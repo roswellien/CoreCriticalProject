@@ -1,0 +1,13 @@
+# Required integer initializer batch
+
+This separate component translates all fourteen remaining import-free integer roots from the exact all-144 CRT inventory, plus their complete shared tail at 0x43AE30. The eight 0x43AEC0..0x43AFA0 wrappers contain encoded tail jumps to that body. The adapter closes the exact recovered block edges with direct calls to the complete compiled definition and instruments its actual entry/return. It retains no missing-block executor or interpreter.
+
+The three 0x467490/0x4674B0/0x4674D0 roots are complete original jump-and-return routes. They still execute their statically compiled definitions. The other three roots initialize fields in the 0x60B000 page. The shared tail zeroes seven dwords at each caller's fixed object address in the 0x605000 page. Checked bridges retain actual emitted values and access order. Expected constants exist only in independent observers and never execute inside a worker.
+
+The offline gate compares standalone routes and persistent ordered fourteen-root sequences on the same checked pages and full 3504-byte State. It rearms only PC/ESP between sequence calls. The corpus varies entry arithmetic flags/DF, registers, unaligned stack positions, twelve masked x87 control words, TOP, FTW, raw80 storage, XMM and unused page bytes. Complete pages, protected State, actual FP/ENV and host FP restoration are mandatory observations.
+
+Final XOR makes AF undefined on the eight shared-tail routes and roots 0x4B5B20/0x4CFEF0. Their standalone defined mask is 0xCC5. The other four MOV/RET-only standalone roots preserve the full 0xCD5 input mask. A persistent batch inherits undefined AF after its first XOR, so it uses 0xCC5 throughout. No other flag is excluded. The adapter uses the upstream zero representative for AF and verifies no AF load within each hash-admitted body; it does not claim that representative is a defined architectural AF result.
+
+The executor borrows GuestMemory and can register all fourteen compiled callbacks in the shared admitted-image runtime. That integration freshly compiles against its pinned Runtime version. It snapshots the complete 145-slot table and dispatches only these selected targets, preserving persistent State/FS and the distinction between legacy ENV metadata and FX bytes. This subset does not complete the full CRT ledger, application initialization, menus or gameplay.
+
+Publication retains the reviewed sequential fresh ordinary private-directory scope, existing staging sentinel preservation and early rejection of any existing report/all-three-build directory. Concurrent writers, reparse points, dangling links and atomic production publication remain excluded.

@@ -1,0 +1,12 @@
+#pragma once
+#include <array>
+#include <cstdint>
+namespace mw34::m4_fp_cosine {
+struct Root {std::uint32_t entry,input,output;};
+inline constexpr std::array<Root,4> roots{{
+ {0x4ce5a0,0x5cc530,0x60b4a0},{0x4ce5c0,0x5cc538,0x60b4a4},
+ {0x4ce5e0,0x5cc540,0x60b49c},{0x4ce600,0x5cc548,0x60b494}}};
+inline constexpr std::array<unsigned,12> controls{
+ 0x007f,0x047f,0x087f,0x0c7f,0x027f,0x067f,0x0a7f,0x0e7f,0x037f,0x077f,0x0b7f,0x0f7f};
+inline constexpr unsigned records=4*12*2*2;
+}

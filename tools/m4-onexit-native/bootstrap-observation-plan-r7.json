@@ -1,0 +1,29 @@
+{
+  "status": "Proposed additive exports pending completion of connected build/run r3; no pinned source edited",
+  "source": "Existing inherited Binding facts only; no new host API calls or reconstructed outputs",
+  "fixed_exports": {
+    "heap-create-witness.bin": "Binding.witness:16Q",
+    "heap-create-registry.bin": "Binding.registry:18Q",
+    "heap-query-witness.bin": "Binding.query_witness:20Q",
+    "heap-query-input.bin": "Binding.query_input:148B",
+    "heap-query-output.bin": "Binding.query_output:148B",
+    "heap-source-accesses.bin": "Binding.accesses:128 Access records",
+    "heap-api-accesses.bin": "Binding.api_accesses:1024 Access records",
+    "heap-events.bin": "Binding.events:1024 Event records",
+    "heap-undefined-sites.bin": "Binding.undefined_sites:8192 DWORDs",
+    "heap-query-output-accesses.bin": "Binding.output_accesses:64 Access records",
+    "heap-scheduler.bin": "Binding.scheduler:8 DWORDs"
+  },
+  "identity_exports": {
+    "heap-create-api-before": "Binding.create_before",
+    "heap-create-api-after": "Binding.create_after",
+    "heap-query-api-before": "Binding.query_before",
+    "heap-query-api-after": "Binding.query_after",
+    "heap-destroy-api-before": "Binding.destroy_before",
+    "heap-destroy-api-after": "Binding.destroy_after"
+  },
+  "identity_encoding": "Existing lb::emit_identity: prefix.bin is 11Q {target,named_target,owner,owner_named_target,region.base,region.bytes,region.allocation,region.state,region.type,region.protect,region.allocation_protect}; prefix-module-path.bin and prefix-module-sha.bin preserve existing string fields",
+  "registry_fields": ["version", "owner", "generation", "token", "historical_acquired_handle", "acquired", "registered", "live", "create_calls", "destroy_calls", "destroy_successes", "destroy_observed_LastError", "cleanup_attempts", "cleanup_skips", "rollback", "finalized", "actual_destroy_input_handle", "lookup_denials"],
+  "bootstrap_api_export_proofs": "Inherited HeapCreate/GetVersionExA/HeapDestroy owner retains measured ApiIdentity fields, not NativeExportProof byte records; no proof output will be fabricated",
+  "caller_error_review": "Session.activate currently rewrites historical Binding.caller_error, while query_snapshot regenerates immutable query witness word8 from it. Keep historical query facts unchanged; root will determine whether runtime entry reproduces a mismatch before selecting correction. Current pinned source unchanged."
+}

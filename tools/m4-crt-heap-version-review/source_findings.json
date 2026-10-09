@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "preparation_sha256": "86a02f49d0aae999f5d766ebe207aaac520a5a5a290bdf1d564293f6e8d960ab",
+  "build_sha256": "4ceb8fefa09bd36ba3a244295250b44ed333e36ba241e0a6a490996680bba25c",
+  "native_GetEnvironmentVariableA_called": false,
+  "host_full_HANDLE_private": true,
+  "scratch_bytes": 148,
+  "API_output_not_original_oracle": true,
+  "source_returns_count": 2,
+  "source_CALLs_count": 5,
+  "API_return_reads_count": 2,
+  "reviewed": [
+    "Exact source operand correction confirmed for ENV PUSH sites3A51/3A56/3A57 and CALL3A5C; mode1 POP/LEAVE/RET preserve original frame",
+    "Exclusive current hv authority checks every prior inactive heap-mode/create/init owner; immutable parent and stale opaque tokens before cast/dereference",
+    "Full148B checked guest input/private typed OSVERSIONINFOA scratch/static_assert148; actualBOOL raw4bytes and all observed native scratch aftercall on both outcomes",
+    "Full148B writable preflight on deep private GuestMemory copy preserves residentguest bytes and frozen bounds/permissions; repeated immediately afterhook14 beforeactualquery",
+    "Exact37 checked DWORD API output commits with separate output ledger, private expected bytes and identity guard; source/API read ledgers remain separate",
+    "Observed native output typedwitness drives literal TEST/CMP/branches; no version fabrication, manifest/context scope applies",
+    "Two genuine API return reads precede finite lowDWORD EAX/ESP/EIP publication, persistent3504State/512FX/RuntimeCPU retained",
+    "Private full64bitHANDLE provisional acquisition beforeanythrow; actualsameHANDLEHeapDestroy cleanup throughquery/store/RET failures; no guest nativeHANDLE publication",
+    "Every new observer hook snapshots entireState/FX/CPU, query publicwitness/output/input/APIidentity/ledger and lifecycle; catch retains firsttypedfault and poisonsroot",
+    "Source identity guards all60 newcompiled bytes plusprior86, rawcoldRXpage; source onlypublishesheap token, currentmode global35004 untouched",
+    "API output148B overlapsoldECXsave1848 intentionally throughtypedcommittednativebytes; genuineprobeRET184C/savedEBP1850/selectorRET1854 outsidequeryoutput",
+    "Originalsource selectorRET3A7F stops atcaller39E8; heapinitializerRET/attachcontinuation/fullM4 uncredited"
+  ],
+  "scope": "Read-only independent source review before independent native fixture execution",
+  "native_executed": false
+}

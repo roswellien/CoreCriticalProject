@@ -1,0 +1,40 @@
+diff --git a/lib/Arch/X86/Semantics/X87.cpp b/lib/Arch/X86/Semantics/X87.cpp
+--- a/lib/Arch/X86/Semantics/X87.cpp
++++ b/lib/Arch/X86/Semantics/X87.cpp
+@@ -1328,7 +1328,4 @@ DEF_SEM(FNSTCW, M16W dst) {
+   auto &cw = state.x87.fxsave.cwd;
+-  cw.pc = kPrecisionSingle;
+-
+-  cw.rc = (FPURoundingControl) __remill_fpu_get_rounding();
+   Write(dst, cw.flat);
+   return memory;
+ }
+@@ -1340,6 +1337,5 @@ DEF_SEM(FLDCW, M16 cwd) {
+   auto &cw = state.x87.fxsave.cwd;
+   cw.flat = Read(cwd);
+-  cw.pc = kPrecisionSingle;
+   __remill_fpu_set_rounding(cw.rc);
+   return memory;
+ }
+diff --git a/bin/lift/Lift.cpp b/bin/lift/Lift.cpp
+--- a/bin/lift/Lift.cpp
++++ b/bin/lift/Lift.cpp
+@@ -97,4 +97,6 @@ DEFINE_bool(symbolic_regs, false, "Set registers to a symbolic value");
+ 
++DEFINE_string(semantics_dir, "", "Explicit semantics directory for MW34 control-word validation.");
++
+ using Memory = std::map<uint64_t, uint8_t>;
+ 
+ // Unhexlify the data passed to `-bytes`, and fill in `memory` with each
+@@ -346,5 +348,10 @@
+   }
+ 
+-  std::unique_ptr<llvm::Module> module(remill::LoadArchSemantics(arch.get()));
++  CHECK(!FLAGS_semantics_dir.empty()) << "Explicit semantics directory required";
++  const std::vector<std::filesystem::path> sem_dirs{FLAGS_semantics_dir};
++  CHECK(remill::FindSemanticsBitcodeFile(remill::GetArchName(arch->arch_name),
++                                        sem_dirs, false))
++      << "Requested semantics file missing; default fallback refused";
++  std::unique_ptr<llvm::Module> module(remill::LoadArchSemantics(arch.get(), sem_dirs));
+ 
+   const auto mem_ptr_type = arch->MemoryPointerType();

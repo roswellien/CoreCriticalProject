@@ -1,0 +1,9 @@
+{
+  "original_source": "D:\\Projects\\MW34Recomp\\tools\\m4-onexit-source\\compare_connected_v2.py",
+  "original_source_sha256": "8978495b71a54c073c352b2d1736e789365faf9ade99643e48158dc3e0eb76af",
+  "derived_source": "D:\\Projects\\MW34Recomp\\tools\\m4-onexit-provider-final\\observe_connected.py",
+  "derived_source_sha256": "78546dfcf9191bb2523cd834e78348beecb03b320b0d5bd30d2cd061ce17d480",
+  "purpose": "Exact frozen source computation, same one bootstrap BEFORE, all finite responses; added read-only observation hooks plus genuine source replay/free continuation",
+  "semantic_game_computation_changes": false,
+  "checkpoint_machine_seed": false
+}

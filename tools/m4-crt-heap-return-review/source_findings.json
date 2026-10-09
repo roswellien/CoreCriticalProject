@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "preparation_sha256": "7837c18f929bf37c1b7e08a84c433bf93b86bc7de41393acadfa7520ae81be82",
+  "build_sha256": "6ea56b105e11b4a826e435cc0a66c391097adb1e9221eb0e38fe6f166ff219d8",
+  "native_GetEnvironmentVariableA_called": false,
+  "host_full_HANDLE_private": true,
+  "scratch_bytes": 148,
+  "API_output_not_original_oracle": true,
+  "source_returns_count": 3,
+  "source_CALLs_count": 5,
+  "API_return_reads_count": 2,
+  "heap_mode_global_published_by_source": true,
+  "fragment_caller_TEST_executed": false,
+  "reviewed": [
+    "Corrected frozen preparation-r2 dispatch passes hr::owner to hr::current at original TEST3A31 AF helper; earlier prep/build-r1 remained refused before native execution",
+    "Existing whole77-byte provider typed IR and both immutable linked AMD64 COFF inputs already contain original39E8 caller branches, MOV35004 and PUSH/POP/RET; all38 prior COFFs and two FDIV libraries retained exactly",
+    "Same typed memory token naturally unwinds through existing selector translated CALL, depth3 to2; no State projection, source provider reentry or synthetic selector result",
+    "Literal MOV39EB validates source PC, original address35004 and actual selector-produced value1 before hook21 and real checked store; private mode publication/value and event12 advance only after successful store",
+    "Whole source-backed4096B heap-global identity permits only original opaque token and committed source mode DWORD; every other byte remains guarded",
+    "Original PUSH3A08 memory commit precedes generated ESP publication; original POP3A0A updates ESP before checked read and EAX after read; original RET3A0B performs checked return read before generated EIP/ESP publication",
+    "Genuine initializer return requires original1858=1843 word, access35/APIread2/event12/AF5, restored original EBP/EBX, EAX1 and ESP185C; event13/checkpoint24 occurs with original private full HANDLE still live",
+    "Every new hook guards entire3504State,512FX, RuntimeCPU, prior source/API/transport/event ledgers, full148 native query output, API identities and private progress mirrors; first typed fault remains sticky and root poisoned retry cannot restart",
+    "Finite source exit stops atfragment1843 before its TEST/POP/branch; same original native full64HANDLE receives actual successful HeapDestroy cleanup through source/observer/permission/RET faults",
+    "Current hr authority excludes the unused unchanged accepted hv and other typed owners; stale or malformed opaque tokens are rejected before cast/dereference; no native HANDLE is published to guest DWORD",
+    "Existing real GetVersionExA private148B input/output and37 output-DWORD commits/two genuine API return reads remain unchanged; actual version response drives branch and is scoped to worker manifest/context",
+    "Actual alternate environment import remains unresolved before host API; persistent game heap, all selector modes, original guard growth, fragment caller continuation and fullM4 remain uncredited"
+  ],
+  "scope": "Independent read-only frozen source/private ownership/ABI readiness before any new native execution",
+  "native_executed": false
+}

@@ -1,0 +1,45 @@
+param([Parameter(Mandatory=$true)][string]$OutputDirectory,[Parameter(Mandatory=$true)][string]$PreparationDirectory,[Parameter(Mandatory=$true)][string]$CandidateBuild)
+$ErrorActionPreference='Stop'
+$reviewRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$reviewOut=[IO.Path]::GetFullPath($OutputDirectory);$reviewPrep=[IO.Path]::GetFullPath($PreparationDirectory);$reviewCandidate=[IO.Path]::GetFullPath($CandidateBuild)
+$reviewBase=Join-Path $reviewRoot 'reports/m4-crt-entry-initterm'
+if([IO.Path]::GetDirectoryName($reviewOut)-ne$reviewBase-or(Test-Path -LiteralPath $reviewOut)-or(Split-Path $reviewOut -Leaf)-notlike'independent-compiled-*'){throw 'Fresh immediate independent compiled report required'}
+function Hash([string]$p){(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()}
+$reviewPins=Get-Content -Raw -LiteralPath (Join-Path $reviewPrep 'pins.json')|ConvertFrom-Json
+foreach($binding in $reviewPins.files.PSObject.Properties){if((Hash $binding.Name)-ne$binding.Value){throw 'Prepared candidate changed'}}
+$reviewCandidateReceipt=Get-Content -Raw -LiteralPath $reviewCandidate|ConvertFrom-Json
+if(-not$reviewCandidateReceipt.passed){throw 'Passed stable candidate build required'}
+$reviewSources=[ordered]@{};$reviewLibraries=[ordered]@{};$reviewHeaders=[ordered]@{};$reviewObjects=[ordered]@{};$reviewMatherrObjects=[ordered]@{};$reviewControlObjects=[ordered]@{};$reviewInitermObjects=[ordered]@{}
+foreach($group in @('sources','source_files','tools','tool_files','libraries','entry_objects','matherr_objects','control_objects','initterm_objects','compiler_read_headers','artifacts')){foreach($binding in $reviewCandidateReceipt.$group.PSObject.Properties){if((Hash $binding.Name)-ne$binding.Value){throw ('Stable candidate physical binding changed '+$binding.Name)}}}
+foreach($rel in @('tools/m4-crt-entry-initterm-compiled-review/controls.cpp','tools/m4-crt-entry-initterm-compiled-review/build_controls.ps1','tools/m4-crt-entry-initterm-compiled-review/review.py','tools/m4-crt/crt_services.cpp','tools/m4-crt/crt_services.hpp','tools/m4-crt-entry-initterm/capture.s','tools/m4-runtime/runtime.cpp','tools/m4-runtime/runtime.hpp','tools/m4-guest-cw/guest_cw.cpp','tools/m4-guest-cw/guest_cw.hpp')){$p=Join-Path $reviewRoot $rel;$reviewSources[$p]=Hash $p}
+$reviewSources[$reviewCandidate]=Hash $reviewCandidate
+foreach($file in Get-ChildItem -LiteralPath $reviewPrep -File){$reviewSources[$file.FullName]=Hash $file.FullName}
+New-Item -ItemType Directory -Path $reviewOut|Out-Null
+foreach($p in $reviewSources.Keys){$q=Join-Path $reviewOut ('sources/'+[IO.Path]::GetRelativePath($reviewRoot,$p));New-Item -ItemType Directory -Force -Path (Split-Path $q)|Out-Null;Copy-Item -LiteralPath $p -Destination $q}
+$reviewVS='C:/Program Files/Microsoft Visual Studio/18/Community';$reviewLLVM=Join-Path $reviewRoot 'local/tools/llvm-21.1.8/clang+llvm-21.1.8-x86_64-pc-windows-msvc/bin';$reviewCommands=[Collections.Generic.List[object]]::new();$reviewPassed=$false
+Import-Module (Join-Path $reviewVS 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
+Enter-VsDevShell -VsInstallPath $reviewVS -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'|Out-Null
+function Run([string]$p,[string[]]$a,[string]$log){[IO.File]::WriteAllBytes($log,[byte[]]::new(0));&$p @a 2>&1|Tee-Object -FilePath $log|Out-Null;$exitCode=$LASTEXITCODE;$reviewCommands.Add([ordered]@{program=$p;arguments=$a;exit_code=$exitCode;log_path=$log;log_sha256=(Hash $log)});if($exitCode-ne0){throw ('Independent tool failed '+$p)}}
+try{
+ foreach($level in @('O0','O2')){
+  $dir=Join-Path $reviewOut $level;New-Item -ItemType Directory -Path $dir|Out-Null
+  $entry=Join-Path $reviewRoot "reports/m4-crt-fdiv-entry-prefix/preparation-r2/candidate-$level.obj";$matherr=Join-Path $reviewRoot "reports/m4-crt-matherr/paired-native-build-r7/native-$level.obj";$control=Join-Path $reviewRoot "reports/m4-crt-entry-control/build-r6/control-$level.obj";$initterm=Join-Path $reviewRoot "reports/m4-crt-entry-initterm/provider-preparation-r3/provider-$level.obj";$library=Join-Path $reviewRoot "build/m4-fdiv-native-build-r3-$level/fdiv_registry.lib"
+  $reviewObjects[$entry]=Hash $entry;$reviewMatherrObjects[$matherr]=Hash $matherr;$reviewControlObjects[$control]=Hash $control;$reviewInitermObjects[$initterm]=Hash $initterm;$reviewLibraries[$library]=Hash $library
+  $capture=Join-Path $dir 'capture.obj';Run (Join-Path $reviewLLVM 'clang.exe') @('--target=x86_64-pc-windows-msvc','-c',(Join-Path $reviewRoot 'tools/m4-crt-entry-initterm/capture.s'),'-o',$capture) (Join-Path $dir 'capture.log')
+  $opt=if($level-eq'O0'){'/Od'}else{'/O2'};$exe=Join-Path $dir 'controls.exe'
+  $a=@('/nologo','/std:c++20','/EHs','/MD','/showIncludes',$opt,('/DMW34_REVIEW_OPTIMIZED='+[int]($level-eq'O2')),'/DADDRESS_SIZE_BITS=32','/DHAS_FEATURE_AVX=0','/DHAS_FEATURE_AVX512=0',('/DMW34_ENTRY_OBJECT_SHA="'+(Hash $entry)+'"'),('/DMW34_CONTROL_OBJECT_SHA="'+(Hash $control)+'"'),('/DMW34_CONNECTED_ARTIFACT_SHA="'+(Hash $control)+'"'),'/DMW34_INITTERM_SOURCE_SHA="960ed0d00b0200736930590a16fbb3caa9c3bc24af9851a3728258fd9b340678"','/DMW34_REPLAY_INPUT_SHA="4294b8d926966c04d305b6e22a9166f08a328f4cc1c62984b72677fe83dd638a"',('/I'+$reviewPrep))
+  foreach($rel in @('tools/m4-crt-entry-initterm','tools/m4-crt-control-integration','tools/m4-crt','tools/m4-crt-fdiv','tools/m4-runtime','tools/m4-startup','tools/m4-guest-cw','runtime','local/tools/remill-v6.0.1/remill-6.0.1/include')){$a+=('/I'+(Join-Path $reviewRoot $rel))}
+  $a+=@(('/Fo'+$dir+'/'),('/Fe'+$exe),(Join-Path $PSScriptRoot 'controls.cpp'),(Join-Path $reviewPrep 'crt_services.cpp'),(Join-Path $reviewRoot 'tools/m4-guest-cw/guest_cw.cpp'),$entry,$matherr,$control,$initterm,$capture,$library,'/link','bcrypt.lib')
+  Run (Join-Path $reviewLLVM 'clang-cl.exe') $a (Join-Path $dir 'compile.log')
+  foreach($line in Get-Content -LiteralPath (Join-Path $dir 'compile.log')){if($line-match'^Note: including file:\s+(.+)$'){$h=[IO.Path]::GetFullPath($Matches[1].Trim());if(Test-Path -LiteralPath $h -PathType Leaf){$reviewHeaders[$h]=Hash $h}}}
+  if(-not$reviewHeaders.Contains((Join-Path $reviewPrep 'initterm_context.hpp'))){throw 'Actual compiler must read exact prepared initterm Context'}
+  $inputs=@((Join-Path $reviewRoot 'MW3/Mech3.exe'),$entry,(Join-Path $reviewRoot 'local/mw3-staged/Shared_DLLs/MSVCRT.DLL'),(Join-Path $reviewRoot 'reports/m4-crt-fdiv/native-derived-r1/pack.bin'),(Join-Path $reviewRoot 'reports/m4-crt-fdiv-replay/preparation-r1/before-inputs.bin'),(Join-Path $dir 'actual'))
+  Run $exe $inputs (Join-Path $dir 'controls.log')
+ }
+ foreach($group in @($reviewSources,$reviewLibraries,$reviewObjects,$reviewMatherrObjects,$reviewControlObjects,$reviewInitermObjects,$reviewHeaders)){foreach($p in $group.Keys){if((Hash $p)-ne$group[$p]){throw 'Independent physical binding changed during actual build'}}}
+ $reviewPassed=$true
+}catch{$_|Out-String|Set-Content -LiteralPath (Join-Path $reviewOut 'failure.txt');throw}finally{
+ $artifacts=[ordered]@{};foreach($f in Get-ChildItem -LiteralPath $reviewOut -Recurse -File){$artifacts[$f.FullName]=Hash $f.FullName}
+ $reviewTools=[ordered]@{};foreach($p in @((Join-Path $reviewLLVM 'clang.exe'),(Join-Path $reviewLLVM 'clang-cl.exe'),(Get-Command link.exe).Source,(Get-Process -Id $PID).Path)){$reviewTools[$p]=Hash $p}
+ [ordered]@{passed=$reviewPassed;scope='Independent authored fixtures on exact production composition, persistent original-BEFORE FDIV writer, unchanged entry/matherr objects and frozen control objects and newly compiled exact initterm provider with selected Session derivative; no original process/game';sources=$reviewSources;tools=$reviewTools;libraries=$reviewLibraries;entry_objects=$reviewObjects;matherr_objects=$reviewMatherrObjects;control_objects=$reviewControlObjects;initterm_objects=$reviewInitermObjects;compiler_read_headers=$reviewHeaders;commands=@($reviewCommands);artifacts=$artifacts;ordinary_game_launched=$false;original_executed=$false;whole_M4_complete=$false}|ConvertTo-Json -Depth 15|Set-Content -LiteralPath (Join-Path $reviewOut 'build.json')
+}

@@ -1,0 +1,13 @@
+{
+  "prior_own_frozen_source": "D:\\Projects\\MW34Recomp\\tools\\m4-crt-entry-first-fault-independent\\compiled\\controls.cpp",
+  "prior_own_source_sha256": "57846cf5d0830b571cc14d169bd674b0c79135ac266c5830a769d17071c8671a",
+  "retained_parts": "Only own checked CPU/State/file helpers, typed throwing bridge declarations and policy. New Context composition/model/control files independently authored.",
+  "new_sources": {
+    "D:\\Projects\\MW34Recomp\\tools\\m4-crt-entry-prefix-independent\\CMakeLists.txt": "a0c92a8a3894e0bd4e49428bb569dbdad487e0a25a7a85f3b92f6718e1006dbf",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-crt-entry-prefix-independent\\context.inc": "a7876560343ea08e3db52b2d0e1280b765d527a9e920fa6e202a1cd659e91f55",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-crt-entry-prefix-independent\\controls.cpp": "328b5feb0d6bc73a91a14bca86854791742119cc7fbf3f27d2f65bcb1ad35e6e",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-crt-entry-prefix-independent\\derive.py": "d4d75b6fe0550ac8318476058a8de29f0a8520e7869a72071471b616b363d833",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-crt-entry-prefix-independent\\model_controls.inc": "c9419541ab61ef4c17e5f2cc199589812bcb963a4bda24ef4ab4a7d0aef64938"
+  },
+  "author_model_fixture_executor_imported": false
+}

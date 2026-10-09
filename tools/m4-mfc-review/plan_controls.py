@@ -1,0 +1,42 @@
+"""Publish bounded, causal compiled control requirements before execution."""
+from pathlib import Path
+import hashlib,json,sys
+ROOT=Path(__file__).resolve().parents[2]
+def sha(path):
+ with Path(path).open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+def main(version):
+ out=ROOT/'reports/m4-mfc-review'/version
+ if out.exists():raise ValueError('Fresh MFC control plan')
+ def case(index,name,intervention,required):return dict(index=index,name=name,intervention=intervention,required_actual_evidence=required)
+ cases=[
+ case(0,'ordinary103','No mutation; one foreign-thread finish attempt after selected table',['All103 source roots in actual table order','35 actual MFC source allocations if genuine execution confirms derived contracts','Exact source allocator/malloc and825/free cdecl frames, object publication and full native owner generations','MFC objects source-freed before16 strings/registry/HeapDestroy','No live heap/CS/native/guest owners after cleanup','Actual foreign-thread refusal leaves whole owner state unchanged']),
+ case(1,'game-ordinal-import','Before first MFC source root, temporarily make exact owning .rdata region writable, change only5BB4BC, restore original permissions',['Mutation actually committed','Fault from genuine original thunk read5ABD26/5BB4BC or explicitly narrower owner admission','No MFC allocation/HeapAlloc caused by corrupted target','Raw corrupt bytes and source first-fault retained']),
+ case(2,'register-indirect-target','At point71 before literal return-frame store, change only State EBX',['Actual original MFC CALL boundary5F401EB5 reached','Refusal before actual HeapAlloc; exact target/frame guard reason','Existing original request/pushed return prefix retained','No claim that an old cached target was executed']),
+ case(3,'handler-owned-input','At point70, temporarily enable write on exact MFC.rdata owner, change handler5F498970, restore read permission',['Actual owned literal input changed','Owned page or exact handler-read refusal before HeapAlloc','Preserve specific actual fault PC/address/reason; no false claim of handler execution']),
+ case(4,'native-backing-corruption','At point72 genuine mallocRET, change one byte through its actual private full-width pointer',['Exactly one actual kind4 allocation acquired','Complete owner corruption refused before publication','Full original owner initial bytes retained in capture; private cleanup frees actual pointer']),
+ case(5,'first-owned-write-refusal','At point73 for4C7B91, make the exact guest allocation mapping read-only',['Actual first literal private store fault4C7B91/guest','Zero private source bytes committed','Complete expected native/guest owner bytes equal pre-store initial bytes']),
+ case(6,'second-owned-write-refusal','At point74 immediately after4C7B91, make the same allocation read-only',['Actual next private store fault4C7B93/guest+4','Exactly4 private source bytes committed','First DWORD equals guest alias and complete remaining extent equals initial bytes']),
+ case(7,'publication-write-refusal','At point73 for4C7B99, make exact game object mapping read-only',['Actual publication fault4C7B99/603FDC','Two private DWORDs and exactly8B initialization committed','Game pointer field equals original BEFORE; earlier preallocation object byte retained']),
+ case(8,'observer-entry','Throw at exact point70',['Exact entry frame/request observed','No kind4 allocation or actual HeapAlloc','First source observer refusal and retry retained']),
+ case(9,'observer-call','Throw at exact point71',['Genuine5F401EB5 before return-frame commit','Request push and saved registers retained','No actual HeapAlloc']),
+ case(10,'observer-malloc-return','Throw at exact point72',['Actual typed HeapAlloc/non-null full native owner acquired','Allocator not returned; no game publication','Acquired owner released during genuine private safeguard']),
+ case(11,'observer-allocator-return','Throw at exact point75',['Original allocator RET completed using same actual malloc alias','No game private-store/publication yet','Complete nonvolatiles/cdecl source frame authenticated']),
+ case(12,'observer-prewrite','Throw at point73 for4C7B91',['Exact pending first private store probe','No private initialized bytes committed']),
+ case(13,'observer-postwrite','Throw at point74 for4C7B91',['Exactly one4B private store committed','Expected owner mirrors full source-derived prefix and untouched remainder']),
+ case(14,'observer-sourcefree-dispatch','After first completed root, invoke genuine825 on the live first object; throw at point76',['Exact genuine825→CRTfree frame at5F401786','No sourceHeapFree yet for that object','Private safeguard releases retained owner; retry does not free twice']),
+ case(15,'observer-sourcefree-return','After first completed root, invoke genuine825 on live first object; throw at point77',['Actual sourceHeapFree already succeeded','Guest mapping and full native ownership revoked','Sourcefree lifecycle retained; safeguard does not free object again']),
+ case(16,'interior-sourcefree','After first root, genuine research825 frame carries live guest+4',['Original825 admitted research CALL reaches owner check','Interior alias refused before actual HeapFree','Whole live owner retained then genuine safeguard releases it']),
+ case(17,'foreign-sourcefree','After first root, genuine research825 frame carries a mapped game object address',['Mapped but foreign alias refused before actualHeapFree','No forged private handle/owner identity']),
+ case(18,'stale-sourcefree','After first root, genuine825 frees live first object, then another genuine825 frame carries same alias',['First actual sourceHeapFree and guest unmapping observed','Second stale alias refused before secondHeapFree','Exact source lifecycle and no double free']),
+ case(19,'oversize-domain-refusal','After first root, genuine research823 frame carries request1048577',['Request admission refusal before any newHeapAlloc','Explicitly request-domain rejection, no actual API allocation-failure claim']),
+ case(20,'rep-zero-fill-partial','At point74 after first DWORD of original4A8C20 REP STOSD, make actual guest allocation read-only',['Actual next same-PC DWORD write permission refusal','Exactly4 of128 requested bytes zeroed','All remaining124 bytes and actual native padding match prewrite input','Source REP count/pointer carried effects retained'])]
+ dependencies={}
+ for path,digest in [('reports/m4-mfc-review/interface-r1/report.json','f9ac44cdc91b751974f965830bd9bda0412801339e1392bf95834ec4bc36161d'),('reports/m4-mfc-review/game-static-r1/report.json','248996818bda699505f754ad26f389ff1dfd2269b19cd5ba66303ae40d035e73'),('reports/m4-mfc-review/prefix-calibration-r1/report.json','38cd8bdd2dde0fb3df8c23ccbd38d1f40b77d6e533d2b269bcd01fc383a40aa9')]:
+  file=ROOT/path
+  if sha(file)!=digest:raise ValueError('Physical control plan source gate')
+  dependencies[str(file.resolve())]=digest
+ out.mkdir(parents=True);plan=dict(schema='mw34-mfc-compiled-control-plan-v1',cases=cases,levels=['O0','O2'],retry_after_each_case=True,requirements_for_every_attempt=['Strict outside-return actual rich x87 raw80/legacyENV/MXCSR/nonvolatileXMM/DF/LastError equality','One first-fault causal prefix; no any-failure acceptance','Full State/CPU/FX/owner equality on refused retry','Actual cleanup: no native pointers, guest mappings, critical sections or live heap handle','Actual before/afterHeapDestroy identity plus independently measured immediate postfinish identity','Immutable fixture/hooks/checker/assembly source copies and exact compiled object hashes'],execution_waits_for_frozen_structural103_pass=True,API_result_injection=False,actual_allocation_NULL_branch_claimed=False,unhandled_handler_TLS_admitted=False,initializer_credit=0,files=dependencies)
+ path=out/'plan.json';path.write_text(json.dumps(plan,indent=2)+'\n');dependencies[str(path)]=sha(path);dependencies[str(Path(__file__).resolve())]=sha(__file__)
+ (out/'report.json').write_text(json.dumps(dict(passed=True,scope='Independent reviewed control requirements only; no worker built or executed',planned_distinct_cases=len(cases),planned_actual_attempts=84,files=dependencies,native_executed=False,initializer_credit=0),indent=2)+'\n')
+ print(json.dumps(dict(passed=True,report_sha256=sha(out/'report.json'),cases=len(cases))))
+if __name__=='__main__':main(sys.argv[1])

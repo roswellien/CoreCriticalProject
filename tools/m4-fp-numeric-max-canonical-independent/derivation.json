@@ -1,0 +1,26 @@
+{
+  "own_parent_sources": {
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-boundary-independent\\boundary.s": "e9d33321b4fc995a84eb7b612169d8f9bb5aa7e2ccb04c490727cd30aa43a65a",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-boundary-independent\\build.py": "e1653b7664f6bd486be7a99722a0e225fe5ba8be3987acd58574e85d5f7979d1",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-boundary-independent\\CMakeLists.txt": "f329394bb31712749d0009dd433992ab184969d4882e43a5bf9d872111516823",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-boundary-independent\\controls.cpp": "d6d067f9eb8d086ead33737c02995a1083e895ac3673929b150380569df5a0e1",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-boundary-independent\\derivation.json": "9165e6e99bdb364496a6ecc3506f27edd93b777caba912a58c95d60c2ddb2a80",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-boundary-independent\\finding_review.py": "ad3f1657523676f89c143e79fa97a5cd56d1f7243d4df582402027f471792d06"
+  },
+  "derivative_sources": {
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-canonical-independent\\controls.cpp": "9aefd935b114a8da6a8dfdfce30efd3a46b654db048c9e39d5d08bd08b58c5fe",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-canonical-independent\\boundary.s": "e9d33321b4fc995a84eb7b612169d8f9bb5aa7e2ccb04c490727cd30aa43a65a",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-canonical-independent\\CMakeLists.txt": "f329394bb31712749d0009dd433992ab184969d4882e43a5bf9d872111516823",
+    "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-canonical-independent\\build.py": "e186801bd20705f9f7aeae8d99a8588fe50a3a23dcce109535db279b75c82fd9"
+  },
+  "scope": "Own additive fixture: independent 8 canonical sticky statuses, all 11 raw bytes x2/17/34/255 x separate coherent/incoherent FX, actual outside-return assembly host measurements; old failed normative fixture untouched",
+  "changes": [
+    "C1 seed from logical status; bounded no-overflow FLD explicitly clears shadow C1 in own expected State",
+    "PE32/C1 statuses positive rather than old unsupported negatives",
+    "88 shadow-byte causal denials and corrected poisoned retries",
+    "Proof gate label corrected from own prior typo to exact private preparation report hash"
+  ],
+  "prior_gate_label": "73a4fa0b37415a7510775d4a1939872a598168b92cc4f9b5bcf581f97e5f312e",
+  "current_gate_label": "73a4fa0b37415a7510775d4a1939872a598168b92cc4f9b5bcf581f97e5f312e",
+  "author_model_fixture_executor_imported": false
+}

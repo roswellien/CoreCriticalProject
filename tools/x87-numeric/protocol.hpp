@@ -1,0 +1,171 @@
+// Authored masked x87 add/sub numerical experiment. No game code is admitted.
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <istream>
+#include <ostream>
+#include <set>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
+
+namespace mw34::x87_numeric {
+inline constexpr std::uint32_t case_count = 240;
+inline constexpr std::uint32_t code_base = 0x10000000;
+inline constexpr std::uint32_t return_sentinel = 0x10000100;
+inline constexpr std::uint32_t stack_base = 0x20000000;
+inline constexpr std::uint32_t memory_base = 0x20001000;
+inline constexpr std::size_t memory_size = 4096;
+inline constexpr std::uint32_t observed_flags = 0xcd5;
+inline constexpr std::uint16_t observed_status = 0x38ff;
+inline constexpr std::array<std::uint8_t, 10> code_identity{0xdd, 0x01, 0xdc, 0x41, 0x08,
+                                                            0xdc, 0x21, 0xdd, 0x1a, 0xc3};
+inline constexpr std::array<unsigned, 5> increment_powers{30, 54, 24, 53, 64};
+
+struct CpuState {
+    std::uint32_t registers[8]; // EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI.
+    std::uint32_t flags;
+    std::uint32_t eip;
+};
+struct Request {
+    CpuState state;
+    std::uint32_t cw;
+    std::uint32_t memory_seed;
+    std::uint64_t base_bits;
+    std::uint64_t increment_bits;
+};
+struct Result {
+    CpuState state;
+    std::uint32_t status;
+    std::array<std::uint8_t, memory_size> memory;
+    std::uint16_t cw_before;
+    std::uint16_t cw_after;
+    std::uint16_t sw_before;
+    std::uint16_t sw_after;
+    std::uint8_t tag_before;
+    std::uint8_t tag_after;
+    std::uint16_t reserved;
+};
+struct Header {
+    char magic[8];
+    std::uint32_t version;
+    std::uint32_t count;
+    std::uint32_t record_size;
+    std::uint32_t pointer_bits;
+};
+static_assert(sizeof(CpuState) == 40 && sizeof(Request) == 64);
+static_assert(offsetof(Request, base_bits) == 48 && offsetof(Request, increment_bits) == 56);
+static_assert(sizeof(Result) == 4152 && offsetof(Result, cw_before) == 4140);
+static_assert(offsetof(Result, sw_before) == 4144 && offsetof(Result, tag_before) == 4148);
+static_assert(offsetof(Result, reserved) == 4150 && sizeof(Header) == 24);
+
+template <class T> T read_record(std::istream &stream) {
+    T value{};
+    if (!stream.read(reinterpret_cast<char *>(&value), sizeof(value)))
+        throw std::runtime_error("Truncated numeric probe input");
+    return value;
+}
+template <class T> void write_record(std::ostream &stream, const T &value) {
+    if (!stream.write(reinterpret_cast<const char *>(&value), sizeof(value)))
+        throw std::runtime_error("Failed writing numeric probe result");
+}
+inline Header input_header(std::istream &stream) {
+    const auto header = read_record<Header>(stream);
+    if (std::memcmp(header.magic, "MW34REQ1", 8) || header.version != 1 ||
+        header.count != case_count || header.record_size != sizeof(Request) ||
+        header.pointer_bits != 32)
+        throw std::runtime_error("Numeric probe requires 240 v1 x86 requests");
+    return header;
+}
+inline Header output_header(std::uint32_t count, std::uint32_t pointer_bits) {
+    if (count != case_count || (pointer_bits != 32 && pointer_bits != 64))
+        throw std::runtime_error("Invalid numeric probe output count or pointer width");
+    Header header{};
+    std::memcpy(header.magic, "MW34RES1", 8);
+    header.version = 1;
+    header.count = count;
+    header.record_size = sizeof(Result);
+    header.pointer_bits = pointer_bits;
+    return header;
+}
+inline void require_end(std::istream &stream) {
+    if (stream.peek() != std::char_traits<char>::eof())
+        throw std::runtime_error("Unexpected trailing numeric probe input");
+}
+inline bool matches_fixture(const std::vector<std::uint8_t> &code) {
+    return code.size() == code_identity.size() &&
+           std::equal(code.begin(), code.end(), code_identity.begin());
+}
+inline bool legal_control_word(std::uint32_t value) {
+    return !(value & ~0x0f7fU) && (value & 0xffU) == 0x7f && ((value >> 8) & 3) != 1;
+}
+inline bool legal_vector(std::uint64_t base, std::uint64_t increment) {
+    constexpr std::uint64_t magnitude_mask = 0x7fffffffffffffffULL;
+    if ((base & magnitude_mask) != 0x3ff0000000000000ULL)
+        return false;
+    for (const auto power : increment_powers)
+        if ((increment & magnitude_mask) == ((std::uint64_t{1023} - power) << 52))
+            return true;
+    return false;
+}
+inline bool overlaps(std::uint64_t left, std::uint64_t left_size, std::uint64_t right,
+                     std::uint64_t right_size) {
+    return left < right + right_size && right < left + left_size;
+}
+inline bool safe_span(std::uint32_t value, std::size_t size, std::uint32_t esp) {
+    const std::uint64_t address = value;
+    return address >= memory_base && address + size <= memory_base + memory_size &&
+           !overlaps(address, size, esp, 12);
+}
+inline void validate_request(const Request &request) {
+    const auto esp = request.state.registers[4];
+    const auto input = request.state.registers[1];
+    const auto output = request.state.registers[2];
+    if (request.state.eip != code_base || esp < memory_base + 16 ||
+        esp > memory_base + memory_size - 16 ||
+        (request.state.flags & ~(observed_flags | 0x202U)) != 0 ||
+        (request.state.flags & 0x202U) != 0x202U)
+        throw std::runtime_error("Invalid entry state or unsafe integer flags");
+    if (!safe_span(input, 16, esp))
+        throw std::runtime_error("Invalid numeric input span or overlap with return frame");
+    if (!safe_span(output, 8, esp))
+        throw std::runtime_error("Invalid numeric output span or overlap with return frame");
+    if (overlaps(input, 16, output, 8))
+        throw std::runtime_error("Numeric input and output spans overlap");
+    if (!legal_control_word(request.cw))
+        throw std::runtime_error("Control word is outside reviewed masked PC/RC modes");
+    if (!legal_vector(request.base_bits, request.increment_bits))
+        throw std::runtime_error("Numeric bits are outside reviewed exact input vectors");
+}
+inline std::vector<Request> read_requests(std::istream &stream) {
+    const auto header = input_header(stream);
+    std::vector<Request> requests;
+    requests.reserve(header.count);
+    std::set<std::tuple<std::uint32_t, std::uint64_t, std::uint64_t>> cases;
+    for (std::uint32_t index = 0; index < header.count; ++index) {
+        auto request = read_record<Request>(stream);
+        validate_request(request);
+        if (!cases.emplace(request.cw, request.base_bits, request.increment_bits).second)
+            throw std::runtime_error("Duplicate reviewed numeric mode and vector");
+        requests.push_back(request);
+    }
+    require_end(stream);
+    return requests;
+}
+inline std::array<std::uint8_t, memory_size> initial_memory(const Request &request) {
+    std::array<std::uint8_t, memory_size> bytes{};
+    for (std::size_t index = 0; index < memory_size; ++index)
+        bytes[index] = static_cast<std::uint8_t>((index * 37 + request.memory_seed) & 0xff);
+    const std::array<std::uint32_t, 3> frame{return_sentinel, request.cw, request.memory_seed};
+    std::memcpy(bytes.data() + (request.state.registers[4] - memory_base), frame.data(),
+                sizeof(frame));
+    const std::array<std::uint64_t, 2> input{request.base_bits, request.increment_bits};
+    std::memcpy(bytes.data() + (request.state.registers[1] - memory_base), input.data(),
+                sizeof(input));
+    return bytes;
+}
+} // namespace mw34::x87_numeric

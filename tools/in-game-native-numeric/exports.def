@@ -1,0 +1,4 @@
+LIBRARY mw34_numeric_hook
+EXPORTS
+    mw34_install=_mw34_install@4
+    mw34_selftest=_mw34_selftest@4

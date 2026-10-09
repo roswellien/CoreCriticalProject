@@ -1,0 +1,15 @@
+{
+  "read_on": "2026-10-09",
+  "sources": [
+    {
+      "url": "https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapsize",
+      "facts": "HeapSize takes the owning heap, flags and an actual allocation pointer, and returns SIZE_T. Its failure sentinel is SIZE_T(-1). It does not establish an extended error through SetLastError. A block from a different heap is outside defined behavior, so guest alias validation must precede the native call. The independently captured native result supplies capacity; the bridge does not substitute a requested-size calculation."
+    },
+    {
+      "url": "https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heaprealloc",
+      "facts": "HeapReAlloc takes the same heap and a pointer returned by its earlier allocation or reallocation. With flags zero it can move. Success preserves the old content and returns at least the requested size; NULL preserves the original allocation. On x64 the returned allocation alignment is 16 bytes. The function does not establish extended error through SetLastError. Private pointer ownership must immediately follow a successful return, including any later observer or guest transport fault."
+    }
+  ],
+  "API_executed": false,
+  "scope": "Current primary API contract references, not native execution evidence"
+}

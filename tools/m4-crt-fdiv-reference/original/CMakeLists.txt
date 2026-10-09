@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.24)
+project(MW34FDIVRealStackReference LANGUAGES CXX ASM_MASM)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_executable(fdiv_reference ../reference.cpp ../reference_x86.asm)
+target_include_directories(fdiv_reference PRIVATE "${MW34_FDIV_REFERENCE_INCLUDE}" ../../m4-runtime ../../m4-startup ../../../runtime)
+target_compile_options(fdiv_reference PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/showIncludes>)
+target_link_libraries(fdiv_reference PRIVATE bcrypt)
+# Deterministic disjoint image placement; no retry or relocation acceptance.
+target_link_options(fdiv_reference PRIVATE /DYNAMICBASE:NO /BASE:0x34000000 /STACK:1048576,65536)

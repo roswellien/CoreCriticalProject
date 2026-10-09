@@ -1,0 +1,68 @@
+cmake_minimum_required(VERSION 3.24)
+project(MW34Recomp VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build configuration" FORCE)
+endif()
+
+option(MW34_WARNINGS_AS_ERRORS "Treat project compiler warnings as errors" ON)
+option(MW34_ENABLE_CLANG_TIDY "Run clang-tidy while compiling" OFF)
+if(MW34_ENABLE_CLANG_TIDY)
+    if(NOT CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+        message(FATAL_ERROR "MW34_ENABLE_CLANG_TIDY requires a Ninja or Makefiles generator")
+    endif()
+    find_program(MW34_CLANG_TIDY clang-tidy REQUIRED)
+    set(CMAKE_CXX_CLANG_TIDY "${MW34_CLANG_TIDY}")
+endif()
+
+include(cmake/Warnings.cmake)
+add_subdirectory(runtime)
+mw34_warnings(mw34_runtime)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(mw34_runtime_tests tests/runtime_tests.cpp)
+    target_link_libraries(mw34_runtime_tests PRIVATE mw34_runtime)
+    mw34_warnings(mw34_runtime_tests)
+    add_test(NAME runtime COMMAND mw34_runtime_tests)
+
+    find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME binary_tools
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
+    set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME asset_tools
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p "test_asset*.py" -v)
+    set_tests_properties(asset_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME in_game_hook_evidence
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_in_game_hook.py -v)
+    set_tests_properties(in_game_hook_evidence PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME game_monitor
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_game_monitor.py -v)
+    set_tests_properties(game_monitor PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME game_monitor_invalid_handle
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_monitor_invalid_handle.py -v)
+    set_tests_properties(game_monitor_invalid_handle PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME mw3_comparison_controls
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_mw3_comparison.py -v)
+    set_tests_properties(mw3_comparison_controls PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME host_adapter_controls
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_host_adapter.py -v)
+    set_tests_properties(host_adapter_controls PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+endif()
+
+find_program(MW34_CLANG_FORMAT clang-format)
+if(MW34_CLANG_FORMAT)
+    file(GLOB_RECURSE MW34_FORMAT_FILES CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/runtime/*.hpp" "${PROJECT_SOURCE_DIR}/runtime/*.cpp"
+        "${PROJECT_SOURCE_DIR}/tests/*.cpp")
+    add_custom_target(format
+        COMMAND "${MW34_CLANG_FORMAT}" -i ${MW34_FORMAT_FILES}
+        VERBATIM)
+    add_custom_target(format-check
+        COMMAND "${MW34_CLANG_FORMAT}" --dry-run --Werror ${MW34_FORMAT_FILES}
+        VERBATIM)
+endif()

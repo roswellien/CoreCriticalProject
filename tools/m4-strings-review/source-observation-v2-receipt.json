@@ -1,0 +1,11 @@
+{
+  "original_source": "D:\\Projects\\MW34Recomp\\tools\\m4-strings-source\\compare_connected.py",
+  "original_source_sha256": "ddb79a1b4b09acc7855b5b87b688aaceb15d352e4fa718b6bcdb895afa9c8c19",
+  "derived_source": "D:\\Projects\\MW34Recomp\\tools\\m4-strings-review\\observe_connected_v2.py",
+  "derived_source_sha256": "9f6132d53e09451fa91ef1cbb3af018bc745cc29d8a25929a5ca6c00fddf4b45",
+  "semantic_game_computation_changes": false,
+  "checkpoint_machine_seed": false,
+  "observer_module": "D:\\Projects\\MW34Recomp\\tools\\m4-strings-review\\final_observer_v2.py",
+  "observer_sha256": "37276adb8f33f482ec52597eac227121fd06b81d9fd9019b127c142e661139f8",
+  "continuation": "Genuine original extra registry replay and sourcefree continuation from persistent selected State; finite typedAPI witnesses only"
+}

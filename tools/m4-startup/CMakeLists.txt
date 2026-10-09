@@ -1,0 +1,53 @@
+cmake_minimum_required(VERSION 3.24)
+project(MW34M4StartupFoundation LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+get_filename_component(MW34_WORKSPACE "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+add_library(mw34_m4_image STATIC image_loader.cpp
+    "${MW34_WORKSPACE}/runtime/memory/guest_memory.cpp")
+target_include_directories(mw34_m4_image PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${MW34_WORKSPACE}/runtime")
+
+add_executable(mw34_m4_startup_host main.cpp)
+target_link_libraries(mw34_m4_startup_host PRIVATE mw34_m4_image)
+if(WIN32)
+    target_link_libraries(mw34_m4_startup_host PRIVATE bcrypt)
+    add_executable(mw34_m4_windows_image_probe
+        "${MW34_WORKSPACE}/tests/m4-startup/windows_image_probe.cpp")
+    target_include_directories(mw34_m4_windows_image_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(mw34_m4_windows_image_probe PRIVATE bcrypt)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(mw34_m4_image_tests
+        "${MW34_WORKSPACE}/tests/m4-startup/image_loader_tests.cpp")
+    target_link_libraries(mw34_m4_image_tests PRIVATE mw34_m4_image)
+    add_test(NAME m4_image_loader COMMAND mw34_m4_image_tests)
+endif()
+
+foreach(target mw34_m4_image mw34_m4_startup_host)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+endforeach()
+if(WIN32)
+    if(MSVC)
+        target_compile_options(mw34_m4_windows_image_probe PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(mw34_m4_windows_image_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+endif()
+if(BUILD_TESTING)
+    if(MSVC)
+        target_compile_options(mw34_m4_image_tests PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(mw34_m4_image_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+endif()

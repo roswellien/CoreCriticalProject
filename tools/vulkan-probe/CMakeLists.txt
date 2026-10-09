@@ -1,0 +1,47 @@
+cmake_minimum_required(VERSION 3.24)
+project(MW34VulkanProbe LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_path(VULKAN_HEADERS vulkan/vulkan_core.h REQUIRED)
+add_executable(mw34_vulkan_probe main.cpp)
+target_include_directories(mw34_vulkan_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(mw34_vulkan_probe PRIVATE ${CMAKE_DL_LIBS})
+add_executable(mw34_vulkan_raster raster.cpp)
+target_include_directories(mw34_vulkan_raster PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(mw34_vulkan_raster PRIVATE ${CMAKE_DL_LIBS})
+find_program(GLSLANG_VALIDATOR NAMES glslangValidator glslang REQUIRED)
+add_executable(mw34_vulkan_replay replay.cpp)
+target_include_directories(mw34_vulkan_replay PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(mw34_vulkan_replay PRIVATE ${CMAKE_DL_LIBS})
+foreach(stage vert frag)
+    foreach(variant smooth flat)
+        if(variant STREQUAL "flat")
+            set(replay_name "replay-flat")
+            set(replay_define "-DFLAT_SHADE=1")
+        else()
+            set(replay_name "replay")
+            set(replay_define "")
+        endif()
+        add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${replay_name}.${stage}.spv"
+            COMMAND "${GLSLANG_VALIDATOR}" -V ${replay_define} "${CMAKE_CURRENT_SOURCE_DIR}/replay.${stage}"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/${replay_name}.${stage}.spv"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/replay.${stage}" VERBATIM)
+        list(APPEND replay_shaders "${CMAKE_CURRENT_BINARY_DIR}/${replay_name}.${stage}.spv")
+    endforeach()
+endforeach()
+add_custom_target(mw34_replay_shaders DEPENDS ${replay_shaders})
+add_dependencies(mw34_vulkan_replay mw34_replay_shaders)
+foreach(stage vert frag)
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/scene.${stage}.spv"
+        COMMAND "${GLSLANG_VALIDATOR}" -V "${CMAKE_CURRENT_SOURCE_DIR}/scene.${stage}"
+            -o "${CMAKE_CURRENT_BINARY_DIR}/scene.${stage}.spv"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scene.${stage}" VERBATIM)
+endforeach()
+add_custom_target(mw34_raster_shaders DEPENDS
+    "${CMAKE_CURRENT_BINARY_DIR}/scene.vert.spv"
+    "${CMAKE_CURRENT_BINARY_DIR}/scene.frag.spv")
+add_dependencies(mw34_vulkan_raster mw34_raster_shaders)
+if(MSVC)
+    target_compile_options(mw34_vulkan_replay PRIVATE /W4 /WX /EHsc)
+    target_compile_options(mw34_vulkan_raster PRIVATE /W4 /WX /EHsc)
+endif()

@@ -1,0 +1,28 @@
+param([Parameter(Mandatory=$true)][string]$OutputDirectory)
+$ErrorActionPreference='Stop'
+$frRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'));$frOut=[IO.Path]::GetFullPath($OutputDirectory);$frAllowed=Join-Path $frRoot 'reports/m4-crt-fdiv-replay'
+if([IO.Path]::GetDirectoryName($frOut)-ne$frAllowed-or(Test-Path -LiteralPath $frOut)){throw 'Fresh immediate private replay report required'}
+$frName=Split-Path $frOut -Leaf;if($frName-notmatch'^[a-z0-9-]+$'){throw 'Simple experiment name'}
+$frBuilds=@{O0=(Join-Path $frRoot "build/m4-fdiv-replay-$frName-O0");O2=(Join-Path $frRoot "build/m4-fdiv-replay-$frName-O2")};foreach($frBuild in $frBuilds.Values){if(Test-Path -LiteralPath $frBuild){throw 'Fresh replay build directories required'}}
+function Hash([string]$p){(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()}
+$frPrimary=Join-Path $frRoot 'reports/m4-crt-fdiv/native-build-r3/build.json';$frGate=Get-Content -Raw -LiteralPath $frPrimary|ConvertFrom-Json
+foreach($frGroup in @('sources','tools','artifacts')){foreach($frPair in $frGate.$frGroup.PSObject.Properties){if((Hash $frPair.Name)-ne$frPair.Value){throw 'Exact frozen Registry dependency required'}}}
+$frPreparation=Join-Path $frAllowed 'preparation-r1/report.json';$frInput=Get-Content -Raw -LiteralPath $frPreparation|ConvertFrom-Json;if((Hash $frInput.inputs_path)-ne$frInput.inputs_sha256){throw 'Exact before-only projection input required'}
+$frSources=[ordered]@{};foreach($frPair in $frGate.sources.PSObject.Properties){$frSources[$frPair.Name]=$frPair.Value};foreach($frFile in Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File){$frSources[$frFile.FullName]=Hash $frFile.FullName}
+New-Item -ItemType Directory -Path $frOut|Out-Null;foreach($frPair in $frSources.GetEnumerator()){$frCopy=Join-Path $frOut ('sources/'+[IO.Path]::GetRelativePath($frRoot,$frPair.Key));New-Item -ItemType Directory -Force -Path (Split-Path $frCopy -Parent)|Out-Null;Copy-Item -LiteralPath $frPair.Key -Destination $frCopy;if((Hash $frCopy)-ne$frPair.Value){throw 'Exact literal replay source copy required'}}
+$frLLVM=Join-Path $frRoot 'local/tools/llvm-21.1.8/clang+llvm-21.1.8-x86_64-pc-windows-msvc/bin';$frVS='C:/Program Files/Microsoft Visual Studio/18/Community';$frCMake=Join-Path $frVS 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe';$frTools=[ordered]@{};$frCommands=[Collections.Generic.List[object]]::new();$frLibraries=[ordered]@{};$frPassed=$false;$frWorkers=[ordered]@{}
+function Run([string]$p,[string[]]$a,[string]$log){$frTools[$p]=Hash $p;$frLog=Join-Path $frOut $log;[IO.File]::WriteAllBytes($frLog,[byte[]]::new(0));&$p @a 2>&1|Tee-Object -FilePath $frLog|Out-Null;$frCode=$LASTEXITCODE;$frCommands.Add([ordered]@{program=$p;arguments=$a;exit_code=$frCode;log_path=$frLog;log_sha256=(Hash $frLog)});if($frCode-ne0){throw 'Actual replay build invocation failed'}}
+try{
+ Import-Module (Join-Path $frVS 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll');Enter-VsDevShell -VsInstallPath $frVS -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'|Out-Null
+ $frTools[(Join-Path $frVS 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')]=Hash (Join-Path $frVS 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll');$frTools[(Get-Process -Id $PID).Path]=Hash (Get-Process -Id $PID).Path
+ foreach($frLevel in @('O0','O2')){$frLibrary=Join-Path $frRoot "build/m4-fdiv-native-build-r3-$frLevel/fdiv_registry.lib";$frLibraries[$frLibrary]=Hash $frLibrary;$frFlags=if($frLevel-eq'O0'){'/Od /DNDEBUG /showIncludes'}else{'/O2 /DNDEBUG /showIncludes'}
+  Run $frCMake @('-G','Ninja','-S',$PSScriptRoot,'-B',$frBuilds[$frLevel],'-DCMAKE_BUILD_TYPE=Release',"-DCMAKE_CXX_COMPILER=$frLLVM/clang-cl.exe","-DCMAKE_CXX_FLAGS_RELEASE=$frFlags","-DMW34_FDIV_LIBRARY=$frLibrary","-DMW34_REPLAY_INPUT_SHA=$($frInput.inputs_sha256)") "configure-$frLevel.log"
+  Run $frCMake @('--build',$frBuilds[$frLevel],'--verbose') "build-$frLevel.log";$frWorkers[$frLevel]=Join-Path $frBuilds[$frLevel] 'fdiv_replay.exe'
+ }
+ foreach($frPair in $frSources.GetEnumerator()){if((Hash $frPair.Key)-ne$frPair.Value){throw 'Replay source changed during compile'}};foreach($frPair in $frLibraries.GetEnumerator()){if((Hash $frPair.Key)-ne$frPair.Value){throw 'Frozen linked Registry library changed'}};$frPassed=$true
+}catch{$_|Out-String|Set-Content -LiteralPath (Join-Path $frOut 'failure.txt');throw}
+finally{
+ $frHeaders=[ordered]@{};foreach($frLevel in @('O0','O2')){$frLog=Join-Path $frOut "build-$frLevel.log";if(Test-Path -LiteralPath $frLog){foreach($frLine in Get-Content -LiteralPath $frLog){if($frLine-match'Note: including file:\s*(.+?)\s*$'){$frHeader=$Matches[1].Trim();if(Test-Path -LiteralPath $frHeader){$frHeaders[[IO.Path]::GetFullPath($frHeader)]=Hash $frHeader}}}}}
+ $frArtifacts=[ordered]@{};foreach($frDirectory in @($frOut)+@($frBuilds.Values)){if(Test-Path -LiteralPath $frDirectory){foreach($frFile in Get-ChildItem -LiteralPath $frDirectory -Recurse -File){$frArtifacts[$frFile.FullName]=Hash $frFile.FullName}}}
+ [ordered]@{passed=$frPassed;scope='Additive original-BEFORE replay build linked to unchanged accepted FDIV r3 Registry; no replay execution yet';sources=$frSources;tools=$frTools;libraries=$frLibraries;commands=@($frCommands);compiler_read_headers=$frHeaders;artifacts=$frArtifacts;workers=$frWorkers;primary=$frPrimary;primary_sha256=(Hash $frPrimary);preparation=$frPreparation;preparation_sha256=(Hash $frPreparation);inputs_path=$frInput.inputs_path;inputs_sha256=$frInput.inputs_sha256;original_executed=$false;native_replay_executed=$false;whole_M4_complete=$false}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $frOut 'build.json')
+}

@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.24)
+project(MW34ConnectedCRTControlNative LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+get_filename_component(WORKSPACE "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+if(NOT MW34_CONNECTED_INCLUDE OR NOT MW34_CONNECTED_OBJECT OR NOT MW34_CONNECTED_ARTIFACT_SHA)
+ message(FATAL_ERROR "Exact private metadata and compiled six-body artifact required")
+endif()
+add_executable(mw34_connected_control_native ../native_worker.cpp
+ "${WORKSPACE}/tools/m4-runtime/runtime.cpp" "${WORKSPACE}/tools/m4-startup/image_loader.cpp"
+ "${WORKSPACE}/tools/m4-guest-cw/guest_cw.cpp" "${WORKSPACE}/runtime/memory/guest_memory.cpp" "${MW34_CONNECTED_OBJECT}")
+target_include_directories(mw34_connected_control_native PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${MW34_CONNECTED_INCLUDE}" "${WORKSPACE}/tools/m4-runtime" "${WORKSPACE}/tools/m4-startup" "${WORKSPACE}/tools/m4-guest-cw" "${WORKSPACE}/runtime" "${WORKSPACE}/tools/m4-crt")
+target_include_directories(mw34_connected_control_native SYSTEM PRIVATE "${WORKSPACE}/local/tools/remill-v6.0.1/remill-6.0.1/include")
+target_compile_definitions(mw34_connected_control_native PRIVATE ADDRESS_SIZE_BITS=32 HAS_FEATURE_AVX=0 HAS_FEATURE_AVX512=0 MW34_CONNECTED_ARTIFACT_SHA="${MW34_CONNECTED_ARTIFACT_SHA}")
+target_compile_options(mw34_connected_control_native PRIVATE /W4 /WX /permissive-)
+target_link_libraries(mw34_connected_control_native PRIVATE bcrypt)

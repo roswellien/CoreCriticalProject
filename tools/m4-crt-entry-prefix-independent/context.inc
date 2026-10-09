@@ -1,0 +1,33 @@
+class Context;
+thread_local Context*owner{};
+class Context{
+ Runtime&r_;State&s_;const std::thread::id thread_=std::this_thread::get_id();bool running_{};unsigned mode_{},data_iat_{};std::vector<Event>events_;Diagnostic first_{};
+ void capture(unsigned address,const std::string&why){if(first_.reason.empty())first_={s_.gpr.rip.dword,address,static_cast<unsigned>(events_.size()),why};}
+ void after(){const auto n=events_.size();if(mode_==7&&n==25)iat_permission(Permissions::none);if(mode_==8&&n==25)change(0x5bb508,data_iat_+1);if(mode_==9&&n==23)r_.memory().store<unsigned>({frame-140},0x12345678);if(mode_==10&&n==13)change(slot,r_.memory().load<unsigned>({slot})+1);}
+public:
+ Context(Runtime&r,const std::string&native,unsigned seed=0):r_(r),s_(*std::construct_at(reinterpret_cast<State*>(r.remill_state().data()))){
+  unsigned count{};for(const auto&i:r.image_metadata().imports)if(r.image_metadata().image_base+i.iat_rva==0x5bb508){check(i.name&&*i.name=="_adjust_fdiv"&&i.library=="MSVCRT.dll","Exact actual FDIV data import owner");data_iat_=i.original_iat_value;++count;}check(count==1&&r.memory().load<unsigned>({0x5bb508})==data_iat_&&data_iat_==0x1ded32,"Actual raw FDIV lookup RVA distinct from provider file zero");
+  for(unsigned i=0;i<3504;++i)r_.remill_state()[i]=std::byte((0x5b+i*37+(i>>4)+seed*43)&255);std::memset(&s_.addr,0,sizeof(s_.addr));s_.addr.fs_base.dword=r_.fs_base().value;s_.seg.cs.flat=0x23;s_.seg.ds.flat=s_.seg.ss.flat=0x2b;project(s_,{0x11223344U+seed,0x55667788U+seed,0x99aabbccU+seed,0xddeeff00U+seed,frame,0x67891234U+seed,0x34567890U+seed,0x78903456U+seed,0x202,entry});std::memset(&s_.x87,0,sizeof(s_.x87));s_.x87.fxsave.cwd.flat=0x37f;s_.x87.fxsave.mxcsr.flat=0x1f80;s_.x87.fxsave.mxcsr_mask.flat=0x2ffff;s_.sw.ie=s_.sw.de=s_.sw.ze=s_.sw.oe=s_.sw.ue=s_.sw.pe=s_.sw.sf=s_.sw.c0=s_.sw.c1=s_.sw.c2=s_.sw.c3=0;r_.cpu()=cpu(s_);r_.cpu().esp=frame+4;r_.cpu().eip=Runtime::external_return;std::memcpy(r_.fx().data(),&s_.x87,512);r_.mark_remill_seeded();
+  std::array<std::byte,4096>pattern{};for(unsigned i=0;i<4096;++i)pattern[i]=std::byte((i*19+seed*7+0x3d)&255);r_.memory().write({0x20001000},pattern);change(0x7365a0,seed?0xabcdef00U+seed:0);change(0x73659c,seed?0x87654320U+seed:0);change(0x9a17ec,0x11111111);change(0x9a17f0,0x22222222);
+  r_.register_translation({{entry},{Abi::Cdecl,0,true},&adapter,"Independent actual three-service CRT entry prefix",{Domain::admitted_game,m4::admitted_image_hash,430,"30da37cdf0ae957fc87f6e0caf250b4a60e0e63767dea24935381791e60ad856",native,"0c67cae86dad6468e082607ebe9d2b2504094829adb28e37b0c082d6e158d724"}});
+ }
+ static void adapter(Runtime&r){if(!owner||&owner->r_!=&r)throw std::runtime_error("Own current adapter owner missing");owner->run();}
+ void guard(){if(owner!=this||!running_||thread_!=std::this_thread::get_id())throw std::runtime_error("Own stable serial adapter owner");}
+ void run(){if(running_||thread_!=std::this_thread::get_id()||!r_.remill_seeded())throw std::runtime_error("Own serial/seed entry admission");std::array<std::byte,430>source{};r_.memory().read({entry},source);if(m4::sha256(source)!="30da37cdf0ae957fc87f6e0caf250b4a60e0e63767dea24935381791e60ad856")throw std::runtime_error("Own current whole430 source identity");project(s_,r_.cpu());running_=true;try{(void)sub_5ac3a0(&s_,entry,this);throw std::runtime_error("Unimplemented full entry cannot complete");}catch(...){running_=false;throw;}}
+ unsigned read(unsigned a){guard();try{const auto v=r_.memory().load<unsigned>({a});events_.push_back({s_.gpr.rip.dword,a,v,4,0});after();if(a==0x5bb508){check(s_.gpr.rip.dword==0x5ac408&&v==data_iat_,"Actual unpublished data import read identity");throw Fault(FaultReason::unresolved_import,{s_.gpr.rip.dword},{a},"Initialized FDIV data import deliberately unconnected");}return v;}catch(const std::exception&e){capture(a,e.what());throw;}}
+ void write(unsigned a,unsigned v){guard();try{r_.memory().store<unsigned>({a},v);}catch(const std::exception&e){capture(a,e.what());throw;}events_.push_back({s_.gpr.rip.dword,a,v,4,1});after();}
+ void*call(State*s,unsigned target){guard();try{check(s==&s_&&events_.size()>=2,"Own actual callback State/event identity");const auto&rd=events_[events_.size()-2];const auto&wr=events_.back();constexpr std::array<std::array<unsigned,3>,3>calls{{{0x5ac3cf,0x5bb5a4,0x5ac3d5},{0x5ac3ec,0x5bb57c,0x5ac3f2},{0x5ac3fa,0x5bb504,0x5ac400}}};const auto found=std::find_if(calls.begin(),calls.end(),[&](const auto&row){return row[0]==rd.pc&&row[1]==rd.address;});check(found!=calls.end()&&!rd.write&&rd.value==target&&wr.pc==rd.pc&&wr.write&&wr.address==s_.gpr.rsp.dword&&wr.value==(*found)[2]&&r_.memory().load<unsigned>({wr.address})==wr.value,"Exact original owning CRT CALL/physical frame before service");
+   if(rd.pc==0x5ac3cf){if(mode_==1)r_.memory().protect({0x78038ee8},Permissions::read);if(mode_==2)r_.memory().protect({frame-140},Permissions::write);if(mode_==3)r_.memory().protect({frame-144},Permissions::write);}
+   if(rd.pc==0x5ac3ec&&mode_==4)r_.memory().protect({frame-140},Permissions::write);
+   r_.cpu()=cpu(s_);r_.cpu().esp+=4;r_.cpu().eip=rd.pc;r_.call_import({rd.address},{wr.value});project(s_,r_.cpu());
+   if(rd.pc==0x5ac3ec&&mode_==5)permission(0x7365a0,Permissions::none);
+   if(rd.pc==0x5ac3ec&&mode_==6)r_.memory().protect({0x78038ee8},Permissions::read);
+   if(rd.pc==0x5ac3fa&&mode_==11)r_.memory().protect({0x78038ee8},Permissions::read);
+   return this;
+  }catch(const std::exception&e){capture(slot,e.what());throw;}}
+ void invoke(unsigned return_pc=Runtime::external_return){if(owner)throw std::runtime_error("Own no nested context owner");owner=this;try{if(return_pc==Runtime::external_return)r_.invoke({entry});else r_.call_direct({entry},{return_pc});}catch(...){owner=nullptr;throw;}owner=nullptr;}
+ void mode(unsigned m){mode_=m;}const auto&events()const{return events_;}const auto&diagnostic()const{return first_;}State&state(){return s_;}bool running()const{return running_;}unsigned data_iat()const{return data_iat_;}
+ void permission(unsigned a,Permissions p){for(const auto&g:r_.image_metadata().mapped_regions)if(a>=g.start.value&&a<g.start.value+g.size){r_.memory().protect(g.start,p);return;}throw std::runtime_error("Own game mapping absent");}
+ void iat_permission(Permissions p){permission(slot,p);}
+ void change(unsigned a,unsigned v){for(const auto&g:r_.image_metadata().mapped_regions)if(a>=g.start.value&&std::uint64_t{a}+4<=std::uint64_t{g.start.value}+g.size){r_.memory().protect(g.start,Permissions::read|Permissions::write);r_.memory().store<unsigned>({a},v);r_.memory().protect(g.start,g.permissions);return;}throw std::runtime_error("Own mutation mapping absent");}
+};

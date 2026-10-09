@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "profile_id": "mw3-us-1-2-retail",
+  "image_sha256": "95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf",
+  "label": "sub_00409ED0",
+  "entry_va": 4234960,
+  "entry_rva": 40656,
+  "file_offset": 37584,
+  "size_bytes": 22,
+  "slice_sha256": "560c17c210dd7fedd7de601f42570c2a0473fa71962c13cfa85a005509a77c65",
+  "review_status": "static_contract_reviewed_execution_pending",
+  "dossier": "../docs/first-function.md"
+}

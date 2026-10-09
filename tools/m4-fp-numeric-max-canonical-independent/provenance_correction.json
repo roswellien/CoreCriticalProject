@@ -1,0 +1,7 @@
+{
+  "scope": "Correction to the unexecuted fixture derivative's derivation prose only; both frozen gate-label hashes are already identical.",
+  "supersedes_claim": "Proof gate label corrected from own prior typo to exact private preparation report hash",
+  "actual_association": "The own parent fixture already carried the exact preparation-r4 report hash. The new derivative obtains and writes the same hash; no Proof label change occurred.",
+  "prior_and_current_gate_sha256": "73a4fa0b37415a7510775d4a1939872a598168b92cc4f9b5bcf581f97e5f312e",
+  "compiled_source_or_prior_frozen_evidence_changed": false
+}

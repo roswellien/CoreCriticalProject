@@ -1,0 +1,9 @@
+# Final independent native observation audit
+
+The final audit preserves the sealed draft audit. It accepts explicit parent-provided SHA-256 bindings for the completed author execution, root observer, and successful observer stage. It verifies each current receipt's physical closure and native/packing stages, opens the original capture archives read-only, and derives expectations from original BEFORE inputs plus independently validated typed HeapCreate/HeapDestroy ownership evidence.
+
+Use `C:/Python314/python.exe tools/m4-crt-heap-mode-root-audit/final.py final-r1 <execution-directory> <execution-report-sha> <observer-directory> <observer-report-sha> <stage.json> <stage-sha>` only after those proofs are frozen. The stage verifier receives the stage directory.
+
+All 48 ordinary rows and 34 phases must match complete State3504, FX512, RuntimeCPU40, 20 pages, source identities, and both full-width ownership metadata arrays. The audit separately validates source access/event ledgers, the genuine probe RET, the unexecuted GetVersionExA fault, poisoned retry, and inactive older/later jobs. The unused heap-create constructor registry must have a typed nonzero owner distinct from the resource-owning heap-mode binding, with no acquired resource. Native API owner file hashes and named export RVAs are independently checked.
+
+This process runs no native worker, Windows API, original provider, or game. The new lower stack page is declared research input; the prior TIB and stack policy remain unchanged. Actual native execution belongs to the delegated author. The guest API ABI and undefined AF representatives are finite declared contracts, not original API internals, Windows guard-stack growth, selector/initializer return, selected mode, initialized allocator, original attach, or a full causal-model claim.

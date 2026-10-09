@@ -1,0 +1,9 @@
+# Independent actual heap-return capture audit
+
+`final.py` accepts explicit frozen author execution, root observer, and observer-stage hashes. It reads strict O0/O2 archives and computes source effects from the full original startup BEFORE seam. The sealed independent affine audit bodies are reused; actual named native HeapCreate/GetVersionExA witnesses provide only the declared API effects. Captured AFTER State is never an expected seed.
+
+Every ordinary row must contain 44 complete phases, including 3504-byte State, 512-byte FX, 40-byte generic Runtime CPU, 21 unchanged mappings, heap W16Q/R18Q, query Q20Q and complete 148-byte input/output mirrors, all 37 API transport DWORDs, and private return-progress 8DWORD. All unused earlier jobs/ledgers are checked, including distinct constructor-only hc/hm/hv owners. The source mode store and genuine initializer RET must occur while the exact full-width private handle remains live; cleanup is verified afterward. The terminal is 78001843 before the fragment caller executes, with the cdecl argument still present at 2000185C.
+
+The auditor executes no native worker, original code, game, or Windows heap/query API. It grants no universal original API/register/flag equivalence, original lower-stack observation or guard growth, full causal replay, complete allocator, original attach, full CRT, or whole M4 claim. Hypothetical query and declared lower-page controls remain explicitly static formula checks.
+
+All prior source, draft audit, and accepted receipts are frozen. `derive_final.py` records construction from the sealed preceding final auditor and sealed current independent affine auditor; the fresh final tool was then extended for the current phase and private-progress schema. Actual proof runs publish only a new final-rN namespace and never change old receipts.

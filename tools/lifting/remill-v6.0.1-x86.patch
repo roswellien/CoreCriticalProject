@@ -1,0 +1,37 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f9878c6..5e0dd69 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -47,8 +47,11 @@ else()
+     aarch64info aarch64desc aarch64codegen aarch64asmparser
+     armcodegen armasmparser
+     interpreter mcjit
+-    x86info x86codegen x86asmparser
+-    sparccodegen sparcasmparser)
++    x86info x86codegen x86asmparser)
++  if("Sparc" IN_LIST LLVM_TARGETS_TO_BUILD)
++    llvm_map_components_to_libnames(sparc_llvm_libs sparccodegen sparcasmparser)
++    list(APPEND llvm_libs ${sparc_llvm_libs})
++  endif()
+ endif()
+ message(STATUS "LLVM Libraries: ${llvm_libs}")
+ 
+@@ -225,7 +228,8 @@ target_compile_definitions(remill_settings INTERFACE
+   "REMILL_BUILD_SEMANTICS_DIR_PPC64_32ADDR=\"${REMILL_BUILD_SEMANTICS_DIR_PPC64_32ADDR}\""
+ )
+ 
+-if(REMILL_FETCH_SLEIGH)
++option(MW34_X86_FIXTURE_ONLY "Exclude unused PowerPC spec compilation for the XED x86 fixture" OFF)
++if(REMILL_FETCH_SLEIGH AND NOT MW34_X86_FIXTURE_ONLY)
+   if(SLEIGH_EXECUTABLE)
+     set(sleigh_compiler "${SLEIGH_EXECUTABLE}")
+   else()
+@@ -247,6 +251,8 @@ if(REMILL_FETCH_SLEIGH)
+     install(FILES "${sleigh_BINARY_DIR}/specfiles/Ghidra/Processors/PowerPC/data/languages/ppc_32_e200_be.sla"
+       DESTINATION "${CMAKE_INSTALL_DATADIR}/sleigh/specfiles/Ghidra/Processors/PowerPC/data/languages/")
+   endif()
++elseif(REMILL_FETCH_SLEIGH)
++  add_custom_target(sleigh_custom_specs)
+ else()
+   if(NOT EXISTS "${sleigh_INSTALL_SPECDIR}/Ghidra/Processors/PowerPC/data/languages/ppc_32_e200_be.sla")
+     message(FATAL_ERROR "Installed sleigh spec not found: ${sleigh_INSTALL_SPECDIR}/Ghidra/Processors/PowerPC/data/languages/ppc_32_e200_be.sla")

@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.24)
+project(CommandLineControls LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+add_executable(commandline_controls ../../../tests/m4-crt-commandline-native/controls.cpp)
+target_include_directories(commandline_controls PRIVATE .. "${MW34_CMD_INCLUDE}" ../../m4-runtime ../../m4-startup ../../../runtime)
+target_include_directories(commandline_controls SYSTEM PRIVATE ../../../local/tools/remill-v6.0.1/remill-6.0.1/include)
+target_compile_definitions(commandline_controls PRIVATE ADDRESS_SIZE_BITS=32 HAS_FEATURE_AVX=0 HAS_FEATURE_AVX512=0)
+target_compile_options(commandline_controls PRIVATE /EHsc -Wno-invalid-offsetof)
+target_link_libraries(commandline_controls PRIVATE "${MW34_CMD_LIBRARY}" bcrypt)
+
+add_executable(commandline_publisher ../../../tests/m4-crt-commandline-native/publisher_controls.cpp)
+target_include_directories(commandline_publisher PRIVATE .. "${MW34_CMD_INCLUDE}" ../../m4-runtime ../../m4-startup ../../../runtime)
+target_link_libraries(commandline_publisher PRIVATE bcrypt)

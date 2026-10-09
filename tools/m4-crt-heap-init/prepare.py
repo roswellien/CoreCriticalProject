@@ -1,0 +1,56 @@
+"""Exact source fragment and heap initializer objects on frozen startup State."""
+import ctypes as c,hashlib,json,pathlib,re,shutil,subprocess,sys
+sys.dont_write_bytecode=True
+ROOT=pathlib.Path(__file__).absolute().parents[2];HERE=pathlib.Path(__file__).absolute().parent;BASE=ROOT/'reports/m4-crt-heap-init';OLD=ROOT/'reports/m4-crt-locale-default/preparation-r4';REC=ROOT/'reports/m4-crt-heap-init-recovery/recovery-r1'
+def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+def read(p):return json.loads(pathlib.Path(p).read_text(encoding='utf-8-sig'))
+def replace(s,a,b):assert s.count(a)==1,(a[:100],s.count(a));return s.replace(a,b)
+def main(name):
+ out=BASE/name;assert name.startswith('preparation-')and out.parent==BASE and not out.exists();out.mkdir(parents=True)
+ accepted=ROOT/'reports/m4-crt-locale-default-root/root-acceptance-r2/report.json';assert sha(accepted)=='211a866900b2274aad08c5ac710e0b69c93c34e279a7bfe3745b837541edf65e'and read(accepted)['passed']
+ assert sha(REC/'report.json')=='4706dd8c297247de56da28566f4c3e2b4891c68cc8db8deb28dc604608b5498b'
+ for manifest in (OLD/'pins.json',REC/'pins.json'):
+  for p,h in read(manifest)['files'].items():assert sha(p)==h,p
+ for p in OLD.iterdir():
+  if p.suffix in('.cpp','.hpp','.inc'):shutil.copyfile(p,out/p.name);shutil.copyfile(p,out/(p.name+'.ancestor'))
+ for n in ('heap.hpp','heap_binding.inc'):shutil.copyfile(HERE/n,out/n)
+ llvm=ROOT/'local/tools/llvm-21.1.8/clang+llvm-21.1.8-x86_64-pc-windows-msvc/bin';lifter=ROOT/'local/tools/remill-x87-control-repair/remill-lift-control-21.exe';sem=ROOT/'local/tools/remill-x87-control-repair/semantics/x86.bc';commands=[]
+ def run(program,args,label):
+  argv=[str(program),*map(str,args)];cp=subprocess.run(argv,capture_output=True,timeout=120);(out/(label+'.stdout')).write_bytes(cp.stdout);(out/(label+'.stderr')).write_bytes(cp.stderr);commands.append(dict(program=str(program),arguments=argv,exit_code=cp.returncode));assert cp.returncode==0,(label,cp.stderr[-1000:])
+ lower_source=(ROOT/'tools/m4-crt-mainargs-recovery/recover.py').read_text();body=lower_source[lower_source.index('def lower('):lower_source.index("if __name__ == '__main__':")];body=body.replace('mw34_mainargs_','mw34_heap_init_').replace("and '__remill_missing_block' not in text",'')
+ sys.path.insert(0,str(ROOT/'tools/lifting'));from host_adapter import LLVM,HOST_LAYOUT,FUNCTION_INDEX,checked_state_offsets
+ namespace=dict(c=c,re=re,sha=sha,LLVM=LLVM,HOST_LAYOUT=HOST_LAYOUT,FUNCTION_INDEX=FUNCTION_INDEX,checked_state_offsets=checked_state_offsets,need=lambda ok,why:None if ok else (_ for _ in()).throw(ValueError(why)),BRIDGES={'__remill_read_memory_32','__remill_write_memory_32','__remill_write_memory_8','__remill_read_memory_8','__remill_function_call','__remill_function_return','__remill_jump','__remill_missing_block'})
+ exec(compile(body,str(ROOT/'tools/m4-crt-mainargs-recovery/recover.py'),'exec'),namespace)
+ upstream=(ROOT/'local/tools/remill-v6.0.1/remill-6.0.1/tests/X86/Run.cpp').read_text();native={};static=read(REC/'report.json')
+ for component,key in (('fragment','attach-fragment'),('provider','heap-initializer')):
+  span=static['spans'][key];code=(REC/(key+'.bin')).read_bytes();assert sha(REC/(key+'.bin'))==span['sha256'];(out/(component+'-source.bin')).write_bytes(code)
+  run(lifter,['--arch=x86','--os=windows','--address='+str(span['start']),'--entry_address='+str(span['start']),'--bytes='+code.hex(),'--semantics_dir='+str(sem.parent),'--ir_out='+str(out/(component+'-guest.ll'))],component+'-lift')
+  calls=[dict(kind='direct',target=int(i['operands'],16))for i in span['instructions']if i['mnemonic']=='call'and re.fullmatch('0x[0-9a-f]+',i['operands'])]
+  for target in re.findall(r'^declare ptr @sub_([0-9a-f]+)',(out/(component+'-guest.ll')).read_text(),re.M):calls.append(dict(kind='direct',target=int(target,16)))
+  native[component]=namespace['lower'](out,component,dict(entry=span['start'],outgoing_calls=calls),llvm/'LLVM-C.dll',upstream,lambda program,args,label:run(program,args,label),llvm)
+ p=out/'composition.cpp';s=p.read_text();s=replace(s,'#include "locale.hpp"','#include "locale.hpp"\n#include "heap.hpp"');s=replace(s,'namespace ld=mw34::m4_crt_locale_default;','namespace ld=mw34::m4_crt_locale_default;\nnamespace hi=mw34::m4_crt_heap_init;');s=replace(s,'#include "mainargs_binding.inc"','#include "heap_binding.inc"\n#include "mainargs_binding.inc"')
+ routes={'__remill_read_memory_32':'return hi::current(p,a)->read32(a);','__remill_write_memory_32':'hi::current(p,a)->write32(a,v);return p;','__remill_function_call':'return hi::current(p,a)->called(s,a,p);'}
+ for line in s.splitlines():
+  if not(line.startswith('extern "C"')and'noexcept(false)'in line and'{'in line):continue
+  opening='noexcept(false) {'if'noexcept(false) {'in line else'noexcept(false){';key=next((k for k in routes if k+'('in line),None);action=routes[key]if key else'hi::current(hi::owner,0)->unsupported(0,"Other bridge cannot use active heap initializer owner");';s=replace(s,line,line.replace(opening,opening+'if(hi::has_authority()){'+action+'}',1))
+ bridges=set(v for n in native.values()for v in n['bridges']);extra=''
+ for bridge in sorted(bridges):
+  if re.search(r'\b'+re.escape(bridge)+r'\(',s):
+   continue
+  if bridge.endswith('_undefined_8'):extra+='extern "C" unsigned char '+bridge+'()noexcept(false){return hi::current(hi::owner,0)->undefined();}\n'
+  elif bridge.startswith('sub_')or bridge=='__remill_missing_block':extra+='extern "C" void*'+bridge+'(State*s,unsigned a,void*p)noexcept(false){return hi::current(p,a)->called(s,a,p);}\n'
+  else:raise ValueError('Unreviewed new heap bridge '+bridge)
+ s=replace(s,'#include "main_v2.inc"',extra+'#include "main_v2.inc"');p.write_text(s)
+ p=out/'mainargs_binding.inc';s=p.read_text();s=replace(s,'unsigned control{};ld::Binding locale;','unsigned control{};ld::Binding locale;hi::Binding heap;');s=replace(s,'control(mode),locale(context,provider,mode){}','control(mode),locale(context,provider,mode),heap(context,provider,mode){}');s=replace(s,'mainargs_binding->locale.start(c);','mainargs_binding->heap.start(c);mainargs_binding->locale.start(c);');p.write_text(s)
+ p=out/'observations.hpp';s=p.read_text();s=replace(s,'fresh_output(phase/"state.bin",r.remill_state());','for(auto [address,size,name]:std::array<std::tuple<unsigned,unsigned,const char*>,2>{{{hi::fragment,7,"heap-fragment.bin"},{hi::entry,77,"heap-provider.bin"}}}){std::vector<std::byte>b(size);r.memory().read({address},b);fresh_output(phase/name,b);}\n fresh_output(phase/"state.bin",r.remill_state());');p.write_text(s)
+ p=out/'main_v2.inc';s=p.read_text().replace('MW34_CRT_LOCALE_DEFAULT_NO_MAIN','MW34_CRT_HEAP_INIT_NO_MAIN');s=replace(s,'scenario+73','scenario+85');s=replace(s,'namespace mw34::m4_crt_locale_default {void checkpoint(Runtime&r,const char*name){snapshot(r,checkpoint_directory,name);}}','namespace mw34::m4_crt_locale_default {void checkpoint(Runtime&r,const char*name){snapshot(r,checkpoint_directory,name);}}\nnamespace mw34::m4_crt_heap_init {void checkpoint(Runtime&r,const char*name){snapshot(r,checkpoint_directory,name);}}');s=replace(s,'auto&locale=mainargs.locale;','auto&locale=mainargs.locale;auto&heap=mainargs.heap;');s=replace(s,'ld::admitted_binding=&locale;boundary','ld::admitted_binding=&locale;hi::binding=&heap;hi::admitted_binding=&heap;boundary')
+ a=s.index('  if(!mode){require(entry_job.fault_reason');b=s.index('  const auto state_copy=context.state();',a)
+ s=s[:a]+'''  std::array<unsigned,26>heap_job{heap.control,heap.frame,heap.parent_frame,heap.access_count,heap.event_count,heap.undefined_count,heap.stage,heap.depth,heap.fault_pc,heap.fault_address,unsigned(heap.used),unsigned(heap.active),unsigned(heap.failed),unsigned(heap.api_reached),heap.caller_error,heap.restored_error,hi::fragment,hi::entry,hi::site,hi::ret,hi::api_site,hi::iat,hi::api_ret,hi::raw_import,17,84};raw_output(row/"heap-job.bin",heap_job);raw_output(row/"heap-accesses.bin",heap.accesses);raw_output(row/"heap-events.bin",heap.events);raw_output(row/"heap-undefined.bin",heap.undefined_sites);raw_output(row/"heap-scheduler.bin",heap.scheduler);std::ofstream heap_reason(row/"heap-reason.txt");heap_reason<<(heap.reason?heap.reason:"")<<'\\n';require(bool(heap_reason),"Heap initializer first diagnostic retained");require(!heap.active&&!heap.depth&&!hi::owner,"Heap initializer terminal cleanup");
+  if(!mode){require(entry_job.fault_reason==static_cast<unsigned>(FaultReason::unresolved_import)&&entry_job.fault_pc==hi::api_site&&entry_job.fault_target==hi::iat,"Genuine HeapCreate API frontier");require(heap.failed&&heap.api_reached&&heap.access_count==8&&heap.event_count==3&&heap.undefined_count==1&&heap.caller_error==heap.restored_error,"Actual heap initializer prefix and LastError");require(r.calls().size()==11&&!r.calls()[0].completed&&!r.calls()[10].completed,"Original actual Runtime call chain retained");for(unsigned i=1;i<10;++i)require(r.calls()[i].completed,"Prior nine completed routes retained");require(!locale.used&&!commandline.used&&!parser.used&&!mainargs.context.used&&!mainargs.context.active,"Heap bootstrap refuses before locale and commandline/parser/provider bodies");}
+  else require(entry_job.fault_reason!=static_cast<unsigned>(FaultReason::unresolved_import)||entry_job.fault_pc!=hi::api_site||entry_job.fault_target!=hi::iat,"Heap initializer causal mutation avoids clean frontier outcome");
+'''+s[b:]
+ s=replace(s,'snapshot(r,row,"retry-after");ld::binding=nullptr;','snapshot(r,row,"retry-after");hi::binding=nullptr;hi::admitted_binding=nullptr;ld::binding=nullptr;');p.write_text(s)
+ files={str(p.absolute()):sha(p)for p in out.iterdir()if p.is_file()}
+ for p in (HERE/'prepare.py',HERE/'heap.hpp',HERE/'heap_binding.inc',accepted,OLD/'pins.json',REC/'report.json',REC/'pins.json',ROOT/'tools/m4-crt-mainargs-recovery/recover.py',ROOT/'tools/lifting/host_adapter.py',lifter,sem,llvm/'LLVM-C.dll',llvm/'clang.exe',llvm/'llvm-nm.exe',pathlib.Path(sys.executable)):files[str(p.absolute())]=sha(p)
+ report=dict(passed=True,scope='Source/build preparation for explicit literal argument/CALL fragment and genuine heap initializer to first HeapCreate API dependency; no heap or locale initialization',source_bodies=native,source_identity_bytes=1940,compiled_new_source_bytes=84,source_accesses=8,source_PCs=9,borrowed_pages=17,prior_pages_preserved=17,State_bytes=3504,FX_bytes=512,State_reseed_after_writer=False,Runtime_CPU_preserved=True,Runtime_call_record_added=False,scheduler_store_count=0,scheduler_State_projection=dict(EIP=0x7800183c,ESP_changed=False,other_bytes_preserved=True),undefined_AF=dict(site=0x780039bf,admitted_generated_representative=0,universal_AF_claim=False),original_attach_executed=False,HeapCreate_called=False,heap_initialized=False,locale_body_executed=False,parser_body_executed=False,original_executed=False,native_component_executed=False,whole_M4_complete=False,commands=commands);(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');files[str(out/'report.json')]=sha(out/'report.json');(out/'pins.json').write_text(json.dumps(dict(files=files),indent=2)+'\n');print(json.dumps(dict(passed=True,report_sha256=sha(out/'report.json'),pins_sha256=sha(out/'pins.json'))))
+if __name__=='__main__':main(sys.argv[1])

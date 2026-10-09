@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.24)
+project(MW34ConnectedControlOriginal LANGUAGES CXX ASM_MASM)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT MW34_CONNECTED_INCLUDE)
+ message(FATAL_ERROR "Exact private connected control metadata required")
+endif()
+add_executable(mw34_connected_control_reference ../reference.cpp ../reference_x86.asm)
+target_include_directories(mw34_connected_control_reference PRIVATE "${MW34_CONNECTED_INCLUDE}" "${CMAKE_CURRENT_SOURCE_DIR}/.." "${CMAKE_CURRENT_SOURCE_DIR}/../../m4-crt")
+target_compile_options(mw34_connected_control_reference PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /WX /permissive->)
+target_link_libraries(mw34_connected_control_reference PRIVATE bcrypt)
+# The modern probe image itself must stay disjoint from exact legacy addresses.
+target_link_options(mw34_connected_control_reference PRIVATE /BASE:0x60000000 /DYNAMICBASE:NO)

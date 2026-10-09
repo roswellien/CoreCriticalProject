@@ -1,0 +1,9 @@
+{
+  "original_source": "D:\\Projects\\MW34Recomp\\tools\\m4-strings-source\\compare_connected.py",
+  "original_source_sha256": "ddb79a1b4b09acc7855b5b87b688aaceb15d352e4fa718b6bcdb895afa9c8c19",
+  "derived_source": "D:\\Projects\\MW34Recomp\\tools\\m4-strings-review\\observe_connected.py",
+  "derived_source_sha256": "abe3c4699ae19314d5bfb966f0ba0ea6b5debf55434baf8831d7c3ff52b394fc",
+  "purpose": "Exact frozen source computation, same one bootstrap BEFORE, all finite responses; added read-only observation hooks plus genuine source replay/free continuation",
+  "semantic_game_computation_changes": false,
+  "checkpoint_machine_seed": false
+}

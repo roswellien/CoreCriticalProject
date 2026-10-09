@@ -1,0 +1,5 @@
+# Independent heap-return model audit
+
+`audit.py draft-r1` checks the fresh root model against a separate affine derivation of the original source, starting with the full immutable startup model's healthy `mainargs-before` machine. It authenticates the eight already compiled continuation instructions and independently computes their two CMP flag sets, original global store, PUSH/POP and initializer RET frame. The root's stopping subclass is compared with the full startup model and is not the independent expected seed.
+
+The draft uses explicitly hypothetical typed 148-byte query responses and declared lower-page research inputs. It compares all ordinary 44 anticipated phases, complete 3504-byte State/512-byte FX/40-byte generic RuntimeCPU and 21 mapped pages, plus source/API ledgers. Directed alternative query outcomes retain their unresolved environment frontier. It grants no new native/API/original/game execution credit, no original lower-stack or guard-growth equivalence, no full causal model proof, and no heap caller execution or persistent live-resource claim. The final actual capture audit will require separate frozen execution and observer receipts.

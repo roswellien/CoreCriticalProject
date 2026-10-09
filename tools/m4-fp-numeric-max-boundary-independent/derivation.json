@@ -1,0 +1,8 @@
+{
+  "scope": "Only own frozen independent seed/page/model helpers copied; no author fixture/model/executor",
+  "source": "D:\\Projects\\MW34Recomp\\tools\\m4-fp-numeric-max-session-independent\\controls.cpp",
+  "source_sha256": "1923cbe35967f43b11b8225b075ff27611d37fbab654e59f12c535c0ecc2092d",
+  "selected_start_marker": "std::array<std::byte,3504> bytes(",
+  "selected_end_marker": "void positive(",
+  "selected_utf8_sha256": "61c1b25b17a32483077e8da321d040cbe40381682a31fe03b5dc4831dc0eb154"
+}

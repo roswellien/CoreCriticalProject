@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.24)
+project(MW34ControlCarryContexts LANGUAGES CXX)
+if(NOT WIN32 OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT MW34_DERIVED OR NOT MW34_NATIVE_BUILD OR NOT MW34_REMILL_INCLUDE)
+  message(FATAL_ERROR "Fresh context tests require exact static carry build and Windows x64")
+endif()
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+enable_testing()
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../runtime" runtime)
+file(GLOB MW34_FP_CPP "${MW34_DERIVED}/native/*.cpp")
+foreach(level O0 O2)
+  include("${MW34_BINDINGS}/objects-${level}.cmake")
+  add_executable(carry_context_${level} ../../../tests/m4-crt-control-carry/context_tests.cpp ${MW34_FP_CPP}
+    "${MW34_DERIVED}/native/chain/runtime_adapter.cpp" "${MW34_DERIVED}/native/integer/runtime_adapter.cpp"
+    ../../m4-initializer-chain/component.cpp ../../m4-integer-startup/component.cpp
+    ../../m4-runtime/runtime.cpp ../../m4-startup/image_loader.cpp ../../m4-guest-cw/guest_cw.cpp ${MW34_CONTEXT_OBJECTS})
+  target_include_directories(carry_context_${level} PRIVATE .. ../../m4-runtime ../../m4-startup ../../m4-guest-cw ../../m4-crt "${MW34_DERIVED}/native" "${MW34_DERIVED}/original" "${MW34_NATIVE_BUILD}/${level}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../runtime")
+  target_include_directories(carry_context_${level} SYSTEM PRIVATE "${MW34_REMILL_INCLUDE}")
+  target_compile_definitions(carry_context_${level} PRIVATE ADDRESS_SIZE_BITS=32 HAS_FEATURE_AVX=0 HAS_FEATURE_AVX512=0)
+  target_compile_options(carry_context_${level} PRIVATE /EHsc /clang:-frounding-math $<IF:$<STREQUAL:${level},O0>,/Od,/O2>)
+  target_link_libraries(carry_context_${level} PRIVATE mw34_runtime bcrypt)
+  add_test(NAME carry_context_${level} COMMAND carry_context_${level} "${MW34_IMAGE}" "${MW34_PROVIDER}" "${MW34_DERIVED}/pack.bin" "${MW34_ORIGINAL_RAW}")
+endforeach()
