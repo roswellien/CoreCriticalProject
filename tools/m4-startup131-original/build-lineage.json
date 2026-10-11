@@ -1,0 +1,12 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup130-original\\build.ps1",
+  "base_sha256": "2be88ec0d8b10e45f07100e5665b06817171249b1e1d6e69bcb0d951b74b22e3",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\build.ps1",
+  "generated_sha256": "8bf2b93b58b2b0fbb545b76f6c8e64c777d1d7eaa97391ea54bdcb8d130f2b70",
+  "changes": [
+    "Assigned additive full131 namespace",
+    "131 roots /786 phases metadata",
+    "Separate measured MFC/constructor export extent metadata"
+  ],
+  "compiler_and_flags_unchanged": true
+}

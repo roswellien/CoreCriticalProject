@@ -1,0 +1,17 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup130-original\\validate_v2.py",
+  "base_sha256": "73f53f69ebd57055538a70ffc6e20f66aeb393dbfa76e109cef00cc9933b3a45",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\validate.py",
+  "generated_sha256": "4d596099fa65621e27dbd04a047dbe979cbd4302f656e2a38a2b7bc4c83ebfc9",
+  "new_MFC_observer": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\mfc_phase.py",
+  "new_MFC_observer_sha256": "2c89e32c6d5e1b52c0468267a5baa484a5eef8b42880f140048101954033e14b",
+  "changes": [
+    "Exact131 physicalorder/header/786phase extent",
+    "Externally fixed current preflight and final format targets",
+    "Fresh genuine MFC42normal/24APIpairs/12TIB endpoints and observed complete module/backing inputs",
+    "Separate actual constructor12graph/whole5F2000/HeapAlloc occurrence joins",
+    "Existing complete130 retained family observations remain required, counts only grow at6addedphases"
+  ],
+  "fixed_record_ABI_unchanged": true,
+  "reader_opened": false
+}

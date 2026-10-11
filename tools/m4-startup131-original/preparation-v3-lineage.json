@@ -1,0 +1,12 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\prepare_v2.py",
+  "base_sha256": "382eea8b5bd3d7bf0043b470e52510d42e99e050e636aeb126ba588183369957",
+  "header_base": "D:\\Projects\\MW34Recomp\\tools\\m4-constructor-original\\prerequisite_observer.hpp",
+  "header_base_sha256": "9b8e6ea6fc5791ce41f75c5b7bcb071f7da7dff1b484c92d66a75140abcb84d6",
+  "new_header": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\prerequisite_observer_v2.hpp",
+  "new_header_sha256": "a0316c180ece4e2b1ddc09fc54499f5193c13bfee2f539841836ffb64d983e0b",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\prepare_v3.py",
+  "generated_sha256": "1d8841342b3ca477a946f6b4f7de74b5e8919258b0eec2ebc296231b976721f2",
+  "change": "Rename local owner to allocation_occurrence to preserve /W4 /WX without shadowing existing imported entry global; observation bytes and logic unchanged",
+  "failed_build": "reports/m4-startup131-original/build-r1/build.json"
+}

@@ -1,0 +1,7 @@
+from pathlib import Path
+p=Path(__file__).resolve().parent;root=p.parents[1]
+s=(root/'tools/m4-formatting-frontier/lift.py').read_text()
+edits=[("REC=ROOT/'reports/m4-formatting-frontier/recovery-r1'","REC=ROOT/'reports/m4-mixed-format-original/recovery-r1'"),("REC_SHA='8a2c511e47eddce2cab0929b9ede59e81276957ace6e2926b38c5323325dca15'","REC_SHA='5627b4234b16f5bdb493f4102f541166cbf8bde11c53c3b9a691a24d1230e5fa'"),("out=ROOT/'reports/m4-formatting-frontier'/name","out=ROOT/'reports/m4-mixed-format-original'/name"),("graphs=json.loads(pin(REC/'game-new-graphs.json').read_bytes());strrchr=json.loads(pin(REC/'strrchr-graph.json').read_bytes());graphs[str(strrchr['entry'])]=strrchr;need(len(graphs)==11,'Ten game plus one closed strrchr source graph')","graphs=json.loads(pin(REC/'game-normal-graphs.json').read_bytes());shared={0x4de9c0,0x5abd26,0x5ac110,0x5ac140,0x5ac580};graphs={k:g for k,g in graphs.items()if int(k)not in shared};need(len(graphs)==7,'Seven new mixed game bodies, shared accepted/formatter bodies excluded')"),("ROOT/'tools/m4-formatting-frontier/derive_lift.py'","ROOT/'tools/m4-mixed-format-original/derive_lift.py',ROOT/'tools/m4-formatting-frontier/lift.py'"),("scope='Exact formatting game and strrchr source/COFF preparation only; sprintf and runtime remain open'","scope='Exact seven mixed game source/COFF bodies only; genuine observed prefix exists, native persistent integration remains separate'"),("root_count=3","root_count=1")]
+for a,b in edits:
+ assert a in s,a;s=s.replace(a,b,1)
+(p/'lift.py').write_text(s)

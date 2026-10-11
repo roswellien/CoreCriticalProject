@@ -1,0 +1,16 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\mfc_phase.py",
+  "base_sha256": "2c89e32c6d5e1b52c0468267a5baa484a5eef8b42880f140048101954033e14b",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\mfc_phase_v2.py",
+  "generated_sha256": "406cf141d4ea9091e13f32b32f66534d222dfc61053e2b8dd3b7f203cc529c28",
+  "validator_base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\validate.py",
+  "validator_base_sha256": "4d596099fa65621e27dbd04a047dbe979cbd4302f656e2a38a2b7bc4c83ebfc9",
+  "validator_generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\validate_v2.py",
+  "validator_generated_sha256": "9991defca2c0659a98fb121a613c0607daddd6f31c5a3f2c019cc960b6776762",
+  "changes": [
+    "Retain each current MFC actual phase356992 record and3wholeextraBEFORE/AFTERsourcepages while the same sole reader is open",
+    "Expose exact bounded-source-compatible wholeprovider alias field",
+    "Pin same current MFC artifact raw record identity"
+  ],
+  "new_reader_opened": false
+}

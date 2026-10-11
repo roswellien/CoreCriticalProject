@@ -48,14 +48,18 @@ static HRESULT STDMETHODCALLTYPE surfaceAttached(IDirectDrawSurface4 *self,DDSCA
 }
 static HRESULT STDMETHODCALLTYPE surfaceFlip(IDirectDrawSurface4 *self,IDirectDrawSurface4 *target,DWORD flags) {
     const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::Flip)>(original(self,offsetof(IDirectDrawSurface4Vtbl,Flip)/sizeof(void *)));
-    const auto result=call(self,target,flags);presentationRecord("Flip",self,target,flags,result);return result;
+    present_capture::before(self);
+    const auto result=call(self,target,flags);presentationRecord("Flip",self,target,flags,result);
+    present_capture::after(self,result);return result;
 }
 static HRESULT STDMETHODCALLTYPE surfaceBlt(IDirectDrawSurface4 *self,RECT *destination,IDirectDrawSurface4 *source,RECT *sourceRect,DWORD flags,DDBLTFX *fx) {
     const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::Blt)>(original(self,offsetof(IDirectDrawSurface4Vtbl,Blt)/sizeof(void *)));
+    present_capture::surfaceOperation("Blt",self,source,flags,destination,sourceRect,fx,0,0);
     const auto result=call(self,destination,source,sourceRect,flags,fx);presentationRecord("Blt",self,source,flags,result);return result;
 }
 static HRESULT STDMETHODCALLTYPE surfaceBltFast(IDirectDrawSurface4 *self,DWORD x,DWORD y,IDirectDrawSurface4 *source,RECT *sourceRect,DWORD flags) {
     const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::BltFast)>(original(self,offsetof(IDirectDrawSurface4Vtbl,BltFast)/sizeof(void *)));
+    present_capture::surfaceOperation("BltFast",self,source,flags,nullptr,sourceRect,nullptr,x,y);
     const auto result=call(self,x,y,source,sourceRect,flags);presentationRecord("BltFast",self,source,flags,result);return result;
 }
 static void installPresentation(Entry &e) {

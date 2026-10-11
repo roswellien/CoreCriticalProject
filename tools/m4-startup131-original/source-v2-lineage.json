@@ -1,0 +1,9 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\compare_source.py",
+  "base_sha256": "2e90065facf74cae5f66e81abc491ac8e9515bfb9b9d5b9adb89872db66ff71d",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\compare_source_v2.py",
+  "generated_sha256": "b4efbfde11e776e08ade1dd1ea8413cbf6572872124933111c433547cada18e3",
+  "change": "Current full-original validation execution_path names its execution directory; use its exact externally pinned report.json, unlike historical one-root receipt file path. No model/predicate/input domain changes.",
+  "failed_receipt": "reports/m4-startup131-original/source-r1/report.json",
+  "archive_reader_opened": false
+}

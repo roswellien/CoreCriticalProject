@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MW3 HUD fidelity prototype</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui;color:#dbe9e0;background:#0b1210}body{margin:0}header,section.controls,footer{padding:20px 28px}h1{font-size:24px;margin:0 0 8px}p{color:#a5b8ae;max-width:1000px;line-height:1.5;margin:8px 0}section.controls{display:flex;gap:18px;flex-wrap:wrap;border-block:1px solid #30463a}label{display:grid;gap:7px;font-size:13px}select,button,input{font:inherit}select,button{background:#1a2b22;color:#dbe9e0;border:1px solid #526a5d;border-radius:5px;padding:8px}button{cursor:pointer}#surface{overflow:auto;background:#030605;border-bottom:1px solid #30463a}canvas{display:block;margin:auto;max-width:100%;height:auto}#surface.actual canvas{max-width:none}#summary{font:13px monospace;color:#afccb9}.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;padding:0 28px 28px}.card{background:#15231c;padding:16px;border:1px solid #30463a;border-radius:7px}.card canvas{max-width:100%;background:#030605}.card h3{font-size:14px;margin:0 0 10px}.tag{color:#8bdd9d;font-size:12px}#checks{font-size:12px;color:#8bdd9d}a{color:#9fe7b0}
+</style>
+<header><h1>MW3 HUD fidelity prototype</h1><p>Compare enlarged source artwork with fresh text and vector components. Sample text is authored in both modes; source sprites are decoded originals. The scene uses recovered HUD positions and illustrative values. This is a standalone prototype; it is not a game capture.</p></header>
+<section class="controls">
+<label>Output size<select id="resolution"><option value="640,480">640 × 480</option><option value="1920,1440">1920 × 1440 · 4:3</option><option value="2560,1440">2560 × 1440 · 16:9</option><option value="3440,1440" selected>3440 × 1440 · ultrawide</option></select></label>
+<label>Rendering<select id="mode"><option value="enhanced">Output-resolution text + vectors</option><option value="source">Enlarged source components</option><option value="stretch">Stretched source control</option></select></label>
+<label>HUD size<input id="scale" type="range" min="0.75" max="1" step="0.05" value="1"></label>
+<label>Heat<input id="heat" type="range" min="0" max="100" value="35"></label>
+<label>Speed<input id="speed" type="range" min="0" max="100" value="64"></label>
+<label>Heading<input id="heading" type="range" min="0" max="359" value="350"></label>
+<label>Preview scale<select id="preview"><option value="fit">Fit window</option><option value="actual">100% output pixels</option></select></label>
+<label>Export<button id="export">Save output PNG</button></label>
+</section>
+<div id="surface"><canvas id="hud" aria-label="HUD component rendering"></canvas></div>
+<footer><div id="summary"></div><p>Gauges keep uniform proportions and move with the screen edges. The reticle stays at the screen center. Arial text is freshly rasterized at output size; vector assets retain their original logical dimensions. Compass spacing, marker motion and weapon values are illustrative. Background is authored.</p><div id="checks"></div><h2>Components at 6×</h2><p>Each card shows the source raster on the left and a source-informed vector remake on the right. Shape, color and numeral styling need in-game visual review.</p></footer>
+<div id="gallery" class="gallery"></div>
+<script>/*MODEL*/
+/*RENDERER*/</script></html>

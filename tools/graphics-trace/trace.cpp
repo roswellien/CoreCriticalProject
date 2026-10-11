@@ -113,7 +113,13 @@ static HRESULT STDMETHODCALLTYPE setRenderState(IDirect3DDevice3 *, D3DRENDERSTA
 static HRESULT STDMETHODCALLTYPE setStageState(IDirect3DDevice3 *, DWORD, D3DTEXTURESTAGESTATETYPE, DWORD);
 static void observe(void *, Kind);
 static void coverageViolation(const char *);
+static void clearDiagnostic(bool,DWORD,D3DRECT *,DWORD,D3DCOLOR,D3DVALUE,DWORD) noexcept;
 #include "coverage.hpp"
+namespace present_capture {
+inline void before(IDirectDrawSurface4 *) noexcept;
+inline void after(IDirectDrawSurface4 *,HRESULT) noexcept;
+inline void surfaceOperation(const char *,IDirectDrawSurface4 *,IDirectDrawSurface4 *,DWORD,RECT *,RECT *,DDBLTFX *,DWORD,DWORD) noexcept;
+}
 #include "presentation.hpp"
 
 static void observe(void *object, Kind kind) {
@@ -224,6 +230,18 @@ static unsigned stride(DWORD fvf) {
 }
 static std::string filteringHistory(void *object);
 #include "capture.hpp"
+#include "present_capture.hpp"
+static void clearDiagnostic(bool explicitValues,DWORD count,D3DRECT *rects,DWORD flags,D3DCOLOR color,D3DVALUE depth,DWORD stencil) noexcept {
+    State guard;
+    if(!live || !frame_capture::active)return;
+    try {
+        if(count>64)throw std::runtime_error("clear_rectangle_budget");
+        DWORD bits{};std::memcpy(&bits,&depth,4);
+        std::string rectangles="null";
+        if(count)rectangles="\""+frame_capture::memory(rects,static_cast<size_t>(count)*sizeof(D3DRECT))+"\"";
+        frame_capture::record("{\"event\":\"unsupported_clear\",\"explicit_values\":"+std::string(explicitValues?"true":"false")+",\"count\":"+std::to_string(count)+",\"rectangles\":"+rectangles+",\"flags\":"+std::to_string(flags)+",\"color_argb\":"+std::to_string(color)+",\"depth_bits\":"+std::to_string(bits)+",\"stencil\":"+std::to_string(stencil)+"}");
+    } catch(const std::exception &e) {frame_capture::abort(e.what());}
+}
 static void coverageViolation(const char *method) {
     State guard;
     if(frame_capture::active)frame_capture::abort(method);
@@ -375,6 +393,9 @@ static HRESULT STDMETHODCALLTYPE fakeStageState(IDirect3DDevice3 *,DWORD stage,D
 #include "capture_fixture.hpp"
 #include "coverage_fixture.hpp"
 #include "presentation_fixture.hpp"
+#include "hud_text.hpp"
+#include "hud_draw.hpp"
+#include "hud_heat.hpp"
 static void tests() {
     __declspec(align(16)) unsigned char before[512]{}, after[512]{};
     SetLastError(0xaabbccdd);
@@ -390,6 +411,10 @@ static void tests() {
     setupCaptureFixture();
     setupCoverageFixture();
     setupPresentationFixture();
+    flipWindowFixture();
+    hud_text::fixture();
+    hud_draw::fixture();
+    hud_heat::fixture();
     fake1[0] = fake4[0] = fake3[0] = fakeDevice[0] = reinterpret_cast<void *>(&fakeQuery);
     fake3[offsetof(IDirect3D3Vtbl, CreateDevice) / sizeof(void *)] = reinterpret_cast<void *>(&fakeDeviceCreate);
     fakeDevice[offsetof(IDirect3DDevice3Vtbl, DrawPrimitive) / sizeof(void *)] = reinterpret_cast<void *>(&fakeDraw);
@@ -464,6 +489,9 @@ extern "C" DWORD WINAPI mw34_install(void *) {
         auto *previous = InterlockedExchangePointer(slot,reinterpret_cast<void *>(&create));
         DWORD ignored{};
         if(previous != reinterpret_cast<void *>(originalCreate) || !VirtualProtect(slot,4,old,&ignored)) throw std::runtime_error("IAT publication failed");
+        hud_text::install();
+        hud_draw::install();
+        hud_heat::install();
         draws = scenes = 0; live = true;
         line("\"event\":\"installed\",\"iat_va\":6008900,\"on_disk_game_unchanged\":true,\"mode\":\"bounded_call_through\"");
         return 0;

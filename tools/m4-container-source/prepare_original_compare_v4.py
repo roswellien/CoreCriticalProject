@@ -1,0 +1,13 @@
+"""Full NULL-free unit from genuine entry BEFORE; retain finite malloc EDX seam."""
+from pathlib import Path
+p=Path(__file__).with_name('compare_original_game_v3.py');q=p.with_name('compare_original_game_v4.py');assert not q.exists();s=p.read_text();old="need(tuple(cpu)==words(r,32,10),'Every NULL-free source-derived CPU GPR/flags/PC at actual entry/RET'+str((hex(entry),hex(self.cursor),cpu,list(words(r,32,10)))))";assert s.count(old)==1
+s=s.replace(old,"""actual_cpu=words(r,32,10);need(all(cpu[j]==actual_cpu[j]for j in range(10)if j!=2),'Every prefix-derived NULL-free CPU field outside finite malloc volatile EDX boundary')
+         if cpu[2]!=actual_cpu[2]:
+          need(entry==0x5a7dc0 and actual_cpu[2]==0 and len(allocation_calls)==1 and allocation_calls[0]['binding']['CALL_pc']==0x5a879c,'Exact finite original malloc EDX seam only at last vector root');need(allocs[0][1][12]==actual_cpu[2],'Authentic actual HeapAlloc volatile EDX output retained at declared finite malloc endpoint');counts['finite_original_malloc_EDX_boundaries']+=1
+         if self.cursor==0x78001390:
+          actual_state=bytearray(self.state);m.statecpu(actual_state,actual_cpu);unit=G.Machine(actual_state,r[72:584],r[32:72],{a:bytearray(v)for a,v in self.memory.items()},program=program,callbacks=callbacks);unit.call_stack=list(self.call_stack);unit.cursor=0x78001390
+          unit.run(stop=lambda x:x.cursor==0x78001424,api=lambda x,t:need(False,'No API/null owner in genuine sourcefree(NULL)'))
+          ret=nullsnapshots[(i+1)*628:(i+2)*628];unit_cpu=list(unit.projected_cpu());unit_cpu[9]=unit.cursor;need(tuple(unit_cpu)==words(ret,32,10),'Full NULL-free source-derived10DWORD CPU at actual literal RET from genuine function-entry BEFORE');ufx,uenv=m.proj(unit.state);need(m.hardwarefx(ufx)==ret[72:584]and uenv==ret[584:612],'All actual freeNULL RET FX/ENV from genuine entry BEFORE');need(unit.bytes(0x7ffde000,4)==ret[24:28]and unit.bytes(unit.reg('esp'),16)==ret[612:628],'Complete actual freeNULL restored predecessor and unchanged true return-frame bytes');unit.step();need(unit.cursor==0x5f40178c and unit.reg('esp')==actual_cpu[4]+4,'Literal actual CRT RET semantics');unit.step();unit.step();need(unit.cursor==actual_cpu[4]and False,'unreachable')if False else None;need(unit.cursor==words(r,620)[0]and unit.reg('esp')==actual_cpu[4]+12,'Literal MFC popECX/RET to authenticated genuine game return word');counts['full_NULLfree_entry_BEFORE_unit_proofs']+=1
+         """)
+s=s.replace("\n         ;need(self.bytes", "\n         need(self.bytes").replace("unit.step();unit.step();need(unit.cursor==actual_cpu[4]and False,'unreachable')if False else None;", "unit.step();unit.step();")
+q.write_text(s)

@@ -1,0 +1,16 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\seal_inherited_source.py",
+  "base_sha256": "db0ebe24372d90c69dd5db59b1088664a3ba06889bec990d8ca828cfc1266df6",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\seal_inherited_source_v2.py",
+  "generated_sha256": "0e7b692090b2f6430a8184336f4582a1f7e8988b18fd6dd8943738de17520423",
+  "previous_aggregate": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\current_inherited_source.py",
+  "previous_aggregate_sha256": "cd9d1f3cf8bd51c9a9500dd2391ca69ce859757697033613cd42388b89b127aa",
+  "aggregate": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\current_inherited_source_v2.py",
+  "aggregate_sha256": "4e6d7566329c658a1e01b6eea69df7760bdc4ce354fb43a313bf928860b40144",
+  "changes": [
+    "Physical table pair comparison excludes optional phase metadata only",
+    "Aggregate binds fresh successful preparation-r3"
+  ],
+  "literal_semantics_changed": false,
+  "capture_reader_opened": false
+}

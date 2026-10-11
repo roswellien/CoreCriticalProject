@@ -1,0 +1,33 @@
+"""Add own physical CRT source pages without changing existing provider state."""
+from pathlib import Path
+import hashlib,json
+R=Path(__file__).resolve().parents[2]
+parent=R/'tools/m4-fps-native/fixture_v1.cpp'
+out=R/'tools/m4-fps-native/fixture_v2.cpp'
+assert not out.exists()
+t=parent.read_text();changes=[]
+def replace(a,b):
+ global t
+ assert t.count(a)==1,a
+ t=t.replace(a,b);changes.append(dict(before=a,after=b,count=1))
+replace('#include "admission.hpp"','#include "admission.hpp"\n#include "provider_pages.hpp"')
+marker='void whole_current_game(m4_runtime::Runtime&r,Writer&w,std::string_view stem){'
+replace(marker,'void whole_current_game(m4_runtime::Runtime&r,Writer&w,std::string_view stem,bool require_provider=true){')
+marker='w.bytes(std::string(stem)+"/FX.bin",r.fx().data(),512);}'
+replace(marker,'''w.bytes(std::string(stem)+"/FX.bin",r.fx().data(),512);
+ for(const auto&p:fps_provider_pages){std::array<std::byte,4096>page{};try{r.memory().read({p.address},page);}catch(const MemoryFault&e){if(e.reason()!=MemoryFaultReason::unmapped||require_provider)throw;continue;}w.bytes(std::string(stem)+"/provider-source-page-"+std::to_string(p.address)+".bin",page.data(),page.size());}
+}
+void map_current_formatter_sources(m4_runtime::Runtime&r,std::span<const std::byte>crt,Writer&w){
+ need(m4::sha256(crt)==fps_crt_sha,"Exact whole owned physical CRT input");
+ for(const auto&p:fps_provider_pages){need(p.file_offset+4096<=crt.size(),"Whole current physical provider source page");auto physical=crt.subspan(p.file_offset,4096);need(m4::sha256(physical)==p.sha256,"Exact current own provider page payload");std::array<std::byte,4096>before{};bool absent{};
+  try{r.memory().read({p.address},before);}catch(const MemoryFault&e){if(e.reason()!=MemoryFaultReason::unmapped)throw;absent=true;}
+  if(absent){r.memory().map({p.address},4096,Permissions::read|Permissions::write);r.memory().write({p.address},physical);r.memory().protect({p.address},static_cast<Permissions>(p.permissions));}
+  else {std::array<std::byte,4096>after{};r.memory().read({p.address},after);need(before==after,"Existing whole provider state preserved during source admission");}
+  std::array<std::byte,4096>current{};r.memory().read({p.address},current);if(absent)need(std::equal(current.begin(),current.end(),physical.begin()),"Complete physical source page map");
+  const std::array<unsigned,6>row{1,p.address,p.file_offset,p.permissions,unsigned(absent),unsigned(!absent)};w.bytes("provider-mapping/page-"+std::to_string(p.address)+"-row.bin",row.data(),sizeof(row));w.bytes("provider-mapping/page-"+std::to_string(p.address)+"-physical.bin",physical.data(),physical.size());if(!absent)w.bytes("provider-mapping/page-"+std::to_string(p.address)+"-before.bin",before.data(),before.size());w.bytes("provider-mapping/page-"+std::to_string(p.address)+"-after.bin",current.data(),current.size());
+ }
+}''')
+replace('whole_current_game(r,writer,"initial-own-input");m4_onexit::Session registry(r,crt,mfc,msvcp);registry.bootstrap();registry.dump(&Writer::sink,&writer);AcceptedServices services(r,registry);','whole_current_game(r,writer,"initial-own-input",false);m4_onexit::Session registry(r,crt,mfc,msvcp);registry.bootstrap();map_current_formatter_sources(r,crt,writer);registry.dump(&Writer::sink,&writer);AcceptedServices services(r,registry);')
+out.write_text(t)
+ledger=R/'tools/m4-fps-native/fixture-source-relations-v2.json';assert not ledger.exists();ledger.write_text(json.dumps(dict(parent=str(parent),parent_sha256=hashlib.sha256(parent.read_bytes()).hexdigest(),target=str(out),target_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),changes=changes),indent=2)+'\n')
+print(out,hashlib.sha256(out.read_bytes()).hexdigest())

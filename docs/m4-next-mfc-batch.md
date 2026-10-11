@@ -2,6 +2,8 @@
 
 Updated 2026-10-09. The complete 32-root family is accepted, advancing coverage from **71/144 to 103/144**. The [progress record](m4-progress-startup103.md) and [34-gate acceptance receipt](../reports/m4-joint-startup103-root/acceptance-r1/report.json) contain final evidence. **41 roots remain**; [plan r6](m4-execution-plan-r6.md) targets shared normal FS support next.
 
+Current checkpoint: [109/144 is now accepted](m4-progress-startup109.md), including six normal FS constructors. **35 roots remain**, and [plan r7](m4-execution-plan-r7.md) targets the next seven container/string roots. The details below retain the historical 103-root batch scope.
+
 ## Prerequisites established
 
 The [genuine 32-bit loader probe](../reports/m4-mfc-source/loader-identity-r1/report.json) loads the exact staged MFC42 and MSVCRT DLLs at their expected bases. It verifies the owning module paths, hashes, export identities and loaded code bytes. MFC's malloc/free imports resolve to the exact staged CRT exports rather than the stale bound pointers in the original file. The handler value remains `FFFFFFFF` after DLL initialization. This probe executes module initialization; it does not execute the constructors, allocator or free bodies.

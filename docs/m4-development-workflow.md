@@ -1,6 +1,6 @@
 # M4 development workflow
 
-Updated 2026-10-08. The immediate work remains native startup and menus.
+Updated 2026-10-10. The immediate work remains native startup and menus.
 The faster workflow groups related dependencies, uses shared evidence tooling,
 and prepares later services while the current CRT integration is verified.
 Acceptance still requires source, ABI, state and dependency evidence.
@@ -65,5 +65,9 @@ message/input loop and shutdown.
 
 Use batches that share data ownership and service contracts rather than
 counting tiny independent helpers as whole-game progress. The current selected
-initializer gate remains 27 of 144. A successfully implemented filename API
-does not produce argv/environment, complete CRT startup or satisfy native menus.
+initializer gate accepts [131 of 144](m4-progress-startup131.md), with 13 remaining.
+[Plan r14](m4-execution-plan-r14.md) groups the remaining MFC, numeric,
+constructor, font, version and registry/loader closures. Use small genuine
+provider probes before connected family integration, and serialize heavy
+archive reads. Initializer acceptance still leaves complete CRT startup,
+argv/environment and native menus open.

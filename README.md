@@ -31,13 +31,23 @@ is the first implementation gate; this assessment adds no MW4 compatibility clai
 - [First native MW3 function proof](docs/mw3-leaf-experiment.md): 16,609 original
   x86 inputs matched generated native x64 at O0/O2, with zero mismatches and
   49 rejection controls.
-- [Connected native startup research](docs/m4-progress-startup103.md): 103 of 144
-  selected initializer roots accepted, including 75 ordered callback registrations,
-  35 MFC allocations, 16 literal duplicated strings, actual growth and cleanup,
-  original/source comparisons and independent controls. [Current milestones](docs/project-milestones-r6.md).
+- [Connected native startup research](docs/m4-progress-startup131.md): 131 of 144
+  selected initializer roots accepted, including 101 callback registrations,
+  68 MFC owners, 19 duplicated strings, four formatter owners, normal FS records,
+  Lockit association, a finite compound-cosine root and independently verified
+  persistent source/provider, growth/cleanup and paired comparisons, plus the
+  MFC current-thread/codepage initializer and all 24 connected fault cases.
+  [Current milestones](docs/project-milestones-r13.md).
+- [Active native work](docs/m4-active-native-lanes-2026-10-10.md): numeric
+  execution and source comparisons, MFC resource tests, and the next widget
+  and chronological startup captures, with accepted and pending work tracked separately.
 - [Local live game diagnostics](tools/game-monitor/README.md): structured event
   timelines, incremental cursor/watch reads, debug messages and exceptions,
   hook/game logs, process metrics, exit codes and OS-reported window health.
+- [Windowed Vulkan replay](docs/vulkan-windowed-replay.md): a project-built x64
+  viewer redraws a saved Training scene, with tested presentation, resizing,
+  minimize/restore and clean shutdown. Launch it with `Launch Vulkan Replay.cmd`.
+  The saved viewpoint is fixed; native menus and playable Training remain open.
 
 ## Build and test
 
@@ -111,8 +121,10 @@ remain local.
 
 Vulkan is the user-selected graphics backend target. The first standalone
 [Vulkan learning prototype](docs/vulkan-learning-prototype.md) passes authored
-GPU transfer/readback on Windows x64; it is not a game renderer. Graphics
-interface recovery, rasterization and captured-frame replay remain next steps.
+GPU transfer/readback on Windows x64. The later
+[windowed replay](docs/vulkan-windowed-replay.md) rasterizes and presents a saved
+Training scene. Complete frame/sequence replay and live runtime integration
+remain next steps.
 
 The proposed pipeline is local binary validation, reviewed function/control-flow
 analysis, offline instruction lifting, native compilation, and a project-authored

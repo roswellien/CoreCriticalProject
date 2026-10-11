@@ -1,0 +1,32 @@
+"""Compose sealed actual/source FS witnesses into a narrow normal-frame relation."""
+from pathlib import Path
+import collections,hashlib,json,struct,sys,traceback
+ROOT=Path(__file__).resolve().parents[2];BASE=ROOT/'reports/m4-fs-source'
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def need(v,s):
+ if not v:raise ValueError(s)
+def main(native_source,name):
+ out=BASE/name;need(not out.exists(),'Fresh normal FS paired receipt');out.mkdir(parents=True);pins={};counts=collections.Counter();pairs=[];passed=False
+ def pin(p,h=None):
+  p=Path(p).resolve();v=sha(p);need(h is None or v==h,'Physical composed witness identity '+str(p));pins[str(p)]=v;return p
+ def receipt(p,h=None):
+  p=pin(p,h);r=json.loads(p.read_bytes());need(r['passed'],'Only sealed passing functional/source receipt');return r
+ def artifact(report,path):return json.loads(pin(path,report['files'][str(Path(path).resolve())]).read_bytes())
+ try:
+  pin(__file__);original=receipt(BASE/'original-FS-observations-r1/report.json','ac3aa3afca50e589558cbcb9fa1bb72e3ecf4db1d674e3ad043c0dbe84026a0b');receipt(BASE/'original-game-source-r4/report.json','e81470844c869f8d31d4995a150a3c689990321710010faeff0550a568029001');receipt(BASE/'observer-attribution-r1/report.json','9a12c0d4c8e6c77f5a7cf6388b9e6ad208fdb648cd16146343756698852269ff');native=receipt(native_source);receipt(ROOT/'reports/m4-joint-startup109-root/execution-r3/report.json','f388380178cef6a17aa38eb8de39f19ed04ce49fa84caa8889bb4be75325763b');frames=artifact(original,BASE/'original-FS-observations-r1/frames.json');events=artifact(native,Path(native_source).parent/'FS-source-derivations.json');need(len(frames)==42 and len(events)==252,'Exact full current original/native witness scope')
+  for level in('O0','O2'):
+   for seq in range(6):
+    local=[r for r in frames if r['sequence']==seq];entries=[r for r in events if r['level']==level and r['sequence']==seq];need(len(local)==7 and len(entries)==21,'All seven normal actual/source frame groups')
+    for original_frame in local:
+     root=original_frame['root'];group=original_frame['group_entry'];selected=[e for e in entries if e['root']==root and e['group_entry']==group];need([e['kind']for e in selected]==[0,1,2],'Exact reached read/install/restore order for each local frame');read,install,restore=selected;need(read['entry_ESP']==original_frame['entry_ESP']and install['record_address']==restore['record_address']==original_frame['record_address'],'Whole original/native source CALL-frame/local-record address geometry');need(read['PC']==original_frame['read_PC']and install['PC']==original_frame['install_PC']and restore['PC']==original_frame['restore_PC'],'Exact physically authenticated corresponding source PCs');native_previous=read['before_head'];parent=original_frame['parent_record']
+     if parent is None:need(native_previous==0xffffffff and original_frame['predecessor']not in(0,0xffffffff)and not 0x20001000<=original_frame['predecessor']<0x20002000,'Explicit opaque original Windows context versus Runtime-owned native end-sentinel boundary')
+     else:need(original_frame['predecessor']==native_previous==parent,'Exact nested game-frame predecessor identity on both branches');counts['exact_nested_predecessors']+=1
+     need(install['before_head']==native_previous and install['after_head']==original_frame['record_address']and restore['before_head']==original_frame['record_address']and restore['after_head']==native_previous,'Actual/source head installation and restoration sequence')
+     for label,raw,source,scope in(('install',original_frame['install_record_hex'],install,0xffffffff),('restore',original_frame['restore_record_hex'],restore,original_frame['restore_scope'])):
+      a=struct.unpack('<3I',bytes.fromhex(raw));b=struct.unpack('<3I',bytes.fromhex(source['record_hex']));need(a==(original_frame['predecessor'],original_frame['handler'],scope)and b==(native_previous,original_frame['handler'],scope),'All actual original/native12B record bytes with only exact predecessor context relation');counts['whole12B_paired_frame_relations']+=1
+     pairs.append(dict(level=level,sequence=seq,root=root,group_entry=group,entry_ESP=original_frame['entry_ESP'],record_address=original_frame['record_address'],original_previous=original_frame['predecessor'],native_previous=native_previous,handler=original_frame['handler'],initial_scope=0xffffffff,final_scope=original_frame['restore_scope'],nested_parent_record=parent,original_install_hex=original_frame['install_record_hex'],native_install_hex=install['record_hex'],original_restore_hex=original_frame['restore_record_hex'],native_restore_hex=restore['record_hex']));counts['paired_normal_frames']+=1
+  need(counts['paired_normal_frames']==84 and counts['whole12B_paired_frame_relations']==168,'Complete current paired FS scope');passed=True
+ except Exception:(out/'failure.txt').write_text(traceback.format_exc());raise
+ finally:
+  (out/'frame-relations.json').write_text(json.dumps(pairs,indent=2)+'\n');pin(out/'frame-relations.json');report=dict(passed=passed,scope='Composed original/native109 normal-game-frame relation under exact sealed actual-capture/source witness identities: all seven local records, full installed/restored12B data, nested parent, source PCs and positive normal restoration.',counts=dict(counts),raw_original_or_native_bytes_modified=False,original_windows_host_context_copied=False,original_Windows_TEB_base_claimed=False,normal_context_boundary='Authentic opaque original Windows FS0 preserved in each original record; explicit Runtime-owned native FFFFFFFF sentinel preserved in each native record. Nested game record addresses, handlers and scopes are exact. This is a local normal-path context relation, not exception-dispatch or old-host-chain equivalence.',full_original_observer_CPU_FX_ENV_gate='126 exact MOV CPU/flags/512BFX/28BENV relations; compiled observer3300bytes/504relocations separately pinned',full_native_CPU_State_FX_ENV_gate='One persistent source machine across all109 roots, no phase reseeds',handler_execution=False,exception_unwind=False,AFTER_machine_seed=False,new_capture_execution=False,files=pins);(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');pin(out/'report.json');(out/'pins.json').write_text(json.dumps(dict(files=pins),indent=2)+'\n');print(json.dumps(dict(passed=passed,sha256=sha(out/'report.json'),counts=dict(counts))))
+if __name__=='__main__':main(Path(sys.argv[1]).resolve(),sys.argv[2])

@@ -1,0 +1,8 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\validate_v2.py",
+  "base_sha256": "9991defca2c0659a98fb121a613c0607daddd6f31c5a3f2c019cc960b6776762",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\validate_v3.py",
+  "generated_sha256": "eaa3fb92cafb3f38bd4d31fcc7a1d8789c99d08248f355844d340822b1e0a2a9",
+  "change": "Expose actual mandatory finally records.close in final receipt; no observation/validation predicate changed",
+  "reader_opened": false
+}

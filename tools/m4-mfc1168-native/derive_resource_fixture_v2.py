@@ -1,0 +1,8 @@
+from pathlib import Path
+import hashlib
+p=Path(__file__).parent;s=(p/'fixture_resource.cpp').read_text()
+old='c.checkpoint("retry/before");dump("retry/before/RuntimeCPU.bin",&r->cpu(),40);'
+new='''auto private_dump=[&](const std::string&stem){dump(stem+"/accesses.bin",c.accesses.data(),c.accesses.size()*sizeof(Access));dump(stem+"/APIs.bin",c.APIs.data(),c.APIs.size()*sizeof(ApiRecord));dump(stem+"/frames.bin",c.frames.data(),c.frames.size()*sizeof(Frame));dump(stem+"/nativeCS40.bin",&c.CS,40);dump(stem+"/native-thread-mirror.bin",c.host_thread_backing.data(),c.host_thread_backing.size());std::vector<unsigned>routes;for(const auto&v:r->calls()){routes.insert(routes.end(),{v.site.value,v.target.value,v.return_pc.value,unsigned(v.import),unsigned(v.completed)});}dump(stem+"/routes.bin",routes.data(),routes.size()*4);const std::array<std::uint64_t,12>w{c.host_thread,c.host_TLS,unsigned(c.TLS_live),unsigned(c.CS_live),c.CS_depth,c.CS.RecursionCount,reinterpret_cast<std::uintptr_t>(c.CS.OwningThread),c.access_cursor,c.API_cursor,unsigned(c.entered),unsigned(c.complete),resource_serial};dump(stem+"/resource-context.bin",w.data(),sizeof(w));};c.checkpoint("retry/before");private_dump("retry/before");dump("retry/before/RuntimeCPU.bin",&r->cpu(),40);'''
+assert s.count(old)==1;s=s.replace(old,new)
+s=s.replace('c.checkpoint("retry/after");dump("retry/after/RuntimeCPU.bin"', 'c.checkpoint("retry/after");private_dump("retry/after");dump("retry/after/RuntimeCPU.bin"')
+(p/'fixture_resource_v2.cpp').write_text(s);print(hashlib.sha256((p/'fixture_resource_v2.cpp').read_bytes()).hexdigest())

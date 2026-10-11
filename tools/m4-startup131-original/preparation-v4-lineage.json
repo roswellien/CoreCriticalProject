@@ -1,0 +1,10 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\prepare_v3.py",
+  "base_sha256": "1d8841342b3ca477a946f6b4f7de74b5e8919258b0eec2ebc296231b976721f2",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\prepare_v4.py",
+  "generated_sha256": "ddf60ae024cd81ab20d39b44aa6566f37c3ef0b13e554c5d2c61f9cbee80bf2d",
+  "changes": [
+    "MFC and string existing-owner export predicates use actual selected-order prefix membership, because newly inserted high-address MFC root is at phase13 before all future owners. Guest execution and allocations unchanged."
+  ],
+  "candidate_writer_executed": false
+}

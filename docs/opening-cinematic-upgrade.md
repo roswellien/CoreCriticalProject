@@ -13,6 +13,11 @@ framing, scene order, and stereo 22050 Hz 16-bit PCM. No motion interpolation.
 
 ## Current state
 
+Later visual review: the user reported unreadable text in two opening sections.
+The defect is reproduced in the lossless general-model upscale. The current
+movie requires revision before visual acceptance; technical checks below remain
+valid. See [text restoration review](opening-cinematic-text-restoration-review.md).
+
 The complete movie upgrade finished on 2026-10-08. The source ISO and opening
 movie identities matched the existing inventory. Media stays in ignored
 `local/work-ahead/opening-cinematic-v1/`; the game installation was not modified.

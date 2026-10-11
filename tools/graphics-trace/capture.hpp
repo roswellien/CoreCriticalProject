@@ -14,6 +14,8 @@ static std::set<std::string> stored;
 static IDirectDrawSurface4 *initialTarget = nullptr;
 static unsigned skippedScenes = 0, requestedSkip = 0;
 static bool armRead = false;
+static bool presentationMode = false;
+static DWORD presentationThread = 0;
 static unsigned minimumDraws = 0, candidateCount = 0;
 
 inline void record(const std::string &text) {
@@ -98,6 +100,15 @@ inline SurfaceRef target(IDirect3DDevice3 *device) {
 }
 inline void begin(IDirect3DDevice3 *device, HRESULT result, bool authored=false) noexcept {
     State guard;
+    if(active && presentationMode) {
+        try {
+            if(FAILED(result) || GetCurrentThreadId()!=presentationThread)throw std::runtime_error("present_scene_begin_failed_or_thread_changed");
+            auto renderTarget=target(device);
+            if(renderTarget.surface!=initialTarget)throw std::runtime_error("render_target_changed");
+            record("{\"event\":\"scene_begin\"}");
+        } catch(const std::exception &e) {abort(e.what());}
+        return;
+    }
     if((!live && !authored) || attempted || FAILED(result)) return;
     try {
         root=std::filesystem::path(environment(L"MW34_HOOK_LOG")).parent_path()/
@@ -146,7 +157,11 @@ inline void draw(IDirect3DDevice3 *device,D3DPRIMITIVETYPE primitive,DWORD fvf,v
     State guard;
     if(!active) return;
     try {
-        if(++commandCount>2048) throw std::runtime_error("draw_budget");
+        if(presentationMode && GetCurrentThreadId()!=presentationThread)throw std::runtime_error("present_draw_thread_changed");
+        // A presentation window can contain substantially more geometry than
+        // the bounded single-scene replay format. Keep its diagnostic separate
+        // while retaining the same storage and scan budgets.
+        if(++commandCount>(presentationMode?8192u:2048u)) throw std::runtime_error("draw_budget");
         const unsigned vertexStride=::stride(fvf);
         if(!vertexStride || !vertexCount || vertexCount>65536 || indexCount>196608) throw std::runtime_error("unsupported_draw_layout");
         auto renderTarget=target(device);
@@ -235,6 +250,12 @@ inline void end(IDirect3DDevice3 *device,HRESULT hr) noexcept {
     try {
         if(FAILED(hr)) throw std::runtime_error("original_end_failed");
         auto renderTarget=target(device);
+        if(presentationMode) {
+            if(GetCurrentThreadId()!=presentationThread)throw std::runtime_error("present_end_thread_changed");
+            if(renderTarget.surface!=initialTarget)throw std::runtime_error("render_target_changed");
+            record("{\"event\":\"scene_end\",\"draws_so_far\":"+std::to_string(commandCount)+"}");
+            return;
+        }
         record("{\"event\":\"final_target\",\"surface\":"+surface(renderTarget.surface)+"}");
         record("{\"event\":\"end\",\"draws\":"+std::to_string(commandCount)+",\"stored_bytes\":"+std::to_string(storedBytes)+",\"resource_files\":"+std::to_string(stored.size())+",\"complete\":true}");
         active=false;manifest.close();

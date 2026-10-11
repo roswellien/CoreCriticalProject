@@ -1,0 +1,25 @@
+#pragma once
+#include "admission.hpp"
+#include "runtime.hpp"
+#include <array>
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <vector>
+namespace mw34::m4_version_api {
+inline void need(bool v,const char*m){if(!v)throw std::runtime_error(m);}
+struct alignas(16) ApiSide {std::uint64_t rax,rcx,rdx,rflags;std::array<std::byte,512>fx;std::array<std::byte,28>env;std::array<std::byte,4>padding;};
+struct alignas(16) Hardware {ApiSide before,after;};
+static_assert(sizeof(ApiSide)==576&&sizeof(Hardware)==1152);
+struct Identity {std::array<std::uint64_t,13>words;std::wstring primary_path,owner_path;std::string primary_sha,owner_sha;std::array<std::byte,64>entry;};
+struct FileIdentity {std::array<std::uint64_t,7>words;std::wstring cwd,path;std::string sha;};
+struct Module {HMODULE handle{};~Module(){if(handle)FreeLibrary(handle);}Module()=default;Module(const Module&)=delete;Module&operator=(const Module&)=delete;};
+inline std::wstring module_path(HMODULE m){std::array<wchar_t,32768>b{};const auto n=GetModuleFileNameW(m,b.data(),unsigned(b.size()));need(n&&n<b.size(),"Whole actual version provider module path");return {b.data(),n};}
+inline std::vector<std::byte> read(const std::filesystem::path&p,unsigned bound){std::ifstream f(p,std::ios::binary|std::ios::ate);need(bool(f),"Actual complete version input/module file open");const auto n=f.tellg();need(n>0&&std::uint64_t(n)<=bound,"Bounded whole version input/module file");std::vector<std::byte>b(static_cast<std::size_t>(n));f.seekg(0);f.read(reinterpret_cast<char*>(b.data()),b.size());need(bool(f),"Complete version input/module physical file read");return b;}
+inline Identity identity(HMODULE primary,const char*name,void*target){Identity v{};need(primary&&GetProcAddress(primary,name)==target,"Actual resolved named VERSION.dll export target");MEMORY_BASIC_INFORMATION region{};need(VirtualQuery(target,&region,sizeof(region))==sizeof(region)&&region.State==MEM_COMMIT&&region.Type==MEM_IMAGE&&!(region.Protect&(PAGE_GUARD|PAGE_NOACCESS))&&(region.Protect&(PAGE_EXECUTE|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY)),"Actual executable image owner of version target");const auto a=reinterpret_cast<std::uintptr_t>(target),start=reinterpret_cast<std::uintptr_t>(region.BaseAddress);need(a>=start&&a+64>=a&&a+64<=start+region.RegionSize,"Entire actual 64-byte native export entry");const auto owner=static_cast<HMODULE>(region.AllocationBase);v.words={a,reinterpret_cast<std::uintptr_t>(primary),reinterpret_cast<std::uintptr_t>(owner),reinterpret_cast<std::uintptr_t>(GetProcAddress(owner,name)),start,region.RegionSize,region.State,region.Type,region.Protect,region.AllocationProtect,64,0,0};v.primary_path=module_path(primary);v.owner_path=module_path(owner);v.primary_sha=m4::sha256(read(v.primary_path,32*1024*1024));v.owner_sha=m4::sha256(read(v.owner_path,32*1024*1024));std::memcpy(v.entry.data(),target,64);return v;}
+inline bool equal(const Identity&a,const Identity&b){return a.words==b.words&&a.primary_path==b.primary_path&&a.owner_path==b.owner_path&&a.primary_sha==b.primary_sha&&a.owner_sha==b.owner_sha&&a.entry==b.entry;}
+inline FileIdentity actual_file(){FileIdentity v{};std::array<wchar_t,32768>cwd{};const auto n=GetCurrentDirectoryW(unsigned(cwd.size()),cwd.data());need(n&&n<cwd.size(),"Actual bounded working directory for relative mech3.exe");v.cwd.assign(cwd.data(),n);v.path=(std::filesystem::path(v.cwd)/L"mech3.exe").wstring();struct File{HANDLE h{INVALID_HANDLE_VALUE};~File(){if(h!=INVALID_HANDLE_VALUE)CloseHandle(h);}}file;file.h=CreateFileW(v.path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);need(file.h!=INVALID_HANDLE_VALUE,"Actual relative version input game file");BY_HANDLE_FILE_INFORMATION info{};need(GetFileInformationByHandle(file.h,&info),"Actual version file identity");v.words={info.dwVolumeSerialNumber,info.nFileIndexHigh,info.nFileIndexLow,info.nFileSizeHigh,info.nFileSizeLow,info.ftLastWriteTime.dwHighDateTime,info.ftLastWriteTime.dwLowDateTime};need(!info.nFileSizeHigh&&info.nFileSizeLow==m4::admitted_image_size,"Exact supported actual version file size");std::vector<std::byte>b(info.nFileSizeLow);DWORD total{};while(total<b.size()){DWORD got{};need(ReadFile(file.h,b.data()+total,unsigned(b.size()-total),&got,nullptr)&&got,"Complete actual game file read for version input");total+=got;}v.sha=m4::sha256(b);need(v.sha==m4::admitted_image_hash,"Exact supported physical file queried by real version API");return v;}
+inline bool equal(const FileIdentity&a,const FileIdentity&b){return a.words==b.words&&a.cwd==b.cwd&&a.path==b.path&&a.sha==b.sha;}
+struct alignas(16) Record {std::array<std::uint64_t,16>words;m4_runtime::Cpu32 before,after;std::array<unsigned,4>args;std::array<std::byte,64>frame;Hardware hardware;Identity identity_before,identity_after;FileIdentity file_before,file_after;};
+}
+extern "C" void mw34_version_native_api(void*,const std::uint64_t*,mw34::m4_version_api::Hardware*);

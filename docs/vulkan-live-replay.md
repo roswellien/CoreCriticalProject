@@ -300,3 +300,134 @@ The user confirmed Training and normal quit with presentation tracing enabled.
 The passive monitor recorded exit code 0, no alerts and no dropped segments.
 This completes the live regression check for boundary observation; full-frame
 capture and replay remain future implementation work.
+
+## Presentation-window capture prototype
+
+Added 2026-10-09 after the standalone windowed Vulkan viewer. Optional
+`-CapturePresentation -CaptureSkipFlips N` arms a capture after a successful
+primary flip and collects across BeginScene/EndScene intervals until the next
+matching primary flip. The final backbuffer snapshot is taken **before** that
+flip; failed flips, changed presentation thread/surface, changed render target,
+unsupported clears/draw paths and observed Blt/BltFast transfers reject the
+capture. Texture snapshots and existing storage/draw limits remain bounded.
+Menu flips before any completed 3D scene do not consume the delay in the final
+implementation. A completed scene counter alone is still not proof of Training.
+
+The result lives under `present-frame` and explicitly has
+`command_coverage_complete=false`. Unobserved surface aliases, direct writes,
+clears and transfer replay still need recovery. The scene verifier rejects
+these diagnostics even when the flip boundary closed. This is a capture
+foundation, not accepted full-frame replay or playable Vulkan integration.
+
+The initial live diagnostic `20261009-210355-562` used the earlier menu-inclusive
+delay rule. After 300 primary flips it captured initial color/depth at 640x480,
+then rejected an unsupported surface transfer. The timeline identifies a
+menu Blt with flags 0x01000000; no 3D scenes or draws had yet occurred there.
+The first 2,048-event prefix and its original source/binary snapshots remain
+unchanged. The ordinary presentation verifier does not accept this run because
+its required modules.json observation is absent. It adds no verified gameplay
+or complete-frame credit.
+
+The user was remote and could not perform Training/quit validation. The agent
+canceled only its own diagnostic process; forced cancellation is not normal
+quit evidence. The revised menu-selection guard was compiled separately under
+`build/graphics-trace-present-check` while the diagnostic was open, without
+replacing its loaded DLL.
+
+Both builds passed `/W4 /WX` and the typed forwarding/FP/LastError fixtures.
+New boundary checks cover ignored non-primary/open/failed arm candidates,
+one-shot completion, and rejection for changed surface, changed thread, open
+scene or failed closing flip. The earlier 589-draw capture and authored scene
+fixture still pass payload verification. Three acceptance controls reject the
+actual diagnostic, forged scene scope with incomplete coverage, and forged
+coverage completeness with presentation scope; receipt:
+`reports/graphics-trace/present-gate-check-20261009/acceptance-controls.json`.
+
+Next: record and implement ordered clears and bounded surface copies, validate
+their color/depth/HUD effects with independent fixtures, then capture a Training
+presentation window when a local gameplay check is available. Until then,
+offline development can proceed without requiring the user to operate MW3.
+
+## Ordered command replay and local capture check (2026-10-10)
+
+The offscreen and windowed Vulkan prototypes now share an ordered command
+executor. SCN4 extends the SCN3 payload with a bounded table of ten-word
+commands: draw references, rectangular color/depth clears, and opaque copies
+from immutable RGBA8 source snapshots. Each stored draw must appear exactly
+once. Earlier SCN1/2/3 files retain their existing draw order. Copies preserve
+depth across a render-pass split; clears can affect color, depth or both.
+Rectangles and reserved fields are checked before GPU execution.
+
+The independent CPU oracle passed 24 combinations of six command sequences,
+D16/D32 depth and 1x/3x rendering: 7,680 exact pixels and zero Vulkan validation
+messages. Seven controls rejected unknown commands, overflowing or invalid
+rectangles, NaN depth, duplicate/omitted draws and RGB565 copy replay. Receipt:
+`reports/vulkan-probe/ordered-commands-20261010/verification.json`.
+
+Copies currently require RGBA8 output and equal logical source/destination
+extents. Color keys, alpha copies, stencil, arbitrary stretches, source/target
+aliasing and render-target feedback remain unsupported. These authored tests
+do not establish that live MW3 clears or HUD transfers have been recovered.
+The observer now records actual clear values/rectangles and Blt/BltFast input
+rectangles/effects before rejecting unsupported operations.
+
+The first local capture `20261010-054219-796` reached its 2,048-draw limit within
+one scene. The user reported normal Training and quit, but module evidence was
+missed before process exit. It remains a diagnostic. Presentation diagnostics
+now allow up to 8,192 draws while retaining the 64 MiB storage and 512 MiB scan
+budgets; single-scene replay acceptance remains limited to 2,048 draws.
+
+The second local run `20261010-054556-752` closed one matching primary-flip
+interval: six scene intervals, 1,272 draws, initial color/depth and final color,
+with 1,351 resource files totaling 2,415,168 bytes. No observed unsupported clear
+or transfer occurred in this selected interval. The provider/module and
+presentation verifiers passed. The passive monitor
+`reports/mw3-monitor/20261010-054622-c7605897` recorded normal exit code 0, no
+alerts and no dropped segments; the user confirmed normal Training and quit.
+Module inventory was collected manually while this process was open. The
+launcher now attempts automatic collection and handles path separators and
+WOW64 module paths; that final automation revision still needs its next launch.
+
+The capture deliberately retains `command_coverage_complete=false`: unobserved
+aliases, direct writes and other command paths remain unresolved. Boundary
+completion alone is not full-frame equivalence. Next, build a separate
+diagnostic replay/comparison for this interval, retaining conservative
+acceptance gates, then recover any missing world/HUD/effect commands indicated
+by that comparison.
+
+## First flip-interval diagnostic replay (2026-10-10)
+
+`replay_presentation_diagnostic.py` now packages observed draws from an explicitly
+incomplete presentation interval into a separate output directory. It validates
+scene nesting, draw ordinals, per-scene counts, boundary closure and every
+resource's size/hash using the shared payload checks. It rejects unsupported
+events and retains `diagnostic_only=true` and `command_coverage_complete=false`
+in its receipts. The ordinary scene verifier still rejects presentation input.
+The diagnostic packaging CLI requires `--diagnostic-presentation`; no source
+manifest is rewritten to claim scene acceptance.
+
+Replay of `20261010-054556-752` rendered all 1,272 draws with 77 packaged textures
+and zero Vulkan validation messages including teardown. At the previously used
+0.5 pixel offset, D32/RGBA8 output, 283,920 of 307,200 pixels (92.421875%) differed
+by at most eight levels per channel. Mean absolute channel error was 3.8170;
+23,280 pixels exceeded that tolerance. Within the union of pixels changed from
+the initial target, 206,710 of 229,990 met the tolerance. Visible HUD omissions
+and world differences remain. Receipt and images:
+`reports/vulkan-probe/present-comparison-20261010/report.json`.
+
+Targeted D16, RGB565 and zero-offset experiments did not resolve the mismatch.
+A separate hypothesis replaced initial depth with zero: 297,706 pixels met
+the eight-level tolerance, but HUD elements disappeared and mean error rose
+to 4.0624. This is altered-input evidence, not a recovered clear command or
+an improved accepted renderer. It indicates that depth history and unobserved
+HUD operations need investigation together. The source's observed-surface
+filter currently includes primary/backbuffer/3D-device caps but not Z-buffer
+caps, so depth-surface transfers are a concrete observation gap to address.
+
+Six negative diagnostic controls passed (coverage overstatement, nested scene,
+draw outside scene, wrong cumulative count, unsupported command, overstated
+footer). The ordinary gate still admitted the prior 589-draw scene and rejected
+the presentation diagnostic plus two forged scope/coverage controls. No playable
+Vulkan integration or full-frame equivalence is claimed. Next: observe depth
+surface transfers and other HUD paths, capture their actual parameters, then
+replay only recovered semantics and repeat the comparison.

@@ -1,0 +1,34 @@
+{
+  "recovery": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\recovery-r3\\report.json",
+    "sha256": "b078cff8698dfbefa8d4e45a0368d4820e72c7d659520161e4316e77d3c2f26b"
+  },
+  "game_lifts": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\lifts-r2\\report.json",
+    "sha256": "e113cca27e1465195dc8b23a855b26bbd4c8233a329ce83201870324bf6f66b0"
+  },
+  "game_symbols": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\symbol-attribution-r1\\report.json",
+    "sha256": "88f75647186771f825ff1f456adfd1dfc501a01c14daebe6b6428b4851dd2d1d"
+  },
+  "game_callbacks": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\game-callbacks-r1\\report.json",
+    "sha256": "7e968e214fb33847be80d779e110b56753eb3b97532c336d82f83268312a0fc1"
+  },
+  "allocation_interface": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\allocation-interface-r1\\report.json",
+    "sha256": "89a6a4b581bedd7a1b98ccfad1344ba35f6c50a011964230aecaa1f7295e95ec"
+  },
+  "provider_lifts": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\provider-lifts-r1\\report.json",
+    "sha256": "6ab4ad9597a22c0d9d423c91e25b244ee5786a0657234f5607eb8c61a08fe08c"
+  },
+  "loader": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\loader-identity-r2\\report.json",
+    "sha256": "f3c5a41e6afcb1c7373a911d5e20434f06c6eafee0cf7755a3fc372e93abd892"
+  },
+  "geometry": {
+    "path": "D:\\Projects\\MW34Recomp\\reports\\m4-container-source\\geometry-r2\\report.json",
+    "sha256": "b4125d30332bb383afb62b41e7a9472d7c7a59ead90199d8988cb107e79d6f7c"
+  }
+}

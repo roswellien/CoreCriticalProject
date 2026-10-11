@@ -1,0 +1,13 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\mfc_phase_v2.py",
+  "base_sha256": "406cf141d4ea9091e13f32b32f66534d222dfc61053e2b8dd3b7f203cc529c28",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\mfc_phase_v3.py",
+  "generated_sha256": "051a20eafb6ed283f3f806a8c4a98b8991891b8623d4b2535066b87b7f5cc17e",
+  "validator_generated": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\validate_v4.py",
+  "validator_generated_sha256": "0711cc109bd80e7d7447456a1094455b0fa8621e3dcc4d4dcd36493548f4a83b",
+  "failed_validation": "D:\\Projects\\MW34Recomp\\reports\\m4-startup131-original\\validation-r1\\report.json",
+  "failed_validation_sha256": "92c18eb6a89429b3e32d314725bd635f69498c4724ce3ac61ed6762414660abc",
+  "change": "Remove unsupported helper-EAX1 assumption at enclosing initializer root return. Exact root caller ESP/PC and complete actual CPU retained; subsequent current literal source must derive full root tail CPU. Genuine current EAX7365A4 also matches historical chronological source3, not used as a seed.",
+  "worker_changed": false,
+  "writer_rerun": false
+}

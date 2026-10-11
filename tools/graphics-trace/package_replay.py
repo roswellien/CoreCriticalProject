@@ -6,7 +6,7 @@ from pathlib import Path
 import struct
 
 from describe_capture import decode_rgb
-from verify_capture import verify
+from verify_capture import verify, verify_presentation_diagnostic
 
 
 def legacy_filter(row):
@@ -30,10 +30,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument('--diagnostic-presentation', action='store_true',
+                        help='Package only observed draws from an explicitly incomplete flip interval; grants no acceptance')
     parser.add_argument("--filter-source", choices=("stage", "legacy"), default="stage",
                         help="Legacy requires successful legacy getter and setter evidence on every draw")
     args = parser.parse_args()
-    receipt = verify(args.directory)
+    receipt = (verify_presentation_diagnostic if args.diagnostic_presentation else verify)(args.directory)
     rows = [json.loads(line) for line in (args.directory / "capture.jsonl").read_text().splitlines()]
     image = next(r["surface"] for r in rows if r["event"] == "initial_target")
     depth = next(r["surface"] for r in rows if r["event"] == "initial_depth")

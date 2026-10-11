@@ -2,11 +2,20 @@ param(
     [string]$VSRoot = 'C:/Program Files/Microsoft Visual Studio/18/Community',
     [string]$Game = 'D:/Projects/MW34Recomp/MW3/Mech3.exe',
     [switch]$Launch,
+    [switch]$CaptureHudText,
+    [switch]$CaptureHudHeat,
+    [ValidateRange(0,36000)][int]$CaptureHudSkipScenes = 0,
     [switch]$Capture,
+    [switch]$CapturePresentation,
+    [ValidateRange(0,36000)][int]$CaptureSkipFlips = 0,
     [ValidateRange(0,36000)][int]$CaptureSkipScenes = 0,
     [ValidateRange(0,2048)][int]$CaptureMinimumDraws = 0
 )
 $ErrorActionPreference = 'Stop'
+if (!$CaptureHudText -and $CaptureHudSkipScenes -ne 0) { throw 'CaptureHudSkipScenes requires CaptureHudText.' }
+if ($Capture -and $CapturePresentation) { throw 'Choose scene capture or presentation capture, not both.' }
+if ($CapturePresentation -and ($CaptureSkipScenes -ne 0 -or $CaptureMinimumDraws -ne 0)) { throw 'Presentation capture uses CaptureSkipFlips; scene selection parameters do not apply.' }
+if (!$CapturePresentation -and $CaptureSkipFlips -ne 0) { throw 'CaptureSkipFlips requires CapturePresentation.' }
 $taskRoot = (Resolve-Path "$PSScriptRoot/../..").Path
 $taskGame = (Resolve-Path -LiteralPath $Game).Path
 if ($Launch -and (Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $taskGame })) {
@@ -57,9 +66,41 @@ if ($Launch) {
     }
 }
 if ($Capture) { "$CaptureSkipScenes $CaptureMinimumDraws" | Set-Content -Encoding ascii "$taskRun/capture.request" }
+if ($CapturePresentation) { "$CaptureSkipFlips" | Set-Content -Encoding ascii "$taskRun/present.request" }
+if ($CaptureHudText) { "$CaptureHudSkipScenes" | Set-Content -Encoding ascii "$taskRun/hud-text.request" }
+if ($CaptureHudHeat) { 'bounded heat display input observations' | Set-Content -Encoding ascii "$taskRun/hud-heat.request" }
 if ($Launch) {
     $arguments = '"{0}" "{1}" "{2}"' -f $taskGame, $taskDll, "$taskRun/game.jsonl"
     $child = Start-Process -FilePath $taskLauncher -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput "$taskRun/launcher.txt" -RedirectStandardError "$taskRun/launcher-error.txt"
     [ordered]@{ launcher_pid = $child.Id; run = $taskRun } | ConvertTo-Json | Set-Content "$taskRun/launch.json" -Encoding utf8
+    # Observe modules as soon as DirectDraw is loaded, before asking for gameplay.
+    # Never substitute an inventory from another process or a later session.
+    $taskModuleDeadline = (Get-Date).AddSeconds(15)
+    do {
+        $taskObservedGame = Get-Process -Name Mech3 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path.Replace('/','\') -eq $taskGame.Replace('/','\') } | Select-Object -First 1
+        if ($taskObservedGame) {
+            $taskObservedModules = @($taskObservedGame.Modules)
+            if ($taskObservedModules | Where-Object ModuleName -eq 'DDRAW.dll') {
+                $taskInventory = @($taskObservedModules | ForEach-Object {
+                    $taskModulePath = $_.FileName
+                    # The module API can return System32 for a WOW64 image.
+                    if ($taskModulePath.StartsWith("$env:WINDIR\System32\",[StringComparison]::OrdinalIgnoreCase)) {
+                        $taskWowPath = "$env:WINDIR\SysWOW64\" + $taskModulePath.Substring(("$env:WINDIR\System32\").Length)
+                        if (Test-Path -LiteralPath $taskWowPath) { $taskModulePath = $taskWowPath }
+                    }
+                    $taskModuleBytes = [IO.File]::ReadAllBytes($taskModulePath)
+                    $taskHasher = [Security.Cryptography.SHA256]::Create()
+                    try { $taskModuleHash = [BitConverter]::ToString($taskHasher.ComputeHash($taskModuleBytes)).Replace('-','').ToLowerInvariant() }
+                    finally { $taskHasher.Dispose() }
+                    [ordered]@{name=$_.ModuleName; path=$taskModulePath; reported_path=$_.FileName; base=$_.BaseAddress.ToInt64(); size=$_.ModuleMemorySize; file_sha256=$taskModuleHash}
+                })
+                ConvertTo-Json -InputObject $taskInventory -Depth 4 | Set-Content "$taskRun/modules.json" -Encoding utf8
+                break
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    } while ((Get-Date) -lt $taskModuleDeadline)
+    if (!(Test-Path "$taskRun/modules.json")) { Write-Warning 'Runtime module inventory unavailable; this run cannot pass provider verification.' }
 }
 Write-Output "Graphics trace run: $taskRun"

@@ -1,5 +1,10 @@
 # Cinematic integration assessment
 
+User decision after this assessment: defer integration until the native
+recompile is ready. The legacy-hook proposal below is retained as research,
+not active implementation work. The current native format proposal is in
+[the compression and runtime plan](cinematic-compression-and-runtime-plan.md).
+
 Investigated 2026-10-08 against the identity-verified installed MW3 U.S. 1.2
 executable, SHA-256 `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf`.
 This is a static feasibility assessment; no cinematic replacement has been

@@ -9,6 +9,46 @@ import struct
 
 def verify(directory, allow_authored=False):
     rows = [json.loads(line) for line in (directory / "capture.jsonl").read_text().splitlines()]
+    if rows and (rows[0].get('scope') != 'one_BeginScene_EndScene_interval' or rows[0].get('command_coverage_complete') is False):
+        raise ValueError('Presentation interval is diagnostic only; full command coverage/replay is not recovered')
+    return _verify_payload(directory, rows, allow_authored)
+
+
+def verify_presentation_diagnostic(directory):
+    """Validate observed payload/order without granting scene acceptance."""
+    rows = [json.loads(line) for line in (directory / 'capture.jsonl').read_text().splitlines()]
+    if not rows or rows[0].get('scope') != 'bounded_primary_flip_interval' or rows[0].get('command_coverage_complete') is not False:
+        raise ValueError('Expected explicitly incomplete presentation diagnostic')
+    if rows[-1].get('command_coverage_complete') is not False:
+        raise ValueError('Diagnostic footer overstates command coverage')
+    opened = False
+    scenes = draws = 0
+    allowed = {'begin', 'initial_target', 'initial_depth', 'scene_begin', 'draw', 'scene_end', 'final_target', 'end'}
+    for row in rows:
+        event = row['event']
+        if event not in allowed:
+            raise ValueError('Unsupported diagnostic event')
+        if event == 'scene_begin':
+            if opened: raise ValueError('Nested diagnostic scene')
+            opened = True
+            scenes += 1
+        elif event == 'scene_end':
+            if not opened or row['draws_so_far'] != draws: raise ValueError('Diagnostic scene accounting')
+            opened = False
+        elif event == 'draw':
+            if not opened: raise ValueError('Draw outside diagnostic scene')
+            draws += 1
+        elif event in ('final_target', 'end') and opened:
+            raise ValueError('Open scene at final boundary')
+    if opened or not scenes:
+        raise ValueError('Missing diagnostic scene closure')
+    receipt = _verify_payload(directory, rows, False)
+    receipt.update(scope='Observed presentation payloads only; no complete command coverage or frame equivalence',
+                   scene_intervals=scenes, diagnostic_only=True, command_coverage_complete=False)
+    return receipt
+
+
+def _verify_payload(directory, rows, allow_authored):
     if not rows or rows[0]["event"] != "begin" or rows[-1]["event"] != "end" or rows[-1]["complete"] is not True:
         raise ValueError("Capture did not complete; partial/aborted data cannot pass")
     if not allow_authored and rows[0]["live"] is not True:

@@ -6,6 +6,9 @@
 /reports/
 /build/
 /out/
+# Local generated fixture and build outputs created outside reports/.
+/fixture-preparation-*/
+/service-build-*/
 /recomp/generated/*
 !/recomp/generated/README.md
 *.exe

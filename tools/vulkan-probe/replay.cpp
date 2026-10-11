@@ -253,6 +253,8 @@ int main(int argc, char **argv) {
         D(vkCmdBindDescriptorSets);
         D(vkCmdPushConstants);
         D(vkCmdDraw);
+        D(vkCmdClearAttachments);
+        D(vkCmdBlitImage);
         D(vkCmdBindVertexBuffers);
         D(vkCreateFence);
         D(vkDestroyFence);
@@ -400,7 +402,7 @@ int main(int argc, char **argv) {
             uploads.push_back(uploadBytes(t.pixels, VK_BUFFER_USAGE_TRANSFER_SRC_BIT));
             textures.push_back(
                 makeImage(t.width, t.height, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                           VK_IMAGE_ASPECT_COLOR_BIT));
         }
         std::vector<uint8_t> vertices;
@@ -679,7 +681,7 @@ int main(int argc, char **argv) {
             uint32_t padding;
         };
         static_assert(sizeof(Push) == 48);
-        for (size_t i = 0; i < scene.draws.size(); ++i) {
+        auto replayDraw = [&](size_t i) {
             const auto &d = scene.draws[i];
             const auto pipeline =
                 pipelines[(d.shade == 1 ? 2 : 0) + d.blend + (d.depthWrite ? 0 : 4)];
@@ -697,7 +699,8 @@ int main(int argc, char **argv) {
             vkCmdPushConstants(command, pipelineLayout, push.stageFlags, 0, sizeof(values),
                                &values);
             vkCmdDraw(command, d.count, 1, firstVertices[i], 0);
-        }
+        };
+        #include "ordered_commands.inc"
         vkCmdEndRenderPass(command);
         transition(color.handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,

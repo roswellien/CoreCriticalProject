@@ -30,6 +30,11 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_runtime_tests)
     add_test(NAME runtime COMMAND mw34_runtime_tests)
 
+    add_executable(mw34_mfc_receiver_tests tests/mfc_receiver_tests.cpp)
+    target_link_libraries(mw34_mfc_receiver_tests PRIVATE mw34_runtime)
+    mw34_warnings(mw34_mfc_receiver_tests)
+    add_test(NAME mfc_receiver_lifecycle COMMAND mw34_mfc_receiver_tests)
+
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)

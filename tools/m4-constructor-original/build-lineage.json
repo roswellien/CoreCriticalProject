@@ -1,0 +1,11 @@
+{
+  "base": "D:\\Projects\\MW34Recomp\\tools\\m4-startup131-original\\build.ps1",
+  "base_sha256": "8bf2b93b58b2b0fbb545b76f6c8e64c777d1d7eaa97391ea54bdcb8d130f2b70",
+  "generated": "D:\\Projects\\MW34Recomp\\tools\\m4-constructor-original\\build.ps1",
+  "generated_sha256": "5c7fa256ebecc6c62d94c70233e06bee30751dbfd07135da86e355a9cdf301d5",
+  "changes": [
+    "Own constructor original namespace",
+    "37 selected chronological roots /222 phases metadata"
+  ],
+  "compiler_and_flags_unchanged": true
+}

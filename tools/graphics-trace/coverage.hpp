@@ -27,10 +27,12 @@ static HRESULT STDMETHODCALLTYPE guardedIndexedVB(IDirect3DDevice3 *self,D3DPRIM
 }
 static HRESULT STDMETHODCALLTYPE guardedClear(IDirect3DViewport3 *self,DWORD count,D3DRECT *rects,DWORD flags) {
     auto call=reinterpret_cast<decltype(IDirect3DViewport3Vtbl::Clear)>(original(self,offsetof(IDirect3DViewport3Vtbl,Clear)/sizeof(void *)));
+    clearDiagnostic(false,count,rects,flags,0,0,0);
     coverageViolation("unsupported_viewport_clear");return call(self,count,rects,flags);
 }
 static HRESULT STDMETHODCALLTYPE guardedClear2(IDirect3DViewport3 *self,DWORD count,D3DRECT *rects,DWORD flags,D3DCOLOR color,D3DVALUE depth,DWORD stencil) {
     auto call=reinterpret_cast<decltype(IDirect3DViewport3Vtbl::Clear2)>(original(self,offsetof(IDirect3DViewport3Vtbl,Clear2)/sizeof(void *)));
+    clearDiagnostic(true,count,rects,flags,color,depth,stencil);
     coverageViolation("unsupported_viewport_clear2");return call(self,count,rects,flags,color,depth,stencil);
 }
 static HRESULT STDMETHODCALLTYPE observedViewport(IDirect3DDevice3 *self,IDirect3DViewport3 **output) {
