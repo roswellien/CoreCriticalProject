@@ -11,9 +11,10 @@ modern native executable. The wrapper effort runs the original 32-bit
 `Mech3.exe` through a patched D7VK graphics layer, providing Vulkan rendering
 in place of dgVoodoo in a separate local profile.
 
-This repository contains the engineering foundation and verified native x64
-game initializer and provider components. A full recompiled game executable
-is not available yet. The installed U.S. MW3 1.2 executable is admitted by exact
+An experimental native x64 host now runs a live main menu and Training 1 through
+Vulkan, including the game's HUD, startup and walking. It needs substantial
+fidelity, compatibility and performance work. A portable, fully validated
+recompiled game release is not available yet. The installed U.S. MW3 1.2 executable is admitted by exact
 identity as `mw3-us-1-2-retail`. Pirate's Moon and the three MW4 titles are future
 targets.
 
@@ -22,17 +23,19 @@ targets.
 Three development tracks are active: faithful native recompilation,
 original-executable Vulkan compatibility, and high-resolution texture upgrades.
 The wrapper has a working local
-launcher and documented compatibility fixes; a full recompiled game remains
-in development. Wrapper runs do not change native recompilation acceptance.
+launcher and documented compatibility fixes; the native host now reaches live
+Training in a prepared local development setup. Wrapper runs do not change
+native recompilation acceptance.
 
 The faithful modernization plan (local reference: `docs/faithful-modernization-plan.md`) is the
 current strategy: preserve original gameplay through native recompilation and
 connect it to modern platform services, with Vulkan as the graphics backend.
-The primary implementation queue is a complete execution path: integrated native
-host, live menu, live Training frame, then playable faithful Training. Existing
+The integrated host has executed startup, a live menu, Training 1 frames and
+normal shutdown. The next work is camera/leg retesting, remaining Training and
+weapons, original/native fidelity comparisons and performance. Existing
 acceptance criteria remain intact; 131/144 selected roots is a bounded fidelity
 milestone, not overall completion or a prerequisite for every independent
-integration experiment. No complete native launch or live renderer is claimed.
+integration experiment. Executed gameplay does not complete formal acceptance.
 
 Start with the [roadmap](docs/roadmap.md), Claude work review (local reference: `docs/m4-claude-work-review-2026-10-11.md`)
 and current continuation prompt (local reference: `docs/claude-m4-continuation-handoff.md`).
@@ -40,6 +43,38 @@ and current continuation prompt (local reference: `docs/claude-m4-continuation-h
 The installed MW4 Mercenaries has a [reconnaissance report](docs/mw4-reconnaissance.md)
 and [execution plan](docs/mw4-execution-plan.md). Its protected code-image recovery
 is the first implementation gate; this assessment adds no MW4 compatibility claim.
+
+## Running native host: current status
+
+The [2026-10-13 native-host summary](docs/session-summary-2026-10-13-native-host.md)
+records execution in one integrated x64 process, with the game logic running as
+recompiled native code:
+
+- A live, animated main menu that responds to input.
+- Training 1 3D scenes rendered through Vulkan with the game's own HUD. Scripted
+  runs reached startup, turning and acceleration; the user's interactive test
+  confirmed startup and walking.
+- Quit -> confirm runs native shutdown and exits with code 0.
+- Intro decoding through the game's recompiled Indeo IV50 codec, tested with the
+  window hidden; visible playback still needs review.
+- About 13 fps in heavy Training scenes on the development machine, up from
+  about 2.6 fps earlier in the session. This is a local observation, not a
+  cross-device benchmark or proof of original timing fidelity.
+
+The quadrant-correct FPATAN fix is built into 57 re-lifted game functions, but
+its effect on the reported camera flip and leg animation still needs a play
+retest. Remaining Training steps, weapons, physics/AI/timing comparisons and
+performance remain open. Strict acceptance v6 is blocked on the pinned startup
+plan hash; its review/criterion decision is separate from these executed runs.
+The accepted selected-startup count stays **131/144**.
+
+Use [Play-MW3.cmd](Play-MW3.cmd) after building the host. The
+[native-host README](tools/m4-crt-heap-carry/README.md) describes the local build,
+input and diagnostic paths. A clean checkout cannot build or run the game host
+on its own: it requires legally obtained game data, staged provider/codec images,
+pinned toolchains, local lift reports/objects and regenerated dispatch metadata.
+Game code, binaries, frame evidence and media remain local. The asset-free
+bootstrap build below remains separate from this native-host build.
 
 ## Original EXE Vulkan wrapper and launcher
 
@@ -67,7 +102,7 @@ path. It is a local development setup, not yet a portable release package.
 See the report for prerequisites and GUI/CLI commands, and the
 [wrapper plan](docs/mw3-d7vk-wrapper-plan.md) for compatibility validation and
 future reuse in the native runtime. These original-EXE runs are separate from
-the live native menu and Training milestones; the selected native startup
+native-host execution and its acceptance milestones; the selected native startup
 acceptance count remains **131/144**.
 
 ## High-resolution texture upgrade pack
@@ -123,7 +158,8 @@ Texture work adds no native recompilation acceptance credit.
 - [Windowed Vulkan replay](docs/vulkan-windowed-replay.md): a project-built x64
   viewer redraws a saved Training scene, with tested presentation, resizing,
   minimize/restore and clean shutdown. Launch it with `Launch Vulkan Replay.cmd`.
-  The saved viewpoint is fixed; native menus and playable Training remain open.
+  The saved viewpoint is fixed. The separate integrated native host now executes
+  a live menu and partial Training; replay remains diagnostic evidence.
 
 ## Build and test
 
@@ -199,8 +235,9 @@ Vulkan is the user-selected graphics backend target. The first standalone
 [Vulkan learning prototype](docs/vulkan-learning-prototype.md) passes authored
 GPU transfer/readback on Windows x64. The later
 [windowed replay](docs/vulkan-windowed-replay.md) rasterizes and presents a saved
-Training scene. Complete frame/sequence replay and live runtime integration
-remain open. Live runtime integration now follows the execution milestones;
+Training scene. The separate integrated native host now renders live Training 1
+through Vulkan; complete fidelity and broader gameplay remain open. Live runtime
+integration follows the execution milestones;
 replay remains a diagnostic input, not the game frontend.
 
 The proposed pipeline is local binary validation, reviewed function/control-flow

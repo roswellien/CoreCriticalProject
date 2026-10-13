@@ -44,3 +44,7 @@ CMakeUserPresets.json
 compile_commands.json
 # Frozen local review with literal input bytes; public safe derivative is separate.
 /tools/m4-crt-matherr-independent/original_model.py
+# Native-host dispatch metadata derives from local lift output and stays local.
+/tools/m4-crt-heap-carry/mfc_entries.inc
+/tools/m4-crt-heap-carry/mfc_routers.inc
+/tools/m4-crt-heap-carry/mfc_objects.txt

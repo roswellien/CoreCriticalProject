@@ -4,8 +4,26 @@ Updated 2026-10-13. The current strategy is faithful recompilation with modern
 platform services (local reference: `docs/faithful-modernization-plan.md`): preserve original game logic,
 connect a complete native execution path, and validate configurable enhancements
 against an original-compatible mode. MechWarrior 3 U.S. retail1.2 is the current
-target; Windows x64 and Vulkan are selected. This is a plan, not a native-launch
-or whole-game completion claim.
+target; Windows x64 and Vulkan are selected. The experimental native host now
+executes a live menu, partial Training 1 and normal quit; whole-game fidelity,
+performance and formal acceptance remain open.
+
+## Native execution update: 2026-10-13
+
+The [session summary](session-summary-2026-10-13-native-host.md) and
+[execution map](e0-application-execution-path.md) record startup through the live
+animated menu, Vulkan Training 1 scenes with the game HUD, and Quit -> confirm
+through native shutdown to exit code 0. The user confirmed startup and walking
+in interactive Training. Intro decoding by the recompiled Indeo IV50 codec was
+tested with the window hidden. Heavy Training scenes reached about 13 fps on
+the development system, up from about 2.6 fps earlier in the session.
+
+Execution priorities are now: retest the built FPATAN correction for camera/leg
+behavior; exercise the rest of Training and weapons; compare physics, AI and
+timing against the original; improve performance; and review visible intro
+playback. The [native-host build](../tools/m4-crt-heap-carry/README.md) requires
+local staged images and generated lift output; it is not a portable release.
+These observations add no accepted-function or whole-milestone credit.
 
 Alongside recompilation, the project develops a D7VK-based Vulkan wrapper and
 launcher for the original MW3 U.S. retail 1.2 executable, replacing dgVoodoo in
@@ -61,23 +79,29 @@ content/provenance policy. This work does not change native acceptance criteria.
   work review (local reference: `docs/m4-claude-work-review-2026-10-11.md`) and [acceptance history](m4-execution-plan-r14.md).
 - Vulkan viewer and captured-scene replay tests are separate from a live renderer.
   Original-game play with isolated native replacements is separate from a complete
-  recompiled game. Native menus and playable native Training remain open.
+  recompiled game. The integrated native host now executes its own live menu
+  and partial Training; fully validated faithful Training remains open.
 
 ## Primary execution queue
 
 | Order | Checkpoint | Next deliverable |
 | --- | --- | --- |
-| E0 | Complete application path | Reuse recovered maps; select retail translated entry or equivalent host bootstrap, enumerate required side effects/services, and identify the first concrete blocker. |
-| E1 | Integrated native host | Connect guest memory/state/dispatch and required host services in one executable; advance a translated application boundary with truthful failures. |
-| E2 | Live native menu | Load menu assets, execute widget/render producers, process actual input and shut down correctly. |
-| E3 | Live native Training frame | Execute Training load/update/render into Vulkan; compare live state and output with the original. |
-| E4 | Faithful playable Training | Validate movement, weapons, collision, AI, HUD, timing and audio in controlled original/native scenarios. |
+| E0 | Complete application path | Retail translated entry connected through provider attach, initialization and application callbacks; retain source map and remaining initialization/fidelity limits. |
+| E1 | Integrated native host | One x64 development host executes startup and application services; close build reproducibility and service-contract limits. |
+| E2 | Live native menu | Animated menu and input executed; normal Quit -> confirm reaches exit code 0. Continue lifecycle and error-path validation. |
+| E3 | Live native Training frame | Training 1 scene and game HUD rendered through Vulkan; controlled original/native scene comparison remains open. |
+| E4 | Faithful playable Training | Startup/walking observed; retest camera/legs and validate remaining steps, weapons, collision, AI, timing and audio. |
 | E5 | Compatibility and release | Expand campaign/Instant Action, saves, error paths and extended play; document a reproducible user-data build. |
 | E6 | Configurable modern features | Validate resolution/aspect/FOV, controls, filtering, interpolation and other selected enhancements against their affected original-compatible baseline. |
 
 E0-E6 organize work alongside M1-M8; they do not alter accepted milestone criteria.
 Modern platform services are built from the start. Gameplay/visual changes remain
 explicit options and must not hide defects in original-compatible mode.
+
+The table records executed boundaries and remaining work, not formal checkpoint
+closure. Accepted selected roots remain **131/144**. Strict acceptance v6 still
+fails on the pinned `docs/m4-startup-plan.md` hash; the decision to rerun reviews
+or change the criterion remains with the user. This publication changes neither.
 
 ## Existing strict acceptance lane
 
