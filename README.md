@@ -1,10 +1,15 @@
 # MW34 RECOMP
 
-MW34 RECOMP is an open-source research project exploring native static
-recompilation of the original MechWarrior games. **MechWarrior 3 is the only
-current implementation target.** The goal is to translate original 32-bit x86
-game logic into a modern native executable while preserving gameplay and using
-the user's own legally obtained game data.
+MW34 RECOMP develops native static recompilation, a D7VK-based Vulkan wrapper
+and launcher for the original executable, and an optional high-resolution
+texture upgrade pack for MechWarrior 3. **MechWarrior 3
+is the only current implementation target.** All three efforts use the user's own
+legally obtained game installation and preserve the original game logic.
+
+The recompilation effort translates original 32-bit x86 game logic into a
+modern native executable. The wrapper effort runs the original 32-bit
+`Mech3.exe` through a patched D7VK graphics layer, providing Vulkan rendering
+in place of dgVoodoo in a separate local profile.
 
 This repository contains the engineering foundation and verified native x64
 game initializer and provider components. A full recompiled game executable
@@ -12,9 +17,80 @@ is not available yet. The installed U.S. MW3 1.2 executable is admitted by exact
 identity as `mw3-us-1-2-retail`. Pirate's Moon and the three MW4 titles are future
 targets.
 
+## Current implementation direction
+
+Three development tracks are active: faithful native recompilation,
+original-executable Vulkan compatibility, and high-resolution texture upgrades.
+The wrapper has a working local
+launcher and documented compatibility fixes; a full recompiled game remains
+in development. Wrapper runs do not change native recompilation acceptance.
+
+The faithful modernization plan (local reference: `docs/faithful-modernization-plan.md`) is the
+current strategy: preserve original gameplay through native recompilation and
+connect it to modern platform services, with Vulkan as the graphics backend.
+The primary implementation queue is a complete execution path: integrated native
+host, live menu, live Training frame, then playable faithful Training. Existing
+acceptance criteria remain intact; 131/144 selected roots is a bounded fidelity
+milestone, not overall completion or a prerequisite for every independent
+integration experiment. No complete native launch or live renderer is claimed.
+
+Start with the [roadmap](docs/roadmap.md), Claude work review (local reference: `docs/m4-claude-work-review-2026-10-11.md`)
+and current continuation prompt (local reference: `docs/claude-m4-continuation-handoff.md`).
+
 The installed MW4 Mercenaries has a [reconnaissance report](docs/mw4-reconnaissance.md)
 and [execution plan](docs/mw4-execution-plan.md). Its protected code-image recovery
 is the first implementation gate; this assessment adds no MW4 compatibility claim.
+
+## Original EXE Vulkan wrapper and launcher
+
+The [D7VK wrapper and launcher report](docs/d7vk-wrapper-launcher-summary.md)
+records the current local status as of 2026-10-13. The graphics path is original
+`Mech3.exe` -> DirectDraw4/Direct3D3 -> D7VK's matching D3D9 layer -> DXVK ->
+Vulkan. The current test system uses an AMD Radeon RX 9070; broader device and
+campaign compatibility still need validation.
+
+- Graphical and command-line launcher with high-resolution 4:3 pillarboxed
+  profiles and 16:9/21:9 widescreen profiles with camera FOV correction.
+- Configurable 2x/4x/8x MSAA and up to 16x anisotropic filtering.
+- Switching between original and cumulative AI texture banks using NTFS hard
+  links in the private profile. Texture assets remain local.
+- Documented fixes for aspect-ratio display-mode filtering, launcher focus
+  conflicts, the Instant Action backbuffer crash at `0x00577648`, and rejected
+  physical 16-bit display-mode switches.
+- Hash-pinned game and wrapper identities, session records, and registry
+  backup/restoration around game execution.
+
+The retail 2D menus remain at 640x480; the higher-resolution settings apply to
+3D gameplay. This launcher currently depends on a prepared local profile,
+wrapper build, texture manifest and FOV components, and uses a fixed checkout
+path. It is a local development setup, not yet a portable release package.
+See the report for prerequisites and GUI/CLI commands, and the
+[wrapper plan](docs/mw3-d7vk-wrapper-plan.md) for compatibility validation and
+future reuse in the native runtime. These original-EXE runs are separate from
+the live native menu and Training milestones; the selected native startup
+acceptance count remains **131/144**.
+
+## High-resolution texture upgrade pack
+
+The project also develops an optional **Hi-Res texture pack** with AI-assisted
+mech artwork, terrain, water, buildings, structures and selected animated
+effects. Prepared batches include 16x source-dimension exports with recorded
+source mappings, editable artwork, hashes and archive verification. Export
+scales vary by batch; this is an ongoing upgrade effort rather than a complete
+replacement of every game texture.
+
+The latest local audit records 39 configured cumulative `.zbd` archives and
+19 complete primary mech texture sets. The terrain/world-surface inventory
+records 243 of 298 priority families upgraded in every corresponding bank,
+with 55 families still needing at least one bank replacement. These counts
+describe prepared archive coverage; mapped visual validation remains pending.
+The launcher switches between original and AI banks in its private profile.
+
+See the [texture pack status](docs/hi-res-texture-pack.md) for coverage,
+preservation checks and remaining work. Original textures, derived artwork and
+replacement archives remain local under the [distribution policy](docs/legal.md);
+the repository contains documentation and tooling, not a downloadable pack.
+Texture work adds no native recompilation acceptance credit.
 
 ## What works now
 
@@ -124,13 +200,16 @@ Vulkan is the user-selected graphics backend target. The first standalone
 GPU transfer/readback on Windows x64. The later
 [windowed replay](docs/vulkan-windowed-replay.md) rasterizes and presents a saved
 Training scene. Complete frame/sequence replay and live runtime integration
-remain next steps.
+remain open. Live runtime integration now follows the execution milestones;
+replay remains a diagnostic input, not the game frontend.
 
 The proposed pipeline is local binary validation, reviewed function/control-flow
 analysis, offline instruction lifting, native compilation, and a project-authored
 runtime. Guest pointers stay 32-bit; host pointers never replace guest fields.
 Win32/COM/API bridges and explicit function replacement routing will preserve
-the original ABI. Unsupported behavior must fail visibly.
+observable original contracts. Legacy CRT/MFC internals are translated where
+guest behavior depends on them; otherwise source-justified service adapters may
+supply equivalent behavior. Unsupported behavior must fail visibly.
 
 The [framework evaluation](docs/recompilation-research.md) recommends a bounded
 Remill experiment, with SRW/llasm as a comparison candidate. The
@@ -167,7 +246,8 @@ modernization, with explicit integration gates.
 | `tests/` | Synthetic fixtures and runtime boundary tests |
 | `cmake/` | Shared build configuration |
 
-Start with [project goals and milestones](docs/project-milestones.md),
+Start with the current faithful modernization plan (local reference: `docs/faithful-modernization-plan.md`),
+[project goals and milestones](docs/project-milestones.md),
 [the full initial-phase plan](docs/initial-phase-plan.md),
 [architecture](docs/architecture.md), [roadmap](docs/roadmap.md),
 [reverse-engineering workflow](docs/reverse-engineering.md), and
@@ -177,5 +257,6 @@ Start with [project goals and milestones](docs/project-milestones.md),
 
 Project-authored code is MIT licensed. Original game content is not included or
 licensed by this project. Users supply their own legally obtained installation.
-Read [the distribution policy](docs/legal.md) before contributing. Preserve
-original behavior first; modernization is later, optional work.
+Read [the distribution policy](docs/legal.md) before contributing. Modern platform
+services are part of the core runtime; behavioral and visual enhancements remain
+configurable and require an original-compatible baseline for the affected scope.

@@ -2,6 +2,14 @@
 
 Established: 2026-10-07. Scope: MW3 first; other games need separate inventories.
 
+Current status, reviewed 2026-10-13: the optional
+[Hi-Res texture pack](hi-res-texture-pack.md) has progressed beyond the early
+pilots below into cumulative local archive integration. The latest local audit
+records 39 configured archives and 19 complete primary mech sets; the terrain
+inventory records 243 of 298 priority families upgraded across their banks.
+Runtime visual acceptance and public distribution remain separate open gates.
+The following pilot descriptions retain their original scopes and evidence.
+
 The [first installed-tree discovery](work-ahead-discovery.md) is complete;
 selected image containers and 19 disc videos have been inventoried. Other
 embedded formats remain open. The reusable
