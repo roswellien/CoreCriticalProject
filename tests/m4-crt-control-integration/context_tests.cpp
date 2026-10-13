@@ -1,41 +1,272 @@
 #include "state_capture.hpp"
+
 #include "probe_io.hpp"
 #include "probe_spec.hpp"
 #include "service_provider.hpp"
 #include <iostream>
 #include <memory>
-using namespace mw34;using namespace mw34::m4_crt_probe;namespace ci=mw34::m4_crt_control_integration;namespace rt=mw34::m4_runtime;
+using namespace mw34;
+using namespace mw34::m4_crt_probe;
+namespace ci = mw34::m4_crt_control_integration;
+namespace rt = mw34::m4_runtime;
 namespace {
-unsigned checks{};std::vector<std::uint8_t>game,provider,pack;
-void check(bool b,const char*w){need(b,w);++checks;}
-rt::Policy policy(unsigned depth){rt::Policy p;p.stack_low=GuestAddress{stack_page};p.stack_bytes=4096;p.heap_bytes=8192;p.max_call_depth=depth;return p;}
-State&seed(rt::Runtime&r){auto*s=std::construct_at(reinterpret_cast<State*>(r.remill_state().data()));std::array<std::uint8_t,512>fx{};std::array<std::uint8_t,28>env{};seed_fp(fx.data(),env.data(),0x37f,0);ci::initialize(*s,ci::cpu(0),fx.data(),env.data(),17);std::memcpy(r.fx().data(),fx.data(),512);r.mark_remill_seeded();return *s;}
-struct Fixture{
- rt::Runtime runtime;State&state;ci::Context context;ci::SerialOwner owner;
- Fixture(bool service=true,unsigned max_depth=64):runtime(rt::Runtime::from_admitted_image(std::as_bytes(std::span(game)),policy(max_depth))),state(seed(runtime)),context(runtime,state),owner(context){
-  for(unsigned i=2;i<4;++i){const auto offset=12+i*4104;auto base=ci::get<unsigned>(pack.data()+offset);runtime.memory().map(GuestAddress{base},4096,Permissions::read|Permissions::write);runtime.memory().write(GuestAddress{base},std::as_bytes(std::span(pack.data()+offset+8,4096)));runtime.memory().protect(GuestAddress{base},Permissions::read|Permissions::execute);}
-  std::array<std::byte,4096>stack;stack.fill(std::byte{0xa5});runtime.memory().write(GuestAddress{stack_page},stack);runtime.memory().store<unsigned>(GuestAddress{state.gpr.rsp.dword},ci::outer_return);
-  const rt::Evidence evidence{rt::Domain::admitted_game,m4::admitted_image_hash,19,"ae1fa42ecf74ee2fb8a6076d57a6d7cb51e91890df3a0b0e839f8a4f4063f4ac",MW34_CONNECTED_ARTIFACT_SHA,"2ff6fb125e0abae0b125f0e00e430cf5e8e4a0ab3a22b1c1eb9fefcb65c8175a"};runtime.register_translation({GuestAddress{ci::wrapper},{rt::Abi::Cdecl,0,true},ci::wrapper_adapter,"actual complete game wrapper",evidence});if(service)runtime.register_service({GuestAddress{ci::slot},{rt::Abi::Cdecl,8,true},ci::provider_adapter,"MSVCRT.dll!_controlfp",rt::Domain::admitted_game,"2d5670881a6d13a100e37da297f6eeb876f68b63073a28eb5d650625c60f9bf7","b75abde48029efcdb8cb123c163c6bfb27a9b76dc62da014e620fca7c95bac56"});runtime.freeze_registry();runtime.cpu()=ci::cpu_view(state);runtime.cpu().esp+=4;runtime.cpu().eip=0x5ac431;
- }
- void protect_game(unsigned a,Permissions p){for(const auto&r:runtime.image_metadata().mapped_regions)if(a>=r.start.value&&std::uint64_t{a}<std::uint64_t{r.start.value}+r.size){runtime.memory().protect(r.start,p);return;}throw std::runtime_error("Actual game mapping missing");}
- bool call(){ci::HostScope host;bool rejected{};try{runtime.call_direct(GuestAddress{ci::wrapper},GuestAddress{ci::outer_return});}catch(const std::exception&){rejected=true;}host.capture();check(std::memcmp(host.before.bytes,host.after.bytes,512)==0&&std::memcmp(host.env,host.env_after,28)==0,"Actual full host restoration even on compiled fault");return rejected;}
- void rejected(const char*why=nullptr){check(call()&&runtime.poisoned()&&!runtime.calls().empty()&&!runtime.calls()[0].completed,"Required actual compiled/r9 rejection leaves outer route incomplete");if(why)check(context.failed&&context.reason&&std::strcmp(context.reason,why)==0,"Exact connected causal diagnostic");const auto count=context.count;const auto fault=context.reason;check(call()&&context.count==count&&context.reason==fault,"Poisoned r9 reuse cannot progress or overwrite retained Context fault");}
+unsigned checks{};
+std::vector<std::uint8_t> game, provider, pack;
+void check(bool b, const char *w) {
+    need(b, w);
+    ++checks;
+}
+rt::Policy policy(unsigned depth) {
+    rt::Policy p;
+    p.stack_low = GuestAddress{stack_page};
+    p.stack_bytes = 4096;
+    p.heap_bytes = 8192;
+    p.max_call_depth = depth;
+    return p;
+}
+State &seed(rt::Runtime &r) {
+    auto *s = std::construct_at(reinterpret_cast<State *>(r.remill_state().data()));
+    std::array<std::uint8_t, 512> fx{};
+    std::array<std::uint8_t, 28> env{};
+    seed_fp(fx.data(), env.data(), 0x37f, 0);
+    ci::initialize(*s, ci::cpu(0), fx.data(), env.data(), 17);
+    std::memcpy(r.fx().data(), fx.data(), 512);
+    r.mark_remill_seeded();
+    return *s;
+}
+struct Fixture {
+    rt::Runtime runtime;
+    State &state;
+    ci::Context context;
+    ci::SerialOwner owner;
+    Fixture(bool service = true, unsigned max_depth = 64)
+        : runtime(
+              rt::Runtime::from_admitted_image(std::as_bytes(std::span(game)), policy(max_depth))),
+          state(seed(runtime)), context(runtime, state), owner(context) {
+        for (unsigned i = 2; i < 4; ++i) {
+            const auto offset = 12 + i * 4104;
+            auto base = ci::get<unsigned>(pack.data() + offset);
+            runtime.memory().map(GuestAddress{base}, 4096, Permissions::read | Permissions::write);
+            runtime.memory().write(GuestAddress{base},
+                                   std::as_bytes(std::span(pack.data() + offset + 8, 4096)));
+            runtime.memory().protect(GuestAddress{base}, Permissions::read | Permissions::execute);
+        }
+        std::array<std::byte, 4096> stack;
+        stack.fill(std::byte{0xa5});
+        runtime.memory().write(GuestAddress{stack_page}, stack);
+        runtime.memory().store<unsigned>(GuestAddress{state.gpr.rsp.dword}, ci::outer_return);
+        const rt::Evidence evidence{
+            rt::Domain::admitted_game,
+            m4::admitted_image_hash,
+            19,
+            "ae1fa42ecf74ee2fb8a6076d57a6d7cb51e91890df3a0b0e839f8a4f4063f4ac",
+            MW34_CONNECTED_ARTIFACT_SHA,
+            "2ff6fb125e0abae0b125f0e00e430cf5e8e4a0ab3a22b1c1eb9fefcb65c8175a"};
+        runtime.register_translation({GuestAddress{ci::wrapper},
+                                      {rt::Abi::Cdecl, 0, true},
+                                      ci::wrapper_adapter,
+                                      "actual complete game wrapper",
+                                      evidence});
+        if (service)
+            runtime.register_service(
+                {GuestAddress{ci::slot},
+                 {rt::Abi::Cdecl, 8, true},
+                 ci::provider_adapter,
+                 "MSVCRT.dll!_controlfp",
+                 rt::Domain::admitted_game,
+                 "2d5670881a6d13a100e37da297f6eeb876f68b63073a28eb5d650625c60f9bf7",
+                 "b75abde48029efcdb8cb123c163c6bfb27a9b76dc62da014e620fca7c95bac56"});
+        runtime.freeze_registry();
+        runtime.cpu() = ci::cpu_view(state);
+        runtime.cpu().esp += 4;
+        runtime.cpu().eip = 0x5ac431;
+    }
+    void protect_game(unsigned a, Permissions p) {
+        for (const auto &r : runtime.image_metadata().mapped_regions)
+            if (a >= r.start.value && std::uint64_t{a} < std::uint64_t{r.start.value} + r.size) {
+                runtime.memory().protect(r.start, p);
+                return;
+            }
+        throw std::runtime_error("Actual game mapping missing");
+    }
+    bool call() {
+        ci::HostScope host;
+        bool rejected{};
+        try {
+            runtime.call_direct(GuestAddress{ci::wrapper}, GuestAddress{ci::outer_return});
+        } catch (const std::exception &) {
+            rejected = true;
+        }
+        host.capture();
+        check(std::memcmp(host.before.bytes, host.after.bytes, 512) == 0 &&
+                  std::memcmp(host.env, host.env_after, 28) == 0,
+              "Actual full host restoration even on compiled fault");
+        return rejected;
+    }
+    void rejected(const char *why = nullptr) {
+        check(call() && runtime.poisoned() && !runtime.calls().empty() &&
+                  !runtime.calls()[0].completed,
+              "Required actual compiled/r9 rejection leaves outer route incomplete");
+        if (why)
+            check(context.failed && context.reason && std::strcmp(context.reason, why) == 0,
+                  "Exact connected causal diagnostic");
+        const auto count = context.count;
+        const auto fault = context.reason;
+        check(call() && context.count == count && context.reason == fault,
+              "Poisoned r9 reuse cannot progress or overwrite retained Context fault");
+    }
 };
-void tests(){
- {Fixture f;const auto legacy=std::array<unsigned,4>{f.state.x87.fxsave.ip,f.state.x87.fxsave.dp,f.state.x87.fxsave.fop,f.state.addr.fs_base.dword};check(!f.call()&&!f.runtime.poisoned()&&f.context.depth==0&&f.context.boundary_depth==0&&f.context.count==13&&f.runtime.calls().size()==2&&f.runtime.calls()[0].completed&&f.runtime.calls()[1].completed,"Actual compiled wrapper/thunk/provider typed route completes");check(f.state.gpr.rip.dword==ci::outer_return&&f.state.gpr.rsp.dword==0x20001104&&f.runtime.memory().load<unsigned>(GuestAddress{0x200010f4})==ci::provider_return,"Actual wrapper cleanup and same already-pushed import return word");check(f.state.x87.fxsave.cwd.flat==0x27f&&ci::get<std::uint16_t>(reinterpret_cast<const std::uint8_t*>(f.runtime.fx().data()))==0x27f&&legacy==std::array<unsigned,4>{f.state.x87.fxsave.ip,f.state.x87.fxsave.dp,f.state.x87.fxsave.fop,f.state.addr.fs_base.dword},"Typed guest CW transferred while distinct legacy metadata and FS persist");}
- {Fixture f(false);f.rejected("Required typed control import route fault");check(f.context.count==3&&f.runtime.calls().size()==1,"Missing service stops before provider entry and never fabricates successful return");}
- {Fixture f(true,1);f.rejected("Required typed control import route fault");check(f.context.count==3&&f.runtime.calls().size()==1,"Nested runtime frame capacity denial remains causal");}
- {Fixture f;f.runtime.memory().protect(GuestAddress{stack_page},Permissions::read);f.rejected();check(f.context.count==0&&f.runtime.memory().load<unsigned>(GuestAddress{0x20001100})==ci::outer_return,"Readonly initial runtime frame denied before compiled entry without sentinel loss");}
- {Fixture f;f.runtime.memory().unmap(GuestAddress{stack_page});f.rejected();check(f.context.count==0,"Missing initial stack cannot create native phase observations");}
- for(unsigned kind=0;kind<3;++kind){Fixture f;if(kind==0)f.state.addr.fs_base.dword^=4;if(kind==1)f.state.addr.ds_base.dword=4;if(kind==2)f.state.addr.ss_base.dword=4;f.rejected("Connected persistent State/flat segments/guest FS identity rejected");check(f.context.count==0,"Wrong guest segment bases rejected before original instructions");}
- for(unsigned kind=0;kind<4;++kind){Fixture f;if(kind==0)f.state.x87.fxsave.swd.flat=1;if(kind==1)f.state.x87.fxsave.swd.flat=0x800;if(kind==2)f.state.x87.fxsave.ftw.flat=1;if(kind==3)f.state.sw.pe=1;const auto before=f.state.x87;f.rejected("Unsupported connected FWAIT pending/nonempty state");check(f.context.failed&&std::strcmp(f.context.reason,"Unsupported connected FWAIT pending/nonempty state")==0&&std::memcmp(&before,&f.state.x87,512)==0,"Unsupported live/pending FP never reset into success");}
- {Fixture f;f.state.x87.fxsave.cwd.flat=0x27f;f.rejected("Required connected typed FNSTCW fault");check(f.context.cw.fault()==m4_guest_cw::Fault::unsupported_state,"Separate State/FX CW mismatch remains a required fault");}
- for(unsigned kind=0;kind<3;++kind){Fixture f;const unsigned a=kind==0?ci::wrapper:kind==1?ci::thunk:0x5ac431;f.protect_game(a,Permissions::read|Permissions::write);f.runtime.memory().store<std::uint8_t>(GuestAddress{a},0);f.protect_game(a,Permissions::read|Permissions::execute);f.rejected("Exact game wrapper/thunk/outer CALL source changed");check(f.context.count==2,"Changed actual game source denies at tail before import phase");}
- {Fixture f;f.protect_game(ci::slot,Permissions::read|Permissions::write);f.runtime.memory().store<unsigned>(GuestAddress{ci::slot},0);f.protect_game(ci::slot,Permissions::read);f.rejected("Actual import tail/raw-IAT/return-frame identity rejected");check(f.context.count==2,"Changed raw IAT cannot route to unrelated code");}
- for(unsigned kind=0;kind<2;++kind){Fixture f;const auto base=kind?0x78011000U:0x78004000U;f.runtime.memory().protect(GuestAddress{base},Permissions::read|Permissions::write);f.runtime.memory().store<std::uint8_t>(GuestAddress{kind?0x7801129bU:0x780042e1U},0);f.runtime.memory().protect(GuestAddress{base},Permissions::read|Permissions::execute);f.rejected("Exact connected provider source identity changed");check(f.context.count==3&&f.runtime.calls().size()==2&&!f.runtime.calls()[1].completed,"Changed provider body cannot complete nested service");}
- {Fixture f;f.runtime.memory().protect(GuestAddress{0x78011000},Permissions::none);f.rejected("Exact connected provider source identity changed");}
- {Fixture f;ci::owner=nullptr;f.rejected();check(f.context.count==0,"Missing serial owner cannot dispatch translated callback");}
- {Fixture f;f.context.boundary_depth=4;f.rejected();check(f.context.count==0,"Owned boundary capacity denial before compiled callback");}
+void tests() {
+    {
+        Fixture f;
+        const auto legacy =
+            std::array<unsigned, 4>{f.state.x87.fxsave.ip, f.state.x87.fxsave.dp,
+                                    f.state.x87.fxsave.fop, f.state.addr.fs_base.dword};
+        check(!f.call() && !f.runtime.poisoned() && f.context.depth == 0 &&
+                  f.context.boundary_depth == 0 && f.context.count == 13 &&
+                  f.runtime.calls().size() == 2 && f.runtime.calls()[0].completed &&
+                  f.runtime.calls()[1].completed,
+              "Actual compiled wrapper/thunk/provider typed route completes");
+        check(f.state.gpr.rip.dword == ci::outer_return && f.state.gpr.rsp.dword == 0x20001104 &&
+                  f.runtime.memory().load<unsigned>(GuestAddress{0x200010f4}) ==
+                      ci::provider_return,
+              "Actual wrapper cleanup and same already-pushed import return word");
+        check(f.state.x87.fxsave.cwd.flat == 0x27f &&
+                  ci::get<std::uint16_t>(
+                      reinterpret_cast<const std::uint8_t *>(f.runtime.fx().data())) == 0x27f &&
+                  legacy == std::array<unsigned, 4>{f.state.x87.fxsave.ip, f.state.x87.fxsave.dp,
+                                                    f.state.x87.fxsave.fop,
+                                                    f.state.addr.fs_base.dword},
+              "Typed guest CW transferred while distinct legacy metadata and FS persist");
+    }
+    {
+        Fixture f(false);
+        f.rejected("Required typed control import route fault");
+        check(f.context.count == 3 && f.runtime.calls().size() == 1,
+              "Missing service stops before provider entry and never fabricates successful return");
+    }
+    {
+        Fixture f(true, 1);
+        f.rejected("Required typed control import route fault");
+        check(f.context.count == 3 && f.runtime.calls().size() == 1,
+              "Nested runtime frame capacity denial remains causal");
+    }
+    {
+        Fixture f;
+        f.runtime.memory().protect(GuestAddress{stack_page}, Permissions::read);
+        f.rejected();
+        check(f.context.count == 0 &&
+                  f.runtime.memory().load<unsigned>(GuestAddress{0x20001100}) == ci::outer_return,
+              "Readonly initial runtime frame denied before compiled entry without sentinel loss");
+    }
+    {
+        Fixture f;
+        f.runtime.memory().unmap(GuestAddress{stack_page});
+        f.rejected();
+        check(f.context.count == 0,
+              "Missing initial stack cannot create native phase observations");
+    }
+    for (unsigned kind = 0; kind < 3; ++kind) {
+        Fixture f;
+        if (kind == 0)
+            f.state.addr.fs_base.dword ^= 4;
+        if (kind == 1)
+            f.state.addr.ds_base.dword = 4;
+        if (kind == 2)
+            f.state.addr.ss_base.dword = 4;
+        f.rejected("Connected persistent State/flat segments/guest FS identity rejected");
+        check(f.context.count == 0,
+              "Wrong guest segment bases rejected before original instructions");
+    }
+    for (unsigned kind = 0; kind < 4; ++kind) {
+        Fixture f;
+        if (kind == 0)
+            f.state.x87.fxsave.swd.flat = 1;
+        if (kind == 1)
+            f.state.x87.fxsave.swd.flat = 0x800;
+        if (kind == 2)
+            f.state.x87.fxsave.ftw.flat = 1;
+        if (kind == 3)
+            f.state.sw.pe = 1;
+        const auto before = f.state.x87;
+        f.rejected("Unsupported connected FWAIT pending/nonempty state");
+        check(f.context.failed &&
+                  std::strcmp(f.context.reason,
+                              "Unsupported connected FWAIT pending/nonempty state") == 0 &&
+                  std::memcmp(&before, &f.state.x87, 512) == 0,
+              "Unsupported live/pending FP never reset into success");
+    }
+    {
+        Fixture f;
+        f.state.x87.fxsave.cwd.flat = 0x27f;
+        f.rejected("Required connected typed FNSTCW fault");
+        check(f.context.cw.fault() == m4_guest_cw::Fault::unsupported_state,
+              "Separate State/FX CW mismatch remains a required fault");
+    }
+    for (unsigned kind = 0; kind < 3; ++kind) {
+        Fixture f;
+        const unsigned a = kind == 0 ? ci::wrapper : kind == 1 ? ci::thunk : 0x5ac431;
+        f.protect_game(a, Permissions::read | Permissions::write);
+        f.runtime.memory().store<std::uint8_t>(GuestAddress{a}, 0);
+        f.protect_game(a, Permissions::read | Permissions::execute);
+        f.rejected("Exact game wrapper/thunk/outer CALL source changed");
+        check(f.context.count == 2,
+              "Changed actual game source denies at tail before import phase");
+    }
+    {
+        Fixture f;
+        f.protect_game(ci::slot, Permissions::read | Permissions::write);
+        f.runtime.memory().store<unsigned>(GuestAddress{ci::slot}, 0);
+        f.protect_game(ci::slot, Permissions::read);
+        f.rejected("Actual import tail/raw-IAT/return-frame identity rejected");
+        check(f.context.count == 2, "Changed raw IAT cannot route to unrelated code");
+    }
+    for (unsigned kind = 0; kind < 2; ++kind) {
+        Fixture f;
+        const auto base = kind ? 0x78011000U : 0x78004000U;
+        f.runtime.memory().protect(GuestAddress{base}, Permissions::read | Permissions::write);
+        f.runtime.memory().store<std::uint8_t>(GuestAddress{kind ? 0x7801129bU : 0x780042e1U}, 0);
+        f.runtime.memory().protect(GuestAddress{base}, Permissions::read | Permissions::execute);
+        f.rejected("Exact connected provider source identity changed");
+        check(f.context.count == 3 && f.runtime.calls().size() == 2 &&
+                  !f.runtime.calls()[1].completed,
+              "Changed provider body cannot complete nested service");
+    }
+    {
+        Fixture f;
+        f.runtime.memory().protect(GuestAddress{0x78011000}, Permissions::none);
+        f.rejected("Exact connected provider source identity changed");
+    }
+    {
+        Fixture f;
+        ci::owner = nullptr;
+        f.rejected();
+        check(f.context.count == 0, "Missing serial owner cannot dispatch translated callback");
+    }
+    {
+        Fixture f;
+        f.context.boundary_depth = 4;
+        f.rejected();
+        check(f.context.count == 0, "Owned boundary capacity denial before compiled callback");
+    }
 }
+} // namespace
+int main(int argc, char **argv) {
+    try {
+        need(argc == 4, "Connected context tests: exact-pack exact-provider exact-game");
+        pack = read(argv[1], 16428);
+        provider = read(argv[2], 266293);
+        game = read(argv[3], 2384384);
+        need(pack.size() == 16428 && digest(pack) == ci::pack_sha &&
+                 digest(provider) ==
+                     "2d5670881a6d13a100e37da297f6eeb876f68b63073a28eb5d650625c60f9bf7" &&
+                 digest(game) == m4::admitted_image_hash,
+             "Exact private actual source association");
+        tests();
+        std::cout << checks << " authored connected compiled-body/frame/fault controls passed\n";
+        return 0;
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << '\n';
+        return 1;
+    }
 }
-int main(int argc,char**argv){try{need(argc==4,"Connected context tests: exact-pack exact-provider exact-game");pack=read(argv[1],16428);provider=read(argv[2],266293);game=read(argv[3],2384384);need(pack.size()==16428&&digest(pack)==ci::pack_sha&&digest(provider)=="2d5670881a6d13a100e37da297f6eeb876f68b63073a28eb5d650625c60f9bf7"&&digest(game)==m4::admitted_image_hash,"Exact private actual source association");tests();std::cout<<checks<<" authored connected compiled-body/frame/fault controls passed\n";return 0;}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}
