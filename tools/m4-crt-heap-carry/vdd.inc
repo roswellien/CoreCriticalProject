@@ -6,7 +6,7 @@
 // nearest stretch for same-format surfaces. Anything outside this model stops typed.
 
 using VSurface=VSurfaceRec;using VPalette=VPaletteRec;
-VSurface*vsurface(unsigned g){for(auto&v:host.vsurfaces)if(v.guest==g)return &v;return nullptr;}
+VSurface*vsurface(unsigned g){auto&h=host;for(;h.vsurf_indexed<h.vsurfaces.size();++h.vsurf_indexed)h.vsurf_index.emplace(h.vsurfaces[h.vsurf_indexed].guest,h.vsurf_indexed);const auto it=h.vsurf_index.find(g);return it==h.vsurf_index.end()?nullptr:&h.vsurfaces[it->second];}
 unsigned vsurf_root(unsigned g){const auto*o=host.com_object(g);return o?root_of(*o):g;}
 VSurface*vsurf_of(unsigned g){return vsurface(vsurf_root(g));}
 unsigned surface_pages(unsigned bytes){const unsigned n=(std::max(bytes,1U)+4095U)&~4095U;if(host.vsurface_next==0)host.vsurface_next=vsurface_arena;const unsigned g=host.vsurface_next;
@@ -19,19 +19,52 @@ DDPIXELFORMAT surface_format(const VSurface&v){if(v.caps&(DDSCAPS_TEXTURE|DDSCAP
 void fill_desc(const VSurface&v,DDSURFACEDESC2&d){d={};d.dwSize=sizeof(d);d.dwFlags=DDSD_CAPS|DDSD_WIDTH|DDSD_HEIGHT|DDSD_PITCH|DDSD_PIXELFORMAT;d.dwWidth=v.width;d.dwHeight=v.height;d.lPitch=LONG(v.pitch);
  d.ddpfPixelFormat=surface_format(v);d.ddsCaps.dwCaps=v.caps;if(v.attached){d.dwFlags|=DDSD_BACKBUFFERCOUNT;d.dwBackBufferCount=1;}if(v.has_src_key){d.dwFlags|=DDSD_CKSRCBLT;d.ddckCKSrcBlt=v.src_key;}}
 // Presentation of the front buffer (RGB565 / palettized) into the game window's client area.
-void present(const VSurface&v){if(!host.display.window)deny("Presentation without a cooperative window",v.guest);const unsigned w=v.width,h=v.height;
- std::vector<unsigned char>px(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));
+// Lazy residency of the 3D target (MW34_LAZY_RT=1). After a scene the GPU images hold the newest render-target and
+// z-buffer content; guest memory is refreshed (gpu_sync) only before a service reads or writes one of those surfaces:
+// Lock, Blt/BltFast, fills, Flip/presentation, texture Load and texture uploads. While the guest copy is stale its pages are
+// inaccessible, so guest code touching them outside a service stops typed instead of using old pixels.
+mw34::vkscene::Renderer*scene_renderer(){if(!host.sren){if(lazy_rt()&&host.presenter)host.sren=host.presenter.get();else{if(!host.renderer)host.renderer=std::make_unique<mw34::vkscene::Renderer>();host.sren=host.renderer.get();}}return host.sren;}
+// Render scale of the resident target on the presenter device: the window's client height over the game height
+// (1..4), or MW34_RENDER_SCALE. The 3D scenes and the GPU HUD render at that resolution; guest copies stay at the
+// game resolution (blits through staging images).
+float render_scale(unsigned gh){static const char*e=std::getenv("MW34_RENDER_SCALE");if(e&&*e)return std::clamp(std::stof(e),1.f,4.f);
+ RECT rc{};if(!host.display.window||!::GetClientRect(host.display.window,&rc)||rc.bottom<=0||!gh)return 1.f;return std::clamp(float(rc.bottom)/float(gh),1.f,4.f);}
+static bool lazy_rt(){static const bool on=[]{const char*e=std::getenv("MW34_LAZY_RT");return e&&*e=='1';}();return on;}
+void gpu_protect(bool stale){if(stale==host.res_protected)return;host.res_protected=stale;auto*b=reinterpret_cast<std::byte*>(runtime.memory().flat_base());if(!b)return;for(const unsigned g:{host.res_rt,host.res_zb})if(g)if(auto*v=vsurface(g)){DWORD old{};
+ if(!::VirtualProtect(b+v->mem,v->bytes,stale?PAGE_NOACCESS:PAGE_READWRITE,&old))deny("Resident surface page protection",v->guest);}}
+void gpu_sync(unsigned guest){if(!host.res_dirty||(guest&&guest!=host.res_rt&&guest!=host.res_zb))return;auto*rt=vsurface(host.res_rt);if(!rt||!host.sren)deny("Resident render target is gone",host.res_rt);
+ auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;gpu_protect(false);namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;sc.color.resize(size_t(sc.width)*sc.height);sc.depth.resize(sc.color.size());
+ try{HostInternal hi(*this);host.sren->fetch_resident(sc);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ for(unsigned y=0;y<rt->height;++y)write_bytes(rt->mem+y*rt->pitch,sc.color.data()+size_t(y)*rt->width,rt->width*2);
+ if(zb)for(unsigned y=0;y<zb->height;++y)write_bytes(zb->mem+y*zb->pitch,sc.depth.data()+size_t(y)*zb->width,zb->width*2);host.res_dirty=false;}
+// Direct presentation (lazy residency on the presenter's device): set by Flip when the back buffer is the resident
+// target and no frame dump is due; the presenter shows the resident image and the bookkeeping below is unchanged.
+bool present_direct{};
+// Copies the resident image into another surface's memory (direct presentation fallback); the GPU stays authoritative.
+void resident_into(const VSurface&v){auto*rt=vsurface(host.res_rt);if(!rt||rt->width!=v.width||rt->height!=v.height)deny("Resident image does not fit the presented surface",v.guest);
+ namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;sc.color.resize(size_t(sc.width)*sc.height);sc.depth.resize(sc.color.size());
+ try{HostInternal hi(*this);host.sren->fetch_resident(sc);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ for(unsigned y=0;y<v.height;++y)write_bytes(v.mem+y*v.pitch,sc.color.data()+size_t(y)*v.width,v.width*2);}
+void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.display.window)deny("Presentation without a cooperative window",v.guest);const unsigned w=v.width,h=v.height;
+ std::vector<unsigned char>px;if(!present_direct){px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));}
  struct{BITMAPINFOHEADER h;DWORD masks[256];}bi{};bi.h.biSize=sizeof(BITMAPINFOHEADER);bi.h.biWidth=LONG(v.pitch/(v.bpp/8));bi.h.biHeight=-LONG(h);bi.h.biPlanes=1;bi.h.biBitCount=WORD(v.bpp);
  if(v.bpp==16){bi.h.biCompression=BI_BITFIELDS;bi.masks[0]=0xf800;bi.masks[1]=0x07e0;bi.masks[2]=0x001f;}else if(v.bpp==8){const auto*pal=vpalette(v.palette);if(!pal)deny("8-bit presentation without a palette",v.guest);
   for(unsigned i=0;i<256;++i)bi.masks[i]=RGB(pal->entries[i].peBlue,pal->entries[i].peGreen,pal->entries[i].peRed);bi.h.biClrUsed=256;}else deny("Presentation depth not modelled",v.bpp);
  // 16-bit frames are presented by the Vulkan swapchain presenter unless MW34_PRESENT=gdi; the GDI presenter
  // serves 8-bit frames and devices without window presentation.
  static const bool gdi_only=[]{const char*p=std::getenv("MW34_PRESENT");return p&&std::string(p)=="gdi";}();bool shown=false;
- if(v.bpp==16&&!gdi_only){if(!host.presenter)host.presenter=std::make_unique<mw34::vkscene::Renderer>();try{HostInternal hi(*this);shown=host.presenter->present(host.display.window,px.data(),w,h,v.pitch);}catch(const std::exception&e){deny(std::string(e.what()),v.guest);}
+ if(v.bpp==16&&!gdi_only){if(!host.presenter)host.presenter=std::make_unique<mw34::vkscene::Renderer>();try{HostInternal hi(*this);if(present_direct){if(host.presenter->overlay.on)overlay_gpu(w,h);{static const char*hp=std::getenv("MW34_HIRES_DUMP_FILE");static const unsigned hf=[]{const char*e=std::getenv("MW34_HIRES_DUMP");return e&&*e?unsigned(std::stoul(e)):0U;}();if(hf&&hp&&host.frames+1==hf)host.presenter->dump_fullres(hp);}shown=host.presenter->present_resident(host.display.window,w,h);if(!shown){resident_into(v);present_direct=false;px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));}}
+  if(!present_direct)shown=host.presenter->present(host.display.window,px.data(),w,h,v.pitch);}catch(const std::exception&e){deny(std::string(e.what()),v.guest);}
   if(shown&&host.presenter->presents==1)apis.back()+="(Vulkan presenter on "+host.presenter->device_name+")";}
  if(!shown){RECT rc{};::GetClientRect(host.display.window,&rc);HDC dc=::GetDC(host.display.window);::SetStretchBltMode(dc,COLORONCOLOR);
  ::StretchDIBits(dc,0,0,rc.right,rc.bottom,0,0,LONG(w),LONG(h),px.data(),reinterpret_cast<BITMAPINFO*>(&bi),DIB_RGB_COLORS,SRCCOPY);::ReleaseDC(host.display.window,dc);}
- ++host.frames;mw34_frames_presented.store(host.frames,std::memory_order_relaxed);if(host.frame_dump&&(host.frames==1||host.frames%host.frame_dump==0))dump_frame(v,px);
+ ++host.frames;mw34_frames_presented.store(host.frames,std::memory_order_relaxed);hud_present();{static const unsigned df=[]{const char*e=std::getenv("MW34_MEM_DUMP_FRAME");return e&&*e?unsigned(std::stoul(e)):0U;}();static const char*dp=std::getenv("MW34_MEM_DUMP");  /* diagnostic: game .data/.bss image at that frame */
+ if(df&&dp&&host.frames==df){std::vector<std::byte>b(0x9a2000-0x5e0000);runtime.memory().read({0x5e0000},b);if(FILE*f=std::fopen(dp,"wb")){std::fwrite(b.data(),1,b.size(),f);std::fclose(f);}}}if(host.draw_log){{std::fprintf(host.draw_log,"%u %u %016llx up %llu rb %llu hud %llu fb %llu touch %llu hires %llu text %llu log2 %llu exp2 %llu\n",host.frames,host.draw_calls,(unsigned long long)host.draw_hash,host.sren?(unsigned long long)host.sren->target_uploads:0ULL,host.sren?(unsigned long long)host.sren->readbacks:0ULL,(unsigned long long)hud_draws_total,(unsigned long long)hud_fallbacks,(unsigned long long)touch_count,(unsigned long long)hires_hits,(unsigned long long)text_hits,mw34_x87_counts[0],mw34_x87_counts[1]);}host.draw_hash=0xcbf29ce484222325ULL;host.draw_calls=0;}if(host.vclock())host.vclock_us+=host.vclock_step_us;
+ // Opt-in frame timing (MW34_FRAME_TIMES=<file>): one line per presented frame, "frame host_ms 3d_scenes virtual_clock_us".
+ static FILE*const frame_times=[]{const char*p=std::getenv("MW34_FRAME_TIMES");return p&&*p?std::fopen(p,"w"):nullptr;}();
+ if(frame_times){static const auto t0=std::chrono::steady_clock::now();std::fprintf(frame_times,"%u %.3f %llu %llu\n",host.frames,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(),
+   static_cast<unsigned long long>(host.sren?host.sren->scenes:0),static_cast<unsigned long long>(host.vclock_us));std::fflush(frame_times);}
+ if(host.frame_dump&&(host.frames==1||host.frames%host.frame_dump==0))dump_frame(v,px);
  if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.presenter?host.presenter->presents:0)+" through the Vulkan swapchain"+(host.presenter&&host.presenter->presents?" on "+host.presenter->device_name:std::string())+")",host.frames);}
 // Evidence: the presented frame as a binary PPM (converted from RGB565) under the run's frame directory.
 void dump_frame(const VSurface&v,const std::vector<unsigned char>&px){if(host.frame_dir.empty()||v.bpp!=16)return;std::ofstream f(host.frame_dir+"/frame-"+std::to_string(host.frames)+".ppm",std::ios::binary);
@@ -48,12 +81,18 @@ RECT surf_rect(unsigned a,const VSurface&v){if(!a)return RECT{0,0,LONG(v.width),
 bool inside(const VSurface&v,const RECT&r){return r.left>=0&&r.top>=0&&r.right<=LONG(v.width)&&r.bottom<=LONG(v.height);}
 void blit(const VSurface&d,RECT dr,const VSurface&s,RECT sr,bool key,unsigned klo,unsigned khi){d.version=++host.surface_versions;if(d.bpp!=s.bpp)deny("Blt between surfaces of different depths is not modelled",d.bpp);
  const LONG dw=dr.right-dr.left,dh=dr.bottom-dr.top,sw=sr.right-sr.left,sh=sr.bottom-sr.top;if(dw<=0||dh<=0||sw<=0||sh<=0)return;
- if(!inside(d,dr)||!inside(s,sr))deny("Blt rectangle outside its surface",unsigned(dr.left));const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Blt depth not modelled",d.bpp);
+ gpu_sync(d.guest);gpu_sync(s.guest);if(!inside(d,dr)||!inside(s,sr))deny("Blt rectangle outside its surface",unsigned(dr.left));const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Blt depth not modelled",d.bpp);
  std::vector<unsigned char>src(size_t(sw)*sh*b),row(size_t(dw)*b);for(LONG y=0;y<sh;++y)get_bytes(s.mem+unsigned(sr.top+y)*s.pitch+unsigned(sr.left)*b,src.data()+size_t(y)*sw*b,unsigned(sw)*b);
  for(LONG y=0;y<dh;++y){const LONG sy=y*sh/dh;const unsigned da=d.mem+unsigned(dr.top+y)*d.pitch+unsigned(dr.left)*b;if(key)get_bytes(da,row.data(),unsigned(dw)*b);
   for(LONG x=0;x<dw;++x){const unsigned char*p=src.data()+(size_t(sy)*sw+size_t(x*sw/dw))*b;unsigned c=0;std::memcpy(&c,p,b);if(key&&c>=klo&&c<=khi)continue;std::memcpy(row.data()+size_t(x)*b,p,b);}
   write_bytes(da,row.data(),unsigned(dw)*b);}}
-void fill(const VSurface&d,RECT r,unsigned c){d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));
+bool resident_current(){auto*rt=vsurface(host.res_rt);auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;return rt&&rt->version==host.res_ver_rt&&(!host.res_zb||(zb&&zb->version==host.res_ver_zb));}
+void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;sc.color.resize(size_t(sc.width)*sc.height);sc.depth.resize(sc.color.size());
+ sc.has_depth=host.res_zb!=0;vs::Clear k{};const bool depth=d.guest==host.res_zb;k.flags=depth?2U:1U;k.color[0]=float((c>>11)&31)/31.f;k.color[1]=float((c>>5)&63)/63.f;k.color[2]=float(c&31)/31.f;k.color[3]=1.f;k.z=float(c&0xffff)/65535.f;
+ k.rects.push_back({{r.left,r.top},{unsigned(r.right-r.left),unsigned(r.bottom-r.top)}});sc.order.push_back({true,0});sc.clears.push_back(std::move(k));
+ try{HostInternal hi(*this);host.sren->render(sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ d.version=++host.surface_versions;if(depth)host.res_ver_zb=d.version;else host.res_ver_rt=d.version;host.res_dirty=true;gpu_protect(true);}
+void fill(const VSurface&d,RECT r,unsigned c){if(lazy_rt()&&host.sren&&d.bpp==16&&r.right>r.left&&r.bottom>r.top&&inside(d,r)&&(d.guest==host.res_rt||(host.res_zb&&d.guest==host.res_zb))&&(host.res_dirty||resident_current())){gpu_fill(d,r,c);return;}gpu_sync(d.guest);d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));
  const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Fill depth not modelled",d.bpp);std::vector<unsigned char>row(size_t(r.right-r.left)*b);for(size_t x=0;x<row.size()/b;++x)std::memcpy(row.data()+x*b,&c,b);
  for(LONG y=r.top;y<r.bottom;++y)write_bytes(d.mem+unsigned(y)*d.pitch+unsigned(r.left)*b,row.data(),unsigned(row.size()));}
 
@@ -91,9 +130,15 @@ void*vdd_surface(const Import&imp,unsigned token,const std::function<unsigned(un
  if(n=="GetAttachedSurface"){const unsigned c=arg(1),out=arg(2);if(!readable(c,4)||!writable(out,4))deny("GetAttachedSurface arguments outside the memory contract",c);const unsigned want=load(c);
   if(!(want&DDSCAPS_BACKBUFFER)||!v->attached){store(out,0);return done(unsigned(DDERR_NOTFOUND),3);}++host.com_object(v->attached)->refs;store(out,v->attached);return done(DD_OK,3);}
  if(n=="Lock"){const unsigned rect=arg(1),desc=arg(2),flags=arg(3);if(arg(4))deny("Lock event handle is not modelled",arg(4));if(!readable(desc,4)||load(desc)!=dsize)deny("Lock descriptor with a wrong dwSize",desc);
-  const RECT r=surf_rect(rect,*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);++v->locks;(void)flags;return done(DD_OK,5);}
- if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);--v->locks;v->version=++host.surface_versions;return done(DD_OK,2);}
- if(n=="Flip"){if(!v->primary||!v->attached)deny("Flip on a surface without a flip chain",v->guest);if(arg(1))deny("Flip with an explicit target is not modelled",arg(1));auto*b=vsurface(v->attached);std::swap(v->mem,b->mem);v->version=++host.surface_versions;b->version=++host.surface_versions;present(*v);return done(DD_OK,3);}
+  if(gpu_hud()&&lazy_rt()&&host.sren&&host.res_dirty&&v->guest==host.res_rt&&!hud_gpu_active)hud_begin(*v);else gpu_sync(v->guest);
+  const RECT r=surf_rect(rect,*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);++v->locks;(void)flags;
+  {static const bool watch=[]{const char*e=std::getenv("MW34_HUD_WATCH");return e&&*e;}();if(watch&&v->width>=640&&v->height>=480&&v->bpp==16&&!hud_watch_hi){auto*b=reinterpret_cast<std::byte*>(runtime.memory().flat_base());if(b){hud_watch_lo=reinterpret_cast<std::uintptr_t>(b+v->mem);hud_watch_hi=hud_watch_lo+std::uintptr_t(v->pitch)*v->height;DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READONLY,&old);}}}
+  return done(DD_OK,5);}
+ if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);if(hud_gpu_active&&v->guest==host.res_rt){hud_flush();hud_gpu_active=false;--v->locks;return done(DD_OK,2);}if(hud_watch_hi){DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READWRITE,&old);hud_watch_lo=hud_watch_hi=0;if(host.frames%25==0)hud_watch_save();}--v->locks;v->version=++host.surface_versions;return done(DD_OK,2);}
+ if(n=="Flip"){if(!v->primary||!v->attached)deny("Flip on a surface without a flip chain",v->guest);if(arg(1))deny("Flip with an explicit target is not modelled",arg(1));auto*b=vsurface(v->attached);{const unsigned next=host.frames+1;const bool dump_due=host.frame_dump&&(next==1||next%host.frame_dump==0);
+  present_direct=lazy_rt()&&host.res_dirty&&b->guest==host.res_rt&&host.sren&&host.presenter&&host.sren==host.presenter.get()&&!dump_due;}
+  /* the guest memories swap: the protection follows the resident surface (b keeps the GPU image as its content) */
+  if(!present_direct){gpu_sync(b->guest);gpu_sync(v->guest);}else gpu_protect(false);std::swap(v->mem,b->mem);if(present_direct)gpu_protect(true);v->version=++host.surface_versions;b->version=++host.surface_versions;present(*v);present_direct=false;return done(DD_OK,3);}
  if(n=="Blt"){const unsigned dr=arg(1),src=arg(2),sr=arg(3),flags=arg(4),fx=arg(5);const RECT dst=surf_rect(dr,*v);
   if(flags&DDBLT_DEPTHFILL){if(!(v->caps&DDSCAPS_ZBUFFER))deny("Depth fill on a non-z-buffer surface",v->guest);if(!readable(fx,100))deny("Blt depth fill without its DDBLTFX",fx);fill(*v,dst,load(fx+80)&0xffff);return done(DD_OK,6);}
   if(flags&DDBLT_COLORFILL){if(!readable(fx,100))deny("Blt colour fill without its DDBLTFX",fx);fill(*v,dst,load(fx+80));if(v->primary&&!v->attached)present(*v);return done(DD_OK,6);}

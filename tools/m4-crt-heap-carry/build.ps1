@@ -1,7 +1,9 @@
 # Builds the heap carry worker at O0 and O2 into build/m4-crt-heap-carry-<level>.
 # Same compiler, flags and guest objects as the parser carry (build/m4-crt-parser-carry-<level>),
 # plus the already-lifted heap-init and mode-1 allocator objects. No worker is executed.
-param([string[]]$Levels=@('O0','O2'))
+# -Inline <dir>: link the objects rebuilt with inlined bridge fast paths (inline_objects.py) into
+# build/m4-crt-heap-carry-O2-inline instead (O2 only); the normal build is unchanged.
+param([string[]]$Levels=@('O0','O2'),[string]$Inline='',[string]$Suffix='-inline')  # -Suffix names the build directory for -Inline
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $vs='C:/Program Files/Microsoft Visual Studio/18/Community'
@@ -21,11 +23,13 @@ foreach($level in $Levels){
   "reports/m4-crt-allocation/lifts-r1/malloc-$level.obj","reports/m4-crt-allocation/lifts-r1/size-$level.obj","reports/m4-crt-allocation/lifts-r1/worker-$level.obj",
   "reports/m4-crt-allocation/lifts-r1/round-$level.obj","reports/m4-crt-allocation/lifts-r1/alloc_tail-$level.obj","reports/m4-crt-allocation/lifts-r1/worker_epilogue-$level.obj","reports/m4-crt-allocation/lifts-r1/free-$level.obj","reports/m4-crt-allocation/lifts-r1/freecold-$level.obj","reports/m4-crt-allocation/lifts-r1/free_tail-$level.obj","reports/m4-crt-allocation/lifts-r1/free_epilogue-$level.obj")|ForEach-Object{(Join-Path $root $_).Replace('\','/')}
  # MFC42 attach closure (lift_closure.py): every lifted component listed by gen_mfc_dispatch.py.
- $mfc=@(Get-Content (Join-Path $PSScriptRoot 'mfc_objects.txt')|Where-Object{$_}|ForEach-Object{"$_-$level.obj"})
+ $list=if($Inline){if($level -ne 'O2'){throw 'Inline objects exist only for O2'};Join-Path $Inline 'mfc_objects_inline.txt'}else{Join-Path $PSScriptRoot 'mfc_objects.txt'}
+ $mfc=@(Get-Content $list|Where-Object{$_}|ForEach-Object{"$_-$level.obj"})
  foreach($o in $mfc){if(-not(Test-Path -LiteralPath $o)){throw "Missing lifted object $o"}}
- $mfcList=(Join-Path $root "build/m4-crt-heap-carry-$level-mfc-objects.txt").Replace('\','/');[IO.File]::WriteAllLines($mfcList,[string[]]$mfc)
+ $suffix=if($Inline){$Suffix}else{''}
+ $mfcList=(Join-Path $root "build/m4-crt-heap-carry-$level$suffix-mfc-objects.txt").Replace('\','/');[IO.File]::WriteAllLines($mfcList,[string[]]$mfc)
  foreach($o in $heap){if(-not(Test-Path -LiteralPath $o)){throw "Missing lifted object $o"}}
- $out=Join-Path $root "build/m4-crt-heap-carry-$level"
+ $out=Join-Path $root "build/m4-crt-heap-carry-$level$suffix"
  & $cmake -G Ninja -S (Join-Path $PSScriptRoot 'native') -B $out -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MAKE_PROGRAM=$ninja" "-DCMAKE_CXX_COMPILER=$llvm/clang-cl.exe" @defs "-DMW34_COMPOSITION_SOURCE=$($PSScriptRoot.Replace('\','/'))/composition.cpp" "-DMW34_COMPOSITION_DIRECTORY=$($PSScriptRoot.Replace('\','/'))" "-DMW34_HEAP_OBJECTS=$($heap -join ';')" "-DMW34_MFC_OBJECT_LIST=$mfcList"
  if($LASTEXITCODE){throw "configure $level failed"}
  & $cmake --build $out

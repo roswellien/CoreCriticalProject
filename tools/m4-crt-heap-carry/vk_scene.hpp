@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <stdexcept>
@@ -38,13 +39,15 @@ struct HostFpEnvironment {
     }
     ~HostFpEnvironment() { __asm__ volatile("fnclex\n\tfldcw %0\n\tldmxcsr %1" ::"m"(cw), "m"(mxcsr)); }
 };
-enum class TexFormat { rgb565, argb1555, argb4444 };
-struct TextureRef { std::uint64_t key, hash; unsigned width, height; TexFormat format; std::vector<std::uint16_t> pixels; };
+// rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour with the image's alpha mask or colour key),
+// carried in pixels32 (R, G, B, A bytes in memory order).
+enum class TexFormat { rgb565, argb1555, argb4444, rgba8888 };
+struct TextureRef { std::uint64_t key, hash; unsigned width, height; TexFormat format; std::vector<std::uint16_t> pixels; std::vector<std::uint32_t> pixels32; };
 // Fixed-function state that selects a pipeline: blend enable/source/destination (D3DBLEND), depth
 // enable/function (D3DCMP)/write, cull mode (D3DCULL).
 struct PipelineKey {
-    std::uint8_t blend, src, dst, zenable, zfunc, zwrite, cull;
-    std::uint64_t packed() const { return std::uint64_t(blend) | std::uint64_t(src) << 8 | std::uint64_t(dst) << 16 | std::uint64_t(zenable) << 24 | std::uint64_t(zfunc) << 32 | std::uint64_t(zwrite) << 40 | std::uint64_t(cull) << 48; }
+    std::uint8_t blend, src, dst, zenable, zfunc, zwrite, cull, points = 0;  // points: D3DPT_POINTLIST input assembly
+    std::uint64_t packed() const { return std::uint64_t(blend) | std::uint64_t(src) << 8 | std::uint64_t(dst) << 16 | std::uint64_t(zenable) << 24 | std::uint64_t(zfunc) << 32 | std::uint64_t(zwrite) << 40 | std::uint64_t(cull) << 48 | std::uint64_t(points) << 56; }
 };
 struct Push { float target[4], fog[4], factor[4]; std::uint32_t mode[4]; };
 static_assert(sizeof(Push) == 64);
@@ -66,6 +69,46 @@ class Renderer {
 public:
     std::string device_name;
     std::uint64_t scenes{}, draws{}, uploads{};
+    // Optional host performance overlay (MW34_PERF_OVERLAY=1, play.ps1 -Overlay; off by default). It is drawn into the
+    // host upload copy of each presented frame, never into guest memory: presented frames per second, and the mean and
+    // worst time between presents over the last second, refreshed four times a second.
+    struct PerfOverlay {
+        bool on = [] { const char *e = std::getenv("MW34_PERF_OVERLAY"); return e && *e && std::strcmp(e, "0") != 0; }();
+        std::vector<std::int64_t> t; std::int64_t qpf{}, shown{}; char text[48]{};
+        unsigned box_w{}, box_h{};  // drawn box of the last draw() (the GPU path uploads just this region)
+        static const std::uint8_t *glyph(char c) {
+            static const std::uint8_t g[][8] = {
+                {'0',0x0E,0x11,0x13,0x15,0x19,0x11,0x0E},{'1',0x04,0x0C,0x04,0x04,0x04,0x04,0x0E},{'2',0x0E,0x11,0x01,0x02,0x04,0x08,0x1F},
+                {'3',0x1F,0x02,0x04,0x02,0x01,0x11,0x0E},{'4',0x02,0x06,0x0A,0x12,0x1F,0x02,0x02},{'5',0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E},
+                {'6',0x06,0x08,0x10,0x1E,0x11,0x11,0x0E},{'7',0x1F,0x01,0x02,0x04,0x08,0x08,0x08},{'8',0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E},
+                {'9',0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C},{'.',0,0,0,0,0,0x0C,0x0C},{'F',0x1F,0x10,0x10,0x1E,0x10,0x10,0x10},
+                {'P',0x1E,0x11,0x11,0x1E,0x10,0x10,0x10},{'S',0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E},{'A',0x0E,0x11,0x11,0x1F,0x11,0x11,0x11},
+                {'V',0x11,0x11,0x11,0x11,0x11,0x0A,0x04},{'G',0x0E,0x11,0x10,0x17,0x11,0x11,0x0F},{'M',0x11,0x1B,0x15,0x15,0x11,0x11,0x11},
+                {'X',0x11,0x11,0x0A,0x04,0x0A,0x11,0x11},{' ',0,0,0,0,0,0,0}};
+            for (const auto &e : g) if (e[0] == std::uint8_t(c)) return e + 1;
+            return g[19] + 1;
+        }
+        void draw(std::uint16_t *px, unsigned w, unsigned h) {
+            LARGE_INTEGER q{}; ::QueryPerformanceCounter(&q); if (!qpf) { LARGE_INTEGER f{}; ::QueryPerformanceFrequency(&f); qpf = f.QuadPart; }
+            const std::int64_t now = q.QuadPart; t.push_back(now);
+            std::size_t first = 0; while (first < t.size() && now - t[first] > qpf) ++first;
+            if (first) t.erase(t.begin(), t.begin() + std::ptrdiff_t(first));
+            if (now - shown >= qpf / 4 && t.size() >= 2) {
+                shown = now; double worst = 0;
+                for (std::size_t i = 1; i < t.size(); ++i) worst = std::max(worst, double(t[i] - t[i - 1]) * 1000.0 / double(qpf));
+                const double span = double(t.back() - t.front()) / double(qpf), n = double(t.size() - 1);
+                std::snprintf(text, sizeof text, "FPS %.1f  AVG %.1fMS  MAX %.1fMS", n / span, span * 1000.0 / n, worst);
+            }
+            if (!text[0]) return;
+            const unsigned sc = w >= 400 ? 2 : 1, len = unsigned(std::strlen(text)), bw = (len * 6 + 2) * sc, bh = 10 * sc;
+            box_w = std::min(bw, w); box_h = std::min(bh, h);
+            for (unsigned y = 0; y < bh && y < h; ++y) for (unsigned x = 0; x < bw && x < w; ++x) px[size_t(y) * w + x] = 0;
+            for (unsigned i = 0; i < len; ++i) { const std::uint8_t *g = glyph(text[i]);
+                for (unsigned r = 0; r < 7; ++r) for (unsigned c = 0; c < 5; ++c) if (g[r] & (0x10 >> c))
+                    for (unsigned dy = 0; dy < sc; ++dy) for (unsigned dx = 0; dx < sc; ++dx) {
+                        const unsigned x = (2 + i * 6 + c) * sc + dx, y = (2 + r) * sc + dy; if (x < w && y < h) px[size_t(y) * w + x] = 0xFFE0; } }
+        }
+    } overlay;
     ~Renderer() { HostFpEnvironment fp; shutdown(); }
     // Presents a 16-bit RGB565 frame (rows of `pitch` bytes) to the window. False when this device cannot
     // present to the window (no surface/swapchain support); the caller then uses its other presenter.
@@ -86,6 +129,9 @@ public:
             if (!device) init(child); else if (presentable && !surface(child)) return false;
         }
         if (!presentable || !windowSurface) return false;
+        // The previous Flip's copy/blit is waited for here, before its upload buffer, command pool or source image
+        // are reused, instead of right after vkQueuePresentKHR (presentation stays one frame per Flip).
+        if (presentInFlight) { check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL), "wait present"); presentInFlight = false; }
         { RECT rc{}; ::GetClientRect(hwnd, &rc); RECT cc{}; ::GetClientRect(child, &cc);
           if (cc.right != rc.right || cc.bottom != rc.bottom) ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom, SWP_NOZORDER | SWP_NOACTIVATE); }
         if (!swapchainReady()) return true;  // minimized: nothing to present
@@ -93,6 +139,7 @@ public:
         ensure(presentUpload, VkDeviceSize(w) * h * 2, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         auto *dst = static_cast<std::uint8_t *>(presentUpload.mapped);
         for (unsigned y = 0; y < h; ++y) std::memcpy(dst + size_t(y) * w * 2, pixels + size_t(y) * pitch, size_t(w) * 2);
+        if (overlay.on) overlay.draw(reinterpret_cast<std::uint16_t *>(dst), w, h);
         unsigned index = 0;
         VkResult r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index);
         if (r == VK_ERROR_OUT_OF_DATE_KHR) { dropSwapchain(); if (!swapchainReady()) return true; r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index); }
@@ -131,20 +178,142 @@ public:
         r = f.vkQueuePresentKHR(queue, &pi);
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) { check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL), "wait present"); dropSwapchain(); return true; }
         check(r, "present");
-        check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL), "wait present");
+        presentInFlight = true;
         ++presents;
         return true;
     }
+    // Presents the resident scene target (lazy residency on this device: the 3D scenes and the GPU HUD of the frame)
+    // directly: no guest copy, no upload. False when this device cannot present to the window yet (the caller then
+    // synchronizes guest memory and uses present()). The target returns to attachment layout for the next scene.
+    bool present_resident(HWND hwnd, unsigned w, unsigned h) {
+        HostFpEnvironment fp;
+        if (!::IsWindowVisible(hwnd)) return true;
+        if (hwnd != presentParent || !child || !presentable || !windowSurface || !colorImage.image || w != width || h != height) return false;
+        if (presentInFlight) { check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL), "wait present"); presentInFlight = false; }
+        { RECT rc{}; ::GetClientRect(hwnd, &rc); RECT cc{}; ::GetClientRect(child, &cc);
+          if (cc.right != rc.right || cc.bottom != rc.bottom) ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom, SWP_NOZORDER | SWP_NOACTIVATE); }
+        if (!swapchainReady()) return true;
+        unsigned index = 0;
+        VkResult r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index);
+        if (r == VK_ERROR_OUT_OF_DATE_KHR) { dropSwapchain(); if (!swapchainReady()) return true; r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index); }
+        if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) check(r, "acquire swapchain image");
+        check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(f.vkBeginCommandBuffer(presentCmd, &bi), "begin resident present");
+        auto bar = [&](VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags sa, VkAccessFlags da, VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            b.srcAccessMask = sa; b.dstAccessMask = da; b.oldLayout = from; b.newLayout = to;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; b.image = img; b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            f.vkCmdPipelineBarrier(presentCmd, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
+        };
+        if (in_attachment_layout)
+            bar(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        bar(swapImages[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        // The frame keeps its aspect ratio (side or top bars are cleared to black when the window's differs).
+        const double sx = double(swapExtent.width) / rw, sy = double(swapExtent.height) / rh, fit = std::min(sx, sy);
+        const int dw = int(std::lround(rw * fit)), dh = int(std::lround(rh * fit)), dx = (int(swapExtent.width) - dw) / 2, dy = (int(swapExtent.height) - dh) / 2;
+        if (dx > 0 || dy > 0) {
+            const VkClearColorValue black{};
+            const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            f.vkCmdClearColorImage(presentCmd, swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
+        }
+        VkImageBlit blit{};
+        blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.srcOffsets[1] = {int(rw), int(rh), 1}; blit.dstOffsets[0] = {dx, dy, 0}; blit.dstOffsets[1] = {dx + dw, dy + dh, 1};
+        f.vkCmdBlitImage(presentCmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                         (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+        bar(swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bar(colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        in_attachment_layout = true;
+        check(f.vkEndCommandBuffer(presentCmd), "end resident present");
+        const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.waitSemaphoreCount = 1; si.pWaitSemaphores = &acquired; si.pWaitDstStageMask = &waitStage;
+        si.commandBufferCount = 1; si.pCommandBuffers = &presentCmd; si.signalSemaphoreCount = 1; si.pSignalSemaphores = &rendered;
+        check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+        check(f.vkQueueSubmit(queue, 1, &si, presentFence), "submit resident present");
+        VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+        pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &rendered; pi.swapchainCount = 1; pi.pSwapchains = &swapchain; pi.pImageIndices = &index;
+        r = f.vkQueuePresentKHR(queue, &pi);
+        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) { check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL), "wait present"); dropSwapchain(); return true; }
+        check(r, "present");
+        presentInFlight = true;
+        ++presents;
+        ++resident_presents;
+        return true;
+    }
+    std::uint64_t resident_presents{};
+    // Diagnostic: the resident colour image at the render resolution as a binary PPM.
+    void dump_fullres(const char *path) {
+        HostFpEnvironment fp;
+        settle();
+        const VkDeviceSize bytes = VkDeviceSize(rw) * rh * (rgba ? 4 : 2);
+        ensure(readback, std::max<VkDeviceSize>(bytes, VkDeviceSize(width) * height * 4), VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        check(f.vkResetCommandPool(device, commandPool, 0), "reset command pool");
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(f.vkBeginCommandBuffer(cmd, &bi), "begin dump");
+        if (in_attachment_layout)
+            barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkBufferImageCopy c{};
+        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; c.imageExtent = {rw, rh, 1};
+        f.vkCmdCopyImageToBuffer(cmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &c);
+        VkMemoryBarrier hb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, nullptr, 0, nullptr);
+        check(f.vkEndCommandBuffer(cmd), "end dump");
+        check(f.vkResetFences(device, 1, &fence), "reset fence");
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
+        check(f.vkQueueSubmit(queue, 1, &si, fence), "submit dump");
+        check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait dump");
+        in_attachment_layout = false;
+        FILE *out = std::fopen(path, "wb");
+        if (!out) return;
+        std::fprintf(out, "P6\n%u %u\n255\n", rw, rh);
+        const auto *src = static_cast<const unsigned char *>(readback.mapped);
+        std::vector<unsigned char> row(size_t(rw) * 3);
+        for (unsigned y = 0; y < rh; ++y) {
+            for (unsigned x = 0; x < rw; ++x) {
+                unsigned char *o = &row[size_t(x) * 3];
+                if (rgba) { const unsigned char *p = src + (size_t(y) * rw + x) * 4; o[0] = p[0]; o[1] = p[1]; o[2] = p[2]; }
+                else { const unsigned p = src[(size_t(y) * rw + x) * 2] | src[(size_t(y) * rw + x) * 2 + 1] << 8; o[0] = ((p >> 11) & 31) * 255 / 31; o[1] = ((p >> 5) & 63) * 255 / 63; o[2] = (p & 31) * 255 / 31; }
+            }
+            std::fwrite(row.data(), row.size(), 1, out);
+        }
+        std::fclose(out);
+    }
     std::uint64_t presents{};
+    bool presentInFlight{};
     // True when the cached texture for this guest surface already holds content version `hash` at this size.
     bool current(std::uint64_t key, std::uint64_t hash, unsigned w, unsigned h) const {
         auto it = textures.find(key);
         return it != textures.end() && it->second.valid && it->second.hash == hash && it->second.width == w && it->second.height == h;
     }
-    void render(Scene &s) {
+    // Lazy residency (provider MW34_LAZY_RT): with upload_in false the target images keep the content of the previous
+    // scene (no guest upload); with readback_out false nothing is copied back and the images stay in attachment layout
+    // until readback() copies them out on demand.
+    bool in_attachment_layout{};
+    float current_scale() const { return scale; }
+    void request_scale(float s) { scale_req = s; }
+    std::uint64_t readbacks{}, target_uploads{};
+    // A scene without copy-back is not waited for; the next scene or copy-back waits before reusing the command pool,
+    // upload, vertex and descriptor resources, so the game computes the next scene while the GPU renders this one.
+    bool scene_pending{};
+    void settle() {
+        if (!scene_pending) return;
+        check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait previous scene");
+        scene_pending = false;
+    }
+    void render(Scene &s, bool upload_in = true, bool readback_out = true) {
         HostFpEnvironment fp;
+        settle();
         if (!device) init();
-        if (s.width != width || s.height != height) target(s.width, s.height);
+        if (s.width != width || s.height != height || scale_req != scale) target(s.width, s.height);
         const VkDeviceSize pixels = VkDeviceSize(width) * height;
         if (s.color.size() != pixels || s.depth.size() != pixels) throw std::runtime_error("Scene buffers do not match the target");
         const VkDeviceSize colorBytes = pixels * (rgba ? 4 : 2), depthBytes = pixels * 2;
@@ -152,7 +321,9 @@ public:
         ensure(readback, colorBytes + depthBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         ensure(vertexBuffer, std::max<VkDeviceSize>(s.vertices.size(), 32), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         auto *up = static_cast<unsigned char *>(upload.mapped);
-        if (rgba) {
+        if (upload_in) ++target_uploads;
+        if (!upload_in) {
+        } else if (rgba) {
             for (VkDeviceSize i = 0; i < pixels; ++i) {
                 const unsigned p = s.color[i];
                 const std::uint32_t r = ((p >> 11) & 31) * 255 / 31, g = ((p >> 5) & 63) * 255 / 63, b = (p & 31) * 255 / 31;
@@ -160,7 +331,7 @@ public:
                 std::memcpy(up + 4 * i, &v, 4);
             }
         } else std::memcpy(up, s.color.data(), colorBytes);
-        std::memcpy(up + colorBytes, s.depth.data(), depthBytes);
+        if (upload_in) std::memcpy(up + colorBytes, s.depth.data(), depthBytes);
         if (!s.vertices.empty()) std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
         // Textures: content-hashed cache keyed by guest surface; changed or new ones are uploaded.
         VkDeviceSize texBytes = 0;
@@ -172,7 +343,7 @@ public:
             if (c.image && (c.width != t.width || c.height != t.height)) destroy(c);
             if (!c.image) create(c, t.width, t.height);
             if (c.hash != t.hash || !c.valid) {
-                if (t.pixels.size() != size_t(t.width) * t.height) throw std::runtime_error("Vulkan scene renderer: changed texture without pixels");
+                if ((t.format == TexFormat::rgba8888 ? t.pixels32.size() : t.pixels.size()) != size_t(t.width) * t.height) throw std::runtime_error("Vulkan scene renderer: changed texture without pixels");
                 changed.push_back({&c, &t}); texBytes += VkDeviceSize(t.width) * t.height * 4;
             }
             bound[i] = &c;
@@ -181,6 +352,11 @@ public:
         {
             auto *tp = static_cast<unsigned char *>(texUpload.mapped);
             for (auto &[c, t] : changed) {
+                if (t->format == TexFormat::rgba8888) {
+                    std::memcpy(tp, t->pixels32.data(), t->pixels32.size() * 4);
+                    tp += VkDeviceSize(t->width) * t->height * 4;
+                    continue;
+                }
                 for (size_t i = 0; i < t->pixels.size(); ++i) {
                     const unsigned p = t->pixels[i];
                     std::uint32_t r, g, b, a;
@@ -231,19 +407,30 @@ public:
                 off += VkDeviceSize(t->width) * t->height * 4;
             }
         }
+        if (!upload_in) {
+            // Keep the resident content: from the layout the previous scene left (attachment, or transfer source after a copy-out).
+            const bool att = in_attachment_layout;
+            barrier(colorImage.image, att ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    att ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    att ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier(depthImage.image, att ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    att ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    att ? VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                    VK_IMAGE_ASPECT_DEPTH_BIT);
+        } else {
         barrier(colorImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         barrier(depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
-        copyIn(upload.buffer, 0, colorImage.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT);
-        copyIn(upload.buffer, colorBytes, depthImage.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT);
+        copy_in_scaled(colorBytes);
         barrier(colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         barrier(depthImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
         VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-        rb.renderPass = renderPass; rb.framebuffer = framebuffer; rb.renderArea = {{0, 0}, {width, height}};
+        rb.renderPass = renderPass; rb.framebuffer = framebuffer; rb.renderArea = {{0, 0}, {rw, rh}};
         f.vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
-        VkViewport vp{0, 0, float(width), float(height), 0, 1};
+        VkViewport vp{0, 0, float(rw), float(rh), 0, 1};
         f.vkCmdSetViewport(cmd, 0, 1, &vp);
         VkDeviceSize zero = 0;
         f.vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &zero);
@@ -254,7 +441,7 @@ public:
                 if (c.flags & 1) { VkClearAttachment a{VK_IMAGE_ASPECT_COLOR_BIT, 0, {}}; std::memcpy(a.clearValue.color.float32, c.color, 16); at.push_back(a); }
                 if ((c.flags & 2) && s.has_depth) { VkClearAttachment a{VK_IMAGE_ASPECT_DEPTH_BIT, 0, {}}; a.clearValue.depthStencil.depth = c.z; at.push_back(a); }
                 std::vector<VkClearRect> rects;
-                for (const auto &r : c.rects) rects.push_back({r, 0, 1});
+                for (const auto &r : c.rects) rects.push_back({scaled(r), 0, 1});
                 if (!at.empty() && !rects.empty()) f.vkCmdClearAttachments(cmd, unsigned(at.size()), at.data(), unsigned(rects.size()), rects.data());
                 continue;
             }
@@ -262,27 +449,66 @@ public:
             if (!d.count || !d.scissor.extent.width || !d.scissor.extent.height) continue;
             f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(d.key));
             f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &drawSets[o.index], 0, nullptr);
-            f.vkCmdSetScissor(cmd, 0, 1, &d.scissor);
+            { const VkRect2D sc = scaled(d.scissor); f.vkCmdSetScissor(cmd, 0, 1, &sc); }
             f.vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &d.push);
             f.vkCmdDraw(cmd, d.count, 1, d.first, 0);
             ++draws;
         }
         f.vkCmdEndRenderPass(cmd);
+        if (readback_out) {
         barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         barrier(depthImage.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
-        copyOut(colorImage.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
-        copyOut(depthImage.image, readback.buffer, colorBytes, VK_IMAGE_ASPECT_DEPTH_BIT);
+        copy_out_scaled(colorBytes);
         VkMemoryBarrier hb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
         f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, nullptr, 0, nullptr);
+        }
+        in_attachment_layout = !readback_out;
         check(f.vkEndCommandBuffer(cmd), "end");
         check(f.vkResetFences(device, 1, &fence), "reset fence");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
         check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
-        check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait");
+        ++scenes;
+        if (readback_out) {
+            check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait");
+            copy_back(s);
+        } else scene_pending = true;
+    }
+    // Copies the resident target images into s.color/s.depth (s sized to the target).
+    void fetch_resident(Scene &s) {
+        HostFpEnvironment fp;
+        settle();
+        if (s.width != width || s.height != height) throw std::runtime_error("Readback size differs from the resident target");
+        check(f.vkResetCommandPool(device, commandPool, 0), "reset command pool");
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(f.vkBeginCommandBuffer(cmd, &bi), "begin readback");
+        const VkDeviceSize pixels = VkDeviceSize(width) * height, colorBytes = pixels * (rgba ? 4 : 2);
+        if (in_attachment_layout) {
+            barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier(depthImage.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
+        copy_out_scaled(colorBytes);
+        VkMemoryBarrier hb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, nullptr, 0, nullptr);
+        check(f.vkEndCommandBuffer(cmd), "end readback");
+        check(f.vkResetFences(device, 1, &fence), "reset fence");
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
+        check(f.vkQueueSubmit(queue, 1, &si, fence), "submit readback");
+        check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait readback");
+        in_attachment_layout = false;
+        ++readbacks;
+        copy_back(s);
+    }
+    void copy_back(Scene &s) {
+        const VkDeviceSize pixels = VkDeviceSize(width) * height, colorBytes = pixels * (rgba ? 4 : 2), depthBytes = pixels * 2;
         const auto *rd = static_cast<const unsigned char *>(readback.mapped);
         if (rgba) {
             for (VkDeviceSize i = 0; i < pixels; ++i) {
@@ -291,7 +517,6 @@ public:
             }
         } else std::memcpy(s.color.data(), rd, colorBytes);
         std::memcpy(s.depth.data(), rd + colorBytes, depthBytes);
-        ++scenes;
     }
 
 private:
@@ -301,7 +526,7 @@ private:
 #define MW34_VK_WSI_FNS(X) X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
     X(vkGetPhysicalDeviceSurfaceFormatsKHR)
 #define MW34_VK_SWAP_FNS(X) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) X(vkAcquireNextImageKHR) X(vkQueuePresentKHR) \
-    X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage)
+    X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage) X(vkCmdClearColorImage)
 #define MW34_VK_DEV_FNS(X) X(vkDestroyDevice) X(vkDeviceWaitIdle) X(vkGetDeviceQueue) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
     X(vkGetImageMemoryRequirements) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory) X(vkBindImageMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCreateImage) X(vkDestroyImage) X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateSampler) X(vkDestroySampler) X(vkCreateDescriptorSetLayout) \
@@ -328,6 +553,12 @@ private:
     bool rgba{};
     Buffer upload, readback, vertexBuffer, texUpload;
     Image colorImage, depthImage;
+    // Render scale (lazy residency on the presenter device): the target images are rw x rh = round(width/height * scale);
+    // guest-resolution staging images (colorLo/depthLo) carry uploads and copy-backs through blits. scale_req is set by
+    // the provider before a scene; it applies when the target is (re)created.
+    Image colorLo, depthLo;
+    float scale = 1.f, scale_req = 1.f;
+    unsigned rw{}, rh{};
     Tex white;
     std::map<std::uint64_t, Tex> textures;
     std::map<std::uint64_t, VkPipeline> pipelines;
@@ -520,6 +751,11 @@ private:
             if ((r.memoryTypeBits & (1U << i)) && (memory.memoryTypes[i].propertyFlags & flags) == flags) return i;
         throw std::runtime_error("Vulkan scene renderer: required memory type unavailable");
     }
+    bool has_type(VkMemoryRequirements r, VkMemoryPropertyFlags flags) const {
+        for (unsigned i = 0; i < memory.memoryTypeCount; ++i)
+            if ((r.memoryTypeBits & (1U << i)) && (memory.memoryTypes[i].propertyFlags & flags) == flags) return true;
+        return false;
+    }
     void ensure(Buffer &b, VkDeviceSize size, VkBufferUsageFlags usage) {
         if (b.buffer && b.size >= size) return;
         if (b.buffer) { f.vkDestroyBuffer(device, b.buffer, nullptr); f.vkFreeMemory(device, b.memory, nullptr); b = {}; }
@@ -529,7 +765,12 @@ private:
         VkMemoryRequirements r{};
         f.vkGetBufferMemoryRequirements(device, b.buffer, &r);
         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        ai.allocationSize = r.size; ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        // Readback buffers are read by the CPU every scene: prefer host-cached memory (uncached, write-combined
+        // memory makes those reads several times slower). Upload buffers take the first host-visible type.
+        const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        ai.allocationSize = r.size;
+        ai.memoryTypeIndex = (usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) && has_type(r, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+            ? type(r, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT) : type(r, visible);
         check(f.vkAllocateMemory(device, &ai, nullptr, &b.memory), "buffer memory");
         check(f.vkBindBufferMemory(device, b.buffer, b.memory, 0), "bind buffer");
         check(f.vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped), "map buffer");
@@ -563,19 +804,34 @@ private:
     void target(unsigned w, unsigned h) {
         f.vkDeviceWaitIdle(device);
         if (framebuffer) f.vkDestroyFramebuffer(device, framebuffer, nullptr);
-        for (Image *i : {&colorImage, &depthImage}) {
+        for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo}) {
             if (i->view) f.vkDestroyImageView(device, i->view, nullptr);
             if (i->image) f.vkDestroyImage(device, i->image, nullptr);
             if (i->memory) f.vkFreeMemory(device, i->memory, nullptr);
             *i = {};
         }
-        image(colorImage.image, colorImage.memory, colorImage.view, w, h, rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
+        scale = scale_req;
+        if (scale != 1.f) {  // scaling needs blits of both formats
+            VkFormatProperties cp{}, dp{};
+            f.vkGetPhysicalDeviceFormatProperties(gpu, rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16, &cp);
+            f.vkGetPhysicalDeviceFormatProperties(gpu, VK_FORMAT_D16_UNORM, &dp);
+            const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+            if ((cp.optimalTilingFeatures & need) != need || (dp.optimalTilingFeatures & need) != need) scale = 1.f;
+        }
+        rw = unsigned(std::lround(double(w) * scale)); rh = unsigned(std::lround(double(h) * scale));
+        if (scale != 1.f) {
+            image(colorLo.image, colorLo.memory, colorLo.view, w, h, rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
+                  VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            image(depthLo.image, depthLo.memory, depthLo.view, w, h, VK_FORMAT_D16_UNORM,
+                  VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
+        image(colorImage.image, colorImage.memory, colorImage.view, rw, rh, rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-        image(depthImage.image, depthImage.memory, depthImage.view, w, h, VK_FORMAT_D16_UNORM,
+        image(depthImage.image, depthImage.memory, depthImage.view, rw, rh, VK_FORMAT_D16_UNORM,
               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
         const std::array<VkImageView, 2> views{colorImage.view, depthImage.view};
         VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-        fi.renderPass = renderPass; fi.attachmentCount = 2; fi.pAttachments = views.data(); fi.width = w; fi.height = h; fi.layers = 1;
+        fi.renderPass = renderPass; fi.attachmentCount = 2; fi.pAttachments = views.data(); fi.width = rw; fi.height = rh; fi.layers = 1;
         check(f.vkCreateFramebuffer(device, &fi, nullptr, &framebuffer), "framebuffer");
         width = w; height = h;
     }
@@ -617,7 +873,7 @@ private:
         VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb; vi.vertexAttributeDescriptionCount = 4; vi.pVertexAttributeDescriptions = va.data();
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        ia.topology = k.points ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
         vps.viewportCount = 1; vps.scissorCount = 1;
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
@@ -659,6 +915,50 @@ private:
         b.srcAccessMask = src; b.dstAccessMask = dst; b.oldLayout = from; b.newLayout = to;
         b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; b.image = img; b.subresourceRange = {aspect, 0, 1, 0, 1};
         f.vkCmdPipelineBarrier(cmd, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+    VkRect2D scaled(const VkRect2D &r) const {
+        if (scale == 1.f) return r;
+        const int x0 = int(std::lround(r.offset.x * double(scale))), y0 = int(std::lround(r.offset.y * double(scale)));
+        const int x1 = int(std::lround((r.offset.x + int(r.extent.width)) * double(scale))), y1 = int(std::lround((r.offset.y + int(r.extent.height)) * double(scale)));
+        return {{x0, y0}, {unsigned(std::max(x1 - x0, 0)), unsigned(std::max(y1 - y0, 0))}};
+    }
+    void blit_img(VkImage src, unsigned sw, unsigned sh, VkImage dst, unsigned dw, unsigned dh, VkImageAspectFlags aspect, VkFilter filter) {
+        VkImageBlit b{};
+        b.srcSubresource = b.dstSubresource = {aspect, 0, 0, 1};
+        b.srcOffsets[1] = {int(sw), int(sh), 1}; b.dstOffsets[1] = {int(dw), int(dh), 1};
+        f.vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, filter);
+    }
+    // Guest-resolution upload into the target images (which are in transfer-destination layout).
+    void copy_in_scaled(VkDeviceSize colorBytes) {
+        if (scale == 1.f) {
+            copyIn(upload.buffer, 0, colorImage.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT);
+            copyIn(upload.buffer, colorBytes, depthImage.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT);
+            return;
+        }
+        for (auto [img, aspect] : {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)}, {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
+            barrier(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        copyIn(upload.buffer, 0, colorLo.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT);
+        copyIn(upload.buffer, colorBytes, depthLo.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT);
+        for (auto [img, aspect] : {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)}, {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
+            barrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        blit_img(colorLo.image, width, height, colorImage.image, rw, rh, VK_IMAGE_ASPECT_COLOR_BIT, VK_FILTER_NEAREST);
+        blit_img(depthLo.image, width, height, depthImage.image, rw, rh, VK_IMAGE_ASPECT_DEPTH_BIT, VK_FILTER_NEAREST);
+    }
+    // Guest-resolution copy of the target images (which are in transfer-source layout) into the readback buffer.
+    void copy_out_scaled(VkDeviceSize colorBytes) {
+        if (scale == 1.f) {
+            copyOut(colorImage.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
+            copyOut(depthImage.image, readback.buffer, colorBytes, VK_IMAGE_ASPECT_DEPTH_BIT);
+            return;
+        }
+        for (auto [img, aspect] : {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)}, {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
+            barrier(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        blit_img(colorImage.image, rw, rh, colorLo.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT, VK_FILTER_LINEAR);
+        blit_img(depthImage.image, rw, rh, depthLo.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT, VK_FILTER_NEAREST);
+        for (auto [img, aspect] : {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)}, {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
+            barrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        copyOut(colorLo.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
+        copyOut(depthLo.image, readback.buffer, colorBytes, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
     void copyIn(VkBuffer buf, VkDeviceSize off, VkImage img, unsigned w, unsigned h, VkImageAspectFlags aspect) {
         VkBufferImageCopy c{};
@@ -769,7 +1069,7 @@ private:
         for (Buffer *b : {&upload, &readback, &vertexBuffer, &texUpload, &presentUpload})
             if (b->buffer) { f.vkDestroyBuffer(device, b->buffer, nullptr); f.vkFreeMemory(device, b->memory, nullptr); }
         if (framebuffer) f.vkDestroyFramebuffer(device, framebuffer, nullptr);
-        for (Image *i : {&colorImage, &depthImage}) {
+        for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo}) {
             if (i->view) f.vkDestroyImageView(device, i->view, nullptr);
             if (i->image) f.vkDestroyImage(device, i->image, nullptr);
             if (i->memory) f.vkFreeMemory(device, i->memory, nullptr);

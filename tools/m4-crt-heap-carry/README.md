@@ -3,8 +3,14 @@
 Current status, 2026-10-13: this experimental x64 host has executed the live
 animated main menu, Vulkan-rendered Training 1 with the game HUD, startup and
 walking, and normal Quit -> confirm shutdown with exit code 0. The intro's
-recompiled Indeo IV50 codec decoded in hidden-window runs. Heavy Training scenes
-reached about 13 fps on the development system. These are executed runs, not
+recompiled Indeo IV50 codec decoded in hidden-window runs. Training 1 runs at about
+19 fps falling to 12 fps as the mech walks outdoors (menus 40+ fps) on the
+development system. Instant Action (Big Lake) was played interactively by the user for about a
+minute and exited through the native shutdown. Scripted Instant Action runs fired
+weapons with the original default bindings (Space = trigger, keypad Enter = alpha
+strike): laser beams, hits on buildings, and an overheat explosion ran natively. Scene point lists
+(`D3DPT_POINTLIST`, drawn after targeting) render as one-pixel points; line
+primitives still stop visibly. These are executed runs, not
 formal acceptance; the accepted count stays **131/144**.
 
 See the [session summary](../../docs/session-summary-2026-10-13-native-host.md)
@@ -462,7 +468,7 @@ These are executed runs, not acceptance. The accepted count stays 131/144.
 - Virtual surfaces live in guest memory, including flip chains, z-buffers and 565/1555/4444 textures. Blt/BltFast, colour keys, clippers and palettes are supported.
 - Flip goes through the Vulkan swapchain presenter (`vk_scene.hpp`, a second instance of the renderer class). The front buffer is uploaded as R5G6B5 and blitted to a FIFO swapchain, so Flip waits for the vertical blank as `DDFLIP_WAIT` did.
   - The swapchain lives on a host-owned child window covering the game window's client area. The child is disabled, hit-test transparent and sends no parent notifications, so the game's messages and input are unchanged.
-  - The presenter picks the adapter that can present to the window. On this hybrid machine that is the integrated GPU, while scenes render on the discrete RX 9070. Frames reach both through guest memory.
+  - The presenter picks a discrete GPU that can present to the window, and otherwise any GPU that can. On the dev machine both rendering and presentation run on the RX 9070 (`mfc-run`, 2026-10-13 06:14). An earlier run fell back to the integrated GPU only because the monitor on the RX 9070 was switched off. Frames reach the presenter through guest memory, so either adapter works.
   - Guest thread hooks (MFC's CBT subclassing) are suspended while host rendering or presentation runs, so driver helper windows stay host-only.
   - GDI remains for 8-bit frames and for `MW34_PRESENT=gdi`.
 - The virtual `SetDisplayMode` makes the cooperative window visible, with a client area of the mode size (integer-scaled to fit), as exclusive DirectDraw did. Scripted runs do not activate it, and `MW34_HIDE_WINDOW=1` keeps it hidden.
@@ -507,6 +513,155 @@ These are executed runs, not acceptance. The accepted count stays 131/144.
 - Textures are versioned through every API write path.
 - `guest_memory_cached.cpp` is a native-host implementation of `GuestMemory` with a direct-mapped page→region cache. The interface and every fault are unchanged. The pinned `runtime/memory/guest_memory.cpp` is untouched.
 - `MW34_PROFILE=<file>` (optionally with `MW34_PROFILE_FROM=<frame>`) samples the main thread. The link now emits a PDB.
+- 2026-10-13, second pass (measured with `MW34_FRAME_TIMES`, aligned to the first 3D scene): Training 1 went from about 15 -> 9 fps to about 19 -> 12 fps over its first 36 seconds.
+  - The stage's own stack frame, the game image/.data and the guest heap (about 99% of mission accesses; about 2.9 million accesses per frame) are checked inline before the full contract predicate. These are leading disjuncts of the same predicate, so nothing new is admitted. The region cache (`guest_memory_fast.hpp`) is inline, and the thread guard reads the thread id from the TEB.
+  - Scene readback buffers prefer host-cached memory. Uncached readback had cost about 8% of mission time in `memcpy`.
+  - Not changed: the per-instruction x87 exception clear/test (about 14%). Some lifted sites branch on the fresh exception result, for example integer-indefinite conversions, so a lazy clear would not be exact.
+- `MW34_FRAME_TIMES=<file>` writes one line per presented frame: frame number, host milliseconds and the 3D scene count.
+- `MW34_VIRTUAL_CLOCK=<ms>` (scripted runs only; refused without `MW34_INPUT_SCRIPT`) makes a scripted run deterministic.
+  - Every guest time source (`timeGetTime`, `GetTickCount`, `QueryPerformanceCounter`/`Frequency`, the system/local time and `+MS` script timing) reads one virtual clock.
+  - The clock advances by `<ms>` at each presented frame and by 1 us per query, so polling loops progress. `Sleep(n)` advances it by n ms and does not block.
+  - The date starts at 2000-01-01 UTC. Interactive play never uses the virtual clock.
+  - Two runs of the same Training script compared 24 of 24 dumped frames byte-identical; two runs of the same Instant Action weapons script compared 131 of 131 byte-identical, with laser shots at 0:21 and 0:28 in both.
+  - Replay determinism (2026-10-14). Visible replays used to split, about 1 in 4, into two stable variants from frame 10 (the main-menu background pixel pattern). A buffered service trace (`MW34_TRACE_SERVICES=<file>`, optionally `MW34_TRACE_ONLY=name,...`, covering frames 0-12) located the split at a DirectSound `GetCurrentPosition` poll from the game's audio streaming (`0x575690`, caller `0x59ad70`). Under the virtual clock the host now virtualises three real-time inputs:
+    1. Sound buffers: play and write positions and the playing/looping status come from virtual time since `Play`/`SetCurrentPosition`/`SetFrequency`, times the buffer's byte rate. The real calls still run.
+    2. `RDTSC`: virtual microseconds × 3000. The game's start-up CPU-speed measurement (`0x5988c0`, part of the hardware-detection routine `0x597fc0`) now yields a fixed value.
+    3. Desktop messages: real-cursor mouse moves, the undocumented system message 0x0060 and `WM_DWMNCRENDERINGCHANGED` are removed from the queue before the game sees them.
+    - Interactive play is unchanged.
+    - Result: 6 of 6 replays were byte-identical. The baseline was re-recorded from the unmodified normal O2 build (`input-training-t8000-v2`). Against it, full merge-r3 and full strict-x87 were each identical 2 of 2, and so was the strict play build.
+  - `MW34_VIRTUAL_CLOCK_BASE_MS=<tick>` starts the virtual clock at that tick instead of 1000 ms, for example a real host uptime, to replay the engine-clock rounding described below.
+- Guest tick clock (2026-10-13). The engine clock is `0x575a00`, called once per main-loop pass. It reads `GetTickCount`, stores "now" as float32 seconds (`0x5f096c`), and sets the frame step `0x72c52c` = now - previous float (times a one-shot scale `0x5f0970`), clamped to 0.125 s (`0x5f0960`/`0x5f0964`). Game time `0x72c530` accumulates the step. About 100 game sites consume the step; the simulation is variable-step, and no frame limiter was found (the only `Sleep(30)` runs once, at scene start in `0x480df0`).
+  - Defect under raw uptime: float32 seconds lose resolution as Windows uptime grows. At 7 days (603,594,948 ms) the resolution is 62.5 ms, so every frame step is off by up to +/-31 ms, and steps can be zero or negative. A PC booted hours before, as in 1999, had about 1 ms.
+  - Fix: `GetTickCount`, `timeGetTime`, message times (`MSG.time`, `GetMessageTime`) and DirectInput buffered timestamps now read one guest clock: milliseconds since the host started, plus 60,000, taken from the performance counter (1 ms steps instead of `GetTickCount`'s 15.6 ms). Host stamps passed back in (`MSG` arguments) are mapped to the host domain. `QueryPerformanceCounter` is unchanged; the game uses it only to calibrate CPU speed.
+  - `MW34_GUEST_CLOCK=uptime` restores raw host uptime. The virtual clock is unchanged, and under it message/input stamps stay host stamps, as before.
+  - Evidence (`reports/m4-crt-attach/guest-clock-r1`): the Training replay at the virtual-clock base equal to this PC's 7-day uptime ends in MISSION FAILURE, with the mech destroyed against the bunker, while the default base and the 60 s base complete the steps.
+  - Step-size check (the above-30-fps question): the same script at 50, 25 and 12.5 ms steps (20/40/80 game fps) ends its 8 s turn at a compass heading of 195.0, 192.2 and 190.8 degrees. The difference halves with the step, which is convergent first-order behaviour. Objectives and mission progress match at 0:22, 0:31 and 0:45. Higher frame rates need no engine change; the step was always hardware-dependent in the original.
+- Inlined bridge fast paths (opt-in build, 2026-10-13): `inline_objects.py <out>` rebuilds all 37,172 recompiled MFC-stage objects from their existing `-host.ll` with the hot bridges (`__remill_{read,write}_memory_{8,16,32,64,f32,f64}`, `__remill_fpu_exception_{clear,test}`) redirected to the always-inline fast paths in `fast_bridges.cpp`; `build.ps1 -Levels O2 -Inline <out>` links them into `build/m4-crt-heap-carry-O2-inline` (`play.ps1 -Build O2-inline`). Original lift reports and objects are untouched.
+  - Exactness: a fast path succeeds only when every check of the out-of-line bridge holds (Stage owner/token/thread/active/complete from the `fast_gate.hpp` gate published by `Stage::run`, `read_fast`/`write_fast`, the GuestMemory region cache); otherwise it calls that bridge unchanged. The fast-path bitcode is header-free so no C runtime directives enter the objects; `mfc_stage.hpp` static_asserts the cache-entry mirror layout. Disassembly shows fnclex before and fnstsw after each x87 operation, as before.
+  - Validation: deterministic replays (MW34_VIRTUAL_CLOCK=50) of the Instant Action weapons script and the Training walk-out script gave byte-identical frames to the normal build (116 of 116 each).
+  - Cost and gain: the executable grows from about 153 MB to 513 MB (the worker-identity and input read bounds were raised to 1 GB for it). Interleaved deterministic benchmarks on an idle machine (Training script, MW34_VIRTUAL_CLOCK=50, two runs each) gave 59.9-60.0 versus 62.7-63.5 ms per frame for frames 300-700 and 65.4-66.0 versus 69.4-69.8 for frames 700-1150: about 5-6% faster. The remaining cost is the x87 status serialisation and the access checks themselves, not the call boundary. The Vulkan scene path (upload, draw, fence wait, readback) is not the bottleneck either: in the deterministic Training benchmark it took 1,764 ms for 2,635 scenes, about 0.67 ms per scene and 2.9% of the 60 s of 3D wall time. The remaining frame time is the recompiled game code itself, including remill state traffic, x87 brackets and contract checks.
+- Host-side dispatch (2026-10-13, both builds):
+  - COM method imports go straight to the COM dispatch instead of walking the Win32/CRT service chain. Every test skipped this way is keyed on a name or prefix that no modelled interface method has; GetDC/ReleaseDC, the only shared names, are used before the shortcut.
+  - `__remill_fpu_set_rounding` executes the serializing `fldcw`/`ldmxcsr` only when the mode changes.
+  - Lifted-body lookups go through a direct-mapped cache over the fixed entry tables.
+  - Deterministic replays stay byte-identical. The only Instant Action difference was the pilot screen's "Player kills" counter, 7 to 8, from the user's fight saved in the registry overlay.
+  - Benchmark: normal build 60-62 / 66 ms per frame (was 62.7-63.5 / 69.4-69.8); inline build 56-58.6 / 61.5-63.5 (was 59.9-60.0 / 65.4-66.0). Inline plus dispatch is about 11% faster than the original normal build.
+- Merged x87 exception tracking (2026-10-13, user-approved semantics): `merge_x87.py`, enabled by `inline_objects.py --merge-x87`. The tool runs each object's `host.ll` through `opt -passes=simplifycfg` and then this pass.
+  - What it removes: remill brackets every x87 operation with clear/op/test and seven sticky OR updates of the guest exception bytes. A sample-level profile showed that tracking (`fnclex`, `fnstsw` and the dependent `orb` chain on offsets 2745-2757) at about a third of game-code time.
+  - The rewrite: within a straight-line run (one block, or a single-entry/single-exit acyclic region such as remill's denormal-check diamond), only the first bracket clears, the interior status reads become 0 (their updates fold away at O2), and the last bracket ORs the union in.
+  - A run ends at: a bracket whose result has any other use (for example integer-indefinite conversions) or a non-127 mask; any call other than the memory bridges, llvm intrinsics or remill's pure undefined-value helpers; any load of an exception byte; any store to one other than remill's single denormal assignment directly before a clear (a guest FCLEX or FNSTSW therefore always ends a run); or a region with other entries or exits.
+  - Semantics: identical for IE, ZE, OE, UE, PE and SF. Within a run, DE now stays set from earlier operations, which is the hardware's sticky behaviour, where remill's per-instruction denormal assignment would have reset it. The user approved this.
+  - Coverage: 38,788 of 70,940 brackets merged, in 15,127 runs across all 37,172 objects (`reports/m4-crt-attach/inline-r3/report.json`).
+  - Validation: deterministic replays are byte-identical to the normal build (Training walk-out 116/116; Instant Action weapons 48/48 against a same-overlay reference).
+  - Benchmark (Training script, MW34_VIRTUAL_CLOCK=50, frames 700-1150): 46.7-47.5 ms per frame, against 61.2-61.6 (inline, unmerged) and 66.3-66.5 (normal); frames 300-700: 45.0-45.1. That is about 21 fps in the heaviest stretch, from 14.4 before this work.
+  - merge-r2 (2026-10-13; `Play-MW3.cmd`'s build): runs may also span remill `__remill_flag_computation_*`/`__remill_compare_*` calls that the object defines as the identity (`ret i1 %0`). Coverage: 40,888 brackets in 15,824 runs (`reports/m4-crt-attach/merge-r2/report.json`), with the guest tick clock linked in. The Training replay is byte-identical to the reference (116/116, visible window). The Instant Action weapons replay matches 110/116; the other 6 are pilot-screen frames whose only difference is the 9x10-pixel "Player kills" digit (7 to 8, from the user's fight saved in the registry overlay). Every in-mission frame is identical.
+  - merge-r2 benchmark (input-training-8, two alternating runs per build, visible window, steps over 1 s excluded): frames 300-700 took 48.9/49.3 ms, against 63.4/60.9 for the normal build; frames 700-1150 took 53.5/55.4 against 67.7/70.0. That is 0.79x the normal build's frame time, against 0.77x for merge-r1 earlier, so the extra merges give no measurable gain. Both builds were about 7% slower than the earlier hidden-window runs. Note that this script holds Right Arrow 1.5 s too long, so the mech turns into the bunker wall in every build; use `input-training-t8000` for walk-out checks.
+- Code-quality investigation and exact cleanup (2026-10-13, `ir_cleanup.py`, `inline_objects.py --cleanup`).
+  - Finding: one hot game function (`0x545720`, about 1,000 x86 instructions) compiled to about 40,400 host instructions with 1,508 calls, roughly 30 host cycles per guest instruction.
+    - remill materialises every flag, the PC, the x87 status/last-instruction fields and a denormal check on every instruction.
+    - It shifts the eight-register x87 stack with 10-byte memcpys.
+    - 734 of the calls went to do-nothing helpers: variadic identity `__remill_flag_computation_*`/`__remill_compare_*`, and the always-0 undefined representative.
+    - Every memory bridge may throw, so LLVM keeps State in memory around each call.
+    - Profile (merge-r2, heavy Training): page-permission checks are about 3% (so a page cache was skipped); memory bridges about 16%; outside the executable about 23% (fence waits and readback memcpy).
+  - `--cleanup` does four things, all exact for guest-visible values:
+    1. Replaces identity helper calls with their argument and undefined representatives with 0.
+    2. Turns 10-byte x87 slot memcpys into `i80` load/store.
+    3. After the x87 merge, declares the memory and x87-exception bridges `nounwind memory(inaccessiblemem: readwrite)` and gives bodies `uwtable`. Bridges never touch State, and a throw from one is always a run-ending deny.
+    4. Adds a second optimisation round (`opt default<O2>`, then `dse,gvn,dse,instcombine<no-verify-fixpoint>,simplifycfg,dse`, then `clang -O2`).
+    - Only non-speed effect: a deny message may quote a State value from before the failing access.
+  - Effect on `0x545720`: 31,643 host instructions (−22%) and 774 calls (−49%).
+  - Measured with the 99 profiled hot functions rebuilt (`merge-r3-mix`, `build.ps1 -Suffix -clean`), Training `input-training-t8000`, `MW34_VIRTUAL_CLOCK=50`, two alternating rounds, visible window: frames 300-700 took 40.7/42.0 ms against 47.0/48.7 for merge-r2 (−13.6%); frames 700-1150 took 23.0/23.0 against 26.1/26.0 (−11.7%). All four runs were byte-identical to the reference (116/116). The full rebuild is `reports/m4-crt-attach/merge-r3`.
+  - Full rebuild `merge-r3` (all 37,172 objects; exe 96 MB, down from 155 MB) is `Play-MW3.cmd`'s build. On 2026-10-14, input-training-t8000, two alternating rounds per build (ms per frame, frames 300-700 / 700-1150):
+
+    | Build | 300-700 | 700-1150 |
+    |---|---|---|
+    | 99-function mix | 35.2 | 19.5 |
+    | full merge-r3 | 33.5 | 18.2 |
+    | `--strict-x87` on the 99 hot functions, rest merge-r2 (`O2-strict`) | 31.9 | 17.8 |
+    | strict + inlined memory fast paths (`O2-strictinl`) | 39.0 | 21.3 |
+
+    - Inlining is slower (code bloat) and was dropped. Strict x87 is the full rebuild `merge-r4` (`--cleanup --strict-x87`).
+    - Every build was byte-identical in at least one run. The misses were all the frame-10 menu-fade replay noise described under the overlay.
+  - `--strict-x87` (ir_cleanup.strict_x87):
+    - Every FP operation becomes a constrained intrinsic (`round.dynamic`, `fpexcept.strict`) in a `strictfp` body, so it stays ordered against the inaccessible-memory bridges, and remill's `~{memory}` fences are removed.
+    - The denormal-classification compares (against 0, infinity and the smallest normal, evaluated before each operation's exception clear) become integer tests on the bit pattern. These were checked against hardware x87/SSE compares and LLVM's optimised form on all 2^32 float patterns and 240 80-bit class patterns (0 mismatches).
+    - A module whose FP operations cannot all be converted is left unchanged; none of the 99 hot functions needed that (64 converted, 35 have no FP).
+    - In converted bodies, `__remill_fpu_exception_clear(127)` and `_test(127)` become inline `fnclex` and `fnstsw & 127`, whose only declared effect is the FP environment (inaccessible memory, so they stay ordered against the constrained operations).
+      - Profile (1 kHz, strict build): the two out-of-line bridges were 11.3% of samples.
+      - Measured on the 99 hot functions over merge-r4, deterministic: 4/4 byte-identical to the baseline; frames 300-700 took 29.6 against 31.2 ms, frames 700-1150 took 16.9 against 17.6 ms.
+      - Full rebuild: `merge-r5`.
+  - `--x87-noexc` (with `--strict-x87`; ir_cleanup step 7): no x87 exception tracking in the game's own bodies (`0x401000-0x5bb000`).
+    - Basis: all 3,733 FNSTSW sites in Mech3.exe test only AH (C0/C2/C3), and it has no FNSTENV, FNSAVE or FNCLEX.
+    - In those bodies, exception brackets and exception-byte stores are removed, and constrained operations use `fpexcept.ignore`, which still orders them against rounding-mode changes.
+    - CRT and MFC bodies keep full tracking. The game calls `_CIacos`/`_CIasin`/`_CIpow`/`_CIsqrt`/`_CIfmod`/`_hypot`/`floor`/`ceil`/`_ftol` and installs `__setusermatherr`.
+    - Code size: `0x545720` went from 30,751 to 15,742 host instructions; stack spills from 7,228 to 4,058.
+    - Measured on the 99 hot functions over merge-r4: byte-identical to the Training baseline (2/2) and the Instant Action baseline (1/1, fight with CRT math). Frames 300-700 took 25.1 against 35.4 ms (−29%), frames 700-1150 16.6 against 21.4 ms (−23%), with a background rebuild running.
+    - Full rebuild: `merge-r6`.
+  - Flat guest memory (2026-10-14; `--flat-mem`, ir_cleanup step 8; user-approved host-only fork).
+    - Storage: `memory/guest_memory.hpp` in this directory forks the runtime header. It is first on the host include path; the runtime file and the pinned `runtime/memory/guest_memory.cpp` are unchanged. `guest_memory_cached.cpp` implements it flat: one 4 GiB (+64 KiB guard) reservation per guest space, each region at `flat_base() + guest address`. Pages are committed while any region touches them, with host protection from the union of those regions' permissions; regions stay exact and zero-initialised, and host transfers keep the exact checks, faults and region cache.
+    - The fdiv registry sources (`registry.cpp`, `runtime.cpp`, `image_loader.cpp`, plus the writer object) are now compiled into the host (`native/CMakeLists.txt`) instead of linked from `fdiv_registry.lib`, whose copies used the runtime layout.
+    - Stage tokens are the flat base (`stage_token`). A vectored handler turns a hardware fault inside the active Stage's reservation into its typed deny.
+    - The IR rewrite turns every `__remill_read/write_memory_*` call into `load/store (token + zext address)`. Guest code thus gets page-level protection, as on Windows; the finer per-access memory contract still applies to host-service arguments.
+    - Validation: the unmodified O2 build on the flat backend is byte-identical to the baseline (116/116). The 99 hot functions with `--flat-mem` over merge-r4 are byte-identical on Training (2/2) and Instant Action (1/1).
+    - `0x545720`: 15,742 to 12,495 host instructions, 596 to 9 calls.
+    - Benchmark (quiet machine): frames 300-700 took 13.2 against 19.2 ms (−31%), frames 700-1150 8.5 against 11.5 ms (−26%).
+    - Full rebuild: `merge-r7` (`--cleanup --strict-x87 --x87-noexc --flat-mem`), about 30 min with 14 jobs. It is the play build since 2026-10-14.
+      - Byte-identical on Training (3 runs, one with the overlay) and Instant Action (1 run).
+      - Training: 7.4-7.6 ms in frames 300-700 and 6.9 ms in 700-1150 (about 130-145 fps). merge-r4 measured about 30 / 17 ms.
+      - Instant Action: 7.5 / 7.1 ms.
+  - Host-built startup seed (2026-10-14; `MW34_SEED=host`, the `play.ps1` default; `MW34_SEED=before` selects the original projection).
+    - The run no longer reads the original BEFORE pack. Its registers and FP contents were authored patterns; its stack page was residue of the original process.
+    - The host builds the state at the FDIV writer itself: zero registers (ESP/EIP/EFLAGS as the projection), a new Win32 thread's x87/SSE state (FCW `0x27F`, MXCSR `0x1F80`), and a zeroed stack page with the normalized outer return word.
+    - Identical on Training (3 runs) and Instant Action (1 run); frame time unchanged.
+    - Details and remaining limits are in `docs/e0-application-execution-path.md`.
+  - Scene fingerprint for original/native comparisons (2026-10-14; `MW34_DRAW_LOG=<file>`, host-only).
+    - At each presented frame the host writes the frame number, the count of `DrawPrimitive`/`DrawIndexedPrimitive` calls, and an FNV-1a 64 hash over each call's primitive type, vertex count, the game-computed TL vertex bytes and indices, in call order.
+    - The game transforms and lights everything itself, so the hash carries its physics, AI, animation and camera results without any structure addresses.
+    - Deterministic: two Training replays gave identical lines for all 1,150 frames (about 1,600-1,750 draws per heavy frame). It is also a stricter exactness check than the every-10th-frame PPMs.
+    - Original side (not yet built): a separate injected x86 DLL must give the original process the same virtual clock (GetTickCount/timeGetTime/QPC and message/input stamps), scripted DirectInput, DirectSound positions/status, `rdtsc` emulation for the CPU-speed test and desktop-message filtering as this host, plus the same hash over `IDirect3DDevice3::DrawPrimitive`. Provider caps (display modes, texture formats, device description) must also match, or the game's own choices diverge.
+    - Every time query under the virtual clock advances it by 1 µs (`vclock_query`). The original side must therefore virtualize exactly the guest modules' calls (Mech3.exe, MSVCRT, MFC42, MSVCP50 imports) and no system-DLL calls.
+    - Runtime mismatch found 2026-10-14: `MSVCRT` is a KnownDLL on this Windows, so the original `Mech3.exe` always loads Windows' current System32 `msvcrt.dll` (and System32 `mfc42.dll`/`msvcp50.dll`). The native host runs the CD's 1998 MSVCRT/MFC42/MSVCP50 (`local/mw3-staged/Shared_DLLs`). CRT math (`_CIpow`, `_CIsqrt`, …), `rand` and heap behaviour can differ between those versions.
+    - A same-runtime comparison needs the original process to bind the staged DLLs. The obvious ways all fail or overstep: an app-local copy loses to KnownDLLs; changing the KnownDLLs registry is not allowed; swapping after entry would mix CRT heaps. What remains is import renaming in local research copies, which changes the admitted image hash. Alternatively, compare against today's runtime and attribute the CRT-version divergences explicitly. That design decision comes before building the original-side DLL.
+    - Decision (user, 2026-10-14): compare on the 1998 runtime. `tools/mw3-compare/prepare_runtime.py OUT` builds the research copy (`local/compare-r1`):
+      - Mech3.exe, Mech3Msg.dll and the CD MFC42/MSVCP50 import `MSVCRZ.dll`. Each patch changes only the import name string, checked byte for byte against the source; the sources match the native pins.
+      - `MSVCRZ.dll` is the CD MSVCRT.DLL. dgVoodoo is set windowed in the copy (no display takeover); pilots/configs are copied and zbd is a junction.
+      - Observed in a smoke launch: MSVCRZ at `0x78000000`, MSVCP50 at `0x780C0000`, MFC42 at `0x5F400000` and IFORCE2 at `0x10000000`, all from the copy. System msvcrt.dll also loads for Windows' own DLLs, but the game, MFC and MSVCP no longer bind it.
+      - Original side, built 2026-10-14: `tools/mw3-compare/compare_hook.cpp` with `compare_launcher.cpp` (Win32, CMake), injected at the entry.
+        - Mirrors the native scripted environment: virtual clock (+1 µs per query, file time, `Sleep`); `rdtsc` ×3000 at the three Mech3.exe sites; scripted DirectInput; virtual DirectSound positions; desktop-message drop; virtual cursor.
+        - Mirrors the native host model: the registry overlay (`MW34_REG_OVERLAY`; real registry never written), `MW34_STAGED_CODEC=0` (no IV50 decoder) and guest threads run to completion in `CreateThread`.
+        - Diagnostics: back-buffer PPMs, per-draw detail with caller stack, `.data` dumps; optionally the native texture formats and video memory (`MW34_NATIVE_CAPS`).
+      - Result on the Training script:
+        - The virtual clocks agree on every frame, so both sides make the same number of time queries.
+        - The full draw-stream fingerprints are bit-identical for frames 1-250 and 700-1150 (about 1,500-2,000 draws per 3D frame).
+        - Frames 251-699: the original draws 4-7 more particle quads per frame (same render path, `0x4F71F0` ← `0x5493E6` ← `0x4F7A6E`); every other draw is identical.
+        - Ruled out: the clock, the game's FYL2X/F2XM1 sites (exact here), uninitialized large heap blocks, native depth write-back, and provider texture formats/video memory. Open.
+      - Native defect found and fixed: `GetFileVersionInfo*A("mech3.exe")` resolved against the host process directory, so the menu showed 1.2.0.0. It now resolves the guest application directory first (1.2.22.0). Draw streams are unchanged; new baselines `input-training-t8000-v3` / `input-ia-13-v3`.
+      - Provider differences seen: dgVoodoo offers more texture formats and 256 MB of video memory; native offers three 16-bit formats and passes through the host's 3-4 GiB. Native formats need not match 1999 hardware (user, 2026-10-14). Choose them for performance; the gameplay comparison stays the test.
+  - True loader order (2026-10-14; `MW34_STARTUP=loader`, the `play.ps1` default; `MW34_STARTUP=accepted` keeps the accepted bounded entry chain).
+    - Order: MSVCRT attach, the `_acmdln` writer (guest copy of the real command line at `0x33000000`), resume, MFC42 and MSVCP50 attach, then the game's CRT entry `0x5AC3A0` whole in the generic stage (`Kind::initterm` started at the entry, `from_entry`).
+    - New bodies: `lifts-r63`, the 25 CRT-entry/`__getmainargs` functions the generic set lacked; dispatch regenerated with it appended. The play build links `reports/m4-crt-attach/merge-r7-entry`.
+    - Identical on Training (3 runs) and Instant Action (1 run). The accepted chain on the same build is identical too.
+  - Host service dispatch (2026-10-14). Training issues about 3,700 guest services per frame, nearly all `IDirect3DDevice3::SetTexture`/`DrawPrimitive` pairs. The host costs per call, all now removed, were:
+    - linear searches over every import (`by_bound`), every COM object ever created (`com_object`, several per call) and every provider surface (`vsurface`); these are now first-match indexes over the same append-only vectors (COM tokens come from a bump allocator and are never reused, and a dead object still takes the original scan);
+    - a freshly concatenated service-log label (now built once per import and prefix);
+    - case-insensitive compares that upper-cased string copies (`same`, `Host::same_name`), and `std::string` temporaries in `com::is_d3d`/`is_lobby`;
+    - about 20 name compares before the two hot Direct3D methods (now selected first, by a selector resolved once per import; every other branch keys on a different name).
+    - Result: identical on the Training baseline (3 runs); about −13% per frame on the hot-set build (host services fell from 17% to 7% of samples).
+  - Tried and removed: lean inline memory paths. Precomputed host windows for stack, heap slices and image/data, behind a generation check. Exact (4/4), but 30% slower: each inline site's checks and slow-path call bloated the code. Removing the bridge cost needs a flat guest mapping (one add plus load per access, no per-site checks), which changes `GuestMemory`'s region storage in the runtime header.
+  - Profiler: `MW34_PROFILE` now samples at a real 1 kHz (high-resolution waitable timer; `Sleep(1)` woke only every ~15.6 ms) and writes the complete address histogram.
+  - Measured but not adopted, because it is not exact as is: relaxing remill's FP memory fences (−37% statically). Doing that exactly needs strict-FP intrinsics plus integer denormal classification. A prototype removes the x87 stack shuffling (3,242 to 24 80-bit moves), but out-of-line bridge calls still force x87 spills, so that path also needs inline fast paths. This is the next recompiler step.
+- Performance overlay (2026-10-13, off by default): `MW34_PERF_OVERLAY=1`, `play.ps1 -Overlay`, `Play-MW3.cmd -Overlay` or `Play-MW3-Overlay.cmd`.
+  - The Vulkan presenter draws presented frames per second, plus the mean and worst time between presents over the last second, refreshed four times a second.
+  - It draws in a small built-in font into its host upload copy of each flipped frame. Guest memory and frame dumps are unchanged.
+  - The GDI fallback presenter shows no overlay.
+  - Deterministic replays: since the 2026-10-14 harness fixes (virtual DirectSound positions, RDTSC and desktop-message filtering, see the virtual clock), overlay-on replays are byte-identical to the baseline (2/2), so the overlay can stay on. History: before those fixes, 4 of 7 overlay-on replays diverged from frame 10. The difference was the main-menu fade-in level (every non-black pixel slightly brighter or darker), i.e. a virtual-clock offset, not changed content.
+    - The overlay's pixels cannot reach guest memory: separate buffers, and a trace found no window-DC `BitBlt`/`StretchBlt`/`GetPixel`.
+    - A bisect found the full changing text was required; timing only, formatting only and short static text stayed identical. A plain 5 ms present delay also stayed identical.
+    - So it perturbs how many virtual-clock queries occur before the menu fades in. That is a sensitivity of the replay harness, which advances the clock per query; game logic is not changed.
+- `ShowOwnedPopups` is passed through to Win32. It is reached from the game's `WM_CLOSE` handler when the window is closed (title-bar X or Alt+F4); before this the host stopped with "Unimplemented host service".
+- `WH_CBT` `HCBT_CLICKSKIPPED` (x86 MOUSEHOOKSTRUCT, 20 bytes) and `HCBT_MOVESIZE` (RECT) are marshalled. A click on the visible game window during a scripted run had stopped the host with "WH_CBT code not modelled: 6".
+- `WM_HELP` (sent by DefWindowProc for F1) is marshalled as the x86 HELPINFO; previously an F1 press stopped the host visibly ("Pointer message without marshalling: 83").
+  - Host-speed benchmark: the virtual clock makes every frame's game work identical across builds, so wall time per frame (from MW34_FRAME_TIMES) measures host speed alone. On 2026-10-13, with the Training script from training-failure-r1 at MW34_VIRTUAL_CLOCK=50, frames 300-700 took 62.6 ms per frame and frames 700-1150 took 69.0 ms per frame (14.5 fps).
 
 **Fidelity limits.**
 - The intro video decodes with the game's own staged Indeo IV50 codec. `Ir50_32.dll` is rebased to 0x11000000 by `rebase_image.py`, lifted (2,583 functions), and driven through its `DriverProc` with msvfw32's ICM protocol. Disable it with `MW34_STAGED_CODEC=0`.
@@ -520,5 +675,5 @@ These are executed runs, not acceptance. The accepted count stays 131/144.
 - Dithering on 16-bit targets is not reproduced.
 - Cull-mode winding is not yet verified against a scene that culls.
 - Guest threads run to completion and are not preempted.
-- About 13 fps in the heaviest Training scenes.
+- About 12 fps in the heaviest Training scenes measured so far (outdoors, Training 1).
 - Presentation copies each frame from guest memory once per Flip, with no frames kept in flight.

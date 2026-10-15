@@ -9,11 +9,20 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 file(STRINGS "${MW34_MFC_OBJECT_LIST}" MW34_MFC_OBJECTS)
-add_executable(entry_commandline "${MW34_COMPOSITION_SOURCE}" "${MW34_CAPTURE_OBJECT}" "${MW34_CMD_OBJECT}" "${MW34_COMPOSITION_DIRECTORY}/crt_services.cpp" "${MW34_ENTRY_OBJECT}" "${MW34_MATHERR_OBJECT}" "${MW34_CONTROL_OBJECT}" "${MW34_INITTERM_OBJECT}" "${MW34_MAINARGS_OBJECT}" "${MW34_ARGV_OBJECT}" "${MW34_PARSER_OBJECT}" ${MW34_HEAP_OBJECTS} ${MW34_MFC_OBJECTS} "${MW34_ROOT}/tools/m4-guest-cw/guest_cw.cpp" "${MW34_COMPOSITION_DIRECTORY}/guest_memory_cached.cpp")
-target_include_directories(entry_commandline PRIVATE "${MW34_COMPOSITION_DIRECTORY}" "${CMAKE_CURRENT_SOURCE_DIR}/.." "${MW34_ROOT}/tools/m4-crt" "${MW34_ROOT}/tools/m4-crt-fdiv" "${MW34_ROOT}/tools/m4-crt-commandline-native" "${MW34_ROOT}/tools/m4-runtime" "${MW34_ROOT}/tools/m4-startup" "${MW34_ROOT}/tools/m4-guest-cw" "${MW34_ROOT}/runtime")
+if(NOT MW34_FDIV_INCLUDE)
+ set(MW34_FDIV_INCLUDE "${MW34_ROOT}/reports/m4-crt-fdiv/native-derived-r1")
+endif()
+if(NOT MW34_FDIV_OBJECT)
+ set(MW34_FDIV_OBJECT "${MW34_ROOT}/reports/m4-crt-fdiv/native-build-r3/writer-O2.obj")
+endif()
+add_executable(entry_commandline "${MW34_COMPOSITION_SOURCE}" "${MW34_CAPTURE_OBJECT}" "${MW34_CMD_OBJECT}" "${MW34_COMPOSITION_DIRECTORY}/crt_services.cpp" "${MW34_ENTRY_OBJECT}" "${MW34_MATHERR_OBJECT}" "${MW34_CONTROL_OBJECT}" "${MW34_INITTERM_OBJECT}" "${MW34_MAINARGS_OBJECT}" "${MW34_ARGV_OBJECT}" "${MW34_PARSER_OBJECT}" ${MW34_HEAP_OBJECTS} ${MW34_MFC_OBJECTS} "${MW34_ROOT}/tools/m4-guest-cw/guest_cw.cpp" "${MW34_COMPOSITION_DIRECTORY}/guest_memory_cached.cpp"
+ # The fdiv registry sources are compiled here (not linked from fdiv_registry.lib) so that they, like the rest of the host,
+ # use the host's flat GuestMemory (memory/guest_memory.hpp fork): the library's copies were built with the runtime layout.
+ "${MW34_ROOT}/tools/m4-crt-fdiv/registry.cpp" "${MW34_ROOT}/tools/m4-runtime/runtime.cpp" "${MW34_ROOT}/tools/m4-startup/image_loader.cpp" "${MW34_FDIV_OBJECT}")
+target_include_directories(entry_commandline PRIVATE "${MW34_COMPOSITION_DIRECTORY}" "${CMAKE_CURRENT_SOURCE_DIR}/.." "${MW34_ROOT}/tools/m4-crt" "${MW34_ROOT}/tools/m4-crt-fdiv" "${MW34_ROOT}/tools/m4-crt-commandline-native" "${MW34_ROOT}/tools/m4-runtime" "${MW34_ROOT}/tools/m4-startup" "${MW34_ROOT}/tools/m4-guest-cw" "${MW34_FDIV_INCLUDE}" "${MW34_ROOT}/runtime")
 target_include_directories(entry_commandline SYSTEM PRIVATE "${MW34_ROOT}/local/tools/remill-v6.0.1/remill-6.0.1/include" "${MW34_ROOT}/local/tools/vulkan-headers-v1.4.321/include")
 target_compile_definitions(entry_commandline PRIVATE ADDRESS_SIZE_BITS=32 HAS_FEATURE_AVX=0 HAS_FEATURE_AVX512=0 MW34_ENTRY_OBJECT_SHA="${MW34_ENTRY_OBJECT_SHA}" MW34_CONTROL_OBJECT_SHA="${MW34_CONTROL_OBJECT_SHA}" MW34_INITTERM_SOURCE_SHA="${MW34_INITTERM_SOURCE_SHA}" MW34_REPLAY_INPUT_SHA="${MW34_REPLAY_INPUT_SHA}" MW34_MAINARGS_RECOVERY_SHA="${MW34_MAINARGS_RECOVERY_SHA}" MW34_MFC42_PATH="${MW34_ROOT}/local/mw3-staged/Shared_DLLs/MFC42.DLL" MW34_MSVCP50_PATH="${MW34_ROOT}/local/mw3-staged/Shared_DLLs/MSVCP50.DLL")
 target_compile_options(entry_commandline PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHs;/showIncludes>)
-target_link_libraries(entry_commandline PRIVATE "${MW34_FDIV_LIBRARY}" bcrypt dxguid version winmm vfw32)
+target_link_libraries(entry_commandline PRIVATE bcrypt dxguid version winmm vfw32)
 # Program database with public symbols (lifted objects included) for host diagnostics and profiling.
 target_link_options(entry_commandline PRIVATE /DEBUG /OPT:REF /OPT:ICF)

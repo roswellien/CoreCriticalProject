@@ -1,0 +1,49 @@
+{
+  "source": "local/remaster/gpu-native-r5/host-source (authored sources only)",
+  "validated_local_executable_sha256": "a45e07298fa753c2c9f1f11a3df573f9ac65fba5fa6e1b54e1969635de498557",
+  "sources": {
+    "d3d_provider.inc": "ada2caa511bd1bcd8aaf7d04793f6ee84bce4e6342513449aa68e8d33f2c0874",
+    "fxaa_frag.h": "0be0a05fc2c29cb5b70edac683f3450d9f136c1b80d8066b25145c57ac380dad",
+    "fxaa_vert.h": "9db582472cb023f4454a6deb573b3172e4d79dcdef33b84b6a7ae781ec11f38e",
+    "gpu_hud.inc": "178bdcf96db74f9c715c5af6c211d2504dc45a47c9de41d872f53593018ba694",
+    "mesh_override_stage.inc": "f4565a19f1cc1133fd2a211b445082d6cf147acf269b209a69eb09aea5e66b69",
+    "mfc_stage.hpp": "e1b31e7d123177d7dee47514084a35fd793e3a600f220b84bb2e723f672c7da4",
+    "model_scene_vert.h": "7f2e56e34b5c65abc483d40a76c96988ce016c6e83e0c2bde16307f4bdb1c593",
+    "override_new_rosters.inc": "1715c5f97018281fab95a6f508c443da600d3cb1e85e46ee0ce16d8afdd5bf8f",
+    "override_source_roster.inc": "fb97f59eccf774a590af125175d6efe7f0a8e5c50439272850d9d263194777c4",
+    "quality_stage.inc": "68184970e30efbf06a8c1ea3bb7a1b4749caf7f3feb5b28bf29095d4260897d5",
+    "remaster_banks.inc": "fad79351f1b6d7e2d9d594aba22299e021ffa5ecf5c4b72730148186f767926c",
+    "vdd.inc": "8c4d4d64b91854f05db8de39dd69e9690efdba28f194a6af64765686d3abf650",
+    "vk_scene.hpp": "4a39abe55186c97908b5b94ffcb5e2d35d367790f60911a399f0786e69fab379",
+    "widescreen_stage.inc": "abccaf565535a985fd55be1d167682be362b8f3cd5598e9ec67f206fc80beb5c",
+    "fxaa.vert": "9c2da01f764f2c17c0303e237efbe093aa13a471315b7e50d3ee0ab1ca108c69",
+    "fxaa.frag": "4ee47bf29b28b59b3de210b502b2ab84576a1e424e170b1c20c088c982c27a69",
+    "model_scene.vert": "2a6d5c150b3bd8b4e93562a1a467d04a3213ebb02073e3d63c3891806c8908f4"
+  },
+  "shared_audio_publication_formatting": {
+    "validated_header_sha256": "ef8e79aa4a3abb8711357ba2a30f394be599f46e2c403877958eb99ae2489d51",
+    "published_header_sha256": "bcd0edc3d23dd4caf3c48ded5a9503642251ddae61fa69e98429b46e06c50752",
+    "preprocessed_tokens_equal_after_C_string_concatenation": true,
+    "validated_source_archive": "local\\remaster\\gpu-native-r5\\validated-support\\local_cd_audio.hpp"
+  },
+  "validated_sources_sha256": {
+    "d3d_provider.inc": "b186abe8fbb4cf953df4e245441aeba0a52b0e5d3c2e7b7e8fd4135a1b26f644",
+    "fxaa_frag.h": "5d6d7f5491e321a57e1c90b062659d0e60883489647d106a83d9cc61184dacc3",
+    "fxaa_vert.h": "284dd4c8acce8f1a87b251d3b483420208d91735cb2486e47641a43912ae0fc1",
+    "gpu_hud.inc": "4ce9f8b005e9f6a4d7c3a20bc1844696e41b592d292151360ca17ecd371066a6",
+    "mesh_override_stage.inc": "158a0269877132bbbfdf6eda56518659acd0524b655f4584f2f0895b7c3b8ac1",
+    "mfc_stage.hpp": "726a6eb99b305f7620d4c66b9430014ad97fcfc1a3ed272bd48962027628a195",
+    "model_scene_vert.h": "7f2e56e34b5c65abc483d40a76c96988ce016c6e83e0c2bde16307f4bdb1c593",
+    "override_new_rosters.inc": "ebd1051966a4a22773182142dd1c7e2a0608d13b368250124ae02a3410802c1b",
+    "override_source_roster.inc": "cfe72fe4fd8ad60cd1b7a012a8f94e8d749b49f06bba194b71fe59a7c70bc3e6",
+    "quality_stage.inc": "68184970e30efbf06a8c1ea3bb7a1b4749caf7f3feb5b28bf29095d4260897d5",
+    "remaster_banks.inc": "fad79351f1b6d7e2d9d594aba22299e021ffa5ecf5c4b72730148186f767926c",
+    "vdd.inc": "f369c6034eac0813517545beed55ce5ee2a3f6dddb8eed9324a89f822ab33e6b",
+    "vk_scene.hpp": "4a39abe55186c97908b5b94ffcb5e2d35d367790f60911a399f0786e69fab379",
+    "widescreen_stage.inc": "abccaf565535a985fd55be1d167682be362b8f3cd5598e9ec67f206fc80beb5c",
+    "fxaa.vert": "9c2da01f764f2c17c0303e237efbe093aa13a471315b7e50d3ee0ab1ca108c69",
+    "fxaa.frag": "4ee47bf29b28b59b3de210b502b2ab84576a1e424e170b1c20c088c982c27a69",
+    "model_scene.vert": "2a6d5c150b3bd8b4e93562a1a467d04a3213ebb02073e3d63c3891806c8908f4"
+  },
+  "source_hash_convention": "sources: published UTF-8/LF text; validated_sources_sha256: original private source bytes; line ending/EOF normalization only"
+}

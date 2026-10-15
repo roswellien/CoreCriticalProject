@@ -10,6 +10,7 @@
 #include <ddraw.h>
 #include <dsound.h>
 #include <d3d.h>
+#include <cstring>
 #define DIRECTINPUT_VERSION 0x0700
 #include <dinput.h>
 namespace com {
@@ -47,8 +48,8 @@ inline constexpr unsigned arena=0x37000000,arena_end=0x37100000;
 // owner: guest address of the root DirectDraw proxy whose object this belongs to (0 for that root).
 // Releasing the last DirectDraw interface of a root destroys its surfaces implicitly (DirectDraw rule).
 struct Object{unsigned guest;const Iface*iface;IUnknown*native;bool alive;unsigned owner;unsigned refs{};};  // refs: project-implemented service objects (native==nullptr)
-inline bool is_d3d(const Iface*i){return std::string(i->name).rfind("IDirect3D",0)==0;}
-inline bool is_lobby(const Iface*i){return std::string(i->name).rfind("IDirectPlayLobby",0)==0;}
+inline bool is_d3d(const Iface*i){return std::strncmp(i->name,"IDirect3D",9)==0;}
+inline bool is_lobby(const Iface*i){return std::strncmp(i->name,"IDirectPlayLobby",16)==0;}
 inline constexpr unsigned dperr_notlobbied=0x8877042E;
 inline bool is_dd(const Iface*i){const std::string n=i->name;return n.rfind("IDirectDraw",0)==0&&n.find("Surface")==std::string::npos;}
 struct Provider{HMODULE module{};std::wstring path;std::string sha;HRESULT(WINAPI*create)(GUID*,LPDIRECTDRAW*,IUnknown*){};};

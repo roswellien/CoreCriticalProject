@@ -229,6 +229,8 @@ inline thread_local HostHeap*heap{};
 inline thread_local void(*attach_hook)(m4_runtime::Runtime&){};
 inline thread_local void(*resume_hook)(m4_runtime::Runtime&){};
 inline thread_local bool(*fdiv_ready_hook)(){};
+// Loader order: runs the FDIV initializer in place (generic native stage) from the State at its call; returns at its RET.
+inline thread_local void(*fdiv_inplace_hook)(){};
 inline thread_local void*initterm_stage_result{};inline thread_local unsigned initterm_roots{},initterm_node{},initterm_frontier{};inline thread_local std::array<unsigned,16>initterm_nodes{};
 
 enum class Kind{attach,call,resume,initterm};
@@ -508,6 +510,13 @@ struct Stage {
    auto get=[&](unsigned a,unsigned n){if(!in(a,n))deny("Import input buffer outside the resume contract",a);std::vector<std::byte>v(n);bool bad{};try{for(unsigned o=0;o<n;){const unsigned k=std::min(n-o,4096U-((a+o)&4095U));runtime.memory().read({a+o},std::span<std::byte>(v.data()+o,k));o+=k;}}catch(...){bad=true;}if(bad)deny("Checked import input",a);return v;};
    auto put=[&](unsigned a,const void*d,unsigned n){if(!n)return;if(!in(a,n)||(a>=0x7802e000&&a<0x78030000))deny("Import output buffer outside the resume contract",a);bool bad{};try{const auto*b=static_cast<const std::byte*>(d);for(unsigned o=0;o<n;){const unsigned k=std::min(n-o,4096U-((a+o)&4095U));runtime.memory().write({a+o},std::span<const std::byte>(b+o,k));o+=k;}}catch(...){bad=true;}if(bad)deny("Checked import output",a);};
    if(ret<0x78001000||ret>=0x7802e000)deny("Import return word outside provider code",raw);
+   if(raw==fdiv_writer&&ret==0x78004232&&in_cinit&&!host.fdiv_done&&fdiv_inplace_hook){
+    // Loader order (play path): _cinit calls the FDIV initializer here, as in the original process. This stage yields
+    // ownership while the generic native stage runs the lifted initializer on this frame with real services
+    // (GetModuleHandleA, GetProcAddress, IsProcessorFeaturePresent; the _controlfp helpers; FNCLEX), then resumes.
+    {Stage*self=owner;owner=nullptr;struct Back{Stage*s;~Back(){owner=s;}}back{self};fdiv_inplace_hook();}
+    if(g.rip.dword!=ret||g.rsp.dword!=e+4)deny("In-place FDIV initializer must return to its _cinit call",raw);
+    host.fdiv_done=true;host.fdiv_value=load(fdiv_flag);++api_calls;return p;}
    if(raw==fdiv_writer&&ret==0x78004232&&in_cinit&&!host.fdiv_done){
     // The accepted FDIV registry already executed this exact callback natively (BEFORE point).
     if(!fdiv_ready_hook||!fdiv_ready_hook())deny("FDIV callback requires the completed accepted registry writer job",raw);

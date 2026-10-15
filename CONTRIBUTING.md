@@ -3,6 +3,14 @@
 Work on MechWarrior 3 first. Start with an observation, record its evidence,
 then make the smallest change that preserves the observed behavior.
 
+Follow the [faithful modernization plan](docs/faithful-modernization-plan.md):
+preserve recompiled gameplay while implementing modern platform services behind
+observed contracts. State the execution boundary advanced by each implementation
+and validate it narrowly. Existing acceptance gates remain strict; backend
+fixtures, original-game hooks and saved-scene replay are not native gameplay.
+For documentation-only changes, check links, diff and evidence consistency;
+do not launch game captures or full verifier runs solely to update documents.
+
 Read [the distribution policy](docs/legal.md) before adding files. Never submit
 game executables, media, assets, memory dumps, or unreviewed generated code.
 Keep user inputs under ignored `local/` (or outside the checkout), and analysis

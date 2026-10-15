@@ -27,7 +27,7 @@ launcher and documented compatibility fixes; the native host now reaches live
 Training in a prepared local development setup. Wrapper runs do not change
 native recompilation acceptance.
 
-The faithful modernization plan (local reference: `docs/faithful-modernization-plan.md`) is the
+The [faithful modernization plan](docs/faithful-modernization-plan.md) is the
 current strategy: preserve original gameplay through native recompilation and
 connect it to modern platform services, with Vulkan as the graphics backend.
 The integrated host has executed startup, a live menu, Training 1 frames and
@@ -37,8 +37,8 @@ acceptance criteria remain intact; 131/144 selected roots is a bounded fidelity
 milestone, not overall completion or a prerequisite for every independent
 integration experiment. Executed gameplay does not complete formal acceptance.
 
-Start with the [roadmap](docs/roadmap.md), Claude work review (local reference: `docs/m4-claude-work-review-2026-10-11.md`)
-and current continuation prompt (local reference: `docs/claude-m4-continuation-handoff.md`).
+Start with the [roadmap](docs/roadmap.md), [Claude work review](docs/m4-claude-work-review-2026-10-11.md)
+and [current continuation prompt](docs/claude-m4-continuation-handoff.md).
 
 The installed MW4 Mercenaries has a [reconnaissance report](docs/mw4-reconnaissance.md)
 and [execution plan](docs/mw4-execution-plan.md). Its protected code-image recovery
@@ -46,35 +46,31 @@ is the first implementation gate; this assessment adds no MW4 compatibility clai
 
 ## Running native host: current status
 
-The [2026-10-13 native-host summary](docs/session-summary-2026-10-13-native-host.md)
-records execution in one integrated x64 process, with the game logic running as
-recompiled native code:
+The [October 14 progress summary](docs/session-summary-2026-10-14-remaster.md)
+records the latest completed work: faster native execution and resident Vulkan
+rendering, software SEH, FXAA/16x AF, true 3440x1440 ultrawide, broader original
+HUD coverage, living asset launchers and local MW3 soundtrack integration.
 
-- A live, animated main menu that responds to input.
-- Training 1 3D scenes rendered through Vulkan with the game's own HUD. Scripted
-  runs reached startup, turning and acceleration; the user's interactive test
-  confirmed startup and walking.
-- Quit -> confirm runs native shutdown and exits with code 0.
-- Intro decoding through the game's recompiled Indeo IV50 codec, tested with the
-  window hidden; visible playback still needs review.
-- About 13 fps in heavy Training scenes on the development machine, up from
-  about 2.6 fps earlier in the session. This is a local observation, not a
-  cross-device benchmark or proof of original timing fidelity.
+The current local enhanced profile measured about **120 FPS in Training at
+3440x1440**, with updated assets, music, FXAA and 16x AF. These are bounded
+measurements on the development RX 9070, not whole-game/device guarantees.
+Original-compatible Training116/116, GPU draw1150/1150 and Instant Action116/116
+regressions pass. Accepted count remains **131/144**, with strict acceptance
+paused; native execution and modernization checks do not complete formal gates.
 
-The quadrant-correct FPATAN fix is built into 57 re-lifted game functions, but
-its effect on the reported camera flip and leg animation still needs a play
-retest. Remaining Training steps, weapons, physics/AI/timing comparisons and
-performance remain open. Strict acceptance v6 is blocked on the pinned startup
-plan hash; its review/criterion decision is separate from these executed runs.
-The accepted selected-startup count stays **131/144**.
+After preparing the local build/assets, use [Play MW3Remaster.cmd](Play%20MW3Remaster.cmd),
+[the original-model variant](Play%20MW3Remaster%20without%20new%20models.cmd), or
+[Play-MW3.cmd](Play-MW3.cmd) for the base native host. See the
+[native-host README](tools/m4-crt-heap-carry/README.md),
+[Remaster launcher notes](tools/remaster-launcher/README.md) and
+[published enhanced source overlays](tools/remaster-launcher/native-overrides/README.md).
 
-Use [Play-MW3.cmd](Play-MW3.cmd) after building the host. The
-[native-host README](tools/m4-crt-heap-carry/README.md) describes the local build,
-input and diagnostic paths. A clean checkout cannot build or run the game host
-on its own: it requires legally obtained game data, staged provider/codec images,
-pinned toolchains, local lift reports/objects and regenerated dispatch metadata.
-Game code, binaries, frame evidence and media remain local. The asset-free
-bootstrap build below remains separate from this native-host build.
+A clean checkout cannot build or run the game host by itself: legally obtained
+game data, staged providers, pinned tools and generated lift objects/dispatch
+metadata remain local. No game, replacement asset pack, music or executable is
+included. The [October 13 summary](docs/session-summary-2026-10-13-native-host.md)
+retains the earlier menu/Training/shutdown history. The asset-free bootstrap
+build below is separate from the game host.
 
 ## Original EXE Vulkan wrapper and launcher
 
@@ -283,7 +279,7 @@ modernization, with explicit integration gates.
 | `tests/` | Synthetic fixtures and runtime boundary tests |
 | `cmake/` | Shared build configuration |
 
-Start with the current faithful modernization plan (local reference: `docs/faithful-modernization-plan.md`),
+Start with the [current faithful modernization plan](docs/faithful-modernization-plan.md),
 [project goals and milestones](docs/project-milestones.md),
 [the full initial-phase plan](docs/initial-phase-plan.md),
 [architecture](docs/architecture.md), [roadmap](docs/roadmap.md),

@@ -62,6 +62,15 @@ void*d3d_call(const Import&imp,unsigned token,const std::function<unsigned(unsig
    auto*dev=device_with_viewport(root);if(!dev)deny("Clear2 on a viewport not attached to a device",root);dev->commands.push_back({D3DCmd::Clear,flags,color,z,{},{},0});auto&c=dev->commands.back();for(unsigned i=0;i<count;++i)c.rects.push_back(RECT{LONG(load(rects+16*i)),LONG(load(rects+16*i+4)),LONG(load(rects+16*i+8)),LONG(load(rects+16*i+12))});
    if(!dev->in_scene)render_scene(*dev);return done(DD_OK,7);}}
  if(imp.dll=="IDirect3DDevice3"){auto*dev=device(root);if(!dev)deny("Device object without its state",root);
+  // The two methods issued per draw (about 1,800 pairs a frame) are selected first, by a selector resolved once per
+  // import from the name; every other branch below is keyed on a different method name, so the order is equivalent.
+  if(imp.op<0)imp.op=n=="SetTexture"?1:(n=="DrawPrimitive"||n=="DrawIndexedPrimitive")?2:0;
+  if(imp.op==1){const unsigned stg=arg(1);if(stg>=8)deny("SetTexture stage outside the model",stg);const unsigned t=arg(2)?vsurf_root(arg(2)):0;if(t&&!vsurface(t))deny("SetTexture with an object that is not a provider texture",arg(2));dev->textures[stg]=t;return done(DD_OK,3);}
+  if(imp.op==2){const unsigned type=arg(1),fvf=arg(2),verts=arg(3),vcount=arg(4);if(fvf!=D3DFVF_TLVERTEX)deny("Vertex format other than D3DFVF_TLVERTEX is not modelled",fvf);
+   if(vcount>65535||!readable(verts,32*vcount))deny(n+" vertices outside the memory contract",verts);D3DCmd c{D3DCmd::Draw,type,0,0.f,{},{},0};c.vertices.resize(32*size_t(vcount));get_bytes(verts,c.vertices.data(),32*vcount);
+   if(n=="DrawIndexedPrimitive"){const unsigned idx=arg(5),icount=arg(6);if(icount>196605||!readable(idx,2*icount))deny("Indices outside the memory contract",idx);c.indices.resize(icount);for(unsigned i=0;i<icount;++i)c.indices[i]=runtime.memory().load<unsigned short>({idx+2*i});}
+   if(host.draw_log&&host.draw_detail_frame==host.frames+1){std::uint64_t h=0xcbf29ce484222325ULL;for(unsigned char b:c.vertices){h^=b;h*=0x100000001b3ULL;}float v0[8]{};if(c.vertices.size()>=32)std::memcpy(v0,c.vertices.data(),32);std::fprintf(host.draw_log,"  draw %u type %u n %u idx %zu v0 %.2f %.2f %.4f tex %08x %016llx\n",host.draw_calls,type,vcount,c.indices.size(),v0[0],v0[1],v0[2],dev->textures[0],(unsigned long long)h);}if(host.draw_log){++host.draw_calls;host.draw_fold(&type,4);host.draw_fold(&vcount,4);host.draw_fold(c.vertices.data(),c.vertices.size());if(!c.indices.empty())host.draw_fold(c.indices.data(),2*c.indices.size());}
+   if(!dev->snap||dev->snap_epoch!=dev->epoch){dev->snap=std::make_shared<const std::vector<unsigned>>(snapshot(*dev));dev->snap_epoch=dev->epoch;}c.state_snapshot=dev->snap;c.texture=dev->textures[0];dev->commands.push_back(std::move(c));return done(DD_OK,n=="DrawPrimitive"?6:8);}
   if(n=="GetCaps"){for(auto[a,hal]:{std::pair<unsigned,bool>{arg(1),true},{arg(2),false}})if(a){if(!readable(a,4)||load(a)!=252)deny("GetCaps D3DDEVICEDESC with a wrong dwSize",a);D3DDEVICEDESC d{};d.dwSize=sizeof(d);if(hal)d=hal_desc();if(!writable(a,252))deny("GetCaps output outside the memory contract",a);put_desc_d3d(a,d);}return done(DD_OK,3);}
   if(n=="EnumTextureFormats"){const unsigned cb=arg(1),ctx=arg(2);if(!find(cb))deny("EnumTextureFormats callback has no lifted body",cb);
    for(const auto&f:texture_formats()){auto&g=state.gpr;const unsigned at=((g.rsp.dword-0x200)&~15U)-32;for(unsigned i=0;i<8;++i)store(at+4*i,f[i]);const unsigned r=call_guest(cb,{at,ctx},true,"EnumTextureFormats callback",at&~15U);if(!callback_fault.empty()||r==D3DENUMRET_CANCEL)break;}return done(DD_OK,3);}
@@ -84,18 +93,14 @@ void*d3d_call(const Import&imp,unsigned token,const std::function<unsigned(unsig
   if(n=="SetTextureStageState"){const unsigned stg=arg(1),st=arg(2);if(stg>=8||st>=32)deny("Texture stage state outside the modelled range",st);dev->tss[stg][st]=arg(3);++dev->epoch;
    if(st==D3DTSS_ADDRESS)dev->tss[stg][D3DTSS_ADDRESSU]=dev->tss[stg][D3DTSS_ADDRESSV]=arg(3);return done(DD_OK,4);}
   if(n=="GetTextureStageState"){const unsigned stg=arg(1),st=arg(2);if(stg>=8||st>=32||!writable(arg(3),4))deny("GetTextureStageState arguments outside the model",st);store(arg(3),dev->tss[stg][st]);return done(DD_OK,4);}
-  if(n=="SetTexture"){const unsigned stg=arg(1);if(stg>=8)deny("SetTexture stage outside the model",stg);const unsigned t=arg(2)?vsurf_root(arg(2)):0;if(t&&!vsurface(t))deny("SetTexture with an object that is not a provider texture",arg(2));dev->textures[stg]=t;return done(DD_OK,3);}
   if(n=="GetTexture"){const unsigned stg=arg(1);if(stg>=8||!writable(arg(2),4))deny("GetTexture arguments outside the model",stg);store(arg(2),dev->textures[stg]);if(dev->textures[stg])++host.com_object(dev->textures[stg])->refs;return done(DD_OK,3);}
   if(n=="SetLightState"||n=="SetTransform"){if(!(n=="SetTransform"?readable(arg(2),64):true))deny("SetTransform matrix outside the memory contract",arg(2));return done(DD_OK,3);}
   if(n=="BeginScene"){if(dev->in_scene)return done(unsigned(D3DERR_SCENE_IN_SCENE),1);dev->in_scene=true;return done(DD_OK,1);}
   if(n=="EndScene"){if(!dev->in_scene)return done(unsigned(D3DERR_SCENE_NOT_IN_SCENE),1);dev->in_scene=false;render_scene(*dev);return done(DD_OK,1);}
-  if(n=="DrawPrimitive"||n=="DrawIndexedPrimitive"){const unsigned type=arg(1),fvf=arg(2),verts=arg(3),vcount=arg(4);if(fvf!=D3DFVF_TLVERTEX)deny("Vertex format other than D3DFVF_TLVERTEX is not modelled",fvf);
-   if(vcount>65535||!readable(verts,32*vcount))deny(n+" vertices outside the memory contract",verts);D3DCmd c{D3DCmd::Draw,type,0,0.f,{},{},0};c.vertices.resize(32*size_t(vcount));get_bytes(verts,c.vertices.data(),32*vcount);
-   if(n=="DrawIndexedPrimitive"){const unsigned idx=arg(5),icount=arg(6);if(icount>196605||!readable(idx,2*icount))deny("Indices outside the memory contract",idx);c.indices.resize(icount);for(unsigned i=0;i<icount;++i)c.indices[i]=runtime.memory().load<unsigned short>({idx+2*i});}
-   if(!dev->snap||dev->snap_epoch!=dev->epoch){dev->snap=std::make_shared<const std::vector<unsigned>>(snapshot(*dev));dev->snap_epoch=dev->epoch;}c.state_snapshot=dev->snap;c.texture=dev->textures[0];dev->commands.push_back(std::move(c));return done(DD_OK,n=="DrawPrimitive"?6:8);}}
+  }
  if(imp.dll=="IDirect3DTexture2"){auto*t=vsurface(root);if(!t)deny("Texture object without its surface",root);
   if(n=="Load"){auto*s=vsurf_of(arg(1));if(!s||s->width!=t->width||s->height!=t->height||s->bpp!=t->bpp)deny("Texture Load between different surfaces is not modelled",arg(1));
-   std::vector<unsigned char>b(s->bytes);get_bytes(s->mem,b.data(),s->bytes);if(t->bytes!=s->bytes)deny("Texture Load with different pitches",arg(1));write_bytes(t->mem,b.data(),unsigned(b.size()));t->tex_masks=s->tex_masks;t->version=++host.surface_versions;return done(DD_OK,2);}
+   gpu_sync(s->guest);gpu_sync(t->guest);std::vector<unsigned char>b(s->bytes);get_bytes(s->mem,b.data(),s->bytes);if(t->bytes!=s->bytes)deny("Texture Load with different pitches",arg(1));write_bytes(t->mem,b.data(),unsigned(b.size()));t->tex_masks=s->tex_masks;t->version=++host.surface_versions;return done(DD_OK,2);}
   if(n=="GetHandle"){if(!writable(arg(2),4))deny("GetHandle output outside the memory contract",arg(2));store(arg(2),t->guest);return done(DD_OK,3);}}
  stop(m4_runtime::FaultReason::unresolved_import,"Direct3D provider method not implemented: "+imp.dll+"::"+n,token);}
 // Texture formats the renderer samples: RGB565, ARGB1555, ARGB4444 (DDPIXELFORMAT words).
@@ -141,10 +146,14 @@ void render_scene(D3DDev&d){auto*rt=vsurface(d.target);if(!rt)deny("Scene render
    for(const auto&r0:c.rects){const RECT r=clip(r0);if(r.right<=r.left||r.bottom<=r.top)continue;if(c.flags&D3DCLEAR_TARGET)fill(*rt,r,px);
     if((c.flags&D3DCLEAR_ZBUFFER)&&zb){const unsigned zv=unsigned(std::lround(std::clamp(c.z,0.f,1.f)*65535.f));fill(*zb,r,zv);}}}
   d.commands.clear();return;}
- if(!host.scene_t0)host.scene_t0=::GetTickCount64();
+ if(!host.scene_t0)host.scene_t0=host.vclock()?std::max<std::uint64_t>(host.vclock_us/1000,1): ::GetTickCount64();
  namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.color.resize(px);sc.depth.assign(px,0);sc.has_depth=zb!=nullptr;
  auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){get_bytes(v.mem+y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
- rows_in(*rt,sc.color);if(zb)rows_in(*zb,sc.depth);
+ const bool lazy=lazy_rt();if(lazy&&host.res_dirty&&(host.res_rt!=rt->guest||host.res_zb!=(zb?zb->guest:0U)))gpu_sync(0);
+ bool rescale=false;if(lazy){auto*sr=scene_renderer();if(sr==host.presenter.get()){const float want=render_scale(rt->height);
+  if(want!=sr->current_scale()){rescale=true;if(host.res_dirty)gpu_sync(0);}sr->request_scale(want);}}  /* a new scale recreates the target: its content moves through guest memory */
+ const bool keep=lazy&&!rescale&&host.sren&&host.res_rt==rt->guest&&host.res_zb==(zb?zb->guest:0U)&&(host.res_dirty||(rt->version==host.res_ver_rt&&(!zb||zb->version==host.res_ver_zb)));
+ if(!keep){rows_in(*rt,sc.color);if(zb)rows_in(*zb,sc.depth);}
  std::map<unsigned,int>tex_index;const auto&dflt=rs_defaults();const std::vector<unsigned>*validated=nullptr;
  for(const auto&c:d.commands){
   if(c.kind==D3DCmd::Clear){vs::Clear k{};k.flags=(c.flags&D3DCLEAR_TARGET?1U:0U)|(c.flags&D3DCLEAR_ZBUFFER?2U:0U);k.color[0]=float((c.a>>16)&255)/255.f;k.color[1]=float((c.a>>8)&255)/255.f;k.color[2]=float(c.a&255)/255.f;k.color[3]=float(c.a>>24)/255.f;k.z=std::clamp(c.z,0.f,1.f);
@@ -166,7 +175,7 @@ void render_scene(D3DDev&d){auto*rt=vsurface(d.target);if(!rt)deny("Scene render
    if(rs(D3DRENDERSTATE_COLORKEYENABLE)&&t->has_src_key)deny("Texture colour keying is not modelled",tex);
    auto it=tex_index.find(tex);if(it==tex_index.end()){vs::TextureRef r{};r.key=tex;r.width=t->width;r.height=t->height;
     r.format=t->tex_masks[0]==0xf800?vs::TexFormat::rgb565:t->tex_masks[0]==0x7c00?vs::TexFormat::argb1555:t->tex_masks[0]==0x0f00?vs::TexFormat::argb4444:(deny("Texture pixel format not modelled",t->tex_masks[0]),vs::TexFormat::rgb565);
-    if(t->bpp!=16)deny("Texture depth not modelled",t->bpp);r.hash=t->version;if(!host.renderer||!host.renderer->current(tex,t->version,t->width,t->height)){r.pixels.resize(size_t(t->width)*t->height);rows_in(*t,r.pixels);}
+    if(t->bpp!=16)deny("Texture depth not modelled",t->bpp);r.hash=t->version;if(!host.sren||!host.sren->current(tex,t->version,t->width,t->height)){gpu_sync(t->guest);r.pixels.resize(size_t(t->width)*t->height);rows_in(*t,r.pixels);}
     it=tex_index.emplace(tex,int(sc.textures.size())).first;sc.textures.push_back(std::move(r));}dr.texture=it->second;}
   dr.sampler=(ts(0,D3DTSS_MAGFILTER)==D3DTFG_LINEAR?1U:0U)|(ts(0,D3DTSS_MINFILTER)==D3DTFN_LINEAR?2U:0U)|(ts(0,D3DTSS_ADDRESSU)<<4)|(ts(0,D3DTSS_ADDRESSV)<<8);
   dr.key={std::uint8_t(rs(D3DRENDERSTATE_ALPHABLENDENABLE)!=0),std::uint8_t(rs(D3DRENDERSTATE_SRCBLEND)),std::uint8_t(rs(D3DRENDERSTATE_DESTBLEND)),std::uint8_t(zb&&rs(D3DRENDERSTATE_ZENABLE)),
@@ -184,10 +193,15 @@ void render_scene(D3DDev&d){auto*rt=vsurface(d.target);if(!rt)deny("Scene render
   if(c.flags==D3DPT_TRIANGLELIST){for(size_t i=0;i+2<nv;i+=3){vert(i);vert(i+1);vert(i+2);}}
   else if(c.flags==D3DPT_TRIANGLESTRIP){for(size_t i=0;i+2<nv;++i){if(i&1){vert(i);vert(i+2);vert(i+1);}else{vert(i);vert(i+1);vert(i+2);}}}
   else if(c.flags==D3DPT_TRIANGLEFAN){for(size_t i=1;i+1<nv;++i){vert(i);vert(i+1);vert(0);}}
+  else if(c.flags==D3DPT_POINTLIST){for(size_t i=0;i<nv;++i)vert(i);dr.key.points=1;}  // one-pixel points (shader point size 1)
   else deny("Primitive type not modelled by the scene renderer",c.flags);
   dr.count=unsigned(sc.vertices.size()/32)-dr.first;sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(dr);}
- if(!host.renderer)host.renderer=std::make_unique<vs::Renderer>();try{HostInternal hi(*this);host.renderer->render(sc);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ scene_renderer();try{HostInternal hi(*this);host.sren->render(sc,!keep,!lazy);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ if(lazy){rt->version=++host.surface_versions;if(zb)zb->version=++host.surface_versions;host.res_rt=rt->guest;host.res_zb=zb?zb->guest:0U;host.res_ver_rt=rt->version;host.res_ver_zb=zb?zb->version:0U;
+  host.res_dirty=true;gpu_protect(true);if(host.sren->scenes==1)apis.back()+="(Vulkan scene renderer on "+host.sren->device_name+", lazy residency)";d.commands.clear();return;}
  auto rows_out=[&](VSurfaceRec&v,const std::vector<std::uint16_t>&in){for(unsigned y=0;y<v.height;++y)write_bytes(v.mem+y*v.pitch,in.data()+size_t(y)*v.width,v.width*2);};
- rows_out(*rt,sc.color);rt->version=++host.surface_versions;if(zb){rows_out(*zb,sc.depth);zb->version=++host.surface_versions;}
- if(host.renderer->scenes==1)apis.back()+="(Vulkan scene renderer on "+host.renderer->device_name+")";
+ {static const bool poison=[]{const char*e=std::getenv("MW34_RT_POISON");return e&&*e=='1';}();if(poison)std::fill(sc.color.begin(),sc.color.end(),std::uint16_t(0xf81f));}  /* MW34_RT_POISON=1 (diagnostic): the copied-back 3D image is magenta, exposing software HUD reads */
+ rows_out(*rt,sc.color);rt->version=++host.surface_versions;if(zb){static const bool zp=[]{const char*e=std::getenv("MW34_ZB_PERTURB");return e&&*e=='1';}();if(zp)for(auto&v:sc.depth)if(v)--v;  /* MW34_ZB_PERTURB=1 (diagnostic): depth written back one unit nearer */
+ rows_out(*zb,sc.depth);zb->version=++host.surface_versions;}
+ if(host.sren->scenes==1)apis.back()+="(Vulkan scene renderer on "+host.sren->device_name+")";
  d.commands.clear();}

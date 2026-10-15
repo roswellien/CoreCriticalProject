@@ -46,6 +46,10 @@ MsgFrame marshal(HWND h,UINT m,WPARAM w,LPARAM l,unsigned&at){MsgFrame f{h,m,w,l
  case WM_STYLECHANGING:case WM_STYLECHANGED:f.bytes=8;f.copy=put_bytes(at,reinterpret_cast<const void*>(l),8);f.guest_l=f.copy;break;
  case WM_SETTEXT:case WM_WININICHANGE:case WM_DEVMODECHANGE:f.guest_l=scratch_string(at,reinterpret_cast<const char*>(l));break;
  case WM_GETTEXT:{const unsigned n=unsigned(w);if(n>0x10000)deny("WM_GETTEXT buffer too large",n);at-=(n+3)&~3U;f.copy=at;f.bytes=n;f.guest_l=at;break;}
+ // F1 (WM_KEYF1) makes DefWindowProc send WM_HELP: x86 HELPINFO (28 bytes; read-only for the receiver).
+ case WM_HELP:{const auto&hi=*reinterpret_cast<const HELPINFO*>(l);if(hi.dwContextId>0xffffffffull)deny("WM_HELP context id not representable as a guest word",0);at-=28;
+  const std::array<unsigned,7>v{28u,unsigned(hi.iContextType),unsigned(hi.iCtrlId),gwnd(reinterpret_cast<HWND>(hi.hItemHandle)),unsigned(hi.dwContextId),unsigned(hi.MousePos.x),unsigned(hi.MousePos.y)};
+  for(unsigned i=0;i<7;++i)store(at+4*i,v[i]);f.copy=at;f.guest_l=at;break;}
  default:if(pointer_message(m))deny("Pointer message without marshalling: "+std::to_string(m),m);plain();
   if(m==WM_ACTIVATE||m==WM_MDIACTIVATE||m==WM_SETFOCUS||m==WM_KILLFOCUS||m==WM_PARENTNOTIFY)f.guest_l=gwnd(reinterpret_cast<HWND>(l));
  }
@@ -63,6 +67,7 @@ void unmarshal(const MsgFrame&f){if(!f.copy)return;
 // Host message -> guest procedure (nested call), with copy-back.
 LRESULT deliver(unsigned proc,HWND h,UINT m,WPARAM w,LPARAM l){auto&g=state.gpr;unsigned at=(g.rsp.dword-0x200)&~15U;MsgFrame f=marshal(h,m,w,l,at);
  msg_frames.push_back(f);struct Pop{std::vector<MsgFrame>&v;~Pop(){v.pop_back();}}pop{msg_frames};
+ ++in_wndproc;struct WndprocDepth{unsigned&n;~WndprocDepth(){--n;}}wndproc_depth{in_wndproc};
  const unsigned r=call_guest(proc,{gwnd(h),unsigned(m),f.guest_w,f.guest_l},true,"window procedure message "+std::to_string(m),at&~15U);unmarshal(msg_frames.back());return LRESULT(std::int32_t(r));}
 static LRESULT CALLBACK wnd_tramp(HWND h,UINT m,WPARAM w,LPARAM l){Stage*st=owner;
  if(!st||!st->callback_fault.empty())return ::DefWindowProcA(h,m,w,l);

@@ -17,6 +17,7 @@ void main() {
     float w = 1.0 / position.w;
     vec2 ndc = (position.xy + draw.target.z) / draw.target.xy * 2.0 - 1.0;
     gl_Position = vec4(ndc * w, position.z * w, w);
+    gl_PointSize = 1.0;  // D3DPT_POINTLIST: one pixel (ignored for triangles)
     uvPerspective = uv;
     uvAffine = uv;
     colorSmooth = colorFlat = unpack(diffuse);

@@ -16,9 +16,12 @@
 #include "vk_scene.hpp"
 #include <atomic>
 #include <deque>
+#include <string_view>
+#include <unordered_map>
 #include <set>
 #include <map>
 #include <mmsystem.h>
+#include "audio/local_cd_audio.hpp"
 #include <vfw.h>
 #include <fstream>
 #include <iterator>
@@ -26,7 +29,14 @@
 #include "com_ddraw.hpp"
 #include <string>
 inline std::atomic<unsigned>mw34_frames_presented{0};  /* presented frames, for the host profiler window */
-namespace mw34{std::byte*guest_fast_pointer(const GuestMemory*,std::uint32_t,std::uint64_t,Permissions);}  /* guest_memory_cached.cpp */
+extern "C" unsigned long long mw34_x87_counts[2];  /* composition.cpp: flog2/fexp2 bridge calls (diagnostic) */
+#include "guest_memory_fast.hpp"  /* the region cache of guest_memory_cached.cpp */
+#include "fast_gate.hpp"  /* gate for the inlined bridge fast paths (fast_bridges.cpp) */
+extern "C" { inline Mw34FastGate mw34_fast_gate{}; }
+static_assert(sizeof(Mw34FastHit)==sizeof(mw34::fastmem::Hit)&&offsetof(Mw34FastHit,owner)==offsetof(mw34::fastmem::Hit,owner)&&offsetof(Mw34FastHit,generation)==offsetof(mw34::fastmem::Hit,generation)
+ &&offsetof(Mw34FastHit,start)==offsetof(mw34::fastmem::Hit,start)&&offsetof(Mw34FastHit,size)==offsetof(mw34::fastmem::Hit,size)&&offsetof(Mw34FastHit,bytes)==offsetof(mw34::fastmem::Hit,bytes)
+ &&offsetof(Mw34FastHit,permissions)==offsetof(mw34::fastmem::Hit,permissions),"Fast-path cache mirror matches mw34::fastmem::Hit");
+static_assert(sizeof(unsigned long long)==sizeof(std::uint64_t)&&static_cast<unsigned>(mw34::Permissions::read)==1&&static_cast<unsigned>(mw34::Permissions::write)==2,"Fast-path cache permission bits");
 namespace mw34::m4_crt_mfc_attach {
 namespace hs=m4_crt_heap_carry;
 using Body=hs::Body;
@@ -34,7 +44,7 @@ struct Entry{unsigned addr;Body body;};
 #include "mfc_entries.inc"
 inline constexpr unsigned base=0x5f400000,image_end=0x5f4ed000,data=0x5f4cb000,data_end=0x5f4d3000,entry=0x5f4052a2,token_base=0x38000000,token_end=0x38010000,host_proc_base=0x39000000,vsurface_arena=0x40000000,vsurface_arena_end=0x50000000;
 inline constexpr unsigned msvcrt_base=0x78000000,msvcrt_text_end=0x7802e000,msvcrt_data=0x78035000,msvcrt_data_end=0x7803c000;
-inline constexpr unsigned initterm_thunk=0x5ac598,game_end=0x9f5000,game_data=0x5e0000,game_data_end=0x9a2000,game_stack_low=0x20001000,game_stack_top=0x20002000,stack_extension=0x1ff01000,entry_continuation=0x5ac480,msvcrt_entry=0x780017fd;
+inline constexpr unsigned crt_entry=0x5ac3a0,initterm_thunk=0x5ac598,game_end=0x9f5000,game_data=0x5e0000,game_data_end=0x9a2000,game_stack_low=0x20001000,game_stack_top=0x20002000,stack_extension=0x1ff01000,entry_continuation=0x5ac480,msvcrt_entry=0x780017fd;
 inline constexpr char image_sha[]="5f66a4d221e24c767aadd3f43a981df53d42f3d73bdf05b518120632099e2fc8";
 // Lifted MSVCRT bodies reachable through MFC42's bound imports (functions and their continuations).
 inline constexpr std::array<Entry,22>msvcrt_entries{{{0x78001000,hs::mw34_attach_memset_body},{0x78001055,hs::mw34_attach_lock_body},{0x78001080,hs::mw34_attach_lock_tail_body},
@@ -43,11 +53,15 @@ inline constexpr std::array<Entry,22>msvcrt_entries{{{0x78001000,hs::mw34_attach
  {0x78001428,hs::mw34_allocation_free_tail_body},{0x780014f8,hs::mw34_attach_initterm_body},{0x78001514,hs::mw34_attach_lockexit_body},{0x7800151d,hs::mw34_attach_msize_body},
  {0x780018f9,hs::mw34_attach_calloc_body},{0x78002f32,hs::mw34_attach_strlen_body},{0x78003041,hs::mw34_attach_unlockexit_body},{0x780044dd,hs::mw34_attach_allmul_body},
  {0x78004a36,hs::mw34_attach_onexit_body},{0x7800cc39,hs::mw34_allocation_freecold_body},{0x7800cc97,hs::mw34_allocation_round_body}}};
-inline Body find(unsigned a){
+inline Body find_uncached(unsigned a){
  auto it=std::lower_bound(mfc_entries.begin(),mfc_entries.end(),a,[](const Entry&e,unsigned v){return e.addr<v;});if(it!=mfc_entries.end()&&it->addr==a)return it->body;
  for(const auto&e:msvcrt_entries)if(e.addr==a)return e.body;return nullptr;}
+// The entry tables are fixed at build time, so a direct-mapped cache of recent lookups (hits and misses) returns
+// exactly what the search returns.
+inline Body find(unsigned a){struct Slot{unsigned addr;bool valid;Body body;};thread_local std::array<Slot,4096>cache{};
+ auto&s=cache[(a>>2)&4095];if(s.valid&&s.addr==a)return s.body;const Body b=find_uncached(a);s={a,true,b};return b;}
 
-struct Import{unsigned cell,bound;std::string dll,name;};
+struct Import{unsigned cell,bound;std::string dll,name;mutable const void*iface_cache{};mutable bool iface_resolved{};mutable std::string label[3];/* service-log text by prefix (none, MSVCRT>, GAME>), built once */mutable signed char op=-1;/* IDirect3DDevice3 hot-method selector, resolved once from the name */};
 struct VSurfaceRec{unsigned guest,width,height,pitch,bpp,caps,mem,bytes,attached,clipper,palette;DDCOLORKEY src_key{},dst_key{};bool has_src_key{},has_dst_key{};unsigned locks{};bool primary{};std::array<unsigned,4>tex_masks{0xf800,0x07e0,0x001f,0};unsigned zbuffer{};
  /* content version, unique across surfaces: advanced by every API path that writes the surface (Unlock,
     Blt/BltFast/colour fills as destination, Texture2::Load, Flip, scene write-back) */
@@ -79,17 +93,23 @@ struct Host{
  // handle token (moveable) or the block address (fixed), and the contents live in guest pages.
  struct Global{unsigned handle,guest,bytes,flags;HGLOBAL native;unsigned locks;bool freed;};
  // A provider DLL mapped by the loader model: image range, entry, writable sections, attach state.
+ std::uint64_t raises{},unwinds{},nonlocal_returns{};  // guest SEH dispatch counters
  struct Module{std::string name;unsigned base,end,entry;const std::vector<std::byte>*bytes;std::vector<std::pair<unsigned,unsigned>>writable;bool attached{},thread_calls_disabled{};};
  std::vector<Module>modules;
  // Staged modules a guest LoadLibraryA may map at run time (name, host path, exact bytes and SHA-256).
  struct Loadable{std::string name,path;std::vector<std::byte>bytes;std::string sha;};std::vector<Loadable>loadable;unsigned nested_calls{};
  const Module*module_named(const std::string&n)const{for(const auto&m:modules)if(same_name(m.name,n))return &m;return nullptr;}
- static bool same_name(std::string a,std::string b){for(auto*x:{&a,&b})for(auto&c:*x)c=char(std::toupper(static_cast<unsigned char>(c)));return a==b;}
+ static bool same_name(std::string_view a,std::string_view b){if(a.size()!=b.size())return false;for(std::size_t i=0;i<a.size();++i)if(char(std::toupper(static_cast<unsigned char>(a[i])))!=char(std::toupper(static_cast<unsigned char>(b[i]))))return false;return true;}
  bool all_attached()const{for(const auto&m:modules)if(!m.attached)return false;return !modules.empty();}
  std::map<unsigned,std::string>paths;const std::vector<std::byte>*msvcrt{};unsigned provider_pages{};  // host paths of the guest images actually loaded, by base
  std::vector<com::Object>com_objects;std::map<std::string,unsigned>com_vtables;unsigned com_next=com::arena;com::Provider ddraw;com::SoundProvider dsound;com::InputProvider dinput;
  bool in_com(unsigned a,unsigned n)const{return com_next>com::arena&&a>=com::arena&&std::uint64_t(a)+n<=com_next;}
- com::Object*com_object(unsigned g){for(auto&o:com_objects)if(o.alive&&o.guest==g)return &o;return nullptr;}
+ // Lookups by guest token use first-match indexes over these append-only vectors (identical to the linear
+ // searches they replace): com_objects, imports and vsurfaces only grow.
+ std::unordered_map<unsigned,std::size_t>com_index;std::size_t com_indexed{};
+ com::Object*com_object(unsigned g){for(;com_indexed<com_objects.size();++com_indexed)com_index.emplace(com_objects[com_indexed].guest,com_indexed);
+  const auto it=com_index.find(g);if(it==com_index.end())return nullptr;if(com_objects[it->second].alive)return &com_objects[it->second];
+  for(auto&o:com_objects)if(o.alive&&o.guest==g)return &o;return nullptr;}
  // Window hooks the guest installed: the real thread hook (host trampoline) and the guest procedure.
  struct Hook{unsigned guest;int id;unsigned proc;HHOOK native;bool live;};std::vector<Hook>hooks;
  // Guest window classes (real class on the host with the trampoline), per-window guest procedures,
@@ -103,6 +123,12 @@ struct Host{
  // Virtual display state (exclusive level and display mode emulated in the game window).
  struct Display{HWND window{};bool exclusive{};unsigned flags{},width{},height{},bpp{};}display;
  std::vector<VSurfaceRec>vsurfaces;std::vector<VPaletteRec>vpalettes;unsigned vsurface_next{};unsigned frames{},frame_budget{120},frame_dump{30};
+ /* MW34_DRAW_LOG=<file>: per presented frame, the number of DrawPrimitive/DrawIndexedPrimitive calls and an FNV-1a 64
+    hash over each call's primitive type, vertex count, the game-computed TL vertex bytes and indices, in call order (an
+    address-free fingerprint of the frame's scene for original/native comparisons; host-only, no guest effect). */
+ unsigned draw_detail_frame=[]{const char*q=std::getenv("MW34_DRAW_DETAIL");return q&&*q?unsigned(std::stoul(q)):0U;}();  /* MW34_DRAW_DETAIL=<frame>: one line per draw of that frame in the draw log */
+ FILE*draw_log=[]{const char*q=std::getenv("MW34_DRAW_LOG");FILE*f=q&&*q?std::fopen(q,"w"):nullptr;if(f)std::setvbuf(f,nullptr,_IOFBF,1<<20);return f;}();std::uint64_t draw_hash=0xcbf29ce484222325ULL;unsigned draw_calls{};
+ void draw_fold(const void*p,std::size_t n){const auto*b=static_cast<const unsigned char*>(p);for(std::size_t i=0;i<n;++i){draw_hash^=b[i];draw_hash*=0x100000001b3ULL;}}
 /* Block-publication ranges in the guest block arena: blocks published by pages() and their released
    (unmapped) ranges, reused first-fit with coalescing. Ranges published before the hand-off are not
    tracked and are never reused. */
@@ -134,19 +160,46 @@ std::map<unsigned,std::pair<unsigned,unsigned>>mutexes;std::unique_ptr<mw34::vks
    Device objects, data formats and cooperative levels stay real; only the input data comes from the
    script. Lines: "FRAME mouse DX DY BUTTONS" (relative motion delivered once, at the first read at or after
    that presented frame; buttons persist) and "FRAME key SCANCODE down|up" (one buffered keyboard record). */
-struct ScriptEvent{unsigned frame;bool mouse;int dx,dy;unsigned buttons,scan;bool down,timed;};std::vector<ScriptEvent>script;size_t script_mouse_at{},script_key_at{},script_kstate_at{};std::array<unsigned char,256>script_keys{};unsigned script_buttons{},script_seq{};bool scripted{};
-std::map<unsigned,unsigned>di_format;std::uint64_t scene_t0{};  /* host ms of the first rendered 3D scene ("+MS" script events) */POINT vcursor{320,240};std::string frame_dir;std::map<unsigned,unsigned>clippers,d3d_owner;GuestHeap gheap;std::vector<void*>handle_tokens;/* pointer-valued host handles: token 0x3d000000+16k */std::vector<DibRec>dibs;std::vector<SoundLock>sound_locks;std::vector<D3DDev>devices;std::vector<D3DViewport>viewports;std::map<unsigned,std::array<unsigned char,80>>materials;std::map<unsigned,unsigned>ver_blocks;std::map<std::string,unsigned>shared_images;/* LoadIcon/LoadCursor shared handles */std::vector<unsigned>keys;std::map<unsigned,unsigned>tls_shadow;  /* guest-freed TLS indexes: reads 0 after TlsFree, as Windows; host slots untouched */
+struct ScriptEvent{unsigned frame;bool mouse;int dx,dy;unsigned buttons,scan;bool down,timed;};std::vector<ScriptEvent>script;size_t script_mouse_at{},script_key_at{},script_kstate_at{};std::array<unsigned char,256>script_keys{};
+/* Opt-in deterministic clock for scripted test runs (MW34_VIRTUAL_CLOCK=<ms per presented frame>, only with
+   MW34_INPUT_SCRIPT): every guest time source reads one virtual clock that advances by that step at each presented
+   frame, by 1 us per query (so polling loops progress) and by the requested time on Sleep. A script then replays
+   identically. Interactive play never uses it. */
+std::uint64_t vclock_step_us{},vclock_us{};bool vclock()const{return vclock_step_us!=0;}
+std::uint64_t vclock_query(){return ++vclock_us;}  /* monotonic, deterministic */
+/* Under the virtual clock, DirectSound play positions are virtual too: real playback runs in real time, and the game's
+   audio streaming polls GetCurrentPosition/GetStatus, which made scripted replays branch between runs. Per buffer:
+   playing/looping, position at the last Play/SetCurrentPosition/SetFrequency, its virtual time, byte rate, size. */
+struct VSound{bool playing{},looping{};std::uint64_t t0{};unsigned pos0{},rate{},size{};};std::map<void*,VSound>vsound;
+/* Live guest tick clock (interactive and unclocked runs): GetTickCount, timeGetTime and the message/input timestamps
+   read milliseconds since host start plus a one-minute boot offset, from the performance counter (1 ms steps). The
+   engine clock (0x575a00) keeps `now` as float32 seconds, so raw Windows uptime of days leaves it tens of ms of
+   resolution and jitters every frame step (62.5 ms at 7 days); the original ran on PCs booted hours before.
+   MW34_GUEST_CLOCK=uptime restores raw host uptime. */
+bool tick_uptime{};std::int64_t tick_qpc0{},tick_qpf{1};DWORD tick_raw0{};static constexpr unsigned tick_base=60000;
+void tick_init(){LARGE_INTEGER q{},f{};::QueryPerformanceFrequency(&f);::QueryPerformanceCounter(&q);tick_qpf=f.QuadPart?f.QuadPart:1;tick_qpc0=q.QuadPart;tick_raw0=::GetTickCount();}
+unsigned guest_tick()const{if(tick_uptime)return ::GetTickCount();LARGE_INTEGER q{};::QueryPerformanceCounter(&q);return tick_base+unsigned((q.QuadPart-tick_qpc0)*1000/tick_qpf);}
+unsigned guest_tick_of(DWORD host_tick)const{return tick_uptime?host_tick:tick_base+(host_tick-tick_raw0);}  /* host GetTickCount-domain stamps */
+DWORD host_tick_of(unsigned guest)const{return tick_uptime?guest:tick_raw0+(guest-tick_base);}
+unsigned script_buttons{},script_seq{};bool scripted{};
+std::map<unsigned,unsigned>di_format;std::uint64_t scene_t0{};unsigned res_rt{},res_zb{};bool res_dirty{},res_protected{};mw34::vkscene::Renderer*sren{};  /* the scene renderer: the presenter's device in lazy mode (direct presentation), else host.renderer */std::uint64_t res_ver_rt{},res_ver_zb{};  /* lazy 3D-target residency (vdd.inc gpu_sync) */  /* host ms of the first rendered 3D scene ("+MS" script events) */POINT vcursor{320,240};std::string frame_dir;std::map<unsigned,unsigned>clippers,d3d_owner;GuestHeap gheap;std::vector<void*>handle_tokens;/* pointer-valued host handles: token 0x3d000000+16k */std::vector<DibRec>dibs;std::vector<SoundLock>sound_locks;std::vector<D3DDev>devices;std::vector<D3DViewport>viewports;std::map<unsigned,std::array<unsigned char,80>>materials;std::map<unsigned,unsigned>ver_blocks;std::map<std::string,unsigned>shared_images;/* LoadIcon/LoadCursor shared handles */std::vector<unsigned>keys;std::map<unsigned,unsigned>tls_shadow;  /* guest-freed TLS indexes: reads 0 after TlsFree, as Windows; host slots untouched */
 /* registry: guest key handles and the per-install overlay of the game's writes */
 struct VKey{unsigned guest;std::string path;HKEY real;};std::vector<VKey>vkeys;unsigned vkey_serial{};
 struct RegOverlay{static constexpr DWORD deleted=0xffffffffU;std::map<std::string,std::map<std::string,std::pair<DWORD,std::vector<BYTE>>>>keys;bool loaded{};std::string file;}reg;std::vector<Import>imports,crt_imports,game_imports;std::vector<DWORD>tls;bool attached{};std::vector<Local>locals;std::vector<Global>globals;std::map<std::string,unsigned>loads;unsigned last_error{};
+ // One native CD player survives the attach/game Stage hand-offs. It owns only its PCM stream.
+ std::unique_ptr<audio::LocalCdAudio>local_cd;
+ audio::LocalCdAudio&music(){if(!local_cd)local_cd=std::make_unique<audio::LocalCdAudio>();return *local_cd;}
  Host()=default;Host(const Host&)=delete;Host&operator=(const Host&)=delete;
  // Children before parents: releasing a real IDirectSound frees its buffers, so creation order would leave them dangling.
- ~Host(){static const bool trace=std::getenv("MW34_TRACE_TEARDOWN")!=nullptr;
+ ~Host(){local_cd.reset();static const bool trace=std::getenv("MW34_TRACE_TEARDOWN")!=nullptr;
   for(auto it=com_objects.rbegin();it!=com_objects.rend();++it)if(it->alive&&it->native){if(trace)std::fprintf(stderr,"teardown release %s guest %x owner %x refs %u\n",it->iface->name,it->guest,it->owner,it->refs);for(unsigned r=0;r<it->refs;++r)it->native->Release();}if(ddraw.module)::FreeLibrary(ddraw.module);for(auto k:keys)::RegCloseKey(reinterpret_cast<HKEY>(std::intptr_t(std::int32_t(k))));for(auto&k:vkeys)if(k.real)::RegCloseKey(k.real);for(auto t:tls)::TlsFree(t);for(auto&l:locals)if(!l.freed)::LocalFree(l.native);for(auto&g:globals)if(!g.freed){while(g.locks--)::GlobalUnlock(g.native);::GlobalFree(g.native);}}
  Global*global(unsigned handle){for(auto&g:globals)if(!g.freed&&g.handle==handle)return &g;return nullptr;}
  bool in_global(unsigned a,unsigned n)const{for(const auto&g:globals)if(!g.freed&&a>=g.guest&&std::uint64_t(a)+n<=std::uint64_t(g.guest)+g.bytes)return true;return false;}
  const Import*by_cell(unsigned c)const{for(const auto&i:imports)if(i.cell==c)return &i;return nullptr;}
- const Import*by_bound(unsigned b)const{for(const auto&i:imports)if(i.bound==b)return &i;return nullptr;}
+ mutable std::unordered_map<unsigned,std::size_t>bound_index;mutable std::size_t bound_indexed{};
+ const Import*by_bound(unsigned b)const{for(;bound_indexed<imports.size();++bound_indexed)bound_index.emplace(imports[bound_indexed].bound,bound_indexed);
+  const auto it=bound_index.find(b);return it==bound_index.end()?nullptr:&imports[it->second];}
+ std::unordered_map<unsigned,std::size_t>vsurf_index;std::size_t vsurf_indexed{};
  const Import*by_raw(unsigned r)const{for(const auto&i:crt_imports)if(i.bound==r)return &i;return nullptr;}
  // Game IAT words stay raw (the runtime's import model); each raw word is unique across the game's
  // imports and resolves to its import: cell = the IAT cell, bound = the MFC42/MSVCRT export or 0.
@@ -169,7 +222,7 @@ inline unsigned export_rva(const std::vector<std::byte>&b,const std::string&name
  unsigned index=~0U;if(name.size()>1&&name[0]=='#'){index=unsigned(std::stoul(name.substr(1)))-ordbase;}else for(unsigned i=0;i<nnames;++i)if(cstr(b,u32(b,offset(b,names)+4*i))==name){index=u16(b,offset(b,ords)+2*i);break;}
  if(index>=nfun)throw std::runtime_error("MSVCRT export absent: "+name);const unsigned rva=u32(b,offset(b,funs)+4*index);if(!rva||(rva>=d&&rva<d+size))throw std::runtime_error("MSVCRT export forwarded or empty: "+name);return rva;}
 }
-inline bool same(std::string a,std::string b){std::transform(a.begin(),a.end(),a.begin(),[](unsigned char c){return char(std::toupper(c));});std::transform(b.begin(),b.end(),b.begin(),[](unsigned char c){return char(std::toupper(c));});return a==b;}
+inline bool same(std::string_view a,std::string_view b){return Host::same_name(a,b);}
 // Maps a provider DLL at its preferred base with literal headers and sections and binds its imports:
 // MSVCRT imports to the staged MSVCRT export addresses, every other import to a service token.
 inline void map_module(m4_runtime::Runtime&r,const std::vector<std::byte>&mfc,const char*sha,const char*name,const std::vector<std::byte>&msvcrt,Host&host){
@@ -222,43 +275,72 @@ inline unsigned bind_game_data(m4_runtime::Runtime&r,Host&host){unsigned bound=0
   if(i.bound>=msvcrt_base&&i.bound<0x78040000){b=host.msvcrt;base_=msvcrt_base;}else for(const auto&m:host.modules)if(i.bound>=m.base&&i.bound<m.end){b=m.bytes;base_=m.base;}
   if(!b||code_rva(*b,i.bound-base_))continue;const unsigned page=i.cell&~4095U;r.memory().protect({page},Permissions::read|Permissions::write);r.memory().store<unsigned>({i.cell},i.bound);r.memory().protect({page},Permissions::read);++bound;}
  return bound;}
-// The real loader maps all of MSVCRT; the runtime maps selected pages. Every MSVCRT .text/.rdata page
-// not yet mapped is mapped read-only with its literal bytes (code-section tables, constants); pages
-// already mapped keep their contents and permissions.
-inline unsigned map_provider_code(m4_runtime::Runtime&r,const std::vector<std::byte>&msvcrt){unsigned added=0;
+// The bounded FDIV pack owns selected source ranges, not complete provider
+// sections: unused bytes in some read-only pages are deliberately 0xCC. On
+// the loader-order play path complete those pages from the admitted PE before
+// ordinary CRT/MFC execution can read its strings/tables. Preserve initialized
+// writable data and the already-bound import page. The accepted bounded path
+// retains its original pack bytes and integrity contract.
+inline unsigned map_provider_code(m4_runtime::Runtime&r,const std::vector<std::byte>&msvcrt,bool complete_literals=false){unsigned added=0;
  for(const auto&sec:pe::sections(msvcrt)){const unsigned lo=msvcrt_base+sec.va,hi=msvcrt_base+sec.va+((std::max(sec.vsize,sec.rawsize)+4095U)&~4095U);
   // .text/.rdata always; .data/.rsrc pages the runtime never mapped (never written: literal initial bytes); .reloc is not needed
   if(lo>=0x7803d000)continue;
-  for(unsigned page=lo;page<hi;page+=4096){bool mapped=true;try{(void)r.memory().load<unsigned char>({page});}catch(...){mapped=false;}if(mapped)continue;
+  for(unsigned page=lo;page<hi;page+=4096){bool mapped=true;try{(void)r.memory().load<unsigned char>({page});}catch(...){mapped=false;}
+   if(mapped&&(!complete_literals||(sec.flags&0x80000000U)||page==0x7802e000U))continue;
    std::vector<std::byte>v(4096);const unsigned off=page-msvcrt_base-sec.va;if(off<sec.rawsize)std::memcpy(v.data(),msvcrt.data()+sec.raw+off,std::min(4096U,sec.rawsize-off));
-   r.memory().map({page},4096,Permissions::read|Permissions::write);r.memory().write({page},v);if(!(sec.flags&0x80000000U))r.memory().protect({page},(sec.flags&0x20000000U)?Permissions::read|Permissions::execute:Permissions::read);++added;}}
+   if(mapped)r.memory().protect({page},Permissions::read|Permissions::write);else r.memory().map({page},4096,Permissions::read|Permissions::write);
+   r.memory().write({page},v);if(!(sec.flags&0x80000000U))r.memory().protect({page},(sec.flags&0x20000000U)?Permissions::read|Permissions::execute:Permissions::read);++added;}}
  return added;}
 constexpr unsigned external_return(){return m4_runtime::Runtime::external_return;}
 struct Stage;
+// Nonlocal guest return (an SEH __except block or a C++ catch continuation): the guest returned to the bound return
+// word of an outer frame, abandoning the frames above it. Thrown by Stage::returned(); the enter()/call_guest() that
+// bound that frame catches it, so the host frames of the abandoned guest calls are released by C++ unwinding.
+struct GuestReturn:std::runtime_error{unsigned frame;explicit GuestReturn(unsigned f):std::runtime_error("Nonlocal guest return crossed a host callback boundary"),frame(f){}};
 inline thread_local Stage*owner{};
+// Memory token for a Stage: the flat guest base (recompiled code adds guest addresses to it), else a dummy.
+inline void*stage_token(m4_runtime::Runtime&r,int*dummy){void*b=r.memory().flat_base();return b?b:dummy;}
 struct Stage {
  m4_runtime::Runtime&runtime;State&state;hs::HostHeap&heap;Host&host;void*token_ptr;
  unsigned entry_esp{},low{},depth{},reads{},writes{},api_calls{},undefined_count{},max_depth{},bodies{};
  std::array<unsigned,4>saved{};std::array<unsigned,128>returns{};std::array<unsigned,128>returns_sp{};  /* the stack slot holding each bound return word */std::vector<std::string>apis;std::uint64_t apis_dropped{};  /* the log keeps the most recent services; the count stays total */
- bool active{},complete{};std::thread::id thread=std::this_thread::get_id();
- enum class Kind{attach,initterm};Kind kind;Host::Module*mod{};
+ bool active{},complete{};std::thread::id thread=std::this_thread::get_id();const unsigned long thread_dw=::GetCurrentThreadId();  // the same identity, read inline from the TEB in guard()
+ enum class Kind{attach,initterm,call};Kind kind;Host::Module*mod{};
+  bool from_entry{};unsigned call_return{};
  Stage(m4_runtime::Runtime&r,hs::HostHeap&h,Host&m,void*t,Kind k=Kind::attach,Host::Module*md=nullptr):runtime(r),state(*reinterpret_cast<State*>(r.remill_state().data())),heap(h),host(m),token_ptr(t),kind(k),mod(md){
   const auto&g=state.gpr;saved={g.rbx.dword,g.rsi.dword,g.rdi.dword,g.rbp.dword};entry_esp=g.rsp.dword;
+  if(kind==Kind::initterm&&g.rip.dword==crt_entry){
+   // Loader order (MW34_STARTUP=loader, play path): the game's CRT entry itself, called by the process start with
+   // the return word on the stack, after native MSVCRT and MFC42 attach; the whole entry then runs in this stage.
+   if(load(entry_esp)!=external_return()||!heap.handle||!host.all_attached()||host.game_imports.empty())
+    deny("Exact game CRT entry call after native MSVCRT and MFC42 attach required",entry_esp);
+   from_entry=true;low=stack_extension;return;}
   if(kind==Kind::initterm){
    // The game's main _initterm CALL through its import thunk, after native MSVCRT and MFC42 attach.
    if(g.rip.dword!=initterm_thunk||load(entry_esp)!=0x5ac480||load(entry_esp+4)!=0x5e0000||load(entry_esp+8)!=0x5e0244||!heap.handle||!host.all_attached()||host.game_imports.empty())
     deny("Exact game main _initterm CALL after native MSVCRT and MFC42 attach required",entry_esp);
    low=stack_extension;return;}
-  if(!host.msvcrt)deny("Staged MSVCRT image required for the loader model",0);if(!host.provider_pages)host.provider_pages=map_provider_code(runtime,*host.msvcrt);
+  if(kind==Kind::call){
+   // One provider function called in place from a suspended heap Stage (loader order: the MSVCRT FDIV initializer
+   // 0x78004254 from _cinit, return word 0x78004232). It completes at its own RET to that word, ESP above it and the
+   // callee-saved registers unchanged.
+   call_return=load(entry_esp);if(g.rip.dword!=hs::fdiv_writer||call_return!=0x78004232||!heap.handle||!host.msvcrt||host.attached)
+    deny("Exact in-place MSVCRT FDIV initializer call from _cinit before MFC42 attach required",entry_esp);
+   low=hs::lower_page;return;}
+  if(!host.msvcrt)deny("Staged MSVCRT image required for the loader model",0);if(!host.provider_pages){const char*startup=std::getenv("MW34_STARTUP");host.provider_pages=map_provider_code(runtime,*host.msvcrt,startup&&std::string(startup)=="loader");}
   if(!mod||mod->attached)deny("Attach of a mapped, not yet attached provider module required",0);
   if(entry_esp!=hs::attach_esp||g.rip.dword!=mod->entry||load(entry_esp)!=external_return()||load(entry_esp+4)!=mod->base||load(entry_esp+8)!=DLL_PROCESS_ATTACH||!load(entry_esp+12)||!heap.handle||host.imports.empty())
    deny("Exact declared _DllMainCRTStartup(DLL_PROCESS_ATTACH) projection frame on a mapped, bound MFC42 image after native MSVCRT attach required",entry_esp);
   low=hs::lower_page;}
- [[noreturn]]void stop(m4_runtime::FaultReason r,const std::string&w,unsigned a){throw m4_runtime::Fault(r,{state.gpr.rip.dword},{a},w);}
+ // A fatal stop ends the process even if teardown of host resources (COM objects, the Vulkan presenter on a window
+ // whose messages are no longer pumped) then blocks: the report is written by then, so the process exits with code 3
+ // after 15 seconds instead of lingering.
+ static void arm_exit_watchdog(){static std::once_flag once;std::call_once(once,[]{std::thread([]{::Sleep(15000);std::fflush(nullptr);::TerminateProcess(::GetCurrentProcess(),3);}).detach();});}
+ [[noreturn]]void stop(m4_runtime::FaultReason r,const std::string&w,unsigned a){arm_exit_watchdog();throw m4_runtime::Fault(r,{state.gpr.rip.dword},{a},w);}
  [[noreturn]]void deny(const std::string&w,unsigned a=0){stop(m4_runtime::FaultReason::unresolved_translation,w,a);}
  unsigned load(unsigned a){unsigned v{};bool bad{};try{v=runtime.memory().load<unsigned>({a});}catch(...){bad=true;}if(bad)deny("Checked MFC42-stage load fault",a);return v;}
  void store(unsigned a,unsigned v){bool bad{};try{runtime.memory().store<unsigned>({a},v);}catch(...){bad=true;}if(bad)deny("Checked MFC42-stage store fault",a);}
- void guard(void*p)const{if(owner!=this||!active||complete||p!=token_ptr||thread!=std::this_thread::get_id())const_cast<Stage*>(this)->deny("Exact current active MFC42 Stage token required",state.gpr.rip.dword);}
+ void guard(void*p)const{if(owner!=this||!active||complete||p!=token_ptr||thread_dw!=__readgsdword(0x48)/*TEB ClientId.UniqueThread*/)const_cast<Stage*>(this)->deny("Exact current active MFC42 Stage token required",state.gpr.rip.dword);}
  // Memory contract: own stack frame, the mapped MFC42 image (writes only to .data), MSVCRT .data
  // (reads only), real heap/local blocks, and the TEB exception-list word for SEH frame links.
  // Pages the native MSVCRT attach/command-line carry published for the process: provider strings,
@@ -278,16 +360,37 @@ struct Stage {
  bool readable(unsigned a,unsigned n)const{if(fast_access(a,n)||(kind==Kind::initterm&&a>=0x400000&&std::uint64_t(a)+n<=game_end))return true;const auto e=std::uint64_t(a)+n;return frame(a,n,false)||in_thread_stack(a,n)||in_module(a,n,false)||(a>=msvcrt_base+0x1000&&e<=msvcrt_data_end)||(kind==Kind::initterm&&a>=0x400000&&e<=game_end)||heap.block(a,n)||host.local(a,n)||host.in_global(a,n)||host.in_com(a,n)||host.gheap.contains(a,n)||provider_published(a,n)||in_surfaces(a,n)||in_dib(a,n)||in_sound(a,n)||(a==runtime.fs_base().value&&n==4)||(a==runtime.fs_base().value+0x18&&n==4);}
  bool writable(unsigned a,unsigned n)const{if((host.gheap.contains(a,n)||(fast_access(a,n)&&!frame(a,n,false)))||frame(a,n,true))return true;
   {const auto e=std::uint64_t(a)+n;if((kind==Kind::initterm&&a>=game_data&&e<=game_data_end)||(a>=msvcrt_data&&e<=msvcrt_data_end))return true;}const auto e=std::uint64_t(a)+n;return frame(a,n,true)||in_thread_stack(a,n)||host.gheap.contains(a,n)||in_module(a,n,true)||in_surfaces(a,n)||in_dib(a,n)||in_sound(a,n)||(a>=msvcrt_data&&e<=msvcrt_data_end)||(kind==Kind::initterm&&a>=game_data&&e<=game_data_end)||heap.block(a,n)||host.local(a,n)||host.in_global(a,n)||(a==runtime.fs_base().value&&n==4);}
- template<class T>T read(unsigned a,void*p){guard(p);if(!readable(a,sizeof(T)))deny("MFC42-stage read outside its memory contract",a);if(const auto*fp=guest_fast_pointer(&runtime.memory(),a,sizeof(T),Permissions::read)){T v;std::memcpy(&v,fp,sizeof(T));++reads;return v;}
+ // Inline subsets of readable()/writable() (each disjunct appears in the full predicate) for the classes that carry
+ // nearly all mission accesses: the stage's own stack frame, the game image (.data for writes) and the guest heap.
+ bool read_fast(unsigned a,unsigned n)const{const auto e=std::uint64_t(a)+n;return frame(a,n,false)||(kind==Kind::initterm&&a>=0x400000&&e<=game_end)||host.gheap.contains(a,n);}
+ bool write_fast(unsigned a,unsigned n)const{const auto e=std::uint64_t(a)+n;return frame(a,n,true)||(kind==Kind::initterm&&a>=game_data&&e<=game_data_end)||host.gheap.contains(a,n);}
+ template<class T>T read(unsigned a,void*p){guard(p);if(!read_fast(a,sizeof(T))&&!readable(a,sizeof(T)))deny("MFC42-stage read outside its memory contract",a);if(const auto*fp=guest_fast_pointer(&runtime.memory(),a,sizeof(T),Permissions::read)){T v;std::memcpy(&v,fp,sizeof(T));++reads;return v;}
   T v{};bool bad{};try{if(((a&4095U)+sizeof(T))>4096U){unsigned char b[sizeof(T)];for(unsigned i=0;i<sizeof(T);++i)b[i]=runtime.memory().load<unsigned char>({a+i});std::memcpy(&v,b,sizeof(T));}else v=runtime.memory().load<T>({a});}catch(...){bad=true;}if(bad)deny("Checked MFC42-stage read",a);++reads;return v;}
- template<class T>void write(unsigned a,T v,void*p){guard(p);if(!writable(a,sizeof(T)))deny("MFC42-stage write outside its memory contract",a);if(auto*fp=guest_fast_pointer(&runtime.memory(),a,sizeof(T),Permissions::write)){std::memcpy(fp,&v,sizeof(T));++writes;return;}
+ template<class T>void write(unsigned a,T v,void*p){guard(p);if(!write_fast(a,sizeof(T))&&!writable(a,sizeof(T)))deny("MFC42-stage write outside its memory contract",a);if(auto*fp=guest_fast_pointer(&runtime.memory(),a,sizeof(T),Permissions::write)){std::memcpy(fp,&v,sizeof(T));++writes;return;}
   std::string why;try{if(((a&4095U)+sizeof(T))>4096U){unsigned char b[sizeof(T)];std::memcpy(b,&v,sizeof(T));for(unsigned i=0;i<sizeof(T);++i)runtime.memory().store<unsigned char>({a+i},b[i]);}else runtime.memory().store<T>({a},v);}catch(const std::exception&x){why=x.what();if(why.empty())why="?";}catch(...){why="non-standard exception";}if(!why.empty())deny("Checked MFC42-stage write ("+why+", esp "+std::to_string(state.gpr.rsp.dword)+")",a);++writes;}
  unsigned root_index{},root_addr{};bool initterm_returned{};
- void*enter(State*s,unsigned target,void*p,Body body){if(depth>=returns.size())deny("MFC42-stage call depth bound",target);
+ // HUD command capture (MW34_HUD_LOG=<file>): the game's software HUD primitives (docs/hud-vulkan-integration-handoff.md)
+ // are recorded with their arguments at entry; the original bodies still run (dual mode, output unchanged).
+ struct HudCmd{unsigned fn,ecx,edx,a0,a1,a2,a3;};std::vector<HudCmd>hud_frame;
+ FILE*hud_log=[]{const char*q=std::getenv("MW34_HUD_LOG");FILE*f=q&&*q?std::fopen(q,"w"):nullptr;if(f)std::setvbuf(f,nullptr,_IOFBF,1<<20);return f;}();
+ unsigned hud_detail_frame=[]{const char*q=std::getenv("MW34_HUD_DETAIL");return q&&*q?unsigned(std::stoul(q)):0U;}();
+ void hud_capture(unsigned target){if(target!=0x55b3c0&&target!=0x563b80&&target!=0x5630c0&&target!=0x564080)return;const auto&g=state.gpr;const unsigned sp=g.rsp.dword;
+  hud_frame.push_back({target,g.rcx.dword,g.rdx.dword,load(sp+4),load(sp+8),load(sp+12),load(sp+16)});}
+ void hud_present(){if(!hud_log)return;unsigned n[4]{};for(const auto&c:hud_frame)++n[c.fn==0x55b3c0?0:c.fn==0x563b80?1:c.fn==0x5630c0?2:3];
+  std::fprintf(hud_log,"%u blit %u line %u circle %u span %u\n",host.frames,n[0],n[1],n[2],n[3]);
+  if(hud_detail_frame==host.frames)for(const auto&c:hud_frame){std::fprintf(hud_log,"  %06x ecx %08x edx %08x a %08x %08x %08x %08x",c.fn,c.ecx,c.edx,c.a0,c.a1,c.a2,c.a3);
+   if(c.fn==0x55b3c0&&readable(c.ecx,0x34)){const unsigned w=load(c.ecx+4)&0xffff,h=load(c.ecx+6)&0xffff;std::fprintf(hud_log," image %ux%u flags %02x pixels %08x surf %08x",w,h,load(c.ecx+8)>>8&0xff,load(c.ecx+0x10),load(c.ecx+0x30));
+    if(c.a2&&readable(c.a2,16))std::fprintf(hud_log," src %d,%d-%d,%d",int(load(c.a2)),int(load(c.a2+4)),int(load(c.a2+8)),int(load(c.a2+12)));}
+   std::fprintf(hud_log,"\n");}
+  hud_frame.clear();}
+ void*enter(State*s,unsigned target,void*p,Body body){if(depth>=returns.size())deny("MFC42-stage call depth bound",target);if(hud_log)hud_capture(target);{void*r{};if(hud_intercept(target,p,r))return r;}
   if(kind==Kind::initterm&&depth==0)for(unsigned i=0;i<145;++i)if(load(0x5e0000+4*i)==target&&load(state.gpr.rsp.dword)>=msvcrt_base){root_index=i;root_addr=target;break;}{const unsigned sp=state.gpr.rsp.dword,w=load(sp);
    /* A direct tail JMP to a function entry is lifted as a tail call through the CALL router: it enters with
       ESP at the slot of the active return word (a real CALL always enters strictly deeper) and binds nothing new. */
-   if(!(depth&&sp==returns_sp[depth-1]&&w==returns[depth-1])){returns_sp[depth]=sp;returns[depth++]=w;}}max_depth=std::max(max_depth,depth);++bodies;return body(s,target,p);}
+   if(!(depth&&sp==returns_sp[depth-1]&&w==returns[depth-1])){returns_sp[depth]=sp;returns[depth++]=w;}else{max_depth=std::max(max_depth,depth);++bodies;return body(s,target,p);}}
+   max_depth=std::max(max_depth,depth);++bodies;const unsigned mine=depth-1;
+   if(seh_test&&(in_wndproc||seh_test_any)&&target>=0x401000&&target<0x5bb000&&!--seh_test)try{seh_test_throw(target);}catch(const GuestReturn&r){if(r.frame!=mine)throw;depth=mine;return p;}
+   try{return body(s,target,p);}catch(const GuestReturn&r){if(r.frame!=mine)throw;depth=mine;return p;}}
  void*called(State*s,unsigned target,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=target)deny("Exact MFC42-stage CALL State",target);const Body b=find(target);if(!b)deny("Direct CALL target outside the lifted MFC42 closure",target);return enter(s,target,p,b);}
  void*function_call(State*s,unsigned target,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=target)deny("Exact MFC42-stage indirect CALL State",target);
   if(const Body b=find(target))return enter(s,target,p,b);
@@ -296,10 +399,13 @@ struct Stage {
   if(const auto*i=host.by_bound(target))deny("Bound import has no lifted provider body yet: "+i->dll+"!"+i->name,target);
   deny("Indirect CALL target outside the lifted closure, bound imports and service tokens",target);}
  void*returned(State*s,unsigned target,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=target)deny("Exact MFC42-stage RET State",target);
-  if(depth){if(target!=returns[depth-1]){std::string w;for(unsigned i=depth>6?depth-6:0;i<depth;++i){char h[12];std::snprintf(h,sizeof h," %x",returns[i]);w+=h;}deny("MFC42-stage RET to a non-source return address (bound return words:"+w+"; thread "+std::to_string(host.thread_tid)+")",target);}--depth;return p;}
+  if(depth){if(target!=returns[depth-1]){
+     for(unsigned j=depth-1;j-->0;)if(returns[j]==target){const unsigned sp=state.gpr.rsp.dword,at=returns_sp[j]+4;if(sp>=at&&sp<=at+256&&!((sp-at)&3)){++host.nonlocal_returns;if(const char*q=std::getenv("MW34_SEH_LOG");q&&*q)std::fprintf(stderr,"nonlocal return to 0x%08x: frame %u of %u (raises %llu unwinds %llu)\n",target,j,depth,(unsigned long long)host.raises,(unsigned long long)host.unwinds);throw GuestReturn(j);}break;}
+     std::string w;for(unsigned i=depth>6?depth-6:0;i<depth;++i){char h[12];std::snprintf(h,sizeof h," %x",returns[i]);w+=h;}deny("MFC42-stage RET to a non-source return address (bound return words:"+w+"; thread "+std::to_string(host.thread_tid)+")",target);}--depth;return p;}
   const auto&g=state.gpr;
   if(kind==Kind::initterm&&target==entry_continuation&&g.rsp.dword==entry_esp+4&&g.rbx.dword==saved[0]&&g.rsi.dword==saved[1]&&g.rdi.dword==saved[2]&&g.rbp.dword==saved[3]&&!initterm_returned){initterm_returned=true;return p;}
   if(kind==Kind::initterm&&initterm_returned&&target==external_return()){complete=true;return p;}  // the entry itself returned to its caller
+  if(kind==Kind::call&&target==call_return&&g.rsp.dword==entry_esp+4&&g.rbx.dword==saved[0]&&g.rsi.dword==saved[1]&&g.rdi.dword==saved[2]&&g.rbp.dword==saved[3]){complete=true;return p;}
   if(kind==Kind::attach&&target==external_return()&&g.rsp.dword==entry_esp+16&&g.rax.dword==1&&g.rbx.dword==saved[0]&&g.rsi.dword==saved[1]&&g.rdi.dword==saved[2]&&g.rbp.dword==saved[3]){complete=true;return p;}
   deny("MFC42-stage outermost RET outside the DllMain contract (TRUE, RET 0Ch, callee-saved registers)",target);}
  void*missing(State*s,unsigned target,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=target)deny("Exact MFC42-stage continuation State",target);const Body b=find(target);if(!b)deny("Continuation outside the lifted MFC42 closure",target);++bodies;return b(s,target,p);}
@@ -317,6 +423,10 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
  bool in_atomic{};unsigned atomics{};
  void*atomic(void*p,bool begin){guard(p);if(in_atomic==begin)deny("Unbalanced LOCK atomic markers");in_atomic=begin;if(begin)++atomics;return p;}
  unsigned char undefined(){if(owner!=this||!active)deny("MFC42-stage undefined flag outside Stage");++undefined_count;return 0;}
+ // RDTSC for guest code. Under the virtual clock it is a virtual 3 GHz counter (virtual microseconds x 3000), so the
+ // game's start-up CPU-speed measurement (0x5988c0: RDTSC timed against QueryPerformanceCounter) always yields the
+ // same value; with the real counter it varied between runs and changed later frames. Interactive play: real RDTSC.
+ unsigned long long guest_tsc()const{return host.vclock()?host.vclock_us*3000ULL:__rdtsc();}
  // Real host services for MFC42's non-MSVCRT imports, implemented as reached.
  struct LastError{Host&h;DWORD saved=GetLastError();explicit LastError(Host&x):h(x){SetLastError(0);}~LastError(){h.last_error=GetLastError();SetLastError(saved);}};
  // Loader model for module names: the guest modules by base; system DLLs by a per-module guest token
@@ -357,10 +467,20 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   const Body b=find(target);if(!b)deny("Nested guest call target has no lifted body: "+what,target);auto&g=state.gpr;const unsigned esp0=g.rsp.dword,eip0=g.rip.dword;
   const std::array<unsigned,4>keep{g.rbx.dword,g.rsi.dword,g.rdi.dword,g.rbp.dword};const unsigned sentinel=0x36000000U+16U*(++host.nested_calls),n=unsigned(args.size()),esp=(below?below:esp0)-4*(n+1);
   if(!writable(esp,4*(n+1)))deny("Nested call frame outside the stack contract: "+what,esp);store(esp,sentinel);unsigned k=0;for(unsigned v:args)store(esp+4+4*k++,v);
-  g.rsp.dword=esp;g.rip.dword=target;const unsigned d0=depth;if(depth>=returns.size())deny("Nested call depth bound",target);returns_sp[depth]=esp;returns[depth++]=sentinel;++bodies;(void)b(&state,target,token_ptr);
+  g.rsp.dword=esp;g.rip.dword=target;const unsigned d0=depth;if(depth>=returns.size())deny("Nested call depth bound",target);returns_sp[depth]=esp;returns[depth++]=sentinel;++bodies;try{(void)b(&state,target,token_ptr);}catch(const GuestReturn&r){if(r.frame!=d0)throw;depth=d0;}
   if(depth!=d0||g.rsp.dword!=esp+4+(stdcall?4*n:0)||g.rip.dword!=sentinel||g.rbx.dword!=keep[0]||g.rsi.dword!=keep[1]||g.rdi.dword!=keep[2]||g.rbp.dword!=keep[3])deny("Nested call did not return through its contract: "+what,g.rip.dword);
   const unsigned r=g.rax.dword;g.rsp.dword=esp0;g.rip.dword=eip0;return r;}
- std::string callback_fault;bool host_internal{};
+  std::string callback_fault;bool host_internal{};unsigned in_wndproc{};
+  // MW34_SEH_TEST=<n> (diagnostic; changes game behaviour for one message): the n-th call into game code made inside a
+  // window procedure instead does what MFC42 AfxThrowUserException (0x5F463574) does: _CxxThrowException(&p,
+  // ThrowInfo 0x5F4B3310) with p = MFC's static CUserException (0x5F4CE380). AfxCallWndProc's CATCH_ALL takes it
+  // (CWinApp::ProcessWndProcException reports nothing for CUserException), exercising guest SEH dispatch, RtlUnwind,
+  // the catch funclet and the nonlocal continuation.
+  const bool seh_test_any=[]{const char*e=std::getenv("MW34_SEH_TEST_ANY");return e&&*e=='1';}();  // MW34_SEH_TEST_ANY=1: count every game call (unhandled path)
+  unsigned seh_test=[]{const char*e=std::getenv("MW34_SEH_TEST");return e&&*e?unsigned(std::stoul(e)):0U;}();
+  void seh_test_throw(unsigned target){const unsigned at=(state.gpr.rsp.dword-16)&~3U;store(at,0x5f4ce380U);seh_test=0;
+   std::fprintf(stderr,"SEH test: game call 0x%08x inside window procedure throws CUserException (raises %llu unwinds %llu nonlocal %llu)\n",target,(unsigned long long)host.raises,(unsigned long long)host.unwinds,(unsigned long long)host.nonlocal_returns);
+   (void)call_guest(0x7800ac1aU,{at,0x5f4b3310U},false,"SEH test _CxxThrowException",at);deny("SEH test: _CxxThrowException returned",target);}
  struct HostInternal{Stage&s;bool was;explicit HostInternal(Stage&x):s(x),was(x.host_internal){s.host_internal=true;}~HostInternal(){s.host_internal=was;}};
  static HRESULT enum_mode(Stage*st,unsigned cb,unsigned ctx,unsigned size,unsigned&calls,const DDSURFACEDESC2&d){if(!st->callback_fault.empty())return DDENUMRET_CANCEL;
   try{unsigned at=((st->state.gpr.rsp.dword-0x200)&~15U)-size;st->put_desc(at,d,size);++calls;return HRESULT(st->call_guest(cb,{at,ctx},true,"EnumDisplayModes callback",at&~15U));}catch(const std::exception&e){st->callback_fault=e.what();return DDENUMRET_CANCEL;}}
@@ -380,13 +500,16 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   for(unsigned i=0;i<k;++i)runtime.memory().store<unsigned char>({at+i},static_cast<unsigned char>(t[i]));return at;}
  unsigned hook_call(int id,unsigned proc,int code,WPARAM w,LPARAM l){auto&g=state.gpr;unsigned at=(g.rsp.dword-0x100)&~15U;unsigned gw=unsigned(w),gl=0;
   auto gh=[&](const void*h){const auto v=reinterpret_cast<std::intptr_t>(h);if(v!=std::intptr_t(std::int32_t(v)))deny("Hook handle not representable as a guest word",0);return unsigned(v);};
-  if(id==WH_MSGFILTER){const MSG&m=*reinterpret_cast<const MSG*>(l);at-=28;const std::array<unsigned,7>v{gh(m.hwnd),m.message,unsigned(m.wParam),unsigned(m.lParam),m.time,unsigned(m.pt.x),unsigned(m.pt.y)};for(unsigned i=0;i<7;++i)store(at+4*i,v[i]);gl=at;}
+  if(id==WH_MSGFILTER){const MSG&m=*reinterpret_cast<const MSG*>(l);at-=28;const std::array<unsigned,7>v{gh(m.hwnd),m.message,unsigned(m.wParam),unsigned(m.lParam),host.guest_tick_of(m.time),unsigned(m.pt.x),unsigned(m.pt.y)};for(unsigned i=0;i<7;++i)store(at+4*i,v[i]);gl=at;}
   else if(id==WH_CBT){
    if(code==HCBT_CREATEWND){const auto&c=*reinterpret_cast<const CBT_CREATEWNDA*>(l);const auto&cs=*c.lpcs;const unsigned name=scratch_string(at,cs.lpszName),cls=scratch_string(at,cs.lpszClass);
     at-=48;const std::array<unsigned,12>v{unsigned(reinterpret_cast<std::uintptr_t>(cs.lpCreateParams)),guest_instance(cs.hInstance),gh(cs.hMenu),gh(cs.hwndParent),unsigned(cs.cy),unsigned(cs.cx),unsigned(cs.y),unsigned(cs.x),unsigned(cs.style),name,cls,cs.dwExStyle};
     for(unsigned i=0;i<12;++i)store(at+4*i,v[i]);const unsigned gcs=at;at-=8;store(at,gcs);store(at+4,gh(c.hwndInsertAfter));gl=at;gw=gh(reinterpret_cast<HWND>(w));}
    else if(code==HCBT_DESTROYWND||code==HCBT_MINMAX||code==HCBT_QS||code==HCBT_SYSCOMMAND||code==HCBT_KEYSKIPPED){gw=code==HCBT_DESTROYWND||code==HCBT_MINMAX?gh(reinterpret_cast<HWND>(w)):unsigned(w);gl=unsigned(l);}
    else if(code==HCBT_SETFOCUS){gw=gh(reinterpret_cast<HWND>(w));gl=gh(reinterpret_cast<HWND>(l));}
+   else if(code==HCBT_CLICKSKIPPED){const auto&mh=*reinterpret_cast<const MOUSEHOOKSTRUCT*>(l);const auto ex=static_cast<std::uint64_t>(mh.dwExtraInfo);if(ex>0xffffffffULL)deny("HCBT_CLICKSKIPPED extra info not representable as a guest word",0);  // x86 MOUSEHOOKSTRUCT, 20 bytes
+    at-=20;const std::array<unsigned,5>v{unsigned(mh.pt.x),unsigned(mh.pt.y),gh(mh.hwnd),unsigned(mh.wHitTestCode),unsigned(ex)};for(unsigned i=0;i<5;++i)store(at+4*i,v[i]);gl=at;gw=unsigned(w);}
+   else if(code==HCBT_MOVESIZE){const auto&r=*reinterpret_cast<const RECT*>(l);at-=16;store(at,unsigned(r.left));store(at+4,unsigned(r.top));store(at+8,unsigned(r.right));store(at+12,unsigned(r.bottom));gl=at;gw=gh(reinterpret_cast<HWND>(w));}
    else if(code==HCBT_ACTIVATE){const auto&a=*reinterpret_cast<const CBTACTIVATESTRUCT*>(l);at-=8;store(at,unsigned(a.fMouse));store(at+4,gh(a.hWndActive));gl=at;gw=gh(reinterpret_cast<HWND>(w));}
    else deny("WH_CBT code not modelled: "+std::to_string(code),unsigned(code));}
   hook_frames.push_back({w,l,gl});struct Pop{std::vector<HookFrame>&f;~Pop(){f.pop_back();}}pop{hook_frames};
@@ -394,6 +517,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
 #include "win_bridge.inc"
 #include "vdd.inc"
 #include "d3d_provider.inc"
+#include "gpu_hud.inc"
  // Guest view of a host HINSTANCE: the worker module stands for the game image (classes it registers).
  // System windows created on the guest thread (IME etc.) carry host module instances the guest never
  // loaded: those become opaque instance tokens that map back to the real HINSTANCE.
@@ -488,16 +612,23 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   T.exit_code=code;T.exited=true;{bool bad{};try{runtime.memory().unmap({T.stack_lo});}catch(...){bad=true;}if(bad)deny("Checked guest thread stack release",T.stack_lo);}if(!::SetEvent(reinterpret_cast<HANDLE>(std::intptr_t(std::int32_t(T.handle)))))deny("Thread object signal",T.handle);
   std::memcpy(&state,&saved,sizeof(State));store(teb,seh);host.thread_tid=tid0;host.last_error=err0;for(const auto&[k,v]:tlsv)::TlsSetValue(k,v);__asm__ volatile("fldcw %0\n\tldmxcsr %1"::"m"(cw0),"m"(mx0));return code;}
  // Registry overlay persistence: "K path" and "V path<TAB>name<TAB>type<TAB>hex" lines in the game folder.
- Host::RegOverlay&reg_overlay(){auto&o=host.reg;if(o.loaded)return o;o.loaded=true;o.file=(std::filesystem::path(host.paths.at(0x400000)).parent_path()/"mw34-registry.txt").string();std::ifstream f(o.file);std::string line;
+ Host::RegOverlay&reg_overlay(){auto&o=host.reg;if(o.loaded)return o;o.loaded=true;o.file=(std::filesystem::path(host.paths.at(0x400000)).parent_path()/"mw34-registry.txt").string();if(const char*e=std::getenv("MW34_REG_OVERLAY");e&&*e)o.file=e;  /* MW34_REG_OVERLAY=<file>: a test overlay instead of the game folder's (scripted replays use a frozen copy) */
+ std::ifstream f(o.file);std::string line;
   while(std::getline(f,line)){if(line.size()>2&&line[0]=='K'&&line[1]==' ')o.keys[line.substr(2)];else if(line.size()>2&&line[0]=='V'&&line[1]==' '){std::istringstream l(line.substr(2));std::string p,nm,ty,hx;
    if(!std::getline(l,p,'\t')||!std::getline(l,nm,'\t')||!std::getline(l,ty,'\t'))deny("Registry overlay line malformed",0);std::getline(l,hx);std::vector<BYTE>b;for(size_t i=0;i+1<hx.size();i+=2)b.push_back(BYTE(std::stoul(hx.substr(i,2),nullptr,16)));
    o.keys[p][nm]={DWORD(std::stoul(ty)),std::move(b)};}}return o;}
  void save_reg_overlay(){auto&o=host.reg;const std::string tmp=o.file+".new";{std::ofstream f(tmp,std::ios::trunc);if(!f)deny("Registry overlay not writable in the game folder",0);
    for(const auto&[p,vals]:o.keys){f<<"K "<<p<<"\n";for(const auto&[nm,v]:vals){f<<"V "<<p<<'\t'<<nm<<'\t'<<v.first<<'\t';char h[3];for(BYTE c:v.second){std::snprintf(h,sizeof h,"%02x",c);f<<h;}f<<"\n";}}
-   if(!f)deny("Registry overlay write failed",0);}if(!::MoveFileExA(tmp.c_str(),o.file.c_str(),MOVEFILE_REPLACE_EXISTING))deny("Registry overlay replace failed",0);}
+   if(!f)deny("Registry overlay write failed",0);}
+   // A scanner or indexer can hold the freshly written file briefly: retry transient sharing/lock/access errors
+   // for up to about two seconds before failing visibly with the Windows error code.
+   DWORD err=0;for(int attempt=0;attempt<40;++attempt){if(::MoveFileExA(tmp.c_str(),o.file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))return;
+    err=::GetLastError();if(err!=ERROR_SHARING_VIOLATION&&err!=ERROR_LOCK_VIOLATION&&err!=ERROR_ACCESS_DENIED)break;::Sleep(50);}
+   deny("Registry overlay replace failed (Windows error "+std::to_string(err)+")",err);}
  // Script events are due by presented frame, or ("+MS" lines) by host milliseconds since the first rendered
  // 3D scene, the mission's wall-clock timeline independent of the host frame rate.
- bool script_due(const Host::ScriptEvent&e)const{if(!e.timed)return e.frame<=host.frames;return host.scene_t0&&::GetTickCount64()-host.scene_t0>=e.frame;}
+ bool script_due(const Host::ScriptEvent&e)const{if(!e.timed)return e.frame<=host.frames;return host.scene_t0&&host_ms()-host.scene_t0>=e.frame;}
+ std::uint64_t host_ms()const{return host.vclock()?host.vclock_us/1000: ::GetTickCount64();}
  std::string guest_string(unsigned a,unsigned limit=4096){std::string s;for(unsigned i=0;i<limit;++i){if(!readable(a+i,1))deny("Service string outside the memory contract",a);const auto c=runtime.memory().load<unsigned char>({a+i});if(!c)return s;s.push_back(char(c));}deny("Service string unterminated",a);}
  unsigned pages(const void*contents,unsigned bytes){const unsigned n=(std::max(bytes,1U)+4095U)&~4095U;unsigned guest=0;
   for(auto it=host.pages_free.begin();it!=host.pages_free.end();++it)if(it->second>=n){guest=it->first;const unsigned rest=it->second-n;host.pages_free.erase(it);if(rest)host.pages_free[guest+n]=rest;break;}
@@ -510,11 +641,16 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   auto nx=fr.lower_bound(at);if(nx!=fr.end()&&at+size==nx->first){size+=nx->second;nx=fr.erase(nx);}if(nx!=fr.begin()){auto pv=std::prev(nx);if(pv->first+pv->second==at){pv->second+=size;return;}}fr[at]=size;}
  void*api(State*s,unsigned token,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=token)deny("Exact MFC42-stage import State",token);
   const Import*imp=host.by_bound(token);const Import*gi=imp?nullptr:game_import(token);bool crt=false;if(gi)imp=gi;if(!imp){crt=true;imp=host.by_raw(token);}if(!imp)deny("Unbound service token",token);
-  auto&g=state.gpr;const unsigned e=g.rsp.dword,ret=load(e);const std::string&n=imp->name;if(apis.size()>=400000){apis.erase(apis.begin(),apis.begin()+200000);apis_dropped+=200000;}apis.push_back((crt?"MSVCRT>":gi?"GAME>":"")+imp->dll+"!"+n);
-  if(gi?!(ret>=0x401000&&ret<0x5bb000):crt?!(ret>=msvcrt_base+0x1000&&ret<msvcrt_text_end):(!find(ret)&&!in_module(ret,1,false)&&!(kind==Kind::initterm&&ret>=0x401000&&ret<0x5bb000)))deny("Service return word outside the importing module's code",ret);
+  auto&g=state.gpr;const unsigned e=g.rsp.dword,ret=load(e);const std::string&n=imp->name;if(apis.size()>=400000){apis.erase(apis.begin(),apis.begin()+200000);apis_dropped+=200000;}{auto&lb=imp->label[crt?1:gi?2:0];if(lb.empty())lb=(crt?"MSVCRT>":gi?"GAME>":"")+imp->dll+"!"+n;apis.push_back(lb);}
+  if(gi?!(ret>=0x401000&&ret<0x5bb000):crt?!(ret>=msvcrt_base+0x1000&&ret<msvcrt_text_end):(!find(ret)&&!in_module(ret,1,false)&&!(kind==Kind::initterm&&ret>=0x401000&&ret<0x5bb000)&&!(ret>=msvcrt_base+0x1000&&ret<msvcrt_text_end)))deny("Service return word outside the importing module's code",ret);  // MSVCRT code also calls GetProcAddress tokens (FDIV initializer)
   auto arg=[&](unsigned i){return load(e+4+4*i);};
   const bool gdi_sync=!host.dibs.empty()&&(same(imp->dll,"GDI32.dll")||n=="FillRect"||n=="DrawTextA"||n=="ReleaseDC"||n=="GetDC");if(gdi_sync)dibs_to_host();
-  auto done=[&](unsigned eax,unsigned args){if(!callback_fault.empty())deny("Guest callback fault: "+callback_fault,0);if(gdi_sync)dibs_to_guest();g.rax.dword=eax;g.rsp.dword=e+4+4*args;g.rip.dword=ret;++api_calls;return p;};
+  auto done=[&](unsigned eax,unsigned args){if(!callback_fault.empty())deny("Guest callback fault: "+callback_fault,0);{static FILE*const tr=[]{const char*q=std::getenv("MW34_TRACE_SERVICES");FILE*f=q&&*q?std::fopen(q,"w"):nullptr;if(f)std::setvbuf(f,nullptr,_IOFBF,1<<26);return f;}();static const std::string only=[]{const char*q=std::getenv("MW34_TRACE_ONLY");return q?std::string(",")+q+",":std::string();}();if(tr&&host.frames<=12&&(only.empty()||only.find(","+n+",")!=std::string::npos)){std::fprintf(tr,"%llu %s eax=%08x ret=%08x a0=%08x a1=%08x a2=%08x esp=%08x msg=%04x\n",(unsigned long long)host.frames,n.c_str(),eax,ret,args?load(e+4):0U,args>1?load(e+8):0U,args>2?load(e+12):0U,e,((n=="PeekMessageA"||n=="GetMessageA")&&eax&&eax!=0xffffffffU)?load(load(e+4)+4):0U);}else if(tr&&host.frames==13){std::fflush(tr);}}/* MW34_TRACE_SERVICES=<file> [MW34_TRACE_ONLY=name,...]: services of frames 0-12 with results, for finding replay divergence */if(gdi_sync)dibs_to_guest();g.rax.dword=eax;g.rsp.dword=e+4+4*args;g.rip.dword=ret;++api_calls;return p;};
+  // COM method imports (the module is a modelled interface) go straight to the COM dispatch: every service test
+  // between here and there is keyed on a Win32/CRT name or prefix that no modelled interface method has (the
+  // only shared names, GetDC/ReleaseDC, are used above in gdi_sync only), so the result is the same.
+  if(!imp->iface_resolved){imp->iface_cache=com::by_name(imp->dll);imp->iface_resolved=true;}
+  if(imp->iface_cache)goto com_dispatch;
   if(n=="LoadLibraryA"){const std::string m=guest_string(arg(0));unsigned h=module(m.substr(m.find_last_of("\\/")==std::string::npos?0:m.find_last_of("\\/")+1));if(m.find_first_of("\\/:")!=std::string::npos&&h){bool path_ok=false;for(const auto&[b,path]:host.paths)if(b==h&&same(m,path))path_ok=true;if(!path_ok)h=0;}
    for(const auto&[b,path]:host.paths)if(same(m,path))h=b;
    if(!h){const std::string leaf=m.substr(m.find_last_of("\\/")==std::string::npos?0:m.find_last_of("\\/")+1);
@@ -696,7 +832,8 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   // launched by a DirectPlay lobby, so GetConnectionSettings reports DPERR_NOTLOBBIED, as DirectPlay does.
   if(imp->dll=="DPLAYX.dll"&&n=="#4"){const unsigned guid=arg(0),out=arg(1),outer=arg(2);if(guid||outer||arg(3)||arg(4))deny("DirectPlayLobbyCreateA with a GUID, aggregation or data is not modelled",guid|outer);
    if(!writable(out,4))deny("DirectPlayLobbyCreateA output outside the memory contract",out);const unsigned g2=com_wrap(nullptr,*com::by_name("IDirectPlayLobbyA"));host.com_object(g2)->refs=1;store(out,g2);return done(0,5);}
-  if(const auto*ci=com::by_name(imp->dll);ci&&com::is_lobby(ci)){auto*o=host.com_object(arg(0));if(!o||o->iface!=ci)deny("COM call on a guest object that is not a live "+imp->dll,arg(0));const unsigned root=root_of(*o);
+  com_dispatch:
+  if(const auto*ci=static_cast<const com::Iface*>(imp->iface_cache);ci&&com::is_lobby(ci)){auto*o=host.com_object(arg(0));if(!o||o->iface!=ci)deny("COM call on a guest object that is not a live "+imp->dll,arg(0));const unsigned root=root_of(*o);
    auto refs=[&]()->unsigned&{return host.com_object(root)?host.com_object(root)->refs:o->refs;};
    if(n=="AddRef")return done(++refs(),1);
    if(n=="Release"){const unsigned c=--refs();if(!c)for(auto&x:host.com_objects)if(x.alive&&root_of(x)==root)x.alive=false;return done(c,1);}
@@ -704,7 +841,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
     if(!wi||!com::is_lobby(wi))deny("DirectPlay lobby QueryInterface for an interface outside the model",arg(1));++refs();store(out,com_wrap(nullptr,*wi,root));return done(0,3);}
    if(n=="GetConnectionSettings"){apis.back()+="=DPERR_NOTLOBBIED";return done(com::dperr_notlobbied,4);}
    stop(m4_runtime::FaultReason::unresolved_import,"DirectPlay lobby method not implemented: "+imp->dll+"::"+n,token);}
-  if(const auto*ci=com::by_name(imp->dll)){auto*o=host.com_object(arg(0));if(!o||o->iface!=ci)deny("COM call on a guest object that is not a live "+imp->dll,arg(0));
+  if(const auto*ci=static_cast<const com::Iface*>(imp->iface_cache)){auto*o=host.com_object(arg(0));if(!o||o->iface!=ci)deny("COM call on a guest object that is not a live "+imp->dll,arg(0));
    const std::function<unsigned(unsigned)>argf=arg;const std::function<void*(unsigned,unsigned)>donef=done;
    if(!o->native&&imp->dll.find("Surface")!=std::string::npos)return vdd_surface(*imp,token,argf,donef);
    if(!o->native&&(imp->dll=="IDirectDrawClipper"||imp->dll=="IDirectDrawPalette"))return vdd_aux(*imp,token,argf,donef);
@@ -755,11 +892,11 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
     if(n=="GetDeviceState"){const unsigned z=arg(1),a=arg(2);if(z>4096||!writable(a,z))deny("GetDeviceState buffer outside the memory contract",a);std::vector<unsigned char>b(z);const HRESULT hr=dv->GetDeviceState(z,b.data());if(SUCCEEDED(hr))for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},b[i]);return done(unsigned(hr),3);}
     if(n=="GetDeviceData"&&host.scripted){const unsigned z=arg(1),a=arg(2),pn=arg(3),fl=arg(4);if(z!=16||!writable(pn,4))deny("GetDeviceData record size or count outside the model",z);const DWORD cnt=load(pn);if(cnt>4096||(a&&!writable(a,16*cnt)))deny("GetDeviceData buffer outside the memory contract",a);
      if(host.di_format[arg(0)]!=256)deny("Scripted GetDeviceData for a device other than the keyboard",arg(0));auto&sc=host.script;DWORD k=0;size_t at=host.script_key_at;
-     while(at<sc.size()&&k<cnt){const auto&e=sc[at];if(e.mouse){++at;continue;}if(!script_due(e))break;if(a){store(a+16*k,e.scan);store(a+16*k+4,e.down?0x80U:0U);store(a+16*k+8,::GetTickCount());store(a+16*k+12,++host.script_seq);}apis.back()+="(scripted key "+std::to_string(e.scan)+(e.down?" down)":" up)");++k;++at;}
+     while(at<sc.size()&&k<cnt){const auto&e=sc[at];if(e.mouse){++at;continue;}if(!script_due(e))break;if(a){store(a+16*k,e.scan);store(a+16*k+4,e.down?0x80U:0U);store(a+16*k+8,host.vclock()?unsigned(host.vclock_query()/1000):host.guest_tick());store(a+16*k+12,++host.script_seq);}apis.back()+="(scripted key "+std::to_string(e.scan)+(e.down?" down)":" up)");++k;++at;}
      if(!(fl&DIGDD_PEEK))host.script_key_at=at;store(pn,k);return done(0,5);}
     if(n=="GetDeviceData"){const unsigned z=arg(1),a=arg(2),pn=arg(3),fl=arg(4);if(z!=16||!writable(pn,4))deny("GetDeviceData record size or count outside the model",z);DWORD cnt=load(pn);if(cnt>4096||(a&&!writable(a,16*cnt)))deny("GetDeviceData buffer outside the memory contract",a);
      std::vector<DIDEVICEOBJECTDATA_DX3>b(std::max<DWORD>(cnt,1));static_assert(sizeof(DIDEVICEOBJECTDATA_DX3)==16);const HRESULT hr=dv->GetDeviceData(16,a?reinterpret_cast<LPDIDEVICEOBJECTDATA>(b.data()):nullptr,&cnt,fl);
-     if(SUCCEEDED(hr)){if(a)for(DWORD k=0;k<cnt;++k)for(unsigned i=0;i<16;++i)runtime.memory().store<unsigned char>({a+16*k+i},reinterpret_cast<const unsigned char*>(&b[k])[i]);store(pn,cnt);}return done(unsigned(hr),5);}
+     if(SUCCEEDED(hr)){if(a)for(DWORD k=0;k<cnt;++k){b[k].dwTimeStamp=host.guest_tick_of(b[k].dwTimeStamp);for(unsigned i=0;i<16;++i)runtime.memory().store<unsigned char>({a+16*k+i},reinterpret_cast<const unsigned char*>(&b[k])[i]);}store(pn,cnt);}return done(unsigned(hr),5);}
     if(n=="SetProperty"||n=="GetProperty"){const unsigned pg=arg(1),ph=arg(2);GUID gp{};const GUID*rp;if(pg<0x10000)rp=reinterpret_cast<const GUID*>(std::uintptr_t(pg));else{gp=guest_guid(pg);rp=&gp;}
      if(!readable(ph,16)||load(ph+4)!=16)deny(n+" DIPROPHEADER outside the contract",ph);const unsigned z=load(ph);if(z<16||z>256||!(n=="SetProperty"?readable(ph,z):writable(ph,z)))deny(n+" property outside the memory contract",ph);
      std::vector<unsigned char>b(z);get_bytes(ph,b.data(),z);const HRESULT hr=n=="SetProperty"?dv->SetProperty(*rp,reinterpret_cast<LPCDIPROPHEADER>(b.data())):dv->GetProperty(*rp,reinterpret_cast<LPDIPROPHEADER>(b.data()));
@@ -789,6 +926,17 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
     if(n=="SetFormat"){auto wf=guest_waveformat(arg(1));const HRESULT hr=b->SetFormat(reinterpret_cast<LPCWAVEFORMATEX>(wf.data()));return done(unsigned(hr),2);}
     if(n=="GetCaps"){const unsigned a=arg(1);if(!writable(a,20)||load(a)!=20)deny("DSBCAPS outside the contract or with a wrong dwSize",a);DSBCAPS c{};c.dwSize=sizeof(c);const HRESULT hr=b->GetCaps(&c);
      if(SUCCEEDED(hr))for(unsigned i=0;i<20;++i)runtime.memory().store<unsigned char>({a+i},reinterpret_cast<const unsigned char*>(&c)[i]);return done(unsigned(hr),2);}
+    auto vs=[&]()->Host::VSound&{auto&v=host.vsound[b];if(!v.size){DSBCAPS c{sizeof c};WAVEFORMATEX f{};if(SUCCEEDED(b->GetCaps(&c)))v.size=c.dwBufferBytes;if(SUCCEEDED(b->GetFormat(&f,sizeof f,nullptr)))v.rate=f.nAvgBytesPerSec;if(!v.size)v.size=1;}return v;};
+    auto vpos=[&](Host::VSound&v)->unsigned{if(!v.playing)return v.pos0;const std::uint64_t moved=(host.vclock_us-v.t0)*v.rate/1000000ULL,p=v.pos0+moved;
+      if(v.looping)return unsigned(p%v.size);if(p>=v.size){v.playing=false;v.pos0=0;return 0;}return unsigned(p);};
+    if(n=="Play"&&host.vclock()){auto&v=vs();v.pos0=vpos(v);v.t0=host.vclock_us;v.playing=true;v.looping=(arg(3)&DSBPLAY_LOOPING)!=0;}
+    if(n=="Stop"&&host.vclock()){auto&v=vs();v.pos0=vpos(v);v.playing=false;}
+    if(n=="SetCurrentPosition"&&host.vclock()){auto&v=vs();v.pos0=arg(1)%v.size;v.t0=host.vclock_us;}
+    if(n=="SetFrequency"&&host.vclock()){auto&v=vs();v.pos0=vpos(v);v.t0=host.vclock_us;WAVEFORMATEX f{};if(SUCCEEDED(b->GetFormat(&f,sizeof f,nullptr)))v.rate=(arg(1)?arg(1):f.nSamplesPerSec)*f.nBlockAlign;}
+    if(n=="GetCurrentPosition"&&host.vclock()){auto&v=vs();const unsigned pl=vpos(v),wp=(pl+v.rate/100)%v.size;  // write cursor 10 ms ahead
+     for(auto[a,x]:{std::pair<unsigned,unsigned>{arg(1),pl},{arg(2),wp}})if(a){if(!writable(a,4))deny("GetCurrentPosition output outside the memory contract",a);store(a,x);}return done(DS_OK,3);}
+    if(n=="GetStatus"&&host.vclock()){if(!writable(arg(1),4))deny("GetStatus output outside the memory contract",arg(1));DWORD st{};const HRESULT hr=b->GetStatus(&st);auto&v=vs();(void)vpos(v);
+     st&=~DWORD(DSBSTATUS_PLAYING|DSBSTATUS_LOOPING);if(v.playing)st|=DSBSTATUS_PLAYING|(v.looping?DSBSTATUS_LOOPING:0);store(arg(1),st);return done(unsigned(hr),2);}
     if(n=="Play")return done(unsigned(b->Play(arg(1),arg(2),arg(3))),4);
     if(n=="Stop")return done(unsigned(b->Stop()),1);
     if(n=="SetVolume")return done(unsigned(b->SetVolume(LONG(arg(1)))),2);
@@ -853,7 +1001,11 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
     // the mode size (integer-scaled to fit the host screen; presentation scales). Scripted runs leave the
     // player's focus alone (no activation); MW34_HIDE_WINDOW=1 keeps the window hidden.
     if(const char*hw=std::getenv("MW34_HIDE_WINDOW");host.display.window&&!(hw&&*hw=='1')){HWND wnd=host.display.window;const int sw=::GetSystemMetrics(SM_CXSCREEN),sh=::GetSystemMetrics(SM_CYSCREEN);
-     const int sc=std::clamp(std::min((sw-80)/int(w),(sh-120)/int(h)),1,2);RECT r{0,0,int(w)*sc,int(h)*sc};::AdjustWindowRectEx(&r,DWORD(::GetWindowLongW(wnd,GWL_STYLE)),FALSE,DWORD(::GetWindowLongW(wnd,GWL_EXSTYLE)));
+     /* MW34_WINDOW=fit: the largest window of the mode's aspect that fits the screen (non-integer scale; the play default);
+        otherwise (integer) the mode size scaled by 1 or 2. Rendering follows the window size (vdd.inc render_scale). */
+     static const bool fit=[]{const char*e=std::getenv("MW34_WINDOW");return e&&std::string(e)=="fit";}();
+     const int sc=std::clamp(std::min((sw-80)/int(w),(sh-120)/int(h)),1,2);const double fs=std::max(1.0,std::min(double(sw-80)/double(w),double(sh-120)/double(h)));
+     RECT r{0,0,fit?int(std::lround(double(w)*fs)):int(w)*sc,fit?int(std::lround(double(h)*fs)):int(h)*sc};::AdjustWindowRectEx(&r,DWORD(::GetWindowLongW(wnd,GWL_STYLE)),FALSE,DWORD(::GetWindowLongW(wnd,GWL_EXSTYLE)));
      {LastError l(host);::SetWindowPos(wnd,nullptr,(sw-(r.right-r.left))/2,(sh-(r.bottom-r.top))/2,r.right-r.left,r.bottom-r.top,SWP_NOZORDER|SWP_SHOWWINDOW|(host.scripted?SWP_NOACTIVATE:0U));}
      apis.back()+="(window shown "+std::to_string(int(w)*sc)+"x"+std::to_string(int(h)*sc)+")";}
     return done(0,4+extra);}
@@ -891,9 +1043,14 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    BOOL ok{};{LastError l(host);ok=::SystemParametersInfoA(act,ui,buf.data(),ini);}if(ok)for(unsigned i=0;i<bytes;++i)runtime.memory().store<unsigned char>({pv+i},buf[i]);return done(ok?1U:0U,4);}
   // VERSION.dll on the real file; VerQueryValueA works on a host copy of the guest block and returns a
   // guest pointer at the same offset inside that block.
-  if(n=="GetFileVersionInfoSizeA"){const std::string f=guest_string(arg(0));DWORD hnd{};DWORD z{};{LastError l(host);z=::GetFileVersionInfoSizeA(f.c_str(),&hnd);}
+  // A relative version-resource file name is found as the real call finds it (a data-file module load): the guest
+  // application directory first, then the guest current directory; not the host process directories.
+  auto version_file=[&](std::string f)->std::string{std::filesystem::path p(f);if(!p.is_relative()||f.empty())return f;
+   const auto exe=host.paths.find(0x400000U);if(exe!=host.paths.end()){const auto c=std::filesystem::path(exe->second).parent_path()/p;if(std::filesystem::exists(c))return c.string();}
+   const auto c=std::filesystem::path(host.cwd)/p;return std::filesystem::exists(c)?c.string():f;};
+  if(n=="GetFileVersionInfoSizeA"){const std::string f=version_file(guest_string(arg(0)));DWORD hnd{};DWORD z{};{LastError l(host);z=::GetFileVersionInfoSizeA(f.c_str(),&hnd);}
    if(arg(1)){if(!writable(arg(1),4))deny("GetFileVersionInfoSizeA handle outside the memory contract",arg(1));store(arg(1),hnd);}apis.back()+="("+f+")="+std::to_string(z);return done(z,2);}
-  if(n=="GetFileVersionInfoA"){const std::string f=guest_string(arg(0));const unsigned len=arg(2),a=arg(3);if(!writable(a,len))deny("GetFileVersionInfoA buffer outside the memory contract",a);
+  if(n=="GetFileVersionInfoA"){const std::string f=version_file(guest_string(arg(0)));const unsigned len=arg(2),a=arg(3);if(!writable(a,len))deny("GetFileVersionInfoA buffer outside the memory contract",a);
    std::vector<unsigned char>buf(len);for(unsigned i=0;i<len;++i)buf[i]=runtime.memory().load<unsigned char>({a+i});BOOL ok{};{LastError l(host);ok=::GetFileVersionInfoA(f.c_str(),arg(1),len,buf.data());}
    if(ok){for(unsigned i=0;i<len;++i)runtime.memory().store<unsigned char>({a+i},buf[i]);host.ver_blocks[a]=len;}return done(ok?1U:0U,4);}
   if(n=="VerQueryValueA"){const unsigned blk=arg(0);const std::string sub=guest_string(arg(1));const unsigned pp=arg(2),pl=arg(3);if(!readable(blk,6))deny("VerQueryValueA block outside the memory contract",blk);
@@ -983,8 +1140,8 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    for(unsigned i=0;i<=t.size();++i)runtime.memory().store<unsigned char>({buf+i},static_cast<unsigned char>(t.c_str()[i]));return done(k,7);}
   // Timing: the real clocks (simulation timing comes from the platform as it did originally).
   if(n=="QueryPerformanceFrequency"||n=="QueryPerformanceCounter"){const unsigned a=arg(0);if(!writable(a,8))deny(n+" output outside the memory contract",a);LARGE_INTEGER v{};BOOL ok{};
-   {LastError l(host);ok=n=="QueryPerformanceFrequency"?::QueryPerformanceFrequency(&v): ::QueryPerformanceCounter(&v);}if(ok){store(a,unsigned(v.QuadPart));store(a+4,unsigned(std::uint64_t(v.QuadPart)>>32));}return done(ok?1U:0U,1);}
-  if(n=="timeGetTime")return done(::timeGetTime(),0);
+   if(host.vclock()){v.QuadPart=n=="QueryPerformanceFrequency"?1000000LL:LONGLONG(host.vclock_query());ok=TRUE;}else{LastError l(host);ok=n=="QueryPerformanceFrequency"?::QueryPerformanceFrequency(&v): ::QueryPerformanceCounter(&v);}if(ok){store(a,unsigned(v.QuadPart));store(a+4,unsigned(std::uint64_t(v.QuadPart)>>32));}return done(ok?1U:0U,1);}
+  if(n=="timeGetTime")return done(host.vclock()?unsigned(host.vclock_query()/1000):host.guest_tick(),0);
   if(n=="timeBeginPeriod"||n=="timeEndPeriod"){MMRESULT r{};{LastError l(host);r=n=="timeBeginPeriod"?::timeBeginPeriod(arg(0)): ::timeEndPeriod(arg(0));}return done(r,1);}
   if(n=="timeGetDevCaps"){const unsigned a=arg(0),z=arg(1);if(z!=8||!writable(a,8))deny("timeGetDevCaps record outside the memory contract",a);TIMECAPS tc{};MMRESULT r{};{LastError l(host);r=::timeGetDevCaps(&tc,sizeof(tc));}if(!r){store(a,tc.wPeriodMin);store(a+4,tc.wPeriodMax);}return done(r,2);}
   if(n=="CreateThread"){const unsigned sa=arg(0),ss=arg(1),start=arg(2),param=arg(3),fl=arg(4),pid=arg(5);if(sa)deny("CreateThread security attributes are not modelled",sa);
@@ -996,7 +1153,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    const unsigned tid=0x10000U+4U*unsigned(host.threads.size()+1);host.threads.push_back({gh,tid,start,param,0,lo,lo+0x100000U,THREAD_PRIORITY_NORMAL,false});if(pid)store(pid,tid);
    char sb[16];std::snprintf(sb,sizeof sb,"%x",start);apis.back()+="(start "+std::string(sb)+", thread "+std::to_string(tid)+", run to completion)";const std::uint64_t at=apis_dropped+apis.size();
    const unsigned code=run_thread(host.threads.size()-1);apis.push_back("guest thread "+std::to_string(tid)+" exited "+std::to_string(code)+" after "+std::to_string(apis_dropped+apis.size()-at)+" services");host.last_error=0;return done(gh,6);}
-  if(n=="Sleep"){{LastError l(host);::Sleep(arg(0));}return done(0,1);}
+  if(n=="Sleep"){if(host.vclock()){if(arg(0)==INFINITE)deny("Sleep(INFINITE) under the virtual clock",0);host.vclock_us+=std::uint64_t(arg(0))*1000;return done(0,1);}{LastError l(host);::Sleep(arg(0));}return done(0,1);}
   auto own_thread=[&](unsigned h)->HANDLE{const HANDLE x=hhandle(h);if(x!=::GetCurrentThread())deny(n+" on a thread other than the guest's own",h);return x;};
   if((n=="GetThreadPriority"||n=="SetThreadPriority")&&guest_thread(arg(0))){auto*t=guest_thread(arg(0));if(n=="GetThreadPriority")return done(unsigned(t->priority),1);t->priority=int(arg(1));apis.back()+="(guest thread "+std::to_string(t->tid)+": "+std::to_string(int(arg(1)))+")";return done(1,2);}
   if(n=="GetThreadPriority"){int p{};{LastError l(host);p=::GetThreadPriority(own_thread(arg(0)));}return done(unsigned(p),1);}
@@ -1060,6 +1217,9 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    std::vector<WORD>t(static_cast<size_t>(len));BOOL ok{};{LastError l(host);ok=::GetStringTypeW(type,w.data(),len,t.data());}if(ok)for(int i=0;i<len;++i)runtime.memory().store<unsigned short>({out+2*unsigned(i)},t[size_t(i)]);return done(ok?1U:0U,4);}
   if(n=="GetStringTypeA"){const unsigned lcid=arg(0),type=arg(1),src=arg(2),out=arg(4);const int cch=int(arg(3));const auto t0=guest_narrow(src,cch);const int len=cch<0?int(t0.size()):cch;if(!writable(out,unsigned(len)*2))deny("GetStringTypeA output outside the memory contract",out);
    std::vector<WORD>t(static_cast<size_t>(len));BOOL ok{};{LastError l(host);ok=::GetStringTypeA(lcid,type,t0.data(),len,t.data());}if(ok)for(int i=0;i<len;++i)runtime.memory().store<unsigned short>({out+2*unsigned(i)},t[size_t(i)]);return done(ok?1U:0U,5);}
+  if(n=="CompareStringW"){const unsigned lcid=arg(0),fl=arg(1),a=arg(2),b=arg(4);const int na=int(arg(3)),nb=int(arg(5));
+   const auto x=a?guest_wide(a,na):std::wstring(),y=b?guest_wide(b,nb):std::wstring();int result{};
+   {LastError l(host);result=::CompareStringW(lcid,fl,a?x.data():nullptr,na,b?y.data():nullptr,nb);}return done(unsigned(result),6);}
   if(n=="LCMapStringW"){const unsigned lcid=arg(0),fl=arg(1),src=arg(2),dst=arg(4);const int cch=int(arg(3)),cd=int(arg(5));if(fl&LCMAP_SORTKEY)deny("LCMapStringW sort keys are not modelled",fl);const auto w=guest_wide(src,cch);
    std::wstring o(size_t(std::max(cd,0)),0);int r{};{LastError l(host);r=::LCMapStringW(lcid,fl,w.data(),cch<0?-1:cch,cd?o.data():nullptr,cd);}
    if(r&&cd){if(!writable(dst,unsigned(r)*2))deny("LCMapStringW output outside the memory contract",dst);for(int i=0;i<r;++i)runtime.memory().store<unsigned short>({dst+2*unsigned(i)},static_cast<unsigned short>(o[size_t(i)]));}return done(unsigned(r),6);}
@@ -1132,6 +1292,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="AdjustWindowRectEx"||n=="AdjustWindowRect"){RECT r=rect_in(arg(0));BOOL ok{};{LastError l(host);ok=n=="AdjustWindowRectEx"?::AdjustWindowRectEx(&r,arg(1),BOOL(arg(2)),arg(3)): ::AdjustWindowRect(&r,arg(1),BOOL(arg(2)));}rect_out(arg(0),r);return done(ok?1U:0U,n=="AdjustWindowRectEx"?4:3);}
   if(n=="GetClientRect"||n=="GetWindowRect"){RECT r{};BOOL ok{};{LastError l(host);ok=n=="GetClientRect"?::GetClientRect(W(0),&r): ::GetWindowRect(W(0),&r);}if(ok)rect_out(arg(1),r);return done(ok?1U:0U,2);}
   if(n=="ShowWindow"){BOOL r{};{LastError l(host);r=::ShowWindow(W(0),int(arg(1)));}apis.back()+="("+std::to_string(arg(1))+")";return done(r?1U:0U,2);}
+  if(n=="ShowOwnedPopups"){BOOL r{};{LastError l(host);r=::ShowOwnedPopups(W(0),BOOL(arg(1)));}return done(r?1U:0U,2);}  // reached from the game's WM_CLOSE handler
   if(n=="UpdateWindow"||n=="DestroyWindow"||n=="SetForegroundWindow"||n=="IsWindow"||n=="IsWindowVisible"||n=="IsIconic"||n=="IsZoomed"||n=="IsWindowEnabled"||n=="BringWindowToTop"){BOOL r{};{LastError l(host);const HWND h=W(0);
     r=n=="UpdateWindow"?::UpdateWindow(h):n=="DestroyWindow"?::DestroyWindow(h):n=="SetForegroundWindow"?::SetForegroundWindow(h):n=="IsWindow"?::IsWindow(h):n=="IsWindowVisible"?::IsWindowVisible(h):n=="IsIconic"?::IsIconic(h):n=="IsZoomed"?::IsZoomed(h):n=="IsWindowEnabled"?::IsWindowEnabled(h): ::BringWindowToTop(h);}
    if(n=="DestroyWindow"&&r)host.windows.erase(W(0));return done(r?1U:0U,1);}
@@ -1155,15 +1316,22 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="SetCursorPos"&&host.scripted){host.vcursor={LONG(arg(0)),LONG(arg(1))};apis.back()+="(virtual)";return done(1,2);}
   if(n=="SetCursorPos"){BOOL ok=::SetCursorPos(int(arg(0)),int(arg(1)));return done(ok?1U:0U,2);}
   // MSG (x86, 28 bytes): hwnd, message, wParam, lParam, time, pt.
-  auto msg_out=[&](unsigned a,const MSG&m){if(!writable(a,28))deny(n+" MSG outside the memory contract",a);const std::array<unsigned,7>v{m.hwnd?gwnd(m.hwnd):0,m.message,unsigned(m.wParam),unsigned(m.lParam),m.time,unsigned(m.pt.x),unsigned(m.pt.y)};for(unsigned i=0;i<7;++i)store(a+4*i,v[i]);};
-  auto msg_in=[&](unsigned a){if(!readable(a,28))deny(n+" MSG outside the memory contract",a);MSG m{};m.hwnd=hwnd_of(load(a));m.message=load(a+4);m.wParam=WPARAM(load(a+8));{const unsigned lv=load(a+12);if(void*hp=token_handle(lv))m.lParam=reinterpret_cast<LPARAM>(hp);else m.lParam=LPARAM(std::int64_t(std::int32_t(lv)));}m.time=load(a+16);m.pt.x=LONG(load(a+20));m.pt.y=LONG(load(a+24));return m;};
-  if(n=="PeekMessageA"||n=="GetMessageA"){MSG m{};BOOL r{};{LastError l(host);r=n=="PeekMessageA"?::PeekMessageA(&m,hwnd_of(arg(1)),arg(2),arg(3),arg(4)): ::GetMessageA(&m,hwnd_of(arg(1)),arg(2),arg(3));}
+  auto msg_out=[&](unsigned a,const MSG&m){if(!writable(a,28))deny(n+" MSG outside the memory contract",a);const std::array<unsigned,7>v{m.hwnd?gwnd(m.hwnd):0,m.message,unsigned(m.wParam),unsigned(m.lParam),host.guest_tick_of(m.time),unsigned(m.pt.x),unsigned(m.pt.y)};for(unsigned i=0;i<7;++i)store(a+4*i,v[i]);};
+  auto msg_in=[&](unsigned a){if(!readable(a,28))deny(n+" MSG outside the memory contract",a);MSG m{};m.hwnd=hwnd_of(load(a));m.message=load(a+4);m.wParam=WPARAM(load(a+8));{const unsigned lv=load(a+12);if(void*hp=token_handle(lv))m.lParam=reinterpret_cast<LPARAM>(hp);else m.lParam=LPARAM(std::int64_t(std::int32_t(lv)));}m.time=host.host_tick_of(load(a+16));m.pt.x=LONG(load(a+20));m.pt.y=LONG(load(a+24));return m;};
+  // Deterministic replays (virtual clock): queued messages produced by the real desktop rather than the game or the
+  // script are removed before the game sees them - real-cursor mouse moves (the scripted cursor is virtual), the
+  // undocumented system message 0x0060 and WM_DWMNCRENDERINGCHANGED - whose number varied between runs and shifted
+  // later frames. Interactive play receives every message.
+  auto replay_drop=[&](UINT msg){return host.vclock()&&(msg==0x0060||msg==WM_MOUSEMOVE||msg==WM_NCMOUSEMOVE||msg==WM_MOUSEHOVER||msg==WM_MOUSELEAVE||msg==WM_NCMOUSELEAVE||msg==0x031F);};
+  if(n=="PeekMessageA"||n=="GetMessageA"){MSG m{};BOOL r{};for(;;){{LastError l(host);r=n=="PeekMessageA"?::PeekMessageA(&m,hwnd_of(arg(1)),arg(2),arg(3),arg(4)): ::GetMessageA(&m,hwnd_of(arg(1)),arg(2),arg(3));}
+    if(!(r&&r!=-1&&replay_drop(m.message)))break;if(n=="PeekMessageA"&&!(arg(4)&PM_REMOVE)){MSG x{};LastError l(host);::PeekMessageA(&x,m.hwnd,m.message,m.message,PM_REMOVE);}}
    if(r&&r!=-1){const auto lw=static_cast<std::int64_t>(m.lParam);if(lw!=std::int64_t(std::int32_t(lw)))m.lParam=LPARAM(handle_token(reinterpret_cast<void*>(m.lParam)));msg_out(arg(0),m);}  /* host pointers (system timer callbacks) become tokens */return done(unsigned(r),n=="PeekMessageA"?5:4);}
   if(n=="TranslateMessage"){const MSG m=msg_in(arg(0));return done(::TranslateMessage(&m)?1U:0U,1);}
   if(n=="DispatchMessageA"){const MSG m=msg_in(arg(0));LRESULT r{};{LastError l(host);r=::DispatchMessageA(&m);}return done(unsigned(std::int32_t(r)),1);}
   if(n=="PostMessageA"||n=="SendMessageA"){const unsigned m=arg(1);if(pointer_message(m))deny(n+" of a pointer message is not modelled: "+std::to_string(m),m);LRESULT r{};
    {LastError l(host);r=n=="PostMessageA"?LRESULT(::PostMessageA(W(0),m,WPARAM(arg(2)),LPARAM(std::int64_t(std::int32_t(arg(3)))))): ::SendMessageA(W(0),m,WPARAM(arg(2)),LPARAM(std::int64_t(std::int32_t(arg(3)))));}return done(unsigned(std::int32_t(r)),4);}
   if(n=="PostQuitMessage"){::PostQuitMessage(int(arg(0)));return done(0,1);}
+  if(n=="MessageBoxExA"){const std::string t=arg(1)?guest_string(arg(1)):std::string(),c=arg(2)?guest_string(arg(2)):std::string();deny("MessageBoxExA would block on a modal dialog: ["+c+"] "+t,arg(3));}
   if(n=="MessageBoxA"){const std::string t=arg(1)?guest_string(arg(1)):std::string(),c=arg(2)?guest_string(arg(2)):std::string();deny("MessageBoxA would block on a modal dialog: ["+c+"] "+t,arg(3));}
   // Class words: GCL_WNDPROC (-24, x86) is the guest class procedure (or a host procedure token),
   // GCL_HMODULE (-16) the guest instance; others are real.
@@ -1269,8 +1437,9 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(n=="DosDateTimeToFileTime"){FILETIME o{};BOOL ok=::DosDateTimeToFileTime(WORD(arg(0)),WORD(arg(1)),&o);if(ok)wrb(arg(2),&o,8);return done(ok?1U:0U,3);}
    if(n=="CompareFileTime"){FILETIME a1{},a2{};rd(arg(0),&a1,8);rd(arg(1),&a2,8);return done(unsigned(::CompareFileTime(&a1,&a2)),2);}
    if(n=="GetTimeZoneInformation"){TIME_ZONE_INFORMATION z{};static_assert(sizeof(z)==172);const DWORD r=::GetTimeZoneInformation(&z);wrb(arg(0),&z,172);return done(r,1);}
-   if(n=="GetSystemTime"||n=="GetLocalTime"){SYSTEMTIME t{};if(n=="GetSystemTime")::GetSystemTime(&t);else ::GetLocalTime(&t);wrb(arg(0),&t,16);return done(0,1);}
-   if(n=="GetSystemTimeAsFileTime"){FILETIME t{};::GetSystemTimeAsFileTime(&t);wrb(arg(0),&t,8);return done(0,1);}
+   auto vfile=[&]{const std::uint64_t ft=125911584000000000ULL+host.vclock_query()*10;return FILETIME{DWORD(ft),DWORD(ft>>32)};};  // 2000-01-01 UTC + virtual time
+   if(n=="GetSystemTime"||n=="GetLocalTime"){SYSTEMTIME t{};if(host.vclock()){const FILETIME f=vfile();::FileTimeToSystemTime(&f,&t);}else if(n=="GetSystemTime")::GetSystemTime(&t);else ::GetLocalTime(&t);wrb(arg(0),&t,16);return done(0,1);}
+   if(n=="GetSystemTimeAsFileTime"){FILETIME t{};if(host.vclock())t=vfile();else ::GetSystemTimeAsFileTime(&t);wrb(arg(0),&t,8);return done(0,1);}
    if(n=="GetFileTime"){if(!owned_file(arg(0)))deny("GetFileTime on a handle the guest does not own",arg(0));FILETIME c{},a2{},w{};BOOL ok=::GetFileTime(hhandle(arg(0)),&c,&a2,&w);if(ok){if(arg(1))wrb(arg(1),&c,8);if(arg(2))wrb(arg(2),&a2,8);if(arg(3))wrb(arg(3),&w,8);}return done(ok?1U:0U,4);}
   }
   if(n=="WideCharToMultiByte"){const unsigned cp=arg(0),fl=arg(1),ws=arg(2),wl=arg(3),mb=arg(4),ml=arg(5),dc=arg(6),ud=arg(7);std::vector<wchar_t>w;
@@ -1304,28 +1473,34 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(type==OBJ_BITMAP){BITMAP b{};if(!::GetObjectA(ho,sizeof(b),&b))return done(0,3);if(b.bmBits)deny("GetObjectA of a bitmap with host bits outside the DIB model",h);if(!out)return done(24,3);if(z<24||!writable(out,24))deny("GetObjectA BITMAP output outside the memory contract",out);
     const std::array<unsigned,6>v{unsigned(b.bmType),unsigned(b.bmWidth),unsigned(b.bmHeight),unsigned(b.bmWidthBytes),unsigned(b.bmPlanes)|(unsigned(b.bmBitsPixel)<<16),0};for(unsigned i=0;i<6;++i)store(out+4*i,v[i]);return done(24,3);}
    deny("GetObjectA object type not modelled: "+std::to_string(type),type);}
-  // MCI (CD audio music): real mciSendCommandA with the x86 parameter records marshalled to the x64
-  // layout (DWORD_PTR callback/return fields, guest strings); notifications go to the real window.
+  // Preserve the original MCI commands. A configured local PCM player replaces only cdaudio;
+  // movie devices retain WinMM. Marshal active x86 fields to x64, including the actual callback HWND.
   if(n=="mciSendCommandA"){const unsigned dev=arg(0),msg=arg(1),fl=arg(2),pa=arg(3);MCIERROR r{};apis.back()+="("+std::to_string(msg)+")";
-   auto cbw=[&]()->DWORD_PTR{return DWORD_PTR(std::intptr_t(std::int32_t(load(pa))));};
+   auto cbw=[&]()->DWORD_PTR{return (fl&MCI_NOTIFY)?reinterpret_cast<DWORD_PTR>(hwnd_of(load(pa))):0;};
+   auto send=[&](DWORD_PTR params)->MCIERROR{auto&cd=host.music();bool local=cd.owns(dev);
+    if(msg==MCI_OPEN&&cd.enabled()&&(fl&MCI_OPEN_TYPE)){const auto&o=*reinterpret_cast<const MCI_OPEN_PARMSA*>(params);
+     local=(fl&MCI_OPEN_TYPE_ID)?reinterpret_cast<std::uintptr_t>(o.lpstrDeviceType)==MCI_DEVTYPE_CD_AUDIO:o.lpstrDeviceType&&Host::same_name(o.lpstrDeviceType,"cdaudio");}
+    return local?cd.send(dev,msg,fl,params): ::mciSendCommandA(dev,msg,fl,params);};
    if(msg==MCI_OPEN){if(!writable(pa,20))deny("MCI_OPEN parameters outside the memory contract",pa);MCI_OPEN_PARMSA o{};o.dwCallback=cbw();std::string type,elem,alias;
     if(fl&MCI_OPEN_TYPE){if(fl&MCI_OPEN_TYPE_ID)o.lpstrDeviceType=reinterpret_cast<LPCSTR>(std::uintptr_t(load(pa+8)));else{type=guest_string(load(pa+8));o.lpstrDeviceType=type.c_str();}}
     if(fl&MCI_OPEN_ELEMENT){if(fl&MCI_OPEN_ELEMENT_ID)deny("MCI_OPEN element id is not modelled",fl);elem=guest_string(load(pa+12));o.lpstrElementName=elem.c_str();}
     if(fl&MCI_OPEN_ALIAS){alias=guest_string(load(pa+16));o.lpstrAlias=alias.c_str();}
-    {LastError l(host);r=::mciSendCommandA(dev,msg,fl,reinterpret_cast<DWORD_PTR>(&o));}if(!r)store(pa+4,o.wDeviceID);apis.back()+="("+type+")="+std::to_string(r);return done(r,4);}
-   if(msg==MCI_SET){if(!readable(pa,12))deny("MCI_SET parameters outside the memory contract",pa);MCI_SET_PARMS p{cbw(),load(pa+4),load(pa+8)};{LastError l(host);r=::mciSendCommandA(dev,msg,fl,reinterpret_cast<DWORD_PTR>(&p));}return done(r,4);}
-   if(msg==MCI_STATUS){if(!writable(pa,16))deny("MCI_STATUS parameters outside the memory contract",pa);MCI_STATUS_PARMS p{cbw(),0,load(pa+8),load(pa+12)};{LastError l(host);r=::mciSendCommandA(dev,msg,fl,reinterpret_cast<DWORD_PTR>(&p));}
+    {LastError l(host);r=send(reinterpret_cast<DWORD_PTR>(&o));}if(!r)store(pa+4,o.wDeviceID);apis.back()+="("+type+")="+std::to_string(r);return done(r,4);}
+   if(msg==MCI_SET){if(!readable(pa,12))deny("MCI_SET parameters outside the memory contract",pa);MCI_SET_PARMS p{cbw(),(fl&MCI_SET_TIME_FORMAT)?load(pa+4):0U,(fl&(MCI_SET_AUDIO|MCI_SET_ON|MCI_SET_OFF))?load(pa+8):0U};{LastError l(host);r=send(reinterpret_cast<DWORD_PTR>(&p));}return done(r,4);}
+   if(msg==MCI_STATUS){if(!writable(pa,16))deny("MCI_STATUS parameters outside the memory contract",pa);MCI_STATUS_PARMS p{cbw(),0,(fl&MCI_STATUS_ITEM)?load(pa+8):0U,(fl&MCI_TRACK)?load(pa+12):0U};{LastError l(host);r=send(reinterpret_cast<DWORD_PTR>(&p));}
     if(!r){if(p.dwReturn>0xffffffffull)deny("MCI_STATUS result not representable",unsigned(p.dwReturn>>32));store(pa+4,unsigned(p.dwReturn));}return done(r,4);}
-   if(msg==MCI_PLAY){if(pa&&!readable(pa,12))deny("MCI_PLAY parameters outside the memory contract",pa);MCI_PLAY_PARMS p{};if(pa){p.dwCallback=cbw();p.dwFrom=load(pa+4);p.dwTo=load(pa+8);}{LastError l(host);r=::mciSendCommandA(dev,msg,fl,pa?reinterpret_cast<DWORD_PTR>(&p):0);}return done(r,4);}
-   if(msg==MCI_SEEK){if(pa&&!readable(pa,8))deny("MCI_SEEK parameters outside the memory contract",pa);MCI_SEEK_PARMS p{};if(pa){p.dwCallback=cbw();p.dwTo=load(pa+4);}{LastError l(host);r=::mciSendCommandA(dev,msg,fl,pa?reinterpret_cast<DWORD_PTR>(&p):0);}return done(r,4);}
-   if(msg==MCI_STOP||msg==MCI_CLOSE||msg==MCI_PAUSE||msg==MCI_RESUME){if(pa&&!readable(pa,4))deny("MCI generic parameters outside the memory contract",pa);MCI_GENERIC_PARMS p{};if(pa)p.dwCallback=cbw();{LastError l(host);r=::mciSendCommandA(dev,msg,fl,pa?reinterpret_cast<DWORD_PTR>(&p):0);}return done(r,4);}
+   if(msg==MCI_PLAY){if(pa&&!readable(pa,12))deny("MCI_PLAY parameters outside the memory contract",pa);MCI_PLAY_PARMS p{};if(pa){p.dwCallback=cbw();if(fl&MCI_FROM)p.dwFrom=load(pa+4);if(fl&MCI_TO)p.dwTo=load(pa+8);}{LastError l(host);r=send(pa?reinterpret_cast<DWORD_PTR>(&p):0);}return done(r,4);}
+   if(msg==MCI_SEEK){if(pa&&!readable(pa,8))deny("MCI_SEEK parameters outside the memory contract",pa);MCI_SEEK_PARMS p{};if(pa){p.dwCallback=cbw();if(fl&MCI_TO)p.dwTo=load(pa+4);}{LastError l(host);r=send(pa?reinterpret_cast<DWORD_PTR>(&p):0);}return done(r,4);}
+   if(msg==MCI_STOP||msg==MCI_CLOSE||msg==MCI_PAUSE||msg==MCI_RESUME){if(pa&&!readable(pa,4))deny("MCI generic parameters outside the memory contract",pa);MCI_GENERIC_PARMS p{};if(pa)p.dwCallback=cbw();{LastError l(host);r=send(pa?reinterpret_cast<DWORD_PTR>(&p):0);}return done(r,4);}
    deny("MCI command not modelled: "+std::to_string(msg),msg);}
   if(n=="mciGetErrorStringA"){const unsigned a=arg(1),z=arg(2);if(!z||!writable(a,z))deny("mciGetErrorStringA buffer outside the memory contract",a);std::vector<char>b(z);BOOL ok=::mciGetErrorStringA(arg(0),b.data(),z);for(unsigned i=0;i<z;++i){runtime.memory().store<unsigned char>({a+i},static_cast<unsigned char>(b[i]));if(!b[i])break;}return done(ok?1U:0U,3);}
-  if(n=="auxGetNumDevs")return done(::auxGetNumDevs(),0);
-  if(n=="auxGetDevCapsA"){const unsigned a=arg(1),z=arg(2);static_assert(sizeof(AUXCAPSA)==48);if(z<48||!writable(a,48))deny("auxGetDevCapsA output outside the memory contract",a);AUXCAPSA c{};const MMRESULT r=::auxGetDevCapsA(UINT_PTR(arg(0)),&c,sizeof(c));
+  // Put the private CD AUX first: the original stops at the first CD-volume device.
+  // Other AUX IDs shift by one; no physical mixer volume writes are enabled.
+  if(n=="auxGetNumDevs"){auto&cd=host.music();return done(::auxGetNumDevs()+(cd.enabled()?1U:0U),0);}
+  if(n=="auxGetDevCapsA"){const unsigned a=arg(1),z=arg(2);static_assert(sizeof(AUXCAPSA)==48);if(z<48||!writable(a,48))deny("auxGetDevCapsA output outside the memory contract",a);AUXCAPSA c{};auto&cd=host.music();const MMRESULT r=cd.enabled()&&arg(0)==cd.aux_id()?cd.aux_caps(c): ::auxGetDevCapsA(UINT_PTR(cd.enabled()&&arg(0)!=0xffffffffU?arg(0)-1U:arg(0)),&c,sizeof(c));
    if(!r)for(unsigned i=0;i<48;++i)runtime.memory().store<unsigned char>({a+i},reinterpret_cast<const unsigned char*>(&c)[i]);return done(r,3);}
-  if(n=="auxGetVolume"){DWORD v{};const MMRESULT r=::auxGetVolume(arg(0),&v);if(!writable(arg(1),4))deny("auxGetVolume output outside the memory contract",arg(1));store(arg(1),v);return done(r,2);}
-  if(n=="auxSetVolume")deny("auxSetVolume would change the host CD-audio mixer level; not authorized",arg(1));
+  if(n=="auxGetVolume"){DWORD v{};auto&cd=host.music();const MMRESULT r=cd.enabled()&&arg(0)==cd.aux_id()?cd.aux_get_volume(v): ::auxGetVolume(cd.enabled()&&arg(0)!=0xffffffffU?arg(0)-1U:arg(0),&v);if(!writable(arg(1),4))deny("auxGetVolume output outside the memory contract",arg(1));store(arg(1),v);return done(r,2);}
+  if(n=="auxSetVolume"){auto&cd=host.music();if(cd.enabled()&&arg(0)==cd.aux_id())return done(cd.aux_set_volume(arg(1)),2);deny("auxSetVolume would change the host CD-audio mixer level; not authorized",arg(1));}
   // WINMM mixer (CD volume): real queries with field-wise x86<->x64 marshalling; setting levels would change
   // the host system volume and stops typed.
   if(n=="mixerGetNumDevs")return done(::mixerGetNumDevs(),0);
@@ -1372,6 +1547,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(r==WAIT_TIMEOUT&&arg(1)==INFINITE)deny("Infinite wait that would block the single guest thread forever",arg(0));if(r==WAIT_TIMEOUT&&arg(1)&&host.thread_tid)deny("A secondary guest thread would block; cooperative thread switching is not modelled",arg(0));return done(r,2);}
   if(n=="DrawTextA"){const int len=int(arg(2));std::string t;if(len<0)t=guest_string(arg(1));else{if(!readable(arg(1),unsigned(len)))deny("DrawTextA text outside the memory contract",arg(1));t.resize(size_t(len));for(int i=0;i<len;++i)t[size_t(i)]=char(runtime.memory().load<unsigned char>({arg(1)+unsigned(i)}));}
    const unsigned ra=arg(3);if(!writable(ra,16))deny("DrawTextA RECT outside the memory contract",ra);RECT r{LONG(load(ra)),LONG(load(ra+4)),LONG(load(ra+8)),LONG(load(ra+12))};if(arg(4)&DT_MODIFYSTRING)deny("DrawTextA DT_MODIFYSTRING is not modelled",arg(4));
+   if(text_rec_active)text_record(static_cast<HDC>(hhandle(arg(0))),t,r,arg(4));  /* GPU HUD text recipe (gpu_hud.inc) */
    int h{};{LastError l(host);h=::DrawTextA(static_cast<HDC>(hhandle(arg(0))),t.data(),int(t.size()),&r,arg(4));}store(ra,unsigned(r.left));store(ra+4,unsigned(r.top));store(ra+8,unsigned(r.right));store(ra+12,unsigned(r.bottom));return done(unsigned(h),5);}
   // AVIFile / Video for Windows: the real x64 libraries; stream and codec handles are guest tokens.
   if(n=="AVIFileInit"){::AVIFileInit();return done(0,0);}
@@ -1498,12 +1674,55 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="LoadCursorA"||n=="LoadIconA"){const unsigned h=arg(0),id=arg(1);if(h||id>=0x10000)deny(n+" of a module resource is not modelled yet (system resources only)",id);
    void*v{};{LastError l(host);v=n=="LoadCursorA"?static_cast<void*>(::LoadCursorA(nullptr,MAKEINTRESOURCEA(id))):static_cast<void*>(::LoadIconA(nullptr,MAKEINTRESOURCEA(id)));}return done(ghandle(v),2);}
   if(n=="GetCursorPos"){POINT pt{};BOOL ok{};if(host.scripted){pt=host.vcursor;ok=TRUE;}else{LastError l(host);ok=::GetCursorPos(&pt);}const unsigned a=arg(0);if(!writable(a,8))deny("GetCursorPos output outside the memory contract",a);if(ok){store(a,unsigned(pt.x));store(a+4,unsigned(pt.y));}return done(ok?1U:0U,1);}
-  if(n=="GetTickCount")return done(::GetTickCount(),0);
-  if(n=="GetMessageTime")return done(unsigned(::GetMessageTime()),0);
+  if(n=="GetTickCount")return done(host.vclock()?unsigned(host.vclock_query()/1000):host.guest_tick(),0);
+  if(n=="GetMessageTime")return done(host.guest_tick_of(DWORD(::GetMessageTime())),0);
   if(n=="GetMessagePos")return done(::GetMessagePos(),0);
   if(n=="GetCurrentThread")return done(ghandle(::GetCurrentThread()),0);
   if(n=="GetCurrentProcess")return done(ghandle(::GetCurrentProcess()),0);
   if(n=="GetCurrentProcessId")return done(::GetCurrentProcessId(),0);
+  // Guest structured exception dispatch: x86 SEH through the TEB exception list (FS:[0]).
+  // RaiseException builds the guest EXCEPTION_RECORD and CONTEXT (control, integer and segment registers) below ESP
+  // and calls each registered handler as a nested guest call, handler(record, registration, context, dispatcher
+  // context), cdecl. ExceptionContinueSearch moves to the next registration; ExceptionContinueExecution resumes the
+  // caller with the context registers (its own return point only). A handler that takes the exception does not return
+  // here: it unwinds through RtlUnwind and transfers to its __except block or catch continuation, and the abandoned
+  // host frames are released when the guest returns past them (GuestReturn). At the end of the chain the top-level
+  // filter runs and the process terminates with the exception code. RtlUnwind calls each handler with
+  // EXCEPTION_UNWINDING up to the target registration, unlinking each, and returns to its caller. Nested and collided
+  // dispositions and transfers to other contexts stop typed.
+  if(n=="RaiseException"||n=="RtlUnwind"||n=="UnhandledExceptionFilter"){const unsigned teb=runtime.fs_base().value;
+   auto put_context=[&](unsigned c,unsigned eip,unsigned esp,unsigned eax){for(unsigned o=0;o<0x2cc;o+=4)store(c+o,0);const auto&f=state.aflag;
+    const unsigned fl=unsigned(state.rflag.flat&~0xcd5ULL)|unsigned(f.cf)|unsigned(f.pf)<<2|unsigned(f.af)<<4|unsigned(f.zf)<<6|unsigned(f.sf)<<7|unsigned(f.df)<<10|unsigned(f.of)<<11;
+    store(c,0x10007);store(c+0x8c,0x2b);store(c+0x90,0x53);store(c+0x94,0x2b);store(c+0x98,0x2b);store(c+0x9c,g.rdi.dword);store(c+0xa0,g.rsi.dword);store(c+0xa4,g.rbx.dword);
+    store(c+0xa8,g.rdx.dword);store(c+0xac,g.rcx.dword);store(c+0xb0,eax);store(c+0xb4,g.rbp.dword);store(c+0xb8,eip);store(c+0xbc,0x23);store(c+0xc0,fl);store(c+0xc4,esp);store(c+0xc8,0x2b);};
+   auto registration=[&](unsigned reg){if(reg<e||(reg&3)||!writable(reg,8))deny("SEH registration outside the active guest stack",reg);return load(reg+4);};
+   auto top_filter=[&](unsigned ptrs,unsigned below)->unsigned{const unsigned f=heap.unhandled_filter;return f?call_guest(f,{ptrs},true,"top-level exception filter",below):0U;};
+   if(n=="UnhandledExceptionFilter"){const unsigned ptrs=arg(0),r=top_filter(ptrs,0);if(r==1U||r==0xffffffffU)return done(r,1);
+    // No host OS reporting/debugger policy is implemented. Do not turn
+    // CONTINUE_SEARCH into EXECUTE_HANDLER or claim that a dialog was shown.
+    if(r!=0U)deny("Invalid top-level exception filter disposition",r);
+    deny("UnhandledExceptionFilter OS reporting/debugger policy is not modelled",load(load(ptrs)));}
+   const unsigned A=(e-0x380)&~15U,ctx=A,dc=A-16;if(!writable(dc-16,e-(dc-16)))deny("Exception record area outside the stack contract",dc);store(dc,0);
+   if(n=="RtlUnwind"){const unsigned target=arg(0),tip=arg(1),rv=arg(3),uflags=2U|(target?0U:4U);unsigned rec=arg(2);
+    if(!rec){rec=A+0x2d0;store(rec,0xC0000027U);store(rec+4,uflags);store(rec+8,0);store(rec+12,token);store(rec+16,0);}else store(rec+4,load(rec+4)|uflags);
+    put_context(ctx,tip,e+20,rv);++host.unwinds;
+    unsigned reg=load(teb);while(reg!=0xffffffffU&&reg!=target){if(target&&target<reg)deny("RtlUnwind target registration is not on the exception chain",target);const unsigned h=registration(reg);
+     const unsigned r=call_guest(h,{rec,reg,ctx,dc},false,"SEH unwind handler",dc);if(r!=1U)deny("Collided unwind disposition is not modelled",r);reg=load(reg);store(teb,reg);}
+    if(target&&reg!=target)deny("RtlUnwind target registration is not on the exception chain",target);
+    if(tip!=ret)deny("RtlUnwind to an instruction other than its return address is not modelled",tip);
+    return done(rv,4);}
+   const unsigned code=arg(0),flags=arg(1)&1U,np=std::min(arg(2),15U),ap=arg(3),rec=A+0x2d0,resume=e+20;
+   store(rec,code);store(rec+4,flags);store(rec+8,0);store(rec+12,token);store(rec+16,np);for(unsigned i=0;i<15;++i)store(rec+20+4*i,i<np&&ap?load(ap+4*i):0U);
+   put_context(ctx,ret,resume,g.rax.dword);++host.raises;
+   if(const char*q=std::getenv("MW34_SEH_LOG");q&&*q)std::fprintf(stderr,"RaiseException 0x%08x flags %u params %u from 0x%08x\n",code,flags,np,ret);
+   auto resume_context=[&]{if(flags&1U)deny("ContinueExecution of a noncontinuable exception",code);if(load(ctx+0xb8)!=ret||load(ctx+0xc4)!=resume)deny("ContinueExecution into a different context is not modelled",load(ctx+0xb8));
+    const unsigned fl=load(ctx+0xc0);state.rflag.flat=fl;auto&f=state.aflag;f.cf=fl&1;f.pf=(fl>>2)&1;f.af=(fl>>4)&1;f.zf=(fl>>6)&1;f.sf=(fl>>7)&1;f.df=(fl>>10)&1;f.of=(fl>>11)&1;
+    g.rbx.dword=load(ctx+0xa4);g.rsi.dword=load(ctx+0xa0);g.rdi.dword=load(ctx+0x9c);g.rbp.dword=load(ctx+0xb4);g.rcx.dword=load(ctx+0xac);g.rdx.dword=load(ctx+0xa8);return done(load(ctx+0xb0),4);};
+   for(unsigned reg=load(teb);reg!=0xffffffffU;reg=load(reg)){const unsigned h=registration(reg),r=call_guest(h,{rec,reg,ctx,dc},false,"SEH handler",dc);
+    if(r==0U)return resume_context();if(r!=1U)deny("Nested or collided exception disposition is not modelled",r);}
+   const unsigned ptrs=dc-16;store(ptrs,rec);store(ptrs+4,ctx);if(top_filter(ptrs,ptrs)==0xffffffffU)return resume_context();
+   deny("Guest unhandled exception: the process terminates with the exception code",code);}
+  if(n=="IsProcessorFeaturePresent"){BOOL v{};{LastError l(host);v=::IsProcessorFeaturePresent(arg(0));}return done(unsigned(v),1);}  // MSVCRT FDIV initializer (feature 0)
   if(n=="RegisterWindowMessageA"){const std::string m=guest_string(arg(0));UINT v{};{LastError l(host);v=::RegisterWindowMessageA(m.c_str());}return done(v,1);}
   if(n=="RegisterClipboardFormatA"){const std::string m=guest_string(arg(0));UINT v{};{LastError l(host);v=::RegisterClipboardFormatA(m.c_str());}return done(v,1);}
   if(n=="GetModuleHandleA"){if(!arg(0))return done(0x400000,1);const std::string m=guest_string(arg(0));const unsigned h=module(m);if(!h){host.last_error=ERROR_MOD_NOT_FOUND;}return done(h,1);}
@@ -1541,11 +1760,43 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
  // The guest's rounding mode is mirrored into the host x87 CW and MXCSR while the stage runs; the host's
  // own control state is restored afterwards (normal return or fault).
  struct FpControl{unsigned short cw;unsigned mx;FpControl(){__asm__ volatile("fnstcw %0":"=m"(cw));__asm__ volatile("stmxcsr %0":"=m"(mx));}~FpControl(){__asm__ volatile("fldcw %0"::"m"(cw));__asm__ volatile("ldmxcsr %0"::"m"(mx));}};
- void run(){if(owner||hs::owner)deny("Exactly one native Stage");FpControl fp_control;owner=this;active=true;
-  try{if(kind==Kind::initterm){(void)hs::mw34_attach_g_thunk_initterm_body(&state,initterm_thunk,token_ptr);
+   // Publishes this Stage's checked values for the inlined bridge fast paths for exactly the duration of run().
+  // Flat guest memory (memory/guest_memory.hpp fork, inline_objects.py --flat-mem): recompiled code accesses guest
+  // memory as token + address. An access to an unmapped or protected page faults in hardware; this handler turns a
+  // fault inside the active Stage's reservation into the Stage's typed deny, by simulating a call from the faulting
+  // instruction into flat_fault_throw (the recompiled frames unwind through their unwind tables as for any deny).
+  static inline thread_local unsigned flat_fault_address{};static inline thread_local bool flat_fault_write{};
+  [[noreturn]] static void flat_fault_throw(){if(const char*q=std::getenv("MW34_SEH_LOG");q&&*q){const auto&g=owner->state.gpr;std::fprintf(stderr,"SEH flat fault address=%08x esp=%08x ebp=%08x eax=%08x ecx=%08x edx=%08x esi=%08x edi=%08x depth=%u\n",flat_fault_address,g.rsp.dword,g.rbp.dword,g.rax.dword,g.rcx.dword,g.rdx.dword,g.rsi.dword,g.rdi.dword,owner->depth);for(unsigned i=0;i<owner->depth;++i)std::fprintf(stderr,"  return[%u]=%08x slot=%08x\n",i,owner->returns[i],owner->returns_sp[i]);}owner->deny(std::string("Guest ")+(flat_fault_write?"write":"read")+" outside mapped guest memory (hardware fault in recompiled code)",flat_fault_address);}
+  // MW34_HUD_WATCH=<file> (diagnostic): while the game holds the render target locked its host pages are read-only; the
+ // first write to each page per lock records the writing host instruction (an exe offset) and makes the page writable.
+ static inline std::uintptr_t hud_watch_lo{},hud_watch_hi{};static inline std::map<std::uint64_t,unsigned>hud_watch_hits;
+ static void hud_watch_save(){static const char*p=std::getenv("MW34_HUD_WATCH");if(!p||!*p)return;if(FILE*f=std::fopen(p,"w")){for(auto&[k,v]:hud_watch_hits)std::fprintf(f,"0x%llx %u\n",(unsigned long long)k,v);std::fclose(f);}}
+ // Sync on touch (lazy 3D-target residency): a guest access to the stale resident target or z-buffer saves the CPU
+ // context, runs touch_sync() on a host thunk (HUD draws so far are rendered, the GPU image is copied back, pages are
+ // unprotected) and resumes the faulting instruction with the saved context.
+ static inline CONTEXT touch_ctx{};static inline std::uint64_t touch_count{};
+ static void touch_thunk(){if(owner)owner->touch_sync();::RtlRestoreContext(&touch_ctx,nullptr);}
+ void touch_sync(){++touch_count;if(hud_gpu_active)hud_fallback();else gpu_sync(0);}
+ bool touch_range(std::uintptr_t a)const{if(!host.res_dirty)return false;const auto b=reinterpret_cast<std::uintptr_t>(runtime.memory().flat_base());if(!b)return false;
+  for(const unsigned g:{host.res_rt,host.res_zb})if(g)for(const auto&v:host.vsurfaces)if(v.guest==g&&a>=b+v.mem&&a<b+v.mem+v.bytes)return true;return false;}
+ static LONG CALLBACK flat_fault_handler(EXCEPTION_POINTERS*e){if(e->ExceptionRecord->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION||e->ExceptionRecord->NumberParameters<2)return EXCEPTION_CONTINUE_SEARCH;if(Stage*ts=owner;ts&&ts->active&&ts->touch_range(std::uintptr_t(e->ExceptionRecord->ExceptionInformation[1]))){touch_ctx=*e->ContextRecord;touch_ctx.ContextFlags=CONTEXT_FULL;auto*c=e->ContextRecord;c->Rsp=((c->Rsp-0x200)&~DWORD64(15))-8;c->Rip=reinterpret_cast<DWORD64>(&touch_thunk);return EXCEPTION_CONTINUE_EXECUTION;}if(hud_watch_hi&&e->ExceptionRecord->ExceptionInformation[0]==1){const auto a=std::uintptr_t(e->ExceptionRecord->ExceptionInformation[1]);if(a>=hud_watch_lo&&a<hud_watch_hi){++hud_watch_hits[e->ContextRecord->Rip-reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr))];DWORD old{};::VirtualProtect(reinterpret_cast<void*>(a&~std::uintptr_t(4095)),4096,PAGE_READWRITE,&old);return EXCEPTION_CONTINUE_EXECUTION;}}
+   Stage*s=owner;if(!s||!s->active)return EXCEPTION_CONTINUE_SEARCH;const auto*at=reinterpret_cast<const std::byte*>(e->ExceptionRecord->ExceptionInformation[1]);const auto&m=s->runtime.memory();
+   if(!m.owns_host(at))return EXCEPTION_CONTINUE_SEARCH;flat_fault_address=unsigned(at-m.flat_base());flat_fault_write=e->ExceptionRecord->ExceptionInformation[0]==1;
+   auto*c=e->ContextRecord;c->Rsp-=8;*reinterpret_cast<DWORD64*>(c->Rsp)=c->Rip;c->Rip=reinterpret_cast<DWORD64>(&flat_fault_throw);return EXCEPTION_CONTINUE_EXECUTION;}
+  struct FastGateScope{explicit FastGateScope(Stage&s){auto&g=mw34_fast_gate;g=Mw34FastGate{};g.thread=::GetCurrentThreadId();g.owner_slot=reinterpret_cast<void*const*>(&owner);
+    g.stage=&s;g.token=s.token_ptr;g.active=&s.active;g.complete=&s.complete;g.low=s.low;
+    if(s.kind==Kind::initterm){g.read_top=g.write_top=game_stack_top;g.image_lo=0x400000;g.image_hi=game_end;g.data_lo=game_data;g.data_hi=game_data_end;}  // frame(), read_fast, write_fast
+    else{g.read_top=s.entry_esp+16;g.write_top=s.entry_esp;g.image_lo=g.data_lo=1;g.image_hi=g.data_hi=0;}
+    g.gheap_lo=GuestHeap::lo;g.gheap_mapped=&s.host.gheap.mapped;g.memory=&s.runtime.memory();g.hits=mw34::fastmem::hits.data();g.generation=&mw34::fastmem::generation;
+    g.reads=&s.reads;g.writes=&s.writes;g.enabled=1;}
+   ~FastGateScope(){mw34_fast_gate.enabled=0;}};
+void run(){static const PVOID flat_veh=::AddVectoredExceptionHandler(1,&flat_fault_handler);(void)flat_veh;if(owner||hs::owner)deny("Exactly one native Stage");FpControl fp_control;owner=this;active=true;FastGateScope fast_gate(*this);
+  try{if(from_entry){const Body b=find(crt_entry);if(!b)deny("Game CRT entry has no lifted body",crt_entry);++bodies;(void)b(&state,crt_entry,token_ptr);}
+   else if(kind==Kind::initterm){(void)hs::mw34_attach_g_thunk_initterm_body(&state,initterm_thunk,token_ptr);
     // The main initializer table returned: the entry continues natively (command line, GetStartupInfoA, WinMain).
-    if(initterm_returned){const Body b=find(entry_continuation);if(!b)deny("Entry continuation has no lifted body",entry_continuation);++bodies;(void)b(&state,entry_continuation,token_ptr);}}else{const Body b=find(mod->entry);if(!b)deny("Provider entry has no lifted body",mod->entry);(void)b(&state,mod->entry,token_ptr);}}catch(...){active=false;owner=nullptr;throw;}
-  active=false;owner=nullptr;if(!complete)deny(kind==Kind::initterm?"Main _initterm body ended without its RET":"_DllMainCRTStartup body ended without its DllMain RET");if(kind==Kind::attach){mod->attached=true;host.attached=host.all_attached();}}
+    if(initterm_returned){const Body b=find(entry_continuation);if(!b)deny("Entry continuation has no lifted body",entry_continuation);++bodies;(void)b(&state,entry_continuation,token_ptr);}}
+    else if(kind==Kind::call){const unsigned pc=state.gpr.rip.dword;const Body b=find(pc);if(!b)deny("In-place provider call has no lifted body",pc);++bodies;(void)b(&state,pc,token_ptr);}else{const Body b=find(mod->entry);if(!b)deny("Provider entry has no lifted body",mod->entry);(void)b(&state,mod->entry,token_ptr);}}catch(...){active=false;owner=nullptr;throw;}
+  active=false;owner=nullptr;if(!complete)deny(kind==Kind::initterm?"Main _initterm body ended without its RET":kind==Kind::call?"In-place provider call ended without its RET":"_DllMainCRTStartup body ended without its DllMain RET");if(kind==Kind::attach){mod->attached=true;host.attached=host.all_attached();}}
  // Game import lookup by IAT word. After binding the IAT cells lie outside the guest's writable contract, so
  // their words cannot change while the stage runs: a raw-word table built on first use answers exactly
  // (rebuilt if the import list changes; without that guarantee the scan is used).
