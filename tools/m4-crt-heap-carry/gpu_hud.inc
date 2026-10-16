@@ -147,7 +147,7 @@ bool hud_span(){const auto&g=state.gpr;const unsigned dest=load(0x72c278),count=
  if(dest<hud_rt_mem||count>hud_w)return false;const unsigned off=(dest-hud_rt_mem)/2,stride=hud_pitch/2;const int y=int(off/stride),x=int(off%stride);if(unsigned(y)>=hud_h)return false;if(!count)return true;
  const unsigned first=unsigned(hud_sc.vertices.size()/32);const float x0=float(x)-0.5f,y0=float(y)-0.5f,x1=x0+float(count),y1=y0+1.f;
  hud_vertex(x0,y0,c,0,0);hud_vertex(x1,y0,c,0,0);hud_vertex(x1,y1,c,0,0);hud_vertex(x0,y0,c,0,0);hud_vertex(x1,y1,c,0,0);hud_vertex(x0,y1,c,0,0);hud_draw(-1,false,first);return true;}
-void hud_flush(){if(hud_sc.draws.empty())return;hud_sc.color.resize(size_t(hud_w)*hud_h);hud_sc.depth.resize(hud_sc.color.size());
+void hud_flush(){if(hud_sc.draws.empty())return;
  try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_begin(*vsurface(host.res_rt));}
 // The lock reverts to the CPU: draws so far reach the target, guest memory is synchronized and unprotected.
 void hud_fallback(){hud_flush();hud_gpu_active=false;++hud_fallbacks;gpu_sync(host.res_rt);}
@@ -165,4 +165,4 @@ void overlay_gpu(unsigned w,unsigned h){auto&ov=host.presenter->overlay;std::vec
  std::uint64_t hash=0xcbf29ce484222325ULL;for(auto v:r.pixels32){hash^=v;hash*=0x100000001b3ULL;}r.hash=hash;hud_sc.textures.push_back(std::move(r));
  const unsigned first=0;hud_vertex(-0.5f,-0.5f,0xffffffffu,0,0);hud_vertex(float(bw)-0.5f,-0.5f,0xffffffffu,1,0);hud_vertex(float(bw)-0.5f,float(bh)-0.5f,0xffffffffu,1,1);
  hud_vertex(-0.5f,-0.5f,0xffffffffu,0,0);hud_vertex(float(bw)-0.5f,float(bh)-0.5f,0xffffffffu,1,1);hud_vertex(-0.5f,float(bh)-0.5f,0xffffffffu,0,1);hud_draw(0,false,first);
- hud_sc.color.resize(size_t(w)*h);hud_sc.depth.resize(hud_sc.color.size());try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_sc=vs::Scene{};}
+ try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_sc=vs::Scene{};}

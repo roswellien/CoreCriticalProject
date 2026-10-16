@@ -73,9 +73,9 @@ def span_bytes(data,start,end):
         lo=base+va
         if lo<=start and end<=lo+rs:need(flags&0x20000000,'Executable source section');return data[rp+start-lo:rp+end-lo]
     raise ValueError('Span outside one raw section')
-def main(name):
+def main(name, *, output_root=None):
     need(re.fullmatch('lifts-r[1-9][0-9]*(-p[0-9]+)?',name),'lifts-rN or a lift_closure.py partition lifts-rN-pK')
-    out=ROOT/'reports/m4-crt-attach'/name;need(not out.exists(),'Fresh lift output');need(sha(PROVIDER)==PROVIDER_SHA,'Exact staged provider')
+    out=(Path(output_root) if output_root is not None else ROOT/'reports/m4-crt-attach')/name;need(not out.exists(),'Fresh lift output');need(sha(PROVIDER)==PROVIDER_SHA,'Exact staged provider')
     data=PROVIDER.read_bytes()
     llvm=ROOT/'local/tools/llvm-21.1.8/clang+llvm-21.1.8-x86_64-pc-windows-msvc/bin'
     lifter=ROOT/'local/tools/remill-x87-control-repair/remill-lift-control-21.exe'

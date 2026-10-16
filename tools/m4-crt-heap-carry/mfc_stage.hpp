@@ -14,13 +14,16 @@
 // else (an unlifted target, an unimplemented service, an access outside the memory contract, a
 // divide error) stops with a typed unresolved_translation Fault. SEH dispatch is not modelled.
 #include "vk_scene.hpp"
+#include "version_resource.hpp"
 #include <atomic>
 #include <deque>
 #include <string_view>
+#include <sstream>
 #include <unordered_map>
 #include <set>
 #include <map>
 #include <mmsystem.h>
+#include <commctrl.h>
 #include "audio/local_cd_audio.hpp"
 #include <vfw.h>
 #include <fstream>
@@ -41,11 +44,23 @@ namespace mw34::m4_crt_mfc_attach {
 namespace hs=m4_crt_heap_carry;
 using Body=hs::Body;
 struct Entry{unsigned addr;Body body;};
+#ifdef MW34_MFC_ENTRIES_HEADER
+#include MW34_MFC_ENTRIES_HEADER
+#else
 #include "mfc_entries.inc"
-inline constexpr unsigned base=0x5f400000,image_end=0x5f4ed000,data=0x5f4cb000,data_end=0x5f4d3000,entry=0x5f4052a2,token_base=0x38000000,token_end=0x38010000,host_proc_base=0x39000000,vsurface_arena=0x40000000,vsurface_arena_end=0x50000000;
-inline constexpr unsigned msvcrt_base=0x78000000,msvcrt_text_end=0x7802e000,msvcrt_data=0x78035000,msvcrt_data_end=0x7803c000;
-inline constexpr unsigned crt_entry=0x5ac3a0,initterm_thunk=0x5ac598,game_end=0x9f5000,game_data=0x5e0000,game_data_end=0x9a2000,game_stack_low=0x20001000,game_stack_top=0x20002000,stack_extension=0x1ff01000,entry_continuation=0x5ac480,msvcrt_entry=0x780017fd;
+#endif
+inline constexpr unsigned token_base=0x38000000,token_end=0x38010000,host_proc_base=0x39000000,vsurface_arena=0x40000000,vsurface_arena_end=0x50000000;
+#ifdef MW34_NATIVE_TARGET_PROFILE
+#include MW34_NATIVE_TARGET_PROFILE
+#else
+inline constexpr unsigned base=0x5f400000,image_end=0x5f4ed000,data=0x5f4cb000,data_end=0x5f4d3000,entry=0x5f4052a2;
+inline constexpr unsigned game_code_begin=0x401000,game_code_end=0x5bb000,initializer_begin=0x5e0000,initializer_end=0x5e0244;
+inline constexpr unsigned attach_result_argument_offset=0;
+inline constexpr unsigned crt_entry=0x5ac3a0,initterm_thunk=0x5ac598,game_end=0x9f5000,game_data=0x5e0000,game_data_end=0x9a2000,entry_continuation=0x5ac480;
 inline constexpr char image_sha[]="5f66a4d221e24c767aadd3f43a981df53d42f3d73bdf05b518120632099e2fc8";
+#endif
+inline constexpr unsigned msvcrt_base=0x78000000,msvcrt_text_end=0x7802e000,msvcrt_data=0x78035000,msvcrt_data_end=0x7803c000;
+inline constexpr unsigned game_stack_low=0x20001000,game_stack_top=0x20002000,stack_extension=0x1ff01000,msvcrt_entry=0x780017fd;
 // Lifted MSVCRT bodies reachable through MFC42's bound imports (functions and their continuations).
 inline constexpr std::array<Entry,22>msvcrt_entries{{{0x78001000,hs::mw34_attach_memset_body},{0x78001055,hs::mw34_attach_lock_body},{0x78001080,hs::mw34_attach_lock_tail_body},
  {0x7800129e,hs::mw34_attach_unlock_body},{0x780012b3,hs::mw34_allocation_malloc_body},{0x780012c5,hs::mw34_allocation_size_body},{0x780012e3,hs::mw34_allocation_worker_body},
@@ -53,7 +68,77 @@ inline constexpr std::array<Entry,22>msvcrt_entries{{{0x78001000,hs::mw34_attach
  {0x78001428,hs::mw34_allocation_free_tail_body},{0x780014f8,hs::mw34_attach_initterm_body},{0x78001514,hs::mw34_attach_lockexit_body},{0x7800151d,hs::mw34_attach_msize_body},
  {0x780018f9,hs::mw34_attach_calloc_body},{0x78002f32,hs::mw34_attach_strlen_body},{0x78003041,hs::mw34_attach_unlockexit_body},{0x780044dd,hs::mw34_attach_allmul_body},
  {0x78004a36,hs::mw34_attach_onexit_body},{0x7800cc39,hs::mw34_allocation_freecold_body},{0x7800cc97,hs::mw34_allocation_round_body}}};
+// MSVCRT _ftol (0x78002551): FNSTCW, RC := truncate, FLDCW, FISTP qword, FLDCW, then EAX:EDX, the compiler's
+// float-to-integer conversion, called constantly by the game. The lifted body runs it through two rounding-mode
+// bridges (serializing FLDCW/LDMXCSR), two FWAIT exception clears, an FRNDINT bridge and an FNCLEX; for a finite
+// normal or zero ST0 with |ST0| < 2^63 its whole effect is fixed, and this host body produces exactly that effect:
+// - guest stack: [ESP-4] = EBP, [ESP-6] = CW, [ESP-8] = CW|0C00h, [ESP-10h] = the 64-bit result;
+// - registers: EAX:EDX = trunc(ST0), EBP restored, ESP += 4, EIP = the return word; EFLAGS of `or ah,0Ch`
+//   (CF, ZF, OF, AF clear; PF of that byte; SF = CW bit 15);
+// - x87: ST0 popped (the lifted stack rotation: slots shift down, slot 7 = old ST0), TOP + 1, CW unchanged, last
+//   instruction FISTP (opcode 37Dh at 7800256Ah, data pointer [EBP-0Ch]); DE status cleared; and, when neither IE nor
+//   PE is already sticky, PE = inexact;
+// - host: the guest rounding mode mirrored into the x87 CW and MXCSR as the closing FLDCW leaves it, and the host
+//   exception flags clear (the lifted body's FNCLEX; no later operation of this case raises one).
+// Every other operand (NaN, infinity, denormal, unnormal, out of range) takes the lifted body. MW34_FTOL_FAST=0
+// disables this; MW34_FTOL_CHECK=1 runs both on every call and stops on any State, stack or host-FPU difference.
+extern "C" void*__remill_function_return(State*,unsigned,void*)noexcept(false);
+inline bool ftol_fast_on(){static const bool on=[]{const char*e=std::getenv("MW34_FTOL_FAST");return !(e&&*e=='0');}();return on;}
+inline bool ftol_check_on(){static const bool on=[]{const char*e=std::getenv("MW34_FTOL_CHECK");return e&&*e=='1';}();return on;}
+// False when the operand needs the lifted body (nothing has been changed then); otherwise sets the return word.
+inline bool ftol_core(State*st,unsigned pc,void*p,unsigned&ret_out){
+ auto*S=reinterpret_cast<unsigned char*>(st);auto*M=static_cast<unsigned char*>(p);
+ auto rd32=[&](unsigned o){unsigned v;std::memcpy(&v,S+o,4);return v;};auto wr32=[&](unsigned o,unsigned v){std::memcpy(S+o,&v,4);};
+ auto rd16=[&](unsigned o){unsigned short v;std::memcpy(&v,S+o,2);return v;};auto wr16=[&](unsigned o,unsigned short v){std::memcpy(S+o,&v,2);};
+ std::uint64_t m;unsigned short se;std::memcpy(&m,S+0x9b6,8);std::memcpy(&se,S+0x9be,2);const unsigned e=se&0x7fffU;const bool neg=(se>>15)!=0;
+ std::uint64_t ip;bool inexact;
+ if(e==0&&m==0){ip=0;inexact=false;}
+ else{if(e==0||e==0x7fff||!(m>>63)||e>16383U+62U)return false;  // denormal/unnormal/NaN/infinity or |x| >= 2^63
+  if(e<16383U){ip=0;inexact=true;}else{const unsigned sh=63U-(e-16383U);ip=m>>sh;inexact=(m&((std::uint64_t(1)<<sh)-1))!=0;}}
+ const std::uint64_t rc=neg?std::uint64_t(0)-ip:ip;
+ const unsigned ss=rd32(0x848),esp0=rd32(0x908),ebp0=rd32(0x918),frame=esp0-4;const unsigned short cw=rd16(0xad0);
+ auto mem=[&](unsigned a){return M+a;};
+ std::memcpy(mem(frame+ss),&ebp0,4);                                   // push ebp
+ std::memcpy(mem(ss+esp0-6),&cw,2);                                    // fnstcw [ebp-2]
+ const unsigned short tcw=static_cast<unsigned short>(cw|0x0c00);std::memcpy(mem(ss+esp0-8),&tcw,2);  // [ebp-4]
+ const unsigned char ah=static_cast<unsigned char>((cw>>8)|0x0c);
+ S[0x811]=0;S[0x813]=static_cast<unsigned char>((__builtin_popcount(ah)&1)==0);S[0x817]=0;S[0x819]=static_cast<unsigned char>((cw>>15)&1);S[0x81d]=0;S[0x815]=0;
+ const unsigned fd=frame+ss-0xc;
+ wr16(0xad6,0x37d);wr32(0xad8,pc+0x19);wr16(0xadc,rd16(0x83e));wr32(0xae0,fd);wr16(0xae4,rd16(0x83a));
+ S[0xac1]=0;                                                            // DE := host DE (clear)
+ if((S[0xac3]|S[0xab9])==0){S[0xab9]=static_cast<unsigned char>(inexact);S[0xac3]=0;}
+ std::memcpy(mem(fd),&rc,8);                                            // fistp qword [ebp-0Ch]
+ {unsigned char old[10];std::memcpy(old,S+0x9b6,10);for(unsigned i=0;i<7;++i)std::memmove(S+0x9b6+16*i,S+0x9c6+16*i,10);std::memcpy(S+0xa26,old,10);}
+ {const unsigned short sw=rd16(0xad2);wr16(0xad2,static_cast<unsigned short>((sw&~0x3800U)|((sw+0x800U)&0x3800U)));}
+ unsigned short cw2;std::memcpy(&cw2,mem(frame+ss-2),2);wr16(0xad0,cw2);
+ unsigned lo,hi,ebp1,ret;std::memcpy(&lo,mem(frame+ss-0xc),4);std::memcpy(&hi,mem(frame+ss-8),4);std::memcpy(&ebp1,mem(frame+ss),4);std::memcpy(&ret,mem(frame+ss+4),4);
+ wr32(0x8a8,lo);wr32(0x8d8,hi);wr32(0x918,ebp1);wr32(0x908,frame+8);wr32(0x9a8,ret);
+ {const unsigned mode=(cw2>>10)&3U;unsigned short hc;__asm__ volatile("fnstcw %0":"=m"(hc));const unsigned short nc=static_cast<unsigned short>((hc&~0xc00)|(mode<<10));if(nc!=hc)__asm__ volatile("fldcw %0"::"m"(nc));
+  unsigned mx;__asm__ volatile("stmxcsr %0":"=m"(mx));const unsigned nmx=(mx&~0x6000U)|(mode<<13);if(nmx!=mx)__asm__ volatile("ldmxcsr %0"::"m"(nmx));
+  unsigned short hs;__asm__ volatile("fnstsw %0":"=m"(hs));if(hs&0x80ffU)__asm__ volatile("fnclex":::"memory");}
+ ret_out=ret;return true;}
+inline void*ftol_body(State*s,unsigned a,void*p){
+ if(!ftol_check_on()){unsigned ret;if(ftol_core(s,a,p,ret))return __remill_function_return(s,ret,p);return mw34_attach_m_78002551_body(s,a,p);}
+ // Differential check: the host body on a snapshot, then the lifted body on the original; both results compared.
+ static std::uint64_t checked{},fallbacks{};
+ std::array<unsigned char,3504>s0,s1;std::memcpy(s0.data(),s,3504);
+ const unsigned ss=reinterpret_cast<const unsigned*>(reinterpret_cast<unsigned char*>(s)+0x848)[0],esp0=reinterpret_cast<const unsigned*>(reinterpret_cast<unsigned char*>(s)+0x908)[0];
+ unsigned char*mb=static_cast<unsigned char*>(p)+(ss+esp0-0x10);std::array<unsigned char,20>m0,m1;std::memcpy(m0.data(),mb,20);
+ struct alignas(4) Env{std::uint32_t w[7];}e0;unsigned mx0;__asm__ volatile("fnstenv %0\n\tfldenv %0":"+m"(e0)::"memory");__asm__ volatile("stmxcsr %0":"=m"(mx0));
+ unsigned ret;if(!ftol_core(s,a,p,ret)){++fallbacks;return mw34_attach_m_78002551_body(s,a,p);}
+ std::memcpy(s1.data(),s,3504);std::memcpy(m1.data(),mb,20);unsigned short c1,w1;unsigned x1;__asm__ volatile("fnstcw %0\n\tfnstsw %1":"=m"(c1),"=m"(w1));__asm__ volatile("stmxcsr %0":"=m"(x1));
+ std::memcpy(s,s0.data(),3504);std::memcpy(mb,m0.data(),20);__asm__ volatile("fldenv %0"::"m"(e0):"memory");__asm__ volatile("ldmxcsr %0"::"m"(mx0));
+ void*r=mw34_attach_m_78002551_body(s,a,p);
+ unsigned short c2,w2;unsigned x2;__asm__ volatile("fnstcw %0\n\tfnstsw %1":"=m"(c2),"=m"(w2));__asm__ volatile("stmxcsr %0":"=m"(x2));
+ const auto*sn=reinterpret_cast<const unsigned char*>(s);std::string diff;
+ for(unsigned i=0;i<3504;++i)if(sn[i]!=s1[i]){char b[48];std::snprintf(b,sizeof b," state+%x lifted %02x host %02x",i,sn[i],s1[i]);diff+=b;if(diff.size()>400)break;}
+ for(unsigned i=0;i<20;++i)if(mb[i]!=m1[i]){char b[48];std::snprintf(b,sizeof b," stack[esp-%x] lifted %02x host %02x",0x10-i,mb[i],m1[i]);diff+=b;}
+ if(c1!=c2||(w1&0x80ff)!=(w2&0x80ff)||x1!=x2){char b[96];std::snprintf(b,sizeof b," host cw %04x/%04x sw %04x/%04x mxcsr %08x/%08x",c2,c1,w2,w1,x2,x1);diff+=b;}
+ if(!diff.empty()){std::fprintf(stderr,"_ftol check mismatch after %llu checks (lifted/host):%s\n",(unsigned long long)checked,diff.c_str());throw std::runtime_error("_ftol host body differs from the lifted body");}
+ if((++checked&((1ULL<<20)-1))==0)std::fprintf(stderr,"_ftol check: %llu identical, %llu lifted fallbacks\n",(unsigned long long)checked,(unsigned long long)fallbacks);
+ return r;}
 inline Body find_uncached(unsigned a){
+ if(a==0x78002551&&ftol_fast_on())return &ftol_body;
  auto it=std::lower_bound(mfc_entries.begin(),mfc_entries.end(),a,[](const Entry&e,unsigned v){return e.addr<v;});if(it!=mfc_entries.end()&&it->addr==a)return it->body;
  for(const auto&e:msvcrt_entries)if(e.addr==a)return e.body;return nullptr;}
 // The entry tables are fixed at build time, so a direct-mapped cache of recent lookups (hits and misses) returns
@@ -317,7 +402,7 @@ struct Stage {
    from_entry=true;low=stack_extension;return;}
   if(kind==Kind::initterm){
    // The game's main _initterm CALL through its import thunk, after native MSVCRT and MFC42 attach.
-   if(g.rip.dword!=initterm_thunk||load(entry_esp)!=0x5ac480||load(entry_esp+4)!=0x5e0000||load(entry_esp+8)!=0x5e0244||!heap.handle||!host.all_attached()||host.game_imports.empty())
+   if(g.rip.dword!=initterm_thunk||load(entry_esp)!=entry_continuation||load(entry_esp+4)!=initializer_begin||load(entry_esp+8)!=initializer_end||!heap.handle||!host.all_attached()||host.game_imports.empty())
     deny("Exact game main _initterm CALL after native MSVCRT and MFC42 attach required",entry_esp);
    low=stack_extension;return;}
   if(kind==Kind::call){
@@ -348,7 +433,11 @@ struct Stage {
  static bool provider_published(unsigned a,unsigned n){const auto e=std::uint64_t(a)+n;return (a>=0x32000000&&e<=0x32201000)||(a>=0x33000000&&e<=0x33001000);}
  // Virtual surface pixel memory (the game writes it through Lock pointers and its own renderer).
  bool in_surfaces(unsigned a,unsigned n)const{const auto e=std::uint64_t(a)+n;for(const auto&v:host.vsurfaces)if(a>=v.mem&&e<=std::uint64_t(v.mem)+v.bytes)return true;return false;}
- bool frame(unsigned a,unsigned n,bool write)const{if(kind==Kind::initterm)return a>=low&&std::uint64_t(a)+n<=game_stack_top;return a>=low&&std::uint64_t(a)+n<=(write?entry_esp:entry_esp+16);}
+ bool frame(unsigned a,unsigned n,bool write)const{if(kind==Kind::initterm)return a>=low&&std::uint64_t(a)+n<=game_stack_top;
+  // PM's MFC42/ MSVCP60 entry stores its DllMain result in the caller-owned reason argument.
+  // Only the recovered DWORD is writable; the outer return word and other arguments stay protected.
+  if(write&&kind==Kind::attach&&attach_result_argument_offset&&a>=entry_esp+attach_result_argument_offset&&std::uint64_t(a)+n<=entry_esp+attach_result_argument_offset+4)return true;
+  return a>=low&&std::uint64_t(a)+n<=(write?entry_esp:entry_esp+16);}
  bool in_module(unsigned a,unsigned n,bool write)const{const auto e=std::uint64_t(a)+n;for(const auto&m:host.modules){if(!write){if(a>=m.base&&e<=m.end)return true;}else for(const auto&[lo,hi]:m.writable)if(a>=lo&&e<=hi)return true;}return false;}
  bool in_thread_stack(unsigned a,unsigned n)const{for(const auto&t:host.threads)if(!t.exited&&a>=t.stack_lo&&std::uint64_t(a)+n<=t.stack_hi)return true;return false;}
  // Exact fast paths: each is a subset of the full predicate below, gated by the arena the predicate's
@@ -384,12 +473,12 @@ struct Stage {
    std::fprintf(hud_log,"\n");}
   hud_frame.clear();}
  void*enter(State*s,unsigned target,void*p,Body body){if(depth>=returns.size())deny("MFC42-stage call depth bound",target);if(hud_log)hud_capture(target);{void*r{};if(hud_intercept(target,p,r))return r;}
-  if(kind==Kind::initterm&&depth==0)for(unsigned i=0;i<145;++i)if(load(0x5e0000+4*i)==target&&load(state.gpr.rsp.dword)>=msvcrt_base){root_index=i;root_addr=target;break;}{const unsigned sp=state.gpr.rsp.dword,w=load(sp);
+  if(kind==Kind::initterm&&depth==0)for(unsigned i=0;i<(initializer_end-initializer_begin)/4;++i)if(load(initializer_begin+4*i)==target&&load(state.gpr.rsp.dword)>=msvcrt_base){root_index=i;root_addr=target;break;}{const unsigned sp=state.gpr.rsp.dword,w=load(sp);
    /* A direct tail JMP to a function entry is lifted as a tail call through the CALL router: it enters with
       ESP at the slot of the active return word (a real CALL always enters strictly deeper) and binds nothing new. */
    if(!(depth&&sp==returns_sp[depth-1]&&w==returns[depth-1])){returns_sp[depth]=sp;returns[depth++]=w;}else{max_depth=std::max(max_depth,depth);++bodies;return body(s,target,p);}}
    max_depth=std::max(max_depth,depth);++bodies;const unsigned mine=depth-1;
-   if(seh_test&&(in_wndproc||seh_test_any)&&target>=0x401000&&target<0x5bb000&&!--seh_test)try{seh_test_throw(target);}catch(const GuestReturn&r){if(r.frame!=mine)throw;depth=mine;return p;}
+   if(seh_test&&(in_wndproc||seh_test_any)&&target>=game_code_begin&&target<game_code_end&&!--seh_test)try{seh_test_throw(target);}catch(const GuestReturn&r){if(r.frame!=mine)throw;depth=mine;return p;}
    try{return body(s,target,p);}catch(const GuestReturn&r){if(r.frame!=mine)throw;depth=mine;return p;}}
  void*called(State*s,unsigned target,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=target)deny("Exact MFC42-stage CALL State",target);const Body b=find(target);if(!b)deny("Direct CALL target outside the lifted MFC42 closure",target);return enter(s,target,p,b);}
  void*function_call(State*s,unsigned target,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=target)deny("Exact MFC42-stage indirect CALL State",target);
@@ -397,7 +486,8 @@ struct Stage {
   if(const auto*i=game_import(target)){if(!i->bound)return api(s,target,p);const Body b=find(i->bound);if(!b)deny("Game import has no lifted provider body: "+i->dll+"!"+i->name,i->bound);state.gpr.rip.dword=i->bound;return enter(s,i->bound,p,b);}
   if((target>=token_base&&target<token_end)||host.by_raw(target))return api(s,target,p);
   if(const auto*i=host.by_bound(target))deny("Bound import has no lifted provider body yet: "+i->dll+"!"+i->name,target);
-  deny("Indirect CALL target outside the lifted closure, bound imports and service tokens",target);}
+  {std::ostringstream detail;detail<<"Indirect CALL target outside the lifted closure, bound imports and service tokens; return=0x"<<std::hex<<load(state.gpr.rsp.dword)<<" ecx=0x"<<state.gpr.rcx.dword;
+   if(readable(state.gpr.rcx.dword,4))try{detail<<" [ecx]=0x"<<runtime.memory().load<unsigned>({state.gpr.rcx.dword});}catch(const std::exception&){detail<<" [ecx]=unmapped";}deny(detail.str(),target);}}
  void*returned(State*s,unsigned target,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=target)deny("Exact MFC42-stage RET State",target);
   if(depth){if(target!=returns[depth-1]){
      for(unsigned j=depth-1;j-->0;)if(returns[j]==target){const unsigned sp=state.gpr.rsp.dword,at=returns_sp[j]+4;if(sp>=at&&sp<=at+256&&!((sp-at)&3)){++host.nonlocal_returns;if(const char*q=std::getenv("MW34_SEH_LOG");q&&*q)std::fprintf(stderr,"nonlocal return to 0x%08x: frame %u of %u (raises %llu unwinds %llu)\n",target,j,depth,(unsigned long long)host.raises,(unsigned long long)host.unwinds);throw GuestReturn(j);}break;}
@@ -419,7 +509,7 @@ struct Stage {
 // (compilers also emit INT3 as padding between functions, which lifted spans may contain but never run).
 void*trap(State*s,unsigned pc,void*p){guard(p);char h[64];std::snprintf(h,sizeof h,"Trap instruction reached (hyper call %u)",unsigned(s?reinterpret_cast<const std::uint32_t*>(s)[2]:0));
  stop(m4_runtime::FaultReason::unimplemented_seh_dispatch,std::string(h)+"; exception dispatch is not modelled",pc);}
-void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::unimplemented_seh_dispatch,"Divide error (#DE) in lifted MFC42 source; SEH dispatch is not modelled",pc);}
+void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::unimplemented_seh_dispatch,"Divide error (#DE) in lifted x86 source; hardware SEH dispatch is not modelled",pc);}
  bool in_atomic{};unsigned atomics{};
  void*atomic(void*p,bool begin){guard(p);if(in_atomic==begin)deny("Unbalanced LOCK atomic markers");in_atomic=begin;if(begin)++atomics;return p;}
  unsigned char undefined(){if(owner!=this||!active)deny("MFC42-stage undefined flag outside Stage");++undefined_count;return 0;}
@@ -642,7 +732,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
  void*api(State*s,unsigned token,void*p){guard(p);if(s!=&state||state.gpr.rip.dword!=token)deny("Exact MFC42-stage import State",token);
   const Import*imp=host.by_bound(token);const Import*gi=imp?nullptr:game_import(token);bool crt=false;if(gi)imp=gi;if(!imp){crt=true;imp=host.by_raw(token);}if(!imp)deny("Unbound service token",token);
   auto&g=state.gpr;const unsigned e=g.rsp.dword,ret=load(e);const std::string&n=imp->name;if(apis.size()>=400000){apis.erase(apis.begin(),apis.begin()+200000);apis_dropped+=200000;}{auto&lb=imp->label[crt?1:gi?2:0];if(lb.empty())lb=(crt?"MSVCRT>":gi?"GAME>":"")+imp->dll+"!"+n;apis.push_back(lb);}
-  if(gi?!(ret>=0x401000&&ret<0x5bb000):crt?!(ret>=msvcrt_base+0x1000&&ret<msvcrt_text_end):(!find(ret)&&!in_module(ret,1,false)&&!(kind==Kind::initterm&&ret>=0x401000&&ret<0x5bb000)&&!(ret>=msvcrt_base+0x1000&&ret<msvcrt_text_end)))deny("Service return word outside the importing module's code",ret);  // MSVCRT code also calls GetProcAddress tokens (FDIV initializer)
+  if(gi?!(ret>=game_code_begin&&ret<game_code_end):crt?!(ret>=msvcrt_base+0x1000&&ret<msvcrt_text_end):(!find(ret)&&!in_module(ret,1,false)&&!(kind==Kind::initterm&&ret>=game_code_begin&&ret<game_code_end)&&!(ret>=msvcrt_base+0x1000&&ret<msvcrt_text_end)))deny("Service return word outside the importing module's code",ret);  // MSVCRT code also calls GetProcAddress tokens (FDIV initializer)
   auto arg=[&](unsigned i){return load(e+4+4*i);};
   const bool gdi_sync=!host.dibs.empty()&&(same(imp->dll,"GDI32.dll")||n=="FillRect"||n=="DrawTextA"||n=="ReleaseDC"||n=="GetDC");if(gdi_sync)dibs_to_host();
   auto done=[&](unsigned eax,unsigned args){if(!callback_fault.empty())deny("Guest callback fault: "+callback_fault,0);{static FILE*const tr=[]{const char*q=std::getenv("MW34_TRACE_SERVICES");FILE*f=q&&*q?std::fopen(q,"w"):nullptr;if(f)std::setvbuf(f,nullptr,_IOFBF,1<<26);return f;}();static const std::string only=[]{const char*q=std::getenv("MW34_TRACE_ONLY");return q?std::string(",")+q+",":std::string();}();if(tr&&host.frames<=12&&(only.empty()||only.find(","+n+",")!=std::string::npos)){std::fprintf(tr,"%llu %s eax=%08x ret=%08x a0=%08x a1=%08x a2=%08x esp=%08x msg=%04x\n",(unsigned long long)host.frames,n.c_str(),eax,ret,args?load(e+4):0U,args>1?load(e+8):0U,args>2?load(e+12):0U,e,((n=="PeekMessageA"||n=="GetMessageA")&&eax&&eax!=0xffffffffU)?load(load(e+4)+4):0U);}else if(tr&&host.frames==13){std::fflush(tr);}}/* MW34_TRACE_SERVICES=<file> [MW34_TRACE_ONLY=name,...]: services of frames 0-12 with results, for finding replay divergence */if(gdi_sync)dibs_to_guest();g.rax.dword=eax;g.rsp.dword=e+4+4*args;g.rip.dword=ret;++api_calls;return p;};
@@ -685,6 +775,14 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(!size)deny("GetModuleFileNameA with an empty buffer",a);if(!writable(a,size))deny("GetModuleFileNameA output outside the memory contract",a);const std::string&path=it->second;
    const unsigned k=unsigned(std::min<std::size_t>(path.size(),size-1));for(unsigned i=0;i<k;++i)runtime.memory().store<unsigned char>({a+i},static_cast<unsigned char>(path[i]));runtime.memory().store<unsigned char>({a+k},0);
    if(path.size()>=size){host.last_error=ERROR_INSUFFICIENT_BUFFER;return done(size,3);}host.last_error=0;return done(k,3);}
+  if(n=="InitCommonControlsEx"){
+   const unsigned record=arg(0);if(load(record)!=sizeof(INITCOMMONCONTROLSEX))deny("InitCommonControlsEx requires the x86 two-DWORD record",record);
+   INITCOMMONCONTROLSEX request{sizeof(INITCOMMONCONTROLSEX),load(record+4)};
+   struct ControlsProvider{HMODULE module=::LoadLibraryExW(L"comctl32.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);~ControlsProvider(){if(module)::FreeLibrary(module);}};
+   static const ControlsProvider provider;using Init=BOOL(WINAPI*)(const INITCOMMONCONTROLSEX*);
+   const auto init=provider.module?reinterpret_cast<Init>(::GetProcAddress(provider.module,"InitCommonControlsEx")):nullptr;
+   if(!init)deny("Windows common-controls provider unavailable",request.dwICC);
+   BOOL ok{};{LastError l(host);ok=init(&request);}return done(ok?1U:0U,1);}
   if(n=="GetVersion"){DWORD v{};{LastError l(host);v=::GetVersion();}return done(v,0);}
   if(n=="GetCurrentThreadId"){return done(cur_tid(),0);}
   // Normal process termination: DLL_PROCESS_DETACH (lpReserved non-zero) runs natively for every loaded module
@@ -752,6 +850,10 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   // Handles of the real window station/GDI are 32-bit significant; anything else stops, never truncates.
   auto ghandle=[&](const void*h){const auto v=reinterpret_cast<std::intptr_t>(h);if(v!=std::intptr_t(std::int32_t(v)))deny(n+" returned a handle not representable as a guest word",0);return unsigned(v);};
   auto hhandle=[&](unsigned v){return reinterpret_cast<HANDLE>(std::intptr_t(std::int32_t(v)));};
+  if(n=="ExtEscape"){
+   if(arg(1)!=QUERYESCSUPPORT||arg(2)!=sizeof(int)||!readable(arg(3),4)||arg(4)||arg(5))deny("ExtEscape outside the recovered QUERYESCSUPPORT integer/no-output contract",arg(1));
+   const int query=int(load(arg(3)));int result{};{LastError l(host);result=::ExtEscape(static_cast<HDC>(hhandle(arg(0))),QUERYESCSUPPORT,sizeof(query),reinterpret_cast<LPCSTR>(&query),0,nullptr);}
+   apis.back()+="(QUERYESCSUPPORT "+std::to_string(query)+")="+std::to_string(result);return done(unsigned(result),6);}
   // Interlocked operations on guest words: the guest runs on one host thread inside one Stage, so a
   // contract-checked read-modify-write is the exact atomic result.
   if(n.rfind("Interlocked",0)==0){const unsigned a=arg(0);if(a%4||!writable(a,4))deny(n+" target outside the memory contract",a);const unsigned old=load(a);
@@ -801,6 +903,13 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    ov.keys[k->path][v]={Host::RegOverlay::deleted,{}};save_reg_overlay();return done(ERROR_SUCCESS,2);}
   if(n=="RegCloseKey"){const unsigned g=arg(0);if(!rootname(g).empty())return done(ERROR_SUCCESS,1);auto it=std::find_if(host.vkeys.begin(),host.vkeys.end(),[&](const auto&k){return k.guest==g;});if(it==host.vkeys.end())deny("RegCloseKey of a key the guest does not own",g);
    if(it->real)::RegCloseKey(it->real);host.vkeys.erase(it);return done(ERROR_SUCCESS,1);}
+  if(n=="RegFlushKey"){auto*k=keyof(arg(0));if(!k||!ov_has_key(k->path))deny("RegFlushKey requires an owned overlay key",arg(0));
+   // RegSetValue already closes the new overlay before publishing it. Flush the actual
+   // persisted file now; never flush or write the real machine registry.
+   const DWORD saved_error=::GetLastError();DWORD status=ERROR_SUCCESS;
+   HANDLE file=::CreateFileA(ov.file.c_str(),GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+   if(file==INVALID_HANDLE_VALUE)status=::GetLastError();else{if(!::FlushFileBuffers(file))status=::GetLastError();if(!::CloseHandle(file)&&status==ERROR_SUCCESS)status=::GetLastError();}
+   ::SetLastError(saved_error);apis.back()+="("+k->path+", overlay durable)="+std::to_string(status);return done(status,1);}
   if(n.rfind("RegCreateKey",0)==0||n.rfind("RegSetValue",0)==0||n.rfind("RegDelete",0)==0)deny(n+" would modify the host registry; not authorized",0);
   if(n=="GetVersionExA"){const unsigned a=arg(0);if(!writable(a,4))deny("GetVersionExA buffer outside the memory contract",a);const unsigned size=load(a);
    if(size!=sizeof(OSVERSIONINFOA)&&size!=sizeof(OSVERSIONINFOEXA)){host.last_error=ERROR_INSUFFICIENT_BUFFER;return done(0,1);}if(!writable(a,size))deny("GetVersionExA buffer outside the memory contract",a);
@@ -828,6 +937,16 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(same(imp->dll,"DDRAW.DLL")&&n=="DirectDrawCreate"){const unsigned guid=arg(0),out=arg(1),outer=arg(2);if(guid||outer)deny("DirectDrawCreate with a device GUID or aggregation is not modelled",guid|outer);
    if(!writable(out,4))deny("DirectDrawCreate output outside the memory contract",out);auto&d=ddraw();LPDIRECTDRAW dd{};const HRESULT hr=d.create(nullptr,&dd,nullptr);apis.back()+="="+std::to_string(unsigned(hr));
    store(out,SUCCEEDED(hr)&&dd?com_wrap(dd,*com::by_name("IDirectDraw")):0);return done(unsigned(hr),3);}
+  // PM's version probe calls DirectDrawCreateEx(NULL, &dd7, IID_IDirectDraw7, NULL)
+  // at 5A1718, then releases the returned interface at 5A172B. Use the real provider.
+  if(same(imp->dll,"DDRAW.DLL")&&n=="DirectDrawCreateEx"){
+   if(arg(0)||arg(3))deny("DirectDrawCreateEx device GUID/aggregation not recovered",arg(0)|arg(3));
+   const unsigned out=arg(1);if(!writable(out,4))deny("DirectDrawCreateEx output outside the memory contract",out);
+   const GUID iid=guest_guid(arg(2));if(!IsEqualGUID(iid,IID_IDirectDraw7))deny("DirectDrawCreateEx requested IID outside the recovered DD7 version probe",arg(2));
+   auto&d=ddraw();if(!d.create_ex)d.create_ex=reinterpret_cast<decltype(d.create_ex)>(::GetProcAddress(d.module,"DirectDrawCreateEx"));if(!d.create_ex)deny("Provider DirectDrawCreateEx export unavailable");
+   void*q{};const HRESULT hr=d.create_ex(nullptr,&q,iid,nullptr);apis.back()+="(IDirectDraw7 version probe)="+std::to_string(unsigned(hr));
+   if(FAILED(hr)&&q)deny("DirectDrawCreateEx returned a non-null interface on failure");
+   store(out,q?com_wrap(static_cast<IUnknown*>(q),*com::by_name("IDirectDraw7")):0);return done(unsigned(hr),4);}
   // DirectPlayLobbyCreateA (DPLAYX ordinal 4): project-implemented lobby object. This process was not
   // launched by a DirectPlay lobby, so GetConnectionSettings reports DPERR_NOTLOBBIED, as DirectPlay does.
   if(imp->dll=="DPLAYX.dll"&&n=="#4"){const unsigned guid=arg(0),out=arg(1),outer=arg(2);if(guid||outer||arg(3)||arg(4))deny("DirectPlayLobbyCreateA with a GUID, aggregation or data is not modelled",guid|outer);
@@ -847,7 +966,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(!o->native&&(imp->dll=="IDirectDrawClipper"||imp->dll=="IDirectDrawPalette"))return vdd_aux(*imp,token,argf,donef);
    if(!o->native&&com::is_d3d(ci))return d3d_call(*imp,token,argf,donef);
    // The Direct3D3 provider answers QueryInterface(IID_IDirect3D3) on every DirectDraw object.
-   if(o->native&&n=="QueryInterface"&&com::is_dd(ci)&&IsEqualGUID(guest_guid(arg(1)),IID_IDirect3D3))return d3d_query(*o,arg(2),donef);
+   if(o->native&&n=="QueryInterface"&&com::is_dd(ci)&&imp->dll!="IDirectDraw7"&&IsEqualGUID(guest_guid(arg(1)),IID_IDirect3D3))return d3d_query(*o,arg(2),donef);
    if(n=="AddRef"){++o->refs;return done(o->native->AddRef(),1);}
    if(n=="Release"){if(!o->refs)deny("Release of a proxy whose references are already released",arg(0));const ULONG c=o->native->Release();apis.back()+="="+std::to_string(c);if(!--o->refs&&c){o->alive=false;o->native=nullptr;}if(!c){o->alive=false;o->native=nullptr;
      auto parent=[](const com::Iface*i){return com::is_dd(i)||std::string(i->name)=="IDirectSound";};
@@ -858,6 +977,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
     void*q{};const HRESULT hr=o->native->QueryInterface(g,&q);apis.back()+="="+std::to_string(unsigned(hr));
     if(SUCCEEDED(hr)&&q){const auto*wi=com::by_iid(g);if(!wi){static_cast<IUnknown*>(q)->Release();deny("QueryInterface succeeded for an interface without a guest proxy model",arg(1));}store(out,com_wrap(static_cast<IUnknown*>(q),*wi,root_of(*o)));}
     else store(out,0);return done(unsigned(hr),3);}
+   if(imp->dll=="IDirectDraw7")deny("IDirectDraw7 method outside recovered IUnknown version-probe contract: "+n,token);
    const bool is_dd=imp->dll.rfind("IDirectDraw",0)==0&&imp->dll.find("Surface")==std::string::npos;
    if(is_dd&&host.display.exclusive&&n=="CreateSurface"){if(arg(3))deny("CreateSurface aggregation is not modelled",arg(3));return vdd_create_surface(arg(2),arg(1),imp->dll=="IDirectDraw4"?124U:108U,donef);}
    if(is_dd&&host.display.exclusive&&n=="CreateClipper"){if(arg(1)||arg(3))deny("CreateClipper flags/aggregation are not modelled",arg(1));if(!writable(arg(2),4))deny("CreateClipper output outside the memory contract",arg(2));
@@ -918,8 +1038,9 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      if(!writable(out,4))deny("DuplicateSoundBuffer output outside the memory contract",out);LPDIRECTSOUNDBUFFER b{};const HRESULT hr=ds->DuplicateSoundBuffer(reinterpret_cast<LPDIRECTSOUNDBUFFER>(so->native),&b);apis.back()+="="+std::to_string(unsigned(hr));
      store(out,SUCCEEDED(hr)&&b?com_wrap(b,*com::by_name("IDirectSoundBuffer"),root_of(*o)):0);return done(unsigned(hr),3);}
     if(n=="CreateSoundBuffer"){const unsigned a=arg(1),out=arg(2);if(arg(3))deny("CreateSoundBuffer aggregation is not modelled",arg(3));const unsigned size=readable(a,4)?load(a):0;
-     if((size!=20&&size!=36)||!readable(a,size)||!writable(out,4))deny("DSBUFFERDESC outside the contract or with a wrong dwSize",a);DSBUFFERDESC d{};d.dwSize=sizeof(d);d.dwFlags=load(a+4);d.dwBufferBytes=load(a+8);
-     std::vector<unsigned char>wf;if(load(a+16)){wf=guest_waveformat(load(a+16));d.lpwfxFormat=reinterpret_cast<LPWAVEFORMATEX>(wf.data());}if(size==36)deny("DSBUFFERDESC with 3D algorithm GUID is not modelled",a);
+     if((size!=20&&size!=36)||!readable(a,size)||!writable(out,4))deny("DSBUFFERDESC outside the contract or with a wrong dwSize",a);DSBUFFERDESC d{};d.dwSize=sizeof(d);d.dwFlags=load(a+4);d.dwBufferBytes=load(a+8);d.dwReserved=load(a+12);
+     std::vector<unsigned char>wf;if(load(a+16)){wf=guest_waveformat(load(a+16));d.lpwfxFormat=reinterpret_cast<LPWAVEFORMATEX>(wf.data());}
+     if(size==36){static_assert(sizeof(d.guid3DAlgorithm)==16);get_bytes(a+20,&d.guid3DAlgorithm,16);}
      LPDIRECTSOUNDBUFFER b{};const HRESULT hr=ds->CreateSoundBuffer(&d,&b,nullptr);apis.back()+="(flags="+std::to_string(d.dwFlags)+",bytes="+std::to_string(d.dwBufferBytes)+")="+std::to_string(unsigned(hr));
      store(out,SUCCEEDED(hr)&&b?com_wrap(b,*com::by_name("IDirectSoundBuffer"),root_of(*o)):0);return done(unsigned(hr),4);}}
    if(imp->dll=="IDirectSoundBuffer"){auto*b=reinterpret_cast<IDirectSoundBuffer*>(o->native);
@@ -1054,10 +1175,15 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    std::vector<unsigned char>buf(len);for(unsigned i=0;i<len;++i)buf[i]=runtime.memory().load<unsigned char>({a+i});BOOL ok{};{LastError l(host);ok=::GetFileVersionInfoA(f.c_str(),arg(1),len,buf.data());}
    if(ok){for(unsigned i=0;i<len;++i)runtime.memory().store<unsigned char>({a+i},buf[i]);host.ver_blocks[a]=len;}return done(ok?1U:0U,4);}
   if(n=="VerQueryValueA"){const unsigned blk=arg(0);const std::string sub=guest_string(arg(1));const unsigned pp=arg(2),pl=arg(3);if(!readable(blk,6))deny("VerQueryValueA block outside the memory contract",blk);
-   const auto vb=host.ver_blocks.find(blk);if(vb==host.ver_blocks.end())deny("VerQueryValueA on a block GetFileVersionInfoA did not fill",blk);const unsigned total=vb->second;if(!writable(blk,total))deny("VerQueryValueA block outside the memory contract",blk);std::vector<unsigned char>buf(total);for(unsigned i=0;i<total;++i)buf[i]=runtime.memory().load<unsigned char>({blk+i});
+   const auto vb=host.ver_blocks.find(blk);const bool raw=vb==host.ver_blocks.end();unsigned total{};
+   if(raw){const auto allocation=host.gheap.live.find(blk);if(sub!="\\"||allocation==host.gheap.live.end())deny("VerQueryValueA raw resource requires a live allocation and fixed-info root query",blk);
+    total=load(blk)&0xffffU;if(total<92||total>allocation->second)deny("VerQueryValueA raw resource length outside its allocation",blk);
+   }else total=vb->second;
+   if(!writable(blk,total))deny("VerQueryValueA block outside the memory contract",blk);std::vector<unsigned char>buf(total);for(unsigned i=0;i<total;++i)buf[i]=runtime.memory().load<unsigned char>({blk+i});
+   if(raw&&!mw34::version_resource::raw_root_extent(buf))deny("VerQueryValueA raw fixed-info resource header not recovered",blk);
    void*q{};UINT ql{};BOOL ok{};{LastError l(host);ok=::VerQueryValueA(buf.data(),sub.c_str(),&q,&ql);}apis.back()+="("+sub+")";
    for(unsigned i=0;i<total;++i)runtime.memory().store<unsigned char>({blk+i},buf[i]);  // ANSI conversions land in the block's spare area
-   if(ok){const auto off=static_cast<unsigned char*>(q)-buf.data();if(off<0||std::size_t(off)>buf.size())deny("VerQueryValueA result outside the guest block",blk);if(!writable(pp,4)||!writable(pl,4))deny("VerQueryValueA outputs outside the memory contract",pp);store(pp,blk+unsigned(off));store(pl,ql);}
+   if(ok){const auto off=static_cast<unsigned char*>(q)-buf.data();if(off<0||std::size_t(off)>buf.size()||(raw&&(ql>buf.size()-std::size_t(off))))deny("VerQueryValueA result outside the guest block",blk);if(!writable(pp,4)||!writable(pl,4))deny("VerQueryValueA outputs outside the memory contract",pp);store(pp,blk+unsigned(off));store(pl,ql);}
    return done(ok?1U:0U,4);}
   // GetStartupInfoA: the real record, x86 layout, strings copied into the provider string page (as the
   // MSVCRT attach stage does); an inherited CRT handle table is not admitted.
@@ -1096,6 +1222,10 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="UnregisterClassA"){const unsigned cn=arg(0);const std::string cls=cn<0x10000?std::string():class_name(cn);BOOL ok{};{LastError l(host);ok=::UnregisterClassA(cn<0x10000?MAKEINTATOM(cn):cls.c_str(),host_instance(arg(1)));}
    if(ok)host.classes.erase(std::remove_if(host.classes.begin(),host.classes.end(),[&](const auto&c){return cn<0x10000?c.atom==ATOM(cn):_stricmp(c.name.c_str(),cls.c_str())==0;}),host.classes.end());
    apis.back()+="("+(cn<0x10000?std::to_string(cn):cls)+")="+std::to_string(ok);return done(ok?1U:0U,2);}
+  if(n=="CreateDialogIndirectParamA"){
+   std::ostringstream detail;detail<<"CreateDialogIndirectParamA requires dialog-template/callback marshalling; return=0x"<<std::hex<<ret<<" instance=0x"<<arg(0)<<" template=0x"<<arg(1)<<" parent=0x"<<arg(2)<<" callback=0x"<<arg(3)<<" param=0x"<<arg(4)<<" ecx=0x"<<g.rcx.dword;
+   const unsigned t=arg(1);if(readable(t,20)){detail<<" template-header=";for(unsigned i=0;i<9;++i)detail<<(load(t+2*i)&0xffff)<<",";}
+   deny(detail.str(),arg(1));}
   if(n=="CreateWindowExA"){const unsigned cn=arg(1),tn=arg(2);const std::string cls=class_name(cn),title=tn?guest_string(tn):std::string();HWND w{};
    {LastError l(host);w=::CreateWindowExA(arg(0),cn<0x10000?MAKEINTATOM(cn):cls.c_str(),tn?title.c_str():nullptr,arg(3),int(arg(4)),int(arg(5)),int(arg(6)),int(arg(7)),hwnd_of(arg(8)),reinterpret_cast<HMENU>(std::intptr_t(std::int32_t(arg(9)))),host_instance(arg(10)),reinterpret_cast<void*>(std::uintptr_t(arg(11))));}
    apis.back()+="("+cls+","+title+")";return done(w?gwnd(w):0,12);}
@@ -1266,7 +1396,9 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
     const unsigned g2=0x3a000000U+16U*unsigned(host.finds.size()+1);host.finds.push_back({g2,h});for(unsigned i=0;i<320;++i)runtime.memory().store<unsigned char>({out+i},reinterpret_cast<const unsigned char*>(&fd)[i]);return done(g2,2);}
    HANDLE fh{};for(const auto&[g3,hh]:host.finds)if(g3==arg(0))fh=hh;if(!fh)deny("FindNextFileA on a handle the guest does not own",arg(0));BOOL ok{};{LastError l(host);ok=::FindNextFileA(fh,&fd);}
    if(ok)for(unsigned i=0;i<320;++i)runtime.memory().store<unsigned char>({out+i},reinterpret_cast<const unsigned char*>(&fd)[i]);return done(ok?1U:0U,2);}
-  if(n=="FindClose"){auto it=std::find_if(host.finds.begin(),host.finds.end(),[&](const auto&f){return f.first==arg(0);});if(it==host.finds.end())deny("FindClose on a handle the guest does not own",arg(0));BOOL ok{};{LastError l(host);ok=::FindClose(it->second);}host.finds.erase(it);return done(ok?1U:0U,1);}
+  if(n=="FindClose"){
+   if(arg(0)==0xffffffffU||!arg(0)){BOOL ok{};{LastError l(host);ok=::FindClose(arg(0)?INVALID_HANDLE_VALUE:nullptr);}return done(ok?1U:0U,1);}
+   auto it=std::find_if(host.finds.begin(),host.finds.end(),[&](const auto&f){return f.first==arg(0);});if(it==host.finds.end())deny("FindClose on a handle the guest does not own",arg(0));BOOL ok{};{LastError l(host);ok=::FindClose(it->second);}host.finds.erase(it);return done(ok?1U:0U,1);}
   if(n=="GetFullPathNameA"){const std::string q=resolve(arg(0));const unsigned z=arg(1),a=arg(2),fp=arg(3);if(q.size()+1>z)return done(unsigned(q.size())+1,4);if(!writable(a,unsigned(q.size())+1))deny("GetFullPathNameA buffer outside the memory contract",a);
    for(unsigned i=0;i<=q.size();++i)runtime.memory().store<unsigned char>({a+i},static_cast<unsigned char>(q.c_str()[i]));if(fp){if(!writable(fp,4))deny("GetFullPathNameA file part outside the memory contract",fp);const auto sl=q.find_last_of("\\/");store(fp,sl==std::string::npos?a:a+unsigned(sl)+1);}
    return done(unsigned(q.size()),4);}
@@ -1741,6 +1873,34 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="lstrcpynA"){const unsigned k=arg(2);if(!k)return done(arg(0),3);std::string t=guest_string(arg(1));if(t.size()>k-1)t.resize(k-1);put_string(arg(0),t);return done(arg(0),3);}
   // Resources from the literally mapped guest image: HRSRC is the IMAGE_RESOURCE_DATA_ENTRY address
   // and the resource HGLOBAL is the data address, as on Win32.
+  // PM enumerates the original executable's RT_VERSION names at 4B2F8C; its
+  // stdcall callback 4B2F60 records the first name and returns FALSE. Let Win32
+  // enumerate a data-only mapping (no original code runs), including cancellation/errors.
+  if(n=="EnumResourceNamesA"){
+   const unsigned h=arg(0)?arg(0):0x400000,typ=arg(1),cb=arg(2),ctx=arg(3);
+   const auto path=host.paths.find(h);if(path==host.paths.end())deny("EnumResourceNamesA on an unmapped module",h);
+   if(!find(cb))deny("EnumResourceNamesA callback has no lifted body",cb);
+   const std::string type=typ>=0x10000?guest_string(typ):std::string();
+   const LPCSTR native_type=typ<0x10000?MAKEINTRESOURCEA(typ):type.c_str();
+   HMODULE data_module{};{LastError l(host);data_module=::LoadLibraryExA(path->second.c_str(),nullptr,LOAD_LIBRARY_AS_DATAFILE|LOAD_LIBRARY_AS_IMAGE_RESOURCE);}
+   if(!data_module)return done(0,4);
+   struct CloseData{HMODULE h;~CloseData(){const DWORD error=::GetLastError();::FreeLibrary(h);::SetLastError(error);}}close_data{data_module};
+   struct C{Stage*stage;unsigned module,callback,context,calls;};C c{this,h,cb,ctx,0};BOOL ok{};
+   {LastError l(host);ok=::EnumResourceNamesA(data_module,native_type,[](HMODULE, LPCSTR type,LPSTR name,LONG_PTR data)->BOOL{
+     auto&c=*reinterpret_cast<C*>(data);auto&s=*c.stage;
+     if(!s.callback_fault.empty())return FALSE;
+     try{unsigned at=(s.state.gpr.rsp.dword-0x100)&~15U;
+      const unsigned t=s.scratch_string(at,type),nm=s.scratch_string(at,name);++c.calls;
+      return BOOL(s.call_guest(c.callback,{c.module,t,nm,c.context},true,"EnumResourceNamesA callback",at&~15U));
+     }catch(const std::exception&e){s.callback_fault=e.what();return FALSE;}
+    },reinterpret_cast<LONG_PTR>(&c));}
+   apis.back()+="("+std::to_string(c.calls)+" callbacks, error="+std::to_string(host.last_error)+")";return done(ok?1U:0U,4);}
+  if(n=="FindResourceExA"){
+   const unsigned h=arg(0)?arg(0):0x400000;if(!host.paths.count(h))deny("FindResourceExA on an unmapped module",h);
+   if(h!=0x400000||arg(1)!=16||arg(2)!=1||arg(3))deny("FindResourceExA outside recovered executable version-resource/neutral-language contract",h);
+   auto key=[&](unsigned a){if(a<0x10000)return std::pair<unsigned,std::string>{a,{}};std::string text=guest_string(a);for(auto&ch:text)ch=char(std::toupper(static_cast<unsigned char>(ch)));return std::pair<unsigned,std::string>{0xffffffffU,text};};
+   const unsigned found=resource(h,key(arg(1)),key(arg(2)));if(!found)deny("Exact executable version resource unavailable after identity verification",h);
+   return done(found,4);}
   if(n=="FindResourceA"){const unsigned h=arg(0)?arg(0):0x400000;if(!host.paths.count(h))deny("FindResourceA on a module without a mapped image",h);
    auto key=[&](unsigned v)->std::pair<unsigned,std::string>{if(v<0x10000)return {v,{}};std::string t=guest_string(v);if(t.size()>1&&t[0]=='#')return {unsigned(std::stoul(t.substr(1))),{}};
     std::transform(t.begin(),t.end(),t.begin(),[](unsigned char c){return char(std::toupper(c));});return {0xffffffffU,t};};

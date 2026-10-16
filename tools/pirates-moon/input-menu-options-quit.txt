@@ -1,0 +1,21 @@
+# 50 ms/frame, -nofmv: Options, Escape back, Escape quit prompt, click OK.
+# Verified on the original reference; native replay is tracked in the startup document.
+40 mouse -35 19 0
+45 mouse -35 19 0
+50 mouse -35 19 0
+55 mouse -35 19 0
+60 mouse -35 19 0
+68 mouse 0 0 1
+72 mouse 0 0 0
+110 key 01 down
+112 key 01 up
+
+
+180 key 01 down
+182 key 01 up
+190 mouse 30 -14 0
+193 mouse 30 -14 0
+196 mouse 30 -14 0
+199 mouse 30 -14 0
+204 mouse 0 0 1
+208 mouse 0 0 0

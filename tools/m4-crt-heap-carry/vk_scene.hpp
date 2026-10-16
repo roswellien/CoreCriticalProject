@@ -315,7 +315,8 @@ public:
         if (!device) init();
         if (s.width != width || s.height != height || scale_req != scale) target(s.width, s.height);
         const VkDeviceSize pixels = VkDeviceSize(width) * height;
-        if (s.color.size() != pixels || s.depth.size() != pixels) throw std::runtime_error("Scene buffers do not match the target");
+        // The host-side buffers carry pixels only for an upload or a readback; a GPU-resident scene leaves them empty.
+        if ((upload_in || readback_out) && (s.color.size() != pixels || s.depth.size() != pixels)) throw std::runtime_error("Scene buffers do not match the target");
         const VkDeviceSize colorBytes = pixels * (rgba ? 4 : 2), depthBytes = pixels * 2;
         ensure(upload, colorBytes + depthBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         ensure(readback, colorBytes + depthBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
@@ -524,7 +525,7 @@ private:
 #define MW34_VK_FNS(X) X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceProperties) \
     X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkEnumerateDeviceExtensionProperties)
 #define MW34_VK_WSI_FNS(X) X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
-    X(vkGetPhysicalDeviceSurfaceFormatsKHR)
+    X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR)
 #define MW34_VK_SWAP_FNS(X) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) X(vkAcquireNextImageKHR) X(vkQueuePresentKHR) \
     X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage) X(vkCmdClearColorImage)
 #define MW34_VK_DEV_FNS(X) X(vkDestroyDevice) X(vkDeviceWaitIdle) X(vkGetDeviceQueue) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
@@ -802,6 +803,8 @@ private:
         t = {};
     }
     void target(unsigned w, unsigned h) {
+        if (static const bool log = [] { const char *e = std::getenv("MW34_VK_LOG"); return e && *e == '1'; }(); log)
+            std::fprintf(stderr, "vk target %ux%u scale %.2f (was %ux%u scale %.2f, scenes %llu)\n", w, h, scale_req, width, height, scale, (unsigned long long)scenes);
         f.vkDeviceWaitIdle(device);
         if (framebuffer) f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo}) {
@@ -1032,7 +1035,18 @@ private:
         sc.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT; sc.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         sc.preTransform = caps.currentTransform;
         sc.compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR : VkCompositeAlphaFlagBitsKHR(caps.supportedCompositeAlpha & -caps.supportedCompositeAlpha);
+        // MW34_PRESENT_MODE=fifo (default: Flip waits for the vertical blank, as DDFLIP_WAIT did) | mailbox | immediate
+        // (uncapped presentation, an explicit setting for benchmarks and VSync-off play). An unsupported request keeps FIFO
+        // and says so; FIFO is always supported.
         sc.presentMode = VK_PRESENT_MODE_FIFO_KHR; sc.clipped = VK_TRUE;
+        if (const char *pm = std::getenv("MW34_PRESENT_MODE"); pm && *pm && std::string(pm) != "fifo") {
+            const VkPresentModeKHR want = std::string(pm) == "mailbox" ? VK_PRESENT_MODE_MAILBOX_KHR : std::string(pm) == "immediate" ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAX_ENUM_KHR;
+            if (want == VK_PRESENT_MODE_MAX_ENUM_KHR) throw std::runtime_error(std::string("MW34_PRESENT_MODE must be fifo, mailbox or immediate: ") + pm);
+            unsigned m = 0; check(f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &m, nullptr), "surface present modes");
+            std::vector<VkPresentModeKHR> modes(m); check(f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &m, modes.data()), "surface present modes");
+            if (std::find(modes.begin(), modes.end(), want) != modes.end()) sc.presentMode = want;
+            else std::fprintf(stderr, "MW34_PRESENT_MODE=%s is not supported by this surface; presenting with FIFO\n", pm);
+        }
         check(f.vkCreateSwapchainKHR(device, &sc, nullptr, &swapchain), "swapchain");
         check(f.vkGetSwapchainImagesKHR(device, swapchain, &n, nullptr), "swapchain images");
         swapImages.resize(n);

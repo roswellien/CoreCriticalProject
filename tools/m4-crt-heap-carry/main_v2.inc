@@ -44,12 +44,20 @@ struct HostProfiler{unsigned from{};std::thread t;std::atomic<bool>stop{};std::u
     {CONTEXT u=c;std::array<std::uint64_t,3>chain{u.Rip,0,0};for(int k=1;k<3;++k){DWORD64 ib=0;auto*fe=::RtlLookupFunctionEntry(u.Rip,&ib,nullptr);
       if(!fe){u.Rip=*reinterpret_cast<DWORD64*>(u.Rsp);u.Rsp+=8;}else{void*hd{};DWORD64 ef{};::RtlVirtualUnwind(UNW_FLAG_NHANDLER,ib,u.Rip,fe,&u,&hd,&ef,nullptr);}chain[k]=u.Rip;}
      for(auto&x:chain)x=(x>=base&&x<base+span)?x-base:0;++stacks[chain];}
+    if(!(c.Rip>=base&&c.Rip<base+span)){CONTEXT u=c;HMODULE lm{};::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,reinterpret_cast<LPCWSTR>(c.Rip),&lm);
+     std::uint64_t first=0;for(int k=0;k<24&&u.Rip;++k){DWORD64 ib=0;auto*fe=::RtlLookupFunctionEntry(u.Rip,&ib,nullptr);if(!fe){u.Rip=*reinterpret_cast<DWORD64*>(u.Rsp);u.Rsp+=8;}else{void*hd{};DWORD64 ef{};::RtlVirtualUnwind(UNW_FLAG_NHANDLER,ib,u.Rip,fe,&u,&hd,&ef,nullptr);}
+      if(u.Rip>=base&&u.Rip<base+span){first=u.Rip-base;break;}}
+     ++deep[{lm?reinterpret_cast<std::uint64_t>(lm):0,c.Rip-(lm?reinterpret_cast<std::uint64_t>(lm):0),first}];}
     if(c.Rip>=base&&c.Rip<base+span)++hist[c.Rip-base];else{++hist[0];HMODULE m{};::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,reinterpret_cast<LPCWSTR>(c.Rip),&m);++outside[m];if(m)++outside_at[{m,c.Rip-reinterpret_cast<std::uint64_t>(m)}];}}::ResumeThread(main);}});}
+ std::map<std::array<std::uint64_t,3>,unsigned>deep;  // (leaf module, leaf offset, first executable frame)
  std::map<HMODULE,unsigned>outside;std::map<std::pair<HMODULE,std::uint64_t>,unsigned>outside_at;std::map<std::array<std::uint64_t,3>,unsigned>stacks;
  ~HostProfiler(){if(!t.joinable())return;stop=true;t.join();std::vector<std::pair<unsigned,std::uint64_t>>v;std::uint64_t total=0;for(auto&[k,n]:hist){v.push_back({n,k});total+=n;}std::sort(v.rbegin(),v.rend());
   std::ofstream f(path);f<<"samples "<<total<<" (offset 0 = outside the executable)\n";for(auto&[m,n]:outside){wchar_t w[MAX_PATH]{};if(m)::GetModuleFileNameW(m,w,MAX_PATH);char a[MAX_PATH]{};::WideCharToMultiByte(CP_UTF8,0,w,-1,a,MAX_PATH,nullptr,nullptr);f<<"# outside "<<n<<" "<<(m?a:"<no module>")<<"\n";}
   {std::vector<std::pair<unsigned,std::pair<HMODULE,std::uint64_t>>>o;for(auto&[k,n]:outside_at)o.push_back({n,k});std::sort(o.rbegin(),o.rend());
    for(size_t i=0;i<o.size()&&i<60;++i){wchar_t w[MAX_PATH]{};::GetModuleFileNameW(o[i].second.first,w,MAX_PATH);char a[MAX_PATH]{};::WideCharToMultiByte(CP_UTF8,0,w,-1,a,MAX_PATH,nullptr,nullptr);f<<"## "<<o[i].first<<" "<<a<<" 0x"<<std::hex<<o[i].second.second<<std::dec<<"\n";}}
+  {std::vector<std::pair<unsigned,std::array<std::uint64_t,3>>>o;for(auto&[k,n]:deep)o.push_back({n,k});std::sort(o.rbegin(),o.rend());
+   for(size_t i=0;i<o.size()&&i<200;++i){wchar_t w[MAX_PATH]{};if(o[i].second[0])::GetModuleFileNameW(reinterpret_cast<HMODULE>(o[i].second[0]),w,MAX_PATH);char a[MAX_PATH]{};::WideCharToMultiByte(CP_UTF8,0,w,-1,a,MAX_PATH,nullptr,nullptr);
+    f<<"%% "<<o[i].first<<" "<<a<<"+0x"<<std::hex<<o[i].second[1]<<" 0x"<<(o[i].second[2]?0x140000000ULL+o[i].second[2]:0)<<std::dec<<"\n";}}
   {std::vector<std::pair<unsigned,std::array<std::uint64_t,3>>>o;for(auto&[k,n]:stacks)o.push_back({n,k});std::sort(o.rbegin(),o.rend());
    for(size_t i=0;i<o.size()&&i<300;++i){f<<"@ "<<o[i].first;for(auto x:o[i].second)f<<std::hex<<" 0x"<<(0x140000000ULL+x)<<std::dec;f<<"\n";}}for(size_t i=0;i<v.size();++i)f<<std::hex<<"0x"<<(0x140000000ULL+v[i].second)<<std::dec<<" "<<v[i].first<<"\n";}};
 static HostProfiler host_profiler;
@@ -74,6 +82,9 @@ thread_local Runtime*loader_runtime{};
 static void fdiv_in_place(){require(loader_runtime&&attach_host&&mfc_host,"In-place FDIV initializer needs the loader runtime, heap and module host");static const int ftoken=0;
  mf::Stage stage(*loader_runtime,*attach_host,*mfc_host,mf::stage_token(*loader_runtime,const_cast<int*>(&ftoken)),mf::Stage::Kind::call);stage.run();
  std::cout<<"FDIV initializer in place from _cinit: bodies="<<stage.bodies<<" services="<<stage.apis.size()<<" query="<<loader_runtime->memory().load<unsigned>({hs::fdiv_flag})<<"\n";}
+#ifdef MW34_NATIVE_TARGET_MAIN
+#include MW34_NATIVE_TARGET_MAIN
+#else
 int main(int argc,char**argv){::SetUnhandledExceptionFilter(host_crash);if(const char*p=std::getenv("MW34_PROFILE")){if(const char*q=std::getenv("MW34_PROFILE_FROM"))host_profiler.from=unsigned(std::stoul(q));host_profiler.start(p);}try{
  require(argc==7,"Composition: exact-game exact-entry-object exact-provider exact-pack before-inputs fresh-directory");
  auto image=fd::readfile(argv[1],2384384),object=read_file(argv[2]),provider=fd::readfile(argv[3],266293),pack=fd::readfile(argv[4],28740);const bool host_seed=[]{const char*e=std::getenv("MW34_SEED");return e&&std::string(e)=="host";}();const bool loader_order=[]{const char*e=std::getenv("MW34_STARTUP");return e&&std::string(e)=="loader";}();const auto inputs=host_seed?std::vector<std::byte>{}:fd::readfile(argv[5],211128);
@@ -194,4 +205,5 @@ int main(int argc,char**argv){::SetUnhandledExceptionFilter(host_crash);if(const
  }
  fresh_output(directory/"COMPLETE",{reinterpret_cast<const std::byte*>("COMPLETE"),8});return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}
+#endif
 #endif

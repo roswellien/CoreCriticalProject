@@ -39,6 +39,9 @@ if(BUILD_TESTING)
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
     set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME pirates_moon_target_isolation
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_pirates_moon.py -v)
+    set_tests_properties(pirates_moon_target_isolation PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME asset_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p "test_asset*.py" -v)
     set_tests_properties(asset_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

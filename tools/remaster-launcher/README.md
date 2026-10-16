@@ -1,10 +1,72 @@
 # Local Remaster launcher
 
-Current profile, validated 2026-10-14: **native 3440x1440 ultrawide, FXAA, 16x AF**.
+October 15 maintained/well-used batch: Orion, Thor and Vulture now use the new
+worn base-color sets, alongside the previously installed Bushwacker and Mad Cat.
+The regular root launcher prepares them on each launch, including Orion LOD1.
+All four new prepared files match their source material pixels; other model
+registrations, geometry, build/profile and six unrelated sidecars are retained.
+Normal maps remain separate work. [Art, comparisons and installation checks](../../docs/orion-thor-vulture-worn-textures-2026-10-15.md).
+
+October 15 worn-texture publication: the normal `Play MW3Remaster.cmd` launcher
+now registers Bushwacker R7 worn colors and Mad Cat maintained/well-used R1 colors.
+All five base-color material paths for each model point to the completed local
+sets. The launcher repacks them on every launch; both prepared RGB565 files were
+checked against every source pixel after the existing 2048-pixel cap/vertical
+conversion. Other registrations, geometry, graphics and the selected build are
+unchanged. This enables the painted wear; normal mapping remains planned.
+See [installation and checks](../../docs/worn-mech-textures-launcher-install-2026-10-15.md).
+
+Current October15 arm-placement update selects
+`local/remaster/gpu-native-daishi-arms-r1/build/entry_commandline.exe`, SHA256
+`11ce36987b79a26a675015689f53561e307953633ae9fdb83773f3dcffaa47df`.
+It retains the scenery-distance host and current graphics settings. Daishi R3
+raises/tucks complete arms with original shoulder shapes; accepted legs/waist
+and all other model registrations remain. BWMESH3 adds rigid current-ancestor
+frame translation, supported by both GPU/CPU projection. Models declaring
+`required_native_mesh_format: 3` require a profile whose `mesh_payload_versions`
+includes 3; V1/V2 profiles default to versions 1/2. Incompatible hosts fail
+before launch. [Implementation, checks and previews](../../docs/mw5-daishi-arm-placement-2026-10-15.md).
+
+Current profile, validated 2026-10-15: **native 3440x1440 ultrawide, FXAA, 16x AF**.
 Launch `D:/Projects/MW34Recomp/Play MW3Remaster.cmd`. It selects the completed
-`local/remaster/gpu-native-r5/build/entry_commandline.exe` (SHA256 `a45e07298fa753c2c9f1f11a3df573f9ac65fba5fa6e1b54e1969635de498557`),
+`local/remaster/gpu-native-daishi-arms-r1/build/entry_commandline.exe` (SHA256 `11ce36987b79a26a675015689f53561e307953633ae9fdb83773f3dcffaa47df`),
 not the newest file by timestamp. `--check` verifies the published build and
 registrations without launching. No build or package installation occurs at launch.
+
+The current model registry includes the October 15 Daishi waist and Shadow Cat
+vertical-thigh corrections for both distance levels. Both draw in the unchanged
+r17 native build; all 4,700 original draw records match the prior cases. The other
+five models and texture PNG registrations are unchanged. See
+[the asset correction](../../docs/mw5-fit-corrections-2026-10-15.md).
+Daishi's current second revision also corrects pelvis/torso connector ownership
+at the hips and shoulders; a further 2,600-frame native check matches all original
+draw records. The other six model records are retained in that second update.
+
+r17 retains ported body parts after original arm loss instead of reverting the
+whole mech. Exact source stump/remaining-roster checks preserve original damage,
+weapon logic and debris. Orionrightarm loss is verified in a6500frame native
+battle with all6500original draw records matchingr15. Training116/116,
+GPU1150/1150 and IA116/116 pass. Other live damage states, converteddebris and
+muzzle correction remain pending. [Details](../../docs/mw5-arm-damage-fix-2026-10-15.md).
+
+r15 adds Orion, Daishi and Shadow Cat runtime candidates to the existing four.
+All three render in bounded native IA tests; Training116/116, original
+GPUdraw1150/1150 and IA116/116 match r14. Both distance texture bindings refresh
+from current registered PNGs at launch. Visible muzzle alignment, controlled
+damage/debris, actual new LOD1 selection and material review remain pending.
+Normal maps are prepared offline; the native adapter samples base color only.
+See [the batch record](../../docs/mw5-next-mechs-2026-10-15.md).
+
+r14 retains r12 zoom alignment, r9 HUD repairs, r8 campaign movie timing and r7
+performance changes. It corrects the zoom window's marker-occlusion footprint
+and aligns its three target-triangle lines using the original camera choice.
+Intended hiding and per-edge clipping remain, as do original zoom FOV/input.
+Training116/116, GPU1150/1150 and IA116/116 match r12. A matched1000-frame
+3440x1440 cockpit case covers false hiding and zoom-marker alignment;14 sampled
+1920x1440 control captures are identical. The Vulkan validation layer was
+unavailable; normal-renderer checks pass. Radar semantics and controlled damage
+progression remain open; Mech Lab is investigation-only. See
+[the October15 findings](../../docs/hud-mechlab-investigation-2026-10-15.md).
 
 
 Local MW3 music is now enabled on both Remaster variants. The supplied Track 01
@@ -27,9 +89,9 @@ FXAA runs before the HUD; world/model textures use real anisotropic sampling/mip
 
 Both root launchers reread `local/remaster/launcher.json`, `models.json` and the
 cumulative texture registrations each launch. They currently supply 39 texture
-banks and Bushwacker/Mad Cat/Vulture/Thor; Avatar is excluded. Registered texture
+banks and Bushwacker/Mad Cat/Vulture/Thor/Orion/Daishi/Shadow Cat; Avatar is excluded. Registered texture
 source updates are prepared atomically on launch. New model entries require a
-compatible, tested native adapter/build before publication. Mad Cat/Vulture/Thor
+compatible, tested native adapter/build before publication. Mad Cat/Vulture/Thor/Orion/Daishi/Shadow Cat
 remain runtime candidates with weapon/damage/LOD validation pending.
 
 `Play MW3Remaster without new models.cmd` uses original geometry with the same
@@ -199,3 +261,23 @@ The source-size native baseline is not the same graphics workload: Remaster
 still renders a second target, performs readback/CPU resolve and does not use
 lazy residency in enhanced mode. FXAA is not implemented; default AA/AF remain
 off. r2's `source-snapshot.json` retains identities and performance scope.
+
+### Alpha GPU playtest launcher (2026-10-15)
+
+Double-click `play mw3 - alpha gpu tests.cmd` at the repository root. It uses
+the separate local `launcher-alpha-gpu-tests.json` profile. The optimized alpha
+retains fast GPU scenery, the original optimized CPU producer and the Mech Lab
+repair. The unfinished CPU projection removal experiment stays in a private
+safety-test host; it is not linked into this interactive package.
+GPU-world geometry and fast binding are enabled with the current seven models,
+39 texture banks, HUD/music,3440×1440 FXAA/AF16 and stock800-unit scenery with
+original scene-defined fog. Both normal and alpha profiles use this distance.
+Both normal and alpha profiles enable the original-device fog-cache repair
+(`MW34_DEVICE_FOG_REBIND=1`), restoring fog after the gameplay display-mode switch.
+See [fog investigation](../../docs/fog-rendering-investigation-2026-10-15.md).
+
+`--check` validates the build/assets without launching. Interactive launch has
+no frame budget or scripted clock. World counters and geometry CPU timings go
+to each session's `local/remaster/runs/` directory; heavy diagnostic payloads
+are disabled. The recurring divergence remains under investigation; see
+[results](../../docs/gpu-divergence-investigation-2026-10-15.md).

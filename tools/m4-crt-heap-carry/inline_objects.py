@@ -15,7 +15,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import hashlib,json,os,re,subprocess,sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-import merge_x87,ir_cleanup
+import merge_x87,ir_cleanup,codec_timing
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 LLVM=ROOT/'local/tools/llvm-21.1.8/clang+llvm-21.1.8-x86_64-pc-windows-msvc/bin'
 BRIDGES=[f'read_memory_{s}' for s in ('8','16','32','64','f32','f64')]+[f'write_memory_{s}' for s in ('8','16','32','64','f32','f64')]+['fpu_exception_clear','fpu_exception_test']
@@ -41,8 +41,14 @@ def build(stem,out,fast):
     obj=dst/(stem.name+'-O2.obj')
     if obj.exists():return str(obj),'kept',None
     stats=None;source=stem.parent/(stem.name+'-host.ll');cstats=None
+    # Clock-observed codec work must survive every optimization recipe, even
+    # when ordinary IR cleanup is disabled. Rebuild into a fresh output tree.
+    text,timing_stats=codec_timing.transform(source.read_text())
+    timing_source=None
     if CLEANUP:
-        text,cstats=ir_cleanup.transform(source.read_text());source=dst/(stem.name+'-clean.ll');source.write_text(text)
+        text,cstats=ir_cleanup.transform(text);source=dst/(stem.name+'-clean.ll');source.write_text(text)
+    elif timing_stats['codec_timing_preserved']:
+        source=timing_source=dst/(stem.name+'-timing.ll');source.write_text(text)
     if MERGE:
         cfg=dst/(stem.name+'-cfg.ll')
         run([LLVM/'opt.exe','-passes=simplifycfg','-S',source,'-o',cfg])
@@ -63,7 +69,8 @@ def build(stem,out,fast):
     else:run([LLVM/'clang.exe','--target=x86_64-pc-windows-msvc','-O2','-c',bc,'-o',tmp])
     for old,new in renames_for(stem).items():run([LLVM/'llvm-objcopy.exe','--redefine-sym',old+'='+new,tmp])
     ll.unlink();bc.unlink();os.replace(tmp,obj)
-    return str(obj),'built',(stats or {})|(cstats or {})
+    if timing_source:timing_source.unlink()
+    return str(obj),'built',(stats or {})|(cstats or {})|timing_stats
 def main():
     out=Path(sys.argv[1]).resolve();filt=sys.argv[2] if len(sys.argv)>2 and not sys.argv[2].startswith('--') else ''
     jobs=int(sys.argv[sys.argv.index('--jobs')+1]) if '--jobs' in sys.argv else os.cpu_count()
@@ -72,7 +79,7 @@ def main():
     run([LLVM/'clang.exe','--target=x86_64-pc-windows-msvc','-std=c++20','-O2','-fexceptions','-fcxx-exceptions','-emit-llvm','-c',src,'-I',HERE,'-o',fast])
     stems=[l.strip() for l in (HERE/'mfc_objects.txt').read_text().splitlines() if l.strip()]
     if filt:stems=[s for s in stems if filt in s]
-    done=0;failed=[];totals=dict(brackets=0,mergeable=0,runs=0,merged=0,identity_calls=0,undefined_calls=0,fp80_copies=0,kept_calls=0,nounwind_bridges=0,uwtable_bodies=0,classify_ueq0=0,classify_inf=0,classify_lt=0,constrained=0,fences=0,strict_applied=0)
+    done=0;failed=[];totals=dict(brackets=0,mergeable=0,runs=0,merged=0,identity_calls=0,undefined_calls=0,fp80_copies=0,kept_calls=0,nounwind_bridges=0,uwtable_bodies=0,classify_ueq0=0,classify_inf=0,classify_lt=0,constrained=0,fences=0,strict_applied=0,codec_timing_preserved=0)
     with ThreadPoolExecutor(jobs) as ex:
         for f,stem in zip(ex.map(lambda s:_safe(s,out,fast),stems),stems):
             done+=1
@@ -84,7 +91,7 @@ def main():
     (out/'mfc_objects_inline.txt').write_text('\n'.join(objs)+'\n')
     rep=dict(objects=len(stems),failed=failed,fast_bridges_cpp_sha256=sha(src),fast_gate_hpp_sha256=sha(HERE/'fast_gate.hpp'),fast_bc_sha256=sha(fast),
              recipe='host.ll with bridge calls redirected to mw34_fast_*; llvm-link --only-needed --internalize fast.bc; clang --target=x86_64-pc-windows-msvc -O2 -c; recorded llvm-objcopy renames',
-             originals_modified=False,inlined_fast_paths=not NO_INLINE,merge_x87=MERGE,merge_x87_py_sha256=sha(HERE/'merge_x87.py') if MERGE else None,x87_merge_totals=totals if MERGE else None,
+             originals_modified=False,inlined_fast_paths=not NO_INLINE,codec_timing_py_sha256=sha(HERE/'codec_timing.py'),codec_timing_preserved=totals['codec_timing_preserved'],merge_x87=MERGE,merge_x87_py_sha256=sha(HERE/'merge_x87.py') if MERGE else None,x87_merge_totals=totals if MERGE else None,
              cleanup=CLEANUP,ir_cleanup_py_sha256=sha(HERE/'ir_cleanup.py') if CLEANUP else None,cleanup_totals={k:totals[k] for k in ('identity_calls','undefined_calls','fp80_copies','kept_calls','nounwind_bridges','uwtable_bodies','classify_ueq0','classify_inf','classify_lt','constrained','fences','strict_applied')} if CLEANUP else None,strict_x87=STRICT,
              cleanup_recipe='ir_cleanup.transform before simplifycfg+merge_x87, ir_cleanup.annotate after; opt default<O2>, opt dse,gvn,dse,instcombine<no-verify-fixpoint>,simplifycfg,dse, clang -O2 -c' if CLEANUP else None)
     (out/'report.json').write_text(json.dumps(rep,indent=1)+'\n');print(json.dumps(dict(objects=len(stems),failed=len(failed))))

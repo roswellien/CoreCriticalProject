@@ -18,6 +18,7 @@ struct Iface{const char*name;GUID iid;std::vector<const char*>slots;};
 inline const std::vector<Iface>&ifaces(){
  static const std::vector<const char*>dd1{"QueryInterface","AddRef","Release","Compact","CreateClipper","CreatePalette","CreateSurface","DuplicateSurface","EnumDisplayModes","EnumSurfaces","FlipToGDISurface","GetCaps","GetDisplayMode","GetFourCCCodes","GetGDISurface","GetMonitorFrequency","GetScanLine","GetVerticalBlankStatus","Initialize","RestoreDisplayMode","SetCooperativeLevel","SetDisplayMode","WaitForVerticalBlank"};
  auto dd2=dd1;dd2.push_back("GetAvailableVidMem");auto dd4=dd2;for(const char*x:{"GetSurfaceFromDC","RestoreAllSurfaces","TestCooperativeLevel","GetDeviceIdentifier"})dd4.push_back(x);
+ auto dd7=dd4;for(const char*x:{"StartModeTest","EvaluateMode"})dd7.push_back(x);
  static const std::vector<const char*>s1{"QueryInterface","AddRef","Release","AddAttachedSurface","AddOverlayDirtyRect","Blt","BltBatch","BltFast","DeleteAttachedSurface","EnumAttachedSurfaces","EnumOverlayZOrders","Flip","GetAttachedSurface","GetBltStatus","GetCaps","GetClipper","GetColorKey","GetDC","GetFlipStatus","GetOverlayPosition","GetPalette","GetPixelFormat","GetSurfaceDesc","Initialize","IsLost","Lock","ReleaseDC","Restore","SetClipper","SetColorKey","SetOverlayPosition","SetPalette","Unlock","UpdateOverlay","UpdateOverlayDisplay","UpdateOverlayZOrder"};
  auto s2=s1;for(const char*x:{"GetDDInterface","PageLock","PageUnlock"})s2.push_back(x);auto s3=s2;s3.push_back("SetSurfaceDesc");auto s4=s3;for(const char*x:{"SetPrivateData","GetPrivateData","FreePrivateData","GetUniquenessValue","ChangeUniquenessValue"})s4.push_back(x);
  // DirectPlay lobby (project-implemented service: no 64-bit DirectPlay provider exists on the host).
@@ -37,7 +38,8 @@ inline const std::vector<Iface>&ifaces(){
  static const std::vector<const char*>did{"QueryInterface","AddRef","Release","GetCapabilities","EnumObjects","GetProperty","SetProperty","Acquire","Unacquire","GetDeviceState","GetDeviceData","SetDataFormat","SetEventNotification","SetCooperativeLevel","GetObjectInfo","GetDeviceInfo","RunControlPanel","Initialize"};
  auto did2=did;for(const char*x:{"CreateEffect","EnumEffects","GetEffectInfo","GetForceFeedbackState","SendForceFeedbackCommand","EnumCreatedEffectObjects","Escape","Poll","SendDeviceData"})did2.push_back(x);
  static const std::vector<Iface>v{{"IDirectDraw",IID_IDirectDraw,dd1},{"IDirectInputA",IID_IDirectInputA,di},{"IDirectInputDeviceA",IID_IDirectInputDeviceA,did},{"IDirectInputDevice2A",IID_IDirectInputDevice2A,did2},{"IDirect3D3",IID_IDirect3D3,d3},{"IDirect3DDevice3",IID_IDirect3DDevice3,dev3},{"IDirect3DViewport3",IID_IDirect3DViewport3,vp3},{"IDirect3DTexture2",IID_IDirect3DTexture2,tex2},{"IDirect3DMaterial3",IID_IDirect3DMaterial3,mat3},{"IDirectDrawClipper",IID_IDirectDrawClipper,clip},{"IDirectDrawPalette",IID_IDirectDrawPalette,pal},{"IDirectSound",IID_IDirectSound,ds1},{"IDirectSoundBuffer",IID_IDirectSoundBuffer,dsb},{"IDirectPlayLobbyA",lobbyA,l1},{"IDirectPlayLobby2A",lobby2A,l2},{"IDirectPlayLobby3A",lobby3A,l3},{"IDirectDraw2",IID_IDirectDraw2,dd2},{"IDirectDraw4",IID_IDirectDraw4,dd4},
-  {"IDirectDrawSurface",IID_IDirectDrawSurface,s1},{"IDirectDrawSurface2",IID_IDirectDrawSurface2,s2},{"IDirectDrawSurface3",IID_IDirectDrawSurface3,s3},{"IDirectDrawSurface4",IID_IDirectDrawSurface4,s4}};return v;}
+  {"IDirectDrawSurface",IID_IDirectDrawSurface,s1},{"IDirectDrawSurface2",IID_IDirectDrawSurface2,s2},{"IDirectDrawSurface3",IID_IDirectDrawSurface3,s3},{"IDirectDrawSurface4",IID_IDirectDrawSurface4,s4},
+  {"IDirectDraw7",IID_IDirectDraw7,dd7}};return v;}
 // x86 guest DDSURFACEDESC (108 bytes) / DDSURFACEDESC2 (124 bytes) field offsets; lpSurface is a guest
 // pointer (offset 36) and is never carried across. DDCOLORKEY x4 at 40, DDPIXELFORMAT (32) at 72,
 // DDSCAPS at 104 (DDSCAPS2: 16 bytes at 104, then dwTextureStage at 120).
@@ -52,7 +54,7 @@ inline bool is_d3d(const Iface*i){return std::strncmp(i->name,"IDirect3D",9)==0;
 inline bool is_lobby(const Iface*i){return std::strncmp(i->name,"IDirectPlayLobby",16)==0;}
 inline constexpr unsigned dperr_notlobbied=0x8877042E;
 inline bool is_dd(const Iface*i){const std::string n=i->name;return n.rfind("IDirectDraw",0)==0&&n.find("Surface")==std::string::npos;}
-struct Provider{HMODULE module{};std::wstring path;std::string sha;HRESULT(WINAPI*create)(GUID*,LPDIRECTDRAW*,IUnknown*){};};
+struct Provider{HMODULE module{};std::wstring path;std::string sha;HRESULT(WINAPI*create)(GUID*,LPDIRECTDRAW*,IUnknown*){};HRESULT(WINAPI*create_ex)(GUID*,void**,REFIID,IUnknown*){};};
 struct InputProvider{HMODULE module{};std::wstring path;std::string sha;HRESULT(WINAPI*create)(HINSTANCE,DWORD,LPDIRECTINPUTA*,LPUNKNOWN){};};
 struct SoundProvider{HMODULE module{};std::wstring path;std::string sha;HRESULT(WINAPI*create)(LPCGUID,LPDIRECTSOUND*,LPUNKNOWN){};};
 inline bool is_sound(const Iface*i){return std::string(i->name).rfind("IDirectSound",0)==0;}

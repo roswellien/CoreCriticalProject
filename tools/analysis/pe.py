@@ -365,7 +365,7 @@ def _integer(value: object, minimum: int, maximum: int) -> bool:
     return type(value) is int and minimum <= value <= maximum
 
 
-def load_manifest(path: Path) -> dict:
+def load_manifest(path: Path, *, expected_game: str = "mw3") -> dict:
     def unique_keys(pairs: list[tuple[str, object]]) -> dict:
         result = {}
         for key, value in pairs:
@@ -380,7 +380,7 @@ def load_manifest(path: Path) -> dict:
         raise ManifestError(f"cannot decode manifest: {error}") from error
     if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "game", "binaries"}:
         raise ManifestError("manifest requires exactly schema_version, game and binaries")
-    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1 or manifest["game"] != "mw3":
+    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1 or manifest["game"] != expected_game:
         raise ManifestError("unsupported manifest schema or game")
     if not isinstance(manifest["binaries"], list):
         raise ManifestError("binaries must be a list")

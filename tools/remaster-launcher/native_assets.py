@@ -55,5 +55,18 @@ def prepare(root,models):
             data=pixels.tobytes();digest=hashlib.sha256(data).digest();out.extend(name.encode().ljust(32,b'\0'));out.extend(struct.pack('<IIQ',*im.size,int.from_bytes(digest[:8],'little')));out.extend(data)
         path=folder/(model['id']+'-textures.bin');write_atomic(path,out);environment[model['texture_environment']]=str(path)
         model_receipts.append(dict(id=model['id'],sidecar=str(path),sha256=hashlib.sha256(out).hexdigest(),texture_sources=model['textures']))
+        # Distance meshes have different batches but use the same current
+        # material pixels. Repack their indices on every launch as well.
+        pixels=out[16+4*count:]
+        for variant in model.get('texture_variants',[]):
+            ident=variant['id']
+            if not ident or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in ident):raise RuntimeError('Invalid model texture variant')
+            metadata=json.loads((root/variant['batch_metadata']).read_text())
+            batches=metadata['batches'];key=variant['texture_environment']
+            if not key.startswith('MW34_') or key in environment:raise RuntimeError('Invalid or duplicate texture variant binding')
+            side=bytearray(b'BWTEX1\0\0'+struct.pack('<II',len(batches),len(names)))
+            side.extend(struct.pack('<'+'I'*len(batches),*[names.index(b['material']) for b in batches]));side.extend(pixels)
+            path=folder/(model['id']+'-'+ident+'-textures.bin');write_atomic(path,side);environment[key]=str(path)
+            model_receipts.append(dict(id=model['id'],variant=ident,sidecar=str(path),sha256=hashlib.sha256(side).hexdigest(),texture_sources=model['textures']))
     write_atomic(folder/'asset-receipt.json',json.dumps(dict(banks=receipt,models=model_receipts),indent=2).encode())
     return environment

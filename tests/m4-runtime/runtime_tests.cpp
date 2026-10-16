@@ -383,9 +383,71 @@ void construction_admission() {
     }
 }
 } // namespace
+// A tiny authored PE exercises the experimental factory without any game media.
+void research_identity() {
+    std::vector<std::byte> bytes(0x400);
+    auto put16 = [&](unsigned p, unsigned v) {
+        for (unsigned i = 0; i < 2; ++i)
+            bytes.at(p + i) = std::byte((v >> (8 * i)) & 255);
+    };
+    auto put32 = [&](unsigned p, unsigned v) {
+        for (unsigned i = 0; i < 4; ++i)
+            bytes.at(p + i) = std::byte((v >> (8 * i)) & 255);
+    };
+    put16(0, 0x5a4d);
+    put32(0x3c, 0x80);
+    put32(0x80, 0x4550);
+    put16(0x84, 0x14c);
+    put16(0x86, 1);
+    put16(0x94, 224);
+    put16(0x96, 0x103);
+    put16(0x98, 0x10b);
+    put32(0xa8, 0x1000);
+    put32(0xb4, 0x400000);
+    put32(0xb8, 0x1000);
+    put32(0xbc, 0x200);
+    put32(0xd0, 0x2000);
+    put32(0xd4, 0x200);
+    put16(0xdc, 2);
+    put32(0xf4, 16);
+    put32(0x180, 0x200);
+    put32(0x184, 0x1000);
+    put32(0x188, 0x200);
+    put32(0x18c, 0x200);
+    put32(0x19c, 0x60000020);
+    bytes[0x200] = std::byte{0xc3};
+    const auto digest = m4::sha256(bytes);
+    auto runtime = Runtime::from_research_image(bytes, digest, small_policy());
+    check(runtime.domain() == Domain::research_game,
+          "Experimental input cannot acquire admitted-game domain");
+    reject([&] { runtime.register_translation(binding(0x401000, increment)); },
+           FaultReason::invalid_binding, "Fixture translation refused in research domain");
+    auto translation = binding(0x401000, increment);
+    translation.evidence = {Domain::research_game,
+                            std::string(64, '0'),
+                            1,
+                            m4::sha256(std::span<const std::byte>(bytes).subspan(0x200, 1)),
+                            std::string(64, 'a'),
+                            std::string(64, 'b')};
+    reject([&] { runtime.register_translation(translation); }, FaultReason::invalid_binding,
+           "Research translation must bind its actual target hash");
+    translation.evidence.image_sha256 = digest;
+    runtime.register_translation(translation);
+    check(runtime.translation_count() == 1, "Research registration retains exact code binding");
+    for (const auto &hash : {std::string(64, '0'), std::string("invalid")}) {
+        bool refused = false;
+        try {
+            (void)Runtime::from_research_image(bytes, hash, small_policy());
+        } catch (const std::runtime_error &) {
+            refused = true;
+        }
+        check(refused, "Wrong experimental image identity rejected before mapping");
+    }
+}
 int main() {
     try {
         construction_admission();
+        research_identity();
         main_thread();
         routing();
         arguments_and_failures();

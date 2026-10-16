@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "game": "mw3-pirates-moon",
+  "binaries": [
+    {
+      "id": "mw3-pirates-moon-us-local-1-0-11-5",
+      "title": "MechWarrior 3: Pirate's Moon supplied U.S. 1.0 candidate",
+      "filename": "Mech3.exe",
+      "sha256": "57cd2ee74bafda3eeb9e9353c7c78a8b7c213a81f3040f1be7c2a164c505ddd9",
+      "size_bytes": 2220057,
+      "pe": {
+        "machine": 332,
+        "optional_magic": 267,
+        "image_base": 4194304,
+        "entry_point_rva": 1896424
+      },
+      "provenance": "User-supplied local MW3-PiratesMoon installation. README identifies Version 1.0 (U.S.), 15 November 1999; executable version resource is 1, 0, 11, 5. Full media, patch and modification provenance remains unresolved.",
+      "notes": [
+        "Exact research input identity only; no native menu or gameplay compatibility claim.",
+        "Original media and generated translations remain local."
+      ]
+    }
+  ]
+}

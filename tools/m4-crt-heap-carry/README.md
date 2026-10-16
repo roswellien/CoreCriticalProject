@@ -649,7 +649,30 @@ These are executed runs, not acceptance. The accepted count stays 131/144.
     - Result: identical on the Training baseline (3 runs); about −13% per frame on the hot-set build (host services fell from 17% to 7% of samples).
   - Tried and removed: lean inline memory paths. Precomputed host windows for stack, heap slices and image/data, behind a generation check. Exact (4/4), but 30% slower: each inline site's checks and slow-path call bloated the code. Removing the bridge cost needs a flat guest mapping (one add plus load per access, no per-site checks), which changes `GuestMemory`'s region storage in the runtime header.
   - Profiler: `MW34_PROFILE` now samples at a real 1 kHz (high-resolution waitable timer; `Sleep(1)` woke only every ~15.6 ms) and writes the complete address histogram.
-  - Measured but not adopted, because it is not exact as is: relaxing remill's FP memory fences (−37% statically). Doing that exactly needs strict-FP intrinsics plus integer denormal classification. A prototype removes the x87 stack shuffling (3,242 to 24 80-bit moves), but out-of-line bridge calls still force x87 spills, so that path also needs inline fast paths. This is the next recompiler step.
+  - Measured but not adopted, because it is not exact as is: relaxing remill's FP memory fences (−37% statically). Doing that exactly needs strict-FP intrinsics plus integer denormal classification.
+  - GPU-resident scenes allocate no host pixel buffers (2026-10-14).
+    - The profile of the play setup (mode 7, GPU frame and HUD, fit window) showed 22% of samples zero-filling width×height `color`/`depth` vectors. They were allocated in every `render_scene`, `gpu_fill` and `hud_flush`, although a resident scene uploads and reads back nothing.
+    - They are now sized only for an upload or a readback; `Renderer::render` checks their size only then.
+    - Result: Training draw stream identical (1150/1150, mode 7); CPU path 116/116. Uncapped, frames 150-1150 went from 7.67 to 4.98 ms per frame; frames 300-700 from 9.46 to 6.63 ms; frames 700-1150 from 7.34 to 4.14 ms.
+    - With the default FIFO presentation, frames 700-1150 now meet the 144 Hz display limit (6.93 ms).
+  - `MW34_PRESENT_MODE=fifo|mailbox|immediate` (default `fifo`, matching `DDFLIP_WAIT`). Uncapped presentation is an explicit setting for benchmarks and VSync-off play; an unsupported mode keeps FIFO with a notice. Measure host speed uncapped: under FIFO a frame faster than the display waits for it.
+  - Profiler diagnostics: samples outside the executable also record the first executable frame up to 24 frames up (`%%` lines: leaf module+offset, calling host frame). `MW34_VK_LOG=1` logs scene-target recreations.
+  - MSVCRT `_ftol` host body (2026-10-14; `mfc_stage.hpp` `ftol_core`/`ftol_body`, installed by `find_uncached`; `MW34_FTOL_FAST=0` disables it).
+    - The game calls `_ftol` about 11,000 times per Training frame. The lifted body runs two rounding-mode bridges (serializing `fldcw`/`ldmxcsr`), two FWAIT exception clears, an `frndint` bridge and an `fnclex` around one `fistp`.
+    - For a finite normal or zero ST0 with |ST0| < 2^63, the host body produces the lifted body's exact effect, using its own State offsets:
+      - stack words and the 64-bit result;
+      - EAX:EDX, EBP, ESP, EIP and EFLAGS;
+      - the x87 pop and TOP, the last-instruction fields, the DE/PE/IE status rules;
+      - the host rounding mode and the cleared host exception flags.
+    - Every other operand takes the lifted body.
+    - `MW34_FTOL_CHECK=1` runs both bodies on every call and stops on any difference in State, stack bytes or host x87 CW/SW and MXCSR.
+      - Training passed: 12.6 million calls identical, 12 lifted fallbacks, frames 116/116.
+      - Instant Action passed: 17.8 million identical; the fast IA run matches the checked run on 116/116 frames.
+    - With it: Training CPU path 116/116; mode-7 GPU draw stream 1150/1150.
+    - Uncapped per frame: frames 300-700 from 6.63 to 5.53 ms, frames 700-1150 from 4.14 to 3.45 ms, average of frames 150-1150 from 4.98 to about 4.27 ms. `_ftol` fell from about 15% of samples to 2.6%.
+  - Next measured costs, uncapped:
+    - Per-scene `vkQueueSubmit`, fence wait and driver GPU-memory frees: about 15%. Each scene, fill and HUD flush shares one command buffer, descriptor pool and vertex buffer, so the CPU waits for the previous scene. A small ring of per-slot resources would remove that wait.
+    - Presentation: about 0.35 ms per frame. A prototype removes the x87 stack shuffling (3,242 to 24 80-bit moves), but out-of-line bridge calls still force x87 spills, so that path also needs inline fast paths. This is the next recompiler step.
 - Performance overlay (2026-10-13, off by default): `MW34_PERF_OVERLAY=1`, `play.ps1 -Overlay`, `Play-MW3.cmd -Overlay` or `Play-MW3-Overlay.cmd`.
   - The Vulkan presenter draws presented frames per second, plus the mean and worst time between presents over the last second, refreshed four times a second.
   - It draws in a small built-in font into its host upload copy of each flipped frame. Guest memory and frame dumps are unchanged.

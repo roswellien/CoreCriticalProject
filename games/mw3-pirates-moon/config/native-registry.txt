@@ -1,0 +1,7 @@
+# Project-authored user settings: select the enumerated hardware renderer.
+# PM builds this key from MicroProse, MechWarrior 3 EP1, and version 1.0.
+K hkcu\software\microprose\mechwarrior 3 ep1\1.0
+K hklm\software\microprose\mechwarrior 3 ep1\1.0
+V hklm\software\microprose\mechwarrior 3 ep1\1.0	installoptions	4	04000000
+V hkcu\software\microprose\mechwarrior 3 ep1\1.0	hwcardflag	4	01000000
+V hkcu\software\microprose\mechwarrior 3 ep1\1.0	hwcarddev	4	00000000

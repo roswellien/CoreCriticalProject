@@ -1,12 +1,51 @@
 # Roadmap
 
-Updated 2026-10-13. The current strategy is faithful recompilation with modern
-platform services (local reference: `docs/faithful-modernization-plan.md`): preserve original game logic,
+Updated 2026-10-13. The current strategy is [faithful recompilation with modern
+platform services](faithful-modernization-plan.md): preserve original game logic,
 connect a complete native execution path, and validate configurable enhancements
 against an original-compatible mode. MechWarrior 3 U.S. retail1.2 is the current
 target; Windows x64 and Vulkan are selected. The experimental native host now
 executes a live menu, partial Training 1 and normal quit; whole-game fidelity,
 performance and formal acceptance remain open.
+
+## Playtesting and frontend priorities: 2026-10-15
+
+The user prioritizes fixing the native Mech Lab layout to unblock playtesting.
+The first repair composes its original controls and3D preview in one consistent
+canvas, with matching input and correct transitions. A centered original4:3
+layout is an interim compatibility step, not the final menu design goal.
+
+Future menus must adapt their layout to the actual resolution and aspect ratio,
+including usable widget placement, readable text, scrolling and matching hit
+testing. The settings menu must expose the implemented modern graphics options:
+resolution/aspect handling, antialiasing, anisotropic filtering, scenery range
+and fog behavior, and optional replacement visuals. Persisted settings and the
+launcher must agree on the applied capabilities and values.
+
+Dynamic lighting and normal mapping remain planned renderer work and may follow
+soon once Lab usability and sustained playtests establish the next priorities.
+Current base-color rendering does not implement normal mapping. New lighting and
+material behavior require the actual geometry/material contracts, configuration
+and comparative validation; settings must not claim those features work before
+the renderer supports them. None of these goals changes strict acceptance credit.
+
+For future MW5 replacement-model normal mapping, the user selected the
+[12x-equivalent Bushwacker preview](mw5-normal-strength-high-preview-2026-10-15.md#approved-target-for-future-native-normal-mapping)
+as the appearance target on 2026-10-15. Calibrate the native material response to
+that reference (Blender Strength 10.20 from baseline 0.85), preserving the glass
+exception and separate original-MW3 material tuning. This records the planned
+enhanced look; it does not enable normal mapping or change a live default.
+
+The [dynamic lighting and shadows investigation](dynamic-lighting-shadows-investigation-2026-10-15.md)
+records current renderer limits and a staged implementation path: capture scene
+geometry before projection/culling, add per-pixel lights, prove a bounded cast
+shadow, then expand outdoor coverage and normal-map materials. No lighting or
+shadow option has been enabled by this investigation.
+
+The [GPU geometry development plan](gpu-geometry-development-plan.md) starts with
+an isolated live CPU/GPU replacement-model comparison, then advances retained
+world geometry, proven CPU-work removal, per-pixel materials/lights and shadows.
+The development benchmark does not switch the playable launcher.
 
 ## Native execution update: 2026-10-13
 
@@ -72,11 +111,11 @@ content/provenance policy. This work does not change native acceptance criteria.
   [milestone register](project-milestones.md), [M2 audit](m2-completion-audit.md)
   and [M3 acceptance](m3-acceptance.md).
 - The selected startup gate remains **131/144**, with13 remaining. The
-  accepted receipt (local reference: `reports/m4-joint-startup131-root/acceptance-r1/report.json`)
+  [accepted receipt](../reports/m4-joint-startup131-root/acceptance-r1/report.json)
   is not a whole-M4 or whole-game percentage.
 - Claude's new registry, lock, import, CRT-page, global-page and ENV probes are
   reusable prerequisites, with explicit policy/completeness limits. See the
-  work review (local reference: `docs/m4-claude-work-review-2026-10-11.md`) and [acceptance history](m4-execution-plan-r14.md).
+  [work review](m4-claude-work-review-2026-10-11.md) and [acceptance history](m4-execution-plan-r14.md).
 - Vulkan viewer and captured-scene replay tests are separate from a live renderer.
   Original-game play with isolated native replacements is separate from a complete
   recompiled game. The integrated native host now executes its own live menu
@@ -125,7 +164,7 @@ Start from [application workahead](m4-application-workahead.md), the
 [MFC receiver](m4-mfc-app-receiver-adapter.md), [reader research](m4-reader-bridge-research-r1.md),
 [video contract](m4-video-backend-contract-r1.md), [native Vulkan build path](m4-native-vulkan-build-path-r1.md),
 [presenter extraction review](m4-vulkan-presenter-extraction-review-r1.md) and
-current graphics work (local reference: `docs/live-native-rendering-current-work.md`). Coordinate with
+[current graphics work](live-native-rendering-current-work.md). Coordinate with
 existing writers. Capture-to-Vulkan transport may prove a renderer boundary but
 must remain labelled original-process diagnostic execution until translated game
 producers drive it. Cinematic/HUD/asset work remains separately scoped.
@@ -151,7 +190,11 @@ next startup requirement. Vulkan remains selected. See the
 [M7 workstream](project-milestones.md#m7-graphics-and-texture-rendering-workstream).
 
 Linux, ARM64 and macOS require separate platform/ABI/backend validation. Pirate's
-Moon and MW4 remain later targets. Earlier research and evidence remain available;
+Moon now has an [experimental native startup target](pirates-moon-native-startup.md)
+using the shared runtime with separate identities, dependencies and generated code;
+its scripted Vulkan menu/Options/normal-quit slice now matches the original's
+210 scene fingerprints. Physical input has not been manually checked, and PM
+missions/cinematics remain unverified. MW4 remains a later target. Earlier research and evidence remain available;
 [architecture](architecture.md) and [development workflow](m4-development-workflow.md)
-retain current contracts. The Claude prompt (local reference: `docs/claude-m4-continuation-handoff.md`)
+retain current contracts. The [Claude prompt](claude-m4-continuation-handoff.md)
 provides the execution-first continuation instructions.

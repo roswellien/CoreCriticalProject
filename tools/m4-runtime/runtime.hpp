@@ -21,7 +21,7 @@ struct Cpu32 {
 };
 static_assert(sizeof(Cpu32) == 40);
 
-enum class Domain { authored_fixture, admitted_game };
+enum class Domain { authored_fixture, admitted_game, research_game };
 enum class Abi { Cdecl, Stdcall, Thiscall, Internal };
 struct AbiContract {
     Abi abi = Abi::Cdecl;
@@ -141,6 +141,10 @@ class Runtime {
     // Actual-image construction copies and hash-admits input before loading.
     [[nodiscard]] static Runtime from_admitted_image(std::span<const std::byte> file,
                                                      const Policy &policy = {});
+    // Exact experimental target identity; never grants the admitted MW3 domain.
+    [[nodiscard]] static Runtime from_research_image(std::span<const std::byte> file,
+                                                     const std::string &expected_sha256,
+                                                     const Policy &policy = {});
     // This factory explicitly cannot register game translations/services.
     [[nodiscard]] static Runtime for_authored_fixture(m4::LoadedImage image,
                                                       const Policy &policy = {});
@@ -202,7 +206,8 @@ class Runtime {
     void run_initializers(InitializerLedger &ledger);
 
   private:
-    Runtime(m4::LoadedImage image, Domain domain, const Policy &policy);
+    Runtime(m4::LoadedImage image, Domain domain, const Policy &policy,
+            std::string image_sha256 = {});
     struct Frame {
         GuestAddress target, return_pc;
         std::uint32_t caller_esp{}, expected_esp{};
@@ -227,6 +232,7 @@ class Runtime {
     std::uint32_t heap_cursor_{};
     std::vector<Frame> frames_;
     std::vector<CallRecord> calls_;
+    std::string image_sha256_;
     [[noreturn]] void fail(FaultReason reason, GuestAddress target, const std::string &detail) const;
     void ready() const;
     [[nodiscard]] bool executable(GuestAddress address, std::uint32_t bytes = 1) const;

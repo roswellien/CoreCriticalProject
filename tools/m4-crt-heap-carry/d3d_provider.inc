@@ -147,13 +147,13 @@ void render_scene(D3DDev&d){auto*rt=vsurface(d.target);if(!rt)deny("Scene render
     if((c.flags&D3DCLEAR_ZBUFFER)&&zb){const unsigned zv=unsigned(std::lround(std::clamp(c.z,0.f,1.f)*65535.f));fill(*zb,r,zv);}}}
   d.commands.clear();return;}
  if(!host.scene_t0)host.scene_t0=host.vclock()?std::max<std::uint64_t>(host.vclock_us/1000,1): ::GetTickCount64();
- namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.color.resize(px);sc.depth.assign(px,0);sc.has_depth=zb!=nullptr;
+ namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
  auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){get_bytes(v.mem+y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
  const bool lazy=lazy_rt();if(lazy&&host.res_dirty&&(host.res_rt!=rt->guest||host.res_zb!=(zb?zb->guest:0U)))gpu_sync(0);
  bool rescale=false;if(lazy){auto*sr=scene_renderer();if(sr==host.presenter.get()){const float want=render_scale(rt->height);
   if(want!=sr->current_scale()){rescale=true;if(host.res_dirty)gpu_sync(0);}sr->request_scale(want);}}  /* a new scale recreates the target: its content moves through guest memory */
  const bool keep=lazy&&!rescale&&host.sren&&host.res_rt==rt->guest&&host.res_zb==(zb?zb->guest:0U)&&(host.res_dirty||(rt->version==host.res_ver_rt&&(!zb||zb->version==host.res_ver_zb)));
- if(!keep){rows_in(*rt,sc.color);if(zb)rows_in(*zb,sc.depth);}
+ if(!keep){sc.color.resize(px);sc.depth.assign(px,0);rows_in(*rt,sc.color);if(zb)rows_in(*zb,sc.depth);}  /* a resident scene (keep) uploads nothing and needs no host buffers */
  std::map<unsigned,int>tex_index;const auto&dflt=rs_defaults();const std::vector<unsigned>*validated=nullptr;
  for(const auto&c:d.commands){
   if(c.kind==D3DCmd::Clear){vs::Clear k{};k.flags=(c.flags&D3DCLEAR_TARGET?1U:0U)|(c.flags&D3DCLEAR_ZBUFFER?2U:0U);k.color[0]=float((c.a>>16)&255)/255.f;k.color[1]=float((c.a>>8)&255)/255.f;k.color[2]=float(c.a&255)/255.f;k.color[3]=float(c.a>>24)/255.f;k.z=std::clamp(c.z,0.f,1.f);

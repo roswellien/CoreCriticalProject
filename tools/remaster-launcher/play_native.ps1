@@ -11,12 +11,19 @@ if($config.native.runtime_environment){
   [Environment]::SetEnvironmentVariable($binding.Name,[string]$binding.Value,'Process')
  }
 }
+$distance=if($config.graphics.PSObject.Properties.Name -contains 'draw_distance'){[int]$config.graphics.draw_distance}else{800}
+if($distance -notin @(800,1600,2400,3200)){throw 'Unsupported scenery draw distance'}
+$env:MW34_REMASTER_DRAW_DISTANCE=[string]$distance
 $exe=Join-Path $taskRoot $config.native.executable
 if(!(Test-Path -LiteralPath $exe)){throw 'Registered native executable is missing'}
 $run=Join-Path $taskRoot ('local/remaster/runs/'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
 New-Item -ItemType Directory -Path $run | Out-Null
 $env:MW34_FRAME_BUDGET="$Frames";$env:MW34_FRAME_DUMP="$Dump";$env:MW34_FRAME_TIMES="$run/frame-times.txt"
 $env:MW34_MODELS_LOG="$run/mesh-runtime.jsonl"
+if($env:MW34_GPU_WORLD -eq '1'){
+ $env:MW34_WORLD_LOG="$run/world.jsonl"
+ $env:MW34_GEOMETRY_PROFILE="$run/geometry.csv"
+}
 if($env:MW34_MUSIC_PACK){$env:MW34_MUSIC_LOG="$run/music.log"}
 if($env:MW34_BUSHWACKER_TEST){$env:MW34_BUSHWACKER_TEST_LOG=$env:MW34_MODELS_LOG}
 if($Script){$env:MW34_INPUT_SCRIPT=$Script;$env:MW34_VIRTUAL_CLOCK='50'}

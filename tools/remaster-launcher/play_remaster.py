@@ -37,6 +37,9 @@ def plan(backend=None,original_models=False):
             if digest.lower()!=profile['executable_sha256'].lower():raise RuntimeError('Native executable changed; publish its completed validation/profile before launching')
         unknown=[m['name'] for m in ready if m.get('id') not in profile.get('model_ids',[])]
         if unknown:raise RuntimeError('Published models need a compatible native host: '+', '.join(unknown))
+        mesh_versions=profile.get('mesh_payload_versions',[1,2])
+        incompatible=[m['name'] for m in ready if m.get('required_native_mesh_format',1) not in mesh_versions]
+        if incompatible:raise RuntimeError('Published models need a newer native mesh format: '+', '.join(incompatible))
         choices=profile.get('supported_graphics_values',{})
         supported=all(caps.get(k)==v or v in choices.get(k,[]) for k,v in graphics.items())
         command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(ROOT/'tools/remaster-launcher/play_native.ps1'),'-Profile',str(CONFIG)]
@@ -71,6 +74,7 @@ def main():
         print(f"Play MW3Remaster requested profile: {g['width']}x{g['height']} ({aspect}), {aa}, {af}")
         print(f"Renderer: {p['backend']}; current texture pack: {p['texture_banks']} banks")
         if p['backend']=='native':print('Native build: '+read_json(CONFIG)['native']['executable'])
+        if p['backend']=='native':print('Scenery draw distance: '+str(g.get('draw_distance',800))+' units')
         print('Runtime models: '+(', '.join(m['name'] for m in p['models']) or 'original game models'))
         if p['music']:print('Music: local MW3 tracks 01 and 02; original game music controls')
         candidates=[m['name'] for m in p['models'] if m['status']=='runtime-candidate']

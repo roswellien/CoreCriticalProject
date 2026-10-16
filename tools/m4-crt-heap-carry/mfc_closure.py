@@ -89,7 +89,10 @@ def jump_table(k,table,entry):
             if i==0:continue  # an unreachable slot 0 (MSVCRT memcpy/memmove index 1..3 tables overlap code)
             break
         out.append(w)
-    for i in (1,2,3):  # negative indices (memcpy's "count-4" tables address the preceding table's slots)
+    # memcpy uses count-4 (-3..-1), while memmove's backward short-copy
+    # dispatcher negates a remaining dword count and indexes -7..0. All seven
+    # preceding slots are needed; stop at the first non-code/unreadable word.
+    for i in range(1,8):
         try:w=pe.word(table-4*i)
         except Exception:break
         if not lo<=w<hi:break

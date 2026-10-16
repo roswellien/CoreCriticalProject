@@ -87,7 +87,7 @@ void blit(const VSurface&d,RECT dr,const VSurface&s,RECT sr,bool key,unsigned kl
   for(LONG x=0;x<dw;++x){const unsigned char*p=src.data()+(size_t(sy)*sw+size_t(x*sw/dw))*b;unsigned c=0;std::memcpy(&c,p,b);if(key&&c>=klo&&c<=khi)continue;std::memcpy(row.data()+size_t(x)*b,p,b);}
   write_bytes(da,row.data(),unsigned(dw)*b);}}
 bool resident_current(){auto*rt=vsurface(host.res_rt);auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;return rt&&rt->version==host.res_ver_rt&&(!host.res_zb||(zb&&zb->version==host.res_ver_zb));}
-void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;sc.color.resize(size_t(sc.width)*sc.height);sc.depth.resize(sc.color.size());
+void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;
  sc.has_depth=host.res_zb!=0;vs::Clear k{};const bool depth=d.guest==host.res_zb;k.flags=depth?2U:1U;k.color[0]=float((c>>11)&31)/31.f;k.color[1]=float((c>>5)&63)/63.f;k.color[2]=float(c&31)/31.f;k.color[3]=1.f;k.z=float(c&0xffff)/65535.f;
  k.rects.push_back({{r.left,r.top},{unsigned(r.right-r.left),unsigned(r.bottom-r.top)}});sc.order.push_back({true,0});sc.clears.push_back(std::move(k));
  try{HostInternal hi(*this);host.sren->render(sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}

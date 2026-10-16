@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "target": "mw3-pirates-moon",
+  "install_options": 4,
+  "component": "8 MB hardware textures",
+  "evidence": "PM 43B3F0/43B3FC: mask 4, minimum 8 MB; original Hardware Texture 8 and Mech Texture HW 4+ files verified against local deployment metadata.",
+  "files": [
+    {
+      "filename": "zbd/c1/rtexture.zbd",
+      "size_bytes": 4446104,
+      "sha256": "149a18fddc89ca9472052f263ca480449da68707b13f5beff0602211329478e4"
+    },
+    {
+      "filename": "zbd/c2/rtexture.zbd",
+      "size_bytes": 4006136,
+      "sha256": "779080953f3bfe1318f6d48b6717c22e7a1b655a8ff447cbb03ed7d416e75b1d"
+    },
+    {
+      "filename": "zbd/c3/rtexture.zbd",
+      "size_bytes": 4099760,
+      "sha256": "9ba346308fcc93c60baa003a5d58a1d7682fde0f19c782909889850e65f82a31"
+    },
+    {
+      "filename": "zbd/c4/rtexture.zbd",
+      "size_bytes": 4032248,
+      "sha256": "74c3c82ac0b506dbfb23f2b59423e77d4b686b5b8f22f5655af857fa2daac5be"
+    },
+    {
+      "filename": "zbd/rmechtex.zbd",
+      "size_bytes": 43722760,
+      "sha256": "ac1d8cca763b33c9e17c2e3be06488c1617979221e922c783878b7e881d53c60"
+    }
+  ]
+}

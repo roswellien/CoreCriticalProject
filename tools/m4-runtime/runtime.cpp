@@ -71,13 +71,22 @@ Runtime Runtime::from_admitted_image(std::span<const std::byte> file, const Poli
     m4::require_admission(file.size() == m4::admitted_image_size, "Wrong M4 image size");
     const std::vector<std::byte> snapshot(file.begin(), file.end());
     m4::admit_image(snapshot);
-    return Runtime(m4::load_pe32(snapshot), Domain::admitted_game, policy);
+    return Runtime(m4::load_pe32(snapshot), Domain::admitted_game, policy, m4::admitted_image_hash);
+}
+Runtime Runtime::from_research_image(std::span<const std::byte> file,
+                                    const std::string &expected_sha256, const Policy &policy) {
+    m4::require_admission(!file.empty() && file.size() <= 64U * 1024U * 1024U,
+                          "Experimental target input exceeds image limits");
+    const std::vector<std::byte> snapshot(file.begin(), file.end());
+    m4::require_admission(hash_string(expected_sha256) && m4::sha256(snapshot) == expected_sha256,
+                          "Experimental target image SHA-256 mismatch");
+    return Runtime(m4::load_pe32(snapshot), Domain::research_game, policy, expected_sha256);
 }
 Runtime Runtime::for_authored_fixture(m4::LoadedImage image, const Policy &policy) {
     return Runtime(std::move(image), Domain::authored_fixture, policy);
 }
-Runtime::Runtime(m4::LoadedImage image, Domain domain, const Policy &policy)
-    : image_(std::move(image)), domain_(domain), policy_(policy) {
+Runtime::Runtime(m4::LoadedImage image, Domain domain, const Policy &policy, std::string image_sha256)
+    : image_(std::move(image)), domain_(domain), policy_(policy), image_sha256_(std::move(image_sha256)) {
     constexpr std::uint64_t space = std::uint64_t{1} << 32;
     if (!policy_.stack_bytes || policy_.stack_bytes > 16 * 1024 * 1024 ||
         !policy_.heap_bytes || policy_.heap_bytes > 64 * 1024 * 1024 ||
@@ -167,9 +176,9 @@ void Runtime::register_translation(Translation translation) {
     if (!translation.native || translation.name.empty() || !executable(translation.entry) ||
         translation.evidence.domain != domain_ || translations_.contains(translation.entry.value))
         fail(FaultReason::invalid_binding, translation.entry, "Null/duplicate/non-executable/domain-mismatched translation");
-    if (domain_ == Domain::admitted_game) {
+    if (domain_ != Domain::authored_fixture) {
         const auto &evidence = translation.evidence;
-        if (evidence.image_sha256 != m4::admitted_image_hash || !evidence.source_bytes ||
+        if (evidence.image_sha256 != image_sha256_ || !evidence.source_bytes ||
             evidence.source_bytes > 1024 * 1024 || !executable(translation.entry, evidence.source_bytes) ||
             !hash_string(evidence.source_sha256) || !hash_string(evidence.native_artifact_sha256) ||
             !hash_string(evidence.gate_report_sha256))
@@ -187,7 +196,7 @@ void Runtime::register_service(Service service) {
     if (!service.native || service.name.empty() || service.domain != domain_ || !import_at(service.iat_slot) ||
         services_.contains(service.iat_slot.value))
         fail(FaultReason::invalid_binding, service.iat_slot, "Null/duplicate/domain-mismatched/unrecognized IAT contract");
-    if (domain_ == Domain::admitted_game && (!hash_string(service.provider_sha256) || !hash_string(service.gate_report_sha256)))
+    if (domain_ != Domain::authored_fixture && (!hash_string(service.provider_sha256) || !hash_string(service.gate_report_sha256)))
         fail(FaultReason::invalid_binding, service.iat_slot, "Unmeasured provider/service contract");
     for (const auto &[pc, continuation] : continuations_) {
         (void)pc;
@@ -211,7 +220,7 @@ void Runtime::register_service_continuation(std::span<const std::byte> provider_
         std::uint64_t{c.code_start.value} + c.source_bytes > (std::uint64_t{1} << 32) ||
         std::uint64_t{c.return_pc.value} >= std::uint64_t{c.code_start.value} + c.source_bytes ||
         continuations_.contains(c.return_pc.value) || !owner || !owner->name || *owner->name != c.name ||
-        (domain_ == Domain::admitted_game && (!hash_string(c.native_artifact_sha256) || !hash_string(c.gate_report_sha256))))
+        (domain_ != Domain::authored_fixture && (!hash_string(c.native_artifact_sha256) || !hash_string(c.gate_report_sha256))))
         fail(FaultReason::invalid_binding, c.return_pc, "Incomplete/duplicate/domain-mismatched measured service continuation");
     if (domain_ == Domain::admitted_game && !staged_crt_library(owner->library))
         fail(FaultReason::invalid_binding, c.service_iat_slot, "Staged CRT continuation owner library is not MSVCRT.dll");

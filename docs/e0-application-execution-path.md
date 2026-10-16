@@ -12,7 +12,248 @@ Indeo IV50 codec decoded in hidden-window runs. The
 record. The dated path table and early blockers below remain historical evidence;
 their "not reached" and "static only" statuses do not describe current execution.
 
+## Update 2026-10-15: rigid Daishi arm placement in the current torso frame
+
+The current Remaster host, based on the scenery-distance build, restores the
+Daishi donor shoulder shapes and translates complete arm branches up/in while
+retaining original limb rotation and the accepted leg/waist geometry. Compiled
+render placement recovers the exact actor's current ancestor frame; GPU and CPU
+projection agree. New BWMESH3 payloads are explicitly gated by launcher format
+capabilities; old payloads retain their prior path. Boundary advanced: optional
+placement metadata -> native animated model projection. Training116/116,
+GPU1150/1150, IA116/116 and Daishi2600originaldraws match the prior baseline;
+fixture3880checks and57preview/runtime walk samples pass. Current graphics,
+scenery settings and all37201translated objects are retained. No gameplay or
+acceptance credit. [R3 evidence and limits](mw5-daishi-arm-placement-2026-10-15.md).
+
+## Update 2026-10-15: corrected Daishi and Shadow Cat visual fitting
+
+An asset-only update to the unchanged r17 host closes the Daishi waist gap using
+its existing pelvis collar and removes Shadow Cat's erroneous outward thigh
+fit while retaining original animation pivots and knee endpoints. Boundary
+exercised: corrected serialized close geometry -> actual native player-model
+draws in two copied-install IA cases, 2,600/2,100 frames. All 4,700 original
+draw records match retained r15 cases; both detail levels pass all 27 recovered
+clips and the actual adapter fixture passes 3,454 checks. The living launcher
+registers both corrected distance levels. No simulation or executable change;
+no new acceptance credit. [Evidence and limits](mw5-fit-corrections-2026-10-15.md).
+
+Daishi's second asset revision corrects the remaining side-hip and shoulder
+gaps through original parent-owned connector meshes. All 13 Daishi clips pass
+at both detail levels; measured original hip-translation variation remains
+documented. A further 2,600-frame native case matches all original draw records.
+The unchanged r17 host uses both new Daishi payloads; other six model records
+remain intact. This adds no execution/acceptance milestone credit.
+
+## Update 2026-10-15: retain ported models after arm loss
+
+Current published Remaster is r17, SHA256
+`fff729b286da537828908eff4e28a3852f46f61a7a87861d1146ae99017cb044`.
+Original arm destruction exposed an intact-only model-identity defect: replacing
+Orion's rarm/rhand subtree with its original stump caused whole-model fallback.
+The display adapter now recognizes complete source-defined arm-loss variants,
+including original stump geometry fingerprints and exact replacement ancestry.
+Surviving MW5 parts remain displayed; original stump/debris draws and all guest
+simulation remain unchanged. Seven models/39banks/HUD/music and3440x1440FXAA/AF16
+remain configured; all37201translated objects and earlier fixes are retained.
+
+Boundary advanced: actual Orionrightarm loss atframe4414 keeps the port through
+sampledframe6400 in a6500frame native battle. Originaldrawrecords6500/6500 matchr15.
+Training116/116, mode7originaldraw1150/1150, IA116/116 matchr15. Actualadapterfixture
+3454checks includes39synthetic armstates across13payloads. New3LOD1 variants now
+draw in native sweeps; both transition directions remain unproved. A private
+r16observer identifies8Orionbeam draws/firepoint02 but does not correct muzzle
+presentation; normalbeam endpoint layout was corrected in retained research.
+See [the damage/distance follow-up](mw5-arm-damage-fix-2026-10-15.md) for scope,
+sourcepins, exactreproducer, Drivepreviews and remaining leg/torso/debris/muzzle work.
+Registry/pilot unchanged; no desktop screenshots or commit;131/144strictpaused.
+
+## Update 2026-10-15: Orion, Daishi and Shadow Cat native ports
+
+The initial three-model Remaster build was r15, SHA256
+`5821edb3a58229242de320de89125afeed89519e50933e430ba1fee343ae9972`.
+It appends exact LOD0/LOD1 rosters for the three new optional visual candidates,
+retaining r14/r12/r9 HUD fixes, r8 codec timing and r7 speed improvements with
+all 37,201 translated objects unchanged. The living launcher now includes seven
+models and freshly prepares both distance levels from the current texture PNGs.
+Avatar remains excluded; 39 banks, music, 3440x1440 FXAA/AF16 remain configured.
+
+Boundary advanced: the three new player models validate their exact original
+chassis identities and render through the native GPU adapter in bounded Instant
+Action at 2000/2100/2600 frames (Orion/Shadow Cat/Daishi). Training116/116,
+mode7 original draw1150/1150 and IA116/116 match r14. All41 recovered animation
+clips pass offline; actual adapter fixture3159checks pass, including13 model/LOD
+payloads and15malformed streams. Six fresh launcher texture sidecars match the
+candidate bytes. None of these native runs observes new LOD1 selection or
+controlled damage breakup; visible muzzle fitting and native normal mapping
+remain open. Material sets are first drafts. See [the batch record](mw5-next-mechs-2026-10-15.md)
+for source pins, exact scope, Drive previews and next blocker. Registry/pilot
+unchanged, no desktop screenshots or commit. Accepted131/144, strictpaused.
+
+## Update 2026-10-15: zoom target triangle visibility
+
+The previous target-marker Remaster build is r14, SHA256
+`c57f7c5bf53c1350453d7531f615f86ba59bac64308fe4aef512d28c6e97e929`.
+The original normal-marker hiding test used the un-narrowed logical zoom
+rectangle, which could hide a triangle beside the displayed window. A scoped
+display-only temporary adjustment now makes that comparison use the physical
+zoom footprint. Exact original camera provenance also gives only the three
+zoom-projected triangle lines the zoom scene's common scaling center. Original
+clip flags, target choice, lead cues, arrows, FOV and gameplay remain intact;
+intended overlap hiding and per-edge clipping remain.
+
+Boundary advanced: enhanced target-marker visibility/alignment matches the
+displayed zoom viewport. Matched1000-frame cockpit cases reproduce and fix the
+false hide; intended hiding is retained. Training116/116, mode7 original
+draw1150/1150 and IA116/116 match r12;14 sampled1920x1440 captures are identical.
+The Vulkan validation layer was unavailable(-6), so no layer-validation pass is
+claimed. The same37,201 translated objects retain all previous fixes. See
+[the HUD investigation](hud-mechlab-investigation-2026-10-15.md) for source pins,
+runtime evidence, scope and retained failures. No new campaign replay or formal
+credit. Registry/pilots unchanged; no desktop screenshots or commit. Acceptance
+stays131/144, strict lane paused. Damage progression/original-radar checks remain
+open; Mech Lab remains diagnosis/proposal only pending discussion.
+
+## Update 2026-10-15: locked off-center zoom alignment
+
+The Remaster launcher now selects r12 zoom alignment, SHA256
+`99dcd7f66679b4e9f5bb74ecab8daf1f6e8766ec7d43b371514ea01fb6875acc`.
+The user's locked-window/cockpit clarification identified the magnified scene
+moving beneath a correctly aligned cross/border. The host scaled that scene
+about the full D3D scissor midpoint rather than the original movable zoom camera
+viewport. Each queued draw now captures and uses the actual camera center;
+input, original zoom FOV and gameplay remain unchanged. The mask, TL/model
+projection and clipping share the same center, including deferred submission.
+
+Training116/116, original mode7 draw1150/1150 and IA116/116 match r9. Matched
+1050-frame locked sweeps cover cockpit/external and both aim directions at
+3440x1440; original draw streams are identical before/after. All seven sampled
+1920x1440 control captures are unchanged. A1500-frame real-clock cockpit run
+also reaches locked off-center zoom. The same37,201 translated objects retain
+r9 HUD, r8 codec and r7 speed repairs. Native frame dumps, source pins and limits
+are recorded in [the HUD investigation](hud-mechlab-investigation-2026-10-15.md).
+
+Boundary advanced: enhanced zoom scene alignment to the original camera while
+aiming off-center. No new campaign completion replay or formal acceptance credit.
+Mech Lab remains diagnosis/proposal only; next bounded checks are progressive
+damage coloring and original-radar semantics, plus a genuine postmission Lab
+capture before its proposed repair. Actual registry/pilots unchanged; no desktop
+screenshots or commit. Acceptance stays131/144, strict lane paused.
+
+## Update 2026-10-15: HUD follow-up after first campaign completion
+
+The Remaster profile now selects r9 HUD, SHA256
+`4cf4ea6a70f3f232d972a6f0478ad24f597bc0bb49662d67e250dac9e2ab3e71`.
+It retains r8's codec fix, r7 performance changes and the same 37,201 translated
+objects. Original-compatible Training116/116, mode7 draw1150/1150 and IA116/116
+match r8. Enhanced IA captures at1920x1440 and3440x1440 verify player/enemy
+status background alignment and original weapons-panel padding. The host now
+carries each original translucent panel's display anchor through the sorted
+deferred queue; source vertices/order/arithmetic remain unchanged.
+
+Original MW3 condition schematics render in the two exact HUD preview scopes,
+preserving source per-part color eligibility while world models remain updated.
+Controlled progressive damage color validation remains pending. Radar and zoom
+reports remain open: the matched sample did not reproduce the reported drift.
+Mech Lab is unchanged; source investigation found mixed frontend composition
+domains, with one centered original-aspect canvas proposed for discussion.
+The copied pilot's Lab was disabled, so the exact failing live branch is not
+claimed observed. [Findings, scope and evidence](hud-mechlab-investigation-2026-10-15.md).
+
+Execution boundary advanced: enhanced HUD presentation and condition-schematic
+draw eligibility. User-reported first-mission completion is retained separately
+from automated checks. Actual registry/pilots unchanged; no desktop screenshots
+or commit. Acceptance remains131/144, strict lane paused. Next blocker: precise
+off-center zoom reproduction, then controlled damage and accessible Lab checks.
+
+Follow-up clarification: the user's zoom symptom is the inner cross separating
+from the box center; Lab was entered in the same session directly after Mission1.
+Private diagnostic runs now trace the actual zoom child at both screen edges,
+cockpit and native4:3. Each has493 paired cross/border frames:492 constant
+half-logical-pixel midpoint differences, plus the original first-image opening
+transient. Continuous drift is still unreproduced, so no zoom patch is published.
+The real Win/Continue/Load6/modal-Lab route is statically traced; the reload1/1
+map explicitly disables Lab. No campaign flags/saves were changed. The detailed
+investigation retains source evidence and pending timing/runtime checks.
+
+## Update 2026-10-15: campaign movie and restart fix
+
+**User play follow-up:** the user reports completing the first campaign mission
+after the r8 fix. This is user-confirmed interactive evidence beyond the bounded
+automated entry test below. The [October 15 rolling summary](session-summary-2026-10-15-remaster.md)
+records that milestone and the six HUD issues plus intermission Mech Lab
+widescreen layout problems reported during play. Mech Lab is investigation-only
+pending discussion. No independent full-mission replay or acceptance credit is
+inferred.
+
+The r8 codec build validated at this stage had SHA256
+`0c3bab3516a2f43f9bc642c5e4403b4c057a12abdd3a52ed4d36a7f9aa76d152`.
+An optimized-away Indeo CPU-calibration loop caused intermittent divide-by-zero
+at `0x1103ac16` (reported next PC `1103ac18`) during campaign/startup movie opening.
+The narrow code-generation fix preserves the original 500,000 iterations of
+eighteen NOPs; real clocks, original arithmetic and failure paths remain intact.
+Only one r7 optimized object is replaced; performance changes and the current
+3440x1440/FXAA/AF16/assets/HUD/music profile are retained. The generic divide
+diagnostic now identifies lifted x86 rather than mislabeling the codec as MFC42.
+
+Real-clock movie initialization/decoding passes, and original-UI Operation 1,
+Mission 1 reaches 1,800 presented frames, including 1,001 with actual 3D and
+third-person/forward movement. Original-compatible **Training 116/116, mode 7
+GPU draw 1150/1150 and IA 116/116** pass on this exact executable. See the
+[cause, validation and limits](campaign-video-startup-fix.md). Actual registry
+and pilot files are unchanged; copied installs/private overlays were used.
+This is bounded campaign entry/play, not mission completion or later-campaign
+acceptance. Hardware SEH and model fidelity limits remain open. No desktop
+screenshots or commit; strict acceptance stays **131/144, paused**.
+
 ## Update 2026-10-14: startup seed and current blockers
+
+**Combat closure discovered during MW5 port checks (2026-10-14 late evening,
+private r6 candidate).** Original-model and replacement-model Instant Action
+both stopped at presented frame 1,301 on missing indirect target `0x7801096d`.
+The staged MSVCRT `memmove` at `0x78002d75` negates a bounded remaining dword
+count and indexes `0x78002e0c` at -7..0. The closure scanner had inspected only
+three preceding slots. `tools/m4-crt-heap-carry/mfc_closure.py` now scans all
+seven, stopping at unreadable/non-code words; four asset-free table tests pass.
+The original DLL is pinned by SHA256
+`2d5670881a6d13a100e37da297f6eeb876f68b63073a28eb5d650625c60f9bf7`.
+
+Four missing original continuations (`78010965`, `7801096d`, `78010975`,
+`7801097d`) were translated using the existing lift pipeline and linked only
+into `local/remaster/gpu-native-r6-lod1`. All 37,197 existing dispatch entries,
+router bodies and ordered optimized object paths are retained; four entries
+and objects are added. Original ordered loads/stores and the continuation at
+`78002dc5` perform the copy. There is no host CRT shortcut, interpreter or
+original machine-code fallback. The executable SHA256 is
+`3ca4492a6ef01262321b0e0eb40e4bfcb41ef2ff7efd920f121730d693ff3a3b`.
+
+The same frozen combat input now reaches the intentional 1,750-frame stop;
+all 1,301 original draw records before the previous failure match exactly.
+Subsequent final-payload native runs reach 1,900 frames for Mad Cat/Mad Cat
+and 2,000 each for Vulture/Thor and Thor/Vulture. All three LOD0 replacements
+are validated and queued; Mad Cat's same enemy root also selects and queues
+LOD1. The candidate adds source-active-flag component filtering and lighter
+distance meshes; [the port status](mw5-model-porting-status.md) records scope,
+fixtures and remaining damage/muzzle/LOD limits.
+
+Fresh standard Training regression attempts did **not** reach 3D: a Windows
+system dialog held foreground input and the harness recorded focus failure.
+The unchanged r5 control likewise stayed in the menu. Even its 116 matching
+menu captures against r6 do not count as a Training pass. These attempts are
+retained and excluded; Training 116/116, mode 7 GPU 1150/1150 and IA 116/116
+have **not been freshly re-established on r6**. Their earlier r5 evidence below
+is unchanged. No claim of complete combat closure or measured model FPS gain
+is made. Normal launchers remain on r5. Tests use copied installs/pilots and
+private registry overlays; actual registry/pilot files are read/hashed only.
+
+Evidence is local under
+`local/work-ahead/mw3-cinematic-mechs-r1/weapon-fit-review-r2`, particularly
+`combat-runtime-fault-r1`, `integration-status.json` and the named run folders;
+the actual-adapter fixture in sibling `damage-lod-review-r2` passes 1,725 checks.
+No desktop screenshots, commit or strict-acceptance run. Acceptance remains
+**131/144, paused**. Next: restore real test focus for standard regressions,
+then verify the remaining per-chassis distance/damage paths and implement the
+scoped visual muzzle correction without changing projectile simulation.
 
 **Latest normal-play performance (2026-10-14 publication check).** The r5 executable above, with current registered assets, music, FXAA and 16x AF, measured 120.06 FPS at3440x1440 on the repeat run and117.97 FPS at1920x1440 over Training frames651..1150, excluding loading. The matched3440x1440 music-off run measured120.37 FPS; all1150 original game draw records match. An initial music-on pass was102.43 FPS and is retained as observed variation, not discarded or attributed to a proven cause. No repeatable large music penalty is shown by this small sample; occasional approximately34 ms frame spikes remain. Thirty-six of39 texture banks changed after the earlier music integration validation, so these current asset measurements have their own snapshot at `local/music-integration-r1/performance-assets-r1.json`; detailed results are `performance-current-r1.json`. Original-compatible validation remains the separately retained original-mode lane. This is bounded Training performance, not a whole-game guarantee. See the [public daily summary](session-summary-2026-10-14-remaster.md).
 
