@@ -8,6 +8,7 @@
 // The same device presents flipped frames: the guest front buffer (R5G6B5) is uploaded and blitted to a
 // FIFO swapchain on the game's window (Flip waits for the vertical blank, as DDFLIP_WAIT did).
 #pragma once
+#include "capture_pixels.hpp"
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan_core.h>
 #include <windows.h>
@@ -29,6 +30,7 @@
 #include "d3d_scene_frag.h"
 #include "fxaa_vert.h"
 #include "fxaa_frag.h"
+#include "frontend_canvas.hpp"
 
 namespace mw34::vkscene {
 // The stage mirrors the guest's x87 control word and MXCSR into the host while guest code runs; driver
@@ -69,6 +71,7 @@ struct Scene {
     unsigned width, height;
     std::vector<std::uint16_t> color, depth;  // in/out, tightly packed width*height
     bool has_depth;
+    bool frontend_canvas{};
     bool hud{}; // Host HUD/overlay draws keep their original sampling and follow world AA.
     std::vector<unsigned char> vertices;      // 32-byte TL vertices, triangle list
     std::vector<TextureRef> textures;
@@ -312,6 +315,85 @@ public:
         }
         std::fclose(out);
     }
+    void capture_fullres_rgb(std::vector<std::uint8_t> &out_rgb, unsigned &out_w, unsigned &out_h) {
+        HostFpEnvironment fp;
+        finish_world();
+        settle();
+        out_w = rw;
+        out_h = rh;
+        if (!rw || !rh || !colorImage.image) { out_rgb.clear(); return; }
+        const VkDeviceSize bytes = VkDeviceSize(rw) * rh * (rgba ? 4 : 2);
+        ensure(readback, std::max<VkDeviceSize>(bytes, VkDeviceSize(width) * height * 4), VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        check(f.vkResetCommandPool(device, commandPool, 0), "reset command pool");
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(f.vkBeginCommandBuffer(cmd, &bi), "begin capture");
+        if (in_attachment_layout) {
+            barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier(depthImage.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
+        VkBufferImageCopy c{};
+        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; c.imageExtent = {rw, rh, 1};
+        f.vkCmdCopyImageToBuffer(cmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &c);
+        VkMemoryBarrier hb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, nullptr, 0, nullptr);
+        check(f.vkEndCommandBuffer(cmd), "end capture");
+        check(f.vkResetFences(device, 1, &fence), "reset fence");
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
+        check(f.vkQueueSubmit(queue, 1, &si, fence), "submit capture");
+        check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait capture");
+        in_attachment_layout = false;
+        const auto *src = static_cast<const unsigned char *>(readback.mapped);
+        out_rgb.resize(size_t(rw) * rh * 3);
+        for (unsigned y = 0; y < rh; ++y) {
+            for (unsigned x = 0; x < rw; ++x) {
+                std::uint8_t *o = &out_rgb[(size_t(y) * rw + x) * 3];
+                if (rgba) { const unsigned char *p = src + (size_t(y) * rw + x) * 4; o[0] = p[0]; o[1] = p[1]; o[2] = p[2]; }
+                else { const unsigned p = src[(size_t(y) * rw + x) * 2] | (src[(size_t(y) * rw + x) * 2 + 1] << 8); o[0] = ((p >> 11) & 31) * 255 / 31; o[1] = ((p >> 5) & 63) * 255 / 63; o[2] = (p & 31) * 255 / 31; }
+            }
+        }
+    }
+    void capture_fullres_bgra(std::vector<std::uint8_t> &out_rgba, unsigned &out_w, unsigned &out_h) {
+        HostFpEnvironment fp;
+        finish_world();
+        settle();
+        out_w = rw;
+        out_h = rh;
+        if (!rw || !rh || !colorImage.image) { out_rgba.clear(); return; }
+        const VkDeviceSize bytes = VkDeviceSize(rw) * rh * (rgba ? 4 : 2);
+        ensure(readback, std::max<VkDeviceSize>(bytes, VkDeviceSize(width) * height * 4), VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        check(f.vkResetCommandPool(device, commandPool, 0), "reset command pool");
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(f.vkBeginCommandBuffer(cmd, &bi), "begin capture");
+        if (in_attachment_layout) {
+            barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier(depthImage.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
+        VkBufferImageCopy c{};
+        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; c.imageExtent = {rw, rh, 1};
+        f.vkCmdCopyImageToBuffer(cmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &c);
+        VkMemoryBarrier hb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, nullptr, 0, nullptr);
+        check(f.vkEndCommandBuffer(cmd), "end capture");
+        check(f.vkResetFences(device, 1, &fence), "reset fence");
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
+        check(f.vkQueueSubmit(queue, 1, &si, fence), "submit capture");
+        check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait capture");
+        in_attachment_layout = false;
+        const auto *src = static_cast<const unsigned char *>(readback.mapped);
+        out_rgba.resize(size_t(rw) * rh * 4);
+        mw34::capture::to_bgra({src, size_t(bytes)}, out_rgba,
+            rgba ? mw34::capture::ColorFormat::rgba8 : mw34::capture::ColorFormat::rgb565);
+    }
     // Enhanced settings are explicit; sample counts are not aliases for FXAA.
     static unsigned remaster_setting(const char *name,unsigned fallback){const char*p=std::getenv(name);if(!p)return fallback;char*end{};const unsigned long n=std::strtoul(p,&end,10);
         if(!*p||*end||n>16384)throw std::runtime_error(std::string("Invalid Remaster setting ")+name);return unsigned(n);}
@@ -348,6 +430,7 @@ public:
     // scene (no guest upload); with readback_out false nothing is copied back and the images stay in attachment layout
     // until readback() copies them out on demand.
     bool in_attachment_layout{};
+    bool frontend_canvas() const { return target_frontend; }
     float current_scale() const { return scale; }
     void request_scale(float s) { scale_req = s; }
     std::uint64_t readbacks{}, target_uploads{};
@@ -363,10 +446,11 @@ public:
         HostFpEnvironment fp;
         settle();
         if (!device) init();
-        if (s.width != width || s.height != height || scale_req != scale) target(s.width, s.height);
+        if (s.width != width || s.height != height || scale_req != scale || s.frontend_canvas != target_frontend) target(s.width, s.height, s.frontend_canvas);
         if(upload_in)quality_world_dirty=false;
         const VkDeviceSize pixels = VkDeviceSize(width) * height;
-        if (s.color.size() != pixels || s.depth.size() != pixels) throw std::runtime_error("Scene buffers do not match the target");
+        // The host-side buffers carry pixels only for an upload or a readback; a GPU-resident scene leaves them empty.
+        if ((upload_in || readback_out) && (s.color.size() != pixels || s.depth.size() != pixels)) throw std::runtime_error("Scene buffers do not match the target");
         const VkDeviceSize colorBytes = pixels * (rgba ? 4 : 2), depthBytes = pixels * 2;
         ensure(upload, colorBytes + depthBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         ensure(readback, colorBytes + depthBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
@@ -638,6 +722,7 @@ private:
     // the provider before a scene; it applies when the target is (re)created.
     Image colorLo, depthLo;
     float scale = 1.f, scale_req = 1.f,scale_x=1.f;
+    bool target_frontend{};
     unsigned rw{}, rh{};
     Tex white;
     std::map<std::uint64_t, Tex> textures;
@@ -910,7 +995,8 @@ private:
         if (t.memory) f.vkFreeMemory(device, t.memory, nullptr);
         t = {};
     }
-    void target(unsigned w, unsigned h) {
+    void target(unsigned w, unsigned h, bool frontend) {
+        target_frontend=frontend;
         f.vkDeviceWaitIdle(device);
         if (framebuffer) f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo,&qualitySource}) {
@@ -931,7 +1017,7 @@ private:
         // Guest buffers remain at the selected original resolution. A wider
         // physical world target is paired with the original camera/frustum's
         // explicit Hor+ correction; HUD coordinates are handled separately.
-        if(widescreen()){rw=3440;rh=1440;}
+        if(widescreen()){if(target_frontend){const auto fit=mw34::frontend::CanvasFit::fit(w,h,remaster_width(),remaster_height());rw=unsigned(fit.width);rh=unsigned(fit.height);}else{rw=3440;rh=1440;}}
         scale_x=float(rw)/float(w);
         if (rw!=w||rh!=h) {
             image(colorLo.image, colorLo.memory, colorLo.view, w, h, rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,

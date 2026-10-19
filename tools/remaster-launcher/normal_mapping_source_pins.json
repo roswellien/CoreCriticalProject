@@ -1,0 +1,26 @@
+{
+  "main": {
+    "vk_scene.hpp": "194619a0dcb6743fc7224b6c868afef99960e6512f7720ac9e2dd1e33fb5108e",
+    "mfc_stage.hpp": "f9ba94581e5a9b6e33ea1b0a0bc9113e3905847d0364f7b24aec2026300a7976",
+    "d3d_provider.inc": "24c64960b3a4d8a977f6cf8446ebbd42c67e34baf1a7a9a42c87b70f04b371df",
+    "mesh_override_stage.inc": "78b5e0186a7df69da6e2f8add4b4ec7c8e3984992e627d02a3f6bfe6a2e114de",
+    "vdd.inc": "4818781bd8bd174896ae6f12e367fc004778645d878a1ae8cba9ef0b0348781a",
+    "widescreen_stage.inc": "06c7ec751a139076a647a183b8a45a614c7bce08f590a42119dfeba44938bd98"
+  },
+  "baseline": {
+    "vk_scene.hpp": "2a4d0eb59dde2fa05fc7b8a8be9ca8c2787953cd85c1578271e0c1e5461e3151",
+    "mfc_stage.hpp": "97e30f95c3c5a415881c56d49ce0adb3ecd7e4702e9dd6dc7772b5b151319856",
+    "d3d_provider.inc": "de440c9a6588253128cd1a8a3a8e1b982107f0413fa009b09bf970b043c58e98",
+    "mesh_override_stage.inc": "f874adad5679a55d70977eb53e4ad3b2c4ecdb233f971cf56edd300b96fab1a2",
+    "vdd.inc": "991b4f961988d29c4f68b3420cd0177be1a3bd5d894c389ef736160415cf7d26",
+    "widescreen_stage.inc": "06c7ec751a139076a647a183b8a45a614c7bce08f590a42119dfeba44938bd98"
+  },
+  "lighting": {
+    "vk_scene.hpp": "1e5276e5d19e33ca1df43a9214366d0035e1a399f6e0ac8e7762799aefb809ff",
+    "mfc_stage.hpp": "6c091456a990e4c1e3bd634894e2f7db9a07affe0cdae2322741b87d95a1f14b",
+    "d3d_provider.inc": "adf9a2402924046900c9063321edabee424356e53bf51dc64efa6e7f0fa40bad",
+    "mesh_override_stage.inc": "a1026303c7e330ca741f1831f213572109cc719456a2f44929876347a7c71abf",
+    "vdd.inc": "caff829513da33375842cfa6ac0a4dbaec35c0a00afb0cbf283e3b491e06cf09",
+    "widescreen_stage.inc": "a047a12a9b889a4da14ada79a7c25c1ff33bc50472daff115b81e71072818398"
+  }
+}

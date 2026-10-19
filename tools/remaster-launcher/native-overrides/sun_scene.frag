@@ -1,0 +1,270 @@
+#version 450
+// Direct3D 6 fixed-function pixel stage for one texture stage: colour/alpha operation and arguments,
+// flat or Gouraud colour, perspective or affine texture coordinates, specular add, vertex fog (specular
+// alpha) and alpha test. Unmodelled states are refused on the host before a draw reaches this shader.
+layout(location=0) in vec2 uvPerspective;
+layout(location=1) noperspective in vec2 uvAffine;
+layout(location=2) noperspective in vec4 colorSmooth;
+layout(location=3) flat in vec4 colorFlat;
+layout(location=4) noperspective in vec4 specularSmooth;
+layout(location=5) flat in vec4 specularFlat;
+layout(location=6) in vec3 worldNormal;
+layout(location=7) in vec3 worldPosition;
+layout(location=8) in vec3 shadowPosition;
+layout(location=9) noperspective in vec2 screenPos;
+layout(set=1,binding=0,std140) uniform SunLighting {
+ vec4 normal0; vec4 normal1; vec4 normal2;
+ vec4 direction; vec4 sunColor; vec4 ambient;
+ vec4 projection; vec4 extra;
+ vec4 world0; vec4 world1; vec4 world2;
+ vec4 shadow0; vec4 shadow1; vec4 shadow2; vec4 shadowParams;
+ vec4 skyEye; vec4 skyTint; vec4 skyGlow; vec4 skyGrade; vec4 skyBlend;
+ vec4 detail; vec4 detailMotion;
+} sun;
+#ifdef MW34_EFFECT_LIGHTING
+struct EffectLight {vec4 start;vec4 end;vec4 color;};
+layout(set=1,binding=2,std140) uniform EffectLighting {
+ vec4 params;
+ EffectLight lights[32];
+} effects;
+vec3 effectIllumination(vec3 p,vec3 n){
+ vec3 illumination=vec3(0);
+ for(int i=0;i<min(int(effects.params.x),32);++i){
+  EffectLight l=effects.lights[i];
+  vec3 segment=l.end.xyz-l.start.xyz;
+  float den=dot(segment,segment);
+  float t=den>1e-8?clamp(dot(p-l.start.xyz,segment)/den,0.0,1.0):0.0;
+  vec3 delta=l.start.xyz+t*segment-p;
+  float d2=dot(delta,delta),r2=l.start.w*l.start.w;
+  if(d2>=r2)continue;
+  float attenuation=1.0-d2/r2;
+  float diffuse=max(dot(n,delta*inversesqrt(max(d2,1e-8))),0.0);
+  illumination+=l.color.rgb*l.color.w*attenuation*attenuation*diffuse;
+ }
+ return illumination;
+}
+#endif
+
+layout(set=0,binding=0) uniform sampler2D image;
+layout(set=1,binding=1) uniform sampler2DShadow shadowMap;
+layout(set=2,binding=0) uniform sampler2D normalMap;
+layout(location=0) out vec4 result;
+// mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test.
+// mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
+// mode.w alpha function | reference << 8.
+layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
+vec4 diffuse, specular, texel;
+vec4 argument(uint a) {
+    vec4 v;
+    uint s = a & 15u;
+    if (s == 0u || s == 1u) v = diffuse;      // D3DTA_DIFFUSE, D3DTA_CURRENT (stage 0: diffuse)
+    else if (s == 2u) v = texel;              // D3DTA_TEXTURE
+    else if (s == 3u) v = draw.factor;        // D3DTA_TFACTOR
+    else v = specular;                        // D3DTA_SPECULAR
+    if ((a & 16u) != 0u) v = 1.0 - v;         // D3DTA_COMPLEMENT
+    if ((a & 32u) != 0u) v = vec4(v.a);       // D3DTA_ALPHAREPLICATE
+    return v;
+}
+vec4 operation(uint word) {
+    uint op = word & 255u;
+    vec4 a = argument((word >> 8) & 255u), b = argument((word >> 16) & 255u);
+    if (op == 1u) return diffuse;                         // DISABLE: current passes through
+    if (op == 2u) return a;                               // SELECTARG1
+    if (op == 3u) return b;                               // SELECTARG2
+    if (op == 4u) return a * b;                           // MODULATE
+    if (op == 5u) return min(a * b * 2.0, 1.0);           // MODULATE2X
+    if (op == 6u) return min(a * b * 4.0, 1.0);           // MODULATE4X
+    if (op == 7u) return min(a + b, 1.0);                 // ADD
+    if (op == 8u) return clamp(a + b - 0.5, 0.0, 1.0);    // ADDSIGNED
+    if (op == 9u) return clamp((a + b - 0.5) * 2.0, 0.0, 1.0); // ADDSIGNED2X
+    if (op == 10u) return clamp(a - b, 0.0, 1.0);         // SUBTRACT
+    if (op == 11u) return min(a + b - a * b, 1.0);        // ADDSMOOTH
+    if (op == 12u) return mix(b, a, diffuse.a);           // BLENDDIFFUSEALPHA
+    if (op == 13u) return mix(b, a, texel.a);             // BLENDTEXTUREALPHA
+    return mix(b, a, draw.factor.a);                      // BLENDFACTORALPHA (14)
+}
+// Sun shadow map (replacement mechs only). Receivers offset along the
+// geometric normal, then take nine bilinear depth comparisons (a 4x4 texel
+// footprint). The edge of the sun-space region fades back to full light.
+float sunShadow(vec3 N) {
+    float ndl=clamp(dot(N,sun.direction.xyz),0.0,1.0);
+    vec4 q=vec4(shadowPosition+N*(sun.shadowParams.y*(1.5+2.0*(1.0-ndl))),1.0);
+    vec3 s=vec3(dot(sun.shadow0,q),dot(sun.shadow1,q),dot(sun.shadow2,q));
+    vec2 uv=s.xy*0.5+0.5;
+    float edge=min(min(uv.x,uv.y),min(1.0-uv.x,1.0-uv.y));
+    if(edge<=0.0||s.z>=1.0)return 1.0;
+    vec2 texel=1.0/vec2(textureSize(shadowMap,0));
+    float ref=s.z-sun.shadowParams.z,visible=0.0;
+    for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x)visible+=texture(shadowMap,vec3(uv+vec2(x,y)*texel,ref));
+    return mix(1.0,visible/9.0,sun.shadowParams.w*smoothstep(0.0,0.05,edge));
+}
+// Sky shading. View direction from the camera to the shaded point; "side" is
+// 1 toward the sun's azimuth and 0 opposite. The glow concentrates around the
+// sun and spreads along the sun-side horizon.
+vec3 skyView() { return normalize(shadowPosition - sun.skyEye.xyz); }
+// Exact per-pixel view ray for the TL sky dome/band (their far-plane z and rhw
+// disagree, so interpolated positions bend per triangle).
+vec3 skyRay() {
+    vec3 c=vec3((screenPos.x-sun.projection.z)/sun.projection.x,(screenPos.y-sun.projection.w)/sun.projection.y,sun.extra.x);
+    return normalize(vec3(dot(sun.normal0.xyz,c),dot(sun.normal1.xyz,c),dot(sun.normal2.xyz,c)));
+}
+float skySide(vec3 v) {
+    vec2 a=v.xz,b=sun.direction.xz;float la=length(a),lb=length(b);
+    return (la<1e-5||lb<1e-5)?0.5:clamp(0.5+0.5*dot(a/la,b/lb),0.0,1.0);
+}
+float skyGlowAmount(vec3 v,float side) {
+    float angle=acos(clamp(dot(v,sun.direction.xyz),-1.0,1.0));
+    return sun.skyGlow.a*(exp(-angle*sun.skyGrade.w)+0.35*side*side*side*exp(-max(v.y,0.0)*4.0));
+}
+// The scene target may be RGB565: dither smooth sky/haze gradients by about
+// one 5-bit step so they do not band into visible contours.
+vec3 skyDither(vec3 c) {
+    float n=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(0.06711056,0.00583715))));
+    return clamp(c+(n-0.5)/31.0,0.0,1.0);
+}
+vec3 hazeColor(vec3 v) {
+    float side=skySide(v);
+    return draw.fogColor.rgb*mix(sun.skyBlend.z,1.0,side)+sun.skyGlow.rgb*skyGlowAmount(v,side)*0.6;
+}
+// Cloud relief changes the existing cloud artwork's response around unity.
+// The dome is never lit as a solid surface; a flat map preserves its color.
+float cloudRelief(vec2 uv,vec3 ray) {
+    vec4 map=texture(normalMap,uv);
+    vec2 slope=(map.xy*255.0-128.0)/127.0;
+    vec3 N=-ray;
+    vec3 dp1=dFdx(ray),dp2=dFdy(ray);
+    vec2 du1=dFdx(uv),du2=dFdy(uv);
+    vec3 p2=cross(dp2,N),p1=cross(N,dp1);
+    vec3 T=p2*du1.x+p1*du2.x,B=p2*du1.y+p1*du2.y;
+    float d=max(dot(T,T),dot(B,B));
+    if(d<=1e-30)return 1.0;
+    vec3 change=(T*slope.x+B*slope.y)*inversesqrt(d);
+    return clamp(1.0+dot(change,sun.direction.xyz)*sun.detail.y*map.a*.8,.7,1.3);
+}
+// Shared world XZ field makes water and the water side of surf follow one
+// wave phase across texture boundaries. Normal alpha masks foam/sand at UV.
+float surfMask(vec2 uv) {
+    // Ripple RGB repeats, but atlas masks must clamp: at U=1, repeat would
+    // blend the water edge back into sand from the other side of the atlas.
+    ivec2 size=textureSize(normalMap,0);
+    vec2 p=clamp(uv,0.0,1.0)*vec2(size)-.5;
+    ivec2 a=ivec2(floor(p));vec2 f=fract(p);
+    // Explicit clamped taps bypass the ripple sampler's repeating/anisotropic
+    // footprint and its mip chain, including at exactly U/V=0 or 1.
+    float aa=texelFetch(normalMap,clamp(a,ivec2(0),size-1),0).a;
+    float ba=texelFetch(normalMap,clamp(a+ivec2(1,0),ivec2(0),size-1),0).a;
+    float ab=texelFetch(normalMap,clamp(a+ivec2(0,1),ivec2(0),size-1),0).a;
+    float bb=texelFetch(normalMap,clamp(a+ivec2(1,1),ivec2(0),size-1),0).a;
+    return mix(mix(aa,ba,f.x),mix(ab,bb,f.x),f.y);
+}
+vec3 waterNormal(vec3 N,float mask) {
+    vec2 p=worldPosition.xz*sun.detail.z;
+    float time=sun.detailMotion.x;
+    vec3 a=texture(normalMap,p+time*vec2(.12,.08)).xyz;
+    vec3 b=texture(normalMap,p*2.0+time*vec2(-.06,.10)).xyz;
+    vec2 slope=((a.xy*255.0-128.0)+.45*(b.xy*255.0-128.0))/127.0;
+    // Fade small ripples below a pixel rather than shimmering at the horizon.
+    float footprint=max(length(dFdx(p)),length(dFdy(p)))*float(textureSize(normalMap,0).x);
+    float fade=1.0-smoothstep(2.0,10.0,footprint);
+    return normalize(N+vec3(slope.x,0,slope.y)*(sun.detail.y*mask*fade));
+}
+void main() {
+    uint flags = draw.mode.x;
+    diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
+    specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
+    vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
+    texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
+    if(sun.skyBlend.w>2.99){ // Path debug: green per-frame TL terrain, blue GPU-kept world, magenta mech, yellow sky/haze-only.
+        float k=sun.skyBlend.w-3.0;vec3 c=k<0.5?vec3(0.1,0.85,0.1):k<1.5?vec3(0.1,0.3,1.0):k<2.5?vec3(1.0,0.1,1.0):vec3(1.0,0.9,0.1);
+        float lum=dot(operation(draw.mode.y).rgb,vec3(0.333));result=vec4(c*(0.55+0.6*lum),1.0);return;
+    }
+    if(sun.skyBlend.w>0.5&&sun.skyBlend.w<1.99){ // Sky debug: R dome, B horizon band, G haze-only, L lit; brightness = draw index.
+        float k=fract(sun.skyBlend.w);
+        result=vec4(sun.extra.w>1.5&&sun.extra.w<2.5?0.3+0.7*k:0.0,sun.extra.w>3.5?0.3+0.7*k:(sun.extra.w<1.5?0.15:0.0),sun.extra.w>2.5&&sun.extra.w<3.5?0.3+0.7*k:0.0,1.0);return;
+    }
+    if(sun.extra.w>1.5&&sun.extra.w<3.5){ // Sky dome (2) or horizon band (3).
+        vec3 v=skyRay();float side=skySide(v);vec3 haze=hazeColor(v),c=haze;
+        if(sun.extra.w<2.5){
+            vec3 base=operation(draw.mode.y).rgb*sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
+            if(sun.detail.x>2.5)base*=cloudRelief(uv,v);
+            float l=dot(base,vec3(0.2126,0.7152,0.0722));
+            base=mix(vec3(l),base,mix(sun.skyGrade.z,1.0,side))+sun.skyGlow.rgb*skyGlowAmount(v,side);
+            // Elevation-only blend into the haze. Below horizon_low the dome equals the haze exactly,
+            // matching the horizon band it overlaps at the same far depth.
+            float f=smoothstep(sun.skyBlend.x,sun.skyBlend.y,v.y);
+            c=mix(haze,base,f);
+            if(sun.skyBlend.w>1.99&&sun.skyBlend.w<2.99)c=vec3(clamp(v.y*2.0,0.0,1.0),side,f); // Debug 2: R view height, G sun side, B dome blend.
+        }else if(sun.skyBlend.w>1.99&&sun.skyBlend.w<2.99)c=vec3(clamp(v.y*2.0,0.0,1.0),side,0.0);
+        result=vec4(skyDither(min(c,vec3(1.0))),operation(draw.mode.z).a);return;
+    }
+    vec3 N;
+    if(sun.extra.w>0.5){
+        N=normalize(cross(dFdx(worldPosition),dFdy(worldPosition)));
+        vec3 eye=vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
+        if(dot(N,eye-worldPosition)<0.0)N=-N;
+    }else{
+        N=normalize(worldNormal);
+    }
+    vec3 dp1 = dFdx(worldPosition);
+    vec3 dp2 = dFdy(worldPosition);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+    vec3 dp2perp = cross(dp2, N);
+    vec3 dp1perp = cross(N, dp1);
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float det = max(dot(T, T), dot(B, B));
+    vec3 n;
+    // Scale-independent: near the camera the per-pixel tangents are tiny but still valid
+    // (an absolute 1e-10 cut-off dropped the normal map on nearby ground, leaving a flat band).
+    bool waterDetail=sun.detail.x>.5&&sun.detail.x<2.5;
+    float waterMask=waterDetail&&sun.detail.x>1.5?surfMask(uv):1.0;
+    if(waterDetail){
+        n=waterNormal(N,waterMask);
+    }else if (det > 1e-30) {
+        float invmax = inversesqrt(det);
+        vec3 map = texture(normalMap, uv).xyz * 2.0 - 1.0;
+        float strength = max(sun.extra.y, 0.0);
+        vec3 n_tan = normalize(vec3(map.xy * strength, map.z));
+        n = normalize(T * (invmax * n_tan.x) + B * (invmax * n_tan.y) + N * n_tan.z);
+    } else {
+        n = N;
+    }
+    if(sun.extra.z>0.5){ // Shadow debug: R occlusion, G inside sun region, B sun-space depth bands.
+        vec4 q=vec4(shadowPosition,1.0);vec3 s=vec3(dot(sun.shadow0,q),dot(sun.shadow1,q),dot(sun.shadow2,q));
+        vec2 uv=s.xy*0.5+0.5;bool inside=all(greaterThan(uv,vec2(0.0)))&&all(lessThan(uv,vec2(1.0)));
+        result=vec4(1.0-sunShadow(N),inside?0.6:0.0,fract(s.z*40.0),1.0);return;
+    }
+    float direct=max(dot(n,sun.direction.xyz),0.0);
+    if(sun.shadowParams.x>0.5&&direct>0.0)direct*=sunShadow(N);
+    vec3 illumination=sun.ambient.rgb+sun.sunColor.rgb*sun.direction.w*direct;
+#ifdef MW34_EFFECT_LIGHTING
+    // Original blended sprites retain their emission. Local lights use true
+    // world positions, distinct from inverse-transpose normal coordinates.
+    vec3 localLight=sun.detailMotion.w<0.0?vec3(0):effectIllumination(shadowPosition,n);
+    vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?
+        (sun.detailMotion.w<0.0?vec3(1):vec3(sun.detailMotion.w)+localLight):illumination+localLight);
+#else
+    vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?vec3(1.0):illumination);
+#endif
+    if(waterDetail){
+        vec3 eye=vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
+        vec3 V=normalize(eye-worldPosition),H=normalize(V+sun.direction.xyz);
+        // Restrained sun reflection, masked off foam and sand; alpha and
+        // original fog/specular still execute below without modification.
+        float glint=pow(max(dot(n,H),0.0),80.0)*max(dot(n,sun.direction.xyz),0.0);
+        rgb+=sun.sunColor.rgb*sun.direction.w*glint*.18*sun.detail.y*waterMask;
+    }
+    if(sun.ambient.w>0.5)rgb=n*0.5+0.5;
+    float alpha = operation(draw.mode.z).a;
+    if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
+    if ((flags & 16u) != 0u) rgb = sun.skyEye.w>0.5?skyDither(mix(hazeColor(skyView()), rgb, specular.a)):mix(draw.fogColor.rgb, rgb, specular.a);
+    if ((flags & 32u) != 0u) {
+        uint f = draw.mode.w & 255u;
+        float r = float((draw.mode.w >> 8) & 255u) / 255.0;
+        bool pass = f == 8u || (f == 2u && alpha < r) || (f == 3u && alpha == r) || (f == 4u && alpha <= r) ||
+                    (f == 5u && alpha > r) || (f == 6u && alpha != r) || (f == 7u && alpha >= r);
+        if (!pass) discard;
+    }
+    result = vec4(rgb, alpha);
+}

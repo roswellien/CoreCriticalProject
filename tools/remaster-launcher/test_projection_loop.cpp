@@ -19,6 +19,8 @@ extern "C" void __remill_fpu_exception_clear(int){__asm__("fnclex");}
 extern "C" int __remill_fpu_exception_test(int mask){unsigned short s;__asm__("fnstsw %0":"=m"(s));return s&mask;}
 static void cw(unsigned short v){__asm__("fldcw %0"::"m"(v));}
 static unsigned short status(){unsigned short s;__asm__("fnstsw %0":"=m"(s));return s;}
+static unsigned mxcsr(){unsigned s;__asm__("stmxcsr %0":"=m"(s));return s;}
+static void clear_mxcsr(){const unsigned s=0x1f80;__asm__("ldmxcsr %0"::"m"(s));}
 static void dump(const char* name,const void* p,std::size_t n){std::ofstream f(name,std::ios::binary);f.write(static_cast<const char*>(p),n);}
 static bool bounded(U b){b&=0x7fffffff;return b==0||(b>=0x3b800000&&b<=0x47800000);}
 static bool admitted(const unsigned char* s,const unsigned char* m,unsigned n){
@@ -43,7 +45,7 @@ int main(){
   put<unsigned short>(seed.data(),2770,0x1800);
   put<unsigned short>(seed.data(),2106,0x1234);put<unsigned short>(seed.data(),2110,0x5678);
   const std::array<float,11> values={0.f,-0.f,0.00390625f,-0.00390625f,1.f,-1.f,65536.f,-65536.f,0.5f,-16.f,123.456f};
-  for(unsigned n:{1U,2U,3U,4U,64U})for(unsigned mode=0;mode<12;++mode)for(unsigned pattern=0;pattern<values.size()+3;++pattern){
+  for(unsigned n:{1U,2U,3U,4U,64U})for(unsigned mode=0;mode<12;++mode)for(unsigned pattern=0;pattern<values.size()+5;++pattern){
    std::fill(initial.begin(),initial.end(),0x5a);
    const unsigned short control=static_cast<unsigned short>(0x7f|((mode%3==0?0:mode%3==1?2:3)<<8)|((mode/3)<<10));
    put<unsigned short>(seed.data(),2768,control);
@@ -61,18 +63,31 @@ int main(){
     for(unsigned j=0;j<n;++j){U p=0x7476a4+12*j;put(initial.data(),p,xy);put(initial.data(),p+4,-xy);put(initial.data(),p+8,z);}
     put(initial.data(),0x73fb80,factor);put(initial.data(),0x73fc30,factor);put(initial.data(),0x73fb98,factor);
     put(initial.data(),0x73fb88,special==2?-1.f:0.f);put(initial.data(),0x73fb8c,special==2?1.f:0.f);
+    if(special>=3){
+     // Arbitrary divisions, including an exact last corner after an inexact
+     // prefix, exercise flags that all-power-of-two depths cannot cover.
+     const bool mixed=special==4;
+     for(unsigned j=0;j<n;++j){U p=0x7476a4+12*j;
+      put(initial.data(),p,mixed&&j+1==n?0.f:-34.834808f-float(j)*.513f);
+      put(initial.data(),p+4,mixed&&j+1==n?0.f:-1.1139655f-float(j)*.371f);
+      put(initial.data(),p+8,mixed?(j+1==n?128.f:3.14159f):94.958084f+float(j)*.731f);
+     }
+     put(initial.data(),0x73fb80,mixed?.125f:.1f);
+     put(initial.data(),0x73fc30,mixed?1024.f:3405.6436f);put(initial.data(),0x73fb98,mixed?2048.f:6651.0747f);
+     put(initial.data(),0x73fb88,512.f);put(initial.data(),0x73fb8c,384.f);
+    }
    }
    if(!admitted(seed.data(),initial.data(),n))throw std::runtime_error("Positive case rejected");
    a=seed;b=seed;full=initial;last=initial;
-   cw(control);__remill_fpu_exception_clear(127);mw34_projection_fixture(a.data(),n,full.data(),0);auto sa=status();
-   cw(control);__remill_fpu_exception_clear(127);mw34_projection_fixture(b.data(),n,last.data(),1);auto sb=status();
+   cw(control);clear_mxcsr();__remill_fpu_exception_clear(127);mw34_projection_fixture(a.data(),n,full.data(),0);auto sa=status();auto ma=mxcsr();
+   cw(control);clear_mxcsr();__remill_fpu_exception_clear(127);mw34_projection_fixture(b.data(),n,last.data(),1);auto sb=status();auto mb=mxcsr();
    unsigned difference=4096;for(unsigned j=0;j<a.size();++j)if(a[j]!=b[j]){difference=j;break;}
    // Exactly the prefix x/y/z scratch writes are intentionally omitted.
    for(unsigned j=0;j+1<n;++j)for(unsigned k=0;k<12;++k)full[0x72f41c+32*j+k]=last[0x72f41c+32*j+k];
-   if(difference!=4096||sa!=sb||full!=last){
+   if(difference!=4096||sa!=sb||ma!=mb||full!=last){
     dump("failure-state-full.bin",a.data(),a.size());dump("failure-state-last.bin",b.data(),b.size());
     dump("failure-memory-full.bin",full.data(),full.size());dump("failure-memory-last.bin",last.data(),last.size());
-    std::cerr<<"Mismatch count="<<n<<" mode="<<mode<<" pattern="<<pattern<<" state_offset="<<difference<<" status="<<sa<<","<<sb<<"\n";return 1;
+    std::cerr<<"Mismatch count="<<n<<" mode="<<mode<<" pattern="<<pattern<<" state_offset="<<difference<<" status="<<sa<<","<<sb<<" mxcsr="<<ma<<","<<mb<<"\n";return 1;
    }++cases;
   }
   // Rejection boundaries are tested without executing rejected FP operands.

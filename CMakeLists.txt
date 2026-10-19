@@ -35,6 +35,25 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_mfc_receiver_tests)
     add_test(NAME mfc_receiver_lifecycle COMMAND mw34_mfc_receiver_tests)
 
+    add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
+    target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
+    target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_material_normal_tests)
+    add_test(NAME material_normals COMMAND mw34_material_normal_tests)
+    add_test(NAME material_normals_disabled COMMAND mw34_material_normal_tests --maps-off)
+    add_test(NAME world_normal_pages COMMAND mw34_material_normal_tests --world-pages)
+    add_test(NAME world_normal_pages_disabled COMMAND mw34_material_normal_tests --world-pages-off)
+
+    add_library(mw34_normal_hash SHARED tools/remaster-launcher/normal_hash.cpp)
+    target_include_directories(mw34_normal_hash PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
+    target_compile_definitions(mw34_normal_hash PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_normal_hash)
+
+    add_executable(mw34_menu_wave_tests tools/remaster-launcher/test_menu_wave.cpp)
+    target_include_directories(mw34_menu_wave_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
+    mw34_warnings(mw34_menu_wave_tests)
+    add_test(NAME menu_wave COMMAND mw34_menu_wave_tests)
+
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)

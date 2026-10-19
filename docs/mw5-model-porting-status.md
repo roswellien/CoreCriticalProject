@@ -1,5 +1,68 @@
 # MW5 model porting status
 
+## October 16: all prepared models connected to native Remaster
+
+All14MW5matches and the detailed original Strider are now registered in the
+standard launcher (15chassis,29close/distance bindings). Eight additions draw
+in actual native IA with current maintained-worn colors. Parked STL Avatar
+remains excluded; Avatar/Firefly/Owens keep original geometry. The current host
+retains graphics/HUD/music and passes the three original-compatible regressions.
+Cockpit identity, donor-length retarget and Strider controller-local binding
+are corrected. [Installed paths, tests and remaining fidelity limits](all-models-native-integration-2026-10-16.md).
+Native normal maps and full combat/LOD transition/muzzle/performance QA remain.
+Older offline statuses below are retained history; strict131/144stays paused.
+
+
+## October 16: authored stock-Strider geometry prototype
+
+At the user's request, the original Strider design now has a higher-detail
+prototype: 17,129 triangles, original 16 moving controls/walk, beveled armor,
+layered plates, cockpit frames and physical vents/joint covers. It uses the
+existing upgraded colors and 12x body-normal reference. This is authored MW3
+geometry work, not another MW5 donor. The installed stock model is unchanged.
+[Preview, editable assets and checks](strider-geometry-detail-prototype-2026-10-16.md).
+Native visual integration/damage/LOD/performance remain open; 131/144 stays paused.
+
+Follow-up material review: the user found broad flat plates/head roof too
+wrinkled. The [smooth-plate revision](strider-normal-surface-cleanup-2026-10-16.md)
+cleans twelve relief tiles while retaining 12x strength, colors, geometry and
+the original walk. R1 is preserved; R2 is the current offline material preview.
+
+## October 16: original Firefly and Strider material tests
+
+The four chassis retaining MW3 geometry now all have original-model 12x
+normal-map previews: Avatar, Owens, Firefly and Strider. The latest pair uses
+unchanged upgraded colors, 16/15 normal maps and matched original walks.
+Both pass 336 source-pose and normal-toggle camera/light checks. Videos, stills
+and material packs are on Drive. This adds no replacement model or native
+material support. [Firefly/Strider results](mw3-firefly-strider-normal-preview-2026-10-16.md).
+Strict acceptance remains paused at 131/144.
+
+## October16: Supernova completes initial local MW5 visual coverage
+
+Supernova now has its complete cockpit/six ER large lasers, donor-length walking
+fit with original three-toe controls, maintained-worn20-map set and12xHQ previews.
+449saved contact checks and original MW3 complete standing height pass. This is
+an OFFLINE CANDIDATE, NOT INSTALLED. Native retarget/combat/LOD/live checks remain.
+[Supernova record](supernova-port-progress-2026-10-16.md). All14locally matching
+MW5 chassis have initial visual work:7runtime registrations plus7offline
+candidates (Black Hawk, Champion, Puma, Annihilator, Cauldron-Born, Sunder,
+Supernova). This does not mean14completed playable ports. Original MW3 Avatar,
+Firefly, Owens and Strider remain until suitable higher-polygon donors exist.
+Strict acceptance remains paused131/144. Older sections retain historical status.
+
+## October16: Cauldron-Born and Sunder offline candidates
+
+Complete body/cockpit/primary-weapon assemblies, donor-proportion walking fits,
+maintained-worn colors and12x material previews are prepared and delivered.
+Both complete heights match MW3;449 saved joint/contact checks each pass.
+These are NOT INSTALLED. Native visual retarget and weapon/damage/LOD/live checks
+remain. Existing seven runtime registrations and four prior candidates retained.
+[Current batch](cauldron-sunder-port-progress-2026-10-16.md). Supernova remains
+the next untouched local MW5 match. Per user direction, Avatar/Firefly/Owens/
+Strider keep their original MW3 models until suitable higher-polygon donors exist.
+Strict acceptance remains paused131/144.
+
 ## October 15: complete Daishi arms moved up/in
 
 The current host supports torso-frame rigid placement. Daishi R3 restores the
@@ -153,3 +216,89 @@ chassis after normal play has closed, then
 implement and validate the scoped visual-effect origin correction. Promote
 the candidate into the living launcher only after those checks. Strict
 acceptance remains paused at **131/144**; this work adds no accepted credit.
+
+## 2026-10-19 — Model joints and reference-corrected Mad Cat
+
+[Joint-fit record](mech-joint-fit-2026-10-19.md): reproduced Mad Cat/Vulture
+elbow fitting and detached inner Bushwacker toes. Vulture retains donor upper/
+lower arm spacing; inner toes now use the existing fitted foot hinges. The
+user's subsequent Mad Cat art reference exposed low/inward original shoulder
+anchors: final Mad Cat restores donor-relative shoulders beneath missile pods
+and keeps separate torso/upper-arm corrections through optional BWMESH5.
+Both source distances and Bushwacker primary/Freya geometry are registered.
+No added pieces, artwork changes or gameplay firing-point edits.
+
+Fresh current-source host be9bc313… is published at
+local/remaster/gpu-native-joint-attachments-r1 with an actual matching snapshot;
+the prior42672b40/2926029b source-record mismatch is preserved as history, not
+relabeled. Main launcher supports the existing AA-off/fullscreen settings,
+passes normal/original-model checks and asset preparation. Current settings,
+39banks/32sidecars, other chassis and original pilot/registry hashes preserved.
+1496changed-adapter checks and10,370,925legacy checks pass. Mad Cat1542offline
+pose/LOD cases checked; retained original collapser/getup hand translations
+are distinct from fitting residual. Vulture349poses, Bushwacker59samples.
+Fresh be9bc313 stock comparisons pass: Training 116/116, GPU draw stream
+1150/1150, IA 116/116. Separate native IA runs reach 1400 Vulkan presentations
+with each corrected chassis: Mad Cat/Vulture LOD0, Bushwacker LOD0 and LOD1.
+Positive instance-validation and queued GPU records establish actual use;
+original F2 exterior views were inspected. Small joint contacts remain partly
+outside the rear-view framing, so offline front/side poses provide detailed
+fit evidence. One menu-only attempt is excluded; budget exit 1 is intentional.
+No game ran concurrently with another native session; singleton refusals were
+respected. Extended combat/damage/effect alignment, full LOD transitions,
+Freya replay on this host and performance remain open. Protected originals
+and artwork hashes remain unchanged. Strict 131/144 paused; no commit.
+[Final Mad Cat previews](https://drive.google.com/drive/folders/1XHakISSeDm96ejNObO9AI4YihuqtxVGc).
+
+
+## 2026-10-19 — Mad Cat torso-follow correction R3
+
+User review supersedes the preceding Mad Cat R2 shoulder claim: walking lowers
+the torso but the source arm joints compensate upward by about2.0888 units.
+The previous fitting test retained that travel and missed the visual detachment.
+Optional BWMESH6 now fixes the replacement shoulder in torso space and gives
+the same live translation correction to each complete upper/lower arm and its
+weapons. Original rotations, aiming, hand motion and guest simulation remain;
+no geometry or artwork added/changed. Both distances updated; other chassis,
+settings,39banks/32sidecars and original registry/pilot/artwork hashes preserved.
+
+Main launcher selects source-matched native host546c5616 at
+local/remaster/gpu-native-madcat-torso-follow-r1. All15recovered MadCat clips at
+both distances pass1542attachment cases (max residual0.00000107, formerly2.088815).
+Actual adapter15183/0 and legacy10370925/0 checks pass. Fresh exact-host stock
+Training116/116 GPU1150/1150 IA116/116 match. Native IA1400 Vulkan presentations
+validates/queues MadCat LOD0 complete arms; F2 exterior target inspected.
+Small joint contacts partly leave the rear-view frame; detailed fit evidence
+uses matched Blender standing/walking poses. Intentional budget exit1, not
+mission completion or measured FPS. Live LOD1, extended combat/damage, effect
+origins, clipping extremes and performance remain open. Strict131/144paused.
+No commit, desktop screenshots or writes to original registry/pilot files.
+
+[Detailed R3 record](mech-joint-fit-2026-10-19.md#r3-arms-follow-the-lowered-torso).
+[R3 before/after walking previews](https://drive.google.com/drive/folders/1lx6N77iOrW6J8jxDH0jVNeKH9J1Z5rSM).
+Private receipts: C:/Users/jcbla/.codex/workspace-storage/MW34Recomp/joints-20261019-r1/torso-follow-r3/.
+
+
+## 2026-10-19 — Mad Cat / Vulture live arm attachment R4
+
+[R4 live-joint repair](mech-live-attachments-2026-10-19.md) supersedes the previous
+Mad Cat R3/Vulture R1 attachment claims. Actual gameplay forearm translations
+differ from the saved stand reference, causing measured1.147158/1.797140-unit
+elbow gaps. Existing BWMESH6 data now anchors both shoulder and elbow, preserving
+source rotations; existing clavicle triangles follow torso. No added geometry,
+artwork edits or guest pose/simulation writes. Both distances and both main/
+material-preview registries updated; all other chassis/settings preserved.
+
+Native base-color walk/aim/stop2500presentations per chassis and separate lit/
+normal front/side2500per chassis verify live corrected geometry; max elbow
+residual below0.00006476.3084clip/LOD checks,318captured-pose/LOD replays and
+actual adapter154247/0 checks pass. Main host546c5616 unchanged. Material Preview
+gets source-matched V5/V6 hosta85f211d; fresh stockTraining116/116 GPU1150/1150
+IA116/116 match. Versioned matching albedo/normal packs,39banks and15models in
+each profile. Original-model/main/material launcher checks pass. Future model
+promotions must keep both geometry registries compatible with their hosts.
+Live LOD transitions, damaged/stump states, effect origins, clipping extremes
+and final performance remain open. Strict131/144paused; no commit or desktop
+screenshots, original registry/pilot writes, or release of the trailer hold.
+[Native game previews](https://drive.google.com/drive/folders/1Qx34jJGwLTQiAHC92EjCaLdEmQQ8CQEm).
+Private receipts: C:/Users/jcbla/.codex/workspace-storage/MW34Recomp/joints-runtime-20261019-r4/.

@@ -1,5 +1,22 @@
 # Local Remaster launcher
 
+October 19 surface-lifetime repair: after composing a compatible private host,
+`apply_surface_page_pool.py HOST_SOURCE` installs checked reuse of retired
+virtual surface pages. It preserves live/locked/queued/resident surfaces and
+the original address limits. Build, validate and publish matching source pins
+before changing a launcher profile. See the Big Lake surface-lifetime repair
+record in `docs/big-lake-surface-lifetime-fix-2026-10-19.md`.
+
+October 18 replay video buffer update: **off by default**. In MW3 Launcher,
+open **Photo & Replay** and enable the 60-second Instant Replay Background
+Buffer to opt in. Its description states a **30–35% performance impact**, with
+cost varying by system and scene. F10 saves a clip when the buffer is enabled.
+Old launcher settings migrate to off once; subsequent explicit choices persist.
+Regular native and lighting-preview shortcuts also default off. Direct script
+users may opt in with `-InstantReplay 1` on `play_native.ps1` or
+`play_big_lake_sun.ps1`. Photo mode, screenshots, manual recording and game-state
+rewind remain separate controls. [Measurements and limits](../../docs/lighting-performance-2026-10-18.md).
+
 October 15 maintained/well-used batch: Orion, Thor and Vulture now use the new
 worn base-color sets, alongside the previously installed Bushwacker and Mad Cat.
 The regular root launcher prepares them on each launch, including Orion LOD1.
@@ -281,3 +298,21 @@ no frame budget or scripted clock. World counters and geometry CPU timings go
 to each session's `local/remaster/runs/` directory; heavy diagnostic payloads
 are disabled. The recurring divergence remains under investigation; see
 [results](../../docs/gpu-divergence-investigation-2026-10-15.md).
+
+### Bounded campaign-normal authoring continuation
+
+`repack_world_normals.py` losslessly groups identical complete normal-image tuples
+across existing world pages; all source keys, image bytes and resolutions remain.
+`prepare_campaign_materials.py` refines pinned upgraded campaign sources with
+explicit UV features, flat-glass/coverage masks and material-specific shallow grain.
+`campaign_material_source.py` validates RGB565 entries and separate alpha planes,
+including their ARGB1555/ARGB4444 runtime identities. Outputs require fresh folders;
+other bindings and previously retained work are checked byte-for-byte.
+
+A compatible native host accepts either a single `BWSNR2` authored sidecar or an
+`MW34SNA1` manifest at `MW34_SURFACE_NORMALS`. The manifest contains plain sibling
+page filenames, at most 16 pages and 256 MiB in aggregate. Each page retains the
+64-image/256-binding format limits. Duplicate identities fail; authored bindings
+retain precedence over lazy world pages. Launcher profiles and matching snapshots
+must advertise `authored_normal_catalog_versions: [1]`. World page/resident limits
+remain unchanged. See the Campaign 1 report for the selected preview and evidence.

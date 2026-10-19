@@ -8,6 +8,15 @@ target; Windows x64 and Vulkan are selected. The experimental native host now
 executes a live menu, partial Training 1 and normal quit; whole-game fidelity,
 performance and formal acceptance remain open.
 
+## Model activation: 2026-10-16
+
+[All prepared models](all-models-native-integration-2026-10-16.md) now have native
+registrations:14MW5chassis plus the authored original-Strider variant. Original
+Avatar/Firefly/Owens remain, parked STL Avatar excluded. Current standard launcher
+uses the validated all-models host, unchanged graphics/HUD/music and current colors.
+This is optional visual integration; native normal mapping and full combat/LOD/
+muzzle/performance validation remain, with strict acceptance still131/144paused.
+
 ## Playtesting and frontend priorities: 2026-10-15
 
 The user prioritizes fixing the native Mech Lab layout to unblock playtesting.
@@ -35,6 +44,35 @@ as the appearance target on 2026-10-15. Calibrate the native material response t
 that reference (Blender Strength 10.20 from baseline 0.85), preserving the glass
 exception and separate original-MW3 material tuning. This records the planned
 enhanced look; it does not enable normal mapping or change a live default.
+
+Reaffirmed on 2026-10-16 after the high-quality Mad Cat 12x/24x comparison: the
+user saw little to no visible improvement at 24x and chose to keep 12x as the
+target going forward. Retain 24x as experimental comparison evidence only.
+
+Model direction selected on2026-10-16: retain the original MW3 Avatar, Firefly,
+Owens and Strider until suitable higher-polygon donors are found. MW4 reviews
+and the parked STL experiment do not replace that default. Continue optional
+MW5 model candidates with maintained-but-well-used materials and the approved
+12x preview target. [Supernova's prepared candidate](supernova-port-progress-2026-10-16.md)
+completes initial visual work for all 14 locally matching MW5 chassis: seven
+existing runtime registrations and seven offline candidates. The latter still
+need native visual retarget, weapon/damage/LOD and live checks; this is not
+completion of 14 playable ports. Preserve the frontend/playtesting priorities above.
+
+The original Avatar, Owens, Firefly and Strider now all have upgraded-color
+12x normal-map walking/light previews. The latest
+[Firefly and Strider tests](mw3-firefly-strider-normal-preview-2026-10-16.md)
+retain original geometry and 336 source poses per model, with matched on/off
+camera and lighting. These are offline material reviews; native normal-map
+integration and calibration remain separate renderer work.
+
+The user subsequently authorized an authored detail pass on the stock Strider
+design. The [first geometry prototype](strider-geometry-detail-prototype-2026-10-16.md)
+adds bevels, armor layers, cockpit frames, vents and bearing covers while keeping
+the original 16 moving controls and walk. It has 17,129 triangles versus 759;
+matched offline previews and editable assets are prepared. The installed Strider
+and gameplay are unchanged; native visual registration, damage and LOD checks
+remain before any runtime adoption.
 
 The [dynamic lighting and shadows investigation](dynamic-lighting-shadows-investigation-2026-10-15.md)
 records current renderer limits and a staged implementation path: capture scene

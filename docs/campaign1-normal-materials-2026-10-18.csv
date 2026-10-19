@@ -1,0 +1,356 @@
+texture,scope,material,pass_state,source_keys,refined_keys,native_route_samples,visual_review
+acshell,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,3,0,0,individual native art review open
+apc01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,3,bounded native registration samples; close-up review open
+autocan03,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+autocan05f,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+barrcade01,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+barrcade02,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+barside2,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,3,bounded native registration samples; close-up review open
+bartop,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+beach01,selected larger C1 surface / vehicle component,concrete,prior work retained,4,0,0,individual native art review open
+beach02,selected larger C1 surface / vehicle component,ground,material-grain refinement candidate,5,5,1,bounded native registration samples; close-up review open
+brlstn2,selected larger C1 surface / vehicle component,concrete,explicit flat decal,6,6,0,individual native art review open
+build01,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+build02,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+build03,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,1,1,1,bounded native registration samples; close-up review open
+build04,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+build05,selected larger C1 surface / vehicle component,wood,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+build06,selected larger C1 surface / vehicle component,wood,UV-authored structure candidate,3,3,1,bounded native registration samples; close-up review open
+build07,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+build08,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+build09,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+build10,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+build11,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+build12,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+bulldog01,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+bulldog02,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+bulldog03,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,3,bounded native registration samples; close-up review open
+bunkr01,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,3,bounded native registration samples; close-up review open
+bunkr02,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,3,bounded native registration samples; close-up review open
+bunkr04,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,0,individual native art review open
+bushwacker_concrete,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+bushwacker_dirt,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+bushwacker_snow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+bwall04,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,4,4,2,bounded native registration samples; close-up review open
+bwall05,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,4,4,2,bounded native registration samples; close-up review open
+c1conc01,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,4,4,3,bounded native registration samples; close-up review open
+c1conc02,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+c1conc03b,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,5,5,2,bounded native registration samples; close-up review open
+c1conc04,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+c1conc05,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,6,6,0,individual native art review open
+c1dtl01,selected larger C1 surface / vehicle component,wood,material-grain refinement candidate,6,6,0,individual native art review open
+c1grhs06e,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,2,bounded native registration samples; close-up review open
+c1grhs06f,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+c1grhs13b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,4,4,2,bounded native registration samples; close-up review open
+c1grhs14,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+c1grhs16,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,0,individual native art review open
+c1grhs16b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,0,individual native art review open
+c1grhs18a,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,1,bounded native registration samples; close-up review open
+c1grhs18b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,4,4,1,bounded native registration samples; close-up review open
+c1grhs18c,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,4,4,1,bounded native registration samples; close-up review open
+c1grhs25,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,4,4,1,bounded native registration samples; close-up review open
+c1grrf01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,1,bounded native registration samples; close-up review open
+c1hex02,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,1,bounded native registration samples; close-up review open
+c1hex03,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,0,individual native art review open
+c1hex04,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,5,5,1,bounded native registration samples; close-up review open
+c1hex05,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,2,bounded native registration samples; close-up review open
+c1m4road,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+c1m4road2,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,5,5,1,bounded native registration samples; close-up review open
+c1opost12,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+c1wrhs01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+c1wrhs01b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+c1wrhs02r,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+c1wrhs14,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+citydest,selected larger C1 surface / vehicle component,ground,material-grain refinement candidate,2,2,0,individual native art review open
+ciytcent,selected larger C1 surface / vehicle component,ground,material-grain refinement candidate,5,5,0,individual native art review open
+com01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,0,individual native art review open
+com02,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+com03,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,1,bounded native registration samples; close-up review open
+com04,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,0,individual native art review open
+com05,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,1,bounded native registration samples; close-up review open
+com08,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,1,bounded native registration samples; close-up review open
+com09,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,1,bounded native registration samples; close-up review open
+com10,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,1,bounded native registration samples; close-up review open
+com11,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,0,individual native art review open
+com12,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,0,individual native art review open
+com13,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+crate01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+crate1,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+crate10,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+crate11,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+cratrc1,selected larger C1 surface / vehicle component,ground,material-grain refinement candidate,5,5,0,individual native art review open
+cratrc1a,selected larger C1 surface / vehicle component,ground,material-grain refinement candidate,5,5,0,individual native art review open
+ctfount01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,3,0,0,individual native art review open
+ctydok01,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+dksand,selected larger C1 surface / vehicle component,ground,material-grain refinement candidate,5,5,3,bounded native registration samples; close-up review open
+drytree01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; foliage,6,0,0,individual native art review open
+drytree02,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; foliage,3,0,0,individual native art review open
+drytree02b,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; foliage,6,0,0,individual native art review open
+drytree03,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; foliage,6,0,0,individual native art review open
+drytree03s,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; foliage,9,0,0,individual native art review open
+drytree04,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; foliage,9,0,0,individual native art review open
+engineparts,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+facade14b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+facade18b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,5,5,0,individual native art review open
+facade19,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,5,5,0,individual native art review open
+ffence01,selected larger C1 surface / vehicle component,wood,UV-authored structure candidate,2,2,0,individual native art review open
+ffence02,selected larger C1 surface / vehicle component,wood,UV-authored structure candidate,2,2,0,individual native art review open
+firefly_concrete,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+firefly_dirt,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+firefly_snow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+fish_boat01,selected larger C1 surface / vehicle component,metal,prior work retained,4,0,0,individual native art review open
+fish_boat02,selected larger C1 surface / vehicle component,metal,prior work retained,4,0,0,individual native art review open
+fish_boat03,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,0,individual native art review open
+fish_boat04,selected larger C1 surface / vehicle component,metal,prior work retained,2,0,0,individual native art review open
+fish_boat05,selected larger C1 surface / vehicle component,metal,prior work retained,4,0,0,individual native art review open
+fish_boat06,selected larger C1 surface / vehicle component,metal,prior work retained,4,0,0,individual native art review open
+fish_boat07,selected larger C1 surface / vehicle component,metal,prior work retained,3,0,0,individual native art review open
+fish_boat08,selected larger C1 surface / vehicle component,metal,prior work retained,2,0,0,individual native art review open
+fish_boat09,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,0,individual native art review open
+fishvill01,selected larger C1 surface / vehicle component,wood,prior work retained,3,0,0,individual native art review open
+fishvill02,selected larger C1 surface / vehicle component,wood,prior work retained,2,0,0,individual native art review open
+fishvill03,selected larger C1 surface / vehicle component,wood,prior work retained,3,0,0,individual native art review open
+fishvill04,selected larger C1 surface / vehicle component,wood,prior work retained,2,0,0,individual native art review open
+fishvill05,selected larger C1 surface / vehicle component,wood,prior work retained,2,0,0,individual native art review open
+fishvill06,selected larger C1 surface / vehicle component,wood,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+fpane3,selected larger C1 surface / vehicle component,wood,UV-authored structure candidate,2,2,0,individual native art review open
+gfly01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,3,0,0,individual native art review open
+grayparts,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+gull01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,3,0,0,individual native art review open
+guntur01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+guntur09,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,1,bounded native registration samples; close-up review open
+guntur11,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+harasser01,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+harasser02,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+harasser03,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+harasser04,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+harasser05,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+harasser06,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+harasser07,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+harasser08,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+jhroc01,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+jhwnd01,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+jhwnd01a,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,0,individual native art review open
+jhwnd02,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+jhwnd02a,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,0,individual native art review open
+jhwnd03,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+jhwnd03a,selected larger C1 surface / vehicle component,concrete,UV-authored structure candidate,6,6,0,individual native art review open
+lflare1,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,3,0,0,individual native art review open
+lflare3,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,3,0,0,individual native art review open
+lnflare01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,17,0,0,individual native art review open
+lnflare02,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,12,0,0,individual native art review open
+ltsand,selected larger C1 surface / vehicle component,concrete,prior work retained,5,0,0,individual native art review open
+m3_supply10,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+m4plnt01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+m4plnt02b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+m4plnt02c,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+m4plnt02d,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+m4plnt02e,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+m4plnt03b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+m4plnt06,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+m4plnt06b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,1,bounded native registration samples; close-up review open
+m4plnt06c,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+m4plnt06d,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+m4plnt06e,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+m4plnt10,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+m4plnt10b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+m4plnt10c,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+m4plnt10d,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+m4plnt12,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,3,bounded native registration samples; close-up review open
+m4plnt12a,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m4plnt12b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,6,6,0,individual native art review open
+m4plnt14,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+m4rbrg01b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,9,9,0,individual native art review open
+m4rbrg02,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,2,bounded native registration samples; close-up review open
+m4rbrg02x,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+m4rbrg02xx,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,0,individual native art review open
+m4rbrg03,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,1,bounded native registration samples; close-up review open
+m4rbrg04,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,3,bounded native registration samples; close-up review open
+m4rbrg05,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m4rbrg05b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m4rbrg05x,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+m4rbrg07,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+m4rbrg09,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+m4rbrg09b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+m4rbrg09c,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+m4rbrg09d,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m4rbrg09e,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,0,individual native art review open
+m4ruin01,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+m4ruin01b,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,4,4,1,bounded native registration samples; close-up review open
+m4ruin01c,selected larger C1 surface / vehicle component,concrete,prior work retained,4,0,0,individual native art review open
+m4ruin01d,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,6,6,0,individual native art review open
+m4sbrg01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+m4sbrg01b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+m4sbrg02,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+m4sbrg03,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+m4sbrg03b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,4,4,0,individual native art review open
+m4sbrg04,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,5,5,0,individual native art review open
+m4sbrg04b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+m4sbrg04c,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,5,5,2,bounded native registration samples; close-up review open
+m4sbrg05,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+m4sbrg06,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+m4sbrg07,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+m4sbrg08,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+m4sbrg09,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,3,bounded native registration samples; close-up review open
+m4sbrg09b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+m4sbrg09c,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+m4sbrg10,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+m4tmpl01,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+m4tmpl03,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,6,6,2,bounded native registration samples; close-up review open
+m4tmpl03c,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,6,6,2,bounded native registration samples; close-up review open
+m4tmpl03d,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,5,5,2,bounded native registration samples; close-up review open
+m4tmpl03e,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,6,6,2,bounded native registration samples; close-up review open
+m4tmpl04,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+m4tmpl05,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+m4tmpl06,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+m4tmpl08,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+m4tmpl10b,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m4tmpl10c,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+m4tmpl10h,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m4tmpl11,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,3,3,1,bounded native registration samples; close-up review open
+m4tmpl15,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m_hq01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+m_hq02,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+m_hq03,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+m_hq05,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+m_hq06,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+m_hq07,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+m_hq08,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+m_hq09,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+m_hq10,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+m_hq11,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,9,9,0,individual native art review open
+m_hq12,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,1,bounded native registration samples; close-up review open
+madcat_concrete,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+madcat_dirt,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+madcat_snow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+mf02,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,18,18,0,individual native art review open
+mf06,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+mf07,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+mf14,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+mf3064,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+mf3064b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+mf45,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+mfglow01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+mflites03,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+mfstack,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,9,9,0,individual native art review open
+missle_turret01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+missle_turret02,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+missle_turret03,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+missle_turret04,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+missle_turret05,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+missle_turret06,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+owens_concrete,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+owens_dirt,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+owens_snow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+oxyend01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+oxyside01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+oxytop01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+pblb,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,6,0,0,individual native art review open
+pbridge03b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+pbridge06,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza001,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+plaza002,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza003,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza010,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza011,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+plaza013,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+plaza014,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza015,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+plaza016,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+plaza021,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+plaza03,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza201,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+plaza204,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza41,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+plaza42,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+poturr1,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+poturr2,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,0,individual native art review open
+poturr3,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+poturr4,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+poturr5,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+poturr6,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,0,individual native art review open
+poturr7,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+powerline01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+powerline02,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+powerline03,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+ppc_turret01,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+ppcmuz,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,3,0,0,individual native art review open
+pruins02,selected larger C1 surface / vehicle component,concrete,material-grain refinement candidate,6,6,2,bounded native registration samples; close-up review open
+road01,selected larger C1 surface / vehicle component,concrete,prior work retained,2,0,0,individual native art review open
+road03,selected larger C1 surface / vehicle component,concrete,prior work retained,2,0,0,individual native art review open
+rockblok,selected larger C1 surface / vehicle component,stone,prior work retained,1,0,0,individual native art review open
+rockfbase,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,4,4,2,bounded native registration samples; close-up review open
+rubble1,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,3,3,0,individual native art review open
+sandtrans1,selected larger C1 surface / vehicle component,concrete,prior work retained,4,0,0,individual native art review open
+sandtrans2,selected larger C1 surface / vehicle component,concrete,prior work retained,4,0,0,individual native art review open
+shadow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+shadow2,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,6,0,0,individual native art review open
+shadowcat_concrete,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+shadowcat_dirt,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+shadowcat_snow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+snowfoot01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,6,0,0,individual native art review open
+striker01,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+striker02,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+striker03,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,0,individual native art review open
+striker04,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,0,individual native art review open
+striker06,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+supernova_concrete,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+supernova_dirt,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+supernova_snow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+tanktrak,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,3,bounded native registration samples; close-up review open
+thedude03,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+thedude03d,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+thedude04,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,1,0,0,individual native art review open
+thedude04d,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+thedude05,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+thedude05d,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+thedude06,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,1,0,0,individual native art review open
+thedude06d,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,1,0,0,individual native art review open
+thedude07,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,1,0,0,individual native art review open
+thedude07d,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,1,0,0,individual native art review open
+thor_concrete,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+thor_dirt,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+thor_snow,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,9,0,0,individual native art review open
+tmblweed,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; foliage,6,0,0,individual native art review open
+tpool01,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; separate water/shore path,15,0,0,individual native art review open
+tredtruck02,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+tredtruck03,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+tredtruck04,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,3,bounded native registration samples; close-up review open
+tredtruck05,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,3,bounded native registration samples; close-up review open
+tredtruck06,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,3,bounded native registration samples; close-up review open
+tredtruck07,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+tredtruck09,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+tredtruck10,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,3,bounded native registration samples; close-up review open
+tredtruck11,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,3,bounded native registration samples; close-up review open
+tri01,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+tri02,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+tri04,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,2,bounded native registration samples; close-up review open
+tri05,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+tri06,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+tri07,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+tri08,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,3,3,2,bounded native registration samples; close-up review open
+tri09,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,1,bounded native registration samples; close-up review open
+tri10,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+tri10b,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+tri11,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,2,bounded native registration samples; close-up review open
+tri11b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,3,3,0,individual native art review open
+tri12,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,1,bounded native registration samples; close-up review open
+txgter_1,selected larger C1 surface / vehicle component,concrete,prior work retained,5,0,0,individual native art review open
+txsurf01,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+txsurf02,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; separate water/shore path,2,0,0,individual native art review open
+txsurf04,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; separate water/shore path,2,0,0,individual native art review open
+txtrim01,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,5,5,3,bounded native registration samples; close-up review open
+txtrim02,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,5,5,3,bounded native registration samples; close-up review open
+txtrim04,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,5,5,3,bounded native registration samples; close-up review open
+txwall01,selected larger C1 surface / vehicle component,stone,prior work retained,5,0,0,individual native art review open
+txwall06,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,5,5,3,bounded native registration samples; close-up review open
+txwall07c,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,2,2,1,bounded native registration samples; close-up review open
+txwall07d,selected larger C1 surface / vehicle component,stone,UV-authored structure candidate,2,2,0,individual native art review open
+txwall07e,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,2,0,0,individual native art review open
+txwall09a,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,2,bounded native registration samples; close-up review open
+txwall09b,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,6,6,1,bounded native registration samples; close-up review open
+txwall09d,selected larger C1 surface / vehicle component,stone,material-grain refinement candidate,4,4,3,bounded native registration samples; close-up review open
+veh_m1,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,1,1,3,bounded native registration samples; close-up review open
+veh_m2,selected larger C1 surface / vehicle component,metal,UV-authored structure candidate,2,2,3,bounded native registration samples; close-up review open
+waypoint,outside current large-solid-surface refinement scope,separate/deferred,existing mapping retained; deferred small prop / character / effect,6,0,0,individual native art review open
+wheel,selected larger C1 surface / vehicle component,metal,material-grain refinement candidate,2,2,3,bounded native registration samples; close-up review open

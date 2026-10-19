@@ -1,6 +1,7 @@
 """Stage completed, registered local assets without touching game installations."""
 from pathlib import Path
 import array,hashlib,json,os,struct,sys
+from normal_materials import load_images, normal_environment, pack_normals, pixel_hash
 try:
     from PIL import Image
 except ImportError as exc:
@@ -12,8 +13,28 @@ except ImportError as exc:
 def write_atomic(path,data):
     path.parent.mkdir(parents=True,exist_ok=True);temp=path.with_suffix(path.suffix+'.tmp');temp.write_bytes(data);os.replace(temp,path)
 
-def prepare(root,models):
-    folder=root/'local/remaster/prepared';folder.mkdir(parents=True,exist_ok=True)
+def material_pixels(root, textures):
+    out=bytearray()
+    for name,relative in textures.items():
+        source=root/relative;im=Image.open(source).convert('RGB');im.thumbnail((2048,2048),Image.Resampling.LANCZOS);im=im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        pixels=array.array('H',(((r>>3)<<11)|((g>>2)<<5)|(b>>3) for r,g,b in im.getdata()))
+        if sys.byteorder!='little':pixels.byteswap()
+        data=pixels.tobytes();digest=hashlib.sha256(data).digest();out.extend(name.encode().ljust(32,b'\0'));out.extend(struct.pack('<IIQ',*im.size,int.from_bytes(digest[:8],'little')));out.extend(data)
+    return out
+
+def normal_source_identity(root, sources):
+    identity={}
+    for name,relative in sources.items():
+        if relative is None:identity[name]=None;continue
+        path=root/relative;before=path.stat()
+        with path.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+        after=path.stat()
+        if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns):raise RuntimeError('Normal source changed during preparation')
+        identity[name]=digest
+    return identity
+
+def prepare(root,models,*,output=None):
+    folder=Path(output) if output is not None else root/'local/remaster/prepared';folder.mkdir(parents=True,exist_ok=True)
     manifest=root/'local/work-ahead/texture-launcher-audit-v2/configured-banks.json'
     rows=json.loads(manifest.read_text(encoding='utf-8-sig'))
     local_cache=folder/'bank-hashes.json'
@@ -36,6 +57,8 @@ def prepare(root,models):
         receipt.append(dict(bank=relative,source=str(source),sha256=digest))
     write_atomic(local_cache,json.dumps(cache,indent=1).encode());bankfile=folder/'texture-banks.bin';write_atomic(bankfile,banks)
     environment={'MW34_REMASTER_BANKS':str(bankfile)}
+    normal_cache_path=folder/'normal-cache.json'
+    normal_cache=json.loads(normal_cache_path.read_text()) if normal_cache_path.exists() else {}
     model_receipts=[]
     for model in models:
         # An adapter can only be published once its executable implements these bindings.
@@ -46,13 +69,36 @@ def prepare(root,models):
             environment[key]=str(path)
         if not model.get('textures'):continue
         metadata=json.loads((root/model['batch_metadata']).read_text());names=list(model['textures']);count=len(metadata['batches'])
+        if 'normal_textures' in model:
+            if set(model['normal_textures'])!=set(names):raise RuntimeError('Normal materials differ from albedo materials: '+model['id'])
+            source_identity=normal_source_identity(root,model['normal_textures']);images=None
+            bindings=[dict(id='close',texture_environment=model['texture_environment'],batch_metadata=model['batch_metadata'])]+model.get('texture_variants',[])
+            # Alternate skins share topology/material names and the same surface
+            # detail; each original LOD receives its own exact batch order.
+            for binding in bindings:
+                if not binding['id'] or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in binding['id']):raise RuntimeError('Invalid normal texture variant')
+                key=normal_environment(binding['texture_environment'])
+                if key in environment:raise RuntimeError('Duplicate normal-map binding '+key)
+                batches=json.loads((root/binding['batch_metadata']).read_text())['batches']
+                material_order=[b['material'] for b in batches]
+                identity=hashlib.sha256(json.dumps(dict(format='BWNRM2-linear-opengl-v1',sources=source_identity,batches=material_order),sort_keys=True).encode()).hexdigest()
+                path=folder/(model['id']+'-'+binding['id']+'-normals.bin');previous=normal_cache.get(key,{})
+                digest=None
+                if previous.get('identity')==identity and path.is_file():
+                    with path.open('rb') as stream:actual=hashlib.file_digest(stream,'sha256').hexdigest()
+                    if actual==previous.get('sha256'):digest=actual
+                if digest is None:
+                    if images is None:
+                        images=load_images(root,model['normal_textures'])
+                        if normal_source_identity(root,model['normal_textures'])!=source_identity:raise RuntimeError('Normal source changed during decoding')
+                    packed=pack_normals(material_order,images);digest=hashlib.sha256(packed).hexdigest();write_atomic(path,packed)
+                normal_cache[key]=dict(identity=identity,sha256=digest)
+                write_atomic(normal_cache_path,json.dumps(normal_cache,indent=1).encode())
+                environment[key]=str(path)
+                model_receipts.append(dict(id=model['id'],variant=binding['id'],normal_sidecar=str(path),sha256=digest,normal_sources=model['normal_textures'],normal_format=2))
         out=bytearray(b'BWTEX1\0\0'+struct.pack('<II',count,len(names)))
         out.extend(struct.pack('<'+'I'*count,*[names.index(b['material']) for b in metadata['batches']]))
-        for name,relative in model['textures'].items():
-            source=root/relative;im=Image.open(source).convert('RGB');im.thumbnail((2048,2048),Image.Resampling.LANCZOS);im=im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-            pixels=array.array('H',(((r>>3)<<11)|((g>>2)<<5)|(b>>3) for r,g,b in im.getdata()))
-            if sys.byteorder!='little':pixels.byteswap()
-            data=pixels.tobytes();digest=hashlib.sha256(data).digest();out.extend(name.encode().ljust(32,b'\0'));out.extend(struct.pack('<IIQ',*im.size,int.from_bytes(digest[:8],'little')));out.extend(data)
+        out.extend(material_pixels(root, model['textures']))
         path=folder/(model['id']+'-textures.bin');write_atomic(path,out);environment[model['texture_environment']]=str(path)
         model_receipts.append(dict(id=model['id'],sidecar=str(path),sha256=hashlib.sha256(out).hexdigest(),texture_sources=model['textures']))
         # Distance meshes have different batches but use the same current
@@ -68,5 +114,24 @@ def prepare(root,models):
             side.extend(struct.pack('<'+'I'*len(batches),*[names.index(b['material']) for b in batches]));side.extend(pixels)
             path=folder/(model['id']+'-'+ident+'-textures.bin');write_atomic(path,side);environment[key]=str(path)
             model_receipts.append(dict(id=model['id'],variant=ident,sidecar=str(path),sha256=hashlib.sha256(side).hexdigest(),texture_sources=model['textures']))
+        # Original per-instance skin identity selects an alternate material set.
+        # The same authored pixels are repacked for each original LOD's batches.
+        for skin in model.get('skins',[]):
+            ident=skin['id'];skin_names=list(skin['textures'])
+            if not ident or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in ident):raise RuntimeError('Invalid skin id')
+            if skin_names!=names:raise RuntimeError('Skin material order differs from primary materials')
+            skin_pixels=material_pixels(root,skin['textures'])
+            bindings=[dict(texture_environment=skin['texture_environment'],batch_metadata=model['batch_metadata'],id='close')]+skin.get('texture_variants',[])
+            for binding in bindings:
+                key=binding['texture_environment']
+                if not key.startswith('MW34_') or key in environment:raise RuntimeError('Invalid or duplicate skin binding')
+                batches=json.loads((root/binding['batch_metadata']).read_text())['batches']
+                side=bytearray(b'BWTEX1\0\0'+struct.pack('<II',len(batches),len(names)))
+                side.extend(struct.pack('<'+'I'*len(batches),*[names.index(b['material']) for b in batches]));side.extend(skin_pixels)
+                path=folder/(model['id']+'-skin-'+ident+'-'+binding['id']+'-textures.bin');write_atomic(path,side);environment[key]=str(path)
+                model_receipts.append(dict(id=model['id'],skin=ident,variant=binding['id'],sidecar=str(path),sha256=hashlib.sha256(side).hexdigest(),texture_sources=skin['textures']))
     write_atomic(folder/'asset-receipt.json',json.dumps(dict(banks=receipt,models=model_receipts),indent=2).encode())
+    # The launcher waits for gameplay in this process. Keep the LOD hash cache
+    # useful during packing without retaining full source images during play.
+    pixel_hash.cache_clear()
     return environment

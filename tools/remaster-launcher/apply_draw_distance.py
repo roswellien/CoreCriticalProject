@@ -14,7 +14,7 @@ def apply(source: Path):
             raise RuntimeError('Expected one widescreen include in native snapshot')
         text = text.replace(anchor, anchor + '\n' + include)
     anchor = ' void*remaster_body(State*s,unsigned target,void*p,Body body){void*result{};'
-    hooks = '''
+    old_hooks = '''
   if(target==0x4f3a70)distance_restore(state.gpr.rcx.dword);
   if(target==0x4f4170||target==0x4f41b0)distance_prepare(state.gpr.rcx.dword);
   if((target==0x4b52c0||target==0x4f6dc0||target==0x4f7030)&&(distance_requested()>800||distance_log()))return distance_camera_body(s,target,p,body);
@@ -23,12 +23,29 @@ def apply(source: Path):
   if((target==0x4f5c80||target==0x4f61b0)&&distance_log()){
    const unsigned camera=load(state.gpr.rsp.dword+4);result=body(s,target,p);distance_tiles(camera);return result;}
 '''
+    previous_hooks = old_hooks.replace('(distance_requested()>800||distance_log())',
+                              '(distance_requested()>800||distance_fog_requested()||distance_log())')
+    previous_hooks += '''  if(target==0x440b00&&(distance_requested()>800||distance_fog_requested()))return distance_marker_body(s,target,p,body);
+'''
+    hooks = previous_hooks.replace('target==0x4f7030)', 'target==0x4f7030||target==0x4f73f0)')
+    hooks += '''  if(target==0x526e10&&(distance_requested()>800||distance_fog_requested()||distance_log()))distance_fog_bound(state.gpr.rcx.dword);
+  if(target==0x555a70&&distance_log())distance_fog_consumed();
+'''
+    for prior in (previous_hooks, old_hooks):
+        if prior in text and hooks not in text:
+            text = text.replace(prior, hooks)
     if 'distance_restore(state.gpr.rcx.dword)' not in text:
         if text.count(anchor) != 1:
             raise RuntimeError('Expected one remaster body in native snapshot')
         text = text.replace(anchor, anchor + hooks)
     elif hooks not in text:
         raise RuntimeError('Existing draw-distance hooks differ; inspect before updating')
+    old_zoom = 'if(wide_on()&&target==0x442f50)return zoom_scene_body(s,target,p,body);'
+    new_zoom = 'if(target==0x442f50&&(wide_on()||distance_requested()>800||distance_fog_requested()))return zoom_scene_body(s,target,p,body);'
+    if old_zoom in text:
+        text = text.replace(old_zoom, new_zoom)
+    elif new_zoom not in text:
+        raise RuntimeError('Expected authenticated zoom scope in native snapshot')
     provider = source / 'd3d_provider.inc'
     draws = provider.read_text()
     anchor = ' scene_renderer();try{HostInternal hi(*this);host.sren->render(sc,!keep,!lazy);}'

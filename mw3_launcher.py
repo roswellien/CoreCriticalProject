@@ -119,6 +119,7 @@ FIXED_CONF = [
     "d3d9.maxFrameRate = 30",
     "ddraw.forceLegacyPresent = True",
     "ddraw.emulateFrontBuffer = True",
+    "ddraw.forceRTFlip = True",
 ]
 
 
@@ -332,7 +333,7 @@ def start_game_direct(diagnostic: bool) -> tuple[int, int]:
     si.lpDesktop = "WinSta0\\Default"
     pi = PROCESS_INFORMATION()
     env = os.environ.copy()
-    env["D7VK_LOG_LEVEL"] = "debug" if diagnostic else "info"
+    env["D7VK_LOG_LEVEL"] = "debug"
     env_buf = ctypes.create_unicode_buffer("".join(f"{k}={v}\0" for k, v in env.items()) + "\0")
     cmd = ctypes.create_unicode_buffer(f'"{GAME_EXE}"')
     if not k32.CreateProcessW(str(GAME_EXE), cmd, None, None, False, 0x00000400,
@@ -347,7 +348,7 @@ def start_game_fov(run_dir: Path, width: int, height: int, diagnostic: bool, log
     evidence_log = run_dir / "fov-bootstrap.log"
     env = os.environ.copy()
     env["MW34_FOV_FILE"] = str(asi_path)
-    env["D7VK_LOG_LEVEL"] = "debug" if diagnostic else "info"
+    env["D7VK_LOG_LEVEL"] = "debug"
 
     cmd = [str(FOV_LAUNCHER_EXE), str(GAME_EXE), str(FOV_BOOTSTRAP_DLL), str(evidence_log)]
     proc = subprocess.run(cmd, env=env, cwd=str(GAME), capture_output=True, text=True, check=False)
@@ -432,7 +433,6 @@ def launch(settings: dict, log, diagnostic: bool = False, auto_close_sec: float 
         "dxvk_conf": conf,
         "textures": tex,
         "ddraw_sha256": expected_ddraw_hash(),
-        "exe_sha256": EXE_SHA256,
     }
     write_reg(new)
     try:

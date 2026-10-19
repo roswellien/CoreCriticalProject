@@ -6,12 +6,40 @@
 // nearest stretch for same-format surfaces. Anything outside this model stops typed.
 
 using VSurface=VSurfaceRec;using VPalette=VPaletteRec;
-VSurface*vsurface(unsigned g){auto&h=host;for(;h.vsurf_indexed<h.vsurfaces.size();++h.vsurf_indexed)h.vsurf_index.emplace(h.vsurfaces[h.vsurf_indexed].guest,h.vsurf_indexed);const auto it=h.vsurf_index.find(g);return it==h.vsurf_index.end()?nullptr:&h.vsurfaces[it->second];}
+VSurface*vsurface(unsigned g){auto&h=host;for(;h.vsurf_indexed<h.vsurfaces.size();++h.vsurf_indexed)h.vsurf_index.emplace(h.vsurfaces[h.vsurf_indexed].guest,h.vsurf_indexed);const auto it=h.vsurf_index.find(g);return it==h.vsurf_index.end()||!h.vsurfaces[it->second].mem?nullptr:&h.vsurfaces[it->second];}
 unsigned vsurf_root(unsigned g){const auto*o=host.com_object(g);return o?root_of(*o):g;}
 VSurface*vsurf_of(unsigned g){return vsurface(vsurf_root(g));}
-unsigned surface_pages(unsigned bytes){const unsigned n=(std::max(bytes,1U)+4095U)&~4095U;if(host.vsurface_next==0)host.vsurface_next=vsurface_arena;if(host.vsurface_next<0x80000000U&&std::uint64_t(host.vsurface_next)+n>vsurface_arena_end){if(!std::getenv("MW34_REMASTER_BANKS"))deny("Virtual surface arena exhausted",host.vsurface_next);host.vsurface_next=0x80000000U;}
- const unsigned g=host.vsurface_next;const std::uint64_t limit=g>=0x80000000U?0xf0000000ULL:vsurface_arena_end;
- if(std::uint64_t(g)+n>limit)deny("Virtual surface arena exhausted",g);host.vsurface_next+=n;bool bad{};try{runtime.memory().map({g},n,Permissions::read|Permissions::write);}catch(...){bad=true;}if(bad)deny("Checked surface memory mapping",g);return g;}
+void surface_collect_retired(){
+ // Recycle only released identities, retaining provider-side references too.
+ std::set<unsigned> pinned{host.res_rt,host.res_zb};
+ for(const auto&o:host.com_objects)if(o.alive||o.refs)pinned.insert(root_of(o));
+ for(const auto&d:host.devices){
+  if(host.com_object(d.guest)){pinned.insert(d.target);pinned.insert(d.zbuffer);for(unsigned t:d.textures)pinned.insert(t);}
+  for(const auto&c:d.commands)if(c.kind==D3DCmd::Draw)pinned.insert(c.texture);
+ }
+ for(size_t before=~size_t{};before!=pinned.size();){before=pinned.size();for(const auto&v:host.vsurfaces)if(pinned.count(v.guest)){pinned.insert(v.attached);pinned.insert(v.zbuffer);}}
+ unsigned count=0;std::uint64_t bytes=0;
+ for(auto&v:host.vsurfaces)if(v.mem&&!v.locks&&!pinned.count(v.guest)){
+  const auto n=(std::uint64_t(v.bytes)+4095)&~std::uint64_t(4095);
+  if(!n||n>0xffffffffULL)deny("Invalid retired surface extent",v.mem);
+  runtime.memory().unmap({v.mem});host.surface_free_pages.put(v.mem,unsigned(n));
+  bytes+=n;++count;v.mem=0;v.bytes=0;
+ }
+ std::fprintf(stderr,"Surface page reclamation: %u retired surfaces, %llu bytes\n",count,(unsigned long long)bytes);
+}
+unsigned surface_pages(unsigned bytes){
+ const auto aligned=(std::uint64_t(std::max(bytes,1U))+4095)&~std::uint64_t(4095);
+ if(aligned>0xffffffffULL)deny("Surface page size overflow",bytes);const unsigned n=unsigned(aligned);
+ unsigned g=host.surface_free_pages.take(n);
+ if(!g){
+  if(!host.vsurface_next)host.vsurface_next=vsurface_arena;
+  if(host.vsurface_next<0x80000000U&&std::uint64_t(host.vsurface_next)+n>vsurface_arena_end&&std::getenv("MW34_REMASTER_BANKS"))host.vsurface_next=0x80000000U;
+  const std::uint64_t limit=host.vsurface_next>=0x80000000U?0xf0000000ULL:vsurface_arena_end;
+  if(std::uint64_t(host.vsurface_next)+n>limit){surface_collect_retired();g=host.surface_free_pages.take(n);if(!g)deny("Virtual surface arena exhausted (no safe retired range fits)",host.vsurface_next);}
+  else{g=host.vsurface_next;host.vsurface_next+=n;}
+ }
+ bool bad{};try{runtime.memory().map({g},n,Permissions::read|Permissions::write);}catch(...){bad=true;}if(bad)deny("Checked surface memory mapping",g);return g;
+}
 unsigned make_surface(unsigned w,unsigned h,unsigned bpp,unsigned caps,const com::Iface&iface){const unsigned pitch=((w*bpp/8)+3U)&~3U,bytes=pitch*h;
  const unsigned g=com_wrap(nullptr,iface);host.com_object(g)->refs=1;host.vsurfaces.push_back({g,w,h,pitch,bpp,caps,surface_pages(bytes),bytes,0,0,0});host.vsurfaces.back().version=++host.surface_versions;return g;}
 DDPIXELFORMAT surface_format(const VSurface&v){if(v.caps&(DDSCAPS_TEXTURE|DDSCAPS_ZBUFFER)){DDPIXELFORMAT f{};f.dwSize=sizeof(f);f.dwRGBBitCount=16;

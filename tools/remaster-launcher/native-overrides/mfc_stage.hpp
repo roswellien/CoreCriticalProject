@@ -14,6 +14,7 @@
 // else (an unlifted target, an unimplemented service, an access outside the memory contract, a
 // divide error) stops with a typed unresolved_translation Fault. SEH dispatch is not modelled.
 #include "vk_scene.hpp"
+#include "surface_page_pool.hpp"
 #include <atomic>
 #include <deque>
 #include <string_view>
@@ -122,7 +123,7 @@ struct Host{
  std::vector<HINSTANCE>foreign_instances;std::map<unsigned,PAINTSTRUCT>paints;
  // Virtual display state (exclusive level and display mode emulated in the game window).
  struct Display{HWND window{};bool exclusive{};unsigned flags{},width{},height{},bpp{};}display;
- std::vector<VSurfaceRec>vsurfaces;std::vector<VPaletteRec>vpalettes;unsigned vsurface_next{};unsigned frames{},frame_budget{120},frame_dump{30};
+ std::vector<VSurfaceRec>vsurfaces;std::vector<VPaletteRec>vpalettes;unsigned vsurface_next{};mw34::surface_pages::FreeList surface_free_pages;unsigned frames{},frame_budget{120},frame_dump{30};
  /* MW34_DRAW_LOG=<file>: per presented frame, the number of DrawPrimitive/DrawIndexedPrimitive calls and an FNV-1a 64
     hash over each call's primitive type, vertex count, the game-computed TL vertex bytes and indices, in call order (an
     address-free fingerprint of the frame's scene for original/native comparisons; host-only, no guest effect). */
@@ -1027,8 +1028,26 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      static const bool fit=[]{const char*e=std::getenv("MW34_WINDOW");return e&&std::string(e)=="fit";}();
      const int sc=std::clamp(std::min((sw-80)/int(w),(sh-120)/int(h)),1,2);const double fs=std::max(1.0,std::min(double(sw-80)/double(w),double(sh-120)/double(h)));
      const unsigned rw=mw34::vkscene::Renderer::remaster_width(),rh=mw34::vkscene::Renderer::remaster_height();
-     RECT r{0,0,rw?int(rw):(fit?int(std::lround(double(w)*fs)):int(w)*sc),rh?int(rh):(fit?int(std::lround(double(h)*fs)):int(h)*sc)};::AdjustWindowRectEx(&r,DWORD(::GetWindowLongW(wnd,GWL_STYLE)),FALSE,DWORD(::GetWindowLongW(wnd,GWL_EXSTYLE)));
-     {LastError l(host);::SetWindowPos(wnd,nullptr,(sw-(r.right-r.left))/2,(sh-(r.bottom-r.top))/2,r.right-r.left,r.bottom-r.top,SWP_NOZORDER|SWP_SHOWWINDOW|(host.scripted?SWP_NOACTIVATE:0U));}
+     const char*wm=std::getenv("MW34_WINDOW_MODE");
+     if(wm&&std::string(wm)=="windowed"){
+      const int win_w=rw?int(rw):int(w),win_h=rh?int(rh):int(h);
+      RECT r{0,0,win_w,win_h};::AdjustWindowRectEx(&r,WS_OVERLAPPEDWINDOW,FALSE,WS_EX_APPWINDOW|WS_EX_WINDOWEDGE);
+      const int wr=r.right-r.left,hr=r.bottom-r.top;
+      ::SetWindowLongPtrW(wnd,GWL_STYLE,WS_OVERLAPPEDWINDOW|WS_VISIBLE);
+      ::SetWindowLongPtrW(wnd,GWL_EXSTYLE,(::GetWindowLongPtrW(wnd,GWL_EXSTYLE)&~WS_EX_TOPMOST)|WS_EX_APPWINDOW|WS_EX_WINDOWEDGE);
+      ::SetWindowTextW(wnd,L"MechWarrior 3 Remastered");
+      const int pos_x=std::max(0,(sw-wr)/2),pos_y=std::max(0,(sh-hr)/2);
+      {LastError l(host);::SetWindowPos(wnd,HWND_NOTOPMOST,pos_x,pos_y,wr,hr,SWP_FRAMECHANGED|SWP_SHOWWINDOW|(host.scripted?SWP_NOACTIVATE:0U));}
+     }else if(wm&&std::string(wm)=="fullscreen"){
+      ::SetWindowLongPtrW(wnd,GWL_STYLE,WS_POPUP|WS_VISIBLE);
+      {LastError l(host);::SetWindowPos(wnd,HWND_TOP,0,0,sw,sh,SWP_FRAMECHANGED|SWP_SHOWWINDOW|(host.scripted?SWP_NOACTIVATE:0U));}
+     }else if(wm&&std::string(wm)=="fullscreen_windowed"){
+      ::SetWindowLongPtrW(wnd,GWL_STYLE,WS_POPUP|WS_VISIBLE);
+      {LastError l(host);::SetWindowPos(wnd,HWND_NOTOPMOST,0,0,sw,sh,SWP_FRAMECHANGED|SWP_SHOWWINDOW|(host.scripted?SWP_NOACTIVATE:0U));}
+     }else{
+      RECT r{0,0,rw?int(rw):(fit?int(std::lround(double(w)*fs)):int(w)*sc),rh?int(rh):(fit?int(std::lround(double(h)*fs)):int(h)*sc)};::AdjustWindowRectEx(&r,DWORD(::GetWindowLongW(wnd,GWL_STYLE)),FALSE,DWORD(::GetWindowLongW(wnd,GWL_EXSTYLE)));
+      {LastError l(host);::SetWindowPos(wnd,nullptr,(sw-(r.right-r.left))/2,(sh-(r.bottom-r.top))/2,r.right-r.left,r.bottom-r.top,SWP_NOZORDER|SWP_SHOWWINDOW|(host.scripted?SWP_NOACTIVATE:0U));}
+     }
      apis.back()+="(window client requested "+std::to_string(rw?int(rw):(fit?int(std::lround(double(w)*fs)):int(w)*sc))+"x"+std::to_string(rh?int(rh):(fit?int(std::lround(double(h)*fs)):int(h)*sc))+")";}
     return done(0,4+extra);}
    if(is_dd&&n=="SetCooperativeLevel"){const HRESULT hr=reinterpret_cast<IDirectDraw*>(o->native)->SetCooperativeLevel(static_cast<HWND>(hhandle(arg(1))),arg(2));apis.back()+="("+std::to_string(arg(2))+")="+std::to_string(unsigned(hr));return done(unsigned(hr),3);}
@@ -1119,7 +1138,10 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(ok)host.classes.erase(std::remove_if(host.classes.begin(),host.classes.end(),[&](const auto&c){return cn<0x10000?c.atom==ATOM(cn):_stricmp(c.name.c_str(),cls.c_str())==0;}),host.classes.end());
    apis.back()+="("+(cn<0x10000?std::to_string(cn):cls)+")="+std::to_string(ok);return done(ok?1U:0U,2);}
   if(n=="CreateWindowExA"){const unsigned cn=arg(1),tn=arg(2);const std::string cls=class_name(cn),title=tn?guest_string(tn):std::string();HWND w{};
-   {LastError l(host);w=::CreateWindowExA(arg(0),cn<0x10000?MAKEINTATOM(cn):cls.c_str(),tn?title.c_str():nullptr,arg(3),int(arg(4)),int(arg(5)),int(arg(6)),int(arg(7)),hwnd_of(arg(8)),reinterpret_cast<HMENU>(std::intptr_t(std::int32_t(arg(9)))),host_instance(arg(10)),reinterpret_cast<void*>(std::uintptr_t(arg(11))));}
+   DWORD exStyle=arg(0),style=arg(3);const char*wm=std::getenv("MW34_WINDOW_MODE");
+   if(wm&&std::string(wm)=="windowed"){style=(style&~WS_POPUP)|WS_OVERLAPPEDWINDOW|WS_VISIBLE;exStyle=(exStyle&~WS_EX_TOPMOST)|WS_EX_APPWINDOW|WS_EX_WINDOWEDGE;}
+   {LastError l(host);w=::CreateWindowExA(exStyle,cn<0x10000?MAKEINTATOM(cn):cls.c_str(),(title.empty()?"MechWarrior 3 Remastered":title.c_str()),style,int(arg(4)),int(arg(5)),int(arg(6)),int(arg(7)),hwnd_of(arg(8)),reinterpret_cast<HMENU>(std::intptr_t(std::int32_t(arg(9)))),host_instance(arg(10)),reinterpret_cast<void*>(std::uintptr_t(arg(11))));}
+   if(w&&wm&&std::string(wm)=="windowed")::SetWindowTextW(w,L"MechWarrior 3 Remastered");
    apis.back()+="("+cls+","+title+")";return done(w?gwnd(w):0,12);}
   if(n=="DefWindowProcA")return done(unsigned(std::int32_t(to_host(nullptr,arg(0),arg(1),arg(2),arg(3)))),4);
   if(n=="CallWindowProcA"){const unsigned p=as_proc(arg(0));if(auto hp=host_proc(p))return done(unsigned(std::int32_t(to_host(hp,arg(1),arg(2),arg(3),arg(4)))),5);
@@ -1130,7 +1152,12 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      if(reinterpret_cast<WNDPROC>(::GetWindowLongPtrA(h,GWLP_WNDPROC))!=&wnd_tramp){::SetWindowLongPtrA(h,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(&wnd_tramp));}host.windows[h]=np;}
     return done(prev,set?3:2);}
    if(idx==-6/*GWL_HINSTANCE (x86)*/){if(set)deny("SetWindowLongA(GWL_HINSTANCE) is not modelled",0);return done(guest_instance(reinterpret_cast<HINSTANCE>(::GetWindowLongPtrA(h,GWLP_HINSTANCE))),2);}
-   LONG r{};{LastError l(host);r=set?::SetWindowLongA(h,idx,LONG(arg(2))): ::GetWindowLongA(h,idx);}return done(unsigned(r),set?3:2);}
+   LONG val=LONG(arg(2));
+   if(set&&h==host.display.window){const char*wm=std::getenv("MW34_WINDOW_MODE");
+    if(wm&&std::string(wm)=="windowed"){
+     if(idx==-16/*GWL_STYLE*/)val=(val&~WS_POPUP)|WS_OVERLAPPEDWINDOW|WS_VISIBLE;
+     else if(idx==-20/*GWL_EXSTYLE*/)val=(val&~WS_EX_TOPMOST)|WS_EX_APPWINDOW|WS_EX_WINDOWEDGE;}}
+   LONG r{};{LastError l(host);r=set?::SetWindowLongA(h,idx,val): ::GetWindowLongA(h,idx);}return done(unsigned(r),set?3:2);}
   // FormatMessageA from the system message table (optionally with LocalAlloc'd output, as Win32 does).
   if(n=="FormatMessageA"&&(arg(0)&FORMAT_MESSAGE_FROM_HMODULE)&&!(arg(0)&FORMAT_MESSAGE_FROM_SYSTEM)){const unsigned flags=arg(0),h=arg(1),id=arg(2),buf=arg(4),size=arg(5),va=arg(6);
    if(!host.paths.count(h))deny("FormatMessageA on a module without a mapped image",h);if(flags&~(FORMAT_MESSAGE_FROM_HMODULE|FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_IGNORE_INSERTS|FORMAT_MESSAGE_ARGUMENT_ARRAY|FORMAT_MESSAGE_MAX_WIDTH_MASK))deny("FormatMessageA flags outside the module-message model",flags);
@@ -1192,8 +1219,18 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   // game folder ----
   auto game_dir=[&]()->std::string{return std::filesystem::path(host.paths.at(0x400000)).parent_path().string();};
   if(host.cwd.empty())host.cwd=game_dir();
-  auto resolve=[&](unsigned a)->std::string{std::string q=guest_string(a,MAX_PATH);if(q.empty())return q;std::filesystem::path pth(q);if(pth.is_relative())pth=std::filesystem::path(host.cwd)/pth;return remaster_bank(pth.lexically_normal().make_preferred(),std::filesystem::path(game_dir()));};
-  auto in_game=[&](const std::string&q){const std::string root=game_dir();return q.size()>=root.size()&&_strnicmp(q.c_str(),root.c_str(),root.size())==0&&(q.size()==root.size()||q[root.size()]=='\\'||q[root.size()]=='/');};
+  auto resolve=[&](unsigned a)->std::string{std::string q=guest_string(a,MAX_PATH);if(q.empty())return q;
+    if(q.size()>=2&&(std::tolower(static_cast<unsigned char>(q[0]))=='b'||std::tolower(static_cast<unsigned char>(q[0]))=='z')&&q[1]==':'){
+     std::string sub=(q.size()>=3&&(q[2]=='\\'||q[2]=='/'))?q.substr(3):(q.size()>2?q.substr(2):std::string());
+     std::filesystem::path pth=sub.empty()?std::filesystem::path(game_dir()):(std::filesystem::path(game_dir())/sub);
+     if(!sub.empty()&&!std::filesystem::exists(pth)){
+      std::filesystem::path alt=std::filesystem::path(game_dir())/"video"/sub;
+      if(std::filesystem::exists(alt))pth=alt;
+      else{alt=std::filesystem::path(game_dir())/"VIDEO"/sub;if(std::filesystem::exists(alt))pth=alt;}
+     }
+     return remaster_bank(pth.lexically_normal().make_preferred(),std::filesystem::path(game_dir()));
+    }
+    std::filesystem::path pth(q);if(pth.is_relative())pth=std::filesystem::path(host.cwd)/pth;return remaster_bank(pth.lexically_normal().make_preferred(),std::filesystem::path(game_dir()));};  auto in_game=[&](const std::string&q){const std::string root=game_dir();return q.size()>=root.size()&&_strnicmp(q.c_str(),root.c_str(),root.size())==0&&(q.size()==root.size()||q[root.size()]=='\\'||q[root.size()]=='/');};
   auto owned_file=[&](unsigned h){return std::find(host.files.begin(),host.files.end(),h)!=host.files.end();};
   if(n=="GetFileAttributesA"){const std::string q=resolve(arg(0));DWORD r{};{LastError l(host);r=::GetFileAttributesA(q.c_str());}apis.back()+="("+q+")";return done(r,1);}
   if(n=="GetCurrentDirectoryA"){const unsigned z=arg(0),a=arg(1);if(host.cwd.size()+1>z)return done(unsigned(host.cwd.size())+1,2);if(!writable(a,unsigned(host.cwd.size())+1))deny("GetCurrentDirectoryA buffer outside the memory contract",a);
@@ -1323,7 +1360,13 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="ReleaseCapture"){BOOL r=::ReleaseCapture();return done(r?1U:0U,0);}
   if(n=="GetWindow"){HWND r=::GetWindow(W(0),arg(1));return done(r?gwnd(r):0,2);}
   if(n=="MoveWindow"){BOOL r{};{LastError l(host);r=::MoveWindow(W(0),int(arg(1)),int(arg(2)),int(arg(3)),int(arg(4)),BOOL(arg(5)));}return done(r?1U:0U,6);}
-  if(n=="SetWindowPos"){BOOL r{};{LastError l(host);r=::SetWindowPos(W(0),hwnd_of(arg(1)),int(arg(2)),int(arg(3)),int(arg(4)),int(arg(5)),arg(6));}return done(r?1U:0U,7);}
+  if(n=="SetWindowPos"){HWND hw=W(0);HWND after=hwnd_of(arg(1));int px=int(arg(2)),py=int(arg(3)),cx=int(arg(4)),cy=int(arg(5));unsigned flags=arg(6);
+   if(hw==host.display.window){const char*wm=std::getenv("MW34_WINDOW_MODE");
+    if(wm&&std::string(wm)=="windowed"){
+     if(after==HWND_TOPMOST)after=HWND_NOTOPMOST;
+     const unsigned rw=mw34::vkscene::Renderer::remaster_width();
+     if(rw&&cx>0&&cx<=800&&!(flags&SWP_NOSIZE)){flags|=SWP_NOSIZE|SWP_NOMOVE;}}}
+   BOOL r{};{LastError l(host);r=::SetWindowPos(hw,after,px,py,cx,cy,flags);}return done(r?1U:0U,7);}
   if(n=="InvalidateRect"||n=="ValidateRect"){RECT r{};const bool has=arg(1)!=0;if(has)r=rect_in(arg(1));BOOL ok{};{LastError l(host);ok=n=="InvalidateRect"?::InvalidateRect(W(0),has?&r:nullptr,BOOL(arg(2))): ::ValidateRect(W(0),has?&r:nullptr);}return done(ok?1U:0U,n=="InvalidateRect"?3:2);}
   if(n=="SetWindowTextA"){const std::string t=arg(1)?guest_string(arg(1)):std::string();BOOL r{};{LastError l(host);r=::SetWindowTextA(W(0),arg(1)?t.c_str():nullptr);}return done(r?1U:0U,2);}
   if(n=="GetWindowTextA"){const unsigned a=arg(1),z=arg(2);if(!z)return done(0,3);if(!writable(a,z))deny("GetWindowTextA buffer outside the memory contract",a);std::vector<char>b(z);int k{};{LastError l(host);k=::GetWindowTextA(W(0),b.data(),int(z));}
@@ -1444,12 +1487,32 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(n=="CreateFontIndirectA"){const unsigned a=arg(0);static_assert(sizeof(LOGFONTA)==60);if(!readable(a,60))deny("LOGFONTA outside the memory contract",a);LOGFONTA lf{};for(unsigned i=0;i<60;++i)reinterpret_cast<unsigned char*>(&lf)[i]=runtime.memory().load<unsigned char>({a+i});return done(gr(::CreateFontIndirectA(&lf)),1);}
   }
   if(n=="GetLogicalDriveStringsA"){const unsigned z=arg(0),a=arg(1);std::vector<char>b(std::max(z,1U));DWORD k{};{LastError l(host);k=::GetLogicalDriveStringsA(z,b.data());}
-   if(k&&k<z){if(!writable(a,k+1))deny("GetLogicalDriveStringsA buffer outside the memory contract",a);for(DWORD i=0;i<=k;++i)runtime.memory().store<unsigned char>({a+i},static_cast<unsigned char>(b[i]));}std::string list;for(DWORD i=0;i<k&&k<z;++i)list.push_back(b[i]?b[i]:' ');apis.back()+="("+list+")";return done(k,2);}
-  if(n=="GetDriveTypeA"){const std::string r=arg(0)?guest_string(arg(0)):std::string();UINT t{};{LastError l(host);t=::GetDriveTypeA(arg(0)?r.c_str():nullptr);}apis.back()+="("+r+")="+std::to_string(t);return done(t,1);}
-  if(n=="GetVolumeInformationA"){const std::string r=arg(0)?guest_string(arg(0)):std::string();const unsigned nb=arg(1),nz=arg(2),ser=arg(3),mcl=arg(4),fl=arg(5),fb=arg(6),fz=arg(7);std::vector<char>vn(std::max(nz,1U)),fn(std::max(fz,1U));DWORD s1{},m1{},f1{};BOOL ok{};
-   {LastError l(host);ok=::GetVolumeInformationA(arg(0)?r.c_str():nullptr,nb?vn.data():nullptr,nz,ser?&s1:nullptr,mcl?&m1:nullptr,fl?&f1:nullptr,fb?fn.data():nullptr,fz);}apis.back()+="("+r+")="+std::to_string(ok);
-   if(ok){auto put=[&](unsigned a,const std::vector<char>&v,unsigned z){if(!a)return;if(!writable(a,z))deny("GetVolumeInformationA buffer outside the memory contract",a);for(unsigned i=0;i<z;++i){runtime.memory().store<unsigned char>({a+i},static_cast<unsigned char>(v[i]));if(!v[i])break;}};
-    put(nb,vn,nz);put(fb,fn,fz);for(auto[a,v]:{std::pair<unsigned,DWORD>{ser,s1},{mcl,m1},{fl,f1}})if(a){if(!writable(a,4))deny("GetVolumeInformationA output outside the memory contract",a);store(a,v);}}return done(ok?1U:0U,8);}
+    std::vector<char>out;out.push_back('B');out.push_back(':');out.push_back('\\');out.push_back('\0');
+    for(DWORD i=0;i<k;++i)out.push_back(b[i]);
+    if(out.empty()||out.back()!='\0')out.push_back('\0');
+    DWORD total=DWORD(out.size()>0?out.size()-1:0);
+    if(z==0||z<=total){apis.back()+="(virtual B: + drives need "+std::to_string(total+1)+")";return done(total+1,2);}
+    if(!writable(a,DWORD(out.size())))deny("GetLogicalDriveStringsA buffer outside the memory contract",a);
+    for(size_t i=0;i<out.size();++i)runtime.memory().store<unsigned char>({a+unsigned(i)},static_cast<unsigned char>(out[i]));
+    std::string list;for(size_t i=0;i<total;++i)list.push_back(out[i]?out[i]:' ');apis.back()+="("+list+")";return done(total,2);}
+  if(n=="GetDriveTypeA"){const std::string r=arg(0)?guest_string(arg(0)):std::string();UINT t{};
+    if(_strnicmp(r.c_str(),"B:",2)==0||_strnicmp(r.c_str(),"B:\\",3)==0||_strnicmp(r.c_str(),"Z:",2)==0||_strnicmp(r.c_str(),"Z:\\",3)==0){
+     t=DRIVE_CDROM;
+    }else{LastError l(host);t=::GetDriveTypeA(arg(0)?r.c_str():nullptr);}
+    apis.back()+="("+r+")="+std::to_string(t);return done(t,1);}
+  if(n=="GetVolumeInformationA"){const std::string r=arg(0)?guest_string(arg(0)):std::string();const unsigned nb=arg(1),nz=arg(2),ser=arg(3),mcl=arg(4),fl=arg(5),fb=arg(6),fz=arg(7);
+    if(_strnicmp(r.c_str(),"B:",2)==0||_strnicmp(r.c_str(),"B:\\",3)==0||_strnicmp(r.c_str(),"Z:",2)==0||_strnicmp(r.c_str(),"Z:\\",3)==0){
+     std::string volName="MW3";
+     const char*pm=std::getenv("MW34_PIRATES_MOON");
+     if(pm&&*pm)volName="MW3 PM";
+     else{std::string gd=game_dir();for(char&c:gd)c=char(std::tolower(static_cast<unsigned char>(c)));if(gd.find("pirate")!=std::string::npos)volName="MW3 PM";}
+     const std::string fsName="CDFS";const DWORD s1=0xFE05F614,m1=255,f1=FS_CASE_IS_PRESERVED|FS_UNICODE_STORED_ON_DISK;
+     auto put=[&](unsigned addr,const std::string&s,unsigned maxz){if(!addr||!maxz)return;if(!writable(addr,maxz))deny("GetVolumeInformationA buffer outside the memory contract",addr);const unsigned lim=std::min<unsigned>(maxz,unsigned(s.size()+1));for(unsigned i=0;i<lim;++i)runtime.memory().store<unsigned char>({addr+i},i<s.size()?static_cast<unsigned char>(s[i]):0);};
+     put(nb,volName,nz);put(fb,fsName,fz);if(ser&&writable(ser,4))store(ser,s1);if(mcl&&writable(mcl,4))store(mcl,m1);if(fl&&writable(fl,4))store(fl,f1);apis.back()+="("+r+" virtual CD)="+volName;return done(1U,8);}
+    std::vector<char>vn(std::max(nz,1U)),fn(std::max(fz,1U));DWORD s1{},m1{},f1{};BOOL ok{};
+    {LastError l(host);ok=::GetVolumeInformationA(arg(0)?r.c_str():nullptr,nb?vn.data():nullptr,nz,ser?&s1:nullptr,mcl?&m1:nullptr,fl?&f1:nullptr,fb?fn.data():nullptr,fz);}apis.back()+="("+r+")="+std::to_string(ok);
+    if(ok){auto put=[&](unsigned a,const std::vector<char>&v,unsigned z){if(!a)return;if(!writable(a,z))deny("GetVolumeInformationA buffer outside the memory contract",a);for(unsigned i=0;i<z;++i){runtime.memory().store<unsigned char>({a+i},static_cast<unsigned char>(v[i]));if(!v[i])break;}};
+     put(nb,vn,nz);put(fb,fn,fz);for(auto[a,v]:{std::pair<unsigned,DWORD>{ser,s1},{mcl,m1},{fl,f1}})if(a){if(!writable(a,4))deny("GetVolumeInformationA output outside the memory contract",a);store(a,v);}}return done(ok?1U:0U,8);}
   // Time conversions: FILETIME (8), SYSTEMTIME (16) and TIME_ZONE_INFORMATION (172) share the x86/x64 layout.
   {auto rd=[&](unsigned a,void*p,unsigned z){if(!readable(a,z))deny(n+" input outside the memory contract",a);get_bytes(a,p,z);};auto wrb=[&](unsigned a,const void*p,unsigned z){if(!writable(a,z))deny(n+" output outside the memory contract",a);const auto*b=static_cast<const unsigned char*>(p);for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},b[i]);};
    if(n=="FileTimeToLocalFileTime"||n=="LocalFileTimeToFileTime"){FILETIME i{},o{};rd(arg(0),&i,8);BOOL ok=n=="FileTimeToLocalFileTime"?::FileTimeToLocalFileTime(&i,&o): ::LocalFileTimeToFileTime(&i,&o);if(ok)wrb(arg(1),&o,8);return done(ok?1U:0U,2);}

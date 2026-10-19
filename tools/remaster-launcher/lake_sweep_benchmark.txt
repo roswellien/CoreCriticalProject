@@ -1,0 +1,51 @@
+40 mouse -20 -15 0
+45 mouse -20 -15 0
+50 mouse -20 -15 0
+55 mouse -20 -15 0
+60 mouse -20 -15 0
+63 mouse 0 -8 0
+66 mouse 0 30 0
+69 mouse 0 29 0
+74 mouse 0 0 1
+78 mouse 0 0 0
+110 mouse 30 15 0
+113 mouse 30 15 0
+116 mouse 30 15 0
+119 mouse 30 15 0
+122 mouse 30 14 0
+125 mouse 34 14 0
+130 mouse 0 0 1
+134 mouse 0 0 0
+230 mouse 0 0 1
+234 mouse 0 0 0
+260 mouse 30 24 0
+263 mouse 30 24 0
+266 mouse 30 23 0
+269 mouse 30 23 0
+276 mouse 0 0 1
+280 mouse 0 0 0
+340 key 39 down
+342 key 39 up
+380 key 1c down
+382 key 1c up
+
++1000 key cd down
++6000 key cd up
++6500 key c8 down
++11000 key c8 up
++11500 key 3c down
++11550 key 3c up
++12000 key 12 down
++12050 key 12 up
++12500 key 1c down
++12550 key 1c up
++13000 key cb down
++28000 key cb up
++29000 key cd down
++44000 key cd up
++45000 key cb down
++60000 key cb up
++61000 key cd down
++76000 key cd up
++77000 key cb down
++92000 key cb up
