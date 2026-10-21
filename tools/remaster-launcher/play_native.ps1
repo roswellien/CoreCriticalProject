@@ -1,4 +1,4 @@
-param([string]$Profile,[int]$Frames=0,[int]$Dump=0,[string]$Script='',[string]$LightingPreset='',[ValidateSet('0','1')][string]$InstantReplay='0')
+param([string]$Profile,[int]$Frames=0,[int]$Dump=0,[string]$Script='',[string]$LightingPreset='',[string]$GameExe='',[ValidateSet('0','1')][string]$InstantReplay='0',[ValidateSet('','0','1')][string]$FixtureLights='',[ValidateSet('','0','1')][string]$Weather='')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Set-Location $taskRoot
@@ -13,12 +13,17 @@ if($config.native.runtime_environment){
 }
 # Explicit launcher choice wins over old profiles and inherited capture defaults.
 $env:MW34_INSTANT_REPLAY=$InstantReplay
+if($FixtureLights -ne ''){$env:MW34_FIXTURE_LIGHTS=$FixtureLights}
+if($Weather -ne ''){$env:MW34_WEATHER=$Weather}
 $lighting=$null
 if($config.native.sun_preset -or $LightingPreset){
  $lighting=(& (Join-Path $PSScriptRoot 'resolve_sun_preset.ps1') -Profile $Profile -Preset $LightingPreset) | ConvertFrom-Json
  foreach($binding in $lighting.environment.PSObject.Properties){
   [Environment]::SetEnvironmentVariable($binding.Name,[string]$binding.Value,'Process')
   $config.native.runtime_environment | Add-Member -NotePropertyName $binding.Name -NotePropertyValue ([string]$binding.Value) -Force
+ }
+ if($LightingPreset){
+  [Environment]::SetEnvironmentVariable('MW34_MANUAL_LIGHTING','1','Process')
  }
  Write-Output "Lighting preset: $($lighting.map) / $($lighting.preset)"
 }
@@ -48,9 +53,9 @@ if($env:MW34_GPU_WORLD -eq '1'){
 if($env:MW34_MUSIC_PACK){$env:MW34_MUSIC_LOG="$run/music.log"}
 if($env:MW34_BUSHWACKER_TEST){$env:MW34_BUSHWACKER_TEST_LOG=$env:MW34_MODELS_LOG}
 if($Script){$env:MW34_INPUT_SCRIPT=$Script;$env:MW34_VIRTUAL_CLOCK='50'}
-$gameExe=if($env:MW34_GAME_EXE -and (Test-Path -LiteralPath $env:MW34_GAME_EXE)){$env:MW34_GAME_EXE}else{'MW3/Mech3.exe'}
+$gameExe=if($GameExe){if(!(Test-Path -LiteralPath $GameExe)){throw 'Selected game executable is missing'};$GameExe}elseif($env:MW34_GAME_EXE -and (Test-Path -LiteralPath $env:MW34_GAME_EXE)){$env:MW34_GAME_EXE}else{'MW3/Mech3.exe'}
 $arguments=@($gameExe,'reports/m4-crt-fdiv-entry-prefix/preparation-r2/candidate-O2.obj','local/mw3-staged/Shared_DLLs/MSVCRT.DLL','reports/m4-crt-fdiv/native-derived-r1/pack.bin','reports/m4-crt-fdiv-replay/preparation-r1/before-inputs.bin',"$run/game")
-$process=Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput "$run/stdout.txt" -RedirectStandardError "$run/stderr.txt"
+$process=Start-Process -FilePath $exe -ArgumentList ($arguments | ForEach-Object {'"' + $_ + '"'}) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$run/stdout.txt" -RedirectStandardError "$run/stderr.txt"
 $null=$process.Handle
 Write-Output "Native Remaster PID $($process.Id). Enter Training and press X for third-person. Logs: $run"
 $process.WaitForExit()

@@ -30,7 +30,7 @@ void surface_normals_load(){
  }else{
  auto parsed=mw34::materials::read_surface_normals(file);
  for(const auto&image:parsed.pack.images)authored_bytes+=std::uint64_t(image.pixels.size())*4;
- if(authored_bytes>256ULL*1024*1024)throw std::runtime_error("Resident authored surface normals exceed byte budget");
+ if(authored_bytes>mw34::materials::authored_normal_budget)throw std::runtime_error("Resident authored surface normals exceed byte budget");
  auto&o=override_state();const size_t offset=o.normal_textures.size();
  if(offset+parsed.pack.images.size()>size_t(std::numeric_limits<int>::max()))throw std::runtime_error("Surface normal image index overflow");
  for(const auto&[key,index]:parsed.bindings){

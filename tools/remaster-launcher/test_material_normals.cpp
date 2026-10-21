@@ -411,6 +411,16 @@ int main(int argc, char **argv) {
         };
         write_manifest(temporary.path.filename().string() + "\n" +
                        additional.path.filename().string() + "\n");
+        write_manifest(temporary.path.string() + "\n" + additional.path.string() + "\n");
+        const auto absolute_pages = surface_normal_catalog_paths(manifest.path);
+        require(absolute_pages.size() == 2 && absolute_pages[0] == temporary.path,
+                "Explicit absolute authored page paths were rejected");
+        write_manifest(temporary.path.string() + "\n" + temporary.path.filename().string() + "\n");
+        refused = false;
+        try { surface_normal_catalog_paths(manifest.path); }
+        catch (const std::exception &) { refused = true; }
+        require(refused, "Absolute/relative aliases of the same page were accepted");
+        write_manifest(temporary.path.filename().string() + "\n" + additional.path.filename().string() + "\n");
         const auto manifest_name = manifest.path.string();
         environment("MW34_SURFACE_NORMALS", manifest_name.c_str());
         SurfaceFixture paged;
@@ -445,6 +455,19 @@ int main(int argc, char **argv) {
         try { surface_normal_catalog_paths(manifest.path); }
         catch (const std::exception &) { refused = true; }
         require(refused, "Authored aggregate byte budget exceeded");
+        Temporary budget_a, budget_b, budget_c;
+        for (const auto &page : {budget_a.path, budget_b.path, budget_c.path}) {
+            std::ofstream output(page, std::ios::binary); output.close();
+            std::filesystem::resize_file(page, 180ULL * 1024 * 1024);
+        }
+        write_manifest(budget_a.path.string() + "\n" + budget_b.path.string() + "\n");
+        require(surface_normal_catalog_paths(manifest.path).size() == 2,
+                "Current enhanced material catalog size was rejected");
+        write_manifest(budget_a.path.string() + "\n" + budget_b.path.string() + "\n" + budget_c.path.string() + "\n");
+        refused = false;
+        try { surface_normal_catalog_paths(manifest.path); }
+        catch (const std::exception &) { refused = true; }
+        require(refused, "Enhanced catalog aggregate budget was not enforced");
         std::cout << "Material normals: truncation, bounds, identity, explicit exclusions, legacy "
                      "glass and channel checks pass\n";
     } catch (const std::exception &error) {

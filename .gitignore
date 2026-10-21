@@ -37,6 +37,12 @@
 *.dylib
 __pycache__/
 *.py[cod]
+# Extracted original game geometry used only by the local editor preview.
+/games/mw3/mod-tools/editor/web/static/assets/game_assets_3d.json
+# Managed launcher intermediates and local user preferences.
+/tools/mw3-remaster-launcher-tests/bin/
+/tools/mw3-remaster-launcher-tests/obj/
+/tools/remaster-launcher/user/
 .venv/
 .vs/
 .idea/

@@ -10,6 +10,8 @@
 
 namespace mw34::effects {
 inline constexpr unsigned capacity=32;
+// CPU/GPU protocol: xyz is an endpoint for capsules, a direction for spots.
+enum class LightKind : unsigned { point=0, capsule=1, spot=2 };
 using Point=std::array<float,3>;
 // Explicit presentation clock: normal live rendering advances, frozen photo
 // rendering holds. A source-frame delta field is not an elapsed-time clock.
@@ -45,6 +47,10 @@ inline Catalog read_catalog(std::istream& f) {
 struct alignas(16) Light { std::array<float,4> start{},end{},color{}; };
 struct alignas(16) Uniform { std::array<float,4> params{};std::array<Light,capacity> lights{}; };
 static_assert(sizeof(Light)==48&&sizeof(Uniform)==1552);
+inline unsigned fixture_slots(unsigned occupied,unsigned limit,unsigned weapon_reserve){
+    if(!limit||limit>capacity||occupied>limit)throw std::runtime_error("Invalid combined light budget");
+    return std::min(limit-occupied,limit-std::min(weapon_reserve,limit));
+}
 inline float distance2(const Point&a,const Point&b){float v=0;for(unsigned i=0;i<3;++i){const float q=a[i]-b[i];v+=q*q;}return v;}
 inline Point closest(const Point&p,const Point&a,const Point&b){
     const float den=distance2(a,b);float t=0;if(den>1e-12f){for(unsigned i=0;i<3;++i)t+=(p[i]-a[i])*(b[i]-a[i]);t=std::clamp(t/den,0.f,1.f);}

@@ -163,7 +163,7 @@ struct PhotoReplayState {
     bool video_recording{false};
     AsyncVideoWriter video_pipeline{};
 
-    bool dvr_enabled{true};
+    bool dvr_enabled{false};
     bool dvr_checked{false};
     AsyncVideoWriter dvr_pipeline{};
 
@@ -180,6 +180,9 @@ struct PhotoReplayState {
     std::array<bool, 256> prev_keys{};
 
     unsigned suppress_d3d_depth{0};
+    unsigned live_camera_render_depth{0};
+    unsigned* live_camera_restore_words{nullptr};
+    unsigned live_camera_restore_data{0};
     bool write_watch_checked{false};
     bool write_watch_ok{false};
     bool cli_checked{false};
@@ -297,11 +300,10 @@ void photo_replay_filter_device_state(unsigned z, unsigned char* b) {
         // DIK_F9 (0x43): Screenshot / Shift+F9 Video
         // DIK_F10 (0x44): Instant Replay Clip
         // DIK_F11 (0x57): Photo Mode / Free Cam
-        // DIK_F12 (0x58): Reserved
+        // F12 belongs to the original mission-objectives toggle; pass it through.
         b[0x43] = 0;
         b[0x44] = 0;
         b[0x57] = 0;
-        b[0x58] = 0;
         if (std::chrono::steady_clock::now() < photo_replay.suppress_escape_until) {
             b[1] = 0; // Suppress DIK_ESCAPE (0x01) so exiting Photo/Replay via ESC does not trigger Abort Mission
         }
@@ -318,7 +320,7 @@ void photo_replay_filter_device_data(DIDEVICEOBJECTDATA_DX3* b, DWORD& cnt) {
         DWORD out_k = 0;
         for (DWORD k = 0; k < cnt; ++k) {
             const DWORD ofs = b[k].dwOfs;
-            if (ofs == 0x43 || ofs == 0x44 || ofs == 0x57 || ofs == 0x58) continue;
+            if (ofs == 0x43 || ofs == 0x44 || ofs == 0x57) continue;
             if (suppress_esc && ofs == 1) continue;
             if (out_k != k) b[out_k] = b[k];
             ++out_k;
@@ -1064,7 +1066,7 @@ void photo_replay_poll_controls() {
     if (!photo_replay.dvr_checked) {
         photo_replay.dvr_checked = true;
         const char* e = std::getenv("MW34_INSTANT_REPLAY");
-        photo_replay.dvr_enabled = (!e || std::strcmp(e, "0") != 0);
+        photo_replay.dvr_enabled = (e && std::strcmp(e, "1") == 0);
     }
 
     const unsigned vw = host.presenter && host.presenter->remaster_width() ? host.presenter->remaster_width() : (host.display.width ? host.display.width : 640);
@@ -1560,6 +1562,42 @@ void* photo_replay_skip_call(State* s, void* p, unsigned stack_arg_bytes, unsign
 
 template <class Next>
 void* photo_replay_body(State* s, unsigned target, void* p, Next&& next) {
+    // Live detached views belong to camera rendering, not the game's aiming
+    // camera. Context4B52C0 tail-JMP fuses the hardware4F7030 world draw;
+    // 4F6DC0 is its software counterpart. Enclose both setup and drawing.
+    // Save genuine pre-render camera outputs and restore only fields changed
+    // by the detached view. All original setup/draw bodies still execute.
+    if ((target==0x4b52c0 || target==0x4f6dc0 || target==0x4f7030) && photo_replay.mode==mw34::photo_replay::Mode::Live && photo_replay_detached_cam() && !frontend_on()) {
+        const unsigned world=load(0x5f4c8c);
+        const unsigned node=world&&readable(world+4,4)?load(world+4):0;
+        if((target==0x4b52c0?world:node)!=state.gpr.rcx.dword)return next(); // Context4B52C0 tail-JMP is fused into hardware world draw.
+        const unsigned data=node&&readable(node+0x38,4)?load(node+0x38):0;
+        if(!data||!readable(data,0x1e8)||!writable(data,0x1e8))
+            throw std::runtime_error("Live camera isolation has no valid world camera");
+        constexpr unsigned offsets[]={0x2c,0x30,0x34,
+            0x44,0x48,0x4c,0x50,0x54,0x58,0x5c,0x60,0x64,0x68,0x6c,0x70,0x74,0x78,0x7c,
+            0xb8,0xbc,0xc0,0xc4,0xc8,0xcc,
+            0xe8,0xec,0xf0,0xf4,0x1d4,0x1d8,0x1e0,0x1e4};
+        std::array<unsigned,sizeof(offsets)/sizeof(offsets[0])> saved{};
+        for(size_t i=0;i<saved.size();++i)saved[i]=load(data+offsets[i]);
+        const auto previous_wc=wide_cameras.find(data);
+        const bool had_wc=previous_wc!=wide_cameras.end();
+        const WideCamera saved_wc=had_wc?previous_wc->second:WideCamera{};
+        auto* const prior_words=photo_replay.live_camera_restore_words;
+        const unsigned prior_data=photo_replay.live_camera_restore_data;
+        photo_replay.live_camera_restore_words=saved.data();
+        photo_replay.live_camera_restore_data=data;
+        const auto restore=[&](){
+            for(size_t i=0;i<saved.size();++i)store(data+offsets[i],saved[i]);
+            if(had_wc)wide_cameras[data]=saved_wc;else wide_cameras.erase(data);
+            photo_replay.live_camera_restore_words=prior_words;
+            photo_replay.live_camera_restore_data=prior_data;
+            --photo_replay.live_camera_render_depth;
+        };
+        ++photo_replay.live_camera_render_depth;
+        try{void*r=next();restore();return r;}catch(...){restore();throw;}
+    }
+
     // Player-camera target markers are not valid for a detached camera. Frozen
     // frames also skip their projection update, even when Photo uses Game view.
     // Suppress only this display routine; retain the live camera-provenance guard.
@@ -1667,7 +1705,7 @@ void* photo_replay_body(State* s, unsigned target, void* p, Next&& next) {
         const unsigned ebp = state.gpr.rbp.dword;
         const unsigned cam_data = (node && readable(node + 0x38, 4)) ? load(node + 0x38) : (readable(ebp - 8, 4) ? load(ebp - 8) : 0);
         const bool is_world_cam = node && cam_data && readable(cam_data, 0x1e4) && distance_world(node, cam_data);
-        if (is_world_cam && photo_replay_detached_cam() && writable(ebp + 8, 4)) {
+        if (is_world_cam && photo_replay_detached_cam() && photo_replay.mode!=mw34::photo_replay::Mode::Live && writable(ebp + 8, 4)) {
             store(ebp + 8, 0); // Zero 32-bit head-bob pointer argument so 0x4F4398 skips cockpit head-bob
         }
         void* r = next();
@@ -1679,7 +1717,7 @@ void* photo_replay_body(State* s, unsigned target, void* p, Next&& next) {
             const unsigned stack_mat = (stack_ptr && readable(stack_ptr, 4)) ? load(stack_ptr) : 0;
             const unsigned mat_addr = (stack_mat && readable(stack_mat, 48)) ? stack_mat : (cam_data + 0x60);
 
-            if (photo_replay.camera_mode == mw34::photo_replay::CameraMode::Game) {
+            if (photo_replay.camera_mode == mw34::photo_replay::CameraMode::Game || (photo_replay.mode==mw34::photo_replay::Mode::Live && !photo_replay.live_camera_render_depth)) {
                 photo_replay.last_world_cam_mat = photo_replay_read_mat3x4(mat_addr);
                 const float v_rad = wide_float(cam_data + 0xec);
                 if (v_rad > 0.05f && v_rad < 3.0f) {
@@ -1688,6 +1726,29 @@ void* photo_replay_body(State* s, unsigned target, void* p, Next&& next) {
                 photo_replay.has_world_cam = true;
             } else {
                 float custom_fov_deg = 60.0f;
+                // Keep fresh genuine camera outputs for simulation, even while
+                // the rendered camera follows a moving subject. Camera Mat3x4
+                // is column-major: eye[9..11], forward=-B[6..8].
+                if(photo_replay.mode==mw34::photo_replay::Mode::Live && photo_replay.live_camera_restore_words && photo_replay.live_camera_restore_data==cam_data) {
+                    unsigned original[12];
+                    for(unsigned i=0;i<12;++i)original[i]=load(mat_addr+4*i);
+                    // 4F4370 adds the original bob vector to the camera eye.
+                    // Retain that genuine input in both normal and filmed play.
+                    const unsigned bob=readable(ebp+8,4)?load(ebp+8):0;
+                    if(bob){
+                        if(!readable(bob,12))throw std::runtime_error("Live camera has invalid bob vector");
+                        for(unsigned i=0;i<3;++i){const float eye=wide_float(mat_addr+4*(9+i))+wide_float(bob+4*i);std::memcpy(&original[9+i],&eye,4);}
+                    }
+                    auto* saved=photo_replay.live_camera_restore_words;
+                    for(unsigned i=0;i<3;++i)saved[i]=original[9+i];
+                    for(unsigned i=0;i<12;++i)saved[3+i]=original[i];
+                    for(unsigned i=0;i<3;++i)saved[15+i]=original[6+i]^0x80000000U;
+                    for(unsigned plane=0;plane<2;++plane)for(unsigned i=0;i<3;++i) {
+                        float forward,eye;std::memcpy(&forward,&saved[15+i],4);std::memcpy(&eye,&saved[i],4);
+                        const float point=float(static_cast<long double>(forward)*wide_float(cam_data+(plane?0xb4:0xb0))+eye);
+                        std::memcpy(&saved[18+plane*3+i],&point,4);
+                    }
+                }
                 const auto custom_mat = photo_replay_active_camera_mat(custom_fov_deg);
                 if (stack_mat && writable(stack_mat, 48)) {
                     photo_replay_write_mat3x4(stack_mat, custom_mat);

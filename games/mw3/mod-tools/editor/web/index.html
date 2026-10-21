@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MechWarrior 3 - Visual 3D Map Studio</title>
+  <link rel="stylesheet" href="/static/css/studio.css">
+  <!-- Vendor 3D Libraries -->
+  <script src="/static/js/three.min.js"></script>
+  <script src="/static/js/OrbitControls.js"></script>
+  <script src="/static/js/TransformControls.js"></script>
+</head>
+<body>
+
+  <!-- App Header -->
+  <header>
+    <div class="brand-section">
+      <div class="brand-logo">
+        <span>⚔️ MECHWARRIOR 3</span>
+        <span class="brand-badge">MAP STUDIO</span>
+      </div>
+    </div>
+
+    <div class="project-meta">
+      <div class="input-group">
+        <span class="input-label">Map Title</span>
+        <input type="text" id="project-title" class="text-input" value="Iron Ridge Outpost" style="width: 170px;">
+      </div>
+      <div class="input-group">
+        <span class="input-label">Pack ID</span>
+        <input type="text" id="project-id" class="text-input" value="iron_ridge_outpost" style="width: 150px;">
+      </div>
+      <div class="input-group">
+        <span class="input-label">Biome</span>
+        <select id="biome-select" class="select-input">
+          <option value="desert" selected>Desert Canyon</option>
+          <option value="coastal">Coastal Basin</option>
+          <option value="volcanic">Volcanic Badlands</option>
+          <option value="highland">Highland Plateau</option>
+          <option value="industrial">Industrial Basin</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button id="btn-load-demo" class="btn" title="Load sample military base layout">📥 Load Demo</button>
+      <button id="btn-export" class="btn btn-primary" title="Compile and export standalone mod pack">⚡ Export Map Pack</button>
+      <button id="btn-launch-game" class="btn btn-accent" title="Launch custom map in native Vulkan engine">▶️ Play in Engine</button>
+    </div>
+  </header>
+
+  <!-- Main Work Area -->
+  <div class="app-container">
+
+    <!-- Left Sidebar: Visual Asset Palette -->
+    <div class="sidebar">
+      <div class="sidebar-tabs">
+        <button class="tab-btn active">Visual Asset Palette</button>
+      </div>
+      <div class="sidebar-content">
+
+        <div class="section-title">🛡️ In-Game Defenses</div>
+        <div class="asset-grid">
+          <div class="asset-card" data-type="turret_srm">
+            <div class="asset-icon">🚀</div>
+            <div class="asset-name">SRM Turret</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="turret_laser">
+            <div class="asset-icon">⚡</div>
+            <div class="asset-name">Laser Tower</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+        </div>
+
+        <div class="section-title">🏛️ In-Game Base Structures</div>
+        <div class="asset-grid">
+          <div class="asset-card" data-type="bunker">
+            <div class="asset-icon">🏢</div>
+            <div class="asset-name">Command Bunker</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="comm_center">
+            <div class="asset-icon">📡</div>
+            <div class="asset-name">Radar Comms Dish</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="fuel_tank">
+            <div class="asset-icon">🛢️</div>
+            <div class="asset-name">Coolant Silo</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="city_building">
+            <div class="asset-icon">🏬</div>
+            <div class="asset-name">City Garrison</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="repair_station">
+            <div class="asset-icon">🔧</div>
+            <div class="asset-name">MFB Gantry</div>
+            <div class="asset-badge">Mech Service</div>
+          </div>
+          <div class="asset-card" data-type="factory">
+            <div class="asset-icon">🏭</div>
+            <div class="asset-name">Mech Factory</div>
+            <div class="asset-badge">Industrial</div>
+          </div>
+        </div>
+
+        <div class="section-title">🤖 In-Game BattleMechs</div>
+        <div class="asset-grid">
+          <div class="asset-card" data-type="mech_madcat">
+            <div class="asset-icon">🦾</div>
+            <div class="asset-name">Mad Cat / Timber</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="mech_bushwacker">
+            <div class="asset-icon">🦾</div>
+            <div class="asset-name">Bushwacker</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="mech_thor">
+            <div class="asset-icon">🦾</div>
+            <div class="asset-name">Thor / Summoner</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="mech_shadowcat">
+            <div class="asset-icon">🦾</div>
+            <div class="asset-name">Shadow Cat</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="mech_vulture">
+            <div class="asset-icon">🦾</div>
+            <div class="asset-name">Vulture / Mad Dog</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+          <div class="asset-card" data-type="mech_daishi">
+            <div class="asset-icon">🦾</div>
+            <div class="asset-name">Daishi / Dire Wolf</div>
+            <div class="asset-badge">In-Game 3D</div>
+          </div>
+        </div>
+
+        <div class="section-title">🎯 Tactical Spawns & Navs</div>
+        <div class="asset-grid">
+          <div class="asset-card" data-type="spawn">
+            <div class="asset-icon">🪂</div>
+            <div class="asset-name">Drop Zone</div>
+            <div class="asset-badge">Player Spawn</div>
+          </div>
+          <div class="asset-card" data-type="nav">
+            <div class="asset-icon">🚩</div>
+            <div class="asset-name">Nav Point</div>
+            <div class="asset-badge">Objective Nav</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 20px; padding: 12px; background: rgba(0, 240, 255, 0.05); border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+          <b style="color:var(--accent-cyan)">💡 Quick Tip:</b> Click any asset card above, then click anywhere on the 3D terrain to place. Drag the handles to reposition, or press <kbd style="background: #222; padding: 2px 5px; border-radius: 3px; color: #fff;">DEL</kbd> to delete.
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Center 3D Viewport -->
+    <div class="viewport-container" id="viewport">
+
+      <!-- Top HUD View Controls -->
+      <div class="viewport-hud-top">
+        <button id="btn-view-orbit" class="hud-btn active" onclick="setViewMode('orbit')">🌐 3D Orbit (O)</button>
+        <button id="btn-view-topdown" class="hud-btn" onclick="setViewMode('topdown')">📐 Top-Down (T)</button>
+        <button id="btn-view-iso" class="hud-btn" onclick="setViewMode('iso')">🎲 Isometric (I)</button>
+      </div>
+
+      <!-- Placement Notification Banner -->
+      <div class="viewport-hud-bottom">
+        <div class="hud-status-pill">
+          <div class="indicator"></div>
+          <span id="stat-coords">X: 0 | Y: 0 | Z: 0</span>
+          <span>Entities: <b id="stat-entities" style="color:var(--accent-amber)">0</b></span>
+        </div>
+
+        <div id="placement-banner" class="placement-banner">
+          PLACING ASSET (Click on terrain to place)
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right Sidebar: Inspector & Environment -->
+    <div class="sidebar right">
+      <div class="sidebar-tabs">
+        <button class="tab-btn active">Inspector & Environment</button>
+      </div>
+      <div class="sidebar-content">
+
+        <!-- Inspector Section -->
+        <div class="section-title">🔍 Selected Entity</div>
+        <div id="inspector-empty" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px; border: 1px dashed var(--border-color); border-radius: 6px;">
+          No entity selected.<br>Click an object in the 3D scene to edit its properties.
+        </div>
+
+        <div id="inspector-content" class="inspector-card" style="display: none;">
+          <div class="prop-row">
+            <span class="prop-name">Name</span>
+            <input type="text" id="insp-name" class="text-input" style="width: 160px;">
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Archetype</span>
+            <span id="insp-type" class="prop-value" style="color:var(--accent-cyan); font-weight:700;">-</span>
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Position (X, Y, Z)</span>
+            <div style="display: flex; gap: 4px;">
+              <input type="text" id="insp-pos-x" class="text-input" style="width: 50px;" readonly>
+              <input type="text" id="insp-pos-y" class="text-input" style="width: 45px;" readonly>
+              <input type="text" id="insp-pos-z" class="text-input" style="width: 50px;" readonly>
+            </div>
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Rotation Yaw</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="range" id="insp-yaw" class="range-slider" min="0" max="360" value="0">
+              <span id="insp-yaw-label" class="prop-value" style="width:35px;">0°</span>
+            </div>
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Faction</span>
+            <select id="insp-faction" class="select-input" style="width: 120px;">
+              <option value="player">Player</option>
+              <option value="friendly">Friendly</option>
+              <option value="enemy">Enemy</option>
+              <option value="neutral">Neutral</option>
+            </select>
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Armor / HP</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="range" id="insp-health" class="range-slider" min="10" max="500" value="100">
+              <span id="insp-health-label" class="prop-value" style="width:35px;">100</span>
+            </div>
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Primary Objective</span>
+            <input type="checkbox" id="insp-objective" style="accent-color: var(--accent-cyan);">
+          </div>
+
+          <div style="display: flex; gap: 8px; margin-top: 14px;">
+            <button id="btn-insp-dup" class="btn" style="flex:1;">Duplicate</button>
+            <button id="btn-insp-delete" class="btn btn-danger" style="flex:1;">Delete</button>
+          </div>
+        </div>
+
+        <!-- Lighting & Atmosphere Section -->
+        <div class="section-title" style="margin-top: 20px;">☀️ Atmosphere & Lighting</div>
+        <div class="env-control-grid">
+          <div id="preset-noon" class="preset-chip" onclick="setEnvPreset('noon')">☀️ High Noon</div>
+          <div id="preset-sunset" class="preset-chip active" onclick="setEnvPreset('sunset')">🌅 Golden Sunset</div>
+          <div id="preset-night" class="preset-chip" onclick="setEnvPreset('night')">🌙 Night Op</div>
+          <div id="preset-storm" class="preset-chip" onclick="setEnvPreset('storm')">🌪️ Dust Storm</div>
+        </div>
+
+        <div class="inspector-card" style="margin-top: 10px;">
+          <div class="prop-row">
+            <span class="prop-name">Sun Azimuth</span>
+            <input type="range" id="env-azimuth" class="range-slider" min="0" max="360" value="235" oninput="state.project.lighting.azimuth = parseFloat(this.value); updateLighting();">
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Sun Elevation</span>
+            <input type="range" id="env-elevation" class="range-slider" min="5" max="85" value="28" oninput="state.project.lighting.elevation = parseFloat(this.value); updateLighting();">
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Sun Intensity</span>
+            <input type="range" id="env-strength" class="range-slider" min="0.1" max="2.0" step="0.05" value="0.9" oninput="state.project.lighting.strength = parseFloat(this.value); updateLighting();">
+          </div>
+          <div class="prop-row">
+            <span class="prop-name">Ambient Light</span>
+            <input type="range" id="env-ambient" class="range-slider" min="0.05" max="0.8" step="0.02" value="0.22" oninput="state.project.lighting.ambient = parseFloat(this.value); updateLighting();">
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Export Success Modal -->
+  <div id="export-modal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-title">
+        <span>⚡ MAP PACK COMPILED SUCCESSFULLY!</span>
+      </div>
+      <div class="modal-body">
+        Your standalone custom map pack has been built and packaged cleanly into the isolated <code>mods/map-packs/</code> folder without altering base game files.
+        <div id="modal-export-details"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-modal-close" class="btn">Close</button>
+        <button onclick="launchGameEngine();" class="btn btn-accent">▶️ Launch Game Now</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/studio.js"></script>
+</body>
+</html>

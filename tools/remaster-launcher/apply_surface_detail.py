@@ -45,6 +45,8 @@ def apply(host):
     replace('d3d_provider.inc','  if(bind_normal_idx<0&&(c.sun_tl||(c.model&&c.model->world))&&tex)if(auto*surface=vsurface(tex))bind_normal_idx=surface_normal_index(*surface);',
             '  if(tex&&(c.sun_tl||c.sky_view||(c.model&&c.model->world)))if(auto*surface=vsurface(tex)){SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;\n'
             '   dr.detail_role=surface_detail_role(*surface);if(bind_normal_idx<0||dr.detail_role)bind_normal_idx=surface_normal_index(*surface);\n  }')
+    from lighting_header_dependencies import copy_lighting_dependencies
+    copy_lighting_dependencies(host)
     for name,text in files.items():(host/name).write_text(text)
     for name in ['sun_lighting.hpp','surface_detail.hpp','surface_detail_stage.inc',
                  'sun_scene_frag.h','sun_world_vert.h','sun_model_vert.h','sun_tl_vert.h','sun_shadow_vert.h']:

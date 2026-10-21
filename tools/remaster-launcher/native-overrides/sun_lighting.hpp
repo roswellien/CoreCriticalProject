@@ -1,4 +1,5 @@
 #pragma once
+#include "campaign_lighting.hpp"
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -8,7 +9,7 @@
 
 namespace mw34::sun {
 struct Settings {
-    bool enabled{}, normals{}, shadows{}, shadow_debug{};
+    bool enabled{}, normals{}, shadows{}, shadow_debug{},weather_enabled{true};
     float azimuth{45}, elevation{35}, strength{.85f}, ambient{.30f}, normal_strength{1.0f}, ground_normal_strength{1.0f};
     // Optional sun shadow map: half-width of the square sun-space region in
     // world units, depth-map resolution, receiver bias and shadow opacity.
@@ -29,6 +30,15 @@ struct Settings {
     bool sky_shading{};
     float sky_brightness{1}, glow_strength{0}, glow_focus{2.5f}, anti_brightness{1}, anti_saturation{1}, anti_haze{1}, horizon_low{.03f}, horizon{.28f};
     std::array<float,3> glow_color{1,1,1};
+
+    // Campaign & dynamic weather parameters
+    float rain_wetness{0.0f};
+    float dust_intensity{0.0f};
+    float heat_shimmer{0.0f};
+    float lava_glow{0.0f};
+    float valley_fog_density{0.0f};
+    float valley_fog_altitude{0.0f};
+    float night_world_gain{1.0f};
 };
 inline float parameter(const char* name,float fallback,float lo,float hi) {
     const char* text=std::getenv(name);
@@ -94,10 +104,82 @@ inline void atmosphere(Settings& s) {
     if(std::getenv("MW34_SKY_GLOW_COLOR")){s.glow_color=triple("MW34_SKY_GLOW_COLOR",s.glow_color,0,4);manual=true;}
     s.sky_shading=s.sky_active||s.haze_active||manual||s.glow_strength>0||s.sky_brightness!=1||s.anti_brightness!=1||s.anti_haze!=1;
 }
-inline const Settings& settings() {
+inline void apply_campaign_environment(Settings& s, const campaign::MissionEnvironment& env, double time_sec) {
+    const auto weather = s.weather_enabled?campaign::CampaignManager::instance().evaluate_weather(time_sec):campaign::CampaignManager::DynamicWeatherState{};
+
+    s.azimuth = env.azimuth;
+    s.elevation = env.elevation;
+    s.color = env.sun_color;
+    s.strength = env.sun_strength;
+    s.ambient_color = env.ambient_color;
+    s.ambient = env.ambient_strength;
+    s.night_world_gain = env.night_world_gain;
+    // Preserve authored hue while keeping essential terrain silhouettes readable.
+    // This changes presentation only; original sensors and visibility rules remain intact.
+    if(env.night_world_gain<.5f){
+        const float luminance=s.ambient*(.2126f*s.ambient_color[0]+.7152f*s.ambient_color[1]+.0722f*s.ambient_color[2]);
+        const float minimum=env.is_interior?.04f:.085f;
+        if(luminance>1e-4f&&luminance<minimum)s.ambient=std::min(2.f,s.ambient*minimum/luminance);
+    }
+
+    if (weather.lightning_flash > 0.01f) {
+        float f = weather.lightning_flash;
+        s.strength += f * 2.5f;
+        s.ambient += f * 1.2f;
+        s.color = {
+            std::min(s.color[0] + f * 1.5f, 4.0f),
+            std::min(s.color[1] + f * 1.6f, 4.0f),
+            std::min(s.color[2] + f * 2.0f, 4.0f)
+        };
+        s.ambient_color = {
+            std::min(s.ambient_color[0] + f * 1.2f, 4.0f),
+            std::min(s.ambient_color[1] + f * 1.3f, 4.0f),
+            std::min(s.ambient_color[2] + f * 1.6f, 4.0f)
+        };
+    }
+
+    s.sky_tint = env.sky_tint;
+    s.sky_brightness = env.sky_brightness;
+    s.glow_color = env.sky_glow_color;
+    s.glow_strength = env.sky_glow_strength;
+    s.glow_focus = env.sky_glow_focus;
+    s.anti_brightness = env.sky_grade[0];
+    s.anti_saturation = env.sky_grade[1];
+    s.anti_haze = env.sky_grade[2];
+    s.horizon_low = env.horizon_low;
+    s.horizon = env.horizon_high;
+    s.sky_shading = true;
+    s.sky_active = true;
+    s.haze_color = env.haze_color;
+    s.haze_scale = env.haze_scale;
+    s.haze_active = true;
+    s.haze_manual = true;
+
+    // Mission art direction may disable shadows; it cannot enable a user-disabled feature.
+    s.shadows = s.shadows && env.shadows;
+    s.shadow_range = env.shadow_range;
+    s.shadow_bias = env.shadow_bias;
+    s.shadow_darkness = env.shadow_darkness;
+
+    s.rain_wetness = weather.wet_reflection;
+    s.dust_intensity = std::max(weather.dust_intensity,weather.smog_intensity);
+    s.heat_shimmer = weather.heat_shimmer;
+    // Caldera-wide height tint is not a verified lava source placement.
+    s.lava_glow = 0;
+    s.valley_fog_density = weather.valley_fog_density;
+    s.valley_fog_altitude = weather.valley_fog_altitude;
+
+    if (env.is_interior) {
+        s.night_world_gain = 0.0f;
+    }
+}
+
+inline const Settings& static_settings() {
     static const Settings value=[] {
         Settings s;s.enabled=flag("MW34_SUN");s.normals=flag("MW34_SUN_NORMALS");
         if(s.enabled){
+            s.weather_enabled=!std::getenv("MW34_WEATHER")||flag("MW34_WEATHER");
+            s.night_world_gain=parameter("MW34_NIGHT_WORLD_GAIN",1,0,1);
             s.azimuth=parameter("MW34_SUN_AZIMUTH",45,-360,360);
             s.elevation=parameter("MW34_SUN_ELEVATION",35,1,89);
             s.strength=parameter("MW34_SUN_STRENGTH",.85f,0,4);
@@ -121,6 +203,33 @@ inline const Settings& settings() {
         }else if(flag("MW34_SUN_SHADOWS"))throw std::runtime_error("Sun shadows require MW34_SUN=1");
         return s;
     }();return value;
+}
+
+inline Settings current_settings(double presentation_time = 0.0) {
+    const Settings& base = static_settings();
+    if (!base.enabled) return base;
+
+    static const bool campaign_enabled = [] {
+        const char* p = std::getenv("MW34_CAMPAIGN_LIGHTING");
+        if (p && !std::strcmp(p, "0")) return false;
+        const char* m = std::getenv("MW34_MANUAL_LIGHTING");
+        if (m && !std::strcmp(m, "1")) return false;
+        return true;
+    }();
+
+    if (campaign_enabled && campaign::CampaignManager::instance().is_campaign_active()) {
+        Settings dynamic_s = base;
+        const auto* env = campaign::CampaignManager::instance().active_environment();
+        if (env) {
+            apply_campaign_environment(dynamic_s, *env, presentation_time);
+        }
+        return dynamic_s;
+    }
+    return base;
+}
+
+inline const Settings& settings() {
+    return static_settings();
 }
 // Rows of inverse-transpose(local-to-world), padded with translation for std140 vec4s.
 inline std::array<float,12> normal_matrix(const std::array<double,16>& m) {
@@ -154,8 +263,10 @@ struct alignas(16) Uniform {
     std::array<float,4> sky_eye{},sky_tint{},sky_glow{},sky_grade{},sky_blend{};
     // Optional material-specific water/cloud relief; zero means legacy path.
     std::array<float,4> detail{},detail_motion{};
+    // Dedicated weather channels; never alias cloud masks, sky flags or water motion.
+    std::array<float,4> weather{},weather_fog{}; // wetness, heat haze, dust, lava; density, altitude, reserved
 };
-static_assert(sizeof(Uniform)==352);
+static_assert(sizeof(Uniform)==384);
 struct Tl {
     std::array<float,12> camera_world{};
     std::array<float,6> projection{};
@@ -171,7 +282,9 @@ inline Uniform uniform(const std::array<float,12>& normal,const Settings& s) {
     u.sky_tint={s.sky_tint[0],s.sky_tint[1],s.sky_tint[2],1};
     u.sky_glow={s.glow_color[0],s.glow_color[1],s.glow_color[2],s.glow_strength};
     u.sky_grade={s.sky_brightness,s.anti_brightness,s.anti_saturation,s.glow_focus};
-    u.sky_blend={s.horizon_low,s.horizon,s.anti_haze,0};return u;
+    u.sky_blend={s.horizon_low,s.horizon,s.anti_haze,0};
+    u.weather={s.rain_wetness,s.heat_shimmer,s.dust_intensity,s.lava_glow};
+    u.weather_fog={s.valley_fog_density,s.valley_fog_altitude,0,0};return u;
 }
 // Orthographic sun view: x/y span [-range,range] around a centre snapped to
 // whole shadow texels (stable as the camera moves), z covers +-4 ranges along

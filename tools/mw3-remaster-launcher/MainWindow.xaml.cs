@@ -50,7 +50,11 @@ namespace MW3RemasterLauncher
         {
             InitializeGamePath();
             PopulateDefaultOfficialPacks();
-            _packMgr.RefreshPacks(_settingsMgr.Current.ActivePacks);
+            _packMgr.RefreshPacks(_settingsMgr.Current.PackSelectionInitialized || _settingsMgr.Current.ActivePacks.Count > 0
+                ? _settingsMgr.Current.ActivePacks : null);
+            _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
+            _settingsMgr.Current.PackSelectionInitialized = true;
+            _settingsMgr.Save();
             ListPacks.ItemsSource = _packMgr.Packs;
 
             LoadSettingsIntoUi();
@@ -113,7 +117,7 @@ namespace MW3RemasterLauncher
                 "39 high-definition environment and terrain texture banks with real-time tangent normal maps.");
 
             CreateOfficialPackStub("com.mw3remaster.upgraded-mechs", "Upgraded Mech Models", "Mechs",
-                "15 modern MW5-derived mech chassis, alternate camo skins, dynamic weapon pods, and LODs.");
+                "Detailed models for all 18 mechs, with updated default textures and normal maps.");
 
             CreateOfficialPackStub("com.mw3remaster.upgraded-world-models", "Upgraded Game Models", "World Models",
                 "High-poly replacements for combat vehicles, tanks, Elementals, base buildings, and defense turrets.");
@@ -222,7 +226,7 @@ namespace MW3RemasterLauncher
             {
                 TxtHeroDesc.Text = isD7Vk
                     ? "Original 1999 game executable running through isolated DirectDraw Vulkan wrapper with widescreen FOV injection, MSAA, and 30 FPS physics lock."
-                    : "Faithful original gameplay running at unlocked framerates, 4K & Ultrawide resolutions, modern lighting, and modular asset replacements.";
+                    : "Original game logic with Vulkan rendering, 1440p and ultrawide output, modern lighting, and registered model replacements.";
             }
             if (BtnLaunchGame != null && BtnLaunchGame.IsEnabled)
             {
@@ -729,24 +733,35 @@ namespace MW3RemasterLauncher
                 try
                 {
                     var activeDirs = _packMgr.GetActivePackDirectories();
-                    var proc = _gameRunner.LaunchGame(_settingsMgr.Current, activeDirs);
+                    SettingControl_Changed(sender, e);
+                    var proc = _gameRunner.LaunchGame(_settingsMgr.Current, activeDirs, line =>
+                    {
+                        if (line.StartsWith("Native Remaster PID "))
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                BtnLaunchGame.Content = "●  GAME RUNNING (REMASTER)...";
+                                TxtStatusReady.Text = "● GAME STATUS: REMASTER HOST RUNNING";
+                            }));
+                    });
 
                     if (proc != null)
                     {
                         BtnLaunchGame.IsEnabled = false;
-                        BtnLaunchGame.Content = "●  GAME RUNNING (REMASTER)...";
-                        TxtStatusReady.Text = "● GAME STATUS: REMASTER HOST RUNNING";
+                        BtnLaunchGame.Content = "●  PREPARING REMASTER...";
+                        TxtStatusReady.Text = "● GAME STATUS: PREPARING ASSETS";
 
-                        proc.EnableRaisingEvents = true;
                         proc.Exited += (sObj, args) =>
                         {
                             Dispatcher.Invoke(() =>
                             {
                                 BtnLaunchGame.IsEnabled = true;
                                 BtnLaunchGame.Content = "▶  LAUNCH REMASTER";
-                                TxtStatusReady.Text = "● GAME STATUS: READY";
+                                TxtStatusReady.Text = proc.ExitCode == 0 ? "● GAME STATUS: READY" : "⚠ LAUNCH OR GAME FAILED";
+                                if (proc.ExitCode != 0)
+                                    MessageBox.Show($"The native launch or game failed (exit {proc.ExitCode}).\n\nLaunch details: {_gameRunner.LastLogPath}\n\nNative game logs: local/remaster/runs", "Remaster Launch Failed", MessageBoxButton.OK, MessageBoxImage.Error);
                             });
                         };
+                        proc.EnableRaisingEvents = true;
                     }
                 }
                 catch (Exception ex)

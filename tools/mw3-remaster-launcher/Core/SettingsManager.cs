@@ -22,6 +22,7 @@ namespace MW3RemasterLauncher.Core
         public bool InstantReplay { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();
+        public bool PackSelectionInitialized { get; set; } = false;
         public bool HasAddedToSteam { get; set; } = false;
 
         // Engine & D7VK options

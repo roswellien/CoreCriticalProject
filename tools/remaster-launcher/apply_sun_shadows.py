@@ -8,6 +8,7 @@ Disabled (MW34_SUN_SHADOWS unset/0) every draw keeps its existing inputs.
 from pathlib import Path
 import argparse
 import shutil
+from lighting_header_dependencies import copy_lighting_dependencies
 
 HERE=Path(__file__).parent
 
@@ -19,6 +20,7 @@ def edit(path,old,new):
 def apply(host):
     vk=host/'vk_scene.hpp'
     if 'sun_shadow_vert.h' in vk.read_text():raise RuntimeError('Use a fresh host copy; sun shadows already installed')
+    copy_lighting_dependencies(host)
     if 'normalSetLayout' not in vk.read_text():raise RuntimeError('Sun shadows expect the normal-map sun host')
     for name in ['sun_lighting.hpp','sun_world_vert.h','sun_model_vert.h','sun_scene_frag.h','sun_tl_vert.h','sun_shadow_vert.h']:
         shutil.copyfile(HERE/'native-overrides'/name,host/name)

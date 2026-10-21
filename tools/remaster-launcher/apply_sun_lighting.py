@@ -2,6 +2,7 @@
 from pathlib import Path
 import argparse
 import shutil
+from lighting_header_dependencies import copy_lighting_dependencies
 
 HERE=Path(__file__).parent
 
@@ -13,6 +14,7 @@ def edit(path,old,new):
 def apply(host):
     vk=host/'vk_scene.hpp'
     if '#include "sun_lighting.hpp"' in vk.read_text():raise RuntimeError('Use a fresh host copy; sun already installed')
+    copy_lighting_dependencies(host)
     for name in ['sun_lighting.hpp','sun_lighting_stage.inc','sun_world_vert.h','sun_model_vert.h','sun_scene_frag.h','sun_tl_vert.h','sun_tl_capture_stage.inc']:
         shutil.copyfile(HERE/'native-overrides'/name,host/name)
     edit(vk,'#include "world_binding.hpp"','#include "world_binding.hpp"\n#include "sun_lighting.hpp"\n#include "sun_world_vert.h"\n#include "sun_model_vert.h"\n#include "sun_scene_frag.h"\n#include "sun_tl_vert.h"')

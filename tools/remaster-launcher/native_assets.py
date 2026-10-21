@@ -7,7 +7,7 @@ try:
 except ImportError as exc:
     raise RuntimeError(
         'Pillow could not be loaded by '+sys.executable+
-        '. Launch through Play MW3Remaster.cmd to select a runtime with Pillow.'
+        f': {exc}. Launch through Play MW3Remaster.cmd to select a runtime with Pillow.'
     ) from exc
 
 def write_atomic(path,data):

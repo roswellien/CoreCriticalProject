@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "com.mw3remaster.upgraded-mechs",
+  "name": "Upgraded Mech Models",
+  "version": "1.1.0",
+  "author": "MW3 Remaster Project",
+  "homepage": null,
+  "description": "Detailed models for all 18 mechs, with updated default textures and normal maps.",
+  "category": "Mechs",
+  "min_engine_version": null,
+  "dependencies": null,
+  "conflicts": null,
+  "provides": null
+}

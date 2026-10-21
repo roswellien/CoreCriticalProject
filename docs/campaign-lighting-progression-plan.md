@@ -1,132 +1,223 @@
 # Campaign lighting and mission progression
 
-Recorded 2026-10-18. Status: user-proposed art direction, saved for later in-game
-integration. This document does not activate a campaign clock or change missions.
+Updated **2026-10-20** from the user's replacement campaign plan. Status:
+**active art direction for all 20 campaign missions; automatic mission selection
+and supported environment shading wired in R7**. Configuration/lifecycle checks
+cover all 20 identities; bounded native checks cover Operation 1 Missions 1 and 3.
+Full campaign visual review and the remaining weather effects are still open;
+see the [repair evidence and limits](world-lighting-repair-2026-10-20.md).
+This revision supersedes the previous twelve-entry schedule.
+The [2026-10-18 plan](campaign-lighting-progression-plan-2026-10-18-superseded.md)
+is retained as a historical reference; its conflicting timings and environments
+no longer govern implementation.
 
-## Intent and working assumptions
+## Scope and campaign order
 
-Use sun position, sky, ambient fill, weather, haze and artificial light to convey
-an urgent campaign progressing from a disastrous storm-bound insertion to a final
-sunrise and rescue. Mission-to-mission continuity matters more than showcasing
-unrelated attractive lighting presets.
-
-The supplied creative schedule uses four Operations, twelve mission lighting
-beats, eight campaign days and a roughly 27-hour planetary day on Tranquil.
-These are **working assumptions supplied with the art-direction proposal**, not
-verified claims about the retail campaign's mission count, chronology, location
-or astronomy. Before integration, reconcile every row with the recovered mission
-roster, map identifiers and original briefings. Preserve all original missions;
-expand or redistribute these beats if the actual roster differs.
-
-Operation subtitles below are working art-direction labels. Narrative context is
-retained from the user's proposal and must be checked against the relevant maps.
-Do not silently rewrite briefings, objectives, dialogue or campaign lore to fit
-this lighting schedule.
-
-## Operation 1 — The Drop · Days 1–2
-
-Proposed context: a failed crash landing on a tropical peninsula during a severe
-storm. The unit is fragmented and must link up with its Mobile Field Bases.
-
-| Supplied mission beat | Campaign time | Lighting and atmosphere | Intended progression |
+| Operation | User's operation label | Mission map IDs | Lighting progression |
 | --- | --- | --- | --- |
-| Mission 1 | Day 1, late afternoon / dusk | Heavy storm clouds; oppressive overcast twilight; restrained, obscured sun; rain and darkening ambient fill. | Transition from the failed drop into a dark, rainy night. |
-| Mission 2 | Day 1, night / midnight | Very dark rainy conditions; intense lightning; limited natural illumination. | Night visibility is a central part of the intended tactical atmosphere. |
-| Mission 3 | Day 2, dawn / early morning | The storm clears; a crisp sunrise breaks through mist and remaining cloud. | Relief and regrouping as the MFBs are secured. |
+| 1 | The Beachhead — Tropical/Coastal Basin | `c1m1`–`c1m4` | Dusk → early night → midnight → foggy dawn |
+| 2 | The Industrial Sector — High-Plains Badlands | `c2m1`–`c2m4` | Early morning → midday → early afternoon → polluted late afternoon |
+| 3 | The Desert Plain — Arid Canyonlands | `c3m1`–`c3m6` | Noon → afternoon → dusk → underground interior → surface nightfall |
+| 4 | The Core — Volcanic Caldera & City Center | `c4m1`–`c4m6` | Volcanic midnight → pre-dawn → first light → dawn → sunrise → full daylight |
 
-Keep night readable enough to navigate and identify essential HUD/objective cues;
-"pitch black" describes the intended mood, not a requirement to crush all detail.
-Lightning flashes need controlled intensity and an accessibility option.
+The numbered entries below bind the user's proposed appearance to the recovered
+campaign map order, **4 / 4 / 6 / 6**. Operation subtitles, mission titles,
+locations and atmospheric explanations are supplied art-direction labels;
+verify them against the actual maps and original briefings before placement.
+They do not rename in-game missions or establish new canonical facts.
+`c4m4`–`c4m6` use assets in the `c4b` region; that is not a fifth operation.
 
-## Operation 2 — The Push Inland · Days 3–4
+This replacement specifies relative times of day, but does not assign campaign
+day numbers, exact hours, transition durations or event triggers. Do not invent
+these assignments. The previous eight-day / roughly 27-hour-day framework remains
+historical context pending reconciliation with this revision, not an implemented
+clock or an explicit day assignment for any entry below. Individual mission
+start/end transitions also remain to be authored unless explicitly described.
+The Operation 2 mission-specific early-morning start takes precedence over its
+broader introductory description of midday conditions.
 
-Proposed context: push through enemy territory toward a major Clan Smoke Jaguar
-base, destroying infrastructure to cover the squad's tracks.
+## Mission-by-mission art direction
 
-| Supplied mission beat | Campaign time | Lighting and atmosphere | Intended progression |
-| --- | --- | --- | --- |
-| Mission 1 | Day 3, mid-morning | Clear, bright daylight and high visibility at the train-depot assault. | A decisive, exposed advance after the storm. |
-| Mission 2 | Day 3, afternoon | The sun begins to dip; harsh directional shadows across industrial and mining areas. | Increasing contrast and pressure during the inland push. |
-| Mission 3 | Day 4, dusk / twilight | Deep orange and purple sunset over the ocean at the naval-port assault. | A strong coastal sunset closing the operation. |
+The following descriptions preserve the user's replacement schedule. Statements
+about desired weather, visibility, reflections and environmental effects are
+requirements to evaluate and implement, not claims about current capabilities.
 
-## Operation 3 — The Urban Siege · Days 5–6
+## Operation 1 — The Beachhead (Tropical/Coastal Basin)
 
-Proposed context: enter fortified urban and industrial sectors to destroy a Mech
-factory and disrupt communications.
+The campaign opens at dusk, moves into pitch black, and concludes under a dense, foggy morning dawn.
 
-| Supplied mission beat | Campaign time | Lighting and atmosphere | Intended progression |
-| --- | --- | --- | --- |
-| Mission 1 | Day 5, noon | Harsh, high overhead sunlight over dense concrete structures; short shadows; heat shimmer as a later effect. | An oppressive, exposed urban assault. |
-| Mission 2 | Day 5, late evening | Sun descending behind the skyline; long geometric shadows between structures. | Deepening street-level contrast as the day ends. |
-| Mission 3 | Day 6, night | Artificial city lights, moonlight and fires from prior battles where supported by the actual mission state. | A night assault with localized pools of illumination. |
+### Mission 1 — Dropzone (`c1m1`)
 
-Do not invent persistent battle damage or fires by changing original mission
-state. Use original scene evidence, or explicitly authored optional visual effects.
+- **Time of day:** Dusk (Late Twilight). The sky is a deep, bruised purple fading into low amber on the horizon. Long, dramatic shadows stretch across the terrain.
+- **Weather:** Clear but humid. The ocean air creates a slight atmospheric haze that scatters the light of low-angle weapon trails.
 
-## Operation 4 — The Final Stand · Days 7–8
+### Mission 2 — Beachhead (`c1m2`)
 
-Proposed context: breach a volcanic caldera where Galaxy Commander Brendon
-Corbett is preparing the final counterattack.
+- **Time of day:** Nightfall / Early Night. Pitch black overhead, but the environment is artificially illuminated by burning drop-pod wreckage, distant base searchlights, and defensive flares.
+- **Weather:** Light coastal drizzle. Rain drops should catch the glare of lasers, and the damp ground should provide sharp, wet reflections from explosions.
 
-| Supplied mission beat | Campaign time | Lighting and atmosphere | Intended progression |
-| --- | --- | --- | --- |
-| Mission 1 | Day 7, midday | Bright, oppressive daylight filtered through volcanic ash and smoke in the upper atmosphere. | Severe visibility and an increasingly hostile environment. |
-| Mission 2 | Day 7, sunset / dusk | Fiery crimson sky; setting sunlight visually combines with caldera lava glow. | The most intense red/orange palette of the campaign. |
-| Mission 3 | Day 8, sunrise / new day | Sunlight breaks over the caldera rim as Corbett is defeated and the rescue dropship arrives. | A symbolic new dawn and definitive visual closure to the squad's struggle against the Smoke Jaguars. |
+### Mission 3 — Bridgehead (`c1m3`)
 
-The last sunrise should support the original victory/rescue sequence. It must
-not change the conditions or timing of victory, enemy behavior or dropship arrival.
+- **Time of day:** Dead of Night (Midnight). Total reliance on night vision and thermal imaging. The sky is starless, choked by thick clouds.
+- **Weather:** Heavy tropical downpour. Rain streaks obscure long-range visibility, and pooling water on the ground creates dynamic reflections. Lightning flashes occasionally silhouette the terrain and enemy mechs.
 
-## Rules for later integration
+### Mission 4 — Hydro-Plant (`c1m4`)
 
-1. **Mission anchors first.** Give each verified mission a starting lighting and
-   weather state. Preserve the intended gaps between campaign days; loading the
-   next mission can advance the visual campaign schedule without simulating the
-   intervening hours.
-2. **Authored transitions second.** Where a row calls for a change during play,
-   define start/end states and approved cues. Prefer bounded visual transitions
-   tied to existing mission events; use presentation elapsed time only where an
-   authored duration is appropriate. Do not rush a 27-hour cycle through a short
-   mission or introduce a universal accelerated clock by accident.
-3. **Keep game time intact.** The lighting clock is host presentation state. It
-   must not replace guest clocks, simulation ticks, AI timers, weapons, physics,
-   weather gameplay rules, mission scripts or save semantics.
-4. **Coordinate the whole scene.** Sun direction/color, cloud lighting, ambient
-   fill, haze, water response, shadows and emissive materials must follow the same
-   state. Avoid abrupt horizon, water/surf or indoor/outdoor color boundaries.
-5. **Use upgraded artwork.** Preserve the upgraded texture source and its UV,
-   alpha, color-key and animation contracts. Water receives a surface lighting
-   model; cloud relief receives a dedicated sky model rather than lighting the
-   sky dome as a solid wall.
-6. **Define night explicitly.** The current positive-elevation sun presets are
-   insufficient for night. Add proper below-horizon solar behavior, night ambient
-   and a moon/cloud treatment before exposing these beats as implemented. Point
-   lights, rain, lightning, wetness, lava illumination, ash and heat shimmer are
-   separate capabilities; a recorded direction is not proof they exist.
-7. **Handle mission lifecycle.** Starting, restarting, loading and transitioning
-   missions must resolve the correct visual state consistently. Specify any
-   remaster-side persistence without altering original save files. Do not infer
-   campaign progress from a folder name, menu frame number or user wall clock.
-8. **Preserve controls.** Keep original-compatible visuals and manual lighting
-   previews available. Campaign lighting, water detail and cloud detail need
-   independent controls and clear effective settings. Unknown optional mission
-   mappings should retain original visuals with an explicit diagnostic.
+- **Time of day:** Dawn (Early Morning). The sun is just cracking the horizon, casting a cold, pale blue-gray light across the massive dam structure.
+- **Weather:** Low-lying valley fog. The river basin below the dam is completely choked with thick, heavy mist, requiring pilots to rely on sensors until enemy units emerge from the fog bank at close range.
 
-## Implementation order and review
+## Operation 2 — The Industrial Sector (High-Plains Badlands)
 
-- Recover and verify the actual campaign mission/map mapping, then bind these
-  twelve proposed beats to that roster.
-- Finish upgraded-texture water normals and cloud-specific sky lighting in an
-  isolated preview before creating mission-dependent transitions.
-- Author static day, dusk, dawn and night anchors, including consistent water,
-  surf, ambient and fog response.
-- Add bounded transitions and lifecycle handling without changing original
-  gameplay. Connect weather and local-light capabilities as each is implemented.
-- Review matching viewpoints at mission start/end and transition boundaries;
-  check night readability, water seams, sky seams, temporal stability and frame
-  cost. Compare original native behavior where the change crosses a game-facing
-  boundary. Do not grant acceptance credit for fixture or screenshot evidence.
+This operation takes place under harsh, oppressive midday conditions, transitioning into a smog-choked afternoon.
 
-The current shared Big Lake sunrise/sunset/midday presets remain the preview
-baseline. Saving this plan does not replace them or promote the lighting preview
-to the regular main-game launcher. Formal acceptance remains **131/144**.
+### Mission 1 — Trainyard (`c2m1`)
+
+- **Time of day:** Early Morning. Sharp, crisp golden light striking the high-altitude plains.
+- **Weather:** High winds and clear skies. Dust kicked up by passing mag-lev trains creates localized windblown sand particles across the tracks.
+
+### Mission 2 — Industrial Complex (`c2m2`)
+
+- **Time of day:** Midday (High Sun). Oppressive, direct overhead light. Minimal shadows, high contrast, and a harsh glare reflecting off metallic roofs and storage tanks.
+- **Weather:** Dry heat with heavy industrial smog. Thick black smoke columns rise from active smokestacks, blending into a yellow-brown haze that limits upper-hemisphere visibility.
+
+### Mission 3 — Mining Facility (`c2m3`)
+
+- **Time of day:** Early Afternoon. The sun begins to slope, casting deep shadows into the open-pit excavation sites.
+- **Weather:** Intense dust storm. Heavy particulate matter in the air reduces optical visibility drastically, forcing reliance on radar, while shifting winds buffet lighter mechs.
+
+### Mission 4 — Power Plant (`c2m4`)
+
+- **Time of day:** Late Afternoon. A dirty, orange-tinted sky filtered through systemic industrial pollution.
+- **Weather:** Electrical storm/Turbulence. The massive power outputs generate a localized atmospheric static charge. Low clouds are tinted green by chemical exhaust, with heat lightning arching through the smoke.
+
+## Operation 3 — The Desert Plain (Arid Canyonlands)
+
+A blistering descent into a dry, sun-scorched canyon system that cools down into an ominous twilight.
+
+### Mission 1 — Canyon Approach (`c3m1`)
+
+- **Time of day:** High Noon. Blistering, washed-out sunlight that bakes the red canyon rock.
+- **Weather:** Extreme heat shimmer. Severe mirage effects warp distant horizons and long-range targeting reticles. The air is bone-dry.
+
+### Mission 2 — Outpost (`c3m2`)
+
+- **Time of day:** Mid-Afternoon. Harsh light cutting directly into the deep, narrow rock fissures.
+- **Weather:** Wind-tunnel gusts. High-velocity winds howl through the canyons, kicking up columns of fine sand that partially obscure low-ground targets.
+
+### Mission 3 — Fuel Depot (`c3m3`)
+
+- **Time of day:** Late Afternoon. The sky turns a deep, fiery crimson as the sun sinks behind the canyon rims.
+- **Weather:** Calm but hazy. A thick layer of heavy, unmoving dust sits in the basin, settling onto the military structures.
+
+### Mission 4 — Supply Depot (`c3m4`)
+
+- **Time of day:** Dusk. Deep orange and purple sky. The shadows of the canyon walls completely swallow the valley floor, leaving only the tops of structures illuminated.
+- **Weather:** Clear. Rapidly cooling air creates clean, sharp visibility, making thermal signatures pop vividly against the freezing desert sand.
+
+### Mission 5 — Underground Hangar (`c3m5`)
+
+- **Time of day:** Indoor / Sealed Environment. No natural sky.
+- **Weather:** Subterranean air filtration. Dim, functional industrial lighting (emergency reds and mercury-vapor greens). Mist from underground cooling vents and leaking pipe steam creates localized blindness in corridors.
+
+### Mission 6 — Comm Array (`c3m6`)
+
+- **Time of day:** Night fall. Emerging back onto the surface under a clear, starlit sky dominated by Tranquil's moons.
+- **Weather:** Freezing desert night. Crystal-clear air with crisp visibility, though the pitch-black shadows of the terrain offer perfect cover for ambushes.
+
+## Operation 4 — The Core (Volcanic Caldera & City Center)
+
+The final push starts in a hellish volcanic night and builds toward the symbolic, final-sunrise climax.
+
+### Mission 1 — Caldera (`c4m1`)
+
+- **Time of day:** Midnight (Volcanic Glow). The sky is completely blotted out by a dense canopy of volcanic ash.
+- **Weather:** Ash fall. Burning embers and heavy gray soot drift down like snow. The primary illumination comes from the glowing orange lava flows below, casting an eerie, underworld under-lighting onto the mechs.
+
+### Mission 2 — Fortress (`c4m2`)
+
+- **Time of day:** Pre-Dawn (Deep Night). The absolute darkest part of the night just before the sun breaks.
+- **Weather:** Acid rain/Sulfuric mist. A caustic, chemically active fog rolls off the volcanic vents, corroding visibility and creating a heavily diffused, spooky glow around exterior base floodlights.
+
+### Mission 3 — City Streets (`c4m3`)
+
+- **Time of day:** First Light (False Dawn). A thin, horizontal strip of silver-blue light cuts across the skyline, while the street level remains cast in deep shadow.
+- **Weather:** Clear but choked with urban destruction. Dust from collapsed buildings floats in static clouds down the city corridors, catching the early light.
+
+### Mission 4 — Starport (`c4m4`)
+
+- **Time of day:** Dawn. The sky shifts rapidly into vibrant pinks and golds as the sun begins to breach the skyscrapers.
+- **Weather:** Windy. Heavy crosswinds sweep across the open tarmac of the spaceport, blowing smoke and debris horizontally across the combat zone.
+
+### Mission 5 — Control Tower (`c4m5`)
+
+- **Time of day:** Morning Sunrise. The sun clears the horizon, flooding the battlefield with an intense, blinding gold glare directly into the player's primary optical view.
+- **Weather:** Heat haze from burning rocket fuel and base explosions, creating rippling air currents that distort the final defensive line.
+
+### Mission 6 — Final Confrontation (The Dropship / Core) (`c4m6`)
+
+- **Time of day:** Final Full Sunrise. The sky clears into a brilliant, unblemished, triumphant sky-blue. The bright daylight symbolizes the breaking of the Clan hold on the planet.
+- **Weather:** Perfectly clear. Total atmospheric clarity. Shadows are crisp and sharp, offering maximum visibility for the ultimate duel.
+
+
+## Integration rules and remaining decisions
+
+1. **Use this schedule as the active source.** In particular, Operation 1 Mission 1
+   is now clear/humid dusk, Mission 3 is stormy midnight, and Mission 4 is foggy
+   dawn. The former storm-at-insertion and Mission-3-dawn assignments are superseded.
+   Operation 3 now follows canyon/interior/night progression; Operation 4's full
+   sunrise belongs to Mission 6.
+2. **Bind to verified mission state.** Resolve each map through the actual native
+   mission load path. Starting, restarting, loading saves and moving between
+   missions must restore the right visual state. Asset discovery or user wall
+   time alone must not select a mission. Keep Training and Instant Action separate
+   from campaign progression, and retain manual lighting previews.
+3. **Preserve original gameplay.** This is a lighting/weather art plan. References
+   above to wind buffeting lighter mechs, reliance on night vision/thermal/radar,
+   optical obstruction, cold thermal contrast or corrosive weather do not by
+   themselves authorize changes to physics, sensors, targeting, AI, damage,
+   objectives or mission scripts. Keep the original simulation and save contracts.
+   Heat shimmer must not move HUD reticles or change targeting calculations.
+4. **Author bounded transitions.** Specify any within-mission start/end states,
+   approved event cues or durations before implementing them. Do not run a full
+   accelerated day/night cycle through each mission. Keep the presentation clock
+   separate from simulation time and respect photo-mode freezing.
+5. **Coordinate the whole scene.** Sun and independent moonlight, ambient fill,
+   upgraded sky/cloud artwork, haze, terrain/vehicle normals, water and surf,
+   wetness, emissive surfaces and shadows must agree. Set map-specific directions
+   after checking terrain and skyline visibility. The sealed hangar needs an
+   interior lighting treatment; do not apply exterior sunlight indiscriminately.
+6. **Place environmental lights from scene evidence.** Check actual wreckage,
+   flares, searchlights, industrial fixtures, vents, fires and lava surfaces before
+   attaching visual lights. Use original effects/state where available. Do not
+   fabricate persistent destruction, move objectives or change the rescue sequence
+   to fit an atmospheric description. Any additional decorative effects must be
+   identified as remaster-side visual authoring.
+7. **Keep darkness and glare playable.** Interpret pitch black, blinding glare,
+   localized blindness and maximum contrast as mood targets subject to readability
+   review. Keep essential controls/HUD legible. Provide controlled lightning
+   intensity and an accessibility option.
+8. **Separate existing features from planned effects.** The integrated preview
+   supplies manual sun/sky/ambient presets, upgraded material normals, bounded
+   water/cloud detail, a moonlit-night treatment and experimental unshadowed
+   weapon lights. Automatic campaign selection, independent sun/moon progression,
+   weather transitions, rain response, pooling/wet reflections, localized
+   volumetric fog, dust/ash/embers, searchlights and heat shimmer require separate
+   capability checks and implementation. This document enables none of them.
+
+## Implementation and review order
+
+- Verify each mission's geography, briefing identity, relevant scene emitters and
+  original weather/effects against the assigned row.
+- Establish static starting states for all 20 missions, beginning with Operation 1.
+  Match scene-wide color and night readability before adding weather transitions.
+- Connect mission selection and restart/load lifecycle handling in the native host.
+- Add supported environmental light sources and weather effects in bounded stages;
+  keep existing upgraded artwork and its UV, alpha and animation contracts intact.
+- Define and then test within-mission transitions where required. Preserve the
+  clear full-sunrise endpoint for the final mission without changing victory timing.
+- Capture matching viewpoints and benchmark each environment, including lighting,
+  shadows and weather costs. Test photo mode and save/restart transitions.
+
+Saving this revision changes documentation only. Existing launcher presets and
+native mission behavior remain unchanged. Formal acceptance stays **131/144**;
+fixtures, captures and renderer improvements do not grant native-game credit.

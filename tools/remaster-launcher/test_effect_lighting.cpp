@@ -59,11 +59,12 @@ int main(){try{
  contracts();_putenv_s("MW34_GPU_MODELS","1");_putenv_s("MW34_SUN","1");_putenv_s("MW34_SUN_STRENGTH","0");_putenv_s("MW34_SUN_AMBIENT","0.05");_putenv_s("MW34_SKY_AUTO","0");
  _putenv_s("MW34_REMASTER_WIDTH","");_putenv_s("MW34_REMASTER_HEIGHT","");_putenv_s("MW34_REMASTER_AA","");_putenv_s("MW34_REMASTER_AF","");
  Renderer renderer;
- auto render=[&](Point location,bool hud=false,bool normal=false,bool beam=false){
+ auto render=[&](Point location,bool hud=false,bool normal=false,bool beam=false,int spot=0){
   auto s=receiver();s.hud=hud;
   if(normal){TextureRef texture{};texture.key=2;texture.hash=2;texture.width=texture.height=1;texture.format=TexFormat::rgba8888;texture.pixels32={0xff8080ff};s.textures.push_back(texture);s.draws[0].normal_texture=0;}
-  s.effect_lights.params[0]=1;auto&l=s.effect_lights.lights[0];l.start={location[0],location[1],location[2],5};l.end=l.start;l.color={1,0,0,2};
+  s.effect_lights.params[0]=1;auto&l=s.effect_lights.lights[0];l.start={location[0],location[1],location[2],5};l.end={location[0],location[1],location[2],0};l.color={1,0,0,2};
   if(beam){l.start[0]=-8;l.end[0]=8;l.end[3]=1;}
+  if(spot)l.end={0,0,spot>0?-1.f:1.f,2};
   renderer.render(s);return s.color[32*64+32];
  };
  auto dark=render({0,0,100}),red=render({0,0,4}),back=render({0,0,0});
@@ -71,9 +72,18 @@ int main(){try{
  require((red&31)==(dark&31),"Red local light must not brighten blue channel");
  require(back==dark,"Back-facing local light rejected by surface normal");
  require((render({0,0,4},false,false,true)>>11)>(dark>>11)+8,"Capsule illuminates beam midpoint beyond endpoint radii");
+ require((render({0,0,4},false,false,false,1)>>11)>(dark>>11)+8,"Spotlight illuminates receiver inside its cone");
+ require(render({0,0,4},false,false,false,-1)==dark,"Spotlight rejects receiver behind its cone");
  require(render({0,0,4},true)==render({0,0,100},true),"HUD excluded from local illumination");
  require(render({0,0,4},false,true)!=red,"Normal-map relief changes local-light response");
  require(render({0,0,100})==dark,"Light list replacement leaves no stale light");
+ auto& campaign=mw34::campaign::CampaignManager::instance();
+ campaign.set_active_mission("c1m3");campaign.enter_world();
+ auto weather_pixel=[&](double time){auto s=receiver();s.detail_time=time;renderer.render(s);return s.color[32*64+32];};
+ const auto flash=weather_pixel(.01);
+ require(weather_pixel(.01)==flash,"Frozen scene time holds campaign lightning shading");
+ require(weather_pixel(1.0)!=flash,"Resumed scene time changes campaign lighting on actual GPU receivers");
+ campaign.reset();
  std::cout<<"Effect lighting contracts and actual Vulkan point-light, radius, normal-map, HUD and stale-list checks passed on "<<renderer.device_name<<"\n";
  return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<"\n";return 1;}}

@@ -81,7 +81,7 @@ namespace MW3RemasterLauncher.Core
             }
 
             // 3. Apply activeOrder if provided, otherwise default to official packs first
-            if (activeOrder != null && activeOrder.Count > 0)
+            if (activeOrder != null)
             {
                 var orderMap = activeOrder.Select((id, index) => new { id, index }).ToDictionary(x => x.id, x => x.index);
                 discovered = discovered

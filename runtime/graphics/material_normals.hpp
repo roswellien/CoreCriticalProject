@@ -135,8 +135,10 @@ struct SurfaceNormals {
     std::map<SurfaceKey, std::uint32_t> bindings;
 };
 // Authored catalogs can span small pages while retaining the original single
-// BWSNR2 sidecar contract. The aggregate budget stays at 256 MiB; this only
-// removes the single-page 64-image ceiling for independently laid-out atlases.
+// BWSNR2 sidecar contract. Enhanced host catalogs have a bounded 512 MiB
+// aggregate budget (matching automatic world normals); each page stays within
+// its original 256 MiB limit. Guest image/resource limits are unchanged.
+inline constexpr std::uint64_t authored_normal_budget = 512ULL * 1024 * 1024;
 inline std::vector<std::filesystem::path>
 surface_normal_catalog_paths(const std::filesystem::path &path) {
     auto fail = [] { throw std::runtime_error("Invalid authored surface-normal catalog"); };
@@ -163,14 +165,23 @@ surface_normal_catalog_paths(const std::filesystem::path &path) {
     while (std::getline(input, line)) {
         if (!line.empty() && line.back() == '\r')
             line.pop_back();
-        if (line.empty() || line.size() > 80 || line == "." || line == ".." ||
-            line.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != std::string::npos ||
+        const std::filesystem::path entry(line);
+        const bool absolute = entry.is_absolute();
+        if (line.empty() || line.size() > 512 || line == "." || line == ".." ||
+            (!absolute && line.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != std::string::npos) ||
             !names.insert(line).second || names.size() > 16)
             fail();
-        auto page = path.parent_path() / line;
+        // Local authored catalogs may explicitly register absolute pages. Relative
+        // entries remain filename-only; traversal and duplicate file aliases fail.
+        auto page = absolute ? entry : path.parent_path() / entry;
+        if (!std::filesystem::is_regular_file(page))
+            fail();
+        for (const auto &previous : paths)
+            if (std::filesystem::equivalent(previous, page))
+                fail();
         const auto size = std::filesystem::file_size(page);
         total += size;
-        if (size > 256ULL * 1024 * 1024 || total > 256ULL * 1024 * 1024)
+        if (size > 256ULL * 1024 * 1024 || total > authored_normal_budget)
             fail();
         paths.push_back(std::move(page));
     }

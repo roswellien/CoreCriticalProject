@@ -24,8 +24,14 @@ namespace MW3RemasterLauncher.Core
             _basePath = basePath;
         }
 
-        public static string? FindPythonExecutable()
+        public static string? FindPythonExecutable(bool requirePillow = false)
         {
+            if (requirePillow)
+            {
+                var bundled = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    @".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe");
+                if (CanPrepareNativeAssets(bundled)) return bundled;
+            }
             // 1. Check common PATH command
             var candidateNames = new[] { "python.exe", "py.exe" };
             var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
@@ -38,7 +44,7 @@ namespace MW3RemasterLauncher.Core
                     try
                     {
                         var full = Path.Combine(p.Trim(), name);
-                        if (File.Exists(full))
+                        if (File.Exists(full) && (!requirePillow || CanPrepareNativeAssets(full)))
                         {
                             return full;
                         }
@@ -63,13 +69,43 @@ namespace MW3RemasterLauncher.Core
 
             foreach (var candidate in wellKnown)
             {
-                if (File.Exists(candidate))
+                if (File.Exists(candidate) && (!requirePillow || CanPrepareNativeAssets(candidate)))
                 {
                     return candidate;
                 }
             }
 
             return null;
+        }
+
+        // Run the same image operation asset preparation needs, under the actual
+        // launcher environment. Finding python.exe alone does not establish that
+        // its Pillow extension is installed or loadable.
+        public static bool CanPrepareNativeAssets(string executable)
+        {
+            if (!File.Exists(executable)) return false;
+            try
+            {
+                var info = new ProcessStartInfo(executable)
+                {
+                    UseShellExecute = false, CreateNoWindow = true,
+                    RedirectStandardOutput = true, RedirectStandardError = true
+                };
+                info.ArgumentList.Add("-c");
+                info.ArgumentList.Add("import sys; assert sys.version_info >= (3,11); from PIL import Image; Image.new('RGB',(1,1)).tobytes(); print('MW34_NATIVE_ASSETS_OK')");
+                using var process = new Process { StartInfo = info };
+                if (!process.Start()) return false;
+                var output = process.StandardOutput.ReadToEndAsync();
+                var error = process.StandardError.ReadToEndAsync();
+                if (!process.WaitForExit(5000))
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit();
+                    return false;
+                }
+                return process.ExitCode == 0 && output.GetAwaiter().GetResult().Trim() == "MW34_NATIVE_ASSETS_OK";
+            }
+            catch { return false; }
         }
 
         public D7VkValidationResult Validate()

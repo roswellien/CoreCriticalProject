@@ -12,8 +12,8 @@ def read_json(path):
 
 def plan(backend=None,original_models=False,*,config_path=None,registry_path=None):
     selected_config=(Path(config_path) if config_path is not None else CONFIG).resolve()
-    selected_registry=(Path(registry_path) if registry_path is not None else REGISTRY).resolve()
     config=read_json(selected_config);backend=backend or config['backend']
+    selected_registry=(Path(registry_path) if registry_path is not None else ROOT/config.get('native',{}).get('model_registry',str(REGISTRY))).resolve()
     registry=read_json(selected_registry)
     if registry['schema_version']!=1:raise RuntimeError('Unsupported model registry version')
     banks=read_json(ROOT/'local/work-ahead/texture-launcher-audit-v2/configured-banks.json')
@@ -121,13 +121,18 @@ def main():
     parser.add_argument('--check',action='store_true',help='Read current profiles/assets without launching or changing files')
     parser.add_argument('--prepare-only',action='store_true',help='Verify and prepare registered native assets without launching')
     parser.add_argument('--profile',type=Path,default=CONFIG,help='Completed native profile to check or launch')
-    parser.add_argument('--registry',type=Path,default=REGISTRY,help='Completed model registry for this profile')
+    parser.add_argument('--registry',type=Path,help='Completed model registry; defaults to the selected profile registry')
     parser.add_argument('--asset-output',type=Path,help='Separate prepared-asset directory for an integration candidate')
     parser.add_argument('--lighting-preset',help='Registered map lighting preset, e.g. sunrise, sunset or midday')
+    parser.add_argument('--game-exe',type=Path,help='Validated local executable selected in the GUI')
+    parser.add_argument('--instant-replay',choices=['0','1'],default='0')
+    parser.add_argument('--fixture-lights',choices=['0','1'],help='Override texture-bearing environmental lights')
+    parser.add_argument('--weather',choices=['0','1'],help='Override supported campaign weather shading')
     parser.add_argument('--frames',type=int,default=0)
     parser.add_argument('--dump',type=int,default=0)
     args=parser.parse_args()
     try:
+        if args.game_exe and not args.game_exe.is_file():raise RuntimeError('Selected game executable is missing')
         p=plan(args.backend,args.original_models,config_path=args.profile,registry_path=args.registry)
         lighting_config=read_json(args.profile).get('native',{}).get('sun_preset')
         if args.lighting_preset and p['backend']!='native':raise RuntimeError('Lighting presets require the native renderer')
@@ -136,7 +141,8 @@ def main():
             if resolved.returncode:raise RuntimeError(resolved.stderr.strip())
             lighting=json.loads(resolved.stdout)
             print('Lighting preset: '+lighting['map']+' / '+lighting['preset'])
-            p['command']+=['-LightingPreset',lighting['preset']]
+            # A profile default is automatic; only an explicit preview request disables campaign selection.
+            if args.lighting_preset:p['command']+=['-LightingPreset',lighting['preset']]
         g=p['graphics']
         aa='AA off' if g['aa']==1 else 'FXAA' if g['aa']=='fxaa' else str(g['aa'])+'-sample SSAA'
         af='AF off' if g['af']==1 else str(g['af'])+'x AF'
@@ -168,7 +174,11 @@ def main():
                 from local_music import prepare_music
                 environment.update(prepare_music(ROOT))
             for key,value in p['graphics'].items():environment['MW34_REMASTER_'+key.upper()]=str(value)
-            p['command']+=['-Frames',str(args.frames),'-Dump',str(args.dump)]
+            p['command']+=['-Frames',str(args.frames),'-Dump',str(args.dump),'-InstantReplay',args.instant_replay]
+            if args.fixture_lights is not None:p['command']+=['-FixtureLights',args.fixture_lights]
+            if args.weather is not None:p['command']+=['-Weather',args.weather]
+            if args.game_exe:
+                p['command']+=['-GameExe',str(args.game_exe.resolve())]
         if args.prepare_only:return 0
         return subprocess.call(p['command'],cwd=ROOT,env=environment)
     except (RuntimeError,OSError,ValueError) as exc:

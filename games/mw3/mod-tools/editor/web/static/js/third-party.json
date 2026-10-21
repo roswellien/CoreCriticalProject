@@ -1,0 +1,27 @@
+{
+  "dependency": "three.js",
+  "version": "r128 / 0.128.0",
+  "license": "MIT",
+  "license_file": "THREE-LICENSE.txt",
+  "purpose": "Existing browser-based 3D map preview, orbit navigation and transform controls; project has no equivalent browser renderer.",
+  "files": [
+    {
+      "file": "three.min.js",
+      "sha256": "9274bbcec8d96168626c732b5d31c775aa8cfb7eaa0599bec0c175908a2c1ce2",
+      "source": "https://raw.githubusercontent.com/mrdoob/three.js/r128/build/three.min.js",
+      "exact_upstream_match": true
+    },
+    {
+      "file": "OrbitControls.js",
+      "sha256": "02bb4ade710f3e607329e37a21f098bc3ac70eb6e33daf8a65e79f4db785e7b2",
+      "source": "https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/js/controls/OrbitControls.js",
+      "exact_upstream_match": true
+    },
+    {
+      "file": "TransformControls.js",
+      "sha256": "67bdcd71fb398e746fe83491ad43b15af06c3754bd7d6eb0b036594132d7bcda",
+      "source": "https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/js/controls/TransformControls.js",
+      "exact_upstream_match": true
+    }
+  ]
+}

@@ -20,6 +20,7 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 shadow0; vec4 shadow1; vec4 shadow2; vec4 shadowParams;
  vec4 skyEye; vec4 skyTint; vec4 skyGlow; vec4 skyGrade; vec4 skyBlend;
  vec4 detail; vec4 detailMotion;
+ vec4 weather; vec4 weatherFog;
 } sun;
 #ifdef MW34_EFFECT_LIGHTING
 struct EffectLight {vec4 start;vec4 end;vec4 color;};
@@ -31,15 +32,24 @@ vec3 effectIllumination(vec3 p,vec3 n){
  vec3 illumination=vec3(0);
  for(int i=0;i<min(int(effects.params.x),32);++i){
   EffectLight l=effects.lights[i];
-  vec3 segment=l.end.xyz-l.start.xyz;
-  float den=dot(segment,segment);
-  float t=den>1e-8?clamp(dot(p-l.start.xyz,segment)/den,0.0,1.0):0.0;
-  vec3 delta=l.start.xyz+t*segment-p;
+  vec3 delta;
+  float spotFactor=1.0;
+  if(l.end.w>1.5){ // 2 = spotlight; 1 remains a laser capsule endpoint.
+   delta=l.start.xyz-p;
+   vec3 dirToSurface=-delta*inversesqrt(max(dot(delta,delta),1e-8));
+   float cosAngle=dot(dirToSurface,l.end.xyz);
+   spotFactor=clamp((cosAngle-0.2)*2.0,0.0,1.0);
+  }else{
+   vec3 segment=l.end.xyz-l.start.xyz;
+   float den=dot(segment,segment);
+   float t=den>1e-8?clamp(dot(p-l.start.xyz,segment)/den,0.0,1.0):0.0;
+   delta=l.start.xyz+t*segment-p;
+  }
   float d2=dot(delta,delta),r2=l.start.w*l.start.w;
-  if(d2>=r2)continue;
+  if(d2>=r2||spotFactor<=0.0)continue;
   float attenuation=1.0-d2/r2;
   float diffuse=max(dot(n,delta*inversesqrt(max(d2,1e-8))),0.0);
-  illumination+=l.color.rgb*l.color.w*attenuation*attenuation*diffuse;
+  illumination+=l.color.rgb*l.color.w*attenuation*attenuation*diffuse*spotFactor;
  }
  return illumination;
 }
@@ -244,6 +254,13 @@ void main() {
     vec3 localLight=sun.detailMotion.w<0.0?vec3(0):effectIllumination(shadowPosition,n);
     vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?
         (sun.detailMotion.w<0.0?vec3(1):vec3(sun.detailMotion.w)+localLight):illumination+localLight);
+    float fixtureEmissive = max(draw.fogColor.w - 1.0, 0.0);
+    if(fixtureEmissive > 0.0){
+        vec3 baseCol = operation(draw.mode.y).rgb;
+        float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));
+        float bulb = smoothstep(0.55, 0.9, lum);
+        rgb += texel.rgb * (fixtureEmissive * bulb);
+    }
 #else
     vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?vec3(1.0):illumination);
 #endif
@@ -254,6 +271,40 @@ void main() {
         // original fog/specular still execute below without modification.
         float glint=pow(max(dot(n,H),0.0),80.0)*max(dot(n,sun.direction.xyz),0.0);
         rgb+=sun.sunColor.rgb*sun.direction.w*glint*.18*sun.detail.y*waterMask;
+    }
+    float wetness=max(sun.weather.x,0.0);
+    if(wetness>0.01&&!waterDetail&&sun.extra.w<=3.5){
+        rgb*=mix(1.0,0.74,wetness);
+        vec3 eye=vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
+        vec3 V=normalize(eye-worldPosition),H=normalize(V+sun.direction.xyz);
+        float wetGlint=pow(max(dot(n,H),0.0),28.0)*max(dot(n,sun.direction.xyz),0.0);
+        rgb+=sun.sunColor.rgb*sun.direction.w*(wetGlint*0.32*wetness);
+    }
+    float shimmer=max(sun.weather.y,0.0);
+    if(shimmer>0.01&&sun.extra.w<=3.5){
+        float dFactor=clamp(length(worldPosition-vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w))*0.0008,0.0,1.0);
+        rgb+=vec3(0.07,0.06,0.04)*(shimmer*dFactor);
+    }
+    if(sun.weather.w>0.01&&sun.extra.w<=3.5){
+        float lavaProx=clamp((90.0-shadowPosition.y)/110.0,0.0,1.0)*sun.weather.w;
+        if(lavaProx>0.0){
+            float upFacing=max(-n.y*0.6+0.4,0.0);
+            rgb+=vec3(1.15,0.28,0.03)*(lavaProx*upFacing*1.5);
+        }
+    }
+    if(sun.weatherFog.x>0.01&&sun.extra.w<=3.5){
+        float hDiff=sun.weatherFog.y-shadowPosition.y;
+        if(hDiff>0.0){
+            float hFog=clamp(hDiff/90.0,0.0,1.0)*sun.weatherFog.x;
+            float dist=length(worldPosition-vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w));
+            float vFog=1.0-exp(-dist*0.0016*hFog);
+            rgb=mix(rgb,draw.fogColor.rgb,clamp(vFog,0.0,0.85));
+        }
+    }
+    if(sun.weather.z>0.01&&sun.extra.w<=3.5){
+        vec3 dustColor=vec3(0.66,0.52,0.34);
+        float dustScatter=pow(max(dot(skyView(),sun.direction.xyz),0.0),3.0)*0.45;
+        rgb=mix(rgb,dustColor+sun.sunColor.rgb*dustScatter,clamp(sun.weather.z*(1.0-specular.a),0.0,0.72));
     }
     if(sun.ambient.w>0.5)rgb=n*0.5+0.5;
     float alpha = operation(draw.mode.z).a;

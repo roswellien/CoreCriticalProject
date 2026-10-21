@@ -1,5 +1,125 @@
 # Local Remaster launcher
 
+October 20 status-damage-colour repair: the original condition schematic uses
+fog colour/factors for its component tint. The world-atmosphere pass was
+rewriting that colour with scenery haze even though replacement geometry was
+already excluded. `apply_status_damage_colour.py HOST_SOURCE` retains the
+two authenticated preview scopes on D3D commands and Vulkan draws, then
+excludes those draws from atmosphere rewriting. Original damage fractions,
+colour producers, geometry, vertex data and blend states still execute.
+`apply_world_lighting_repair.py` includes this protection in future lighting
+builds. Boundary advanced: original per-component diagnostic colour survives
+the enhanced renderer's world grading.
+
+`test_status_damage_colour.cpp` renders both display positions with different
+damage factors, an undamaged component and an unchanged world-haze control.
+The previous host fails on overwritten diagnostic colour; the candidate passes
+the actual Vulkan pixel/state checks. Local evidence is
+`local/status-damage-colour-r1`. Native IA candidate run
+`local/remaster/runs/20261020-080121-838` and prior-host control
+`20261020-080257-865` are bounded 2200-frame runs (expected budget exit 1).
+Matched frame 1600 differs only within the player status schematic: 3395
+pixels gain red (mean RGB delta +19.510/-1.055/-1.783). Other samples include
+small transient differences. The original producer trace confirms positive
+component damage; actual enemy-hit progression and broad campaign/chassis
+coverage remain open. Original F12/display/Operation 2 repairs are retained;
+acceptance remains 131/144.
+
+October 20 Operation 2 load repair: a failed optional mech-configuration open
+can be followed by an original-game `ReadFile(INVALID_HANDLE_VALUE, ...)`.
+The native file service previously stopped execution at that call. Reads and
+writes with NULL or INVALID_HANDLE_VALUE now reach Win32 and return its actual
+failure, byte count and LastError; arbitrary unowned handles and guest-memory
+guards remain enforced. No configuration data or success result is fabricated.
+This advances the original-game/Win32 file-error boundary.
+`test_file_io_failure.py` compiles the actual handler and checks failure values,
+unchanged guest buffer, zero count, host/guest LastError separation, valid owned
+I/O and rejection of arbitrary unowned handles. The installed F12 host fails
+the regression; the candidate passes. Diagnosis and protected copies of the
+user's pilot, saves, configs and registry are local under
+`local/operation2-load-crash-r1`; the original files remain unchanged.
+Exact copied-save reproduction `local/remaster/runs/20261020-061613-884`
+selected c2m1 and stopped on invalid-handle ReadFile after the missing
+`configs/elemental.mw3` open. Candidate runs `20261020-061817-083` and
+`20261020-061938-445` reached the Operation 2 briefing/salvage warning instead;
+their frame budgets ended with the expected exit 1. Additional deployment
+scripts paused at the original salvage warning; full deployment/completion
+and a live Operation 1-to-2 transition remain unverified. The candidate host
+is selected by the published launcher profile with matching executable and
+source pins. Existing F12/display/lighting sources are retained. Acceptance
+remains 131/144.
+
+October 20 F12 repair: the photo/replay DirectInput filters no longer reserve
+F12, which belongs to the original mission-objectives toggle. This advances
+the physical-keyboard-to-original-game boundary for both state and buffered
+input. `test_photo_replay_input.py` compiles the actual filters and checks F12
+press/release, ordinary keys, capture hotkeys and overlay suppression. The
+isolated `local/remaster/launcher-f12-r1` host retained the display R2 sources
+apart from this fix. Campaign Mission 2 opened objectives after scripted F12
+at frame 1000 and closed them after frame 1500; the 1800-frame bounded run
+ended with the expected frame-budget stop (exit 1). Scripted input bypasses
+the physical-device filters, so the compiled regression supplies that check.
+Evidence: `local/remaster/runs/20261020-055234-097`. Acceptance remains 131/144.
+
+October 20 R7 world-light repair: profiles retain automatic campaign selection
+unless `--lighting-preset` is explicitly supplied. `--registry` defaults to the
+selected profile's `native.model_registry`. `--fixture-lights 0|1` and
+`--weather 0|1` independently override fixture lighting and supported weather
+shading. The combined light budget defaults to 16 with eight weapon-reserved
+slots. See [repair scope and evidence](../../docs/world-lighting-repair-2026-10-20.md).
+
+October 20 GUI launch repair: the WPF launcher now calls `play_remaster.py` so
+registered model assets are verified/prepared before `play_native.ps1` starts
+the native host. The Upgraded Mech Models selection controls original versus
+registered replacement geometry. Graphics use the renderer's
+`MW34_REMASTER_*` bindings. Each GUI launch writes its own profile and log under
+`local/remaster/launcher-runs/`; it does not rewrite the published host profile.
+The GUI uses a separate `local/remaster/prepared-launcher/` asset cache.
+
+All original GUI choices remain available, including SSAA and Fullscreen
+Exclusive. `apply_launcher_display.py HOST_SOURCE` integrates general output
+sizes, 2x/4x sample grids, output-aspect-aware presentation and distinct window
+modes into a private host snapshot. SSAA uses larger raster targets and the
+Vulkan presentation blit resolves them to the selected output. Exclusive mode
+uses temporary Windows display ownership plus application-controlled
+`VK_EXT_full_screen_exclusive`; unsupported hardware/modes fail visibly.
+Borderless uses the monitor bounds, and windowed mode keeps its title bar.
+Menus retain their original canvas proportions. The activated host lives in `local/remaster/launcher-display-r2/`, based on the
+r7 lighting host with matching source/executable pins. The original GUI controls
+and labels are retained. A backup of the previous profile is kept in that local
+directory. Preserve other writers by checking the current profile identity before
+changing the selected host.
+
+Narrow checks: `dotnet run --project tools/mw3-remaster-launcher-tests -c Release`
+uses authored profile/pack fixtures; `python -m unittest discover -s
+tools/remaster-launcher -p test_launcher_dispatch.py` checks prepared model and
+resolution bindings, explicit replay/game-path arguments and inherited-state
+cleanup without running game code. The live local profile and all 16 registered
+models passed check/preparation on October 20. Vulkan fixture checks passed
+for 1080p, ultrawide, 4K and 32:9 targets,
+including real 2x/4x SSAA, scissor scaling and guest copy-back. The exclusive
+fixture acquired/released Vulkan fullscreen successfully. Live 3440x1440
+borderless menu and exclusive 4x SSAA Training checks both shut down normally
+with exit code 0. Runs `20261020-052407-990` and `20261020-053542-780` under
+`local/remaster/runs/` retain those results. The latter records a 6880x2880
+raster target and actual queued Bushwacker replacement geometry. Additional
+output sizes have target/scissor fixture coverage, not exhaustive live gameplay
+coverage. The GUI launch from the selected MW3 installation also passed in
+`20261020-054012-881`: 3440x1440 borderless, FXAA/16x AF, model preparation,
+proportional intro/menu, normal exit 0 and the launcher returning to Ready.
+This advances GUI settings and asset preparation into the existing
+native launch boundary; it grants no new
+native-game acceptance credit (still 131/144).
+
+Training also exposed an incompatible current authored-normal catalog: its
+pages use absolute local paths and total 351,867,596 bytes. The reader now accepts
+explicit absolute page registrations, rejects duplicate file aliases, and retains
+filename-only relative entries. The enhanced host aggregate and resident budget
+is explicitly 512 MiB, matching existing automatic world-normal budgeting;
+per-page 256 MiB and guest resource limits are retained. Added material checks
+cover the new supported size, aggregate rejection, aliases and traversal. Failed
+attempts remain in their original run directories.
+
 October 19 surface-lifetime repair: after composing a compatible private host,
 `apply_surface_page_pool.py HOST_SOURCE` installs checked reuse of retired
 virtual surface pages. It preserves live/locked/queued/resident surfaces and

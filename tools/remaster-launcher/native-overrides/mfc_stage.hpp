@@ -1244,7 +1244,10 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    const bool writes=(acc&(GENERIC_WRITE|FILE_WRITE_DATA|FILE_APPEND_DATA))||disp==CREATE_ALWAYS||disp==CREATE_NEW||disp==TRUNCATE_EXISTING||disp==OPEN_ALWAYS;
    if(writes&&!in_game(q))deny("CreateFileA write access outside the game folder is not authorized: "+q,arg(0));if(fl&FILE_FLAG_OVERLAPPED)deny("Overlapped file I/O is not modelled",fl);
    HANDLE h{};{LastError l(host);h=::CreateFileA(q.c_str(),acc,share,arg(3)?&sa:nullptr,disp,fl,nullptr);}apis.back()+="("+q+")";if(h==INVALID_HANDLE_VALUE)return done(0xffffffffU,7);const unsigned g2=ghandle(h);host.files.push_back(g2);return done(g2,7);}
-  if(n=="ReadFile"||n=="WriteFile"){const unsigned h=arg(0),a=arg(1),z=arg(2),outn=arg(3);if(!owned_file(h))deny(n+" on a handle the guest does not own",h);if(arg(4))deny("Overlapped file I/O is not modelled",arg(4));
+  // A failed CreateFile returns INVALID_HANDLE_VALUE. Let Win32 report the real
+  // I/O failure (FALSE, ERROR_INVALID_HANDLE, zero bytes), so original optional
+  // config-file handling can run. Arbitrary unowned handles remain rejected.
+  if(n=="ReadFile"||n=="WriteFile"){const unsigned h=arg(0),a=arg(1),z=arg(2),outn=arg(3);if(!owned_file(h)&&h!=0xffffffffU&&h!=0)deny(n+" on a handle the guest does not own",h);if(arg(4))deny("Overlapped file I/O is not modelled",arg(4));
    if(n=="ReadFile"?!writable(a,z):!readable(a,z))deny(n+" buffer outside the memory contract",a);std::vector<unsigned char>buf(z);if(n=="WriteFile")for(unsigned i=0;i<z;++i)buf[i]=runtime.memory().load<unsigned char>({a+i});
    DWORD k{};BOOL ok{};{LastError l(host);ok=n=="ReadFile"?::ReadFile(hhandle(h),buf.data(),z,&k,nullptr): ::WriteFile(hhandle(h),buf.data(),z,&k,nullptr);}
    if(n=="ReadFile")for(DWORD i=0;i<k;++i)runtime.memory().store<unsigned char>({a+i},buf[i]);if(outn){if(!writable(outn,4))deny(n+" count outside the memory contract",outn);store(outn,k);}return done(ok?1U:0U,5);}
@@ -1351,6 +1354,16 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="AdjustWindowRectEx"||n=="AdjustWindowRect"){RECT r=rect_in(arg(0));BOOL ok{};{LastError l(host);ok=n=="AdjustWindowRectEx"?::AdjustWindowRectEx(&r,arg(1),BOOL(arg(2)),arg(3)): ::AdjustWindowRect(&r,arg(1),BOOL(arg(2)));}rect_out(arg(0),r);return done(ok?1U:0U,n=="AdjustWindowRectEx"?4:3);}
   if(n=="GetClientRect"||n=="GetWindowRect"){RECT r{};BOOL ok{};{LastError l(host);ok=n=="GetClientRect"?::GetClientRect(W(0),&r): ::GetWindowRect(W(0),&r);}if(ok)rect_out(arg(1),r);return done(ok?1U:0U,2);}
   if(n=="ShowWindow"){BOOL r{};{LastError l(host);r=::ShowWindow(W(0),int(arg(1)));}apis.back()+="("+std::to_string(arg(1))+")";return done(r?1U:0U,2);}
+  // Original MFC WM_DESTROY releases its Windows Help client. Forward the
+  // observed HELP_QUIT contract to Windows and preserve the real result/error.
+  if(n=="WinHelpA"){
+   const unsigned command=arg(2),data=arg(3);
+   if(command!=HELP_QUIT||data)deny("Unsupported Windows Help command or data",command);
+   const std::string help=arg(1)?guest_string(arg(1)):std::string{};
+   BOOL result{};{LastError l(host);result=::WinHelpA(W(0),arg(1)?help.c_str():nullptr,command,0);}
+   std::fprintf(stderr,"Windows Help release: command=%u result=%d error=%u\n",command,int(result),host.last_error);
+   return done(result?1U:0U,4);
+  }
   if(n=="ShowOwnedPopups"){BOOL r{};{LastError l(host);r=::ShowOwnedPopups(W(0),BOOL(arg(1)));}return done(r?1U:0U,2);}  // reached from the game's WM_CLOSE handler
   if(n=="UpdateWindow"||n=="DestroyWindow"||n=="SetForegroundWindow"||n=="IsWindow"||n=="IsWindowVisible"||n=="IsIconic"||n=="IsZoomed"||n=="IsWindowEnabled"||n=="BringWindowToTop"){BOOL r{};{LastError l(host);const HWND h=W(0);
     r=n=="UpdateWindow"?::UpdateWindow(h):n=="DestroyWindow"?::DestroyWindow(h):n=="SetForegroundWindow"?::SetForegroundWindow(h):n=="IsWindow"?::IsWindow(h):n=="IsWindowVisible"?::IsWindowVisible(h):n=="IsIconic"?::IsIconic(h):n=="IsZoomed"?::IsZoomed(h):n=="IsWindowEnabled"?::IsWindowEnabled(h): ::BringWindowToTop(h);}
