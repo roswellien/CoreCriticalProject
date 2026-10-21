@@ -69,8 +69,10 @@ class ReleaseToolsTests(unittest.TestCase):
                 self.assertEqual(config.load_settings(), {})
                 setup.write_settings(settings, {"schema_version": 1, "game_root": str(root / "owned game"),
                                                 "mech3ax_dir": str(root / "tools")})
-                self.assertEqual(config.game_directory(), root / "owned game")
-                self.assertEqual(config.tool_directory(), root / "tools")
+                # Windows runners may supply an 8.3 temporary path. The API
+                # returns resolved paths, so compare the same canonical form.
+                self.assertEqual(config.game_directory(), (root / "owned game").resolve())
+                self.assertEqual(config.tool_directory(), (root / "tools").resolve())
                 settings.write_text('{"schema_version":99}')
                 with self.assertRaisesRegex(ValueError, "Unsupported"):
                     config.load_settings()
@@ -91,7 +93,9 @@ class ReleaseToolsTests(unittest.TestCase):
             for pack_id in ("../escape", "nested/path", "x&echo", "", "a" * 65, "é"):
                 with self.assertRaises(ValueError):
                     pack_directory(root, pack_id)
-            self.assertEqual(pack_directory(root, "authored-map_1"), root / "authored-map_1")
+            self.assertEqual(
+                pack_directory(root, "authored-map_1"), (root / "authored-map_1").resolve()
+            )
             pack_builder = MapPackBuilder(packs_root=root / "packs", game_root=root / "game")
             project = MapPackProject("safe_id", "A title & a command")
             project.lighting.strength = "1 & command"
