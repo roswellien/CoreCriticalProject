@@ -34,9 +34,21 @@ class Command(ABC):
 
 
 class MoveObjectCommand(Command):
-    """Moves a placed world object to a new (x, y, z) position."""
+    """Move one referenced object, retaining its original position for undo.
 
-    def __init__(self, obj: PlacedObject, new_x: float, new_y: float, new_z: float, on_update: Optional[Callable[[], None]] = None):
+    on_update refreshes the UI after either direction. It receives no object
+    argument, so UI code must not assume the current selection is the object
+    this command changed. History and persisted deltas are separate state.
+    """
+
+    def __init__(
+        self,
+        obj: PlacedObject,
+        new_x: float,
+        new_y: float,
+        new_z: float,
+        on_update: Optional[Callable[[], None]] = None,
+    ):
         self.obj = obj
         self.old_x, self.old_y, self.old_z = obj.x, obj.y, obj.z
         self.new_x, self.new_y, self.new_z = new_x, new_y, new_z
@@ -64,7 +76,9 @@ class MoveObjectCommand(Command):
 class RotateObjectCommand(Command):
     """Rotates an object (yaw degrees/radians)."""
 
-    def __init__(self, obj: PlacedObject, new_yaw_deg: float, on_update: Optional[Callable[[], None]] = None):
+    def __init__(
+        self, obj: PlacedObject, new_yaw_deg: float, on_update: Optional[Callable[[], None]] = None
+    ):
         self.obj = obj
         self.old_yaw_deg = obj.yaw_degrees
         self.new_yaw_deg = new_yaw_deg
@@ -88,7 +102,9 @@ class RotateObjectCommand(Command):
 class ToggleObjectActiveCommand(Command):
     """Toggles object active/enabled flag."""
 
-    def __init__(self, obj: PlacedObject, new_active: bool, on_update: Optional[Callable[[], None]] = None):
+    def __init__(
+        self, obj: PlacedObject, new_active: bool, on_update: Optional[Callable[[], None]] = None
+    ):
         self.obj = obj
         self.old_active = obj.active
         self.new_active = new_active
@@ -111,7 +127,12 @@ class ToggleObjectActiveCommand(Command):
 
 
 class CommandHistory:
-    """Manages undo and redo stacks with change notifications."""
+    """Bound the command stacks and notify observers after each completed action.
+
+    A new command discards the redo branch. The history holds references to live
+    mission objects; clear it when changing missions. It does not save projects
+    or decide which source node's delta should be persisted.
+    """
 
     def __init__(self, max_depth: int = 100):
         self.max_depth = max_depth
@@ -179,7 +200,13 @@ class CommandHistory:
 
 @dataclass
 class ModProject:
-    """Represents an editable mod project with delta tracking."""
+    """Persist property deltas against a particular operation/mission.
+
+    Keys in modified_objects are source node indices, not positions in the UI
+    tree. base_file_hashes stores identity metadata but is not validated here.
+    dirty tracks serialization changes independently of the undo stack. Loading
+    this JSON does not load a mission or prove that its deltas match an archive.
+    """
 
     project_name: str
     target_operation: str

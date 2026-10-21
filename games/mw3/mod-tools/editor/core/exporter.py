@@ -1,8 +1,10 @@
-"""Mod Exporter.
+"""Export edit deltas into local derived archives, manifests and a launch script.
 
-Packages an authored mod into an isolated local mod directory,
-repacking modified archives with byte-exact precision, writing manifests,
-and generating engine redirect bank files without touching the base installation.
+MissionData supplies the extracted base scene; ModProject supplies the edits.
+The original installation stays read-only. Outputs contain game-derived data
+and are not redistributable just because the project edits are authored.
+Archive round-trip fidelity and successful native loading require separate
+checks; completing this writer does not establish either result.
 """
 
 import hashlib
@@ -57,6 +59,8 @@ def build_bank_file(redirects: Dict[str, Path], output_bin: Path) -> Path:
 
 @dataclass
 class ExportReceipt:
+    """Locations and identities written by one export, not a gameplay acceptance receipt."""
+
     mod_dir: Path
     manifest_path: Path
     redirect_bank_path: Path
@@ -65,14 +69,26 @@ class ExportReceipt:
 
 
 class ModExporter:
-    """Exports a mod project to an isolated local directory."""
+    """Own output files under output_root; use temporary copies for archive edits.
+
+    Export names currently select reusable directories rather than immutable
+    versions. Callers must serialize exports that resolve to the same directory.
+    See docs/code-provenance-review-2026-10-21.md for outstanding export/run defects.
+    """
 
     def __init__(self, output_root: Optional[Path] = None):
         self.output_root = (Path(output_root) if output_root else ROOT / "local/mods").resolve()
         self.output_root.mkdir(parents=True, exist_ok=True)
 
     def export(self, project: ModProject, mission: MissionData) -> ExportReceipt:
-        """Export project deltas into a packaged mod folder."""
+        """Apply object/spawn deltas, write redirects and describe generated files.
+
+        Node indices address the loaded GameZ node array; spawn keys address the
+        reader document. Edits operate on temporary extraction copies. The final
+        directory is published incrementally, so failure may leave partial output.
+        The caller is responsible for matching the project to its source mission.
+        """
+
         def _safe_rel(p: Path) -> str:
             try:
                 return p.resolve().relative_to(ROOT.resolve()).as_posix()
@@ -80,7 +96,10 @@ class ModExporter:
                 return str(p.resolve())
 
         # Clean folder name
-        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in project.project_name.lower())
+
+        safe_name = "".join(
+            c if c.isalnum() or c in "-_" else "_" for c in project.project_name.lower()
+        )
         mod_dir = self.output_root / safe_name
         mod_dir.mkdir(parents=True, exist_ok=True)
         zbd_dest_dir = mod_dir / f"zbd/{mission.operation}"
@@ -90,15 +109,18 @@ class ModExporter:
         redirects: Dict[str, Path] = {}
 
         # 1. Apply GameZ modifications if any object was modified
+
         if project.modified_objects:
             with tempfile.TemporaryDirectory() as td:
                 temp_extract = Path(td) / "gamez_edit"
                 # Copy original extracted gamez cache files into temp_extract
+
                 shutil.copytree(mission.raw_nodes_json_path.parent, temp_extract)
                 nodes_path = temp_extract / "nodes.json"
                 nodes = json.loads(nodes_path.read_text(encoding="utf-8"))
 
                 # Apply object modifications while preserving all other fields
+
                 for node_idx, edits in project.modified_objects.items():
                     if 0 <= node_idx < len(nodes):
                         n = nodes[node_idx]
@@ -115,39 +137,49 @@ class ModExporter:
                                     rts = tr.setdefault("RotateTranslateScale", {})
                                     if isinstance(rts, dict):
                                         t = rts.setdefault("translate", {})
-                                        if "x" in edits: t["x"] = float(edits["x"])
-                                        if "y" in edits: t["y"] = float(edits["y"])
-                                        if "z" in edits: t["z"] = float(edits["z"])
+                                        if "x" in edits:
+                                            t["x"] = float(edits["x"])
+                                        if "y" in edits:
+                                            t["y"] = float(edits["y"])
+                                        if "z" in edits:
+                                            t["z"] = float(edits["z"])
                                         r = rts.setdefault("rotate", {})
-                                        if "rot_y" in edits: r["y"] = float(edits["rot_y"])
+                                        if "rot_y" in edits:
+                                            r["y"] = float(edits["rot_y"])
                                         elif "yaw_degrees" in edits:
                                             import math
-                                            r["y"] = math.radians(float(edits["yaw_degrees"]))
 
+                                            r["y"] = math.radians(float(edits["yaw_degrees"]))
                 # Write modified nodes.json
+
                 nodes_path.write_text(json.dumps(nodes, indent=2), encoding="utf-8")
 
                 # Repack to mod directory
+
                 out_gamez = zbd_dest_dir / "gamez.zbd"
                 pack_gamez_zbd(temp_extract, out_gamez)
 
                 rel_key = f"zbd/{mission.operation}/gamez.zbd"
                 redirects[rel_key] = out_gamez
                 orig_gamez = mission.game_root / rel_key
-                modified_files.append({
-                    "target": rel_key,
-                    "exported_path": _safe_rel(out_gamez),
-                    "original_sha256": compute_sha256(orig_gamez),
-                    "modified_sha256": compute_sha256(out_gamez),
-                    "size_bytes": out_gamez.stat().st_size,
-                    "changes": f"{len(project.modified_objects)} world objects modified"
-                })
-
+                modified_files.append(
+                    {
+                        "target": rel_key,
+                        "exported_path": _safe_rel(out_gamez),
+                        "original_sha256": compute_sha256(orig_gamez),
+                        "modified_sha256": compute_sha256(out_gamez),
+                        "size_bytes": out_gamez.stat().st_size,
+                        "changes": f"{len(project.modified_objects)} world objects modified",
+                    }
+                )
         # 2. Apply Spawn modifications if any spawn point was modified
+
         if project.modified_spawns:
             with tempfile.TemporaryDirectory() as td:
                 temp_extract = Path(td) / "reader_edit"
-                op_reader_cache = mission.game_root.parent / f"local/mod-cache/{mission.operation}_reader"
+                op_reader_cache = (
+                    mission.game_root.parent / f"local/mod-cache/{mission.operation}_reader"
+                )
                 shutil.copytree(op_reader_cache, temp_extract)
                 loc_path = temp_extract / "location.zrd.json"
                 if loc_path.is_file():
@@ -157,9 +189,12 @@ class ModExporter:
                         if sp_name in project.modified_spawns:
                             sp_edits = project.modified_spawns[sp_name]
                             pos = loc_data[0][i + 1][0]
-                            if "x" in sp_edits: pos[0] = float(sp_edits["x"])
-                            if "y" in sp_edits: pos[1] = float(sp_edits["y"])
-                            if "z" in sp_edits: pos[2] = float(sp_edits["z"])
+                            if "x" in sp_edits:
+                                pos[0] = float(sp_edits["x"])
+                            if "y" in sp_edits:
+                                pos[1] = float(sp_edits["y"])
+                            if "z" in sp_edits:
+                                pos[2] = float(sp_edits["z"])
                             if "yaw_degrees" in sp_edits and len(loc_data[0][i + 1]) > 1:
                                 loc_data[0][i + 1][1] = float(sp_edits["yaw_degrees"])
                     loc_path.write_text(json.dumps(loc_data, indent=2), encoding="utf-8")
@@ -170,16 +205,18 @@ class ModExporter:
                     rel_key = f"zbd/{mission.operation}/reader.zbd"
                     redirects[rel_key] = out_reader
                     orig_reader = mission.game_root / rel_key
-                    modified_files.append({
-                        "target": rel_key,
-                        "exported_path": _safe_rel(out_reader),
-                        "original_sha256": compute_sha256(orig_reader),
-                        "modified_sha256": compute_sha256(out_reader),
-                        "size_bytes": out_reader.stat().st_size,
-                        "changes": f"{len(project.modified_spawns)} spawn points modified"
-                    })
-
+                    modified_files.append(
+                        {
+                            "target": rel_key,
+                            "exported_path": _safe_rel(out_reader),
+                            "original_sha256": compute_sha256(orig_reader),
+                            "modified_sha256": compute_sha256(out_reader),
+                            "size_bytes": out_reader.stat().st_size,
+                            "changes": f"{len(project.modified_spawns)} spawn points modified",
+                        }
+                    )
         # 3. If nothing was modified (unchanged round-trip export test), export an unchanged gamez.zbd
+
         if not modified_files:
             out_gamez = zbd_dest_dir / "gamez.zbd"
             with tempfile.TemporaryDirectory() as td:
@@ -189,16 +226,18 @@ class ModExporter:
             rel_key = f"zbd/{mission.operation}/gamez.zbd"
             redirects[rel_key] = out_gamez
             orig_gamez = mission.game_root / rel_key
-            modified_files.append({
-                "target": rel_key,
-                "exported_path": _safe_rel(out_gamez),
-                "original_sha256": compute_sha256(orig_gamez),
-                "modified_sha256": compute_sha256(out_gamez),
-                "size_bytes": out_gamez.stat().st_size,
-                "changes": "Unchanged round-trip export"
-            })
-
+            modified_files.append(
+                {
+                    "target": rel_key,
+                    "exported_path": _safe_rel(out_gamez),
+                    "original_sha256": compute_sha256(orig_gamez),
+                    "modified_sha256": compute_sha256(out_gamez),
+                    "size_bytes": out_gamez.stat().st_size,
+                    "changes": "Unchanged round-trip export",
+                }
+            )
         # 4. Write manifest.json
+
         manifest_path = mod_dir / "manifest.json"
         manifest_data = {
             "name": project.project_name,
@@ -214,31 +253,35 @@ class ModExporter:
 
         # 5. Build MW34_REMASTER_BANKS redirect file
         # We merge existing prepared texture banks with mod redirects
+
         existing_bank_bin = ROOT / "local/remaster/prepared/texture-banks.bin"
         mod_bank_bin = mod_dir / "mod-banks.bin"
         merged_redirects: Dict[str, Path] = {}
         if existing_bank_bin.is_file():
             # Read existing entries
+
             try:
                 bdata = existing_bank_bin.read_bytes()
                 if bdata.startswith(b"MWBANK1\0"):
                     cnt = struct.unpack("<I", bdata[8:12])[0]
                     cur = 12
                     for _ in range(cnt):
-                        alen, blen = struct.unpack("<II", bdata[cur:cur + 8])
+                        alen, blen = struct.unpack("<II", bdata[cur : cur + 8])
                         cur += 8
-                        akey = bdata[cur:cur + alen].decode("ascii")
+                        akey = bdata[cur : cur + alen].decode("ascii")
                         cur += alen
-                        bval = bdata[cur:cur + blen].decode("ascii")
+                        bval = bdata[cur : cur + blen].decode("ascii")
                         cur += blen
                         merged_redirects[akey] = Path(bval)
             except Exception as e:
                 print(f"Warning: could not read existing banks: {e}")
         # Add mod redirects (taking precedence)
+
         merged_redirects.update(redirects)
         build_bank_file(merged_redirects, mod_bank_bin)
 
         # 6. Generate Play Mod command script
+
         cmd_path = mod_dir / "Play-Mod.cmd"
         cmd_script = f"""@echo off
 setlocal
@@ -249,7 +292,7 @@ call "Play MW3 - Dynamic Night Lighting Preview.cmd" %*
 """
         cmd_path.write_text(cmd_script, encoding="utf-8")
 
-        run_cmd = f'powershell -ExecutionPolicy Bypass -Command "$env:MW34_REMASTER_BANKS=\'{mod_bank_bin}\'; tools/remaster-launcher/play_native.ps1 -Profile local/effect-lighting-r1/launcher.json"'
+        run_cmd = f"powershell -ExecutionPolicy Bypass -Command \"$env:MW34_REMASTER_BANKS='{mod_bank_bin}'; tools/remaster-launcher/play_native.ps1 -Profile local/effect-lighting-r1/launcher.json\""
 
         return ExportReceipt(
             mod_dir=mod_dir,

@@ -1,7 +1,9 @@
-"""MW3 format abstraction layer.
+"""Convert local MW3 archives through the separately supplied Mech3AX tools.
 
-Wraps Mech3AX for byte-exact ZBD container conversions, providing
-clean Python data structures for reader documents and GameZ scenes.
+Reader archives become JSON documents; GameZ archives become scene/material
+files. This layer owns temporary ZIPs and reports converter failures. It does
+not execute game code or establish that an edited archive is game-compatible.
+Keep source installations read-only and derived outputs in ignored local paths.
 """
 
 import json
@@ -13,8 +15,10 @@ import zipfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
+from ..config import tool_directory
+
 ROOT = Path(__file__).resolve().parents[5]
-DEFAULT_MECH3AX_DIR = ROOT / "local/tools/mech3ax-v0.7.0-rc3-windows/mech3ax-v0.7.0-rc3-x86_64-pc-windows-msvc"
+DEFAULT_MECH3AX_DIR = tool_directory()
 UNZBD_EXE = DEFAULT_MECH3AX_DIR / "unzbd.exe"
 REZBD_EXE = DEFAULT_MECH3AX_DIR / "rezbd.exe"
 
@@ -47,7 +51,8 @@ def unpack_reader_zbd(zbd_path: Path, output_dir: Path) -> Path:
 def pack_reader_zbd(source_dir: Path, output_zbd: Path) -> Path:
     """Reconstruct a reader*.zbd archive from a directory of JSON documents.
 
-    Produces a byte-exact binary archive matching original structure.
+    Round-trip identity must be checked against the particular source archive;
+    invoking the converter alone does not prove byte-exact preservation.
     """
     output_zbd.parent.mkdir(parents=True, exist_ok=True)
     temp_zip = source_dir / "_temp_pack_reader.zip"
@@ -88,7 +93,7 @@ def unpack_gamez_zbd(zbd_path: Path, output_dir: Path) -> Path:
 
 
 def pack_gamez_zbd(source_dir: Path, output_zbd: Path) -> Path:
-    """Reconstruct a gamez.zbd archive from JSON files byte-for-byte."""
+    """Repack GameZ JSON with Mech3AX; raise if the converter reports failure."""
     output_zbd.parent.mkdir(parents=True, exist_ok=True)
     temp_zip = source_dir / "_temp_pack_gamez.zip"
     try:
@@ -121,7 +126,12 @@ def extract_single_texture(rimage_zbd: Path, texture_name: str, output_png: Path
             return False
         with zipfile.ZipFile(temp_zip, "r") as z:
             # Case-insensitive search
-            candidates = [n for n in z.namelist() if n.lower() == texture_name.lower() or n.lower() == f"{texture_name.lower()}.png"]
+
+            candidates = [
+                n
+                for n in z.namelist()
+                if n.lower() == texture_name.lower() or n.lower() == f"{texture_name.lower()}.png"
+            ]
             if not candidates:
                 return False
             data = z.read(candidates[0])

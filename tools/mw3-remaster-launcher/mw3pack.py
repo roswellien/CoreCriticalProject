@@ -7,6 +7,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 
+
 def validate_pack(folder: Path) -> tuple[bool, str]:
     if not folder.is_dir():
         return False, f"Not a directory: {folder}"
@@ -20,7 +21,10 @@ def validate_pack(folder: Path) -> tuple[bool, str]:
         return False, f"Invalid JSON in pack.json: {exc}"
 
     if data.get("schema_version") != SCHEMA_VERSION:
-        return False, f"Unsupported schema_version {data.get('schema_version')} (expected {SCHEMA_VERSION})"
+        return (
+            False,
+            f"Unsupported schema_version {data.get('schema_version')} (expected {SCHEMA_VERSION})",
+        )
 
     for req in ["id", "name", "version", "author", "description"]:
         if not data.get(req):
@@ -39,6 +43,7 @@ def validate_pack(folder: Path) -> tuple[bool, str]:
 
     return True, f"Pack '{data['name']}' ({data['id']} v{data['version']}) is valid."
 
+
 def build_pack(folder: Path, output_file: Path | None = None) -> Path:
     ok, msg = validate_pack(folder)
     if not ok:
@@ -56,8 +61,11 @@ def build_pack(folder: Path, output_file: Path | None = None) -> Path:
                 rel_p = abs_p.relative_to(folder)
                 zf.write(abs_p, arcname=str(rel_p).replace("\\", "/"))
 
-    print(f"Successfully built asset pack: {output_file} ({output_file.stat().st_size / 1024:.1f} KB)")
+    print(
+        f"Successfully built asset pack: {output_file} ({output_file.stat().st_size / 1024:.1f} KB)"
+    )
     return output_file
+
 
 def unpack_pack(archive: Path, dest_dir: Path | None = None) -> Path:
     if not archive.is_file():
@@ -77,6 +85,7 @@ def unpack_pack(archive: Path, dest_dir: Path | None = None) -> Path:
 
     print(f"Extracted pack '{data.get('name')}' to {dest_dir}")
     return dest_dir
+
 
 def create_template(pack_id: str, dest_dir: Path) -> Path:
     target = dest_dir / pack_id
@@ -106,12 +115,13 @@ def create_template(pack_id: str, dest_dir: Path) -> Path:
             "textures": True,
             "normal_maps": True,
             "audio": False,
-            "cd_music": False
-        }
+            "cd_music": False,
+        },
     }
     (target / "pack.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Created boilerplate mod template in: {target}")
     return target
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -143,6 +153,7 @@ def main():
         unpack_pack(args.archive, args.dest)
     elif args.command == "template":
         create_template(args.pack_id, args.dest)
+
 
 if __name__ == "__main__":
     main()

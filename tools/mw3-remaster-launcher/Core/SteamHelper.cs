@@ -6,8 +6,15 @@ using Microsoft.Win32;
 
 namespace MW3RemasterLauncher.Core
 {
+    /// <summary>Locate Steam and write local non-Steam shortcut/artwork records.</summary>
+    /// <remarks>
+    /// This is an opt-in filesystem integration, not a Steam Web API or network client.
+    /// The legacy VDF writer's indexing/atomic-replacement limitations remain review items;
+    /// documentation does not establish safe updates to every existing Steam profile.
+    /// </remarks>
     public static class SteamHelper
     {
+        /// <summary>Discover Steam's local installation path from Windows registry locations.</summary>
         public static string? GetSteamPath()
         {
             try
@@ -42,6 +49,7 @@ namespace MW3RemasterLauncher.Core
             return Directory.Exists(defaultPath) ? defaultPath : null;
         }
 
+        /// <summary>Compute the non-Steam shortcut CRC identity, including supplied executable quotes.</summary>
         public static uint CalculateShortcutAppId(string exePath, string appName)
         {
             // Steam generates shortcut ID using CRC32 of target path + name
@@ -69,6 +77,9 @@ namespace MW3RemasterLauncher.Core
             return ~crc;
         }
 
+        /// <summary>Attempt shortcut/artwork installation in discovered local userdata profiles.</summary>
+        /// <returns>Whether at least one shortcut write reported success.</returns>
+        /// <remarks>The result does not mean Steam has reloaded or displayed the shortcut.</remarks>
         public static bool AddToSteam(string launcherExePath, string artworkSourceDir)
         {
             var steamPath = GetSteamPath();

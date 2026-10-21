@@ -6,6 +6,7 @@ using System.Text.Json;
 
 namespace MW3RemasterLauncher.Core
 {
+    /// <summary>Local prerequisite discovery result for the original-executable wrapper.</summary>
     public class D7VkValidationResult
     {
         public bool IsValid { get; set; }
@@ -15,6 +16,11 @@ namespace MW3RemasterLauncher.Core
         public string? GameExePath { get; set; }
     }
 
+    /// <summary>Discover prerequisites and launch the explicit D7VK compatibility backend.</summary>
+    /// <remarks>
+    /// D7VK executes the user's original game executable. It is a separate user choice,
+    /// not a fallback from native recompilation and not evidence of native-game acceptance.
+    /// </remarks>
     public class D7VkRunner
     {
         private readonly string _basePath;
@@ -24,6 +30,8 @@ namespace MW3RemasterLauncher.Core
             _basePath = basePath;
         }
 
+        /// <summary>Search known runtimes, optionally exercising the required Pillow operation.</summary>
+        /// <remarks>A filename match alone does not establish a usable native asset runtime.</remarks>
         public static string? FindPythonExecutable(bool requirePillow = false)
         {
             if (requirePillow)
@@ -81,6 +89,7 @@ namespace MW3RemasterLauncher.Core
         // Run the same image operation asset preparation needs, under the actual
         // launcher environment. Finding python.exe alone does not establish that
         // its Pillow extension is installed or loadable.
+        /// <summary>Run a bounded Python/Pillow capability probe without loading game data.</summary>
         public static bool CanPrepareNativeAssets(string executable)
         {
             if (!File.Exists(executable)) return false;
@@ -88,8 +97,10 @@ namespace MW3RemasterLauncher.Core
             {
                 var info = new ProcessStartInfo(executable)
                 {
-                    UseShellExecute = false, CreateNoWindow = true,
-                    RedirectStandardOutput = true, RedirectStandardError = true
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
                 };
                 info.ArgumentList.Add("-c");
                 info.ArgumentList.Add("import sys; assert sys.version_info >= (3,11); from PIL import Image; Image.new('RGB',(1,1)).tobytes(); print('MW34_NATIVE_ASSETS_OK')");
@@ -108,6 +119,8 @@ namespace MW3RemasterLauncher.Core
             catch { return false; }
         }
 
+        /// <summary>Check local wrapper-profile files and Python discovery without launching.</summary>
+        /// <remarks>File presence does not authenticate the wrapper or establish game compatibility.</remarks>
         public D7VkValidationResult Validate()
         {
             var res = new D7VkValidationResult();
@@ -168,6 +181,9 @@ namespace MW3RemasterLauncher.Core
             return res;
         }
 
+        /// <summary>Persist wrapper settings and start its explicit original-game coordinator.</summary>
+        /// <returns>The started coordinator process, owned by the caller.</returns>
+        /// <remarks>Output callbacks run on process-reader threads; UI callers marshal updates.</remarks>
         public Process LaunchGame(LauncherSettings settings, Action<string>? logCallback = null)
         {
             var val = Validate();

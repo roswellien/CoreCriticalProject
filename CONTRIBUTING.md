@@ -3,6 +3,14 @@
 Work on MechWarrior 3 first. Start with an observation, record its evidence,
 then make the smallest change that preserves the observed behavior.
 
+## Before starting
+
+Use the [code guide](docs/code-guide.md) to find the active component. Check open
+issues and describe substantial changes before investing in a redesign. Bug fixes,
+hardware playtest reports, Mod Tools improvements and clear documentation are
+welcome. Keep a pull request focused on one behavior or one readability concern.
+Do not mix a large formatting pass with gameplay or renderer changes.
+
 Follow the [faithful modernization plan](docs/faithful-modernization-plan.md):
 preserve recompiled gameplay while implementing modern platform services behind
 observed contracts. State the execution boundary advanced by each implementation
@@ -18,7 +26,8 @@ output under ignored `reports/`. Ignore rules are a convenience, not proof that
 a commit is safe: inspect `git diff --cached` before committing.
 
 Use C++20 for the runtime and Python 3.11+ standard library for lightweight
-offline analysis. No external runtime dependencies are currently required.
+offline analysis. The asset-free bootstrap needs no external runtime libraries;
+the separate Mod Tools preview has its own pinned dependencies and setup guide.
 Proposed dependencies must record license, exact version/commit, integrity
 hash where available, and why an existing dependency cannot do the job.
 
@@ -29,6 +38,50 @@ when clang-format is installed; `format-check` verifies formatting. Enable
 `MW34_ENABLE_CLANG_TIDY` with a Ninja or Makefiles generator for optional
 compiler-integrated static analysis. CMake's Visual Studio generator does not
 run clang-tidy; on Windows, use Ninja from a developer command prompt.
+
+The asset-free CMake tests, launcher tests and local original-game comparisons
+have different prerequisites. State which you ran and which require private
+inputs. The Mod Tools currently include local-installation integration scripts;
+do not describe them as asset-free CI tests. The public setup/package path is
+tracked in [release readiness](docs/public-release-readiness.md).
+
+## Readable, maintainable code
+
+Write modules around a clear responsibility and describe their entry points,
+input/output formats, ownership and failure behavior. Prefer descriptive names
+and small named helpers over compressed one-line control flow. Comments should
+explain why a constraint exists, a binary layout, units, a lifecycle rule or an
+unusual ABI/FP contract; avoid restating obvious assignments. Include enough
+context that a developer can understand the code without this project's chats.
+
+Keep unresolved guest functions named `sub_XXXXXXXX` and retain evidence-backed
+addresses. Human readability does not justify invented gameplay semantics.
+Preserve frozen source models, hashes and historical evidence. Refactor maintained
+code with narrow checks; propose separate replacements for pinned historical tools
+rather than silently formatting or renaming their source.
+
+For Mod Tools, keep the original installation read-only and place caches/projects/
+exports in a separate writable location. Validate identifiers, paths and sizes
+before file access or process launch. Exported game archives are local derived
+content; a successful export does not authorize sharing it or prove native play.
+
+## Issues and pull requests
+
+For a bug, include the component/build, OS/GPU/driver when relevant, the supported
+game profile, steps to reproduce, expected result and actual result. Attach only
+reviewed, redacted logs/screenshots. Never upload archives, executables, memory
+dumps, saves containing original data or generated translations to an issue.
+
+A pull request should explain the problem and resulting behavior, list meaningful
+checks and their results, and identify remaining limits. For native behavior,
+name the execution boundary changed and the original comparison or fixture used.
+For docs, review links and claims. New dependencies need exact pins, provenance
+and applicable license notices. Include notices in the package as well as source.
+
+Follow the project's existing license for your own contributions and identify
+third-party material explicitly. This draft adds no contributor agreement or
+mandatory external service. Release publication, repository visibility and any
+history replacement remain maintainer decisions after review.
 
 For findings, include executable SHA-256, RVA/VA distinction, tool and version,
 method, confidence, reproducible evidence, and unresolved alternatives. Keep

@@ -1,8 +1,8 @@
 """Property Inspector Pane.
 
-Displays and allows editing of confirmed object properties (transforms,
-names, active flags) with undo/redo integration, while explicitly
-documenting and labeling all preserved unresolved engine fields.
+Displays source identity and unresolved fields, and edits confirmed transforms
+and active flags through the shared undo/redo history. Diagnostic metadata is
+kept separate from fields whose editing behavior has been implemented.
 """
 
 import tkinter as tk
@@ -10,13 +10,29 @@ from tkinter import ttk
 from typing import Optional, Callable
 
 from ..core.mission_loader import PlacedObject
-from ..core.project import CommandHistory, MoveObjectCommand, RotateObjectCommand, ToggleObjectActiveCommand
+from ..core.project import (
+    CommandHistory,
+    MoveObjectCommand,
+    RotateObjectCommand,
+    ToggleObjectActiveCommand,
+)
 
 
 class PropertyInspector(ttk.Frame):
-    """Side panel displaying confirmed properties and unresolved metadata for the selected entity."""
+    """Inspect one live object and submit commands to the window-owned history.
 
-    def __init__(self, master, history: CommandHistory, on_change: Optional[Callable[[], None]] = None, **kwargs):
+    on_change is a zero-argument refresh callback, not the edited object or a
+    persistence operation. Widget contents may be rounded display strings;
+    refreshing inspection must not itself create an edit command.
+    """
+
+    def __init__(
+        self,
+        master,
+        history: CommandHistory,
+        on_change: Optional[Callable[[], None]] = None,
+        **kwargs,
+    ):
         super().__init__(master, padding=8, **kwargs)
         self.history = history
         self.on_change = on_change
@@ -28,27 +44,37 @@ class PropertyInspector(ttk.Frame):
         self.columnconfigure(1, weight=1)
 
         # Header
-        self.header_label = ttk.Label(self, text="Property Inspector", font=("Segoe UI", 11, "bold"))
+        self.header_label = ttk.Label(
+            self, text="Property Inspector", font=("Segoe UI", 11, "bold")
+        )
         self.header_label.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         # Identity
-        ttk.Label(self, text="Name:", font=("Segoe UI", 9, "bold")).grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(self, text="Name:", font=("Segoe UI", 9, "bold")).grid(
+            row=1, column=0, sticky="w", pady=2
+        )
         self.name_var = tk.StringVar()
         self.name_entry = ttk.Entry(self, textvariable=self.name_var, state="readonly")
         self.name_entry.grid(row=1, column=1, sticky="ew", pady=2)
 
         ttk.Label(self, text="Node Index:").grid(row=2, column=0, sticky="w", pady=2)
         self.index_var = tk.StringVar(value="-")
-        ttk.Label(self, textvariable=self.index_var, font=("Consolas", 9)).grid(row=2, column=1, sticky="w", pady=2)
+        ttk.Label(self, textvariable=self.index_var, font=("Consolas", 9)).grid(
+            row=2, column=1, sticky="w", pady=2
+        )
 
         ttk.Label(self, text="Model Index:").grid(row=3, column=0, sticky="w", pady=2)
         self.model_var = tk.StringVar(value="-")
-        ttk.Label(self, textvariable=self.model_var, font=("Consolas", 9)).grid(row=3, column=1, sticky="w", pady=2)
+        ttk.Label(self, textvariable=self.model_var, font=("Consolas", 9)).grid(
+            row=3, column=1, sticky="w", pady=2
+        )
 
         # Separator: Transform
         sep1 = ttk.Separator(self, orient="horizontal")
         sep1.grid(row=4, column=0, columnspan=2, sticky="ew", pady=8)
-        ttk.Label(self, text="Transform (Confirmed Properties)", font=("Segoe UI", 9, "bold")).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Label(self, text="Transform (Confirmed Properties)", font=("Segoe UI", 9, "bold")).grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=(0, 4)
+        )
 
         # Pos X
         ttk.Label(self, text="World X (m):").grid(row=6, column=0, sticky="w", pady=2)
@@ -80,7 +106,12 @@ class PropertyInspector(ttk.Frame):
 
         # Active Status
         self.active_var = tk.BooleanVar(value=True)
-        self.active_chk = ttk.Checkbutton(self, text="Active / Enabled at Spawn", variable=self.active_var, command=self._apply_active)
+        self.active_chk = ttk.Checkbutton(
+            self,
+            text="Active / Enabled at Spawn",
+            variable=self.active_var,
+            command=self._apply_active,
+        )
         self.active_chk.grid(row=10, column=0, columnspan=2, sticky="w", pady=6)
 
         # Apply Button
@@ -90,10 +121,23 @@ class PropertyInspector(ttk.Frame):
         # Separator: Unresolved Fields
         sep2 = ttk.Separator(self, orient="horizontal")
         sep2.grid(row=12, column=0, columnspan=2, sticky="ew", pady=10)
-        ttk.Label(self, text="Unresolved Engine Fields (Preserved Losslessly)", font=("Segoe UI", 9, "bold")).grid(row=13, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Label(
+            self,
+            text="Unresolved Engine Fields (Preserved Losslessly)",
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=13, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
         # Text display for unresolved metadata
-        self.unresolved_text = tk.Text(self, height=8, width=28, bg="#21262d", fg="#8b949e", font=("Consolas", 8), relief="flat", wrap="word")
+        self.unresolved_text = tk.Text(
+            self,
+            height=8,
+            width=28,
+            bg="#21262d",
+            fg="#8b949e",
+            font=("Consolas", 8),
+            relief="flat",
+            wrap="word",
+        )
         self.unresolved_text.grid(row=14, column=0, columnspan=2, sticky="nsew", pady=2)
         self.rowconfigure(14, weight=1)
 
@@ -109,7 +153,11 @@ class PropertyInspector(ttk.Frame):
         self.apply_btn.config(state=state)
 
     def inspect_object(self, obj: Optional[PlacedObject]) -> None:
-        """Populate inspector with object attributes."""
+        """Refresh widget values from one live object; None clears/disables editing.
+
+        Display rounding does not modify source coordinates. Unknown source fields
+        are shown as diagnostics, not assigned invented editable semantics.
+        """
         self.current_object = obj
         if not obj:
             self._set_enabled(False)
@@ -123,7 +171,10 @@ class PropertyInspector(ttk.Frame):
             self.yaw_var.set("")
             self.active_var.set(False)
             self.unresolved_text.delete("1.0", "end")
-            self.unresolved_text.insert("end", "Select an object to inspect its confirmed properties and preserved engine state.")
+            self.unresolved_text.insert(
+                "end",
+                "Select an object to inspect its confirmed properties and preserved engine state.",
+            )
             return
 
         self._set_enabled(True)
@@ -151,19 +202,25 @@ class PropertyInspector(ttk.Frame):
         self.unresolved_text.insert("end", unresolved_info)
 
     def _apply_transform(self) -> None:
+        """Parse XYZ and enqueue one move only when values differ; ignore invalid text."""
         if not self.current_object:
             return
         try:
             nx = float(self.x_var.get())
             ny = float(self.y_var.get())
             nz = float(self.z_var.get())
-            if (nx, ny, nz) != (self.current_object.x, self.current_object.y, self.current_object.z):
+            if (nx, ny, nz) != (
+                self.current_object.x,
+                self.current_object.y,
+                self.current_object.z,
+            ):
                 cmd = MoveObjectCommand(self.current_object, nx, ny, nz, on_update=self.on_change)
                 self.history.execute(cmd)
         except ValueError:
             pass
 
     def _apply_yaw(self) -> None:
+        """Commit a degree-valued heading; the command/model converts it to rot_y radians."""
         if not self.current_object:
             return
         try:
@@ -175,6 +232,7 @@ class PropertyInspector(ttk.Frame):
             pass
 
     def _apply_active(self) -> None:
+        """Commit the editable active flag without changing other source flags."""
         if not self.current_object:
             return
         nactive = self.active_var.get()
@@ -183,6 +241,7 @@ class PropertyInspector(ttk.Frame):
             self.history.execute(cmd)
 
     def _apply_all(self) -> None:
+        """Apply position, heading and active as separate undoable commands in that order."""
         self._apply_transform()
         self._apply_yaw()
         self._apply_active()

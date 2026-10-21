@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace MW3RemasterLauncher.Core
 {
+    /// <summary>Declared payload capabilities; these flags do not prove that files exist.</summary>
     public class PackProvides
     {
         [JsonPropertyName("mechs")]
@@ -25,6 +26,7 @@ namespace MW3RemasterLauncher.Core
         public bool CdMusic { get; set; }
     }
 
+    /// <summary>Declared dependency metadata, separate from runtime compatibility enforcement.</summary>
     public class PackDependency
     {
         [JsonPropertyName("id")]
@@ -37,6 +39,12 @@ namespace MW3RemasterLauncher.Core
         public bool Optional { get; set; }
     }
 
+    /// <summary>pack.json metadata plus nonserialized launcher discovery/selection state.</summary>
+    /// <remarks>
+    /// Id identifies a pack; it is not an authenticated publisher identity or a safe path.
+    /// DirectoryPath and the other JsonIgnore properties belong to the local launcher.
+    /// Deserializing this type does not validate dependency versions or payload contents.
+    /// </remarks>
     public class PackManifest
     {
         [JsonPropertyName("schema_version")]

@@ -1,12 +1,16 @@
-"""MW3 Standalone Map Pack Builder & Generator.
+"""Prototype map edits against existing locally extracted operation archives.
 
-Creates brand new, standalone community maps packaged into self-contained
-map packs (.mw3pack / mods/map-packs/<name>/) without modifying default game maps.
+The browser project contains terrain/lighting previews and requested placements.
+The exporter currently repositions a bounded pool of existing GameZ nodes and
+updates selected reader locations; it does not synthesize the preview terrain
+or implement every requested gameplay property. Outputs are local derived game
+data, not self-contained redistributable maps. Original archives remain read-only.
 """
 
 import json
 import math
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -16,12 +20,26 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from .formats import pack_gamez_zbd, pack_reader_zbd
 from .exporter import compute_sha256, build_bank_file
+from ..config import cache_directory, game_directory
 
 ROOT = Path(__file__).resolve().parents[5]
 
 
+def pack_directory(packs_root: Path, pack_id: str) -> Path:
+    """Resolve one pack, including existing symlinks, within its owned directory."""
+    if not isinstance(pack_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", pack_id):
+        raise ValueError("Pack ID must be 1–64 ASCII letters, digits, hyphens or underscores.")
+    root = packs_root.resolve()
+    destination = (root / pack_id).resolve()
+    if not destination.is_relative_to(root):
+        raise ValueError("Pack directory resolves outside the packs folder.")
+    return destination
+
+
 @dataclass
 class MapAsset:
+    """Browser placement request; not every field is currently applied to game data."""
+
     asset_id: str
     asset_type: str  # turret, bunker, building, factory, prop, spawn, nav
     name: str
@@ -38,6 +56,8 @@ class MapAsset:
 
 @dataclass
 class TerrainConfig:
+    """Preview terrain parameters in metres; stored in the project/summary only."""
+
     biome: str = "coastal"  # coastal, desert, volcanic, highland, industrial
     width: float = 3000.0  # meters
     depth: float = 3000.0  # meters
@@ -48,6 +68,8 @@ class TerrainConfig:
 
 @dataclass
 class LightingConfig:
+    """Preview light settings; azimuth/elevation are degrees and colours are RGB gains."""
+
     preset_name: str = "sunset"
     azimuth: float = 225.0
     elevation: float = 35.0
@@ -60,6 +82,8 @@ class LightingConfig:
 
 @dataclass
 class MapPackProject:
+    """Serializable preview scene and requested edits to one base operation."""
+
     pack_id: str
     pack_title: str
     author: str = "Community Modder"
@@ -167,22 +191,39 @@ class MapPackProject:
 
 
 class MapPackBuilder:
-    """Builds and compiles standalone Map Packs into mods/map-packs/<pack_id>/."""
+    """Write prototype archive overrides under one owned pack directory.
+
+    The fixed archetype pools below are source-node indices, not a general object
+    factory. See the code/provenance review for known capacity/aliasing limits.
+    Existing packs are updated incrementally; a failed build can leave partial files.
+    """
 
     def __init__(self, packs_root: Optional[Path] = None, game_root: Optional[Path] = None):
         self.packs_root = (packs_root or ROOT / "mods/map-packs").resolve()
-        self.game_root = (game_root or ROOT / "MW3").resolve()
+        self.game_root = (game_root or game_directory()).resolve()
         self.packs_root.mkdir(parents=True, exist_ok=True)
 
     def build(self, project: MapPackProject) -> Path:
         """Compile project assets and data into an isolated map pack folder."""
-        pack_folder = self.packs_root / project.pack_id
+        pack_folder = pack_directory(self.packs_root, project.pack_id)
+        if project.base_operation not in {"c1", "c2", "c3", "c4", "c4b", "t1"}:
+            raise ValueError("Unsupported base operation; select an installed MW3 operation.")
+        # These values enter a CMD launcher. Require real finite numbers before
+        # creating any files; labels and arbitrary strings never become shell text.
+        for value in (
+            project.lighting.azimuth,
+            project.lighting.elevation,
+            project.lighting.strength,
+            project.lighting.ambient,
+        ):
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError("Launcher lighting values must be finite numbers.")
         pack_folder.mkdir(parents=True, exist_ok=True)
         zbd_folder = pack_folder / f"zbd/{project.base_operation}"
         zbd_folder.mkdir(parents=True, exist_ok=True)
 
         op = project.base_operation
-        cache_dir = ROOT / "local/mod-cache"
+        cache_dir = cache_directory()
         op_gamez_cache = cache_dir / f"{op}_gamez"
         op_reader_cache = cache_dir / f"{op}_reader"
         ia_reader_cache = cache_dir / f"{op}_readeria1"
@@ -250,10 +291,20 @@ class MapPackBuilder:
                         obj3d = data.setdefault("Object3d", {})
                         tr = obj3d.get("transform")
                         if not isinstance(tr, dict):
-                            tr = {"RotateTranslateScale": {"rotate": {"x": 0.0, "y": 0.0, "z": 0.0}, "translate": {"x": 0.0, "y": 0.0, "z": 0.0}, "scale": {"x": 1.0, "y": 1.0, "z": 1.0}}}
+                            tr = {
+                                "RotateTranslateScale": {
+                                    "rotate": {"x": 0.0, "y": 0.0, "z": 0.0},
+                                    "translate": {"x": 0.0, "y": 0.0, "z": 0.0},
+                                    "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
+                                }
+                            }
                             obj3d["transform"] = tr
                         rts = tr.setdefault("RotateTranslateScale", {})
-                        rts["translate"] = {"x": float(asset.x), "y": float(asset.y), "z": float(asset.z)}
+                        rts["translate"] = {
+                            "x": float(asset.x),
+                            "y": float(asset.y),
+                            "z": float(asset.z),
+                        }
                         rts["rotate"] = {"x": 0.0, "y": math.radians(asset.yaw_deg), "z": 0.0}
                         node.setdefault("flags", {})["active"] = True
                         placed_count += 1
@@ -264,12 +315,14 @@ class MapPackBuilder:
 
             rel_gamez = f"zbd/{op}/gamez.zbd"
             redirects[rel_gamez] = out_gamez
-            modified_records.append({
-                "target": rel_gamez,
-                "size_bytes": out_gamez.stat().st_size,
-                "sha256": compute_sha256(out_gamez),
-                "summary": f"{placed_count} custom visual entities placed"
-            })
+            modified_records.append(
+                {
+                    "target": rel_gamez,
+                    "size_bytes": out_gamez.stat().st_size,
+                    "sha256": compute_sha256(out_gamez),
+                    "summary": f"{placed_count} custom visual entities placed",
+                }
+            )
 
         # 2. Build Reader archive with custom Spawns and Objectives
         with tempfile.TemporaryDirectory() as td:
@@ -279,7 +332,14 @@ class MapPackBuilder:
             # Update location.zrd with player and enemy spawns
             loc_path = temp_reader / "location.zrd.json"
             if loc_path.is_file():
-                player_spawn = next((a for a in project.assets if a.asset_type == "spawn" and a.faction == "player"), None)
+                player_spawn = next(
+                    (
+                        a
+                        for a in project.assets
+                        if a.asset_type == "spawn" and a.faction == "player"
+                    ),
+                    None,
+                )
                 loc_data = json.loads(loc_path.read_text(encoding="utf-8"))
                 # Update IA_base or Mission 1 Start
                 for i in range(0, len(loc_data[0]), 2):
@@ -294,16 +354,50 @@ class MapPackBuilder:
             waynet_path = temp_reader / "waynet_1.zrd.json"
             if waynet_path.is_file():
                 waynet_data = json.loads(waynet_path.read_text(encoding="utf-8"))
-                player_spawn = next((a for a in project.assets if a.asset_type == "spawn" and a.faction == "player"), None)
-                nav_able = next((a for a in project.assets if a.asset_type == "nav" and "able" in a.name.lower() or "alpha" in a.name.lower()), None)
-                nav_baker = next((a for a in project.assets if a.asset_type == "nav" and "baker" in a.name.lower() or "beta" in a.name.lower()), None)
+                player_spawn = next(
+                    (
+                        a
+                        for a in project.assets
+                        if a.asset_type == "spawn" and a.faction == "player"
+                    ),
+                    None,
+                )
+                nav_able = next(
+                    (
+                        a
+                        for a in project.assets
+                        if a.asset_type == "nav"
+                        and "able" in a.name.lower()
+                        or "alpha" in a.name.lower()
+                    ),
+                    None,
+                )
+                nav_baker = next(
+                    (
+                        a
+                        for a in project.assets
+                        if a.asset_type == "nav"
+                        and "baker" in a.name.lower()
+                        or "beta" in a.name.lower()
+                    ),
+                    None,
+                )
 
                 # Iterate through waynet entries
                 for i in range(0, len(waynet_data[0]), 2):
                     key = waynet_data[0][i]
                     val = waynet_data[0][i + 1]
-                    if key == "node_00" and player_spawn and isinstance(val, list) and len(val) >= 2:
-                        val[1] = [float(player_spawn.x), float(player_spawn.y), float(player_spawn.z)]
+                    if (
+                        key == "node_00"
+                        and player_spawn
+                        and isinstance(val, list)
+                        and len(val) >= 2
+                    ):
+                        val[1] = [
+                            float(player_spawn.x),
+                            float(player_spawn.y),
+                            float(player_spawn.z),
+                        ]
                     elif key == "node_01" and nav_able and isinstance(val, list) and len(val) >= 2:
                         val[1] = [float(nav_able.x), float(nav_able.y), float(nav_able.z)]
                     elif key == "node_02" and nav_baker and isinstance(val, list) and len(val) >= 2:
@@ -316,12 +410,14 @@ class MapPackBuilder:
 
             rel_reader = f"zbd/{op}/reader.zbd"
             redirects[rel_reader] = out_reader
-            modified_records.append({
-                "target": rel_reader,
-                "size_bytes": out_reader.stat().st_size,
-                "sha256": compute_sha256(out_reader),
-                "summary": "Custom player spawn, waypoints, and objective markers"
-            })
+            modified_records.append(
+                {
+                    "target": rel_reader,
+                    "size_bytes": out_reader.stat().st_size,
+                    "sha256": compute_sha256(out_reader),
+                    "summary": "Custom player spawn, waypoints, and objective markers",
+                }
+            )
 
         # 3. Write Map Pack Manifest
         manifest_file = pack_folder / "manifest.json"
@@ -363,11 +459,11 @@ class MapPackBuilder:
                     cnt = struct.unpack("<I", bdata[8:12])[0]
                     cur = 12
                     for _ in range(cnt):
-                        alen, blen = struct.unpack("<II", bdata[cur:cur + 8])
+                        alen, blen = struct.unpack("<II", bdata[cur : cur + 8])
                         cur += 8
-                        akey = bdata[cur:cur + alen].decode("ascii")
+                        akey = bdata[cur : cur + alen].decode("ascii")
                         cur += alen
-                        bval = bdata[cur:cur + blen].decode("ascii")
+                        bval = bdata[cur : cur + blen].decode("ascii")
                         cur += blen
                         merged_redirects[akey] = Path(bval)
             except Exception:
@@ -376,13 +472,13 @@ class MapPackBuilder:
         build_bank_file(merged_redirects, mod_banks_bin)
 
         # 6. Generate Play Map Runner Command Script
-        run_cmd = pack_folder / f"Play Map - {project.pack_title}.cmd"
+        run_cmd = pack_folder / f"Play Map - {project.pack_id}.cmd"
         cmd_content = f"""@echo off
 setlocal
 set "MAP_DIR=%~dp0"
 cd /d "%MAP_DIR%..\\..\\.."
 echo ======================================================================
-echo   Launching Custom Map Pack: {project.pack_title}
+echo   Launching Custom Map Pack: {project.pack_id}
 echo ======================================================================
 echo.
 set "MW34_REMASTER_BANKS=%MAP_DIR%map-banks.bin"

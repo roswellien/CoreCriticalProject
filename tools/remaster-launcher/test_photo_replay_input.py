@@ -2,6 +2,7 @@
 
 Run from a C++ build environment; --compiler accepts clang++ or cl-compatible clang-cl.
 """
+
 import argparse
 from pathlib import Path
 import subprocess
@@ -10,12 +11,20 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--compiler', default='clang++')
-    parser.add_argument('--source', type=Path, default=Path(__file__).parent / 'native-overrides/photo_replay_stage.inc')
+    parser.add_argument("--compiler", default="clang++")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=Path(__file__).parent / "native-overrides/photo_replay_stage.inc",
+    )
     args = parser.parse_args()
     stage = args.source.read_text()
-    filters = stage[stage.index('void photo_replay_filter_device_state('):stage.index('void photo_replay_flush_di_keyboard(')]
-    harness = r'''
+    filters = stage[
+        stage.index("void photo_replay_filter_device_state(") : stage.index(
+            "void photo_replay_flush_di_keyboard("
+        )
+    ]
+    harness = r"""
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -68,20 +77,24 @@ int main() {
     assert(h.photo_replay.accum_di_dx == 3 && h.photo_replay.accum_di_dy == -4);
     assert(mouse.lX == 0 && mouse.buttons[0] == 0);
 }
-'''.replace('FILTERS', filters)
-    with tempfile.TemporaryDirectory(prefix='mw34-input-') as temp:
+""".replace(
+        "FILTERS", filters
+    )
+    with tempfile.TemporaryDirectory(prefix="mw34-input-") as temp:
         folder = Path(temp)
-        source = folder / 'input.cpp'
+        source = folder / "input.cpp"
         source.write_text(harness)
-        executable = folder / 'input.exe'
-        if 'clang-cl' in Path(args.compiler).name:
-            flags = ['/std:c++20', '/EHsc', str(source), '/Fe:' + str(executable)]
+        executable = folder / "input.exe"
+        if "clang-cl" in Path(args.compiler).name:
+            flags = ["/std:c++20", "/EHsc", str(source), "/Fe:" + str(executable)]
         else:
-            flags = ['-std=c++20', str(source), '-o', str(executable)]
+            flags = ["-std=c++20", str(source), "-o", str(executable)]
         subprocess.run([args.compiler, *flags], cwd=folder, check=True)
         subprocess.run([str(executable)], check=True)
-    print('PASS: F12 press/release preserved in state and buffered input; capture hotkeys and overlay suppression retained.')
+    print(
+        "PASS: F12 press/release preserved in state and buffered input; capture hotkeys and overlay suppression retained."
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

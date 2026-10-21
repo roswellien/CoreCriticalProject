@@ -26,9 +26,20 @@
 *.mp3
 *.avi
 *.mpg
+*.mp4
+*.flac
+*.bik
+*.dmp
 *.pak
 *.res
 *.zbd
+*.zrd
+# Local credentials and signing keys; example configuration can be reviewed.
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
 *.pdb
 *.obj
 *.lib
@@ -44,6 +55,10 @@ __pycache__/
 /tools/mw3-remaster-launcher-tests/obj/
 /tools/remaster-launcher/user/
 .venv/
+.venv-mod-tools/
+# Machine-specific Windows shortcuts and local GPU build outputs.
+*.lnk
+/tools/remaster-launcher/native-overrides/*.spv
 .vs/
 .idea/
 CMakeUserPresets.json

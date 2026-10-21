@@ -33,6 +33,8 @@ class LocalCdAudio {
     static constexpr unsigned rate = 44100, channels = 2, block = 4, cd_sample_frames = 588;
     static constexpr unsigned frames_per_buffer = 441, buffer_count = 4;
     struct Track {
+        // start/frames are stereo PCM sample frames, not interleaved sample counts
+        // or CD sectors. One CD frame is cd_sample_frames (588) PCM frames.
         unsigned number{};
         U64 start{}, frames{};
     };
@@ -728,6 +730,8 @@ class LocalCdAudio {
 
   public:
     static constexpr UINT device_id = 0x4d34;
+    // An empty manifest leaves the service disabled. A supplied manifest is loaded
+    // and validated before creating the worker; missing/bad data throws visibly.
     LocalCdAudio() : LocalCdAudio(environment_path("MW34_MUSIC_PACK")) {}
     explicit LocalCdAudio(const std::filesystem::path &manifest) {
         if (manifest.empty())
@@ -754,6 +758,8 @@ class LocalCdAudio {
             throw;
         }
     }
+    // Callers stop submitting requests before destruction. Shutdown runs on the
+    // worker and is joined before host event/log resources are released.
     ~LocalCdAudio() {
         if (worker_.joinable()) {
             auto r = std::make_shared<Request>();
@@ -796,6 +802,9 @@ class LocalCdAudio {
         r->value = volume;
         return invoke(r) ? MMSYSERR_ERROR : MMSYSERR_NOERROR;
     }
+    // params points to the caller's native MCI parameter structure, not guest
+    // memory. The guest-facing adapter must marshal and validate it first. This
+    // method copies supported request fields before handing work to the worker.
     MCIERROR send(UINT dev, UINT msg, DWORD flags, DWORD_PTR params) {
         if (!enabled_)
             return MCIERR_DEVICE_NOT_INSTALLED;

@@ -1,167 +1,112 @@
-# MW34 RECOMP
+# MechWarrior 3 Recomp
 
-MW34 RECOMP develops native static recompilation, a D7VK-based Vulkan wrapper
-and launcher for the original executable, and an optional high-resolution
-texture upgrade pack for MechWarrior 3. **MechWarrior 3
-is the only current implementation target.** All three efforts use the user's own
-legally obtained game installation and preserve the original game logic.
+**Original gameplay. A modern core.**
 
-The recompilation effort translates original 32-bit x86 game logic into a
-modern native executable. The wrapper effort runs the original 32-bit
-`Mech3.exe` through a patched D7VK graphics layer, providing Vulkan rendering
-in place of dgVoodoo in a separate local profile.
+An experimental native recompilation of MechWarrior 3, with Vulkan rendering,
+modern Windows services, an optional enhanced visual profile, and developing
+map and mission editing tools. The aim is to preserve the original game's
+logic and behavior while making it usable on modern systems.
 
-An experimental native x64 host now runs a live main menu and Training 1 through
-Vulkan, including the game's HUD, startup and walking. It needs substantial
-fidelity, compatibility and performance work. A portable, fully validated
-recompiled game release is not available yet. The installed U.S. MW3 1.2 executable is admitted by exact
-identity as `mw3-us-1-2-retail`. Pirate's Moon and the three MW4 titles are future
-targets.
+[![MechWarrior 3 Recomp announcement trailer — in-game development footage](docs/media/announcement-trailer.jpg)](https://www.youtube.com/watch?v=2olchoLkZro)
 
-## Current implementation direction
+**[Watch the announcement trailer](https://www.youtube.com/watch?v=2olchoLkZro)**
+· [Development videos](https://www.youtube.com/channel/UC0YGz5FEh7-ij1miUmXECiw/videos)
+· [Screenshots and media](docs/media/README.md)
+· [Setup](docs/setup-game.md)
+· [Mod Tools](#mod-tools)
+· [Contributing](CONTRIBUTING.md)
 
-Three development tracks are active: faithful native recompilation,
-original-executable Vulkan compatibility, and high-resolution texture upgrades.
-The wrapper has a working local
-launcher and documented compatibility fixes; the native host now reaches live
-Training in a prepared local development setup. Wrapper runs do not change
-native recompilation acceptance.
+> **In development.** A playable portable release is being prepared and is not
+> available yet. A source checkout builds the asset-free runtime and tests, but
+> does not by itself build or run the complete game. You must supply your own
+> legally obtained original installation. No original game or replacement asset
+> pack is included.
 
-The [faithful modernization plan](docs/faithful-modernization-plan.md) is the
-current strategy: preserve original gameplay through native recompilation and
-connect it to modern platform services, with Vulkan as the graphics backend.
-The integrated host has executed startup, a live menu, Training 1 frames and
-normal shutdown. The next work is camera/leg retesting, remaining Training and
-weapons, original/native fidelity comparisons and performance. Existing
-acceptance criteria remain intact; 131/144 selected roots is a bounded fidelity
-milestone, not overall completion or a prerequisite for every independent
-integration experiment. Executed gameplay does not complete formal acceptance.
+## What the project does
 
-Start with the [roadmap](docs/roadmap.md), [Claude work review](docs/m4-claude-work-review-2026-10-11.md)
-and [current continuation prompt](docs/claude-m4-continuation-handoff.md).
+The native host executes recompiled original 32-bit game logic in a project-built
+64-bit application. Project-authored services handle graphics, input, audio,
+files and Windows integration. Vulkan is the selected graphics backend.
+Modernization preserves original gameplay; visual and behavioral enhancements
+need separate configuration and comparison against original-compatible behavior.
 
-The installed MW4 Mercenaries has a [reconnaissance report](docs/mw4-reconnaissance.md)
-and [execution plan](docs/mw4-execution-plan.md). Its protected code-image recovery
-is the first implementation gate; this assessment adds no MW4 compatibility claim.
+The local development build has run startup, the animated menu, Training,
+Instant Action and selected campaign play, including normal shutdown. The
+October 20 work added launcher repairs, all 18 chassis in the enhanced profile,
+32-bit depth rendering, and fixes for objectives input and damage-display colors.
+A player confirmed the reported Operation 1 → Operation 2 transition repair.
+These observations do not establish complete campaign compatibility or fidelity.
 
-## Running native host: current status
+| Area | Current development capabilities | Remaining work |
+| --- | --- | --- |
+| Native gameplay | Live menu, Training, Instant Action, selected campaign play and original HUD | Broader campaign, saves, physics/AI/timing comparisons and sustained playtests |
+| Vulkan graphics | Ultrawide output, window modes, FXAA, anisotropic filtering, SSAA and improved depth precision | Broader hardware coverage, performance and visual regressions |
+| Enhanced visuals | Optional updated models, textures, material normals and environment lighting in local profiles | Asset distribution review, damage/LOD/muzzle checks and remaining lighting effects |
+| Launcher | Installation validation, graphics choices, model selection and local preparation | Portable runtime import/build and first-run installation |
+| Mod Tools | Top-down editor and browser Map Studio prototypes with project save/edit/export paths | Portable setup, input hardening and native custom-mission validation |
+| Pirate's Moon | Experimental native startup/menu/Options/quit slice | Missions, cinematics and broader input/play validation |
 
-The [October 14 progress summary](docs/session-summary-2026-10-14-remaster.md)
-records the latest completed work: faster native execution and resident Vulkan
-rendering, software SEH, FXAA/16x AF, true 3440x1440 ultrawide, broader original
-HUD coverage, living asset launchers and local MW3 soundtrack integration.
+The separately maintained **D7VK compatibility track** runs the original 32-bit
+executable through a Vulkan wrapper. It is a distinct launch option, not the
+native host or a fallback inside it. See [wrapper status](docs/d7vk-wrapper-launcher-summary.md).
+MW4 remains a later target.
 
-The current local enhanced profile measured about **120 FPS in Training at
-3440x1440**, with updated assets, music, FXAA and 16x AF. These are bounded
-measurements on the development RX 9070, not whole-game/device guarantees.
-Original-compatible Training116/116, GPU draw1150/1150 and Instant Action116/116
-regressions pass. Accepted count remains **131/144**, with strict acceptance
-paused; native execution and modernization checks do not complete formal gates.
+## In-game development
 
-After preparing the local build/assets, use [Play MW3Remaster.cmd](Play%20MW3Remaster.cmd),
-[the original-model variant](Play%20MW3Remaster%20without%20new%20models.cmd), or
-[Play-MW3.cmd](Play-MW3.cmd) for the base native host. See the
-[native-host README](tools/m4-crt-heap-carry/README.md),
-[Remaster launcher notes](tools/remaster-launcher/README.md) and
-[published enhanced source overlays](tools/remaster-launcher/native-overrides/README.md).
+| Mad Cat — Grasslands at sunrise | Cauldron-Born — Gorge at sunrise |
+| --- | --- |
+| ![Mad Cat rendered in the native development build](docs/media/mad-cat-grasslands.jpg) | ![Cauldron-Born rendered in the native development build](docs/media/cauldron-born-gorge.jpg) |
 
-A clean checkout cannot build or run the game host by itself: legally obtained
-game data, staged providers, pinned tools and generated lift objects/dispatch
-metadata remain local. No game, replacement asset pack, music or executable is
-included. The [October 13 summary](docs/session-summary-2026-10-13-native-host.md)
-retains the earlier menu/Training/shutdown history. The asset-free bootstrap
-build below is separate from the game host.
+These October 19 trailer captures show the optional enhanced profile with
+replacement visuals and a filming camera. They are real development footage,
+not a promise that those assets are included in a download. The
+[media page](docs/media/README.md) explains capture scope and links the evolution videos.
 
-## Original EXE Vulkan wrapper and launcher
+## Downloads and user setup
 
-The [D7VK wrapper and launcher report](docs/d7vk-wrapper-launcher-summary.md)
-records the current local status as of 2026-10-13. The graphics path is original
-`Mech3.exe` -> DirectDraw4/Direct3D3 -> D7VK's matching D3D9 layer -> DXVK ->
-Vulkan. The current test system uses an AMD Radeon RX 9070; broader device and
-campaign compatibility still need validation.
+Two separate packages are being prepared:
 
-- Graphical and command-line launcher with high-resolution 4:3 pillarboxed
-  profiles and 16:9/21:9 widescreen profiles with camera FOV correction.
-- Configurable 2x/4x/8x MSAA and up to 16x anisotropic filtering.
-- Switching between original and cumulative AI texture banks using NTFS hard
-  links in the private profile. Texture assets remain local.
-- Documented fixes for aspect-ratio display-mode filtering, launcher focus
-  conflicts, the Instant Action backbuffer crash at `0x00577648`, and rejected
-  physical 16-bit display-mode switches.
-- Hash-pinned game and wrapper identities, session records, and registry
-  backup/restoration around game execution.
+- **Game / Launcher for Windows x64:** import the user's supported original
+  installation, prepare the required runtime locally and launch through the GUI.
+  Portable setup and distribution review are still open. Follow
+  [game setup and current limits](docs/setup-game.md).
+- **Mod Tools source preview:** a separate editor package with its own setup
+  instructions and dependency checks. It reads the user's own archives and
+  keeps extracted caches and exports local. See [Mod Tools setup](docs/setup-mod-tools.md).
 
-The retail 2D menus remain at 640x480; the higher-resolution settings apply to
-3D gameplay. This launcher currently depends on a prepared local profile,
-wrapper build, texture manifest and FOV components, and uses a fixed checkout
-path. It is a local development setup, not yet a portable release package.
-See the report for prerequisites and GUI/CLI commands, and the
-[wrapper plan](docs/mw3-d7vk-wrapper-plan.md) for compatibility validation and
-future reuse in the native runtime. These original-EXE runs are separate from
-native-host execution and its acceptance milestones; the selected native startup
-acceptance count remains **131/144**.
+Do not treat an existing development shortcut or the current Inno installer
+script as a self-contained playable release. The release preparation record is
+[here](docs/public-release-readiness.md).
 
-## High-resolution texture upgrade pack
+## Mod Tools
 
-The project also develops an optional **Hi-Res texture pack** with AI-assisted
-mech artwork, terrain, water, buildings, structures and selected animated
-effects. Prepared batches include 16x source-dimension exports with recorded
-source mappings, editable artwork, hashes and archive verification. Export
-scales vary by batch; this is an ongoing upgrade effort rather than a complete
-replacement of every game texture.
+The [Mod Tools](games/mw3/mod-tools/README.md) are a separate workstream and will
+have a separate download/setup path from the Game / Launcher.
 
-The latest local audit records 39 configured cumulative `.zbd` archives and
-19 complete primary mech texture sets. The terrain/world-surface inventory
-records 243 of 298 priority families upgraded in every corresponding bank,
-with 55 families still needing at least one bank replacement. These counts
-describe prepared archive coverage; mapped visual validation remains pending.
-The launcher switches between original and AI banks in its private profile.
+- **Map & Mission Editor:** a desktop top-down view with object selection,
+  movement, property editing, undo/redo, saved projects and isolated local export.
+- **Visual Map Studio:** a browser-based 3D preview and placement prototype with
+  lighting controls and experimental map-pack generation.
+- **Format documentation:** recovered archive structures and a
+  [support matrix](games/mw3/mod-tools/docs/format-support-matrix.md) that identifies
+  unresolved fields.
 
-See the [texture pack status](docs/hi-res-texture-pack.md) for coverage,
-preservation checks and remaining work. Original textures, derived artwork and
-replacement archives remain local under the [distribution policy](docs/legal.md);
-the repository contains documentation and tooling, not a downloadable pack.
-Texture work adds no native recompilation acceptance credit.
+Editing or exporting a project does not establish that its custom mission plays
+correctly. Original preview geometry is extracted locally; it is not bundled.
+Exported archives may contain original-derived material and are not automatically
+shareable community packs. See [setup](docs/setup-mod-tools.md) and the
+[distribution policy](docs/legal.md).
 
-## What works now
+![Visual Map Studio prototype with the local demo scene, asset palette and environment inspector](docs/media/mod-tools-studio.jpg)
 
-- CMake/C++20 static runtime library with explicit 32-bit guest addresses,
-  checked memory mappings, permissions, and little-endian scalar access.
-- Python tools for SHA-256 identity validation and bounded PE32/i386 metadata
-  analysis: headers, sections, imports, exports, relocation summary, executable
-  regions, entry-point seeds, and a static-import API dependency report.
-- A wrapper for optional local LLVM disassembly. Function boundaries and
-  instruction semantics still require analysis.
-- Automated tests using project-authored fixtures, compiler warnings, formatting
-  configuration, optional static analysis, and Windows/MSVC + Linux/Clang CI.
-- Architecture, evidence standards, framework research and an incremental plan.
-- [First native MW3 function proof](docs/mw3-leaf-experiment.md): 16,609 original
-  x86 inputs matched generated native x64 at O0/O2, with zero mismatches and
-  49 rejection controls.
-- [Connected native startup research](docs/m4-progress-startup131.md): 131 of 144
-  selected initializer roots accepted, including 101 callback registrations,
-  68 MFC owners, 19 duplicated strings, four formatter owners, normal FS records,
-  Lockit association, a finite compound-cosine root and independently verified
-  persistent source/provider, growth/cleanup and paired comparisons, plus the
-  MFC current-thread/codepage initializer and all 24 connected fault cases.
-  [Current milestones](docs/project-milestones-r13.md).
-- [Active native work](docs/m4-active-native-lanes-2026-10-10.md): numeric
-  execution and source comparisons, MFC resource tests, and the next widget
-  and chronological startup captures, with accepted and pending work tracked separately.
-- [Local live game diagnostics](tools/game-monitor/README.md): structured event
-  timelines, incremental cursor/watch reads, debug messages and exceptions,
-  hook/game logs, process metrics, exit codes and OS-reported window health.
-- [Windowed Vulkan replay](docs/vulkan-windowed-replay.md): a project-built x64
-  viewer redraws a saved Training scene, with tested presentation, resizing,
-  minimize/restore and clean shutdown. Launch it with `Launch Vulkan Replay.cmd`.
-  The saved viewpoint is fixed. The separate integrated native host now executes
-  a live menu and partial Training; replay remains diagnostic evidence.
+The current browser prototype, captured October 21. This local workspace has
+extracted preview assets; the separate source package does not include them.
 
-## Build and test
+## Build the asset-free runtime
 
-Requirements: CMake 3.24+, a C++20 compiler (MSVC or Clang recommended), and
-Python 3.11+. The bootstrap uses no third-party runtime or Python libraries and
-does not need any game files to build or test.
+The bootstrap needs CMake 3.24+, a C++20 compiler and Python 3.11+. It builds
+project-authored runtime components and tests without installing or downloading
+game content. This is separate from building the integrated game host.
 
 ```sh
 cmake --preset default
@@ -169,127 +114,46 @@ cmake --build --preset default
 ctest --preset default
 ```
 
-On Windows, install Visual Studio's Desktop development with C++ workload and
-use its developer shell if CMake is not on PATH. For Visual Studio generators,
-add `-A x64` to the configure command. On Linux with Clang:
+On Windows, use Visual Studio's C++ developer shell and add `-A x64` to the
+configure command when using its generator. With Clang on Linux:
 
 ```sh
 cmake --preset default -DCMAKE_CXX_COMPILER=clang++
 ```
 
-Configure a separate build directory when changing compilers or generators.
-Tests can also be run directly:
+Use a separate build directory when changing compilers. See
+[contributing](CONTRIBUTING.md), [dependencies](docs/dependencies.md) and the
+[native-host build notes](tools/m4-crt-heap-carry/README.md) for their distinct scopes.
 
-```sh
-python -m unittest discover -s tests -p test_binary_tools.py -v
-```
+## Help develop and test
 
-When clang-format is available, `cmake --build build/default --target format-check`
-checks C++ formatting and target `format` applies it. Optional clang-tidy
-integration requires `-DMW34_ENABLE_CLANG_TIDY=ON` and Ninja or Makefiles.
-See [contributing](CONTRIBUTING.md) and [dependencies](docs/dependencies.md).
-The first session's actual results and limitations are recorded in
-[bootstrap validation](docs/bootstrap-validation.md).
+Read the [October 21 development update](docs/development-update-2026-10-21.md)
+for the current presentation, setup and source-readability work.
 
-## Inspect a local executable
+Read the [contribution guide](CONTRIBUTING.md) and [code guide](docs/code-guide.md)
+to find the maintained entry points. Useful contributions include reproducible
+bug reports, focused contract tests, readable host-service code, documentation,
+hardware playtesting and editor improvements. Never attach original media, memory
+dumps, private logs or generated game translations to public issues.
 
-Keep original files outside the checkout or in ignored `local/`. The local
-`MW3/` and `MW4/` media folders are also ignored. Do not commit proprietary input,
-full disassembly, strings, memory dumps, or generated game translations.
-
-```sh
-python tools/analysis/analyze.py "local/mech3.exe" --output reports/mw3.json
-python tools/binary-validator/validate.py "local/mech3.exe"
-```
-
-The analyzer labels an unrecognized hash `unknown_binary`. The validator returns
-exit code 2 for an unknown identity. Add `--require-supported` to the analyzer
-when a pipeline must stop on unrecognized input. Validation never trusts the
-filename alone. Both tools read
-files without executing them. See [the manifest specification](docs/supported-binaries.md).
-
-Optional disassembly requires a separately installed `llvm-objdump`:
-
-```sh
-python tools/analysis/disassemble.py "local/mech3.exe" --output reports/mw3-disassembly.txt
-```
-
-Linear disassembly can decode inline data as instructions. It is a research aid,
-not recovered function boundaries or a recompilation. Detailed limitations and
-tool instructions are in [tools/analysis](tools/analysis/README.md).
-
-The installed MW3 1.2 image now has a reviewed
-[memory/API inventory](games/mw3/docs/api-dependencies.md) and a
-[first-function contract](games/mw3/docs/first-function.md) for `sub_00409ED0`.
-Its hash-bound slice has passed original-versus-native comparison. The extraction
-tool accepts only this reviewed identity; proprietary inputs and generated code
-remain local.
-
-## Recompilation direction
-
-Vulkan is the user-selected graphics backend target. The first standalone
-[Vulkan learning prototype](docs/vulkan-learning-prototype.md) passes authored
-GPU transfer/readback on Windows x64. The later
-[windowed replay](docs/vulkan-windowed-replay.md) rasterizes and presents a saved
-Training scene. The separate integrated native host now renders live Training 1
-through Vulkan; complete fidelity and broader gameplay remain open. Live runtime
-integration follows the execution milestones;
-replay remains a diagnostic input, not the game frontend.
-
-The proposed pipeline is local binary validation, reviewed function/control-flow
-analysis, offline instruction lifting, native compilation, and a project-authored
-runtime. Guest pointers stay 32-bit; host pointers never replace guest fields.
-Win32/COM/API bridges and explicit function replacement routing will preserve
-observable original contracts. Legacy CRT/MFC internals are translated where
-guest behavior depends on them; otherwise source-justified service adapters may
-supply equivalent behavior. Unsupported behavior must fail visibly.
-
-The [framework evaluation](docs/recompilation-research.md) recommends a bounded
-Remill experiment, with SRW/llasm as a comparison candidate. The
-[authored fixture suite](docs/fixture-suite-experiment.md) passes 40,576 original
-x86 cases against compiled native x64 at O0/O2, including branches, partial
-registers, memory writes, shifts and stack cleanup, plus 135 rejection/bridge check entries.
-The Remill pipeline also passes the isolated MW3 leaf comparison. Broader runtime
-and floating-point behavior still need independent validation.
-
-The [initial-phase execution plan](docs/initial-phase-plan.md) defines two tracks:
-prove the lifting/reference harness on authored x86 fixtures, and select an
-evidence-backed integer leaf function from the admitted MW3 executable. The
-original installation and 1.2 patch are complete; exact identity validation and
-strict metadata analysis passed. Provenance and version observations are in
-[media observations](docs/media-inventory.md), with the admitted profile described
-in [supported binaries](docs/supported-binaries.md). Both tracks meet at a
-differential test of a real MW3 function against its native x64 translation.
-The bounded MW3 Bootstrap initial phase is complete. The next phase validates
-x87 behavior, calls and import bridges before expanding to a game subsystem.
-
-## Project map
-
-The [work-ahead asset backlog](docs/work-ahead-assets.md) defines parallel
-preparation for textures, videos, normal maps, effects and related optional
-modernization, with explicit integration gates.
-
-| Path | Purpose |
+| Reference | Purpose |
 | --- | --- |
-| `docs/` | Architecture, roadmap, legal policy, research and evidence standards |
-| `tools/` | Offline validation and analysis |
-| `runtime/` | Guest memory and future API compatibility layers |
-| `recomp/` | Translator integration, local generated output and shared patch contracts |
-| `games/mw3/` | Exact binary profiles, symbols, authored patches and findings |
-| `tests/` | Synthetic fixtures and runtime boundary tests |
-| `cmake/` | Shared build configuration |
+| [Roadmap](docs/roadmap.md) | Development direction and remaining validation |
+| [Faithful modernization plan](docs/faithful-modernization-plan.md) | Original behavior, native execution and modernization contracts |
+| [Latest recorded daily update](docs/mechlab/2026-10-20.md) | October 20 changes and their limits |
+| [Architecture](docs/architecture.md) | Guest ABI, runtime and graphics boundaries |
+| [Milestones](docs/project-milestones.md) | Evidence and formal acceptance criteria |
+| [First native function proof](docs/mw3-leaf-experiment.md) | A bounded original/native comparison |
 
-Start with the [current faithful modernization plan](docs/faithful-modernization-plan.md),
-[project goals and milestones](docs/project-milestones.md),
-[the full initial-phase plan](docs/initial-phase-plan.md),
-[architecture](docs/architecture.md), [roadmap](docs/roadmap.md),
-[reverse-engineering workflow](docs/reverse-engineering.md), and
-[MW3 findings](games/mw3/docs/findings.md).
+Formal acceptance remains **131/144 selected startup roots**. This is a specific
+evidence set, not overall project completion. Live execution, optional enhanced
+visuals, saved replay and original-process diagnostics have different scopes.
 
-## Distribution
+## License and original content
 
-Project-authored code is MIT licensed. Original game content is not included or
-licensed by this project. Users supply their own legally obtained installation.
-Read [the distribution policy](docs/legal.md) before contributing. Modern platform
-services are part of the core runtime; behavioral and visual enhancements remain
-configurable and require an original-compatible baseline for the affected scope.
+Project-authored contributions use the [MIT license](LICENSE). Third-party tools,
+fonts and libraries retain their own licenses. MechWarrior and original game
+content belong to their respective rights holders; no affiliation or endorsement
+is implied. This project supplies no game installation, media, music, generated
+game code or derived replacement pack. Read [the distribution policy](docs/legal.md)
+before contributing or preparing a release.

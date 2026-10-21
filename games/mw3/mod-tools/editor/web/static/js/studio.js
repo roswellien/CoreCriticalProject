@@ -1,16 +1,24 @@
 /**
  * MechWarrior 3 - Visual 3D Map Studio
- * Modern WebGL Three.js interactive map creator for standalone community map packs.
+ * Browser preview and local export/launch controls for prototype map edits.
+ *
+ * state.project holds serializable requests; Three.js objects below are derived
+ * display state and must never enter the JSON project. Preview terrain, health
+ * and faction controls do not imply that the archive builder applies all fields.
+ * Original geometry, when present, is extracted locally from the user's game.
  */
 
-// State
+// Project coordinates use X/Z for the ground plane and Y for height. yaw_deg is
+// serialized in degrees; Three.js rotations use radians. activeTool is placement
+// mode, while selectedAssetId identifies an existing object independently of it.
 const state = {
   project: {
     pack_id: "iron_ridge_outpost",
     pack_title: "Iron Ridge Outpost",
     author: "MW3 Modder",
     version: "1.0.0",
-    description: "Fortified Clan Smoke Jaguar communications outpost nestled in the red canyons of Tranquil.",
+    description:
+      "Fortified Clan Smoke Jaguar communications outpost nestled in the red canyons of Tranquil.",
     base_operation: "c1",
     terrain: {
       biome: "desert",
@@ -18,28 +26,29 @@ const state = {
       depth: 3000.0,
       height_scale: 85.0,
       water_level: 2.0,
-      roughness: 0.55
+      roughness: 0.55,
     },
     lighting: {
       preset_name: "sunset",
       azimuth: 235.0,
       elevation: 28.0,
-      strength: 0.90,
+      strength: 0.9,
       ambient: 0.22,
       sun_color: [1.0, 0.82, 0.65],
       sky_tint: [0.35, 0.45, 0.75],
-      fog_distance: 1200
+      fog_distance: 1200,
     },
-    assets: []
+    assets: [],
   },
   activeTool: null, // asset type string or null
   selectedAssetId: null,
   history: [],
   historyIndex: -1,
-  viewMode: "orbit" // 'orbit', 'topdown', 'iso'
+  viewMode: "orbit", // 'orbit', 'topdown', 'iso'
 };
 
-// Three.js Globals
+// Renderer-owned display objects, shared by the event handlers and animation loop.
+// assetObjectMap keys are project asset_id values; mesh children are not project IDs.
 let scene, camera, renderer, orbitControls, transformControls;
 let terrainMesh, waterMesh, sunLight, ambientLight, ghostPreview;
 let assetObjectMap = new Map(); // asset_id -> THREE.Group
@@ -49,9 +58,9 @@ let planeIntersect = new THREE.Vector3();
 
 // Sound synthesizer (Web Audio API)
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-function playBeep(freq = 440, type = 'sine', duration = 0.08) {
+function playBeep(freq = 440, type = "sine", duration = 0.08) {
   try {
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx.state === "suspended") audioCtx.resume();
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = type;
@@ -65,36 +74,43 @@ function playBeep(freq = 440, type = 'sine', duration = 0.08) {
   } catch (e) {}
 }
 
-// Procedural Height Formula for Terrain
+/**
+ * Evaluate the browser's procedural preview height at one X/Z position.
+ * The exported map still uses its base operation's terrain; this function is
+ * also used to snap preview placements and does not write original game data.
+ */
 function getTerrainHeight(x, z, biome, scale, roughness) {
   // Center coordinates
   const nx = x * 0.0012;
   const nz = z * 0.0012;
 
   let h = 0.0;
-  if (biome === 'coastal') {
+  if (biome === "coastal") {
     // Large lake / sea basin in center, hills along borders
     const dist = Math.sqrt(x * x + z * z);
     const basin = Math.max(0.0, (dist - 500) / 1000.0);
-    h = Math.sin(nx * 1.5) * Math.cos(nz * 1.5) * 20.0 +
-        Math.sin(nx * 3.5 + nz * 2.1) * 8.0 * roughness +
-        basin * 45.0;
-  } else if (biome === 'desert') {
+    h =
+      Math.sin(nx * 1.5) * Math.cos(nz * 1.5) * 20.0 +
+      Math.sin(nx * 3.5 + nz * 2.1) * 8.0 * roughness +
+      basin * 45.0;
+  } else if (biome === "desert") {
     // Stepped mesa bluffs and canyon wash
     const mesa = Math.sin(nx * 2.0) * Math.cos(nz * 2.0);
     const stepped = Math.floor(mesa * 4.0) / 4.0;
     h = stepped * scale * 0.6 + Math.sin(nx * 5.0) * 6.0 * roughness;
-  } else if (biome === 'volcanic') {
+  } else if (biome === "volcanic") {
     // Jagged caldera rim with deep crater
     const dist = Math.sqrt(x * x + z * z);
     const crater = -Math.exp(-Math.pow(dist / 600.0, 2)) * 60.0;
     const ridges = (Math.abs(Math.sin(nx * 3.0)) + Math.abs(Math.cos(nz * 3.0))) * 35.0;
     h = crater + ridges * roughness;
-  } else if (biome === 'highland') {
+  } else if (biome === "highland") {
     // High rolling mountain plateau
-    h = (Math.sin(nx * 1.8) + Math.cos(nz * 1.8)) * 35.0 +
-        (Math.sin(nx * 4.2) * Math.sin(nz * 3.7)) * 18.0 * roughness;
-  } else { // industrial
+    h =
+      (Math.sin(nx * 1.8) + Math.cos(nz * 1.8)) * 35.0 +
+      Math.sin(nx * 4.2) * Math.sin(nz * 3.7) * 18.0 * roughness;
+  } else {
+    // industrial
     // Flatter cratered terrain with leveled tiers
     const tiered = Math.round((Math.sin(nx * 2.0) + Math.cos(nz * 2.0)) * 2.0) * 12.0;
     h = tiered + Math.sin(nx * 4.0) * 4.0;
@@ -104,7 +120,7 @@ function getTerrainHeight(x, z, biome, scale, roughness) {
 
 // Init Three.js Viewport
 function initViewport() {
-  const container = document.getElementById('viewport');
+  const container = document.getElementById("viewport");
   const width = container.clientWidth;
   const height = container.clientHeight;
 
@@ -138,19 +154,25 @@ function initViewport() {
 
   // TransformControls
   transformControls = new THREE.TransformControls(camera, renderer.domElement);
-  transformControls.setMode('translate');
+  transformControls.setMode("translate");
   transformControls.showY = false; // Restrict translation to X/Z plane (Y snaps to terrain)
-  transformControls.addEventListener('dragging-changed', (event) => {
+  transformControls.addEventListener("dragging-changed", (event) => {
     orbitControls.enabled = !event.value;
   });
-  transformControls.addEventListener('change', () => {
+  transformControls.addEventListener("change", () => {
     if (transformControls.object && state.selectedAssetId) {
       const pos = transformControls.object.position;
       // Snap Y to terrain height
-      const th = getTerrainHeight(pos.x, pos.z, state.project.terrain.biome, state.project.terrain.height_scale, state.project.terrain.roughness);
+      const th = getTerrainHeight(
+        pos.x,
+        pos.z,
+        state.project.terrain.biome,
+        state.project.terrain.height_scale,
+        state.project.terrain.roughness,
+      );
       pos.y = th;
 
-      const asset = state.project.assets.find(a => a.asset_id === state.selectedAssetId);
+      const asset = state.project.assets.find((a) => a.asset_id === state.selectedAssetId);
       if (asset) {
         asset.x = Math.round(pos.x * 10) / 10;
         asset.y = Math.round(pos.y * 10) / 10;
@@ -194,16 +216,20 @@ function initViewport() {
   scene.add(ghostPreview);
 
   // Event Listeners
-  window.addEventListener('resize', onWindowResize);
-  container.addEventListener('mousemove', onMouseMove);
-  container.addEventListener('click', onCanvasClick);
-  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener("resize", onWindowResize);
+  container.addEventListener("mousemove", onMouseMove);
+  container.addEventListener("click", onCanvasClick);
+  window.addEventListener("keydown", onKeyDown);
 
   // Animation Loop
   animate();
 }
 
-// Build 3D Terrain Mesh
+/**
+ * Replace the preview terrain/water using project dimensions and biome settings.
+ * Removing objects from scene does not dispose GPU resources. Resource cleanup
+ * is a separate outstanding lifecycle concern, not supplied by this rebuild.
+ */
 function buildTerrain() {
   if (terrainMesh) scene.remove(terrainMesh);
   if (waterMesh) scene.remove(waterMesh);
@@ -223,7 +249,7 @@ function buildTerrain() {
     coastal: { sand: 0xd9c28a, rock: 0x4a7337, peak: 0x5a6975 },
     volcanic: { sand: 0x242426, rock: 0x473232, peak: 0x7a2323 },
     highland: { sand: 0x526b48, rock: 0x545b63, peak: 0xd9e5eb },
-    industrial: { sand: 0x42454a, rock: 0x2f343b, peak: 0x6e7885 }
+    industrial: { sand: 0x42454a, rock: 0x2f343b, peak: 0x6e7885 },
   };
   const pal = palettes[tcfg.biome] || palettes.coastal;
 
@@ -237,7 +263,7 @@ function buildTerrain() {
     const t = (y + 40.0) / (tcfg.height_scale + 40.0);
     if (t < 0.25) {
       color.setHex(pal.sand);
-    } else if (t < 0.70) {
+    } else if (t < 0.7) {
       color.setHex(pal.rock);
     } else {
       color.setHex(pal.peak);
@@ -245,14 +271,14 @@ function buildTerrain() {
     colors.push(color.r, color.g, color.b);
   }
 
-  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   geom.computeVertexNormals();
 
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.85,
     metalness: 0.1,
-    flatShading: true
+    flatShading: true,
   });
 
   terrainMesh = new THREE.Mesh(geom, mat);
@@ -268,7 +294,7 @@ function buildTerrain() {
     roughness: 0.15,
     metalness: 0.8,
     transparent: true,
-    opacity: 0.65
+    opacity: 0.65,
   });
   waterMesh = new THREE.Mesh(waterGeom, waterMat);
   waterMesh.position.y = tcfg.water_level;
@@ -318,23 +344,38 @@ function buildGeometryFromData(assetData) {
     const v2 = verts[f[2]];
     if (!v0 || !v1 || !v2) continue;
 
-    positions[ptr++] = v0[0]; positions[ptr++] = v0[1]; positions[ptr++] = v0[2];
-    positions[ptr++] = v1[0]; positions[ptr++] = v1[1]; positions[ptr++] = v1[2];
-    positions[ptr++] = v2[0]; positions[ptr++] = v2[1]; positions[ptr++] = v2[2];
+    positions[ptr++] = v0[0];
+    positions[ptr++] = v0[1];
+    positions[ptr++] = v0[2];
+    positions[ptr++] = v1[0];
+    positions[ptr++] = v1[1];
+    positions[ptr++] = v1[2];
+    positions[ptr++] = v2[0];
+    positions[ptr++] = v2[1];
+    positions[ptr++] = v2[2];
   }
 
-  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geom.computeVertexNormals();
   return geom;
 }
 
+/**
+ * Optionally read locally extracted static meshes after the initial UI appears.
+ * A missing catalog leaves procedural markers usable. syncSceneAssets updates
+ * existing groups rather than rebuilding them, so loading does not guarantee
+ * that every already-created placeholder is replaced with extracted geometry.
+ */
 async function loadGameAssets() {
   try {
-    const res = await fetch('/static/assets/game_assets_3d.json');
+    const res = await fetch("/static/assets/game_assets_3d.json");
     if (res.ok) {
       gameAssetsData = await res.json();
-      console.log("[Map Studio] Loaded authentic MW3 in-game 3D assets:", Object.keys(gameAssetsData));
-      // Re-sync all scene meshes to display authentic in-game models
+      console.log(
+        "[Map Studio] Loaded authentic MW3 in-game 3D assets:",
+        Object.keys(gameAssetsData),
+      );
+      // Refresh placements after loading; existing groups retain their geometry.
       syncSceneAssets();
     }
   } catch (e) {
@@ -342,7 +383,11 @@ async function loadGameAssets() {
   }
 }
 
-// 3D Mesh Generators for Assets (Authentic in-game 3D geometry + procedural tactical elements)
+/**
+ * Build one display group from extracted geometry or procedural tactical shapes.
+ * The root group carries asset_id for selection; child meshes carry geometry.
+ * This does not create a native game entity, physics body or animation rig.
+ */
 function createAssetMesh(asset) {
   const group = new THREE.Group();
   group.name = asset.asset_id;
@@ -351,7 +396,7 @@ function createAssetMesh(asset) {
     player: 0x00ff88,
     friendly: 0x00d2ff,
     enemy: 0xff3366,
-    neutral: 0xffaa00
+    neutral: 0xffaa00,
   };
   const fColor = factionColors[asset.faction] || 0xffaa00;
 
@@ -359,7 +404,7 @@ function createAssetMesh(asset) {
   const matArmor = new THREE.MeshStandardMaterial({
     color: 0x5a6372,
     roughness: 0.35,
-    metalness: 0.65
+    metalness: 0.65,
   });
   const matTrim = new THREE.MeshStandardMaterial({ color: fColor, roughness: 0.2, metalness: 0.8 });
   const matGlow = new THREE.MeshBasicMaterial({ color: fColor });
@@ -373,16 +418,19 @@ function createAssetMesh(asset) {
     group.add(mesh);
 
     // Subtle edge / faction outline
-    const wire = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({
-      color: fColor,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.25
-    }));
+    const wire = new THREE.Mesh(
+      geom,
+      new THREE.MeshBasicMaterial({
+        color: fColor,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.25,
+      }),
+    );
     group.add(wire);
 
     // If it's a BattleMech, add a glowing tactical beacon ring at feet
-    if (asset.asset_type.startsWith('mech_') || asset.asset_type === 'patrol') {
+    if (asset.asset_type.startsWith("mech_") || asset.asset_type === "patrol") {
       const ring = new THREE.Mesh(new THREE.RingGeometry(3.5, 4.2, 24), matGlow);
       ring.rotation.x = -Math.PI / 2;
       ring.position.y = 0.15;
@@ -395,7 +443,7 @@ function createAssetMesh(asset) {
   }
 
   // 2. Procedural Fallbacks for non-mesh types or until JSON finishes loading
-  if (asset.asset_type === 'turret_srm') {
+  if (asset.asset_type === "turret_srm") {
     // Octagonal base
     const base = new THREE.Mesh(new THREE.CylinderGeometry(8, 10, 6, 8), matArmor);
     base.position.y = 3;
@@ -418,8 +466,7 @@ function createAssetMesh(asset) {
     podR.position.set(6, 9, 2);
     podR.castShadow = true;
     group.add(podR);
-
-  } else if (asset.asset_type === 'turret_laser') {
+  } else if (asset.asset_type === "turret_laser") {
     // Tall triangular lattice tower
     const tower = new THREE.Mesh(new THREE.CylinderGeometry(3, 7, 24, 4), matArmor);
     tower.position.y = 12;
@@ -437,8 +484,7 @@ function createAssetMesh(asset) {
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 25, 5);
     group.add(barrel);
-
-  } else if (asset.asset_type === 'bunker') {
+  } else if (asset.asset_type === "bunker") {
     // Low profile reinforced bunker
     const bldg = new THREE.Mesh(new THREE.BoxGeometry(28, 10, 22), matArmor);
     bldg.position.y = 5;
@@ -451,8 +497,7 @@ function createAssetMesh(asset) {
     shield.position.y = 12;
     shield.castShadow = true;
     group.add(shield);
-
-  } else if (asset.asset_type === 'comm_center') {
+  } else if (asset.asset_type === "comm_center") {
     // Headquarters dome
     const base = new THREE.Mesh(new THREE.CylinderGeometry(14, 16, 12, 10), matArmor);
     base.position.y = 6;
@@ -469,8 +514,7 @@ function createAssetMesh(asset) {
     dish.position.set(0, 26, 0);
     dish.castShadow = true;
     group.add(dish);
-
-  } else if (asset.asset_type === 'repair_station') {
+  } else if (asset.asset_type === "repair_station") {
     // Heavy dual crane pylons
     const pylonL = new THREE.Mesh(new THREE.BoxGeometry(4, 26, 4), matTrim);
     pylonL.position.set(-14, 13, 0);
@@ -493,8 +537,7 @@ function createAssetMesh(asset) {
     pad.rotation.x = -Math.PI / 2;
     pad.position.y = 0.3;
     group.add(pad);
-
-  } else if (asset.asset_type === 'factory') {
+  } else if (asset.asset_type === "factory") {
     // Industrial warehouse
     const bldg = new THREE.Mesh(new THREE.BoxGeometry(42, 18, 30), matArmor);
     bldg.position.y = 9;
@@ -511,8 +554,7 @@ function createAssetMesh(asset) {
     s2.position.set(-5, 21, -8);
     s2.castShadow = true;
     group.add(s2);
-
-  } else if (asset.asset_type === 'fuel_tank') {
+  } else if (asset.asset_type === "fuel_tank") {
     // Twin cylindrical storage tanks
     const t1 = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 16, 12), matArmor);
     t1.position.set(-10, 8, 0);
@@ -523,8 +565,7 @@ function createAssetMesh(asset) {
     t2.position.set(10, 8, 0);
     t2.castShadow = true;
     group.add(t2);
-
-  } else if (asset.asset_type === 'spawn') {
+  } else if (asset.asset_type === "spawn") {
     // Player orbital drop zone beacon
     const ring = new THREE.Mesh(new THREE.RingGeometry(12, 15, 24), matGlow);
     ring.rotation.x = -Math.PI / 2;
@@ -532,15 +573,17 @@ function createAssetMesh(asset) {
     group.add(ring);
 
     // Vertical holographic light beam
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 80, 8), new THREE.MeshBasicMaterial({
-      color: 0x00ff88,
-      transparent: true,
-      opacity: 0.35
-    }));
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1, 80, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0x00ff88,
+        transparent: true,
+        opacity: 0.35,
+      }),
+    );
     beam.position.y = 40;
     group.add(beam);
-
-  } else if (asset.asset_type === 'nav') {
+  } else if (asset.asset_type === "nav") {
     // Floating tactical waypoint diamond
     const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(6), matTrim);
     diamond.position.y = 16;
@@ -551,8 +594,7 @@ function createAssetMesh(asset) {
     pRing.rotation.x = -Math.PI / 2;
     pRing.position.y = 0.4;
     group.add(pRing);
-
-  } else if (asset.asset_type === 'patrol') {
+  } else if (asset.asset_type === "patrol") {
     // Enemy BattleMech silhouette marker
     const mechTorso = new THREE.Mesh(new THREE.BoxGeometry(10, 8, 8), matTrim);
     mechTorso.position.y = 14;
@@ -562,11 +604,14 @@ function createAssetMesh(asset) {
     head.position.set(0, 19, 2);
     group.add(head);
 
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(8, 20, 8), new THREE.MeshBasicMaterial({
-      color: 0xff3366,
-      transparent: true,
-      opacity: 0.3
-    }));
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(8, 20, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xff3366,
+        transparent: true,
+        opacity: 0.3,
+      }),
+    );
     cone.rotation.x = Math.PI / 2;
     cone.position.set(0, 0.5, 14);
     group.add(cone);
@@ -579,11 +624,15 @@ function createAssetMesh(asset) {
   return group;
 }
 
-// Synchronize all assets in scene
+/**
+ * Reconcile project IDs with display groups, then update transforms/selection.
+ * Existing meshes retain their geometry/materials. Callers that change appearance
+ * currently remove a group explicitly before requesting a fresh one.
+ */
 function syncSceneAssets() {
   // Remove deleted assets
   for (const [id, grp] of assetObjectMap.entries()) {
-    if (!state.project.assets.some(a => a.asset_id === id)) {
+    if (!state.project.assets.some((a) => a.asset_id === id)) {
       scene.remove(grp);
       assetObjectMap.delete(id);
     }
@@ -609,12 +658,12 @@ function syncSceneAssets() {
     transformControls.detach();
   }
 
-  document.getElementById('stat-entities').innerText = state.project.assets.length;
+  document.getElementById("stat-entities").innerText = state.project.assets.length;
 }
 
-// Raycast to Terrain
+/** Convert viewport pixels to a ray hit on the preview terrain, or null. */
 function raycastTerrain(event) {
-  const container = document.getElementById('viewport');
+  const container = document.getElementById("viewport");
   const rect = container.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / container.clientWidth) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / container.clientHeight) * 2 + 1;
@@ -631,7 +680,8 @@ function raycastTerrain(event) {
 function onMouseMove(event) {
   const pt = raycastTerrain(event);
   if (pt) {
-    document.getElementById('stat-coords').innerText = `X: ${Math.round(pt.x)} | Y: ${Math.round(pt.y)} | Z: ${Math.round(pt.z)}`;
+    document.getElementById("stat-coords").innerText =
+      `X: ${Math.round(pt.x)} | Y: ${Math.round(pt.y)} | Z: ${Math.round(pt.z)}`;
 
     if (state.activeTool) {
       ghostPreview.position.copy(pt);
@@ -647,7 +697,7 @@ function onCanvasClick(event) {
   // If dragging transform controls, ignore
   if (transformControls.dragging) return;
 
-  const container = document.getElementById('viewport');
+  const container = document.getElementById("viewport");
   const rect = container.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / container.clientWidth) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / container.clientHeight) * 2 + 1;
@@ -667,12 +717,12 @@ function onCanvasClick(event) {
         yaw_deg: 0,
         faction: getDefaultFaction(state.activeTool),
         health: 100,
-        is_objective: state.activeTool.includes('comm') || state.activeTool.includes('bunker')
+        is_objective: state.activeTool.includes("comm") || state.activeTool.includes("bunker"),
       };
 
       state.project.assets.push(newAsset);
       state.selectedAssetId = newAsset.asset_id;
-      playBeep(580, 'triangle', 0.1);
+      playBeep(580, "triangle", 0.1);
 
       syncSceneAssets();
       updateInspector();
@@ -694,7 +744,7 @@ function onCanvasClick(event) {
     }
     if (cur && assetObjectMap.has(cur.name)) {
       state.selectedAssetId = cur.name;
-      playBeep(720, 'sine', 0.05);
+      playBeep(720, "sine", 0.05);
       syncSceneAssets();
       updateInspector();
       return;
@@ -726,16 +776,16 @@ function getDefaultName(type) {
     mech_daishi: "Dire Wolf / Daishi",
     spawn: "Player Orbital Drop Zone",
     nav: "Nav Point Able",
-    patrol: "OpFor Patrol Lance"
+    patrol: "OpFor Patrol Lance",
   };
   return titles[type] || "World Installation";
 }
 
 function getDefaultFaction(type) {
-  if (type === 'spawn') return 'player';
-  if (type === 'patrol' || type.startsWith('mech_')) return 'enemy';
-  if (type === 'turret_srm' || type === 'turret_laser' || type === 'bunker') return 'enemy';
-  return 'neutral';
+  if (type === "spawn") return "player";
+  if (type === "patrol" || type.startsWith("mech_")) return "enemy";
+  if (type === "turret_srm" || type === "turret_laser" || type === "bunker") return "enemy";
+  return "neutral";
 }
 
 // Active Tool Selection
@@ -747,27 +797,35 @@ function selectTool(type) {
   state.activeTool = type;
 
   // Highlight UI
-  document.querySelectorAll('.asset-card').forEach(el => {
-    el.classList.toggle('active', el.dataset.type === type);
+  document.querySelectorAll(".asset-card").forEach((el) => {
+    el.classList.toggle("active", el.dataset.type === type);
   });
 
-  const banner = document.getElementById('placement-banner');
-  banner.style.display = 'flex';
+  const banner = document.getElementById("placement-banner");
+  banner.style.display = "flex";
   banner.innerText = `PLACING: ${getDefaultName(type).toUpperCase()} (Click on terrain to place, ESC to cancel)`;
 
   // Update ghost preview mesh
   while (ghostPreview.children.length > 0) {
     ghostPreview.remove(ghostPreview.children[0]);
   }
-  const previewAsset = { asset_id: "ghost", asset_type: type, faction: getDefaultFaction(type), x:0, y:0, z:0, yaw_deg:0 };
+  const previewAsset = {
+    asset_id: "ghost",
+    asset_type: type,
+    faction: getDefaultFaction(type),
+    x: 0,
+    y: 0,
+    z: 0,
+    yaw_deg: 0,
+  };
   const previewMesh = createAssetMesh(previewAsset);
-  previewMesh.traverse(child => {
+  previewMesh.traverse((child) => {
     if (child.isMesh) {
       child.material = new THREE.MeshBasicMaterial({
         color: 0x00f0ff,
         wireframe: true,
         transparent: true,
-        opacity: 0.7
+        opacity: 0.7,
       });
     }
   });
@@ -776,63 +834,64 @@ function selectTool(type) {
 
 function clearActiveTool() {
   state.activeTool = null;
-  document.querySelectorAll('.asset-card').forEach(el => el.classList.remove('active'));
-  document.getElementById('placement-banner').style.display = 'none';
+  document.querySelectorAll(".asset-card").forEach((el) => el.classList.remove("active"));
+  document.getElementById("placement-banner").style.display = "none";
   ghostPreview.visible = false;
 }
 
 // Update Property Inspector UI
 function updateInspector() {
-  const card = document.getElementById('inspector-content');
-  const emptyNotice = document.getElementById('inspector-empty');
+  const card = document.getElementById("inspector-content");
+  const emptyNotice = document.getElementById("inspector-empty");
 
   if (!state.selectedAssetId) {
-    card.style.display = 'none';
-    emptyNotice.style.display = 'block';
+    card.style.display = "none";
+    emptyNotice.style.display = "block";
     return;
   }
 
-  const asset = state.project.assets.find(a => a.asset_id === state.selectedAssetId);
+  const asset = state.project.assets.find((a) => a.asset_id === state.selectedAssetId);
   if (!asset) {
-    card.style.display = 'none';
-    emptyNotice.style.display = 'block';
+    card.style.display = "none";
+    emptyNotice.style.display = "block";
     return;
   }
 
-  card.style.display = 'block';
-  emptyNotice.style.display = 'none';
+  card.style.display = "block";
+  emptyNotice.style.display = "none";
 
-  document.getElementById('insp-name').value = asset.name;
-  document.getElementById('insp-type').innerText = asset.asset_type.toUpperCase();
-  document.getElementById('insp-pos-x').value = asset.x;
-  document.getElementById('insp-pos-y').value = asset.y;
-  document.getElementById('insp-pos-z').value = asset.z;
-  document.getElementById('insp-yaw').value = Math.round(asset.yaw_deg || 0);
-  document.getElementById('insp-yaw-label').innerText = `${Math.round(asset.yaw_deg || 0)}°`;
-  document.getElementById('insp-faction').value = asset.faction;
-  document.getElementById('insp-health').value = asset.health;
-  document.getElementById('insp-health-label').innerText = asset.health;
-  document.getElementById('insp-objective').checked = !!asset.is_objective;
+  document.getElementById("insp-name").value = asset.name;
+  document.getElementById("insp-type").innerText = asset.asset_type.toUpperCase();
+  document.getElementById("insp-pos-x").value = asset.x;
+  document.getElementById("insp-pos-y").value = asset.y;
+  document.getElementById("insp-pos-z").value = asset.z;
+  document.getElementById("insp-yaw").value = Math.round(asset.yaw_deg || 0);
+  document.getElementById("insp-yaw-label").innerText = `${Math.round(asset.yaw_deg || 0)}°`;
+  document.getElementById("insp-faction").value = asset.faction;
+  document.getElementById("insp-health").value = asset.health;
+  document.getElementById("insp-health-label").innerText = asset.health;
+  document.getElementById("insp-objective").checked = !!asset.is_objective;
 }
 
-// Inspector Event Bindings
+// These handlers mutate state.project directly; the history fields in state are
+// not a complete undo implementation. Sync/redraw is distinct from persistence.
 function bindInspectorEvents() {
-  document.getElementById('insp-name').addEventListener('input', (e) => {
-    const a = state.project.assets.find(x => x.asset_id === state.selectedAssetId);
+  document.getElementById("insp-name").addEventListener("input", (e) => {
+    const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
     if (a) a.name = e.target.value;
   });
 
-  document.getElementById('insp-yaw').addEventListener('input', (e) => {
-    const a = state.project.assets.find(x => x.asset_id === state.selectedAssetId);
+  document.getElementById("insp-yaw").addEventListener("input", (e) => {
+    const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
     if (a) {
       a.yaw_deg = parseFloat(e.target.value);
-      document.getElementById('insp-yaw-label').innerText = `${a.yaw_deg}°`;
+      document.getElementById("insp-yaw-label").innerText = `${a.yaw_deg}°`;
       syncSceneAssets();
     }
   });
 
-  document.getElementById('insp-faction').addEventListener('change', (e) => {
-    const a = state.project.assets.find(x => x.asset_id === state.selectedAssetId);
+  document.getElementById("insp-faction").addEventListener("change", (e) => {
+    const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
     if (a) {
       a.faction = e.target.value;
       // Re-create mesh for new colors
@@ -843,41 +902,49 @@ function bindInspectorEvents() {
     }
   });
 
-  document.getElementById('insp-health').addEventListener('input', (e) => {
-    const a = state.project.assets.find(x => x.asset_id === state.selectedAssetId);
+  document.getElementById("insp-health").addEventListener("input", (e) => {
+    const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
     if (a) {
       a.health = parseInt(e.target.value);
-      document.getElementById('insp-health-label').innerText = a.health;
+      document.getElementById("insp-health-label").innerText = a.health;
     }
   });
 
-  document.getElementById('insp-objective').addEventListener('change', (e) => {
-    const a = state.project.assets.find(x => x.asset_id === state.selectedAssetId);
+  document.getElementById("insp-objective").addEventListener("change", (e) => {
+    const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
     if (a) a.is_objective = e.target.checked;
   });
 
-  document.getElementById('btn-insp-delete').addEventListener('click', () => {
+  document.getElementById("btn-insp-delete").addEventListener("click", () => {
     if (state.selectedAssetId) {
-      state.project.assets = state.project.assets.filter(a => a.asset_id !== state.selectedAssetId);
+      state.project.assets = state.project.assets.filter(
+        (a) => a.asset_id !== state.selectedAssetId,
+      );
       state.selectedAssetId = null;
-      playBeep(320, 'sawtooth', 0.1);
+      playBeep(320, "sawtooth", 0.1);
       syncSceneAssets();
       updateInspector();
     }
   });
 
-  document.getElementById('btn-insp-dup').addEventListener('click', () => {
-    const orig = state.project.assets.find(a => a.asset_id === state.selectedAssetId);
+  document.getElementById("btn-insp-dup").addEventListener("click", () => {
+    const orig = state.project.assets.find((a) => a.asset_id === state.selectedAssetId);
     if (orig) {
       const copy = JSON.parse(JSON.stringify(orig));
       copy.asset_id = `asset_${Date.now()}`;
       copy.name = `${orig.name} (Copy)`;
       copy.x += 25;
       copy.z += 25;
-      copy.y = getTerrainHeight(copy.x, copy.z, state.project.terrain.biome, state.project.terrain.height_scale, state.project.terrain.roughness);
+      copy.y = getTerrainHeight(
+        copy.x,
+        copy.z,
+        state.project.terrain.biome,
+        state.project.terrain.height_scale,
+        state.project.terrain.roughness,
+      );
       state.project.assets.push(copy);
       state.selectedAssetId = copy.asset_id;
-      playBeep(640, 'triangle', 0.08);
+      playBeep(640, "triangle", 0.08);
       syncSceneAssets();
       updateInspector();
     }
@@ -887,20 +954,21 @@ function bindInspectorEvents() {
 // Camera View Mode Presets
 function setViewMode(mode) {
   state.viewMode = mode;
-  document.querySelectorAll('.hud-btn').forEach(btn => btn.classList.remove('active'));
-  document.getElementById(`btn-view-${mode}`).classList.add('active');
+  document.querySelectorAll(".hud-btn").forEach((btn) => btn.classList.remove("active"));
+  document.getElementById(`btn-view-${mode}`).classList.add("active");
 
-  if (mode === 'topdown') {
+  if (mode === "topdown") {
     orbitControls.reset();
     camera.position.set(0, 1800, 0);
     orbitControls.target.set(0, 0, 0);
     orbitControls.maxPolarAngle = 0.001; // Lock to top-down
-  } else if (mode === 'iso') {
+  } else if (mode === "iso") {
     orbitControls.reset();
     camera.position.set(-1100, 1100, 1100);
     orbitControls.target.set(0, 0, 0);
     orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
-  } else { // orbit
+  } else {
+    // orbit
     orbitControls.reset();
     camera.position.set(-600, 450, 750);
     orbitControls.target.set(0, 0, 0);
@@ -911,44 +979,44 @@ function setViewMode(mode) {
 // Environment Presets
 function setEnvPreset(preset) {
   state.project.lighting.preset_name = preset;
-  document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
-  document.getElementById(`preset-${preset}`).classList.add('active');
+  document.querySelectorAll(".preset-chip").forEach((c) => c.classList.remove("active"));
+  document.getElementById(`preset-${preset}`).classList.add("active");
 
-  if (preset === 'noon') {
+  if (preset === "noon") {
     state.project.lighting.azimuth = 180;
     state.project.lighting.elevation = 75;
     state.project.lighting.strength = 1.0;
     state.project.lighting.ambient = 0.35;
     state.project.lighting.sun_color = [1.0, 1.0, 0.95];
     state.project.lighting.sky_tint = [0.45, 0.65, 0.95];
-  } else if (preset === 'sunset') {
+  } else if (preset === "sunset") {
     state.project.lighting.azimuth = 235;
     state.project.lighting.elevation = 28;
-    state.project.lighting.strength = 0.90;
+    state.project.lighting.strength = 0.9;
     state.project.lighting.ambient = 0.22;
-    state.project.lighting.sun_color = [1.0, 0.75, 0.50];
+    state.project.lighting.sun_color = [1.0, 0.75, 0.5];
     state.project.lighting.sky_tint = [0.38, 0.28, 0.48];
-  } else if (preset === 'night') {
+  } else if (preset === "night") {
     state.project.lighting.azimuth = 45;
     state.project.lighting.elevation = 15;
     state.project.lighting.strength = 0.15;
     state.project.lighting.ambient = 0.08;
     state.project.lighting.sun_color = [0.4, 0.55, 0.85];
     state.project.lighting.sky_tint = [0.04, 0.06, 0.12];
-  } else if (preset === 'storm') {
+  } else if (preset === "storm") {
     state.project.lighting.azimuth = 200;
     state.project.lighting.elevation = 40;
     state.project.lighting.strength = 0.45;
     state.project.lighting.ambient = 0.15;
     state.project.lighting.sun_color = [0.8, 0.65, 0.45];
-    state.project.lighting.sky_tint = [0.25, 0.22, 0.20];
+    state.project.lighting.sky_tint = [0.25, 0.22, 0.2];
   }
 
   // Update slider UI
-  document.getElementById('env-azimuth').value = state.project.lighting.azimuth;
-  document.getElementById('env-elevation').value = state.project.lighting.elevation;
-  document.getElementById('env-strength').value = state.project.lighting.strength;
-  document.getElementById('env-ambient').value = state.project.lighting.ambient;
+  document.getElementById("env-azimuth").value = state.project.lighting.azimuth;
+  document.getElementById("env-elevation").value = state.project.lighting.elevation;
+  document.getElementById("env-strength").value = state.project.lighting.strength;
+  document.getElementById("env-ambient").value = state.project.lighting.ambient;
 
   updateLighting();
 }
@@ -957,66 +1025,203 @@ function setEnvPreset(preset) {
 function loadDemoMap() {
   state.project.pack_id = "iron_ridge_outpost";
   state.project.pack_title = "Iron Ridge Outpost";
-  state.project.description = "Fortified Clan Smoke Jaguar communications outpost nestled in the red canyons of Tranquil.";
+  state.project.description =
+    "Fortified Clan Smoke Jaguar communications outpost nestled in the red canyons of Tranquil.";
   state.project.terrain.biome = "desert";
   state.project.terrain.height_scale = 85.0;
   state.project.terrain.water_level = 2.0;
 
   state.project.assets = [
     // Player Spawn
-    { asset_id: "p_spawn", asset_type: "spawn", name: "Player Orbital Drop Zone", x: -850, y: 0, z: -800, yaw_deg: 45, faction: "player", health: 100 },
+    {
+      asset_id: "p_spawn",
+      asset_type: "spawn",
+      name: "Player Orbital Drop Zone",
+      x: -850,
+      y: 0,
+      z: -800,
+      yaw_deg: 45,
+      faction: "player",
+      health: 100,
+    },
     // Command Bunker & Comms (In-Game 3D Models)
-    { asset_id: "bunk_cmd", asset_type: "bunker", name: "Outpost Command Bunker", x: 50, y: 0, z: 20, yaw_deg: 180, faction: "enemy", health: 250, is_objective: true },
-    { asset_id: "comm_main", asset_type: "comm_center", name: "Primary Comms Dish", x: 120, y: 0, z: 80, yaw_deg: 210, faction: "enemy", health: 150, is_objective: true },
+    {
+      asset_id: "bunk_cmd",
+      asset_type: "bunker",
+      name: "Outpost Command Bunker",
+      x: 50,
+      y: 0,
+      z: 20,
+      yaw_deg: 180,
+      faction: "enemy",
+      health: 250,
+      is_objective: true,
+    },
+    {
+      asset_id: "comm_main",
+      asset_type: "comm_center",
+      name: "Primary Comms Dish",
+      x: 120,
+      y: 0,
+      z: 80,
+      yaw_deg: 210,
+      faction: "enemy",
+      health: 150,
+      is_objective: true,
+    },
     // Defense Perimeter (In-Game 3D Models)
-    { asset_id: "tur_srm_1", asset_type: "turret_srm", name: "Perimeter SRM Alpha", x: -160, y: 0, z: -90, yaw_deg: 135, faction: "enemy", health: 120 },
-    { asset_id: "tur_srm_2", asset_type: "turret_srm", name: "Perimeter SRM Beta", x: 180, y: 0, z: -110, yaw_deg: 225, faction: "enemy", health: 120 },
-    { asset_id: "tur_las_1", asset_type: "turret_laser", name: "Ridge Laser Tower", x: 40, y: 0, z: 220, yaw_deg: 0, faction: "enemy", health: 150 },
+    {
+      asset_id: "tur_srm_1",
+      asset_type: "turret_srm",
+      name: "Perimeter SRM Alpha",
+      x: -160,
+      y: 0,
+      z: -90,
+      yaw_deg: 135,
+      faction: "enemy",
+      health: 120,
+    },
+    {
+      asset_id: "tur_srm_2",
+      asset_type: "turret_srm",
+      name: "Perimeter SRM Beta",
+      x: 180,
+      y: 0,
+      z: -110,
+      yaw_deg: 225,
+      faction: "enemy",
+      health: 120,
+    },
+    {
+      asset_id: "tur_las_1",
+      asset_type: "turret_laser",
+      name: "Ridge Laser Tower",
+      x: 40,
+      y: 0,
+      z: 220,
+      yaw_deg: 0,
+      faction: "enemy",
+      health: 150,
+    },
     // Coolant Silos (In-Game 3D Model)
-    { asset_id: "fuel_1", asset_type: "fuel_tank", name: "Refinery Coolant Silo", x: 160, y: 0, z: -20, yaw_deg: 45, faction: "neutral", health: 60 },
+    {
+      asset_id: "fuel_1",
+      asset_type: "fuel_tank",
+      name: "Refinery Coolant Silo",
+      x: 160,
+      y: 0,
+      z: -20,
+      yaw_deg: 45,
+      faction: "neutral",
+      health: 60,
+    },
     // Fortified City Garrison (In-Game 3D Model)
-    { asset_id: "garrison_1", asset_type: "city_building", name: "Forward Garrison Block", x: -120, y: 0, z: 120, yaw_deg: 0, faction: "enemy", health: 180 },
+    {
+      asset_id: "garrison_1",
+      asset_type: "city_building",
+      name: "Forward Garrison Block",
+      x: -120,
+      y: 0,
+      z: 120,
+      yaw_deg: 0,
+      faction: "enemy",
+      health: 180,
+    },
     // In-Game BattleMechs (Patrol & Defense)
-    { asset_id: "mech_guard", asset_type: "mech_madcat", name: "Smoke Jaguar Timber Wolf", x: 30, y: 0, z: 70, yaw_deg: 195, faction: "enemy", health: 350, is_objective: true },
-    { asset_id: "mech_patrol", asset_type: "mech_bushwacker", name: "Recon Bushwacker BSW-X1", x: -280, y: 0, z: -250, yaw_deg: 60, faction: "enemy", health: 220 },
+    {
+      asset_id: "mech_guard",
+      asset_type: "mech_madcat",
+      name: "Smoke Jaguar Timber Wolf",
+      x: 30,
+      y: 0,
+      z: 70,
+      yaw_deg: 195,
+      faction: "enemy",
+      health: 350,
+      is_objective: true,
+    },
+    {
+      asset_id: "mech_patrol",
+      asset_type: "mech_bushwacker",
+      name: "Recon Bushwacker BSW-X1",
+      x: -280,
+      y: 0,
+      z: -250,
+      yaw_deg: 60,
+      faction: "enemy",
+      health: 220,
+    },
     // Nav Points
-    { asset_id: "nav_able", asset_type: "nav", name: "Nav Point Able", x: -400, y: 0, z: -350, yaw_deg: 0, faction: "neutral", health: 100 },
-    { asset_id: "nav_baker", asset_type: "nav", name: "Nav Point Baker", x: 50, y: 0, z: -150, yaw_deg: 0, faction: "neutral", health: 100 }
+    {
+      asset_id: "nav_able",
+      asset_type: "nav",
+      name: "Nav Point Able",
+      x: -400,
+      y: 0,
+      z: -350,
+      yaw_deg: 0,
+      faction: "neutral",
+      health: 100,
+    },
+    {
+      asset_id: "nav_baker",
+      asset_type: "nav",
+      name: "Nav Point Baker",
+      x: 50,
+      y: 0,
+      z: -150,
+      yaw_deg: 0,
+      faction: "neutral",
+      health: 100,
+    },
   ];
 
   // Auto snap all Y coordinates to terrain
   for (const a of state.project.assets) {
-    a.y = Math.round(getTerrainHeight(a.x, a.z, state.project.terrain.biome, state.project.terrain.height_scale, state.project.terrain.roughness) * 10) / 10;
+    a.y =
+      Math.round(
+        getTerrainHeight(
+          a.x,
+          a.z,
+          state.project.terrain.biome,
+          state.project.terrain.height_scale,
+          state.project.terrain.roughness,
+        ) * 10,
+      ) / 10;
   }
 
   // Update form inputs
-  document.getElementById('project-title').value = state.project.pack_title;
-  document.getElementById('project-id').value = state.project.pack_id;
-  document.getElementById('biome-select').value = state.project.terrain.biome;
+  document.getElementById("project-title").value = state.project.pack_title;
+  document.getElementById("project-id").value = state.project.pack_id;
+  document.getElementById("biome-select").value = state.project.terrain.biome;
 
   buildTerrain();
-  setEnvPreset('sunset');
+  setEnvPreset("sunset");
   syncSceneAssets();
   updateInspector();
-  playBeep(880, 'sine', 0.12);
+  playBeep(880, "sine", 0.12);
 }
 
-// Export Map Pack via Backend API
+/**
+ * Send a snapshot of requested edits to the local builder; show its result.
+ * A successful response means output was written, not that gameplay loaded or
+ * that every preview property was applied. The server validates pack paths.
+ */
 async function exportMapPack() {
-  const btn = document.getElementById('btn-export');
+  const btn = document.getElementById("btn-export");
   btn.innerText = "COMPILING PACK...";
   btn.disabled = true;
 
   try {
-    const res = await fetch('/api/export-pack', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state.project)
+    const res = await fetch("/api/export-pack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state.project),
     });
 
     const data = await res.json();
-    if (data.status === 'ok') {
-      playBeep(980, 'sine', 0.15);
+    if (data.status === "ok") {
+      playBeep(980, "sine", 0.15);
       showExportSuccessModal(data);
     } else {
       alert("Export failed: " + (data.message || "Unknown error"));
@@ -1031,8 +1236,8 @@ async function exportMapPack() {
 
 // Show Export Success Modal
 function showExportSuccessModal(data) {
-  const modal = document.getElementById('export-modal');
-  const details = document.getElementById('modal-export-details');
+  const modal = document.getElementById("export-modal");
+  const details = document.getElementById("modal-export-details");
 
   details.innerHTML = `
     <div style="font-family: var(--font-mono); font-size: 12px; background: rgba(0,0,0,0.4); padding: 12px; border-radius: 4px; border: 1px solid var(--border-color); margin-top: 10px;">
@@ -1043,24 +1248,27 @@ function showExportSuccessModal(data) {
     </div>
   `;
 
-  modal.style.display = 'flex';
+  modal.style.display = "flex";
 }
 
-// Launch Game Native Engine
+/**
+ * Ask the server to start the existing exported pack's launcher.
+ * This does not export unsaved preview changes or wait for native-game success.
+ */
 async function launchGameEngine() {
-  const btn = document.getElementById('btn-launch-game');
+  const btn = document.getElementById("btn-launch-game");
   btn.innerText = "LAUNCHING...";
   btn.disabled = true;
 
   try {
-    const res = await fetch('/api/launch-map', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pack_id: state.project.pack_id })
+    const res = await fetch("/api/launch-map", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pack_id: state.project.pack_id }),
     });
     const data = await res.json();
-    if (data.status === 'ok') {
-      playBeep(1200, 'sine', 0.2);
+    if (data.status === "ok") {
+      playBeep(1200, "sine", 0.2);
     } else {
       alert("Launch error: " + data.message);
     }
@@ -1074,29 +1282,34 @@ async function launchGameEngine() {
 
 // Keyboard shortcuts
 function onKeyDown(e) {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+  if (
+    e.target.tagName === "INPUT" ||
+    e.target.tagName === "SELECT" ||
+    e.target.tagName === "TEXTAREA"
+  )
+    return;
 
-  if (e.key === 'Escape') {
+  if (e.key === "Escape") {
     clearActiveTool();
     state.selectedAssetId = null;
     syncSceneAssets();
     updateInspector();
-  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+  } else if (e.key === "Delete" || e.key === "Backspace") {
     if (state.selectedAssetId) {
-      document.getElementById('btn-insp-delete').click();
+      document.getElementById("btn-insp-delete").click();
     }
-  } else if (e.key === 't' || e.key === 'T') {
-    setViewMode('topdown');
-  } else if (e.key === 'o' || e.key === 'O') {
-    setViewMode('orbit');
-  } else if (e.key === 'i' || e.key === 'I') {
-    setViewMode('iso');
+  } else if (e.key === "t" || e.key === "T") {
+    setViewMode("topdown");
+  } else if (e.key === "o" || e.key === "O") {
+    setViewMode("orbit");
+  } else if (e.key === "i" || e.key === "I") {
+    setViewMode("iso");
   }
 }
 
 // Window resize
 function onWindowResize() {
-  const container = document.getElementById('viewport');
+  const container = document.getElementById("viewport");
   camera.aspect = container.clientWidth / container.clientHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(container.clientWidth, container.clientHeight);
@@ -1115,34 +1328,35 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// Window OnLoad Init
-window.addEventListener('DOMContentLoaded', () => {
+// Initialization deliberately starts optional asset loading without awaiting it.
+// The demo and animation loop are available while that local request completes.
+window.addEventListener("DOMContentLoaded", () => {
   initViewport();
   bindInspectorEvents();
 
   // UI Event Bindings
-  document.getElementById('project-title').addEventListener('input', (e) => {
+  document.getElementById("project-title").addEventListener("input", (e) => {
     state.project.pack_title = e.target.value;
   });
 
-  document.getElementById('project-id').addEventListener('input', (e) => {
-    state.project.pack_id = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  document.getElementById("project-id").addEventListener("input", (e) => {
+    state.project.pack_id = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_");
   });
 
-  document.getElementById('biome-select').addEventListener('change', (e) => {
+  document.getElementById("biome-select").addEventListener("change", (e) => {
     state.project.terrain.biome = e.target.value;
     buildTerrain();
   });
 
-  document.querySelectorAll('.asset-card').forEach(card => {
-    card.addEventListener('click', () => selectTool(card.dataset.type));
+  document.querySelectorAll(".asset-card").forEach((card) => {
+    card.addEventListener("click", () => selectTool(card.dataset.type));
   });
 
-  document.getElementById('btn-export').addEventListener('click', exportMapPack);
-  document.getElementById('btn-load-demo').addEventListener('click', loadDemoMap);
-  document.getElementById('btn-launch-game').addEventListener('click', launchGameEngine);
-  document.getElementById('btn-modal-close').addEventListener('click', () => {
-    document.getElementById('export-modal').style.display = 'none';
+  document.getElementById("btn-export").addEventListener("click", exportMapPack);
+  document.getElementById("btn-load-demo").addEventListener("click", loadDemoMap);
+  document.getElementById("btn-launch-game").addEventListener("click", launchGameEngine);
+  document.getElementById("btn-modal-close").addEventListener("click", () => {
+    document.getElementById("export-modal").style.display = "none";
   });
 
   // Load authentic in-game 3D models and initial demo

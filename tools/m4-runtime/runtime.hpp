@@ -13,6 +13,8 @@
 
 namespace mw34::m4_runtime {
 
+// Logical guest integer state, not the host CPU context or Remill's full State.
+// esp/eip contain 32-bit guest addresses; never cast them to native pointers.
 struct Cpu32 {
     std::uint32_t eax{}, ecx{}, edx{}, ebx{}, esp{}, ebp{}, esi{}, edi{};
     std::uint32_t eflags = 0x202;
@@ -21,19 +23,34 @@ struct Cpu32 {
 };
 static_assert(sizeof(Cpu32) == 40);
 
+// Domains prevent an authored fixture or another research image from registering
+// callbacks as if they had the admitted game's measured identity.
 enum class Domain { authored_fixture, admitted_game, research_game };
 enum class Abi { Cdecl, Stdcall, Thiscall, Internal };
 struct AbiContract {
     Abi abi = Abi::Cdecl;
-    std::uint32_t stack_argument_bytes{};
+    std::uint32_t
+        stack_argument_bytes{}; // Guest stack arguments only; excludes CALL's return word.
     bool preserve_nonvolatile = true;
 };
 
 enum class FaultReason {
-    unresolved_translation, unresolved_import, invalid_binding, registry_frozen,
-    memory_access, stack_bounds, abi_violation, poisoned, call_limit,
-    unsupported_fs, invalid_seh_chain, unimplemented_seh_dispatch,
-    heap_exhausted, invalid_allocation, initializer_changed, initializer_failed
+    unresolved_translation,
+    unresolved_import,
+    invalid_binding,
+    registry_frozen,
+    memory_access,
+    stack_bounds,
+    abi_violation,
+    poisoned,
+    call_limit,
+    unsupported_fs,
+    invalid_seh_chain,
+    unimplemented_seh_dispatch,
+    heap_exhausted,
+    invalid_allocation,
+    initializer_changed,
+    initializer_failed
 };
 
 class Fault : public std::runtime_error {
@@ -42,12 +59,15 @@ class Fault : public std::runtime_error {
     [[nodiscard]] FaultReason reason() const noexcept { return reason_; }
     [[nodiscard]] GuestAddress site() const noexcept { return site_; }
     [[nodiscard]] GuestAddress target() const noexcept { return target_; }
+
   private:
     FaultReason reason_;
     GuestAddress site_, target_;
 };
 [[nodiscard]] const char *fault_name(FaultReason reason) noexcept;
 
+// Bounded, private main-thread mappings. All sizes are bytes; call-record capacity
+// is a total trace budget, while max_call_depth bounds simultaneously active frames.
 struct Policy {
     GuestAddress stack_low{0x20000000};
     std::uint32_t stack_bytes = 1024 * 1024;
@@ -75,10 +95,13 @@ struct Evidence {
 struct Translation {
     GuestAddress entry;
     AbiContract contract;
-    NativeEntry native{};
+    NativeEntry
+        native{}; // Statically supplied host callback; not an address read from guest bytes.
     std::string name;
     Evidence evidence;
 };
+// Bind one admitted guest IAT slot to an implemented native service. The original
+// IAT DWORD stays intact; routing uses this host-owned registry, not pointer patching.
 struct Service {
     GuestAddress iat_slot;
     AbiContract contract;
@@ -100,13 +123,17 @@ struct ServiceContinuation {
     std::string native_artifact_sha256, gate_report_sha256, name;
 };
 
+// Append-only attempt record. completed becomes true only after return-PC, stack
+// cleanup and nonvolatile-register checks pass. Failed attempts remain visible.
 struct CallRecord {
     GuestAddress site, target, return_pc;
     bool import{};
     bool completed{};
     std::string name;
 };
-struct SehRecord { GuestAddress frame, previous, handler; };
+struct SehRecord {
+    GuestAddress frame, previous, handler;
+};
 enum class InitializerStatus { pending, zero_sentinel, attempted, complete, fault };
 struct InitializerItem {
     GuestAddress slot, target;
@@ -114,6 +141,9 @@ struct InitializerItem {
     std::string failure;
 };
 
+// One runtime-owned ordering snapshot. A failed attempt cannot be retried as a
+// fresh initialization; the cursor/status retain exactly how far execution got.
+// The owning Runtime must outlive this ledger; a ledger move retains that owner.
 class InitializerLedger {
   public:
     InitializerLedger(const InitializerLedger &) = delete;
@@ -123,6 +153,7 @@ class InitializerLedger {
     [[nodiscard]] std::size_t cursor() const noexcept { return cursor_; }
     [[nodiscard]] bool completed() const noexcept { return cursor_ == items_.size() && !failed_; }
     [[nodiscard]] bool failed() const noexcept { return failed_; }
+
   private:
     friend class Runtime;
     explicit InitializerLedger(Runtime *owner) : owner_(owner) {}
@@ -132,8 +163,14 @@ class InitializerLedger {
     bool failed_{};
 };
 
+// Own one loaded image, guest thread state and static native binding registry.
+// Callers serialize access: references returned by cpu()/memory()/fx()/remill_state()
+// expose mutable state for reviewed adapters, not a concurrent execution interface.
+// Freeze registration before execution. A fault in an active callback poisons this
+// context rather than allowing a caught error to masquerade as a successful return.
 class Runtime {
   public:
+    // Host orchestration sentinel, never a fabricated game/provider instruction.
     static constexpr std::uint32_t external_return = 0xfffffff0;
     static constexpr std::uint32_t seh_end = 0xffffffff;
     static constexpr std::size_t remill_state_bytes = 3504;
@@ -158,10 +195,17 @@ class Runtime {
     [[nodiscard]] const Cpu32 &cpu() const noexcept { return cpu_; }
     [[nodiscard]] GuestMemory &memory() noexcept { return image_.memory; }
     [[nodiscard]] const GuestMemory &memory() const noexcept { return image_.memory; }
-    [[nodiscard]] const m4::ImageMetadata &image_metadata() const noexcept { return image_.metadata; }
+    [[nodiscard]] const m4::ImageMetadata &image_metadata() const noexcept {
+        return image_.metadata;
+    }
+    // Guest FX state and Remill transport storage are separate representations.
+    // Adapters must seed/transport the required state explicitly; access alone
+    // does not mark initialization complete or prove a hardware FP observation.
     [[nodiscard]] std::span<std::byte, 512> fx() noexcept { return fx_; }
     [[nodiscard]] std::span<const std::byte, 512> fx() const noexcept { return fx_; }
-    [[nodiscard]] std::span<std::byte, remill_state_bytes> remill_state() noexcept { return state_; }
+    [[nodiscard]] std::span<std::byte, remill_state_bytes> remill_state() noexcept {
+        return state_;
+    }
     [[nodiscard]] bool remill_seeded() const noexcept { return remill_seeded_; }
     void mark_remill_seeded() noexcept { remill_seeded_ = true; }
     [[nodiscard]] GuestAddress fs_base() const noexcept { return policy_.teb; }
@@ -171,23 +215,32 @@ class Runtime {
     [[nodiscard]] bool poisoned() const noexcept { return poisoned_; }
     [[nodiscard]] const std::vector<CallRecord> &calls() const noexcept { return calls_; }
 
+    // Registrations are validated before publication; no lazy translation,
+    // dynamic host-pointer discovery or interpreter fallback occurs at call time.
     void register_translation(Translation translation);
     void register_service(Service service);
     void register_service_continuation(std::span<const std::byte> provider_image,
                                        ServiceContinuation continuation);
-    [[nodiscard]] std::size_t service_continuation_count() const noexcept { return continuations_.size(); }
+    [[nodiscard]] std::size_t service_continuation_count() const noexcept {
+        return continuations_.size();
+    }
     void freeze_registry();
     [[nodiscard]] bool registry_frozen() const noexcept { return frozen_; }
     [[nodiscard]] std::size_t translation_count() const noexcept { return translations_.size(); }
     [[nodiscard]] std::size_t service_count() const noexcept { return services_.size(); }
+    // These model guest CALL, including its return word and ABI exit checks.
+    // call_indirect reads a guest DWORD target unless operand names an IAT slot.
     void call_direct(GuestAddress target, GuestAddress return_pc);
     void call_indirect(GuestAddress operand, GuestAddress return_pc);
     void call_import(GuestAddress slot, GuestAddress return_pc);
+    // External entry only: active callbacks must use the checked nested CALL paths.
     void invoke(GuestAddress target);
     // Authored/service callbacks may use this helper. Remill adapters capture
     // their actual RET EIP/ESP instead; both paths face the same exit checks.
     void ret(std::uint32_t callee_pop_bytes = 0);
 
+    // Only recovered NT_TIB32 fields are mapped; offsets are relative to policy.teb.
+    // SEH-chain inspection/registration does not implement exception dispatch/unwind.
     [[nodiscard]] std::uint32_t fs_load32(std::uint32_t offset) const;
     void fs_store32(std::uint32_t offset, std::uint32_t value);
     [[nodiscard]] std::vector<SehRecord> seh_chain(std::uint32_t max_depth = 64) const;
@@ -196,6 +249,7 @@ class Runtime {
     [[noreturn]] void dispatch_exception(std::uint32_t code, GuestAddress fault_address);
 
     // Bounded private arena, not an implementation of imported malloc/new/HeapAlloc.
+    // Release removes live-allocation bookkeeping; it does not rewind/reuse space.
     [[nodiscard]] GuestAddress heap_allocate(std::uint32_t bytes, std::uint32_t alignment = 16);
     void heap_release(GuestAddress address);
     [[nodiscard]] bool heap_allocation_live(GuestAddress address) const noexcept;
@@ -233,7 +287,8 @@ class Runtime {
     std::vector<Frame> frames_;
     std::vector<CallRecord> calls_;
     std::string image_sha256_;
-    [[noreturn]] void fail(FaultReason reason, GuestAddress target, const std::string &detail) const;
+    [[noreturn]] void fail(FaultReason reason, GuestAddress target,
+                           const std::string &detail) const;
     void ready() const;
     [[nodiscard]] bool executable(GuestAddress address, std::uint32_t bytes = 1) const;
     [[nodiscard]] bool admitted_return_pc(GuestAddress address) const;

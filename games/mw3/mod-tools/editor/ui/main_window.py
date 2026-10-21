@@ -11,7 +11,13 @@ from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
 from typing import Optional, List, Tuple
 
-from ..core.mission_loader import MissionLoader, MissionData, PlacedObject, SpawnPoint, TriggerRegion
+from ..core.mission_loader import (
+    MissionLoader,
+    MissionData,
+    PlacedObject,
+    SpawnPoint,
+    TriggerRegion,
+)
 from ..core.project import ModProject, CommandHistory, MoveObjectCommand
 from ..core.exporter import ModExporter
 from .map_canvas import MapCanvas
@@ -21,9 +27,20 @@ ROOT = Path(__file__).resolve().parents[5]
 
 
 class MainWindow(tk.Tk):
-    """MW3 Map & Mission Editor Main Application Window."""
+    """Coordinate live mission objects, project deltas and Tk widgets on one UI thread.
 
-    def __init__(self, game_root: Optional[Path] = None, initial_op: str = "c1", initial_mission: str = "c1m1"):
+    The loader owns private extraction inputs; the exporter owns derived outputs.
+    Selection is display state, distinct from the object held by an undo command.
+    File conversion/export currently runs synchronously in callbacks, so changing
+    thread ownership requires explicit UI marshalling rather than direct widget calls.
+    """
+
+    def __init__(
+        self,
+        game_root: Optional[Path] = None,
+        initial_op: str = "c1",
+        initial_mission: str = "c1m1",
+    ):
         super().__init__()
         self.title("MechWarrior 3 Map & Mission Editor (Native Modding Suite)")
         self.geometry("1400x900")
@@ -70,36 +87,61 @@ class MainWindow(tk.Tk):
         style.configure("TButton", background="#30363d", foreground="#e6edf3", borderwidth=1)
         style.map("TButton", background=[("active", "#388bfd"), ("disabled", "#21262d")])
         style.configure("TCheckbutton", background="#21262d", foreground="#e6edf3")
-        style.configure("Treeview", background="#161b22", foreground="#e6edf3", fieldbackground="#161b22", font=("Segoe UI", 8))
-        style.configure("Treeview.Heading", background="#30363d", foreground="#e6edf3", font=("Segoe UI", 9, "bold"))
+        style.configure(
+            "Treeview",
+            background="#161b22",
+            foreground="#e6edf3",
+            fieldbackground="#161b22",
+            font=("Segoe UI", 8),
+        )
+        style.configure(
+            "Treeview.Heading",
+            background="#30363d",
+            foreground="#e6edf3",
+            font=("Segoe UI", 9, "bold"),
+        )
         style.map("Treeview", background=[("selected", "#1f6feb")])
 
     def _build_menu(self) -> None:
-        menubar = tk.Menu(self, bg="#21262d", fg="#e6edf3", activebackground="#388bfd", activeforeground="#ffffff")
+        menubar = tk.Menu(
+            self, bg="#21262d", fg="#e6edf3", activebackground="#388bfd", activeforeground="#ffffff"
+        )
         self.config(menu=menubar)
 
         # File Menu
-        file_menu = tk.Menu(menubar, tearoff=0, bg="#21262d", fg="#e6edf3", activebackground="#388bfd")
-        file_menu.add_command(label="Open Mission...", command=self._show_open_mission_dialog, accelerator="Ctrl+O")
+        file_menu = tk.Menu(
+            menubar, tearoff=0, bg="#21262d", fg="#e6edf3", activebackground="#388bfd"
+        )
+        file_menu.add_command(
+            label="Open Mission...", command=self._show_open_mission_dialog, accelerator="Ctrl+O"
+        )
         file_menu.add_separator()
         file_menu.add_command(label="New Mod Project...", command=self._new_project)
         file_menu.add_command(label="Open Mod Project...", command=self._open_project)
-        file_menu.add_command(label="Save Mod Project", command=self._save_project, accelerator="Ctrl+S")
+        file_menu.add_command(
+            label="Save Mod Project", command=self._save_project, accelerator="Ctrl+S"
+        )
         file_menu.add_separator()
         file_menu.add_command(label="Export Mod Package...", command=self._export_mod)
-        file_menu.add_command(label="Play Mod in Native Game", command=self._run_native_game, accelerator="F5")
+        file_menu.add_command(
+            label="Play Mod in Native Game", command=self._run_native_game, accelerator="F5"
+        )
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
 
         # Edit Menu
-        self.edit_menu = tk.Menu(menubar, tearoff=0, bg="#21262d", fg="#e6edf3", activebackground="#388bfd")
+        self.edit_menu = tk.Menu(
+            menubar, tearoff=0, bg="#21262d", fg="#e6edf3", activebackground="#388bfd"
+        )
         self.edit_menu.add_command(label="Undo", command=self._undo, accelerator="Ctrl+Z")
         self.edit_menu.add_command(label="Redo", command=self._redo, accelerator="Ctrl+Y")
         menubar.add_cascade(label="Edit", menu=self.edit_menu)
 
         # View Menu
-        view_menu = tk.Menu(menubar, tearoff=0, bg="#21262d", fg="#e6edf3", activebackground="#388bfd")
+        view_menu = tk.Menu(
+            menubar, tearoff=0, bg="#21262d", fg="#e6edf3", activebackground="#388bfd"
+        )
         self.view_bitmap_var = tk.BooleanVar(value=True)
         self.view_bounds_var = tk.BooleanVar(value=True)
         self.view_objects_var = tk.BooleanVar(value=True)
@@ -107,21 +149,40 @@ class MainWindow(tk.Tk):
         self.view_triggers_var = tk.BooleanVar(value=True)
         self.view_grid_var = tk.BooleanVar(value=True)
 
-        view_menu.add_checkbutton(label="Map Texture", variable=self.view_bitmap_var, command=self._update_layers)
-        view_menu.add_checkbutton(label="Terrain Bounds", variable=self.view_bounds_var, command=self._update_layers)
-        view_menu.add_checkbutton(label="World Objects", variable=self.view_objects_var, command=self._update_layers)
-        view_menu.add_checkbutton(label="Spawn Points", variable=self.view_spawns_var, command=self._update_layers)
-        view_menu.add_checkbutton(label="Trigger Regions", variable=self.view_triggers_var, command=self._update_layers)
-        view_menu.add_checkbutton(label="Coordinate Grid", variable=self.view_grid_var, command=self._update_layers)
+        view_menu.add_checkbutton(
+            label="Map Texture", variable=self.view_bitmap_var, command=self._update_layers
+        )
+        view_menu.add_checkbutton(
+            label="Terrain Bounds", variable=self.view_bounds_var, command=self._update_layers
+        )
+        view_menu.add_checkbutton(
+            label="World Objects", variable=self.view_objects_var, command=self._update_layers
+        )
+        view_menu.add_checkbutton(
+            label="Spawn Points", variable=self.view_spawns_var, command=self._update_layers
+        )
+        view_menu.add_checkbutton(
+            label="Trigger Regions", variable=self.view_triggers_var, command=self._update_layers
+        )
+        view_menu.add_checkbutton(
+            label="Coordinate Grid", variable=self.view_grid_var, command=self._update_layers
+        )
         view_menu.add_separator()
-        view_menu.add_command(label="Reset Camera / Center", command=lambda: self.canvas.set_mission(self.current_mission) if self.current_mission else None)
+        view_menu.add_command(
+            label="Reset Camera / Center",
+            command=lambda: (
+                self.canvas.set_mission(self.current_mission) if self.current_mission else None
+            ),
+        )
         menubar.add_cascade(label="View", menu=view_menu)
 
     def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self, padding=(6, 4))
         toolbar.pack(side="top", fill="x")
 
-        ttk.Button(toolbar, text="📂 Open Mission", command=self._show_open_mission_dialog).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="📂 Open Mission", command=self._show_open_mission_dialog).pack(
+            side="left", padx=2
+        )
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6, pady=2)
 
         self.undo_btn = ttk.Button(toolbar, text="↶ Undo", command=self._undo, state="disabled")
@@ -130,12 +191,20 @@ class MainWindow(tk.Tk):
         self.redo_btn.pack(side="left", padx=2)
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6, pady=2)
 
-        ttk.Button(toolbar, text="💾 Save Project", command=self._save_project).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="📦 Export Mod", command=self._export_mod).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="▶ Play in Native Game", command=self._run_native_game).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="💾 Save Project", command=self._save_project).pack(
+            side="left", padx=2
+        )
+        ttk.Button(toolbar, text="📦 Export Mod", command=self._export_mod).pack(
+            side="left", padx=2
+        )
+        ttk.Button(toolbar, text="▶ Play in Native Game", command=self._run_native_game).pack(
+            side="left", padx=2
+        )
 
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6, pady=2)
-        ttk.Label(toolbar, text="Active Mission:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 2))
+        ttk.Label(toolbar, text="Active Mission:", font=("Segoe UI", 9, "bold")).pack(
+            side="left", padx=(4, 2)
+        )
         self.mission_label = ttk.Label(toolbar, text="None", foreground="#58a6ff")
         self.mission_label.pack(side="left", padx=2)
 
@@ -147,7 +216,9 @@ class MainWindow(tk.Tk):
         left_frame = ttk.Frame(paned, width=280)
         paned.add(left_frame, weight=1)
 
-        ttk.Label(left_frame, text="Mission Entities", font=("Segoe UI", 9, "bold")).pack(side="top", anchor="w", padx=6, pady=4)
+        ttk.Label(left_frame, text="Mission Entities", font=("Segoe UI", 9, "bold")).pack(
+            side="top", anchor="w", padx=6, pady=4
+        )
         tree_scroll = ttk.Scrollbar(left_frame)
         tree_scroll.pack(side="right", fill="y")
         self.tree = ttk.Treeview(left_frame, selectmode="browse", yscrollcommand=tree_scroll.set)
@@ -165,7 +236,9 @@ class MainWindow(tk.Tk):
         self.canvas.on_cursor_coords = self._on_cursor_coords
 
         # Right Pane: Property Inspector
-        self.inspector = PropertyInspector(paned, history=self.history, on_change=self._on_property_edited, width=320)
+        self.inspector = PropertyInspector(
+            paned, history=self.history, on_change=self._on_property_edited, width=320
+        )
         paned.add(self.inspector, weight=2)
 
     def _build_statusbar(self) -> None:
@@ -182,6 +255,7 @@ class MainWindow(tk.Tk):
         self.status_msg.pack(side="left", fill="x", expand=True, padx=4)
 
     def _update_layers(self) -> None:
+        """Copy visibility switches to the canvas; do not change mission objects."""
         self.canvas.show_bitmap = self.view_bitmap_var.get()
         self.canvas.show_terrain_bounds = self.view_bounds_var.get()
         self.canvas.show_objects = self.view_objects_var.get()
@@ -191,15 +265,20 @@ class MainWindow(tk.Tk):
         self.canvas.redraw()
 
     def _show_open_mission_dialog(self) -> None:
+        """List recovered mission identities and open the selected operation/mission pair."""
         dialog = tk.Toplevel(self)
         dialog.title("Select Operation & Mission")
         dialog.geometry("450x400")
         dialog.transient(self)
         dialog.grab_set()
 
-        ttk.Label(dialog, text="Select Mission to Open:", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=8)
+        ttk.Label(dialog, text="Select Mission to Open:", font=("Segoe UI", 10, "bold")).pack(
+            anchor="w", padx=10, pady=8
+        )
 
-        tree = ttk.Treeview(dialog, columns=("op", "mid", "label"), show="headings", selectmode="browse")
+        tree = ttk.Treeview(
+            dialog, columns=("op", "mid", "label"), show="headings", selectmode="browse"
+        )
         tree.heading("op", text="Op")
         tree.heading("mid", text="ID")
         tree.heading("label", text="Mission Name")
@@ -225,6 +304,12 @@ class MainWindow(tk.Tk):
         ttk.Button(btn_box, text="Cancel", command=dialog.destroy).pack(side="right")
 
     def _open_mission(self, operation: str, mission_id: str) -> None:
+        """Replace the live scene and clear history after successful loading.
+
+        Errors are displayed and swallowed here; callers currently cannot infer
+        success from a normal return. The failed-project-load defect is tracked
+        separately; this documentation does not make the operation transactional.
+        """
         self.status_msg.config(text=f"Loading {operation.upper()} / {mission_id}...")
         self.update_idletasks()
         try:
@@ -244,12 +329,15 @@ class MainWindow(tk.Tk):
             # Set Canvas
             self.canvas.set_mission(mission)
             self.inspector.inspect_object(None)
-            self.status_msg.config(text=f"Loaded {len(mission.placed_objects)} world objects, {len(mission.spawn_points)} spawns, {len(mission.trigger_regions)} trigger regions.")
+            self.status_msg.config(
+                text=f"Loaded {len(mission.placed_objects)} world objects, {len(mission.spawn_points)} spawns, {len(mission.trigger_regions)} trigger regions."
+            )
         except Exception as e:
             messagebox.showerror("Error Opening Mission", str(e))
             self.status_msg.config(text="Error loading mission")
 
     def _populate_tree(self) -> None:
+        """Build UI rows with typed source keys; row positions are not archive indices."""
         self.tree.delete(*self.tree.get_children())
         if not self.current_mission:
             return
@@ -269,9 +357,15 @@ class MainWindow(tk.Tk):
         for obj in self.current_mission.placed_objects:
             low = obj.name.lower()
             icon = "⚡" if "tur" in low else "🏢" if "build" in low or "bunk" in low else "📦"
-            self.tree.insert(obj_root, "end", text=f"{icon} {obj.name or f'Node_{obj.node_index}'}", values=("object", obj.node_index))
+            self.tree.insert(
+                obj_root,
+                "end",
+                text=f"{icon} {obj.name or f'Node_{obj.node_index}'}",
+                values=("object", obj.node_index),
+            )
 
     def _on_tree_select(self, event) -> None:
+        """Resolve the selected typed key and center the view without committing an edit."""
         sel = self.tree.selection()
         if not sel or not self.current_mission:
             return
@@ -282,7 +376,9 @@ class MainWindow(tk.Tk):
         kind, key = vals[0], vals[1]
         if kind == "object":
             node_idx = int(key)
-            obj = next((o for o in self.current_mission.placed_objects if o.node_index == node_idx), None)
+            obj = next(
+                (o for o in self.current_mission.placed_objects if o.node_index == node_idx), None
+            )
             if obj:
                 self.canvas.selected_object = obj
                 self.canvas.cam_x = obj.x
@@ -297,18 +393,31 @@ class MainWindow(tk.Tk):
                 self.canvas.redraw()
 
     def _on_canvas_object_selected(self, obj: Optional[PlacedObject]) -> None:
+        """Mirror canvas selection in the inspector/tree, retaining the source node key."""
         self.inspector.inspect_object(obj)
         if obj:
             # Highlight item in tree
             for item in self.tree.get_children():
                 for sub in self.tree.get_children(item):
                     vals = self.tree.item(sub).get("values")
-                    if vals and len(vals) >= 2 and vals[0] == "object" and int(vals[1]) == obj.node_index:
+                    if (
+                        vals
+                        and len(vals) >= 2
+                        and vals[0] == "object"
+                        and int(vals[1]) == obj.node_index
+                    ):
                         self.tree.selection_set(sub)
                         self.tree.see(sub)
                         break
 
-    def _on_canvas_object_moved(self, obj: PlacedObject, old_x: float, old_y: float, old_z: float) -> None:
+    def _on_canvas_object_moved(
+        self, obj: PlacedObject, old_x: float, old_y: float, old_z: float
+    ) -> None:
+        """Turn a finished drag preview into one reversible move command.
+
+        The canvas has already moved the object. Restore the old coordinates
+        before constructing the command so its undo snapshot captures the start.
+        """
         new_x, new_y, new_z = obj.x, obj.y, obj.z
         # Revert temporary visual state so command execution applies it cleanly to history
         obj.x, obj.y, obj.z = old_x, old_y, old_z
@@ -316,6 +425,12 @@ class MainWindow(tk.Tk):
         self.history.execute(cmd)
 
     def _on_property_edited(self) -> None:
+        """Record the current selection's delta and refresh its widgets.
+
+        This selection-based callback is also used by history commands; it does
+        not receive the changed object. The resulting undo/save mismatch remains
+        a separate behavior fix, not an ownership guarantee of this callback.
+        """
         if self.canvas.selected_object and self.current_project:
             self.current_project.record_object_change(self.canvas.selected_object)
         self.canvas.redraw()
@@ -326,8 +441,23 @@ class MainWindow(tk.Tk):
         self.zoom_label.config(text=f"Scale: {int(self.canvas.scale * 100)}%")
 
     def _on_history_changed(self) -> None:
-        self.undo_btn.config(state="normal" if self.history.can_undo else "disabled", text=f"↶ Undo {self.history.undo_description[:16]}" if self.history.can_undo else "↶ Undo")
-        self.redo_btn.config(state="normal" if self.history.can_redo else "disabled", text=f"↷ Redo {self.history.redo_description[:16]}" if self.history.can_redo else "↷ Redo")
+        """Update history buttons from stack availability, not the project's dirty flag."""
+        self.undo_btn.config(
+            state="normal" if self.history.can_undo else "disabled",
+            text=(
+                f"↶ Undo {self.history.undo_description[:16]}"
+                if self.history.can_undo
+                else "↶ Undo"
+            ),
+        )
+        self.redo_btn.config(
+            state="normal" if self.history.can_redo else "disabled",
+            text=(
+                f"↷ Redo {self.history.redo_description[:16]}"
+                if self.history.can_redo
+                else "↷ Redo"
+            ),
+        )
 
     def _undo(self) -> None:
         cmd = self.history.undo()
@@ -348,6 +478,7 @@ class MainWindow(tk.Tk):
             self.inspector.inspect_object(self.canvas.selected_object)
 
     def _new_project(self) -> None:
+        """Reset serialized deltas/history for the current mission; do not reload its scene."""
         if not self.current_mission:
             messagebox.showinfo("New Project", "Please open a mission first.")
             return
@@ -357,10 +488,19 @@ class MainWindow(tk.Tk):
             target_mission=self.current_mission.mission_id,
         )
         self.history.clear()
-        messagebox.showinfo("New Project", f"Created new project for {self.current_mission.mission_id.upper()}.")
+        messagebox.showinfo(
+            "New Project", f"Created new project for {self.current_mission.mission_id.upper()}."
+        )
 
     def _open_project(self) -> None:
-        f = filedialog.askopenfilename(filetypes=[("MW3 Mod Project", "*.mw3mod"), ("JSON Files", "*.json")])
+        """Read saved deltas and request their source mission before applying object fields.
+
+        Source hashes and mission-load success are not enforced here yet. Keep
+        those known limitations visible when changing load/selection orchestration.
+        """
+        f = filedialog.askopenfilename(
+            filetypes=[("MW3 Mod Project", "*.mw3mod"), ("JSON Files", "*.json")]
+        )
         if not f:
             return
         try:
@@ -372,29 +512,43 @@ class MainWindow(tk.Tk):
                 for obj in self.current_mission.placed_objects:
                     if obj.node_index in proj.modified_objects:
                         edits = proj.modified_objects[obj.node_index]
-                        if "x" in edits: obj.x = float(edits["x"])
-                        if "y" in edits: obj.y = float(edits["y"])
-                        if "z" in edits: obj.z = float(edits["z"])
-                        if "rot_y" in edits: obj.rot_y = float(edits["rot_y"])
-                        if "active" in edits: obj.active = bool(edits["active"])
+                        if "x" in edits:
+                            obj.x = float(edits["x"])
+                        if "y" in edits:
+                            obj.y = float(edits["y"])
+                        if "z" in edits:
+                            obj.z = float(edits["z"])
+                        if "rot_y" in edits:
+                            obj.rot_y = float(edits["rot_y"])
+                        if "active" in edits:
+                            obj.active = bool(edits["active"])
                 self.canvas.redraw()
-            messagebox.showinfo("Project Loaded", f"Loaded '{proj.project_name}' with {len(proj.modified_objects)} modified objects.")
+            messagebox.showinfo(
+                "Project Loaded",
+                f"Loaded '{proj.project_name}' with {len(proj.modified_objects)} modified objects.",
+            )
         except Exception as e:
             messagebox.showerror("Error Loading Project", str(e))
 
     def _save_project(self) -> None:
+        """Write the delta model to its chosen JSON file, not a packed game archive."""
         if not self.current_project:
             return
         if not self.current_project.project_file_path:
-            f = filedialog.asksaveasfilename(defaultextension=".mw3mod", filetypes=[("MW3 Mod Project", "*.mw3mod")])
+            f = filedialog.asksaveasfilename(
+                defaultextension=".mw3mod", filetypes=[("MW3 Mod Project", "*.mw3mod")]
+            )
             if not f:
                 return
             self.current_project.project_file_path = Path(f)
         self.current_project.save(self.current_project.project_file_path)
         self.status_msg.config(text=f"Saved project: {self.current_project.project_file_path.name}")
-        messagebox.showinfo("Project Saved", f"Project saved to:\n{self.current_project.project_file_path}")
+        messagebox.showinfo(
+            "Project Saved", f"Project saved to:\n{self.current_project.project_file_path}"
+        )
 
     def _export_mod(self) -> None:
+        """Run local archive export and report its receipt; native loading is a later step."""
         if not self.current_project or not self.current_mission:
             messagebox.showinfo("Export Mod", "No active mission or project to export.")
             return
@@ -417,6 +571,11 @@ class MainWindow(tk.Tk):
             self.status_msg.config(text="Mod export failed")
 
     def _run_native_game(self) -> None:
+        """Export current deltas, then start the generated launcher without waiting for it.
+
+        A successful process start is not proof that asset preparation or gameplay
+        succeeded. Export/command-handling defects remain in the code review.
+        """
         if not self.current_project or not self.current_mission:
             messagebox.showinfo("Run Mod", "Please load a mission and create a project first.")
             return
@@ -425,6 +584,8 @@ class MainWindow(tk.Tk):
             cmd_file = receipt.mod_dir / "Play-Mod.cmd"
             if cmd_file.is_file():
                 subprocess.Popen(["cmd.exe", "/c", str(cmd_file)], cwd=str(ROOT))
-                self.status_msg.config(text=f"Launched {self.current_project.project_name} in native engine.")
+                self.status_msg.config(
+                    text=f"Launched {self.current_project.project_name} in native engine."
+                )
         except Exception as e:
             messagebox.showerror("Launch Error", str(e))

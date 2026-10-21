@@ -27,9 +27,9 @@ class RepackTests(unittest.TestCase):
         self.assertEqual([len(p) for p in pages_for(entries)], [3, 1])
 
     def test_duplicate_key_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
             list(pages_for([((1, 1, 1, 1), None)] * 2))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

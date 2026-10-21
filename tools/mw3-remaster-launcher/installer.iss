@@ -1,10 +1,12 @@
 ; Inno Setup Script for MechWarrior 3 Remastered
-; Built for clean-room distribution without proprietary game media.
+; Development GUI installer only: the portable native-runtime preparation path
+; is not included. Do not publish this as a playable game installer.
+; See docs/public-release-readiness.md before assembling any release payload.
 
 #define MyAppName "MechWarrior 3 Remastered"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "0.1.0-preview"
 #define MyAppPublisher "MW3 Remaster Project"
-#define MyAppURL "https://github.com/example/mw3-remaster"
+#define MyAppURL "https://github.com/roswellien/MW3Recomp"
 #define MyAppExeName "MW3RemasterLauncher.exe"
 
 [Setup]
@@ -19,7 +21,7 @@ DefaultDirName=C:\Games\MW3Remaster
 DisableDirPage=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-OutputBaseFilename=MW3Remaster-v1.0-Setup
+OutputBaseFilename=MW3Remaster-GUI-Development-Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

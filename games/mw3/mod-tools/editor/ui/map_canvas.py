@@ -15,7 +15,13 @@ from ..core.mission_loader import MissionData, PlacedObject, SpawnPoint, Trigger
 
 
 class MapCanvas(tk.Canvas):
-    """Interactive 2D top-down viewport for mission editing."""
+    """Draw/select live mission objects using an X/Z-to-pixel viewport transform.
+
+    Tk owns the UI thread and PhotoImage lifetime. The canvas references, rather
+    than copies, mission placements. A drag mutates an object as a visual preview;
+    on_object_moved receives that object and its old XYZ position on release.
+    The parent window owns command creation and persisted deltas.
+    """
 
     def __init__(self, master, **kwargs):
         super().__init__(master, bg="#1a1c23", highlightthickness=0, **kwargs)
@@ -93,6 +99,7 @@ class MapCanvas(tk.Canvas):
         self.redraw()
 
     def world_to_screen(self, wx: float, wz: float) -> Tuple[float, float]:
+        """Map world X/Z to canvas X/Y pixels using camera center and pixels/unit scale."""
         cx = self.winfo_width() / 2.0
         cy = self.winfo_height() / 2.0
         sx = cx + (wx - self.cam_x) * self.scale
@@ -100,6 +107,7 @@ class MapCanvas(tk.Canvas):
         return (sx, sy)
 
     def screen_to_world(self, sx: float, sy: float) -> Tuple[float, float]:
+        """Invert the viewport transform; screen Y corresponds to world Z, not height."""
         cx = self.winfo_width() / 2.0
         cy = self.winfo_height() / 2.0
         wx = self.cam_x + (sx - cx) / self.scale
@@ -111,9 +119,12 @@ class MapCanvas(tk.Canvas):
         self.delete("all")
         if not self.mission:
             self.create_text(
-                self.winfo_width() / 2, self.winfo_height() / 2,
+                self.winfo_width() / 2,
+                self.winfo_height() / 2,
                 text="No Mission Loaded\nUse File -> Open Mission",
-                fill="#6e7681", font=("Segoe UI", 14), justify="center"
+                fill="#6e7681",
+                font=("Segoe UI", 14),
+                justify="center",
             )
             return
 
@@ -147,9 +158,12 @@ class MapCanvas(tk.Canvas):
     def _draw_grid(self, w: int, h: int) -> None:
         # Determine grid step in world meters
         step = 500.0
-        if self.scale > 0.8: step = 100.0
-        elif self.scale > 0.4: step = 250.0
-        elif self.scale < 0.1: step = 1000.0
+        if self.scale > 0.8:
+            step = 100.0
+        elif self.scale > 0.4:
+            step = 250.0
+        elif self.scale < 0.1:
+            step = 1000.0
 
         min_w, min_h = self.screen_to_world(0, 0)
         max_w, max_h = self.screen_to_world(w, h)
@@ -164,7 +178,9 @@ class MapCanvas(tk.Canvas):
             sx, _ = self.world_to_screen(x, 0)
             color = "#2d333b" if int(x) % 1000 != 0 else "#373e47"
             self.create_line(sx, 0, sx, h, fill=color, width=1)
-            self.create_text(sx + 3, h - 12, text=f"{int(x)}m", fill="#484f58", font=("Consolas", 8), anchor="w")
+            self.create_text(
+                sx + 3, h - 12, text=f"{int(x)}m", fill="#484f58", font=("Consolas", 8), anchor="w"
+            )
             x += step
 
         z = start_z
@@ -172,7 +188,9 @@ class MapCanvas(tk.Canvas):
             _, sy = self.world_to_screen(0, z)
             color = "#2d333b" if int(z) % 1000 != 0 else "#373e47"
             self.create_line(0, sy, w, sy, fill=color, width=1)
-            self.create_text(5, sy - 8, text=f"{int(z)}m", fill="#484f58", font=("Consolas", 8), anchor="w")
+            self.create_text(
+                5, sy - 8, text=f"{int(z)}m", fill="#484f58", font=("Consolas", 8), anchor="w"
+            )
             z += step
 
         # Origin crosshair (0,0)
@@ -200,7 +218,9 @@ class MapCanvas(tk.Canvas):
             self._bg_image_tk = ImageTk.PhotoImage(resized)
             self.create_image(sx1, sy1, image=self._bg_image_tk, anchor="nw")
             # Border around map texture
-            self.create_rectangle(sx1, sy1, sx1 + target_pw, sy1 + target_ph, outline="#444c56", width=1)
+            self.create_rectangle(
+                sx1, sy1, sx1 + target_pw, sy1 + target_ph, outline="#444c56", width=1
+            )
         except Exception as e:
             pass
 
@@ -209,7 +229,14 @@ class MapCanvas(tk.Canvas):
         x1, y1 = self.world_to_screen(tb.min_x, tb.min_z)
         x2, y2 = self.world_to_screen(tb.max_x, tb.max_z)
         self.create_rectangle(x1, y1, x2, y2, outline="#388bfd", width=1, dash=(4, 4))
-        self.create_text(min(x1, x2) + 5, min(y1, y2) + 12, text="Terrain Bounds", fill="#388bfd", font=("Segoe UI", 9, "bold"), anchor="w")
+        self.create_text(
+            min(x1, x2) + 5,
+            min(y1, y2) + 12,
+            text="Terrain Bounds",
+            fill="#388bfd",
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        )
 
     def _draw_trigger_regions(self) -> None:
         for reg in self.mission.trigger_regions:
@@ -223,30 +250,52 @@ class MapCanvas(tk.Canvas):
             self.create_polygon(screen_pts, fill="", outline="#3fb950", width=1, dash=(3, 3))
             # Label
             first_x, first_y = self.world_to_screen(reg.points[0][0], reg.points[0][2])
-            self.create_text(first_x, first_y - 8, text=reg.name, fill="#3fb950", font=("Segoe UI", 8), anchor="s")
+            self.create_text(
+                first_x,
+                first_y - 8,
+                text=reg.name,
+                fill="#3fb950",
+                font=("Segoe UI", 8),
+                anchor="s",
+            )
 
     def _draw_spawns(self) -> None:
         for sp in self.mission.spawn_points:
             sx, sy = self.world_to_screen(sp.x, sp.z)
             # Draw directional circle/arrow
             r = 8
-            self.create_oval(sx - r, sy - r, sx + r, sy + r, fill="#d29922", outline="#f0883e", width=2)
+            self.create_oval(
+                sx - r, sy - r, sx + r, sy + r, fill="#d29922", outline="#f0883e", width=2
+            )
             # Direction vector
             rad = math.radians(sp.yaw_degrees)
             dx = math.sin(rad) * 16
             dy = -math.cos(rad) * 16
             self.create_line(sx, sy, sx + dx, sy + dy, fill="#f0883e", width=2, arrow="last")
-            self.create_text(sx, sy + r + 6, text=sp.name, fill="#e3b341", font=("Segoe UI", 8, "bold"), anchor="n")
+            self.create_text(
+                sx,
+                sy + r + 6,
+                text=sp.name,
+                fill="#e3b341",
+                font=("Segoe UI", 8, "bold"),
+                anchor="n",
+            )
 
     def _draw_objects(self) -> None:
+        """Draw visible placement markers; marker shapes are name-based UI hints only."""
         # Filter notable world entities
         for obj in self.mission.placed_objects:
             # Highlight root / named objects
-            is_selected = (self.selected_object == obj)
+            is_selected = self.selected_object == obj
             sx, sy = self.world_to_screen(obj.x, obj.z)
 
             # Cull offscreen markers
-            if sx < -30 or sx > self.winfo_width() + 30 or sy < -30 or sy > self.winfo_height() + 30:
+            if (
+                sx < -30
+                or sx > self.winfo_width() + 30
+                or sy < -30
+                or sy > self.winfo_height() + 30
+            ):
                 continue
 
             r = 6 if not is_selected else 9
@@ -257,19 +306,51 @@ class MapCanvas(tk.Canvas):
             low = obj.name.lower()
             if "tur" in low:
                 # Square marker for turrets
-                self.create_rectangle(sx - r, sy - r, sx + r, sy + r, fill=fill_color, outline=outline_color, width=2 if is_selected else 1)
+                self.create_rectangle(
+                    sx - r,
+                    sy - r,
+                    sx + r,
+                    sy + r,
+                    fill=fill_color,
+                    outline=outline_color,
+                    width=2 if is_selected else 1,
+                )
             else:
-                self.create_oval(sx - r, sy - r, sx + r, sy + r, fill=fill_color, outline=outline_color, width=2 if is_selected else 1)
+                self.create_oval(
+                    sx - r,
+                    sy - r,
+                    sx + r,
+                    sy + r,
+                    fill=fill_color,
+                    outline=outline_color,
+                    width=2 if is_selected else 1,
+                )
 
             # Selection halo
             if is_selected:
-                self.create_oval(sx - r - 4, sy - r - 4, sx + r + 4, sy + r + 4, outline="#58a6ff", width=1, dash=(2, 2))
+                self.create_oval(
+                    sx - r - 4,
+                    sy - r - 4,
+                    sx + r + 4,
+                    sy + r + 4,
+                    outline="#58a6ff",
+                    width=1,
+                    dash=(2, 2),
+                )
 
             # Label on zoom
             if self.scale > 0.15 or is_selected or obj.parent_indices == [0]:
-                self.create_text(sx, sy - r - 4, text=obj.name or f"Node {obj.node_index}", fill="#e6edf3" if is_selected else "#8b949e", font=("Segoe UI", 8), anchor="s")
+                self.create_text(
+                    sx,
+                    sy - r - 4,
+                    text=obj.name or f"Node {obj.node_index}",
+                    fill="#e6edf3" if is_selected else "#8b949e",
+                    font=("Segoe UI", 8),
+                    anchor="s",
+                )
 
     def _on_left_down(self, event) -> None:
+        """Select the nearest placement within a pixel-sized hit radius and snapshot a drag."""
         if not self.mission:
             return
         click_wx, click_wz = self.screen_to_world(event.x, event.y)
@@ -295,6 +376,7 @@ class MapCanvas(tk.Canvas):
         self.redraw()
 
     def _on_left_drag(self, event) -> None:
+        """Preview an X/Z translation while retaining the source object's Y height."""
         if not self.selected_object or not self.drag_start_world or not self.drag_start_pos:
             return
         cur_wx, cur_wz = self.screen_to_world(event.x, event.y)
@@ -307,9 +389,14 @@ class MapCanvas(tk.Canvas):
         self.redraw()
 
     def _on_left_up(self, event) -> None:
+        """Notify one committed X/Z move, passing its original coordinates for undo."""
         if self.selected_object and self.drag_start_pos and self.on_object_moved:
             orig_x, orig_y, orig_z = self.drag_start_pos
-            cur_x, cur_y, cur_z = self.selected_object.x, self.selected_object.y, self.selected_object.z
+            cur_x, cur_y, cur_z = (
+                self.selected_object.x,
+                self.selected_object.y,
+                self.selected_object.z,
+            )
             if math.hypot(cur_x - orig_x, cur_z - orig_z) > 0.05:
                 # Fire committed move callback
                 self.on_object_moved(self.selected_object, orig_x, orig_y, orig_z)
@@ -320,6 +407,7 @@ class MapCanvas(tk.Canvas):
         self._pan_start_screen = (event.x, event.y)
 
     def _on_pan_drag(self, event) -> None:
+        """Move only the viewport camera; convert mouse-pixel deltas back to world units."""
         if not self._pan_start_screen:
             return
         dx = event.x - self._pan_start_screen[0]
@@ -333,6 +421,7 @@ class MapCanvas(tk.Canvas):
         self._pan_start_screen = None
 
     def _on_mousewheel(self, event) -> None:
+        """Zoom around the cursor's world position, within the canvas scale limits."""
         # Zoom toward mouse position
         mouse_wx, mouse_wz = self.screen_to_world(event.x, event.y)
         factor = 1.15 if event.delta > 0 else (1.0 / 1.15)

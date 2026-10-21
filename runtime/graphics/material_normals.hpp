@@ -15,6 +15,8 @@
 
 namespace mw34::materials {
 inline constexpr std::uint32_t no_normal = 0xffffffffU;
+// Process-wide choice, captured on first use. Changing the environment after
+// materials have been initialized does not reload this switch or their pixels.
 inline bool normal_maps_enabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("MW34_NORMAL_MAPS");
@@ -26,6 +28,8 @@ inline bool normal_maps_enabled() {
     }();
     return enabled;
 }
+// FNV-1a over the entire byte sequence, shared with the Python sidecar writer.
+// This is a format/content key, not a cryptographic publisher-admission check.
 inline std::uint64_t normal_hash(const void *data, std::size_t size) {
     auto *bytes = static_cast<const unsigned char *>(data);
     std::uint64_t hash = 0xcbf29ce484222325ULL;
@@ -35,6 +39,8 @@ inline std::uint64_t normal_hash(const void *data, std::size_t size) {
     }
     return hash;
 }
+// Owns decoded linear RGBA8 pixels. On the supported little-endian Windows host,
+// each uint32_t stores the four source channel bytes without colour conversion.
 struct NormalImage {
     std::string name;
     std::uint32_t width{}, height{};
@@ -42,6 +48,8 @@ struct NormalImage {
     std::vector<std::uint32_t> pixels;
 };
 struct NormalPack {
+    // One image index per material batch, or no_normal for explicit absence.
+    // Indices refer to this pack's images, never global renderer texture IDs.
     std::vector<std::uint32_t> bindings;
     std::vector<NormalImage> images;
 };
@@ -50,6 +58,9 @@ struct NormalPack {
 // batch unperturbed (glass, constants or an intentionally absent map).
 // BWNRM1 remains readable; its glass exception uses its material name, not slot 3.
 inline NormalPack read_normals(std::istream &input, const std::vector<std::string> &materials) {
+    // Read from the stream's current position; BWSNR2 places its BWNRM2 payload
+    // immediately after a source-surface header. Counts and aggregate pixel bytes
+    // are bounded before allocation. Truncation/trailing bytes fail visibly.
     auto fail = [] { throw std::runtime_error("Invalid normal-map sidecar"); };
     auto bytes = [&](void *out, std::size_t count) {
         if (!input.read(static_cast<char *>(out), std::streamsize(count)))
@@ -141,6 +152,9 @@ struct SurfaceNormals {
 inline constexpr std::uint64_t authored_normal_budget = 512ULL * 1024 * 1024;
 inline std::vector<std::filesystem::path>
 surface_normal_catalog_paths(const std::filesystem::path &path) {
+    // Accept one binary sidecar or a bounded text list of pages. Resolve paths,
+    // check sizes and reject filesystem aliases here; decoding each page remains
+    // the caller's separate operation. No source pixels are loaded by this step.
     auto fail = [] { throw std::runtime_error("Invalid authored surface-normal catalog"); };
     std::ifstream input(path, std::ios::binary);
     if (!input)
@@ -168,7 +182,10 @@ surface_normal_catalog_paths(const std::filesystem::path &path) {
         const std::filesystem::path entry(line);
         const bool absolute = entry.is_absolute();
         if (line.empty() || line.size() > 512 || line == "." || line == ".." ||
-            (!absolute && line.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != std::string::npos) ||
+            (!absolute &&
+             line.find_first_not_of(
+                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") !=
+                 std::string::npos) ||
             !names.insert(line).second || names.size() > 16)
             fail();
         // Local authored catalogs may explicitly register absolute pages. Relative
@@ -193,6 +210,9 @@ surface_normal_catalog_paths(const std::filesystem::path &path) {
 // it separate lets geometric lighting remain on without loading normal pixels.
 inline std::vector<std::pair<SurfaceKey, std::string>>
 read_surface_normal_header(std::istream &input) {
+    // Consume only source identities and material names, leaving the normal-pack
+    // payload unread. Disabled perturbation can retain these geometric bindings
+    // without allocating pixels; this alone does not validate the unread payload.
     auto fail = [] { throw std::runtime_error("Invalid surface-normal sidecar"); };
     auto bytes = [&](void *out, std::size_t count) {
         if (!input.read(static_cast<char *>(out), std::streamsize(count)))
@@ -232,6 +252,8 @@ read_surface_normal_header(std::istream &input) {
     return header;
 }
 inline SurfaceNormals read_surface_normals(std::istream &input) {
+    // Header order becomes the expected material order for read_normals. This
+    // joins original-surface keys to pack-local image indices, including no_normal.
     const auto header = read_surface_normal_header(input);
     std::vector<std::string> materials;
     for (const auto &entry : header)

@@ -14,6 +14,13 @@ Features:
   * AI textures: verified cumulative AI .zbd banks via fast NTFS hard-links
     with automatic TextureMemory_HW = 6 configuration.
   * Isolation: Original MW3 folder is untouched; registry settings restored on exit.
+
+This is the original-executable compatibility backend, separate from native
+recompilation. ROOT and the staged profile/tool paths below describe the local
+development layout; this is not a portable installation recipe. launch() owns
+temporary registry choices and the game-process handle. GUI work runs on a
+worker, with Tk updates scheduled on its main thread. Forced coordinator
+termination cannot guarantee execution of Python's normal cleanup path.
 """
 
 from __future__ import annotations
@@ -62,45 +69,85 @@ AI_TEXTURE_MEMORY_MODE = 6  # bank 2; avoids rainbow artifacts with high-res ban
 RESOLUTION_PROFILES = {
     # 4:3 Aspect Ratio (Pillarboxed on modern widescreen displays; unstretched native geometry)
     "1024x768 (Native 4:3)": {
-        "width": 1024, "height": 768, "aspect": "4:3", "widescreen": False, "vmode": 7,
+        "width": 1024,
+        "height": 768,
+        "aspect": "4:3",
+        "widescreen": False,
+        "vmode": 7,
         "note": "Native retail 4:3 presentation (pillarboxed on widescreen displays)",
     },
     "1440x1080 (1080p 4:3 Equivalent)": {
-        "width": 1440, "height": 1080, "aspect": "4:3", "widescreen": False, "vmode": 7,
+        "width": 1440,
+        "height": 1080,
+        "aspect": "4:3",
+        "widescreen": False,
+        "vmode": 7,
         "note": "1080p height in 4:3 proportions (pillarboxed on 16:9 displays)",
     },
     "1920x1440 (1440p 4:3 Equivalent)": {
-        "width": 1920, "height": 1440, "aspect": "4:3", "widescreen": False, "vmode": 7,
+        "width": 1920,
+        "height": 1440,
+        "aspect": "4:3",
+        "widescreen": False,
+        "vmode": 7,
         "note": "1440p height in 4:3 proportions (pillarboxed on 16:9 displays)",
     },
     "2880x2160 (4K 4:3 Equivalent)": {
-        "width": 2880, "height": 2160, "aspect": "4:3", "widescreen": False, "vmode": 7,
+        "width": 2880,
+        "height": 2160,
+        "aspect": "4:3",
+        "widescreen": False,
+        "vmode": 7,
         "note": "4K/2160p height in 4:3 proportions (pillarboxed on 16:9 displays)",
     },
     # Widescreen (16:9 / 21:9 - Unstretched 3D via verified camera FOV injection)
     "1920x1080 (1080p Widescreen 16:9)": {
-        "width": 1920, "height": 1080, "aspect": "16:9", "widescreen": True, "vmode": 7,
+        "width": 1920,
+        "height": 1080,
+        "aspect": "16:9",
+        "widescreen": True,
+        "vmode": 7,
         "note": "Full HD 1080p widescreen with corrected 3D camera FOV (unstretched)",
     },
     "2560x1440 (1440p Widescreen 16:9)": {
-        "width": 2560, "height": 1440, "aspect": "16:9", "widescreen": True, "vmode": 7,
+        "width": 2560,
+        "height": 1440,
+        "aspect": "16:9",
+        "widescreen": True,
+        "vmode": 7,
         "note": "QHD 1440p widescreen with corrected 3D camera FOV (unstretched)",
     },
     "3440x1440 (Ultrawide 21:9)": {
-        "width": 3440, "height": 1440, "aspect": "21:9", "widescreen": True, "vmode": 7,
+        "width": 3440,
+        "height": 1440,
+        "aspect": "21:9",
+        "widescreen": True,
+        "vmode": 7,
         "note": "Ultrawide 21:9 with corrected 3D camera FOV (unstretched)",
     },
     "3840x2160 (4K Widescreen 16:9)": {
-        "width": 3840, "height": 2160, "aspect": "16:9", "widescreen": True, "vmode": 7,
+        "width": 3840,
+        "height": 2160,
+        "aspect": "16:9",
+        "widescreen": True,
+        "vmode": 7,
         "note": "4K UHD 2160p widescreen with corrected 3D camera FOV (unstretched)",
     },
     # Legacy modes
     "800x600 (Legacy 4:3)": {
-        "width": 800, "height": 600, "aspect": "4:3", "widescreen": False, "vmode": 6,
+        "width": 800,
+        "height": 600,
+        "aspect": "4:3",
+        "widescreen": False,
+        "vmode": 6,
         "note": "Legacy 800x600 mode",
     },
     "640x480 (Legacy 4:3)": {
-        "width": 640, "height": 480, "aspect": "4:3", "widescreen": False, "vmode": 5,
+        "width": 640,
+        "height": 480,
+        "aspect": "4:3",
+        "widescreen": False,
+        "vmode": 5,
         "note": "Original default 640x480 mode",
     },
 }
@@ -124,12 +171,16 @@ FIXED_CONF = [
 
 
 class LauncherError(RuntimeError):
+    """A missing/invalid local prerequisite or failed wrapper launch operation."""
+
     pass
 
 
 # ---------------------------------------------------------------- hashing
 
+
 def _load_cache() -> dict:
+    """Read the optional local hash cache, discarding unreadable cache contents."""
     try:
         return json.loads(HASH_CACHE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -140,6 +191,11 @@ _cache = None
 
 
 def sha256(path: Path) -> str:
+    """Return a SHA-256 using the local path/size/mtime cache when available.
+
+    Cache reuse assumes unchanged file metadata means unchanged bytes. This is
+    an optimization for owned staged inputs, not a general hostile-file verifier.
+    """
     global _cache
     if _cache is None:
         _cache = _load_cache()
@@ -155,23 +211,39 @@ def sha256(path: Path) -> str:
 
 
 def save_cache() -> None:
+    """Persist this process's accumulated hash records in the wrapper workspace."""
     if _cache is not None:
         HASH_CACHE_FILE.write_text(json.dumps(_cache, indent=1), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- processes
 
+
 def running_mech3() -> list[str]:
+    """Query existing original-game process paths without starting or stopping them."""
     out = subprocess.run(
-        ["powershell", "-NoProfile", "-Command",
-         "Get-CimInstance Win32_Process -Filter \"Name='Mech3.exe'\" | ForEach-Object { $_.ExecutablePath }"],
-        capture_output=True, text=True, check=False).stdout
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name='Mech3.exe'\" | ForEach-Object { $_.ExecutablePath }",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
 # ---------------------------------------------------------------- textures
 
+
 def load_ai_banks() -> list[dict]:
+    """Resolve registered enhanced-bank targets relative to the reviewed install tree.
+
+    Each returned row has a profile-relative target, local source and expected
+    SHA-256. This selects existing private content; it does not fetch assets.
+    """
     try:
         rows = json.loads(AI_MANIFEST.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
@@ -183,7 +255,9 @@ def load_ai_banks() -> list[dict]:
             rel = target.relative_to(AI_MANIFEST_INSTALL)
         except ValueError:
             raise LauncherError(f"Unexpected AI bank target outside texture install: {target}")
-        banks.append({"rel": rel, "source": Path(row["source"]), "sha256": row["expected_sha256"].lower()})
+        banks.append(
+            {"rel": rel, "source": Path(row["source"]), "sha256": row["expected_sha256"].lower()}
+        )
     if not banks:
         raise LauncherError("AI texture manifest is empty")
     return banks
@@ -209,7 +283,12 @@ def ensure_original_cache(rel: Path, log) -> Path:
 
 
 def place(source: Path, dest: Path, want: str) -> bool:
-    """Hard-link source at dest unless dest already has the wanted content."""
+    """Replace a profile directory entry with a verified hard link; report a change.
+
+    Source/destination must be on the same volume. Linked content is shared, so
+    callers must treat staged sources as immutable. Original mode links a private
+    verified cache copy, never the user's original installation file itself.
+    """
     if dest.is_file() and sha256(dest) == want:
         return False
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +303,12 @@ def place(source: Path, dest: Path, want: str) -> bool:
 
 
 def apply_textures(ai: bool, log) -> dict:
+    """Switch registered banks in the isolated GAME tree and summarize replacements.
+
+    Each bank is checked before placement. The whole set is not a transaction:
+    an error may leave earlier profile entries switched, while original source
+    installation entries remain untouched. Do not run alongside another writer.
+    """
     banks = load_ai_banks()
     changed = 0
     for bank in banks:
@@ -232,7 +317,9 @@ def apply_textures(ai: bool, log) -> dict:
             if not bank["source"].is_file():
                 raise LauncherError(f"AI bank source missing: {bank['source']}")
             if sha256(bank["source"]) != bank["sha256"]:
-                raise LauncherError(f"AI bank source hash mismatch (manifest may be updating): {bank['source']}")
+                raise LauncherError(
+                    f"AI bank source hash mismatch (manifest may be updating): {bank['source']}"
+                )
             source, want = bank["source"], bank["sha256"]
         else:
             source = ensure_original_cache(bank["rel"], log)
@@ -246,7 +333,9 @@ def apply_textures(ai: bool, log) -> dict:
 
 # ---------------------------------------------------------------- config / registry
 
+
 def write_dxvk_conf(aa: int, af: int) -> list[str]:
+    """Write wrapper-local options; aa=0 disables MSAA, af sets maximum anisotropy."""
     lines = ["# Generated by mw3_launcher.py (isolated MW3 D7VK profile)"] + FIXED_CONF
     if aa:
         lines += ["ddraw.emulateFSAA = forced", f"ddraw.fsaaSamples = {aa}"]
@@ -258,6 +347,7 @@ def write_dxvk_conf(aa: int, af: int) -> list[str]:
 
 
 def read_reg(names: list[str]) -> dict:
+    """Snapshot current-user game values with registry types; None records absence."""
     out = {}
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH) as key:
         for n in names:
@@ -270,6 +360,7 @@ def read_reg(names: list[str]) -> dict:
 
 
 def write_reg(values: dict) -> None:
+    """Apply or restore a snapshot, deleting values that were originally absent."""
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
         for n, rec in values.items():
             if rec is None:
@@ -283,31 +374,63 @@ def write_reg(values: dict) -> None:
 
 # ---------------------------------------------------------------- launch
 
+
 class STARTUPINFOW(ctypes.Structure):
-    _fields_ = [("cb", w.DWORD), ("lpReserved", w.LPWSTR), ("lpDesktop", w.LPWSTR), ("lpTitle", w.LPWSTR),
-                ("dwX", w.DWORD), ("dwY", w.DWORD), ("dwXSize", w.DWORD), ("dwYSize", w.DWORD),
-                ("dwXCountChars", w.DWORD), ("dwYCountChars", w.DWORD), ("dwFillAttribute", w.DWORD),
-                ("dwFlags", w.DWORD), ("wShowWindow", w.WORD), ("cbReserved2", w.WORD),
-                ("lpReserved2", ctypes.c_void_p), ("hStdInput", w.HANDLE), ("hStdOutput", w.HANDLE),
-                ("hStdError", w.HANDLE)]
+    """Native Windows process-start layout; not the translated game's x86 structure."""
+
+    _fields_ = [
+        ("cb", w.DWORD),
+        ("lpReserved", w.LPWSTR),
+        ("lpDesktop", w.LPWSTR),
+        ("lpTitle", w.LPWSTR),
+        ("dwX", w.DWORD),
+        ("dwY", w.DWORD),
+        ("dwXSize", w.DWORD),
+        ("dwYSize", w.DWORD),
+        ("dwXCountChars", w.DWORD),
+        ("dwYCountChars", w.DWORD),
+        ("dwFillAttribute", w.DWORD),
+        ("dwFlags", w.DWORD),
+        ("wShowWindow", w.WORD),
+        ("cbReserved2", w.WORD),
+        ("lpReserved2", ctypes.c_void_p),
+        ("hStdInput", w.HANDLE),
+        ("hStdOutput", w.HANDLE),
+        ("hStdError", w.HANDLE),
+    ]
 
 
 class PROCESS_INFORMATION(ctypes.Structure):
-    _fields_ = [("hProcess", w.HANDLE), ("hThread", w.HANDLE), ("dwProcessId", w.DWORD), ("dwThreadId", w.DWORD)]
+    """Native process/thread handles returned by CreateProcessW."""
+
+    _fields_ = [
+        ("hProcess", w.HANDLE),
+        ("hThread", w.HANDLE),
+        ("dwProcessId", w.DWORD),
+        ("dwThreadId", w.DWORD),
+    ]
 
 
 def cleanup_fov_staging() -> None:
+    """Remove only the known FOV plugin/config/log entries from the private GAME tree."""
     for name in ("MechWarrior3FOVFix.asi", "MechWarrior3FOVFix.ini", "MechWarrior3FOVFix.log"):
         (GAME / name).unlink(missing_ok=True)
 
 
 def stage_fov_fix(width: int, height: int, log) -> Path:
+    """Verify and copy the local camera plugin, then write its pixel dimensions.
+
+    The file belongs to the isolated original-game profile. This is not an
+    in-process plugin for the native recompiled host.
+    """
     if not FOV_ASI_SOURCE.is_file():
         raise LauncherError(f"FOV plugin missing: {FOV_ASI_SOURCE}")
     if sha256(FOV_ASI_SOURCE) != FOV_ASI_EXPECTED_HASH:
         raise LauncherError(f"FOV plugin hash mismatch: {FOV_ASI_SOURCE}")
     if not FOV_LAUNCHER_EXE.is_file() or not FOV_BOOTSTRAP_DLL.is_file():
-        raise LauncherError("Widescreen FOV launcher binaries missing in build/widescreen-test/Release")
+        raise LauncherError(
+            "Widescreen FOV launcher binaries missing in build/widescreen-test/Release"
+        )
 
     asi_dest = GAME / "MechWarrior3FOVFix.asi"
     shutil.copyfile(FOV_ASI_SOURCE, asi_dest)
@@ -326,6 +449,11 @@ def stage_fov_fix(width: int, height: int, log) -> Path:
 
 
 def start_game_direct(diagnostic: bool) -> tuple[int, int]:
+    """Start the original process; return an owned process handle and its PID.
+
+    The thread handle is closed here; wait_exit consumes the process handle.
+    diagnostic is retained in the shared launch signature but unused on this path.
+    """
     cleanup_fov_staging()
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     si = STARTUPINFOW()
@@ -336,14 +464,32 @@ def start_game_direct(diagnostic: bool) -> tuple[int, int]:
     env["D7VK_LOG_LEVEL"] = "debug"
     env_buf = ctypes.create_unicode_buffer("".join(f"{k}={v}\0" for k, v in env.items()) + "\0")
     cmd = ctypes.create_unicode_buffer(f'"{GAME_EXE}"')
-    if not k32.CreateProcessW(str(GAME_EXE), cmd, None, None, False, 0x00000400,
-                              ctypes.byref(env_buf), str(GAME), ctypes.byref(si), ctypes.byref(pi)):
+    if not k32.CreateProcessW(
+        str(GAME_EXE),
+        cmd,
+        None,
+        None,
+        False,
+        0x00000400,
+        ctypes.byref(env_buf),
+        str(GAME),
+        ctypes.byref(si),
+        ctypes.byref(pi),
+    ):
         raise LauncherError(f"CreateProcessW failed: {ctypes.get_last_error()}")
     k32.CloseHandle(pi.hThread)
     return int(pi.hProcess), int(pi.dwProcessId)
 
 
-def start_game_fov(run_dir: Path, width: int, height: int, diagnostic: bool, log) -> tuple[int, int]:
+def start_game_fov(
+    run_dir: Path, width: int, height: int, diagnostic: bool, log
+) -> tuple[int, int]:
+    """Use the separate FOV bootstrap and open a waitable handle to its game PID.
+
+    The bootstrap process exits before gameplay does; callers must wait on the
+    returned game handle. diagnostic is retained in the shared signature;
+    launch() owns the separate diagnostic module-capture worker.
+    """
     asi_path = stage_fov_fix(width, height, log)
     evidence_log = run_dir / "fov-bootstrap.log"
     env = os.environ.copy()
@@ -371,6 +517,7 @@ def start_game_fov(run_dir: Path, width: int, height: int, diagnostic: bool, log
 
 
 def wait_exit(handle: int) -> int:
+    """Wait for the native process handle, retrieve its exit code and close it."""
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.WaitForSingleObject(w.HANDLE(handle), 0xFFFFFFFF)
     code = w.DWORD()
@@ -380,6 +527,7 @@ def wait_exit(handle: int) -> int:
 
 
 def expected_ddraw_hash() -> str:
+    """Select the explicit environment pin before the staged profile's hash file."""
     if DDRAW_SHA256:
         return DDRAW_SHA256.lower()
     if DDRAW_SHA256_FILE.is_file():
@@ -388,8 +536,18 @@ def expected_ddraw_hash() -> str:
 
 
 def summarize_log(path: Path) -> dict:
-    keys = ("Effective configuration", "ddraw.", "d3d9.", "SetDisplayMode", "Back buffer size",
-            "MSAA", "Found device", "Creating device", "err:")
+    """Keep at most 200 matching diagnostic lines; do not treat them as acceptance."""
+    keys = (
+        "Effective configuration",
+        "ddraw.",
+        "d3d9.",
+        "SetDisplayMode",
+        "Back buffer size",
+        "MSAA",
+        "Found device",
+        "Creating device",
+        "err:",
+    )
     lines = []
     if path.is_file():
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -399,7 +557,14 @@ def summarize_log(path: Path) -> dict:
 
 
 def launch(settings: dict, log, diagnostic: bool = False, auto_close_sec: float = 0.0) -> int:
-    if (running := running_mech3()):
+    """Prepare the private wrapper, own one game session, then restore registry state.
+
+    Registry restoration and log collection run in finally after the guarded
+    launch section. auto_close_sec is an explicit diagnostic WM_CLOSE request,
+    not a gameplay timeout or a forced process kill. The log callback may run
+    on the GUI worker, so the GUI implementation marshals it with root.after.
+    """
+    if running := running_mech3():
         raise LauncherError(f"Mech3.exe is already running: {running}")
     if sha256(GAME_EXE) != EXE_SHA256:
         raise LauncherError("Profile Mech3.exe is not the admitted US 1.2 executable")
@@ -441,24 +606,40 @@ def launch(settings: dict, log, diagnostic: bool = False, auto_close_sec: float 
         else:
             handle, pid = start_game_direct(diagnostic)
         record["pid"] = pid
-        log(f"Started Mech3.exe PID {pid}: {res_key}, AA {settings['aa']}, "
-            f"AF {settings['af']}, {'AI' if settings['ai_textures'] else 'original'} textures")
+        log(
+            f"Started Mech3.exe PID {pid}: {res_key}, AA {settings['aa']}, "
+            f"AF {settings['af']}, {'AI' if settings['ai_textures'] else 'original'} textures"
+        )
         if diagnostic:
+
             def capture():
                 import time
+
                 time.sleep(4.0)
                 try:
                     sys.path.insert(0, str(WRAPPER))
                     from inspect_live_process import enum_modules
-                    mods = [m for m in enum_modules(pid)
-                            if any(n in str(m).lower() for n in ("ddraw", "d3dimm", "vulkan", "d3d9", "dgvoodoo", "fov"))]
-                    (run_dir / "live-modules.json").write_text(json.dumps(mods, indent=2), encoding="utf-8")
+
+                    mods = [
+                        m
+                        for m in enum_modules(pid)
+                        if any(
+                            n in str(m).lower()
+                            for n in ("ddraw", "d3dimm", "vulkan", "d3d9", "dgvoodoo", "fov")
+                        )
+                    ]
+                    (run_dir / "live-modules.json").write_text(
+                        json.dumps(mods, indent=2), encoding="utf-8"
+                    )
                 except Exception as exc:
                     (run_dir / "live-modules-error.txt").write_text(repr(exc), encoding="utf-8")
+
             threading.Thread(target=capture, daemon=True).start()
         if auto_close_sec > 0.0:
+
             def auto_close():
                 import time
+
                 time.sleep(auto_close_sec)
                 deadline = time.time() + 25.0
                 WM_CLOSE = 0x0010
@@ -473,6 +654,7 @@ def launch(settings: dict, log, diagnostic: bool = False, auto_close_sec: float 
                         u32.SetThreadDesktop(hdesk)
 
                     posted = 0
+
                     def enum_proc(hwnd, _):
                         nonlocal posted
                         proc_id = w.DWORD()
@@ -488,9 +670,12 @@ def launch(settings: dict, log, diagnostic: bool = False, auto_close_sec: float 
                         if posted > 0:
                             break
                         time.sleep(0.5)
-                    (run_dir / "auto-close.txt").write_text(f"Posted WM_CLOSE to {posted} windows\n", encoding="utf-8")
+                    (run_dir / "auto-close.txt").write_text(
+                        f"Posted WM_CLOSE to {posted} windows\n", encoding="utf-8"
+                    )
                 except Exception as e:
                     (run_dir / "auto-close-error.txt").write_text(str(e), encoding="utf-8")
+
             threading.Thread(target=auto_close, daemon=True).start()
         record["exit_code"] = wait_exit(handle)
     finally:
@@ -504,14 +689,20 @@ def launch(settings: dict, log, diagnostic: bool = False, auto_close_sec: float 
                 shutil.copy2(src_log, run_dir / log_name)
         cleanup_fov_staging()
         record["d7vk_log_summary"] = summarize_log(run_dir / "Mech3_ddraw.log")
-        (run_dir / "session.json").write_text(json.dumps(record, indent=2, default=str), encoding="utf-8")
-    log(f"Game exited ({record['exit_code']}); registry restored={record['registry_restored']}; record {run_dir}")
+        (run_dir / "session.json").write_text(
+            json.dumps(record, indent=2, default=str), encoding="utf-8"
+        )
+    log(
+        f"Game exited ({record['exit_code']}); registry restored={record['registry_restored']}; record {run_dir}"
+    )
     return record["exit_code"]
 
 
 # ---------------------------------------------------------------- settings / UI
 
+
 def normalize_resolution(name: str) -> str:
+    """Map saved legacy labels to current profiles, falling back to the named default."""
     if name in RESOLUTION_PROFILES:
         return name
     legacy_map = {
@@ -531,18 +722,22 @@ def normalize_resolution(name: str) -> str:
 
 
 def load_settings() -> dict:
+    """Overlay readable saved choices on defaults and normalize the resolution label."""
     s = dict(DEFAULTS)
     try:
         s.update(json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
     except (OSError, ValueError):
         pass
     s["resolution"] = normalize_resolution(s.get("resolution", ""))
-    if s["aa"] not in AA_LEVELS: s["aa"] = DEFAULTS["aa"]
-    if s["af"] not in AF_LEVELS: s["af"] = DEFAULTS["af"]
+    if s["aa"] not in AA_LEVELS:
+        s["aa"] = DEFAULTS["aa"]
+    if s["af"] not in AF_LEVELS:
+        s["af"] = DEFAULTS["af"]
     return s
 
 
 def gui() -> int:
+    """Run Tk on its main thread and delegate blocking preparation/game waits to a worker."""
     import tkinter as tk
     from tkinter import ttk, messagebox
 
@@ -557,14 +752,17 @@ def gui() -> int:
     # Resolution row
     ttk.Label(frm, text="Resolution").grid(row=0, column=0, sticky="w", pady=4)
     res_var = tk.StringVar(value=s["resolution"])
-    res_cb = ttk.Combobox(frm, textvariable=res_var, values=list(RESOLUTION_PROFILES), state="readonly", width=36)
+    res_cb = ttk.Combobox(
+        frm, textvariable=res_var, values=list(RESOLUTION_PROFILES), state="readonly", width=36
+    )
     res_cb.grid(row=0, column=1, sticky="ew", pady=4)
     vars_["resolution"] = res_var
 
     # Aspect / description hint label
     hint_var = tk.StringVar()
-    ttk.Label(frm, textvariable=hint_var, foreground="#555", font=("Segoe UI", 8), wraplength=320).grid(
-        row=1, column=1, sticky="w", pady=(0, 4))
+    ttk.Label(
+        frm, textvariable=hint_var, foreground="#555", font=("Segoe UI", 8), wraplength=320
+    ).grid(row=1, column=1, sticky="w", pady=(0, 4))
 
     def on_res_change(*_):
         p = RESOLUTION_PROFILES.get(res_var.get())
@@ -572,6 +770,7 @@ def gui() -> int:
             hint_var.set(p.get("note", ""))
         else:
             hint_var.set("")
+
     res_var.trace_add("write", on_res_change)
     on_res_change()
 
@@ -579,27 +778,32 @@ def gui() -> int:
     ttk.Label(frm, text="Anti-aliasing").grid(row=2, column=0, sticky="w", pady=4)
     aa_var = tk.StringVar(value=s["aa"])
     ttk.Combobox(frm, textvariable=aa_var, values=list(AA_LEVELS), state="readonly", width=36).grid(
-        row=2, column=1, sticky="ew", pady=4)
+        row=2, column=1, sticky="ew", pady=4
+    )
     vars_["aa"] = aa_var
 
     # AF row
     ttk.Label(frm, text="Anisotropic filtering").grid(row=3, column=0, sticky="w", pady=4)
     af_var = tk.StringVar(value=s["af"])
     ttk.Combobox(frm, textvariable=af_var, values=list(AF_LEVELS), state="readonly", width=36).grid(
-        row=3, column=1, sticky="ew", pady=4)
+        row=3, column=1, sticky="ew", pady=4
+    )
     vars_["af"] = af_var
 
     # AI textures checkbutton
     ai = tk.BooleanVar(value=bool(s["ai_textures"]))
     ttk.Checkbutton(frm, text="Load AI-upscaled textures (39 banks)", variable=ai).grid(
-        row=4, column=0, columnspan=2, sticky="w", pady=6)
+        row=4, column=0, columnspan=2, sticky="w", pady=6
+    )
 
-    ttk.Label(frm, text="Frame cap: 30 FPS ceiling (fixed for game physics)", foreground="#666").grid(
-        row=5, column=0, columnspan=2, sticky="w")
+    ttk.Label(
+        frm, text="Frame cap: 30 FPS ceiling (fixed for game physics)", foreground="#666"
+    ).grid(row=5, column=0, columnspan=2, sticky="w")
 
     status = tk.StringVar(value="Ready")
     ttk.Label(frm, textvariable=status, wraplength=400).grid(
-        row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        row=7, column=0, columnspan=2, sticky="w", pady=(8, 0)
+    )
 
     btn = ttk.Button(frm, text="Launch MechWarrior 3")
     btn.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -633,23 +837,34 @@ def gui() -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    """Select GUI or explicit CLI mode without starting gameplay during argument parsing."""
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--no-gui", action="store_true")
     p.add_argument("--resolution", choices=list(RESOLUTION_PROFILES))
     p.add_argument("--aa", choices=list(AA_LEVELS))
     p.add_argument("--af", choices=list(AF_LEVELS))
     p.add_argument("--textures", choices=["ai", "original"])
     p.add_argument("--diagnostic", action="store_true", help="debug D7VK log + live module capture")
-    p.add_argument("--prepare-only", action="store_true", help="apply textures/config without launching")
-    p.add_argument("--auto-close-sec", type=float, default=0.0, help="automated exit delay for testing")
+    p.add_argument(
+        "--prepare-only", action="store_true", help="apply textures/config without launching"
+    )
+    p.add_argument(
+        "--auto-close-sec", type=float, default=0.0, help="automated exit delay for testing"
+    )
     a = p.parse_args()
     if not a.no_gui:
         return gui()
     s = load_settings()
-    if a.resolution: s["resolution"] = a.resolution
-    if a.aa: s["aa"] = a.aa
-    if a.af: s["af"] = a.af
-    if a.textures: s["ai_textures"] = a.textures == "ai"
+    if a.resolution:
+        s["resolution"] = a.resolution
+    if a.aa:
+        s["aa"] = a.aa
+    if a.af:
+        s["af"] = a.af
+    if a.textures:
+        s["ai_textures"] = a.textures == "ai"
     try:
         if a.prepare_only:
             if running_mech3():

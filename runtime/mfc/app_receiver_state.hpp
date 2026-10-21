@@ -44,6 +44,9 @@ class ConstructionTicket {
 // Controlled, sequential association model, not a translation of MFC constructors/destructors.
 // IDs are guest addresses. Host TLS/TEB/SEH and provider factories are never consulted.
 // No live-dispatch admission API exists while the provider/lifetime contract is incomplete.
+// The host owns this model and serializes transitions. A ConstructionTicket belongs
+// to exactly this instance and construction attempt; never persist it or infer lifetime
+// from a reused guest address. Teardown invalidates associations, not guest memory.
 class AppReceiverState {
   public:
     explicit AppReceiverState(ReceiverProviderIdentity provider);
@@ -58,11 +61,15 @@ class AppReceiverState {
                                                std::optional<ModuleStateId> module);
     [[nodiscard]] std::optional<ModuleStateId> current_module(ThreadSlotId thread) const;
 
+    // Capture the current owned module before construction. Completion publishes
+    // only in that saved module; failure/teardown invalidates all its associations.
     [[nodiscard]] ConstructionTicket begin_construction(AppReceiverId receiver,
                                                         ThreadSlotId thread);
     void complete_construction(ConstructionTicket ticket);
     void fail_construction(ConstructionTicket ticket);
     void destroy_receiver(AppReceiverId receiver);
+    // These tear down association metadata, not the underlying guest/provider
+    // objects. Real destructors and callback lifetime admission are separate.
     void teardown_thread(ThreadSlotId thread);
     void teardown_module(ModuleStateId module);
 

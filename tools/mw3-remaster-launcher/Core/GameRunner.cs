@@ -7,6 +7,12 @@ using System.Text.Json.Nodes;
 
 namespace MW3RemasterLauncher.Core
 {
+    /// <summary>Translate native-launcher settings into one isolated launch session.</summary>
+    /// <remarks>
+    /// The published host profile is read-only. Each call writes a profile/log below
+    /// local/remaster/launcher-runs and delegates asset preparation to play_remaster.py.
+    /// Host admission and gameplay acceptance belong to the native pipeline, not this UI adapter.
+    /// </remarks>
     public class GameRunner
     {
         private readonly string _basePath;
@@ -17,6 +23,7 @@ namespace MW3RemasterLauncher.Core
             _basePath = basePath;
         }
 
+        /// <summary>Walk ancestors for the private native profile and launch script together.</summary>
         public static string? FindRepositoryRoot(string startDir)
         {
             try
@@ -37,6 +44,13 @@ namespace MW3RemasterLauncher.Core
             return null;
         }
 
+        /// <summary>Prepare arguments and start the native launch coordinator.</summary>
+        /// <returns>The started coordinator process; the caller owns its lifetime.</returns>
+        /// <remarks>
+        /// Output callbacks run on process-reader threads; UI callers must marshal updates.
+        /// Active packs currently select the upgraded-model switch, not general pack composition.
+        /// Starting the coordinator does not mean the game has finished preparing or loading.
+        /// </remarks>
         public Process? LaunchGame(LauncherSettings settings, List<string> activeModDirs, Action<string>? logCallback = null)
         {
             // Verify game path
@@ -124,6 +138,11 @@ namespace MW3RemasterLauncher.Core
             return process;
         }
 
+        /// <summary>Build a private settings snapshot while retaining published host identity.</summary>
+        /// <remarks>
+        /// AA "off" maps to one raster sample; "fxaa" remains a named mode.
+        /// This validates UI choices; the coordinator separately checks host capabilities.
+        /// </remarks>
         public static JsonObject CreateLaunchProfile(string publishedJson, LauncherSettings settings)
         {
             var profile = JsonNode.Parse(publishedJson)?.AsObject()

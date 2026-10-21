@@ -78,3 +78,22 @@ whose undefined intermediate flags are overwritten before observation.
 verifies their combined evidence. `tools/lifting/build_mw3_leaf.ps1 -RunComparison`
 uses the same toolchain for the [admitted MW3 leaf](mw3-leaf-experiment.md).
 No additional external dependency is required.
+
+## Separate Mod Tools source preview
+
+These dependencies apply to the editor setup, not the asset-free C++ bootstrap.
+
+| Component | Pin and license | Use and distribution |
+| --- | --- | --- |
+| Pillow | 12.3.0; MIT-CMU | Desktop map images; installed into `.venv-mod-tools` from hash-pinned Windows x64 wheels in `tools/release/mod-tools-requirements.txt` |
+| Mech3AX | v0.7.0-rc3 Windows x64; EUPL-1.2 | Archive extraction/reconstruction; user installs separately; observed `unzbd.exe`/`rezbd.exe` SHA-256 pins are enforced by setup |
+| Three.js | r128 / 0.128.0; MIT | Browser scene preview; included source hashes, official upstream URLs and license are recorded in `games/mw3/mod-tools/editor/web/static/js/third-party.json` |
+| Tkinter | Supplied with the user's CPython distribution | Desktop UI; setup checks its availability without fetching another GUI framework |
+
+The Pillow pin matches the existing local editor environment, rather than tracking
+the latest release. Exact wheel hashes were read from
+[PyPI's version metadata](https://pypi.org/pypi/Pillow/12.3.0/json). The wheels keep
+their embedded dependency notices; the source-preview ZIP does not redistribute
+Python, Pillow wheels or Mech3AX binaries. The observed converter binary pins are
+local identities, not independent verification of an upstream release signature.
+See [Mod Tools setup](setup-mod-tools.md) for requirements and remaining limits.

@@ -2,10 +2,12 @@
 
 namespace mw34::graphics {
 namespace {
+// byte_offset addresses a DWORD in the guest vtable, not a method ordinal.
+// Resolve it anew for each provider call so preceding guest-visible writes count.
 
-ComMethod method_at(GuestMemory &memory, GuestAddress object, std::uint32_t offset) {
+ComMethod method_at(GuestMemory &memory, GuestAddress object, std::uint32_t byte_offset) {
     const GuestAddress table{memory.load<std::uint32_t>(object)};
-    return {object, GuestAddress{memory.load<std::uint32_t>(table.wrapping_add(offset))}};
+    return {object, GuestAddress{memory.load<std::uint32_t>(table.wrapping_add(byte_offset))}};
 }
 
 } // namespace

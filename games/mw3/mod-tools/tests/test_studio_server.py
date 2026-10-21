@@ -14,6 +14,7 @@ sys.path.insert(0, str(TOOLS_ROOT))
 from run_studio import StudioRequestHandler
 import http.server
 
+
 def test_studio_api():
     port = 8899
     server = http.server.HTTPServer(("127.0.0.1", port), StudioRequestHandler)
@@ -35,7 +36,9 @@ def test_studio_api():
             data = json.loads(resp.read().decode("utf-8"))
             assert data["status"] == "ok"
             assert any(p["pack_id"] == "iron_ridge_outpost" for p in data["packs"])
-            print(f"[OK] GET /api/list-packs returned {len(data['packs'])} packs (including iron_ridge_outpost)")
+            print(
+                f"[OK] GET /api/list-packs returned {len(data['packs'])} packs (including iron_ridge_outpost)"
+            )
 
         # 3. Test POST /api/export-pack
         sample_pack = {
@@ -45,16 +48,42 @@ def test_studio_api():
             "version": "1.0.0",
             "description": "Automated API test pack",
             "base_operation": "c1",
-            "terrain": { "biome": "coastal", "width": 3000.0, "depth": 3000.0, "height_scale": 80.0, "water_level": 3.0, "roughness": 0.5 },
-            "lighting": { "preset_name": "noon", "azimuth": 180.0, "elevation": 75.0, "strength": 1.0, "ambient": 0.3, "sun_color": [1,1,1], "sky_tint": [0.4,0.6,0.9], "fog_distance": 1100 },
+            "terrain": {
+                "biome": "coastal",
+                "width": 3000.0,
+                "depth": 3000.0,
+                "height_scale": 80.0,
+                "water_level": 3.0,
+                "roughness": 0.5,
+            },
+            "lighting": {
+                "preset_name": "noon",
+                "azimuth": 180.0,
+                "elevation": 75.0,
+                "strength": 1.0,
+                "ambient": 0.3,
+                "sun_color": [1, 1, 1],
+                "sky_tint": [0.4, 0.6, 0.9],
+                "fog_distance": 1100,
+            },
             "assets": [
-                { "asset_id": "t1", "asset_type": "turret_srm", "name": "Test SRM", "x": 100.0, "y": 5.0, "z": 200.0, "yaw_deg": 45.0, "faction": "enemy", "health": 100 }
-            ]
+                {
+                    "asset_id": "t1",
+                    "asset_type": "turret_srm",
+                    "name": "Test SRM",
+                    "x": 100.0,
+                    "y": 5.0,
+                    "z": 200.0,
+                    "yaw_deg": 45.0,
+                    "faction": "enemy",
+                    "health": 100,
+                }
+            ],
         }
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/export-pack",
             data=json.dumps(sample_pack).encode("utf-8"),
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 200
@@ -65,6 +94,7 @@ def test_studio_api():
 
         # Cleanup test pack
         import shutil
+
         test_folder = ROOT / "mods/map-packs/test_api_pack"
         if test_folder.is_dir():
             shutil.rmtree(test_folder)
@@ -73,6 +103,7 @@ def test_studio_api():
     finally:
         server.shutdown()
         server.server_close()
+
 
 if __name__ == "__main__":
     test_studio_api()

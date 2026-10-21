@@ -17,7 +17,13 @@ sys.path.insert(0, str(TOOLS_ROOT))
 
 from editor.core.formats import verify_tools_available
 from editor.core.mission_loader import MissionLoader
-from editor.core.project import ModProject, CommandHistory, MoveObjectCommand, RotateObjectCommand, ToggleObjectActiveCommand
+from editor.core.project import (
+    ModProject,
+    CommandHistory,
+    MoveObjectCommand,
+    RotateObjectCommand,
+    ToggleObjectActiveCommand,
+)
 from editor.core.exporter import ModExporter
 
 ROOT = TOOLS_ROOT.parents[2]
@@ -42,8 +48,12 @@ def test_mission_loading():
     assert len(m1.placed_objects) > 500, f"Expected world objects, found {len(m1.placed_objects)}"
     assert len(m1.spawn_points) >= 1, "Expected spawn points in location.zrd"
     assert len(m1.trigger_regions) >= 1, "Expected trigger regions in reg_*.zrd"
-    assert m1.calibration.image_path and m1.calibration.image_path.is_file(), "Map image should be extracted"
-    print(f"  -> C1M1 loaded: {len(m1.placed_objects)} objects, {len(m1.spawn_points)} spawns, {len(m1.trigger_regions)} trigger regions.")
+    assert (
+        m1.calibration.image_path and m1.calibration.image_path.is_file()
+    ), "Map image should be extracted"
+    print(
+        f"  -> C1M1 loaded: {len(m1.placed_objects)} objects, {len(m1.spawn_points)} spawns, {len(m1.trigger_regions)} trigger regions."
+    )
 
 
 def test_undo_redo_and_editing():
@@ -108,13 +118,17 @@ def test_unchanged_export_roundtrip():
         exporter = ModExporter(output_root=Path(td))
         loader = MissionLoader(ROOT / "MW3")
         m1 = loader.load_mission("c1", "c1m1")
-        clean_proj = ModProject(project_name="Clean Export", target_operation="c1", target_mission="c1m1")
+        clean_proj = ModProject(
+            project_name="Clean Export", target_operation="c1", target_mission="c1m1"
+        )
         receipt = exporter.export(clean_proj, m1)
 
         orig_gamez = ROOT / "MW3/zbd/c1/gamez.zbd"
         exported_gamez = receipt.mod_dir / "zbd/c1/gamez.zbd"
         assert exported_gamez.is_file(), "Exported gamez.zbd missing"
-        assert filecmp.cmp(orig_gamez, exported_gamez, shallow=False), "Unchanged export must be byte-exact"
+        assert filecmp.cmp(
+            orig_gamez, exported_gamez, shallow=False
+        ), "Unchanged export must be byte-exact"
         assert receipt.manifest_path.is_file(), "manifest.json missing"
         assert receipt.redirect_bank_path.is_file(), "mod-banks.bin missing"
     print("  -> Unchanged byte-exact export verified.")
@@ -134,15 +148,19 @@ def test_intentional_edit_export():
             "x": -1000.0,
             "y": 16.6,
             "z": -900.0,
-            "active": True
+            "active": True,
         }
         receipt = exporter.export(proj, m1)
         exported_gamez = receipt.mod_dir / "zbd/c1/gamez.zbd"
         orig_gamez = ROOT / "MW3/zbd/c1/gamez.zbd"
 
         assert exported_gamez.is_file(), "Modified gamez.zbd missing"
-        assert not filecmp.cmp(orig_gamez, exported_gamez, shallow=False), "Modified file must differ from original"
-        assert orig_gamez.stat().st_size == exported_gamez.stat().st_size, "Header/archive size parity expected"
+        assert not filecmp.cmp(
+            orig_gamez, exported_gamez, shallow=False
+        ), "Modified file must differ from original"
+        assert (
+            orig_gamez.stat().st_size == exported_gamez.stat().st_size
+        ), "Header/archive size parity expected"
 
         manifest = json.loads(receipt.manifest_path.read_text(encoding="utf-8"))
         assert manifest["name"] == "Edited Mod"

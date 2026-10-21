@@ -17,6 +17,9 @@ struct CameraBinding {
     Words renderer{}, inverse{};
     bool valid{};
 
+    // Invalidate first so a failed new activation cannot leave the prior camera
+    // usable. original is a value copy: sign-bit adjustment never writes the
+    // game's producer matrix. Ownership is an exact source address plus word match.
     void capture(std::uint32_t address, Words original, const Words &actual, const Words &view) {
         valid = false;
         for (unsigned i = 3; i < 9; ++i)
@@ -29,12 +32,17 @@ struct CameraBinding {
         valid = true;
     }
     bool owns(std::uint32_t address) const { return valid && source == address; }
+    // Exact inverse-word equality is deliberate; epsilon comparisons would admit
+    // a different active camera and incorrectly light temporary effect matrices.
     void validate(const Words &view) const {
         if (!valid)
             throw std::runtime_error("Sun camera activation is missing");
-        if(inverse!=view)
+        if (inverse != view)
             throw std::runtime_error("Sun camera activated inverse view changed");
     }
+    // Convert the authenticated column-major 3x4 renderer words to a row-major
+    // homogeneous 4x4 double matrix. Bit admission and finite-value validation
+    // are distinct: capture preserves words; this conversion rejects NaN/Inf.
     std::array<double, 16> matrix() const {
         if (!valid)
             throw std::runtime_error("Sun camera has no authenticated activation");

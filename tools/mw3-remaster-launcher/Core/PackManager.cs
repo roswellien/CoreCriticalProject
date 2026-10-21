@@ -8,6 +8,7 @@ using System.Text.Json;
 
 namespace MW3RemasterLauncher.Core
 {
+    /// <summary>One duplicate relative filename and the precedence claimed by active packs.</summary>
     public class PackConflict
     {
         public string RelativePath { get; set; } = string.Empty;
@@ -15,6 +16,13 @@ namespace MW3RemasterLauncher.Core
         public string OverriddenPackName { get; set; } = string.Empty;
     }
 
+    /// <summary>Maintain the launcher's discovered packs and user-selected priority order.</summary>
+    /// <remarks>
+    /// Collection order is precedence order; InspectConflicts reports the first claim.
+    /// This is a filesystem manager, not a native asset compositor or publisher verifier.
+    /// Import/uninstall containment defects remain tracked in code review finding C01;
+    /// this documentation pass does not make untrusted pack import safe.
+    /// </remarks>
     public class PackManager
     {
         private readonly string _modsRoot;
@@ -31,6 +39,8 @@ namespace MW3RemasterLauncher.Core
             }
         }
 
+        /// <summary>Rescan directories/archives, then restore the requested enabled order.</summary>
+        /// <remarks>Null means first-run defaults; an empty list means deliberately disable all packs.</remarks>
         public void RefreshPacks(List<string>? activeOrder = null)
         {
             _packs.Clear();
@@ -110,6 +120,11 @@ namespace MW3RemasterLauncher.Core
             }
         }
 
+        /// <summary>Read pack metadata and replace its extracted local directory.</summary>
+        /// <remarks>
+        /// The existing implementation replaces files incrementally and may leave partial
+        /// output on failure. This is not an atomic install or a trusted-package validator.
+        /// </remarks>
         public PackManifest InstallPack(string archivePath, bool autoDeleteSource = false)
         {
             if (!File.Exists(archivePath))
@@ -200,6 +215,8 @@ namespace MW3RemasterLauncher.Core
             return manifest;
         }
 
+        /// <summary>Delete the discovered directory and remove its collection entry.</summary>
+        /// <remarks>Only launcher-owned discovered state is intended; caller paths are not validated here.</remarks>
         public bool UninstallPack(PackManifest pack)
         {
             if (pack == null) return false;
@@ -221,6 +238,7 @@ namespace MW3RemasterLauncher.Core
             return true;
         }
 
+        /// <summary>Move a discovered pack by an index offset and renumber display priorities.</summary>
         public void MovePriority(PackManifest pack, int direction)
         {
             int oldIndex = _packs.IndexOf(pack);
@@ -233,6 +251,7 @@ namespace MW3RemasterLauncher.Core
             for (int i = 0; i < _packs.Count; i++) _packs[i].Priority = i;
         }
 
+        /// <summary>Report duplicate relative paths; do not copy or merge their contents.</summary>
         public List<PackConflict> InspectConflicts()
         {
             var conflicts = new List<PackConflict>();
@@ -272,11 +291,13 @@ namespace MW3RemasterLauncher.Core
             return conflicts;
         }
 
+        /// <summary>Snapshot enabled IDs in precedence order for settings persistence.</summary>
         public List<string> GetActivePackIds()
         {
             return _packs.Where(p => p.IsEnabled).Select(p => p.Id).ToList();
         }
 
+        /// <summary>Snapshot enabled local directories without validating or composing their payloads.</summary>
         public List<string> GetActivePackDirectories()
         {
             return _packs.Where(p => p.IsEnabled).Select(p => p.DirectoryPath).ToList();

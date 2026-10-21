@@ -14,6 +14,8 @@ inline constexpr GuestAddress direct_draw4_iid{0x5ce790};
 inline constexpr GuestAddress video_error_file{0x5f0a5c};
 
 struct ComMethod {
+    // Both values remain guest identities. The provider owns marshaling to its
+    // real host COM object; this pair does not extend that object's lifetime.
     GuestAddress object;
     GuestAddress target; // Guest vtable entry, never a host function pointer.
 };
@@ -36,6 +38,8 @@ class DirectDrawCreationProvider {
 // Functional boundary for 0x577D40. temporary_output is the caller-owned writable
 // four-byte stack-local equivalent; it must not alias game state. Its initial
 // contents are retained until the provider writes them. Throws/faults propagate.
+// Provider output writes can change guest state between methods; do not cache
+// a guest vtable or output DWORD across the calls performed by this boundary.
 // Does not run 0x576EE0, install callbacks, initialize surfaces, or report startup
 // completion. The caller must supply the admitted image's GUID and receiver data.
 [[nodiscard]] std::uint32_t create_direct_draw4(GuestMemory &memory,

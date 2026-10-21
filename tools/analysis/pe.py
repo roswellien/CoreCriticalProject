@@ -14,9 +14,22 @@ MAX_SECTIONS = 96
 MAX_TABLE_ENTRIES = 65536
 MAX_STRING_BYTES = 4096
 DIRECTORY_NAMES = (
-    "exports", "imports", "resources", "exceptions", "security", "base_relocations",
-    "debug", "architecture", "global_pointer", "tls", "load_config", "bound_imports",
-    "iat", "delay_imports", "clr", "reserved",
+    "exports",
+    "imports",
+    "resources",
+    "exceptions",
+    "security",
+    "base_relocations",
+    "debug",
+    "architecture",
+    "global_pointer",
+    "tls",
+    "load_config",
+    "bound_imports",
+    "iat",
+    "delay_imports",
+    "clr",
+    "reserved",
 )
 
 
@@ -33,6 +46,7 @@ class UnsupportedBinaryError(ValueError):
 
 
 def read_binary(path: Path) -> bytes:
+    """Read bounded local bytes without mapping, executing or modifying the image."""
     with path.open("rb") as stream:
         # Limit the read itself, including files that grow after stat().
         if path.stat().st_size > MAX_FILE_BYTES:
@@ -44,6 +58,14 @@ def read_binary(path: Path) -> bytes:
 
 
 class PEImage:
+    """Inspect a bounded PE32/i386 file as bytes, not as a loaded address space.
+
+    Construction validates header/section extents; imports, exports and
+    relocations are checked when their methods are called. Offsets index data;
+    RVAs are relative to image_base. File-backed ranges exclude zero-fill tails,
+    which a loader may later allocate but a metadata reader cannot read here.
+    """
+
     def __init__(self, data: bytes):
         self.data = data
         if len(data) > MAX_FILE_BYTES:
@@ -54,7 +76,9 @@ class PEImage:
         if pe_offset < 0x40 or self.read(pe_offset, 4) != b"PE\0\0":
             raise PEError("invalid PE signature or header offset")
         coff = pe_offset + 4
-        self.machine, section_count, self.timestamp, _, _, optional_size, self.characteristics = self.unpack("<HHIIIHH", coff)
+        self.machine, section_count, self.timestamp, _, _, optional_size, self.characteristics = (
+            self.unpack("<HHIIIHH", coff)
+        )
         if self.machine != 0x14C:
             raise PEError(f"unsupported machine 0x{self.machine:04x}; expected i386")
         if not 1 <= section_count <= MAX_SECTIONS:
@@ -100,7 +124,9 @@ class PEImage:
         virtual_ranges = [(0, self.size_of_headers)]
         for index in range(section_count):
             record = section_table + index * 40
-            name = self.read(record, 8).split(b"\0", 1)[0].decode("ascii", errors="backslashreplace")
+            name = (
+                self.read(record, 8).split(b"\0", 1)[0].decode("ascii", errors="backslashreplace")
+            )
             virtual_size, virtual_address, raw_size, raw_offset = self.unpack("<IIII", record + 8)
             flags = self.u32(record + 36)
             extent = max(virtual_size, raw_size)
@@ -111,24 +137,34 @@ class PEImage:
                 self.check_overlap(raw_ranges, raw_offset, raw_size, "raw sections")
             if extent:
                 self.check_overlap(virtual_ranges, virtual_address, extent, "virtual sections")
-            self.sections.append({
-                "name": name, "virtual_address": virtual_address, "virtual_size": virtual_size,
-                "raw_offset": raw_offset, "raw_size": raw_size, "characteristics": flags,
-                "executable": bool(flags & 0x20000000), "readable": bool(flags & 0x40000000),
-                "writable": bool(flags & 0x80000000),
-            })
+            self.sections.append(
+                {
+                    "name": name,
+                    "virtual_address": virtual_address,
+                    "virtual_size": virtual_size,
+                    "raw_offset": raw_offset,
+                    "raw_size": raw_size,
+                    "characteristics": flags,
+                    "executable": bool(flags & 0x20000000),
+                    "readable": bool(flags & 0x40000000),
+                    "writable": bool(flags & 0x80000000),
+                }
+            )
 
     @staticmethod
     def check_overlap(ranges: list[tuple[int, int]], start: int, size: int, label: str) -> None:
         end = start + size
-        if any(start < previous_end and previous_start < end for previous_start, previous_end in ranges):
+        if any(
+            start < previous_end and previous_start < end for previous_start, previous_end in ranges
+        ):
             raise PEError(f"overlapping {label}")
         ranges.append((start, end))
 
     def read(self, offset: int, size: int) -> bytes:
+        """Read an exact file range; both arguments are byte counts, not guest VAs."""
         if offset < 0 or size < 0 or offset + size > len(self.data):
             raise PEError(f"truncated file range at 0x{offset:x}, size {size}")
-        return self.data[offset:offset + size]
+        return self.data[offset : offset + size]
 
     def unpack(self, fmt: str, offset: int) -> tuple:
         return struct.unpack(fmt, self.read(offset, struct.calcsize(fmt)))
@@ -155,6 +191,7 @@ class PEImage:
         return self.u32(self.rva_range(rva, 4)[0])
 
     def rva_string(self, rva: int) -> str:
+        """Read a bounded ASCII metadata name without crossing its file backing."""
         offset, backing_end = self.rva_range(rva, 1)
         end = self.data.find(b"\0", offset, min(backing_end, offset + MAX_STRING_BYTES))
         if end < 0:
@@ -165,6 +202,11 @@ class PEImage:
             raise PEError(f"non-ASCII metadata name at RVA 0x{rva:x}") from error
 
     def directory(self, index: int) -> tuple[int, int]:
+        """Return a file-backed RVA directory used by metadata readers.
+
+        The PE security directory is exceptional: its address is a file offset,
+        so callers must not pass that directory through this RVA helper.
+        """
         rva, size = self.directories[index]
         if rva:
             self.rva_range(rva, size)
@@ -220,7 +262,9 @@ class PEImage:
         if size < 40:
             raise PEError("truncated export directory")
         offset = self.rva_range(rva, 40)[0]
-        _, _, _, _, _, ordinal_base, function_count, name_count, functions, names, ordinals = self.unpack("<IIHHIIIIIII", offset)
+        _, _, _, _, _, ordinal_base, function_count, name_count, functions, names, ordinals = (
+            self.unpack("<IIHHIIIIIII", offset)
+        )
         if function_count > MAX_TABLE_ENTRIES or name_count > MAX_TABLE_ENTRIES:
             raise PEError("excessive export table count")
         if name_count and not function_count:
@@ -233,7 +277,9 @@ class PEImage:
             ordinal_index = self.u16(ordinals_offset + index * 2)
             if ordinal_index >= function_count:
                 raise PEError("export name ordinal exceeds the address table")
-            names_by_index.setdefault(ordinal_index, []).append(self.rva_string(self.u32(names_offset + index * 4)))
+            names_by_index.setdefault(ordinal_index, []).append(
+                self.rva_string(self.u32(names_offset + index * 4))
+            )
         exports = []
         for index in range(function_count):
             target = self.u32(function_offset + index * 4)
@@ -243,7 +289,11 @@ class PEImage:
                 continue
             if target >= self.size_of_image:
                 raise PEError("export target exceeds the image")
-            entry = {"ordinal": ordinal_base + index, "rva": target, "names": names_by_index.get(index, [])}
+            entry = {
+                "ordinal": ordinal_base + index,
+                "rva": target,
+                "names": names_by_index.get(index, []),
+            }
             if rva <= target < rva + size:
                 entry["forwarder"] = self.rva_string(target)
             exports.append(entry)
@@ -286,31 +336,77 @@ class PEImage:
             cursor += block_size
             blocks += 1
         return {
-            "present": bool(rva), "stripped_flag": bool(self.characteristics & 1),
-            "dynamic_base_flag": bool(self.dll_characteristics & 0x40), "block_count": blocks,
-            "entry_count": sum(counts.values()), "slot_count": slots,
+            "present": bool(rva),
+            "stripped_flag": bool(self.characteristics & 1),
+            "dynamic_base_flag": bool(self.dll_characteristics & 0x40),
+            "block_count": blocks,
+            "entry_count": sum(counts.values()),
+            "slot_count": slots,
             "type_counts": {str(key): value for key, value in sorted(counts.items())},
-            "type_names": {"0": "ABSOLUTE (padding)", "1": "HIGH", "2": "LOW", "3": "HIGHLOW", "4": "HIGHADJ"},
+            "type_names": {
+                "0": "ABSOLUTE (padding)",
+                "1": "HIGH",
+                "2": "LOW",
+                "3": "HIGHLOW",
+                "4": "HIGHADJ",
+            },
             "interpretation": "Presence and flags only; safe rebasing has not been established.",
         }
 
     def metadata(self) -> dict:
         imports = self.imports()
         exports = self.exports()
-        entry_sections = [section["name"] for section in self.sections if section["virtual_address"] <= self.entry_point_rva < section["virtual_address"] + max(section["raw_size"], section["virtual_size"])]
+        entry_sections = [
+            section["name"]
+            for section in self.sections
+            if section["virtual_address"]
+            <= self.entry_point_rva
+            < section["virtual_address"] + max(section["raw_size"], section["virtual_size"])
+        ]
         return {
-            "machine": self.machine, "optional_magic": self.optional_magic, "format": "PE32", "architecture": "i386",
-            "timestamp": self.timestamp, "image_base": self.image_base, "size_of_image": self.size_of_image,
-            "size_of_headers": self.size_of_headers, "section_alignment": self.section_alignment,
-            "file_alignment": self.file_alignment, "subsystem": self.subsystem,
-            "characteristics": self.characteristics, "dll_characteristics": self.dll_characteristics,
-            "entry_point_rva": self.entry_point_rva, "entry_point_va": self.image_base + self.entry_point_rva,
-            "entry_point_sections": entry_sections, "sections": self.sections,
+            "machine": self.machine,
+            "optional_magic": self.optional_magic,
+            "format": "PE32",
+            "architecture": "i386",
+            "timestamp": self.timestamp,
+            "image_base": self.image_base,
+            "size_of_image": self.size_of_image,
+            "size_of_headers": self.size_of_headers,
+            "section_alignment": self.section_alignment,
+            "file_alignment": self.file_alignment,
+            "subsystem": self.subsystem,
+            "characteristics": self.characteristics,
+            "dll_characteristics": self.dll_characteristics,
+            "entry_point_rva": self.entry_point_rva,
+            "entry_point_va": self.image_base + self.entry_point_rva,
+            "entry_point_sections": entry_sections,
+            "sections": self.sections,
             "executable_sections": [section for section in self.sections if section["executable"]],
-            "data_directories": [{"name": DIRECTORY_NAMES[index], "address": address, "size": size, "address_kind": "file_offset" if index == 4 else "rva"} for index, (address, size) in enumerate(self.directories)],
-            "imports": imports, "exports": exports, "relocations": self.relocations(),
+            "data_directories": [
+                {
+                    "name": DIRECTORY_NAMES[index],
+                    "address": address,
+                    "size": size,
+                    "address_kind": "file_offset" if index == 4 else "rva",
+                }
+                for index, (address, size) in enumerate(self.directories)
+            ],
+            "imports": imports,
+            "exports": exports,
+            "relocations": self.relocations(),
             "dependencies": dependency_report(imports),
-            "function_seeds": [{"va": self.image_base + self.entry_point_rva, "rva": self.entry_point_rva, "label": f"sub_{self.image_base + self.entry_point_rva:08X}", "evidence": "PE entry point; boundary and calling convention unverified"}] if self.entry_point_rva else [],
+            "function_seeds": (
+                [
+                    {
+                        "va": self.image_base + self.entry_point_rva,
+                        "rva": self.entry_point_rva,
+                        "label": f"sub_{self.image_base + self.entry_point_rva:08X}",
+                        "evidence": "PE entry point; boundary and calling convention unverified",
+                    }
+                ]
+                if self.entry_point_rva
+                else []
+            ),
             "analysis_limits": [
                 "No instruction decoding, execution, function-boundary recovery, or string extraction is performed.",
                 "x87, SSE/MMX, SEH, RTTI, vtables, globals, jump tables, indirect calls, callbacks and subsystem boundaries remain unanalysed.",
@@ -321,24 +417,118 @@ class PEImage:
 
 
 def dependency_report(imports: list[dict]) -> dict:
+    """Group import names into research hints, not proven subsystem/reachability facts."""
     categories: dict[str, list[dict]] = {}
     library_categories = {
-        "ddraw.dll": "directdraw", "d3dim.dll": "direct3d", "d3drm.dll": "direct3d",
-        "d3d8.dll": "direct3d", "d3d9.dll": "direct3d", "dinput.dll": "directinput",
-        "dinput8.dll": "directinput", "dsound.dll": "directsound", "winmm.dll": "multimedia",
-        "wsock32.dll": "networking", "ws2_32.dll": "networking", "wininet.dll": "networking",
-        "shell32.dll": "shell", "user32.dll": "windowing", "gdi32.dll": "gdi",
-        "advapi32.dll": "advanced_win32", "kernel32.dll": "base_win32", "ntdll.dll": "nt_native",
+        "ddraw.dll": "directdraw",
+        "d3dim.dll": "direct3d",
+        "d3drm.dll": "direct3d",
+        "d3d8.dll": "direct3d",
+        "d3d9.dll": "direct3d",
+        "dinput.dll": "directinput",
+        "dinput8.dll": "directinput",
+        "dsound.dll": "directsound",
+        "winmm.dll": "multimedia",
+        "wsock32.dll": "networking",
+        "ws2_32.dll": "networking",
+        "wininet.dll": "networking",
+        "shell32.dll": "shell",
+        "user32.dll": "windowing",
+        "gdi32.dll": "gdi",
+        "advapi32.dll": "advanced_win32",
+        "kernel32.dll": "base_win32",
+        "ntdll.dll": "nt_native",
     }
     prefixes = {
-        "threading": ("createthread", "exitthread", "getcurrentthread", "tls", "interlocked", "setthread", "resumethread", "suspendthread", "_beginthread", "_endthread"),
-        "synchronization": ("waitfor", "createevent", "setevent", "resetevent", "createmutex", "releasemutex", "createsemaphore", "releasesemaphore", "entercriticalsection", "leavecriticalsection", "initializecriticalsection", "deletecriticalsection"),
-        "timing": ("queryperformance", "gettickcount", "timegettime", "timebeginperiod", "timeendperiod", "timesetevent", "sleep", "getsystemtime", "getlocaltime"),
-        "memory": ("heap", "virtualalloc", "virtualfree", "virtualprotect", "virtualquery", "globalalloc", "globalfree", "localalloc", "localfree", "malloc", "calloc", "realloc", "free"),
-        "file_io": ("createfile", "readfile", "writefile", "setfile", "getfile", "findfirstfile", "findnextfile", "findclose", "deletefile", "movefile", "copyfile", "fopen", "fread", "fwrite", "fclose", "_open", "_read", "_write"),
-        "registry": ("regopen", "regquery", "regset", "regcreate", "regclose", "regdelete", "regenum"),
+        "threading": (
+            "createthread",
+            "exitthread",
+            "getcurrentthread",
+            "tls",
+            "interlocked",
+            "setthread",
+            "resumethread",
+            "suspendthread",
+            "_beginthread",
+            "_endthread",
+        ),
+        "synchronization": (
+            "waitfor",
+            "createevent",
+            "setevent",
+            "resetevent",
+            "createmutex",
+            "releasemutex",
+            "createsemaphore",
+            "releasesemaphore",
+            "entercriticalsection",
+            "leavecriticalsection",
+            "initializecriticalsection",
+            "deletecriticalsection",
+        ),
+        "timing": (
+            "queryperformance",
+            "gettickcount",
+            "timegettime",
+            "timebeginperiod",
+            "timeendperiod",
+            "timesetevent",
+            "sleep",
+            "getsystemtime",
+            "getlocaltime",
+        ),
+        "memory": (
+            "heap",
+            "virtualalloc",
+            "virtualfree",
+            "virtualprotect",
+            "virtualquery",
+            "globalalloc",
+            "globalfree",
+            "localalloc",
+            "localfree",
+            "malloc",
+            "calloc",
+            "realloc",
+            "free",
+        ),
+        "file_io": (
+            "createfile",
+            "readfile",
+            "writefile",
+            "setfile",
+            "getfile",
+            "findfirstfile",
+            "findnextfile",
+            "findclose",
+            "deletefile",
+            "movefile",
+            "copyfile",
+            "fopen",
+            "fread",
+            "fwrite",
+            "fclose",
+            "_open",
+            "_read",
+            "_write",
+        ),
+        "registry": (
+            "regopen",
+            "regquery",
+            "regset",
+            "regcreate",
+            "regclose",
+            "regdelete",
+            "regenum",
+        ),
         "dynamic_loading": ("loadlibrary", "freelibrary", "getprocaddress", "getmodulehandle"),
-        "exceptions": ("setunhandledexceptionfilter", "unhandledexceptionfilter", "raiseexception", "__cxxframehandler", "_except_handler"),
+        "exceptions": (
+            "setunhandledexceptionfilter",
+            "unhandledexceptionfilter",
+            "raiseexception",
+            "__cxxframehandler",
+            "_except_handler",
+        ),
     }
     for library in imports:
         dll = library["library"].lower()
@@ -346,17 +536,25 @@ def dependency_report(imports: list[dict]) -> dict:
         if re.fullmatch(r"(?:msvcrt|msvcr\d+|ucrtbase)\.dll", dll):
             base_category = "crt"
         for symbol in library["symbols"]:
-            evidence = {"library": library["library"], **({"name": symbol["name"]} if "name" in symbol else {"ordinal": symbol["ordinal"]})}
+            evidence = {
+                "library": library["library"],
+                **(
+                    {"name": symbol["name"]} if "name" in symbol else {"ordinal": symbol["ordinal"]}
+                ),
+            }
             matches = {base_category} if base_category else set()
             # Symbol-prefix classification is a candidate label, never a recovered subsystem.
             if "name" in symbol:
                 name = symbol["name"].lower()
-                matches.update(category for category, starts in prefixes.items() if name.startswith(starts))
+                matches.update(
+                    category for category, starts in prefixes.items() if name.startswith(starts)
+                )
             for category in sorted(matches):
                 categories.setdefault(category, []).append(evidence)
     return {
         "evidence": "Static import table only. Categories are API-family candidates; imports do not prove calls are reachable. COM methods and dynamically loaded APIs can be absent.",
-        "library_count": len(imports), "symbol_count": sum(len(library["symbols"]) for library in imports),
+        "library_count": len(imports),
+        "symbol_count": sum(len(library["symbols"]) for library in imports),
         "categories": dict(sorted(categories.items())),
     }
 
@@ -366,6 +564,12 @@ def _integer(value: object, minimum: int, maximum: int) -> bool:
 
 
 def load_manifest(path: Path, *, expected_game: str = "mw3") -> dict:
+    """Validate identity records for one game, rejecting malformed/duplicate metadata.
+
+    This validates manifest shape and scope only. validate_identity separately
+    compares an actual image and fully checks the implemented PE metadata subset.
+    """
+
     def unique_keys(pairs: list[tuple[str, object]]) -> dict:
         result = {}
         for key, value in pairs:
@@ -380,20 +584,35 @@ def load_manifest(path: Path, *, expected_game: str = "mw3") -> dict:
         raise ManifestError(f"cannot decode manifest: {error}") from error
     if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "game", "binaries"}:
         raise ManifestError("manifest requires exactly schema_version, game and binaries")
-    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1 or manifest["game"] != expected_game:
+    if (
+        type(manifest["schema_version"]) is not int
+        or manifest["schema_version"] != 1
+        or manifest["game"] != expected_game
+    ):
         raise ManifestError("unsupported manifest schema or game")
     if not isinstance(manifest["binaries"], list):
         raise ManifestError("binaries must be a list")
     ids, hashes = set(), set()
     required = {"id", "title", "filename", "sha256", "size_bytes", "pe"}
     for record in manifest["binaries"]:
-        if not isinstance(record, dict) or not required <= set(record) or set(record) - required - {"provenance", "notes"}:
+        if (
+            not isinstance(record, dict)
+            or not required <= set(record)
+            or set(record) - required - {"provenance", "notes"}
+        ):
             raise ManifestError("invalid binary record fields")
-        if any(not isinstance(record[key], str) or not record[key].strip() for key in ("id", "title", "filename", "sha256")):
+        if any(
+            not isinstance(record[key], str) or not record[key].strip()
+            for key in ("id", "title", "filename", "sha256")
+        ):
             raise ManifestError("binary identity strings must be non-empty")
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", record["id"]):
             raise ManifestError("binary id must be lowercase letters, digits and hyphens")
-        if "/" in record["filename"] or "\\" in record["filename"] or record["filename"] in (".", ".."):
+        if (
+            "/" in record["filename"]
+            or "\\" in record["filename"]
+            or record["filename"] in (".", "..")
+        ):
             raise ManifestError("filename must be a basename")
         if not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]):
             raise ManifestError("sha256 must be a complete lowercase SHA-256 digest")
@@ -404,18 +623,38 @@ def load_manifest(path: Path, *, expected_game: str = "mw3") -> dict:
         if not _integer(record["size_bytes"], 1, MAX_FILE_BYTES):
             raise ManifestError("invalid size_bytes")
         pe = record["pe"]
-        if not isinstance(pe, dict) or set(pe) != {"machine", "optional_magic", "image_base", "entry_point_rva"}:
+        if not isinstance(pe, dict) or set(pe) != {
+            "machine",
+            "optional_magic",
+            "image_base",
+            "entry_point_rva",
+        }:
             raise ManifestError("invalid PE identity fields")
-        if any(not _integer(pe[key], 0, 0xFFFFFFFF) for key in pe) or pe["machine"] != 0x14C or pe["optional_magic"] != 0x10B:
+        if (
+            any(not _integer(pe[key], 0, 0xFFFFFFFF) for key in pe)
+            or pe["machine"] != 0x14C
+            or pe["optional_magic"] != 0x10B
+        ):
             raise ManifestError("PE identity must describe PE32/i386 with unsigned 32-bit values")
-        if "provenance" in record and (not isinstance(record["provenance"], str) or not record["provenance"].strip()):
+        if "provenance" in record and (
+            not isinstance(record["provenance"], str) or not record["provenance"].strip()
+        ):
             raise ManifestError("provenance must be a non-empty string")
-        if "notes" in record and (not isinstance(record["notes"], list) or any(not isinstance(note, str) for note in record["notes"])):
+        if "notes" in record and (
+            not isinstance(record["notes"], list)
+            or any(not isinstance(note, str) for note in record["notes"])
+        ):
             raise ManifestError("notes must be a string list")
     return manifest
 
 
 def validate_identity(data: bytes, manifest: dict, image: PEImage | None = None) -> dict:
+    """Match full SHA-256, size and PE metadata against an already validated manifest.
+
+    Return the matching manifest record or raise UnsupportedBinaryError. This
+    proves the declared binary identity, not execution compatibility or ownership
+    rights; it never runs the image's entry point or imported providers.
+    """
     digest = hashlib.sha256(data).hexdigest()
     for record in manifest["binaries"]:
         if digest == record["sha256"]:
@@ -427,4 +666,6 @@ def validate_identity(data: bytes, manifest: dict, image: PEImage | None = None)
             # Fully validate the implemented metadata subset before accepting a profile.
             image.metadata()
             return record
-    raise UnsupportedBinaryError(f"unsupported binary SHA-256 {digest}; no exact verified manifest identity")
+    raise UnsupportedBinaryError(
+        f"unsupported binary SHA-256 {digest}; no exact verified manifest identity"
+    )

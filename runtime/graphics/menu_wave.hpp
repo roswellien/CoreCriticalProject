@@ -68,10 +68,11 @@ inline std::vector<Offset> wave_map(const Wave &wave) {
             if (sx < wave.left || sx >= wave.right || sy < wave.top || sy >= wave.bottom) {
                 // The clipped rasterizer leaves an old scratch pixel here.
                 // Its real post-call pixel must be retained by the presenter.
-                result[static_cast<std::size_t>(y) * 640 + x].raster = true;
+                result[static_cast<std::size_t>(y) * 640 + static_cast<std::size_t>(x)].raster =
+                    true;
                 continue;
             }
-            result[static_cast<std::size_t>(y) * 640 + x] = offset;
+            result[static_cast<std::size_t>(y) * 640 + static_cast<std::size_t>(x)] = offset;
         }
     }
     return result;

@@ -37,8 +37,10 @@ REVIEWED = {
 
 def private_directory(path: Path) -> Path:
     path = path.resolve()
-    if not any(path.is_relative_to((ROOT / name).resolve())
-               for name in ("reports", "local", "recomp/generated")):
+    if not any(
+        path.is_relative_to((ROOT / name).resolve())
+        for name in ("reports", "local", "recomp/generated")
+    ):
         raise ValueError("output must be under ignored reports/, local/, or recomp/generated/")
     return path
 
@@ -52,7 +54,10 @@ def extract(binary: Path, contract: Path, output: Path) -> dict:
     data = read_binary(binary)
     image = PEImage(data)
     identity = validate_identity(data, load_manifest(MANIFEST), image)
-    if identity["id"] != REVIEWED["profile_id"] or hashlib.sha256(data).hexdigest() != REVIEWED["image_sha256"]:
+    if (
+        identity["id"] != REVIEWED["profile_id"]
+        or hashlib.sha256(data).hexdigest() != REVIEWED["image_sha256"]
+    ):
         raise ValueError("input differs from the reviewed MW3 image")
     rva, size = REVIEWED["entry_rva"], REVIEWED["size_bytes"]
     if image.image_base + rva != REVIEWED["entry_va"]:
@@ -60,16 +65,27 @@ def extract(binary: Path, contract: Path, output: Path) -> dict:
     offset, _ = image.rva_range(rva, size)
     if offset != REVIEWED["file_offset"]:
         raise ValueError("raw/virtual slice mapping differs from review")
-    sections = [s for s in image.sections if s["virtual_address"] <= rva
-                and rva + size <= s["virtual_address"] + s["virtual_size"]]
-    if len(sections) != 1 or not sections[0]["executable"] or not sections[0]["readable"] or sections[0]["writable"]:
+    sections = [
+        s
+        for s in image.sections
+        if s["virtual_address"] <= rva and rva + size <= s["virtual_address"] + s["virtual_size"]
+    ]
+    if (
+        len(sections) != 1
+        or not sections[0]["executable"]
+        or not sections[0]["readable"]
+        or sections[0]["writable"]
+    ):
         raise ValueError("slice must have reviewed read/execute section permissions")
     code = image.read(offset, size)
     if hashlib.sha256(code).hexdigest() != REVIEWED["slice_sha256"]:
         raise ValueError("slice hash differs from review")
     destination = output / "sub_00409ed0.bin"
     record_path = output / "slice.json"
-    if binary.resolve() in (destination, record_path) or contract.resolve() in (destination, record_path):
+    if binary.resolve() in (destination, record_path) or contract.resolve() in (
+        destination,
+        record_path,
+    ):
         raise ValueError("output must differ from input")
     record = {
         **REVIEWED,
@@ -82,7 +98,10 @@ def extract(binary: Path, contract: Path, output: Path) -> dict:
     }
     output.mkdir(parents=True, exist_ok=True)
     # Publish the evidence record last. Invalid input writes no new artifacts.
-    for path, contents in ((destination, code), (record_path, (json.dumps(record, indent=2) + "\n").encode())):
+    for path, contents in (
+        (destination, code),
+        (record_path, (json.dumps(record, indent=2) + "\n").encode()),
+    ):
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(dir=output, delete=False) as stream:

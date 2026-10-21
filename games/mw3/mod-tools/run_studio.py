@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """MW3 Visual Map Studio - Web Application Server.
 
-Launches a modern, visual 3D map creation studio for MechWarrior 3.
-Allows visual terrain generation, 3D asset placement, real-time lighting previews,
-and 1-click standalone map pack compilation into mods/map-packs/<pack_id>/.
+Serve the Three.js preview and local prototype export/launch APIs on loopback.
+The preview terrain and requested gameplay properties are not all implemented
+by the archive builder. Exports stay local under mods/map-packs/<pack_id>/.
+This process does not own the game installation or a running native game session.
 """
 
 import http.server
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Setup paths
 TOOLS_ROOT = Path(__file__).resolve().parent
@@ -24,7 +26,8 @@ WEB_ROOT = TOOLS_ROOT / "editor/web"
 if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
-from editor.core.map_pack import MapPackProject, MapPackBuilder
+from editor.core.map_pack import MapPackProject, MapPackBuilder, pack_directory
+from editor.config import game_directory
 
 
 class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -34,12 +37,22 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(WEB_ROOT), **kwargs)
 
     def do_GET(self):
+        if not self.check_local_request():
+            return
         if self.path == "/api/list-packs":
             self.handle_list_packs()
         else:
             super().do_GET()
 
     def do_POST(self):
+        if not self.check_local_request():
+            return
+        if (
+            self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            != "application/json"
+        ):
+            self.send_error(415, "Use application/json")
+            return
         if self.path == "/api/export-pack":
             self.handle_export_pack()
         elif self.path == "/api/launch-map":
@@ -49,15 +62,15 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_export_pack(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body.decode("utf-8"))
+            data = self.read_json_request()
 
             project = MapPackProject.from_dict(data)
-            builder = MapPackBuilder(packs_root=PROJECT_ROOT / "mods/map-packs", game_root=PROJECT_ROOT / "MW3")
+            builder = MapPackBuilder(
+                packs_root=PROJECT_ROOT / "mods/map-packs", game_root=game_directory()
+            )
             out_folder = builder.build(project)
 
-            launcher_name = f"Play Map - {project.pack_title}.cmd"
+            launcher_name = f"Play Map - {project.pack_id}.cmd"
 
             resp = {
                 "status": "ok",
@@ -67,36 +80,44 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
                 "launcher_script": launcher_name,
             }
             self.send_json_response(200, resp)
+        except (ValueError, TypeError, KeyError) as e:
+            self.send_json_response(400, {"status": "error", "message": str(e)})
         except Exception as e:
             self.send_json_response(500, {"status": "error", "message": str(e)})
 
     def handle_launch_map(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body.decode("utf-8"))
+            data = self.read_json_request()
             pack_id = data.get("pack_id", "")
 
-            pack_folder = PROJECT_ROOT / "mods/map-packs" / pack_id
+            pack_folder = pack_directory(PROJECT_ROOT / "mods/map-packs", pack_id)
             if not pack_folder.is_dir():
-                self.send_json_response(400, {"status": "error", "message": f"Pack folder not found: {pack_id}"})
+                self.send_json_response(
+                    400, {"status": "error", "message": f"Pack folder not found: {pack_id}"}
+                )
                 return
 
             cmd_files = list(pack_folder.glob("Play Map - *.cmd"))
             if not cmd_files:
-                self.send_json_response(400, {"status": "error", "message": "No launcher command file found in pack"})
+                self.send_json_response(
+                    400, {"status": "error", "message": "No launcher command file found in pack"}
+                )
                 return
 
-            cmd_file = cmd_files[0]
+            cmd_file = cmd_files[0].resolve()
+            if not cmd_file.is_relative_to(pack_folder):
+                raise ValueError("Pack launcher resolves outside its pack directory.")
             # Launch in a new visible console window so the user sees launch status & controls
             CREATE_NEW_CONSOLE = 0x00000010
             subprocess.Popen(
                 ["cmd.exe", "/c", str(cmd_file.resolve())],
                 cwd=str(PROJECT_ROOT),
-                creationflags=CREATE_NEW_CONSOLE
+                creationflags=CREATE_NEW_CONSOLE,
             )
 
             self.send_json_response(200, {"status": "ok", "message": f"Launched {cmd_file.name}"})
+        except (ValueError, TypeError, KeyError) as e:
+            self.send_json_response(400, {"status": "error", "message": str(e)})
         except Exception as e:
             self.send_json_response(500, {"status": "error", "message": str(e)})
 
@@ -114,13 +135,54 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json_response(500, {"status": "error", "message": str(e)})
 
     def send_json_response(self, code: int, data: dict):
+        """Send one UTF-8 JSON body with a byte length for browser response framing."""
         body = json.dumps(data).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def check_local_request(self) -> bool:
+        """Loopback binding does not protect against a page on another origin.
+
+        Check Host to prevent DNS rebinding and Origin for browser mutations.
+        Command-line clients can omit Origin; they must still use the local host.
+        """
+        port = self.server.server_port
+        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        if self.headers.get("Host", "").lower() not in hosts:
+            self.send_error(403, "Local Host required")
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            try:
+                parsed = urlsplit(origin)
+                valid = (
+                    parsed.scheme == "http"
+                    and parsed.netloc.lower() in hosts
+                    and not parsed.path
+                    and not parsed.query
+                    and not parsed.fragment
+                )
+            except ValueError:
+                valid = False
+            if not valid:
+                self.send_error(403, "Same-origin request required")
+                return False
+        return True
+
+    def read_json_request(self) -> dict:
+        """Bound memory use and reject malformed bodies before touching packs."""
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("Transfer-Encoding is not supported.")
+        length = int(self.headers.get("Content-Length", "0"))
+        if not 0 < length <= 1024 * 1024:
+            raise ValueError("JSON body must be between 1 byte and 1 MiB.")
+        data = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Request must contain a JSON object.")
+        return data
 
     def log_message(self, format, *args):
         # Concise logging

@@ -5,6 +5,7 @@ using Microsoft.Win32;
 
 namespace MW3RemasterLauncher.Core
 {
+    /// <summary>Launcher discovery details and a user-facing status for a selected directory.</summary>
     public class ValidationResult
     {
         public bool IsValid { get; set; }
@@ -15,10 +16,17 @@ namespace MW3RemasterLauncher.Core
         public string StatusMessage { get; set; } = string.Empty;
     }
 
+    /// <summary>Find a local Mech3.exe and collect launcher discovery metadata.</summary>
+    /// <remarks>
+    /// This legacy validator currently accepts unknown executable hashes. IsValid and
+    /// the displayed version therefore do not establish supported-image admission;
+    /// the strict native analysis/runtime contracts must check the selected image.
+    /// </remarks>
     public static class GameValidator
     {
         public const string SHA256_V1_2_COMMUNITY = "09a6018bb2cd3a6daf79786ee0bd2485b25f6b8c78740a352989019a2511e42a";
 
+        /// <summary>Find the expected executable basename without searching arbitrary subtrees.</summary>
         public static string? FindExecutableInDirectory(string dir)
         {
             if (!Directory.Exists(dir)) return null;
@@ -47,6 +55,7 @@ namespace MW3RemasterLauncher.Core
             return null;
         }
 
+        /// <summary>Try repository-relative and conventional installed-game locations.</summary>
         public static string? AutoDetectGameDirectory()
         {
             // 1. Walk up from BaseDirectory looking for MW3 or Mech3.exe
@@ -121,6 +130,8 @@ namespace MW3RemasterLauncher.Core
             return null;
         }
 
+        /// <summary>Collect the selected folder/executable identity for launcher feedback.</summary>
+        /// <remarks>Unknown hashes currently remain valid here; see the class-level admission limit.</remarks>
         public static ValidationResult Validate(string? path)
         {
             var res = new ValidationResult();

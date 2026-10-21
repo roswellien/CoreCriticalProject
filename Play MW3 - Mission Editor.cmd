@@ -4,7 +4,8 @@ title MechWarrior 3 Map and Mission Editor
 cd /d "%~dp0"
 
 set "PYTHON_EXE="
-call :try_python "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+call :try_python "%~dp0.venv-mod-tools\Scripts\python.exe"
+if not defined PYTHON_EXE call :try_python "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 if not defined PYTHON_EXE call :try_python "C:\Python314\python.exe"
 if not defined PYTHON_EXE call :try_python "python"
 if not defined PYTHON_EXE call :try_python "py"

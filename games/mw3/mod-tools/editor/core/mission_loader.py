@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 from .formats import unpack_reader_zbd, unpack_gamez_zbd, extract_single_texture
+from ..config import cache_directory
 
 
 @dataclass
@@ -46,6 +47,13 @@ class MapCalibration:
 
 @dataclass
 class PlacedObject:
+    """One source node's editable placement, using world units and radian rotations.
+
+    node_index is the stable index in this loaded archive, not a global model ID.
+    yaw_degrees is a UI conversion of rot_y; both describe the same rotation.
+    Unknown recovered fields stay attached rather than being assigned semantics.
+    """
+
     node_index: int
     name: str
     x: float
@@ -75,6 +83,8 @@ class PlacedObject:
 
 @dataclass
 class SpawnPoint:
+    """Named reader-document location with a heading expressed in degrees."""
+
     name: str
     x: float
     y: float
@@ -110,6 +120,12 @@ class TerrainBounds:
 
 @dataclass
 class MissionData:
+    """Loaded view plus private extraction paths needed to preserve source records.
+
+    UI commands mutate the placement objects. raw_nodes_json_path/raw_reader_dir
+    identify the unedited cached documents; they are not alternate game installs.
+    """
+
     operation: str
     mission_id: str
     game_root: Path
@@ -124,11 +140,18 @@ class MissionData:
 
 
 class MissionLoader:
-    """Discovers and loads mission data from MW3 installation."""
+    """Read an installation and keep converter products in a separate writable cache.
+
+    Existing extracted documents are reused by filename. This is not content-hash
+    invalidation: refreshing or replacing the source installation requires care.
+    Missing calibration/format fields retain the explicit fallback/unresolved
+    handling below; a useful editor view does not establish native acceptance.
+    """
 
     def __init__(self, game_root: Path, cache_dir: Optional[Path] = None):
         self.game_root = Path(game_root)
-        self.cache_dir = Path(cache_dir) if cache_dir else self.game_root.parent / "local/mod-cache"
+        # Caches belong to the tools workspace, never beside a user's game install.
+        self.cache_dir = Path(cache_dir) if cache_dir else cache_directory()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._maps_catalog: Dict[str, Dict[str, Any]] = {}
         self._load_maps_catalog()
@@ -155,7 +178,7 @@ class MissionLoader:
                             "name": name,
                             "bitmap": m_dict.get("bitmap", [name])[0],
                             "mpp": float(m_dict.get("mpp", [3.5])[0]),
-                            "offset": [float(x) for x in m_dict.get("offset", [0.0, 0.0, 0.0])]
+                            "offset": [float(x) for x in m_dict.get("offset", [0.0, 0.0, 0.0])],
                         }
             except Exception as e:
                 print(f"Warning: could not parse maps.zrd: {e}")
@@ -225,7 +248,14 @@ class MissionLoader:
                     min_z = min(min_z, a.get("z", 0.0), b.get("z", 0.0))
                     max_z = max(max_z, a.get("z", 0.0), b.get("z", 0.0))
         if min_x == float("inf"):
-            min_x, max_x, min_y, max_y, min_z, max_z = -4000.0, 4000.0, -100.0, 500.0, -4000.0, 4000.0
+            min_x, max_x, min_y, max_y, min_z, max_z = (
+                -4000.0,
+                4000.0,
+                -100.0,
+                500.0,
+                -4000.0,
+                4000.0,
+            )
         terrain_bounds = TerrainBounds(min_x, max_x, min_y, max_y, min_z, max_z)
 
         # Recover placed objects
@@ -283,12 +313,10 @@ class MissionLoader:
         map_meta = self._maps_catalog.get(m_lower)
         if not map_meta:
             # Fallback to operation default or Instant Action
-            map_meta = self._maps_catalog.get(f"{op_lower}ia", {
-                "name": m_lower,
-                "bitmap": m_lower,
-                "mpp": 3.476,
-                "offset": [0.0, 0.0, 0.0]
-            })
+            map_meta = self._maps_catalog.get(
+                f"{op_lower}ia",
+                {"name": m_lower, "bitmap": m_lower, "mpp": 3.476, "offset": [0.0, 0.0, 0.0]},
+            )
         calibration = MapCalibration(
             name=map_meta["name"],
             bitmap_name=map_meta["bitmap"],
@@ -369,9 +397,13 @@ class MissionLoader:
                             val = reg_dict[k]
                             if len(val) >= 2 and isinstance(val[1], list):
                                 coords = val[1]
-                                nodes_list.append((float(coords[0]), float(coords[1]), float(coords[2])))
+                                nodes_list.append(
+                                    (float(coords[0]), float(coords[1]), float(coords[2]))
+                                )
                     if nodes_list:
-                        trigger_regions.append(TriggerRegion(name=reg_name, version=reg_version, points=nodes_list))
+                        trigger_regions.append(
+                            TriggerRegion(name=reg_name, version=reg_version, points=nodes_list)
+                        )
                 except Exception as e:
                     print(f"Warning: error parsing {reg_file.name}: {e}")
 
@@ -385,5 +417,7 @@ class MissionLoader:
             spawn_points=spawn_points,
             trigger_regions=trigger_regions,
             raw_nodes_json_path=nodes_json_path,
-            raw_reader_dir=mission_reader_cache if mission_reader_cache.is_dir() else op_reader_cache,
+            raw_reader_dir=(
+                mission_reader_cache if mission_reader_cache.is_dir() else op_reader_cache
+            ),
         )

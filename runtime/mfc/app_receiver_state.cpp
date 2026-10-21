@@ -92,6 +92,9 @@ void AppReceiverState::complete_construction(ConstructionTicket ticket) {
 }
 
 void AppReceiverState::invalidate(std::uint64_t ticket) {
+    // Remove every publication of this lifetime before discarding the ticket.
+    // Leaving a thread/module association behind would make address reuse appear
+    // to preserve a receiver that is no longer alive.
     const auto receiver = applications_.at(ticket).receiver;
     for (auto &[address, module] : modules_) {
         (void)address;
@@ -129,6 +132,7 @@ void AppReceiverState::destroy_receiver(AppReceiverId receiver) {
 void AppReceiverState::teardown_thread(ThreadSlotId thread) {
     (void)threads_.at(thread.address.value);
     for (auto it = applications_.begin(); it != applications_.end();) {
+        // Advance before invalidate(), which erases this application entry.
         const auto current = it++;
         if (current->second.thread == thread) {
             invalidate(current->first);
@@ -140,6 +144,7 @@ void AppReceiverState::teardown_thread(ThreadSlotId thread) {
 void AppReceiverState::teardown_module(ModuleStateId module) {
     (void)modules_.at(module.address.value);
     for (auto it = applications_.begin(); it != applications_.end();) {
+        // Advance before invalidate(), which erases this application entry.
         const auto current = it++;
         if (current->second.module == module) {
             invalidate(current->first);

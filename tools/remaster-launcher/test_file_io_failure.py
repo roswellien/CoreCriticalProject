@@ -2,6 +2,7 @@
 
 Run in the Visual Studio developer environment with --compiler PATH_TO_CLANG_CL.
 """
+
 import argparse
 from pathlib import Path
 import subprocess
@@ -10,13 +11,19 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--compiler', required=True)
-    parser.add_argument('--source', type=Path, default=Path(__file__).parent / 'native-overrides/mfc_stage.hpp')
+    parser.add_argument("--compiler", required=True)
+    parser.add_argument(
+        "--source", type=Path, default=Path(__file__).parent / "native-overrides/mfc_stage.hpp"
+    )
     args = parser.parse_args()
     text = args.source.read_text()
-    handler = text[text.index('  if(n=="ReadFile"||n=="WriteFile")'):text.index('  if(n=="SetFilePointer")')]
-    last_error = text[text.index(' struct LastError{'):text.index('\n', text.index(' struct LastError{'))]
-    code = r'''
+    handler = text[
+        text.index('  if(n=="ReadFile"||n=="WriteFile")') : text.index('  if(n=="SetFilePointer")')
+    ]
+    last_error = text[
+        text.index(" struct LastError{") : text.index("\n", text.index(" struct LastError{"))
+    ]
+    code = r"""
 #include <windows.h>
 #include <algorithm>
 #include <array>
@@ -72,15 +79,23 @@ int main(){try{
     check(h.call("ReadFile")==1,"owned read");check(h.runtime.mem.bytes[32]==0x5a,"owned read bytes");CloseHandle(f);
     std::puts("PASS: failed-open I/O returns real Win32 errors; guest buffer/count and host LastError preserved; owned I/O and ownership guards retained.");return 0;
 }catch(const std::exception& e){std::fprintf(stderr,"FAIL: %s\n",e.what());return 1;}}
-'''.replace('HANDLER', handler).replace('LAST_ERROR', last_error)
-    with tempfile.TemporaryDirectory(prefix='mw34-file-io-') as temp:
+""".replace(
+        "HANDLER", handler
+    ).replace(
+        "LAST_ERROR", last_error
+    )
+    with tempfile.TemporaryDirectory(prefix="mw34-file-io-") as temp:
         folder = Path(temp)
-        source = folder / 'test.cpp'
+        source = folder / "test.cpp"
         source.write_text(code)
-        exe = folder / 'test.exe'
-        subprocess.run([args.compiler, '/std:c++20', '/EHsc', str(source), '/Fe:' + str(exe)], cwd=folder, check=True)
+        exe = folder / "test.exe"
+        subprocess.run(
+            [args.compiler, "/std:c++20", "/EHsc", str(source), "/Fe:" + str(exe)],
+            cwd=folder,
+            check=True,
+        )
         subprocess.run([str(exe)], cwd=folder, check=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

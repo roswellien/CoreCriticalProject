@@ -37,6 +37,10 @@ template <typename T>
 concept GuestScalar = std::unsigned_integral<T> && !std::same_as<T, bool> && sizeof(T) <= 8;
 
 // Bootstrap memory backing for translated code. It does not execute x86 instructions.
+// Owns each region's bytes; GuestAddress values never expose host pointers. Accesses
+// validate a whole transfer before copying, including permissions and 32-bit overflow.
+// The container is not thread-safe: the owning host must serialize access and mapping
+// changes. Mapping/protection mistakes throw argument errors; accesses throw MemoryFault.
 class GuestMemory {
   public:
     static constexpr std::uint64_t address_space_size = std::uint64_t{1} << 32;

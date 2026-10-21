@@ -5,8 +5,16 @@ using System.Threading.Tasks;
 
 namespace MW3RemasterLauncher.Core
 {
+    /// <summary>Mount local user-supplied media and copy recognized files into a destination.</summary>
+    /// <remarks>
+    /// This helper does not build a native host or establish a complete standalone install.
+    /// PowerShell filename interpolation and incomplete-media success remain review findings
+    /// C03/C11; they are intentionally not changed by the readability-only pass.
+    /// </remarks>
     public class IsoInstaller
     {
+        /// <summary>Mount the selected media, attempt recognized-file copying and dismount afterward.</summary>
+        /// <remarks>Progress is a fraction from zero to one; completion is not native-install validation.</remarks>
         public static async Task<bool> InstallFromIsoAsync(string isoPath, string destDir, Action<string, double>? onProgress = null)
         {
             if (!File.Exists(isoPath))
@@ -69,6 +77,8 @@ namespace MW3RemasterLauncher.Core
             }
         }
 
+        /// <summary>Copy the currently recognized media layout on a background worker.</summary>
+        /// <remarks>Progress callbacks may run off the UI thread and must be marshalled by callers.</remarks>
         public static async Task CopyGameMediaAsync(string sourceRoot, string destDir, Action<string, double>? onProgress = null)
         {
             await Task.Run(() =>
