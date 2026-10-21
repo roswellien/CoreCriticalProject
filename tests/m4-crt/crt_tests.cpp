@@ -275,9 +275,7 @@ void tests() {
     {
         auto r = Runtime::for_authored_fixture(fixture(), policy());
         setup(r);
-        {
-            Session s(r, provider, {}, slots);
-        }
+        { Session s(r, provider, {}, slots); }
         r.freeze_registry();
         begin = 0x2000;
         end = 0x2000;
