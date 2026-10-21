@@ -12,11 +12,20 @@ import json
 
 
 def sha(path):
+    """Stream a local input's SHA-256 for the queue's provenance record."""
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def build(config_path, output, limit=100):
+    """Rank material families by first eligible submission along configured routes.
+
+    Runs must follow unique campaign progression order, and encounters must have
+    increasing sequence numbers and nondecreasing frame numbers. Complete pixel
+    keys resolve source aliases; shared names merge variants into one family.
+    Never fill a short queue from bank order or treat submission as visibility.
+    Input paths in this configuration are interpreted from the working directory.
+    """
     if limit < 1:
         raise ValueError("A positive campaign queue limit is required")
     if output.exists():
@@ -36,8 +45,8 @@ def build(config_path, output, limit=100):
     }
     with Path(config["previous_queue"]).open(encoding="utf-8", newline="") as stream:
         previous = {e["texture"]: e for e in csv.DictReader(stream)}
-    sequence = []
-    by_name = {}
+    families = []
+    family_index_by_name = {}
     skipped = []
     pins = []
     last_mission = -1
@@ -61,16 +70,16 @@ def build(config_path, output, limit=100):
         last_sequence = 0
         last_frame = 0
         for line in path.read_text().splitlines():
-            e = json.loads(line)
+            encounter = json.loads(line)
             if (
-                e["event"] != "first_world_texture_submission"
-                or e["sequence"] <= last_sequence
-                or e["frame"] < last_frame
+                encounter["event"] != "first_world_texture_submission"
+                or encounter["sequence"] <= last_sequence
+                or encounter["frame"] < last_frame
             ):
                 raise ValueError("Encounter trace order invalid")
-            last_sequence = e["sequence"]
-            last_frame = e["frame"]
-            key = (e["width"], e["height"], e["format"], e["hash"])
+            last_sequence = encounter["sequence"]
+            last_frame = encounter["frame"]
+            key = (encounter["width"], encounter["height"], encounter["format"], encounter["hash"])
             if key not in index:
                 raise ValueError("Unresolved texture blocks exact ordering: " + str(key))
             match = index[key]
@@ -84,36 +93,40 @@ def build(config_path, output, limit=100):
                     if categories.intersection(
                         {"sky_candidate", "effects_animation", "water_shore_candidate"}
                     )
-                    else "unsupported_blended_material" if e["alpha_blend"] else None
+                    else "unsupported_blended_material" if encounter["alpha_blend"] else None
                 )
             )
             if reason:
-                skipped.append(dict(mission=mission, frame=e["frame"], names=names, reason=reason))
+                skipped.append(
+                    dict(mission=mission, frame=encounter["frame"], names=names, reason=reason)
+                )
                 continue
-            existing = {by_name[n] for n in names if n in by_name}
+            # A family is anchored by its first encounter. A later pixel variant
+            # may add aliases, but must not silently join two ranked families.
+            existing = {family_index_by_name[n] for n in names if n in family_index_by_name}
             if len(existing) > 1:
                 raise ValueError(
                     "Pixel aliases join previously distinct queue families; review explicitly"
                 )
             if existing:
-                row = sequence[existing.pop()]
+                row = families[existing.pop()]
                 if list(key) not in row["encountered_keys"]:
                     row["encountered_keys"].append(list(key))
                 row["aliases"] = sorted(set(row["aliases"]) | set(names))
                 for n in names:
-                    by_name[n] = row["rank"] - 1
+                    family_index_by_name[n] = row["rank"] - 1
                 continue
             row = dict(
-                rank=len(sequence) + 1,
+                rank=len(families) + 1,
                 texture=names[0],
                 aliases=names,
                 first_mission=mission,
-                first_frame=e["frame"],
-                submission_sequence=e["sequence"],
+                first_frame=encounter["frame"],
+                submission_sequence=encounter["sequence"],
                 first_key=list(key),
                 encountered_keys=[list(key)],
-                first_gpu_terrain=bool(e["terrain_gpu"]),
-                alpha_test=bool(e["alpha_test"]),
+                first_gpu_terrain=bool(encounter["terrain_gpu"]),
+                alpha_test=bool(encounter["alpha_test"]),
                 source_match=match["source"],
             )
             category = inventory.get(row["texture"], {}).get("category")
@@ -133,24 +146,24 @@ def build(config_path, output, limit=100):
             )
             if min(key[:2]) < 128:
                 row["source_review"] += "; small tile requires detail review"
-            sequence.append(row)
+            families.append(row)
             for n in names:
-                by_name[n] = len(sequence) - 1
-    if len(sequence) < limit:
+                family_index_by_name[n] = len(families) - 1
+    if len(families) < limit:
         raise ValueError(
-            f"Only {len(sequence)} eligible families encountered; continue campaign capture, do not pad from bank order"
+            f"Only {len(families)} eligible families encountered; continue campaign capture, do not pad from bank order"
         )
-    selected = sequence[:limit]
+    selected = families[:limit]
     report = dict(
         schema_version=1,
         scope="First distinct eligible terrain/world/object and original-mech surface families in this recorded campaign route; simultaneously submitted materials tie by draw sequence. Replacement mech maps already handled separately.",
         ordering="campaign mission order then first render submission, not pixel-depth visibility or asset load order",
         mission_order=config["mission_order"],
         limit=limit,
-        eligible_encounter_groups=len(sequence),
+        eligible_encounter_groups=len(families),
         selected=selected,
         excluded=skipped,
-        remaining_encounters=sequence[limit:],
+        remaining_encounters=families[limit:],
         inputs=dict(
             config_sha256=sha(config_path), key_index_sha256=sha(config["key_index"]), runs=pins
         ),
@@ -161,6 +174,8 @@ def build(config_path, output, limit=100):
             "This queue does not prove all campaign states or vehicle LOD/damage appearances have been covered.",
         ],
     )
+    # JSON retains every encounter and exclusion; the CSV is the selected
+    # authoring view. Its historical filename is fixed even for a custom limit.
     output.mkdir(parents=True)
     (output / "queue.json").write_text(json.dumps(report, indent=2) + "\n")
     fields = [

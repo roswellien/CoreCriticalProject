@@ -15,18 +15,33 @@ from prepare_world_normals import accelerated_hash
 
 
 def sha(path):
+    """Stream a local file's SHA-256 for source and output identities."""
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def rgb565(data, width, height):
+    """Decode little-endian RGB565 words into an (H, W, 3) float array in [0, 1]."""
     import numpy as np
 
-    p = np.frombuffer(data, dtype="<u2").reshape(height, width)
-    return np.stack(((p >> 11) / 31.0, ((p >> 5) & 63) / 63.0, (p & 31) / 31.0), axis=-1)
+    packed_words = np.frombuffer(data, dtype="<u2").reshape(height, width)
+    return np.stack(
+        (
+            (packed_words >> 11) / 31.0,
+            ((packed_words >> 5) & 63) / 63.0,
+            (packed_words & 31) / 31.0,
+        ),
+        axis=-1,
+    )
 
 
 def water_tile(size=128):
+    """Create a periodic RGBA ripple tile; alpha initially permits full strength.
+
+    Integer wave frequencies repeat over the tile. XY encodes exact neutral
+    128 with a scale of 127; Z uses the full unsigned range. Keep this convention
+    aligned with the detail shader rather than generic normal-map encoding.
+    """
     import numpy as np
 
     y, x = np.mgrid[:size, :size] * (2 * np.pi / size)
@@ -37,16 +52,22 @@ def water_tile(size=128):
         wave = np.cos(kx * x + ky * y + phase)
         dx -= amplitude * kx * wave
         dy -= amplitude * ky * wave
-    n = np.stack((dx, dy, np.ones_like(dx)), axis=-1)
-    n /= np.linalg.norm(n, axis=-1, keepdims=True)
+    unit_normals = np.stack((dx, dy, np.ones_like(dx)), axis=-1)
+    unit_normals /= np.linalg.norm(unit_normals, axis=-1, keepdims=True)
     rgba = np.full((size, size, 4), 255, dtype="uint8")
     # XY uses exactly neutral128; shader decodes (byte-128)/127.
-    rgba[..., :2] = np.rint(n[..., :2] * 127 + 128).clip(0, 255).astype("uint8")
-    rgba[..., 2] = np.rint(n[..., 2] * 255).astype("uint8")
+    rgba[..., :2] = np.rint(unit_normals[..., :2] * 127 + 128).clip(0, 255).astype("uint8")
+    rgba[..., 2] = np.rint(unit_normals[..., 2] * 255).astype("uint8")
     return rgba
 
 
 def normal_for(role, colour, w, h):
+    """Return (width, height, RGBA bytes) for water, surf or the cloud path.
+
+    Water and surf share one ripple field; surf alpha masks its strength using
+    the reviewed atlas orientation. Cloud XY is a bounded color-derived slope
+    estimate, with neutral borders and full alpha/Z. The caller validates roles.
+    """
     import numpy as np
     from PIL import Image, ImageFilter
 
@@ -68,19 +89,21 @@ def normal_for(role, colour, w, h):
         max(1, round(w * min(1, 256 / w, 256 / h))),
         max(1, round(h * min(1, 256 / w, 256 / h))),
     )
-    lum = rgb @ np.array([0.2126, 0.7152, 0.0722])
+    luminance = rgb @ np.array([0.2126, 0.7152, 0.0722])
     image = (
-        Image.fromarray(np.rint(lum * 255).astype("uint8"))
+        Image.fromarray(np.rint(luminance * 255).astype("uint8"))
         .resize(size, Image.Resampling.BOX)
         .filter(ImageFilter.GaussianBlur(2))
     )
-    value = np.asarray(image, dtype=float) / 255
-    dx = (np.roll(value, -1, 1) - np.roll(value, 1, 1)) * 3
-    dy = (np.roll(value, -1, 0) - np.roll(value, 1, 0)) * 3
-    slopes = np.stack((-dx, -dy), axis=-1)
-    slopes *= np.minimum(1, 0.3 / np.maximum(np.linalg.norm(slopes, axis=-1, keepdims=True), 1e-10))
+    height_field = np.asarray(image, dtype=float) / 255
+    dx = (np.roll(height_field, -1, 1) - np.roll(height_field, 1, 1)) * 3
+    dy = (np.roll(height_field, -1, 0) - np.roll(height_field, 1, 0)) * 3
+    xy_slopes = np.stack((-dx, -dy), axis=-1)
+    xy_slopes *= np.minimum(
+        1, 0.3 / np.maximum(np.linalg.norm(xy_slopes, axis=-1, keepdims=True), 1e-10)
+    )
     result = np.full((size[1], size[0], 4), 255, dtype="uint8")
-    result[..., :2] = np.rint(slopes * 127 + 128).clip(0, 255).astype("uint8")
+    result[..., :2] = np.rint(xy_slopes * 127 + 128).clip(0, 255).astype("uint8")
     # Flat borders avoid inventing a ridge where a non-periodic sky atlas meets.
     result[:3, :, :2] = result[-3:, :, :2] = [128, 128]
     result[:, :3, :2] = result[:, -3:, :2] = [128, 128]
@@ -88,6 +111,13 @@ def normal_for(role, colour, w, h):
 
 
 def prepare(config, output, hash_library):
+    """Write three role catalogs and a receipt from explicitly selected bank entries.
+
+    Source hashes and entry spans are checked before use, then sources are
+    rehashed before output. A complete-pixel identity cannot belong to two roles.
+    Output must be fresh, but writes are sequential: failures can leave partial
+    catalogs, so directory existence alone does not establish a complete package.
+    """
     config = Path(config).resolve(strict=True)
     output = Path(output).resolve()
     if output.exists():
@@ -122,6 +152,8 @@ def prepare(config, output, hash_library):
                 ):
                     raise ValueError("Unsupported selected detail source layout")
                 colour = stream.read(w * h * 2)
+                # Bind to all stored RGB565 pixels, not a texture name or a
+                # sample from the image. Detail alpha never changes bank coverage.
                 key = (w, h, 1, digest(colour))
                 normal = normal_for(role, colour, w, h)
                 if key in roles[role] and roles[role][key] != normal:
