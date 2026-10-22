@@ -120,6 +120,8 @@ int wmain(int argc, wchar_t **argv) {
             return result == 0 ? 0 : 1;
         }
         STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+        wchar_t desktop[] = L"WinSta0\\Default";
+        startup.lpDesktop = desktop;
         PROCESS_INFORMATION info{};
         auto command = L"\"" + game + L"\"";
         const auto working = std::filesystem::path(game).parent_path().wstring();

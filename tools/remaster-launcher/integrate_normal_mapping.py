@@ -98,6 +98,10 @@ def compose(main,baseline,lighting,output):
             if digest(host/name)!=digest(main/'host-source'/name):raise ValueError('Changed protected main service: '+name)
         from apply_capture_readback import apply as apply_capture_readback
         apply_capture_readback(host)
+        from apply_detached_cockpit_visibility import apply as apply_detached_cockpit_visibility
+        adapter=host/'mesh_override_stage.inc'
+        if 'detached_attached_cockpit_suppressed' not in adapter.read_text():
+            apply_detached_cockpit_visibility(adapter)
         (candidate/'integration-inputs.json').write_text(json.dumps(pins,indent=2))
         candidate.rename(output)
 

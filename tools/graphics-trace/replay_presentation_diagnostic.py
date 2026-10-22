@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -17,6 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('capture', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--draws-only', action='store_true', help='Same-capture diagnostic baseline omitting surface commands')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     root = Path(__file__).resolve().parents[2]
@@ -24,7 +26,7 @@ def main():
     scene = args.output / 'scene.replay'
     packaging = subprocess.run([sys.executable, str(Path(__file__).with_name('package_replay.py')),
                                str(args.capture), str(scene), '--filter-source', 'legacy',
-                               '--diagnostic-presentation'], capture_output=True, text=True)
+                               '--diagnostic-presentation', *(['--draws-only'] if args.draws_only else [])], capture_output=True, text=True)
     (args.output / 'package.log').write_text(packaging.stdout + packaging.stderr)
     if packaging.returncode: raise ValueError('Diagnostic packaging rejected')
     rows = [json.loads(line) for line in (args.capture / 'capture.jsonl').read_text().splitlines()]
@@ -47,11 +49,19 @@ def main():
         raise ValueError('GPU replay or validation failed')
     comparison = compare(args.output / 'final_target.png', candidate, args.output / 'difference.png',
                          False, None, args.output / 'initial_target.png')
-    inputs = [Path(__file__), Path(__file__).with_name('package_replay.py'),
+    Image.open(candidate).save(args.output / 'vulkan.png')
+    sources = [Path(__file__), Path(__file__).with_name('package_replay.py'),
               Path(__file__).with_name('verify_capture.py'), Path(__file__).with_name('describe_capture.py'),
-              Path(__file__).with_name('compare_replay.py'), executable, scene,
-              args.capture / 'capture.jsonl', *shaders.glob('*.spv')]
-    report = {'scope': 'Diagnostic image comparison of observed draws; no full-frame acceptance',
+              Path(__file__).with_name('compare_replay.py')]
+    source_directory = args.output / 'sources'
+    source_directory.mkdir()
+    for source in sources:
+        shutil.copyfile(source, source_directory / source.name)
+    inputs = [*(source_directory / source.name for source in sources), executable, scene, candidate,
+              args.output / 'initial_target.png', args.output / 'final_target.png', args.output / 'vulkan.png',
+              args.capture / 'capture.jsonl', *args.capture.glob('*.bin'), *shaders.glob('*.spv')]
+    report = {'scope': 'Diagnostic image comparison; no full-frame acceptance',
+              'omitted_observed_surface_commands': args.draws_only,
               'command_coverage_complete': False, 'capture': receipt, 'command': command,
               'comparison': comparison,
               'files': {str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}

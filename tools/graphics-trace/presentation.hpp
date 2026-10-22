@@ -8,12 +8,14 @@ static void observeSurface(IDirectDrawSurface4 *surface) {
     if(!surface)return;
     DDSURFACEDESC2 desc{};desc.dwSize=sizeof(desc);
     if(SUCCEEDED(surface->lpVtbl->GetSurfaceDesc(surface,&desc)) &&
-       (desc.ddsCaps.dwCaps & (DDSCAPS_PRIMARYSURFACE|DDSCAPS_BACKBUFFER|DDSCAPS_3DDEVICE)))
+       (desc.ddsCaps.dwCaps & (DDSCAPS_PRIMARYSURFACE|DDSCAPS_BACKBUFFER|DDSCAPS_3DDEVICE|DDSCAPS_ZBUFFER)))
         observe(surface,Kind::surface4);
 }
 static void presentationRecord(const char *method,IDirectDrawSurface4 *self,IDirectDrawSurface4 *source,DWORD flags,HRESULT hr) noexcept {
     State guard;
-    if(!live || presentationSequence>=2048)return;
+    // Menu animation must not consume the finite gameplay timeline before the
+    // user enters Training. Capture arming already uses the same scene gate.
+    if(!live || completedScenes==0 || presentationSequence>=2048)return;
     try {
         if(!presentationLog.is_open()) {
             const auto path=std::filesystem::path(environment(L"MW34_HOOK_LOG")).parent_path()/"presentation.jsonl";
@@ -50,17 +52,55 @@ static HRESULT STDMETHODCALLTYPE surfaceFlip(IDirectDrawSurface4 *self,IDirectDr
     const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::Flip)>(original(self,offsetof(IDirectDrawSurface4Vtbl,Flip)/sizeof(void *)));
     present_capture::before(self);
     const auto result=call(self,target,flags);presentationRecord("Flip",self,target,flags,result);
+    surface_diagnostics::finish(self,result);
     present_capture::after(self,result);return result;
 }
 static HRESULT STDMETHODCALLTYPE surfaceBlt(IDirectDrawSurface4 *self,RECT *destination,IDirectDrawSurface4 *source,RECT *sourceRect,DWORD flags,DDBLTFX *fx) {
     const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::Blt)>(original(self,offsetof(IDirectDrawSurface4Vtbl,Blt)/sizeof(void *)));
-    present_capture::surfaceOperation("Blt",self,source,flags,destination,sourceRect,fx,0,0);
-    const auto result=call(self,destination,source,sourceRect,flags,fx);presentationRecord("Blt",self,source,flags,result);return result;
+    auto diagnostic=surface_diagnostics::prepare("Blt",self,source,flags,destination,sourceRect,fx,0,0);
+    auto depthCommand=present_capture::depthFill(self,source,flags,destination,sourceRect,fx);
+    if(depthCommand.empty())present_capture::surfaceOperation("Blt",self,source,flags,destination,sourceRect,fx,0,0);
+    const auto result=call(self,destination,source,sourceRect,flags,fx);surface_diagnostics::complete(diagnostic,result);
+    present_capture::depthFillResult(depthCommand,result);
+    presentationRecord("Blt",self,source,flags,result);return result;
 }
 static HRESULT STDMETHODCALLTYPE surfaceBltFast(IDirectDrawSurface4 *self,DWORD x,DWORD y,IDirectDrawSurface4 *source,RECT *sourceRect,DWORD flags) {
     const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::BltFast)>(original(self,offsetof(IDirectDrawSurface4Vtbl,BltFast)/sizeof(void *)));
+    auto diagnostic=surface_diagnostics::prepare("BltFast",self,source,flags,nullptr,sourceRect,nullptr,x,y);
     present_capture::surfaceOperation("BltFast",self,source,flags,nullptr,sourceRect,nullptr,x,y);
-    const auto result=call(self,x,y,source,sourceRect,flags);presentationRecord("BltFast",self,source,flags,result);return result;
+    const auto result=call(self,x,y,source,sourceRect,flags);surface_diagnostics::complete(diagnostic,result);
+    presentationRecord("BltFast",self,source,flags,result);return result;
+}
+static HRESULT STDMETHODCALLTYPE surfaceLock(IDirectDrawSurface4 *self,RECT *rect,DDSURFACEDESC2 *desc,DWORD flags,HANDLE event) {
+    const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::Lock)>(original(self,offsetof(IDirectDrawSurface4Vtbl,Lock)/sizeof(void *)));
+    auto diagnostic=surface_diagnostics::prepare("Lock",self,nullptr,flags,rect,nullptr,nullptr,0,0);
+    const bool pixelCandidate=surface_diagnostics::pixelCandidate(self,rect,flags);
+    if(!observerSurfaceReads && !(flags&DDLOCK_READONLY) && !pixelCandidate)coverageViolation("unsupported_surface_write_lock");
+    const auto result=call(self,rect,desc,flags,event);
+    surface_diagnostics::lockPixels(self,rect,desc,flags,result);
+    if(pixelCandidate && (!surface_diagnostics::pixelLockReady(self) || FAILED(result)))coverageViolation("unsupported_surface_write_lock_output");
+    surface_diagnostics::complete(diagnostic,result,SUCCEEDED(result)?desc:nullptr,SUCCEEDED(result)?sizeof(DDSURFACEDESC2):0);
+    return result;
+}
+static HRESULT STDMETHODCALLTYPE surfaceUnlock(IDirectDrawSurface4 *self,RECT *rect) {
+    const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::Unlock)>(original(self,offsetof(IDirectDrawSurface4Vtbl,Unlock)/sizeof(void *)));
+    auto diagnostic=surface_diagnostics::prepare("Unlock",self,nullptr,0,rect,nullptr,nullptr,0,0);
+    auto pixels=surface_diagnostics::unlockPixels(self);
+    if(!observerSurfaceReads && (pixels.empty() || rect))coverageViolation("unsupported_game_surface_unlock");
+    const auto result=call(self,rect);surface_diagnostics::complete(diagnostic,result);
+    surface_diagnostics::unlockPixelsResult(pixels,result);return result;
+}
+static HRESULT STDMETHODCALLTYPE surfaceGetDC(IDirectDrawSurface4 *self,HDC *dc) {
+    const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::GetDC)>(original(self,offsetof(IDirectDrawSurface4Vtbl,GetDC)/sizeof(void *)));
+    auto diagnostic=surface_diagnostics::prepare("GetDC",self,nullptr,0,nullptr,nullptr,nullptr,0,0);
+    coverageViolation("unsupported_surface_gdi_access");
+    const auto result=call(self,dc);surface_diagnostics::complete(diagnostic,result,SUCCEEDED(result)?dc:nullptr,SUCCEEDED(result)?sizeof(HDC):0);return result;
+}
+static HRESULT STDMETHODCALLTYPE surfaceReleaseDC(IDirectDrawSurface4 *self,HDC dc) {
+    const auto call=reinterpret_cast<decltype(IDirectDrawSurface4Vtbl::ReleaseDC)>(original(self,offsetof(IDirectDrawSurface4Vtbl,ReleaseDC)/sizeof(void *)));
+    auto diagnostic=surface_diagnostics::prepare("ReleaseDC",self,nullptr,0,nullptr,nullptr,nullptr,reinterpret_cast<DWORD>(dc),0);
+    coverageViolation("unsupported_surface_gdi_release");
+    const auto result=call(self,dc);surface_diagnostics::complete(diagnostic,result);return result;
 }
 static void installPresentation(Entry &e) {
 #define PRESENT_HOOK(table,method,handler) e.clone[offsetof(table,method)/sizeof(void *)]=reinterpret_cast<void *>(&handler)
@@ -70,6 +110,10 @@ static void installPresentation(Entry &e) {
         PRESENT_HOOK(IDirectDrawSurface4Vtbl,Flip,surfaceFlip);
         PRESENT_HOOK(IDirectDrawSurface4Vtbl,Blt,surfaceBlt);
         PRESENT_HOOK(IDirectDrawSurface4Vtbl,BltFast,surfaceBltFast);
+        PRESENT_HOOK(IDirectDrawSurface4Vtbl,Lock,surfaceLock);
+        PRESENT_HOOK(IDirectDrawSurface4Vtbl,Unlock,surfaceUnlock);
+        PRESENT_HOOK(IDirectDrawSurface4Vtbl,GetDC,surfaceGetDC);
+        PRESENT_HOOK(IDirectDrawSurface4Vtbl,ReleaseDC,surfaceReleaseDC);
     }
 #undef PRESENT_HOOK
 }

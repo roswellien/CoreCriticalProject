@@ -128,11 +128,13 @@ public:
         if(fixtures_.size()>=512){auto oldest=std::min_element(fixtures_.begin(),fixtures_.end(),[](const auto&a,const auto&b){return a.last_frame<b.last_frame;});*oldest={c,normal,&def,frame,source};}
         else fixtures_.push_back({c,normal,&def,frame,source});
     }
-    std::vector<effects::Light> select_lights(const Point& eye,unsigned limit,float strength=1)const{
+    std::vector<effects::Light> select_lights(const Point& eye,unsigned limit,float strength=1,float range_scale=1)const{
         struct Candidate{float score;effects::Light light;std::uint64_t source;};std::vector<Candidate> picks;
         for(const auto& f:fixtures_){const auto& d=*f.def;const float power=d.intensity*strength;
-            const float radius2=d.radius*d.radius;const float distance2=effects::distance2(eye,f.position);
-            if(power<=0)continue;effects::Light l;l.start={f.position[0],f.position[1],f.position[2],d.radius};
+            // Range affects local illumination and selection consistently; it does not alter lamp brightness.
+            const float radius=d.radius*range_scale;
+            const float radius2=radius*radius;const float distance2=effects::distance2(eye,f.position);
+            if(power<=0)continue;effects::Light l;l.start={f.position[0],f.position[1],f.position[2],radius};
             l.end=d.is_spot?std::array<float,4>{f.direction[0],f.direction[1],f.direction[2],float(effects::LightKind::spot)}:std::array<float,4>{f.position[0],f.position[1],f.position[2],float(effects::LightKind::point)};
             l.color={d.color[0],d.color[1],d.color[2],power};picks.push_back({power*radius2/(radius2+distance2),l,f.source});
         }

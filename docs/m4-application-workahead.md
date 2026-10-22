@@ -1,5 +1,12 @@
 # M4 application and retail menu workahead
 
+Current use, 2026-10-11: this static map is an E0 input for the
+[faithful modernization plan](faithful-modernization-plan.md). Reuse its source
+paths and unresolved edges to choose the next actual execution blocker. The
+dated prerequisite ordering below is not a requirement to reproduce every CRT
+implementation before an equivalent application bootstrap can be investigated.
+Required initialization effects and original-compatible contracts remain mandatory.
+
 This preparation turns existing exact static records into implementation batches while the CRT argument/filename work continues. It does not run the original game, a provider or native application code. The inventory keeps source receipt identities, JSON pointers, call frontiers and exact original instruction/table bytes; it adds no native application credit.
 
 The admitted game is `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf`. The staged MFC42 candidate is `5f66a4d221e24c767aadd3f43a981df53d42f3d73bdf05b518120632099e2fc8`; staged MSVCRT is `2d5670881a6d13a100e37da297f6eeb876f68b63073a28eb5d650625c60f9bf7`. Actual Windows MFC provider selection remains unobserved. The source records distinguish staged and SysWOW64 ordinal targets, so a staged static contract cannot silently stand in for a different runtime provider.

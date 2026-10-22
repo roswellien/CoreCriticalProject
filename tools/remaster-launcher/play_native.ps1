@@ -16,11 +16,12 @@ param(
     [string]$GameExe = '',
     [ValidateSet('0','1')][string]$InstantReplay = '0',
     [ValidateSet('','0','1')][string]$FixtureLights = '',
-    [ValidateSet('','0','1')][string]$Weather = ''
+    [ValidateSet('','0','1')][string]$Weather = '',
+    [string]$RuntimeRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
-$taskRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$taskRoot = if ($RuntimeRoot) { [IO.Path]::GetFullPath($RuntimeRoot) } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
 Set-Location $taskRoot
 $active = Get-CimInstance Win32_Process | Where-Object {$_.Name -in @('entry_commandline.exe','Mech3.exe')}
 if ($active) {
@@ -48,7 +49,7 @@ if ($Weather -ne '') {
 }
 $lighting = $null
 if ($config.native.sun_preset -or $LightingPreset) {
-    $lighting = (& (Join-Path $PSScriptRoot 'resolve_sun_preset.ps1') -Profile $Profile -Preset $LightingPreset) | ConvertFrom-Json
+    $lighting = (& (Join-Path $PSScriptRoot 'resolve_sun_preset.ps1') -Profile $Profile -Preset $LightingPreset -RuntimeRoot $taskRoot) | ConvertFrom-Json
     foreach ($binding in $lighting.environment.PSObject.Properties) {
         [Environment]::SetEnvironmentVariable($binding.Name, [string]$binding.Value, 'Process')
         $config.native.runtime_environment | Add-Member -NotePropertyName $binding.Name -NotePropertyValue ([string]$binding.Value) -Force
@@ -92,7 +93,12 @@ if (!(Test-Path -LiteralPath $exe)) {
 }
 
 # Each session owns its trace filenames. Zero frame/dump budgets remain interactive.
-$run = Join-Path $taskRoot ('local/remaster/runs/' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+$run = if ($config.native.launch_session_directory) {
+    Join-Path ([string]$config.native.launch_session_directory) 'native'
+} else {
+    Join-Path $taskRoot ('local/remaster/runs/' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+}
+if (Test-Path -LiteralPath $run) { throw 'The native session directory already exists; refusing to overwrite prior logs.' }
 New-Item -ItemType Directory -Path $run | Out-Null
 if ($config.native.platform_visibility_trace) {
     $env:MW34_PLATFORM_TRACE = Join-Path $run 'platform-visibility.txt'
@@ -131,14 +137,33 @@ $gameExe = if ($GameExe) {
 } else {
     'MW3/Mech3.exe'
 }
-$arguments = @(
-    $gameExe,
-    'reports/m4-crt-fdiv-entry-prefix/preparation-r2/candidate-O2.obj',
-    'local/mw3-staged/Shared_DLLs/MSVCRT.DLL',
-    'reports/m4-crt-fdiv/native-derived-r1/pack.bin',
-    'reports/m4-crt-fdiv-replay/preparation-r1/before-inputs.bin',
-    "$run/game"
-)
+$env:MW34_GAME_EXE = $gameExe
+if ($config.native.installation_layout -eq 1) {
+    if ($env:MW34_SEED -ne 'host' -or $env:MW34_STARTUP -ne 'loader') {
+        throw 'Installed runtime requires host-initialized loader startup; captured startup state is not allowed.'
+    }
+    $inputs = $config.native.launch_inputs
+    $paths = @()
+    foreach ($key in @('entry_object','crt_provider','crt_pack')) {
+        $path = [string]$inputs.$key
+        if (!$path) { throw "Installed runtime is missing required input $key" }
+        if (![IO.Path]::IsPathRooted($path)) { $path = Join-Path $taskRoot $path }
+        if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Installed runtime input is missing: $key" }
+        $paths += $path
+    }
+    # Host-initialized startup never reads this positional slot. Do not ship or
+    # silently fall back to the original-process BEFORE capture.
+    $arguments = @($gameExe) + $paths + @('host-initialized', "$run/game")
+} else {
+    $arguments = @(
+        $gameExe,
+        'reports/m4-crt-fdiv-entry-prefix/preparation-r2/candidate-O2.obj',
+        'local/mw3-staged/Shared_DLLs/MSVCRT.DLL',
+        'reports/m4-crt-fdiv/native-derived-r1/pack.bin',
+        'reports/m4-crt-fdiv-replay/preparation-r1/before-inputs.bin',
+        "$run/game"
+    )
+}
 $process = Start-Process -FilePath $exe -ArgumentList ($arguments | ForEach-Object {'"' + $_ + '"'}) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$run/stdout.txt" -RedirectStandardError "$run/stderr.txt"
 $null = $process.Handle
 Write-Output "Native Remaster PID $($process.Id). Enter Training and press X for third-person. Logs: $run"

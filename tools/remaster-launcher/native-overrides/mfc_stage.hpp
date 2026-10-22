@@ -393,6 +393,7 @@ std::string pose_name(unsigned address,unsigned limit){std::string result;
  #include "widescreen_stage.inc"
  #include "mesh_override_stage.inc"
  #include "remaster_banks.inc"
+ #include "cinematic_paths.inc"
  // Preserve current enter()/SEH dispatch and restore the optional model scope
  // on every host exception, including a guest non-local return.
  void*remaster_body(State*s,unsigned target,void*p,Body body){void*result{};
@@ -1446,6 +1447,17 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(n=="EnableMenuItem")return done(unsigned(::EnableMenuItem(static_cast<HMENU>(H(0)),arg(1),arg(2))),3);
    if(n=="CheckMenuItem")return done(::CheckMenuItem(static_cast<HMENU>(H(0)),arg(1),arg(2)),3);
    if(n=="GetWindowDC")return done(gr(::GetWindowDC(W2(0))),1);
+   // Scalar USER32 translation used by fresh pilot-name entry; preserve the real host result.
+   if(n=="MapVirtualKeyA")return done(::MapVirtualKeyA(arg(0),arg(1)),2);
+   if(n=="ToAscii"){
+    const unsigned keys=arg(2),out=arg(3);
+    if(keys&&!readable(keys,256))deny("ToAscii key state outside the memory contract",keys);
+    if(!writable(out,2))deny("ToAscii output outside the memory contract",out);
+    BYTE state[256]{};if(keys)for(unsigned i=0;i<256;++i)state[i]=runtime.memory().load<unsigned char>({keys+i});
+    WORD translated{};int count{};{LastError error(host);count=::ToAscii(arg(0),arg(1),keys?state:nullptr,&translated,arg(4));}
+    if(count)runtime.memory().store<unsigned short>({out},translated);
+    return done(unsigned(count),5);
+   }
    if(n=="GetKeyState")return done(unsigned(std::int32_t(::GetKeyState(int(arg(0))))),1);
    if(n=="GetAsyncKeyState")return done(unsigned(std::int32_t(::GetAsyncKeyState(int(arg(0))))),1);
    if(n=="GetKeyboardState"){const unsigned a=arg(0);if(!writable(a,256))deny("GetKeyboardState buffer outside the memory contract",a);BYTE k[256]{};BOOL ok=::GetKeyboardState(k);if(ok)for(unsigned i=0;i<256;++i)runtime.memory().store<unsigned char>({a+i},k[i]);return done(ok?1U:0U,1);}
@@ -1650,7 +1662,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   // AVIFile / Video for Windows: the real x64 libraries; stream and codec handles are guest tokens.
   if(n=="AVIFileInit"){::AVIFileInit();return done(0,0);}
   if(n=="AVIFileExit"){::AVIFileExit();return done(0,0);}
-  if(n=="AVIStreamOpenFromFileA"){const unsigned out=arg(0);const std::string q=resolve(arg(1));GUID h{};const GUID*ph=nullptr;if(arg(5)){h=guest_guid(arg(5));ph=&h;}if(!writable(out,4))deny("AVIStreamOpenFromFileA output outside the memory contract",out);
+  if(n=="AVIStreamOpenFromFileA"){const unsigned out=arg(0);const std::string original=resolve(arg(1));const std::string q=cinematic_path(original);if(q!=original&&(arg(4)&3))deny("Cinematic replacement write access is not authorized",arg(4));GUID h{};const GUID*ph=nullptr;if(arg(5)){h=guest_guid(arg(5));ph=&h;}if(!writable(out,4))deny("AVIStreamOpenFromFileA output outside the memory contract",out);
    PAVISTREAM st{};HRESULT hr{};{LastError l(host);hr=::AVIStreamOpenFromFileA(&st,q.c_str(),arg(2),LONG(arg(3)),arg(4),ph?const_cast<CLSID*>(ph):nullptr);}apis.back()+="("+q+")="+std::to_string(unsigned(hr));store(out,SUCCEEDED(hr)?handle_token(st):0);return done(unsigned(hr),6);}
   auto avs=[&](unsigned v){auto*p2=static_cast<PAVISTREAM>(token_handle(v));if(!p2)deny(n+" on an object that is not a guest AVI stream",v);return p2;};
   if(n=="AVIStreamRelease")return done(unsigned(::AVIStreamRelease(avs(arg(0)))),1);

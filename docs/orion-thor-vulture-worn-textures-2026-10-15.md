@@ -1,5 +1,12 @@
 # Orion, Thor and Vulture maintained and well-used textures
 
+Thor's initial R1 colors below have been superseded by the stronger wear/detail
+[Thor R2 revision](thor-worn-textures-r2-2026-10-15.md). Vulture now also uses
+its stronger [R2 service-wear set](thor-vulture-service-wear-2026-10-16.md).
+Orion's Body blue and low-density front collar are superseded by the
+[2026-10-21 height/color/collar repair](orion-height-and-collar-2026-10-21.md).
+Historical publication checks below describe the first batch.
+
 2026-10-15. The user requested the new Bushwacker/Mad Cat surface standard on
 Orion, Thor and Vulture. Six new Body/Variant color atlases retain the existing
 MW3-inspired palettes and paint zones, adding irregular edge chips, thin

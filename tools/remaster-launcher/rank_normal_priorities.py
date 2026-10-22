@@ -23,11 +23,18 @@ IMPACT = re.compile(
 
 
 def sha(path):
+    """Stream a decoded scene or inventory file's SHA-256 for the output record."""
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def polygon_area(vertices, polygon):
+    """Sum triangle areas in squared model-local coordinate units.
+
+    Triangle strips use consecutive triples; other polygons use a fan around
+    the first vertex. Cross-product magnitude ignores winding. This estimates
+    stored geometry area without applying node transforms or screen projection.
+    """
     indices = polygon["vertex_indices"]
     if len(indices) < 3:
         return 0.0
@@ -53,6 +60,13 @@ def polygon_area(vertices, polygon):
 
 
 def rank(scenes, inventory, output, water_inventory):
+    """Write a static authoring queue from the six configured decoded scene ZIPs.
+
+    Repeated node placements, stored LODs and material layers each contribute
+    references. Terrain-flagged and other nodes are ranked separately, so one
+    texture can occur in both lanes. Both lanes must have eligible references.
+    Names guide authoring selection; runtime binding still needs exact pixels.
+    """
     output = Path(output)
     if output.exists():
         raise ValueError("Choose a fresh output directory")
@@ -79,27 +93,29 @@ def rank(scenes, inventory, output, water_inventory):
                 json.loads(archive.read(x + ".json"))
                 for x in ("nodes", "models", "materials", "textures")
             ]
+        # Retain every recognized root that reaches a node. The per-root visited
+        # set tolerates repeated child references without counting a cycle twice.
         vehicle_nodes = defaultdict(set)
         for i, node in enumerate(nodes):
             if not VEHICLE_ROOT.search(node["name"].lower()):
                 continue
-            root = node["name"].lower()
+            vehicle_root = node["name"].lower()
             stack = [i]
             seen = set()
             while stack:
-                at = stack.pop()
-                if at in seen:
+                node_index = stack.pop()
+                if node_index in seen:
                     continue
-                if not 0 <= at < len(nodes):
+                if not 0 <= node_index < len(nodes):
                     raise ValueError("Invalid vehicle child index")
-                seen.add(at)
-                vehicle_nodes[at].add(root)
-                stack.extend(nodes[at].get("child_indices", []))
+                seen.add(node_index)
+                vehicle_nodes[node_index].add(vehicle_root)
+                stack.extend(nodes[node_index].get("child_indices", []))
         for i, node in enumerate(nodes):
-            mi = node.get("model_index", -1)
-            if mi is None or mi == -1:
+            model_index = node.get("model_index", -1)
+            if model_index is None or model_index == -1:
                 continue
-            model = models[mi]
+            model = models[model_index]
             lane = "terrain" if node.get("flags", {}).get("terrain") else "objects"
             for polygon in model.get("polygons", []):
                 area = polygon_area(model["vertices"], polygon)
@@ -117,8 +133,8 @@ def rank(scenes, inventory, output, water_inventory):
                     if i in vehicle_nodes:
                         row["vehicle"] += 1
                         row["vehicle_roots"].update(vehicle_nodes[i])
-                        for root in vehicle_nodes[i]:
-                            families[root].add(name)
+                        for vehicle_root in vehicle_nodes[i]:
+                            families[vehicle_root].add(name)
     water = json.loads(Path(water_inventory).read_text())["groups"]
     dedicated = {
         n.lower()
@@ -140,15 +156,19 @@ def rank(scenes, inventory, output, water_inventory):
             (n for n, r in eligible.items() if r[lane]),
             key=lambda n: (-eligible[n][lane], -len(eligible[n]["regions"]), n),
         )
-        count = math.ceil(len(ordered) * 0.25)
+        if not ordered:
+            raise ValueError("No eligible " + lane + " material references; cannot rank coverage")
+        # Frequency controls queue order. Area and landmark-name matches add
+        # review candidates without changing that order or claiming visibility.
+        frequency_quartile_count = math.ceil(len(ordered) * 0.25)
         area_rank = sorted(ordered, key=lambda n: (-eligible[n][lane + "_area"], n))
         area_priority = set(area_rank[: max(1, math.ceil(len(ordered) * 0.1))])
         result[lane] = []
-        total = sum(eligible[n][lane] for n in ordered)
+        total_references = sum(eligible[n][lane] for n in ordered)
         for i, name in enumerate(ordered):
             row = eligible[name]
             reasons = []
-            if i < count:
+            if i < frequency_quartile_count:
                 reasons.append("top_quartile_reference_frequency")
             if name in area_priority:
                 reasons.append("top_decile_static_surface_area")
@@ -169,9 +189,12 @@ def rank(scenes, inventory, output, water_inventory):
             )
         result[lane + "_summary"] = dict(
             eligible_names=len(ordered),
-            top_quartile_count=count,
-            total_references=total,
-            top_quartile_reference_coverage=sum(eligible[n][lane] for n in ordered[:count]) / total,
+            top_quartile_count=frequency_quartile_count,
+            total_references=total_references,
+            top_quartile_reference_coverage=sum(
+                eligible[n][lane] for n in ordered[:frequency_quartile_count]
+            )
+            / total_references,
         )
     for name, row in eligible.items():
         if row["vehicle"]:

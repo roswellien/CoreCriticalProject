@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "distribution": "launcher-preview",
+  "native_runtime": "requires-user-file-generation"
+}

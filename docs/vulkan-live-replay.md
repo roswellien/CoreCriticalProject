@@ -431,3 +431,19 @@ the presentation diagnostic plus two forged scope/coverage controls. No playable
 Vulkan integration or full-frame equivalence is claimed. Next: observe depth
 surface transfers and other HUD paths, capture their actual parameters, then
 replay only recovered semantics and repeat the comparison.
+
+## Observed depth and CPU surface commands (2026-10-11)
+
+The [surface command work](live-native-rendering-current-work.md) now observes
+depth surfaces, actual D16 zero fills and RGB565 CPU Lock/Unlock spans. The second
+genuine Training capture records 1,082 draws, two fills and two lock spans,
+including 8,486 changed CPU pixels. Its ordered SCN4 replay uses clears and copies
+only changed pixel runs at their observed positions.
+
+A same-frame comparison improves the eight-level per-channel tolerance result
+from 84.85% for deliberately draw-only replay to 99.01% with the surface commands;
+outliers fall from 46,528 to 3,039. Both GPU runs have zero validation messages.
+The user confirmed normal Training and quit; exit code is zero, with a retained
+temporary window warning and later recovery. Complete command coverage, exact
+frame equivalence, moving-frame resource persistence and live native gameplay
+remain open. Receipts and images are linked from the work record.

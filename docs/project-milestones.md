@@ -8,6 +8,13 @@ as recorded in the [milestone update r13](project-milestones-r13.md) and
 [131-root evidence](m4-progress-startup131.md). Inventory coverage is separate
 from total M4 or project completion.
 
+Strategy update, 2026-10-11: the [faithful modernization plan](faithful-modernization-plan.md)
+adds execution checkpoints E0-E6 alongside these milestones. Prioritize the
+integrated host, live menu and live Training path, while retaining existing
+initializer acceptance and strict evidence requirements as a separate lane.
+New platform services are core architecture; optional enhancements need a
+baseline for their affected scope. This decision awards no milestone credit.
+
 The user selected Vulkan as the graphics backend target on 2026-10-08. Bounded
 [graphics learning/prototyping](vulkan-learning-prototype.md) has begun separately
 from native startup; it does not advance native menu/Training acceptance.
@@ -36,8 +43,10 @@ it cannot satisfy a compatibility or gameplay gate that still fails.
 
 ### M7 graphics and texture-rendering workstream
 
-This work is gated behind recovered rendering behavior and the M6 compatibility
-baseline. Vulkan is now the selected backend target; implementation and minimum
+Integration of each enhancement is gated behind recovered rendering behavior
+and its affected original-compatible test scope. The complete M6 regression is
+still required for release, but modern backend and device work may proceed with
+M4/M5. Vulkan is the selected backend target; implementation and minimum
 feature requirements remain subject to recovered graphics behavior and measured
 requirements. Implement each stage behind settings so the original-compatible
 path remains available for comparison and regression.

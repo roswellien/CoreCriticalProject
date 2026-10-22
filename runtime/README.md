@@ -1,7 +1,13 @@
 # Runtime bootstrap
 
+Current integration direction: [faithful modernization](../docs/faithful-modernization-plan.md).
+Reuse this memory library and the bounded MFC receiver state in `mw34_runtime`,
+plus the separate execution components under `tools/m4-runtime/`, in one native
+host. The bootstrap limits below describe the memory component, not absence of
+later project components. A complete game runtime remains open.
+
 `mw34_runtime` is a C++20 library containing checked backing storage for a 32-bit
-guest address space. This is project-authored infrastructure, not an x86
+guest address space and bounded MFC application receiver state. This is project-authored infrastructure, not an x86
 interpreter or a translation of MechWarrior 3.
 
 ## Implemented memory contract
@@ -34,7 +40,7 @@ changing behavior. Mappings use independent byte vectors and an ordered lookup,
 not a reserved contiguous 4 GiB host address range. Large mappings allocate real
 backing storage and may throw a host allocation exception.
 
-There is no PE loader, allocator, stack setup, ABI bridge, threading model,
+The memory container itself supplies no PE loader, allocator, stack setup, ABI bridge, threading model,
 exception translation, or x87/MMX/SSE state. The memory container is not thread
 safe. Its C++ exceptions are harness diagnostics, not emulation of Windows
 structured exceptions. No memory is exposed as a persistent raw host pointer.
@@ -60,4 +66,6 @@ addresses in memory. Translate them through that registry; never cast a guest
 integer to a native function pointer. The controlled execution experiment must
 first establish register/flags state, guest stack arguments and cleanup,
 return values, callback re-entry, and floating-point state requirements. This
-boundary is a design proposal, not an implemented game-call ABI.
+boundary is the original bootstrap proposal. Later dispatch/ABI experiments live
+under `tools/m4-runtime/` and have separately scoped evidence; the complete
+application integration is not implemented by this memory component.

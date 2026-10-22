@@ -1,5 +1,13 @@
 # M4: native startup and menus
 
+Current strategy, 2026-10-11: use the [faithful modernization plan](faithful-modernization-plan.md)
+and [current roadmap](roadmap.md) for implementation ordering. The dated details
+below preserve historical startup research; they do not require translating every
+CRT/MFC internal instruction before an independent integration experiment.
+An equivalent host bootstrap needs explicit side-effect/service contracts and
+cannot skip required game initialization. Accepted inventory remains131/144;
+full M4 menu/input acceptance and all existing criteria remain open.
+
 Status: active, updated 2026-10-08. M1–M3 retain their accepted scopes and frozen
 technical evidence. M4 is complete only when a project-built x64 executable
 loads admitted user data, initializes required services, presents correct

@@ -29,7 +29,7 @@ int main() {
         }
         auto &data = memory.at(base);
         check(std::uint64_t(at - base) + bytes <= data.size());
-        std::fill_n(data.begin() + (at - base), bytes, 0);
+        std::fill_n(data.begin() + (at - base), bytes, static_cast<unsigned char>(0));
         ++clears;
     };
     auto allocate = [&](unsigned bytes, bool zero, unsigned owner) {
@@ -38,7 +38,7 @@ int main() {
     constexpr unsigned crt = 0x31415920, codec = 0x3f400010, services = 0;
 
     const auto video = allocate(0x1d1e8, false, codec);
-    std::fill(memory.at(video).begin(), memory.at(video).end(), 0xab);
+    std::fill(memory.at(video).begin(), memory.at(video).end(), static_cast<unsigned char>(0xab));
     heap.release(video);
     const auto menu = allocate(0x17730, false, crt);
     check(menu != video);

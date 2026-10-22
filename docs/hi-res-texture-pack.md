@@ -4,7 +4,7 @@ Status reviewed 2026-10-13: active local development, cumulative archive
 integration prepared, broader in-game visual validation pending.
 
 The project develops an optional high-resolution texture upgrade pack alongside
-native recompilation (local reference: `docs/faithful-modernization-plan.md`) and the
+[native recompilation](faithful-modernization-plan.md) and the
 [original-EXE Vulkan wrapper](d7vk-wrapper-launcher-summary.md). The pack uses
 AI-assisted artwork and source-aware exports for mech panels, terrain, water,
 buildings, structures and selected effects. It preserves an original-textures

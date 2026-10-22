@@ -15,14 +15,17 @@ namespace MW3RemasterLauncher.Core
         public bool Fullscreen { get; set; } = true;
         public string AntiAliasing { get; set; } = "fxaa"; // "off", "fxaa", "2", "4", "8"
         public int AnisotropicFiltering { get; set; } = 16; // 1, 2, 4, 8, 16
-        public int DrawDistance { get; set; } = 2400; // 800, 1200, 1600, 2400, 3200
+        public int DrawDistance { get; set; } = 1600; // 800, 1200, 1600, 2400, 3200
         public int FogDistance { get; set; } = 1100; // 0, 1100
         public bool LocalCdAudio { get; set; } = true;
+        public string MusicTrack2 { get; set; } = string.Empty;
+        public string MusicTrack3 { get; set; } = string.Empty;
         public int CdAudioVolume { get; set; } = 80;
         public bool InstantReplay { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();
         public bool PackSelectionInitialized { get; set; } = false;
+        public bool EnvironmentPackSelectionInitialized { get; set; } = false;
         public bool HasAddedToSteam { get; set; } = false;
 
         // Engine & D7VK options
@@ -36,38 +39,43 @@ namespace MW3RemasterLauncher.Core
     public class SettingsManager
     {
         private readonly string _settingsPath;
+        public string SettingsPath => _settingsPath;
+        public string? LoadWarning { get; private set; }
         public LauncherSettings Current { get; private set; }
 
-        public SettingsManager(string basePath)
+        public SettingsManager(string basePath, string? dataRoot = null)
         {
-            var userDir = Path.Combine(basePath, "user");
-            if (!Directory.Exists(userDir))
-            {
-                Directory.CreateDirectory(userDir);
-            }
+            var userDir = dataRoot ?? LauncherPaths.DataRoot;
+            Directory.CreateDirectory(userDir);
             _settingsPath = Path.Combine(userDir, "settings.json");
+            var legacy = Path.Combine(basePath, "user", "settings.json");
+            if (!File.Exists(_settingsPath) && File.Exists(legacy))
+            {
+                // Copy once. Upgrades must never replace a newer per-user choice.
+                File.Copy(legacy, _settingsPath, overwrite: false);
+            }
             Current = Load();
         }
 
         public LauncherSettings Load()
         {
+            LoadWarning = null;
             if (File.Exists(_settingsPath))
             {
                 try
                 {
-                    var json = File.ReadAllText(_settingsPath);
-                    var settings = JsonSerializer.Deserialize<LauncherSettings>(json);
-                    if (settings != null)
-                    {
-                        // Earlier launchers enabled capture by default without informed opt-in.
-                        if (settings.ReplayVideoSettingsVersion < 1)
-                            settings.InstantReplay = false;
-                        return settings;
-                    }
+                    var settings = JsonSerializer.Deserialize<LauncherSettings>(File.ReadAllText(_settingsPath))
+                        ?? throw new JsonException("Settings are empty.");
+                    settings.ActivePacks ??= new List<string>();
+                    if (settings.ReplayVideoSettingsVersion < 1) settings.InstantReplay = false;
+                    return settings;
                 }
-                catch
+                catch (JsonException ex)
                 {
-                    // Fall back to defaults
+                    // Keep the exact rejected bytes before allowing defaults to save.
+                    var backup = _settingsPath + ".unreadable-" + Guid.NewGuid().ToString("N");
+                    File.Copy(_settingsPath, backup);
+                    LoadWarning = "Saved settings could not be read. Defaults were loaded; the original file is preserved at " + backup + ". " + ex.Message;
                 }
             }
 
@@ -89,17 +97,20 @@ namespace MW3RemasterLauncher.Core
 
         public void Save()
         {
+            Current.ReplayVideoSettingsVersion = 1;
+            var temporary = _settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                Current.ReplayVideoSettingsVersion = 1;
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                var json = JsonSerializer.Serialize(Current, options);
-                File.WriteAllText(_settingsPath, json);
+                var json = JsonSerializer.Serialize(Current, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(temporary, json);
+                if (File.Exists(_settingsPath)) File.Replace(temporary, _settingsPath, _settingsPath + ".previous");
+                else File.Move(temporary, _settingsPath);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to save settings: {ex.Message}");
+                throw new IOException("Your launcher settings could not be saved to " + _settingsPath + ". " + ex.Message, ex);
             }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
     }
 }

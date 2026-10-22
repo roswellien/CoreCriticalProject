@@ -19,9 +19,8 @@ namespace MW3RemasterLauncher.Core
     /// <summary>Maintain the launcher's discovered packs and user-selected priority order.</summary>
     /// <remarks>
     /// Collection order is precedence order; InspectConflicts reports the first claim.
-    /// This is a filesystem manager, not a native asset compositor or publisher verifier.
-    /// Import/uninstall containment defects remain tracked in code review finding C01;
-    /// this documentation pass does not make untrusted pack import safe.
+    /// PackStorage validates and stages imported files. Publisher authentication and
+    /// host compatibility are separate from archive integrity.
     /// </remarks>
     public class PackManager
     {
@@ -29,10 +28,13 @@ namespace MW3RemasterLauncher.Core
         private readonly ObservableCollection<PackManifest> _packs = new();
 
         public ObservableCollection<PackManifest> Packs => _packs;
+        public string ModsRoot => _modsRoot;
+        public List<string> DiscoveryErrors { get; } = new();
 
         public PackManager(string basePath)
         {
-            _modsRoot = Path.Combine(basePath, "mods");
+            _modsRoot = Path.GetFullPath(Path.Combine(basePath, "mods"));
+            PackStorage.EnsureNoLinks(_modsRoot);
             if (!Directory.Exists(_modsRoot))
             {
                 Directory.CreateDirectory(_modsRoot);
@@ -44,20 +46,26 @@ namespace MW3RemasterLauncher.Core
         public void RefreshPacks(List<string>? activeOrder = null)
         {
             _packs.Clear();
+            DiscoveryErrors.Clear();
             if (!Directory.Exists(_modsRoot)) return;
 
+            using var storageLock = PackStorage.Lock(_modsRoot);
+            PackStorage.Recover(_modsRoot);
+            // Loose archives require an explicit import. Startup never overwrites installed content.
             var discovered = new List<PackManifest>();
 
             // 1. Scan subdirectories under mods/
             foreach (var dir in Directory.GetDirectories(_modsRoot))
             {
+                if (Path.GetFileName(dir).StartsWith('.')) continue;
                 var manifestFile = Path.Combine(dir, "pack.json");
                 if (File.Exists(manifestFile))
                 {
                     try
                     {
-                        var json = File.ReadAllText(manifestFile);
-                        var manifest = JsonSerializer.Deserialize<PackManifest>(json);
+                        var manifest = PackStorage.ReadManifest(manifestFile);
+                        if (!string.Equals(Path.GetFileName(dir), manifest.Id, StringComparison.Ordinal))
+                            throw new InvalidDataException("Installed directory and pack ID disagree.");
                         if (manifest != null && !string.IsNullOrWhiteSpace(manifest.Id))
                         {
                             manifest.DirectoryPath = dir;
@@ -66,27 +74,14 @@ namespace MW3RemasterLauncher.Core
                             {
                                 manifest.PreviewImagePath = preview;
                             }
-                            manifest.IsOfficial = manifest.Id.StartsWith("com.mw3remaster.");
+                            manifest.IsOfficial = false; // IDs are not authenticated publisher identities.
                             discovered.Add(manifest);
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        // Ignore malformed packs
+                        DiscoveryErrors.Add(Path.GetFileName(dir) + ": " + ex.Message);
                     }
-                }
-            }
-
-            // 2. Scan standalone .mw3pack or .zip files directly in mods/ and extract them if needed
-            foreach (var archive in Directory.GetFiles(_modsRoot, "*.mw3pack").Concat(Directory.GetFiles(_modsRoot, "*.zip")))
-            {
-                try
-                {
-                    InstallPack(archive, autoDeleteSource: false);
-                }
-                catch
-                {
-                    // Ignore non-pack zips
                 }
             }
 
@@ -122,8 +117,8 @@ namespace MW3RemasterLauncher.Core
 
         /// <summary>Read pack metadata and replace its extracted local directory.</summary>
         /// <remarks>
-        /// The existing implementation replaces files incrementally and may leave partial
-        /// output on failure. This is not an atomic install or a trusted-package validator.
+        /// Verification completes in staging before activation. A previous version is
+        /// retained for rollback; manifest hashes do not authenticate the publisher.
         /// </remarks>
         public PackManifest InstallPack(string archivePath, bool autoDeleteSource = false)
         {
@@ -132,79 +127,29 @@ namespace MW3RemasterLauncher.Core
                 throw new FileNotFoundException("Asset pack file not found", archivePath);
             }
 
-            using var archive = ZipFile.OpenRead(archivePath);
-            var manifestEntry = archive.Entries.FirstOrDefault(e => e.FullName.Equals("pack.json", StringComparison.OrdinalIgnoreCase) || e.FullName.EndsWith("/pack.json", StringComparison.OrdinalIgnoreCase));
-            if (manifestEntry == null)
-            {
-                throw new InvalidOperationException("Archive does not contain a valid pack.json manifest.");
-            }
+            var manifest = PackStorage.Install(_modsRoot, archivePath);
+            return RegisterInstalled(manifest, archivePath, autoDeleteSource);
+        }
 
-            PackManifest? manifest;
-            using (var stream = manifestEntry.Open())
-            {
-                manifest = JsonSerializer.Deserialize<PackManifest>(stream);
-            }
+        public async System.Threading.Tasks.Task<PackManifest> InstallPackAsync(string archivePath)
+        {
+            var manifest = await System.Threading.Tasks.Task.Run(() => PackStorage.Install(_modsRoot, archivePath));
+            return RegisterInstalled(manifest, archivePath, false);
+        }
 
-            if (manifest == null || string.IsNullOrWhiteSpace(manifest.Id))
-            {
-                throw new InvalidOperationException("Manifest in archive is invalid or missing 'id'.");
-            }
-
-            var targetDir = Path.Combine(_modsRoot, manifest.Id);
-            if (Directory.Exists(targetDir))
-            {
-                Directory.Delete(targetDir, true);
-            }
-            Directory.CreateDirectory(targetDir);
-
-            // Determine if entries are inside a root folder
-            var rootPrefix = string.Empty;
-            if (manifestEntry.FullName.Contains('/'))
-            {
-                rootPrefix = manifestEntry.FullName.Substring(0, manifestEntry.FullName.LastIndexOf('/') + 1);
-            }
-
-            foreach (var entry in archive.Entries)
-            {
-                var relativePath = entry.FullName;
-                if (!string.IsNullOrEmpty(rootPrefix) && relativePath.StartsWith(rootPrefix))
-                {
-                    relativePath = relativePath.Substring(rootPrefix.Length);
-                }
-
-                if (string.IsNullOrWhiteSpace(relativePath)) continue;
-
-                var destPath = Path.Combine(targetDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
-                if (entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\"))
-                {
-                    Directory.CreateDirectory(destPath);
-                }
-                else
-                {
-                    var parent = Path.GetDirectoryName(destPath);
-                    if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
-                    {
-                        Directory.CreateDirectory(parent);
-                    }
-                    entry.ExtractToFile(destPath, true);
-                }
-            }
-
-            manifest.DirectoryPath = targetDir;
-            var preview = Path.Combine(targetDir, "preview.png");
-            if (File.Exists(preview))
-            {
-                manifest.PreviewImagePath = preview;
-            }
-
+        private PackManifest RegisterInstalled(PackManifest manifest, string archivePath, bool autoDeleteSource)
+        {
+            var preview = Path.Combine(manifest.DirectoryPath, "preview.png");
+            if (File.Exists(preview)) manifest.PreviewImagePath = preview;
             // Remove existing entry with same ID if present
             var existing = _packs.FirstOrDefault(p => p.Id == manifest.Id);
             if (existing != null)
             {
-                _packs.Remove(existing);
+                manifest.IsEnabled = existing.IsEnabled;
+                var index = _packs.IndexOf(existing);
+                _packs[index] = manifest;
             }
-
-            _packs.Insert(0, manifest);
+            else _packs.Insert(0, manifest);
             for (int i = 0; i < _packs.Count; i++) _packs[i].Priority = i;
 
             if (autoDeleteSource && Path.GetDirectoryName(archivePath) == _modsRoot)
@@ -221,21 +166,40 @@ namespace MW3RemasterLauncher.Core
         {
             if (pack == null) return false;
 
-            if (Directory.Exists(pack.DirectoryPath))
+            var target = PackStorage.Resolve(_modsRoot, PackStorage.ValidateId(pack.Id));
+            if (!string.Equals(Path.GetFullPath(pack.DirectoryPath), target, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Cannot uninstall content outside its owned pack directory.");
+            using (var storageLock = PackStorage.Lock(_modsRoot))
             {
-                try
-                {
-                    Directory.Delete(pack.DirectoryPath, true);
-                }
-                catch (Exception ex)
-                {
-                    throw new IOException($"Could not delete mod folder: {ex.Message}", ex);
-                }
+                var previous = PackStorage.Resolve(_modsRoot, ".rollback-" + pack.Id);
+                if (Directory.Exists(previous)) PackStorage.DeleteOwnedTree(previous);
+                if (Directory.Exists(target)) PackStorage.DeleteOwnedTree(target);
             }
 
             _packs.Remove(pack);
             for (int i = 0; i < _packs.Count; i++) _packs[i].Priority = i;
             return true;
+        }
+
+        /// <summary>Swap with the retained previous version without changing enabled order.</summary>
+        public void RollbackPack(PackManifest pack)
+        {
+            using var storageLock = PackStorage.Lock(_modsRoot);
+            var target = PackStorage.Resolve(_modsRoot, PackStorage.ValidateId(pack.Id));
+            var previous = PackStorage.Resolve(_modsRoot, ".rollback-" + pack.Id);
+            if (!Directory.Exists(previous)) throw new InvalidOperationException("No previous version is available.");
+            var restored = PackStorage.ReadManifest(Path.Combine(previous, "pack.json"));
+            if (restored.Id != pack.Id) throw new InvalidDataException("Rollback identity mismatch.");
+            // Keep the previous directory until it has been activated; a failed move restores it.
+            var swap = PackStorage.Resolve(_modsRoot, ".staging-" + Guid.NewGuid().ToString("N"));
+            Directory.Move(target, swap);
+            try { Directory.Move(previous, target); }
+            catch { Directory.Move(swap, target); throw; }
+            Directory.Move(swap, previous);
+            restored.DirectoryPath = target;
+            restored.IsEnabled = pack.IsEnabled;
+            restored.Priority = pack.Priority;
+            _packs[_packs.IndexOf(pack)] = restored;
         }
 
         /// <summary>Move a discovered pack by an index offset and renumber display priorities.</summary>
@@ -262,6 +226,39 @@ namespace MW3RemasterLauncher.Core
             {
                 if (!Directory.Exists(pack.DirectoryPath)) continue;
 
+                if (pack.SchemaVersion == 2)
+                {
+                    if (pack.NativePayload?.Profile == CinematicPack.Profile)
+                        foreach (var clip in CinematicPack.Read(pack.DirectoryPath, pack).Where(c => c.Replaces != null))
+                        {
+                            var key = "cinematic/" + clip.Replaces;
+                            if (claimedFiles.TryGetValue(key, out var winner))
+                                conflicts.Add(new PackConflict { RelativePath = key, WinningPackName = winner.Name, OverriddenPackName = pack.Name });
+                            else claimedFiles[key] = pack;
+                        }
+                    if (pack.NativePayload?.Profile == UiPack.Profile)
+                    {
+                        var key = "ui/" + UiPack.Read(pack.DirectoryPath, pack).Kind;
+                        if (claimedFiles.TryGetValue(key, out var winner))
+                            conflicts.Add(new PackConflict { RelativePath = key, WinningPackName = winner.Name, OverriddenPackName = pack.Name });
+                        else claimedFiles[key] = pack;
+                    }
+                    if (pack.NativePayload?.Profile == MusicPack.Profile)
+                    {
+                        const string key = "music/cd-soundtrack";
+                        if (claimedFiles.TryGetValue(key, out var winner))
+                            conflicts.Add(new PackConflict { RelativePath = key, WinningPackName = winner.Name, OverriddenPackName = pack.Name });
+                        else claimedFiles[key] = pack;
+                    }
+                    foreach (var id in pack.Provides?.Mechs ?? new List<string>())
+                    {
+                        var key = "chassis/" + id;
+                        if (claimedFiles.TryGetValue(key, out var winner))
+                            conflicts.Add(new PackConflict { RelativePath = key, WinningPackName = winner.Name, OverriddenPackName = pack.Name });
+                        else claimedFiles[key] = pack;
+                    }
+                    continue;
+                }
                 var files = Directory.GetFiles(pack.DirectoryPath, "*.*", SearchOption.AllDirectories);
                 foreach (var file in files)
                 {

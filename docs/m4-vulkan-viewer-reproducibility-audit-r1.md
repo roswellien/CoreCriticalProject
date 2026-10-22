@@ -1,5 +1,11 @@
 # M4 Vulkan viewer reproducibility audit r1
 
+Historical audit note, 2026-10-11 continuation: this document and the viewer
+foundation are now tracked in commit `5d86c74`. Its clean-checkout/untracked
+findings below refer to the then-current `d20e936` snapshot. No fresh viewer
+build is claimed by this note. See the [current work review](m4-claude-work-review-2026-10-11.md)
+and [live integration strategy](faithful-modernization-plan.md).
+
 Recorded 2026-10-11. This audit asks whether another developer could build, launch and
 check the windowed Vulkan replay viewer in `tools/vulkan-windowed/`. Nothing was installed.
 No source, CMake, script, capture or configuration file was changed. No receipt, ledger or

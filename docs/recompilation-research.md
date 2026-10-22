@@ -1,5 +1,10 @@
 # Recompilation research
 
+Current strategy, 2026-10-11: [faithful modernization](faithful-modernization-plan.md)
+reuses the accepted translation/CPU experiments and evaluates other components
+only for concrete execution gaps. The initial proposal below is historical;
+it does not call for restarting framework selection or repeating accepted probes.
+
 Research date: **2026-10-06**. This is a source review and experiment proposal,
 not a successful MW3 lift. No framework listed below has been built or validated
 against an MW3 function by this document's author. Upstream documentation is

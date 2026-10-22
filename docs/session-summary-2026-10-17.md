@@ -6,6 +6,19 @@ The website publishes dated files from `docs/mechlab/`, not this technical recor
 Earlier sections below preserve their session-specific evidence and limits.
 Acceptance remains **131/144**; no native milestone credit was added.
 
+## Later continuation: normal mapping and original menu rollovers
+
+The [normal mapping integration record](normal-mapping-integration-2026-10-17.md)
+documents the current-main candidate, named material formats, shared normal images,
+surface registration and existing coverage limits. The
+[rollover restoration record](menu-rollover-restoration-2026-10-17.md) documents
+the missing direct-pixel wave operation, its enhanced composition, native raster
+comparisons and focused tests. The updated normal-map candidate retained identical
+complete draw logs and frame-600/900 gameplay captures across separate 1,200-frame
+Training and Instant Action routes. All 30 model normal bindings still loaded.
+These later continuation changes remain uncommitted; the earlier published
+performance report below retains its original build identities and evidence.
+
 ## Big Lake model expansion and performance repair
 
 The isolated Big Lake host has 15 chassis / 30 original LOD bindings, directional

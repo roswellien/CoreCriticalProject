@@ -6,7 +6,7 @@ from pathlib import Path
 import struct
 
 from describe_capture import decode_rgb
-from verify_capture import verify, verify_presentation_diagnostic
+from verify_capture import verify, verify_presentation_diagnostic, depth_fill_command, cpu_write_regions
 
 
 def legacy_filter(row):
@@ -32,9 +32,13 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument('--diagnostic-presentation', action='store_true',
                         help='Package only observed draws from an explicitly incomplete flip interval; grants no acceptance')
+    parser.add_argument('--draws-only', action='store_true',
+                        help='Diagnostic baseline omitting observed surface commands; preserves original capture')
     parser.add_argument("--filter-source", choices=("stage", "legacy"), default="stage",
                         help="Legacy requires successful legacy getter and setter evidence on every draw")
     args = parser.parse_args()
+    if args.draws_only and not args.diagnostic_presentation:
+        raise ValueError('Draw-only baseline requires explicit presentation diagnostic')
     receipt = (verify_presentation_diagnostic if args.diagnostic_presentation else verify)(args.directory)
     rows = [json.loads(line) for line in (args.directory / "capture.jsonl").read_text().splitlines()]
     image = next(r["surface"] for r in rows if r["event"] == "initial_target")
@@ -47,7 +51,25 @@ def main():
     textures = [(1, 1, b"\xff\xff\xff\xff")]
     texture_ids = {}
     draws = []
+    commands = []
     for row in rows:
+        if row['event'] == 'depth_fill':
+            if not args.draws_only:
+                commands.append(depth_fill_command(row, width, height, (args.directory / row['effects']).read_bytes()))
+            continue
+        if row['event'] == 'cpu_write':
+            if args.draws_only:
+                continue
+            before = (args.directory / row['before']).read_bytes()
+            after = (args.directory / row['after']).read_bytes()
+            regions = cpu_write_regions(row, width, height, before, after)
+            if regions:
+                texture_id = len(textures)
+                info = {'flags': 64, 'bits': 16, 'r_mask': 0xf800, 'g_mask': 0x7e0, 'b_mask': 0x1f, 'a_mask': 0}
+                textures.append((width, height, decode_rgb(info, after)))
+                for x, y, w, h in regions:
+                    commands.append((3, texture_id, x, y, x, y, w, h, 0, 0))
+            continue
         if row["event"] != "draw":
             continue
         state = row["render_states"]
@@ -89,16 +111,25 @@ def main():
         filtering = 0
         if args.filter_source == "legacy":
             filtering = legacy_filter(row)
+        commands.append((1, len(draws), 0, 0, 0, 0, 0, 0, 0, 0))
         draws.append(struct.pack("<11I",*settings,filtering,state["14"])+b"".join(triangles))
-    blob = bytearray(b"MW34SCN3"+struct.pack("<4I",width,height,len(textures),len(draws))+initial+z)
+    ordered = any(command[0] != 1 for command in commands)
+    if len(commands) > 8192 or len(textures) > 1024:
+        raise ValueError('Replay command/texture budget exceeded')
+    blob = bytearray((b"MW34SCN4" if ordered else b"MW34SCN3")+struct.pack("<4I",width,height,len(textures),len(draws))+initial+z)
     for w,h,rgba in textures:
         blob += struct.pack("<2I",w,h)+rgba
     for draw in draws:
         blob += draw
+    if ordered:
+        blob += struct.pack('<I', len(commands))
+        for command in commands:
+            blob += struct.pack('<10I', *command)
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_bytes(blob)
     receipt.update({"package_sha256":hashlib.sha256(blob).hexdigest(),"package_bytes":len(blob),"textures":len(textures),
                     "filter_source":args.filter_source,
+                    "omitted_observed_surface_commands":args.draws_only,
                     "profile":"TL32, triangle fans/strips, single texture, vertex fog, alpha blend, greater Z; raster equivalence unproven"})
     args.output.with_suffix(".json").write_text(json.dumps(receipt,indent=2)+"\n",encoding="utf-8")
     print(json.dumps(receipt,indent=2))

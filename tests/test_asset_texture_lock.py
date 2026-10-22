@@ -77,7 +77,8 @@ def read_rgba_png(path):
 @unittest.skipUnless(os.name == "nt" and SHELL, "Windows System.Drawing compatibility export only")
 class TextureLockTests(unittest.TestCase):
     def setUp(self):
-        fixture_root = ROOT / "local/work-ahead/test-fixtures"
+        # Archived work-ahead may be a junction, which exporters must reject.
+        fixture_root = ROOT / "local/authored-test-fixtures"
         fixture_root.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(prefix="lock-", dir=fixture_root)
         self.addCleanup(self.temporary.cleanup)

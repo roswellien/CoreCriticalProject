@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 from apply_status_damage_colour import apply as apply_status_damage_colour
 from apply_depth32 import apply as apply_depth32
+from apply_detached_cockpit_visibility import apply as apply_detached_cockpit_visibility
 
 ROOT=Path(__file__).resolve().parents[2]
 SHARED=Path(__file__).parent/'native-overrides'
@@ -44,6 +45,9 @@ def apply(host):
     for p,text in pending.items():p.write_text(text,encoding='utf-8',newline='\n')
     apply_status_damage_colour(host)
     apply_depth32(host)
+    adapter=host/'mesh_override_stage.inc'
+    if 'detached_attached_cockpit_suppressed' not in adapter.read_text():
+        apply_detached_cockpit_visibility(adapter)
     print('Applied native world-light repair to',host)
 
 if __name__=='__main__':

@@ -1,0 +1,1030 @@
+{
+  "profile": "mw3-us-1-2-retail",
+  "baseCabinet": "58f289ef80958dd919d36313daa105e55ea6aba759a260ca66ecdeedda1ae40f",
+  "baseHeader": "61bd79199166c87110c6030a23dc5a272f32f3f7d404a9e759257ed3991cdbde",
+  "patchPackage": "4409f3122553d68d3cfc9b0b0694300b3349d1584af3fa87654ddd7ae9edd50d",
+  "patchCabinet": "772941763f035cb87fbda88423c3a08a2462405f1a6f6defd0b0286b730fc77a",
+  "patchHeader": "2882a9732de43c8a7107db007acee3751bdffa6a14acc0c7faa9e2e28382a4a9",
+  "patchWrapperCabinet": "794b9c1959e45bac20cdfd76705048724665a915520293032bf3a8f12bdb8e79",
+  "patchWrapperOffset": 130217,
+  "patchWrapperBytes": 6204975,
+  "unshield": "0047092f0407552acc6ce7d84e418d5d3121f2a40b9ce486d8ab2123d328f67a",
+  "staticUnshield": "134d597a3d5d764188acfa57815d96c88c5ce4a8cb135a548fa78917a9fc2cc2",
+  "zlib": "f07195206534ebb1fe75093d4ec6c54a7a9227281b0c09d2113465b71da9e900",
+  "baseFiles": [
+    {
+      "source": "Program_Files/Mech3.exe",
+      "target": "Mech3.exe",
+      "bytes": 2357248,
+      "sha256": "1c6419fcdbb0503d2dee006861477fc7354039e6ce95c431b5ac5e4995b465bc"
+    },
+    {
+      "source": "Program_Files/Mech3Msg.dll",
+      "target": "Mech3Msg.dll",
+      "bytes": 120320,
+      "sha256": "ceb29fa9b871fcf15fc94030e46b26d2df9ca02203859b36fbf057713bdbee01"
+    },
+    {
+      "source": "Program_Files/force_eff.ifr",
+      "target": "force_eff.ifr",
+      "bytes": 2936,
+      "sha256": "9902299387d7c8767a62dced03d09bad85a68bc30ff714dffb572c80205add4c"
+    },
+    {
+      "source": "Database_Files/zbd/c1/anim.zbd",
+      "target": "zbd/c1/anim.zbd",
+      "bytes": 5228852,
+      "sha256": "f0cbeffe487d81d59347beb0b85758c85afb28dfd36309b0043a951d3e878d98"
+    },
+    {
+      "source": "Database_Files/zbd/c1/gamez.zbd",
+      "target": "zbd/c1/gamez.zbd",
+      "bytes": 11412064,
+      "sha256": "552fd635bb6ee506c4d0aa85299bb672c3e4aa79e1cdb3f0b0a0d7f6f98fd64f"
+    },
+    {
+      "source": "Database_Files/zbd/c1/reader.zbd",
+      "target": "zbd/c1/reader.zbd",
+      "bytes": 771601,
+      "sha256": "3bff6190a04ca0c3f585c0e13677ccb53a7e30bd18638edfaafa60cb3a8b4a7c"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readeria1.zbd",
+      "target": "zbd/c1/readeria1.zbd",
+      "bytes": 103043,
+      "sha256": "130585647d659415f9ebaf5a24c65e5e25c546840ea91b97f0f89218ca5142ae"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readeria2.zbd",
+      "target": "zbd/c1/readeria2.zbd",
+      "bytes": 79335,
+      "sha256": "d3b4b74f43a48fe21a5174dfe0778716e47fff50c167dd5e4bda3ba95248b1fe"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readeria3.zbd",
+      "target": "zbd/c1/readeria3.zbd",
+      "bytes": 49566,
+      "sha256": "eafb875a9a07623a4f2c4025fa769e3d7af4484b11af0a913d064491d98fc084"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readerm1.zbd",
+      "target": "zbd/c1/readerm1.zbd",
+      "bytes": 38922,
+      "sha256": "63b7fe81a2d48a3320d61258796e2dbe7ebd5fc36b3d7adf288e4b80f6bd41d6"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readerm2.zbd",
+      "target": "zbd/c1/readerm2.zbd",
+      "bytes": 80316,
+      "sha256": "a52b11b8ea7107dd9843492b7560aaeb3f08810b5c532e00599068f0857107e2"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readerm3.zbd",
+      "target": "zbd/c1/readerm3.zbd",
+      "bytes": 53289,
+      "sha256": "e667505ec8eef3b19d3420ea04cb73e19c0eeabfb46cdf10dfbcb4e320678f3c"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readerm4.zbd",
+      "target": "zbd/c1/readerm4.zbd",
+      "bytes": 61963,
+      "sha256": "d44727315277617a031d18ef3b7788135ce259c95c36f996b7779705fda6043e"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readermp1.zbd",
+      "target": "zbd/c1/readermp1.zbd",
+      "bytes": 6654,
+      "sha256": "95d78d8b9d873e0b7882f995b60f30da7f5727cd63ecb80a333366fb4cc6e538"
+    },
+    {
+      "source": "Database_Files/zbd/c1/readermp2.zbd",
+      "target": "zbd/c1/readermp2.zbd",
+      "bytes": 5636,
+      "sha256": "a633590d06293b8fc1a646fecad2843d60fecf668b65bbfd1a798968ffe5d076"
+    },
+    {
+      "source": "Hardware_Texture_8/zbd/c1/rtexture.zbd",
+      "target": "zbd/c1/rtexture.zbd",
+      "bytes": 5253232,
+      "sha256": "56afd5738562ffd51596ce4b3557b734cacedfd187b09307e9b94281dd39269f"
+    },
+    {
+      "source": "Hardware_Texture_2/zbd/c1/rtexture2.zbd",
+      "target": "zbd/c1/rtexture2.zbd",
+      "bytes": 1427312,
+      "sha256": "69eb62df0de41ba1ca60277c777838cde96d16dea18cac2faa5976de7934de27"
+    },
+    {
+      "source": "Hardware_Texture_4/zbd/c1/rtexture3.zbd",
+      "target": "zbd/c1/rtexture3.zbd",
+      "bytes": 3021168,
+      "sha256": "61cf8df6c5de6232d4f0459145df7f4bccd87705c9cb22f7741cd1ed2fa1624c"
+    },
+    {
+      "source": "Software_Texture_Best/zbd/c1/texture.zbd",
+      "target": "zbd/c1/texture.zbd",
+      "bytes": 2989476,
+      "sha256": "098984c296b978a2f4956040f9c785bf129e31b8c522175d0be2591b3d4c7615"
+    },
+    {
+      "source": "Software_Texture_Low/zbd/c1/texture1.zbd",
+      "target": "zbd/c1/texture1.zbd",
+      "bytes": 905000,
+      "sha256": "aac39c05deb4b6057cadd026f6be9e5e1bc9e154c401499958a07446e6078771"
+    },
+    {
+      "source": "Software_Texture_Medium/zbd/c1/texture2.zbd",
+      "target": "zbd/c1/texture2.zbd",
+      "bytes": 1782600,
+      "sha256": "89ebf3fba6dba6c07d92192e22bc778b52ba9a5f6ac042306207d994c4e6d354"
+    },
+    {
+      "source": "Database_Files/zbd/c2/anim.zbd",
+      "target": "zbd/c2/anim.zbd",
+      "bytes": 3947704,
+      "sha256": "469ab2254145479f6b24fe50fb81ab12f5d820d9ed0018a6ad1a5c380fbede93"
+    },
+    {
+      "source": "Database_Files/zbd/c2/gamez.zbd",
+      "target": "zbd/c2/gamez.zbd",
+      "bytes": 11389876,
+      "sha256": "687b35adf3b458bfc94315ce3819af0bcbd2e63b84f1205dddaa3c28e707aebe"
+    },
+    {
+      "source": "Database_Files/zbd/c2/reader.zbd",
+      "target": "zbd/c2/reader.zbd",
+      "bytes": 758993,
+      "sha256": "e8020d7bffaf6ba5bdaf96e1bbbaa0bc649c3407f450a5c6bbe30081c8977151"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readeria1.zbd",
+      "target": "zbd/c2/readeria1.zbd",
+      "bytes": 92994,
+      "sha256": "6c8d3aad104b9e899663581b62e50a50a1215d35b015309e66c599d06fa064f5"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readeria2.zbd",
+      "target": "zbd/c2/readeria2.zbd",
+      "bytes": 88014,
+      "sha256": "2a50c61f03b15c95836097bb2e661a1244f8235d42540703eebe4561867935c0"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readeria3.zbd",
+      "target": "zbd/c2/readeria3.zbd",
+      "bytes": 55844,
+      "sha256": "30127e61a8c3b676621ab8344bfffdb392e9a5699ba0cdac6acba3ad6363145c"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readerm1.zbd",
+      "target": "zbd/c2/readerm1.zbd",
+      "bytes": 87849,
+      "sha256": "93ff7fae3ba27b93cd331b77e0bced551be3783202fca3544b7e63c4853f4777"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readerm2.zbd",
+      "target": "zbd/c2/readerm2.zbd",
+      "bytes": 106691,
+      "sha256": "b382e3e71eb2c83713f5c8431ffea3a43a251135dd2110c33d579c06136c2f9a"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readerm3.zbd",
+      "target": "zbd/c2/readerm3.zbd",
+      "bytes": 68026,
+      "sha256": "8f98cad8d776ec7152a12f74e1e29b55e1c55b5e29cca3594b7dc82cea107e33"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readerm4.zbd",
+      "target": "zbd/c2/readerm4.zbd",
+      "bytes": 55440,
+      "sha256": "6dea71b38fcfc6a3cb7fee9f1271215bc3bffdc4f28d92d70db5bdfd9e49a4e3"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readermp1.zbd",
+      "target": "zbd/c2/readermp1.zbd",
+      "bytes": 5557,
+      "sha256": "37d181043b195e54f1a33bf01f5ad231a73e395e3aeca29c0f16af0bd803de53"
+    },
+    {
+      "source": "Database_Files/zbd/c2/readermp2.zbd",
+      "target": "zbd/c2/readermp2.zbd",
+      "bytes": 5514,
+      "sha256": "93ea36e161a3921d576afa10a5533fd52c3970685aef26b2a0bac5574e755107"
+    },
+    {
+      "source": "Hardware_Texture_8/zbd/c2/rtexture.zbd",
+      "target": "zbd/c2/rtexture.zbd",
+      "bytes": 5172416,
+      "sha256": "db15f36e687b258643c9bdd835cf938098cd4ecfe0fc2e6c10f6ce662701339c"
+    },
+    {
+      "source": "Hardware_Texture_2/zbd/c2/rtexture2.zbd",
+      "target": "zbd/c2/rtexture2.zbd",
+      "bytes": 1345280,
+      "sha256": "14b0cdfe3d23c9eb23c600e6cecf8ada365788ab260c995d8e0b546b37754a50"
+    },
+    {
+      "source": "Hardware_Texture_4/zbd/c2/rtexture3.zbd",
+      "target": "zbd/c2/rtexture3.zbd",
+      "bytes": 2881728,
+      "sha256": "cc10b35086f9a4279c320ed116e039dc0c32a718dbdc1fe19bf251ddf52f2b6b"
+    },
+    {
+      "source": "Software_Texture_Best/zbd/c2/texture.zbd",
+      "target": "zbd/c2/texture.zbd",
+      "bytes": 2932480,
+      "sha256": "93f1e88b7970c5e394a87fb31c81754205bf93a9c7044210fac4c58087eaa86f"
+    },
+    {
+      "source": "Software_Texture_Low/zbd/c2/texture1.zbd",
+      "target": "zbd/c2/texture1.zbd",
+      "bytes": 894606,
+      "sha256": "576673a8247a6d93f55f5818bbfabadb39185b8c13661fb49575f1b1eea71bf9"
+    },
+    {
+      "source": "Software_Texture_Medium/zbd/c2/texture2.zbd",
+      "target": "zbd/c2/texture2.zbd",
+      "bytes": 1740034,
+      "sha256": "284d91e63d84fac2fac80d3c546884d17102457e16f34c36d0a58353fdd2d891"
+    },
+    {
+      "source": "Database_Files/zbd/c3/anim.zbd",
+      "target": "zbd/c3/anim.zbd",
+      "bytes": 3879480,
+      "sha256": "7244cb74108ff778a36b3277b388c6776d0a4ec2588055de67a0485b9101a503"
+    },
+    {
+      "source": "Database_Files/zbd/c3/gamez.zbd",
+      "target": "zbd/c3/gamez.zbd",
+      "bytes": 12999820,
+      "sha256": "a38a401b605596cf809a88db65f12d0af1e26d5dc4d93158854b4fc83fbb3546"
+    },
+    {
+      "source": "Database_Files/zbd/c3/reader.zbd",
+      "target": "zbd/c3/reader.zbd",
+      "bytes": 672818,
+      "sha256": "1e8cc7fa16828b34b3e3bad383635d3e806164a14a89c5d115bebe00a562b17b"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readeria1.zbd",
+      "target": "zbd/c3/readeria1.zbd",
+      "bytes": 171819,
+      "sha256": "e10d62f81bad19b019f44b25031de31925760440105f01aaa3124efd9b4d27f7"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readeria2.zbd",
+      "target": "zbd/c3/readeria2.zbd",
+      "bytes": 63334,
+      "sha256": "5b31cbe69b6627ddbaf88fb8c6f27af1720732a24d1a384148cd37b6c385a1a2"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readeria3.zbd",
+      "target": "zbd/c3/readeria3.zbd",
+      "bytes": 49126,
+      "sha256": "ad20e2455836c3edfc70ad1b1e84c5333d3247085ea899008edd1737ca6b10c7"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readerm1.zbd",
+      "target": "zbd/c3/readerm1.zbd",
+      "bytes": 127288,
+      "sha256": "a1e0f3b2f9eb507bf8aa047c9a9ed111ca6c98afb7ff74678bad4558bd6eacfe"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readerm2.zbd",
+      "target": "zbd/c3/readerm2.zbd",
+      "bytes": 64538,
+      "sha256": "1d559b48944f9b4338fa38e71435c7adf091b310cb6de63164d21a4e4d9c1069"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readerm3.zbd",
+      "target": "zbd/c3/readerm3.zbd",
+      "bytes": 177365,
+      "sha256": "2a7ed79091830515888dd3af6644d0fc9e24bcf4bf2f65fe1fa0d84ca19cd788"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readerm4.zbd",
+      "target": "zbd/c3/readerm4.zbd",
+      "bytes": 116679,
+      "sha256": "9a11120c2f391dc33f6d6196f3645d5d7722dfce72ab28068562568d69c8a1e5"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readerm5.zbd",
+      "target": "zbd/c3/readerm5.zbd",
+      "bytes": 107888,
+      "sha256": "374ebeb150ea887ed96d743410b0628843270aa349d9f343c91c5c59ba7ae2bf"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readerm6.zbd",
+      "target": "zbd/c3/readerm6.zbd",
+      "bytes": 125891,
+      "sha256": "ced433d4d5bf1a1dd43d99a829a65bd5ef98ab0c130e9b471705648141d5685b"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readermp1.zbd",
+      "target": "zbd/c3/readermp1.zbd",
+      "bytes": 5873,
+      "sha256": "6f74ffc3f6f75268cce5765cedbff9322a9837218e2d0c48f3632a90cd4ecc9a"
+    },
+    {
+      "source": "Database_Files/zbd/c3/readermp2.zbd",
+      "target": "zbd/c3/readermp2.zbd",
+      "bytes": 5715,
+      "sha256": "a3ce3eb6a2b0c21c2ef3bf65ac52ef0a783881b94bdc55b94192bdeb4b995329"
+    },
+    {
+      "source": "Hardware_Texture_8/zbd/c3/rtexture.zbd",
+      "target": "zbd/c3/rtexture.zbd",
+      "bytes": 5114864,
+      "sha256": "a7544dcf08658076bf6c61cc5a03c46de835d333eb49b82f3c85e5a0448457e5"
+    },
+    {
+      "source": "Hardware_Texture_2/zbd/c3/rtexture2.zbd",
+      "target": "zbd/c3/rtexture2.zbd",
+      "bytes": 1325168,
+      "sha256": "6882af758020248b279a1802bfd6a6139de54e007fb4c74235d530ba6d5d93fb"
+    },
+    {
+      "source": "Hardware_Texture_4/zbd/c3/rtexture3.zbd",
+      "target": "zbd/c3/rtexture3.zbd",
+      "bytes": 2893296,
+      "sha256": "e6f925c51e258b33bac9e0a710ec480c59d4dcd4081d4e05ce8511f48766b52a"
+    },
+    {
+      "source": "Software_Texture_Best/zbd/c3/texture.zbd",
+      "target": "zbd/c3/texture.zbd",
+      "bytes": 2861158,
+      "sha256": "d419bd007608661f698dee5b9d0f26fe157575e7459c7bd5df9d1c8e24d47bac"
+    },
+    {
+      "source": "Software_Texture_Low/zbd/c3/texture1.zbd",
+      "target": "zbd/c3/texture1.zbd",
+      "bytes": 839416,
+      "sha256": "f3b2501249fb1bb0bcdc974135f92390792a1b4192dab9b6649ce8d55dac1e01"
+    },
+    {
+      "source": "Software_Texture_Medium/zbd/c3/texture2.zbd",
+      "target": "zbd/c3/texture2.zbd",
+      "bytes": 1711710,
+      "sha256": "9a43b649e68f6740f49d47d12acca8daf33469cfdbb1d8490858ca23828e5306"
+    },
+    {
+      "source": "Database_Files/zbd/c4/anim.zbd",
+      "target": "zbd/c4/anim.zbd",
+      "bytes": 4780384,
+      "sha256": "b09ff60ab035e39c011f8899086edbaa7c33dc334558fd279d8df4310c6cdefb"
+    },
+    {
+      "source": "Database_Files/zbd/c4/gamez.zbd",
+      "target": "zbd/c4/gamez.zbd",
+      "bytes": 12726160,
+      "sha256": "83dfb9b1d5f7dd13cd50712d0882af3ee3e3ce4547e7396d49aba29abffc117e"
+    },
+    {
+      "source": "Database_Files/zbd/c4/reader.zbd",
+      "target": "zbd/c4/reader.zbd",
+      "bytes": 652910,
+      "sha256": "ced8cf096fe8c20aa012f098bb51b36ad1be25f95d90b377a9750f65b7d6a6b7"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readeria1.zbd",
+      "target": "zbd/c4/readeria1.zbd",
+      "bytes": 205461,
+      "sha256": "591d31a58273fd54be81b154bfa26d20dc46019c26d67e154f6e09d4f92d3ea5"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readeria2.zbd",
+      "target": "zbd/c4/readeria2.zbd",
+      "bytes": 111174,
+      "sha256": "6a082daff0811469f6216232bd9c790d4f8f6c43172adaf3bb616fc54f26ba88"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readeria3.zbd",
+      "target": "zbd/c4/readeria3.zbd",
+      "bytes": 74944,
+      "sha256": "95e69c5405ca96e0b7a9a418566089d8f77ed279ed9d46f9b4e2e025bb743430"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readerm1.zbd",
+      "target": "zbd/c4/readerm1.zbd",
+      "bytes": 60841,
+      "sha256": "b8112c19eb36539f973d51fce9b5b2b455401df413f8b5460373b7dd3c52b9b5"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readerm2.zbd",
+      "target": "zbd/c4/readerm2.zbd",
+      "bytes": 42377,
+      "sha256": "52efe466012dcbfb2838a00bb7de9fabbe859d82cc0ab56f3d33c881e8c1ff7d"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readerm3.zbd",
+      "target": "zbd/c4/readerm3.zbd",
+      "bytes": 46821,
+      "sha256": "9a07fbd2da27f61cd470f910a8b74d5d7acb9221668aafada3a74e1cd825db39"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readermp1.zbd",
+      "target": "zbd/c4/readermp1.zbd",
+      "bytes": 5873,
+      "sha256": "34f83dfb86d3ea9976e35843ef338b8e1d518efcc1292e616f6d72156ed8a312"
+    },
+    {
+      "source": "Database_Files/zbd/c4/readermp2.zbd",
+      "target": "zbd/c4/readermp2.zbd",
+      "bytes": 4130,
+      "sha256": "73d1e9b47e73aba1df62b6b9843272c8065cc9c0509e967ed6ddc7b7b86a6159"
+    },
+    {
+      "source": "Hardware_Texture_8/zbd/c4/rtexture.zbd",
+      "target": "zbd/c4/rtexture.zbd",
+      "bytes": 4508456,
+      "sha256": "70e0276fdad6b9173b7580f0ff45d64bfa23a94d6ca5e30da4d7a7a4e9756fe6"
+    },
+    {
+      "source": "Hardware_Texture_2/zbd/c4/rtexture2.zbd",
+      "target": "zbd/c4/rtexture2.zbd",
+      "bytes": 1269800,
+      "sha256": "ce83d486f9de4116eaf0003a8e787362dd724376670aa1c3153d2956cf23e1fa"
+    },
+    {
+      "source": "Hardware_Texture_4/zbd/c4/rtexture3.zbd",
+      "target": "zbd/c4/rtexture3.zbd",
+      "bytes": 2881576,
+      "sha256": "4370a33debe441d962d0b00929045bbee464fa9b675cfe63a9d68994b7b08de1"
+    },
+    {
+      "source": "Software_Texture_Best/zbd/c4/texture.zbd",
+      "target": "zbd/c4/texture.zbd",
+      "bytes": 2559178,
+      "sha256": "f72a2870a049ea69f7ec02fcc1dbed1d4e43eb48c09a2d1bdeed59701ed7fabd"
+    },
+    {
+      "source": "Software_Texture_Low/zbd/c4/texture1.zbd",
+      "target": "zbd/c4/texture1.zbd",
+      "bytes": 789452,
+      "sha256": "07405581acc10388fb44c6d2f142c94d7e1d27e2af80e049b0614df645bbbb0b"
+    },
+    {
+      "source": "Software_Texture_Medium/zbd/c4/texture2.zbd",
+      "target": "zbd/c4/texture2.zbd",
+      "bytes": 1669368,
+      "sha256": "8a730d017141e8ce661c501422782fbec6f7341dbcd4c96672a5705c86facb25"
+    },
+    {
+      "source": "Database_Files/zbd/c4b/anim.zbd",
+      "target": "zbd/c4b/anim.zbd",
+      "bytes": 1791044,
+      "sha256": "e951c8dab6bc5452259fb3ff52f38d79e0f331dd16596976d99c1cb38be6c3fa"
+    },
+    {
+      "source": "Database_Files/zbd/c4b/gamez.zbd",
+      "target": "zbd/c4b/gamez.zbd",
+      "bytes": 9573948,
+      "sha256": "c1e430c0339a6602120f8a1da61da46d07b5e21ce81480980f75d1fc183c01a0"
+    },
+    {
+      "source": "Database_Files/zbd/c4b/reader.zbd",
+      "target": "zbd/c4b/reader.zbd",
+      "bytes": 234695,
+      "sha256": "70de43d557c7e2b7790562363f6f2fe333f18f38eb4df9d161ee722eaed7af4f"
+    },
+    {
+      "source": "Database_Files/zbd/c4b/readerm4.zbd",
+      "target": "zbd/c4b/readerm4.zbd",
+      "bytes": 34205,
+      "sha256": "183101bdaf846fac8dfb1995acdeccb2996e120f1b44977fb75c1dce527cb323"
+    },
+    {
+      "source": "Database_Files/zbd/c4b/readerm5.zbd",
+      "target": "zbd/c4b/readerm5.zbd",
+      "bytes": 26025,
+      "sha256": "500aa4a843e640aa0a29b1d026afec649d7b61e72ec69b3d4495abfbffc6cd54"
+    },
+    {
+      "source": "Database_Files/zbd/c4b/readerm6.zbd",
+      "target": "zbd/c4b/readerm6.zbd",
+      "bytes": 50481,
+      "sha256": "84581d39efec5816077345be7570fab476228a6f51175a48f11004ab68594c6f"
+    },
+    {
+      "source": "Hardware_Texture_8/zbd/c4b/rtexture.zbd",
+      "target": "zbd/c4b/rtexture.zbd",
+      "bytes": 4336528,
+      "sha256": "d65b7e18af1698d144f78459b68177459fdb8e9e1a85c48e16b919234a668307"
+    },
+    {
+      "source": "Hardware_Texture_2/zbd/c4b/rtexture2.zbd",
+      "target": "zbd/c4b/rtexture2.zbd",
+      "bytes": 1208848,
+      "sha256": "d5ecb9b51b54f225a58a45f426a10c20fcd525940ea3a312169021e80ff00fa1"
+    },
+    {
+      "source": "Hardware_Texture_4/zbd/c4b/rtexture3.zbd",
+      "target": "zbd/c4b/rtexture3.zbd",
+      "bytes": 2920848,
+      "sha256": "dcb18ad25ea41adb264502dbe1772d804789da985c0f7ea6d5b41595bbf44cd0"
+    },
+    {
+      "source": "Software_Texture_Best/zbd/c4b/texture.zbd",
+      "target": "zbd/c4b/texture.zbd",
+      "bytes": 2448186,
+      "sha256": "9162c03145a6d1893803addd03d3df378a48f7ad7020966f5dce5ca131b79383"
+    },
+    {
+      "source": "Software_Texture_Low/zbd/c4b/texture1.zbd",
+      "target": "zbd/c4b/texture1.zbd",
+      "bytes": 740734,
+      "sha256": "b40b463f720c4e5a27927e73251055630e6742888e611a7ea0ebe74864b43f61"
+    },
+    {
+      "source": "Software_Texture_Medium/zbd/c4b/texture2.zbd",
+      "target": "zbd/c4b/texture2.zbd",
+      "bytes": 1664532,
+      "sha256": "573ee30ebf4ef979137774b814b4c636d807cd0f1a3425934ef4ccab26215a08"
+    },
+    {
+      "source": "Database_Files/zbd/interp.zbd",
+      "target": "zbd/interp.zbd",
+      "bytes": 99662,
+      "sha256": "e4c66e6f217e952a1ba0e9fe6c8b2f6b47a3d83ef881548f2b40fb8263f5361f"
+    },
+    {
+      "source": "Database_Files/zbd/mechlib.zbd",
+      "target": "zbd/mechlib.zbd",
+      "bytes": 2406873,
+      "sha256": "6ad7fd9fb6a7518e59fb0f01c01dbad6dc58228f5f8ba7989a5b7dc6fb606dc9"
+    },
+    {
+      "source": "Database_Files/zbd/motion.zbd",
+      "target": "zbd/motion.zbd",
+      "bytes": 6007773,
+      "sha256": "48fdd7f69467627129529f5f576f89afba9ab039b46fbe3fac9df090739716dd"
+    },
+    {
+      "source": "Database_Files/zbd/reader.zbd",
+      "target": "zbd/reader.zbd",
+      "bytes": 2143369,
+      "sha256": "fde31f93949aec52c0b22f51c57659b66ef667337f40f1ea42bc54204fb811bd"
+    },
+    {
+      "source": "Database_Files/zbd/rimage.zbd",
+      "target": "zbd/rimage.zbd",
+      "bytes": 41266654,
+      "sha256": "3519eb39907a08900ec175ec9dd828ba15878e2a4a9b0f7263525eb5a88ad4cc"
+    },
+    {
+      "source": "Mech_Texture_HW_4+/zbd/rmechtex.zbd",
+      "target": "zbd/rmechtex.zbd",
+      "bytes": 32910360,
+      "sha256": "8f679537d33fb6da204d8dcb83d5b4d0e4d5dbcee1a16d0c63caeed9649fdbfe"
+    },
+    {
+      "source": "Mech_Texture_HW_2/zbd/rmechtex16.zbd",
+      "target": "zbd/rmechtex16.zbd",
+      "bytes": 9195816,
+      "sha256": "326a24a05fab6adf4c4f414412a5e38fdb4559bc19093a332e825387973aed85"
+    },
+    {
+      "source": "Mech_Texture_SW/zbd/rmechtexs.zbd",
+      "target": "zbd/rmechtexs.zbd",
+      "bytes": 9195816,
+      "sha256": "a5c233eec6c5ab705d0e327292745903c6bc6cf674de0c77cf9a4f10e45fd57d"
+    },
+    {
+      "source": "Sound_High_Fidelity/zbd/soundsH.zbd",
+      "target": "zbd/soundsH.zbd",
+      "bytes": 92824914,
+      "sha256": "71c4688e38d59e03d3e0a63c8ef90cce0359103890904aaab5dc461647f484a4"
+    },
+    {
+      "source": "Sound_Low_Fidelity/zbd/soundsL.zbd",
+      "target": "zbd/soundsL.zbd",
+      "bytes": 46187594,
+      "sha256": "e259704b36069339bad035ae571f7733a6655ed2020c4d7e24b5c8872a3b09c3"
+    },
+    {
+      "source": "Database_Files/zbd/t1/anim.zbd",
+      "target": "zbd/t1/anim.zbd",
+      "bytes": 1473220,
+      "sha256": "94535b87de07674db51880085fcb503b220c114bd31000a8cd1d2170e2cacb98"
+    },
+    {
+      "source": "Database_Files/zbd/t1/gamez.zbd",
+      "target": "zbd/t1/gamez.zbd",
+      "bytes": 5512052,
+      "sha256": "f4e8df1d8cc494b833fd2c7385fd2013fe4c23cd53a226cf51c49844a281d288"
+    },
+    {
+      "source": "Database_Files/zbd/t1/reader.zbd",
+      "target": "zbd/t1/reader.zbd",
+      "bytes": 106747,
+      "sha256": "be04481c85cd76bf2ab646536032e914083fc2edc30eecc18723b60602caaafe"
+    },
+    {
+      "source": "Database_Files/zbd/t1/readeria1.zbd",
+      "target": "zbd/t1/readeria1.zbd",
+      "bytes": 329,
+      "sha256": "9aaa1e928758421959e98b883b0a1eecb5e5b3e26f1dba0cf962bac79b7be59c"
+    },
+    {
+      "source": "Database_Files/zbd/t1/readerm1.zbd",
+      "target": "zbd/t1/readerm1.zbd",
+      "bytes": 7998,
+      "sha256": "498b95112410d63d4c7fafe0f8d09a58596f4da2e48b82e827a9abb6b5b19e89"
+    },
+    {
+      "source": "Database_Files/zbd/t1/readerm2.zbd",
+      "target": "zbd/t1/readerm2.zbd",
+      "bytes": 6150,
+      "sha256": "f8bc8e1240098094374e2b42874562f99e3a5668cc850afc00dcc993f435a4b8"
+    },
+    {
+      "source": "Database_Files/zbd/t1/readerm3.zbd",
+      "target": "zbd/t1/readerm3.zbd",
+      "bytes": 8792,
+      "sha256": "a4f04f45bcb2cd636f5e73b3add973c3dfd0b7626a937f1eea18c52075478360"
+    },
+    {
+      "source": "Database_Files/zbd/t1/readerm4.zbd",
+      "target": "zbd/t1/readerm4.zbd",
+      "bytes": 16958,
+      "sha256": "64d6fc8f4b808c7a7d741e1ba3e7639c08990fd50e20f2f8aa693464965e30e2"
+    },
+    {
+      "source": "Database_Files/zbd/t1/readermp1.zbd",
+      "target": "zbd/t1/readermp1.zbd",
+      "bytes": 1914,
+      "sha256": "5fc59913f1e5e4fc8d652a41d7f50dd29cccfba5191e462f8c0905c57d190c1e"
+    },
+    {
+      "source": "Hardware_Texture_8/zbd/t1/rtexture.zbd",
+      "target": "zbd/t1/rtexture.zbd",
+      "bytes": 3777832,
+      "sha256": "c22117ba21ce299bd1329e1ddfc3573e55840e83c618fb6e7058d02dce0e8170"
+    },
+    {
+      "source": "Hardware_Texture_2/zbd/t1/rtexture2.zbd",
+      "target": "zbd/t1/rtexture2.zbd",
+      "bytes": 1313064,
+      "sha256": "886829c0990a3bf08b0204410fd826462c3698d75bc3d315e0267e83800f302e"
+    },
+    {
+      "source": "Hardware_Texture_4/zbd/t1/rtexture3.zbd",
+      "target": "zbd/t1/rtexture3.zbd",
+      "bytes": 2745128,
+      "sha256": "2a9219fb6152a0a0202a5ddf880e1be01f095edabd63baf6f34656b5469bb360"
+    },
+    {
+      "source": "Software_Texture_Best/zbd/t1/texture.zbd",
+      "target": "zbd/t1/texture.zbd",
+      "bytes": 2182762,
+      "sha256": "9029f8f7bf7affdb00e1e83db37c639307ac7f10f1e4369e48c3ef93341ecd16"
+    },
+    {
+      "source": "Software_Texture_Low/zbd/t1/texture1.zbd",
+      "target": "zbd/t1/texture1.zbd",
+      "bytes": 802830,
+      "sha256": "c3c636cccbf9a2da1f565c7733cda8b8e1097327d41d436a57213d739e6f0537"
+    },
+    {
+      "source": "Software_Texture_Medium/zbd/t1/texture2.zbd",
+      "target": "zbd/t1/texture2.zbd",
+      "bytes": 1594612,
+      "sha256": "09efcdb2cd4dd0795d7dc7e4a10c596d8018daeca6002605f52b9a6a747e5a4a"
+    }
+  ],
+  "patchFiles": [
+    {
+      "source": "Patch_Files/force_eff.ifr",
+      "target": "force_eff.ifr",
+      "bytes": 4113,
+      "sha256": "5d021f79378493302509ef3fad31282961e1f3c037367ae4f00faa154d3d2a26"
+    },
+    {
+      "source": "Patch_Files/Mech3.exe",
+      "target": "Mech3.exe",
+      "bytes": 2384384,
+      "sha256": "95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf"
+    },
+    {
+      "source": "Patch_Files/Mech3Msg.dll",
+      "target": "Mech3Msg.dll",
+      "bytes": 123392,
+      "sha256": "8899fabb7e57383a9a483cb048636bcc027334b48941aa49835cdcc1c4715b8c"
+    },
+    {
+      "source": "Patch_Files/readme.doc",
+      "target": "readme.doc",
+      "bytes": 719872,
+      "sha256": "db82bf8593b0e339911ddeec46a35f043dc998232da05a0fbd9beaeab2d03791"
+    },
+    {
+      "source": "Patch_Files/readme.txt",
+      "target": "readme.txt",
+      "bytes": 40634,
+      "sha256": "e38aa21a09a08071327a9c558d821c23eb0ef6fc4e913a68c3510d359937ef8c"
+    },
+    {
+      "source": "Patch_Files/zbd/c1/reader.zbd",
+      "target": "zbd/c1/reader.zbd",
+      "bytes": 774352,
+      "sha256": "482501ffbb210ccf516b8655ece2df27e0558d24cc7c9977ef9edf9ea21c4046"
+    },
+    {
+      "source": "Patch_Files/zbd/c2/reader.zbd",
+      "target": "zbd/c2/reader.zbd",
+      "bytes": 759298,
+      "sha256": "9852cbcca859adcc377a23bca19193daec918f6c9d495056ec6a29c1e74946f8"
+    },
+    {
+      "source": "Patch_Files/zbd/c2/readerm3.zbd",
+      "target": "zbd/c2/readerm3.zbd",
+      "bytes": 73391,
+      "sha256": "e263d938c9caa7feae09936b1fd6affce9909a2c1d10a86027db872e698e940f"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/anim.zbd",
+      "target": "zbd/c3/anim.zbd",
+      "bytes": 3879480,
+      "sha256": "69eb5a140e34c82cd9675c76789ca00b7c5cabb6c56c919a95d2659a9ee6fc09"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/gamez.zbd",
+      "target": "zbd/c3/gamez.zbd",
+      "bytes": 12994852,
+      "sha256": "3110b96b7ff30489da339038770a5fb08b8dc7f91b1aab89342c35bc97a0204e"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/readerm2.zbd",
+      "target": "zbd/c3/readerm2.zbd",
+      "bytes": 64542,
+      "sha256": "019b13a3e384b5506328fab6e408fc63423d4a81f9e73ccdff3a4af066b60d42"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/readerm3.zbd",
+      "target": "zbd/c3/readerm3.zbd",
+      "bytes": 177365,
+      "sha256": "54fe45f8b378d5287a148210d2fb87f04485d96c547a9e1d3314edde719ff3fd"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/readerm4.zbd",
+      "target": "zbd/c3/readerm4.zbd",
+      "bytes": 116699,
+      "sha256": "10c837259ef8eccd686f84195e6359d381e2abd8f04345f0e010208c0edb82ee"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/readerm5.zbd",
+      "target": "zbd/c3/readerm5.zbd",
+      "bytes": 107912,
+      "sha256": "89043c04714b2f38bf806190d2d418cd25b1f02a124096e2aefe1f4151cd0ea6"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/readerm6.zbd",
+      "target": "zbd/c3/readerm6.zbd",
+      "bytes": 125863,
+      "sha256": "3e73aa429aa8461387322e245ef41337830c4dcd7def9afd47d0384a426c1ef1"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/readermp3.zbd",
+      "target": "zbd/c3/readermp3.zbd",
+      "bytes": 7262,
+      "sha256": "2ba33f7279334ebee6d2ba466fba0223054119ee4dd30bfbc8a83e1962e8d251"
+    },
+    {
+      "source": "Patch_Files/zbd/c3/readermp4.zbd",
+      "target": "zbd/c3/readermp4.zbd",
+      "bytes": 6662,
+      "sha256": "ff567a76c1aea1417d6062b5f8445120fe427be3a9dc451d6d9c538d4002d569"
+    },
+    {
+      "source": "Patch_Files/zbd/c4b/readerm4.zbd",
+      "target": "zbd/c4b/readerm4.zbd",
+      "bytes": 41618,
+      "sha256": "a2d04807664e874e2582563f5c0fbc8945ee036532207d43b43d822a52f7f2c2"
+    },
+    {
+      "source": "Patch_Files/zbd/c4b/readerm5.zbd",
+      "target": "zbd/c4b/readerm5.zbd",
+      "bytes": 50984,
+      "sha256": "10d57108b2385fbb504e057aef82c4d2e5cc7ef124db8a3282e8f1c6089e4d98"
+    },
+    {
+      "source": "Patch_Files/zbd/interp.zbd",
+      "target": "zbd/interp.zbd",
+      "bytes": 99662,
+      "sha256": "f4ae013c419984cd1139dcbe06695efddd1875e88baa55bf0997adf36907b171"
+    },
+    {
+      "source": "Patch_Files/zbd/mech_engine_np.wav",
+      "target": "zbd/mech_engine_np.wav",
+      "bytes": 107850,
+      "sha256": "099ef778bf1e992ba2026d22cb9c653753261cc74005cebf8322878a263cbd2a"
+    },
+    {
+      "source": "Patch_Files/zbd/mech_footfall_2s.wav",
+      "target": "zbd/mech_footfall_2s.wav",
+      "bytes": 124048,
+      "sha256": "492e86565e68c0d80666c809bd8522b3511cb61ddd99a059176e395d18a39093"
+    },
+    {
+      "source": "Patch_Files/zbd/reader.zbd",
+      "target": "zbd/reader.zbd",
+      "bytes": 2146707,
+      "sha256": "5e17037f3634480f74265b3e378e4513b84cae518e20bc55cd5c6e9c6683851a"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_concrete_2s.wav",
+      "target": "zbd/soil_concrete_2s.wav",
+      "bytes": 124048,
+      "sha256": "324ba7300161a12838f96b0ce8ef0a2a41a21e95d5573facda0494c06a4d32a2"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_dirt_2s.wav",
+      "target": "zbd/soil_dirt_2s.wav",
+      "bytes": 124200,
+      "sha256": "92d568ff620453fa4d268b1acad2d4aeeaa4122c4e6930f8669fc026ae3d9f05"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_grass_2s.wav",
+      "target": "zbd/soil_grass_2s.wav",
+      "bytes": 124048,
+      "sha256": "11cb30d5fed7be0e0a51b6905e1bc13ae7315ed1edf04606c325ff04a83a4f35"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_in_water_2s.wav",
+      "target": "zbd/soil_in_water_2s.wav",
+      "bytes": 123912,
+      "sha256": "76f8b06395beb4c31425dc87c59d1709347c00e006c15f85b0f8ecb7702d70e2"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_metal_2s.wav",
+      "target": "zbd/soil_metal_2s.wav",
+      "bytes": 124200,
+      "sha256": "01ea56319e77539e79e81471ab03ed5f1d366085238adb309a0d141e0c8f3b95"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_mud_2s.wav",
+      "target": "zbd/soil_mud_2s.wav",
+      "bytes": 110474,
+      "sha256": "d933c94053f5bb7fbcdb91111284f23664007228753623b8cb38d55177e053ef"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_snow_2s.wav",
+      "target": "zbd/soil_snow_2s.wav",
+      "bytes": 124200,
+      "sha256": "d647280939dbfd44a027f88412bc98b6010e1d6f0d1c34dd62007719b11586d2"
+    },
+    {
+      "source": "Patch_Files/zbd/soil_water_2s.wav",
+      "target": "zbd/soil_water_2s.wav",
+      "bytes": 124048,
+      "sha256": "33320d09f4ea21889cd8d03d8dbc8ef82144670e41e7942df25c0bef05190ff4"
+    }
+  ],
+  "mediaFiles": [
+    {
+      "source": "MW3CD.TXT",
+      "target": "MW3CD.TXT",
+      "bytes": 7528,
+      "sha256": "e073dbf9e80f2907f4fd4766ecd83603c55b1df4c2e81ebe3d2a7830fc73fdcb"
+    },
+    {
+      "source": "VIDEO/C1.AVI",
+      "target": "VIDEO/C1.AVI",
+      "bytes": 15203148,
+      "sha256": "bc9eaace394f2300ae868200e75462bfb0dde3b3bb7e8507c1c1746077df9aa3"
+    },
+    {
+      "source": "VIDEO/C1M1.AVI",
+      "target": "VIDEO/C1M1.AVI",
+      "bytes": 9174840,
+      "sha256": "4294334f620667c2af1b114c45ff3652e4af28af25b97e13ab0cedadcc7d35f5"
+    },
+    {
+      "source": "VIDEO/C1M2.AVI",
+      "target": "VIDEO/C1M2.AVI",
+      "bytes": 6244584,
+      "sha256": "321d351bf311bbb887c627bf08977be2af214f4a45d7379cecb52a2041afacbc"
+    },
+    {
+      "source": "VIDEO/C1M3.AVI",
+      "target": "VIDEO/C1M3.AVI",
+      "bytes": 5467384,
+      "sha256": "09775e14c81ebedef81df7c269069588a2ffac8b00a693db50aee7ae3ffd6c06"
+    },
+    {
+      "source": "VIDEO/C1M4.AVI",
+      "target": "VIDEO/C1M4.AVI",
+      "bytes": 9613720,
+      "sha256": "272665585e25a3899eeacaa55cbe71dca4ac5e02ea71b882da201d7b69e19d0c"
+    },
+    {
+      "source": "VIDEO/C2.AVI",
+      "target": "VIDEO/C2.AVI",
+      "bytes": 11309564,
+      "sha256": "bd38cc4004a2690b2fcb15f22ae65176f1b833bb9333da3ccc83ef552f75db41"
+    },
+    {
+      "source": "VIDEO/C2M1.AVI",
+      "target": "VIDEO/C2M1.AVI",
+      "bytes": 5003912,
+      "sha256": "a4ceb7c9cc222fe4a690717d670449cc2dacdc251512c9708fd9e29a62881385"
+    },
+    {
+      "source": "VIDEO/C2M2.AVI",
+      "target": "VIDEO/C2M2.AVI",
+      "bytes": 10917800,
+      "sha256": "17e5bd694968d412524065222f727cdf66d756ed07e08dd5e751232f06747e08"
+    },
+    {
+      "source": "VIDEO/C2M3.AVI",
+      "target": "VIDEO/C2M3.AVI",
+      "bytes": 6615704,
+      "sha256": "09b48087ed13ab14210a52f25d66c0feaeee7fe8eee0ae54bd70121689599091"
+    },
+    {
+      "source": "VIDEO/C2M4.AVI",
+      "target": "VIDEO/C2M4.AVI",
+      "bytes": 8050952,
+      "sha256": "9c7f11fd89232ff873d6d316381ff602e709020b21aedb1e267c0d9889007afb"
+    },
+    {
+      "source": "VIDEO/C3.AVI",
+      "target": "VIDEO/C3.AVI",
+      "bytes": 5744284,
+      "sha256": "e3547e8b6d1e71b00a7b57837455c76313b9800d6a3d17ace7ff48bb37bcfc68"
+    },
+    {
+      "source": "VIDEO/C3M1.AVI",
+      "target": "VIDEO/C3M1.AVI",
+      "bytes": 6213816,
+      "sha256": "865bec9259d56d2e60f34a5d6a4ab6144a65adc57960a5f75895c2ef3f71d93e"
+    },
+    {
+      "source": "VIDEO/C3M2.AVI",
+      "target": "VIDEO/C3M2.AVI",
+      "bytes": 6539896,
+      "sha256": "d862c6c0f6ac5067e363d8965bea7d1feba73694ee2dcc52022526de5b64b72a"
+    },
+    {
+      "source": "VIDEO/C3M4.AVI",
+      "target": "VIDEO/C3M4.AVI",
+      "bytes": 7809224,
+      "sha256": "ca0f8ef8bc5c60bfdc9154b9a295ea6c3c9f3decf7a96adfcaa260ea1cbf5ea6"
+    },
+    {
+      "source": "VIDEO/C3M5.AVI",
+      "target": "VIDEO/C3M5.AVI",
+      "bytes": 9954136,
+      "sha256": "174a4e969a6692bd48f59284e20f7a5f901c1e42aa5041e258dcd8921bdc3828"
+    },
+    {
+      "source": "VIDEO/C3M6.AVI",
+      "target": "VIDEO/C3M6.AVI",
+      "bytes": 6012840,
+      "sha256": "985e91a3729241b8c650eb01738055135130d8dfa9f7c5aec8ff3cd028f1087b"
+    },
+    {
+      "source": "VIDEO/C4WIN.AVI",
+      "target": "VIDEO/C4WIN.AVI",
+      "bytes": 25145740,
+      "sha256": "40f02cafaa1e1f5b8c753e265fb513908c6a056e6bd303efe197edb361b40cc4"
+    },
+    {
+      "source": "VIDEO/CAMPAIGN.AVI",
+      "target": "VIDEO/CAMPAIGN.AVI",
+      "bytes": 84778396,
+      "sha256": "f2c936424caf4aeb029ba86154057317b542e6bb872c2e7517f7940e6326d585"
+    },
+    {
+      "source": "VIDEO/INTRO.AVI",
+      "target": "VIDEO/INTRO.AVI",
+      "bytes": 82169804,
+      "sha256": "8a4276231b81a2edc064f3c88af1ee5aa780e080e2e00a9f5c43711ec62891e4"
+    }
+  ],
+  "providerFiles": [
+    {
+      "source": "Shared_DLLs/MSVCRT.DLL",
+      "target": "native-inputs/MSVCRT.DLL",
+      "bytes": 266293,
+      "sha256": "2d5670881a6d13a100e37da297f6eeb876f68b63073a28eb5d650625c60f9bf7"
+    },
+    {
+      "source": "Shared_DLLs/MFC42.DLL",
+      "target": "native-inputs/MFC42.DLL",
+      "bytes": 954128,
+      "sha256": "5f66a4d221e24c767aadd3f43a981df53d42f3d73bdf05b518120632099e2fc8"
+    },
+    {
+      "source": "Shared_DLLs/MSVCP50.DLL",
+      "target": "native-inputs/MSVCP50.DLL",
+      "bytes": 565760,
+      "sha256": "91cd76f9fa3b25008decb12c005c194bdf66c8d6526a954de7051bec9aae462a"
+    },
+    {
+      "source": "Codec_DLLs/Ir50_32.dll",
+      "target": "native-inputs/Ir50_32.dll",
+      "bytes": 739328,
+      "sha256": "56760e0ea8c8709f4a0c34bee7289a87188aedd8bddfd05f8f62bee2f3f91238"
+    }
+  ]
+}

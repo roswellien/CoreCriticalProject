@@ -1,0 +1,106 @@
+using System.IO;
+using System.IO.Compression;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace MW3RemasterLauncher.Core;
+
+/// <summary>Export a small local support bundle, using an explicit allowlist of metadata and log tails.</summary>
+public static class PlaytestDiagnostics
+{
+    public const int MaxLogBytes = 64 * 1024;
+
+    public static string ReadTail(string path)
+    {
+        if (!File.Exists(path)) return "";
+        PackStorage.EnsureNoLinks(path);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var start = Math.Max(0, stream.Length - MaxLogBytes);
+        stream.Position = start;
+        var buffer = new byte[MaxLogBytes];
+        var length = 0;
+        int count;
+        while (length < buffer.Length && (count = stream.Read(buffer, length, buffer.Length - length)) != 0) length += count;
+        var text = Encoding.UTF8.GetString(buffer, 0, length);
+        if (start != 0)
+        {
+            var newline = text.IndexOf('\n');
+            text = newline < 0 ? "" : text[(newline + 1)..];
+        }
+        return text;
+    }
+
+    public static string FailureSummary(string? launchLog)
+    {
+        if (launchLog == null) return "No launch details were recorded.";
+        var directory = Path.GetDirectoryName(launchLog)!;
+        foreach (var file in new[] { Path.Combine(directory, "native", "stderr.txt"), launchLog })
+        {
+            var lines = ReadTail(file).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var error = lines.LastOrDefault(line => line.StartsWith("ERROR:", StringComparison.Ordinal) ||
+                line.Contains("loader-order entry fault:", StringComparison.Ordinal));
+            if (error != null) return error.Trim();
+        }
+        return "The launch or game ended unexpectedly. Open Logs for details.";
+    }
+
+    public static string Redact(string text, params string[] privateRoots)
+    {
+        foreach (var root in privateRoots.Where(root => !string.IsNullOrWhiteSpace(root)).OrderByDescending(root => root.Length))
+        {
+            text = text.Replace(root, "<local-path>", StringComparison.OrdinalIgnoreCase);
+            text = text.Replace(root.Replace('\\', '/'), "<local-path>", StringComparison.OrdinalIgnoreCase);
+        }
+        // Source/runtime paths can point outside the known user and project roots.
+        text = Regex.Replace(text, @"\b[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
+        text = Regex.Replace(text, @"\\\\[^\s\""<>|]+", "<network-path>");
+        return text;
+    }
+
+    public static void Export(string destination, LauncherSettings settings, IEnumerable<PackManifest> packs,
+        string? launchLog, string applicationRoot)
+    {
+        // No profiles, settings files, saves, archives, media, dumps or recursive directory walks.
+        var report = new
+        {
+            format_version = 1,
+            created_utc = DateTimeOffset.UtcNow,
+            launcher_version = typeof(GameRunner).Assembly.GetName().Version?.ToString(),
+            os = RuntimeInformation.OSDescription,
+            architecture = RuntimeInformation.ProcessArchitecture.ToString(),
+            dotnet_runtime = RuntimeInformation.FrameworkDescription,
+            settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
+                settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
+                settings.LocalCdAudio, settings.InstantReplay },
+            packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
+            note = "Review this local report before sharing. Includes selected settings, pack metadata and redacted log tails only."
+        };
+        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+        var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var zip = ZipFile.Open(temporary, ZipArchiveMode.Create))
+            {
+                void Add(string name, string content)
+                {
+                    using var writer = new StreamWriter(zip.CreateEntry(name, CompressionLevel.Optimal).Open(), Encoding.UTF8);
+                    writer.Write(Redact(content, roots));
+                }
+                Add("report.json", JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+                if (launchLog != null)
+                {
+                    var folder = Path.GetDirectoryName(launchLog)!;
+                    foreach (var (name, path) in new[] { ("launcher.log", launchLog),
+                        ("native-stderr.txt", Path.Combine(folder, "native", "stderr.txt")),
+                        ("native-stdout.txt", Path.Combine(folder, "native", "stdout.txt")) })
+                        if (File.Exists(path)) Add(name, ReadTail(path));
+                }
+            }
+            File.Move(temporary, destination, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+}

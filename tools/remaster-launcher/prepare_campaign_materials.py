@@ -22,6 +22,13 @@ from repack_world_normals import pages_for, PAGE_BYTES, PACKAGE_BYTES
 
 
 def prepare(config_path, output, hash_library):
+    """Refine explicitly selected source variants in a fresh local world catalog.
+
+    Require pinned inventory, manifest and variant review inputs. Preserve flat
+    exclusions and previously reviewed bindings; structural features additionally
+    require coarse-layout approval or an explicit per-key manual review. Repack
+    pages and verify decoded bindings before writing the final manifest.
+    """
     if output.exists():
         raise ValueError("Choose a fresh candidate output")
     config = json.loads(config_path.read_text())
@@ -30,8 +37,8 @@ def prepare(config_path, output, hash_library):
         raise ValueError("Source inventory changed")
     source = json.loads(source_path.read_text())
     recipes = config["materials"]
-    fnv = accelerated_hash(hash_library)
-    catalog.pixel_hash = fnv
+    pixel_digest = accelerated_hash(hash_library)
+    catalog.pixel_hash = pixel_digest
     for bank, pin in source["source_bank_pins"].items():
         if sha(bank) != pin:
             raise ValueError("Upgraded source bank changed")
@@ -41,21 +48,21 @@ def prepare(config_path, output, hash_library):
     lines = manifest.read_text().splitlines()
     if lines[0] != "MW34SNP1":
         raise ValueError("Unsupported base catalog")
-    before = {}
+    base_bindings = {}
     pins = {}
     for name in filter(None, lines[1:]):
         path = manifest.parent / name
         pins[str(path)] = sha(path)
         for key, normal in catalog.read_surface_bindings(path.read_bytes()):
-            if key in before:
+            if key in base_bindings:
                 raise ValueError("Ambiguous base identity")
-            before[key] = normal
+            base_bindings[key] = normal
     selected = {}
     preserved = set()
     for name, recipe in recipes.items():
         for variant in source["sources"][name]["variants"]:
             key = tuple(variant["key"])
-            if key not in before:
+            if key not in base_bindings:
                 raise ValueError("Campaign source absent from world catalog")
             if recipe.get("preserve_previous"):
                 preserved.add(key)
@@ -69,11 +76,11 @@ def prepare(config_path, output, hash_library):
     reviews = {tuple(row["key"]): row for row in json.loads(review_path.read_text())["rows"]}
     output.mkdir(parents=True)
     (output / "editable").mkdir()
-    result = dict(before)
+    updated_bindings = dict(base_bindings)
     edits = []
     for key, (name, variant) in selected.items():
         recipe = dict(recipes[name])
-        if before[key] is None:
+        if base_bindings[key] is None:
             continue  # An explicit flat exclusion remains authoritative.
         if (
             recipe["features"]
@@ -81,15 +88,17 @@ def prepare(config_path, output, hash_library):
             and list(key) not in recipe.get("manually_reviewed_keys", [])
         ):
             raise ValueError("UV structure needs separate variant review: " + name)
-        image, alpha = read_variant(variant, fnv)
-        size = before[key][:2]
+        image, alpha = read_variant(variant, pixel_digest)
+        size = base_bindings[key][:2]
         longest = recipe.get("minimum_longest_side", 0)
         if max(size) < longest:
             ratio = min(longest, max(image.size)) / max(size)
             size = (max(8, round(size[0] * ratio)), max(8, round(size[1] * ratio)))
         image = image.resize(size, Image.Resampling.LANCZOS)
         rgb = np.asarray(image, dtype=float) / 255.0
-        grain = np.ones((size[1], size[0]), dtype=bool)
+        # Grain permission affects color-derived microdetail only. Coverage
+        # exclusions also flatten final normals after structural features run.
+        grain_allowed = np.ones((size[1], size[0]), dtype=bool)
         if recipe["material"] == "metal":
             # Suppress only shallow color grain in strongly painted/emissive
             # regions. Authored frame/seam geometry remains independent of hue.
@@ -97,8 +106,8 @@ def prepare(config_path, output, hash_library):
             paint = Image.fromarray((saturation > 0.45).astype("uint8") * 255).filter(
                 ImageFilter.MaxFilter(7)
             )
-            grain &= np.asarray(paint) == 0
-        invisible = np.zeros_like(grain)
+            grain_allowed &= np.asarray(paint) == 0
+        invisible = np.zeros_like(grain_allowed)
         if alpha is not None:
             coverage = np.asarray(alpha.resize(size, Image.Resampling.NEAREST))
             invisible = (
@@ -109,9 +118,11 @@ def prepare(config_path, output, hash_library):
                 )
                 > 0
             )
-            grain &= ~invisible
+            grain_allowed &= ~invisible
+        # Calibrate a private recipe copy so one difficult variant cannot reduce
+        # the configured depth for every later variant in the material family.
         for attempt in range(12):
-            normal, height, stats = feature_relief(image, recipe, grain_mask=grain)
+            normal, height, stats = feature_relief(image, recipe, grain_mask=grain_allowed)
             if stats["clipped_fraction"] <= 0.05:
                 break
             recipe["depth_ratio"] *= 0.8
@@ -123,7 +134,7 @@ def prepare(config_path, output, hash_library):
         stem = f"{name}-{key[3]:016x}-{key[2]}"
         height.save(output / "editable" / (stem + "-height.png"))
         Image.frombytes("RGBA", size, normal[2]).save(output / "editable" / (stem + "-normal.png"))
-        result[key] = normal
+        updated_bindings[key] = normal
         edits.append(
             dict(
                 name=name,
@@ -134,27 +145,29 @@ def prepare(config_path, output, hash_library):
                 stats=stats,
                 depth_ratio=recipe["depth_ratio"],
                 coverage_guard_pixels=int(invisible.sum()),
-                masked_grain_pixels=int((~grain).sum()),
+                masked_grain_pixels=int((~grain_allowed).sum()),
                 normal_sha256=hashlib.sha256(normal[2]).hexdigest(),
             )
         )
-    if set(before) != set(result):
+    if set(base_bindings) != set(updated_bindings):
         raise ValueError("World key set changed")
-    for key in set(before) - set(selected) | preserved:
-        if before[key] != result[key]:
+    # Both untouched keys and explicit preserve_previous keys must retain their
+    # complete normal image tuples, including an absent image where recorded.
+    for key in set(base_bindings) - set(selected) | preserved:
+        if base_bindings[key] != updated_bindings[key]:
             raise ValueError("Unselected or previously reviewed normal changed")
     pages = []
-    restored = {}
-    for index, entries in enumerate(pages_for(result.items())):
+    decoded_bindings = {}
+    for index, entries in enumerate(pages_for(updated_bindings.items())):
         data = catalog.pack_surface_bindings(entries)
         if len(data) > PAGE_BYTES:
             raise ValueError("World page budget exceeded")
         name = f"world-{index:03}.bin"
         (output / name).write_bytes(data)
-        restored.update(catalog.read_surface_bindings(data))
+        decoded_bindings.update(catalog.read_surface_bindings(data))
         pages.append(dict(name=name, bytes=len(data), sha256=hashlib.sha256(data).hexdigest()))
-    total = sum(page["bytes"] for page in pages)
-    if total > PACKAGE_BYTES or len(pages) > 256 or restored != result:
+    package_bytes = sum(page["bytes"] for page in pages)
+    if package_bytes > PACKAGE_BYTES or len(pages) > 256 or decoded_bindings != updated_bindings:
         raise ValueError("World package budget or readback failed")
     for bank, pin in {**source["source_bank_pins"], **pins}.items():
         if sha(bank) != pin:
@@ -164,10 +177,10 @@ def prepare(config_path, output, hash_library):
         config_sha256=sha(config_path),
         source_pins=source["source_bank_pins"],
         base_page_pins=pins,
-        bindings=len(result),
+        bindings=len(updated_bindings),
         edits=edits,
         pages=pages,
-        bytes=total,
+        bytes=package_bytes,
         preserved_prior_keys=len(preserved),
         other_bindings_byte_identical=True,
         strength_baked=False,

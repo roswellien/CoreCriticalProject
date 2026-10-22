@@ -10,7 +10,7 @@ the pinned source only for measured MW3 compatibility defects. Retain the
 original engine and simulation. No new gameplay engine is required.
 
 This is a useful original-game compatibility deliverable and a renderer
-development lane alongside the faithful recompilation strategy (local reference: `docs/faithful-modernization-plan.md`).
+development lane alongside the [faithful recompilation strategy](faithful-modernization-plan.md).
 It does not replace that strategy, supply an original-code fallback for the
 production native host, or complete its E1/E2/E3 milestones. Wrapper progress
 does not change the last verified selected-startup count of 131/144.
@@ -51,9 +51,9 @@ adapter are later integration work.
 
 ## Starting evidence and pins
 
-Use the D7VK evaluation (local reference: `docs/d7vk-evaluation-r1.md`),
+Use the [D7VK evaluation](d7vk-evaluation-r1.md),
 [graphics trace](mw3-live-graphics-trace.md),
-surface-command investigation (local reference: `docs/live-native-rendering-current-work.md`) and
+[surface-command investigation](live-native-rendering-current-work.md) and
 [video contract](m4-video-backend-contract-r1.md). Do not regenerate existing
 captures merely to prove they exist.
 

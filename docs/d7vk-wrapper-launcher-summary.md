@@ -5,7 +5,7 @@
 **Execution Boundary**: Isolated private profile running US retail 1.2 `Mech3.exe` on D7VK (DirectDraw4/Direct3D3 -> Direct3D9 -> Vulkan) with camera FOV widescreen fix, MSAA, anisotropic filtering, and cumulative AI textures.
 
 This is the original-executable wrapper track alongside
-native recompilation (local reference: `docs/faithful-modernization-plan.md`). D7VK supplies Vulkan
+[native recompilation](faithful-modernization-plan.md). D7VK supplies Vulkan
 rendering in place of dgVoodoo in this profile. Original game execution does
 not complete native host/menu/Training milestones or change the last verified
 selected-startup acceptance count of **131/144**. The observations below describe
@@ -97,17 +97,53 @@ A modern, standalone game launcher and patched Vulkan wrapper pipeline was devel
 * **Symptom**: Game loaded menus successfully, but crashed with Access Violation (`0xC0000005`) upon clicking **Launch** into Instant Action or Campaign missions.
 * **Disassembly Diagnosis**:
   Application Event Log identified fault offset `0x00177648` (`0x00577648` VA) in `Mech3.exe`:
-  `esi` is loaded from `[0x008027C8 + 0x20]` = `[0x008027E8]` (the backbuffer surface pointer).
-  Tracing back to initialization function `0x00577EE5` in `zVideo\zvid_dd.c`:
-  The investigation identified these contributing compatibility issues:
-  1. **Uninitialized Stack Garbage**: The 1999 game allocated a 4-byte `DDSCAPS` struct on stack rather than a 16-byte `DDSCAPS2` struct. Modern Windows `SysWOW64\ddraw.dll` strictly validates `dwCaps2..4`. Because these fields held stack garbage, the proxy rejected the call with an error.
-  2. **D7VK Fallback Omission**: D7VK already enumerates and caches the swapchain backbuffer (`m_nextFlippable`) during primary surface construction, but `DDraw4Surface::GetAttachedSurface` forwarded strictly to the proxy and returned NULL if the proxy failed.
-  3. **WDDM 16-Bit Desktop Mode Rejection**: On Windows 11, physical monitor mode switches to 16-bit color at high resolutions (e.g. 2560×1440 16bpp) fail in `m_proxy->SetDisplayMode`. In D7VK, this failure was bubbled up, causing `Mech3.exe` to abort before creating 3D surfaces.
+  ```asm
+  00577648: 8B 06          mov eax, dword ptr [esi] ; Dereferencing NULL surface pointer
+  0057764A: 6A 00          push 0                   ; hEvent = NULL
+  0057764C: 6A 01          push 1                   ; dwFlags = DDLOCK_WAIT
+  0057764E: 53             push ebx                 ; lpDDSurfaceDesc (dwSize = 0x7C)
+  0057764F: 6A 00          push 0                   ; lpDestRect = NULL
+  00577651: 56             push esi                 ; this = esi
+  00577652: FF 50 64       call dword ptr [eax+64h] ; IDirectDrawSurface4::Lock (vtable index 25)
+  ```
+  `esi` is passed from `0x005775C3` (`[0x008027C8 + 0x20]` = `[0x008027E8]` backbuffer surface) or `0x0057BA3C` (`[ecx]` texture surface).
+  Tracing through the complete mode-switch sequence `0x00577CD0`:
+  1. `0x00578740` releases the previous 2D 640×480 menu surfaces.
+  2. `0x00577C40` calls `IDirectDraw4::SetDisplayMode(width, height, 16)`.
+  3. `0x00577DF0` allocates new 3D surfaces: Primary (`0x00577EAB`), Backbuffer (`0x00577EEC`), and Depth/Stencil Z-Buffer (`0x00577F79`), then attaches Z-buffer via `pBackBuffer->AddAttachedSurface(pZBuffer)` (`0x00577FA0`).
+  The investigation identified the exact chain of failures in modern Windows 11:
+  1. **Z-Buffer Hardware Emulation Rejection**: Modern `C:\Windows\SysWOW64\ddraw.dll` has no Direct3D hardware support and rejects all `DDSCAPS_ZBUFFER` creation with `DDERR_NOZBUFFERHW` (`0x88760064`).
+  2. **Dimension Mismatch on Surface Attachment**: Because Windows 11 WDDM drivers reject 16-bit physical mode switches, the underlying proxy desktop retains native display dimensions (e.g. 3440×1440), while `Mech3.exe` requested custom resolution (e.g. 2560×1440). When `pBackBuffer->AddAttachedSurface(pZBuffer)` was forwarded to the proxy, it failed with `DDERR_CANNOTATTACHSURFACE` / `E_INVALIDARG` due to mismatched proxy surface bounds.
+  3. **Uninitialized Stack Garbage**: The 1999 game allocated a 4-byte `DDSCAPS` struct on stack rather than a 16-byte `DDSCAPS2` struct for `GetAttachedSurface`.
+  When any of these steps failed, `Mech3.exe` aborted initialization before `0x008027E8` was populated, leaving the backbuffer NULL. The render loop then dereferenced NULL `esi` at `0x00577648`.
 * **Code Fixes Applied to D7VK Source**:
-  * **`src/ddraw/ddraw4/ddraw4_surface.cpp`** (patched source remains under ignored `local/work-ahead/mw3-d7vk-wrapper/d7vk-source/`):
-    Sanitized `DDSCAPS2` by zeroing `dwCaps2..4` for `DDSCAPS_BACKBUFFER` queries. Added fallback to return `ref(m_nextFlippable)` when the proxy lookup fails and a cached backbuffer exists.
-  * **`src/ddraw/ddraw4/ddraw4_interface.cpp`** (same local source tree):
-    Allowed `SetDisplayMode` to proceed with virtual presentation mode when physical 16-bit desktop mode switches are rejected by modern WDDM drivers.
+  * **`src/ddraw/ddraw4/ddraw4_interface.cpp`**:
+    - Enforced `dwSize = sizeof(DDSURFACEDESC2)` sanitization.
+    - Added proxy fallback in `CreateSurface`: when `m_proxy->CreateSurface` fails for non-primary surfaces (e.g. Z-buffers or VRAM textures), retries with `DDSCAPS_SYSTEMMEMORY` and maps `DDSCAPS_ZBUFFER` to an offscreen plain backing in system memory. D7VK manages the actual Vulkan depth-stencil texture in D3D9, so the proxy object serves as an error-free placeholder.
+    - Updated `SetDisplayMode` to maintain virtual primary surface dimensions.
+  * **`src/ddraw/ddraw4/ddraw4_surface.cpp`**:
+    - In `AddAttachedSurface`: when `m_proxy->AddAttachedSurface` fails due to WDDM desktop size mismatches, logs a warning and proceeds with virtual attachment in D7VK (`m_depthStencil = attachedSurf`), returning `DD_OK`.
+    - In `GetAttachedSurface`: added fallback for `DDSCAPS_ZBUFFER` to return `m_depthStencil.ref()`, and sanitized `cleanCaps` for `DDSCAPS_BACKBUFFER`.
+  * **`mw3_launcher.py`**:
+    - Enabled `D7VK_LOG_LEVEL = "debug"` by default so all surface calls and mode switches are logged to `Mech3_ddraw.log`.
+
+### 3.5 Surface Descriptor Format Overwrite Fix ("Failed to Initialize Video Source")
+* **Symptom**: Game immediately failed with "failed to initialize video source" dialog and reset back to the launcher.
+* **Root Cause**: An initial surface descriptor sync in `d7vk-source/src/ddraw/ddraw4/ddraw4_interface.cpp` copied the caller's descriptor into the primary surface wrapper. For primary flippable surfaces created by `Mech3.exe`, the caller passes `dwFlags = 0x21` (`DDSD_CAPS | DDSD_BACKBUFFERCOUNT`) without `DDSD_PIXELFORMAT`. Copying this descriptor directly zeroed out the valid 16-bit RGB pixel format established by the proxy, causing DXVK `ConvertFormat` to fail with `D3DFMT_UNKNOWN` and `CreateDevice` to reject initialization with `D3DERR_INVALIDCALL`.
+* **Fix**: Scoped descriptor mutation strictly to the `isZBufferFallback` code path, ensuring primary flippable surfaces retain their valid pixel formats and display mode settings.
+
+### 3.6 Mission Mode Switch Primary Surface & Backbuffer Proxy Fix
+* **Symptom**: Game booted successfully into 2D menus, but crashed with Access Violation (`0xC0000005`) when clicking **Launch** into an Instant Action point.
+* **Root Cause & Disassembly Diagnosis**:
+  When loading into the 3D simulation, `Mech3.exe` calls `00578740` to release all 2D surfaces, calls `SetDisplayMode` for the target 3D mode (e.g. 1024×768), and then calls `IDirectDraw4::CreateSurface` for the new flippable primary surface:
+  1. On modern Windows WDDM drivers, `m_proxy->CreateSurface` returned `0x88760234` (`DDERR_PRIMARYSURFACEALREADYEXISTS`): the proxy DirectDraw driver retained the existing primary display surface allocation across mode switches.
+  2. While D7VK's primary surface recovery acquired the existing GDI primary surface via `GetGDISurface`, the proxy GDI surface has no attached backbuffer. When `Mech3.exe` subsequently queried `primary->GetAttachedSurface(&caps, &pBackBuffer)` (`0x00577EEC`), the proxy returned `DDERR_NOTFOUND`.
+  3. D7VK attempted to create a fallback backbuffer proxy surface, but the fallback descriptor copied the primary surface's descriptor (`dim=0x0`) and included `DDSCAPS_BACKBUFFER | DDSCAPS_OFFSCREENPLAIN`. According to DirectDraw specifications, standalone `CreateSurface` strictly forbids `DDSCAPS_BACKBUFFER` and rejects contradictory caps with `DDERR_INVALIDCAPS` (`0x88760168`).
+  4. Because `m_proxy->CreateSurface` failed, `GetAttachedSurface` returned failure to `Mech3.exe`, leaving backbuffer pointer `[0x008027E8]` NULL. The 3D render loop then crashed dereferencing NULL `esi` at `0x00577648`.
+* **Fix Applied to D7VK Source**:
+  1. **Primary Surface Recovery**: In `DDraw4Interface::CreateSurface`, when `m_proxy->CreateSurface` returns `DDERR_PRIMARYSURFACEALREADYEXISTS` (`0x88760234`), D7VK acquires the proxy surface via `GetGDISurface`, marks it as primary, calls `SetDesc2` with requested `DDSCAPS_FLIP | DDSCAPS_COMPLEX | DDSCAPS_3DDEVICE`, and returns `DD_OK`.
+  2. **Sanitized Backbuffer Proxy Creation**: In `DDraw4Surface::GetAttachedSurface`, the fallback backbuffer proxy descriptor is sanitized to use non-zero display dimensions and valid standalone capabilities (`DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT` with `DDSCAPS_OFFSCREENPLAIN | DDSCAPS_3DDEVICE | DDSCAPS_SYSTEMMEMORY`). Once created on the proxy, D7VK wraps it and patches its common descriptor with `DDSCAPS_BACKBUFFER | DDSCAPS_3DDEVICE | DDSCAPS_FLIP` via `SetDesc2`, ensuring `GetAttachedSurface` returns `DD_OK` and `Mech3.exe` receives a valid backbuffer.
+  3. **Virtual Attachment Enumeration**: In `DDraw4Surface::EnumAttachedSurfaces`, if the proxy driver reports no attached surfaces, D7VK injects virtually attached surfaces (`m_nextFlippable` and `m_depthStencil`) so downstream enumeration callbacks find all expected surfaces.
 
 ---
 
@@ -121,10 +157,12 @@ their own licenses; the project's MIT license covers its own contributions.
 
 | Component | Path | SHA-256 Digest |
 |---|---|---|
-| Recompiled D7VK `ddraw.dll` | `local/work-ahead/mw3-d7vk-wrapper/game/ddraw.dll` | `57b84ffe136db85e567c09ada00c3d39666f823f2c1e4b1406e35b42a445ac11` |
-| Hash Admittance Pin | `local/work-ahead/mw3-d7vk-wrapper/launcher-ddraw.sha256` | `57b84ffe136db85e567c09ada00c3d39666f823f2c1e4b1406e35b42a445ac11` |
-| Primary Launcher | `mw3_launcher.py` | `b6572f390a8311edb6083e3fe008516867733dd1a298bc614f4e94b7449baee5` |
+| Recompiled D7VK `ddraw.dll` | `local/work-ahead/mw3-d7vk-wrapper/game/ddraw.dll` | `bb6f56375c37c3de013e905328e3a81f52a1f8a3efc6355e6c28b6d72d943385` |
+| Hash Admittance Pin | `local/work-ahead/mw3-d7vk-wrapper/launcher-ddraw.sha256` | `bb6f56375c37c3de013e905328e3a81f52a1f8a3efc6355e6c28b6d72d943385` |
+| Primary Launcher | `mw3_launcher.py` | `006b1218f323aa112506f13b80daf609cfaff7f0e5afad2c585c550109aa6ef1` |
 | Root Launch Batch | `Launch MW3 (D7VK Vulkan Launcher).cmd` | Verified batch entry point |
+| Root Launch Alias (.cmd) | `Launch MW3 (D7VK Vulkan).cmd` | Verified batch entry point |
+| Root Launch Alias (.bat) | `Launch MW3 (D7VK Vulkan).bat` | Verified batch entry point |
 | Verified Game Executable | `local/work-ahead/mw3-d7vk-wrapper/game/Mech3.exe` | `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf` |
 | Camera FOV Fix Plugin | `local/tools/mw3-fov-v1.6/MechWarrior3FOVFix.asi` | `57afb226033790cafa36f6409ee036c03dc38e42b6cc1fe8d62880b03be2205d` |
 | FOV Launcher Binary | `build/widescreen-test/Release/mw34_fov_launcher.exe` | Verified bootstrap |

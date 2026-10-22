@@ -4,8 +4,16 @@ static IDirectDrawSurface4 fixtureSurface{&fixtureSurfaceTable};
 static IDirect3DViewport3Vtbl fixtureViewportTable{};
 static IDirect3DViewport3 fixtureViewport{&fixtureViewportTable};
 static const unsigned char fixturePixels[16]{255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255};
+static unsigned char fixtureWritePixels[8]{};
+static IDirectDrawSurface4 *fixtureAttachedDepth=nullptr;
 static ULONG STDMETHODCALLTYPE fixtureSurfaceRelease(IDirectDrawSurface4 *) { return 1; }
 static HRESULT STDMETHODCALLTYPE fixtureLock(IDirectDrawSurface4 *,RECT *,DDSURFACEDESC2 *desc,DWORD flags,HANDLE) {
+    if(flags==DDLOCK_WAIT) {
+        desc->dwWidth=2;desc->dwHeight=2;desc->lPitch=4;desc->lpSurface=fixtureWritePixels;
+        desc->ddpfPixelFormat.dwFlags=DDPF_RGB;desc->ddpfPixelFormat.dwRGBBitCount=16;
+        desc->ddpfPixelFormat.dwRBitMask=0xf800;desc->ddpfPixelFormat.dwGBitMask=0x7e0;desc->ddpfPixelFormat.dwBBitMask=0x1f;
+        return S_OK;
+    }
     if(flags!=(DDLOCK_READONLY|DDLOCK_WAIT))return E_INVALIDARG;
     desc->dwWidth=2;desc->dwHeight=2;desc->lPitch=8;desc->lpSurface=const_cast<unsigned char *>(fixturePixels);
     desc->ddpfPixelFormat.dwFlags=DDPF_RGB|DDPF_ALPHAPIXELS;desc->ddpfPixelFormat.dwRGBBitCount=32;
@@ -14,7 +22,7 @@ static HRESULT STDMETHODCALLTYPE fixtureLock(IDirectDrawSurface4 *,RECT *,DDSURF
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE fixtureUnlock(IDirectDrawSurface4 *,RECT *) { return S_OK; }
-static HRESULT STDMETHODCALLTYPE fixtureAttached(IDirectDrawSurface4 *,DDSCAPS2 *,IDirectDrawSurface4 **output) { *output=nullptr;return DDERR_NOTFOUND; }
+static HRESULT STDMETHODCALLTYPE fixtureAttached(IDirectDrawSurface4 *,DDSCAPS2 *caps,IDirectDrawSurface4 **output) { *output=caps->dwCaps==DDSCAPS_ZBUFFER?fixtureAttachedDepth:nullptr;return *output?S_OK:DDERR_NOTFOUND; }
 static ULONG STDMETHODCALLTYPE fixtureViewportRelease(IDirect3DViewport3 *) { return 1; }
 static HRESULT STDMETHODCALLTYPE fixtureGetViewport(IDirect3DViewport3 *,D3DVIEWPORT2 *vp) { vp->dwWidth=2;vp->dwHeight=2;vp->dvMaxZ=1;return S_OK; }
 static HRESULT STDMETHODCALLTYPE fixtureTarget(IDirect3DDevice3 *,IDirectDrawSurface4 **output) { *output=&fixtureSurface;return S_OK; }

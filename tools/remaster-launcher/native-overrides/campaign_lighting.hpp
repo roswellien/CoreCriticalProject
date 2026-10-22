@@ -1,5 +1,7 @@
 #pragma once
 #include "fixture_lighting.hpp"
+#include "mission_environment_pack.hpp"
+#include <cstdlib>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -58,7 +60,7 @@ struct MissionEnvironment {
     // Weather Effects
     float rain_intensity;        // 0..1 (0.35 drizzle, 0.95 heavy downpour, 0.55 acid rain)
     float wet_reflection;        // 0..1 (sheen & wet specular reflections)
-    bool has_lightning;          // periodic lightning strikes in c1m3 & c2m4
+    bool has_lightning;          // Periodic lightning for outdoor storm missions
     float valley_fog_altitude;   // low-altitude fog base height (c1m4, c4m2, c3m5)
     float valley_fog_density;    // low-altitude fog density multiplier
     float dust_intensity;        // 0..1 (dust storm / particulate haze)
@@ -66,13 +68,13 @@ struct MissionEnvironment {
     float heat_shimmer;          // 0..1 (mirage / rippling horizon)
     float volcanic_ash;          // 0..1 (ash canopy / soot)
     float lava_glow;             // 0..1 (underworld upward radiant orange light)
-    bool is_interior;            // true for c3m5 (Underground Hangar)
+    bool is_interior;            // Sealed underground missions (c2m2, c2m4, c3m5)
 
     // Environmental light emitters
     std::vector<EnvLight> env_lights;
 };
 
-inline const std::vector<MissionEnvironment>& mission_database() {
+inline const std::vector<MissionEnvironment>& builtin_mission_database() {
     static const std::vector<MissionEnvironment> db = {
         // =========================================================================
         // Operation 1 — The Beachhead (Tropical/Coastal Basin)
@@ -164,18 +166,18 @@ inline const std::vector<MissionEnvironment>& mission_database() {
             {}
         },
         {
-            "c2m2", 2, 2, "Industrial Complex", "Midday (High Sun)", "Dry heat with heavy industrial smog",
-            185.0f, 75.0f,
-            {1.0f, 0.98f, 0.90f}, 1.55f,
-            {0.65f, 0.62f, 0.52f}, 0.30f,
-            1.0f,
-            {0.72f, 0.68f, 0.50f}, 0.90f,
-            {0.95f, 0.85f, 0.65f}, 0.40f, 1.8f,
-            {0.60f, 0.50f, 0.60f},
+            "c2m2", 2, 2, "Industrial Complex", "Indoor / Sealed Environment", "Underground industrial lighting",
+            0.0f, 90.0f,
+            {0.0f, 0.0f, 0.0f}, 0.0f,       // No natural sunlight underground
+            {0.65f, 0.62f, 0.52f}, 0.18f,   // Reduce ambient fill by 40 percent
+            0.0f,
+            {0.0f, 0.0f, 0.0f}, 0.0f,       // No outdoor sky or horizon glow
+            {0.0f, 0.0f, 0.0f}, 0.0f, 1.8f,
+            {1.0f, 1.0f, 1.0f},
             0.05f, 0.35f,
-            {0.48f, 0.42f, 0.28f}, {0.85f, 0.78f, 0.65f}, 1000.0f,
-            true, 180.0f, 0.05f, 1.0f,
-            0.0f, 0.0f, false, 0.0f, 0.0f, 0.30f, 0.65f, 0.0f, 0.0f, 0.0f, false,
+            {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, 1000.0f,
+            false, 180.0f, 0.05f, 0.0f,
+            0.0f, 0.0f, false, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true,
             {}
         },
         {
@@ -194,18 +196,18 @@ inline const std::vector<MissionEnvironment>& mission_database() {
             {}
         },
         {
-            "c2m4", 2, 4, "Power Plant", "Late Afternoon", "Polluted electrical storm",
-            255.0f, 16.0f,
-            {0.98f, 0.48f, 0.18f}, 1.25f,
-            {0.38f, 0.45f, 0.35f}, 0.26f,
-            1.0f,
-            {0.55f, 0.48f, 0.28f}, 0.75f,
-            {1.0f, 0.55f, 0.25f}, 0.95f, 2.2f,
-            {0.60f, 0.45f, 0.60f},
+            "c2m4", 2, 4, "Power Plant", "Indoor / Sealed Environment", "Underground industrial lighting",
+            0.0f, 90.0f,
+            {0.0f, 0.0f, 0.0f}, 0.0f,       // No natural sunlight underground
+            {0.38f, 0.45f, 0.35f}, 0.40f, // User-selected per-map ambient level
+            0.0f,
+            {0.0f, 0.0f, 0.0f}, 0.0f,       // No outdoor sky or horizon glow
+            {0.0f, 0.0f, 0.0f}, 0.0f, 2.2f,
+            {1.0f, 1.0f, 1.0f},
             0.03f, 0.28f,
-            {0.35f, 0.38f, 0.25f}, {0.80f, 0.85f, 0.70f}, 1050.0f,
-            true, 220.0f, 0.04f, 1.0f,
-            0.0f, 0.0f, true, 0.0f, 0.0f, 0.20f, 0.50f, 0.0f, 0.0f, 0.0f, false,
+            {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, 1050.0f,
+            false, 220.0f, 0.04f, 0.0f,
+            0.0f, 0.0f, false, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true,
             {}
         },
 
@@ -414,6 +416,18 @@ inline const std::vector<MissionEnvironment>& mission_database() {
         }
     };
     return db;
+}
+
+inline const std::vector<MissionEnvironment>& mission_database() {
+    static const auto database=[] {
+        auto result=builtin_mission_database();
+        if(const auto* path=std::getenv("MW34_MISSION_ENVIRONMENTS");path && *path) {
+            const auto count=mw34::packs::load_mission_environments(path,result);
+            std::fprintf(stderr,"Mission lighting pack: loaded %u verified mission environments\n",count);
+        }
+        return result;
+    }();
+    return database;
 }
 
 class CampaignManager {

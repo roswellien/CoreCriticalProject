@@ -1,6 +1,7 @@
 param(
     [string]$VSRoot = 'C:/Program Files/Microsoft Visual Studio/18/Community',
     [string]$Game = 'D:/Projects/MW34Recomp/MW3/Mech3.exe',
+    [string]$BuildDirectory = 'build/graphics-trace',
     [switch]$Launch,
     [switch]$CaptureHudText,
     [switch]$CaptureHudHeat,
@@ -22,7 +23,7 @@ if ($Launch -and (Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePa
     throw 'Close the existing MW3 session before tracing'
 }
 $taskCmake = "$VSRoot/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
-$taskBuild = "$taskRoot/build/graphics-trace"
+$taskBuild = if ([IO.Path]::IsPathRooted($BuildDirectory)) { $BuildDirectory } else { Join-Path $taskRoot $BuildDirectory }
 & $taskCmake -S $PSScriptRoot -B $taskBuild -G 'Visual Studio 18 2026' -A Win32
 if ($LASTEXITCODE -ne 0) { throw 'Configure failed' }
 & $taskCmake --build $taskBuild --config Release

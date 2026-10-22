@@ -4,12 +4,69 @@ Working review, October 21, 2026. The repository remains private. This document
 tracks the owner's requested preparation; it does not authorize publication,
 commits, history replacement, or a change to distribution policy.
 
+The latest [original-input native generation work](native-generation-preparation-2026-10-21.md)
+now includes complete body regeneration, native linking and isolated live-menu
+launches. The [October 22 source installer integration](source-installer-integration-2026-10-22.md)
+adds a bundled preparer and private source-tool installer. Signed update/reuse
+integration passes; fresh packaged first-install generation is running.
+Clean-machine installation and public release clearance remain open.
+
+The subsequent [playtest launcher preparation](playtest-launcher-preparation-2026-10-21.md)
+adds persistent per-user settings/sessions, actionable failures and local support
+exports in deployed launcher 1.0.3-preview. Its actual launch/normal-quit check
+passes. The [1.0.4 installer setup follow-up](installer-original-game-setup-2026-10-21.md)
+adds the requested existing-installation or ISO-plus-patch choice and verifies
+original-data extraction against the supplied media. Complete installed runtime,
+content preparation and clean-machine setup remain open. The
+[first installed-runtime trial](installed-runtime-first-stage-2026-10-21.md)
+now reaches the native live menu and normal close using external runtime/data
+directories; it is a private baseline integration, not a distributable installer.
+The [installed content follow-up](installed-content-trial-2026-10-21.md) tests
+Training with mech/environment packs and optional music, repairs fresh-pilot
+keyboard services, and resolves existing-install support-file import. Permitted
+local generation, environment-pack migration and clean-machine installer tests
+remain open.
+The [soundtrack/setup follow-up](soundtrack-pack-setup-2026-10-21.md) adds
+verified soundtrack `.mw3pack` loading and optional pack imports during first-run
+game setup. The staged GUI is 1.0.7-preview; a shareable game installer remains open.
+The [launcher migration and extraction build](launcher-migration-media-build-2026-10-21.md)
+deploys 1.0.9 with preserved settings and a soundtrack pack, verifies actual GUI
+Play/normal quit, and replaces the Python-sourced extraction dependency with
+pinned source builds and notices. Native user-file generation and clean-machine
+installer validation remain open.
+The [environment mission-lighting follow-up](environment-pack-mission-lighting-2026-10-21.md)
+deploys launcher 1.0.10 and the optional native catalog reader, with five rebuilt
+1.1.0 environment packs. This closes the pack-data dependency for mission lighting;
+it does not clear native generation/distribution or whole-campaign fidelity gates.
+The [artwork/cinematic pack follow-up](artwork-cinematic-packs-2026-10-21.md)
+adds independently installable HUD/menu artwork, original-compatible AVI
+replacement routing, an MP4 additions library and an explicit private original
+movie-decoder resource. Modern high-resolution movies inside native gameplay,
+new automatic story triggers and full enhanced movie masters remain open.
+The [user-input generation step](installer-user-input-generation-2026-10-21.md)
+imports all four required support images from the player's ISO and generates
+the codec image and startup source pack locally. Fresh 151-file original setup
+and external native startup pass. The staged launcher is 1.0.12; native-host/entry
+generation and clean-machine lifecycle validation remain open. Inno Setup 7.1
+now compiles the launcher-only preview; isolated same-machine install, upgrade
+and uninstall tests pass, with settings and pack metadata preserved.
+The [native update follow-up](launcher-runtime-updates-2026-10-21.md) deploys
+launcher 1.0.13 with signed source/tool update preparation, version selection,
+cancellation and rollback. Authored process fixtures pass; a production feed/key,
+the actual whole-game preparation tool and clean-Windows updated-game launch
+remain open. This does not make the preview a playable end-user installer.
+The [merged-native setup follow-up](merged-native-installer-2026-10-21.md) combines
+the current pack/skin feature host, 21 audited readability files and installed
+user-provider bindings. External installed launch with five packs and normal
+quit passes; launcher 1.0.14 selects the merged build. Native generation from
+player files and clean-Windows distribution gates remain open.
+
 ## Intended deliverables
 
 | Deliverable | Required outcome | Current state |
 | --- | --- | --- |
 | GitHub project page | Clear README, announcement trailer, real gameplay, launcher and editor screenshots | README/gallery drafted; launcher and desktop editor captures still needed |
-| Game / Launcher download | Separate Windows package; user supplies the original game; first-run setup works without this checkout | Blocked by private build inputs and missing portable preparation pipeline |
+| Game / Launcher download | Windows installer; user supplies an existing game or ISO and patch; first-run setup works without this checkout | External runtime and Training content tested locally; private build inputs, pack migration and clean-machine installer validation remain open |
 | Mod Tools download | Separate tools and setup; user supplies original archives and external conversion tools | Local source-preview ZIP and isolated setup tested; supported Studio export/play remains open |
 | Contribution guide | Explain source layout, evidence, tests, readability and content rules | Review draft in CONTRIBUTING.md |
 | Privacy and provenance | Review published refs/history, current changes, assets, logs and release payloads | First pattern/inventory pass complete; manual review open |
@@ -19,10 +76,10 @@ commits, history replacement, or a change to distribution policy.
 
 1. **The existing game installer is not a working end-user release.**
    `tools/mw3-remaster-launcher/installer.iss` copies the WPF output and artwork.
-   `Core/GameRunner.cs` still finds a repository containing
-   `local/remaster/launcher.json` and invokes `play_remaster.py`. That script
-   requires private bank/model registrations, generated host builds, source
-   snapshots and prepared assets. Installing the GUI alone cannot supply these.
+   `Core/GameRunner.cs` now supports an application-local runtime as well as the
+   development checkout. The private external runtime trial works, but still
+   contains generated host builds, source snapshots and derived preparation
+   inputs. Installing the GUI alone cannot supply these.
    The installer's placeholder URL and stable `1.0.0` label have been corrected
    to the actual repository and an explicit development preview.
    Do not publish it as a playable package.

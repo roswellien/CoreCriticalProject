@@ -79,43 +79,86 @@ function playBeep(freq = 440, type = "sine", duration = 0.08) {
  * The exported map still uses its base operation's terrain; this function is
  * also used to snap preview placements and does not write original game data.
  */
-function getTerrainHeight(x, z, biome, scale, roughness) {
-  // Center coordinates
-  const nx = x * 0.0012;
-  const nz = z * 0.0012;
 
-  let h = 0.0;
-  if (biome === "coastal") {
-    // Large lake / sea basin in center, hills along borders
-    const dist = Math.sqrt(x * x + z * z);
-    const basin = Math.max(0.0, (dist - 500) / 1000.0);
-    h =
-      Math.sin(nx * 1.5) * Math.cos(nz * 1.5) * 20.0 +
-      Math.sin(nx * 3.5 + nz * 2.1) * 8.0 * roughness +
-      basin * 45.0;
-  } else if (biome === "desert") {
-    // Stepped mesa bluffs and canyon wash
-    const mesa = Math.sin(nx * 2.0) * Math.cos(nz * 2.0);
-    const stepped = Math.floor(mesa * 4.0) / 4.0;
-    h = stepped * scale * 0.6 + Math.sin(nx * 5.0) * 6.0 * roughness;
-  } else if (biome === "volcanic") {
-    // Jagged caldera rim with deep crater
-    const dist = Math.sqrt(x * x + z * z);
-    const crater = -Math.exp(-Math.pow(dist / 600.0, 2)) * 60.0;
-    const ridges = (Math.abs(Math.sin(nx * 3.0)) + Math.abs(Math.cos(nz * 3.0))) * 35.0;
-    h = crater + ridges * roughness;
-  } else if (biome === "highland") {
-    // High rolling mountain plateau
-    h =
-      (Math.sin(nx * 1.8) + Math.cos(nz * 1.8)) * 35.0 +
-      Math.sin(nx * 4.2) * Math.sin(nz * 3.7) * 18.0 * roughness;
-  } else {
-    // industrial
-    // Flatter cratered terrain with leveled tiers
-    const tiered = Math.round((Math.sin(nx * 2.0) + Math.cos(nz * 2.0)) * 2.0) * 12.0;
-    h = tiered + Math.sin(nx * 4.0) * 4.0;
+// Authentic MechWarrior 3 Operation & Biome Environmental Metadata
+const OP_ENV_METADATA = {
+  c1: {
+    name: "Op 1: Coastal Basin / Big Lake",
+    center: [-1408, 0],
+    waterLevel: 3.0,
+    hasWater: true,
+    waterColor: 0x145266,
+    waterSize: [5000, 5800],
+    waterCenter: [-1408, 0],
+    palette: { sand: 0xd9c28a, rock: 0x4a7337, peak: 0x5a6975, shoreY: 3.0 },
+    preset: "sunset"
+  },
+  c2: {
+    name: "Op 2: Desert Canyons",
+    center: [-512, -1152],
+    waterLevel: -200.0,
+    hasWater: false,
+    waterColor: 0x145266,
+    waterSize: [6500, 3500],
+    waterCenter: [-512, -1152],
+    palette: { sand: 0xd9a76a, rock: 0x9e5b32, peak: 0xc47e45, shoreY: -50.0 },
+    preset: "noon"
+  },
+  c3: {
+    name: "Op 3: Volcanic Badlands",
+    center: [256, -3200],
+    waterLevel: -20.0,
+    hasWater: true,
+    waterColor: 0x223820,
+    waterSize: [5000, 11000],
+    waterCenter: [256, -3200],
+    palette: { sand: 0x242426, rock: 0x473232, peak: 0x822a2a, shoreY: -20.0 },
+    preset: "storm"
+  },
+  c4: {
+    name: "Op 4: Highland Mountains",
+    center: [128, 1280],
+    waterLevel: -10.0,
+    hasWater: true,
+    waterColor: 0x1b4559,
+    waterSize: [5500, 8000],
+    waterCenter: [128, 1280],
+    palette: { sand: 0x526b48, rock: 0x545b63, peak: 0xd9e5eb, shoreY: -10.0 },
+    preset: "noon"
+  },
+  t1: {
+    name: "Training Grounds",
+    center: [1792, -1408],
+    waterLevel: -50.0,
+    hasWater: false,
+    waterColor: 0x145266,
+    waterSize: [4000, 3000],
+    waterCenter: [1792, -1408],
+    palette: { sand: 0x73695b, rock: 0x4a4744, peak: 0x8a847e, shoreY: -30.0 },
+    preset: "noon"
   }
-  return h;
+};
+OP_ENV_METADATA.coastal = OP_ENV_METADATA.c1;
+OP_ENV_METADATA.desert = OP_ENV_METADATA.c2;
+OP_ENV_METADATA.volcanic = OP_ENV_METADATA.c3;
+OP_ENV_METADATA.highland = OP_ENV_METADATA.c4;
+OP_ENV_METADATA.training = OP_ENV_METADATA.t1;
+OP_ENV_METADATA.industrial = OP_ENV_METADATA.c1;
+
+function getTerrainHeight(x, z) {
+  if (terrainMesh) {
+    const ray = new THREE.Raycaster(
+      new THREE.Vector3(x, 400.0, z),
+      new THREE.Vector3(0, -1, 0),
+      0.0,
+      1000.0
+    );
+    const hits = ray.intersectObject(terrainMesh, false);
+    if (hits.length > 0) {
+      return Math.round(hits[0].point.y * 10) / 10;
+    }
+  }
+  return 0.0;
 }
 
 // Init Three.js Viewport
@@ -230,78 +273,149 @@ function initViewport() {
  * Removing objects from scene does not dispose GPU resources. Resource cleanup
  * is a separate outstanding lifecycle concern, not supplied by this rebuild.
  */
-function buildTerrain() {
-  if (terrainMesh) scene.remove(terrainMesh);
-  if (waterMesh) scene.remove(waterMesh);
+let terrainCache = {};
 
-  const tcfg = state.project.terrain;
-  const segs = 120;
-  const geom = new THREE.PlaneGeometry(tcfg.width, tcfg.depth, segs, segs);
-  geom.rotateX(-Math.PI / 2);
+function buildTerrainGeometryFromData(terrainData, opCode) {
+  const geom = new THREE.BufferGeometry();
+  const verts = terrainData.vertices;
+  const faces = terrainData.faces;
 
-  const pos = geom.attributes.position;
-  const colors = [];
-  const color = new THREE.Color();
+  const positions = new Float32Array(faces.length * 3 * 3);
+  const colors = new Float32Array(faces.length * 3 * 3);
+  let ptr = 0;
+  let cptr = 0;
 
-  // Biome color palettes
-  const palettes = {
-    desert: { sand: 0xd9a76a, rock: 0x9e5b32, peak: 0xc47e45 },
-    coastal: { sand: 0xd9c28a, rock: 0x4a7337, peak: 0x5a6975 },
-    volcanic: { sand: 0x242426, rock: 0x473232, peak: 0x7a2323 },
-    highland: { sand: 0x526b48, rock: 0x545b63, peak: 0xd9e5eb },
-    industrial: { sand: 0x42454a, rock: 0x2f343b, peak: 0x6e7885 },
-  };
-  const pal = palettes[tcfg.biome] || palettes.coastal;
+  const meta = OP_ENV_METADATA[opCode] || OP_ENV_METADATA.c1;
+  const pal = meta.palette;
+  const colSand = new THREE.Color(pal.sand);
+  const colRock = new THREE.Color(pal.rock);
+  const colPeak = new THREE.Color(pal.peak);
+  const tempCol = new THREE.Color();
 
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const z = pos.getZ(i);
-    const y = getTerrainHeight(x, z, tcfg.biome, tcfg.height_scale, tcfg.roughness);
-    pos.setY(i, y);
+  for (let i = 0; i < faces.length; i++) {
+    const f = faces[i];
+    const v0 = verts[f[0]];
+    const v1 = verts[f[1]];
+    const v2 = verts[f[2]];
+    if (!v0 || !v1 || !v2) continue;
 
-    // Height & slope coloring
-    const t = (y + 40.0) / (tcfg.height_scale + 40.0);
-    if (t < 0.25) {
-      color.setHex(pal.sand);
-    } else if (t < 0.7) {
-      color.setHex(pal.rock);
-    } else {
-      color.setHex(pal.peak);
+    positions[ptr++] = v0[0];
+    positions[ptr++] = v0[1];
+    positions[ptr++] = v0[2];
+
+    positions[ptr++] = v1[0];
+    positions[ptr++] = v1[1];
+    positions[ptr++] = v1[2];
+
+    positions[ptr++] = v2[0];
+    positions[ptr++] = v2[1];
+    positions[ptr++] = v2[2];
+
+    // Compute vertex colors based on height relative to operation water / floor
+    for (const v of [v0, v1, v2]) {
+      const y = v[1];
+      if (y <= pal.shoreY + 1.5) {
+        tempCol.copy(colSand);
+      } else if (y < pal.shoreY + 28.0) {
+        const t = (y - pal.shoreY) / 28.0;
+        tempCol.lerpColors(colSand, colRock, t);
+      } else {
+        const t = Math.min(1.0, (y - pal.shoreY - 28.0) / 35.0);
+        tempCol.lerpColors(colRock, colPeak, t);
+      }
+      colors[cptr++] = tempCol.r;
+      colors[cptr++] = tempCol.g;
+      colors[cptr++] = tempCol.b;
     }
-    colors.push(color.r, color.g, color.b);
   }
 
-  geom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geom.computeVertexNormals();
+  return geom;
+}
 
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.85,
-    metalness: 0.1,
-    flatShading: true,
-  });
+async function buildTerrain() {
+  if (terrainMesh) {
+    scene.remove(terrainMesh);
+    if (terrainMesh.geometry) terrainMesh.geometry.dispose();
+    terrainMesh = null;
+  }
+  if (waterMesh) {
+    scene.remove(waterMesh);
+    if (waterMesh.geometry) waterMesh.geometry.dispose();
+    waterMesh = null;
+  }
 
-  terrainMesh = new THREE.Mesh(geom, mat);
-  terrainMesh.receiveShadow = true;
-  terrainMesh.name = "terrain";
-  scene.add(terrainMesh);
+  const rawOp = state.project.base_operation || state.project.terrain.biome || "c1";
+  const opCode = (rawOp === "coastal" ? "c1" :
+                  rawOp === "desert" ? "c2" :
+                  rawOp === "volcanic" ? "c3" :
+                  rawOp === "highland" ? "c4" :
+                  rawOp === "training" ? "t1" : rawOp);
+  state.project.base_operation = opCode;
+  state.project.terrain.biome = opCode;
 
-  // Water Plane
-  const waterGeom = new THREE.PlaneGeometry(tcfg.width, tcfg.depth);
-  waterGeom.rotateX(-Math.PI / 2);
-  const waterMat = new THREE.MeshStandardMaterial({
-    color: 0x145266,
-    roughness: 0.15,
-    metalness: 0.8,
-    transparent: true,
-    opacity: 0.65,
-  });
-  waterMesh = new THREE.Mesh(waterGeom, waterMat);
-  waterMesh.position.y = tcfg.water_level;
-  waterMesh.receiveShadow = true;
-  scene.add(waterMesh);
+  const meta = OP_ENV_METADATA[opCode] || OP_ENV_METADATA.c1;
+
+  // 1. Fetch or use cached authentic terrain mesh
+  let tData = terrainCache[opCode];
+  if (!tData) {
+    try {
+      const res = await fetch(`/static/assets/terrains/${opCode}.json`);
+      if (res.ok) {
+        tData = await res.json();
+        terrainCache[opCode] = tData;
+      }
+    } catch (e) {
+      console.warn("Could not load terrain JSON for", opCode, e);
+    }
+  }
+
+  if (tData) {
+    const geom = buildTerrainGeometryFromData(tData, opCode);
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.88,
+      metalness: 0.12,
+      flatShading: true,
+    });
+    terrainMesh = new THREE.Mesh(geom, mat);
+    terrainMesh.receiveShadow = true;
+    terrainMesh.name = "terrain";
+    scene.add(terrainMesh);
+    console.log(`[Map Studio] Loaded authentic ${meta.name} terrain mesh (${tData.vertices.length} vertices, ${tData.faces.length} faces)`);
+  }
+
+  // 2. Water Plane (if operation features water)
+  if (meta.hasWater) {
+    const waterGeom = new THREE.PlaneGeometry(meta.waterSize[0], meta.waterSize[1]);
+    waterGeom.rotateX(-Math.PI / 2);
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: meta.waterColor,
+      roughness: 0.15,
+      metalness: 0.75,
+      transparent: true,
+      opacity: 0.70,
+    });
+    waterMesh = new THREE.Mesh(waterGeom, waterMat);
+    waterMesh.position.set(meta.waterCenter[0], meta.waterLevel, meta.waterCenter[1]);
+    waterMesh.receiveShadow = true;
+    scene.add(waterMesh);
+  }
+
+  // 3. Center orbit controls around operation center
+  orbitControls.target.set(meta.center[0], 0, meta.center[1]);
+  camera.position.set(meta.center[0] - 650, 480, meta.center[1] + 750);
+  orbitControls.update();
 
   updateLighting();
+
+  // 4. Snap all placed assets to the authentic terrain surface
+  for (const asset of state.project.assets) {
+    asset.y = getTerrainHeight(asset.x, asset.z);
+  }
+  syncSceneAssets();
 }
 
 // Update Lighting from State
@@ -768,6 +882,12 @@ function getDefaultName(type) {
     factory: "Mech Assembly Plant",
     fuel_tank: "Coolant Storage Silo",
     city_building: "Fortified City Garrison",
+    bridge_span: "Highway Bridge Span",
+    ramp: "Heavy Vehicle Ramp",
+    dock: "Shoreline Platform Dock",
+    defense_wall: "Perimeter Blast Wall",
+    security_gate: "Security Blast Gate",
+    powerline_pole: "Utility Powerline Pole",
     mech_madcat: "Timber Wolf / Mad Cat",
     mech_bushwacker: "Bushwacker BSW-X1",
     mech_thor: "Summoner / Thor",
@@ -957,23 +1077,26 @@ function setViewMode(mode) {
   document.querySelectorAll(".hud-btn").forEach((btn) => btn.classList.remove("active"));
   document.getElementById(`btn-view-${mode}`).classList.add("active");
 
+  const opCode = state.project.base_operation || "c1";
+  const meta = OP_ENV_METADATA[opCode] || OP_ENV_METADATA.c1;
+  const cx = meta.center[0];
+  const cz = meta.center[1];
+
+  orbitControls.reset();
+  orbitControls.target.set(cx, 0, cz);
+
   if (mode === "topdown") {
-    orbitControls.reset();
-    camera.position.set(0, 1800, 0);
-    orbitControls.target.set(0, 0, 0);
+    camera.position.set(cx, 2400, cz);
     orbitControls.maxPolarAngle = 0.001; // Lock to top-down
   } else if (mode === "iso") {
-    orbitControls.reset();
-    camera.position.set(-1100, 1100, 1100);
-    orbitControls.target.set(0, 0, 0);
+    camera.position.set(cx - 1100, 1100, cz + 1100);
     orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
   } else {
     // orbit
-    orbitControls.reset();
-    camera.position.set(-600, 450, 750);
-    orbitControls.target.set(0, 0, 0);
+    camera.position.set(cx - 650, 480, cz + 750);
     orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
   }
+  orbitControls.update();
 }
 
 // Environment Presets
@@ -1026,10 +1149,10 @@ function loadDemoMap() {
   state.project.pack_id = "iron_ridge_outpost";
   state.project.pack_title = "Iron Ridge Outpost";
   state.project.description =
-    "Fortified Clan Smoke Jaguar communications outpost nestled in the red canyons of Tranquil.";
-  state.project.terrain.biome = "desert";
-  state.project.terrain.height_scale = 85.0;
-  state.project.terrain.water_level = 2.0;
+    "Fortified Clan Smoke Jaguar communications outpost nestled in the coastal bluff of Tranquil.";
+  state.project.base_operation = "c1";
+  state.project.terrain.biome = "c1";
+  state.project.terrain.water_level = 3.0;
 
   state.project.assets = [
     // Player Spawn
@@ -1037,9 +1160,9 @@ function loadDemoMap() {
       asset_id: "p_spawn",
       asset_type: "spawn",
       name: "Player Orbital Drop Zone",
-      x: -850,
+      x: -650,
       y: 0,
-      z: -800,
+      z: -700,
       yaw_deg: 45,
       faction: "player",
       health: 100,
@@ -1049,9 +1172,9 @@ function loadDemoMap() {
       asset_id: "bunk_cmd",
       asset_type: "bunker",
       name: "Outpost Command Bunker",
-      x: 50,
+      x: -420,
       y: 0,
-      z: 20,
+      z: -680,
       yaw_deg: 180,
       faction: "enemy",
       health: 250,
@@ -1061,9 +1184,9 @@ function loadDemoMap() {
       asset_id: "comm_main",
       asset_type: "comm_center",
       name: "Primary Comms Dish",
-      x: 120,
+      x: -360,
       y: 0,
-      z: 80,
+      z: -620,
       yaw_deg: 210,
       faction: "enemy",
       health: 150,
@@ -1074,9 +1197,9 @@ function loadDemoMap() {
       asset_id: "tur_srm_1",
       asset_type: "turret_srm",
       name: "Perimeter SRM Alpha",
-      x: -160,
+      x: -560,
       y: 0,
-      z: -90,
+      z: -780,
       yaw_deg: 135,
       faction: "enemy",
       health: 120,
@@ -1085,9 +1208,9 @@ function loadDemoMap() {
       asset_id: "tur_srm_2",
       asset_type: "turret_srm",
       name: "Perimeter SRM Beta",
-      x: 180,
+      x: -300,
       y: 0,
-      z: -110,
+      z: -820,
       yaw_deg: 225,
       faction: "enemy",
       health: 120,
@@ -1096,45 +1219,100 @@ function loadDemoMap() {
       asset_id: "tur_las_1",
       asset_type: "turret_laser",
       name: "Ridge Laser Tower",
-      x: 40,
+      x: -480,
       y: 0,
-      z: 220,
+      z: -560,
       yaw_deg: 0,
       faction: "enemy",
       health: 150,
     },
-    // Coolant Silos (In-Game 3D Model)
+    // Coolant Silo & Garrison (In-Game 3D Models)
     {
       asset_id: "fuel_1",
       asset_type: "fuel_tank",
       name: "Refinery Coolant Silo",
-      x: 160,
+      x: -320,
       y: 0,
-      z: -20,
+      z: -580,
       yaw_deg: 45,
       faction: "neutral",
       health: 60,
     },
-    // Fortified City Garrison (In-Game 3D Model)
     {
       asset_id: "garrison_1",
       asset_type: "city_building",
       name: "Forward Garrison Block",
-      x: -120,
+      x: -520,
       y: 0,
-      z: 120,
+      z: -620,
       yaw_deg: 0,
       faction: "enemy",
       health: 180,
+    },
+    // Authentic In-Game Environment Props
+    {
+      asset_id: "dock_1",
+      asset_type: "dock",
+      name: "Shoreline Platform Dock",
+      x: -780,
+      y: 0,
+      z: -850,
+      yaw_deg: 40,
+      faction: "neutral",
+      health: 200,
+    },
+    {
+      asset_id: "wall_1",
+      asset_type: "defense_wall",
+      name: "North Perimeter Wall",
+      x: -480,
+      y: 0,
+      z: -800,
+      yaw_deg: 90,
+      faction: "neutral",
+      health: 300,
+    },
+    {
+      asset_id: "gate_1",
+      asset_type: "security_gate",
+      name: "Base Security Blast Gate",
+      x: -420,
+      y: 0,
+      z: -800,
+      yaw_deg: 90,
+      faction: "enemy",
+      health: 250,
+    },
+    {
+      asset_id: "pole_1",
+      asset_type: "powerline_pole",
+      name: "High-Voltage Power Pole",
+      x: -380,
+      y: 0,
+      z: -750,
+      yaw_deg: 0,
+      faction: "neutral",
+      health: 50,
+    },
+    {
+      asset_id: "ramp_1",
+      asset_type: "ramp",
+      name: "Vehicle Access Ramp",
+      x: -600,
+      y: 0,
+      z: -730,
+      yaw_deg: 130,
+      faction: "neutral",
+      health: 200,
     },
     // In-Game BattleMechs (Patrol & Defense)
     {
       asset_id: "mech_guard",
       asset_type: "mech_madcat",
       name: "Smoke Jaguar Timber Wolf",
-      x: 30,
+      x: -400,
       y: 0,
-      z: 70,
+      z: -640,
       yaw_deg: 195,
       faction: "enemy",
       health: 350,
@@ -1144,62 +1322,49 @@ function loadDemoMap() {
       asset_id: "mech_patrol",
       asset_type: "mech_bushwacker",
       name: "Recon Bushwacker BSW-X1",
-      x: -280,
+      x: -540,
       y: 0,
-      z: -250,
+      z: -660,
       yaw_deg: 60,
       faction: "enemy",
       health: 220,
     },
     // Nav Points
     {
-      asset_id: "nav_able",
+      asset_id: "nav_alpha",
       asset_type: "nav",
-      name: "Nav Point Able",
-      x: -400,
+      name: "Nav Point Alpha (Drop Zone)",
+      x: -650,
       y: 0,
-      z: -350,
+      z: -700,
       yaw_deg: 0,
       faction: "neutral",
       health: 100,
     },
     {
-      asset_id: "nav_baker",
+      asset_id: "nav_beta",
       asset_type: "nav",
-      name: "Nav Point Baker",
-      x: 50,
+      name: "Nav Point Beta (Outpost Gate)",
+      x: -420,
       y: 0,
-      z: -150,
+      z: -800,
       yaw_deg: 0,
       faction: "neutral",
       health: 100,
     },
   ];
 
-  // Auto snap all Y coordinates to terrain
-  for (const a of state.project.assets) {
-    a.y =
-      Math.round(
-        getTerrainHeight(
-          a.x,
-          a.z,
-          state.project.terrain.biome,
-          state.project.terrain.height_scale,
-          state.project.terrain.roughness,
-        ) * 10,
-      ) / 10;
-  }
-
   // Update form inputs
   document.getElementById("project-title").value = state.project.pack_title;
   document.getElementById("project-id").value = state.project.pack_id;
-  document.getElementById("biome-select").value = state.project.terrain.biome;
+  document.getElementById("biome-select").value = state.project.base_operation;
 
-  buildTerrain();
-  setEnvPreset("sunset");
-  syncSceneAssets();
-  updateInspector();
-  playBeep(880, "sine", 0.12);
+  buildTerrain().then(() => {
+    setEnvPreset("sunset");
+    syncSceneAssets();
+    updateInspector();
+    playBeep(880, "sine", 0.12);
+  });
 }
 
 /**
@@ -1344,6 +1509,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("biome-select").addEventListener("change", (e) => {
+    state.project.base_operation = e.target.value;
     state.project.terrain.biome = e.target.value;
     buildTerrain();
   });

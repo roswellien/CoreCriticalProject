@@ -23,7 +23,7 @@ def verify_presentation_diagnostic(directory):
         raise ValueError('Diagnostic footer overstates command coverage')
     opened = False
     scenes = draws = 0
-    allowed = {'begin', 'initial_target', 'initial_depth', 'scene_begin', 'draw', 'scene_end', 'final_target', 'end'}
+    allowed = {'begin', 'initial_target', 'initial_depth', 'scene_begin', 'draw', 'scene_end', 'final_target', 'end', 'depth_fill', 'cpu_write'}
     for row in rows:
         event = row['event']
         if event not in allowed:
@@ -38,6 +38,8 @@ def verify_presentation_diagnostic(directory):
         elif event == 'draw':
             if not opened: raise ValueError('Draw outside diagnostic scene')
             draws += 1
+        elif event in ('depth_fill', 'cpu_write') and row['draws_so_far'] != draws:
+            raise ValueError('Surface command draw-order mismatch')
         elif event in ('final_target', 'end') and opened:
             raise ValueError('Open scene at final boundary')
     if opened or not scenes:
@@ -46,6 +48,48 @@ def verify_presentation_diagnostic(directory):
     receipt.update(scope='Observed presentation payloads only; no complete command coverage or frame equivalence',
                    scene_intervals=scenes, diagnostic_only=True, command_coverage_complete=False)
     return receipt
+
+
+def depth_fill_command(row, width, height, effects):
+    """Only the observed null-source D16 zero-depth profile is supported."""
+    if (row['flags'], row['fill_depth'], row['bits'], row['depth_bits']) != (0x2000000, 0, 16, 0) or row['hresult'] < 0:
+        raise ValueError('Depth fill outside observed profile')
+    if len(effects) != 100 or struct.unpack_from('<I', effects)[0] != 100 or struct.unpack_from('<I', effects, 80)[0] != 0:
+        raise ValueError('Depth fill input disagreement')
+    rect = row['rectangle']
+    if len(rect) != 4 or any(type(value) is not int for value in rect):
+        raise ValueError('Depth rectangle shape')
+    left, top, right, bottom = rect
+    if not (0 <= left < right <= width and 0 <= top < bottom <= height):
+        raise ValueError('Depth rectangle bounds')
+    return (2, 2, left, top, right-left, bottom-top, 0, 0, 0, 0)
+
+
+def cpu_write_regions(row, width, height, before, after):
+    """Copy only pixels changed by the observed CPU interval, preserving others."""
+    if row['format'] != 'RGB565' or row['unlock_hresult'] < 0 or (row['width'], row['height']) != (width, height) or row['source_pitch'] < width*2:
+        raise ValueError('CPU write outside observed profile')
+    if len(before) != width*height*2 or len(after) != len(before):
+        raise ValueError('CPU pixel payload size mismatch')
+    regions = []
+    for y in range(height):
+        x = 0
+        while x < width:
+            position = (y*width+x)*2
+            if before[position:position+2] == after[position:position+2]:
+                x += 1
+                continue
+            start = x
+            x += 1
+            while x < width:
+                position = (y*width+x)*2
+                if before[position:position+2] == after[position:position+2]:
+                    break
+                x += 1
+            regions.append((start, y, x-start, 1))
+    if len(regions) > 4096:
+        raise ValueError('CPU write copy-command budget')
+    return regions
 
 
 def _verify_payload(directory, rows, allow_authored):
@@ -92,6 +136,24 @@ def _verify_payload(directory, rows, allow_authored):
     if len(draws) < rows[0].get("minimum_draws", 0):
         raise ValueError("Interval did not meet the requested scene selection minimum")
     texture_snapshots = 0
+    fills = [row for row in rows if row['event'] == 'depth_fill']
+    for row in fills:
+        if depth[0].get('absent') or (depth[0]['surface']['bits'], depth[0]['surface']['flags'], depth[0]['surface']['g_mask']) != (16, 1024, 65535):
+            raise ValueError('Depth fill lacks observed D16 backing')
+        if not depth[0].get('object') or row['destination'] != depth[0]['object']:
+            raise ValueError('Depth fill attachment identity mismatch')
+        if (depth[0]['surface']['width'], depth[0]['surface']['height']) != (initial[0]['surface']['width'], initial[0]['surface']['height']):
+            raise ValueError('Depth fill backing size mismatch')
+        depth_fill_command(row, initial[0]['surface']['width'], initial[0]['surface']['height'], payload(row['effects'], 100))
+    writes = [row for row in rows if row['event'] == 'cpu_write']
+    for ordinal, row in enumerate(writes, 1):
+        target_info = initial[0]['surface']
+        if tuple(target_info[key] for key in ('flags', 'bits', 'r_mask', 'g_mask', 'b_mask', 'a_mask')) != (64, 16, 0xf800, 0x7e0, 0x1f, 0):
+            raise ValueError('CPU write requires observed RGB565 target')
+        if row['ordinal'] != ordinal or not initial[0].get('object') or row['surface'] != initial[0]['object']:
+            raise ValueError('CPU write target identity/ordinal mismatch')
+        size = row['width']*row['height']*2
+        cpu_write_regions(row, initial[0]['surface']['width'], initial[0]['surface']['height'], payload(row['before'], size), payload(row['after'], size))
     for ordinal, draw in enumerate(draws, 1):
         if draw["ordinal"] != ordinal:
             raise ValueError("Dropped or reordered draw")
@@ -126,7 +188,7 @@ def _verify_payload(directory, rows, allow_authored):
         raise ValueError("Storage budget/accounting mismatch")
     return {"live": rows[0]["live"], "pid": rows[0]["pid"], "draws": len(draws),
             "skipped_scenes": rows[0].get("skipped_scenes", 0),
-            "texture_snapshots": texture_snapshots, "payload_files": len(actual), "stored_bytes": total,
+            "texture_snapshots": texture_snapshots, "depth_fills": len(fills), "cpu_writes": len(writes), "payload_files": len(actual), "stored_bytes": total,
             "target_size": [initial[0]["surface"]["width"], initial[0]["surface"]["height"]],
             "manifest_sha256": hashlib.sha256((directory / "capture.jsonl").read_bytes()).hexdigest(),
             "scope": "Selected draw/state/resource snapshots; command closure, clear/presentation coverage and Vulkan equivalence unproven"}

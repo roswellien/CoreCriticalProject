@@ -1,5 +1,11 @@
 # Active native initializer work — 2026-10-10
 
+Historical lane snapshot. Current implementation priority is the
+[faithful modernization plan](faithful-modernization-plan.md), with the latest
+[Claude work review](m4-claude-work-review-2026-10-11.md) and
+[acceptance continuation](m4-execution-plan-r14.md). The outcomes below retain
+their recorded scope; they are not the current execution queue.
+
 Accepted progress is **131/144 selected startup initializers, 13 remaining**.
 The authoritative connected acceptance is [startup131 acceptance](../reports/m4-joint-startup131-root/acceptance-r1/report.json)
 (`aa9462f30bf4fa6c80ef926488928bb8680f207020e4f0aa166968caaf724061`).

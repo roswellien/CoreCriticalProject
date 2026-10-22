@@ -5,6 +5,12 @@ This private experiment follows the missing flat-memory coverage identified in
 playable launcher changes. No new FPS gain or native acceptance credit is
 established by the fixtures below.
 
+Follow-up: [differences investigation](gpu-projection-differences-investigation-2026-10-15.md)
+separates expected scratch-byte changes from the intermittent failed comparison.
+Two subsequent 1,800-frame bypass replays match every semantic record and all six
+captures, including one with added draw diagnostics disabled. The first failure
+is retained and its precise cause remains unproven; no launcher is promoted.
+
 The execution boundary under test is the original lit polygon perspective loop
 at `0x540985`: a narrowly admitted GPU draw omits its first n−1 iterations and
 retains its last original iteration. Original transformation, clipping,

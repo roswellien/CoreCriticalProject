@@ -49,6 +49,12 @@ request to blindly enter 12 into a different shader. Preserve the glass exceptio
 (0.30 in the reference). This decision applies to the MW5 replacement-model
 material direction; it does not select a strength for original MW3 meshes.
 
+On 2026-10-16, after reviewing the high-quality Mad Cat 12x/24x comparison,
+the user reported very little to no visible difference and reaffirmed 12x as
+the goal going forward. Keep the 12x reference and existing glass exception;
+the 24x experiment does not replace this approved target. See the
+[Mad Cat comparison and decision](five-mech-camera-follow-24x-2026-10-16.md#user-decision-after-high-quality-review---2026-10-16).
+
 Bring-up plan:
 
 1. Establish enhanced per-pixel lighting and the geometry/material handoff,

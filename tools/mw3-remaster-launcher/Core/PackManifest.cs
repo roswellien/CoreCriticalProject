@@ -4,6 +4,21 @@ using System.Text.Json.Serialization;
 
 namespace MW3RemasterLauncher.Core
 {
+    public class PackFile
+    {
+        [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+        [JsonPropertyName("bytes")] public long Bytes { get; set; }
+        [JsonPropertyName("format")] public string? Format { get; set; }
+    }
+
+    public class NativePackPayload
+    {
+        [JsonPropertyName("profile")] public string Profile { get; set; } = "";
+        [JsonPropertyName("registry")] public string Registry { get; set; } = "";
+        [JsonPropertyName("path_base")] public string PathBase { get; set; } = "";
+        [JsonPropertyName("reference_host_sha256")] public string ReferenceHostSha256 { get; set; } = "";
+        [JsonPropertyName("required_formats")] public List<string> RequiredFormats { get; set; } = new();
+    }
     /// <summary>Declared payload capabilities; these flags do not prove that files exist.</summary>
     public class PackProvides
     {
@@ -50,6 +65,12 @@ namespace MW3RemasterLauncher.Core
         [JsonPropertyName("schema_version")]
         public int SchemaVersion { get; set; } = 1;
 
+        [JsonPropertyName("native_payload")]
+        public NativePackPayload? NativePayload { get; set; }
+
+        [JsonPropertyName("files")]
+        public Dictionary<string, PackFile>? Files { get; set; }
+
         [JsonPropertyName("id")]
         public string Id { get; set; } = string.Empty;
 
@@ -82,6 +103,13 @@ namespace MW3RemasterLauncher.Core
 
         [JsonPropertyName("provides")]
         public PackProvides? Provides { get; set; }
+
+        [JsonIgnore]
+        public string RuntimeLabel => SchemaVersion == 2 ?
+            (NativePayload?.Profile == CinematicPack.Profile ? "Cinematics — AVI replacements or launcher movie library" :
+             NativePayload?.Profile == UiPack.Profile ? "HUD/menu artwork — original layout and input" :
+             NativePayload?.Profile == MusicPack.Profile ? "Soundtrack — original game music controls" :
+             NativePayload?.Profile == "prepared-environment-v1" ? "Environment textures, normals and lighting — playtest pending" : "Native mech candidates — gameplay validation pending") : "";
 
         // Local state
         [JsonIgnore]

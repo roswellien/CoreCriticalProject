@@ -22,6 +22,43 @@ still open. Strict acceptance v6 remains a separate review/criterion decision.
 
 ## Local build and launch
 
+### Reading the host source
+
+This directory retains several dated execution stages. Read their names and
+contracts before interpreting a historical stop point as the current game state.
+The current launcher's selected executable/profile and matching private source
+snapshot determine the active host; this checkout alone is not that build receipt.
+
+| File / type | Responsibility | Ownership and interpretation |
+| --- | --- | --- |
+| `composition.cpp` | Connect translated entries, service contexts and provider attach stages | Generated bodies/dispatch tables stay local; an absent admitted route must fault |
+| `parser_stage.hpp`, `heap_stage.hpp` | Earlier connected CRT boundaries | Preserve their recovered order and side effects; later MFC/game stages build on them |
+| `mfc_stage.hpp` / `Host` | Long-lived provider modules, handles and service bookkeeping | Host pointers live in host records; guest-visible handles/addresses remain 32-bit tokens |
+| `mfc_stage.hpp` / `map_image` | Map admitted provider bytes and bind imports | Mapping data does not execute provider code or complete attach |
+| `mfc_stage.hpp` / `Stage` | Active translated call/return state and API dispatch | `run`, `called`, `missing` and `deny` are the routing/failure path to follow first |
+| `win_bridge.inc` | Guest-facing Windows window/callback bridge | Marshal structures and callbacks; do not cast guest addresses to host pointers |
+| `vk_scene.hpp` and authored shaders | Render submitted scene state | Renderer/GPU ownership is distinct from guest surface memory and simulation state |
+| `../remaster-launcher/native-overrides/` | Later authored overlays and repairs | Read the applicator order and matching build snapshot; this is not a universal replacement tree |
+
+Follow one service from its import token through argument decoding, real host
+call, guest-visible output writes, status and stack cleanup. Preserve failure
+writes and last-error behavior as well as the success path. For callbacks, follow
+the return token and active owner through re-entry; a similarly named guest
+function is not enough to establish a safe native call signature.
+
+`State` carries translated guest register/FP state. Runtime memory owns guest
+bytes; `Host` owns native objects; `Stage` scopes active dispatch. FP guards must
+restore the host environment on both normal and exceptional exit. Rendering and
+audio may use host threads, but this does not make guest state concurrently safe.
+Read each component's threading/ownership comments before moving work between them.
+
+Keep frozen source versions intact when adding explanatory notes. Reformatting a
+receipt-bound host or applicator changes its identity even when generated code
+appears equivalent. Put a reviewed successor in the actual build chain and retain
+the previous version rather than silently rewriting accepted evidence. The
+[code guide](../../docs/code-guide.md) identifies the maintained launch/editor
+interfaces and the separate readability and functional-review work.
+
 ```powershell
 powershell -File tools/m4-crt-heap-carry/build.ps1 -Levels O2
 Play-MW3.cmd

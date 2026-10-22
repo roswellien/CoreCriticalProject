@@ -7,7 +7,7 @@ All generated assets and receipts belong under ignored local storage.
 """
 
 from pathlib import Path
-import argparse, hashlib, json, os, subprocess, sys
+import argparse, hashlib, json, os, subprocess, sys, time
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "local/remaster/launcher.json"
@@ -22,7 +22,7 @@ def read_json(path):
         raise RuntimeError(f"Cannot read completed manifest {path}: {exc}") from exc
 
 
-def plan(backend=None, original_models=False, *, config_path=None, registry_path=None):
+def plan(backend=None, original_models=False, *, config_path=None, registry_path=None, verification=None):
     """Resolve registered models, capabilities and command arguments without launching.
 
     Paths in registrations are relative to ROOT unless already absolute. A
@@ -33,25 +33,61 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
     selected_config = (Path(config_path) if config_path is not None else CONFIG).resolve()
     config = read_json(selected_config)
     backend = backend or config["backend"]
-    selected_registry = (
-        Path(registry_path)
-        if registry_path is not None
-        else ROOT / config.get("native", {}).get("model_registry", str(REGISTRY))
-    ).resolve()
-    registry = read_json(selected_registry)
-    if registry["schema_version"] != 1:
-        raise RuntimeError("Unsupported model registry version")
-    banks = read_json(ROOT / "local/work-ahead/texture-launcher-audit-v2/configured-banks.json")
-    if not banks:
-        raise RuntimeError("Texture pack manifest is empty")
-    statuses = {"runtime-ready"}
-    if backend == "native" and config["native"].get("include_runtime_candidates", False):
-        statuses.add("runtime-candidate")
-    ready = [m for m in registry["models"] if m["status"] in statuses and m["backend"] == backend]
-    offline = [m["name"] for m in registry["models"] if m not in ready]
-    if original_models:
-        ready = []
+    installed_packs = "prepared_pack_roots" in config.get("native", {})
+    prepared_profile = None
+    if installed_packs:
+        if backend != "native" or registry_path is not None:
+            raise RuntimeError("Prepared mech packs require the native backend and cannot mix legacy registries")
+        from prepared_mech_packs import compose
+        roots = [] if original_models else config["native"]["prepared_pack_roots"]
+        if not isinstance(roots, list) or len(roots) > 128 or any(not isinstance(p, str) for p in roots):
+            raise RuntimeError("Invalid installed pack roots")
+        ready, bindings = compose(roots, config["native"], verification)
+        config["native"]["runtime_environment"] = bindings
+        prepared_profile = config
         offline = []
+    else:
+        selected_registry = (
+            Path(registry_path) if registry_path is not None
+            else ROOT / config.get("native", {}).get("model_registry", str(REGISTRY))
+        ).resolve()
+        registry = read_json(selected_registry)
+        if registry["schema_version"] != 1:
+            raise RuntimeError("Unsupported model registry version")
+        statuses = {"runtime-ready"}
+        if backend == "native" and config["native"].get("include_runtime_candidates", False):
+            statuses.add("runtime-candidate")
+        ready = [m for m in registry["models"] if m["status"] in statuses and m["backend"] == backend]
+        offline = [m["name"] for m in registry["models"] if m not in ready]
+        if original_models:
+            ready = []
+            offline = []
+    bank_manifest = ROOT / "local/work-ahead/texture-launcher-audit-v2/configured-banks.json"
+    environment_packs = None
+    if "prepared_environment_pack_roots" in config.get("native", {}):
+        if backend != "native":
+            raise RuntimeError("Prepared environment packs require the native backend")
+        from prepared_environment_packs import select, profile_bindings, detail_metadata
+        environment_packs = select(config['native']['prepared_environment_pack_roots'], config['native'], verification)
+        from mission_lighting import apply_training
+        apply_training(environment_packs, config['native'])
+        config['native']['runtime_environment'] = profile_bindings(environment_packs,config['native'])
+        # Installed pack versions own their independently verified detail pins.
+        # A development catalog hash must not reject another valid pack revision.
+        installed_detail = detail_metadata(environment_packs)
+        if installed_detail:
+            config['native'].setdefault('surface_detail',{}).setdefault('packs',{}).update(installed_detail)
+        env = config['native']['runtime_environment']
+        if 'MW34_EFFECT_LIGHT_CATALOG' in env:
+            from prepared_environment_packs import sha
+            config['native']['effect_lighting']['catalog'] = env['MW34_EFFECT_LIGHT_CATALOG']
+            config['native']['effect_lighting']['sha256'] = sha(env['MW34_EFFECT_LIGHT_CATALOG'])
+        prepared_profile = config
+        banks = [key for p in environment_packs.values() for key in p['registry']['banks']]
+    else:
+        banks = read_json(bank_manifest) if bank_manifest.is_file() else []
+    if not banks and not installed_packs and environment_packs is None:
+        raise RuntimeError("Texture pack manifest is empty or missing")
     graphics = dict(config["graphics"])
     # Settings UI persists the named off choice; the native sampler contract
     # uses one raster sample for disabled AA.
@@ -129,8 +165,15 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
                 "MW34_EFFECT_LIGHT_CATALOG", ""
             )
             pin = profile.get("effect_lighting", {})
-            if not catalog.is_file() or pin.get("catalog") != str(catalog):
-                raise RuntimeError("Configured effect-light catalog is missing or unregistered")
+            if not catalog.is_file():
+                raise RuntimeError("Configured effect-light catalog is missing: " + str(catalog))
+            registered_catalog = pin.get("catalog")
+            if not registered_catalog or (ROOT / registered_catalog).resolve() != catalog.resolve():
+                raise RuntimeError(
+                    "Effect-light profile mismatch: selected " + str(catalog)
+                    + "; registered " + str(registered_catalog)
+                    + ". Repair the profile using the selected catalog's generation receipt."
+                )
             data = catalog.read_bytes()
             if len(data) < 12 or data[:8] != b"MWFX1\0\0\0":
                 raise RuntimeError("Invalid effect-light catalog")
@@ -150,6 +193,10 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
                 raise RuntimeError(
                     "Native executable changed; publish its completed validation/profile before launching"
                 )
+        if profile.get("translated_module"):
+            module = ROOT / profile["translated_module"]
+            if not module.is_file() or hashlib.sha256(module.read_bytes()).hexdigest() != profile.get("translated_module_sha256"):
+                raise RuntimeError("Generated native game module is missing or changed. Repair this runtime version.")
         if profile.get("verify_source_snapshot"):
             snapshot = read_json(ROOT / profile["source_snapshot"])
             if (
@@ -220,9 +267,10 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(ROOT / "tools/remaster-launcher/play_native.ps1"),
+            str(Path(__file__).with_name("play_native.ps1")),
             "-Profile",
             str(selected_config),
+            "-RuntimeRoot", str(ROOT),
         ]
         limitations = (
             ["Native renderer does not yet implement this complete requested graphics profile."]
@@ -246,7 +294,9 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
     if backend == "native" and config["native"].get("local_cd_audio", False):
         from local_music import configuration
 
-        music = configuration(ROOT)
+        music = configuration(ROOT, config['native'].get('music_inputs'))
+        if config["native"].get("installation_layout") == 1 and music is None:
+            raise RuntimeError("Local music is enabled but its installed input configuration is missing")
     asset_output = (
         config.get("native", {}).get("prepared_asset_directory") if backend == "native" else None
     )
@@ -261,12 +311,16 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         command=command,
         music=music,
         asset_output=asset_output,
+        prepared_profile=prepared_profile,
+        environment_packs=environment_packs,
     )
 
 
 def main():
     """Handle check/prepare/run modes; return the backend exit status or 2 on failure."""
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runtime-root", type=Path, help="Installed runtime data root; no checkout discovery")
     parser.add_argument("--backend", choices=["native", "d7vk"])
     parser.add_argument(
         "--original-models",
@@ -310,21 +364,39 @@ def main():
         "--weather", choices=["0", "1"], help="Override supported campaign weather shading"
     )
     parser.add_argument("--frames", type=int, default=0)
+    parser.add_argument("--input-script", type=Path, help="Explicit local UI-input script for bounded native checks")
     parser.add_argument("--dump", type=int, default=0)
     args = parser.parse_args()
+    if args.runtime_root is not None:
+        ROOT = args.runtime_root.resolve(strict=True)
     try:
         if args.game_exe and not args.game_exe.is_file():
             raise RuntimeError("Selected game executable is missing")
+        if args.input_script and not args.input_script.is_file():
+            raise RuntimeError("Selected UI-input script is missing")
+        from startup_cache import VerificationCache, environment_resources
+        startup_started = time.monotonic()
+        def startup_progress(message):
+            print(f'Startup: {message} ({time.monotonic() - startup_started:.0f}s)', flush=True)
+        startup_progress('Checking content…')
+        verification = VerificationCache(Path(args.asset_output) / 'startup' , startup_progress) if args.asset_output and not args.check else None
         p = plan(
             args.backend,
             args.original_models,
             config_path=args.profile,
             registry_path=args.registry,
+            verification=verification,
         )
-        lighting_config = read_json(args.profile).get("native", {}).get("sun_preset")
+        if verification is not None:
+            verification.save()
+            startup_progress(f'Content checks complete: {verification.reused} unchanged, {verification.hashed} fully checked.')
+        lighting_profile = p.get('prepared_profile') or read_json(args.profile)
+        lighting_config = lighting_profile.get("native", {}).get("sun_preset")
         if args.lighting_preset and p["backend"] != "native":
             raise RuntimeError("Lighting presets require the native renderer")
         if p["backend"] == "native" and (lighting_config or args.lighting_preset):
+            # The selected pack catalog must also reach the read-only resolver;
+            # the original GUI profile still contains the previous selection.
             resolved = subprocess.run(
                 [
                     "powershell.exe",
@@ -332,11 +404,13 @@ def main():
                     "-ExecutionPolicy",
                     "Bypass",
                     "-File",
-                    str(ROOT / "tools/remaster-launcher/resolve_sun_preset.ps1"),
+                    str(Path(__file__).with_name("resolve_sun_preset.ps1")),
                     "-Profile",
                     str(args.profile.resolve()),
+                    "-RuntimeRoot", str(ROOT),
                     "-Preset",
                     args.lighting_preset or lighting_config["default"],
+                    "-CatalogPath", str(lighting_config['source']), "-MapName", str(lighting_config['map']),
                 ],
                 capture_output=True,
                 text=True,
@@ -417,14 +491,27 @@ def main():
                 environment.pop(key, None)
         if p["backend"] == "native":
             from native_assets import prepare
-
+            startup_progress('Preparing mech resources…')
             environment.update(
-                prepare(ROOT, p["models"], output=args.asset_output or p["asset_output"])
+                prepare(ROOT, p["models"], output=args.asset_output or p["asset_output"],
+                        allow_original_banks=p.get("prepared_profile") is not None,
+                        use_development_banks=p.get('environment_packs') is None)
             )
+            if p.get('environment_packs') is not None:
+                from prepared_environment_packs import RESOURCE_KEYS
+                native=p['prepared_profile']['native']
+                bindings=environment_resources(p['environment_packs'],native,
+                    Path(args.asset_output or p['asset_output']), startup_progress)
+                native['runtime_environment']=bindings
+                for key in RESOURCE_KEYS: environment.pop(key,None)
+                environment.update(bindings)
             if p["music"]:
+                startup_progress('Preparing soundtrack…')
                 from local_music import prepare_music
 
-                environment.update(prepare_music(ROOT))
+                music_output = (Path(args.asset_output or p['asset_output']) / 'music'
+                                if read_json(args.profile)['native'].get('installation_layout') == 1 else None)
+                environment.update(prepare_music(ROOT, supplied=p['music'], output=music_output))
             for key, value in p["graphics"].items():
                 environment["MW34_REMASTER_" + key.upper()] = str(value)
             p["command"] += [
@@ -441,8 +528,21 @@ def main():
                 p["command"] += ["-Weather", args.weather]
             if args.game_exe:
                 p["command"] += ["-GameExe", str(args.game_exe.resolve())]
+            if args.input_script:
+                p["command"] += ["-Script", str(args.input_script.resolve())]
+        if p.get("prepared_profile") is not None:
+            # PowerShell applies runtime_environment after preparation. Give it the
+            # composed session profile so stale developer mech paths cannot return.
+            import uuid
+            session_dir = Path(args.asset_output or p["asset_output"] or ROOT / "local/remaster/prepared") / "launches" / uuid.uuid4().hex
+            session_dir.mkdir(parents=True)
+            session_profile = session_dir / "profile.json"
+            session_profile.write_text(json.dumps(p["prepared_profile"], indent=2), encoding="utf-8")
+            p["command"][p["command"].index("-Profile") + 1] = str(session_profile.resolve())
+            print("Prepared-pack session profile: " + str(session_profile.resolve()))
         if args.prepare_only:
             return 0
+        startup_progress('Starting game…')
         return subprocess.call(p["command"], cwd=ROOT, env=environment)
     except (RuntimeError, OSError, ValueError) as exc:
         print("ERROR: " + str(exc), file=sys.stderr)

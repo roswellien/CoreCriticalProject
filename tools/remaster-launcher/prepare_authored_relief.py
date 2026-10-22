@@ -17,70 +17,90 @@ from prepare_world_normals import accelerated_hash
 
 
 def sha(path):
+    """Stream an input or output file's SHA-256 without loading its full contents."""
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def periodic_height(value):
-    """Remove the smooth boundary mismatch without erasing interior rock forms."""
+    """Subtract the smooth boundary mismatch from a 2-D floating height field.
+
+    Opposite-edge differences supply a discrete Poisson solve in Fourier space.
+    The zero-frequency component is forced to zero, preserving the input mean.
+    This reduces wrap seams without removing broad interior height features.
+    """
     h, w = value.shape
     border = np.zeros_like(value)
     border[0] = value[-1] - value[0]
     border[-1] = -border[0]
-    diff = value[:, -1] - value[:, 0]
-    border[:, 0] += diff
-    border[:, -1] -= diff
-    denom = (
+    column_mismatch = value[:, -1] - value[:, 0]
+    border[:, 0] += column_mismatch
+    border[:, -1] -= column_mismatch
+    laplacian_eigenvalues = (
         2 * np.cos(2 * np.pi * np.arange(w) / w)[None, :]
         + 2 * np.cos(2 * np.pi * np.arange(h) / h)[:, None]
         - 4
     )
-    denom[0, 0] = 1
-    spectrum = np.fft.fft2(border) / denom
-    spectrum[0, 0] = 0
-    return value - np.fft.ifft2(spectrum).real
+    laplacian_eigenvalues[0, 0] = 1
+    smooth_spectrum = np.fft.fft2(border) / laplacian_eigenvalues
+    smooth_spectrum[0, 0] = 0
+    return value - np.fft.ifft2(smooth_spectrum).real
 
 
 def normals_from_height(image, size, depth_ratio, slope_limit, *, repeat=True):
+    """Return (width, height, RGBA bytes) and slope statistics from grayscale height.
+
+    Heights are filtered after resizing. Repeating surfaces use a corrected
+    periodic field and wrapped central differences; other surfaces use ordinary
+    gradients. Scale derivatives by image dimensions and depth_ratio, cap their
+    combined slope, then encode negative stored-U/V derivatives as unit normals.
+    """
     image = image.convert("L").resize(size, Image.Resampling.LANCZOS)
-    value = np.asarray(image.filter(ImageFilter.GaussianBlur(1.2)), dtype=np.float64) / 255.0
+    height_field = np.asarray(image.filter(ImageFilter.GaussianBlur(1.2)), dtype=np.float64) / 255.0
     if repeat:
-        value = periodic_height(value)
-        dx = (np.roll(value, -1, 1) - np.roll(value, 1, 1)) * 0.5
-        dy = (np.roll(value, -1, 0) - np.roll(value, 1, 0)) * 0.5
+        height_field = periodic_height(height_field)
+        dx = (np.roll(height_field, -1, 1) - np.roll(height_field, 1, 1)) * 0.5
+        dy = (np.roll(height_field, -1, 0) - np.roll(height_field, 1, 0)) * 0.5
     else:
-        dy, dx = np.gradient(value)
+        dy, dx = np.gradient(height_field)
     dx *= size[0] * depth_ratio
     dy *= size[1] * depth_ratio
     slopes = np.sqrt(dx * dx + dy * dy)
-    cap = np.minimum(1.0, slope_limit / np.maximum(slopes, 1e-12))
-    n = np.stack((-dx * cap, -dy * cap, np.ones_like(dx)), axis=-1)
-    n /= np.linalg.norm(n, axis=-1, keepdims=True)
-    raw = np.empty((*value.shape, 4), dtype="uint8")
-    raw[:, :, :3] = np.rint(np.clip(n * 0.5 + 0.5, 0, 1) * 255).astype("uint8")
-    raw[:, :, 3] = 255
+    slope_scale = np.minimum(1.0, slope_limit / np.maximum(slopes, 1e-12))
+    unit_normals = np.stack((-dx * slope_scale, -dy * slope_scale, np.ones_like(dx)), axis=-1)
+    unit_normals /= np.linalg.norm(unit_normals, axis=-1, keepdims=True)
+    rgba = np.empty((*height_field.shape, 4), dtype="uint8")
+    rgba[:, :, :3] = np.rint(np.clip(unit_normals * 0.5 + 0.5, 0, 1) * 255).astype("uint8")
+    rgba[:, :, 3] = 255
     stats = dict(
-        median_slope=float(np.median(slopes * cap)),
-        p95_slope=float(np.percentile(slopes * cap, 95)),
-        max_slope=float((slopes * cap).max()),
+        median_slope=float(np.median(slopes * slope_scale)),
+        p95_slope=float(np.percentile(slopes * slope_scale, 95)),
+        max_slope=float((slopes * slope_scale).max()),
         clipped_fraction=float(np.mean(slopes > slope_limit)),
     )
-    return (*size, raw.tobytes()), stats
+    return (*size, rgba.tobytes()), stats
 
 
 def alignment(colour, height):
+    """Screen color/height alignment using a fixed 256-square comparison grid.
+
+    Compare blurred luminance over the interior at shifts of -8 to +8 pixels
+    in four-pixel steps. Return zero-shift correlation and the greatest
+    (correlation, x shift, y shift) tuple. Correlation is a review aid, not proof
+    of UV correctness; a constant comparison is rejected rather than scored.
+    """
     size = (256, 256)
-    a = np.asarray(
+    colour_luminance = np.asarray(
         colour.convert("L").resize(size).filter(ImageFilter.GaussianBlur(2)), dtype=float
     )
-    b = np.asarray(
+    height_luminance = np.asarray(
         height.convert("L").resize(size).filter(ImageFilter.GaussianBlur(2)), dtype=float
     )
-    interior = a[12:-12, 12:-12].ravel()
+    interior = colour_luminance[12:-12, 12:-12].ravel()
     scores = []
     for y in (-8, -4, 0, 4, 8):
         for x in (-8, -4, 0, 4, 8):
-            shifted = np.roll(b, (y, x), (0, 1))[12:-12, 12:-12].ravel()
+            shifted = np.roll(height_luminance, (y, x), (0, 1))[12:-12, 12:-12].ravel()
             score = float(np.corrcoef(interior, shifted)[0, 1])
             if not np.isfinite(score):
                 raise ValueError("Height/colour alignment has no variation")
@@ -89,6 +109,14 @@ def alignment(colour, height):
 
 
 def prepare(config_path, output, hash_library):
+    """Replace selected normal bindings in a fresh local catalog candidate.
+
+    Receipts pin the source catalog and base pages. Shared pixel aliases must
+    select at most one recipe; each selected recipe must match a surface and
+    pass alignment/slope screening. Untouched pages are copied byte for byte.
+    The final manifest is written after the pages and receipt; failure can leave
+    partial output. Reusing an output directory is deliberately rejected.
+    """
     if output.exists():
         raise ValueError("Choose a fresh output")
     config = json.loads(config_path.read_text())
@@ -101,6 +129,8 @@ def prepare(config_path, output, hash_library):
         raise ValueError("Source catalog changed")
     base_receipt = json.loads(receipt_path.read_text())
     edits = {tuple(e["key"]): e for e in source["registrations"]}
+    # This script selects the process-wide catalog hash implementation. The
+    # caller supplies a trusted local library, checked against reference vectors.
     catalog.pixel_hash = accelerated_hash(hash_library)
     recipes = {e["name"]: e for e in config["materials"]}
     loaded = {}
@@ -161,6 +191,8 @@ def prepare(config_path, output, hash_library):
                     )
                 ratio = min(1.0, spec["longest_side"] / max(w, h))
                 size = (round(w * ratio), round(h * ratio))
+                # Recipes are tiled by default. Keep height filtering and normal
+                # orientation consistent across every pixel variant of a recipe.
                 normal, stats = normals_from_height(
                     loaded[name], size, spec["depth_ratio"], spec["slope_limit"]
                 )

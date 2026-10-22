@@ -40,7 +40,7 @@ class LauncherDispatchTests(unittest.TestCase):
                 play_remaster,
                 "read_json",
                 return_value={
-                    "native": {"executable": "native.exe", "sun_preset": {"default": "sunset"}}
+                    "native": {"executable": "native.exe", "sun_preset": {"default": "sunset", "source": "authored-presets.json", "map": "BIG LAKE"}}
                 },
             ),
             patch.dict(sys.modules, {"native_assets": assets}),

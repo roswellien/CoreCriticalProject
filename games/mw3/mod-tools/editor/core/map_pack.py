@@ -255,6 +255,12 @@ class MapPackBuilder:
                 "mech_thor": [1644, 1648, 1899, 3065],
                 "mech_vulture": [3156, 3159],
                 "mech_daishi": [3138, 3205],
+                "bridge_span": [5715, 5746, 5759, 5768],
+                "ramp": [4278, 5215],
+                "dock": [4343, 4383, 4423, 4463],
+                "defense_wall": [2720, 2729, 2704, 2762],
+                "security_gate": [7525],
+                "powerline_pole": [8303, 8320, 8321, 8438, 8455],
             }
 
             # Track allocation pointer for each pool

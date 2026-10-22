@@ -1,0 +1,19 @@
+<Window x:Class="MW3RemasterLauncher.SaveBackupsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Save Backups" Width="700" Height="460" WindowStartupLocation="CenterOwner"
+        Background="#141A1F" Foreground="#E5EDF0">
+    <Grid Margin="20">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="SAVE BACKUPS" FontSize="20" FontWeight="Bold" Foreground="#6FD8E5"/>
+        <TextBlock Grid.Row="1" Text="Back up pilots, campaign saves, mech configurations and native player settings. Restoring replaces matching files and keeps other saves. After restoring, use Load Game in the game menu." TextWrapping="Wrap" Margin="0,10,0,15"/>
+        <ListBox Grid.Row="2" x:Name="Backups" DisplayMemberPath="Name" Background="#202930" Foreground="#E5EDF0"/>
+        <WrapPanel Grid.Row="3" Margin="0,14,0,10">
+            <Button Content="Back Up Now" Click="CreateBackup" Padding="12,7" Margin="0,0,8,0"/>
+            <Button Content="Restore Selected" Click="RestoreSelected" Padding="12,7" Margin="0,0,8,0"/>
+            <Button Content="Load Backup File…" Click="LoadBackup" Padding="12,7" Margin="0,0,8,0"/>
+            <Button Content="Open Folder" Click="OpenFolder" Padding="12,7"/>
+        </WrapPanel>
+        <TextBlock Grid.Row="4" x:Name="Status" Text="Close the game before creating or restoring a backup. Your current saves are automatically backed up before restore." TextWrapping="Wrap" Foreground="#6FD8E5"/>
+    </Grid>
+</Window>

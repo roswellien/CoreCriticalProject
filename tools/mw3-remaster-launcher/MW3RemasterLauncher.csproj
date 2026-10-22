@@ -10,11 +10,12 @@
     <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
     <AssemblyName>MW3RemasterLauncher</AssemblyName>
     <RootNamespace>MW3RemasterLauncher</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.0.17-preview</Version>
     <Authors>MW3 Remaster Team</Authors>
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Core\SupportedMedia.json" />
     <Resource Include="Assets\Fonts\*.ttf" />
     <Resource Include="Assets\Plates\*.png" />
     <Resource Include="Assets\app-icon.ico" />

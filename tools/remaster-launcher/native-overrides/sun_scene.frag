@@ -26,11 +26,11 @@ layout(set=1,binding=0,std140) uniform SunLighting {
 struct EffectLight {vec4 start;vec4 end;vec4 color;};
 layout(set=1,binding=2,std140) uniform EffectLighting {
  vec4 params;
- EffectLight lights[32];
+ EffectLight lights[64];
 } effects;
 vec3 effectIllumination(vec3 p,vec3 n){
  vec3 illumination=vec3(0);
- for(int i=0;i<min(int(effects.params.x),32);++i){
+ for(int i=0;i<min(int(effects.params.x),64);++i){
   EffectLight l=effects.lights[i];
   vec3 delta;
   float spotFactor=1.0;

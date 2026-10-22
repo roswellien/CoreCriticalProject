@@ -18,16 +18,24 @@ from feature_relief import feature_relief
 
 
 def atlas_relief(image, recipe):
-    """Independent clamped panels; excluded regions and panel guards stay flat."""
-    w, h = image.size
-    rgba = np.full((h, w, 4), [128, 128, 255, 255], dtype="uint8")
-    height = Image.new("L", (w, h), 128)
-    occupied = np.zeros((h, w), dtype=bool)
+    """Return normals, grayscale height preview and statistics for isolated panels.
+
+    Panel rectangles use normalized coordinates with exclusive right/bottom
+    edges after rounding to pixel bounds. Reject overlap and panels below eight
+    pixels per side. Unselected regions and each panel's two-pixel guard stay flat.
+    """
+    image_width, image_height = image.size
+    rgba = np.full((image_height, image_width, 4), [128, 128, 255, 255], dtype="uint8")
+    height = Image.new("L", (image_width, image_height), 128)
+    occupied = np.zeros((image_height, image_width), dtype=bool)
     reports = []
-    for rect in recipe["panels"]:
-        if len(rect) != 4 or not all(0 <= v <= 1 for v in rect):
+    for panel_bounds in recipe["panels"]:
+        if len(panel_bounds) != 4 or not all(0 <= v <= 1 for v in panel_bounds):
             raise ValueError("Atlas panel outside normalized texture bounds")
-        x0, y0, x1, y1 = [round(v * s) for v, s in zip(rect, (w, h, w, h))]
+        x0, y0, x1, y1 = [
+            round(v * s)
+            for v, s in zip(panel_bounds, (image_width, image_height, image_width, image_height))
+        ]
         if x1 - x0 < 8 or y1 - y0 < 8 or occupied[y0:y1, x0:x1].any():
             raise ValueError("Atlas panels overlap or are too small")
         occupied[y0:y1, x0:x1] = True
@@ -40,16 +48,16 @@ def atlas_relief(image, recipe):
         normal, stats = normals_from_height(
             relief, panel.size, recipe["depth_ratio"], recipe["slope_limit"], repeat=False
         )
-        data = np.frombuffer(normal[2], dtype="uint8").reshape(y1 - y0, x1 - x0, 4).copy()
-        data[:2, :, :3] = data[-2:, :, :3] = [128, 128, 255]
-        data[:, :2, :3] = data[:, -2:, :3] = [128, 128, 255]
-        rgba[y0:y1, x0:x1] = data
+        panel_pixels = np.frombuffer(normal[2], dtype="uint8").reshape(y1 - y0, x1 - x0, 4).copy()
+        panel_pixels[:2, :, :3] = panel_pixels[-2:, :, :3] = [128, 128, 255]
+        panel_pixels[:, :2, :3] = panel_pixels[:, -2:, :3] = [128, 128, 255]
+        rgba[y0:y1, x0:x1] = panel_pixels
         height.paste(relief, (x0, y0))
         reports.append(stats)
     if not reports:
         raise ValueError("No atlas panels selected")
     return (
-        (w, h, rgba.tobytes()),
+        (image_width, image_height, rgba.tobytes()),
         height,
         dict(
             panels=reports,
@@ -60,16 +68,22 @@ def atlas_relief(image, recipe):
 
 
 def analytic_height(image, kind):
-    value = np.asarray(image.convert("L"), dtype=float) / 255.0
+    """Estimate an 8-bit height draft from filtered color luminance bands.
+
+    Cliff recipes remove column lighting bias before filtering; transition
+    recipes suppress broad painted color changes. Filters wrap with padding,
+    and the neutral output height is centered at 0.5. This is not measured relief.
+    """
+    luminance = np.asarray(image.convert("L"), dtype=float) / 255.0
     # Remove the persistent left/right cliff lighting bias before interpreting
     # horizontal ledges. This remains an estimate from upgraded color artwork.
     if kind == "cliff":
-        value -= value.mean(axis=0, keepdims=True) - value.mean()
+        luminance -= luminance.mean(axis=0, keepdims=True) - luminance.mean()
 
     def blur(radius):
         # Extended borders avoid introducing wraparound detail during filtering.
         pad = max(4, int(radius * 3))
-        padded = np.pad(value, pad, mode="wrap")
+        padded = np.pad(luminance, pad, mode="wrap")
         filtered = Image.fromarray(np.rint(np.clip(padded, 0, 1) * 255).astype("uint8"))
         return (
             np.asarray(filtered.filter(ImageFilter.GaussianBlur(radius)), dtype=float)[
@@ -80,16 +94,24 @@ def analytic_height(image, kind):
 
     fine, medium, broad = [blur(x) for x in (0.7, 3.0, 24.0)]
     if kind == "cliff":
-        height = 0.75 * (medium - broad) + 0.25 * (fine - medium)
+        height_field = 0.75 * (medium - broad) + 0.25 * (fine - medium)
     elif kind == "transition":
         # Do not turn the large painted sand-color transition into a height step.
-        height = 0.10 * (medium - broad) + 0.65 * (fine - medium)
+        height_field = 0.10 * (medium - broad) + 0.65 * (fine - medium)
     else:
-        height = 0.12 * (medium - broad) + 0.70 * (fine - medium)
-    return Image.fromarray(np.rint(np.clip(0.5 + height, 0, 1) * 255).astype("uint8"))
+        height_field = 0.12 * (medium - broad) + 0.70 * (fine - medium)
+    return Image.fromarray(np.rint(np.clip(0.5 + height_field, 0, 1) * 255).astype("uint8"))
 
 
 def prepare(config_path, output, hash_library):
+    """Refine selected C1 bank aliases and preserve all other world bindings.
+
+    An optional per-recipe key list narrows name matching. The first eligible
+    alias selects a recipe. Feature coordinates, panel grain, reviewed height
+    images and analytic drafts have distinct preparation paths. Pinned source
+    pixels, alignment checks and output readback guard this local candidate;
+    the final manifest is published only after package checks complete.
+    """
     if output.exists():
         raise ValueError("Preserve previous output: choose a fresh directory")
     config = json.loads(config_path.read_text())
@@ -125,7 +147,7 @@ def prepare(config_path, output, hash_library):
     (output / "editable").mkdir()
     seen = set()
     changed_keys = set()
-    retained = 0
+    retained_bindings = 0
     lines = manifest.read_text().splitlines()
     if not lines or lines[0] != "MW34SNP1":
         raise ValueError("Unsupported world manifest")
@@ -133,16 +155,16 @@ def prepare(config_path, output, hash_library):
         if not filename:
             continue
         path = manifest.parent / filename
-        before = sha(path)
-        result = []
+        source_page_sha256 = sha(path)
+        page_bindings = []
         changed = False
         for key, normal in catalog.read_surface_bindings(path.read_bytes()):
             if key in seen:
                 raise ValueError("Duplicate world identity")
             seen.add(key)
             if key not in selected:
-                result.append((key, normal))
-                retained += 1
+                page_bindings.append((key, normal))
+                retained_bindings += 1
                 continue
             alias, recipe = selected[key]
             name = alias["name"].lower()
@@ -153,11 +175,22 @@ def prepare(config_path, output, hash_library):
                     raise ValueError("Upgraded source bank changed")
             with bank.open("rb") as stream:
                 stream.seek(alias["offset"])
-                flags, w, h, reserved, palette, stretch = struct.unpack("<IHHIHH", stream.read(16))
-                raw = stream.read(w * h * 2)
-            if flags not in (5, 37) or reserved or palette or (w, h, 1, digest(raw)) != key:
+                flags, source_width, source_height, reserved, palette, stretch = struct.unpack(
+                    "<IHHIHH", stream.read(16)
+                )
+                colour_bytes = stream.read(source_width * source_height * 2)
+            if (
+                flags not in (5, 37)
+                or reserved
+                or palette
+                or (source_width, source_height, 1, digest(colour_bytes)) != key
+            ):
                 raise ValueError("Complete source identity mismatch")
-            words = np.frombuffer(raw, dtype="<u2").reshape(h, w).astype("uint32")
+            words = (
+                np.frombuffer(colour_bytes, dtype="<u2")
+                .reshape(source_height, source_width)
+                .astype("uint32")
+            )
             rgb = np.stack(
                 (
                     (words >> 11) * 255 // 31,
@@ -167,8 +200,8 @@ def prepare(config_path, output, hash_library):
                 axis=-1,
             ).astype("uint8")
             image = Image.fromarray(rgb)
-            ratio = min(1.0, recipe["longest_side"] / max(w, h))
-            size = (round(w * ratio), round(h * ratio))
+            ratio = min(1.0, recipe["longest_side"] / max(source_width, source_height))
+            size = (round(source_width * ratio), round(source_height * ratio))
             review = None
             if "features" in recipe:
                 reference = Path(recipe["layout_reference"])
@@ -212,7 +245,7 @@ def prepare(config_path, output, hash_library):
             Image.frombytes("RGBA", size, normal[2]).save(
                 output / "editable" / (stem + "-normal.png")
             )
-            result.append((key, normal))
+            page_bindings.append((key, normal))
             changed = True
             changed_keys.add(key)
             reports.append(
@@ -229,6 +262,11 @@ def prepare(config_path, output, hash_library):
         if changed:
 
             def write_page(entries, name):
+                """Recursively split an oversized changed page, then verify readback.
+
+                Preserve entry order across the -a/-b children. A single binding
+                that cannot fit is rejected; runtime page limits are not raised.
+                """
                 data = catalog.pack_surface_bindings(entries)
                 if len(data) > 16 * 1024 * 1024:
                     if len(entries) < 2:
@@ -244,18 +282,18 @@ def prepare(config_path, output, hash_library):
                     raise ValueError("Output roundtrip changed a binding")
                 pages.append(dict(name=name, sha256=sha(path_out), bytes=len(data)))
 
-            write_page(result, filename)
+            write_page(page_bindings, filename)
         else:
             shutil.copyfile(path, target)
-            if catalog.read_surface_bindings(target.read_bytes()) != result:
+            if catalog.read_surface_bindings(target.read_bytes()) != page_bindings:
                 raise ValueError("Output roundtrip changed a binding")
             pages.append(dict(name=filename, sha256=sha(target), bytes=target.stat().st_size))
-        if sha(path) != before:
+        if sha(path) != source_page_sha256:
             raise ValueError("Page source changed during preparation")
     if changed_keys != selected.keys() or {x["name"] for x in reports} != set(recipes):
         raise ValueError("Selected source identity absent from current manifest")
-    total = sum(x["bytes"] for x in pages)
-    if total > 512 * 1024 * 1024 or len(pages) > 256:
+    package_bytes = sum(x["bytes"] for x in pages)
+    if package_bytes > 512 * 1024 * 1024 or len(pages) > 256:
         raise ValueError("World package exceeds existing byte budget")
     for path, pin in pins.items():
         if sha(Path(path)) != pin:
@@ -267,9 +305,9 @@ def prepare(config_path, output, hash_library):
         base_manifest_sha256=sha(manifest),
         source_pins=pins,
         pages=pages,
-        bytes=total,
+        bytes=package_bytes,
         bindings=len(seen),
-        retained_bindings=retained,
+        retained_bindings=retained_bindings,
         edits=reports,
         strength_baked=False,
         albedo_unchanged=True,

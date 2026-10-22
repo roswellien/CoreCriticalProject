@@ -67,12 +67,13 @@ inline void after(IDirectDrawSurface4 *self,HRESULT hr) noexcept {
             throw std::runtime_error("present_backbuffer_unavailable");
         frame_capture::initialTarget=backbuffer.surface;
         frame_capture::record("{\"event\":\"begin\",\"schema_version\":2,\"live\":true,\"scope\":\"bounded_primary_flip_interval\",\"pid\":"+std::to_string(GetCurrentProcessId())+",\"tid\":"+std::to_string(GetCurrentThreadId())+",\"skipped_flips\":"+std::to_string(skipped)+",\"command_coverage_complete\":false}");
-        frame_capture::record("{\"event\":\"initial_target\",\"surface\":"+frame_capture::surface(backbuffer.surface)+"}");
+        frame_capture::record("{\"event\":\"initial_target\",\"object\":"+std::to_string(reinterpret_cast<unsigned>(backbuffer.surface))+",\"surface\":"+frame_capture::surface(backbuffer.surface)+"}");
         frame_capture::SurfaceRef depth;caps.dwCaps=DDSCAPS_ZBUFFER;
         if(SUCCEEDED(backbuffer.surface->lpVtbl->GetAttachedSurface(backbuffer.surface,&caps,&depth.surface)) && depth.surface)
-            frame_capture::record("{\"event\":\"initial_depth\",\"surface\":"+frame_capture::surface(depth.surface)+"}");
+            frame_capture::record("{\"event\":\"initial_depth\",\"object\":"+std::to_string(reinterpret_cast<unsigned>(depth.surface))+",\"surface\":"+frame_capture::surface(depth.surface)+"}");
         else frame_capture::record("{\"event\":\"initial_depth\",\"absent\":true}");
         frame_capture::active=true;
+        surface_diagnostics::begin(self);
         line("\"event\":\"present_capture_started\"");
     } catch(const std::exception &e) {frame_capture::abort(e.what());window.done=true;window.active=false;releaseBackbuffer();}
 }
@@ -87,5 +88,33 @@ inline void surfaceOperation(const char *method,IDirectDrawSurface4 *self,IDirec
         frame_capture::abort("unsupported_present_surface_transfer");
         window.done=true;window.active=false;releaseBackbuffer();
     }
+}
+// The observed profile is D16, exact DEPTHFILL, null source, fill value zero.
+// Return a pending command only after checking actual depth attachment identity.
+inline std::string depthFill(IDirectDrawSurface4 *self,IDirectDrawSurface4 *source,DWORD flags,RECT *destination,RECT *sourceRect,DDBLTFX *fx) noexcept {
+    State guard;
+    if(!window.active || !frame_capture::active || GetCurrentThreadId()!=frame_capture::presentationThread || source || sourceRect || flags!=DDBLT_DEPTHFILL || !fx)return {};
+    try {
+        DDBLTFX effects{};SIZE_T copied{};
+        if(!ReadProcessMemory(GetCurrentProcess(),fx,&effects,sizeof(effects),&copied) || copied!=sizeof(effects) || effects.dwSize!=sizeof(effects) || effects.dwFillDepth!=0)return {};
+        frame_capture::SurfaceRef depth;DDSCAPS2 caps{};caps.dwCaps=DDSCAPS_ZBUFFER;
+        if(FAILED(frame_capture::initialTarget->lpVtbl->GetAttachedSurface(frame_capture::initialTarget,&caps,&depth.surface)) || depth.surface!=self)return {};
+        DDSURFACEDESC2 desc{};desc.dwSize=sizeof(desc);
+        if(FAILED(self->lpVtbl->GetSurfaceDesc(self,&desc)) || !desc.dwWidth || !desc.dwHeight || desc.dwWidth>4096 || desc.dwHeight>4096 || desc.ddpfPixelFormat.dwFlags!=DDPF_ZBUFFER || desc.ddpfPixelFormat.dwZBufferBitDepth!=16 || desc.ddpfPixelFormat.dwZBitMask!=65535)return {};
+        RECT rect{0,0,static_cast<LONG>(desc.dwWidth),static_cast<LONG>(desc.dwHeight)};
+        if(destination && (!ReadProcessMemory(GetCurrentProcess(),destination,&rect,sizeof(rect),&copied) || copied!=sizeof(rect)))return {};
+        if(rect.left<0 || rect.top<0 || rect.right<=rect.left || rect.bottom<=rect.top || static_cast<DWORD>(rect.right)>desc.dwWidth || static_cast<DWORD>(rect.bottom)>desc.dwHeight)return {};
+        return "\"event\":\"depth_fill\",\"destination\":"+std::to_string(reinterpret_cast<unsigned>(self))+",\"flags\":"+std::to_string(flags)+",\"rectangle\":["+std::to_string(rect.left)+","+std::to_string(rect.top)+","+std::to_string(rect.right)+","+std::to_string(rect.bottom)+"],\"fill_depth\":0,\"bits\":16,\"depth_bits\":0,\"draws_so_far\":"+std::to_string(frame_capture::commandCount)+",\"effects\":\""+frame_capture::memory(&effects,sizeof(effects))+"\"";
+    } catch(...) {return {};}
+}
+inline void depthFillResult(std::string &command,HRESULT hr) noexcept {
+    State guard;
+    if(!command.empty() && frame_capture::active) {
+        try {
+            if(FAILED(hr))throw std::runtime_error("depth_fill_provider_failed");
+            frame_capture::record("{"+command+",\"hresult\":"+std::to_string(hr)+"}");
+        } catch(const std::exception &e) {frame_capture::abort(e.what());}
+    }
+    std::string{}.swap(command);
 }
 } // namespace present_capture

@@ -9,13 +9,20 @@ write profiles or start the game.
 #>
 param(
     [Parameter(Mandatory=$true)][string]$Profile,
-    [string]$Preset = ''
+    [string]$Preset = '',
+    [string]$RuntimeRoot = '',
+    [string]$CatalogPath = '',
+    [string]$MapName = ''
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$root = if ($RuntimeRoot) { [IO.Path]::GetFullPath($RuntimeRoot) } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
 $config = Get-Content -LiteralPath $Profile -Raw | ConvertFrom-Json
 $selection = $config.native.sun_preset
+if ($CatalogPath) {
+    if (!$MapName -or !$Preset) { throw 'Explicit lighting catalog requires a map and preset.' }
+    $selection = [pscustomobject]@{source=$CatalogPath;map=$MapName;default=$Preset}
+}
 if (!$selection) {
     throw 'This profile has no registered sun preset source'
 }

@@ -150,6 +150,43 @@ def extract_gamez_node(nodes, models, root_idx, ignore=None):
     return {"vertices": all_verts, "faces": all_faces}
 
 
+def extract_welded_terrain(nodes, models):
+    """Extract and weld authentic in-game terrain mesh from GameZ nodes."""
+    all_verts = []
+    all_faces = []
+    vert_map = {}
+    terrain_nodes = [n for n in nodes if n.get("flags", {}).get("terrain") and n.get("model_index", -1) >= 0]
+
+    for n in terrain_nodes:
+        mi = n["model_index"]
+        m = models[mi]
+        tr = n.get("data", {}).get("Object3d", {}).get("transform", {})
+        t = {"x": 0, "y": 0, "z": 0}
+        if isinstance(tr, dict) and "RotateTranslateScale" in tr:
+            t = tr["RotateTranslateScale"]["translate"]
+
+        local_to_global = []
+        for v in m.get("vertices", []):
+            gx = round(v["x"] + t["x"], 1)
+            gy = round(v["y"] + t["y"], 1)
+            gz = round(v["z"] + t["z"], 1)
+            key = (gx, gy, gz)
+            if key not in vert_map:
+                vert_map[key] = len(all_verts)
+                all_verts.append([gx, gy, gz])
+            local_to_global.append(vert_map[key])
+
+        for p in m.get("polygons", []):
+            idx_list = p.get("vertex_indices", [])
+            if len(idx_list) == 3:
+                all_faces.append([local_to_global[idx_list[0]], local_to_global[idx_list[1]], local_to_global[idx_list[2]]])
+            elif len(idx_list) == 4:
+                all_faces.append([local_to_global[idx_list[0]], local_to_global[idx_list[1]], local_to_global[idx_list[2]]])
+                all_faces.append([local_to_global[idx_list[0]], local_to_global[idx_list[2]], local_to_global[idx_list[3]]])
+
+    return {"vertices": all_verts, "faces": all_faces}
+
+
 def extract_mech_data(data):
     """Flatten a static MechLib scene and lift its lowest point to preview ground.
 
@@ -206,6 +243,43 @@ def extract_mech_data(data):
     return {"vertices": all_verts, "faces": all_faces}
 
 
+def extract_welded_terrain(nodes, models):
+    """Extract and weld authentic in-game terrain mesh from GameZ nodes."""
+    all_verts = []
+    all_faces = []
+    vert_map = {}
+    terrain_nodes = [n for n in nodes if n.get("flags", {}).get("terrain") and n.get("model_index", -1) >= 0]
+
+    for n in terrain_nodes:
+        mi = n["model_index"]
+        m = models[mi]
+        tr = n.get("data", {}).get("Object3d", {}).get("transform", {})
+        t = {"x": 0, "y": 0, "z": 0}
+        if isinstance(tr, dict) and "RotateTranslateScale" in tr:
+            t = tr["RotateTranslateScale"]["translate"]
+
+        local_to_global = []
+        for v in m.get("vertices", []):
+            gx = round(v["x"] + t["x"], 1)
+            gy = round(v["y"] + t["y"], 1)
+            gz = round(v["z"] + t["z"], 1)
+            key = (gx, gy, gz)
+            if key not in vert_map:
+                vert_map[key] = len(all_verts)
+                all_verts.append([gx, gy, gz])
+            local_to_global.append(vert_map[key])
+
+        for p in m.get("polygons", []):
+            idx_list = p.get("vertex_indices", [])
+            if len(idx_list) == 3:
+                all_faces.append([local_to_global[idx_list[0]], local_to_global[idx_list[1]], local_to_global[idx_list[2]]])
+            elif len(idx_list) == 4:
+                all_faces.append([local_to_global[idx_list[0]], local_to_global[idx_list[1]], local_to_global[idx_list[2]]])
+                all_faces.append([local_to_global[idx_list[0]], local_to_global[idx_list[2]], local_to_global[idx_list[3]]])
+
+    return {"vertices": all_verts, "faces": all_faces}
+
+
 def main():
     """Write ignored preview geometry from configured local archives/extractions."""
     print("Extracting authentic MW3 in-game 3D assets...")
@@ -226,6 +300,12 @@ def main():
             "comm_center": 4865,
             "fuel_tank": 7537,
             "city_building": 5117,
+            "bridge_span": 5715,
+            "ramp": 4278,
+            "dock": 4343,
+            "defense_wall": 2720,
+            "security_gate": 7525,
+            "powerline_pole": 8303,
         }
 
         for k, root_idx in building_targets.items():
@@ -266,6 +346,35 @@ def main():
     print(
         f"\nSaved {len(assets)} in-game 3D assets to {OUTPUT_JSON} ({OUTPUT_JSON.stat().st_size} bytes)"
     )
+
+    # 3. Extract Authentic In-Game Terrains for All Operations
+    print("\nExtracting authentic in-game terrain environments...")
+    terrains_dir = ROOT / "games/mw3/mod-tools/editor/web/static/assets/terrains"
+    terrains_dir.mkdir(parents=True, exist_ok=True)
+
+    # C1 from local cache
+    if nodes_path.is_file() and models_path.is_file():
+        c1_terrain = extract_welded_terrain(c1_nodes, c1_models)
+        out_c1 = terrains_dir / "c1.json"
+        out_c1.write_text(json.dumps(c1_terrain), encoding="utf-8")
+        print(f"  [OK] Saved C1 (Coastal Basin) terrain: {len(c1_terrain['vertices'])} verts, {len(c1_terrain['faces'])} faces -> {out_c1.stat().st_size // 1024} KB")
+
+    # C2, C3, C4, T1 from zip or extract
+    import subprocess
+    for op in ["c2", "c3", "c4", "t1"]:
+        zip_path = ROOT / f"local/temp_{op}.zip"
+        zbd_path = game_directory() / f"zbd/{op}/gamez.zbd"
+        if not zip_path.is_file() and zbd_path.is_file() and UNZBD_EXE.is_file():
+            subprocess.run([str(UNZBD_EXE), "mw", "gamez", str(zbd_path), str(zip_path)], capture_output=True)
+
+        if zip_path.is_file():
+            with zipfile.ZipFile(zip_path) as z:
+                nd = json.loads(z.read("nodes.json").decode("utf-8"))
+                md = json.loads(z.read("models.json").decode("utf-8"))
+                op_terrain = extract_welded_terrain(nd, md)
+                out_op = terrains_dir / f"{op}.json"
+                out_op.write_text(json.dumps(op_terrain), encoding="utf-8")
+                print(f"  [OK] Saved {op.upper()} terrain: {len(op_terrain['vertices'])} verts, {len(op_terrain['faces'])} faces -> {out_op.stat().st_size // 1024} KB")
 
 
 if __name__ == "__main__":

@@ -32,13 +32,13 @@ namespace MW3RemasterLauncher.Core
 
         /// <summary>Search known runtimes, optionally exercising the required Pillow operation.</summary>
         /// <remarks>A filename match alone does not establish a usable native asset runtime.</remarks>
-        public static string? FindPythonExecutable(bool requirePillow = false)
+        public static string? FindPythonExecutable(bool requirePillow = false, bool requirePython311 = false)
         {
-            if (requirePillow)
+            if (requirePillow || requirePython311)
             {
                 var bundled = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     @".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe");
-                if (CanPrepareNativeAssets(bundled)) return bundled;
+                if (CanPrepareNativeAssets(bundled, requirePillow)) return bundled;
             }
             // 1. Check common PATH command
             var candidateNames = new[] { "python.exe", "py.exe" };
@@ -52,7 +52,7 @@ namespace MW3RemasterLauncher.Core
                     try
                     {
                         var full = Path.Combine(p.Trim(), name);
-                        if (File.Exists(full) && (!requirePillow || CanPrepareNativeAssets(full)))
+                        if (File.Exists(full) && (!(requirePillow || requirePython311) || CanPrepareNativeAssets(full, requirePillow)))
                         {
                             return full;
                         }
@@ -77,7 +77,7 @@ namespace MW3RemasterLauncher.Core
 
             foreach (var candidate in wellKnown)
             {
-                if (File.Exists(candidate) && (!requirePillow || CanPrepareNativeAssets(candidate)))
+                if (File.Exists(candidate) && (!(requirePillow || requirePython311) || CanPrepareNativeAssets(candidate, requirePillow)))
                 {
                     return candidate;
                 }
@@ -90,7 +90,7 @@ namespace MW3RemasterLauncher.Core
         // launcher environment. Finding python.exe alone does not establish that
         // its Pillow extension is installed or loadable.
         /// <summary>Run a bounded Python/Pillow capability probe without loading game data.</summary>
-        public static bool CanPrepareNativeAssets(string executable)
+        public static bool CanPrepareNativeAssets(string executable, bool requirePillow = true)
         {
             if (!File.Exists(executable)) return false;
             try
@@ -103,7 +103,9 @@ namespace MW3RemasterLauncher.Core
                     RedirectStandardError = true
                 };
                 info.ArgumentList.Add("-c");
-                info.ArgumentList.Add("import sys; assert sys.version_info >= (3,11); from PIL import Image; Image.new('RGB',(1,1)).tobytes(); print('MW34_NATIVE_ASSETS_OK')");
+                info.ArgumentList.Add(requirePillow
+                    ? "import sys; assert sys.version_info >= (3,11); from PIL import Image; Image.new('RGB',(1,1)).tobytes(); print('MW34_NATIVE_ASSETS_OK')"
+                    : "import sys; assert sys.version_info >= (3,11); print('MW34_NATIVE_ASSETS_OK')");
                 using var process = new Process { StartInfo = info };
                 if (!process.Start()) return false;
                 var output = process.StandardOutput.ReadToEndAsync();

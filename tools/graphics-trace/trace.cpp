@@ -9,6 +9,8 @@
 #include "../in-game-hook/identity.hpp"
 
 using namespace mw34::hook;
+static_assert(sizeof(DDSURFACEDESC2)==124 && offsetof(DDSURFACEDESC2,ddsCaps)==104);
+static_assert(sizeof(DDBLTFX)==100 && offsetof(DDBLTFX,dwFillDepth)==80);
 using Create = HRESULT(WINAPI *)(GUID *, IDirectDraw **, IUnknown *);
 using Query = HRESULT(STDMETHODCALLTYPE *)(void *, REFIID, void **);
 using Device = HRESULT(STDMETHODCALLTYPE *)(IDirect3D3 *, REFCLSID, IDirectDrawSurface4 *, IDirect3DDevice3 **, IUnknown *);
@@ -41,6 +43,12 @@ static unsigned mockDraws = 0, mockCreates = 0;
 static unsigned filterSequence = 0, filterEvents = 0;
 static unsigned completedScenes = 0, successfulDraws = 0;
 static bool sceneOpen = false;
+// Snapshot locks belong to the observer, not to the game's command stream.
+static thread_local unsigned observerSurfaceReads = 0;
+struct ObserverSurfaceRead {
+    ObserverSurfaceRead() { ++observerSurfaceReads; }
+    ~ObserverSurfaceRead() { --observerSurfaceReads; }
+};
 
 // Only instrumentation is guarded. The real method executes with its original
 // incoming FP/vector state and its resulting state is preserved across logging.
@@ -119,6 +127,19 @@ namespace present_capture {
 inline void before(IDirectDrawSurface4 *) noexcept;
 inline void after(IDirectDrawSurface4 *,HRESULT) noexcept;
 inline void surfaceOperation(const char *,IDirectDrawSurface4 *,IDirectDrawSurface4 *,DWORD,RECT *,RECT *,DDBLTFX *,DWORD,DWORD) noexcept;
+inline std::string depthFill(IDirectDrawSurface4 *,IDirectDrawSurface4 *,DWORD,RECT *,RECT *,DDBLTFX *) noexcept;
+inline void depthFillResult(std::string &,HRESULT) noexcept;
+}
+namespace surface_diagnostics {
+inline std::string prepare(const char *,IDirectDrawSurface4 *,IDirectDrawSurface4 *,DWORD,RECT *,RECT *,DDBLTFX *,DWORD,DWORD);
+inline void complete(std::string &,HRESULT,const void * = nullptr,size_t = 0) noexcept;
+inline void begin(IDirectDrawSurface4 *);
+inline void finish(IDirectDrawSurface4 *,HRESULT) noexcept;
+inline void lockPixels(IDirectDrawSurface4 *,RECT *,DDSURFACEDESC2 *,DWORD,HRESULT) noexcept;
+inline std::string unlockPixels(IDirectDrawSurface4 *) noexcept;
+inline void unlockPixelsResult(std::string &,HRESULT) noexcept;
+inline bool pixelCandidate(IDirectDrawSurface4 *,RECT *,DWORD) noexcept;
+inline bool pixelLockReady(IDirectDrawSurface4 *) noexcept;
 }
 #include "presentation.hpp"
 
@@ -230,6 +251,7 @@ static unsigned stride(DWORD fvf) {
 }
 static std::string filteringHistory(void *object);
 #include "capture.hpp"
+#include "surface_diagnostics.hpp"
 #include "present_capture.hpp"
 static void clearDiagnostic(bool explicitValues,DWORD count,D3DRECT *rects,DWORD flags,D3DCOLOR color,D3DVALUE depth,DWORD stencil) noexcept {
     State guard;
@@ -455,6 +477,8 @@ static void tests() {
     line("\"event\":\"filter_fixture\",\"passed\":true,\"failed_setters_preserved\":true,\"last_error_preserved\":true");
     coverageFixture(device,vertices.data(),indices);
     presentationFixture(four);
+    surfaceAccessFixture(four);
+    depthCommandFixture();
     originalCreate = saved;
     line("\"event\":\"selftest\",\"passed\":true,\"typed_methods\":7,\"draws\":2,\"last_error_preserved\":true,\"failed_qi_preserved\":true,\"failed_draw_preserved\":true,\"fp_vector_guard_verified\":true");
 }

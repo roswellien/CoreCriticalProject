@@ -8,16 +8,6 @@ Binary fields below use explicit little-endian layouts shared with the renderer.
 
 from pathlib import Path
 import array, hashlib, json, os, struct, sys
-from normal_materials import load_images, normal_environment, pack_normals, pixel_hash
-
-try:
-    from PIL import Image
-except ImportError as exc:
-    raise RuntimeError(
-        "Pillow could not be loaded by "
-        + sys.executable
-        + f": {exc}. Launch through Play MW3Remaster.cmd to select a runtime with Pillow."
-    ) from exc
 
 
 def write_atomic(path, data):
@@ -40,6 +30,10 @@ def material_pixels(root, textures):
     axis and flipped vertically to match the native texture-coordinate contract.
     Material insertion order must agree with the batch-to-material indices.
     """
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Legacy source-image preparation requires Pillow in " + sys.executable) from exc
     out = bytearray()
     for name, relative in textures.items():
         source = root / relative
@@ -82,7 +76,7 @@ def normal_source_identity(root, sources):
     return identity
 
 
-def prepare(root, models, *, output=None):
+def prepare(root, models, *, output=None, allow_original_banks=False, use_development_banks=True):
     """Write bank, texture and normal sidecars; return MW34_* path bindings.
 
     ``models`` contains already selected registry entries. Existing hash caches
@@ -94,7 +88,14 @@ def prepare(root, models, *, output=None):
     folder = Path(output) if output is not None else root / "local/remaster/prepared"
     folder.mkdir(parents=True, exist_ok=True)
     manifest = root / "local/work-ahead/texture-launcher-audit-v2/configured-banks.json"
-    rows = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    if not use_development_banks:
+        rows = []  # Installed environment packs own replacement routing.
+    elif manifest.is_file():
+        rows = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    elif allow_original_banks:
+        rows = []  # No optional replacements: the game reads its original archives.
+    else:
+        raise RuntimeError("Configured texture-bank manifest is missing")
     local_cache = folder / "bank-hashes.json"
     shared = root / "local/work-ahead/mw3-d7vk-wrapper/launcher-hash-cache.json"
     cache = (
@@ -141,7 +142,9 @@ def prepare(root, models, *, output=None):
     write_atomic(local_cache, json.dumps(cache, indent=1).encode())
     bankfile = folder / "texture-banks.bin"
     write_atomic(bankfile, banks)
-    environment = {"MW34_REMASTER_BANKS": str(bankfile)}
+    # The native reader rejects a present MWBANK1 index with zero entries.
+    # No redirection binding means the native file service reads original archives.
+    environment = {"MW34_REMASTER_BANKS": str(bankfile)} if rows else {}
     normal_cache_path = folder / "normal-cache.json"
     normal_cache = json.loads(normal_cache_path.read_text()) if normal_cache_path.exists() else {}
     model_receipts = []
@@ -156,6 +159,7 @@ def prepare(root, models, *, output=None):
             environment[key] = str(path)
         if not model.get("textures"):
             continue
+        from normal_materials import load_images, normal_environment, pack_normals, pixel_hash
         metadata = json.loads((root / model["batch_metadata"]).read_text())
         names = list(model["textures"])
         count = len(metadata["batches"])
@@ -326,5 +330,7 @@ def prepare(root, models, *, output=None):
     )
     # The launcher waits for gameplay in this process. Keep the LOD hash cache
     # useful during packing without retaining full source images during play.
-    pixel_hash.cache_clear()
+    if any(model.get("textures") for model in models):
+        from normal_materials import pixel_hash
+        pixel_hash.cache_clear()
     return environment

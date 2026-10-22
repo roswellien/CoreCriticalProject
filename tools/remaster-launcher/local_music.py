@@ -1,4 +1,4 @@
-"""Prepare user-supplied FLAC music for the native CD-audio service.
+"""Prepare user-supplied FLAC or PCM WAV music for the native CD-audio service.
 
 Configuration lives in local/remaster/music.json. Sources remain read-only;
 decoded WAVs, their receipt and the MW3CD1 tracklist stay in local storage.
@@ -6,7 +6,7 @@ CD tracks 2/3 correspond to the first/second audio tracks; the data track is 1.
 """
 
 from pathlib import Path
-import hashlib, json, os, struct, subprocess, wave
+import hashlib, json, os, shutil, struct, subprocess, wave
 
 
 def sha(path):
@@ -23,22 +23,27 @@ def atomic(path, data):
     os.replace(temporary, path)
 
 
-def configuration(root):
-    """Return enabled schema-v1 settings, None when disabled, or raise on bad inputs."""
-    path = root / "local/remaster/music.json"
-    if not path.exists():
-        return None
-    config = json.loads(path.read_text(encoding="utf-8-sig"))
+def configuration(root, supplied=None):
+    """Return enabled file/inline settings, None when disabled, or reject bad inputs."""
+    if supplied is None:
+        path = root / "local/remaster/music.json"
+        if not path.exists():
+            return None
+        config = json.loads(path.read_text(encoding="utf-8-sig"))
+    else:
+        config = supplied
     if not config.get("enabled", False):
         return None
-    if config.get("schema_version") != 1:
+    if config.get("schema_version") not in (1, 2):
         raise RuntimeError("Unsupported local music configuration")
     if [t["cd_track"] for t in config["tracks"]] != [2, 3]:
         raise RuntimeError("MW3 local music requires CD tracks 2 and 3")
     for track in config["tracks"]:
         if not (root / track["source"]).is_file():
             raise RuntimeError("Local music source is missing: " + track["source"])
-    if not (root / config["decoder"]).is_file():
+    if any(Path(t['source']).suffix.lower() != '.wav' for t in config['tracks']) and (
+        not config.get('decoder') or not (root / config['decoder']).is_file()
+    ):
         raise RuntimeError("The local music preparation tool is missing")
     return config
 
@@ -97,18 +102,19 @@ def verify_wav(path, expected_frames, expected_md5):
     return actual
 
 
-def prepare_music(root):
+def prepare_music(root, *, supplied=None, output=None):
     """Reuse verified WAVs or decode locally, then return the native tracklist binding.
 
     Source, decoder and cached-output identities all participate in reuse.
     Decode/verification failures raise before publishing the new tracklist.
     """
-    config = configuration(root)
+    config = configuration(root, supplied)
     if config is None:
         return {}
-    decoder = root / config["decoder"]
-    decoder_sha = sha(decoder)
-    directory = root / "local/remaster/prepared/music"
+    needs_decoder = any(Path(t['source']).suffix.lower() != '.wav' for t in config['tracks'])
+    decoder = root / config['decoder'] if needs_decoder else None
+    decoder_sha = sha(decoder) if decoder else 'pcm-wav-copy-v1'
+    directory = Path(output) if output is not None else root / "local/remaster/prepared/music"
     directory.mkdir(parents=True, exist_ok=True)
     receipt_path = directory / "receipt.json"
     previous = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
@@ -118,7 +124,15 @@ def prepare_music(root):
     manifest = bytearray(b"MW3CD1\0\0" + struct.pack("<II", 1, 2))
     for track in config["tracks"]:
         source = (root / track["source"]).resolve()
-        frames, pcm_md5 = stream_info(source)
+        if source.suffix.lower() == '.wav':
+            try:
+                with wave.open(str(source), 'rb') as audio:
+                    frames = audio.getnframes()
+                pcm_md5 = verify_wav(source, frames, '0' * 32)
+            except (wave.Error, EOFError) as error:
+                raise RuntimeError('Invalid original music WAV: ' + str(source)) from error
+        else:
+            frames, pcm_md5 = stream_info(source)
         source_sha = sha(source)
         destination = directory / f"track{track['cd_track']:02d}.wav"
         cached = next(
@@ -134,11 +148,14 @@ def prepare_music(root):
         if not valid:
             print("Preparing local music: " + source.name, flush=True)
             temporary = destination.with_suffix(".wav.tmp")
-            result = subprocess.run(
-                [str(decoder), str(source), str(temporary)], capture_output=True, text=True
-            )
-            if result.returncode:
-                raise RuntimeError(result.stderr.strip() or "Local music decoding failed")
+            if source.suffix.lower() == '.wav':
+                shutil.copyfile(source, temporary)
+            else:
+                result = subprocess.run(
+                    [str(decoder), str(source), str(temporary)], capture_output=True, text=True
+                )
+                if result.returncode:
+                    raise RuntimeError(result.stderr.strip() or "Local music decoding failed")
             actual_pcm_md5 = verify_wav(temporary, frames, pcm_md5)
             if sha(source) != source_sha:
                 raise RuntimeError("Music source changed during preparation: " + str(source))

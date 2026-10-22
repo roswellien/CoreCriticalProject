@@ -1,5 +1,12 @@
 # Graphics compatibility boundary
 
+Follow the [current integration plan](../../docs/faithful-modernization-plan.md):
+connect the recovered game-facing graphics contracts to Vulkan in the native
+host, and keep capture replay separate from live translated producers. Reuse the
+[video contract](../../docs/m4-video-backend-contract-r1.md),
+[presenter extraction review](../../docs/m4-vulkan-presenter-extraction-review-r1.md)
+and [active graphics work](../../docs/live-native-rendering-current-work.md).
+
 Reserved for observed legacy graphics/COM contracts. No integrated renderer exists yet.
 Vulkan is the user-selected backend target as of 2026-10-08. The standalone
 [learning prototype](../../docs/vulkan-learning-prototype.md) proves bounded GPU

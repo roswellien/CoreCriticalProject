@@ -28,26 +28,30 @@
 #include <vector>
 
 namespace mw34::audio {
+// Native replacement for the game's CD-audio device, not a general MCI driver.
+// Construction owns loading and worker startup; send() marshals native parameters
+// into requests, and the worker exclusively owns playback and notification state.
 class LocalCdAudio {
     using U64 = std::uint64_t;
-    static constexpr unsigned rate = 44100, channels = 2, block = 4, cd_sample_frames = 588;
-    static constexpr unsigned frames_per_buffer = 441, buffer_count = 4;
+    static constexpr unsigned sample_rate = 44100, channels = 2, bytes_per_sample_frame = 4,
+                              samples_per_cd_frame = 588;
+    static constexpr unsigned sample_frames_per_buffer = 441, output_buffer_count = 4;
     struct Track {
         // start/frames are stereo PCM sample frames, not interleaved sample counts
-        // or CD sectors. One CD frame is cd_sample_frames (588) PCM frames.
+        // or CD sectors. One CD frame is samples_per_cd_frame (588) PCM frames.
         unsigned number{};
         U64 start{}, frames{};
     };
-    struct Slot {
+    struct OutputSlot {
         WAVEHDR header{};
-        std::array<std::int16_t, frames_per_buffer * channels> pcm{};
+        std::array<std::int16_t, sample_frames_per_buffer * channels> pcm{};
         U64 end{}, nonzero{};
         bool prepared{}, queued{};
     };
     struct Output {
         HWAVEOUT wave{};
         HANDLE event{};
-        std::array<Slot, buffer_count> slots{};
+        std::array<OutputSlot, output_buffer_count> slots{};
         ~Output() {
             if (event)
                 ::CloseHandle(event);
@@ -64,7 +68,7 @@ class LocalCdAudio {
         std::mutex mutex;
         std::condition_variable ready;
     };
-    using Req = std::shared_ptr<Request>;
+    using RequestPtr = std::shared_ptr<Request>;
     std::vector<std::int16_t> pcm_;
     std::array<Track, 2> tracks_{};
     U64 total_{};
@@ -72,7 +76,7 @@ class LocalCdAudio {
     HANDLE control_{};
     std::thread worker_;
     std::mutex queue_mutex_;
-    std::deque<Req> queue_;
+    std::deque<RequestPtr> queue_;
     FILE *log_{};
     // Worker-owned state. Public methods communicate exclusively through requests.
     std::unique_ptr<Output> output_;
@@ -80,7 +84,7 @@ class LocalCdAudio {
     DWORD mode_ = MCI_MODE_STOP, time_format_ = MCI_FORMAT_MSF, volume_ = 0xffffffffU;
     U64 cursor_{}, play_base_{}, play_end_{}, submitted_{}, completed_{};
     DWORD_PTR pending_notify_{};
-    Req wait_play_;
+    RequestPtr wait_play_;
     MCIERROR fault_{};
     U64 queued_nonzero_{}, played_nonzero_{};
     unsigned audits_{};
@@ -130,6 +134,8 @@ class LocalCdAudio {
         return p && *p ? utf8_path(p) : std::filesystem::path{};
     }
     void load(const std::filesystem::path &manifest) {
+        // MW3CD1 contains exactly the two audio tracks, numbered 2 and 3.
+        // Track 1 is the original disc's data track and has no PCM payload here.
         const auto b = file_bytes(manifest, 2 * 1024 * 1024);
         const unsigned char magic[8] = {'M', 'W', '3', 'C', 'D', '1', 0, 0};
         if (b.size() < 16 || std::memcmp(b.data(), magic, 8) || u32(b, 8) != 1 || u32(b, 12) != 2)
@@ -143,8 +149,9 @@ class LocalCdAudio {
             const U64 frames = u64(b, at + 16);
             const auto len = u32(b, at + 24);
             at += 28;
-            if (track != i + 2 || sr != rate || ch != channels || bits != 16 || !frames ||
-                frames > 0x7fffffffULL / block || !len || len > 32768 || len > b.size() - at)
+            if (track != i + 2 || sr != sample_rate || ch != channels || bits != 16 || !frames ||
+                frames > 0x7fffffffULL / bytes_per_sample_frame || !len || len > 32768 ||
+                len > b.size() - at)
                 throw std::runtime_error("Local CD: invalid track metadata");
             const auto path =
                 utf8_path(std::string(reinterpret_cast<const char *>(b.data() + at), len));
@@ -152,17 +159,23 @@ class LocalCdAudio {
             if (!path.is_absolute())
                 throw std::runtime_error("Local CD: prepared WAV path must be absolute");
             const auto wav = file_bytes(path, 0x7fffffffU);
-            if (wav.size() != 44 + frames * block || std::memcmp(wav.data(), "RIFF", 4) ||
-                u32(wav, 4) != wav.size() - 8 || std::memcmp(wav.data() + 8, "WAVEfmt ", 8) ||
-                u32(wav, 16) != 16 || u16(wav, 20) != WAVE_FORMAT_PCM || u16(wav, 22) != channels ||
-                u32(wav, 24) != rate || u32(wav, 28) != rate * block || u16(wav, 32) != block ||
-                u16(wav, 34) != 16 || std::memcmp(wav.data() + 36, "data", 4) ||
-                u32(wav, 40) != frames * block)
+            // Preparation emits a canonical 44-byte PCM WAV header. Arbitrary
+            // RIFF chunk ordering, compressed WAV and extra chunks are rejected.
+            if (wav.size() != 44 + frames * bytes_per_sample_frame ||
+                std::memcmp(wav.data(), "RIFF", 4) || u32(wav, 4) != wav.size() - 8 ||
+                std::memcmp(wav.data() + 8, "WAVEfmt ", 8) || u32(wav, 16) != 16 ||
+                u16(wav, 20) != WAVE_FORMAT_PCM || u16(wav, 22) != channels ||
+                u32(wav, 24) != sample_rate ||
+                u32(wav, 28) != sample_rate * bytes_per_sample_frame ||
+                u16(wav, 32) != bytes_per_sample_frame || u16(wav, 34) != 16 ||
+                std::memcmp(wav.data() + 36, "data", 4) ||
+                u32(wav, 40) != frames * bytes_per_sample_frame)
                 throw std::runtime_error("Local CD: WAV does not match canonical PCM manifest");
             tracks_[i] = {track, total_, frames};
             const std::size_t start = pcm_.size();
             pcm_.resize(start + std::size_t(frames) * channels);
-            std::memcpy(pcm_.data() + start, wav.data() + 44, std::size_t(frames) * block);
+            std::memcpy(pcm_.data() + start, wav.data() + 44,
+                        std::size_t(frames) * bytes_per_sample_frame);
             total_ += frames;
         }
         if (at != b.size())
@@ -199,14 +212,17 @@ class LocalCdAudio {
         std::fprintf(stderr, "Local CD audio: %s failed (%u)\n", where, r);
         return MCIERR_HARDWARE;
     }
-    void complete(const Req &r, MCIERROR result, DWORD_PTR answer = 0) {
+    void complete(const RequestPtr &r, MCIERROR result, DWORD_PTR answer = 0) {
         std::lock_guard lock(r->mutex);
         r->result = result;
         r->answer = answer;
         r->done = true;
         r->ready.notify_one();
     }
-    MCIERROR invoke(const Req &r) {
+    MCIERROR invoke(const RequestPtr &r) {
+        // Callers wait for request completion, not necessarily playback completion.
+        // MCI_WAIT play requests remain pending until the worker drains or aborts
+        // their selected range. The shared request outlives this queue transfer.
         if (!enabled_)
             return MCIERR_DEVICE_NOT_INSTALLED;
         {
@@ -251,6 +267,9 @@ class LocalCdAudio {
         }
     }
     void install_notification(const Request &r, bool prevents_old, bool async) {
+        // Changing the play range aborts its notification; a new notification
+        // on the same range supersedes the old one. Ordinary synchronous commands
+        // report success immediately instead of waiting for WaveOut completion.
         if (pending_notify_ && (prevents_old || (r.flags & MCI_NOTIFY)))
             cancel_pending(prevents_old ? MCI_NOTIFY_ABORTED : MCI_NOTIFY_SUPERSEDED);
         if (r.flags & MCI_NOTIFY) {
@@ -267,6 +286,9 @@ class LocalCdAudio {
         finish_wait(error);
     }
     void reap() {
+        // Submitted buffers still belong to the device until WHDR_DONE. Advance
+        // completed_ only from returned buffers and finish a range only after
+        // every queued buffer drains, including its final partial buffer.
         if (!output_)
             return;
         bool queued = false;
@@ -301,13 +323,15 @@ class LocalCdAudio {
         if (t.wType == TIME_SAMPLES)
             offset = t.u.sample;
         else if (t.wType == TIME_BYTES)
-            offset = t.u.cb / block;
+            offset = t.u.cb / bytes_per_sample_frame;
         else if (t.wType == TIME_MS)
-            offset = U64(t.u.ms) * rate / 1000;
+            offset = U64(t.u.ms) * sample_rate / 1000;
         else {
             trace("unsupported-position-format", t.wType);
             return MCIERR_HARDWARE;
         }
+        // WaveOut position is relative to its last reset, while cursor_ uses the
+        // concatenated track timeline. Bound it by completed data and play end.
         cursor_ = std::min(play_end_, std::max(completed_, play_base_ + offset));
         return 0;
     }
@@ -323,6 +347,8 @@ class LocalCdAudio {
         return 0;
     }
     MCIERROR close_output() {
+        // Driver ownership ends in order: reset pending playback, unprepare each
+        // header, close the device, then release buffers and the callback event.
         if (!output_) {
             opened_ = false;
             return 0;
@@ -359,7 +385,13 @@ class LocalCdAudio {
             output_.reset();
             return MCIERR_OUT_OF_MEMORY;
         }
-        WAVEFORMATEX fmt{WAVE_FORMAT_PCM, channels, rate, rate * block, block, 16, 0};
+        WAVEFORMATEX fmt{WAVE_FORMAT_PCM,
+                         channels,
+                         sample_rate,
+                         sample_rate * bytes_per_sample_frame,
+                         bytes_per_sample_frame,
+                         16,
+                         0};
         const auto r =
             ::waveOutOpen(&output_->wave, WAVE_MAPPER, &fmt,
                           reinterpret_cast<DWORD_PTR>(output_->event), 0, CALLBACK_EVENT);
@@ -390,13 +422,16 @@ class LocalCdAudio {
         return 0;
     }
     MCIERROR fill() {
+        // Reuse only returned slots. Apply this service's stereo gain while
+        // copying immutable source PCM; a volume change affects future fills,
+        // never another application's mixer or already queued samples.
         reap();
         if (!output_ || mode_ != MCI_MODE_PLAY)
             return 0;
         for (auto &s : output_->slots)
             if (!s.queued && submitted_ < play_end_) {
                 const unsigned n =
-                    unsigned(std::min<U64>(frames_per_buffer, play_end_ - submitted_));
+                    unsigned(std::min<U64>(sample_frames_per_buffer, play_end_ - submitted_));
                 const unsigned left = volume_ & 65535, right = volume_ >> 16;
                 U64 nonzero{};
                 for (unsigned i = 0; i < n; ++i) {
@@ -408,7 +443,7 @@ class LocalCdAudio {
                     if (s.pcm[i * 2] || s.pcm[i * 2 + 1])
                         ++nonzero;
                 }
-                s.header.dwBufferLength = n * block;
+                s.header.dwBufferLength = n * bytes_per_sample_frame;
                 s.end = submitted_ + n;
                 const auto e = hardware("waveOutWrite",
                                         ::waveOutWrite(output_->wave, &s.header, sizeof s.header));
@@ -425,6 +460,9 @@ class LocalCdAudio {
         return sample < tracks_[1].start ? tracks_[0] : tracks_[1];
     }
     bool decode_position(DWORD v, bool endpoint, U64 &sample) const {
+        // MCI addresses use 75 CD frames per second; playback counts stereo PCM
+        // frames at 44.1 kHz. Track 4 at zero is accepted only as an end sentinel
+        // after audio track 3, not as another playable track.
         if (time_format_ == MCI_FORMAT_TMSF) {
             const auto t = MCI_TMSF_TRACK(v), m = MCI_TMSF_MINUTE(v), s = MCI_TMSF_SECOND(v),
                        f = MCI_TMSF_FRAME(v);
@@ -437,7 +475,7 @@ class LocalCdAudio {
             if (t < 2 || t > 3)
                 return false;
             const auto &tr = tracks_[t - 2];
-            const U64 offset = (U64(m) * 60 * 75 + U64(s) * 75 + f) * cd_sample_frames;
+            const U64 offset = (U64(m) * 60 * 75 + U64(s) * 75 + f) * samples_per_cd_frame;
             if (offset > tr.frames)
                 return false;
             sample = tr.start + offset;
@@ -447,13 +485,13 @@ class LocalCdAudio {
             const auto m = MCI_MSF_MINUTE(v), s = MCI_MSF_SECOND(v), f = MCI_MSF_FRAME(v);
             if ((v >> 24) || s >= 60 || f >= 75)
                 return false;
-            sample = (U64(m) * 60 * 75 + U64(s) * 75 + f) * cd_sample_frames;
+            sample = (U64(m) * 60 * 75 + U64(s) * 75 + f) * samples_per_cd_frame;
             return sample <= total_;
         }
         return false;
     }
     static DWORD msf(U64 samples) {
-        const U64 f = samples / cd_sample_frames;
+        const U64 f = samples / samples_per_cd_frame;
         return MCI_MAKE_MSF(f / (60 * 75), (f / 75) % 60, f % 75);
     }
     DWORD position_value(U64 sample) const {
@@ -461,7 +499,7 @@ class LocalCdAudio {
         if (time_format_ != MCI_FORMAT_TMSF)
             return msf(sample);
         const auto &tr = track_at(sample);
-        const U64 f = (sample - tr.start) / cd_sample_frames;
+        const U64 f = (sample - tr.start) / samples_per_cd_frame;
         return MCI_MAKE_TMSF(tr.number, f / (60 * 75), (f / 75) % 60, f % 75);
     }
     MCIERROR status(const Request &r, DWORD_PTR &answer) {
@@ -519,7 +557,7 @@ class LocalCdAudio {
         }
         return 0;
     }
-    MCIERROR command(const Req &q, bool &deferred, DWORD_PTR &answer) {
+    MCIERROR command(const RequestPtr &q, bool &deferred, DWORD_PTR &answer) {
         auto &r = *q;
         trace("command", r.msg, r.flags);
         if (r.msg == MCI_OPEN) {
@@ -566,6 +604,8 @@ class LocalCdAudio {
                 return MCIERR_OUTOFRANGE;
             if (wait_play_)
                 return MCIERR_DEVICE_LOCKED;
+            // A play command without a new start can keep the queued range.
+            // Replacing the range instead resets WaveOut and restarts counters.
             const bool keep = (mode_ == MCI_MODE_PLAY || mode_ == MCI_MODE_PAUSE) &&
                               !(r.flags & MCI_FROM) && to == play_end_;
             const bool prevents = pending_notify_ && ((r.flags & MCI_FROM) || to != play_end_);
@@ -668,6 +708,9 @@ class LocalCdAudio {
         }
     }
     void worker() {
+        // The manual-reset control event and queue share one mutex: draining
+        // and resetting under that lock prevents losing a concurrent submission.
+        // Device events wake the same thread to reclaim and refill PCM slots.
         bool exit = false;
         while (!exit) {
             HANDLE events[2] = {control_, output_ ? output_->event : nullptr};
@@ -677,7 +720,7 @@ class LocalCdAudio {
                 trace("worker-wait-failed", ::GetLastError());
                 std::fprintf(stderr, "Local CD audio: worker wait failed\n");
             }
-            std::deque<Req> ready;
+            std::deque<RequestPtr> ready;
             {
                 std::lock_guard lock(queue_mutex_);
                 ready.swap(queue_);

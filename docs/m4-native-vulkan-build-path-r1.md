@@ -2,6 +2,12 @@
 
 Date: 2026-10-10
 
+Strategy update, 2026-10-11: the [faithful modernization plan](faithful-modernization-plan.md)
+now governs integration. Reuse this investigation's boundaries and presenter
+work, but audit a complete application path rather than making every legacy CRT
+implementation a mandatory first step. Recompiled producers and equivalent
+platform services must still supply all required observable initialization.
+
 ## Current state
 
 The project has two proven but separate native components:
@@ -51,11 +57,12 @@ for recovering the game's DirectDraw/Direct3D call contracts.
    Vulkan upload, resize, presentation, and destruction. Compare the bridge's
    Win32/COM results with the source contract from the parallel video analysis.
    This is backend readiness, not game startup credit.
-3. **Connect the real startup prefix.** Complete the real CRT/SEH/import and
-   initializer path, including the 144-root table and its failure/cleanup
-   behavior. Then connect the app/frame path, MFC provider state, localization,
-   and reader ABI. The existing workahead identifies these as prerequisites to
-   the first truthful native window cut.
+3. **Connect a justified application startup path.** Audit retail translated
+   entry versus an equivalent host bootstrap, accounting for required CRT/SEH/
+   import, initializer and failure/cleanup effects. Connect the actual app/frame
+   path, MFC object/provider state, localization and reader ABI. Preserve the
+   144-root acceptance gate separately; prototypes may advance integration before
+   its final receipt, but cannot fabricate completed initialization or skip effects.
 4. **Reach the first game-owned frame.** Run the translated initialization and
    graphics callbacks until a real game-owned surface produces pixels in the
    Vulkan swapchain. Keep unsupported services as explicit stops; do not fake a

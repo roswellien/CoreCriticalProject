@@ -25,7 +25,9 @@ SHELL = shutil.which("pwsh") or shutil.which("powershell")
 @unittest.skipUnless(os.name == "nt" and SHELL, "Windows System.Drawing exporter only")
 class ExportTests(unittest.TestCase):
     def test_alpha_guards_and_no_overwrite(self):
-        fixture_root = ROOT / "local/work-ahead/test-fixtures"
+        # Work-ahead directories may be archival junctions. Authored fixtures
+        # must stay in a direct local folder so export containment is exercised.
+        fixture_root = ROOT / "local/authored-test-fixtures"
         fixture_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="export-", dir=fixture_root) as directory:
             directory = Path(directory).resolve()

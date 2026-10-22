@@ -60,6 +60,7 @@ struct SurfaceRef {
     ~SurfaceRef() { if(surface) surface->lpVtbl->Release(surface); }
 };
 inline std::string surface(IDirectDrawSurface4 *object) {
+    ObserverSurfaceRead observerRead;
     DDSURFACEDESC2 desc{};desc.dwSize=sizeof(desc);
     const auto result=object->lpVtbl->Lock(object,nullptr,&desc,DDLOCK_READONLY | DDLOCK_WAIT,nullptr);
     if(FAILED(result)) throw std::runtime_error("surface_lock");

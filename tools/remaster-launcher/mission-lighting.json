@@ -1,0 +1,1549 @@
+{
+  "schema_version": 1,
+  "missions": {
+    "c1m1": {
+      "azimuth": 245.0,
+      "elevation": 7.0,
+      "sun_color": [
+        1.0,
+        0.45,
+        0.2
+      ],
+      "sun_strength": 1.4,
+      "ambient_color": [
+        0.42,
+        0.32,
+        0.55
+      ],
+      "ambient_strength": 0.25,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.65,
+        0.38,
+        0.6
+      ],
+      "sky_brightness": 0.75,
+      "sky_glow_color": [
+        1.0,
+        0.5,
+        0.2
+      ],
+      "sky_glow_strength": 0.9,
+      "sky_glow_focus": 2.5,
+      "sky_grade": [
+        0.55,
+        0.45,
+        0.65
+      ],
+      "horizon_low": 0.02,
+      "horizon_high": 0.25,
+      "haze_color": [
+        0.28,
+        0.18,
+        0.25
+      ],
+      "haze_scale": [
+        1.0,
+        0.85,
+        0.75
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 300.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c1m2": {
+      "azimuth": 210.0,
+      "elevation": 25.0,
+      "sun_color": [
+        0.35,
+        0.45,
+        0.65
+      ],
+      "sun_strength": 0.28,
+      "ambient_color": [
+        0.18,
+        0.22,
+        0.32
+      ],
+      "ambient_strength": 0.14,
+      "night_world_gain": 0.24,
+      "sky_tint": [
+        0.08,
+        0.12,
+        0.22
+      ],
+      "sky_brightness": 0.2,
+      "sky_glow_color": [
+        0.3,
+        0.4,
+        0.6
+      ],
+      "sky_glow_strength": 0.1,
+      "sky_glow_focus": 1.5,
+      "sky_grade": [
+        0.7,
+        0.6,
+        0.8
+      ],
+      "horizon_low": 0.01,
+      "horizon_high": 0.2,
+      "haze_color": [
+        0.02,
+        0.03,
+        0.05
+      ],
+      "haze_scale": [
+        0.35,
+        0.45,
+        0.65
+      ],
+      "fog_distance": 1100.0,
+      "shadows": false,
+      "shadow_range": 200.0,
+      "shadow_bias": 0.05,
+      "shadow_darkness": 0.8,
+      "rain_intensity": 0.35,
+      "wet_reflection": 0.5,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": [
+        [
+          [
+            -80.0,
+            12.0,
+            -450.0,
+            75.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1.0,
+            0.45,
+            0.1,
+            1.4
+          ]
+        ],
+        [
+          [
+            120.0,
+            15.0,
+            -600.0,
+            90.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1.0,
+            0.5,
+            0.12,
+            1.6
+          ]
+        ],
+        [
+          [
+            -300.0,
+            28.0,
+            -950.0,
+            110.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.75,
+            0.85,
+            1.0,
+            1.8
+          ]
+        ],
+        [
+          [
+            350.0,
+            30.0,
+            -1050.0,
+            120.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.9,
+            1.0,
+            1.9
+          ]
+        ]
+      ]
+    },
+    "c1m3": {
+      "azimuth": 180.0,
+      "elevation": 40.0,
+      "sun_color": [
+        0.2,
+        0.28,
+        0.45
+      ],
+      "sun_strength": 0.18,
+      "ambient_color": [
+        0.12,
+        0.15,
+        0.22
+      ],
+      "ambient_strength": 0.1,
+      "night_world_gain": 0.2,
+      "sky_tint": [
+        0.05,
+        0.06,
+        0.1
+      ],
+      "sky_brightness": 0.12,
+      "sky_glow_color": [
+        0.2,
+        0.3,
+        0.5
+      ],
+      "sky_glow_strength": 0.05,
+      "sky_glow_focus": 1.0,
+      "sky_grade": [
+        0.8,
+        0.7,
+        0.9
+      ],
+      "horizon_low": 0.01,
+      "horizon_high": 0.18,
+      "haze_color": [
+        0.015,
+        0.02,
+        0.03
+      ],
+      "haze_scale": [
+        0.2,
+        0.28,
+        0.45
+      ],
+      "fog_distance": 950.0,
+      "shadows": false,
+      "shadow_range": 200.0,
+      "shadow_bias": 0.05,
+      "shadow_darkness": 0.8,
+      "rain_intensity": 0.95,
+      "wet_reflection": 0.9,
+      "has_lightning": true,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c1m4": {
+      "azimuth": 65.0,
+      "elevation": 5.0,
+      "sun_color": [
+        0.92,
+        0.78,
+        0.68
+      ],
+      "sun_strength": 1.2,
+      "ambient_color": [
+        0.55,
+        0.62,
+        0.75
+      ],
+      "ambient_strength": 0.32,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.58,
+        0.65,
+        0.78
+      ],
+      "sky_brightness": 0.85,
+      "sky_glow_color": [
+        1.0,
+        0.8,
+        0.6
+      ],
+      "sky_glow_strength": 0.8,
+      "sky_glow_focus": 2.0,
+      "sky_grade": [
+        0.65,
+        0.55,
+        0.7
+      ],
+      "horizon_low": 0.03,
+      "horizon_high": 0.3,
+      "haze_color": [
+        0.52,
+        0.58,
+        0.68
+      ],
+      "haze_scale": [
+        0.9,
+        0.95,
+        1.05
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 250.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.15,
+      "has_lightning": false,
+      "valley_fog_altitude": 45.0,
+      "valley_fog_density": 0.04,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c2m1": {
+      "azimuth": 80.0,
+      "elevation": 18.0,
+      "sun_color": [
+        1.0,
+        0.88,
+        0.65
+      ],
+      "sun_strength": 1.35,
+      "ambient_color": [
+        0.7,
+        0.72,
+        0.8
+      ],
+      "ambient_strength": 0.28,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.75,
+        0.82,
+        0.95
+      ],
+      "sky_brightness": 1.05,
+      "sky_glow_color": [
+        1.0,
+        0.9,
+        0.7
+      ],
+      "sky_glow_strength": 0.7,
+      "sky_glow_focus": 2.0,
+      "sky_grade": [
+        0.75,
+        0.8,
+        0.85
+      ],
+      "horizon_low": 0.03,
+      "horizon_high": 0.28,
+      "haze_color": [
+        0.55,
+        0.52,
+        0.45
+      ],
+      "haze_scale": [
+        0.95,
+        0.9,
+        0.85
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 220.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.25,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c2m2": {
+      "azimuth": 0.0,
+      "elevation": 90.0,
+      "sun_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sun_strength": 0.0,
+      "ambient_color": [
+        0.65,
+        0.62,
+        0.52
+      ],
+      "ambient_strength": 0.18,
+      "night_world_gain": 0.0,
+      "sky_tint": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sky_brightness": 0.0,
+      "sky_glow_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sky_glow_strength": 0.0,
+      "sky_glow_focus": 1.8,
+      "sky_grade": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "horizon_low": 0.05,
+      "horizon_high": 0.35,
+      "haze_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "haze_scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "fog_distance": 1000.0,
+      "shadows": false,
+      "shadow_range": 180.0,
+      "shadow_bias": 0.05,
+      "shadow_darkness": 0.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": true,
+      "env_lights": []
+    },
+    "c2m3": {
+      "azimuth": 220.0,
+      "elevation": 42.0,
+      "sun_color": [
+        0.98,
+        0.82,
+        0.58
+      ],
+      "sun_strength": 1.15,
+      "ambient_color": [
+        0.58,
+        0.46,
+        0.32
+      ],
+      "ambient_strength": 0.24,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.62,
+        0.48,
+        0.3
+      ],
+      "sky_brightness": 0.7,
+      "sky_glow_color": [
+        0.9,
+        0.7,
+        0.45
+      ],
+      "sky_glow_strength": 0.6,
+      "sky_glow_focus": 1.6,
+      "sky_grade": [
+        0.5,
+        0.4,
+        0.5
+      ],
+      "horizon_low": 0.04,
+      "horizon_high": 0.32,
+      "haze_color": [
+        0.52,
+        0.38,
+        0.22
+      ],
+      "haze_scale": [
+        0.9,
+        0.75,
+        0.55
+      ],
+      "fog_distance": 850.0,
+      "shadows": true,
+      "shadow_range": 200.0,
+      "shadow_bias": 0.05,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.85,
+      "smog_intensity": 0.2,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c2m4": {
+      "azimuth": 0.0,
+      "elevation": 90.0,
+      "sun_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sun_strength": 0.0,
+      "ambient_color": [
+        0.38,
+        0.45,
+        0.35
+      ],
+      "ambient_strength": 0.4,
+      "night_world_gain": 0.0,
+      "sky_tint": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sky_brightness": 0.0,
+      "sky_glow_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sky_glow_strength": 0.0,
+      "sky_glow_focus": 2.2,
+      "sky_grade": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "horizon_low": 0.03,
+      "horizon_high": 0.28,
+      "haze_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "haze_scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "fog_distance": 1050.0,
+      "shadows": false,
+      "shadow_range": 220.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 0.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": true,
+      "env_lights": []
+    },
+    "c3m1": {
+      "azimuth": 175.0,
+      "elevation": 82.0,
+      "sun_color": [
+        1.05,
+        0.98,
+        0.92
+      ],
+      "sun_strength": 1.7,
+      "ambient_color": [
+        0.85,
+        0.68,
+        0.58
+      ],
+      "ambient_strength": 0.36,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.85,
+        0.9,
+        0.98
+      ],
+      "sky_brightness": 1.2,
+      "sky_glow_color": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "sky_glow_strength": 0.3,
+      "sky_glow_focus": 2.0,
+      "sky_grade": [
+        0.85,
+        0.85,
+        0.85
+      ],
+      "horizon_low": 0.05,
+      "horizon_high": 0.35,
+      "haze_color": [
+        0.65,
+        0.55,
+        0.48
+      ],
+      "haze_scale": [
+        1.05,
+        0.95,
+        0.9
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 240.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.1,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.8,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c3m2": {
+      "azimuth": 225.0,
+      "elevation": 48.0,
+      "sun_color": [
+        1.0,
+        0.88,
+        0.72
+      ],
+      "sun_strength": 1.4,
+      "ambient_color": [
+        0.68,
+        0.55,
+        0.45
+      ],
+      "ambient_strength": 0.28,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.8,
+        0.82,
+        0.88
+      ],
+      "sky_brightness": 1.0,
+      "sky_glow_color": [
+        0.95,
+        0.85,
+        0.65
+      ],
+      "sky_glow_strength": 0.5,
+      "sky_glow_focus": 1.8,
+      "sky_grade": [
+        0.75,
+        0.7,
+        0.8
+      ],
+      "horizon_low": 0.04,
+      "horizon_high": 0.3,
+      "haze_color": [
+        0.58,
+        0.48,
+        0.38
+      ],
+      "haze_scale": [
+        0.95,
+        0.88,
+        0.8
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 220.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.45,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.2,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c3m3": {
+      "azimuth": 260.0,
+      "elevation": 12.0,
+      "sun_color": [
+        1.0,
+        0.32,
+        0.12
+      ],
+      "sun_strength": 1.5,
+      "ambient_color": [
+        0.58,
+        0.32,
+        0.38
+      ],
+      "ambient_strength": 0.3,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.85,
+        0.28,
+        0.22
+      ],
+      "sky_brightness": 0.9,
+      "sky_glow_color": [
+        1.0,
+        0.4,
+        0.15
+      ],
+      "sky_glow_strength": 1.2,
+      "sky_glow_focus": 2.5,
+      "sky_grade": [
+        0.55,
+        0.4,
+        0.6
+      ],
+      "horizon_low": 0.03,
+      "horizon_high": 0.26,
+      "haze_color": [
+        0.42,
+        0.25,
+        0.22
+      ],
+      "haze_scale": [
+        0.9,
+        0.7,
+        0.65
+      ],
+      "fog_distance": 1050.0,
+      "shadows": true,
+      "shadow_range": 250.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.5,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.15,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c3m4": {
+      "azimuth": 275.0,
+      "elevation": 3.0,
+      "sun_color": [
+        0.95,
+        0.42,
+        0.18
+      ],
+      "sun_strength": 0.9,
+      "ambient_color": [
+        0.32,
+        0.25,
+        0.42
+      ],
+      "ambient_strength": 0.2,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.45,
+        0.28,
+        0.52
+      ],
+      "sky_brightness": 0.6,
+      "sky_glow_color": [
+        0.95,
+        0.45,
+        0.2
+      ],
+      "sky_glow_strength": 0.8,
+      "sky_glow_focus": 2.2,
+      "sky_grade": [
+        0.55,
+        0.45,
+        0.65
+      ],
+      "horizon_low": 0.02,
+      "horizon_high": 0.22,
+      "haze_color": [
+        0.18,
+        0.14,
+        0.24
+      ],
+      "haze_scale": [
+        0.7,
+        0.65,
+        0.85
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 280.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c3m5": {
+      "azimuth": 0.0,
+      "elevation": 90.0,
+      "sun_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sun_strength": 0.0,
+      "ambient_color": [
+        0.12,
+        0.14,
+        0.16
+      ],
+      "ambient_strength": 0.18,
+      "night_world_gain": 0.3,
+      "sky_tint": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sky_brightness": 0.0,
+      "sky_glow_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sky_glow_strength": 0.0,
+      "sky_glow_focus": 1.0,
+      "sky_grade": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "horizon_low": 0.0,
+      "horizon_high": 0.0,
+      "haze_color": [
+        0.08,
+        0.1,
+        0.12
+      ],
+      "haze_scale": [
+        0.2,
+        0.2,
+        0.2
+      ],
+      "fog_distance": 900.0,
+      "shadows": false,
+      "shadow_range": 100.0,
+      "shadow_bias": 0.05,
+      "shadow_darkness": 0.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.1,
+      "has_lightning": false,
+      "valley_fog_altitude": 80.0,
+      "valley_fog_density": 0.035,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": true,
+      "env_lights": [
+        [
+          [
+            -50.0,
+            18.0,
+            -200.0,
+            50.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1.0,
+            0.08,
+            0.03,
+            1.5
+          ]
+        ],
+        [
+          [
+            60.0,
+            18.0,
+            -320.0,
+            50.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1.0,
+            0.08,
+            0.03,
+            1.5
+          ]
+        ],
+        [
+          [
+            0.0,
+            25.0,
+            -120.0,
+            70.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.2,
+            0.9,
+            0.55,
+            1.2
+          ]
+        ],
+        [
+          [
+            -80.0,
+            25.0,
+            -280.0,
+            70.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.2,
+            0.9,
+            0.55,
+            1.2
+          ]
+        ]
+      ]
+    },
+    "c3m6": {
+      "azimuth": 140.0,
+      "elevation": 38.0,
+      "sun_color": [
+        0.48,
+        0.58,
+        0.85
+      ],
+      "sun_strength": 0.42,
+      "ambient_color": [
+        0.22,
+        0.26,
+        0.38
+      ],
+      "ambient_strength": 0.2,
+      "night_world_gain": 0.26,
+      "sky_tint": [
+        0.12,
+        0.18,
+        0.32
+      ],
+      "sky_brightness": 0.35,
+      "sky_glow_color": [
+        0.45,
+        0.55,
+        0.8
+      ],
+      "sky_glow_strength": 0.25,
+      "sky_glow_focus": 1.8,
+      "sky_grade": [
+        0.8,
+        0.75,
+        0.9
+      ],
+      "horizon_low": 0.01,
+      "horizon_high": 0.18,
+      "haze_color": [
+        0.025,
+        0.035,
+        0.06
+      ],
+      "haze_scale": [
+        0.45,
+        0.55,
+        0.8
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 220.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 0.8,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c4m1": {
+      "azimuth": 180.0,
+      "elevation": 20.0,
+      "sun_color": [
+        0.1,
+        0.1,
+        0.1
+      ],
+      "sun_strength": 0.05,
+      "ambient_color": [
+        0.35,
+        0.14,
+        0.05
+      ],
+      "ambient_strength": 0.3,
+      "night_world_gain": 0.22,
+      "sky_tint": [
+        0.08,
+        0.06,
+        0.06
+      ],
+      "sky_brightness": 0.08,
+      "sky_glow_color": [
+        0.8,
+        0.3,
+        0.1
+      ],
+      "sky_glow_strength": 0.15,
+      "sky_glow_focus": 1.2,
+      "sky_grade": [
+        0.6,
+        0.4,
+        0.7
+      ],
+      "horizon_low": 0.02,
+      "horizon_high": 0.2,
+      "haze_color": [
+        0.14,
+        0.08,
+        0.05
+      ],
+      "haze_scale": [
+        0.4,
+        0.25,
+        0.15
+      ],
+      "fog_distance": 1000.0,
+      "shadows": false,
+      "shadow_range": 200.0,
+      "shadow_bias": 0.05,
+      "shadow_darkness": 0.6,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.15,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.35,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.75,
+      "lava_glow": 0.85,
+      "is_interior": false,
+      "env_lights": [
+        [
+          [
+            -150.0,
+            -10.0,
+            -300.0,
+            120.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1.0,
+            0.35,
+            0.05,
+            2.2
+          ]
+        ],
+        [
+          [
+            180.0,
+            -12.0,
+            -450.0,
+            140.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1.0,
+            0.38,
+            0.06,
+            2.4
+          ]
+        ],
+        [
+          [
+            0.0,
+            -15.0,
+            -600.0,
+            160.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1.0,
+            0.32,
+            0.04,
+            2.5
+          ]
+        ]
+      ]
+    },
+    "c4m2": {
+      "azimuth": 75.0,
+      "elevation": 12.0,
+      "sun_color": [
+        0.25,
+        0.32,
+        0.45
+      ],
+      "sun_strength": 0.2,
+      "ambient_color": [
+        0.15,
+        0.18,
+        0.25
+      ],
+      "ambient_strength": 0.15,
+      "night_world_gain": 0.22,
+      "sky_tint": [
+        0.08,
+        0.1,
+        0.18
+      ],
+      "sky_brightness": 0.18,
+      "sky_glow_color": [
+        0.25,
+        0.35,
+        0.5
+      ],
+      "sky_glow_strength": 0.1,
+      "sky_glow_focus": 1.5,
+      "sky_grade": [
+        0.7,
+        0.6,
+        0.8
+      ],
+      "horizon_low": 0.02,
+      "horizon_high": 0.22,
+      "haze_color": [
+        0.08,
+        0.12,
+        0.1
+      ],
+      "haze_scale": [
+        0.35,
+        0.45,
+        0.4
+      ],
+      "fog_distance": 900.0,
+      "shadows": false,
+      "shadow_range": 200.0,
+      "shadow_bias": 0.05,
+      "shadow_darkness": 0.8,
+      "rain_intensity": 0.55,
+      "wet_reflection": 0.65,
+      "has_lightning": false,
+      "valley_fog_altitude": 55.0,
+      "valley_fog_density": 0.035,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": [
+        [
+          [
+            -220.0,
+            35.0,
+            -700.0,
+            95.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.85,
+            0.95,
+            1.0,
+            1.9
+          ]
+        ],
+        [
+          [
+            240.0,
+            35.0,
+            -720.0,
+            95.0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.85,
+            0.95,
+            1.0,
+            1.9
+          ]
+        ]
+      ]
+    },
+    "c4m3": {
+      "azimuth": 82.0,
+      "elevation": 2.0,
+      "sun_color": [
+        0.65,
+        0.75,
+        0.95
+      ],
+      "sun_strength": 0.8,
+      "ambient_color": [
+        0.28,
+        0.32,
+        0.42
+      ],
+      "ambient_strength": 0.2,
+      "night_world_gain": 0.8,
+      "sky_tint": [
+        0.38,
+        0.48,
+        0.65
+      ],
+      "sky_brightness": 0.55,
+      "sky_glow_color": [
+        0.6,
+        0.75,
+        0.95
+      ],
+      "sky_glow_strength": 0.9,
+      "sky_glow_focus": 2.8,
+      "sky_grade": [
+        0.6,
+        0.5,
+        0.65
+      ],
+      "horizon_low": 0.02,
+      "horizon_high": 0.22,
+      "haze_color": [
+        0.18,
+        0.2,
+        0.28
+      ],
+      "haze_scale": [
+        0.6,
+        0.7,
+        0.85
+      ],
+      "fog_distance": 1050.0,
+      "shadows": true,
+      "shadow_range": 280.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.4,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c4m4": {
+      "azimuth": 88.0,
+      "elevation": 8.0,
+      "sun_color": [
+        1.0,
+        0.65,
+        0.45
+      ],
+      "sun_strength": 1.35,
+      "ambient_color": [
+        0.65,
+        0.45,
+        0.55
+      ],
+      "ambient_strength": 0.32,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.85,
+        0.52,
+        0.62
+      ],
+      "sky_brightness": 0.95,
+      "sky_glow_color": [
+        1.0,
+        0.68,
+        0.45
+      ],
+      "sky_glow_strength": 1.1,
+      "sky_glow_focus": 2.2,
+      "sky_grade": [
+        0.65,
+        0.6,
+        0.75
+      ],
+      "horizon_low": 0.03,
+      "horizon_high": 0.28,
+      "haze_color": [
+        0.42,
+        0.32,
+        0.38
+      ],
+      "haze_scale": [
+        0.95,
+        0.8,
+        0.85
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 250.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.15,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c4m5": {
+      "azimuth": 95.0,
+      "elevation": 14.0,
+      "sun_color": [
+        1.0,
+        0.82,
+        0.45
+      ],
+      "sun_strength": 1.65,
+      "ambient_color": [
+        0.72,
+        0.68,
+        0.6
+      ],
+      "ambient_strength": 0.35,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.82,
+        0.85,
+        0.92
+      ],
+      "sky_brightness": 1.15,
+      "sky_glow_color": [
+        1.0,
+        0.85,
+        0.45
+      ],
+      "sky_glow_strength": 1.4,
+      "sky_glow_focus": 2.0,
+      "sky_grade": [
+        0.75,
+        0.7,
+        0.85
+      ],
+      "horizon_low": 0.04,
+      "horizon_high": 0.3,
+      "haze_color": [
+        0.55,
+        0.48,
+        0.38
+      ],
+      "haze_scale": [
+        1.0,
+        0.9,
+        0.8
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 240.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.1,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.7,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    },
+    "c4m6": {
+      "azimuth": 110.0,
+      "elevation": 28.0,
+      "sun_color": [
+        1.0,
+        0.95,
+        0.88
+      ],
+      "sun_strength": 1.45,
+      "ambient_color": [
+        0.78,
+        0.82,
+        0.92
+      ],
+      "ambient_strength": 0.35,
+      "night_world_gain": 1.0,
+      "sky_tint": [
+        0.65,
+        0.78,
+        0.98
+      ],
+      "sky_brightness": 1.1,
+      "sky_glow_color": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "sky_glow_strength": 0.6,
+      "sky_glow_focus": 2.0,
+      "sky_grade": [
+        0.85,
+        0.85,
+        0.95
+      ],
+      "horizon_low": 0.03,
+      "horizon_high": 0.28,
+      "haze_color": [
+        0.45,
+        0.55,
+        0.72
+      ],
+      "haze_scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "fog_distance": 1100.0,
+      "shadows": true,
+      "shadow_range": 220.0,
+      "shadow_bias": 0.04,
+      "shadow_darkness": 1.0,
+      "rain_intensity": 0.0,
+      "wet_reflection": 0.0,
+      "has_lightning": false,
+      "valley_fog_altitude": 0.0,
+      "valley_fog_density": 0.0,
+      "dust_intensity": 0.0,
+      "smog_intensity": 0.0,
+      "heat_shimmer": 0.0,
+      "volcanic_ash": 0.0,
+      "lava_glow": 0.0,
+      "is_interior": false,
+      "env_lights": []
+    }
+  }
+}

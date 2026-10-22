@@ -17,11 +17,18 @@ from prepare_world_normals import accelerated_hash
 
 
 def sha(path):
+    """Stream a source or candidate file's SHA-256 for provenance checks."""
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def profile(name, reasons):
+    """Select draft filter weights, resolution, slope and boundary treatment.
+
+    Rules are ordered: a rock-name match precedes vehicle membership, then
+    ground-name matching, then the structure default. These are offline draft
+    heuristics, not recovered material semantics or runtime binding identities.
+    """
     # Named rock families preserve their broad erosion channels. World strength
     # remains separate: no 2x multiplier is baked into these image samples.
     if re.search(
@@ -44,16 +51,22 @@ def profile(name, reasons):
 
 
 def relief(rgb, settings):
+    """Return a normal-map tuple and editable 16-bit color-derived height array.
+
+    Resize without upscaling, separate luminance into three spatial bands, and
+    combine them using the selected profile. Repeating surfaces wrap; other
+    atlases clamp and receive flat normal borders. Height is a draft estimate.
+    """
     rgb = rgb.convert("RGB")
     ratio = min(1.0, settings["size"] / max(rgb.size))
     size = tuple(max(1, round(x * ratio)) for x in rgb.size)
     color = np.asarray(rgb.resize(size, Image.Resampling.LANCZOS), dtype=np.float32) / 255.0
-    value = color @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+    luminance = color @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
     def blur(radius):
         # Extended borders keep clamped atlases from wrapping unrelated panels.
         pad = max(2, int(radius * 3))
-        padded = np.pad(value, pad, mode="wrap" if settings["repeat"] else "edge")
+        padded = np.pad(luminance, pad, mode="wrap" if settings["repeat"] else "edge")
         image = Image.fromarray(np.rint(padded * 255).astype("uint8")).filter(
             ImageFilter.GaussianBlur(radius)
         )
@@ -76,19 +89,21 @@ def relief(rgb, settings):
     else:
         dy, dx = np.gradient(height)
     # Normalize across the whole tile, retaining relative macro/micro relief.
-    slope = np.sqrt(dx * dx + dy * dy)
-    scale = min(
+    unscaled_slopes = np.sqrt(dx * dx + dy * dy)
+    # One gain brings the 95th-percentile slope toward the profile target.
+    # The later per-pixel cap bounds outliers at 1.5 times that target.
+    gain = min(
         256.0 if settings["kind"] == "rock" else 32.0,
-        settings["slope"] / max(float(np.percentile(slope, 95)), 1e-6),
+        settings["slope"] / max(float(np.percentile(unscaled_slopes, 95)), 1e-6),
     )
-    dx *= scale
-    dy *= scale
-    length = np.sqrt(dx * dx + dy * dy)
-    cap = np.minimum(1.0, settings["slope"] * 1.5 / np.maximum(length, 1e-6))
-    n = np.stack((-dx * cap, -dy * cap, np.ones_like(dx)), axis=-1)
-    n /= np.linalg.norm(n, axis=-1, keepdims=True)
+    dx *= gain
+    dy *= gain
+    scaled_slopes = np.sqrt(dx * dx + dy * dy)
+    slope_scale = np.minimum(1.0, settings["slope"] * 1.5 / np.maximum(scaled_slopes, 1e-6))
+    unit_normals = np.stack((-dx * slope_scale, -dy * slope_scale, np.ones_like(dx)), axis=-1)
+    unit_normals /= np.linalg.norm(unit_normals, axis=-1, keepdims=True)
     rgba = np.empty((*height.shape, 4), dtype="uint8")
-    rgba[:, :, :3] = np.rint((n * 0.5 + 0.5) * 255).astype("uint8")
+    rgba[:, :, :3] = np.rint((unit_normals * 0.5 + 0.5) * 255).astype("uint8")
     rgba[:, :, 3] = 255
     if not settings["repeat"]:
         rgba[:2, :, :3] = rgba[-2:, :, :3] = [128, 128, 255]
@@ -98,6 +113,13 @@ def relief(rgb, settings):
 
 
 def prepare(priorities, base, output, hash_library):
+    """Build a fresh draft catalog from priority names and registered bank pixels.
+
+    Base-page bindings and receipt registrations must have the same key order.
+    Selected aliases share one generated normal per source/profile kind; other
+    bindings retain their previous normal data. Missing priority names are
+    reported as unavailable rather than fabricated. Outputs remain local drafts.
+    """
     if output.exists():
         raise ValueError("Preserve previous candidates: select a fresh output")
     ranks = json.loads(priorities.read_text())
@@ -123,6 +145,7 @@ def prepare(priorities, base, output, hash_library):
     total = 0
 
     def flush():
+        """Write one pending page and reset its binding and pixel-byte counters."""
         nonlocal batch, batch_bytes, total
         if not batch:
             return
@@ -153,8 +176,9 @@ def prepare(priorities, base, output, hash_library):
             selected = [n for n in names if n in choices]
             selected = [n for n in selected if n not in ranks["dedicated_water_exclusions"]]
             if selected:
-                # A shared colour identity needs one interpretation. Choose the
-                # strictest vehicle/atlas profile if any alias uses that surface.
+                # A shared colour identity needs one interpretation. Prefer a
+                # vehicle alias as the profile name; profile() still applies its
+                # rock-name rule before the vehicle-membership rule.
                 reasons = {r for n in selected for r in choices[n]["reasons"]}
                 name = next(
                     (n for n in selected if "vehicle_all_materials" in choices[n]["reasons"]),
@@ -210,6 +234,8 @@ def prepare(priorities, base, output, hash_library):
                         normal_size=normal[:2],
                     )
                 )
+            # This conservative batching estimate counts repeated pixel data.
+            # flush() separately checks the actual encoded page byte limit.
             size = len(normal[2]) if normal else 0
             if len(batch) >= 64 or batch_bytes + size > 8 * 1024 * 1024:
                 flush()

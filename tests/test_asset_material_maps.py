@@ -20,7 +20,8 @@ SHELL = shutil.which("pwsh") or shutil.which("powershell")
 @unittest.skipUnless(os.name == "nt" and SHELL, "Windows System.Drawing material export only")
 class MaterialMapTests(unittest.TestCase):
     def setUp(self):
-        fixtures = ROOT / "local/work-ahead/test-fixtures"
+        # Keep synthetic inputs separate from relocated work-ahead archives.
+        fixtures = ROOT / "local/authored-test-fixtures"
         fixtures.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(prefix="materials-", dir=fixtures)
         self.addCleanup(self.temporary.cleanup)

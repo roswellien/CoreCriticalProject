@@ -168,3 +168,111 @@ Private receipts: C:/Users/jcbla/.codex/workspace-storage/MW34Recomp/joints-runt
 The public notes in `docs/mechlab/2026-10-18.md` and `2026-10-19.md` now summarize the current results, superseding the accumulated draft publication text. They distinguish preview, main-play and filming boundaries and preserve the 131/144 acceptance count. The website adds Mechs and Gameplay categories, fourteen profiles with corrected orbit captures, and the user-published YouTube announcement on Gameplay and the homepage. AI-development disclosure is explicit on Home and About; the www Pages domain is configured.
 
 Website source lives in the separate `CoreCriticalWeb` repository. Its media manifest points to verified copies in the pinned Cloudflare deployment so future Git builds do not require local game media. The dated notes remain the sole input to automatic MechLab publishing. No new native execution boundary is advanced by this publication work.
+
+
+## 2026-10-19 - Original Avatar geometry upgrade R1
+
+[Avatar geometry candidate](avatar-geometry-detail-2026-10-19.md): upgraded the
+original558-triangle model to17318triangles across the same19moving parts.
+Added source-aligned armor layers/bevels,15vent regions,22missile collars,
+six muzzle collars and cockpit framing. Existing color/normal images retained;
+12x reference preserved. No parked STL, new joint or changed limb transform.
+All336controller poses match exactly;336matched walking render pairs, four
+gray comparison views and46packed image hashes pass. Nine Drive review files
+are verified; local packed scene/HTML and source receipts retained.
+Offline geometry boundary only, not installed in either launcher. Native LOD,
+weapon/damage/joint/performance validation remains. The15installed replacements
+and MadCat/Vulture R4 are unchanged. Owens/Firefly geometry remains next.
+No game, desktop screenshot, original pilot/registry write or commit.
+Strict131/144paused; no new native credit.
+
+
+## 2026-10-19 - Avatar STL-guided geometry R2 (offline)
+
+After R1 review, the user requested a stronger upgrade using the supplied STL.
+[R2 geometry revision](avatar-stl-guided-geometry-r2-2026-10-19.md) has36,038triangles
+vs R1's17,318, retaining19original MW3 controller parts. It adds81deeper chamfered
+shells, stepped shoulder/hip/knee/ankle and toe covers, plus a newly extracted
+6,580-triangle STL cockpit/nose. The old mis-fitted STL rig is not reused.
+Original control transforms/action curves and all336checked poses remain exact;
+46packed source color/normal files retain bytes and12xbody response. Nose mapping
+and clean new covers have provisional materials. Gray and color R1/R2 reviews,
+336matched walking render pairs and video checks pass;10Drive files verified.
+Native payload/LOD and weapon/damage/live-joint/performance work remain; NOT
+INSTALLED. Two separate launcher changes observed during authoring are preserved
+without restoration; source model registries and original registry remained
+unchanged at inspection. No game, desktop screenshots, original pilot/registry
+write or commit. Strict131/144paused; zero new native credit.
+
+
+## 2026-10-19 - Avatar R3 hip covers seated (offline)
+
+Corrected the detached R2 outer hip covers: moved only the existing covers/bolts
+inward onto the actual narrow upper-thigh surface, with 0.03-unit backing overlap.
+No new connector, joint or leg movement. Exactly 1,008 cover vertices change on
+X only; 36,038 triangles, 19 parts and 46 packed source images remain. Seventeen
+mounting samples per side and 336 unchanged controller poses pass. Three boards
+and 112 matched walking frames reviewed; five Drive preview/notes files verified.
+[R3 detail and review links](avatar-stl-guided-geometry-r2-2026-10-19.md#2026-10-19---r3-hip-cover-seating-correction-offline).
+Local: `local/work-ahead/mw3-avatar-hip-fit-r3/comparison.html`. NOT INSTALLED;
+native LOD/combat/live-joint/performance checks remain. R2 and live assets retained.
+No game, desktop screenshots, original registry/pilot write or commit.
+Strict 131/144 paused; no new native credit.
+
+
+## 2026-10-19 - Avatar R4 textured and installed
+
+[Textured Avatar integration](avatar-native-integration-2026-10-19.md) is now in
+both living launcher profiles:16replacement chassis total. Preserved R3 hips,
+19original moving parts and36,038triangles. Retained25body color tiles pixel
+for pixel; new surfaces have separate worn paint/metal/soot textures.45material
+slots,43normal bindings, smooth glazing exceptions and the selected12x reference.
+Both source distances and four arm-loss alternatives registered; far geometry
+currently retains full detail. Merged the independently updated lighting host
+8fce991d before publishing the Avatar hosta0cefef7, preserving prior15registrations.
+Latest-host Training116/116, GPUdraw1150/1150 and IA116/116 match; adapter3850/0;
+native player2500frames with movement/firing and normals; both launchers prepare
+all16 and original-model option passes. Six Drive previews/notes verified.
+NPC LOD transitions/full destruction/muzzle/extended play/FPS remain open.
+No desktop screenshots, original registry/pilot writes or commit. Strict131/144
+paused; no accepted-function credit. Remaining original geometry work:Firefly/Owens.
+
+
+## 2026-10-19 - Owens ZIP-inspired geometry prototype R1
+
+The supplied Downloads Owens Omnimech5955019 ZIP contains editable Blender,
+STL and render references credited to UnrestedGuy. Used as visual inspiration
+for [new authored geometry on the MW3 Owens](owens-zip-geometry-prototype-2026-10-19.md),
+without importing its rig, meshes or print base.774to21,170triangles,16same moving
+parts;82faceted shells,10source missile openings,4vents, cockpit/bearing/optics,
+8toe hinges and2solid antenna whips on the source centerlines. Existing colors
+and12x normal reference retained; new mechanical materials remain provisional.
+All336source controller poses match exactly;88mounting samples inside original
+part armor,42packed source-image hashes,168matched walking render pairs and
+4uniform-gray views pass. Seven Drive previews/notes names/MIME/parents/bytes
+verified. Local packed scene/HTML:local/work-ahead/mw3-owens-detail-r1/.
+Offline/not installed. Native mesh/LOD/material export and weapon/damage/live
+checks remain. Current16model launchers and original registry retain their
+initial hashes. No game, desktop screenshots, original pilot/registry write
+or commit. Strict131/144paused; no new native acceptance credit.
+
+
+## 2026-10-19 - Firefly Firebug-inspired geometry prototype R1
+
+Inspected both supplied Firebug ZIPs: two PunyKaiju-named posed STLs and separate
+bases, no license/README in the supplied archives. Used as visual inspiration for
+[authored MW3 Firefly geometry](firefly-firebug-geometry-prototype-2026-10-19.md),
+without importing reference triangles, bases or STL poses. 622 to23,688triangles,
+21same moving parts/35same controller-frame objects. Added103armor panels,
+cockpit contour frame, circular housings, four grilles/30louvers, four leg rails,
+seated bearings,14source-layout missile wells and10toe hinges on8toe controls.
+An initial hinge crossing the paired front toe gap failed the mounting check;
+separate embedded hinges now follow each prong under the original control.
+Original source geometry/UV/actions retained;336control poses exact,82mounting
+samples and48packed image identities pass. Existing worn colors/12xreference
+retained; new hardware finishes remain provisional.168matched walking render
+pairs plus4normal-off gray views;7Drive previews/notes metadata/bytes verified.
+Local packed scene/HTML:local/work-ahead/mw3-firefly-detail-r1/.
+Offline/not installed; native mesh/LOD/material export, weapon/damage and live
+performance remain. Current16model launcher/registry hashes unchanged. No game,
+desktop screenshots, original pilot/registry write or commit. Strict131/144paused.

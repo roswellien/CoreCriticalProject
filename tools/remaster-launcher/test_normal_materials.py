@@ -260,7 +260,20 @@ class NormalMaterialsTests(unittest.TestCase):
                 save([2], [2])
                 planned = play_remaster.plan(config_path=config, registry_path=registry)
                 self.assertTrue(planned["supported"])
-                self.assertEqual(planned["command"][-1], str(config))
+                self.assertEqual(planned["command"][planned["command"].index("-Profile") + 1], str(config))
+                module = root / "translated.dll"
+                module.write_bytes(b"authored native module fixture")
+                native["translated_module"] = "translated.dll"
+                native["translated_module_sha256"] = hashlib.sha256(module.read_bytes()).hexdigest()
+                save([2], [2])
+                self.assertTrue(play_remaster.plan(config_path=config, registry_path=registry)["supported"])
+                module.write_bytes(b"corrupted native module fixture")
+                with self.assertRaisesRegex(RuntimeError, "native game module"):
+                    play_remaster.plan(config_path=config, registry_path=registry)
+                module.unlink()
+                with self.assertRaisesRegex(RuntimeError, "native game module"):
+                    play_remaster.plan(config_path=config, registry_path=registry)
+                del native["translated_module"], native["translated_module_sha256"]
                 (root / "authored.txt").write_bytes(b"MW34SNA1\nauthored-00.bin\n")
                 native["runtime_environment"] = {"MW34_SURFACE_NORMALS": "authored.txt"}
                 save([2], [2])

@@ -128,6 +128,8 @@
                                     </Border>
 
                                     <Button x:Name="BtnLaunchGame" Content="▶  LAUNCH REMASTER" Style="{StaticResource PrimaryLaunchButton}" HorizontalAlignment="Left" Click="BtnLaunchGame_Click" />
+                                    <TextBlock Text="First startup and launches after changing packs may take several minutes, depending on your PC and storage speed." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrushMuted}" Margin="0,10,0,0" />
+                                    <TextBlock x:Name="TxtStartupProgress" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrushAmber}" Margin="0,6,0,0" />
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -152,7 +154,7 @@
 
                                 <StackPanel Margin="0,0,0,12">
                                     <TextBlock Text="Scenery Draw Distance:" FontSize="12" Foreground="{StaticResource BrushMuted}" />
-                                    <TextBlock x:Name="TxtSummaryDrawDist" Text="2400m (Epic Distance)" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource BrushInk}" />
+                                    <TextBlock x:Name="TxtSummaryDrawDist" Text="1600m (Standard)" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource BrushInk}" />
                                 </StackPanel>
 
                                 <StackPanel Margin="0,0,0,16">
@@ -261,8 +263,8 @@
                                     <TextBlock Text="Scenery Draw Distance:" FontWeight="SemiBold" Margin="0,0,0,6" />
                                     <ComboBox x:Name="ComboDrawDist" Margin="0,0,0,16" SelectionChanged="SettingControl_Changed">
                                         <ComboBoxItem Content="3200m - Horizon Maximum (Modern High-End)" Tag="3200" />
-                                        <ComboBoxItem Content="2400m - Epic Distance (Recommended)" Tag="2400" />
-                                        <ComboBoxItem Content="1600m - Extended Distance" Tag="1600" />
+                                        <ComboBoxItem Content="2400m - Epic Distance" Tag="2400" />
+                                        <ComboBoxItem Content="1600m - Extended Distance (Recommended)" Tag="1600" />
                                         <ComboBoxItem Content="1200m - High Distance" Tag="1200" />
                                         <ComboBoxItem Content="800m - Original 1999 Classic Distance" Tag="800" />
                                     </ComboBox>
@@ -274,8 +276,8 @@
                                         <ComboBoxItem Content="Original Fog Atmosphere (Classic Fog Density)" Tag="0" />
                                     </ComboBox>
 
-                                    <!-- CD Audio Music -->
-                                    <CheckBox x:Name="ChkCdAudio" Content="Enable High-Fidelity CD Audio Soundtrack (In-Mission Red Book Music)" Margin="0,0,0,16" Checked="SettingControl_Changed" Unchecked="SettingControl_Changed" />
+                                    <TextBlock Text="Install soundtrack .mw3pack files through Mods &amp; Packs → Install Pack. The first enabled soundtrack in pack order is used." TextWrapping="Wrap" Margin="0,0,0,12" />
+                                    <CheckBox x:Name="ChkCdAudio" Content="Enable installed soundtrack (original in-game music controls)" Margin="0,0,0,16" Checked="SettingControl_Changed" Unchecked="SettingControl_Changed" />
                                 </StackPanel>
 
                                 <!-- PANEL B: D7VK WRAPPER GRAPHICS -->
@@ -352,6 +354,8 @@
 
                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                 <TextBlock Text="MODS &amp; ASSET PACKS MANAGER" FontFamily="{StaticResource FontHeader}" FontSize="15" Foreground="{StaticResource BrushAmber}" />
+                                <Button Content="Watch installed cinematics…" Style="{StaticResource SecondaryButton}" FontSize="12" Padding="10,4" Click="WatchCinematics_Click" HorizontalAlignment="Left" Margin="0,6,0,0" />
+                                <TextBlock x:Name="TxtEnvironmentMigration" Text="Your previous environment content remains active until you install an environment pack." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrushAmber}" Margin="0,4,12,0" MaxWidth="480" />
                                 <TextBlock Text="Drag &amp; drop .mw3pack files anywhere onto this window, or use the buttons to install and reorder packs." FontSize="12" Foreground="{StaticResource BrushMuted}" Margin="0,4,0,0" />
                             </StackPanel>
 
@@ -389,12 +393,14 @@
                                                     </Border>
                                                     <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="11" Foreground="{StaticResource BrushMuted}" Margin="8,2,0,0" VerticalAlignment="Center" />
                                                 </StackPanel>
+                                                <TextBlock Text="{Binding RuntimeLabel}" FontSize="11" Foreground="{StaticResource BrushAmber}" Margin="0,4,0,0" />
                                                 <TextBlock Text="{Binding Description}" FontSize="12" Foreground="{StaticResource BrushMuted}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
                                                 <TextBlock Text="{Binding Author, StringFormat='Author: {0}'}" FontSize="11" Foreground="#888880" Margin="0,2,0,0" />
                                             </StackPanel>
 
                                             <!-- Priority Reordering Buttons -->
                                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0">
+                                                <Button Content="↶" Style="{StaticResource SecondaryButton}" Padding="8,4" Margin="0,0,4,0" Click="BtnRollbackPack_Click" Tag="{Binding}" ToolTip="Restore previous installed version" />
                                                 <Button Content="▲" Style="{StaticResource SecondaryButton}" Padding="8,4" Margin="0,0,4,0" Click="BtnMoveUp_Click" Tag="{Binding}" ToolTip="Move Up in Priority (Load First)" />
                                                 <Button Content="▼" Style="{StaticResource SecondaryButton}" Padding="8,4" Click="BtnMoveDown_Click" Tag="{Binding}" ToolTip="Move Down in Priority" />
                                             </StackPanel>
@@ -456,6 +462,7 @@
                 <!-- VIEW 5: SETTINGS & STEAM -->
                 <Grid x:Name="ViewSettings" Visibility="Collapsed">
                     <Border Background="{StaticResource BrushGroundCard}" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="4" Padding="24">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel MaxWidth="680" HorizontalAlignment="Left">
                             <TextBlock Text="SYSTEM SETTINGS &amp; STEAM INTEGRATION" FontFamily="{StaticResource FontHeader}" FontSize="18" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,20" />
 
@@ -472,14 +479,28 @@
                             </Grid>
                             <TextBlock x:Name="TxtValidationDetails" Text="Verifying game files..." FontSize="12" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,24" />
 
+                            <Border Background="#1C2220" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,20">
+                                <StackPanel>
+                                    <TextBlock Text="PLAYTEST SUPPORT" FontFamily="{StaticResource FontDisplay}" FontSize="13" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,6" />
+                                    <TextBlock x:Name="TxtLauncherBuild" Foreground="{StaticResource BrushMuted}" FontSize="12" Margin="0,0,0,6" />
+                                    <TextBlock Text="Open recent launch details or save a troubleshooting report for a bug report. Reports include selected settings, pack metadata and redacted log tails. Review before sharing." FontSize="12" Foreground="{StaticResource BrushMuted}" TextWrapping="Wrap" Margin="0,0,0,14" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="Open Logs" Style="{StaticResource SecondaryButton}" Click="BtnOpenLogs_Click" Margin="0,0,12,0" />
+                                        <Button Content="Export Report..." Style="{StaticResource SecondaryButton}" Click="BtnExportReport_Click" />
+                                        <Button Content="Game Updates..." Style="{StaticResource SecondaryButton}" Click="BtnGameUpdates_Click" Margin="12,0,0,0" />
+                                        <Button Content="Save Backups..." Style="{StaticResource SecondaryButton}" Click="BtnSaveBackups_Click" Margin="12,0,0,0" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
                             <!-- Standalone Disc-Free Media Installer -->
                             <Border Background="#1C2220" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,20">
                                 <StackPanel>
-                                    <TextBlock Text="STANDALONE DISC-FREE MEDIA INSTALLER" FontFamily="{StaticResource FontDisplay}" FontSize="13" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,6" />
-                                    <TextBlock Text="Import cinematic movies (VIDEO/) and disc markers from your legal game CD or .ISO image directly into your installation. Once imported, MechWarrior 3 runs completely standalone without requiring a CD in the drive." FontSize="12" Foreground="{StaticResource BrushMuted}" TextWrapping="Wrap" Margin="0,0,0,14" />
+                                    <TextBlock Text="IMPORT ORIGINAL DISC MEDIA" FontFamily="{StaticResource FontDisplay}" FontSize="13" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,6" />
+                                    <TextBlock Text="Use an existing MW3 installation, or install the original files from your own ISO and cumulative English 1.2 patch. Your existing game files stay unchanged." FontSize="12" Foreground="{StaticResource BrushMuted}" TextWrapping="Wrap" Margin="0,0,0,14" />
                                     <StackPanel Orientation="Horizontal">
-                                        <Button x:Name="BtnImportMedia" Content="Import Media from ISO or CD..." Style="{StaticResource SecondaryButton}" Click="BtnImportMedia_Click" Margin="0,0,12,0" />
-                                        <TextBlock x:Name="TxtMediaStatus" Text="Status: Local media check ready" FontSize="12" Foreground="{StaticResource BrushMuted}" VerticalAlignment="Center" />
+                                        <Button x:Name="BtnImportMedia" Content="Set Up Game…" Style="{StaticResource SecondaryButton}" Click="BtnImportMedia_Click" Margin="0,0,12,0" />
+                                        <TextBlock x:Name="TxtMediaStatus" Text="Status: Game setup available" FontSize="12" Foreground="{StaticResource BrushMuted}" VerticalAlignment="Center" />
                                     </StackPanel>
                                     <ProgressBar x:Name="ProgressMedia" Height="4" Background="#141717" Foreground="{StaticResource BrushAmber}" BorderThickness="0" Margin="0,10,0,0" Visibility="Collapsed" />
                                 </StackPanel>
@@ -494,6 +515,7 @@
                                 </StackPanel>
                             </Border>
                         </StackPanel>
+                        </ScrollViewer>
                     </Border>
                 </Grid>
             </Grid>

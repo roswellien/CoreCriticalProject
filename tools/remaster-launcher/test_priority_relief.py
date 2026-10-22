@@ -1,15 +1,65 @@
 """Synthetic checks for the priority scan and broad-feature relief regression."""
 
 import math
+import json
+from pathlib import Path
+import tempfile
 import unittest
+import zipfile
 import numpy as np
 from PIL import Image, ImageFilter
 from prepare_priority_relief import relief, profile
-from rank_normal_priorities import polygon_area
+from rank_normal_priorities import polygon_area, rank, REGIONS
 from prepare_authored_relief import normals_from_height, periodic_height, alignment
 
 
 class PriorityReliefTests(unittest.TestCase):
+    def test_priority_scan_rejects_empty_material_lane_before_output(self):
+        # All fixtures are authored geometry. Exercise both a missing terrain
+        # lane and a missing object lane without any original game inputs.
+        for terrain in (False, True):
+            missing_lane = "objects" if terrain else "terrain"
+            with (
+                self.subTest(missing_lane=missing_lane),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                scene = dict(
+                    nodes=[dict(name="authored", model_index=0, flags=dict(terrain=terrain))],
+                    models=[
+                        dict(
+                            vertices=[
+                                dict(x=0, y=0, z=0),
+                                dict(x=1, y=0, z=0),
+                                dict(x=0, y=0, z=1),
+                            ],
+                            polygons=[
+                                dict(vertex_indices=[0, 1, 2], materials=[dict(material_index=0)])
+                            ],
+                        )
+                    ],
+                    materials=[dict(Textured=dict(texture_index=0))],
+                    textures=[dict(name="authored.bmp")],
+                )
+                for region in REGIONS:
+                    with zipfile.ZipFile(root / (region + "-gamez.zip"), "w") as archive:
+                        for name, data in scene.items():
+                            archive.writestr(name + ".json", json.dumps(data))
+                inventory = root / "inventory.json"
+                inventory.write_text(
+                    json.dumps(dict(textures=[dict(name="authored", category="fixture")]))
+                )
+                water = root / "water.json"
+                water.write_text(
+                    json.dumps(
+                        dict(groups=dict(water_surfaces=[], surf_animation=[], foam_and_splash=[]))
+                    )
+                )
+                output = root / "output"
+                with self.assertRaisesRegex(ValueError, "No eligible " + missing_lane):
+                    rank(root, inventory, output, water)
+                self.assertFalse(output.exists())
+
     def test_broad_rock_ridge_survives(self):
         x = np.arange(512, dtype=np.float32)
         h = np.tile(0.5 + 0.25 * np.sin(x * 2 * math.pi / 256), (256, 1))

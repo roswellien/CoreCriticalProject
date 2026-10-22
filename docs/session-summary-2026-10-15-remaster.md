@@ -386,3 +386,35 @@ https://drive.google.com/drive/folders/1_CBZecIqQsQJXzAQVkge_OskM1cPhaZ-
 Details docs/bushwacker-waist-fit-2026-10-15.md. Backup in revision before/.
 No game launch/screenshots, protected registry/pilot edits, commit or native
 execution credit.131/144strictpaused. Live visual review remains pending.
+
+
+## Thor R2 wear and Black Hawk/Champion port milestone
+
+Thor's user-requested stronger wear/detail R2 is installed: Body/Variant only,
+other three maps unchanged. Root launcher --prepare-only exits0; every actual
+packed Thor RGB565 pixel verified, other nine sidecars unchanged. Twelve Drive
+files metadata-verified. Other six models/current build/profile/BW waist retained.
+Details docs/thor-worn-textures-r2-2026-10-15.md; Orion/Vulture keep R1 colors.
+
+User selected Black Hawk (Nova) and Champion. MW5 donors decoded with cockpit
+and 12+6 modular weapons, initial MW3 palette material scenes and source motion.
+User rejected stretched Black Hawk thighs. Guarded the rejected native payload
+and retired its generator. Corrected leg-correction-r2 keeps original donor
+mesh/UV/rest skeleton and fixed leg lengths, using MW3 gait phase/stride/root,
+correct gait midpoint and consistent knee bend.225 sampled poses;449 saved
+animation contact evaluations. Offline standing/walking/side previews plus
+11.2s front/side video on Drive, six files verified:
+https://drive.google.com/drive/folders/1_Kw5HzGsh9HHFGX1BRE4SUfmpEjW9X95
+
+Neither new chassis is installed. Native visual retarget needed; current rigid
+adapter cannot represent corrected donor joint solve by reusing rejected mesh.
+Champion source/donor SRM/small-laser controller mismatch recorded; muzzle,
+damage/falls, LODs, live validation remain. No fake completion/native credit.
+Details docs/blackhawk-champion-port-progress-2026-10-15.md.
+
+MW4 roster research: Owens official Mercenaries; Avatar/Strider MekTek playable
+models documented in primary technical guides; Firefly unverified. No MW4 game
+data fetched/decoded. docs/mw4-missing-mech-donor-check-2026-10-15.md.
+
+No game launch/screenshots, MW3/mw34-registry.txt/pilot edits or commit.
+Other writers/composer/watcher preserved. Strict acceptance paused at131/144.

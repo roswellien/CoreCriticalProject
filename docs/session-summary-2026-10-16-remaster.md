@@ -285,3 +285,43 @@ docs/strider-geometry-detail-prototype-2026-10-16.md. OFFLINE PROTOTYPE, NOT
 INSTALLED; native payload/material/weapon/damage/LOD/performance work remains.
 No game, screenshots, protected file edits, runtime/launcher writes or commit.
 Strict acceptance131/144 remains paused.
+
+
+## Strider smooth armor normal-map revision
+
+Addressed user-reported wrinkles on broad plates/head roof. Edited12relief
+tiles and added a derivative noise floor, retaining12x strength,22unchanged
+colors,3shared relief groups,17,129-triangle geometry and336original poses.
+Matched HQ walk, roof and neutral-gray comparisons, editable scene/material
+pack delivered: https://drive.google.com/drive/folders/1hRkIHkTC-sJ0W41adAwYlzkSe52fkz6f
+11files/4folders verified including byte sizes. Source/map/pose/packed-image/
+video/ZIP/HTML checks pass. See docs/strider-normal-surface-cleanup-2026-10-16.md.
+Offline only; no native/launcher change, game, desktop capture, protected-file
+edits or commit. Strict131/144 remains paused.
+
+
+## All prepared models installed in the native Remaster launcher
+
+Connected all14MW5chassis plus detailed Strider (15total), latest base colors,
+29close/distance bindings and original-model launcher on native8bf6e08e.
+Eight actual1800frame player runs, final gameplay regressions116/116,1150/1150,
+116/116 and10,370,795adapter checks pass. Fixed source cockpit recognition and
+Strider double-pose export; corrected Strider51387corners/336bindings checked.
+Graphics/HUD/music/39banks retained; STL Avatar excluded. Previews: https://drive.google.com/drive/folders/1_rfk3ocVrRCplcaw_Z7ZQiT47IKrauzt
+Native normal mapping, fullcombat/debris/LODtransition/muzzle/performance QA
+remain. Source/proofs/assets partly on C:; preserve that workspace. See
+docs/all-models-native-integration-2026-10-16.md. No desktop capture, actual
+pilot/registry writes or commit. Strict acceptance131/144stays paused.
+
+
+## Opening-video startup crash repaired
+
+Installed native `110c0ae83f79` with isolated CRT/codec/service heap regions.
+Reproduced the invalid campaign-list read after the movie; codec freed blocks had
+been reused by the separate game heap. No pilot reset, seeded fields, index
+clamp or movie bypass. Also restored all 15 chassis/29 bindings in the newer
+photo/replay host after the live check caught its older seven-chassis adapter.
+Final complete opening/menu, enlarged-environment skip, full-profile Black Hawk
+IA, Training116/116, GPU1150/1150 and IA116/116 pass. Source snapshot identity/model
+checks now protect the installed launcher. See [repair evidence](post-intro-heap-isolation-2026-10-16.md).
+Original files untouched; no commit; strict acceptance 131/144 remains paused.

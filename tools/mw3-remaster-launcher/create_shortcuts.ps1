@@ -1,6 +1,9 @@
 $wsh = New-Object -ComObject WScript.Shell
 $rootDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$targetExe = Join-Path $rootDir "tools\mw3-remaster-launcher\bin\Debug\net8.0-windows\MW3RemasterLauncher.exe"
+$targetExe = Join-Path $rootDir "tools\remaster-launcher\MW3RemasterLauncher.exe"
+if (!(Test-Path -LiteralPath $targetExe)) {
+    throw 'Publish the launcher to tools/remaster-launcher before creating shortcuts.'
+}
 $iconPath = Join-Path $rootDir "tools\mw3-remaster-launcher\Assets\app-icon.ico"
 
 # 1. Root folder shortcut: "MechWarrior 3 Remastered.lnk"

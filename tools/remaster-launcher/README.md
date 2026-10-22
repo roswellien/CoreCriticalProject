@@ -1,5 +1,43 @@
 # Local Remaster launcher
 
+Launcher 1.0.16 adds unchanged-pack verification receipts, reusable merged
+environment resources, visible startup stages and a first-start warning. See
+[startup caching evidence](../../docs/launcher-startup-cache-2026-10-22.md).
+New or changed packs still require preparation; native builds are unaffected.
+
+## Maintainer entry points
+
+Start with `play_remaster.plan`: it reads the selected profile/registry and checks
+required files, host pins and capabilities. `play_remaster.main` owns the later
+prepare/launch steps. `--check` returns before preparation; `--prepare-only`
+writes local assets but does not start gameplay. D7VK is an explicit separate
+backend that runs the original executable.
+
+`native_assets.prepare` translates registered local content into bank/material
+sidecars and returns environment bindings. `normal_materials` defines the linear
+normal-map transport, its full-pixel format keys and explicit disabled bindings.
+The WPF launcher's soundtrack pack contract and first-run pack selection are
+documented in [soundtrack setup](../../docs/soundtrack-pack-setup-2026-10-21.md).
+`build_music_pack.py` creates a local `.mw3pack` from two supplied audio sources.
+The updated GUI selects the first enabled soundtrack pack; absent/disabled packs
+leave music off instead of reading the private development music configuration.
+
+`local_music` validates user-supplied FLAC/PCM WAV, prepares checked PCM WAVs and writes
+the native service's tracklist. These modules do not download or grant rights to
+the content they process. Their output directories must have one writer at a time.
+
+Read the [format/ownership map](../../docs/code-guide.md) before changing these
+interfaces. `apply_*.py` scripts patch specific private host source shapes; they
+are not interchangeable migration steps. Their embedded source snippets and
+retained receipts are reasons to preserve their exact historical versions.
+`native-overrides/source-sha256.json` describes its historical snapshot, not all
+subsequent repairs or the current selected executable.
+
+The local readability cleanup changes formatting, documentation and a small set
+of local variable names. It does not close the functional findings in the
+[code/provenance review](../../docs/code-provenance-review-2026-10-21.md), update
+the selected native host, or add strict acceptance credit.
+
 October 20 status-damage-colour repair: the original condition schematic uses
 fog colour/factors for its component tint. The world-atmosphere pass was
 rewriting that colour with scenery haze even though replacement geometry was

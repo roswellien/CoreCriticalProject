@@ -1,5 +1,8 @@
 # Milestone update: 131 accepted startup initializers
 
+This is the dated acceptance update. The [current strategy](faithful-modernization-plan.md)
+adds execution milestones without changing131/144 or granting new credit.
+
 Updated 2026-10-10. M1–M3 retain their previously defined accepted scopes.
 M4 remains active. Its selected startup inventory now accepts **131/144 roots**,
 with **13 remaining**. [Current evidence](m4-progress-startup131.md) and

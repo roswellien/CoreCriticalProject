@@ -12,7 +12,26 @@ namespace MW3RemasterLauncher
 {
     public partial class MainWindow : Window
     {
+        private async void WatchCinematics_Click(object sender, RoutedEventArgs e)
+        {
+            var button = (Button)sender;
+            button.IsEnabled = false;
+            try
+            {
+                var directories = _packMgr.GetActivePackDirectories();
+                var clips = await System.Threading.Tasks.Task.Run(() => CinematicPack.Library(directories));
+                if (clips.Count == 0)
+                {
+                    MessageBox.Show(this, "Install and enable a cinematic pack with library additions to watch them here. In-game movie replacements play at their original game triggers.", "Cinematics");
+                    return;
+                }
+                new CinematicWindow(clips) { Owner = this }.ShowDialog();
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Cannot open cinematics", MessageBoxButton.OK, MessageBoxImage.Error); }
+            finally { button.IsEnabled = true; }
+        }
         private readonly string _basePath;
+        private bool _nativeSessionActive;
         private readonly SettingsManager _settingsMgr;
         private readonly PackManager _packMgr;
         private readonly GameRunner _gameRunner;
@@ -39,7 +58,7 @@ namespace MW3RemasterLauncher
 
             _basePath = AppDomain.CurrentDomain.BaseDirectory;
             _settingsMgr = new SettingsManager(_basePath);
-            _packMgr = new PackManager(_basePath);
+            _packMgr = new PackManager(LauncherPaths.DataRoot);
             _gameRunner = new GameRunner(_basePath);
             _d7vkRunner = new D7VkRunner(_basePath);
 
@@ -48,18 +67,26 @@ namespace MW3RemasterLauncher
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            TxtLauncherBuild.Text = "Launcher " + typeof(GameRunner).Assembly.GetName().Version;
+            if (_settingsMgr.LoadWarning != null)
+                MessageBox.Show(_settingsMgr.LoadWarning, "Settings recovered", MessageBoxButton.OK, MessageBoxImage.Warning);
             InitializeGamePath();
-            PopulateDefaultOfficialPacks();
             _packMgr.RefreshPacks(_settingsMgr.Current.PackSelectionInitialized || _settingsMgr.Current.ActivePacks.Count > 0
                 ? _settingsMgr.Current.ActivePacks : null);
             _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
             _settingsMgr.Current.PackSelectionInitialized = true;
+            _settingsMgr.Current.EnvironmentPackSelectionInitialized |= _packMgr.Packs.Any(p => p.NativePayload?.Profile == "prepared-environment-v1");
             _settingsMgr.Save();
             ListPacks.ItemsSource = _packMgr.Packs;
+            if (_packMgr.DiscoveryErrors.Count > 0)
+                MessageBox.Show(string.Join("\n", _packMgr.DiscoveryErrors), "Some installed packs could not be loaded", MessageBoxButton.OK, MessageBoxImage.Warning);
 
             LoadSettingsIntoUi();
             UpdateSummaryDisplay();
             _isInitializing = false;
+            if (Environment.GetCommandLineArgs().Contains("--setup-game", StringComparer.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(_settingsMgr.Current.GamePath))
+                ShowGameSetup();
         }
 
         private void InitializeGamePath()
@@ -92,6 +119,18 @@ namespace MW3RemasterLauncher
                 BorderGameMissingAlert.Visibility = Visibility.Collapsed;
                 BtnLaunchGame.Content = _settingsMgr.Current.EngineMode == "d7vk" ? "▶  LAUNCH ORIGINAL (D7VK)" : "▶  LAUNCH REMASTER";
                 BtnLaunchGame.IsEnabled = true;
+                try
+                {
+                    if (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null)
+                        NativeRuntimeLayout.FindInstalled(_basePath);
+                }
+                catch (Exception error)
+                {
+                    TxtStatusReady.Text = "● GAME STATUS: SETUP INCOMPLETE";
+                    TxtValidationDetails.Text = error.Message;
+                    BtnLaunchGame.Content = "GAME SETUP INCOMPLETE";
+                    BtnLaunchGame.IsEnabled = false;
+                }
             }
             else
             {
@@ -107,44 +146,16 @@ namespace MW3RemasterLauncher
             }
         }
 
-        private void PopulateDefaultOfficialPacks()
+        private void BtnGameUpdates_Click(object sender, RoutedEventArgs e)
         {
-            var modsDir = Path.Combine(_basePath, "mods");
-            if (!Directory.Exists(modsDir)) Directory.CreateDirectory(modsDir);
-
-            // Create placeholders for the 3 official modular packs if not present
-            CreateOfficialPackStub("com.mw3remaster.hd-textures", "HD Texture Set (with Normal Maps)", "Textures",
-                "39 high-definition environment and terrain texture banks with real-time tangent normal maps.");
-
-            CreateOfficialPackStub("com.mw3remaster.upgraded-mechs", "Upgraded Mech Models", "Mechs",
-                "Detailed models for all 18 mechs, with updated default textures and normal maps.");
-
-            CreateOfficialPackStub("com.mw3remaster.upgraded-world-models", "Upgraded Game Models", "World Models",
-                "High-poly replacements for combat vehicles, tanks, Elementals, base buildings, and defense turrets.");
-
-            CreateOfficialPackStub("com.mw3remaster.cd-audio", "CD Audio Soundtrack", "Music",
-                "Original Red Book audio tracks 01 and 02 in high-fidelity FLAC / OGG format.");
-        }
-
-        private void CreateOfficialPackStub(string id, string name, string category, string description)
-        {
-            var dir = Path.Combine(_basePath, "mods", id);
-            if (!Directory.Exists(dir))
+            if (_nativeSessionActive)
             {
-                Directory.CreateDirectory(dir);
-                var manifest = new PackManifest
-                {
-                    Id = id,
-                    Name = name,
-                    Category = category,
-                    Description = description,
-                    Author = "MW3 Remaster Project",
-                    Version = "1.0.0",
-                    IsOfficial = true
-                };
-                var json = System.Text.Json.JsonSerializer.Serialize(manifest, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(Path.Combine(dir, "pack.json"), json);
+                MessageBox.Show(this, "Close the game before changing versions.", "Game updates");
+                return;
             }
+            try { new UpdatesWindow(_basePath, _settingsMgr.Current.GamePath) { Owner = this }.ShowDialog(); }
+            catch (Exception error) { MessageBox.Show(this, error.Message, "Game updates"); }
+            ValidateGamePath();
         }
 
         private void LoadSettingsIntoUi()
@@ -175,7 +186,7 @@ namespace MW3RemasterLauncher
             SelectComboByTag(ComboResolution, resTag, 2);
             SelectComboByTag(ComboAA, s.AntiAliasing, 0);
             SelectComboByTag(ComboAF, s.AnisotropicFiltering.ToString(), 0);
-            SelectComboByTag(ComboDrawDist, s.DrawDistance.ToString(), 1);
+            SelectComboByTag(ComboDrawDist, s.DrawDistance.ToString(), 2);
             SelectComboByTag(ComboFog, s.FogDistance.ToString(), 0);
             ChkCdAudio.IsChecked = s.LocalCdAudio;
             ChkInstantReplay.IsChecked = s.InstantReplay;
@@ -208,6 +219,9 @@ namespace MW3RemasterLauncher
         private void UpdateSummaryDisplay()
         {
             var s = _settingsMgr.Current;
+            TxtEnvironmentMigration.Visibility = !s.EnvironmentPackSelectionInitialized &&
+                GameRunner.FindRepositoryRoot(_basePath) != null && !Directory.Exists(Path.Combine(_basePath, "Runtime"))
+                ? Visibility.Visible : Visibility.Collapsed;
             bool isD7Vk = s.EngineMode == "d7vk";
 
             if (TxtHeaderMode != null)
@@ -449,7 +463,13 @@ namespace MW3RemasterLauncher
                     "Uninstall Pack", MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (prompt == MessageBoxResult.Yes)
                 {
-                    _packMgr.UninstallPack(pack);
+                    try
+                    {
+                        if (Process.GetProcessesByName("entry_commandline").Length > 0)
+                            throw new InvalidOperationException("Close the Remaster game before removing content packs.");
+                        _packMgr.UninstallPack(pack);
+                    }
+                    catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot uninstall pack", MessageBoxButton.OK, MessageBoxImage.Error); return; }
                     _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
                     _settingsMgr.Save();
                     UpdateSummaryDisplay();
@@ -457,7 +477,38 @@ namespace MW3RemasterLauncher
             }
         }
 
-        private void BtnInstallPack_Click(object sender, RoutedEventArgs e)
+        private async System.Threading.Tasks.Task<PackManifest> InstallPackWithProgressAsync(string file)
+        {
+            if (!BtnInstallPack.IsEnabled) throw new InvalidOperationException("A content installation is already running.");
+            if (Process.GetProcessesByName("entry_commandline").Length > 0)
+                throw new InvalidOperationException("Close the Remaster game before installing content packs.");
+            BtnInstallPack.IsEnabled = false;
+            BtnLaunchGame.IsEnabled = false;
+            ListPacks.IsEnabled = false;
+            var caption = BtnInstallPack.Content;
+            BtnInstallPack.Content = "Verifying and installing...";
+            try
+            {
+                var pack = await _packMgr.InstallPackAsync(file);
+                // Persist each successful import even if a later pack fails or the batch is interrupted.
+                _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
+                _settingsMgr.Current.PackSelectionInitialized = true;
+                if (pack.NativePayload?.Profile == "prepared-environment-v1")
+                    _settingsMgr.Current.EnvironmentPackSelectionInitialized = true;
+                _settingsMgr.Save();
+                UpdateSummaryDisplay();
+                return pack;
+            }
+            finally
+            {
+                BtnInstallPack.Content = caption;
+                BtnInstallPack.IsEnabled = true;
+                ListPacks.IsEnabled = true;
+                ValidateGamePath();
+            }
+        }
+
+        private async void BtnInstallPack_Click(object sender, RoutedEventArgs e)
         {
             var dlg = new OpenFileDialog
             {
@@ -472,7 +523,7 @@ namespace MW3RemasterLauncher
                 {
                     try
                     {
-                        var installed = _packMgr.InstallPack(file);
+                        var installed = await InstallPackWithProgressAsync(file);
                         MessageBox.Show($"Successfully installed pack '{installed.Name}'!", "Pack Installed", MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                     catch (Exception ex)
@@ -487,9 +538,30 @@ namespace MW3RemasterLauncher
             }
         }
 
+        private void BtnRollbackPack_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.Tag is PackManifest pack)
+            {
+                try
+                {
+                    if (Process.GetProcessesByName("entry_commandline").Length > 0)
+                        throw new InvalidOperationException("Close the Remaster game before changing installed versions.");
+                    _packMgr.RollbackPack(pack);
+                    UpdateSummaryDisplay();
+                }
+                catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot restore previous pack", MessageBoxButton.OK, MessageBoxImage.Information); }
+            }
+        }
+
         private void BtnInspectConflicts_Click(object sender, RoutedEventArgs e)
         {
-            var conflicts = _packMgr.InspectConflicts();
+            List<PackConflict> conflicts;
+            try { conflicts = _packMgr.InspectConflicts(); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Cannot inspect packs", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
             if (conflicts.Count == 0)
             {
                 MessageBox.Show("No file conflicts detected between active asset packs.", "Conflict Check", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -504,7 +576,7 @@ namespace MW3RemasterLauncher
 
         private void BtnOpenModsFolder_Click(object sender, RoutedEventArgs e)
         {
-            var modsDir = Path.Combine(_basePath, "mods");
+            var modsDir = _packMgr.ModsRoot;
             if (!Directory.Exists(modsDir)) Directory.CreateDirectory(modsDir);
             Process.Start(new ProcessStartInfo("explorer.exe", modsDir));
         }
@@ -522,7 +594,7 @@ namespace MW3RemasterLauncher
             e.Handled = true;
         }
 
-        private void Window_Drop(object sender, DragEventArgs e)
+        private async void Window_Drop(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
@@ -548,7 +620,7 @@ namespace MW3RemasterLauncher
                     {
                         try
                         {
-                            _packMgr.InstallPack(file);
+                            await InstallPackWithProgressAsync(file);
                             installedCount++;
                         }
                         catch (Exception ex)
@@ -588,73 +660,31 @@ namespace MW3RemasterLauncher
             }
         }
 
-        private async void BtnImportMedia_Click(object sender, RoutedEventArgs e)
+        private void BtnImportMedia_Click(object sender, RoutedEventArgs e) => ShowGameSetup();
+
+        private async void ShowGameSetup()
         {
-            var dlg = new OpenFileDialog
+            if (_nativeSessionActive) return;
+            var setup = new GameSetupWindow(_settingsMgr.Current.GamePath) { Owner = this };
+            if (setup.ShowDialog() != true || setup.GameDirectory == null) return;
+            _settingsMgr.Current.GamePath = setup.GameDirectory;
+            _settingsMgr.Save();
+            TxtGamePath.Text = setup.GameDirectory;
+            TxtMediaStatus.Text = "Original MW3 1.2 files verified.";
+            ValidateGamePath();
+            foreach (var file in setup.SelectedPacks)
             {
-                Title = "Select MechWarrior 3 CD Image (.iso) or AUTORUN.INF / MW3CD.TXT on CD Drive",
-                Filter = "Disc Images and Setup (*.iso;*.inf;*.txt)|*.iso;AUTORUN.INF;MW3CD.TXT|ISO Images (*.iso)|*.iso|All Files (*.*)|*.*"
-            };
-
-            if (dlg.ShowDialog() == true)
-            {
-                var selected = dlg.FileName;
-                var targetDir = _settingsMgr.Current.GamePath;
-                if (string.IsNullOrEmpty(targetDir) || !Directory.Exists(targetDir))
-                {
-                    targetDir = Path.Combine(Directory.GetCurrentDirectory(), "MW3");
-                }
-
-                BtnImportMedia.IsEnabled = false;
-                ProgressMedia.Visibility = Visibility.Visible;
-                ProgressMedia.Value = 10;
-
-                try
-                {
-                    if (selected.EndsWith(".iso", StringComparison.OrdinalIgnoreCase))
-                    {
-                        await IsoInstaller.InstallFromIsoAsync(selected, targetDir, (status, pct) =>
-                        {
-                            Dispatcher.Invoke(() =>
-                            {
-                                TxtMediaStatus.Text = status;
-                                ProgressMedia.Value = pct * 100;
-                            });
-                        });
-                    }
-                    else
-                    {
-                        var srcDir = Path.GetDirectoryName(selected) ?? selected;
-                        await IsoInstaller.CopyGameMediaAsync(srcDir, targetDir, (status, pct) =>
-                        {
-                            Dispatcher.Invoke(() =>
-                            {
-                                TxtMediaStatus.Text = status;
-                                ProgressMedia.Value = pct * 100;
-                            });
-                        });
-                    }
-
-                    TxtMediaStatus.Text = "Status: Complete! All media is stored locally.";
-                    MessageBox.Show("Game media (cinematic movies, disc markers, and files) have been successfully installed into your local game folder.\n\nYou can now launch MechWarrior 3 completely disc-free without any CD or ISO in the drive!",
-                        "Disc-Free Media Installed", MessageBoxButton.OK, MessageBoxImage.Information);
-
-                    _settingsMgr.Current.GamePath = targetDir;
-                    _settingsMgr.Save();
-                    TxtGamePath.Text = targetDir;
-                    ValidateGamePath();
-                }
+                TxtMediaStatus.Text = "Installing " + Path.GetFileName(file) + "…";
+                try { await InstallPackWithProgressAsync(file); }
                 catch (Exception ex)
                 {
-                    TxtMediaStatus.Text = "Import error: " + ex.Message;
-                    MessageBox.Show($"Failed to import media:\n\n{ex.Message}", "Import Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-                finally
-                {
-                    BtnImportMedia.IsEnabled = true;
-                    ProgressMedia.Visibility = Visibility.Collapsed;
+                    TxtMediaStatus.Text = "Original files verified. A pack needs attention; completed imports were saved.";
+                    MessageBox.Show($"Could not install {Path.GetFileName(file)}:\n{ex.Message}\n\nYour verified game and completed pack imports are preserved. Retry through Mods & Packs → Install Pack.",
+                        "Pack installation", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
                 }
             }
+            if (setup.SelectedPacks.Length > 0) TxtMediaStatus.Text = "Original files verified and selected packs installed.";
         }
 
         private void BtnAddToSteam_Click(object sender, RoutedEventArgs e)
@@ -698,6 +728,8 @@ namespace MW3RemasterLauncher
                     BtnLaunchGame.Content = "●  GAME RUNNING (D7VK)...";
                     TxtStatusReady.Text = "● GAME STATUS: ORIGINAL MECH3 (D7VK) RUNNING";
 
+                    if (_packMgr.Packs.Any(p => p.IsEnabled && p.SchemaVersion == 2))
+                        throw new InvalidOperationException("Prepared native mech packs require the Remaster engine. Disable them before launching D7VK.");
                     var proc = _d7vkRunner.LaunchGame(s, log =>
                     {
                         System.Diagnostics.Debug.WriteLine(log);
@@ -734,43 +766,126 @@ namespace MW3RemasterLauncher
                 {
                     var activeDirs = _packMgr.GetActivePackDirectories();
                     SettingControl_Changed(sender, e);
+                    _nativeSessionActive = true;
+                    BtnLaunchGame.IsEnabled = false;
+                    BtnInstallPack.IsEnabled = false;
+                    ListPacks.IsEnabled = false;
+                    BtnLaunchGame.Content = "●  PREPARING REMASTER...";
+                    TxtStatusReady.Text = "● GAME STATUS: PREPARING ASSETS";
+                    TxtStartupProgress.Text = "Checking content…";
                     var proc = _gameRunner.LaunchGame(_settingsMgr.Current, activeDirs, line =>
                     {
+                        if (line.StartsWith("Startup: ", StringComparison.Ordinal))
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                if (!_nativeSessionActive) return;
+                                TxtStartupProgress.Text = line[9..].Replace(
+                                    " First startup can take several minutes depending on your PC and storage speed.", "",
+                                    StringComparison.Ordinal);
+                                BtnLaunchGame.Content = "●  PREPARING REMASTER...";
+                            }));
                         if (line.StartsWith("Native Remaster PID "))
                             Dispatcher.BeginInvoke(new Action(() =>
                             {
+                                if (!_nativeSessionActive) return;
                                 BtnLaunchGame.Content = "●  GAME RUNNING (REMASTER)...";
                                 TxtStatusReady.Text = "● GAME STATUS: REMASTER HOST RUNNING";
+                                TxtStartupProgress.Text = "The game process has started.";
                             }));
                     });
-
-                    if (proc != null)
-                    {
-                        BtnLaunchGame.IsEnabled = false;
-                        BtnLaunchGame.Content = "●  PREPARING REMASTER...";
-                        TxtStatusReady.Text = "● GAME STATUS: PREPARING ASSETS";
-
-                        proc.Exited += (sObj, args) =>
-                        {
-                            Dispatcher.Invoke(() =>
-                            {
-                                BtnLaunchGame.IsEnabled = true;
-                                BtnLaunchGame.Content = "▶  LAUNCH REMASTER";
-                                TxtStatusReady.Text = proc.ExitCode == 0 ? "● GAME STATUS: READY" : "⚠ LAUNCH OR GAME FAILED";
-                                if (proc.ExitCode != 0)
-                                    MessageBox.Show($"The native launch or game failed (exit {proc.ExitCode}).\n\nLaunch details: {_gameRunner.LastLogPath}\n\nNative game logs: local/remaster/runs", "Remaster Launch Failed", MessageBoxButton.OK, MessageBoxImage.Error);
-                            });
-                        };
-                        proc.EnableRaisingEvents = true;
-                    }
+                    if (proc == null) throw new InvalidOperationException("The game launch did not start.");
+                    _ = ObserveNativeCompletionAsync(proc);
                 }
                 catch (Exception ex)
                 {
-                    BtnLaunchGame.IsEnabled = true;
-                    BtnLaunchGame.Content = "▶  LAUNCH REMASTER";
-                    MessageBox.Show($"Failed to launch MechWarrior 3 Remaster:\n\n{ex.Message}", "Launch Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    ResetNativeLaunchControls();
+                    TxtStatusReady.Text = "⚠ LAUNCH FAILED — OPEN LOGS FOR DETAILS";
+                    MessageBox.Show($"Failed to launch MechWarrior 3 Remaster:\n\n{ex.Message}\n\nUse Open Logs or Export Report under Settings & Steam.", "Launch Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
+        }
+
+        private void ResetNativeLaunchControls()
+        {
+            _nativeSessionActive = false;
+            BtnLaunchGame.IsEnabled = true;
+            BtnInstallPack.IsEnabled = true;
+            ListPacks.IsEnabled = true;
+            BtnLaunchGame.Content = "▶  LAUNCH REMASTER";
+        }
+
+        private async System.Threading.Tasks.Task ObserveNativeCompletionAsync(Process process)
+        {
+            try
+            {
+                var exit = await GameRunner.WaitForCompletionAsync(process);
+                ResetNativeLaunchControls();
+                TxtStatusReady.Text = exit == 0 ? "● GAME STATUS: READY" : "⚠ LAUNCH OR GAME FAILED";
+                if (exit != 0)
+                    MessageBox.Show(PlaytestDiagnostics.FailureSummary(_gameRunner.LastLogPath) +
+                        "\n\nUse Open Logs or Export Report under Settings & Steam.",
+                        "Remaster stopped (exit " + exit + ")", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            catch (Exception ex)
+            {
+                ResetNativeLaunchControls();
+                TxtStatusReady.Text = "⚠ COULD NOT READ GAME EXIT STATUS";
+                MessageBox.Show(ex.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally { process.Dispose(); }
+        }
+
+        private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var log = _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog();
+                var folder = log == null ? LauncherPaths.SessionsRoot : Path.GetDirectoryName(log)!;
+                Directory.CreateDirectory(folder);
+                Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot open logs", MessageBoxButton.OK, MessageBoxImage.Error); }
+        }
+
+        private void BtnSaveBackups_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_nativeSessionActive) throw new InvalidOperationException("Close the current game session before managing saves.");
+                string? registry = null;
+                if (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null)
+                    registry = Path.Combine(LauncherPaths.DataRoot, "native-settings", "mw3-registry.txt");
+                else
+                {
+                    var root = GameRunner.FindRepositoryRoot(_basePath);
+                    if (root != null)
+                    {
+                        var profile = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(root, "local/remaster/launcher.json")));
+                        var source = profile?["native"]?["runtime_environment"]?["MW34_REG_OVERLAY"]?.GetValue<string>();
+                        if (!string.IsNullOrEmpty(source)) registry = Path.GetFullPath(Path.Combine(root, source));
+                    }
+                }
+                new SaveBackupsWindow(_settingsMgr.Current.GamePath, registry) { Owner = this }.ShowDialog();
+            }
+            catch (Exception error) { MessageBox.Show(error.Message, "Save backups", MessageBoxButton.OK, MessageBoxImage.Information); }
+        }
+
+        private void BtnExportReport_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = "Save playtest troubleshooting report", Filter = "Troubleshooting report (*.zip)|*.zip",
+                FileName = "MW3-Playtest-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip"
+            };
+            if (dialog.ShowDialog() != true) return;
+            try
+            {
+                PlaytestDiagnostics.Export(dialog.FileName, _settingsMgr.Current, _packMgr.Packs,
+                    _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog(), _basePath);
+                MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted recent log tails. Review it before sharing.",
+                    "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot export report", MessageBoxButton.OK, MessageBoxImage.Error); }
         }
 
         private void BtnOpenScreenshots_Click(object sender, RoutedEventArgs e)

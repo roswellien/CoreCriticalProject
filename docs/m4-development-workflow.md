@@ -1,14 +1,29 @@
 # M4 development workflow
 
-Updated 2026-10-10. The immediate work remains native startup and menus.
-The faster workflow groups related dependencies, uses shared evidence tooling,
-and prepares later services while the current CRT integration is verified.
-Acceptance still requires source, ABI, state and dependency evidence.
+Updated 2026-10-11. The [faithful modernization plan](faithful-modernization-plan.md)
+controls current priorities: recover the complete execution path, integrate the
+native host and advance live menu/Training behavior. Retain source, ABI, state,
+resource and dependency acceptance as a separate lane; no count is changed.
+
+## Choose work by executable progress
+
+Before each implementation, name the recovered call/service boundary it advances,
+its input/ownership contract and the narrowest validation. Reuse current immutable
+evidence when applicable. Do not add a verifier or documentation layer without
+an uncovered criterion or a concrete defect. Full milestone closure remains
+strict; exploratory/backend fixtures must retain explicit non-game scopes.
+
+Leave the active controls composer and watcher intact. Once actual closed output
+exists, use admissionv2 and the independent review/field/configuration/strict
+acceptance chain in [plan r14](m4-execution-plan-r14.md). Do independent small
+execution work while waiting; do not make another startup probe the default task.
+Serialize heavy inventories and never open the active SQLite database.
 
 ## Four concurrent roles
 
-The current session supports four active agents including the coordinator.
-Use one coordinator for integration and independent source predictions, one
+Where the available session supports parallel work, assign distinct scopes;
+four roles are a useful division, not four mandatory jobs. Use one coordinator
+for integration and independent source predictions, one
 implementation owner for a bounded service batch, one independent compiled
 reviewer for ownership/failure/floating-point behavior, and one work-ahead
 owner for the next application dependency. Each writer owns a separate new
@@ -55,8 +70,10 @@ controls. The projection retains 203 unresolved indirect edges and eight
 missing bodies. Runtime loops remain marked separately from implementation
 prerequisites. The map is actionable static preparation, not full call closure.
 
-While CRT filename/command-line/environment work progresses, prioritize narrow
-MFC module/TLS/object lifetime contracts and the archive reader ABI. The reader
+Use E0 to choose between the retail entry and an equivalent host bootstrap;
+classify CRT/MFC requirements rather than extending providers blindly. Prioritize
+the MFC object/callback and archive reader dependencies of the actual application
+boundary. The reader
 is required before the first bounded frame/window path. Localization/config,
 widget properties, graphics and input/audio contracts can be prepared in
 parallel as their source dependencies permit. Retail menu acceptance still

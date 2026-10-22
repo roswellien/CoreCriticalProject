@@ -5,6 +5,34 @@ The bootstrap runtime is a foundation for experiments; it is not a functioning
 game runtime. The pipeline below is planned unless an implementation and a passing
 experiment are explicitly identified in the repository.
 
+Current strategy update, 2026-10-11: [faithful modernization](faithful-modernization-plan.md)
+preserves recompiled game logic and implements modern services behind observed
+guest contracts. The initial-design descriptions below retain their historical
+scope; they do not imply that later runtime/registry components are absent.
+The [milestone register](project-milestones.md) and [Claude work review](m4-claude-work-review-2026-10-11.md)
+describe current evidence. No whole native game or live renderer is available yet.
+
+## Integration decision and service boundary
+
+Use the existing guest memory, state, dispatch and compiled components as the
+foundation of one native host. Separate game algorithms from window/files,
+allocation/synchronization, audio/input and Vulkan services. Preserve ABI,
+ownership, failure, callback and guest-visible state at the service boundary.
+Translate CRT/MFC internals where these semantics require it; do not require
+instruction-for-instruction reproduction of every legacy host service by default.
+
+The first execution-path audit must choose retail translated entry or a justified
+host bootstrap into the recovered application. Bootstrap equivalence requires
+all required initializers, provider/TLS/FS/SEH state and shutdown/cleanup order;
+no missing side effect may be concealed by a successful return. Modernization
+changes implementation choices, not the accepted 144-root criteria or game rules.
+No original-code fallback or interpreter is authorized in the production host.
+
+Bind Vulkan to live rendering operations from translated game producers. Saved
+capture replay and original-process graphics transport remain explicitly separate
+diagnostics. Implement modern controls at the input contract and retain original
+simulation cadence before adding optional rendering interpolation.
+
 ## Pipeline and ownership
 
 ```mermaid
@@ -224,10 +252,10 @@ are active so original behavior remains reproducible.
 
 ## Validation boundary
 
-Bootstrap tests establish guest-memory bounds, permissions, and integer layout
-using authored fixtures. Dispatch and replacements are designs only; no function
-registry is implemented yet. These tests do not establish x86 semantic
-coverage or game compatibility. The next proof must compare a compiled lift with
-original 32-bit execution and record all dependencies, hashes, flags, outputs,
-and unsupported paths. Only then expand to new instructions, globals, calls,
-imports, or threads. ARM64 is a later portability test, not a claimed target.
+The original bootstrap tests establish guest-memory bounds, permissions and
+integer layout using authored fixtures. Later M1-M3 and finite M4 components
+have their own acceptance records; do not treat the initial bootstrap description
+as a current absence-of-registry claim. Those finite results do not establish
+whole-game compatibility. New execution slices compare compiled behavior and
+observed original boundaries with explicit dependency, ABI, resource and failure
+scope. ARM64 remains a later portability test, not a claimed target.

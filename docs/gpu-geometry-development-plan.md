@@ -121,3 +121,10 @@ matching permitted depth-copy observations and no dirty-read guard failure,
 but fails gameplay image equivalence and changes original draw counts from
 frame 489. Resolve this regression before timing or promotion; neither playable
 launcher changes and no new speedup is established.
+
+The [differences investigation](gpu-projection-differences-investigation-2026-10-15.md)
+finds that the failed run already differs before the first bypass admission.
+Subsequent 1,800-frame repeats match all semantic records and six captures, but
+the exact earlier initialization/movement divergence remains unresolved. Expanded
+optimized FP fixtures pass 1,152 cases in both watched and unwatched pipelines.
+Retain the failure and trace recurrence before attributing a cause or promoting.

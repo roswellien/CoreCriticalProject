@@ -49,7 +49,7 @@ def verify(run, stage, monitor=None):
     installed = [row for row in live if row["event"] == "installed"]
     if len(installed) != 1 or installed[0]["iat_va"] != 0x5BB044 or installed[0]["on_disk_game_unchanged"] is not True:
         raise ValueError("Missing admitted installation")
-    if any(row["event"] in ("fatal", "coverage_limit") for row in rows):
+    if any(row["event"] in ("fatal", "coverage_limit", "surface_diagnostics_failed") for row in rows):
         raise ValueError("Trace has a failure/coverage limit")
     if any(row["event"] == "object" and row["installed"] is not True for row in live):
         raise ValueError("Object instrumentation was not installed")
