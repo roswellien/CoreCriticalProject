@@ -11,6 +11,22 @@ from fixture_retention_adapter import adapt
 ROOT=Path(__file__).resolve().parents[2]
 SHARED=Path(__file__).parent/'native-overrides'
 
+def add_shadow_uniform(source):
+    """Accept the original snapshot and the maintained, formatted header."""
+    variants=[
+        ('std::array<Light,capacity> lights{};',
+         'std::array<Light,capacity> lights{};std::array<std::array<float,4>,capacity> shadow{};',
+         'sizeof(Uniform)==16+48*capacity','sizeof(Uniform)==16+64*capacity'),
+        ('std::array<Light, capacity> lights{};',
+         'std::array<Light, capacity> lights{};\n    std::array<std::array<float, 4>, capacity> shadow{};',
+         'sizeof(Uniform) == 16 + 48 * capacity','sizeof(Uniform) == 16 + 64 * capacity')]
+    matches=[v for v in variants if v[0] in source]
+    if len(matches)!=1:raise ValueError('effect_lighting.hpp: missing/ambiguous light uniform')
+    old,new,size_before,size_after=matches[0]
+    if source.count(old)!=1 or source.count(size_before)!=1 or ' shadow{};' in source:
+        raise ValueError('effect_lighting.hpp: shadow uniform layout changed')
+    return source.replace(old,new,1).replace(size_before,size_after,1)
+
 def apply(host,backup):
     pending={}
     def edit(name,old,new):
@@ -18,8 +34,7 @@ def apply(host,backup):
         if s.count(old)!=1:raise ValueError(f'{name}: missing/ambiguous adapter anchor: {old[:80]}')
         pending[p]=s.replace(old,new)
     pending[host/'fixture_lighting.hpp']=adapt((host/'fixture_lighting.hpp').read_text())
-    edit('effect_lighting.hpp','std::array<Light,capacity> lights{};','std::array<Light,capacity> lights{};std::array<std::array<float,4>,capacity> shadow{};')
-    edit('effect_lighting.hpp','sizeof(Uniform)==16+48*capacity','sizeof(Uniform)==16+64*capacity')
+    pending[host/'effect_lighting.hpp']=add_shadow_uniform((host/'effect_lighting.hpp').read_text())
     edit('effect_lighting_settings.hpp','bool enabled{},fixtures{true};','bool enabled{},fixtures{true},fixture_shadows{};unsigned fixture_shadow_size{256};float fixture_retain_distance{160},fixture_fade_distance{32};')
     edit('effect_lighting_settings.hpp','  v.fixture_range_scale=sun::parameter("MW34_FIXTURE_LIGHT_RANGE_SCALE",1,.25f,4);','''  v.fixture_range_scale=sun::parameter("MW34_FIXTURE_LIGHT_RANGE_SCALE",1,.25f,4);
   v.fixture_shadows=sun::flag("MW34_FIXTURE_SHADOWS");
