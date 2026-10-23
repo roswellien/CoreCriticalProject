@@ -1,0 +1,33 @@
+======================================================================
+MECHWARRIOR 3: COMBAT MISSION BRIEFING DOSSIER
+OPERATION: C1  |  MAP PACK: iron_ridge_outpost
+AUTHOR: Community Modder  |  VERSION: 1.0.0
+======================================================================
+
+MISSION TITLE:
+  Iron Ridge Outpost
+
+INTEL BRIEFING:
+  Satellite recon has confirmed hostile Clan Smoke Jaguar activity in this sector. Neutralize all perimeter defenses and eliminate the patrol lance before proceeding to extraction.
+
+PRIMARY OBJECTIVES:
+  [ ] 1. Neutralize Clan Smoke Jaguar defenders
+  [ ] 2. Proceed to designated Extraction Zone
+
+SECONDARY OBJECTIVES:
+  [ ] 1. Destroy auxiliary fuel storage silos
+
+DROP FORCE & COMBAT CONFIGURATION:
+  Player Chassis: mech_madcat (75.0T)
+  Insertion Type: orbital_drop_pod
+  Armor: 14.0 Tons | Heat Sinks: 16 | Jump Jets: 0
+  Weapon Hardpoints:
+    - Left Arm: ER PPC
+    - Right Arm: ER PPC
+    - Left Torso: Clan LRM-20
+    - Right Torso: Clan LRM-20
+    - Center Torso: Medium Pulse Laser
+  Lancemate Support:
+    - Lt. Alan Mattila: mech_bushwacker (escort)
+    - Sgt. Epona Rhi: mech_shadowcat (free_fire)
+======================================================================

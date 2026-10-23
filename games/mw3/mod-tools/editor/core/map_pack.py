@@ -41,7 +41,7 @@ class MapAsset:
     """Browser placement request; not every field is currently applied to game data."""
 
     asset_id: str
-    asset_type: str  # turret, bunker, building, factory, prop, spawn, nav
+    asset_type: str  # turret, bunker, building, factory, prop, spawn, nav, trig_*
     name: str
     x: float
     y: float
@@ -52,6 +52,9 @@ class MapAsset:
     health: int = 100
     is_objective: bool = False
     objective_desc: str = ""
+    trigger_radius: float = 40.0
+    trigger_action: str = ""
+    trigger_message: str = ""
 
 
 @dataclass
@@ -93,6 +96,36 @@ class MapPackProject:
     terrain: TerrainConfig = field(default_factory=TerrainConfig)
     lighting: LightingConfig = field(default_factory=LightingConfig)
     assets: List[MapAsset] = field(default_factory=list)
+    objectives: Dict[str, Any] = field(default_factory=lambda: {
+        "primary": [
+            {"id": "obj_pri_1", "desc": "Neutralize Clan Smoke Jaguar defenders", "target": "any_enemy", "completed": False},
+            {"id": "obj_pri_2", "desc": "Proceed to designated Extraction Zone", "target": "trig_evac", "completed": False}
+        ],
+        "secondary": [
+            {"id": "obj_sec_1", "desc": "Destroy auxiliary fuel storage silos", "target": "fuel_tank", "completed": False}
+        ],
+        "briefing_text": "Satellite recon has confirmed hostile Clan Smoke Jaguar activity in this sector. Neutralize all perimeter defenses and eliminate the patrol lance before proceeding to extraction.",
+        "audio_track": "action_theme_1",
+    })
+    drop_config: Dict[str, Any] = field(default_factory=lambda: {
+        "player_mech": "mech_madcat",
+        "drop_type": "orbital_drop_pod",
+        "tonnage": 75.0,
+        "armor_tons": 14.0,
+        "heatsinks": 16,
+        "jump_jets": 0,
+        "weapons": {
+            "left_arm": "ER PPC",
+            "right_arm": "ER PPC",
+            "left_torso": "Clan LRM-20",
+            "right_torso": "Clan LRM-20",
+            "center_torso": "Medium Pulse Laser"
+        },
+        "lancemates": [
+            {"name": "Lt. Alan Mattila", "mech": "mech_bushwacker", "orders": "escort"},
+            {"name": "Sgt. Epona Rhi", "mech": "mech_shadowcat", "orders": "free_fire"}
+        ]
+    })
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -121,6 +154,8 @@ class MapPackProject:
                 "sky_tint": self.lighting.sky_tint,
                 "fog_distance": self.lighting.fog_distance,
             },
+            "objectives": self.objectives,
+            "drop_config": self.drop_config,
             "assets": [
                 {
                     "asset_id": a.asset_id,
@@ -135,6 +170,9 @@ class MapPackProject:
                     "health": a.health,
                     "is_objective": a.is_objective,
                     "objective_desc": a.objective_desc,
+                    "trigger_radius": a.trigger_radius,
+                    "trigger_action": a.trigger_action,
+                    "trigger_message": a.trigger_message,
                 }
                 for a in self.assets
             ],
@@ -158,6 +196,9 @@ class MapPackProject:
                 health=int(a.get("health", 100)),
                 is_objective=bool(a.get("is_objective", False)),
                 objective_desc=a.get("objective_desc", ""),
+                trigger_radius=float(a.get("trigger_radius", 40.0)),
+                trigger_action=a.get("trigger_action", ""),
+                trigger_message=a.get("trigger_message", ""),
             )
             for a in data.get("assets", [])
         ]
@@ -186,6 +227,36 @@ class MapPackProject:
                 sky_tint=lc.get("sky_tint", [0.35, 0.45, 0.75]),
                 fog_distance=int(lc.get("fog_distance", 1100)),
             ),
+            objectives=data.get("objectives", {
+                "primary": [
+                    {"id": "obj_pri_1", "desc": "Neutralize Clan Smoke Jaguar defenders", "target": "any_enemy", "completed": False},
+                    {"id": "obj_pri_2", "desc": "Proceed to designated Extraction Zone", "target": "trig_evac", "completed": False}
+                ],
+                "secondary": [
+                    {"id": "obj_sec_1", "desc": "Destroy auxiliary fuel storage silos", "target": "fuel_tank", "completed": False}
+                ],
+                "briefing_text": "Satellite recon has confirmed hostile Clan Smoke Jaguar activity in this sector. Neutralize all perimeter defenses and eliminate the patrol lance before proceeding to extraction.",
+                "audio_track": "action_theme_1",
+            }),
+            drop_config=data.get("drop_config", {
+                "player_mech": "mech_madcat",
+                "drop_type": "orbital_drop_pod",
+                "tonnage": 75.0,
+                "armor_tons": 14.0,
+                "heatsinks": 16,
+                "jump_jets": 0,
+                "weapons": {
+                    "left_arm": "ER PPC",
+                    "right_arm": "ER PPC",
+                    "left_torso": "Clan LRM-20",
+                    "right_torso": "Clan LRM-20",
+                    "center_torso": "Medium Pulse Laser"
+                },
+                "lancemates": [
+                    {"name": "Lt. Alan Mattila", "mech": "mech_bushwacker", "orders": "escort"},
+                    {"name": "Sgt. Epona Rhi", "mech": "mech_shadowcat", "orders": "free_fire"}
+                ]
+            }),
             assets=assets,
         )
 
@@ -427,6 +498,21 @@ class MapPackBuilder:
 
         # 3. Write Map Pack Manifest
         manifest_file = pack_folder / "manifest.json"
+        triggers_list = [
+            {
+                "asset_id": a.asset_id,
+                "type": a.asset_type,
+                "name": a.name,
+                "x": a.x,
+                "y": a.y,
+                "z": a.z,
+                "radius": a.trigger_radius,
+                "action": a.trigger_action,
+                "message": a.trigger_message,
+            }
+            for a in project.assets
+            if a.asset_type.startswith("trig_")
+        ]
         manifest_content = {
             "format": "MW3_MAP_PACK_MANIFEST_V1",
             "pack_id": project.pack_id,
@@ -445,16 +531,71 @@ class MapPackBuilder:
                 "sun_azimuth": project.lighting.azimuth,
                 "sun_elevation": project.lighting.elevation,
             },
+            "objectives_summary": {
+                "primary_count": len(project.objectives.get("primary", [])),
+                "secondary_count": len(project.objectives.get("secondary", [])),
+                "triggers_count": len(triggers_list),
+            },
+            "drop_summary": {
+                "mech": project.drop_config.get("player_mech", "mech_madcat"),
+                "drop_type": project.drop_config.get("drop_type", "orbital_drop_pod"),
+                "lance_size": 1 + len(project.drop_config.get("lancemates", [])),
+            },
             "total_placed_assets": len(project.assets),
             "files": modified_records,
         }
         manifest_file.write_text(json.dumps(manifest_content, indent=2), encoding="utf-8")
 
-        # 4. Save the Project JSON alongside the pack
+        # 4. Save Project, Objectives, and Drop Config JSONs
         project_json_file = pack_folder / "project.json"
         project_json_file.write_text(json.dumps(project.to_dict(), indent=2), encoding="utf-8")
 
-        # 5. Build Engine Redirect Banks (merged with existing texture packs)
+        objectives_data = dict(project.objectives)
+        objectives_data["triggers"] = triggers_list
+        objectives_file = pack_folder / "objectives.json"
+        objectives_file.write_text(json.dumps(objectives_data, indent=2), encoding="utf-8")
+
+        drop_config_file = pack_folder / "drop_config.json"
+        drop_config_file.write_text(json.dumps(project.drop_config, indent=2), encoding="utf-8")
+
+        # 5. Generate Tactical Briefing Text Dossier
+        briefing_file = pack_folder / "briefing.txt"
+        pri_objs = "\n".join(f"  [ ] {i+1}. {o.get('desc', '')}" for i, o in enumerate(project.objectives.get("primary", [])))
+        sec_objs = "\n".join(f"  [ ] {i+1}. {o.get('desc', '')}" for i, o in enumerate(project.objectives.get("secondary", [])))
+        weapons_summary = "\n".join(f"    - {k.replace('_', ' ').title()}: {v}" for k, v in project.drop_config.get("weapons", {}).items())
+        lance_summary = "\n".join(f"    - {m.get('name', '')}: {m.get('mech', '')} ({m.get('orders', '')})" for m in project.drop_config.get("lancemates", []))
+
+        briefing_content = f"""======================================================================
+MECHWARRIOR 3: COMBAT MISSION BRIEFING DOSSIER
+OPERATION: {project.base_operation.upper()}  |  MAP PACK: {project.pack_id}
+AUTHOR: {project.author}  |  VERSION: {project.version}
+======================================================================
+
+MISSION TITLE:
+  {project.pack_title}
+
+INTEL BRIEFING:
+  {project.objectives.get('briefing_text', project.description)}
+
+PRIMARY OBJECTIVES:
+{pri_objs if pri_objs else '  - None specified'}
+
+SECONDARY OBJECTIVES:
+{sec_objs if sec_objs else '  - None specified'}
+
+DROP FORCE & COMBAT CONFIGURATION:
+  Player Chassis: {project.drop_config.get('player_mech', 'mech_madcat')} ({project.drop_config.get('tonnage', 75)}T)
+  Insertion Type: {project.drop_config.get('drop_type', 'orbital_drop_pod')}
+  Armor: {project.drop_config.get('armor_tons', 14)} Tons | Heat Sinks: {project.drop_config.get('heatsinks', 16)} | Jump Jets: {project.drop_config.get('jump_jets', 0)}
+  Weapon Hardpoints:
+{weapons_summary if weapons_summary else '    - Standard Loadout'}
+  Lancemate Support:
+{lance_summary if lance_summary else '    - Solo Drop (No lancemates)'}
+======================================================================
+"""
+        briefing_file.write_text(briefing_content, encoding="utf-8")
+
+        # 6. Build Engine Redirect Banks (merged with existing texture packs)
         mod_banks_bin = pack_folder / "map-banks.bin"
         existing_bank_bin = ROOT / "local/remaster/prepared/texture-banks.bin"
         merged_redirects: Dict[str, Path] = {}
@@ -477,16 +618,21 @@ class MapPackBuilder:
         merged_redirects.update(redirects)
         build_bank_file(merged_redirects, mod_banks_bin)
 
-        # 6. Generate Play Map Runner Command Script
+        # 7. Generate Play Map Runner Command Script
         run_cmd = pack_folder / f"Play Map - {project.pack_id}.cmd"
         cmd_content = f"""@echo off
 setlocal
 set "MAP_DIR=%~dp0"
 cd /d "%MAP_DIR%..\\..\\.."
 echo ======================================================================
-echo   Launching Custom Map Pack: {project.pack_id}
+echo   MECHWARRIOR 3 - CUSTOM MISSION LAUNCH
+echo   Map Title: {project.pack_title} [{project.pack_id}]
+echo   Operation: {project.base_operation.upper()} | Biome: {project.terrain.biome}
 echo ======================================================================
 echo.
+type "%MAP_DIR%briefing.txt"
+echo.
+echo Initializing native Vulkan engine redirect banks...
 set "MW34_REMASTER_BANKS=%MAP_DIR%map-banks.bin"
 set "MW34_SUN_AZIMUTH={project.lighting.azimuth}"
 set "MW34_SUN_ELEVATION={project.lighting.elevation}"

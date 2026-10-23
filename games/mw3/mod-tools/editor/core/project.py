@@ -32,13 +32,17 @@ class Command(ABC):
     def description(self) -> str:
         pass
 
+    @property
+    def affected_object(self) -> Optional[Any]:
+        return getattr(self, "obj", None)
+
 
 class MoveObjectCommand(Command):
     """Move one referenced object, retaining its original position for undo.
 
-    on_update refreshes the UI after either direction. It receives no object
-    argument, so UI code must not assume the current selection is the object
-    this command changed. History and persisted deltas are separate state.
+    on_update refreshes the UI after either direction. It receives the affected
+    object, ensuring UI and persistence code record changes for this command's
+    target regardless of current selection.
     """
 
     def __init__(
@@ -47,26 +51,38 @@ class MoveObjectCommand(Command):
         new_x: float,
         new_y: float,
         new_z: float,
-        on_update: Optional[Callable[[], None]] = None,
+        on_update: Optional[Callable[..., None]] = None,
+        project: Optional["ModProject"] = None,
     ):
         self.obj = obj
         self.old_x, self.old_y, self.old_z = obj.x, obj.y, obj.z
         self.new_x, self.new_y, self.new_z = new_x, new_y, new_z
         self.on_update = on_update
+        self.project = project
 
     def execute(self) -> None:
         self.obj.x = self.new_x
         self.obj.y = self.new_y
         self.obj.z = self.new_z
+        if self.project:
+            self.project.record_object_change(self.obj)
         if self.on_update:
-            self.on_update()
+            try:
+                self.on_update(self.obj)
+            except TypeError:
+                self.on_update()
 
     def undo(self) -> None:
         self.obj.x = self.old_x
         self.obj.y = self.old_y
         self.obj.z = self.old_z
+        if self.project:
+            self.project.record_object_change(self.obj)
         if self.on_update:
-            self.on_update()
+            try:
+                self.on_update(self.obj)
+            except TypeError:
+                self.on_update()
 
     @property
     def description(self) -> str:
@@ -77,22 +93,37 @@ class RotateObjectCommand(Command):
     """Rotates an object (yaw degrees/radians)."""
 
     def __init__(
-        self, obj: PlacedObject, new_yaw_deg: float, on_update: Optional[Callable[[], None]] = None
+        self,
+        obj: PlacedObject,
+        new_yaw_deg: float,
+        on_update: Optional[Callable[..., None]] = None,
+        project: Optional["ModProject"] = None,
     ):
         self.obj = obj
-        self.old_yaw_deg = obj.yaw_degrees
-        self.new_yaw_deg = new_yaw_deg
+        self.old_yaw_deg = (obj.yaw_degrees + 180.0) % 360.0 - 180.0
+        self.new_yaw_deg = (new_yaw_deg + 180.0) % 360.0 - 180.0
         self.on_update = on_update
+        self.project = project
 
     def execute(self) -> None:
         self.obj.yaw_degrees = self.new_yaw_deg
+        if self.project:
+            self.project.record_object_change(self.obj)
         if self.on_update:
-            self.on_update()
+            try:
+                self.on_update(self.obj)
+            except TypeError:
+                self.on_update()
 
     def undo(self) -> None:
         self.obj.yaw_degrees = self.old_yaw_deg
+        if self.project:
+            self.project.record_object_change(self.obj)
         if self.on_update:
-            self.on_update()
+            try:
+                self.on_update(self.obj)
+            except TypeError:
+                self.on_update()
 
     @property
     def description(self) -> str:
@@ -103,22 +134,37 @@ class ToggleObjectActiveCommand(Command):
     """Toggles object active/enabled flag."""
 
     def __init__(
-        self, obj: PlacedObject, new_active: bool, on_update: Optional[Callable[[], None]] = None
+        self,
+        obj: PlacedObject,
+        new_active: bool,
+        on_update: Optional[Callable[..., None]] = None,
+        project: Optional["ModProject"] = None,
     ):
         self.obj = obj
         self.old_active = obj.active
         self.new_active = new_active
         self.on_update = on_update
+        self.project = project
 
     def execute(self) -> None:
         self.obj.active = self.new_active
+        if self.project:
+            self.project.record_object_change(self.obj)
         if self.on_update:
-            self.on_update()
+            try:
+                self.on_update(self.obj)
+            except TypeError:
+                self.on_update()
 
     def undo(self) -> None:
         self.obj.active = self.old_active
+        if self.project:
+            self.project.record_object_change(self.obj)
         if self.on_update:
-            self.on_update()
+            try:
+                self.on_update(self.obj)
+            except TypeError:
+                self.on_update()
 
     @property
     def description(self) -> str:
@@ -130,12 +176,14 @@ class CommandHistory:
     """Bound the command stacks and notify observers after each completed action.
 
     A new command discards the redo branch. The history holds references to live
-    mission objects; clear it when changing missions. It does not save projects
-    or decide which source node's delta should be persisted.
+    mission objects; clear it when changing missions. When a project is attached,
+    execute, undo and redo automatically synchronize deltas for the command's
+    affected object.
     """
 
-    def __init__(self, max_depth: int = 100):
+    def __init__(self, max_depth: int = 100, project: Optional["ModProject"] = None):
         self.max_depth = max_depth
+        self.project = project
         self.undo_stack: List[Command] = []
         self.redo_stack: List[Command] = []
         self.change_callbacks: List[Callable[[], None]] = []
@@ -151,7 +199,12 @@ class CommandHistory:
                 print(f"Error in change callback: {e}")
 
     def execute(self, command: Command) -> None:
+        if getattr(command, "project", None) is None and self.project is not None:
+            command.project = self.project
         command.execute()
+        affected = command.affected_object
+        if self.project is not None and affected is not None and isinstance(affected, PlacedObject):
+            self.project.record_object_change(affected)
         self.undo_stack.append(command)
         if len(self.undo_stack) > self.max_depth:
             self.undo_stack.pop(0)
@@ -162,7 +215,12 @@ class CommandHistory:
         if not self.can_undo:
             return None
         cmd = self.undo_stack.pop()
+        if getattr(cmd, "project", None) is None and self.project is not None:
+            cmd.project = self.project
         cmd.undo()
+        affected = cmd.affected_object
+        if self.project is not None and affected is not None and isinstance(affected, PlacedObject):
+            self.project.record_object_change(affected)
         self.redo_stack.append(cmd)
         self._notify()
         return cmd
@@ -171,7 +229,12 @@ class CommandHistory:
         if not self.can_redo:
             return None
         cmd = self.redo_stack.pop()
+        if getattr(cmd, "project", None) is None and self.project is not None:
+            cmd.project = self.project
         cmd.redo()
+        affected = cmd.affected_object
+        if self.project is not None and affected is not None and isinstance(affected, PlacedObject):
+            self.project.record_object_change(affected)
         self.undo_stack.append(cmd)
         self._notify()
         return cmd
@@ -249,6 +312,37 @@ class ModProject:
             "yaw_degrees": spawn.yaw_degrees,
         }
         self.dirty = True
+
+    def apply_to_mission(self, mission: MissionData) -> None:
+        """Apply this project's recorded modifications to mission objects and spawns."""
+        for obj in mission.placed_objects:
+            if obj.node_index in self.modified_objects:
+                edits = self.modified_objects[obj.node_index]
+                if "x" in edits:
+                    obj.x = float(edits["x"])
+                if "y" in edits:
+                    obj.y = float(edits["y"])
+                if "z" in edits:
+                    obj.z = float(edits["z"])
+                if "rot_y" in edits:
+                    obj.rot_y = float(edits["rot_y"])
+                elif "yaw_degrees" in edits:
+                    obj.yaw_degrees = float(edits["yaw_degrees"])
+                if "active" in edits:
+                    obj.active = bool(edits["active"])
+                if "name" in edits and edits["name"]:
+                    obj.name = edits["name"]
+        for sp in mission.spawn_points:
+            if sp.name in self.modified_spawns:
+                sp_edits = self.modified_spawns[sp.name]
+                if "x" in sp_edits:
+                    sp.x = float(sp_edits["x"])
+                if "y" in sp_edits:
+                    sp.y = float(sp_edits["y"])
+                if "z" in sp_edits:
+                    sp.z = float(sp_edits["z"])
+                if "yaw_degrees" in sp_edits:
+                    sp.yaw_degrees = float(sp_edits["yaw_degrees"])
 
     def save(self, file_path: Path) -> None:
         """Save project state as a standalone JSON project file."""

@@ -1,0 +1,18 @@
+# Mad Cat default markings and edge-wear repair — 2026-10-23
+
+The user reported missing original MW3 caution stripes and markings on replacement models, then selected Mad Cat first. They also requested lighter worn exposed armor edges in place of dark outer outlines.
+
+Restored adapted MW3 yellow/black warning paint around the cockpit lower rim/cheeks, blue cheek accents, blue triangular/arrow emblems and caution bands on the separate inner/outer side panels of both missile pods, and small red service/warning panels. The source references are mcat20, mcat_d01 and mcat21. Placement follows corresponding features on the MW5-derived model; this is reconstructed paint on the existing donor UVs, not exact original atlas projection. Light exposed-steel bevel wear replaces dark raised-edge outlines; recessed seams and black mechanical cavities remain dark. New paint is flat color and receives no fabricated normal relief.
+
+Execution boundary: default replacement-model color sidecars consumed by the existing native renderer. No geometry, UV coordinates, animation, normal maps, runtime executable, world-bank selection or gameplay changes. Native roughness/metalness support was not added, so this pass changes the visible edge treatment without claiming increased material reflectivity. Other chassis and alternate skins remain unchanged. Acceptance remains 131/144; no commit or public asset release.
+
+Both close (40 batches) and distance (23 batches) BWTEX1 files preserve their existing batch tables and byte-identical Weapons/Window/MissileHead records. Only Body and Variant records change. Installed new immutable payloads in the local MW5 Mechs pack, refreshed its registry hash and updated only MW34_MADCAT_TEXTURES/MW34_MADCAT_LOD1_TEXTURES in the current launcher. Both local authoring registries select the revised default PNGs. Backup: local/work-ahead/madcat-markings-20261023-r1/installation-backup/.
+
+Checks: matched offline before/after views preserve the geometry/UV/pose digest aa46bd18a1700f351adb3c0d8872e533f3c4b2450ad1cdddda1ea1e9dca558ec. Installed native review completed 1300 presentation frames using current launcher resources, current menus, normal maps and sunset lighting; inspected front, oblique and both sides. The initial ordinary-host review produced no automated photographs; the dedicated capture host then produced the required views. Review exposed separate pod texture regions, corrected in the final installed revision. Both final installed texture hashes and original geometry/normal/alternate-skin bindings were read back and checked.
+
+Private authoring and editable scene: local/work-ahead/madcat-markings-20261023-r1/. Receipts and review images: reports/madcat-markings-20261023/. Runtime review: C:/Users/jcbla/MW34SunTests/madcat-markings-20261023/madcat/installed-review-r4/. Rendered before/after and in-game previews are delivered in the existing private Mad Cat Drive folder; the existing evolution video has not been replaced by this texture pass.
+
+
+## Red missile cones follow-up
+
+At the user's request, only the default MissileHead albedo is now red (RGB 198/36/30) on both shoulder pods. Close/distance payloads retain byte-identical Body/Variant/Weapons/Window records and batch tables. Geometry, normals and alternate skins remain unchanged. Installed review completed 1160 frames and produced front/oblique photographs of the red cones; previews delivered to the existing Mad Cat Drive folder. Backups: local/work-ahead/madcat-red-tips-20261023-r1/installation-backup/. Receipts: reports/madcat-red-tips-20261023/. No acceptance or commit change.

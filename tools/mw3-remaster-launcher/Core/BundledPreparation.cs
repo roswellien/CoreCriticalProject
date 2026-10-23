@@ -6,6 +6,7 @@ namespace MW3RemasterLauncher.Core;
 public static class BundledPreparation
 {
     public static bool IsAvailable(string application) =>
+        !NativeRuntimeLayout.HasPrecompiledRuntime(application) &&
         File.Exists(Path.Combine(application, "Preparation", "initial.mw3update"));
 
     public static async Task PrepareAsync(string application, string game, IProgress<string>? progress = null,

@@ -70,6 +70,9 @@ namespace MW3RemasterLauncher.Core
 
         private Process LaunchGameCore(LauncherSettings settings, List<string> activeModDirs, string runDir, Action<string>? logCallback)
         {
+            // MSIX AppData redirection can expose a different pack to a child
+            // outside this process's context. Pass physical manifest roots.
+            activeModDirs = activeModDirs.Select(PackStorage.CanonicalPackRoot).ToList();
             // Verify game path
             var validation = GameValidator.Validate(settings.GamePath);
             if (!validation.IsValid)
@@ -113,7 +116,10 @@ namespace MW3RemasterLauncher.Core
             // Each launch owns its settings snapshot; never rewrite the published host profile.
             var profileText = File.ReadAllText(profileJson);
             if (installed != null) profileText = NativeRuntimeLayout.ResolveProfile(profileText, installed.Root, validation.GameDirectory);
-            var profile = CreateLaunchProfile(profileText, settings);
+            var profile = CreateLaunchProfile(profileText, settings,
+                Path.Combine(_dataRoot, "cache", "pipeline-warmup-v1"));
+            profile["native"]!["content_capabilities"] = RuntimeContentCapabilities.Advertised(profile["native"]!.AsObject());
+            NativeRuntimeLayout.ValidateLaunchExecutable(Path.GetFullPath(profile["native"]!["executable"]!.GetValue<string>(), rootDir));
             if (installed != null)
             {
                 var provider = GameInstallation.FindProvider(validation.GameDirectory, _dataRoot)
@@ -121,7 +127,7 @@ namespace MW3RemasterLauncher.Core
                 profile["native"]!["launch_inputs"]!["crt_provider"] = provider;
                 if (profile["native"]!["original_support_versions"] != null)
                     GameInstallation.BindSupportFiles(profile, validation.GameDirectory, _dataRoot);
-                PlayerRegistry.Bind(profile, _dataRoot);
+                PlayerRegistry.PrepareInstalledRenderer(profile, _dataRoot, validation.GameDirectory);
             }
             if (installed == null && profile["native"]!["music_decoder"] == null)
             {
@@ -151,6 +157,8 @@ namespace MW3RemasterLauncher.Core
             profile["native"]!["prepared_pack_roots"] = roots;
             ApplyEnvironmentSelection(profile, environmentRoots, installed != null, settings.EnvironmentPackSelectionInitialized);
             profile["native"]!["launch_session_directory"] = Path.GetFullPath(runDir);
+            new ControlProfiles(_dataRoot).PrepareLaunch(profile, _dataRoot, validation.GameDirectory);
+            new ControllerProfiles(_dataRoot).PrepareLaunch(profile, runDir);
             var launchProfile = Path.Combine(runDir, "profile.json");
             File.WriteAllText(launchProfile, SerializeLaunchProfile(profile));
             var logPath = Path.Combine(runDir, "launcher.log");
@@ -235,7 +243,8 @@ namespace MW3RemasterLauncher.Core
         /// AA "off" maps to one raster sample; "fxaa" remains a named mode.
         /// This validates UI choices; the coordinator separately checks host capabilities.
         /// </remarks>
-        public static JsonObject CreateLaunchProfile(string publishedJson, LauncherSettings settings)
+        public static JsonObject CreateLaunchProfile(string publishedJson, LauncherSettings settings,
+            string? pipelineWarmupDirectory = null)
         {
             var profile = JsonNode.Parse(publishedJson)?.AsObject()
                 ?? throw new InvalidOperationException("Native profile is empty.");
@@ -255,6 +264,22 @@ namespace MW3RemasterLauncher.Core
             graphics["fog_distance"] = settings.FogDistance;
             graphics["window_mode"] = settings.WindowMode;
             profile["native"]!["local_cd_audio"] = settings.LocalCdAudio;
+            if (settings.PerformanceMonitor && profile["native"]!["performance_monitor_version"]?.GetValue<int>() != 1)
+                throw new InvalidOperationException("This runtime needs the performance monitor update. Install it through Game Updates, or turn off the monitor to use this version.");
+            // An explicit saved choice overrides both old profiles and inherited diagnostics.
+            profile["native"]!["runtime_environment"] ??= new JsonObject();
+            profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"] = settings.PerformanceMonitor ? "1" : "0";
+            // Emit the existing native register/return-chain diagnostics only
+            // when a guest memory fault occurs, including on remote playtest PCs.
+            profile["native"]!["runtime_environment"]!["MW34_SEH_LOG"] = "1";
+            if (pipelineWarmupDirectory != null)
+            {
+                if (!Path.IsPathFullyQualified(pipelineWarmupDirectory))
+                    throw new InvalidOperationException("Pipeline warmup cache needs an absolute user-data path.");
+                profile["native"]!["runtime_environment"]!["MW34_PIPELINE_WARMUP_DIR"] = pipelineWarmupDirectory;
+                profile["native"]!["runtime_environment"]!["MW34_PIPELINE_WARMUP"] = "1";
+                profile["native"]!["runtime_environment"]!["MW34_NORMAL_PREWARM"] = "1";
+            }
             return profile;
         }
     }

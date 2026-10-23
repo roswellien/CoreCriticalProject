@@ -36,6 +36,7 @@ class LocalCdAudio {
     static constexpr unsigned sample_rate = 44100, channels = 2, bytes_per_sample_frame = 4,
                               samples_per_cd_frame = 588;
     static constexpr unsigned sample_frames_per_buffer = 441, output_buffer_count = 4;
+    static constexpr DWORD wait_retry_ms = 50;
     struct Track {
         // start/frames are stereo PCM sample frames, not interleaved sample counts
         // or CD sectors. One CD frame is samples_per_cd_frame (588) PCM frames.
@@ -86,6 +87,8 @@ class LocalCdAudio {
     DWORD_PTR pending_notify_{};
     RequestPtr wait_play_;
     MCIERROR fault_{};
+    // A failed worker wait cannot pace playback; unlike fault_, STOP does not clear it.
+    MCIERROR worker_fault_{};
     U64 queued_nonzero_{}, played_nonzero_{};
     unsigned audits_{};
 
@@ -219,16 +222,21 @@ class LocalCdAudio {
         r->done = true;
         r->ready.notify_one();
     }
+    static void CALLBACK wake_worker(ULONG_PTR) {}
     MCIERROR invoke(const RequestPtr &r) {
         // Callers wait for request completion, not necessarily playback completion.
         // MCI_WAIT play requests remain pending until the worker drains or aborts
         // their selected range. The shared request outlives this queue transfer.
+        // Shutdown must reach the worker before join(): if the control event cannot
+        // be signaled, an APC wakes the worker's alertable wait instead.
         if (!enabled_)
             return MCIERR_DEVICE_NOT_INSTALLED;
         {
             std::lock_guard lock(queue_mutex_);
             queue_.push_back(r);
-            if (!::SetEvent(control_)) {
+            if (!::SetEvent(control_) &&
+                (r->kind != Request::Shutdown ||
+                 !::QueueUserAPC(wake_worker, static_cast<HANDLE>(worker_.native_handle()), 0))) {
                 queue_.pop_back();
                 return MCIERR_HARDWARE;
             }
@@ -284,6 +292,18 @@ class LocalCdAudio {
         mode_ = MCI_MODE_STOP;
         cancel_pending(MCI_NOTIFY_FAILURE);
         finish_wait(error);
+    }
+    void keep_returned_position() {
+        // Returned buffers bound the played position from below. Without this,
+        // reset() would rewind to the cursor of the last command.
+        cursor_ = std::min(play_end_, std::max(cursor_, completed_));
+    }
+    void abandon_play(MCIERROR error) {
+        // Prefer the device position; fall back to returned buffers if it fails.
+        if (position())
+            keep_returned_position();
+        (void)reset();
+        failed_play(error);
     }
     void reap() {
         // Submitted buffers still belong to the device until WHDR_DONE. Advance
@@ -560,6 +580,8 @@ class LocalCdAudio {
     MCIERROR command(const RequestPtr &q, bool &deferred, DWORD_PTR &answer) {
         auto &r = *q;
         trace("command", r.msg, r.flags);
+        if (worker_fault_ && r.msg != MCI_CLOSE)
+            return worker_fault_;
         if (r.msg == MCI_OPEN) {
             const auto e = open_output();
             if (!e) {
@@ -573,6 +595,7 @@ class LocalCdAudio {
         if (fault_ && r.msg != MCI_STOP && r.msg != MCI_CLOSE)
             return fault_;
         if (const auto e = position(); e && r.msg != MCI_CLOSE) {
+            keep_returned_position();
             (void)reset();
             failed_play(e);
             return e;
@@ -694,9 +717,13 @@ class LocalCdAudio {
             return 0;
         }
         case MCI_CLOSE: {
+            // close_output() may fail after reset() already returned every buffer.
+            // Stop refilling and resolve the range instead of leaving it in PLAY.
             const auto e = close_output();
-            if (e)
+            if (e) {
+                failed_play(e);
                 return e;
+            }
             finish_wait(MCIERR_DEVICE_NOT_READY);
             install_notification(r, true, false);
             fault_ = 0;
@@ -711,14 +738,25 @@ class LocalCdAudio {
         // The manual-reset control event and queue share one mutex: draining
         // and resetting under that lock prevents losing a concurrent submission.
         // Device events wake the same thread to reclaim and refill PCM slots.
+        // The wait is alertable so a shutdown APC can wake it without the event.
         bool exit = false;
         while (!exit) {
             HANDLE events[2] = {control_, output_ ? output_->event : nullptr};
-            const auto w = ::WaitForMultipleObjects(output_ ? 2U : 1U, events, FALSE, INFINITE);
+            const auto w =
+                ::WaitForMultipleObjectsEx(output_ ? 2U : 1U, events, FALSE, INFINITE, TRUE);
             if (w == WAIT_FAILED) {
-                fault_ = MCIERR_HARDWARE;
-                trace("worker-wait-failed", ::GetLastError());
-                std::fprintf(stderr, "Local CD audio: worker wait failed\n");
+                // Without a working wait, refills and completion are unpaced. Fail
+                // the range, keep the fault and retry slowly; queued requests
+                // still complete below with an error instead of stranding callers.
+                const auto error = ::GetLastError();
+                if (!worker_fault_) {
+                    trace("worker-wait-failed", error);
+                    std::fprintf(stderr, "Local CD audio: worker wait failed (%lu)\n", error);
+                }
+                worker_fault_ = MCIERR_HARDWARE;
+                if (output_ && (mode_ == MCI_MODE_PLAY || mode_ == MCI_MODE_PAUSE))
+                    abandon_play(worker_fault_);
+                ::SleepEx(wait_retry_ms, TRUE);
             }
             std::deque<RequestPtr> ready;
             {
@@ -738,7 +776,9 @@ class LocalCdAudio {
                         cancel_pending(MCI_NOTIFY_ABORTED);
                         finish_wait(MCIERR_DEVICE_NOT_READY);
                         exit = true;
-                    } else if (r->kind == Request::GetVolume)
+                    } else if (worker_fault_ && r->kind != Request::Command)
+                        result = worker_fault_;
+                    else if (r->kind == Request::GetVolume)
                         answer = volume_;
                     else if (r->kind == Request::SetVolume) {
                         volume_ = r->value;
@@ -755,11 +795,8 @@ class LocalCdAudio {
                     complete(r, result, answer);
             }
             if (!exit && opened_ && mode_ == MCI_MODE_PLAY) {
-                const auto e = fill();
-                if (e) {
-                    (void)reset();
-                    failed_play(e);
-                }
+                if (const auto e = fill())
+                    abandon_play(e);
             }
         }
         // A pathological driver failure must not free memory still owned by its DMA queue.
@@ -802,12 +839,23 @@ class LocalCdAudio {
         }
     }
     // Callers stop submitting requests before destruction. Shutdown runs on the
-    // worker and is joined before host event/log resources are released.
+    // worker and is joined before host event/log resources are released. If it
+    // cannot be delivered, joining would hang and detaching would leave the worker
+    // using freed state, so the failure terminates visibly instead.
     ~LocalCdAudio() {
         if (worker_.joinable()) {
             auto r = std::make_shared<Request>();
             r->kind = Request::Shutdown;
             (void)invoke(r);
+            bool delivered;
+            {
+                std::lock_guard lock(r->mutex);
+                delivered = r->done;
+            }
+            if (!delivered) {
+                std::fprintf(stderr, "Local CD audio: cannot signal worker shutdown\n");
+                std::abort();
+            }
             worker_.join();
         }
         if (control_)

@@ -100,10 +100,7 @@ public static class UiPack
             if (manifest.NativePayload?.Profile != Profile) continue;
             var content = Read(directory, manifest);
             if (selected.ContainsKey(content.Kind)) continue;
-            if (!NativeHostCompatibility.Matches(manifest.NativePayload.ReferenceHostSha256, native["executable_sha256"]!.GetValue<string>()))
-                throw new InvalidDataException($"UI pack '{manifest.Id}' requires its matched native runtime. " +
-                    $"Pack reference: {manifest.NativePayload.ReferenceHostSha256}; " +
-                    $"selected runtime: {native["executable_sha256"]!.GetValue<string>()}. Update the pack or runtime.");
+            RuntimeContentCapabilities.Require(native, manifest.NativePayload, manifest.Id);
             selected.Add(content.Kind, content);
         }
         // Both readers share an identity table in the current host.

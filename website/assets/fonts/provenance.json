@@ -1,0 +1,26 @@
+[
+  {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf",
+    "file": "Orbitron.ttf",
+    "sha256": "f42db2dd16e642258e35782916eceb1dcdbea06fb958d77ad71dc5963587e8fd",
+    "license": "Orbitron-OFL.txt"
+  },
+  {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/barlow/Barlow-Regular.ttf",
+    "file": "Barlow-Regular.ttf",
+    "sha256": "95aa02c7c43096e0dd44d787ba6216864a67157e402adab59b35572e0c1577ea",
+    "license": "Barlow-OFL.txt"
+  },
+  {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/barlow/Barlow-SemiBold.ttf",
+    "file": "Barlow-SemiBold.ttf",
+    "sha256": "86577cb32f8abe3673db53ca0f4221e6856751a4f6730c867e00f720f8bb1fc5",
+    "license": "Barlow-OFL.txt"
+  },
+  {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/russoone/RussoOne-Regular.ttf",
+    "file": "RussoOne-Regular.ttf",
+    "sha256": "bc0abcc660bd8b7ad3000ecb2898a27c58a29a50f7ec81652fa12e75148d09df",
+    "license": "RussoOne-OFL.txt"
+  }
+]

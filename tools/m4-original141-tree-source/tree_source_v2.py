@@ -1,0 +1,132 @@
+"""Execute the literal tree from genuine one-root BEFORE and typed API facts."""
+from pathlib import Path
+import collections,hashlib,importlib.util,json,struct,sys,traceback
+sys.dont_write_bytecode=True
+ROOT=Path(__file__).resolve().parents[2];PINS={};SHARED_READER=None
+
+def pin(path,expected=None):
+    path=Path(path).resolve();digest=hashlib.sha256(path.read_bytes()).hexdigest()
+    if expected is not None and digest!=expected:raise ValueError('Exact physical source input '+str(path))
+    if str(path)in PINS and PINS[str(path)]!=digest:raise ValueError('Stable input '+str(path))
+    PINS[str(path)]=digest;return path
+def load(name,path):
+    spec=importlib.util.spec_from_file_location(name,pin(path));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+def read(path,expected=None):return json.loads(pin(path,expected).read_bytes())
+def words(raw,offset=0,count=1):return struct.unpack_from('<'+'I'*count,raw,offset)
+def need(value,label):
+    if not value:raise ValueError(label)
+def equal(a,b,label):need(a==b,label+' '+str([(i,x,y)for i,(x,y)in enumerate(zip(a,b))if x!=y][:12]))
+
+def main(name,model_path,sequence,validation_path,validation_sha256):
+    out=ROOT/'reports/m4-original141-tree-source'/name;need(not out.exists(),'Fresh tree semantic receipt');out.mkdir(parents=True)
+    passed=False;reader=None;result={};counts=collections.Counter();boundaries=[]
+    try:
+        validation_path=Path(validation_path).resolve();need(validation_path.parent.parent==ROOT/'reports/m4-original141','Exact original141 strict report namespace');validation=read(validation_path,validation_sha256);need(validation['passed']and validation['reader_closed']and validation['paired_export_readers_closed']and validation['callbacks']==111,'Genuine independently measured original141 prefix and closed export');need(0<=sequence<6,'Exact six measured original141 cases')
+        execution=read(Path(validation['execution_path'])/'report.json',validation['execution_sha256']);build=read(execution['build_path'],execution['build_sha256']);preparation=read(Path(build['preparation'])/'report.json',build['preparation_sha256']);need(preparation['root_count']==141 and preparation['phases']==846 and preparation['callback_count']==111 and build['preparation_sha256']=='a54ece9c861485fb2e121bc1733550e0d0ab462199d85de83a2894fc72702b6c','Exact physically compiled current141 source');current_order=read(Path(build['preparation'])/'selected-order.json');retained_pages=read(ROOT/'reports/m4-startup138-original/preparation-r8/report.json','9bd1ef9049eccaeb9f87e81f38e001d0d1c805f077c75a8563fc08ec0e67b161');preparation=dict(preparation,selected_order=current_order,observed_pages=retained_pages['observed_pages'],extra_whole_source_pages=retained_pages['extra_whole_source_pages']);pages=preparation['observed_pages'];need(len(pages)==43 and len(set(pages+preparation['extra_whole_source_pages']))==69,'Complete unchanged fixed43/external26 page scope');compiled=read(ROOT/'reports/m4-original141/root-compiled-review-r2/report.json','e756132a1c938d6b5318f8a2b65e954a17c44870be2bab556427767ef233214c');need(compiled['passed'],'Current whole linked observer proof');links=read(ROOT/'reports/m4-original141/root-compiled-review-r2/physical-links.json');resolved={}
+        for row in links:
+            for rel in row['relocations']:
+                if rel['symbol_section']==0 and rel['resolution_kind']=='virtual address':
+                    symbol,value=rel['symbol'],rel['actual_symbol_address'];need(symbol not in resolved or resolved[symbol]==value,'Unique current linked symbol');resolved[symbol]=value
+        exact_CS_shims={0x78146198:resolved['_lockit_api_Enter'],0x78146184:resolved['_lockit_api_Leave']}
+        for gate in (validation,preparation,compiled):
+            for dependency,identity in gate['files'].items():pin(dependency,identity)
+        D=load('tree_prefix_direct',ROOT/'tools/m4-crt-allocation-root/run_v2.py');reader=SHARED_READER;need(reader is not None and type(reader).__name__=='ExportReader' and Path(reader.path).resolve()==Path(execution['original_capture']).resolve(),'One authenticated shared current-original141 ordinary-export session')
+        O=load('tree_original_state_helpers',ROOT/'tools/m4-mfc-source/compare_original_game.py');O.PAGES=tuple(pages);O.MFC_IMPORTS=[tuple(r[:3])for r in struct.iter_unpack('<7I',reader.data('mfc-import-ledger.bin'))]
+        G=load('tree_literal_model',model_path);program,callbacks=G.source_program();J=load('tree_numerical_projection',ROOT/'tools/m4-joint-startup27-review/observe.py');projection,_,_,_=J.models();projection.PAGES=list(pages)
+        PE=load('tree_provider_PE',ROOT/'tools/analysis/pe.py');provider=PE.PEImage(pin(ROOT/'local/mw3-staged/Shared_DLLs/MSVCP50.DLL','91cd76f9fa3b25008decb12c005c194bdf66c8d6526a954de7051bec9aae462a').read_bytes());worker=pin(build['worker'],build['worker_sha256']).read_bytes()
+        hooks=read(ROOT/'reports/m4-lockit-original/original-preparation-r4/lockit-hook-bindings.json');patches=[]
+        for hook in hooks:
+            pc,size=hook['pc'],hook['size'];raw=bytes.fromhex(hook['raw']);offset,_=provider.rva_range(pc-provider.image_base,size);equal(provider.data[offset:offset+size],raw,'Exact original observer source span')
+            key=struct.pack('<2I',pc,size);matches=[i for i in range(len(worker))if worker.startswith(key,i)and worker[i+12:i+12+size]==raw];need(len(matches)==1,'Unique linked observer target')
+            target=words(worker,matches[0]+8)[0];patched=b'\xe9'+struct.pack('<I',(target-pc-5)&0xffffffff)+b'\x90'*(size-5);patches.append(dict(pc=pc,width=size,patched_hex=patched.hex(),source_hex=raw.hex()))
+        bootstrap={p:reader.data(f'lockit/post-DllMain/{p}-page.bin')for p in(0x7810a000,0x78145000,0x78146000)}
+        imports={r[0]:r[1]for r in struct.iter_unpack('<5I',reader.data('lockit/import-ledger.bin'))};thread=words(reader.data('lockit/thread.bin'))[0]
+        def normalized(raw):
+            memory=O.normalize_memory(raw,0x1df20c)
+            for address,actual,value in((0x5bb454,0x5f4020b4,0x8000021c),(0x5bb4c8,0x5f401782,0x80000339),(0x5bb4f8,0x7810a290,0x1df582),(0x5bb4f4,0x7810a350,0x1df568)):
+                need(words(memory[address&~4095],address&4095)[0]==actual,'Exact owning game IAT prior to named projection');struct.pack_into('<I',memory[address&~4095],address&4095,value)
+            for patch in patches:
+                offset=patch['pc']&4095;equal(memory[0x7810a000][offset:offset+patch['width']],bytes.fromhex(patch['patched_hex']),'Exact compiled observer jump');memory[0x7810a000][offset:offset+patch['width']]=bytes.fromhex(patch['source_hex'])
+            for slot in(0x78146198,0x78146184):
+                current=words(memory[0x78146000],slot&4095)[0];need(current==exact_CS_shims[slot],'Exact current wholly compiled x86 API observer cell');struct.pack_into('<I',memory[0x78146000],slot&4095,imports[slot])
+            equal(memory[0x78146000],bootstrap[0x78146000],'Whole authentic loaded IAT after exact two shim corrections')
+            return memory
+        tree_phase=next(i for i,x in enumerate(preparation['selected_order'])if x['entry']==0x4b7f70);need(tree_phase==86 and [preparation['selected_order'][i]['entry']for i in (13,14,39)]==[0x4103f0,0x410440,0x459b40],'Current physical tree slot after exact three constructor insertions');phase=reader.data(f'phase/{sequence}/{tree_phase}.bin');memory=normalized(phase[2276:178404]);actual_after=normalized(phase[178404:354532]);pages=pages+preparation['extra_whole_source_pages'];memory.update({p:bytearray(reader.data(f'phase/{sequence}/{tree_phase}/extra-before/{p}.bin'))for p in preparation['extra_whole_source_pages']});actual_after.update({p:bytearray(reader.data(f'phase/{sequence}/{tree_phase}/extra-after/{p}.bin'))for p in preparation['extra_whole_source_pages']})
+        fs_raw=reader.data(f'phase/{sequence}/{tree_phase}/fs-events.bin');memory[0x7ffde000]=bytearray(struct.pack('<I',words(fs_raw,16)[0]));state=bytearray(O.original_state(projection,G,words(phase,36,10),phase));struct.pack_into('<I',state,2168,0x7ffde000)
+        geometry_path=validation_path.parent/'allocation-geometry.json';geometry=read(geometry_path,validation['files'][str(geometry_path.resolve())]);owners=[dict(row,actual_API_index=row['API_index'],final_hex=row['actual_final_hex'])for row in geometry if row.get('sequence')==sequence and row.get('root')==0x4b7f70 and 'CALL_pc'in row];need(len(owners)==7,'Exact genuine seven tree allocation occurrences per relative-order125 case');owner_index=[0];API=list(struct.iter_unpack('<26I',reader.data(f'phase/{sequence}/{tree_phase}/api-ledger.bin')));allocfacts=[(i,r)for i,r in enumerate(API)if r[24]==0]
+        lock_raw=reader.data(f'phase/{sequence}/{tree_phase}/lockit-snapshots.bin');snaps=[lock_raw[i:i+12988]for i in range(0,len(lock_raw),12988)];lock_index=[0];fs_index=[0];unused_frame_bytes=[]
+        def owner_resolver(machine,pending,pointer):
+            owner=owners[owner_index[0]];owner_index[0]+=1
+            need((pending['CALL_pc'],pending['per_site_invocation_ordinal'],pointer,pending['source_frame'][1])==(owner['CALL_pc'],owner['site_invocation'],owner['pointer'],owner['source_frame']),'Literal MFC CALL/site ordinal/frame joins independent owner witness')
+            return dict(guest=pointer,native=pointer,requested=24,generation=owner['generation'],capacity=owner['capacity'],initial=bytes.fromhex(owner['initial_hex']))
+        def boundary(machine):
+            raw=snaps[lock_index[0]];header=words(raw,0,16);cpu=list(machine.projected_cpu());cpu[9]=machine.cursor
+            equal(tuple(cpu),words(raw,64,10),'Whole genuine original Lockit boundary CPU '+str(lock_index[0]))
+            fx,env=projection.proj(machine.state);equal(projection.hardwarefx(fx),raw[104:616],'Whole source Lockit hardware FX');equal(env,raw[616:644],'Whole source Lockit ENV')
+            modeled=machine.bytes(machine.reg('esp'),32);actual=raw[644:676]
+            invocation=machine.invocation();invocation_rows=[r for r in machine.tree_function_invocations if r['index']==invocation]
+            first=invocation_rows[0]['source_access_index']if invocation_rows else 0
+            for offset,(expected,observed)in enumerate(zip(modeled,actual)):
+                address=machine.reg('esp')+offset
+                writes=[r for r in machine.accesses[first:]if r[4]and r[1]<=address<r[1]+r[3]]
+                if writes:need(expected==observed,'Every source-established current-frame byte matches actual original')
+                elif expected!=observed:unused_frame_bytes.append(dict(boundary_index=lock_index[0],address=address,source_value=expected,actual_observation=observed,source_access_index=len(machine.accesses),invocation=invocation,source_frame_first_access=first,current_frame_source_write=False))
+            equal(machine.bytes(0x78145640,24),raw[676:700],'Full carried CS24 at original boundary')
+            boundaries.append(dict(index=lock_index[0],kind=header[3],CPU=cpu,source_access_index=len(machine.accesses),source_CS24_hex=raw[676:700].hex()));lock_index[0]+=1;counts['whole_original_CPU_FX_ENV_frame_CS_boundaries']+=1
+        def fs(machine,event,data):
+            if event not in('read-before','write-before')or data['domain']!='source'or data['address']!=0x7ffde000:return
+            raw=fs_raw[fs_index[0]*1216:(fs_index[0]+1)*1216];header=words(raw,0,8);writing=event=='write-before'
+            need(header[2]==data['pc']and data['bytes']==4 and writing==(header[3]!=0),'Finite genuine original FS PC/direction/width')
+            equal(machine.bytes(0x7ffde000,4),struct.pack('<I',header[4]),'Genuine FS previous head');need(data['value']==(header[5]if writing else header[4])and machine.reg('esp')==words(raw,32,10)[4],'Actual source-derived FS value/frame')
+            if header[7]:equal(machine.bytes(header[6],12),raw[112:124],'Complete actual original12B FS record')
+            fs_index[0]+=1;counts['whole_original_FS_records']+=1
+        class Prefix(G.Machine):
+            def step(self):
+                if self.cursor in(0x7810a290,0x7810a311,0x7810a350,0x7810a364):boundary(self)
+                return super().step()
+        machine=Prefix(state,phase[116:628],phase[36:76],memory,program=program,callbacks=callbacks,hook=fs,tree_owner_resolver=owner_resolver)
+        machine.call_stack.append((0x4b7f70,0x20001800,0x410a80,0,machine.reg('ebp'),machine.reg('ebx'),machine.reg('esi'),machine.reg('edi'),0));alloc_index=[0]
+        def external(model,target):
+            site=model.PCs[-1]
+            if site in(0x7810a30b,0x7810a35e):
+                before=snaps[lock_index[0]];after=snaps[lock_index[0]+1];header=words(before,0,16);kind=header[3]
+                need(kind==(1 if site==0x7810a30b else 4)and target==imports[0x78146198 if kind==1 else 0x78146184],'Exact source/API target and boundary kind');boundary(model)
+                bc=words(before,64,10);ac=words(after,64,10);need(ac[3]==bc[3]and ac[5:8]==bc[5:8]and ac[4]==bc[4]+8 and ac[9]==(0x7810a311 if kind==1 else 0x7810a364),'API preserves nonvolatiles and exact stdcall frame')
+                equal(before[104:644],after[104:644],'Actual API preserves complete FP environment')
+                expected=bytearray(model.bytes(0x78145640,24));depth=words(expected,8)[0]+(1 if kind==1 else -1);need(0<=depth<=2,'Balanced same-thread source recursion')
+                struct.pack_into('<III',expected,4,0xfffffffe if depth else 0xffffffff,depth,thread if depth else 0);equal(bytes(expected),after[676:700],'Whole typed original CS24 output derived from original opaque identity and source depth')
+                model.api_return(site,1,ac[0],[(0x78145640,bytes(expected))]);cpu=list(model.projected_cpu());cpu[1:3]=ac[1:3];cpu[8]=ac[8];projection.statecpu(model.state,cpu);counts['bounded_original_API_volatile_inputs']+=1;return
+            need(target==0x780012b3 and site==0x5f401eb5,'Only genuine MFC malloc scalar frontier')
+            api_index,fact=allocfacts[alloc_index[0]];owner=owners[alloc_index[0]];request=words(model.bytes(model.reg('esp')+4,4))[0]
+            need(request==24 and fact[21]==0 and fact[22]==32 and fact[10]==owner['pointer']and owner['actual_API_index']==api_index,'Exact positive original allocator request/result')
+            initial=reader.data(f'phase/{sequence}/{tree_phase}/api-initial/{api_index}/bytes.bin');need(not any(p<=fact[10]<p+len(b)for p,b in model.memory.items()),'Fresh genuine API allocation memory');model.memory[fact[10]]=bytearray(initial)
+            model.reg('edx',fact[12]);model.api_return(site,0,fact[10]);alloc_index[0]+=1;counts['actual_initial_allocator_witnesses']+=1
+        machine.run(lambda model:model.cursor==0x78004a36,api=external);result=machine.tree_result()
+        need(lock_index[0]==len(snaps)and fs_index[0]*1216==len(fs_raw)and alloc_index[0]==owner_index[0]==len(owners),'Exhaust all genuine finite boundary/owner witnesses')
+        equal(machine.bytes(machine.reg('esp'),8),struct.pack('<2I',0x5ac124,0x4b7fa0),'Literal source callback CALL frame/value')
+        suffix=load('tree_registry_suffix',ROOT/'tools/m4-startup138-original/registry_suffix_v1.py');registry_suffix=suffix.prove(reader,sequence,tree_phase,machine,0x4b7fa0,phase,API);result['separate_registry_suffix']=registry_suffix
+        for page in pages:
+            if page==0x20001000:continue
+            equal(suffix.page(machine.bytes(page,4096),page,registry_suffix),bytes(actual_after[page]),'Whole actual original nonstack page plus independently proven registry suffix '+hex(page));counts['whole_original_nonstack_pages']+=1
+        for computed,owner in zip(result['owners'],owners):
+            equal(computed['source_final_hex'],owner['final_hex'],'Entire original backing from literal writes and untouched initial capacity tails');counts['whole_original_owner_backings']+=1
+        for row in unused_frame_bytes:
+            subsequent=[(index,access)for index,access in enumerate(machine.accesses[row['source_access_index']:],row['source_access_index'])if access[1]<=row['address']<access[1]+access[3]]
+            if subsequent:
+                index,access=subsequent[0];need(access[4],'Observed opaque unused frame byte cannot enter a subsequent literal source read before overwrite')
+                row['subsequent_dominating_source_write']=dict(index=index,pc=access[0],address=access[1],width=access[3],value=access[2])
+            else:row['never_subsequently_read_or_written']=True
+        result['unused_original_frame_observations']=unused_frame_bytes
+        result['original_boundary_joins']=boundaries;result['observer_patches']=patches;result['reached_original_PCs']=machine.PCs;result['sequence']=sequence;result['phase']=tree_phase;passed=True
+        for module in(O,projection):
+            for path,digest in getattr(module,'PINS',{}).items():pin(path,digest if isinstance(digest,str)else digest['sha256'])
+        pin(__file__)
+    except BaseException:
+        (out/'failure.txt').write_text(traceback.format_exc());raise
+    finally:
+        # The aggregate owns and closes the one genuine archive/index session.
+        reader=None
+        (out/'source-derivations.json').write_text(json.dumps(result,indent=2)+'\n');pin(out/'source-derivations.json')
+        report=dict(passed=passed,original_validation_sha256=validation_sha256,original_validation_path=str(validation_path),source_case_extent=1,source_AFTER_seed=False,canonical_reader_opened=False,sequence=sequence,scope='Current-original138 literal tree prefix from genuine untouched BEFORE and finite scalar/typed API boundaries; borrowed shared reader closed only by aggregate',reader_scope='Borrowed one authenticated current-original138 session; aggregate closure required',counts=dict(counts),candidate_AFTER_machine_seed=False,original_postRET_source_derived=True,original_postRET_observed=False,whole_provider_stack_compared=False,original_unused_frame_bytes_seeded=False,all_current_frame_source_written_bytes_compared=True,opaque_disagreements_proven_unused_before_overwrite=True,initializer_credit=False,files=PINS)
+        (out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(dict(passed=passed,report_sha256=hashlib.sha256((out/'report.json').read_bytes()).hexdigest(),counts=dict(counts))))
+if __name__=='__main__':main(sys.argv[1],ROOT/sys.argv[2],int(sys.argv[3]),Path(sys.argv[4]),sys.argv[5])

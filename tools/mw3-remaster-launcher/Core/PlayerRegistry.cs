@@ -9,6 +9,40 @@ public static class PlayerRegistry
 {
     private const long MaximumBytes = 8 * 1024 * 1024;
 
+    public static string PrepareInstalledRenderer(JsonObject profile, string dataRoot, string gameDirectory)
+    {
+        // Retail 1.2 reads HKLM InstallOptions at 0x59803d, and masks its low
+        // byte when initializing HWCardFlag at 0x40c47e. A copied data install
+        // has no original installer registry. Bit 4 is Hardware_Texture_8.
+        GameInstallation.VerifyHardwareRendererFiles(gameDirectory);
+        var target = Bind(profile, dataRoot);
+        var text = File.ReadAllText(target);
+        var configured = ConfigureHardwareRenderer(text);
+        if (configured != text) ControlProfiles.AtomicWrite(target, configured);
+        return target;
+    }
+
+    public static string ConfigureHardwareRenderer(string text)
+    {
+        const string userKey = @"hkcu\software\microprose\mechwarrior 3\1.0";
+        const string installKey = @"hklm\software\microprose\mechwarrior 3\1.0";
+        var values = new[] {
+            (Key: installKey, Name: "installoptions", Hex: "04000000"),
+            (Key: userKey, Name: "hwcardflag", Hex: "01000000"),
+            (Key: userKey, Name: "hwcarddev", Hex: "00000000")
+        };
+        var rows = text.Split('\n').Select(r => r.TrimEnd('\r')).Where(r => r.Length > 0)
+            .Where(r => !values.Any(v => r.StartsWith("V " + v.Key + "\t" + v.Name + "\t", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        foreach (var key in new[] { installKey, userKey })
+            if (!rows.Any(r => r.Equals("K " + key, StringComparison.OrdinalIgnoreCase))) rows.Add("K " + key);
+        // The modern native backend exposes one Vulkan-backed hardware device.
+        // Only its installation/device selection is launcher-owned; game defaults,
+        // pilot state and controls remain owned by the translated game/player.
+        rows.AddRange(values.Select(v => "V " + v.Key + "\t" + v.Name + "\t4\t" + v.Hex));
+        return string.Join('\n', rows) + "\n";
+    }
+
     public static string Bind(JsonObject profile, string dataRoot)
     {
         var environment = profile["native"]!["runtime_environment"]!.AsObject();
@@ -39,8 +73,8 @@ public static class PlayerRegistry
                             destination.Write(buffer, 0, count);
                         }
                     }
-                    // New installations start empty. Translated game code creates
-                    // its actual defaults; no captured configuration is supplied.
+                    // Translated game code owns gameplay defaults. Installed
+                    // renderer component selection is supplied separately.
                     destination.Flush(true);
                 }
                 try { File.Move(temporary, target); }

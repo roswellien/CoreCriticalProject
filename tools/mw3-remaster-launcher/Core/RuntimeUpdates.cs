@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 
 namespace MW3RemasterLauncher.Core;
 
@@ -13,7 +14,8 @@ public sealed record UpdateFile(long Bytes, string Sha256);
 public sealed record RuntimeUpdateManifest(int SchemaVersion, string Version, long Sequence,
     string MinimumLauncherVersion, string PreparationContract, string PackageUrl,
     long PackageBytes, string PackageSha256, string Preparer,
-    Dictionary<string, UpdateFile> Files, Dictionary<string, UpdateFile> OriginalInputs);
+    Dictionary<string, UpdateFile> Files, Dictionary<string, UpdateFile> OriginalInputs,
+    string GameId = GameCatalog.Mw3);
 public sealed record VerifiedRuntimeUpdate(RuntimeUpdateManifest Manifest, string ManifestSha256, string SignedEnvelope);
 public sealed record RuntimeUpdateTrust(string FeedUrl, Dictionary<string, string> PublicKeys);
 public sealed record RuntimeUpdateState(string? Active, string? Previous, long HighestSequence);
@@ -101,6 +103,8 @@ public sealed class RuntimeUpdates
             throw new InvalidDataException("Update signature verification failed.");
         var manifest = JsonSerializer.Deserialize<RuntimeUpdateManifest>(payload, Json)
             ?? throw new InvalidDataException("Empty update manifest.");
+        if (GameCatalog.Get(manifest.GameId).Id != GameCatalog.Mw3)
+            throw new InvalidDataException("This update targets another game. Only MechWarrior 3 runtime updates are supported yet.");
         if (manifest.SchemaVersion != 1 || manifest.PreparationContract is not ("mw3-local-runtime-v1" or "mw3-source-runtime-v2"))
             throw new InvalidDataException("This update needs an unsupported preparation service. Update the launcher first.");
         PackStorage.ValidateId(manifest.Version);
@@ -164,6 +168,17 @@ public sealed class RuntimeUpdates
     {
         var updates = new RuntimeUpdates(application, new("", new()), dataRoot);
         var active = updates.State().Active;
+        // A full installer can replace explicitly retired runtime releases while
+        // preserving their files and selection for rollback. Future updates win.
+        var bundledManifest = Path.Combine(application, "Runtime", "runtime.json");
+        if (active != null && File.Exists(bundledManifest))
+        {
+            PackStorage.EnsureNoLinks(bundledManifest);
+            using var bundled = JsonDocument.Parse(ReadSmall(bundledManifest));
+            if (bundled.RootElement.TryGetProperty("supersedes_runtime_versions", out var retired) &&
+                retired.EnumerateArray().Any(version => version.GetString() == active))
+                return null;
+        }
         return active == null ? null : updates.VersionRoot(active);
     }
 
@@ -438,6 +453,7 @@ public sealed class RuntimeUpdates
         Inspect(root);
         var layout = NativeRuntimeLayout.ReadRoot(root);
         var profileText = File.ReadAllText(layout.Profile);
+        RuntimeContentCapabilities.Advertised(JsonNode.Parse(profileText)!["native"]!.AsObject());
         using var profile = JsonDocument.Parse(profileText);
         var native = profile.RootElement.GetProperty("native");
         var executable = native.GetProperty("executable").GetString() ?? "";
@@ -445,6 +461,7 @@ public sealed class RuntimeUpdates
             !files.TryGetValue(executable[9..], out var executablePin) ||
             !executablePin.Sha256.Equals(native.GetProperty("executable_sha256").GetString(), StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The generated game executable must be pinned inside its runtime version.");
+        NativeRuntimeLayout.ValidateLaunchExecutable(PackStorage.Resolve(root, executable[9..]));
         if (native.TryGetProperty("translated_module", out var module))
         {
             var name = module.GetString() ?? "";

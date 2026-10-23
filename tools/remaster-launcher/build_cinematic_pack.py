@@ -1,6 +1,6 @@
 """Author a local cinematic pack from a JSON description and user-owned media.
 
-Source JSON: id, name, version, reference_host_sha256, clips (id, title,
+Source JSON: id, name, version, optional reference_host_sha256 provenance, clips (id, title,
 source, replaces). Null replaces makes an MP4 library addition; an original
 lowercase AVI stem makes a replacement. The launcher validates the actual formats
 before installation. No media conversion, scripts or custom triggers are included.
@@ -47,10 +47,8 @@ def build(description, output):
     if sum(f['bytes'] for f in files.values()) > 16*1024**3:
         raise ValueError('Cinematic pack exceeds expanded size limit')
     host=data.get('reference_host_sha256','')
-    if targets and not re.fullmatch('[0-9a-f]{64}',host):
-        raise ValueError('In-game replacements require a matched native runtime identity')
-    manifest=dict(schema_version=2,id=data['id'],name=data['name'],version=data.get('version','1.0.0'),category='Cinematics',
-                  native_payload=dict(profile='prepared-cinematic-v1',registry='cinematics/cinematics.json',path_base='pack-root',reference_host_sha256=host,required_formats=sorted(formats)),files=files)
+    manifest=dict(schema_version=2, game_id="mw3",id=data['id'],name=data['name'],version=data.get('version','1.0.0'),category='Cinematics',
+                  native_payload=dict(profile='prepared-cinematic-v1',registry='cinematics/cinematics.json',path_base='pack-root',required_capabilities={'cinematic-replacements':1}, reference_host_sha256=host,required_formats=sorted(formats)),files=files)
     output=Path(output);output.parent.mkdir(parents=True,exist_ok=True)
     with zipfile.ZipFile(output,'x',compression=zipfile.ZIP_STORED) as archive:
         archive.writestr('pack.json',json.dumps(manifest,indent=2))

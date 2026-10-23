@@ -24,51 +24,6 @@ for chassis in CHASSIS:
 ALL_MODEL_KEYS = set().union(*MODEL_KEYS.values())
 MAX_BYTES = 16 * 1024**3
 MAX_JSON = 2 * 1024**2
-# Exact compatibility admission after reviewing the current host's 36 compiled
-# chassis/LOD rows, Bushwacker skin D, BWMESH1-6/BWTEX1/BWNRM2 readers and
-# rehashing their pinned sources plus the executable. See the integration note.
-REVIEWED_HOST_ADMISSIONS = {
-'9c578de615168724fb40664ad03b870b34b68169802cd0fae371a6f2c2d666b6': {'0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93', 'd0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d', 'b1a3edb7ed84daf399fa4bb5f3ed246a9d718470e5f6b0fac4fc16e4961af1b6'},  # Same sky correction, guarded host FP scope.
-    # Installer/readability successor preserves the complete B-H reader.
-    "a99afd84ddb8fb2375197d0406186286ce8d8775399cbf75373c5a07bcd8482c": {
-        "8194028a835c85e46b0963864ea04acfe400749671b1eb7f28ae63a51a2f5532",
-        "9c578de615168724fb40664ad03b870b34b68169802cd0fae371a6f2c2d666b6",  # Sky backdrop classification; resource readers unchanged.
-        "0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93",  # Sky backdrop classification; resource readers unchanged.
-        "d0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d",  # Sky backdrop classification; resource readers unchanged.
-        "b1a3edb7ed84daf399fa4bb5f3ed246a9d718470e5f6b0fac4fc16e4961af1b6",  # Sky backdrop classification; resource readers unchanged.
-        "e293b3a5f79d3d85f7c04ddcd9f857046e66583f6c7d18255e3ceb43c2cfc46c",
-        "c922df9f8663315972d14376ab5ac622cf82316d8ecf78a9c5eda7ecdca9ae95",  # Rebuilt lower-horizon split host; pack readers unchanged.
-    },
-    "a2e3f32d40904e7e2bf6e99f426cb758f47c3a14743dcdab3dd9895d607efb74": {
-        # Optional B-H selection extends skin D; BWMESH1-6/BWTEX1/BWNRM2
-        # remain compatible. Exact-image interning checks dimensions/full pixels.
-        "a99afd84ddb8fb2375197d0406186286ce8d8775399cbf75373c5a07bcd8482c",
-        # Same mech/skin readers; audited readability merge and explicit original support paths.
-        "8194028a835c85e46b0963864ea04acfe400749671b1eb7f28ae63a51a2f5532",
-        "9c578de615168724fb40664ad03b870b34b68169802cd0fae371a6f2c2d666b6",  # Sky backdrop classification; resource readers unchanged.
-        "0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93",  # Sky backdrop classification; resource readers unchanged.
-        "d0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d",  # Sky backdrop classification; resource readers unchanged.
-        "b1a3edb7ed84daf399fa4bb5f3ed246a9d718470e5f6b0fac4fc16e4961af1b6",  # Sky backdrop classification; resource readers unchanged.
-        "e293b3a5f79d3d85f7c04ddcd9f857046e66583f6c7d18255e3ceb43c2cfc46c",
-        "c922df9f8663315972d14376ab5ac622cf82316d8ecf78a9c5eda7ecdca9ae95",  # Rebuilt lower-horizon split host; pack readers unchanged.
-        "e3ea21dba813995bc6d47dd75f0bb5d572b4ff92c7908b8eaea57c0088e93ae7",
-        # Fixture UV-anchor host: rehashed executable/snapshot and all three
-        # reviewed mech readers; their source hashes are unchanged.
-        "bf9c4b5e3e626ea542a52100325508897a22355c82dbb22680b90273cce62b44",
-        # C4 fixture-only rebuild; the three reviewed mech readers are byte-identical.
-        "7e1c939111b219f32bd765e25d840c6196c1d9c5b7cfb073ac21b949aedfa5d9",
-        # Fresh-pilot keyboard services only; all 116 other pinned host sources unchanged.
-        "3f34ec34ac6fb6f729a8c544b387b79b81495e7c0f250b566ef25008772b4fa2",
-        # Optional mission environment reader; all mech bindings/readers unchanged.
-        "0d3d920f6b560ddcd92fbeeb4034d59430ddd46a19b75269255fc8ec83fe12ef",
-        # AVI read-path routing only; all mech readers and bindings unchanged.
-        "33bfcf1d6c2b7454d6a21aee1421c34cadbc7b1be5783485b70499b5bc0e8afa",
-        # Also admits the explicit private codec image path; remaining 116 sources unchanged.
-        "9fd17ba2459ac2d349adda33c0c84d41772bbd2ec7c0e2a620242c696526bb83",
-        # Explicit installed original provider paths; all mech readers unchanged.
-        "c1afedadd8ed9e13a956db917a1a5335a6581fac01374b367969d4e985852115"
-    }
-}
 
 
 def read_json(path):
@@ -141,13 +96,8 @@ def compose(roots, host, verification=None):
         if (manifest.get("schema_version") != 2 or payload.get("profile") != "prepared-native-v1" or
                 payload.get("path_base") != "pack-root" or payload.get("registry") != "models/models.json"):
             raise ValueError("Unsupported installed pack schema/profile")
-        reference = payload.get("reference_host_sha256", "").lower()
-        actual = host.get("executable_sha256", "").lower()
-        # Explicit identity pairs are authored after reviewing a newer host's
-        # compiled bindings. A pack cannot admit itself to an arbitrary host.
-        admissions = REVIEWED_HOST_ADMISSIONS.get(reference, set())
-        if not re.fullmatch(r"[0-9a-f]{64}", actual) or (actual != reference and actual not in admissions):
-            raise ValueError("Prepared mech pack requires an explicitly admitted native host: " + reference)
+        from content_capabilities import require
+        require(host, payload, ident)
         formats = {"BWTEX1"}
         formats.update("BWMESH" + str(v) for v in host.get("mesh_payload_versions", []))
         formats.update("BWNRM" + str(v) for v in host.get("normal_map_formats", []))

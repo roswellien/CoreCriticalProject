@@ -1,5 +1,11 @@
 # Launcher native runtime updates
 
+**Current private playtest delivery, October 22:** performance/native updates
+can use the existing `.mw3update` protocol with a precompiled runtime. See
+[precompiled performance update delivery](precompiled-performance-updates-2026-10-22.md).
+The source-generation route below remains available; code regeneration is not
+required for the owner-authorized private precompiled delivery.
+
 Launcher 1.0.13-preview adds a manual **Game Updates** window under **Settings &
 Steam → Playtest Support**. It checks a configured HTTPS feed, imports a signed
 `.mw3update` file, prepares an update, cancels preparation and selects a previous

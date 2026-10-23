@@ -38,6 +38,36 @@ const state = {
       sky_tint: [0.35, 0.45, 0.75],
       fog_distance: 1200,
     },
+    objectives: {
+      primary: [
+        { id: "obj_pri_1", desc: "Neutralize Clan Smoke Jaguar defenders", target: "any_enemy", completed: false },
+        { id: "obj_pri_2", desc: "Proceed to designated Extraction Zone", target: "trig_evac", completed: false }
+      ],
+      secondary: [
+        { id: "obj_sec_1", desc: "Destroy auxiliary fuel storage silos", target: "fuel_tank", completed: false }
+      ],
+      briefing_text: "Satellite recon has confirmed hostile Clan Smoke Jaguar activity in this sector. Neutralize all perimeter defenses and eliminate the patrol lance before proceeding to extraction.",
+      audio_track: "action_theme_1",
+    },
+    drop_config: {
+      player_mech: "mech_madcat",
+      drop_type: "orbital_drop_pod",
+      tonnage: 75.0,
+      armor_tons: 14.0,
+      heatsinks: 16,
+      jump_jets: 0,
+      weapons: {
+        left_arm: "ER PPC",
+        right_arm: "ER PPC",
+        left_torso: "Clan LRM-20",
+        right_torso: "Clan LRM-20",
+        center_torso: "Medium Pulse Laser"
+      },
+      lancemates: [
+        { name: "Lt. Alan Mattila", mech: "mech_bushwacker", orders: "escort" },
+        { name: "Sgt. Epona Rhi", mech: "mech_shadowcat", orders: "free_fire" }
+      ]
+    },
     assets: [],
   },
   activeTool: null, // asset type string or null
@@ -91,7 +121,8 @@ const OP_ENV_METADATA = {
     waterSize: [5000, 5800],
     waterCenter: [-1408, 0],
     palette: { sand: 0xd9c28a, rock: 0x4a7337, peak: 0x5a6975, shoreY: 3.0 },
-    preset: "sunset"
+    preset: "sunset",
+    terrainTexture: "/static/assets/textures/terrains/c1_txgter_1.png"
   },
   c2: {
     name: "Op 2: Desert Canyons",
@@ -102,7 +133,8 @@ const OP_ENV_METADATA = {
     waterSize: [6500, 3500],
     waterCenter: [-512, -1152],
     palette: { sand: 0xd9a76a, rock: 0x9e5b32, peak: 0xc47e45, shoreY: -50.0 },
-    preset: "noon"
+    preset: "noon",
+    terrainTexture: "/static/assets/textures/terrains/c2_ggter_1.png"
   },
   c3: {
     name: "Op 3: Volcanic Badlands",
@@ -113,7 +145,8 @@ const OP_ENV_METADATA = {
     waterSize: [5000, 11000],
     waterCenter: [256, -3200],
     palette: { sand: 0x242426, rock: 0x473232, peak: 0x822a2a, shoreY: -20.0 },
-    preset: "storm"
+    preset: "storm",
+    terrainTexture: "/static/assets/textures/terrains/c3_gter_1.png"
   },
   c4: {
     name: "Op 4: Highland Mountains",
@@ -124,7 +157,8 @@ const OP_ENV_METADATA = {
     waterSize: [5500, 8000],
     waterCenter: [128, 1280],
     palette: { sand: 0x526b48, rock: 0x545b63, peak: 0xd9e5eb, shoreY: -10.0 },
-    preset: "noon"
+    preset: "noon",
+    terrainTexture: "/static/assets/textures/terrains/c4_gter_1.png"
   },
   t1: {
     name: "Training Grounds",
@@ -135,7 +169,8 @@ const OP_ENV_METADATA = {
     waterSize: [4000, 3000],
     waterCenter: [1792, -1408],
     palette: { sand: 0x73695b, rock: 0x4a4744, peak: 0x8a847e, shoreY: -30.0 },
-    preset: "noon"
+    preset: "noon",
+    terrainTexture: "/static/assets/textures/terrains/t1_ggter1.png"
   }
 };
 OP_ENV_METADATA.coastal = OP_ENV_METADATA.c1;
@@ -282,8 +317,10 @@ function buildTerrainGeometryFromData(terrainData, opCode) {
 
   const positions = new Float32Array(faces.length * 3 * 3);
   const colors = new Float32Array(faces.length * 3 * 3);
+  const uvs = new Float32Array(faces.length * 3 * 2);
   let ptr = 0;
   let cptr = 0;
+  let uvptr = 0;
 
   const meta = OP_ENV_METADATA[opCode] || OP_ENV_METADATA.c1;
   const pal = meta.palette;
@@ -326,11 +363,16 @@ function buildTerrainGeometryFromData(terrainData, opCode) {
       colors[cptr++] = tempCol.r;
       colors[cptr++] = tempCol.g;
       colors[cptr++] = tempCol.b;
+
+      // Planar UV projection (~25m repeat interval) for seamless authentic ground textures
+      uvs[uvptr++] = v[0] * 0.04;
+      uvs[uvptr++] = v[2] * 0.04;
     }
   }
 
   geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geom.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
   geom.computeVertexNormals();
   return geom;
 }
@@ -374,17 +416,24 @@ async function buildTerrain() {
 
   if (tData) {
     const geom = buildTerrainGeometryFromData(tData, opCode);
+    let terrainTex = null;
+    if (meta.terrainTexture) {
+      terrainTex = new THREE.TextureLoader().load(meta.terrainTexture);
+      terrainTex.wrapS = THREE.RepeatWrapping;
+      terrainTex.wrapT = THREE.RepeatWrapping;
+    }
     const mat = new THREE.MeshStandardMaterial({
+      map: terrainTex,
       vertexColors: true,
       roughness: 0.88,
-      metalness: 0.12,
-      flatShading: true,
+      metalness: 0.10,
+      flatShading: false,
     });
     terrainMesh = new THREE.Mesh(geom, mat);
     terrainMesh.receiveShadow = true;
     terrainMesh.name = "terrain";
     scene.add(terrainMesh);
-    console.log(`[Map Studio] Loaded authentic ${meta.name} terrain mesh (${tData.vertices.length} vertices, ${tData.faces.length} faces)`);
+    console.log(`[Map Studio] Loaded authentic ${meta.name} terrain mesh (${tData.vertices.length} vertices, ${tData.faces.length} faces) with in-game texture ${meta.terrainTexture}`);
   }
 
   // 2. Water Plane (if operation features water)
@@ -729,6 +778,62 @@ function createAssetMesh(asset) {
     cone.rotation.x = Math.PI / 2;
     cone.position.set(0, 0.5, 14);
     group.add(cone);
+  } else if (asset.asset_type.startsWith("trig_")) {
+    const radius = asset.trigger_radius || 40.0;
+    const height = 18.0;
+
+    let trigColor = 0x00ff88;
+    if (asset.asset_type === "trig_ambush") {
+      trigColor = 0xff3366;
+    } else if (asset.asset_type === "trig_sensor") {
+      trigColor = 0x00f0ff;
+    } else if (asset.asset_type === "trig_minefield") {
+      trigColor = 0xffaa00;
+    }
+
+    // Cylindrical trigger volume
+    const volGeom = new THREE.CylinderGeometry(radius, radius, height, 32);
+    const volMat = new THREE.MeshBasicMaterial({
+      color: trigColor,
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const volMesh = new THREE.Mesh(volGeom, volMat);
+    volMesh.position.y = height / 2;
+    group.add(volMesh);
+
+    // Perimeter cage
+    const wireGeom = new THREE.CylinderGeometry(radius, radius, height, 16);
+    const wireMat = new THREE.MeshBasicMaterial({
+      color: trigColor,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.40,
+    });
+    const wireMesh = new THREE.Mesh(wireGeom, wireMat);
+    wireMesh.position.y = height / 2;
+    group.add(wireMesh);
+
+    // Ground ring
+    const ringGeom = new THREE.RingGeometry(radius - 2.0, radius, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: trigColor,
+      side: THREE.DoubleSide,
+    });
+    const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+    ringMesh.rotation.x = -Math.PI / 2;
+    ringMesh.position.y = 0.35;
+    group.add(ringMesh);
+
+    // Vertical holographic beacon beam
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.8, 0.8, 50, 8),
+      new THREE.MeshBasicMaterial({ color: trigColor, transparent: true, opacity: 0.55 })
+    );
+    beam.position.y = 25;
+    group.add(beam);
   }
 
   // Position and yaw
@@ -736,6 +841,39 @@ function createAssetMesh(asset) {
   group.rotation.y = THREE.MathUtils.degToRad(asset.yaw_deg || 0);
 
   return group;
+}
+
+// Dynamic waypoint route line
+let waypointTrajectoryLine = null;
+
+function updateWaypointTrajectories() {
+  if (waypointTrajectoryLine) {
+    scene.remove(waypointTrajectoryLine);
+    if (waypointTrajectoryLine.geometry) waypointTrajectoryLine.geometry.dispose();
+    waypointTrajectoryLine = null;
+  }
+
+  const navPoints = state.project.assets
+    .filter((a) => a.asset_type === "nav" || a.asset_type === "spawn")
+    .sort((a, b) => {
+      if (a.asset_type === "spawn") return -1;
+      if (b.asset_type === "spawn") return 1;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+  if (navPoints.length < 2) return;
+
+  const points = navPoints.map((p) => new THREE.Vector3(p.x, p.y + 3.0, p.z));
+  const geom = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = new THREE.LineDashedMaterial({
+    color: 0x00f0ff,
+    dashSize: 20,
+    gapSize: 10,
+    linewidth: 2,
+  });
+  waypointTrajectoryLine = new THREE.Line(geom, mat);
+  waypointTrajectoryLine.computeLineDistances();
+  scene.add(waypointTrajectoryLine);
 }
 
 /**
@@ -764,6 +902,9 @@ function syncSceneAssets() {
       grp.rotation.y = THREE.MathUtils.degToRad(asset.yaw_deg || 0);
     }
   }
+
+  // Update dynamic waypoint trajectory routes
+  updateWaypointTrajectories();
 
   // Update selection
   if (state.selectedAssetId && assetObjectMap.has(state.selectedAssetId)) {
@@ -991,6 +1132,21 @@ function updateInspector() {
   document.getElementById("insp-health").value = asset.health;
   document.getElementById("insp-health-label").innerText = asset.health;
   document.getElementById("insp-objective").checked = !!asset.is_objective;
+
+  const objDescEl = document.getElementById("insp-objective-desc");
+  if (objDescEl) objDescEl.value = asset.objective_desc || "";
+
+  const isTrig = (asset.asset_type || "").startsWith("trig_");
+  const trigSec = document.getElementById("insp-trigger-section");
+  if (trigSec) {
+    trigSec.style.display = isTrig ? "block" : "none";
+    if (isTrig) {
+      document.getElementById("insp-trigger-radius").value = asset.trigger_radius || 40;
+      document.getElementById("insp-trigger-radius-label").innerText = `${asset.trigger_radius || 40}m`;
+      document.getElementById("insp-trigger-action").value = asset.trigger_action || (asset.asset_type === "trig_evac" ? "evac_complete" : "spawn_ambush");
+      document.getElementById("insp-trigger-msg").value = asset.trigger_message || "";
+    }
+  }
 }
 
 // These handlers mutate state.project directly; the history fields in state are
@@ -1000,6 +1156,45 @@ function bindInspectorEvents() {
     const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
     if (a) a.name = e.target.value;
   });
+
+  const objDescInput = document.getElementById("insp-objective-desc");
+  if (objDescInput) {
+    objDescInput.addEventListener("input", (e) => {
+      const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+      if (a) a.objective_desc = e.target.value;
+    });
+  }
+
+  const trigRadius = document.getElementById("insp-trigger-radius");
+  if (trigRadius) {
+    trigRadius.addEventListener("input", (e) => {
+      const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+      if (a) {
+        a.trigger_radius = parseFloat(e.target.value);
+        document.getElementById("insp-trigger-radius-label").innerText = `${a.trigger_radius}m`;
+        const grp = assetObjectMap.get(a.asset_id);
+        if (grp) scene.remove(grp);
+        assetObjectMap.delete(a.asset_id);
+        syncSceneAssets();
+      }
+    });
+  }
+
+  const trigAction = document.getElementById("insp-trigger-action");
+  if (trigAction) {
+    trigAction.addEventListener("change", (e) => {
+      const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+      if (a) a.trigger_action = e.target.value;
+    });
+  }
+
+  const trigMsg = document.getElementById("insp-trigger-msg");
+  if (trigMsg) {
+    trigMsg.addEventListener("input", (e) => {
+      const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+      if (a) a.trigger_message = e.target.value;
+    });
+  }
 
   document.getElementById("insp-yaw").addEventListener("input", (e) => {
     const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
@@ -1352,6 +1547,35 @@ function loadDemoMap() {
       faction: "neutral",
       health: 100,
     },
+    // Mission Triggers & Volumes
+    {
+      asset_id: "trig_evac_zone",
+      asset_type: "trig_evac",
+      name: "Dust-Off Extraction Zone",
+      x: -350,
+      y: 0,
+      z: -900,
+      yaw_deg: 0,
+      faction: "player",
+      health: 100,
+      trigger_radius: 50.0,
+      trigger_action: "evac_complete",
+      trigger_message: "HQ: Dropship touchdown confirmed! Mission accomplished.",
+    },
+    {
+      asset_id: "trig_ridge_ambush",
+      asset_type: "trig_ambush",
+      name: "Ridge Ambush Sensor Perimeter",
+      x: -480,
+      y: 0,
+      z: -720,
+      yaw_deg: 0,
+      faction: "enemy",
+      health: 100,
+      trigger_radius: 65.0,
+      trigger_action: "spawn_ambush",
+      trigger_message: "WARNING: Clan reinforcements detected descending from ridge!",
+    },
   ];
 
   // Update form inputs
@@ -1493,6 +1717,136 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+// Objectives Modal Logic
+function openObjectivesModal() {
+  document.getElementById("briefing-textarea").value = state.project.objectives.briefing_text || "";
+  document.getElementById("audio-track-select").value = state.project.objectives.audio_track || "action_theme_1";
+  renderObjectivesLists();
+  document.getElementById("objectives-modal").style.display = "flex";
+}
+
+function renderObjectivesLists() {
+  const priBox = document.getElementById("primary-objectives-list");
+  priBox.innerHTML = "";
+  (state.project.objectives.primary || []).forEach((obj, idx) => {
+    const row = document.createElement("div");
+    row.className = "objective-item-row";
+    row.innerHTML = `
+      <span style="color:var(--accent-cyan); font-weight:700;">${idx + 1}.</span>
+      <input type="text" value="${obj.desc}" oninput="state.project.objectives.primary[${idx}].desc = this.value;">
+      <button class="btn-tiny-del" onclick="removeObjective('primary', ${idx})">&times;</button>
+    `;
+    priBox.appendChild(row);
+  });
+
+  const secBox = document.getElementById("secondary-objectives-list");
+  secBox.innerHTML = "";
+  (state.project.objectives.secondary || []).forEach((obj, idx) => {
+    const row = document.createElement("div");
+    row.className = "objective-item-row";
+    row.innerHTML = `
+      <span style="color:var(--accent-amber); font-weight:700;">${idx + 1}.</span>
+      <input type="text" value="${obj.desc}" oninput="state.project.objectives.secondary[${idx}].desc = this.value;">
+      <button class="btn-tiny-del" onclick="removeObjective('secondary', ${idx})">&times;</button>
+    `;
+    secBox.appendChild(row);
+  });
+}
+
+function addObjective(type) {
+  if (!state.project.objectives[type]) state.project.objectives[type] = [];
+  state.project.objectives[type].push({
+    id: `obj_${type}_${Date.now()}`,
+    desc: type === "primary" ? "New Tactical Goal" : "Optional Secondary Goal",
+    completed: false
+  });
+  renderObjectivesLists();
+}
+
+function removeObjective(type, idx) {
+  state.project.objectives[type].splice(idx, 1);
+  renderObjectivesLists();
+}
+
+// MechLab Modal Logic
+const CHASSIS_DATA = {
+  mech_madcat: { name: "Mad Cat / Timber Wolf", tons: 75.0 },
+  mech_bushwacker: { name: "Bushwacker BSW-X1", tons: 55.0 },
+  mech_thor: { name: "Thor / Summoner", tons: 70.0 },
+  mech_shadowcat: { name: "Shadow Cat", tons: 45.0 },
+  mech_vulture: { name: "Vulture / Mad Dog", tons: 60.0 },
+  mech_daishi: { name: "Daishi / Dire Wolf", tons: 100.0 },
+};
+
+function openMechLabModal() {
+  const dc = state.project.drop_config;
+  document.getElementById("mechlab-chassis").value = dc.player_mech || "mech_madcat";
+  document.getElementById("mechlab-drop-type").value = dc.drop_type || "orbital_drop_pod";
+  document.getElementById("wpn-left-arm").value = dc.weapons?.left_arm || "ER PPC";
+  document.getElementById("wpn-center-torso").value = dc.weapons?.center_torso || "Medium Pulse Laser";
+  document.getElementById("wpn-right-arm").value = dc.weapons?.right_arm || "ER PPC";
+  document.getElementById("wpn-left-torso").value = dc.weapons?.left_torso || "Clan LRM-20";
+  document.getElementById("wpn-right-torso").value = dc.weapons?.right_torso || "Clan LRM-20";
+  document.getElementById("mechlab-armor").value = dc.armor_tons || 14.0;
+  document.getElementById("mechlab-armor-val").innerText = `${dc.armor_tons || 14.0}T`;
+  document.getElementById("mechlab-heatsinks").value = dc.heatsinks || 16;
+  document.getElementById("mechlab-jumpjets").value = dc.jump_jets || 0;
+  updateMechLabTonnage();
+  renderLancemates();
+  document.getElementById("mechlab-modal").style.display = "flex";
+}
+
+function updateMechLabTonnage() {
+  const chassis = document.getElementById("mechlab-chassis").value;
+  const maxTons = CHASSIS_DATA[chassis]?.tons || 75.0;
+  state.project.drop_config.tonnage = maxTons;
+  const badge = document.getElementById("mechlab-tonnage-badge");
+  if (badge) {
+    badge.innerText = `${maxTons.toFixed(1)} / ${maxTons.toFixed(1)} TONS`;
+  }
+}
+
+function renderLancemates() {
+  const box = document.getElementById("lancemate-list");
+  if (!box) return;
+  box.innerHTML = "";
+  (state.project.drop_config.lancemates || []).forEach((m, idx) => {
+    const row = document.createElement("div");
+    row.className = "lancemate-item-row";
+    row.innerHTML = `
+      <input type="text" value="${m.name}" style="width:130px;" oninput="state.project.drop_config.lancemates[${idx}].name = this.value;">
+      <select class="select-input" style="width:140px; font-size:11px;" onchange="state.project.drop_config.lancemates[${idx}].mech = this.value;">
+        <option value="mech_bushwacker" ${m.mech === "mech_bushwacker" ? "selected" : ""}>Bushwacker (55T)</option>
+        <option value="mech_shadowcat" ${m.mech === "mech_shadowcat" ? "selected" : ""}>Shadow Cat (45T)</option>
+        <option value="mech_thor" ${m.mech === "mech_thor" ? "selected" : ""}>Thor (70T)</option>
+        <option value="mech_vulture" ${m.mech === "mech_vulture" ? "selected" : ""}>Vulture (60T)</option>
+      </select>
+      <select class="select-input" style="width:100px; font-size:11px;" onchange="state.project.drop_config.lancemates[${idx}].orders = this.value;">
+        <option value="escort" ${m.orders === "escort" ? "selected" : ""}>Escort</option>
+        <option value="free_fire" ${m.orders === "free_fire" ? "selected" : ""}>Free Fire</option>
+        <option value="defend" ${m.orders === "defend" ? "selected" : ""}>Defend Base</option>
+      </select>
+      <button class="btn-tiny-del" onclick="removeLancemate(${idx})">&times;</button>
+    `;
+    box.appendChild(row);
+  });
+}
+
+function addLancemate() {
+  if (!state.project.drop_config.lancemates) state.project.drop_config.lancemates = [];
+  state.project.drop_config.lancemates.push({
+    name: "Lt. Alan Mattila",
+    mech: "mech_bushwacker",
+    orders: "escort"
+  });
+  renderLancemates();
+}
+
+function removeLancemate(idx) {
+  state.project.drop_config.lancemates.splice(idx, 1);
+  renderLancemates();
+}
+
 // Initialization deliberately starts optional asset loading without awaiting it.
 // The demo and animation loop are available while that local request completes.
 window.addEventListener("DOMContentLoaded", () => {
@@ -1524,6 +1878,38 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("btn-modal-close").addEventListener("click", () => {
     document.getElementById("export-modal").style.display = "none";
   });
+
+  // Objectives and MechLab Event Bindings
+  document.getElementById("btn-objectives").addEventListener("click", openObjectivesModal);
+  document.getElementById("btn-close-objectives").addEventListener("click", () => {
+    state.project.objectives.briefing_text = document.getElementById("briefing-textarea").value;
+    state.project.objectives.audio_track = document.getElementById("audio-track-select").value;
+    document.getElementById("objectives-modal").style.display = "none";
+  });
+  document.getElementById("btn-add-primary-obj").addEventListener("click", () => addObjective("primary"));
+  document.getElementById("btn-add-secondary-obj").addEventListener("click", () => addObjective("secondary"));
+
+  document.getElementById("btn-mechlab").addEventListener("click", openMechLabModal);
+  document.getElementById("btn-close-mechlab").addEventListener("click", () => {
+    state.project.drop_config.player_mech = document.getElementById("mechlab-chassis").value;
+    state.project.drop_config.drop_type = document.getElementById("mechlab-drop-type").value;
+    state.project.drop_config.weapons = {
+      left_arm: document.getElementById("wpn-left-arm").value,
+      center_torso: document.getElementById("wpn-center-torso").value,
+      right_arm: document.getElementById("wpn-right-arm").value,
+      left_torso: document.getElementById("wpn-left-torso").value,
+      right_torso: document.getElementById("wpn-right-torso").value,
+    };
+    state.project.drop_config.armor_tons = parseFloat(document.getElementById("mechlab-armor").value);
+    state.project.drop_config.heatsinks = parseInt(document.getElementById("mechlab-heatsinks").value);
+    state.project.drop_config.jump_jets = parseInt(document.getElementById("mechlab-jumpjets").value);
+    document.getElementById("mechlab-modal").style.display = "none";
+  });
+  document.getElementById("mechlab-chassis").addEventListener("change", updateMechLabTonnage);
+  document.getElementById("mechlab-armor").addEventListener("input", (e) => {
+    document.getElementById("mechlab-armor-val").innerText = `${e.target.value}T`;
+  });
+  document.getElementById("btn-add-lancemate").addEventListener("click", addLancemate);
 
   // Load authentic in-game 3D models and initial demo
   loadGameAssets();

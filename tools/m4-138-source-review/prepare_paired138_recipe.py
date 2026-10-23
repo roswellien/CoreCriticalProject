@@ -1,0 +1,38 @@
+"""Archive-free exact paired138 adaptation recipe from accepted paired131."""
+from pathlib import Path
+import ast,hashlib,json,sys
+sys.dont_write_bytecode=True
+R=Path(__file__).resolve().parents[2]
+def sha(p):
+ with Path(p).open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+def main(name):
+ out=R/'reports/m4-startup138-paired'/name;assert not out.exists();out.mkdir(parents=True);pins={}
+ def pin(p,h=None):
+  p=Path(p).resolve();assert p.suffix.lower()not in('.mwb','.mwi','.zip')and p.name!='transport.json';v=sha(p);assert h is None or v==h;pins[str(p)]=v;return p
+ def read(p,h=None):return json.loads(pin(R/p,h).read_bytes())
+ old=read('reports/m4-startup131-original/preparation-r4/report.json','1ee9bd012dcb8e5d4023de10ab6c6046d29d561098cf7c95fffc89ce96ddaceb');cur=read('reports/m4-startup138-original/preparation-r8/report.json','9bd1ef9049eccaeb9f87e81f38e001d0d1c805f077c75a8563fc08ec0e67b161');native=read('reports/m4-joint-startup138/preparation-r4/report.json','a392e9d80e88a3779cc37247b681eeea5e3012aa90304564290d5283f7f73a2a');v=read('reports/m4-startup138-original/original-validation-r3/report.json','02ea1ce07ac3e5aa5dff6e20813b956117383784ae4f5e1ffd6aa1822f603f5f');proof=read('reports/m4-startup138-original/widget-complete-source-r1/report.json','4f9e1d0a8fc80f4780bf9e6ce50fe5bf1df3dcc02b42581fa369fe0c6e889684');review=read('reports/m4-138-validation-review/current-widget-policy-review-r1/report.json','6e980830a01cf6a4b04ff4e7abcf6faff78c9c4b478da694a64c671da6f79c46');policy=read('reports/m4-startup131-paired/preparation-r1/policy.json')
+ assert v['passed']and v['reader_closed']and proof['passed']and review['passed'];assert cur['selected_order']==native['selected_order']and len(cur['selected_order'])==138
+ oldorder=old['selected_order'];current=cur['selected_order'];oldkeys={(q['slot'],q['entry'])for q in oldorder};new=[dict(phase=i,**q)for i,q in enumerate(current)if(q['slot'],q['entry'])not in oldkeys];assert len(new)==7
+ assert [q for q in current if(q['slot'],q['entry'])in oldkeys]==oldorder
+ mapping=[dict(entry=q['entry'],slot=q['slot'],old_phase=i,current_phase=current.index(q))for i,q in enumerate(oldorder)]
+ comparer=pin(R/'tools/m4-startup131-paired/paired_v2.py','61c3d15dea49cfc712cee70e04c2132470a20dd094abe79ada4f7971a736cd43');text=comparer.read_text();ast.parse(text)
+ for leaf in('prepare_policy.py','freeze_configuration.py','mfc_relations_v2.py','tree_relations.py','format_relations.py'):pin(R/'tools/m4-startup131-paired'/leaf)
+ for leaf in('paired_exports.py','compare_provider138.py'):pin(R/'reports/m4-joint-startup138-source/preparation-r10'/leaf)
+ assert cur['combined_source_page_count']==69 and len(cur['extra_whole_source_pages'])==26 and cur['record_bytes']==356992 and cur['callback_count']==108
+ pages=ast.parse((R/'reports/m4-joint-startup138-source/preparation-r10/compare_provider138.py').read_text());page_values=[]
+ for node in pages.body:
+  if isinstance(node,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='PAGES'for t in node.targets):page_values.append(ast.unparse(node.value))
+ changes=[
+ dict(area='Immutable identities/configuration',required='Rebind every configured native138 prep4/build5/execution3, original138 prep8/build5/execution2/strictvalidation3, current original inherited/MFC/widget proofs and independent reviews. Fresh loaded-page input relation and paired policy/preflight remain required; accepted131 identities cannot substitute.'),
+ dict(area='Chronology',required='Use exact138 slot/entry schedule. Preserve all131 roots/order and every existing family predicate by entry; recompute phase-dependent SPI nextFP/tree/cosine/format activations, all lifetime carry intervals, current MFC domains.'),
+ dict(area='Whole pages and ABI',required='Keep fixed original43page/native17page record ABI and independent26/52extra raw page exports. Compare69pages, two endpoints,12cases1656phases; stack remains own-source typed proof, loader whole page separately exact. Do not global replace record offsets or authorize new page differences.'),
+ dict(area='Seven widget resource domains',required='Add independently derived original/native own-BEFORE whole69/CRT predictions and exact same-role widget fields,149GDI calls persequence, source150API ledger joins total original cases,12realloc births sourceCALL/IAT/full APIbirth identity, complete arrays/virtual/frame/FX/ENV/FS operands. Handle integers/generations require typed aliases, not scalar coincidence.'),
+ dict(area='Fonts and cleanup',required='Join90sourcefontstores/current original6cases to180native sourcefontstores12cases by root/ESI+258 generation and actualGDI provider/lifetime. Keep borrowed stock separate; manualcleanup exact owned generations/BOOL/FXENV/caller metadata, never claim callback body/shutdown executed.'),
+ dict(area='Registrar and growth',required='Update callback inventory101->108 by exactseven newrootCALL source arguments, preserve oldcallbacks and sourceorder. Callback vector capacity exceeds embedded legacy128DWORD field only growth snapshot/cleanup sealed exports are authoritative. New source-owned registry backing fullbytes and growth typedAPIinitial fields independently proved; no AFTER bytes as inputs.'),
+ dict(area='Field policy',required='Old broad ECX/EFLAGS/FX/ENV paired equalities cannot automatically extend across actualGDI/API seams. Produce finite literal lastwriter/externalprovider own facts with source carry intervals, preserving rawfullrecords. Exact CPU PC10 fields remain measured; zeroPC invariant applies only known API schemas proven by physicalproducer.'),
+ dict(area='Literal observer pages',required='Fresh currentbuild5 all13MFC spans and newGDI/FS compiledshims physically bound to actualHook kind/direction/width/address; current compile displacement bytes typed, every other pagebyte exact. Reuse currenttransitionr4 only exactcurrentcapture identity.'),
+ dict(area='Completion counts',required='Recompute exactall69page endpoints and inherited root counts; do not multiply semantic counts that remain same finite families. Finalnative source gate pending sessionroot; compare bounded sealed exports only after root gate closes, fresh own relation review required before accepted credit.')]
+ r=dict(passed=True,scope='Bounded exact accepted131-to-current138 paired recipe only; comparer not generated/executed, paired admission remains incomplete',paired_execution_ready=False,accepted_parent_comparer_sha256=sha(comparer),old_selected_roots=131,new_selected_roots=138,paired_cases=12,paired_phases=1656,original_phases=828,callback_roots=108,source_pages=69,fixed_original_record_pages=43,fixed_native_record_pages=17,original_extra_pages=cur['extra_whole_source_pages'],native_extra_page_count=52,whole_all_page_endpoint_relations=1656*2*69,whole_nonstack_endpoint_relations=1656*2*68,separate_loader_endpoint_relations=1656*2,ordinary_nonstack_endpoint_relations=1656*2*67,whole_stack_endpoint_proof_scope='Own source causal equivalence, not blanket rawscratch equality',new_roots=new,legacy_phase_map=mapping,required_changes=changes,archive_reader_opened=False,raw_export_reader_opened=False,source_machine_executed=False,initializer_credit=0,files=pins)
+ pin(__file__);pin(sys.executable)
+ q=out/'report.json';q.write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(dict(passed=True,sha256=sha(q),new_roots=new,paired_execution_ready=False)))
+if __name__=='__main__':main(sys.argv[1])

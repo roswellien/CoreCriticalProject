@@ -347,7 +347,7 @@ bool hud_intercept(unsigned target,void*p,void*&result){if(target==0x577ba0||tar
  auto&g=state.gpr;const unsigned sp=g.rsp.dword;g.rip.dword=load(sp);g.rsp.dword=sp+4+args;result=p;return true;}
 // FPS/frame-time overlay on the direct presentation path: the presenter's overlay text is drawn into a small buffer and
 // rendered as an opaque textured quad onto the resident image just before it is presented (diagnostic; not guest state).
-void overlay_gpu(unsigned w,unsigned h){auto&ov=host.presenter->overlay;std::vector<std::uint16_t>buf(size_t(w)*24,0);ov.draw(buf.data(),w,24);const unsigned bw=ov.box_w,bh=ov.box_h;if(!bw||!bh)return;
+void overlay_gpu(unsigned w,unsigned h){auto&ov=host.presenter->overlay;std::vector<std::uint16_t>buf(size_t(w)*ov.buffer_height,0);ov.draw(buf.data(),w,ov.buffer_height);const unsigned bw=ov.box_w,bh=ov.box_h;if(!bw||!bh)return;
  namespace vs=mw34::vkscene;hud_sc=vs::Scene{};hud_sc.hud=true;hud_sc.width=w;hud_sc.height=h;hud_sc.has_depth=host.res_zb!=0;hud_w=w;hud_h=h;vs::TextureRef r{};r.key=0x4f564c0000000000ULL;r.width=bw;r.height=bh;r.format=vs::TexFormat::rgba8888;
  r.pixels32.resize(size_t(bw)*bh);for(unsigned y=0;y<bh;++y)for(unsigned x=0;x<bw;++x)r.pixels32[size_t(y)*bw+x]=hud_rgba(buf[size_t(y)*w+x],255);
  std::uint64_t hash=0xcbf29ce484222325ULL;for(auto v:r.pixels32){hash^=v;hash*=0x100000001b3ULL;}r.hash=hash;hud_sc.textures.push_back(std::move(r));

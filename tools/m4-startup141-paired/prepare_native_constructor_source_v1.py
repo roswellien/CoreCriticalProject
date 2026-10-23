@@ -1,0 +1,57 @@
+"""Prepare inherited full native36 own-source gate for current141 only."""
+from pathlib import Path
+import hashlib,json,ast,difflib
+R=Path(__file__).resolve().parents[2]
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def main():
+ out=R/'reports/m4-startup141-paired/native-constructor-source-preparation-r1';assert not out.exists();out.mkdir();p=R/'tools/m4-138-validation-review/constructor_native36_source_v6.py';q=R/'tools/m4-startup141-paired/constructor_native36_source141_v1.py';assert not q.exists();a=p.read_text();b=a;changes=[]
+ def edit(old,new):
+  nonlocal b
+  assert b.count(old)==1,(old,b.count(old));b=b.replace(old,new);changes.append((old,new))
+ edit('def main(name):', '''def main(admission_path,admission_sha,configuration_path,configuration_sha,name):
+ admission_path=Path(admission_path).resolve();assert hashlib.file_digest(admission_path.open('rb'),'sha256').hexdigest()==admission_sha;admission=json.loads(admission_path.read_bytes());assert admission['passed']is True and admission['independent_review']is True and admission['scope_identity']=='native141_constructor36_own_source'and admission['configuration_sha256']==configuration_sha
+ admitted={}
+ for p,h in admission['files'].items():
+  p=Path(p).resolve();assert p.suffix.lower()not in('.mwb','.mwi','.zip')and p.name!='transport.json';assert str(p)not in admitted and hashlib.file_digest(p.open('rb'),'sha256').hexdigest()==h;admitted[str(p)]=h
+ admitted[str(admission_path)]=admission_sha''')
+ edit("out=R/'reports/m4-138-validation-review'/name","out=R/'reports/m4-startup141-paired'/name")
+ edit("p=Path(p).resolve();v=hashlib.file_digest(p.open('rb'),'sha256').hexdigest();", "p=Path(p).resolve();assert p.suffix.lower()not in('.mwb','.mwi','.zip')and p.name!='transport.json';v=hashlib.file_digest(p.open('rb'),'sha256').hexdigest();assert p.is_relative_to(out.resolve())or admitted.get(str(p))==v;")
+ old="  receipt=json.loads(pin(R/'reports/m4-138-validation-review/constructor37-raw-export-r1/report.json','2d5039d9ec0e4ae118a10c031f367bef3f97f78175bb0e57b3dbb2f813e582a1').read_bytes());need(receipt['passed']and receipt['reader_closed'],'Current closed native37 ordinary export')"
+ new="""  C=json.loads(pin(configuration_path,configuration_sha).read_bytes());need(C['schema']=='mw34-native141-constructor36-source-inputs-v1','Exact finite current own-source configuration');need(C['native_source']['sha256']=='8684b0a3219a72a3a0712dd99170e0c584ee0c5cd438effcd9632a83bc3d72b3','Actual native source6 identity')
+  receipt=json.loads(pin(C['native_source']['path'],C['native_source']['sha256']).read_bytes());need(receipt['passed']and receipt['reader_closed']and receipt['paired_export_readers_closed']and receipt['complete_persistent141_constructors']and receipt['per_phase_BEFORE_machine_seed']is False and receipt['candidate_AFTER_machine_seed']is False,'Actual fullcarried native141 proof; old original export excluded')
+  source_rows=json.loads(pin(Path(C['native_source']['path']).parent/'Constructor-carried-source-derivations.json',receipt['files'][str((Path(C['native_source']['path']).parent/'Constructor-carried-source-derivations.json').resolve())]).read_bytes());need(len(source_rows)==36 and {(r['level'],r['sequence'],r['root'])for r in source_rows}=={(l,s,r)for l in('O0','O2')for s in range(6)for r in(0x4103f0,0x410440,0x459b40)},'Complete distinct actual current carried36 constructor rows')
+  original=json.loads(pin(C['current_original18']['path'],C['current_original18']['sha256']).read_bytes());need(C['current_original18']['sha256']=='8f910be42c5be26bf6e41260361b61b3ec258aefedf2cbdaabe35e3992498899'and original['passed']and len(original['cases'])==18 and original['source_AFTER_seed']is False and original['canonical_reader_opened']is False,'Exact independent currently passed original18, not failed combined success')
+  for dep,h in original['files'].items():pin(dep,h)
+  def input_audit(event,args):
+   if event!='open'or not args or not isinstance(args[0],(str,bytes)):return
+   dep=Path(args[0]).resolve();mode=args[1]if len(args)>1 else None;flags=args[2]if len(args)>2 else 0;reading=isinstance(mode,str)and'r'in mode or mode is None and isinstance(flags,int)and not(flags&3)
+   if reading:
+    need(dep.suffix.lower()not in('.mwb','.mwi','.zip')and dep.name!='transport.json','No archives through indirect source import')
+    if dep.is_relative_to(R)or str(dep)in admitted:need(dep.is_relative_to(out.resolve())or str(dep)in admitted,'Every source import/descriptor/read preauthenticated')
+  sys.addaudithook(input_audit)
+"""
+ edit(old,new)
+ edit("E=load('tools/m4-joint-startup131/paired_exports.py','ex');A=load('tools/m4-138-validation-review/constructor_native_input_v7.py','input');", "E=load('tools/m4-startup138-original/export_reader_r2.py','ex');A=load('tools/m4-startup141-paired/constructor_native_input141_v1.py','input');")
+ edit("  for export in receipt['paired_exports']:\n   level=export['branch'];f=E.Facade(export,pin);table=f.words('selected-table.bin',37)","  for level in('O0','O2'):\n   f=E.ExportReader(C['native_source']['path'],C['native_source']['sha256'],level,pin);f.words=lambda key,n,kind='I':struct.unpack('<'+kind*n,f.data(key));table=f.words('selected-table.bin',141)")
+ edit("inp=A.build(f,level,seq,root);write(case/'input.json',inp)","carried=next(r for r in source_rows if(r['level'],r['sequence'],r['root'])==(level,seq,root));inp=A.build(f,level,seq,root,carried);write(case/'input.json',inp)")
+ anchor="     for key,value in target.items():need(result['source_computed_'+key]==value,'Entire native source '+key)\n"
+ add="""     need(target['CPU']==carried['computed_after_CPU']and hashlib.sha256(bytes.fromhex(target['State_hex'])).hexdigest()==carried['computed_after_State_sha256']and hashlib.sha256(bytes.fromhex(target['FX_hex'])).hexdigest()==carried['computed_after_FX_sha256'],'Own complete endpoint independently joins fullcarried source6 result')
+     program,_=D.M.source_program(preparation);need(all(not program[pc]['mnemonic'].startswith('f')for pc in result['PCs']),'Every reached literal constructor/provider instruction integer-only; wholeENV source carry not inferred from changed output');need(raw[2164:2192]==raw[2192:2220],'Every actual current root entireENV28 unchanged under literal noFP scope')
+     need(result['accesses']==carried['whole_literal_source_accesses'],'Every current whole ordered component/provider/shared literal operand equals independently carried source6 journal')
+"""
+ edit(anchor,anchor+add)
+ edit("cases.append(dict(branch=level,sequence=seq,root=root,whole_State=True,whole_CPU=True,whole_FX=True,entire_endpoint_regions=len(memory),whole_owner_backings=owner_count,game_source_operands=len(wanted),source_API_facts=len(inp['APIs']),source_COMPLETE=True))", "cases.append(dict(branch=level,sequence=seq,root=root,whole_State=True,whole_CPU=True,whole_FX=True,whole_own_CPU40=True,defined_EFLAGS=True,whole_own_State3504=True,whole_own_FX512=True,whole_own_ENV28=True,whole_own_pages_and_backings=True,source_AFTER_seed=False,independent_current_fullcarry_join=True,whole_current_ordered_operand_joins=len(result['accesses']),entire_endpoint_regions=len(memory),whole_owner_backings=owner_count,game_source_operands=len(wanted),source_API_facts=len(inp['APIs']),source_COMPLETE=True))")
+ edit("  pin(__file__);q=out/'report.json';", "  pin(__file__);pin(admission_path,admission_sha);\n  for dep,h in pins.items():need(hashlib.file_digest(Path(dep).open('rb'),'sha256').hexdigest()==h,'Final whole admitted current code/input/derived output conservation')\n  q=out/'report.json';")
+ edit("scope='Current native37 finite36 literal constructor equality; original18 and paired/refusal/full141 chronology separate.","scope='Current native141 finite36 literal own constructor equality independently joined to actual fullcarried source6; original18 structural pairing and complete paired141 separate.")
+ edit("cases=cases,frontier=stage,source_AFTER_seed=False", "configuration_sha256=configuration_sha,current_native_source_sha256=C['native_source']['sha256']if'C'in locals()else None,current_original18_sha256=C['current_original18']['sha256']if'C'in locals()else None,cases=cases,frontier=stage,source_AFTER_seed=False")
+ edit("if __name__=='__main__':main(sys.argv[1])","if __name__=='__main__':main(*sys.argv[1:])")
+ ast.parse(b);q.write_text(b);back=b
+ for old,new in reversed(changes):assert back.count(new)==1,(new,back.count(new));back=back.replace(new,old)
+ assert back==a;before=a.splitlines(True);after=b.splitlines(True);delta=[]
+ for tag,i,j,k,l in difflib.SequenceMatcher(None,before,after,autojunk=False).get_opcodes():
+  if tag!='equal':delta.append(dict(parent_start=i,parent_stop=j,child_start=k,child_stop=l,parent=''.join(before[i:j]),child=''.join(after[k:l])))
+ (out/'inverse.json').write_text(json.dumps(delta,indent=2)+'\n');C=dict(schema='mw34-native141-constructor36-source-inputs-v1',native_source=dict(path=str(R/'reports/m4-startup141-source/combined-source-provider-r6/report.json'),sha256='8684b0a3219a72a3a0712dd99170e0c584ee0c5cd438effcd9632a83bc3d72b3'),current_original18=dict(path=str(R/'reports/m4-original141-source/source-r4-constructors/report.json'),sha256='8f910be42c5be26bf6e41260361b61b3ec258aefedf2cbdaabe35e3992498899'))
+ (out/'configuration.json').write_text(json.dumps(C,indent=2)+'\n');files={str(x):sha(x)for x in[p,q,out/'inverse.json',out/'configuration.json',R/'tools/m4-startup141-paired/constructor_native_input141_v1.py',R/'tools/m4-constructor-native/derive_source_v9.py',Path(__file__).resolve()]}
+ (out/'ROOT-recipe.txt').write_text('UNEXECUTED. ROOT inspect inverse+new complete endpoint/carry/ordered operand guards, then physically authenticate entire cold constructor descriptor/model/adapter/interpreter closure (retained54 plus measuredTREE148 lazyimports), current native source6/report/Constructor-carried36 + ONLYO0/O2 sealedindexpayload; current passedoriginal18 wholefilemap8f910 (failedaggregate never success). Current special artifacts include perphase before/after17fixed+extra+5F2000, exacteight ctorMFC checkpoints and correspondinglate registrar endpoint, actualinitialHeapAlloc/HeapSize/CS24 typed API5 witness. Native source6 ORIGINAL138 row never opened. First source/API/wholeStateCPUFX and integer-only wholeENV endpoints must really pass all36; then pure constructorpolicy function may consume resulting actual endpoint output fields. No worker/fullverifier, originalcurrent full141 pass or acceptance inferred. CLI: Python -B constructor_native36_source141_v1.py ROOT_ADMISSION SHA CONFIG SHA FRESH_NAME. ROOTscope native141_constructor36_own_source.\n');files[str(out/'ROOT-recipe.txt')]=sha(out/'ROOT-recipe.txt')
+ r=out/'report.json';r.write_text(json.dumps(dict(prepared_only=True,imports_executed=False,source_execution=False,canonical_reader_opened=False,ordinary_export_reader_opened=False,initializer_credit=0,exact_whole_parent_inverse=True,inverse_hunks=len(delta),current_native_fullcarry_required=True,current_original18_independent_positive_required=True,no_failed_original_aggregate_success_used=True,all_parent_endpoint_and_operand_guards_retained=True,wholeENV_integer_only_guard_added=True,configuration_sha256=sha(out/'configuration.json'),complete_pair_gate=False,files=files),indent=2)+'\n');print(json.dumps(dict(path=str(r),sha256=sha(r),configuration_sha256=sha(out/'configuration.json'))))
+if __name__=='__main__':main()

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "com.mw3remaster.hd-textures",
+  "name": "HD Texture Set (with Normal Maps)",
+  "version": "1.0.0",
+  "author": "MW3 Remaster Project",
+  "homepage": null,
+  "description": "39 high-definition environment and terrain texture banks with real-time tangent normal maps.",
+  "category": "Textures",
+  "min_engine_version": null,
+  "dependencies": null,
+  "conflicts": null,
+  "provides": null
+}

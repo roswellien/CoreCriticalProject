@@ -530,6 +530,55 @@ header {
   gap: 10px;
 }
 
+/* Objectives and MechLab UI List Items */
+.objectives-list-box, .lancemate-list-box {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.objective-item-row, .lancemate-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.objective-item-row input[type="text"], .lancemate-item-row input[type="text"] {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.objective-item-row input[type="text"]:focus, .lancemate-item-row input[type="text"]:focus {
+  outline: none;
+  background: rgba(0, 240, 255, 0.05);
+}
+
+.btn-tiny-del {
+  background: none;
+  border: none;
+  color: var(--accent-red);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.btn-tiny-del:hover {
+  color: #fff;
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;

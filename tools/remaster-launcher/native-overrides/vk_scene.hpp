@@ -9,6 +9,7 @@
 // (R5G6B5) is uploaded and blitted to a FIFO swapchain on the game's window (Flip waits for the
 // vertical blank, as DDFLIP_WAIT did).
 #pragma once
+#include "performance_monitor.hpp"
 #include "capture_pixels.hpp"
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan_core.h>
@@ -142,95 +143,8 @@ class Renderer {
   public:
     std::string device_name;
     std::uint64_t scenes{}, draws{}, uploads{};
-    // Optional host performance overlay (MW34_PERF_OVERLAY=1, play.ps1 -Overlay; off by default).
-    // It is drawn into the host upload copy of each presented frame, never into guest memory:
-    // presented frames per second, and the mean and worst time between presents over the last
-    // second, refreshed four times a second.
-    struct PerfOverlay {
-        bool on = [] {
-            const char *e = std::getenv("MW34_PERF_OVERLAY");
-            return e && *e && std::strcmp(e, "0") != 0;
-        }();
-        std::vector<std::int64_t> t;
-        std::int64_t qpf{}, shown{};
-        char text[48]{};
-        unsigned box_w{},
-            box_h{}; // drawn box of the last draw() (the GPU path uploads just this region)
-        static const std::uint8_t *glyph(char c) {
-            static const std::uint8_t g[][8] = {{'0', 0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E},
-                                                {'1', 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
-                                                {'2', 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F},
-                                                {'3', 0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E},
-                                                {'4', 0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},
-                                                {'5', 0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
-                                                {'6', 0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E},
-                                                {'7', 0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
-                                                {'8', 0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},
-                                                {'9', 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},
-                                                {'.', 0, 0, 0, 0, 0, 0x0C, 0x0C},
-                                                {'F', 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10},
-                                                {'P', 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10},
-                                                {'S', 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E},
-                                                {'A', 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11},
-                                                {'V', 0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04},
-                                                {'G', 0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F},
-                                                {'M', 0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11},
-                                                {'X', 0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11},
-                                                {' ', 0, 0, 0, 0, 0, 0, 0}};
-            for (const auto &e : g)
-                if (e[0] == std::uint8_t(c))
-                    return e + 1;
-            return g[19] + 1;
-        }
-        void draw(std::uint16_t *px, unsigned w, unsigned h) {
-            LARGE_INTEGER q{};
-            ::QueryPerformanceCounter(&q);
-            if (!qpf) {
-                LARGE_INTEGER f{};
-                ::QueryPerformanceFrequency(&f);
-                qpf = f.QuadPart;
-            }
-            const std::int64_t now = q.QuadPart;
-            t.push_back(now);
-            std::size_t first = 0;
-            while (first < t.size() && now - t[first] > qpf)
-                ++first;
-            if (first)
-                t.erase(t.begin(), t.begin() + std::ptrdiff_t(first));
-            if (now - shown >= qpf / 4 && t.size() >= 2) {
-                shown = now;
-                double worst = 0;
-                for (std::size_t i = 1; i < t.size(); ++i)
-                    worst = std::max(worst, double(t[i] - t[i - 1]) * 1000.0 / double(qpf));
-                const double span = double(t.back() - t.front()) / double(qpf),
-                             n = double(t.size() - 1);
-                std::snprintf(text, sizeof text, "FPS %.1f  AVG %.1fMS  MAX %.1fMS", n / span,
-                              span * 1000.0 / n, worst);
-            }
-            if (!text[0])
-                return;
-            const unsigned sc = w >= 400 ? 2 : 1, len = unsigned(std::strlen(text)),
-                           bw = (len * 6 + 2) * sc, bh = 10 * sc;
-            box_w = std::min(bw, w);
-            box_h = std::min(bh, h);
-            for (unsigned y = 0; y < bh && y < h; ++y)
-                for (unsigned x = 0; x < bw && x < w; ++x)
-                    px[size_t(y) * w + x] = 0;
-            for (unsigned i = 0; i < len; ++i) {
-                const std::uint8_t *g = glyph(text[i]);
-                for (unsigned r = 0; r < 7; ++r)
-                    for (unsigned c = 0; c < 5; ++c)
-                        if (g[r] & (0x10 >> c))
-                            for (unsigned dy = 0; dy < sc; ++dy)
-                                for (unsigned dx = 0; dx < sc; ++dx) {
-                                    const unsigned x = (2 + i * 6 + c) * sc + dx,
-                                                   y = (2 + r) * sc + dy;
-                                    if (x < w && y < h)
-                                        px[size_t(y) * w + x] = 0xFFE0;
-                                }
-            }
-        }
-    } overlay;
+    using PerfOverlay = mw34::performance::Overlay;
+    PerfOverlay overlay;
     ~Renderer() {
         HostFpEnvironment fp;
         shutdown();

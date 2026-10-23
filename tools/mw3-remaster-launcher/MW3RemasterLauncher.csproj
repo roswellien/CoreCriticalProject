@@ -6,16 +6,18 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <ApplicationTitle>MechWarrior 3 Remastered</ApplicationTitle>
+    <ApplicationTitle>Core Critical Launcher</ApplicationTitle>
     <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
-    <AssemblyName>MW3RemasterLauncher</AssemblyName>
+    <AssemblyName>Core Critical Launcher</AssemblyName>
     <RootNamespace>MW3RemasterLauncher</RootNamespace>
-    <Version>1.0.17-preview</Version>
+    <Version>1.0.28-preview</Version>
     <Authors>MW3 Remaster Team</Authors>
   </PropertyGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Core\SupportedMedia.json" />
+    <EmbeddedResource Include="Core\Mw3ControlActions.json" />
+    <EmbeddedResource Include="../remaster-launcher/legacy_content_capabilities.json" Link="Core/legacy_content_capabilities.json" LogicalName="MW3RemasterLauncher.Core.legacy_content_capabilities.json" />
     <Resource Include="Assets\Fonts\*.ttf" />
     <Resource Include="Assets\Plates\*.png" />
     <Resource Include="Assets\app-icon.ico" />
@@ -23,5 +25,18 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!-- Fetch the pinned, zlib-licensed input-only runtime with fetch_controller_runtime.ps1. -->
+  <ItemGroup Condition="Exists('../../local/third-party/SDL3-3.4.18/runtime/SDL3.dll')">
+    <None Include="../../local/third-party/SDL3-3.4.18/runtime/SDL3.dll" Link="SDL3.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../local/third-party/SDL3-3.4.18/runtime/LICENSE.txt" Link="SDL3-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="VerifyControllerRuntime" BeforeTargets="BeforeBuild" Condition="Exists('../../local/third-party/SDL3-3.4.18/runtime/SDL3.dll')">
+    <GetFileHash Files="../../local/third-party/SDL3-3.4.18/runtime/SDL3.dll" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="ControllerRuntimeHash" />
+    </GetFileHash>
+    <Error Condition="'$(ControllerRuntimeHash)' != '2B4B128D8D510CC2D442693CF848C050D700D43DC667AFE9E5FD82B0570D667E'" Text="SDL3 runtime does not match the pinned upstream DLL. Run fetch_controller_runtime.ps1." />
+  </Target>
 
 </Project>

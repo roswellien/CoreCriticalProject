@@ -15,8 +15,8 @@ def digest(path):
 
 
 def build(kind, sprites, background, host, output):
-    if kind not in ('hud', 'menu') or not re.fullmatch('[0-9a-f]{64}', host):
-        raise ValueError('Invalid artwork kind or host identity')
+    if kind not in ('hud', 'menu') or (host and not re.fullmatch('[0-9a-f]{64}', host)):
+        raise ValueError('Invalid artwork kind or optional provenance hash')
     sources = {}
     identities = {}
     for path in sorted(Path(sprites).glob('*.rgba')):
@@ -50,11 +50,11 @@ def build(kind, sprites, background, host, output):
     files['ui/ui.json'] = dict(bytes=len(registry), sha256=hashlib.sha256(registry).hexdigest())
     if sum(f['bytes'] for f in files.values()) > 512*1024*1024:
         raise ValueError('Artwork pack exceeds 512 MiB')
-    manifest = dict(schema_version=2, id='com.mw3remaster.'+kind, name='Remaster '+('HUD' if kind == 'hud' else 'Menus'),
+    manifest = dict(schema_version=2, game_id="mw3", id='com.mw3remaster.'+kind, name='Remaster '+('HUD' if kind == 'hud' else 'Menus'),
                     version='1.0.0', author='MW3 Remaster', category=kind.title(),
                     description='Current remaster artwork; original layout and input remain in the runtime.',
                     native_payload=dict(profile='prepared-ui-v1', registry='ui/ui.json', path_base='pack-root',
-                                        reference_host_sha256=host, required_formats=sorted({fmt for _,fmt in sources.values()})), files=files)
+                                        required_capabilities={'ui-artwork':1}, reference_host_sha256=host, required_formats=sorted({fmt for _,fmt in sources.values()})), files=files)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=3) as archive:

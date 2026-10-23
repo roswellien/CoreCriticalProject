@@ -19,7 +19,9 @@ public partial class GameSetupWindow : Window
         InitializeComponent();
         ExistingPath.Text = existingPath ?? GameValidator.AutoDetectGameDirectory() ?? "";
         DestinationPath.Text = Path.Combine(LauncherPaths.DataRoot, "OriginalGame");
-        if (BundledPreparation.IsAvailable(AppContext.BaseDirectory))
+        if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
+            PreparationNote.Text = "The native game is already installed. This step only installs or verifies your original game files; no game-code compilation is needed.";
+        else if (BundledPreparation.IsAvailable(AppContext.BaseDirectory))
             PreparationNote.Text = "After verifying your files, setup prepares the native game. First-time preparation can take a while. You can cancel and resume it.";
         Closing += (_, e) =>
         {
@@ -126,7 +128,13 @@ public partial class GameSetupWindow : Window
             if (GameInstallation.FindSupportFiles(directory, LauncherPaths.DataRoot) != null)
                 await Task.Run(() => GameInstallation.PrepareSupportFiles(directory, LauncherPaths.DataRoot));
             _verifiedDirectory = Path.GetFullPath(directory);
-            if (BundledPreparation.IsAvailable(AppContext.BaseDirectory))
+            if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
+            {
+                Status.Text = "Checking the installed native game…";
+                await Task.Run(() => RuntimeUpdates.ValidateGeneratedRuntime(
+                    Path.Combine(AppContext.BaseDirectory, "Runtime")));
+            }
+            else if (BundledPreparation.IsAvailable(AppContext.BaseDirectory))
             {
                 _nativePreparation = new CancellationTokenSource();
                 CancelButton.Content = "Cancel preparation";

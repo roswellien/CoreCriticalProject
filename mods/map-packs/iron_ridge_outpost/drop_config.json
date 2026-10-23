@@ -1,0 +1,27 @@
+{
+  "player_mech": "mech_madcat",
+  "drop_type": "orbital_drop_pod",
+  "tonnage": 75.0,
+  "armor_tons": 14.0,
+  "heatsinks": 16,
+  "jump_jets": 0,
+  "weapons": {
+    "left_arm": "ER PPC",
+    "right_arm": "ER PPC",
+    "left_torso": "Clan LRM-20",
+    "right_torso": "Clan LRM-20",
+    "center_torso": "Medium Pulse Laser"
+  },
+  "lancemates": [
+    {
+      "name": "Lt. Alan Mattila",
+      "mech": "mech_bushwacker",
+      "orders": "escort"
+    },
+    {
+      "name": "Sgt. Epona Rhi",
+      "mech": "mech_shadowcat",
+      "orders": "free_fire"
+    }
+  ]
+}

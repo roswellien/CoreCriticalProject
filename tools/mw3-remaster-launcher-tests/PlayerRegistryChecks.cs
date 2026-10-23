@@ -23,6 +23,21 @@ static class PlayerRegistryChecks
             if (new FileInfo(state).Length != 0) throw new Exception("Fresh setup supplied captured defaults");
             if (fresh["native"]!["runtime_environment"]!["MW34_REG_OVERLAY"]!.ToString() != state)
                 throw new Exception("Native game did not receive its writable settings path");
+            var renderer = PlayerRegistry.ConfigureHardwareRenderer("");
+            if (!renderer.Contains("\tinstalloptions\t4\t04000000") ||
+                !renderer.Contains("\thwcardflag\t4\t01000000") || !renderer.Contains("\thwcarddev\t4\t00000000"))
+                throw new Exception("Fresh installed renderer configuration is incomplete");
+            var damaged = renderer.Replace("04000000", "00000000").Replace("01000000", "00000000")
+                + "V hkcu\\software\\microprose\\mechwarrior 3\\1.0\tplayer-control\t4\tabcdef00\n";
+            var repaired = PlayerRegistry.ConfigureHardwareRenderer(damaged);
+            if (!repaired.Contains("\tinstalloptions\t4\t04000000") ||
+                !repaired.Contains("\tplayer-control\t4\tabcdef00") ||
+                PlayerRegistry.ConfigureHardwareRenderer(repaired) != repaired)
+                throw new Exception("Renderer repair lost player state or was not idempotent");
+            var unverified = Path.Combine(root, "unverified");
+            try { PlayerRegistry.PrepareInstalledRenderer(Profile(), unverified, root); throw new Exception("Missing hardware files were advertised as installed"); }
+            catch (FileNotFoundException) { }
+            if (Directory.Exists(unverified)) throw new Exception("Unverified renderer modified player settings");
             var seed = Path.Combine(root, "runtime-registry.txt");
             File.WriteAllText(seed, "K authored-fixture\n");
             var migrated = PlayerRegistry.Bind(Profile(seed), Path.Combine(root, "migrated"));

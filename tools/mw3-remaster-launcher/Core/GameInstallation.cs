@@ -4,12 +4,32 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 
 namespace MW3RemasterLauncher.Core;
 
 /// <summary>Build a private original-data installation from admitted user media, without executing it.</summary>
 public static class GameInstallation
 {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint QueryDosDevice(string deviceName, StringBuilder target, int capacity);
+
+    private static string MountedIsoDrive(string devicePath)
+    {
+        // Some Windows storage providers expose the mounted CD-ROM device but
+        // omit its Get-Volume association. Match the actual DOS device mappings.
+        if (!devicePath.StartsWith(@"\\.\CDROM", StringComparison.OrdinalIgnoreCase)) return "";
+        string Target(string name)
+        {
+            var buffer = new StringBuilder(32768);
+            return QueryDosDevice(name, buffer, buffer.Capacity) == 0 ? "" : buffer.ToString();
+        }
+        var target = Target(devicePath[4..]);
+        if (target.Length == 0) return "";
+        var matches = DriveInfo.GetDrives().Where(drive => drive.DriveType == DriveType.CDRom &&
+            Target(drive.Name[..2]).Equals(target, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return matches.Length == 1 ? matches[0].Name[..1] : "";
+    }
     private sealed record ContentFile(string Source, string Target, long Bytes, string Sha256);
     private sealed record MediaManifest(string Profile, string BaseCabinet, string BaseHeader,
         string PatchPackage, string PatchCabinet, string PatchHeader, string PatchWrapperCabinet,
@@ -17,15 +37,21 @@ public static class GameInstallation
         ContentFile[] BaseFiles, ContentFile[] PatchFiles, ContentFile[] MediaFiles, ContentFile[] ProviderFiles);
 
     private static readonly MediaManifest Media = LoadManifest();
-    private static void VerifyExtractor(string directory)
+    public static void VerifyExtractor(string directory)
     {
         var executable = Path.Combine(directory, "unshield.exe");
-        using var stream = File.OpenRead(executable);
-        var hash = Convert.ToHexString(SHA256.HashData(stream));
-        if (hash.Equals(Media.StaticUnshield, StringComparison.OrdinalIgnoreCase)) return;
+        PackStorage.EnsureNoLinks(executable);
+        if (new FileInfo(executable).Length > 2 * 1024 * 1024)
+            throw new InvalidDataException("The launcher's media extraction tool is damaged. Repair the launcher installation.");
+        var bytes = File.ReadAllBytes(executable);
+        var hash = Convert.ToHexString(SHA256.HashData(bytes));
+        // Pin every unsigned executable byte. Signing may alter only the checksum,
+        // security directory and appended certificate records, never code or data.
+        if (hash.Equals(Media.StaticUnshield, StringComparison.OrdinalIgnoreCase) ||
+            PinnedPeImage.MatchesSignedImage(bytes, 284672, Media.StaticUnshield)) return;
         // Preserve exact legacy development tooling for retained private trials.
         if (!hash.Equals(Media.Unshield, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Unsupported media extraction tool. Repair the launcher installation.");
+            throw new InvalidDataException("The launcher's media extraction tool is damaged or incompatible. Repair the launcher installation; this error does not identify an unsupported ISO.");
         VerifyFile(Path.Combine(directory, "zlib1.dll"), Media.Zlib);
     }
     private static MediaManifest LoadManifest()
@@ -52,6 +78,18 @@ public static class GameInstallation
                 progress?.Invoke("Checking original game files: " + file.Target, (i + 1.0) / files.Length);
             }
         });
+    }
+
+    /// <summary>Admit the retail eight-megabyte hardware component before advertising it to the game.</summary>
+    public static void VerifyHardwareRendererFiles(string directory)
+    {
+        var files = Media.BaseFiles.Where(f => f.Source.StartsWith("Hardware_Texture_8/", StringComparison.Ordinal))
+            .Concat(Media.PatchFiles).GroupBy(f => f.Target, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Any(f => f.Source.StartsWith("Hardware_Texture_8/", StringComparison.Ordinal)))
+            .Select(g => g.Last()).ToArray();
+        if (files.Length != 6) throw new InvalidDataException("Hardware renderer component metadata is incomplete.");
+        foreach (var file in files)
+            VerifyFile(PackStorage.Resolve(directory, file.Target), file.Sha256, file.Bytes);
     }
 
     /// <summary>The destination must be new. Publish only after every selected file has passed verification.</summary>
@@ -336,8 +374,14 @@ public static class GameInstallation
                 await DiskImageCommandAsync(isoPath, "Mount-DiskImage -ImagePath $env:MW3_INSTALL_ISO | Out-Null");
                 mountedHere = true;
             }
-            var letter = await DiskImageCommandAsync(isoPath,
-                "(Get-DiskImage -ImagePath $env:MW3_INSTALL_ISO | Get-Volume).DriveLetter");
+            var volume = await DiskImageCommandAsync(isoPath,
+                "$i=Get-DiskImage -ImagePath $env:MW3_INSTALL_ISO; " +
+                "@{letter=($i|Get-Volume).DriveLetter;device=$i.DevicePath}|ConvertTo-Json -Compress");
+            using var mounted = JsonDocument.Parse(volume);
+            var driveLetter = mounted.RootElement.GetProperty("letter");
+            var letter = driveLetter.ValueKind == JsonValueKind.String ? driveLetter.GetString() ?? "" : "";
+            if (letter.Length != 1)
+                letter = MountedIsoDrive(mounted.RootElement.GetProperty("device").GetString() ?? "");
             if (letter.Length != 1 || !char.IsAsciiLetter(letter[0]))
                 throw new IOException("The ISO did not expose a single mounted data drive.");
             await action(letter + @":\");

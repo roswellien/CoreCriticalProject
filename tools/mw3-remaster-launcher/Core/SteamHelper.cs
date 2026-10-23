@@ -91,7 +91,7 @@ namespace MW3RemasterLauncher.Core
             var userFolders = Directory.GetDirectories(userDataDir);
             if (userFolders.Length == 0) return false;
 
-            const string appName = "MechWarrior 3 Remastered";
+            const string appName = "Core Critical Launcher";
             var targetExe = $"\"{launcherExePath}\"";
             var startDir = $"\"{Path.GetDirectoryName(launcherExePath)}\"";
             uint appId = CalculateShortcutAppId(targetExe, appName);

@@ -2,32 +2,42 @@
   "format": "MW3_MAP_PACK_MANIFEST_V1",
   "pack_id": "iron_ridge_outpost",
   "title": "Iron Ridge Outpost",
-  "author": "Antigravity & MW3 Community",
-  "version": "1.1.0",
-  "description": "Fortified Clan Smoke Jaguar communications outpost defended by Timber Wolf & Bushwacker units.",
+  "author": "Community Modder",
+  "version": "1.0.0",
+  "description": "Custom standalone map pack for MechWarrior 3",
   "base_operation": "c1",
   "terrain_summary": {
-    "biome": "desert",
+    "biome": "coastal",
     "bounds": "3000.0m x 3000.0m",
-    "water_level": 2.0
+    "water_level": 3.0
   },
   "lighting_summary": {
     "preset": "sunset",
-    "sun_azimuth": 235.0,
-    "sun_elevation": 28.0
+    "sun_azimuth": 225.0,
+    "sun_elevation": 35.0
   },
-  "total_placed_assets": 12,
+  "objectives_summary": {
+    "primary_count": 2,
+    "secondary_count": 1,
+    "triggers_count": 0
+  },
+  "drop_summary": {
+    "mech": "mech_madcat",
+    "drop_type": "orbital_drop_pod",
+    "lance_size": 3
+  },
+  "total_placed_assets": 0,
   "files": [
     {
       "target": "zbd/c1/gamez.zbd",
       "size_bytes": 11412064,
-      "sha256": "13c4c65f43bed8d3cc645d833d93b127a06db8cc48f9679fb3c54dbb9651d7b1",
-      "summary": "9 custom visual entities placed"
+      "sha256": "552fd635bb6ee506c4d0aa85299bb672c3e4aa79e1cdb3f0b0a0d7f6f98fd64f",
+      "summary": "0 custom visual entities placed"
     },
     {
       "target": "zbd/c1/reader.zbd",
       "size_bytes": 774352,
-      "sha256": "ea865ffffb5a66deca665b5bf02044f345cc8dc67a4065d14ec7c42f5fc40829",
+      "sha256": "482501ffbb210ccf516b8655ece2df27e0558d24cc7c9977ef9edf9ea21c4046",
       "summary": "Custom player spawn, waypoints, and objective markers"
     }
   ]

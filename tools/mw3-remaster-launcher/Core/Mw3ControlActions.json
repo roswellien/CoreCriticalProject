@@ -1,0 +1,422 @@
+[
+  {
+    "Name": "CMD_THROTTLE_UP",
+    "Command": 24
+  },
+  {
+    "Name": "CMD_THROTTLE_DN",
+    "Command": 25
+  },
+  {
+    "Name": "CMD_TURN_LEFT",
+    "Command": 2
+  },
+  {
+    "Name": "CMD_TURN_RIGHT",
+    "Command": 3
+  },
+  {
+    "Name": "CMD_TWIST_LEFT",
+    "Command": 8
+  },
+  {
+    "Name": "CMD_TWIST_RIGHT",
+    "Command": 9
+  },
+  {
+    "Name": "CMD_PITCH_UP",
+    "Command": 4
+  },
+  {
+    "Name": "CMD_PITCH_DN",
+    "Command": 5
+  },
+  {
+    "Name": "CMD_CENTER_TORSO",
+    "Command": 6
+  },
+  {
+    "Name": "CMD_CENTER_LEGS",
+    "Command": 7
+  },
+  {
+    "Name": "CMD_THROTTLE_REV",
+    "Command": 26
+  },
+  {
+    "Name": "CMD_THROTTLE1",
+    "Command": 27
+  },
+  {
+    "Name": "CMD_THROTTLE2",
+    "Command": 28
+  },
+  {
+    "Name": "CMD_THROTTLE3",
+    "Command": 29
+  },
+  {
+    "Name": "CMD_THROTTLE4",
+    "Command": 30
+  },
+  {
+    "Name": "CMD_THROTTLE5",
+    "Command": 31
+  },
+  {
+    "Name": "CMD_THROTTLE6",
+    "Command": 32
+  },
+  {
+    "Name": "CMD_THROTTLE7",
+    "Command": 33
+  },
+  {
+    "Name": "CMD_THROTTLE8",
+    "Command": 34
+  },
+  {
+    "Name": "CMD_THROTTLE9",
+    "Command": 35
+  },
+  {
+    "Name": "CMD_THROTTLE0",
+    "Command": 36
+  },
+  {
+    "Name": "CMD_JJ_UP",
+    "Command": 12
+  },
+  {
+    "Name": "CMD_JJ_FORWARD",
+    "Command": 13
+  },
+  {
+    "Name": "CMD_JJ_BACKWARD",
+    "Command": 14
+  },
+  {
+    "Name": "CMD_JJ_LEFT",
+    "Command": 15
+  },
+  {
+    "Name": "CMD_JJ_RIGHT",
+    "Command": 16
+  },
+  {
+    "Name": "CMD_JJ_ROTLEFT",
+    "Command": 17
+  },
+  {
+    "Name": "CMD_JJ_ROTRIGHT",
+    "Command": 18
+  },
+  {
+    "Name": "CMD_GETUP",
+    "Command": 68
+  },
+  {
+    "Name": "CMD_CROUCH",
+    "Command": 19
+  },
+  {
+    "Name": "CMD_SHUTDOWN",
+    "Command": 63
+  },
+  {
+    "Name": "CMD_MASC",
+    "Command": 110
+  },
+  {
+    "Name": "CMD_TRIGGER1",
+    "Command": 61
+  },
+  {
+    "Name": "CMD_WEPGRP_NEXT",
+    "Command": 42
+  },
+  {
+    "Name": "CMD_WEPGRP_PREV",
+    "Command": 43
+  },
+  {
+    "Name": "CMD_WEP_PREV",
+    "Command": 38
+  },
+  {
+    "Name": "CMD_WEP_NEXT",
+    "Command": 37
+  },
+  {
+    "Name": "CMD_NEXT_WEAPON",
+    "Command": 39
+  },
+  {
+    "Name": "CMD_WEPGRP_1",
+    "Command": 44
+  },
+  {
+    "Name": "CMD_WEPGRP_2",
+    "Command": 45
+  },
+  {
+    "Name": "CMD_WEPGRP_3",
+    "Command": 46
+  },
+  {
+    "Name": "CMD_WEPGRP_4",
+    "Command": 47
+  },
+  {
+    "Name": "CMD_WEPGRP_5",
+    "Command": 48
+  },
+  {
+    "Name": "CMD_MOVETOWG_1",
+    "Command": 49
+  },
+  {
+    "Name": "CMD_MOVETOWG_2",
+    "Command": 50
+  },
+  {
+    "Name": "CMD_MOVETOWG_3",
+    "Command": 51
+  },
+  {
+    "Name": "CMD_MOVETOWG_4",
+    "Command": 52
+  },
+  {
+    "Name": "CMD_MOVETOWG_5",
+    "Command": 53
+  },
+  {
+    "Name": "CMD_FIREMODE",
+    "Command": 40
+  },
+  {
+    "Name": "CMD_ALPHASTRIKE",
+    "Command": 57
+  },
+  {
+    "Name": "CMD_COOLANTFLUSH",
+    "Command": 65
+  },
+  {
+    "Name": "CMD_SHUT_OVER",
+    "Command": 64
+  },
+  {
+    "Name": "CMD_JETTISON_AMMO",
+    "Command": 59
+  },
+  {
+    "Name": "CMD_CYCLE_CAM",
+    "Command": 97
+  },
+  {
+    "Name": "CMD_LOOK_LEFT",
+    "Command": 98
+  },
+  {
+    "Name": "CMD_LOOK_RIGHT",
+    "Command": 99
+  },
+  {
+    "Name": "CMD_LOOK_UP",
+    "Command": 100
+  },
+  {
+    "Name": "CMD_LOOK_DOWN",
+    "Command": 101
+  },
+  {
+    "Name": "CMD_LOOK_REAR",
+    "Command": 103
+  },
+  {
+    "Name": "CMD_LOOK_FRONT",
+    "Command": 102
+  },
+  {
+    "Name": "CMD_VMODE_TOGGLE",
+    "Command": 108
+  },
+  {
+    "Name": "CMD_TARGET_NEXT_E",
+    "Command": 70
+  },
+  {
+    "Name": "CMD_TARGET_PREV_E",
+    "Command": 77
+  },
+  {
+    "Name": "CMD_TARGET_CLOSE_E",
+    "Command": 76
+  },
+  {
+    "Name": "CMD_TARGET_NEXT_F",
+    "Command": 71
+  },
+  {
+    "Name": "CMD_TARGET_PREV_F",
+    "Command": 78
+  },
+  {
+    "Name": "CMD_TARGET_CLOSE_F",
+    "Command": 75
+  },
+  {
+    "Name": "CMD_TARGET_CURSOR",
+    "Command": 72
+  },
+  {
+    "Name": "CMD_TARGET_NONE",
+    "Command": 73
+  },
+  {
+    "Name": "CMD_TARGET_HEAD",
+    "Command": 89
+  },
+  {
+    "Name": "CMD_TARGET_LARM",
+    "Command": 93
+  },
+  {
+    "Name": "CMD_TARGET_RARM",
+    "Command": 94
+  },
+  {
+    "Name": "CMD_TARGET_TORSO",
+    "Command": 90
+  },
+  {
+    "Name": "CMD_TARGET_LTORSO",
+    "Command": 91
+  },
+  {
+    "Name": "CMD_TARGET_RTORSO",
+    "Command": 92
+  },
+  {
+    "Name": "CMD_TARGET_LLEG",
+    "Command": 95
+  },
+  {
+    "Name": "CMD_TARGET_RLEG",
+    "Command": 96
+  },
+  {
+    "Name": "CMD_RETICULE_ZOOM",
+    "Command": 20
+  },
+  {
+    "Name": "CMD_ZOOM_LOCK",
+    "Command": 21
+  },
+  {
+    "Name": "CMD_TOGGLE_TMODE",
+    "Command": 22
+  },
+  {
+    "Name": "CMD_FREELOOK",
+    "Command": 23
+  },
+  {
+    "Name": "CMD_DAMAGE_TOGGLE",
+    "Command": 116
+  },
+  {
+    "Name": "CMD_EDAMAGE_TOGGLE",
+    "Command": 117
+  },
+  {
+    "Name": "CMD_RADAR_TOGGLE",
+    "Command": 104
+  },
+  {
+    "Name": "CMD_RADAR_RANGE",
+    "Command": 105
+  },
+  {
+    "Name": "CMD_RADAR_MAP_TOGGLE",
+    "Command": 165
+  },
+  {
+    "Name": "CMD_HUD_TOGGLE",
+    "Command": 107
+  },
+  {
+    "Name": "CMD_AMS_TOGGLE",
+    "Command": 58
+  },
+  {
+    "Name": "CMD_DIRECT_ATTACKT",
+    "Command": 84
+  },
+  {
+    "Name": "CMD_DIRECT_DEFENDT",
+    "Command": 85
+  },
+  {
+    "Name": "CMD_DIRECT_FOLLOW",
+    "Command": 82
+  },
+  {
+    "Name": "CMD_DIRECT_PAUSE",
+    "Command": 81
+  },
+  {
+    "Name": "CMD_DIRECT_REFITT",
+    "Command": 86
+  },
+  {
+    "Name": "CMD_DIRECT_POCKET",
+    "Command": 79
+  },
+  {
+    "Name": "CMD_DIRECT_AWAITCMD",
+    "Command": 87
+  },
+  {
+    "Name": "CMD_DIRECT_AWAITCMDCANCEL",
+    "Command": 88
+  },
+  {
+    "Name": "CMD_MCB_COMMAND",
+    "Command": 115
+  },
+  {
+    "Name": "CMD_NAVPT_NEXT",
+    "Command": 54
+  },
+  {
+    "Name": "CMD_NAVPT_PREV",
+    "Command": 55
+  },
+  {
+    "Name": "CMD_NAVPT_NEAR",
+    "Command": 56
+  },
+  {
+    "Name": "CMD_CHAT_TEAM",
+    "Command": 118
+  },
+  {
+    "Name": "CMD_CHAT_ALL",
+    "Command": 119
+  },
+  {
+    "Name": "CMD_OBJECTIVES",
+    "Command": 67
+  },
+  {
+    "Name": "CMD_MISSION_COMPLETE",
+    "Command": 113
+  },
+  {
+    "Name": "CMD_MESSAGE_TOGGLE",
+    "Command": 112
+  }
+]

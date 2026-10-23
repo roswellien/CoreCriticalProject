@@ -25,15 +25,17 @@ namespace MW3RemasterLauncher.Core
     public class PackManager
     {
         private readonly string _modsRoot;
+        public string GameId { get; }
         private readonly ObservableCollection<PackManifest> _packs = new();
 
         public ObservableCollection<PackManifest> Packs => _packs;
         public string ModsRoot => _modsRoot;
         public List<string> DiscoveryErrors { get; } = new();
 
-        public PackManager(string basePath)
+        public PackManager(string basePath, string gameId = GameCatalog.Mw3)
         {
-            _modsRoot = Path.GetFullPath(Path.Combine(basePath, "mods"));
+            GameId = GameCatalog.Get(gameId).Id;
+            _modsRoot = Path.GetFullPath(Path.Combine(GameCatalog.PackBase(basePath, GameId), "mods"));
             PackStorage.EnsureNoLinks(_modsRoot);
             if (!Directory.Exists(_modsRoot))
             {
@@ -64,6 +66,7 @@ namespace MW3RemasterLauncher.Core
                     try
                     {
                         var manifest = PackStorage.ReadManifest(manifestFile);
+                        GameCatalog.RequirePackTarget(manifest.GameId, GameId);
                         if (!string.Equals(Path.GetFileName(dir), manifest.Id, StringComparison.Ordinal))
                             throw new InvalidDataException("Installed directory and pack ID disagree.");
                         if (manifest != null && !string.IsNullOrWhiteSpace(manifest.Id))
@@ -120,20 +123,22 @@ namespace MW3RemasterLauncher.Core
         /// Verification completes in staging before activation. A previous version is
         /// retained for rollback; manifest hashes do not authenticate the publisher.
         /// </remarks>
-        public PackManifest InstallPack(string archivePath, bool autoDeleteSource = false)
+        public PackManifest InstallPack(string archivePath, bool autoDeleteSource = false,
+            IProgress<PackInstallProgress>? progress = null)
         {
             if (!File.Exists(archivePath))
             {
                 throw new FileNotFoundException("Asset pack file not found", archivePath);
             }
 
-            var manifest = PackStorage.Install(_modsRoot, archivePath);
+            var manifest = PackStorage.Install(_modsRoot, archivePath, GameId, progress);
             return RegisterInstalled(manifest, archivePath, autoDeleteSource);
         }
 
-        public async System.Threading.Tasks.Task<PackManifest> InstallPackAsync(string archivePath)
+        public async System.Threading.Tasks.Task<PackManifest> InstallPackAsync(string archivePath,
+            IProgress<PackInstallProgress>? progress = null)
         {
-            var manifest = await System.Threading.Tasks.Task.Run(() => PackStorage.Install(_modsRoot, archivePath));
+            var manifest = await System.Threading.Tasks.Task.Run(() => PackStorage.Install(_modsRoot, archivePath, GameId, progress));
             return RegisterInstalled(manifest, archivePath, false);
         }
 
@@ -189,6 +194,7 @@ namespace MW3RemasterLauncher.Core
             var previous = PackStorage.Resolve(_modsRoot, ".rollback-" + pack.Id);
             if (!Directory.Exists(previous)) throw new InvalidOperationException("No previous version is available.");
             var restored = PackStorage.ReadManifest(Path.Combine(previous, "pack.json"));
+            GameCatalog.RequirePackTarget(restored.GameId, GameId);
             if (restored.Id != pack.Id) throw new InvalidDataException("Rollback identity mismatch.");
             // Keep the previous directory until it has been activated; a failed move restores it.
             var swap = PackStorage.Resolve(_modsRoot, ".staging-" + Guid.NewGuid().ToString("N"));

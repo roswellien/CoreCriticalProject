@@ -2,12 +2,51 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Reflection.PortableExecutable;
 
 namespace MW3RemasterLauncher.Core;
 
 /// <summary>Application-local native launch files. A present but incomplete install never falls back to a checkout.</summary>
 public sealed record NativeRuntimeLayout(string Root, string Profile, string Coordinator, string Python)
 {
+    public static void ValidateLaunchExecutable(string path)
+    {
+        PackStorage.EnsureNoLinks(path);
+        try
+        {
+            using var input = File.OpenRead(path);
+            using var image = new PEReader(input);
+            var headers = image.PEHeaders;
+            var pe = headers.PEHeader;
+            if (headers.CoffHeader.Machine != Machine.Amd64 ||
+                (headers.CoffHeader.Characteristics & Characteristics.ExecutableImage) == 0 ||
+                (headers.CoffHeader.Characteristics & Characteristics.Dll) != 0 ||
+                pe == null || pe.Magic != PEMagic.PE32Plus || pe.AddressOfEntryPoint <= 0 ||
+                !headers.SectionHeaders.Any(section =>
+                    (section.SectionCharacteristics & SectionCharacteristics.MemExecute) != 0 &&
+                    pe.AddressOfEntryPoint >= section.VirtualAddress &&
+                    (long)pe.AddressOfEntryPoint < (long)section.VirtualAddress + Math.Max(section.VirtualSize, section.SizeOfRawData)))
+                throw new InvalidDataException("This game update contains an invalid launch executable. Install a corrected game update.");
+        }
+        catch (BadImageFormatException error)
+        {
+            throw new InvalidDataException("This game update contains an invalid launch executable. Install a corrected game update.", error);
+        }
+    }
+
+    public static bool HasPrecompiledRuntime(string applicationDirectory)
+    {
+        var manifest = Path.Combine(applicationDirectory, "Runtime", "runtime.json");
+        if (!File.Exists(manifest)) return false;
+        PackStorage.EnsureNoLinks(manifest);
+        if (new FileInfo(manifest).Length > PackStorage.MaxJsonBytes)
+            throw new InvalidDataException("Installed runtime manifest is too large.");
+        using var document = JsonDocument.Parse(File.ReadAllText(manifest));
+        if (!document.RootElement.TryGetProperty("precompiled_runtime_version", out var version)) return false;
+        if (version.GetInt32() != 1) throw new InvalidDataException("Unsupported precompiled runtime version.");
+        return true;
+    }
+
     public static bool IsInstalledApplication(string directory) =>
         Directory.Exists(Path.Combine(directory, "Runtime")) || File.Exists(Path.Combine(directory, "launcher-installation.json"));
 

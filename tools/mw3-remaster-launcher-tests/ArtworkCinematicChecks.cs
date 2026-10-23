@@ -11,6 +11,25 @@ static class ArtworkCinematicChecks
 {
     public static void Run()
     {
+        foreach (var malformed in new[] { "null", "[]", "{\"ui-artwork\":[]}", "{\"ui-artwork\":[true]}",
+            "{\"ui-artwork\":[1.0]}", "{\"ui-artwork\":[-1]}", "{\"ui-artwork\":[1,1]}" })
+        {
+            try
+            {
+                RuntimeContentCapabilities.Advertised(new JsonObject { ["content_capabilities"] = JsonNode.Parse(malformed) });
+                throw new Exception("Malformed runtime capability table was accepted.");
+            }
+            catch (InvalidDataException) { }
+        }
+        foreach (var successor in new[] {
+            "879408f40d492459b7168f5bab6ba7f3cf89f19d1f12feac3bc0cf21154150a4",
+            "dee5e15e02ae18539a3f5b7a89f1e1abac55a2afd964717c28fb900351f85f0a",
+            "3aae1c6eb38fe299904823f082754f1339628e2ef6dbf338f8a935bc63aed5c0" })
+        {
+            var legacy = new JsonObject { ["executable_sha256"] = successor.ToUpperInvariant() };
+            RuntimeContentCapabilities.Require(legacy, new NativePackPayload { Profile = UiPack.Profile }, "legacy.hud");
+            RuntimeContentCapabilities.Require(legacy, new NativePackPayload { Profile = CinematicPack.Profile }, "legacy.movie");
+        }
         var root = Path.Combine(Path.GetTempPath(), "MW3 artwork checks " + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -38,6 +57,7 @@ static class ArtworkCinematicChecks
             JsonObject Profile()
             {
                 var p=JsonNode.Parse("{\"native\":{\"executable_sha256\":\""+host+"\",\"cinematic_path_versions\":[1],\"runtime_environment\":{\"MW34_HIRES_HUD\":\"stale\",\"MW34_HIRES_MENU\":\"stale\",\"MW34_MENU_HD_BG\":\"stale\",\"MW34_CINEMATIC_PATHS\":\"stale\"}}}")!.AsObject();
+                p["native"]!["content_capabilities"] = JsonNode.Parse("{\"ui-artwork\":[1],\"cinematic-replacements\":[1]}");
                 p["native"]!["runtime_environment"]!["MW34_IV50_IMAGE"]=codec;
                 p["native"]!["cinematic_codec_sha256"]=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(codec))).ToLowerInvariant();
                 return p;
@@ -55,11 +75,25 @@ static class ArtworkCinematicChecks
             var hud = manager.InstallPack(Ui("test.hud","hud"));
             var next = manager.InstallPack(Ui("test.hud2","hud",1));
             var menu = manager.InstallPack(Ui("test.menu","menu",1));
+            var hudManifest = Path.Combine(hud.DirectoryPath, "pack.json");
+            var originalHudManifest = File.ReadAllText(hudManifest);
+            var releasedHud = JsonNode.Parse(originalHudManifest)!;
+            releasedHud["native_payload"]!["reference_host_sha256"] =
+                "9fd17ba2459ac2d349adda33c0c84d41772bbd2ec7c0e2a620242c696526bb83";
+            File.WriteAllText(hudManifest, releasedHud.ToJsonString());
+            var updatedProfile = Profile();
+            updatedProfile["native"]!["executable_sha256"] =
+                "dee5e15e02ae18539a3f5b7a89f1e1abac55a2afd964717c28fb900351f85f0a";
+            updatedProfile["native"]!.AsObject().Remove("content_capabilities");
+            UiPack.Apply(updatedProfile, new[] { hud.DirectoryPath });
+            if (updatedProfile["native"]!["runtime_environment"]!["MW34_HIRES_HUD"]!.GetValue<string>() != Path.Combine(hud.DirectoryPath, "ui", "sprites"))
+                throw new Exception("Published performance runtime did not activate existing HUD pack.");
+            File.WriteAllText(hudManifest, originalHudManifest);
             var profile = Profile();
             UiPack.Apply(profile,new[] {hud.DirectoryPath,next.DirectoryPath});
             if (!profile["native"]!["runtime_environment"]!["MW34_HIRES_HUD"]!.GetValue<string>().StartsWith(hud.DirectoryPath)) throw new Exception("UI priority failed.");
             Reject(() => UiPack.Apply(Profile(),new[] {hud.DirectoryPath,menu.DirectoryPath}));
-            var mismatch = Profile(); mismatch["native"]!["executable_sha256"]="wrong";
+            var mismatch = Profile(); mismatch["native"]!["content_capabilities"] = new JsonObject();
             try
             {
                 UiPack.Apply(mismatch,new[] {hud.DirectoryPath});
@@ -67,8 +101,8 @@ static class ArtworkCinematicChecks
             }
             catch (InvalidDataException error)
             {
-                if (!error.Message.Contains(hud.Id) || !error.Message.Contains(host) || !error.Message.Contains("wrong"))
-                    throw new Exception("UI compatibility failure omitted the pack or runtime identities.");
+                if (!error.Message.Contains(hud.Id) || !error.Message.Contains("ui-artwork") || !error.Message.Contains("version 1"))
+                    throw new Exception("UI compatibility failure omitted the pack or missing capability.");
             }
             // Reproduce the installed menu revision rejected after the sky-host update.
             var menuManifestPath = Path.Combine(next.DirectoryPath, "pack.json");
@@ -77,6 +111,7 @@ static class ArtworkCinematicChecks
             revisedMenuManifest["native_payload"]!["reference_host_sha256"] = "33bfcf1d6c2b7454d6a21aee1421c34cadbc7b1be5783485b70499b5bc0e8afa";
             File.WriteAllText(menuManifestPath, revisedMenuManifest.ToJsonString());
             var skyProfile = Profile();
+            skyProfile["native"]!.AsObject().Remove("content_capabilities");
             skyProfile["native"]!["executable_sha256"] = "0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93";
             UiPack.Apply(skyProfile, new[] { next.DirectoryPath });
             skyProfile["native"]!["executable_sha256"] = "d0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d";
@@ -85,6 +120,18 @@ static class ArtworkCinematicChecks
             UiPack.Apply(skyProfile, new[] { next.DirectoryPath });
             skyProfile["native"]!["executable_sha256"] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
             Reject(() => UiPack.Apply(skyProfile, new[] { next.DirectoryPath }));
+            revisedMenuManifest["native_payload"]!.AsObject().Remove("reference_host_sha256");
+            File.WriteAllText(menuManifestPath, revisedMenuManifest.ToJsonString());
+            var communityProfile = Profile();
+            communityProfile["native"]!["executable_sha256"] = new string('b', 64);
+            UiPack.Apply(communityProfile, new[] { next.DirectoryPath });
+            revisedMenuManifest["native_payload"]!["required_capabilities"] = JsonNode.Parse("{\"ui-artwork\":2}");
+            File.WriteAllText(menuManifestPath, revisedMenuManifest.ToJsonString());
+            Reject(() => UiPack.Apply(communityProfile, new[] { next.DirectoryPath }));
+            communityProfile["native"]!["content_capabilities"]!["ui-artwork"] = new JsonArray(1, 2);
+            UiPack.Apply(communityProfile, new[] { next.DirectoryPath });
+            communityProfile["native"]!["content_capabilities"]!["ui-artwork"] = new JsonArray(2);
+            Reject(() => UiPack.Apply(communityProfile, new[] { next.DirectoryPath }));
             File.WriteAllText(menuManifestPath, originalMenuManifest);
             Reject(() => manager.InstallPack(Ui(hud.Id,"hud",u0:float.NaN)));
             if (!File.Exists(Path.Combine(hud.DirectoryPath, UiPack.Registry))) throw new Exception("Failed update destroyed artwork.");

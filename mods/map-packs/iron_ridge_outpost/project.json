@@ -2,204 +2,88 @@
   "format": "MW3_MAP_PACK_V1",
   "pack_id": "iron_ridge_outpost",
   "pack_title": "Iron Ridge Outpost",
-  "author": "Antigravity & MW3 Community",
-  "version": "1.1.0",
-  "description": "Fortified Clan Smoke Jaguar communications outpost defended by Timber Wolf & Bushwacker units.",
+  "author": "Community Modder",
+  "version": "1.0.0",
+  "description": "Custom standalone map pack for MechWarrior 3",
   "base_operation": "c1",
   "terrain": {
-    "biome": "desert",
+    "biome": "coastal",
     "width": 3000.0,
     "depth": 3000.0,
-    "height_scale": 85.0,
-    "water_level": 2.0,
+    "height_scale": 80.0,
+    "water_level": 3.0,
     "roughness": 0.5
   },
   "lighting": {
     "preset_name": "sunset",
-    "azimuth": 235.0,
-    "elevation": 28.0,
-    "strength": 0.9,
-    "ambient": 0.22,
+    "azimuth": 225.0,
+    "elevation": 35.0,
+    "strength": 0.85,
+    "ambient": 0.2,
     "sun_color": [
       1.0,
-      0.75,
-      0.5
+      0.85,
+      0.7
     ],
     "sky_tint": [
-      0.38,
-      0.28,
-      0.48
+      0.35,
+      0.45,
+      0.75
     ],
-    "fog_distance": 1200
+    "fog_distance": 1100
   },
-  "assets": [
-    {
-      "asset_id": "p_spawn",
-      "asset_type": "spawn",
-      "name": "Player Orbital Drop Zone",
-      "x": -850.0,
-      "y": 12.0,
-      "z": -800.0,
-      "yaw_deg": 45.0,
-      "faction": "player",
-      "model_name": "",
-      "health": 100,
-      "is_objective": false,
-      "objective_desc": ""
+  "objectives": {
+    "primary": [
+      {
+        "id": "obj_pri_1",
+        "desc": "Neutralize Clan Smoke Jaguar defenders",
+        "target": "any_enemy",
+        "completed": false
+      },
+      {
+        "id": "obj_pri_2",
+        "desc": "Proceed to designated Extraction Zone",
+        "target": "trig_evac",
+        "completed": false
+      }
+    ],
+    "secondary": [
+      {
+        "id": "obj_sec_1",
+        "desc": "Destroy auxiliary fuel storage silos",
+        "target": "fuel_tank",
+        "completed": false
+      }
+    ],
+    "briefing_text": "Satellite recon has confirmed hostile Clan Smoke Jaguar activity in this sector. Neutralize all perimeter defenses and eliminate the patrol lance before proceeding to extraction.",
+    "audio_track": "action_theme_1"
+  },
+  "drop_config": {
+    "player_mech": "mech_madcat",
+    "drop_type": "orbital_drop_pod",
+    "tonnage": 75.0,
+    "armor_tons": 14.0,
+    "heatsinks": 16,
+    "jump_jets": 0,
+    "weapons": {
+      "left_arm": "ER PPC",
+      "right_arm": "ER PPC",
+      "left_torso": "Clan LRM-20",
+      "right_torso": "Clan LRM-20",
+      "center_torso": "Medium Pulse Laser"
     },
-    {
-      "asset_id": "bunk_cmd",
-      "asset_type": "bunker",
-      "name": "Outpost Command Bunker",
-      "x": 50.0,
-      "y": 15.0,
-      "z": 20.0,
-      "yaw_deg": 180.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 250,
-      "is_objective": true,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "comm_main",
-      "asset_type": "comm_center",
-      "name": "Primary Comms Dish",
-      "x": 120.0,
-      "y": 18.0,
-      "z": 80.0,
-      "yaw_deg": 210.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 150,
-      "is_objective": true,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "tur_srm_1",
-      "asset_type": "turret_srm",
-      "name": "Perimeter SRM Alpha",
-      "x": -160.0,
-      "y": 12.0,
-      "z": -90.0,
-      "yaw_deg": 135.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 120,
-      "is_objective": false,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "tur_srm_2",
-      "asset_type": "turret_srm",
-      "name": "Perimeter SRM Beta",
-      "x": 180.0,
-      "y": 14.0,
-      "z": -110.0,
-      "yaw_deg": 225.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 120,
-      "is_objective": false,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "tur_las_1",
-      "asset_type": "turret_laser",
-      "name": "Ridge Laser Tower",
-      "x": 40.0,
-      "y": 25.0,
-      "z": 220.0,
-      "yaw_deg": 0.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 150,
-      "is_objective": false,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "fuel_1",
-      "asset_type": "fuel_tank",
-      "name": "Refinery Coolant Silo",
-      "x": 160.0,
-      "y": 16.0,
-      "z": -20.0,
-      "yaw_deg": 45.0,
-      "faction": "neutral",
-      "model_name": "",
-      "health": 60,
-      "is_objective": false,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "garrison_1",
-      "asset_type": "city_building",
-      "name": "Forward Garrison Block",
-      "x": -120.0,
-      "y": 14.0,
-      "z": 120.0,
-      "yaw_deg": 0.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 180,
-      "is_objective": false,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "mech_guard",
-      "asset_type": "mech_madcat",
-      "name": "Smoke Jaguar Timber Wolf",
-      "x": 30.0,
-      "y": 15.0,
-      "z": 70.0,
-      "yaw_deg": 195.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 350,
-      "is_objective": true,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "mech_patrol",
-      "asset_type": "mech_bushwacker",
-      "name": "Recon Bushwacker BSW-X1",
-      "x": -280.0,
-      "y": 12.0,
-      "z": -250.0,
-      "yaw_deg": 60.0,
-      "faction": "enemy",
-      "model_name": "",
-      "health": 220,
-      "is_objective": false,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "nav_able",
-      "asset_type": "nav",
-      "name": "Nav Point Able",
-      "x": -400.0,
-      "y": 10.0,
-      "z": -350.0,
-      "yaw_deg": 0.0,
-      "faction": "neutral",
-      "model_name": "",
-      "health": 100,
-      "is_objective": false,
-      "objective_desc": ""
-    },
-    {
-      "asset_id": "nav_baker",
-      "asset_type": "nav",
-      "name": "Nav Point Baker",
-      "x": 50.0,
-      "y": 14.0,
-      "z": -150.0,
-      "yaw_deg": 0.0,
-      "faction": "neutral",
-      "model_name": "",
-      "health": 100,
-      "is_objective": false,
-      "objective_desc": ""
-    }
-  ]
+    "lancemates": [
+      {
+        "name": "Lt. Alan Mattila",
+        "mech": "mech_bushwacker",
+        "orders": "escort"
+      },
+      {
+        "name": "Sgt. Epona Rhi",
+        "mech": "mech_shadowcat",
+        "orders": "free_fire"
+      }
+    ]
+  },
+  "assets": []
 }

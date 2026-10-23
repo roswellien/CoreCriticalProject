@@ -1,0 +1,27 @@
+{
+  "primary": [
+    {
+      "id": "obj_pri_1",
+      "desc": "Neutralize Clan Smoke Jaguar defenders",
+      "target": "any_enemy",
+      "completed": false
+    },
+    {
+      "id": "obj_pri_2",
+      "desc": "Proceed to designated Extraction Zone",
+      "target": "trig_evac",
+      "completed": false
+    }
+  ],
+  "secondary": [
+    {
+      "id": "obj_sec_1",
+      "desc": "Destroy auxiliary fuel storage silos",
+      "target": "fuel_tank",
+      "completed": false
+    }
+  ],
+  "briefing_text": "Satellite recon has confirmed hostile Clan Smoke Jaguar activity in this sector. Neutralize all perimeter defenses and eliminate the patrol lance before proceeding to extraction.",
+  "audio_track": "action_theme_1",
+  "triggers": []
+}

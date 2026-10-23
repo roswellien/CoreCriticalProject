@@ -1,8 +1,8 @@
 """Resolve installed environment packs into private native launch resources.
 
 Operation banks are selected as a whole, first enabled pack wins per region.
-Content never supplies process flags or commands. Exact host identity admits
-the compiled fixture catalog; installing a pack cannot authorize a newer host.
+Content never supplies process flags or commands. Runtime capabilities admit
+the resource contracts; installing a pack cannot add a runtime capability.
 """
 import hashlib
 import json
@@ -21,53 +21,6 @@ RESOURCE_KEYS = {'MW34_REMASTER_BANKS', 'MW34_WORLD_NORMALS', 'MW34_SURFACE_NORM
                  'MW34_EFFECT_LIGHT_CATALOG', 'MW34_WATER_NORMALS',
                  'MW34_SURF_NORMALS', 'MW34_CLOUD_NORMALS', 'MW34_MISSION_ENVIRONMENTS'}
 MAX_BYTES = 16 * 1024**3
-REVIEWED_HOST_ADMISSIONS = {
-'9c578de615168724fb40664ad03b870b34b68169802cd0fae371a6f2c2d666b6': {'0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93', 'd0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d', 'b1a3edb7ed84daf399fa4bb5f3ed246a9d718470e5f6b0fac4fc16e4961af1b6'},  # Same sky correction, guarded host FP scope.
-    'a99afd84ddb8fb2375197d0406186286ce8d8775399cbf75373c5a07bcd8482c': {
-        '8194028a835c85e46b0963864ea04acfe400749671b1eb7f28ae63a51a2f5532',
-        '9c578de615168724fb40664ad03b870b34b68169802cd0fae371a6f2c2d666b6',  # Sky backdrop classification; resource readers unchanged.
-        '0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93',  # Sky backdrop classification; resource readers unchanged.
-        'd0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d',  # Sky backdrop classification; resource readers unchanged.
-        'b1a3edb7ed84daf399fa4bb5f3ed246a9d718470e5f6b0fac4fc16e4961af1b6',  # Sky backdrop classification; resource readers unchanged.
-        'e293b3a5f79d3d85f7c04ddcd9f857046e66583f6c7d18255e3ceb43c2cfc46c',
-        'c922df9f8663315972d14376ab5ac622cf82316d8ecf78a9c5eda7ecdca9ae95',  # Rebuilt lower-horizon split host; readers unchanged.
-    },
-    # Lighting-capable 1.1 packs: only AVI routing/codec location changed.
-    '0d3d920f6b560ddcd92fbeeb4034d59430ddd46a19b75269255fc8ec83fe12ef': {
-        # All-skin host: fixture, environment and normal readers byte-identical.
-        'a99afd84ddb8fb2375197d0406186286ce8d8775399cbf75373c5a07bcd8482c',
-        '8194028a835c85e46b0963864ea04acfe400749671b1eb7f28ae63a51a2f5532',
-        '9c578de615168724fb40664ad03b870b34b68169802cd0fae371a6f2c2d666b6',  # Sky backdrop classification; resource readers unchanged.
-        '0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93',  # Sky backdrop classification; resource readers unchanged.
-        'd0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d',  # Sky backdrop classification; resource readers unchanged.
-        'b1a3edb7ed84daf399fa4bb5f3ed246a9d718470e5f6b0fac4fc16e4961af1b6',  # Sky backdrop classification; resource readers unchanged.
-        'e293b3a5f79d3d85f7c04ddcd9f857046e66583f6c7d18255e3ceb43c2cfc46c',
-        'c922df9f8663315972d14376ab5ac622cf82316d8ecf78a9c5eda7ecdca9ae95',  # Rebuilt lower-horizon split host; readers unchanged.
-        '33bfcf1d6c2b7454d6a21aee1421c34cadbc7b1be5783485b70499b5bc0e8afa',
-        '9fd17ba2459ac2d349adda33c0c84d41772bbd2ec7c0e2a620242c696526bb83',
-        'c1afedadd8ed9e13a956db917a1a5335a6581fac01374b367969d4e985852115'
-    },
-    # USER32 keyboard services only. Fixture catalogs and all resource readers are byte-identical.
-    '7e1c939111b219f32bd765e25d840c6196c1d9c5b7cfb073ac21b949aedfa5d9': {
-        'a99afd84ddb8fb2375197d0406186286ce8d8775399cbf75373c5a07bcd8482c',
-        '8194028a835c85e46b0963864ea04acfe400749671b1eb7f28ae63a51a2f5532',
-        '9c578de615168724fb40664ad03b870b34b68169802cd0fae371a6f2c2d666b6',  # Sky backdrop classification; resource readers unchanged.
-        '0dec8fa9dc1671b16744b406cea2099dd5801613c037e42dbae9bd22d5fc1d93',  # Sky backdrop classification; resource readers unchanged.
-        'd0a79be7a0e1fe30b22ca5005fa9d3c4ff133380833f80dd6d3d751766681a0d',  # Sky backdrop classification; resource readers unchanged.
-        'b1a3edb7ed84daf399fa4bb5f3ed246a9d718470e5f6b0fac4fc16e4961af1b6',  # Sky backdrop classification; resource readers unchanged.
-        'e293b3a5f79d3d85f7c04ddcd9f857046e66583f6c7d18255e3ceb43c2cfc46c',
-        'c922df9f8663315972d14376ab5ac622cf82316d8ecf78a9c5eda7ecdca9ae95',  # Rebuilt lower-horizon split host; readers unchanged.
-        '3f34ec34ac6fb6f729a8c544b387b79b81495e7c0f250b566ef25008772b4fa2',
-        # Optional mission presentation reader; fixture definitions/resource readers unchanged.
-        '0d3d920f6b560ddcd92fbeeb4034d59430ddd46a19b75269255fc8ec83fe12ef',
-        # AVI read-path routing only; environment and fixture readers unchanged.
-        '33bfcf1d6c2b7454d6a21aee1421c34cadbc7b1be5783485b70499b5bc0e8afa',
-        # Explicit private codec image path; fixture/lighting readers remain identical.
-        '9fd17ba2459ac2d349adda33c0c84d41772bbd2ec7c0e2a620242c696526bb83',
-        # Explicit installed original providers; all environment readers unchanged.
-        'c1afedadd8ed9e13a956db917a1a5335a6581fac01374b367969d4e985852115'
-    }
-}
 
 
 def sha(path):
@@ -116,12 +69,8 @@ def select(roots, host, verification=None):
             raise ValueError('Unsupported environment pack contract')
         if manifest.get('dependencies') or manifest.get('conflicts'):
             raise ValueError('Environment pack dependencies/conflicts are unsupported')
-        actual = host.get('executable_sha256','').lower()
-        reference = payload.get('reference_host_sha256')
-        if not re.fullmatch('[0-9a-f]{64}',actual) or (
-            actual != reference and actual not in REVIEWED_HOST_ADMISSIONS.get(reference, set())
-        ):
-            raise ValueError('Environment pack requires its explicitly matched fixture-capable host')
+        from content_capabilities import require
+        require(host, payload, ident)
         formats = {'ZBD-texture-v1','BWSNR2','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1'}
         if not set(payload.get('required_formats',[])).issubset(formats):
             raise ValueError('Unsupported environment resource format')

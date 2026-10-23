@@ -4,6 +4,22 @@ MW34 RECOMP contains project-authored interoperability and research tooling.
 Users must supply their own legally obtained game installation or media.
 The project does not supply games or grant rights to their content.
 
+## Owner-authorized private playtest delivery
+
+On October 22, 2026 the owner explicitly replaced the source-only delivery
+restriction for the private MW3 playtest installer. That installer may include
+the precompiled native host, translated native module and required runtime
+components, so testers do not regenerate game code. It must still verify the
+tester's original game files. This scoped exception does not include original
+media, original executable/provider images, music, videos or content packs in
+the launcher installer, and does not authorize committing generated code.
+The restrictions below continue to apply outside this private playtest scope.
+
+The owner's subsequent October 22 instruction to deliver performance updates
+through `.mw3update` packs extends the same private precompiled-runtime delivery
+to those updates. The original-input verification and content exclusions above
+continue to apply; updating must not require testers to regenerate native code.
+
 Do not commit, redistribute, or package proprietary executables, DLLs, assets,
 music, video, installers, disc images, or memory dumps, including derived
 replacements. Do not download game content as part of builds or tests.

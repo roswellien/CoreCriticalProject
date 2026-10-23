@@ -1,0 +1,3 @@
+LIBRARY mw34_compare_hook
+EXPORTS
+    mw34_install

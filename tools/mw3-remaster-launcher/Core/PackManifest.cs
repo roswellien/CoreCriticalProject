@@ -18,6 +18,7 @@ namespace MW3RemasterLauncher.Core
         [JsonPropertyName("path_base")] public string PathBase { get; set; } = "";
         [JsonPropertyName("reference_host_sha256")] public string ReferenceHostSha256 { get; set; } = "";
         [JsonPropertyName("required_formats")] public List<string> RequiredFormats { get; set; } = new();
+        [JsonPropertyName("required_capabilities")] public Dictionary<string, int> RequiredCapabilities { get; set; } = new();
     }
     /// <summary>Declared payload capabilities; these flags do not prove that files exist.</summary>
     public class PackProvides
@@ -62,6 +63,10 @@ namespace MW3RemasterLauncher.Core
     /// </remarks>
     public class PackManifest
     {
+        // Existing packs without an explicit target are MW3 packs only.
+        [JsonPropertyName("game_id")]
+        public string GameId { get; set; } = GameCatalog.Mw3;
+
         [JsonPropertyName("schema_version")]
         public int SchemaVersion { get; set; } = 1;
 

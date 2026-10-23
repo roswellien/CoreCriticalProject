@@ -25,7 +25,8 @@ static class RuntimeUpdateChecks
     private static void WriteRuntime(string root)
     {
         Directory.CreateDirectory(root);
-        File.WriteAllText(Path.Combine(root, "host.exe"), "AUTHORED FIXTURE: never executed as a game");
+        // Authored executable-format fixture, never executed as a game.
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "LauncherChecks.exe"), Path.Combine(root, "host.exe"), true);
         File.WriteAllText(Path.Combine(root, "coordinator.py"), "authored coordinator fixture");
         File.WriteAllText(Path.Combine(root, "python.exe"), "authored interpreter path fixture");
         var host = Pin(Path.Combine(root, "host.exe"));
@@ -76,6 +77,8 @@ static class RuntimeUpdateChecks
                     signature = Convert.ToBase64String(rsa.SignData(payload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss)) });
             }
             var signer = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../mw3-remaster-launcher/sign_runtime_update.ps1"));
+            if (!File.Exists(signer))
+                signer = Path.GetFullPath("tools/mw3-remaster-launcher/sign_runtime_update.ps1");
             if (!File.Exists(signer)) throw new Exception("Missing release signing tool.");
             var privateKey = Path.Combine(trial, "fixture-private-key.pem");
             var manifestFile = Path.Combine(trial, "manifest.json");
@@ -149,6 +152,18 @@ static class RuntimeUpdateChecks
             await updates.PrepareAsync(verified, game, archive);
             if (updates.State().Active != "v1" || NativeRuntimeLayout.FindInstalled(app, data)!.Root != Path.Combine(updates.Store, "versions", "v1"))
                 throw new Exception("Prepared runtime was not selected by installed game discovery.");
+            var bundledPath = Path.Combine(app, "Runtime", "runtime.json");
+            var bundledBytes = File.ReadAllBytes(bundledPath);
+            var bundledManifest = JsonNode.Parse(bundledBytes)!;
+            bundledManifest["supersedes_runtime_versions"] = new JsonArray("older-release");
+            File.WriteAllText(bundledPath, bundledManifest.ToJsonString());
+            if (RuntimeUpdates.SelectedRoot(app, data) == null)
+                throw new Exception("A future runtime update was hidden by an installer.");
+            bundledManifest["supersedes_runtime_versions"] = new JsonArray("v1");
+            File.WriteAllText(bundledPath, bundledManifest.ToJsonString());
+            if (NativeRuntimeLayout.FindInstalled(app, data)!.Root != Path.Combine(app, "Runtime") || updates.State().Active != "v1")
+                throw new Exception("Full installer did not supersede only the retired runtime without deleting its selection.");
+            File.WriteAllBytes(bundledPath, bundledBytes);
             var selectionFile = Path.Combine(updates.Store, "selection.json");
             // Model power loss between directory publication and pointer activation.
             File.Delete(selectionFile);

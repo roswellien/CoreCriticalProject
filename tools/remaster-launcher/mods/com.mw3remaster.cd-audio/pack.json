@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "com.mw3remaster.cd-audio",
+  "name": "CD Audio Soundtrack",
+  "version": "1.0.0",
+  "author": "MW3 Remaster Project",
+  "homepage": null,
+  "description": "Original Red Book audio tracks 01 and 02 in high-fidelity FLAC / OGG format.",
+  "category": "Music",
+  "min_engine_version": null,
+  "dependencies": null,
+  "conflicts": null,
+  "provides": null
+}

@@ -1,0 +1,27 @@
+"""Seal exact source-backed generation chronology correction; no reader/model/controls."""
+from pathlib import Path
+import ast,difflib,hashlib,json
+R=Path(__file__).resolve().parents[2]
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def inverse(p,q,out,label):
+ a=p.read_text();b=q.read_text();ast.parse(b);d=[]
+ for tag,i,j,k,l in difflib.SequenceMatcher(None,a.splitlines(True),b.splitlines(True),autojunk=False).get_opcodes():
+  if tag!='equal':d.append(dict(parent_start=i,parent_stop=j,child_start=k,child_stop=l,parent=''.join(a.splitlines(True)[i:j]),child=''.join(b.splitlines(True)[k:l])))
+ back=b.splitlines(True)
+ for h in reversed(d):assert ''.join(back[h['child_start']:h['child_stop']])==h['child'];back[h['child_start']:h['child_stop']]=h['parent'].splitlines(True)
+ assert ''.join(back)==a;v=out/(label+'-inverse.json');v.write_text(json.dumps(d,indent=2)+'\n');return [p,q,v],len(d)
+def main():
+ out=R/'reports/m4-startup141-paired/native-owner-bootstrap-order-preparation-r1';assert not out.exists();out.mkdir();base=R/'tools/m4-startup141-paired';paths=[];hunks={}
+ for a,b,label in [('native_owner_metadata_v5.py','native_owner_metadata_v6.py','metadata5-to6'),('constructor_native36_source141_v7.py','constructor_native36_source141_v8.py','source7-to8'),('native_owner_metadata_controls_v2.py','native_owner_metadata_controls_v3.py','controls2-to3'),('predict_native_owner_metadata_v1.py','predict_native_owner_metadata_v2.py','diagnostic1-to2')]:
+  ps,n=inverse(base/a,base/b,out,label);paths.extend(ps);hunks[label]=n
+ service=R/'reports/m4-startup141-runway/service-preparation-r2';session=service/'session_impl.inc';s=session.read_text();start=s.index('binding->start(*parent);');lock=s.index('binding->lockit_bootstrap();',start);producer=s.index('binding->external_source_call(0x78004482',lock);assert start<lock<producer and 'live_critical_sections()==4' in s[start:lock]
+ header=service/'locale_batch.hpp';assert 'batch_phase_{},generation_{},allocation_cursor_{0x31000000}'in header.read_text();lockit=service/'lockit_operations.inc';assert 'object->generation=++generation_'in lockit.read_text();ops=service/'locale_batch_operations.inc';assert 'object->generation=++generation_'in ops.read_text();paths.extend([session,header,lockit,ops,service/'registry_api.inc'])
+ lines=[]
+ for p,tokens in [(session,['binding->start(*parent);','binding->external_source_call(0x78004482']),(header,['batch_phase_{},generation_{}']),(lockit,['object->generation=++generation_']),(ops,['object->generation=++generation_'])]:
+  for token in tokens:
+   hits=[dict(line=i+1,text=line)for i,line in enumerate(p.read_text().splitlines())if token in line];assert hits;lines.append(dict(path=str(p),sha256=sha(p),token=token,observed_physical_lines=hits))
+ evidence=out/'physical-bootstrap-order.json';evidence.write_text(json.dumps(lines,indent=2)+'\n');paths.append(evidence)
+ source=R/'reports/m4-startup141-source/combined-source-provider-r6/report.json';N=json.loads(source.read_bytes());assert sha(source)=='8684b0a3219a72a3a0712dd99170e0c584ee0c5cd438effcd9632a83bc3d72b3';jp=source.parent/'Constructor-carried-source-derivations.json';assert sha(jp)==N['files'][str(jp.resolve())];rows=json.loads(jp.read_bytes());assert len(rows)==36 and {r['API_before']for r in rows}=={52,57,107};paths.extend([source,jp])
+ recipe=out/'ROOT-recipe.txt';recipe.write_text('UNEXECUTED. Exact causal correction: initialize counter0; replay four normal CS APIs0..3 as generations1..4; physical Session bootstrap then invokes distinct Lockit association outside ordinary API ledger before firstHeapAlloc API4, increments5; actual resource generation corroborates5 ONLY after derivation; firstregistry128 birth increments6. Existing all scalar token/request/native/growth/BOOL guards unchanged. ROOT controls3 retains40 adverses plus positive exact event order and zero/cut4 no futureassociation seeds. Actualresource8 words/earlybirth metadata are unvalidated here; optional diagnostic2 under ROOT-admitted ordinary reader scope reports actual resource and derived events, no source machine/worker. Bind native36source8/helper6 into fresh ROOT ordinary admission and all previous physical/inverse inputs before source retry. Failed source3/helper5 attempt preserved. No future finaltable/growth seed, no source CPU/register/page exclusion, no count/acceptance.\n');paths.append(recipe);paths.append(Path(__file__).resolve())
+ report=out/'report.json';report.write_text(json.dumps(dict(prepared_only=True,imports_executed=False,reader_opened=False,source_execution=False,controls_invoked=False,root_admission_minted=False,whole_inverses_verified=True,inverse_hunks=hunks,physical_bootstrap_order_bound=True,generation_initial_value=0,first_four_CS_generations=[1,2,3,4],distinct_Lockit_generation_derived=5,registry_firstbirth_generation_derived=6,resource_generation_corroboration_only_after_derivation=True,actual_resource_words_not_read=True,expected_retained_negative_controls=40,actual_early_cut_prediction_pending=True,complete_constructor_acceptance_gate=False,initializer_credit=0,files={str(p.resolve()):sha(p)for p in paths}),indent=2)+'\n');print(json.dumps(dict(path=str(report),sha256=sha(report),helper_sha256=sha(base/'native_owner_metadata_v6.py'),source_sha256=sha(base/'constructor_native36_source141_v8.py'),controls_sha256=sha(base/'native_owner_metadata_controls_v3.py'))))
+if __name__=='__main__':main()

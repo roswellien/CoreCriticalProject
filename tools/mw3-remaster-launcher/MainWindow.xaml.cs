@@ -31,9 +31,16 @@ namespace MW3RemasterLauncher
             finally { button.IsEnabled = true; }
         }
         private readonly string _basePath;
+        private void OpenControls(object sender, RoutedEventArgs e) => new ControlsWindow(_dataRoot, _settingsMgr.Current.GamePath) { Owner = this }.ShowDialog();
         private bool _nativeSessionActive;
+        private bool _assetInstallActive;
+        private int _assetInstallSequence;
+        private int _assetPackIndex;
+        private int _assetPackCount;
         private readonly SettingsManager _settingsMgr;
         private readonly PackManager _packMgr;
+        private readonly string _dataRoot;
+        private PackManager? _libraryPackMgr;
         private readonly GameRunner _gameRunner;
         private readonly D7VkRunner _d7vkRunner;
         private bool _isInitializing = true;
@@ -52,14 +59,19 @@ namespace MW3RemasterLauncher
             ["640x480 (Legacy 4:3)"] = "Original default 640x480 mode"
         };
 
-        public MainWindow()
+        public MainWindow() : this(null) { }
+
+        public MainWindow(string? dataRoot)
         {
+            _dataRoot = dataRoot ?? LauncherPaths.DataRoot;
             InitializeComponent();
 
             _basePath = AppDomain.CurrentDomain.BaseDirectory;
-            _settingsMgr = new SettingsManager(_basePath);
-            _packMgr = new PackManager(LauncherPaths.DataRoot);
-            _gameRunner = new GameRunner(_basePath);
+            _settingsMgr = new SettingsManager(_basePath, _dataRoot);
+            _packMgr = new PackManager(_dataRoot);
+            CmbPackGame.ItemsSource = GameCatalog.Games;
+            CmbPackGame.SelectedValue = GameCatalog.Mw3;
+            _gameRunner = new GameRunner(_basePath, _dataRoot);
             _d7vkRunner = new D7VkRunner(_basePath);
 
             Loaded += MainWindow_Loaded;
@@ -77,7 +89,7 @@ namespace MW3RemasterLauncher
             _settingsMgr.Current.PackSelectionInitialized = true;
             _settingsMgr.Current.EnvironmentPackSelectionInitialized |= _packMgr.Packs.Any(p => p.NativePayload?.Profile == "prepared-environment-v1");
             _settingsMgr.Save();
-            ListPacks.ItemsSource = _packMgr.Packs;
+            RefreshPackLibrary();
             if (_packMgr.DiscoveryErrors.Count > 0)
                 MessageBox.Show(string.Join("\n", _packMgr.DiscoveryErrors), "Some installed packs could not be loaded", MessageBoxButton.OK, MessageBoxImage.Warning);
 
@@ -107,6 +119,13 @@ namespace MW3RemasterLauncher
 
         private void ValidateGamePath()
         {
+            if (_assetInstallActive)
+            {
+                TxtStatusReady.Text = "● GAME STATUS: INSTALLING ASSETS (NOT READY)";
+                TxtGameDetected.Text = "Installing assets (not ready)";
+                BtnLaunchGame.IsEnabled = false;
+                return;
+            }
             var res = GameValidator.Validate(_settingsMgr.Current.GamePath);
             if (res.IsValid)
             {
@@ -148,14 +167,45 @@ namespace MW3RemasterLauncher
 
         private void BtnGameUpdates_Click(object sender, RoutedEventArgs e)
         {
-            if (_nativeSessionActive)
+            if (_nativeSessionActive || _assetInstallActive)
             {
-                MessageBox.Show(this, "Close the game before changing versions.", "Game updates");
+                MessageBox.Show(this, "Close the game and wait for asset installation to finish before changing versions.", "Game updates");
                 return;
             }
             try { new UpdatesWindow(_basePath, _settingsMgr.Current.GamePath) { Owner = this }.ShowDialog(); }
             catch (Exception error) { MessageBox.Show(this, error.Message, "Game updates"); }
             ValidateGamePath();
+        }
+
+        private void BtnLauncherUpdates_Click(object sender, RoutedEventArgs e)
+        {
+            if (_nativeSessionActive || _assetInstallActive) { MessageBox.Show(this, "Close the game and wait for asset installation to finish before updating Core Critical.", "Core Critical updates"); return; }
+            new LauncherUpdateWindow(_basePath) { Owner = this }.ShowDialog();
+        }
+
+        private void PackGame_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_packMgr != null) RefreshPackLibrary();
+        }
+
+        private void RefreshPackLibrary()
+        {
+            var game = CmbPackGame.SelectedItem as GameDefinition ?? GameCatalog.Get(GameCatalog.Mw3);
+            _libraryPackMgr = game.Id == GameCatalog.Mw3 ? _packMgr : new PackManager(_dataRoot, game.Id);
+            if (game.Id != GameCatalog.Mw3) _libraryPackMgr.RefreshPacks();
+            var view = System.Windows.Data.CollectionViewSource.GetDefaultView(_libraryPackMgr.Packs);
+            view.GroupDescriptions.Clear();
+            view.GroupDescriptions.Add(new System.Windows.Data.PropertyGroupDescription(nameof(PackManifest.Category)));
+            ListPacks.ItemsSource = view;
+            ListPacks.IsHitTestVisible = ListPacks.Focusable = game.Playable;
+            BtnWatchCinematics.IsEnabled = game.Playable;
+            BtnInstallPack.IsEnabled = BtnInspectConflicts.IsEnabled = game.Playable && !_nativeSessionActive && !_assetInstallActive;
+            TxtEnvironmentMigration.Visibility = game.Playable && !_settingsMgr.Current.EnvironmentPackSelectionInitialized ? Visibility.Visible : Visibility.Collapsed;
+            TxtPackEmpty.Text = game.Playable ? "No packs installed for MechWarrior 3. Choose Install New Pack to add one."
+                : game.Name + " is coming later. Its packs will appear here when support is available.";
+            TxtPackLibraryStatus.Text = game.Playable
+                ? $"{game.Name} packs, grouped by type. Install {game.PackExtension} files or drag them into this window."
+                : $"{game.Name} support is planned. Its {game.PackExtension} content and {game.UpdateExtension} updates will have their own library. Installation is not available yet.";
         }
 
         private void LoadSettingsIntoUi()
@@ -190,6 +240,7 @@ namespace MW3RemasterLauncher
             SelectComboByTag(ComboFog, s.FogDistance.ToString(), 0);
             ChkCdAudio.IsChecked = s.LocalCdAudio;
             ChkInstantReplay.IsChecked = s.InstantReplay;
+            ChkPerformanceMonitor.IsChecked = s.PerformanceMonitor;
 
             // D7VK options
             SelectComboByTag(ComboD7vkResolution, s.D7VkResolution, 0);
@@ -219,7 +270,7 @@ namespace MW3RemasterLauncher
         private void UpdateSummaryDisplay()
         {
             var s = _settingsMgr.Current;
-            TxtEnvironmentMigration.Visibility = !s.EnvironmentPackSelectionInitialized &&
+            TxtEnvironmentMigration.Visibility = (CmbPackGame.SelectedItem as GameDefinition)?.Id == GameCatalog.Mw3 && !s.EnvironmentPackSelectionInitialized &&
                 GameRunner.FindRepositoryRoot(_basePath) != null && !Directory.Exists(Path.Combine(_basePath, "Runtime"))
                 ? Visibility.Visible : Visibility.Collapsed;
             bool isD7Vk = s.EngineMode == "d7vk";
@@ -382,6 +433,7 @@ namespace MW3RemasterLauncher
 
             s.LocalCdAudio = ChkCdAudio.IsChecked == true;
             s.InstantReplay = ChkInstantReplay.IsChecked == true;
+            s.PerformanceMonitor = ChkPerformanceMonitor.IsChecked == true;
 
             _settingsMgr.Save();
             UpdateSummaryDisplay();
@@ -479,63 +531,89 @@ namespace MW3RemasterLauncher
 
         private async System.Threading.Tasks.Task<PackManifest> InstallPackWithProgressAsync(string file)
         {
-            if (!BtnInstallPack.IsEnabled) throw new InvalidOperationException("A content installation is already running.");
-            if (Process.GetProcessesByName("entry_commandline").Length > 0)
-                throw new InvalidOperationException("Close the Remaster game before installing content packs.");
-            BtnInstallPack.IsEnabled = false;
-            BtnLaunchGame.IsEnabled = false;
-            ListPacks.IsEnabled = false;
+            if (!_assetInstallActive) throw new InvalidOperationException("Asset installation needs an active batch.");
+            var sequence = ++_assetInstallSequence;
+            ProgressAssetInstall.Value = 0;
+            ProgressAssetInstall.IsIndeterminate = true;
+            TxtAssetInstallProgress.Text = $"Pack {_assetPackIndex} of {_assetPackCount}: {Path.GetFileName(file)} — Checking archive…";
+            var progress = new Progress<PackInstallProgress>(value =>
+            {
+                if (!_assetInstallActive || sequence != _assetInstallSequence) return;
+                ProgressAssetInstall.IsIndeterminate = value.TotalBytes == 0;
+                ProgressAssetInstall.Value = value.Percent;
+                var percent = value.TotalBytes > 0 ? $" ({value.Percent:F0}%)" : "";
+                TxtAssetInstallProgress.Text = $"Pack {_assetPackIndex} of {_assetPackCount}: {Path.GetFileName(file)} — {value.Stage}{percent}";
+            });
+            var pack = await _packMgr.InstallPackAsync(file, progress);
+            // Retain successful imports even if a later pack fails.
+            _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
+            _settingsMgr.Current.PackSelectionInitialized = true;
+            if (pack.NativePayload?.Profile == "prepared-environment-v1")
+                _settingsMgr.Current.EnvironmentPackSelectionInitialized = true;
+            _settingsMgr.Save();
+            UpdateSummaryDisplay();
+            return pack;
+        }
+
+        private async System.Threading.Tasks.Task<int> InstallPacksAsync(string[] files)
+        {
+            if (files.Length == 0 || _assetInstallActive || _nativeSessionActive) return 0;
+            if ((CmbPackGame.SelectedItem as GameDefinition)?.Id != GameCatalog.Mw3 ||
+                Process.GetProcessesByName("entry_commandline").Length > 0)
+            {
+                MessageBox.Show(this, "Select the MechWarrior 3 library and close the game before installing packs.", "Cannot install assets");
+                return 0;
+            }
+            _assetInstallActive = true;
+            _assetPackCount = files.Length;
+            _assetPackIndex = 0;
             var caption = BtnInstallPack.Content;
-            BtnInstallPack.Content = "Verifying and installing...";
+            BtnInstallPack.Content = "Installing assets…";
+            BtnInstallPack.IsEnabled = BtnInspectConflicts.IsEnabled = false;
+            CmbPackGame.IsEnabled = ListPacks.IsEnabled = false;
+            AssetInstallProgressPanel.Visibility = Visibility.Visible;
+            ValidateGamePath();
+            var errors = new List<string>();
+            int installed = 0;
             try
             {
-                var pack = await _packMgr.InstallPackAsync(file);
-                // Persist each successful import even if a later pack fails or the batch is interrupted.
-                _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
-                _settingsMgr.Current.PackSelectionInitialized = true;
-                if (pack.NativePayload?.Profile == "prepared-environment-v1")
-                    _settingsMgr.Current.EnvironmentPackSelectionInitialized = true;
-                _settingsMgr.Save();
-                UpdateSummaryDisplay();
-                return pack;
+                foreach (var file in files)
+                {
+                    _assetPackIndex++;
+                    try
+                    {
+                        await InstallPackWithProgressAsync(file);
+                        installed++;
+                    }
+                    catch (Exception error) { errors.Add(Path.GetFileName(file) + ": " + error.Message); }
+                }
             }
             finally
             {
+                _assetInstallActive = false;
+                _assetInstallSequence++;
+                AssetInstallProgressPanel.Visibility = Visibility.Collapsed;
                 BtnInstallPack.Content = caption;
-                BtnInstallPack.IsEnabled = true;
-                ListPacks.IsEnabled = true;
+                CmbPackGame.IsEnabled = ListPacks.IsEnabled = true;
+                RefreshPackLibrary();
                 ValidateGamePath();
             }
+            var message = $"Installed {installed} of {files.Length} asset pack(s).";
+            if (errors.Count > 0) message += "\n\n" + string.Join("\n", errors);
+            MessageBox.Show(this, message, errors.Count == 0 ? "Assets installed" : "Asset installation needs attention",
+                MessageBoxButton.OK, errors.Count == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            return installed;
         }
 
         private async void BtnInstallPack_Click(object sender, RoutedEventArgs e)
         {
-            var dlg = new OpenFileDialog
+            var dialog = new OpenFileDialog
             {
-                Title = "Select Asset Pack (.mw3pack or .zip)",
+                Title = "Select Asset Packs",
                 Filter = "MechWarrior 3 Asset Packs (*.mw3pack;*.zip)|*.mw3pack;*.zip|All Files (*.*)|*.*",
                 Multiselect = true
             };
-
-            if (dlg.ShowDialog() == true)
-            {
-                foreach (var file in dlg.FileNames)
-                {
-                    try
-                    {
-                        var installed = await InstallPackWithProgressAsync(file);
-                        MessageBox.Show($"Successfully installed pack '{installed.Name}'!", "Pack Installed", MessageBoxButton.OK, MessageBoxImage.Information);
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Failed to install '{Path.GetFileName(file)}':\n{ex.Message}", "Error Installing Pack", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                }
-
-                _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
-                _settingsMgr.Save();
-                UpdateSummaryDisplay();
-            }
+            if (dialog.ShowDialog(this) == true) await InstallPacksAsync(dialog.FileNames);
         }
 
         private void BtnRollbackPack_Click(object sender, RoutedEventArgs e)
@@ -576,14 +654,14 @@ namespace MW3RemasterLauncher
 
         private void BtnOpenModsFolder_Click(object sender, RoutedEventArgs e)
         {
-            var modsDir = _packMgr.ModsRoot;
+            var modsDir = (_libraryPackMgr ?? _packMgr).ModsRoot;
             if (!Directory.Exists(modsDir)) Directory.CreateDirectory(modsDir);
             Process.Start(new ProcessStartInfo("explorer.exe", modsDir));
         }
 
         private void Window_DragOver(object sender, DragEventArgs e)
         {
-            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            if (!_assetInstallActive && !_nativeSessionActive && e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 e.Effects = DragDropEffects.Copy;
             }
@@ -596,48 +674,26 @@ namespace MW3RemasterLauncher
 
         private async void Window_Drop(object sender, DragEventArgs e)
         {
-            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            if (_assetInstallActive || _nativeSessionActive || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+            var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+            foreach (var file in files)
             {
-                var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                int installedCount = 0;
-                foreach (var file in files)
+                if (Path.GetFileName(file).Equals("Mech3.exe", StringComparison.OrdinalIgnoreCase) ||
+                    (Directory.Exists(file) && GameValidator.FindExecutableInDirectory(file) != null))
                 {
-                    // Check if player dropped Mech3.exe or a folder containing Mech3.exe
-                    if (Path.GetFileName(file).Equals("Mech3.exe", StringComparison.OrdinalIgnoreCase) ||
-                        (Directory.Exists(file) && GameValidator.FindExecutableInDirectory(file) != null))
-                    {
-                        var dir = Directory.Exists(file) ? file : (Path.GetDirectoryName(file) ?? file);
-                        _settingsMgr.Current.GamePath = dir;
-                        _settingsMgr.Save();
-                        TxtGamePath.Text = dir;
-                        ValidateGamePath();
-                        MessageBox.Show($"MechWarrior 3 location set to:\n{dir}\n\nStatus: {_settingsMgr.Current.GamePath}", "Game Folder Updated", MessageBoxButton.OK, MessageBoxImage.Information);
-                        return;
-                    }
-
-                    var ext = Path.GetExtension(file).ToLowerInvariant();
-                    if (ext == ".mw3pack" || ext == ".zip")
-                    {
-                        try
-                        {
-                            await InstallPackWithProgressAsync(file);
-                            installedCount++;
-                        }
-                        catch (Exception ex)
-                        {
-                            MessageBox.Show($"Failed to install '{Path.GetFileName(file)}':\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        }
-                    }
-                }
-
-                if (installedCount > 0)
-                {
-                    _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
+                    var directory = Directory.Exists(file) ? file : Path.GetDirectoryName(file)!;
+                    _settingsMgr.Current.GamePath = directory;
                     _settingsMgr.Save();
-                    UpdateSummaryDisplay();
-                    MessageBox.Show($"Successfully installed {installedCount} asset pack(s) via Drag & Drop!", "Packs Installed", MessageBoxButton.OK, MessageBoxImage.Information);
+                    TxtGamePath.Text = directory;
+                    ValidateGamePath();
+                    MessageBox.Show(this, "Game location set to: " + directory, "Game folder updated");
+                    return;
                 }
             }
+            var archives = files.Where(file =>
+                GameCatalog.Games.Any(game => string.Equals(Path.GetExtension(file), game.PackExtension, StringComparison.OrdinalIgnoreCase)) ||
+                string.Equals(Path.GetExtension(file), ".zip", StringComparison.OrdinalIgnoreCase)).ToArray();
+            await InstallPacksAsync(archives);
         }
 
         private void BtnBrowseGamePath_Click(object sender, RoutedEventArgs e)
@@ -664,7 +720,7 @@ namespace MW3RemasterLauncher
 
         private async void ShowGameSetup()
         {
-            if (_nativeSessionActive) return;
+            if (_nativeSessionActive || _assetInstallActive) return;
             var setup = new GameSetupWindow(_settingsMgr.Current.GamePath) { Owner = this };
             if (setup.ShowDialog() != true || setup.GameDirectory == null) return;
             _settingsMgr.Current.GamePath = setup.GameDirectory;
@@ -672,24 +728,16 @@ namespace MW3RemasterLauncher
             TxtGamePath.Text = setup.GameDirectory;
             TxtMediaStatus.Text = "Original MW3 1.2 files verified.";
             ValidateGamePath();
-            foreach (var file in setup.SelectedPacks)
+            if (setup.SelectedPacks.Length > 0)
             {
-                TxtMediaStatus.Text = "Installing " + Path.GetFileName(file) + "…";
-                try { await InstallPackWithProgressAsync(file); }
-                catch (Exception ex)
-                {
-                    TxtMediaStatus.Text = "Original files verified. A pack needs attention; completed imports were saved.";
-                    MessageBox.Show($"Could not install {Path.GetFileName(file)}:\n{ex.Message}\n\nYour verified game and completed pack imports are preserved. Retry through Mods & Packs → Install Pack.",
-                        "Pack installation", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                var installed = await InstallPacksAsync(setup.SelectedPacks);
+                TxtMediaStatus.Text = $"Original files verified. Installed {installed} of {setup.SelectedPacks.Length} selected packs.";
             }
-            if (setup.SelectedPacks.Length > 0) TxtMediaStatus.Text = "Original files verified and selected packs installed.";
         }
 
         private void BtnAddToSteam_Click(object sender, RoutedEventArgs e)
         {
-            var launcherExe = Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(_basePath, "MW3RemasterLauncher.exe");
+            var launcherExe = Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(_basePath, "Core Critical Launcher.exe");
             var artworkDir = Path.Combine(_basePath, "Assets", "Plates");
 
             bool ok = SteamHelper.AddToSteam(launcherExe, artworkDir);
@@ -697,7 +745,7 @@ namespace MW3RemasterLauncher
             {
                 _settingsMgr.Current.HasAddedToSteam = true;
                 _settingsMgr.Save();
-                MessageBox.Show("MechWarrior 3 Remastered was successfully added to your Steam library!\n\nPlease restart Steam if it is currently running to see the game and artwork.",
+                MessageBox.Show("Core Critical Launcher was successfully added to your Steam library!\n\nPlease restart Steam if it is currently running to see the launcher and artwork.",
                     "Steam Integration", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
@@ -709,6 +757,7 @@ namespace MW3RemasterLauncher
 
         private void BtnLaunchGame_Click(object sender, RoutedEventArgs e)
         {
+            if (_assetInstallActive) return;
             var s = _settingsMgr.Current;
 
             if (s.EngineMode == "d7vk")
@@ -854,7 +903,7 @@ namespace MW3RemasterLauncher
                 if (_nativeSessionActive) throw new InvalidOperationException("Close the current game session before managing saves.");
                 string? registry = null;
                 if (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null)
-                    registry = Path.Combine(LauncherPaths.DataRoot, "native-settings", "mw3-registry.txt");
+                    registry = Path.Combine(_dataRoot, "native-settings", "mw3-registry.txt");
                 else
                 {
                     var root = GameRunner.FindRepositoryRoot(_basePath);

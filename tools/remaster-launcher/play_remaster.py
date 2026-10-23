@@ -199,6 +199,8 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
                 raise RuntimeError("Generated native game module is missing or changed. Repair this runtime version.")
         if profile.get("verify_source_snapshot"):
             snapshot = read_json(ROOT / profile["source_snapshot"])
+            if snapshot.get("controller_input_version") != profile.get("controller_input_version"):
+                raise RuntimeError("Native source snapshot and launcher disagree on controller input support")
             if (
                 snapshot.get("executable_sha256", "").lower()
                 != profile.get("executable_sha256", "").lower()
@@ -499,9 +501,16 @@ def main():
             )
             if p.get('environment_packs') is not None:
                 from prepared_environment_packs import RESOURCE_KEYS
+                from prepared_mech_packs import ALL_MODEL_KEYS
+                # Environment preparation may reuse a receipt containing older
+                # host bindings. Only the freshly selected mech resources own
+                # model/LOD/skin keys; never let that receipt replace them.
+                model_bindings = {key: value for key, value in environment.items() if key in ALL_MODEL_KEYS}
                 native=p['prepared_profile']['native']
                 bindings=environment_resources(p['environment_packs'],native,
                     Path(args.asset_output or p['asset_output']), startup_progress)
+                bindings = {key: value for key, value in bindings.items() if key not in ALL_MODEL_KEYS}
+                bindings.update(model_bindings)
                 native['runtime_environment']=bindings
                 for key in RESOURCE_KEYS: environment.pop(key,None)
                 environment.update(bindings)

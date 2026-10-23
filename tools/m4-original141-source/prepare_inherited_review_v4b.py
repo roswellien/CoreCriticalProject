@@ -1,0 +1,8 @@
+"""Exact additive preparation correction: retained validation archives deferred."""
+from pathlib import Path
+import hashlib
+p=Path(__file__).with_name('prepare_inherited_review_v4.py');text=p.read_text()
+changes=[("inherited-review-preparation-r4'","inherited-review-preparation-r5'"),("pins={};closure={};declaration_origins={}","pins={};closure={};declaration_origins={};canonical_deferred={}"),("def receipt(p,h=None):","def receipt(p,h=None,defer_canonical=False):"),("for q,v in d.get('files',{}).items():include(q,v,str(p))","for q,v in d.get('files',{}).items():\n   if defer_canonical and (Path(q).suffix.lower()in('.mwb','.mwi','.zip')or Path(q).name=='transport.json'):canonical_deferred[q]=v\n   else:include(q,v,str(p))"),("receipt(a['original_validation_path'],a['original_validation_sha256'])","receipt(a['original_validation_path'],a['original_validation_sha256'],defer_canonical=True)"),("declarations=closure,declaration_origins=declaration_origins","declarations=closure,declaration_origins=declaration_origins,canonical_validation_references_deferred_to_acceptance_union=canonical_deferred"),("whole_declared_inputs_physically_rehashed=False,reviewer_executed=False","whole_declared_inputs_physically_rehashed=False,canonical_validation_references_deferred_to_acceptance_union=canonical_deferred,reviewer_executed=False")]
+for a,b in changes:assert text.count(a)==1;text=text.replace(a,b)
+text=text.replace("for p in [child,parent,Path(__file__).resolve(),", "for p in [child,parent,Path(__file__).resolve(),Path(__file__).with_name('prepare_inherited_review_v4.py'),")
+exec(compile(text,str(p),'exec'),globals())

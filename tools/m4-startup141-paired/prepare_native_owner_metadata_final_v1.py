@@ -1,0 +1,28 @@
+"""Final physical/inverse handoff for ROOT causal metadata controls and native36."""
+from pathlib import Path
+import ast,difflib,hashlib,json
+R=Path(__file__).resolve().parents[2]
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def inverse(p,q,out,label):
+ a=p.read_text();b=q.read_text();ast.parse(a);ast.parse(b);d=[]
+ for tag,i,j,k,l in difflib.SequenceMatcher(None,a.splitlines(True),b.splitlines(True),autojunk=False).get_opcodes():
+  if tag!='equal':d.append(dict(parent_start=i,parent_stop=j,child_start=k,child_stop=l,parent=''.join(a.splitlines(True)[i:j]),child=''.join(b.splitlines(True)[k:l])))
+ back=b.splitlines(True)
+ for x in reversed(d):assert ''.join(back[x['child_start']:x['child_stop']])==x['child'];back[x['child_start']:x['child_stop']]=x['parent'].splitlines(True)
+ assert ''.join(back)==a;f=out/(label+'-inverse.json');f.write_text(json.dumps(d,indent=2)+'\n');return [p,q,f],len(d)
+def main():
+ out=R/'reports/m4-startup141-paired/native-owner-metadata-final-preparation-r1';assert not out.exists();out.mkdir();base=R/'tools/m4-startup141-paired';files=[];counts={}
+ for a,b,label in [('native_owner_metadata_v1.py','native_owner_metadata_v3.py','helper1-to3'),('native_owner_metadata_v3.py','native_owner_metadata_v5.py','helper3-to5'),('native_owner_metadata_controls_v1.py','native_owner_metadata_controls_v2.py','controls1-to2'),('constructor_native36_source141_v6.py','constructor_native36_source141_v7.py','source6-to7')]:
+  ps,n=inverse(base/a,base/b,out,label);files.extend(ps);counts[label]=n
+ prep=R/'reports/m4-startup141-paired/native-owner-metadata-preparation-r2/report.json';P=json.loads(prep.read_bytes());assert sha(prep)=='7d4b5fc91440b40e07a7f36032c641a9e1d0695f97cfe749a167405266a89553'and P['whole_parent_inverses'];files.append(prep)
+ for p,h in P['files'].items():assert sha(p)==h;files.append(Path(p))
+ service=R/'reports/m4-startup141-runway/service-preparation-r2';snippets=[]
+ for name,strings in [('locale_batch.hpp',['generation_{}','allocation_cursor_{0x31000000}','token=0x48450001']),('lockit_operations.inc',['object->generation=++generation_','object->guest=0x78145640']),('locale_batch_operations.inc',['object->generation=++generation_','object->requested=runtime.memory().load<unsigned>','api.words[8]=result;api.words[12]=result','api.words[20]!=token','api.words[21]']),('registry_api.inc',['oldgeneration=a->generation','a->generation=++generation_','api.words[20]!=token'])]:
+  p=service/name;s=p.read_text();lines=s.splitlines()
+  for token in strings:
+   hits=[(i+1,line)for i,line in enumerate(lines)if token in line];assert hits,(name,token);snippets.append(dict(path=str(p),physical_sha256=sha(p),token=token,lines=[dict(line=i,text=line)for i,line in hits]))
+  files.append(p)
+ proof=out/'physical-generation-token-evidence.json';proof.write_text(json.dumps(snippets,indent=2)+'\n');files.append(proof);files.extend([base/'predict_native_owner_metadata_v1.py',Path(__file__).resolve()]);ast.parse((base/'predict_native_owner_metadata_v1.py').read_text())
+ recipe=out/'ROOT-recipe.txt';recipe.write_text('HANDOFF BYTES FROZEN; UNEXECUTED models/readers/controls. ROOT independently execute native_owner_metadata_controls_v2.controls(native_owner_metadata_v5.derive):40 negative controls plus manager6,total8,cut5, futureOLD ignored, HeapSize, positivegrowth14/free tests. Rehash complete prior native36 ordinary ROOT admission union and current supplement d9b356af5dbec93b333c43bb11a335833ed4b74d6f118110b7f405d55c6a7e3f; add adapter4/source7/helper5/physicalcontractprep2 and all retained inverses+current tests. ROOT source admission scope native141_constructor36_own_source/configurationa5c92b...,owner_exportSHA d9b356.... Source CLI Python -B constructor_native36_source141_v7.py ADMISSION SHA CONFIG SHA OWNER_EXPORT SHA FRESH_NAME. BEFORE metadata is derived first at authenticated current source API_before52/57/107, then separate metadata to API_after allows own2 API birth inputs; only BEFORE owner map seeds memory. Native initial8 means one registry128 and7kind4 nodes; total10/19 retains typed intervening prior births. Future/final summary not read; futuregrowthOLD rows not seeds. Optional predictor script can independently validate36 actual scalar cuts under scope current_native141_owner_metadata; do not duplicate source execution or reader during active lane. Actual predictions pending ROOT run; no guessed native pointers/generations, no native worker/acceptance.\n');files.append(recipe)
+ report=out/'report.json';report.write_text(json.dumps(dict(prepared_only=True,source_execution=False,reader_opened=False,controls_invoked=False,root_admission_minted=False,inverse_hunks=counts,all_whole_inverses_verified=True,helper5=str(base/'native_owner_metadata_v5.py'),adapter4=str(base/'constructor_native_input141_v4.py'),source7=str(base/'constructor_native36_source141_v7.py'),controls2=str(base/'native_owner_metadata_controls_v2.py'),expected_negative_controls=40,physical_generation_zero_and_bootstrap1_bound=True,physical_heap_token_and_BOOL_bound=True,complete_physical_API_contract_extraction_retained=True,before_metadata_precedes_after=True,only_before_metadata_map_seeds=True,actual_early_cut_metadata_predictions_pending=True,complete_constructor_acceptance_gate=False,initializer_credit=0,files={str(p.resolve()):sha(p)for p in files}),indent=2)+'\n');print(json.dumps(dict(path=str(report),sha256=sha(report),helper_sha256=sha(base/'native_owner_metadata_v5.py'),source_sha256=sha(base/'constructor_native36_source141_v7.py'),controls_sha256=sha(base/'native_owner_metadata_controls_v2.py'))))
+if __name__=='__main__':main()

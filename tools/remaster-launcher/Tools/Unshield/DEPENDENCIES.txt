@@ -1,0 +1,10 @@
+Media extraction dependencies
+Unshield 1.6.2, commit 51de441ba6893f11026d4671ccef9e8e2a4634fa, MIT.
+Source: https://github.com/twogood/unshield
+zlib 1.3.2, zlib license. Source: https://zlib.net/fossils/zlib-1.3.2.tar.gz
+Both libraries and the MSVC runtime are statically linked into unshield.exe.
+The exact admitted executable hash is embedded in SupportedMedia.json.
+Included licenses and provenance identify the corresponding source archives.
+Rebuild recipe: tools/mw3-remaster-launcher/build_media_tools.ps1.
+No original game data or patch payload is included here. This does not clear
+other native game/codec artifacts for distribution.

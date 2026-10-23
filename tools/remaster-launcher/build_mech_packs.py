@@ -204,13 +204,13 @@ def build(profile_path, output):
             write_json(stage / registry_name, dict(schema_version=2, payload_profile="prepared-native-v1", models=records))
             files[registry_name] = dict(sha256=digest(stage / registry_name), bytes=(stage / registry_name).stat().st_size)
             manifest = dict(
-                schema_version=2, id=pack_id, name=title, version="0.1.0-local.20261021",
+                schema_version=2, game_id="mw3", id=pack_id, name=title, version="0.1.0-local.20261021",
                 author="MW3 Remaster Project", category="Mechs",
                 description="Local prepared native visual assets; original gameplay remains in control.",
                 distribution="local-only; no redistribution clearance",
                 provides=dict(mechs=[m["id"] for m in records], textures=True, normal_maps=True),
                 native_payload=dict(profile="prepared-native-v1", registry=registry_name,
-                    path_base="pack-root", reference_host_sha256=config["executable_sha256"],
+                    path_base="pack-root", required_capabilities={'prepared-mechs':1}, reference_host_sha256=config["executable_sha256"],
                     required_formats=sorted({f for m in records for f in m["required_formats"]})),
                 files=files,
             )

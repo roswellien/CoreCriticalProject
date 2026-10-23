@@ -17,7 +17,7 @@ class PreparedPackTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="MW3 installed packs ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.host = dict(executable_sha256="a" * 64, model_ids=["orion"], skin_ids={},
+        self.host = dict(content_capabilities={"prepared-mechs": [1]}, executable_sha256="a" * 64, model_ids=["orion"], skin_ids={},
                          mesh_payload_versions=[2], normal_map_formats=[2], include_runtime_candidates=True,
                          runtime_environment={"MW34_ORION_MESH": "stale.bin", "MW34_AVATAR_NORMALS": "disabled.bin", "MW34_GPU_MODELS": "1"})
 
@@ -83,7 +83,7 @@ class PreparedPackTests(unittest.TestCase):
 
     def test_corruption_unsupported_host_format_and_schema(self):
         root = self.build()
-        for change in ({"executable_sha256": "b" * 64}, {"mesh_payload_versions": [1]}, {"model_ids": []}, {"include_runtime_candidates": False}):
+        for change in ({"content_capabilities": {}}, {"mesh_payload_versions": [1]}, {"model_ids": []}, {"include_runtime_candidates": False}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 packs.compose([str(root)], self.host | change)
         manifest = json.loads((root / "pack.json").read_text())

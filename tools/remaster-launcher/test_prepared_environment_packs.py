@@ -40,7 +40,7 @@ class EnvironmentPackTests(unittest.TestCase):
         (root/'pack.json').write_text(json.dumps(manifest))
         return root
     def host(self):
-        return dict(executable_sha256='a'*64,runtime_environment={'MW34_WORLD_NORMALS':'stale','MW34_REMASTER_BANKS':'stale','MW34_BUSHWACKER_TEST':'selected-mech','MW34_FIXTURE_LIGHT_RETAIN_DISTANCE':'160'})
+        return dict(content_capabilities={'environment-resources':[1]},executable_sha256='a'*64,runtime_environment={'MW34_WORLD_NORMALS':'stale','MW34_REMASTER_BANKS':'stale','MW34_BUSHWACKER_TEST':'selected-mech','MW34_FIXTURE_LIGHT_RETAIN_DISTANCE':'160'})
     def test_relocation_selection_and_disable(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);one=self.fixture(root/'one');two=self.fixture(root/'two','operation4');moved=root/'relocated with spaces';one.rename(moved)
@@ -64,7 +64,7 @@ class EnvironmentPackTests(unittest.TestCase):
             manifest=json.loads((pack/'pack.json').read_text())
             manifest['native_payload']['reference_host_sha256']='0d3d920f6b560ddcd92fbeeb4034d59430ddd46a19b75269255fc8ec83fe12ef'
             (pack/'pack.json').write_text(json.dumps(manifest))
-            host=self.host()
+            host=self.host();host.pop('content_capabilities')
             for digest in ['9fd17ba2459ac2d349adda33c0c84d41772bbd2ec7c0e2a620242c696526bb83',
                            'c1afedadd8ed9e13a956db917a1a5335a6581fac01374b367969d4e985852115']:
                 host['executable_sha256']=digest

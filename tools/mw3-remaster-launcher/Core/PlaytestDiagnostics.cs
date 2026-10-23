@@ -73,7 +73,7 @@ public static class PlaytestDiagnostics
             dotnet_runtime = RuntimeInformation.FrameworkDescription,
             settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
                 settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
-                settings.LocalCdAudio, settings.InstantReplay },
+                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor },
             packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
             note = "Review this local report before sharing. Includes selected settings, pack metadata and redacted log tails only."
         };

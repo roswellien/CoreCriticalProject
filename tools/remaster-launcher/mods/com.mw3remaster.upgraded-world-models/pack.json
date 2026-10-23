@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "com.mw3remaster.upgraded-world-models",
+  "name": "Upgraded Game Models",
+  "version": "1.0.0",
+  "author": "MW3 Remaster Project",
+  "homepage": null,
+  "description": "High-poly replacements for combat vehicles, tanks, Elementals, base buildings, and defense turrets.",
+  "category": "World Models",
+  "min_engine_version": null,
+  "dependencies": null,
+  "conflicts": null,
+  "provides": null
+}

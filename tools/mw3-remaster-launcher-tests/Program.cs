@@ -2,6 +2,191 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+if (args.Length == 2 && args[0] == "--verify-media-tools")
+{
+    GameInstallation.VerifyExtractor(Path.GetFullPath(args[1]));
+    Console.WriteLine("Published media extractor matches the pinned executable, including certificate-only signing changes.");
+    return;
+}
+
+if (args.Length == 4 && args[0] == "--prepare-installed-renderer")
+{
+    var path = Path.GetFullPath(args[3]);
+    var rendererProfile = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+    PlayerRegistry.PrepareInstalledRenderer(rendererProfile, Path.GetFullPath(args[1]), Path.GetFullPath(args[2]));
+    File.WriteAllText(path, GameRunner.SerializeLaunchProfile(rendererProfile)); return;
+}
+
+if (args.Length == 4 && args[0] == "--prepare-controller-launch")
+{
+    var path = Path.GetFullPath(args[3]);
+    var launch = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+    new ControllerProfiles(Path.GetFullPath(args[1])).PrepareLaunch(launch, Path.GetFullPath(args[2]));
+    File.WriteAllText(path, GameRunner.SerializeLaunchProfile(launch)); return;
+}
+
+if (args.Length == 1 && args[0] == "--runtime-layout-only")
+{
+    NativeRuntimeLayoutChecks.Run();
+    return;
+}
+if (args.Length == 1 && args[0] == "--content-only")
+{
+    PackStorageChecks.Run();
+    EnvironmentPackChecks.Run();
+    MusicPackChecks.Run();
+    ArtworkCinematicChecks.Run();
+    return;
+}
+if (args.Length == 1 && args[0] == "--artwork-only")
+{
+    ArtworkCinematicChecks.Run();
+    return;
+}
+if (args.Length == 1 && args[0] == "--controllers-only")
+{
+    ControllerChecks.Run(); ControllerChecks.Sdl(); return;
+}
+if (args.Length == 2 && args[0] == "--preview-controller")
+{
+    var thread = new Thread(() =>
+    {
+        var app = new MW3RemasterLauncher.App(false); app.InitializeComponent();
+        app.Run(new MW3RemasterLauncher.ControllerWindow(Path.GetFullPath(args[1])));
+    });
+    thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join(); return;
+}
+
+if (args.Length == 1 && args[0] == "--controls-only")
+{
+    ControlProfileChecks.Run(); return;
+}
+if (args.Length == 3 && args[0] == "--preview-controls")
+{
+    var root = Path.GetFullPath(args[1]);
+    var thread = new Thread(() =>
+    {
+        var app = new MW3RemasterLauncher.App(false); app.InitializeComponent();
+        app.Run(new MW3RemasterLauncher.ControlsWindow(root, Path.GetFullPath(args[2])) { Title = "Controls — isolated UI trial" });
+    });
+    thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join(); return;
+}
+if (args.Length == 4 && args[0] == "--prepare-controls-profile")
+{
+    var store = new ControlProfiles(Path.GetFullPath(args[1]));
+    var doc = store.Load();
+    var preset = ControlProfiles.ImportRegistry(File.ReadAllText(Path.GetFullPath(args[2])), args[3]);
+    doc.Profiles.Add(preset); doc.ActiveId = preset.Id; store.Save(doc); return;
+}
+if (args.Length == 4 && args[0] == "--prepare-controls-launch")
+{
+    LauncherUpdates.RequireGamesClosed();
+    var profilePath = Path.GetFullPath(args[3]);
+    var controlsLaunch = JsonNode.Parse(File.ReadAllText(profilePath))!.AsObject();
+    new ControlProfiles(Path.GetFullPath(args[1])).PrepareLaunch(controlsLaunch, Path.GetFullPath(args[1]), Path.GetFullPath(args[2]));
+    File.WriteAllText(profilePath, GameRunner.SerializeLaunchProfile(controlsLaunch)); return;
+}
+
+// Maintainer repair: use the same bounded/transactional importer as the UI.
+// Run in the player's Windows context when MSIX AppData redirection differs.
+if (args.Length == 4 && args[0] == "--refresh-installed-mech-pack")
+{
+    LauncherUpdates.RequireGamesClosed();
+    var dataRoot = Path.GetFullPath(args[1]);
+    var archive = Path.GetFullPath(args[2]);
+    string id;
+    using (var zip = System.IO.Compression.ZipFile.OpenRead(archive))
+    {
+        var entry = zip.GetEntry("pack.json") ?? throw new InvalidDataException("Missing pack manifest.");
+        if (entry.Length > PackStorage.MaxJsonBytes) throw new InvalidDataException("Pack manifest too large.");
+        using var reader = new StreamReader(entry.Open());
+        id = JsonNode.Parse(reader.ReadToEnd())!["id"]!.GetValue<string>();
+    }
+    if (id is not ("com.mw3remaster.updated-mw3-mechs" or "com.mw3remaster.mw5-mechs"))
+        throw new InvalidDataException("This repair only refreshes existing MW3 mech collections.");
+    var mods = Path.Combine(dataRoot, "mods");
+    var before = Path.Combine(mods, id, "pack.json");
+    if (!File.Exists(before)) throw new InvalidDataException("The target mech collection is not already installed.");
+    PackStorage.EnsureNoLinks(before);
+    var beforeHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(before)));
+    var installed = PackStorage.Install(mods, archive);
+    var registry = JsonNode.Parse(File.ReadAllText(Path.Combine(installed.DirectoryPath, "models", "models.json")))!;
+    var bindings = registry["models"]!.AsArray().Sum(model => model!["environment"]!.AsObject().Count(pair => pair.Key.Contains("_SKIN_")));
+    File.WriteAllText(args[3], System.Text.Json.JsonSerializer.Serialize(new {
+        installed.Id, installed.Version, installed.DirectoryPath, alternate_bindings = bindings,
+        before_manifest_sha256 = beforeHash,
+        rollback = Path.Combine(mods, ".rollback-" + installed.Id),
+        settings_modified = false, native_started = false
+    }));
+    Console.WriteLine($"Refreshed {installed.Id}: {bindings} alternate texture bindings; previous pack retained.");
+    return;
+}
+
+if (args.Length >= 2 && args[0] == "--preview-corecritical")
+{
+    var root = Path.GetFullPath(args[1]);
+    var fixtureSettings = new SettingsManager(root, root);
+    fixtureSettings.Current.GamePath = args.Length >= 3 ? Path.GetFullPath(args[2]) : root; fixtureSettings.Save();
+    var thread = new Thread(() =>
+    {
+        var application = new MW3RemasterLauncher.App(false); application.InitializeComponent();
+        var window = new MW3RemasterLauncher.MainWindow(root) { Title = "Core Critical — UI trial" };
+        window.Loaded += (_, _) => ((System.Windows.Controls.RadioButton)window.FindName("TabMods")).IsChecked = true;
+        if (args.Length > 3)
+        {
+            window.Loaded += async (_, _) =>
+            {
+                var samples = new List<object>();
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+                timer.Tick += (_, _) =>
+                {
+                    if (samples.Count >= 1000) return;
+                    var bar = (System.Windows.Controls.ProgressBar)window.FindName("ProgressAssetInstall");
+                    samples.Add(new {
+                        status = ((System.Windows.Controls.TextBlock)window.FindName("TxtStatusReady")).Text,
+                        detail = ((System.Windows.Controls.TextBlock)window.FindName("TxtAssetInstallProgress")).Text,
+                        percent = bar.Value,
+                        visible = bar.IsVisible,
+                        launch_enabled = ((System.Windows.Controls.Button)window.FindName("BtnLaunchGame")).IsEnabled
+                    });
+                };
+                timer.Start();
+                try
+                {
+                    var method = typeof(MW3RemasterLauncher.MainWindow).GetMethod("InstallPacksAsync",
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                    await (Task<int>)method.Invoke(window, new object[] { args.Skip(3).ToArray() })!;
+                }
+                finally
+                {
+                    timer.Stop();
+                    File.WriteAllText(Path.Combine(root, "asset-install-ui-samples.json"),
+                        System.Text.Json.JsonSerializer.Serialize(samples));
+                }
+            };
+        }
+        application.Run(window);
+    });
+    thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
+    return;
+}
+
+if (args.Length == 6 && args[0] == "--check-precompiled-update")
+{
+    var updates = new RuntimeUpdates(args[1], RuntimeUpdates.ReadTrust(args[1]), args[3]);
+    if (updates.State().Active != null) throw new InvalidOperationException("Use an isolated update store.");
+    var update = updates.Verify(File.ReadAllBytes(args[4]));
+    await updates.PrepareAsync(update, args[2], args[5], new Progress<string>(Console.WriteLine));
+    var selected = RuntimeUpdates.SelectedRoot(args[1], args[3])
+        ?? throw new InvalidDataException("Precompiled update was not activated.");
+    RuntimeUpdates.ValidateGeneratedRuntime(selected);
+    updates.Rollback();
+    if (updates.State().Active != null || updates.State().HighestSequence != update.Manifest.Sequence)
+        throw new InvalidDataException("Precompiled rollback or sequence retention failed.");
+    Console.WriteLine("Signed precompiled update verified, installed, activated, validated and rolled back.");
+    return;
+}
+
 if (args.Length == 2 && args[0] == "--verify-bundled-preparation")
 {
     var updates = new RuntimeUpdates(args[1], RuntimeUpdates.ReadTrust(args[1]));
@@ -130,7 +315,14 @@ if (args.Length > 0 && args[0] == "--install-packs")
     }
     return;
 }
+var profilesOnly = args.Length == 2 && args[0] == "--profile-only";
+if (profilesOnly) args = new[] { args[1] };
+if (args.Length > 0 && args[0].StartsWith("--", StringComparison.Ordinal) && args[0] != "--check-native-runtime")
+    throw new ArgumentException("Unknown check command or incorrect argument count: " + args[0]);
+if (!profilesOnly)
+{
 PackStorageChecks.Run();
+UniversalLauncherChecks.Run();
 EnvironmentPackChecks.Run();
 MusicPackChecks.Run();
 ArtworkCinematicChecks.Run();
@@ -138,9 +330,12 @@ PlaytestSupportChecks.Run();
 GameInstallationChecks.Run();
 OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
+ControlProfileChecks.Run();
+ControllerChecks.Run();
 SaveBackupChecks.Run();
 NativeRuntimeLayoutChecks.Run();
 await RuntimeUpdateChecks.Run();
+}
 
 if (args.Length > 0 && args[0] == "--check-native-runtime")
 {
@@ -159,6 +354,8 @@ var published = args.Length > 0 ? File.ReadAllText(Path.Combine(args[0], "local/
     : """{"graphics":{"width":3440,"height":1440},"native":{"executable_sha256":"authored-test-identity"}}""";
 var settings = new LauncherSettings { Width = 3440, Height = 1440, WindowMode = "fullscreen_windowed" };
 var profile = GameRunner.CreateLaunchProfile(published, settings);
+Check(profile["native"]!["runtime_environment"]!["MW34_SEH_LOG"]!.GetValue<string>() == "1",
+    "Remote native memory-fault diagnostics were not enabled");
 GameRunner.ApplyEnvironmentSelection(profile, new JsonArray(), false, false);
 if (profile["native"]!["prepared_environment_pack_roots"] != null)
     throw new Exception("Development upgrade discarded its existing environment bindings.");
@@ -176,6 +373,32 @@ var serializedProfile = GameRunner.SerializeLaunchProfile(profile);
 if (JsonNode.Parse(serializedProfile)!["native"]!["prepared_pack_roots"]![0]!.GetValue<string>() != Path.Combine(Path.GetTempPath(), "authored pack root"))
     throw new Exception("Serialized installed-pack root changed");
 void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+Check(profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "0", "Monitor must default off");
+var pipelineCache = Path.Combine(Path.GetTempPath(), "authored pipeline warmup cache");
+var cacheProfile = GameRunner.CreateLaunchProfile(serializedProfile, settings, pipelineCache);
+Check(cacheProfile["native"]!["runtime_environment"]!["MW34_PIPELINE_WARMUP_DIR"]!.GetValue<string>() == pipelineCache, "Pipeline cache escaped user storage");
+Check(cacheProfile["native"]!["runtime_environment"]!["MW34_PIPELINE_WARMUP"]!.GetValue<string>() == "1", "Pipeline warmup binding lost");
+Check(cacheProfile["native"]!["runtime_environment"]!["MW34_NORMAL_PREWARM"]!.GetValue<string>() == "1", "Mission normal warmup binding lost");
+try { GameRunner.CreateLaunchProfile(serializedProfile, settings, "relative-cache"); throw new Exception("Relative cache path accepted"); }
+catch (InvalidOperationException) { }
+settings.PerformanceMonitor = true;
+var oldMonitorProfile = JsonNode.Parse(serializedProfile)!.AsObject();
+oldMonitorProfile["native"]!.AsObject().Remove("performance_monitor_version");
+try { GameRunner.CreateLaunchProfile(oldMonitorProfile.ToJsonString(), settings); throw new Exception("Old runtime advertised the new monitor"); }
+catch (InvalidOperationException) { }
+var monitorSource = JsonNode.Parse(serializedProfile)!;
+monitorSource["native"]!["performance_monitor_version"] = 1;
+var monitorProfile = GameRunner.CreateLaunchProfile(monitorSource.ToJsonString(), settings);
+Check(monitorProfile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "1", "Monitor on choice lost");
+settings.PerformanceMonitor = false;
+Check(GameRunner.CreateLaunchProfile(monitorProfile.ToJsonString(), settings)["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "0", "Stale profile re-enabled monitor");
+var monitorSettingsRoot = Path.Combine(Path.GetTempPath(), "MW3MonitorSettings-" + Guid.NewGuid().ToString("N"));
+try {
+    var monitorSettings = new SettingsManager(monitorSettingsRoot, monitorSettingsRoot);
+    monitorSettings.Current.PerformanceMonitor = true;
+    monitorSettings.Save();
+    Check(new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.PerformanceMonitor, "Monitor setting did not persist");
+} finally { if (Directory.Exists(monitorSettingsRoot)) Directory.Delete(monitorSettingsRoot, true); }
 Check(profile["graphics"]!["width"]!.GetValue<int>() == 3440, "Lost requested width");
 Check(profile["graphics"]!["window_mode"]!.GetValue<string>() == "fullscreen_windowed", "Borderless choice was not preserved");
 Check(profile["native"]!["executable_sha256"]!.ToString() == JsonNode.Parse(published)!["native"]!["executable_sha256"]!.ToString(), "Changed host identity");

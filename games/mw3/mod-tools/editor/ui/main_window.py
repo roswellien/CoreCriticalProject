@@ -57,6 +57,7 @@ class MainWindow(tk.Tk):
 
         self.current_mission: Optional[MissionData] = None
         self.current_project: Optional[ModProject] = None
+        self.history.project = self.current_project
 
         self._build_menu()
         self._build_toolbar()
@@ -321,6 +322,7 @@ class MainWindow(tk.Tk):
                 target_mission=mission_id,
             )
             self.history.clear()
+            self.history.project = self.current_project
             self.mission_label.config(text=f"{operation.upper()} / {mission_id}")
 
             # Populate Treeview
@@ -421,20 +423,29 @@ class MainWindow(tk.Tk):
         new_x, new_y, new_z = obj.x, obj.y, obj.z
         # Revert temporary visual state so command execution applies it cleanly to history
         obj.x, obj.y, obj.z = old_x, old_y, old_z
-        cmd = MoveObjectCommand(obj, new_x, new_y, new_z, on_update=self._on_property_edited)
+        cmd = MoveObjectCommand(
+            obj,
+            new_x,
+            new_y,
+            new_z,
+            on_update=self._on_property_edited,
+            project=self.current_project,
+        )
         self.history.execute(cmd)
 
-    def _on_property_edited(self) -> None:
-        """Record the current selection's delta and refresh its widgets.
+    def _on_property_edited(self, obj: Optional[PlacedObject] = None) -> None:
+        """Record the affected object's delta and refresh its widgets.
 
-        This selection-based callback is also used by history commands; it does
-        not receive the changed object. The resulting undo/save mismatch remains
-        a separate behavior fix, not an ownership guarantee of this callback.
+        Persists changes for the command's affected object (or current selection
+        if called without an explicit object), ensuring deltas remain synchronized
+        regardless of which object is currently selected.
         """
-        if self.canvas.selected_object and self.current_project:
-            self.current_project.record_object_change(self.canvas.selected_object)
+        target = obj if obj is not None else self.canvas.selected_object
+        if target and self.current_project:
+            self.current_project.record_object_change(target)
         self.canvas.redraw()
-        self.inspector.inspect_object(self.canvas.selected_object)
+        if self.canvas.selected_object:
+            self.inspector.inspect_object(self.canvas.selected_object)
 
     def _on_cursor_coords(self, wx: float, wz: float) -> None:
         self.coords_label.config(text=f"X: {wx:7.1f}m, Z: {wz:7.1f}m")
@@ -463,19 +474,23 @@ class MainWindow(tk.Tk):
         cmd = self.history.undo()
         if cmd:
             self.status_msg.config(text=f"Undid: {cmd.description}")
-            if self.canvas.selected_object and self.current_project:
-                self.current_project.record_object_change(self.canvas.selected_object)
+            affected = getattr(cmd, "affected_object", None)
+            if affected and self.current_project:
+                self.current_project.record_object_change(affected)
             self.canvas.redraw()
-            self.inspector.inspect_object(self.canvas.selected_object)
+            if self.canvas.selected_object:
+                self.inspector.inspect_object(self.canvas.selected_object)
 
     def _redo(self) -> None:
         cmd = self.history.redo()
         if cmd:
             self.status_msg.config(text=f"Redid: {cmd.description}")
-            if self.canvas.selected_object and self.current_project:
-                self.current_project.record_object_change(self.canvas.selected_object)
+            affected = getattr(cmd, "affected_object", None)
+            if affected and self.current_project:
+                self.current_project.record_object_change(affected)
             self.canvas.redraw()
-            self.inspector.inspect_object(self.canvas.selected_object)
+            if self.canvas.selected_object:
+                self.inspector.inspect_object(self.canvas.selected_object)
 
     def _new_project(self) -> None:
         """Reset serialized deltas/history for the current mission; do not reload its scene."""
@@ -488,6 +503,7 @@ class MainWindow(tk.Tk):
             target_mission=self.current_mission.mission_id,
         )
         self.history.clear()
+        self.history.project = self.current_project
         messagebox.showinfo(
             "New Project", f"Created new project for {self.current_mission.mission_id.upper()}."
         )
@@ -507,21 +523,10 @@ class MainWindow(tk.Tk):
             proj = ModProject.load(Path(f))
             self._open_mission(proj.target_operation, proj.target_mission)
             self.current_project = proj
+            self.history.project = self.current_project
             # Reapply project modifications to current mission objects
             if self.current_mission:
-                for obj in self.current_mission.placed_objects:
-                    if obj.node_index in proj.modified_objects:
-                        edits = proj.modified_objects[obj.node_index]
-                        if "x" in edits:
-                            obj.x = float(edits["x"])
-                        if "y" in edits:
-                            obj.y = float(edits["y"])
-                        if "z" in edits:
-                            obj.z = float(edits["z"])
-                        if "rot_y" in edits:
-                            obj.rot_y = float(edits["rot_y"])
-                        if "active" in edits:
-                            obj.active = bool(edits["active"])
+                self.current_project.apply_to_mission(self.current_mission)
                 self.canvas.redraw()
             messagebox.showinfo(
                 "Project Loaded",

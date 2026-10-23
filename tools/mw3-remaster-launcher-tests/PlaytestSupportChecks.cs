@@ -50,7 +50,9 @@ static class PlaytestSupportChecks
             settings.Current.GamePath = Path.Combine(root, "private game directory");
             var privateText = "ERROR: Cannot open " + settings.Current.GamePath + "\\file.bin\n";
             File.WriteAllText(runner.LastLogPath!, new string('x', PlaytestDiagnostics.MaxLogBytes * 3) + "\n" + privateText);
-            File.WriteAllText(Path.Combine(session, "native", "stderr.txt"), "loader-order entry fault: authored fixture failure\n");
+            File.WriteAllText(Path.Combine(session, "native", "stderr.txt"),
+                "SEH flat fault address=00000000 esp=20001000 ebp=20001080 eax=00000000 ecx=00000004 edx=00000010 esi=50000000 edi=00000000 depth=1\n" +
+                "  return[0]=00412345 slot=20001004\nloader-order entry fault: authored fixture failure\n");
             File.WriteAllText(Path.Combine(session, "native", "stdout.txt"), "fixture output\n");
             File.WriteAllText(Path.Combine(session, "native", "original.exe"), "DO_NOT_EXPORT_GAME_BYTES");
             File.WriteAllText(Path.Combine(session, "profile.json"), "DO_NOT_EXPORT_PRIVATE_PROFILE");
@@ -66,6 +68,9 @@ static class PlaytestSupportChecks
                 {
                     using var reader = new StreamReader(entry.Open());
                     var text = reader.ReadToEnd();
+                    if (entry.FullName == "native-stderr.txt")
+                        Check(text.Contains("SEH flat fault address=00000000") && text.Contains("return[0]=00412345"),
+                            "Remote crash report dropped the native registers/return chain");
                     Check(!text.Contains(root) && !text.Contains("DO_NOT_EXPORT"), "Report exposed private paths/content");
                     if (entry.FullName == "report.json")
                     {

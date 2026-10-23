@@ -33,8 +33,8 @@ def build(first, second, output, pack_id="local.cd-soundtrack", name="CD Audio S
         members[relative] = source.read_bytes()
         tracks.append(dict(cd_track=number, source=relative))
     members['music/music.json'] = json.dumps(dict(schema_version=2, payload_profile='prepared-music-v1', tracks=tracks), indent=2).encode()
-    manifest = dict(schema_version=2, id=pack_id, name=name, version='1.0.0', category='Music',
-                    provides=dict(cd_music=True), native_payload=dict(profile='prepared-music-v1', registry='music/music.json', path_base='pack-root'),
+    manifest = dict(schema_version=2, game_id="mw3", id=pack_id, name=name, version='1.0.0', category='Music',
+                    provides=dict(cd_music=True), native_payload=dict(profile='prepared-music-v1', registry='music/music.json', path_base='pack-root', required_capabilities={'soundtrack':1}),
                     files={key: dict(bytes=len(value), sha256=hashlib.sha256(value).hexdigest()) for key, value in members.items()})
     output.parent.mkdir(parents=True, exist_ok=True)
     # Exclusive creation protects both prior packs and the user's source files.

@@ -117,7 +117,7 @@ def environment_resources(selected, host, cache_root, progress=None):
 
 def _environment_resources(selected, host, cache_root, progress=None):
     """Reuse complete merged normal/lighting resources for an identical selection."""
-    from prepared_environment_packs import prepare
+    from prepared_environment_packs import prepare, profile_bindings, RESOURCE_KEYS
     progress = progress or (lambda message: None)
     # Include source implementation identities so reader/writer changes invalidate
     # the cache, even when no installed pack changes.
@@ -125,13 +125,20 @@ def _environment_resources(selected, host, cache_root, progress=None):
     producers = {name: hashlib.sha256((source / name).read_bytes()).hexdigest()
                  for name in ('startup_cache.py', 'prepared_environment_packs.py',
                               'normal_materials.py', 'mission_lighting.py')}
-    identity = dict(selected=selected, host=host, producers=producers)
+    # Only resource-generation inputs belong in this identity. The full host
+    # includes fresh session/log paths and player controls on every launch.
+    # Those bindings must remain current without rebuilding identical images.
+    resource_host = dict(executable_sha256=host.get('executable_sha256'),
+                         authored_normal_catalog_budget_bytes=host.get(
+                             'authored_normal_catalog_budget_bytes', 536870912))
+    identity = dict(selected=selected, host=resource_host, producers=producers)
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     directory = Path(cache_root) / 'environment-cache' / key
     receipt_path = directory / 'ready.json'
     receipt = read_receipt(receipt_path)
     try:
-        if receipt.get('identity') == key and receipt.get('complete') is True and isinstance(receipt.get('files'), dict):
+        if (receipt.get('identity') == key and receipt.get('complete') is True and
+                isinstance(receipt.get('files'), dict) and isinstance(receipt.get('environment'), dict)):
             for name, pin in receipt['files'].items():
                 # Only immediate, generated filenames are registered.
                 if Path(name).name != name or '/' in name or '\\' in name:
@@ -145,7 +152,10 @@ def _environment_resources(selected, host, cache_root, progress=None):
                     pin['stat'] = fingerprint(path)
             write_receipt(receipt_path, receipt)
             progress('Reusing prepared textures, surface detail and mission lighting.')
-            return receipt['environment']
+            bindings = profile_bindings(selected, host)
+            bindings.update({key: value for key, value in receipt['environment'].items()
+                             if key in RESOURCE_KEYS})
+            return bindings
     except (OSError, ValueError, KeyError, TypeError):
         pass
     # Preserve incomplete/corrupt attempts, never publish a partial ready receipt.

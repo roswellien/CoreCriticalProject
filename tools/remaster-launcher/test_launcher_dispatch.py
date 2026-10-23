@@ -4,6 +4,8 @@ import os
 import sys
 import types
 import unittest
+import tempfile
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +13,38 @@ import play_remaster
 
 
 class LauncherDispatchTests(unittest.TestCase):
+    def test_environment_preparation_cannot_replace_installed_enemy_skin_bindings(self):
+        # Observed session: the model plan had B-H bindings, while the final
+        # environment/profile retained only the historical Bushwacker-D pair.
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            model_bindings = {
+                f'MW34_{chassis}{lod}_SKIN_{skin}_TEXTURES': str(output / f'{chassis}{lod}-{skin}.bin')
+                for chassis in ('BUSHWACKER', 'THOR') for lod in ('', '_LOD1') for skin in 'BCDEFGH'
+            }
+            model_bindings['MW34_THOR_MESH'] = str(output / 'thor.bin')
+            native = dict(runtime_environment=dict(model_bindings))
+            planned = dict(backend='native', graphics=dict(width=1280,height=720,aa=1,af=1),
+                           supported=True, texture_banks=1,
+                           models=[dict(id='thor',name='Thor',status='runtime-ready')],
+                           offline_models=[],limitations=[],command=['powershell.exe','-Profile','old.json'],
+                           music=None,asset_output=str(output),prepared_profile=dict(native=native),environment_packs={})
+            stale = {'MW34_BUSHWACKER_SKIN_D_TEXTURES': 'stale-developer-skin.bin',
+                     'MW34_ORION_MESH': 'disabled-old-model.bin',
+                     'MW34_REMASTER_BANKS': 'prepared-banks.bin'}
+            with (patch.object(sys,'argv',['play_remaster','--prepare-only','--asset-output',str(output)]),
+                  patch.object(play_remaster,'plan',return_value=planned),
+                  patch.object(play_remaster,'read_json',return_value={'native':{'executable':'authored.exe'}}),
+                  patch.dict(sys.modules,{'native_assets':types.SimpleNamespace(prepare=lambda *a,**kw:dict(model_bindings))}),
+                  patch('startup_cache.environment_resources',return_value=stale)):
+                self.assertEqual(play_remaster.main(),0)
+            profiles=list((output/'launches').glob('*/profile.json'))
+            self.assertEqual(len(profiles),1)
+            actual=json.loads(profiles[0].read_text())['native']['runtime_environment']
+            for key,value in model_bindings.items(): self.assertEqual(actual.get(key),value,key)
+            self.assertEqual(actual['MW34_REMASTER_BANKS'],'prepared-banks.bin')
+            self.assertNotIn('MW34_ORION_MESH',actual)
+
     def run_launch(self, *extra):
         graphics = dict(width=3440, height=1440, aa="fxaa", af=16, window_mode="fullscreen")
         planned = dict(

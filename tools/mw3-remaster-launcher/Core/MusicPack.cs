@@ -63,6 +63,7 @@ public static class MusicPack
         native["local_cd_audio"] = enabled && selected != null;
         if (enabled && selected != null)
         {
+            RuntimeContentCapabilities.Require(native, manifest!.NativePayload!, manifest.Id);
             var registry = PackStorage.Resolve(selected, Registry);
             var declared = manifest!.Files![Registry];
             using var input = File.OpenRead(registry);

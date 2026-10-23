@@ -28,7 +28,10 @@ class PackAuthoringTests(unittest.TestCase):
             source.write_bytes(content)
             bg=root/'background';bg.write_bytes(struct.pack('<8sIIII3B',b'MWHDBG1\0',1,1,1,1,0,0,0))
             output=root/'menu.mw3pack'
-            ui('menu',sprites,bg,'a'*64,output);self.verify(output)
+            ui('menu',sprites,bg,'',output);self.verify(output)
+            with zipfile.ZipFile(output) as archive:
+                payload=json.loads(archive.read('pack.json'))['native_payload']
+                self.assertEqual(payload['required_capabilities'], {'ui-artwork':1})
             self.assertEqual(content,source.read_bytes())
             with self.assertRaises(FileExistsError):ui('menu',sprites,bg,'a'*64,output)
             with self.assertRaises(ValueError):ui('hud',sprites,bg,'a'*64,root/'bad.mw3pack')

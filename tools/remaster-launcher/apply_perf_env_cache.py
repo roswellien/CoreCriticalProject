@@ -15,6 +15,9 @@ zeroing a width x 24 buffer every frame (it clears its own box). Behaviour is un
 After replacing or expanding the model adapter, --models-only restores its caches
 without reapplying renderer/HUD edits. This mode accepts an already cached adapter
 and validates every model anchor before writing the file.
+
+--display-only caches the modern renderer's validated output dimensions. It
+rejects older hard-coded display adapters and preserves all other host files.
 """
 from pathlib import Path
 import argparse
@@ -62,6 +65,61 @@ def apply_model_cache(host):
         m.write_text(updated)
 
 
+DISPLAY_ORIGINAL = '''    static unsigned remaster_width() {
+        const unsigned w = remaster_setting("MW34_REMASTER_WIDTH", 0),
+                       h = remaster_setting("MW34_REMASTER_HEIGHT", 0);
+        if ((w || h) && (w < 640 || h < 480 || w > 7680 || h > 4320))
+            throw std::runtime_error("Remaster output resolution outside 640x480..7680x4320");
+        if ((fxaa_enabled() || anisotropy() > 1) && !w)
+            throw std::runtime_error("AA/AF require an explicit native Remaster resolution");
+        return w;
+    }
+    static unsigned remaster_height() {
+        return remaster_width() ? remaster_setting("MW34_REMASTER_HEIGHT", 0) : 0;
+    }
+'''
+
+DISPLAY_CACHED = '''    struct OutputResolution {
+        unsigned width{}, height{};
+    };
+    static const OutputResolution &remaster_resolution() {
+        // These process settings are supplied before host startup. Window/target
+        // recreation uses the same validated output, without reparsing the
+        // environment for each HUD primitive or aspect-ratio calculation.
+        static const OutputResolution resolution = [] {
+            const unsigned w = remaster_setting("MW34_REMASTER_WIDTH", 0),
+                           h = remaster_setting("MW34_REMASTER_HEIGHT", 0);
+            if ((w || h) && (w < 640 || h < 480 || w > 7680 || h > 4320))
+                throw std::runtime_error("Remaster output resolution outside 640x480..7680x4320");
+            if ((fxaa_enabled() || anisotropy() > 1) && !w)
+                throw std::runtime_error("AA/AF require an explicit native Remaster resolution");
+            return OutputResolution{w, h};
+        }();
+        return resolution;
+    }
+    static unsigned remaster_width() { return remaster_resolution().width; }
+    static unsigned remaster_height() {
+        return remaster_resolution().height;
+    }
+'''
+
+
+def display_cache_text(text):
+    if text.count(DISPLAY_CACHED) == 1 and DISPLAY_ORIGINAL not in text:
+        return text
+    if text.count(DISPLAY_ORIGINAL) != 1 or 'struct OutputResolution' in text:
+        raise RuntimeError('Expected the validated modern display accessors exactly once')
+    return text.replace(DISPLAY_ORIGINAL, DISPLAY_CACHED)
+
+
+def apply_display_cache(host):
+    path = host / 'vk_scene.hpp'
+    text = path.read_text()
+    updated = display_cache_text(text)
+    if updated != text:
+        path.write_text(updated)
+
+
 def apply(host):
     apply_model_cache(host)
     vk=host/'vk_scene.hpp'
@@ -75,6 +133,8 @@ def apply(host):
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('host_source',type=Path)
-    p.add_argument('--models-only',action='store_true')
+    mode=p.add_mutually_exclusive_group()
+    mode.add_argument('--models-only',action='store_true')
+    mode.add_argument('--display-only',action='store_true')
     a=p.parse_args()
-    (apply_model_cache if a.models_only else apply)(a.host_source)
+    (apply_display_cache if a.display_only else apply_model_cache if a.models_only else apply)(a.host_source)

@@ -164,9 +164,9 @@ public static class CinematicPack
             foreach (var clip in Read(root, manifest).Where(c => c.Replaces != null))
             {
                 if (selected.ContainsKey(clip.Replaces!)) continue;
-                if (!codecVerified || native["cinematic_path_versions"] is not JsonArray versions || !versions.Any(v => v!.GetValue<int>() == 1) ||
-                    !NativeHostCompatibility.Matches(manifest.NativePayload.ReferenceHostSha256, native["executable_sha256"]!.GetValue<string>()))
-                    throw new InvalidDataException("This cinematic replacement requires its matched native runtime.");
+                RuntimeContentCapabilities.Require(native, manifest.NativePayload, manifest.Id);
+                if (!codecVerified || native["cinematic_path_versions"] is not JsonArray versions || !versions.Any(v => v!.GetValue<int>() == 1))
+                    throw new InvalidDataException("This cinematic replacement requires the original decoder and cinematic path version 1.");
                 // New scenes cannot silently invent guest story/mission hooks.
                 var video = Directory.EnumerateDirectories(game).FirstOrDefault(d => Path.GetFileName(d).Equals("video", StringComparison.OrdinalIgnoreCase));
                 if (video == null || !Directory.EnumerateFiles(video).Any(f => Path.GetFileName(f).Equals(clip.Replaces + ".avi", StringComparison.OrdinalIgnoreCase)))

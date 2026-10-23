@@ -1,0 +1,19 @@
+"""Bounded plain ordinary raw observation; no reader/model/import/ROOT admission."""
+from pathlib import Path
+import hashlib,json,re,struct
+R=Path(__file__).resolve().parents[2]
+def sha(p):
+ with Path(p).open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+def main():
+ out=R/'reports/m4-startup141-paired/native-API-prefix-diagnostic-r1';assert not out.exists();out.mkdir();np=R/'reports/m4-startup141-source/combined-source-provider-r6/report.json';assert sha(np)=='8684b0a3219a72a3a0712dd99170e0c584ee0c5cd438effcd9632a83bc3d72b3';N=json.loads(np.read_bytes());e=next(v for v in N['paired_exports']if v['branch']=='O0');ip=Path(e['index_path']);pp=Path(e['payload_path']);assert sha(ip)==e['index_sha256']==N['files'][str(ip)]and ip.suffix.lower()not in('.mwb','.mwi','.zip')and pp.suffix.lower()not in('.mwb','.mwi','.zip');index=json.loads(ip.read_bytes());assert pp.stat().st_size==e['payload_bytes']==index['payload_bytes']and index['logical_files']==e['logical_files']
+ prior=R/'reports/m4-startup141-paired/native36-source-r4/report.json';assert sha(prior)=='8b09520b66890815803bce0053fb42ba63ea4858128372ccc0488f222607b185';P=json.loads(prior.read_bytes());assert P['passed']is False and P['ordinary_reader_closed']is True and P['files'][str(pp)]==e['payload_sha256']
+ contract_path=R/'reports/m4-startup141-paired/native-owner-metadata-preparation-r2/physical-API-contracts.json';contracts=json.loads(contract_path.read_bytes());reads={};total=0
+ with pp.open('rb')as f:
+  def data(key,size):
+   nonlocal total
+   item=index['entries'][key];assert item['bytes']==size and type(item['offset'])is int and item['offset']>=0 and item['offset']+size<=index['payload_bytes'];f.seek(item['offset']);b=f.read(size);assert len(b)==size and hashlib.sha256(b).hexdigest()==item['sha256'];reads[key]=dict(item);total+=size;assert total<=14000;return b
+  base='sequence-0/selected/';resource=list(struct.unpack('<8Q',data(base+'lockit-resource.bin',64)));facts=[]
+  for i in range(52):
+   key=base+'locale-api-'+str(i)+'-witness.bin';w=list(struct.unpack('<32Q',data(key,256)));name=contracts.get(str(w[2]),['UNMATCHED_PHYSICAL_CONTRACT'])[0];facts.append(dict(index=i,key=key,sha256=reads[key]['sha256'],actual_words=w,physical_contract_name=name,word0_1=w[:2],word14_15=w[14:16],word19=w[19],word31=w[31],old_guard_passes=len(w)==32 and w[:2]==[1,i]and w[14:16]==[1,1]and not w[31]))
+ assert sha(ip)==e['index_sha256'];output=out/'raw-fields.json';output.write_text(json.dumps(dict(resource_words=resource,facts=facts),indent=2)+'\n');bad=[{k:v for k,v in x.items()if k!='actual_words'}for x in facts if not x['old_guard_passes']];r=out/'report.json';r.write_text(json.dumps(dict(passed=True,scope='Limited code-independent O0 sequence0 first52 actual API32Q/resource8 ordinary raw diagnostic, not source/admission validation',current_native_source_sha256=sha(np),index_path=str(ip),index_sha256=sha(ip),payload_path=str(pp),declared_payload_sha256=e['payload_sha256'],payload_whole_hash_recomputed_by_this_diagnostic=False,root_closed_failed_source_report_sha256=sha(prior),source_failure_preserved=True,ordinary_bytes_read=total,individual_entry_hashes_checked=len(reads),resource_words=resource,first_old_guard_failure=bad[0]if bad else None,all_old_guard_failures=bad,raw_fields_path=str(output),raw_fields_sha256=sha(output),model_executed=False,CaptureReader_opened=False,canonical_reader_opened=False,worker_launched=False,root_admission_minted=False,initializer_credit=0,files={str(np):sha(np),str(ip):sha(ip),str(prior):sha(prior),str(contract_path):sha(contract_path),str(output):sha(output),str(Path(__file__).resolve()):sha(__file__)},ordinary_selected_entry_identities=reads),indent=2)+'\n');print(json.dumps(dict(path=str(r),sha256=sha(r),resource_words=resource,first_failure=bad[0]if bad else None,failed_indices=[v['index']for v in bad],bytes_read=total)))
+if __name__=='__main__':main()

@@ -69,6 +69,25 @@ class StartupCacheTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select([str(pack)], host, VerificationCache(self.root / 'cache'))
 
+    def test_new_session_reuses_resources_with_fresh_launch_bindings(self):
+        pack = self.fixtures.fixture(self.root / 'pack')
+        host = self.fixtures.host()
+        first_host = dict(host, runtime_environment={
+            'MW34_FRAME_TIMES': 'session-a/times.txt', 'MW34_PERF_OVERLAY': '0',
+            'MW34_INSTANT_REPLAY': '0'})
+        chosen = select([str(pack)], first_host)
+        first = environment_resources(chosen, first_host, self.root / 'cache')
+        second_host = dict(host, launch_session_directory='session-b', graphics={'width': 1920},
+                           runtime_environment={
+            'MW34_FRAME_TIMES': 'session-b/times.txt', 'MW34_PERF_OVERLAY': '1',
+            'MW34_INSTANT_REPLAY': '0'})
+        with patch('prepared_environment_packs.prepare', side_effect=AssertionError('New session rebuilt images')):
+            second = environment_resources(chosen, second_host, self.root / 'cache')
+        self.assertEqual(first['MW34_REMASTER_BANKS'], second['MW34_REMASTER_BANKS'])
+        self.assertEqual(second['MW34_FRAME_TIMES'], 'session-b/times.txt')
+        self.assertEqual(second['MW34_PERF_OVERLAY'], '1')
+        self.assertEqual(second['MW34_INSTANT_REPLAY'], '0')
+
     def test_selection_host_and_producer_changes_invalidate_resources(self):
         pack = self.fixtures.fixture(self.root / 'pack')
         host = self.fixtures.host(); chosen = select([str(pack)], host)

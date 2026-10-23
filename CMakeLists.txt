@@ -54,6 +54,15 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_menu_wave_tests)
     add_test(NAME menu_wave COMMAND mw34_menu_wave_tests)
 
+    if(WIN32)
+        add_executable(mw34_local_cd_audio_tests tests/local_cd_audio_tests.cpp)
+        target_include_directories(mw34_local_cd_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
+        target_compile_definitions(mw34_local_cd_audio_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(mw34_local_cd_audio_tests PRIVATE winmm user32)
+        mw34_warnings(mw34_local_cd_audio_tests)
+        add_test(NAME local_cd_audio_failures COMMAND mw34_local_cd_audio_tests)
+    endif()
+
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)

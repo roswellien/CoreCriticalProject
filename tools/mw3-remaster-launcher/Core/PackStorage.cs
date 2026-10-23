@@ -3,12 +3,49 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Text;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace MW3RemasterLauncher.Core;
+
+public sealed record PackInstallProgress(string Stage, long CompletedBytes, long TotalBytes, bool IsComplete = false)
+{
+    public double Percent => TotalBytes > 0
+        ? Math.Min(IsComplete ? 100 : 99, 100.0 * CompletedBytes / TotalBytes) : 0;
+}
 
 /// <summary>Bounded pack extraction. Content is verified before replacing an owned installation.</summary>
 public static class PackStorage
 {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint size, uint flags);
+
+    /// <summary>Pin the physical manifest opened here before handing its pack to another process.</summary>
+    public static string CanonicalPackRoot(string directory)
+    {
+        var physical = CanonicalFilePath(Path.Combine(Path.GetFullPath(directory), "pack.json"));
+        if (!Path.GetFileName(physical).Equals("pack.json", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Resolved pack manifest identity changed.");
+        return Path.GetDirectoryName(physical)!;
+    }
+
+    /// <summary>Resolve MSIX filesystem redirection before handing a file to an external native child.</summary>
+    public static string CanonicalFilePath(string path)
+    {
+        EnsureNoLinks(path);
+        using var file = File.OpenRead(path);
+        var name = new StringBuilder(32768);
+        var length = GetFinalPathNameByHandleW(file.SafeFileHandle, name, (uint)name.Capacity, 0);
+        if (length == 0 || length >= name.Capacity)
+            throw new IOException("Cannot resolve the physical file path.", new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
+        var physical = name.ToString();
+        if (physical.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) physical = @"\\" + physical[8..];
+        else if (physical.StartsWith(@"\\?\", StringComparison.Ordinal)) physical = physical[4..];
+        EnsureNoLinks(physical);
+        return physical;
+    }
+
     // Operation 4 includes both C4 and C4b (over 8 GiB of prepared banks).
     public const long MaxExpandedBytes = 16L * 1024 * 1024 * 1024;
     public const int MaxJsonBytes = 2 * 1024 * 1024;
@@ -65,10 +102,14 @@ public static class PackStorage
         var manifest = JsonSerializer.Deserialize<PackManifest>(json)
             ?? throw new InvalidDataException("Empty pack manifest.");
         ValidateId(manifest.Id);
+        GameCatalog.Get(manifest.GameId);
+        if (manifest.GameId != GameCatalog.Mw3 && manifest.SchemaVersion == 2)
+            throw new InvalidDataException("Prepared content for this game is not supported yet.");
         if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2)
             throw new InvalidDataException("Unsupported pack schema.");
         if (manifest.SchemaVersion == 2)
         {
+            if (manifest.NativePayload != null) RuntimeContentCapabilities.ValidateRequirements(manifest.NativePayload);
             var environment = manifest.NativePayload?.Profile == "prepared-environment-v1";
             var music = manifest.NativePayload?.Profile == MusicPack.Profile;
             var ui = manifest.NativePayload?.Profile == UiPack.Profile;
@@ -128,7 +169,8 @@ public static class PackStorage
         }
     }
 
-    public static PackManifest Install(string root, string archivePath)
+    public static PackManifest Install(string root, string archivePath, string gameId = GameCatalog.Mw3,
+        IProgress<PackInstallProgress>? progress = null)
     {
         root = Path.GetFullPath(root);
         EnsureNoLinks(root);
@@ -139,12 +181,33 @@ public static class PackStorage
         Directory.CreateDirectory(stage);
         try
         {
+            progress?.Report(new("Checking archive", 0, 0));
             using var archive = ZipFile.OpenRead(archivePath);
             if (archive.Entries.Count > 10000) throw new InvalidDataException("Too many pack members.");
             var manifestEntry = archive.GetEntry("pack.json") ?? throw new InvalidDataException("pack.json must be at the archive root.");
             if (manifestEntry.Length > MaxJsonBytes) throw new InvalidDataException("Pack manifest is too large.");
             ExtractBounded(manifestEntry, Path.Combine(stage, "pack.json"));
             var manifest = ReadManifest(Path.Combine(stage, "pack.json"));
+            GameCatalog.RequirePackTarget(manifest.GameId, gameId, archivePath);
+            long expandedBytes = 0;
+            foreach (var member in archive.Entries.Where(e => !e.FullName.EndsWith('/')))
+                expandedBytes = checked(expandedBytes + member.Length);
+            if (expandedBytes > MaxExpandedBytes) throw new InvalidDataException("Pack expanded size exceeds limit.");
+            long progressTotal = expandedBytes;
+            if (manifest.SchemaVersion == 2)
+                foreach (var declaredFile in manifest.Files!.Values)
+                    progressTotal = checked(progressTotal + declaredFile.Bytes);
+            long completedBytes = manifestEntry.Length;
+            var progressClock = System.Diagnostics.Stopwatch.StartNew();
+            long lastReport = -100;
+            void ReportProgress(string phase, int bytes = 0, bool force = false)
+            {
+                completedBytes = checked(completedBytes + bytes);
+                if (progress == null || (!force && progressClock.ElapsedMilliseconds - lastReport < 100)) return;
+                lastReport = progressClock.ElapsedMilliseconds;
+                progress.Report(new(phase, completedBytes, progressTotal));
+            }
+            ReportProgress("Extracting assets", force: true);
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             long total = 0;
             foreach (var entry in archive.Entries)
@@ -170,11 +233,19 @@ public static class PackStorage
                 if (manifest.SchemaVersion == 2 && (!manifest.Files!.TryGetValue(path, out declared) || declared.Bytes != entry.Length))
                     throw new InvalidDataException("Undeclared member or incorrect size: " + path);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                ExtractBounded(entry, dest);
+                ExtractBounded(entry, dest, progress == null ? null : bytes => ReportProgress("Extracting assets", bytes));
                 if (declared != null)
                 {
                     using var stream = File.OpenRead(dest);
-                    if (!Convert.ToHexString(SHA256.HashData(stream)).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase))
+                    using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    var buffer = new byte[65536];
+                    int count;
+                    while ((count = stream.Read(buffer)) != 0)
+                    {
+                        hash.AppendData(buffer, 0, count);
+                        ReportProgress("Verifying assets", count);
+                    }
+                    if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("Pack hash mismatch: " + path);
                 }
             }
@@ -227,6 +298,7 @@ public static class PackStorage
                         foreach (var detail in data.GetProperty("detail").EnumerateObject()) Declared(detail.Value.GetString()!);
                 }
             }
+            ReportProgress("Activating assets", force: true);
             var target = Resolve(root, manifest.Id);
             var previous = Resolve(root, ".rollback-" + manifest.Id);
             // Retain a recoverable previous version until the next successful replacement.
@@ -239,12 +311,13 @@ public static class PackStorage
                 throw;
             }
             manifest.DirectoryPath = target;
+            progress?.Report(new("Complete", progressTotal, progressTotal, true));
             return manifest;
         }
         finally { if (Directory.Exists(stage)) DeleteOwnedTree(stage); }
     }
 
-    private static void ExtractBounded(ZipArchiveEntry entry, string destination)
+    private static void ExtractBounded(ZipArchiveEntry entry, string destination, Action<int>? onBytes = null)
     {
         using var input = entry.Open();
         using var output = new FileStream(destination, FileMode.CreateNew);
@@ -256,6 +329,7 @@ public static class PackStorage
             written = checked(written + count);
             if (written > entry.Length) throw new InvalidDataException("Expanded member exceeds declared size.");
             output.Write(buffer, 0, count);
+            onBytes?.Invoke(count);
         }
         if (written != entry.Length) throw new InvalidDataException("Truncated pack member.");
     }

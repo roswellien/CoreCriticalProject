@@ -46,7 +46,7 @@ static class MusicPackChecks
             var first = manager.InstallPack(Archive("test.music.first"));
             var second = manager.InstallPack(Archive("test.music.second"));
             manager.RefreshPacks(new List<string> { first.Id, second.Id });
-            JsonObject Profile() => JsonNode.Parse("{\"native\":{\"local_cd_audio\":true}}")!.AsObject();
+            JsonObject Profile() => JsonNode.Parse("{\"native\":{\"local_cd_audio\":true,\"content_capabilities\":{\"soundtrack\":[1]}}}")!.AsObject();
             var profile = Profile();
             MusicPack.Apply(profile, manager.GetActivePackDirectories(), true);
             if (!profile["native"]!["music_inputs"]!["tracks"]![0]!["source"]!.GetValue<string>().StartsWith(first.DirectoryPath))

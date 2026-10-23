@@ -12,6 +12,17 @@ static class NativeRuntimeLayoutChecks
         Directory.CreateDirectory(app);
         try
         {
+            var executable = Path.Combine(AppContext.BaseDirectory, "LauncherChecks.exe");
+            NativeRuntimeLayout.ValidateLaunchExecutable(executable);
+            var libraryBytes = File.ReadAllBytes(executable);
+            var peOffset = BitConverter.ToInt32(libraryBytes, 60);
+            var characteristics = peOffset + 22;
+            libraryBytes[characteristics + 1] |= 0x20; // Reproduce DLL flag in a file named .exe.
+            var badExecutable = Path.Combine(app, "library-named-exe.exe");
+            File.WriteAllBytes(badExecutable, libraryBytes);
+            Reject(() => NativeRuntimeLayout.ValidateLaunchExecutable(badExecutable));
+            File.WriteAllText(badExecutable, "authored malformed executable");
+            Reject(() => NativeRuntimeLayout.ValidateLaunchExecutable(badExecutable));
             if (NativeRuntimeLayout.FindInstalled(app) != null) throw new Exception("Unexpected installed runtime.");
             var marker = Path.Combine(app, "launcher-installation.json");
             File.WriteAllText(marker, "{\"schema_version\":1,\"native_runtime\":\"requires-user-file-generation\"}");
@@ -41,6 +52,16 @@ static class NativeRuntimeLayoutChecks
             Reject(() => NativeRuntimeLayout.ResolveProfile(profile.Replace("\"host\"", "\"captured\""), root));
             var manifestPath = Path.Combine(root, "runtime.json");
             var originalManifest = File.ReadAllText(manifestPath);
+            var preparation = Path.Combine(app, "Preparation");
+            Directory.CreateDirectory(preparation);
+            File.WriteAllText(Path.Combine(preparation, "initial.mw3update"), "stale source installer metadata");
+            if (!BundledPreparation.IsAvailable(app)) throw new Exception("Legacy source preparation lost.");
+            var precompiled = JsonNode.Parse(originalManifest)!;
+            precompiled["precompiled_runtime_version"] = 1;
+            File.WriteAllText(manifestPath, precompiled.ToJsonString());
+            if (!NativeRuntimeLayout.HasPrecompiledRuntime(app) || BundledPreparation.IsAvailable(app))
+                throw new Exception("A precompiled install attempted legacy source generation.");
+            File.WriteAllText(manifestPath, originalManifest);
             var modulePath = Path.Combine(root, "translated.dll");
             File.WriteAllText(modulePath, "authored native module fixture");
             var moduleManifest = JsonNode.Parse(originalManifest)!;

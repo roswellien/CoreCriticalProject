@@ -149,3 +149,11 @@ preparation.json says reused_previous_native_code=false. This closes the prior
 frozen package's full first-install lane; it does not replace signed-toolchain
 integration or a clean Windows machine test. No NativePreparer process remains.
 Protected controls Python 6536/5196 and unrelated server 4164 remain untouched.
+
+## Core Critical continuation
+
+Launcher 1.0.19 introduces .ccupdate launcher upgrades and explicit game-specific
+package identities. See [Core Critical package contracts](core-critical-launcher-and-game-packages-2026-10-22.md)
+for the current source implementation, compatibility rules and remaining real
+signed-upgrade test. Rebuild the pending setup from the latest source rather than
+shipping the earlier unsigned 1.0.17 artifact.

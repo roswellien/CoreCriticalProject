@@ -28,7 +28,7 @@ def package(source, output, powershell, signer, private_key, public_key, key_id,
     with zipfile.ZipFile(archive,'x',compression=zipfile.ZIP_DEFLATED,compresslevel=1) as target:
         for name in sorted(expected):
             target.write(resolve(source,name),name)
-    manifest = dict(schema_version=1,version=version,sequence=sequence,minimum_launcher_version='1.0.17',
+    manifest = dict(schema_version=1,game_id='mw3',version=version,sequence=sequence,minimum_launcher_version='1.0.19',
         preparation_contract='mw3-source-runtime-v2',package_url='',package_bytes=archive.stat().st_size,
         package_sha256=sha(archive),preparer='NativePreparer.exe',files=expected,original_inputs=config['original_inputs'])
     unsigned = output/'manifest.json'

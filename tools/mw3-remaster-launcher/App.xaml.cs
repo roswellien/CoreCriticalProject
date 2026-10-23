@@ -8,8 +8,23 @@ namespace MW3RemasterLauncher
 {
     public partial class App : Application
     {
-        protected override void OnStartup(StartupEventArgs e)
+        private readonly bool _showMainWindow;
+        public App() : this(true) { }
+        public App(bool showMainWindow) { _showMainWindow = showMainWindow; }
+        protected override async void OnStartup(StartupEventArgs e)
         {
+            if (e.Args.Length == 2 && e.Args[0] == "--apply-ccupdate")
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                base.OnStartup(e);
+                try { await LauncherUpdates.ApplyJobAsync(e.Args[1]); Shutdown(0); }
+                catch (Exception error)
+                {
+                    MessageBox.Show(error.Message, "Core Critical update failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                    Shutdown(1);
+                }
+                return;
+            }
             base.OnStartup(e);
 
             DispatcherUnhandledException += (s, args) =>
@@ -23,7 +38,7 @@ namespace MW3RemasterLauncher
             if (argsList.Contains("--add-steam", StringComparer.OrdinalIgnoreCase))
             {
                 var basePath = AppDomain.CurrentDomain.BaseDirectory;
-                var launcherExe = Path.Combine(basePath, "MW3RemasterLauncher.exe");
+                var launcherExe = Path.Combine(basePath, "Core Critical Launcher.exe");
                 var artworkDir = Path.Combine(basePath, "Assets", "Plates");
                 SteamHelper.AddToSteam(launcherExe, artworkDir);
 
@@ -33,6 +48,7 @@ namespace MW3RemasterLauncher
                     return;
                 }
             }
+            if (_showMainWindow) new MainWindow().Show();
         }
     }
 }

@@ -7,6 +7,10 @@ using MW3RemasterLauncher.Core;
 
 static class PackStorageChecks
 {
+    private sealed class CaptureProgress(Action<PackInstallProgress> callback) : IProgress<PackInstallProgress>
+    {
+        public void Report(PackInstallProgress value) => callback(value);
+    }
     public static void Run()
     {
         var root = Path.Combine(Path.GetTempPath(), "MW3 pack checks " + Guid.NewGuid().ToString("N"));
@@ -35,7 +39,26 @@ static class PackStorageChecks
                 throw new Exception("Invalid pack was accepted.");
             }
             Build();
-            var installed = manager.InstallPack(archive);
+            var progress = new List<PackInstallProgress>();
+            var installed = manager.InstallPack(archive, progress: new CaptureProgress(value =>
+            {
+                progress.Add(value);
+                if (value.IsComplete && !File.Exists(Path.Combine(manager.ModsRoot, "test.mech", "payload", "mesh.bin")))
+                    throw new Exception("Installation reached 100% before activation.");
+            }));
+            long workBytes;
+            using (var zip = ZipFile.OpenRead(archive))
+                workBytes = zip.Entries.Sum(entry => entry.Length) +
+                    zip.Entries.Where(entry => entry.FullName != "pack.json").Sum(entry => entry.Length);
+            if (progress.Count < 3 || !progress[^1].IsComplete || progress[^1].Percent != 100 ||
+                progress[^1].CompletedBytes != workBytes || progress[^1].TotalBytes != workBytes ||
+                progress.Take(progress.Count - 1).Any(value => value.IsComplete || value.Percent >= 100) ||
+                progress.Zip(progress.Skip(1)).Any(pair => pair.Second.CompletedBytes < pair.First.CompletedBytes))
+                throw new Exception("Asset progress did not account for extraction, verification and activation.");
+            var physicalRoot = PackStorage.CanonicalPackRoot(installed.DirectoryPath);
+            if (PackStorage.ReadManifest(Path.Combine(physicalRoot, "pack.json")).Id != installed.Id ||
+                !File.ReadAllBytes(Path.Combine(physicalRoot, "payload/mesh.bin")).SequenceEqual(Encoding.UTF8.GetBytes("authored mesh")))
+                throw new Exception("Physical pack handoff selected a different installed payload.");
             var installedPayload = Path.Combine(installed.DirectoryPath, "payload/mesh.bin");
             if (!File.Exists(installedPayload)) throw new Exception("Pack payload not installed");
             foreach (var bad in new[] { "../escape", "C:/escape", "//host/share", "payload/mesh.bin:stream", "payload/CON.bin", "payload/a. /b", "payload/../escape", "payload\\escape" })
@@ -45,7 +68,11 @@ static class PackStorageChecks
                 if (!File.Exists(installedPayload)) throw new Exception("Failed update removed working version");
             }
             File.Delete(archive); Build(id: "../outside"); Reject(() => manager.InstallPack(archive));
-            File.Delete(archive); Build(corrupt: true); Reject(() => manager.InstallPack(archive));
+            File.Delete(archive); Build(corrupt: true);
+            progress.Clear();
+            Reject(() => manager.InstallPack(archive, progress: new CaptureProgress(progress.Add)));
+            if (progress.Any(value => value.IsComplete || value.Percent >= 100) || !File.Exists(installedPayload))
+                throw new Exception("Failed asset verification reported completion or damaged the installed pack.");
             File.Delete(archive); Build(schema: 3); Reject(() => manager.InstallPack(archive));
             File.Delete(archive); Build();
             using (var zip = ZipFile.Open(archive, ZipArchiveMode.Update))

@@ -22,6 +22,7 @@ namespace MW3RemasterLauncher.Core
         public string MusicTrack3 { get; set; } = string.Empty;
         public int CdAudioVolume { get; set; } = 80;
         public bool InstantReplay { get; set; } = false;
+        public bool PerformanceMonitor { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();
         public bool PackSelectionInitialized { get; set; } = false;

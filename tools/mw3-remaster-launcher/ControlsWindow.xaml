@@ -1,0 +1,89 @@
+<Window x:Class="MW3RemasterLauncher.ControlsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Controls — Core Critical" Width="1060" Height="730" MinWidth="860" MinHeight="600"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource BrushGround}" Foreground="{DynamicResource BrushInk}"
+        FontFamily="{DynamicResource FontBody}" FontSize="14" PreviewKeyDown="CaptureKey" PreviewMouseDown="CancelCaptureOnClick" Closing="OnClosing">
+    <Window.Resources>
+        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="Margin" Value="0,0,8,0"/><Setter Property="Padding" Value="12,8"/>
+        </Style>
+        <Style TargetType="TextBox"><Setter Property="Background" Value="#252B2B"/><Setter Property="Foreground" Value="#EEE6DC"/>
+            <Setter Property="Padding" Value="8,6"/><Setter Property="BorderBrush" Value="#4A4F4D"/></Style>
+        <Style TargetType="ListBoxItem"><Setter Property="Padding" Value="10,8"/></Style>
+        <Style TargetType="DataGridCell"><Setter Property="Padding" Value="8,7"/><Setter Property="BorderThickness" Value="0"/></Style>
+        <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#252B2B"/><Setter Property="Foreground" Value="#C4C4BE"/>
+            <Setter Property="Padding" Value="8,10"/></Style>
+    </Window.Resources>
+    <Grid Margin="24">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="KEYBOARD &amp; MOUSE" FontFamily="{DynamicResource FontDisplay}" FontSize="22" Margin="0,0,0,8"/>
+            <TextBlock Text="Save a layout for each game. Your selected layout is applied the next time you launch the native game." Foreground="{DynamicResource BrushMuted}" TextWrapping="Wrap"/>
+        </StackPanel>
+        <DockPanel Grid.Row="1" Margin="0,18,0,16">
+            <TextBlock Text="Game" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <ComboBox x:Name="Game" Width="295" HorizontalAlignment="Left" DisplayMemberPath="DisplayName" SelectionChanged="GameChanged"/>
+            <TextBlock x:Name="ActiveSummary" TextWrapping="Wrap" VerticalAlignment="Center" Margin="18,0,0,0" Foreground="{DynamicResource BrushAmber}"/>
+        </DockPanel>
+        <Grid Grid.Row="2" x:Name="Editor">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="215"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <TextBlock Text="SAVED LAYOUTS" Foreground="{DynamicResource BrushMuted}" Margin="0,0,0,10"/>
+                <ListBox Grid.Row="1" x:Name="Profiles" DisplayMemberPath="Name" SelectionChanged="ProfileChanged"
+                         Background="#181D1D" Foreground="#EEE6DC" BorderBrush="#373B3A"/>
+                <StackPanel Grid.Row="2" Margin="0,12,0,0">
+                    <Button x:Name="CopyCurrent" Content="Copy current controls" Click="ImportCurrent" Margin="0,0,0,8"/>
+                    <Button Content="Reset layout to original" Click="ResetOriginal" Margin="0,0,0,8"/>
+                    <Button Content="Use game's own controls" Click="UseGameControls" Margin="0"/>
+                </StackPanel>
+            </Grid>
+            <Grid Grid.Column="2" x:Name="ProfileEditor" IsEnabled="False">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <DockPanel Margin="0,0,0,12">
+                    <TextBlock Text="Layout name" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                    <TextBox x:Name="ProfileName" MaxLength="64" TextChanged="NameChanged" AutomationProperties.Name="Layout name"/>
+                </DockPanel>
+                <DockPanel Grid.Row="1" Margin="0,0,0,10">
+                    <TextBlock Text="Find action" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <TextBox x:Name="Search" TextChanged="FilterChanged" AutomationProperties.Name="Find an action" ToolTip="Find an action or group"/>
+                </DockPanel>
+                <DataGrid Grid.Row="2" x:Name="Bindings" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                          CanUserDeleteRows="False" SelectionMode="Single" SelectionUnit="FullRow" HeadersVisibility="Column"
+                          Background="#181D1D" Foreground="#EEE6DC" RowBackground="#181D1D" AlternatingRowBackground="#1E2424"
+                          BorderBrush="#373B3A" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#303737"
+                          SelectionChanged="BindingChanged" EnableRowVirtualization="True">
+                    <DataGrid.GroupStyle><GroupStyle><GroupStyle.HeaderTemplate><DataTemplate>
+                        <Border Background="#252B2B" Padding="8,7"><TextBlock Text="{Binding Name}" Foreground="#EFA348" FontWeight="SemiBold"/></Border>
+                    </DataTemplate></GroupStyle.HeaderTemplate></GroupStyle></DataGrid.GroupStyle>
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Action" Binding="{Binding Label}" Width="2*"/>
+                        <DataGridTextColumn Header="Primary" Binding="{Binding Primary}" Width="*"/>
+                        <DataGridTextColumn Header="Secondary" Binding="{Binding Secondary}" Width="*"/>
+                        <DataGridTextColumn Header="Mouse" Binding="{Binding Mouse}" Width="90"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <WrapPanel Grid.Row="3" Margin="0,12,0,0" x:Name="BindingButtons" IsEnabled="False">
+                    <Button Content="Set primary" Click="SetPrimary"/><Button Content="Clear primary" Click="ClearPrimary"/>
+                    <Button Content="Set secondary" Click="SetSecondary"/><Button Content="Clear secondary" Click="ClearSecondary"/>
+                    <Button Content="Mouse button…" Click="SetMouse"/>
+                </WrapPanel>
+            </Grid>
+        </Grid>
+        <StackPanel Grid.Row="3" Margin="0,14,0,12">
+            <TextBlock x:Name="Status" Text="Copy your current controls to create the first layout. Existing game controls stay active until you select a saved layout." TextWrapping="Wrap" Foreground="{DynamicResource BrushAmber}"/>
+            <TextBlock x:Name="ConflictSummary" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" MaxHeight="55" Margin="0,6,0,0"/>
+        </StackPanel>
+        <DockPanel Grid.Row="4">
+            <Button Content="Controller setup…" Click="OpenControllerSetup"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="SaveButton" Content="Save layout" Click="SaveProfile" IsEnabled="False"/>
+                <Button x:Name="UseButton" Content="Save &amp; use next launch" Click="UseProfile" IsEnabled="False"/>
+                <Button Content="Close" Click="CloseWindow" Margin="0"/>
+            </StackPanel>
+        </DockPanel>
+    </Grid>
+</Window>

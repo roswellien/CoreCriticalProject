@@ -43,6 +43,8 @@
     </div>
 
     <div class="header-actions">
+      <button id="btn-objectives" class="btn" title="Edit mission objectives and intel briefing">🎯 Objectives</button>
+      <button id="btn-mechlab" class="btn" title="Customize Player Mech loadout and lance drop configuration">🦾 MechLab</button>
       <button id="btn-load-demo" class="btn" title="Load sample military base layout">📥 Load Demo</button>
       <button id="btn-export" class="btn btn-primary" title="Compile and export standalone mod pack">⚡ Export Map Pack</button>
       <button id="btn-launch-game" class="btn btn-accent" title="Launch custom map in native Vulkan engine">▶️ Play in Engine</button>
@@ -189,6 +191,30 @@
           </div>
         </div>
 
+        <div class="section-title">⚡ Mission Triggers & Volumes</div>
+        <div class="asset-grid">
+          <div class="asset-card" data-type="trig_evac">
+            <div class="asset-icon">🚁</div>
+            <div class="asset-name">Evac Zone</div>
+            <div class="asset-badge">Mission Goal</div>
+          </div>
+          <div class="asset-card" data-type="trig_ambush">
+            <div class="asset-icon">⚠️</div>
+            <div class="asset-name">Ambush Trigger</div>
+            <div class="asset-badge">Reinforcements</div>
+          </div>
+          <div class="asset-card" data-type="trig_sensor">
+            <div class="asset-icon">📡</div>
+            <div class="asset-name">Sensor Grid</div>
+            <div class="asset-badge">Perimeter Alert</div>
+          </div>
+          <div class="asset-card" data-type="trig_minefield">
+            <div class="asset-icon">💥</div>
+            <div class="asset-name">Minefield</div>
+            <div class="asset-badge">Hazard Zone</div>
+          </div>
+        </div>
+
         <div style="margin-top: 20px; padding: 12px; background: rgba(0, 240, 255, 0.05); border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
           <b style="color:var(--accent-cyan)">💡 Quick Tip:</b> Click any asset card above, then click anywhere on the 3D terrain to place. Drag the handles to reposition, or press <kbd style="background: #222; padding: 2px 5px; border-radius: 3px; color: #fff;">DEL</kbd> to delete.
         </div>
@@ -278,6 +304,33 @@
             <span class="prop-name">Primary Objective</span>
             <input type="checkbox" id="insp-objective" style="accent-color: var(--accent-cyan);">
           </div>
+          <div class="prop-row" id="insp-objective-desc-row">
+            <span class="prop-name">Objective Label</span>
+            <input type="text" id="insp-objective-desc" class="text-input" placeholder="e.g. Destroy Command Bunker" style="width: 160px;">
+          </div>
+
+          <div id="insp-trigger-section" style="display:none; border-top: 1px dashed var(--border-color); padding-top: 10px; margin-top: 10px;">
+            <div class="prop-row">
+              <span class="prop-name">Trigger Radius</span>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="range" id="insp-trigger-radius" class="range-slider" min="15" max="250" value="40">
+                <span id="insp-trigger-radius-label" class="prop-value" style="width:40px;">40m</span>
+              </div>
+            </div>
+            <div class="prop-row">
+              <span class="prop-name">Trigger Action</span>
+              <select id="insp-trigger-action" class="select-input" style="width: 140px;">
+                <option value="evac_complete">Complete Evac</option>
+                <option value="spawn_ambush">Spawn Ambush</option>
+                <option value="sound_alarm">Perimeter Alarm</option>
+                <option value="minefield_detonate">Minefield Detonation</option>
+              </select>
+            </div>
+            <div class="prop-row">
+              <span class="prop-name">HUD Prompt</span>
+              <input type="text" id="insp-trigger-msg" class="text-input" placeholder="e.g. Warning: Ambush detected!" style="width: 160px;">
+            </div>
+          </div>
 
           <div style="display: flex; gap: 8px; margin-top: 14px;">
             <button id="btn-insp-dup" class="btn" style="flex:1;">Duplicate</button>
@@ -316,6 +369,169 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- Mission Objectives & Briefing Modal -->
+  <div id="objectives-modal" class="modal-overlay">
+    <div class="modal-card" style="width: 680px;">
+      <div class="modal-title">
+        <span>🎯 MISSION OBJECTIVES & TACTICAL INTEL</span>
+      </div>
+      <div class="modal-body">
+        <div style="margin-bottom: 14px;">
+          <label style="display:block; font-size:11px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:4px;">Intel Briefing Dossier</label>
+          <textarea id="briefing-textarea" class="text-input" style="width:100%; height:80px; resize:vertical; font-family:var(--font-mono); font-size:12px; line-height:1.4; padding:8px;"></textarea>
+        </div>
+
+        <div style="display:flex; gap:16px; margin-bottom:14px;">
+          <div style="flex:1;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="font-weight:700; color:var(--accent-cyan); font-size:12px;">PRIMARY OBJECTIVES</span>
+              <button id="btn-add-primary-obj" class="btn" style="padding:2px 8px; font-size:11px;">+ Add Goal</button>
+            </div>
+            <div id="primary-objectives-list" class="objectives-list-box"></div>
+          </div>
+          <div style="flex:1;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="font-weight:700; color:var(--accent-amber); font-size:12px;">SECONDARY OBJECTIVES</span>
+              <button id="btn-add-secondary-obj" class="btn" style="padding:2px 8px; font-size:11px;">+ Add Goal</button>
+            </div>
+            <div id="secondary-objectives-list" class="objectives-list-box"></div>
+          </div>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:12px; padding:10px; background:var(--bg-tertiary); border-radius:6px;">
+          <span style="font-size:11px; text-transform:uppercase; color:var(--text-secondary);">Combat Audio Profile:</span>
+          <select id="audio-track-select" class="select-input" style="width:200px;">
+            <option value="action_theme_1">Theme 1: Combat Engagement</option>
+            <option value="action_theme_2">Theme 2: Heavy Armor Clash</option>
+            <option value="ambient_winds">Ambient: Barren Winds</option>
+            <option value="tranquil_night">Stealth: Tranquil Night</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-close-objectives" class="btn">Close & Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MechLab & Drop Configuration Modal -->
+  <div id="mechlab-modal" class="modal-overlay">
+    <div class="modal-card" style="width: 720px;">
+      <div class="modal-title">
+        <span>🦾 MECHLAB & COMBAT DROP CONFIGURATION</span>
+      </div>
+      <div class="modal-body">
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:14px;">
+          <div>
+            <label style="display:block; font-size:11px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:4px;">Player BattleMech Chassis</label>
+            <select id="mechlab-chassis" class="select-input" style="width:100%;">
+              <option value="mech_madcat" selected>Mad Cat / Timber Wolf (75 Tons - Heavy Clan OmniMech)</option>
+              <option value="mech_bushwacker">Bushwacker BSW-X1 (55 Tons - Medium IS Mech)</option>
+              <option value="mech_thor">Thor / Summoner (70 Tons - Heavy Clan OmniMech)</option>
+              <option value="mech_shadowcat">Shadow Cat (45 Tons - Medium Clan OmniMech)</option>
+              <option value="mech_vulture">Vulture / Mad Dog (60 Tons - Heavy Clan OmniMech)</option>
+              <option value="mech_daishi">Daishi / Dire Wolf (100 Tons - Assault Clan OmniMech)</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:4px;">Insertion Deployment Type</label>
+            <select id="mechlab-drop-type" class="select-input" style="width:100%;">
+              <option value="orbital_drop_pod">Orbital Combat Drop Pod (Direct Orbit)</option>
+              <option value="dropship_insertion">Union-Class Dropship Low Insertion</option>
+              <option value="hot_lz_combat">Hot LZ Perimeter Touchdown</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Hardpoint Configuration -->
+        <div style="margin-bottom:14px; padding:12px; background:var(--bg-tertiary); border-radius:6px; border:1px solid var(--border-color);">
+          <div style="font-weight:700; color:var(--accent-cyan); font-size:12px; margin-bottom:10px; display:flex; justify-content:space-between;">
+            <span>WEAPON HARDPOINT LOADOUT</span>
+            <span id="mechlab-tonnage-badge" style="color:var(--accent-green); font-family:var(--font-mono);">75.0 / 75.0 TONS</span>
+          </div>
+          <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px;">
+            <div>
+              <span class="prop-name" style="font-size:10px;">Left Arm</span>
+              <select id="wpn-left-arm" class="select-input" style="width:100%;">
+                <option value="ER PPC">Clan ER PPC</option>
+                <option value="Large Pulse Laser">Large Pulse Laser</option>
+                <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
+                <option value="Ultra AC/20">Ultra AC/20</option>
+                <option value="None">Empty</option>
+              </select>
+            </div>
+            <div>
+              <span class="prop-name" style="font-size:10px;">Center Torso</span>
+              <select id="wpn-center-torso" class="select-input" style="width:100%;">
+                <option value="Medium Pulse Laser">Medium Pulse Laser</option>
+                <option value="ER Medium Laser">Clan ER Medium Laser</option>
+                <option value="SRM-6 Streak">Streak SRM-6</option>
+                <option value="None">Empty</option>
+              </select>
+            </div>
+            <div>
+              <span class="prop-name" style="font-size:10px;">Right Arm</span>
+              <select id="wpn-right-arm" class="select-input" style="width:100%;">
+                <option value="ER PPC">Clan ER PPC</option>
+                <option value="Large Pulse Laser">Large Pulse Laser</option>
+                <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
+                <option value="Ultra AC/20">Ultra AC/20</option>
+                <option value="None">Empty</option>
+              </select>
+            </div>
+            <div>
+              <span class="prop-name" style="font-size:10px;">Left Torso</span>
+              <select id="wpn-left-torso" class="select-input" style="width:100%;">
+                <option value="Clan LRM-20">Clan LRM-20 Rack</option>
+                <option value="Streak SRM-6">Streak SRM-6</option>
+                <option value="Ultra AC/10">Ultra AC/10</option>
+                <option value="None">Empty</option>
+              </select>
+            </div>
+            <div>
+              <span class="prop-name" style="font-size:10px;">Armor Tonnage</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <input type="range" id="mechlab-armor" class="range-slider" min="8" max="22" step="0.5" value="14">
+                <span id="mechlab-armor-val" class="prop-value" style="width:40px;">14.0T</span>
+              </div>
+            </div>
+            <div>
+              <span class="prop-name" style="font-size:10px;">Right Torso</span>
+              <select id="wpn-right-torso" class="select-input" style="width:100%;">
+                <option value="Clan LRM-20">Clan LRM-20 Rack</option>
+                <option value="Streak SRM-6">Streak SRM-6</option>
+                <option value="Ultra AC/10">Ultra AC/10</option>
+                <option value="None">Empty</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex; gap:20px; margin-top:10px; font-size:11px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span>Double Heat Sinks:</span>
+              <input type="number" id="mechlab-heatsinks" class="text-input" value="16" min="10" max="28" style="width:50px;">
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span>Jump Jets:</span>
+              <input type="number" id="mechlab-jumpjets" class="text-input" value="0" min="0" max="6" style="width:50px;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Lancemate Roster -->
+        <div style="padding:10px; background:var(--bg-tertiary); border-radius:6px; border:1px solid var(--border-color);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span style="font-weight:700; color:var(--accent-amber); font-size:12px;">SUPPORT LANCE ROSTER</span>
+            <button id="btn-add-lancemate" class="btn" style="padding:2px 8px; font-size:11px;">+ Add Lancemate</button>
+          </div>
+          <div id="lancemate-list" class="lancemate-list-box"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-close-mechlab" class="btn">Close & Apply</button>
+      </div>
+    </div>
   </div>
 
   <!-- Export Success Modal -->

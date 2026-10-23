@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputFile
 )
 # Release-owner operation: the private key stays local, outside publication inputs.
-# This signs authored tool/source update metadata; it grants no content distribution clearance.
+# Signs update metadata, including the owner-authorized private precompiled
+# runtime route. Original media and provider images remain outside the package.
 $ErrorActionPreference='Stop'
 if (Test-Path -LiteralPath $OutputFile) { throw 'Use a fresh signed update output file' }
 $payload=[IO.File]::ReadAllBytes([IO.Path]::GetFullPath($Manifest))
