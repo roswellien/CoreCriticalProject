@@ -40,17 +40,20 @@ class EnvironmentPackTests(unittest.TestCase):
         (root/'pack.json').write_text(json.dumps(manifest))
         return root
     def host(self):
-        return dict(content_capabilities={'environment-resources':[1]},executable_sha256='a'*64,runtime_environment={'MW34_WORLD_NORMALS':'stale','MW34_REMASTER_BANKS':'stale','MW34_BUSHWACKER_TEST':'selected-mech','MW34_FIXTURE_LIGHT_RETAIN_DISTANCE':'160'})
+        return dict(content_capabilities={'environment-resources':[1]},executable_sha256='a'*64,runtime_environment={'MW34_WORLD_NORMALS':'stale','MW34_REMASTER_BANKS':'stale','MW34_EFFECT_LIGHTS':'0','MW34_BUSHWACKER_TEST':'selected-mech','MW34_FIXTURE_LIGHT_RETAIN_DISTANCE':'160'})
     def test_relocation_selection_and_disable(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);one=self.fixture(root/'one');two=self.fixture(root/'two','operation4');moved=root/'relocated with spaces';one.rename(moved)
             chosen=select([str(moved),str(two)],self.host());self.assertEqual(set(chosen),{'training','operation4'})
             bindings=prepare(chosen,self.host(),root/'launch');self.assertEqual(bindings['MW34_BUSHWACKER_TEST'],'selected-mech')
+            self.assertEqual(bindings['MW34_EFFECT_LIGHTS'],'1')
+            self.assertTrue(Path(bindings['MW34_EFFECT_LIGHT_CATALOG']).is_file())
             self.assertEqual(bindings['MW34_FIXTURE_LIGHT_RETAIN_DISTANCE'],'160')
             raw=Path(bindings['MW34_REMASTER_BANKS']).read_bytes();self.assertEqual(struct.unpack('<I',raw[8:12])[0],18)
             pages=Path(bindings['MW34_SURFACE_NORMALS']);page=pages.parent/pages.read_text().splitlines()[1]
             self.assertEqual(len(read_surface_bindings(page.read_bytes())),1)
             empty=prepare({},self.host(),root/'disabled');self.assertNotIn('MW34_WORLD_NORMALS',empty);self.assertNotIn('MW34_REMASTER_BANKS',empty)
+            self.assertEqual(empty['MW34_EFFECT_LIGHTS'],'0')
     def test_reject_bad_host_corruption_and_conflicts(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);one=self.fixture(root/'one');two=self.fixture(root/'two','operation1',b'\x90\x80\xff\xff')
@@ -82,6 +85,7 @@ class EnvironmentPackTests(unittest.TestCase):
             self.assertIn('MW34_SURFACE_NORMALS',env)
             raw=Path(env['MW34_REMASTER_BANKS']).read_bytes();self.assertEqual(struct.unpack('<I',raw[8:12])[0],2)
             chosen=select([str(moved),str(world)],self.host());env=prepare(chosen,self.host(),root/'combined')
+            self.assertEqual(env['MW34_EFFECT_LIGHTS'],'1')
             raw=Path(env['MW34_REMASTER_BANKS']).read_bytes();self.assertEqual(struct.unpack('<I',raw[8:12])[0],8)
             self.assertIn('MW34_WORLD_NORMALS',env)
             disabled=prepare({},self.host(),root/'disabled-shared');self.assertNotIn('MW34_REMASTER_BANKS',disabled)

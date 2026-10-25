@@ -24,7 +24,7 @@ class PrecompiledUpdateTests(unittest.TestCase):
 
     def build(self, output=None):
         return package(self.runtime, self.preparer, self.game, output or self.root / 'update',
-                       'fixture-v1', 1, self.root / 'private.pem', 'fixture')
+                       '1.2.3', 1, self.root / 'private.pem', 'fixture')
 
     def test_complete_precompiled_archive_uses_existing_protocol(self):
         with patch('build_precompiled_update.subprocess.run') as sign:
@@ -34,10 +34,17 @@ class PrecompiledUpdateTests(unittest.TestCase):
         manifest = json.loads((self.root / 'update/manifest.json').read_text())
         self.assertEqual(manifest['preparation_contract'], 'mw3-local-runtime-v1')
         self.assertEqual(manifest['original_inputs']['MECH3.EXE'], pin(self.game / 'MECH3.EXE'))
-        with zipfile.ZipFile(self.root / 'update/fixture-v1.zip') as archive:
+        with zipfile.ZipFile(self.root / 'update/1.2.3.zip') as archive:
             self.assertEqual(set(archive.namelist()), set(manifest['files']))
             self.assertEqual(archive.read('Runtime/host.exe'), (self.runtime / 'host.exe').read_bytes())
         sign.assert_called_once()
+        self.assertTrue(str(sign.call_args.args[0][-1]).endswith('1.2.3.mw3update'))
+
+    def test_descriptive_build_id_cannot_replace_release_version(self):
+        with self.assertRaisesRegex(ValueError, 'public release version'):
+            package(self.runtime, self.preparer, self.game, self.root / 'bad-update',
+                    'mw3-feature-20261024-r1', 1, self.root / 'private.pem', 'fixture')
+        self.assertFalse((self.root / 'bad-update').exists())
 
     def test_modified_missing_and_extra_runtime_members_rejected(self):
         host = self.runtime / 'host.exe'

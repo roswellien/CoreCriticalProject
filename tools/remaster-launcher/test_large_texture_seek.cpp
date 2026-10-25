@@ -25,7 +25,9 @@ int main() {
     }
     check(!unsigned_archive_seek(true, 0x7fffffff, 0, FILE_BEGIN, chain));
     const std::array<unsigned, 1> no_crt{0x518e08};
-    check(!unsigned_archive_seek(true, 0x80000040, 0, FILE_BEGIN, no_crt));
+    check(unsigned_archive_seek(true, 0x80000040, 0, FILE_BEGIN, no_crt));
+    check(!unsigned_archive_seek(false, 0x80000040, 0, FILE_BEGIN, no_crt));
+    check(!unsigned_archive_seek(true, 0x80000040, 0, FILE_CURRENT, no_crt));
 
     wchar_t directory[MAX_PATH], name[MAX_PATH];
     check(GetTempPathW(MAX_PATH, directory) != 0);

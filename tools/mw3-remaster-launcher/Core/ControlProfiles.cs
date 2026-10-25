@@ -28,6 +28,7 @@ public sealed class ControlProfile
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = "My controls";
+    public string Description { get; set; } = "";
     public Dictionary<string, ControlBinding> Bindings { get; set; } = new();
 }
 public sealed class ControlDocument
@@ -38,7 +39,7 @@ public sealed class ControlDocument
     public List<ControlProfile> Profiles { get; set; } = new();
 }
 
-/// <summary>MW3 command metadata and authored profiles; no captured game defaults are shipped.</summary>
+/// <summary>MW3 command metadata, declarative default bindings and authored profiles.</summary>
 public sealed class ControlProfiles
 {
     public static IReadOnlyList<ControlAction> Actions { get; } = LoadActions();
@@ -68,7 +69,18 @@ public sealed class ControlProfiles
     public ControlDocument Load()
     {
         var doc = File.Exists(Store) ? Read<ControlDocument>(Store) : new();
-        Validate(doc); return doc;
+        Validate(doc);
+        // Seed optional layouts, never replacing edits or the active selection.
+        bool added = false;
+        foreach (var preset in new[] { ControlPresets.Mw5(), Mw3DefaultControls.Create() })
+        {
+            if (doc.Profiles.Count >= 24 || doc.Profiles.Any(p => p.Id == preset.Id)) continue;
+            doc.Profiles.Add(preset);
+            if (Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(doc, Json)) <= 256 * 1024) added = true;
+            else doc.Profiles.RemoveAt(doc.Profiles.Count - 1);
+        }
+        if (added) Save(doc);
+        return doc;
     }
     public void Save(ControlDocument doc)
     {
@@ -86,6 +98,7 @@ public sealed class ControlProfiles
         foreach (var p in doc.Profiles)
         {
             if (!Guid.TryParseExact(p.Id, "N", out _) || string.IsNullOrWhiteSpace(p.Name) || p.Name.Length > 64 || p.Name.Any(char.IsControl) ||
+                p.Description == null || p.Description.Length > 2048 ||
                 p.Bindings == null || p.Bindings.Count != Actions.Count || Actions.Any(a => !p.Bindings.ContainsKey(a.Name)))
                 throw new InvalidDataException("Invalid or incomplete controls profile.");
             foreach (var b in p.Bindings.Values)
@@ -98,7 +111,7 @@ public sealed class ControlProfiles
     }
     public static ControlProfile Clone(ControlProfile source, string name) => new()
     {
-        Name = name, Bindings = source.Bindings.ToDictionary(p => p.Key, p => new ControlBinding {
+        Name = name, Description = source.Description, Bindings = source.Bindings.ToDictionary(p => p.Key, p => new ControlBinding {
             Primary = p.Value.Primary, Secondary = p.Value.Secondary, Mouse = p.Value.Mouse, Joystick = p.Value.Joystick })
     };
     public static IReadOnlyList<string> Conflicts(ControlProfile p)

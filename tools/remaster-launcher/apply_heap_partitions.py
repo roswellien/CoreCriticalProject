@@ -54,6 +54,9 @@ def apply(host):
         assert s.count(a)==1;s=s.replace(a,'host.gheap.region_end = rec.gheap_region_end;')
         p.write_text(s)
 
+    from apply_heap_address_space import apply as apply_address_space
+    apply_address_space(host)
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('host',type=Path)
     apply(parser.parse_args().host)

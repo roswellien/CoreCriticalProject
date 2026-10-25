@@ -316,6 +316,26 @@ void control(const fs::path &manifest) {
     check(command(cd, MCI_CLOSE) == 0, "CLOSE succeeds");
 }
 
+void aux_device_contract(const fs::path &manifest) {
+    using mw34::audio::valid_host_aux_device;
+    check(!valid_host_aux_device(UINT(-1), false, 0), "missing AUX sentinel is not a host mixer");
+    check(!valid_host_aux_device(0, false, 0), "no physical AUX means device zero is absent");
+    check(!valid_host_aux_device(UINT(-1), true, 2), "AUX mapper is not a volume-device ID");
+    check(!valid_host_aux_device(0, true, 2), "private CD device is not a physical mixer");
+    check(valid_host_aux_device(0, false, 2) && valid_host_aux_device(1, false, 2), "physical IDs retain normal bounds without private CD");
+    check(!valid_host_aux_device(2, false, 2), "unshifted enumeration upper boundary is invalid");
+    check(valid_host_aux_device(1, true, 2) && valid_host_aux_device(2, true, 2), "private CD shifts host IDs exactly once");
+    check(!valid_host_aux_device(3, true, 2), "shifted enumeration upper boundary is invalid");
+    driver.clear();
+    LocalCdAudio cd(manifest);
+    check(cd.enabled(), "authored PCM fixture enables private CD");
+    AUXCAPSA caps{};
+    check(cd.aux_caps(caps)==0 && caps.wTechnology==AUXCAPS_CDAUDIO, "private device advertises CD audio");
+    check(cd.aux_set_volume(0x12345678)==0, "private volume request succeeds without a physical mixer");
+    DWORD value{};
+    check(cd.aux_get_volume(value)==0 && value==0x12345678, "private stereo volume is retained exactly");
+}
+
 void close_failure(const fs::path &manifest) {
     std::puts("F1: failed MCI_CLOSE after a successful reset");
     driver.clear();
@@ -470,6 +490,7 @@ int main(int argc, char **argv) {
     const std::string only = argc > 1 ? argv[1] : "";
     const std::pair<const char *, std::function<void()>> groups[] = {
         {"control", [&] { control(manifest); }},
+        {"aux", [&] { aux_device_contract(manifest); }},
         {"close", [&] { close_failure(manifest); }},
         {"cursor",
          [&] {

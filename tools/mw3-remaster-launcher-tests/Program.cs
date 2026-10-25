@@ -2,6 +2,36 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+if(args.Length==1 && args[0]=="--skins-only") { SkinPackChecks.Run(); return; }
+if(args.Length==3 && args[0]=="--install-skin-pack") { SkinPackChecks.Install(args[1],args[2]); return; }
+
+if(args.Length==3&&args[0]=="--check-loading-indicator")
+{
+    LoadingIndicatorUiChecks.Run(args[1],args[2]);return;
+}
+
+if(args.Length==3&&args[0]=="--check-graphics-setup")
+{
+    GraphicsSetupUiChecks.Run(args[1],args[2]);return;
+}
+
+if (args.Length is 5 or 6 && args[0] == "--prepare-presentation-profile")
+{
+    if (args[2] is not ("on" or "off")) throw new ArgumentException("Lighting must be on or off");
+    var output = Path.GetFullPath(args[4]);
+    Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+    var graphicsProfile = GameRunner.CreateLaunchProfile(File.ReadAllText(args[1]),
+        new LauncherSettings { Width = 3440, Height = 1440, DynamicLighting = args[2] == "on" });
+    var contentRoots = args.Length == 6
+        ? System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(args[5]))!
+        : Array.Empty<string>();
+    GameRunner.ApplyContentSelection(graphicsProfile, contentRoots, true,
+        Path.GetDirectoryName(output)!, Path.GetFullPath(args[3]));
+    File.WriteAllText(output, GameRunner.SerializeLaunchProfile(graphicsProfile));
+    Console.WriteLine("Explicit launcher content and graphics profile prepared.");
+    return;
+}
+
 if (args.Length == 2 && args[0] == "--verify-media-tools")
 {
     GameInstallation.VerifyExtractor(Path.GetFullPath(args[1]));
@@ -32,6 +62,7 @@ if (args.Length == 1 && args[0] == "--runtime-layout-only")
 }
 if (args.Length == 1 && args[0] == "--content-only")
 {
+    SkinPackChecks.Run();
     PackStorageChecks.Run();
     EnvironmentPackChecks.Run();
     MusicPackChecks.Run();
@@ -126,6 +157,7 @@ if (args.Length >= 2 && args[0] == "--preview-corecritical")
 {
     var root = Path.GetFullPath(args[1]);
     var fixtureSettings = new SettingsManager(root, root);
+    fixtureSettings.Current.InitialSetupCompleted = true;
     fixtureSettings.Current.GamePath = args.Length >= 3 ? Path.GetFullPath(args[2]) : root; fixtureSettings.Save();
     var thread = new Thread(() =>
     {
@@ -325,6 +357,7 @@ PackStorageChecks.Run();
 UniversalLauncherChecks.Run();
 EnvironmentPackChecks.Run();
 MusicPackChecks.Run();
+GraphicsPreferencesChecks.Run();
 ArtworkCinematicChecks.Run();
 PlaytestSupportChecks.Run();
 GameInstallationChecks.Run();
@@ -357,8 +390,8 @@ var profile = GameRunner.CreateLaunchProfile(published, settings);
 Check(profile["native"]!["runtime_environment"]!["MW34_SEH_LOG"]!.GetValue<string>() == "1",
     "Remote native memory-fault diagnostics were not enabled");
 GameRunner.ApplyEnvironmentSelection(profile, new JsonArray(), false, false);
-if (profile["native"]!["prepared_environment_pack_roots"] != null)
-    throw new Exception("Development upgrade discarded its existing environment bindings.");
+if (profile["native"]!["prepared_environment_pack_roots"]!.AsArray().Count != 0)
+    throw new Exception("Empty development selection inherited optional environment bindings.");
 GameRunner.ApplyEnvironmentSelection(profile, new JsonArray(), true, false);
 if (profile["native"]!["prepared_environment_pack_roots"]!.AsArray().Count != 0)
     throw new Exception("Fresh installed selection inherited development content.");
@@ -374,6 +407,16 @@ if (JsonNode.Parse(serializedProfile)!["native"]!["prepared_pack_roots"]![0]!.Ge
     throw new Exception("Serialized installed-pack root changed");
 void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
 Check(profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "0", "Monitor must default off");
+Check(!new LauncherSettings().DynamicLighting, "New installations must default to stock lighting");
+Check(!profile["native"]!["presentation"]!["dynamic_lighting"]!.GetValue<bool>(), "Stock lighting choice missing");
+settings.DynamicLighting = true;
+settings.Shadows = true;
+Check(GameRunner.CreateLaunchProfile(serializedProfile, settings)["native"]!["presentation"]!["dynamic_lighting"]!.GetValue<bool>(), "Lighting on choice lost");
+Check(GameRunner.CreateLaunchProfile(serializedProfile, settings)["native"]!["presentation"]!["shadows"]!.GetValue<bool>(), "Shadow on choice lost");
+settings.DynamicLighting = false;
+Check(!GameRunner.CreateLaunchProfile(serializedProfile, settings)["native"]!["presentation"]!["dynamic_lighting"]!.GetValue<bool>(), "Lighting off choice lost");
+Check(GameRunner.CreateLaunchProfile(serializedProfile, settings)["native"]!["presentation"]!["shadows"]!.GetValue<bool>(), "Lighting off erased saved shadow choice");
+settings.Shadows = false;
 var pipelineCache = Path.Combine(Path.GetTempPath(), "authored pipeline warmup cache");
 var cacheProfile = GameRunner.CreateLaunchProfile(serializedProfile, settings, pipelineCache);
 Check(cacheProfile["native"]!["runtime_environment"]!["MW34_PIPELINE_WARMUP_DIR"]!.GetValue<string>() == pipelineCache, "Pipeline cache escaped user storage");
@@ -396,8 +439,13 @@ var monitorSettingsRoot = Path.Combine(Path.GetTempPath(), "MW3MonitorSettings-"
 try {
     var monitorSettings = new SettingsManager(monitorSettingsRoot, monitorSettingsRoot);
     monitorSettings.Current.PerformanceMonitor = true;
+    monitorSettings.Current.DynamicLighting = true;
     monitorSettings.Save();
     Check(new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.PerformanceMonitor, "Monitor setting did not persist");
+    Check(new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.DynamicLighting, "Lighting setting did not persist");
+    monitorSettings.Current.DynamicLighting = false;
+    monitorSettings.Save();
+    Check(!new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.DynamicLighting, "Lighting off setting did not persist");
 } finally { if (Directory.Exists(monitorSettingsRoot)) Directory.Delete(monitorSettingsRoot, true); }
 Check(profile["graphics"]!["width"]!.GetValue<int>() == 3440, "Lost requested width");
 Check(profile["graphics"]!["window_mode"]!.GetValue<string>() == "fullscreen_windowed", "Borderless choice was not preserved");
@@ -420,7 +468,7 @@ var folder = Path.Combine(Path.GetTempPath(), "MW3LauncherChecks-" + Guid.NewGui
 Directory.CreateDirectory(Path.Combine(folder, "mods", "com.mw3remaster.upgraded-mechs"));
 File.WriteAllText(Path.Combine(folder, "mods", "com.mw3remaster.upgraded-mechs", "pack.json"), "{\"id\":\"com.mw3remaster.upgraded-mechs\"}");
 var packs = new PackManager(folder);
-packs.RefreshPacks(null); Check(packs.GetActivePackIds().Count == 1, "First-run default lost");
+packs.RefreshPacks(null); Check(packs.GetActivePackIds().Count == 0, "First-run selection must be stock");
 packs.RefreshPacks(new()); Check(packs.GetActivePackIds().Count == 0, "Empty saved selection re-enabled models");
 packs.RefreshPacks(new() { "com.mw3remaster.upgraded-mechs" }); Check(packs.GetActivePackDirectories().Count == 1, "Model pack selection lost");
 Directory.Delete(folder, true);

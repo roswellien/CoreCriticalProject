@@ -1,0 +1,9 @@
+# Black Hawk default skin review — 2026-10-24
+
+The optional MW5 replacement Black Hawk default skin now restores the MW3 red and yellow caution paint on the forward cockpit-side armor. The placement was checked with a marked Body atlas rendered on the Black Hawk rig. The existing blue canopy and pale worn armor remain. UV-covered flat black mechanical regions now use textured gunmetal; Body, Variant, and Weapons color maps have lighter worn edges. Offline metallic and roughness authoring maps received corresponding edge changes.
+
+This is a **default-color-only** installation. The October 23 uniform 10% replacement-model scale correction remains in place; no mesh, rig, animation, weapon or gameplay change was made. Other Black Hawk skins and all other chassis payloads were preserved. The current Body, Variant, and Weapons records were replaced in the LOD0 and LOD1 default BWTEX payload in both local pack roots. Authoring registries now point at the new local colors. Previous pack and registry bytes were backed up under `local/work-ahead/blackhawk-default-skin-20261024-r1/installation-backup/`.
+
+Matched Blender front, close, opposite, rear and unlit views were rendered. Geometry, UV, pose and animation digests were unchanged within that comparison. `play_remaster.py --check` passed with the installed pack. This does not constitute a live in-game visual check; lighting, damage, weapon attachment and LOD appearance remain to be inspected in gameplay.
+
+[Private Google Drive comparison boards](https://drive.google.com/drive/folders/1AGvU-Db_oO3MQ5MqMY01_GQq2c8POGYf) show before and after. Local source maps, UV evidence, scripts, receipts and rendered images are retained under ignored `local/work-ahead/blackhawk-default-skin-20261024-r1/`. Original media remains local. No commit was made. Native acceptance remains 131/144; this asset pass earns no acceptance credit.

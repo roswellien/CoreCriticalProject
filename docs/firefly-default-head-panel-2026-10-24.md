@@ -1,0 +1,9 @@
+# Firefly default head panel review — 2026-10-24
+
+The detailed Firefly default skin retained its MW3 identifying details: blue canopy, yellow/black caution bars, red mechanical inset and yellow leg arrow. Its source-derived panels already show lighter metallic edge wear and textured mechanics. Matched Blender review revealed one exception: the new `detail_head` quadrilateral above the nose rendered pure white against the blue canopy and weathered front armor.
+
+Only that default `detail_head` base-color image was replaced. The new color samples weathered olive-gray armor from the existing Firefly `firefly11` texture and preserves the head patch's UV shape. A matched before/after Blender render confirms the white panel is gone and the rest of the model is unchanged. The single face is owned by `Detailed_head_geometry`; no geometry, UV, rig or animation edit was needed.
+
+The Firefly default LOD0 and LOD1 BWTEX1 payloads were updated in both local model packs. Installation checked the previous payload hash, replaced only the `detail_head` material record, and verified every other record stayed byte-identical. Other skins, normals, mesh resources and other chassis were retained. Both project authoring registries now select the new local color; preinstallation registry and pack metadata are backed up under ignored `local/work-ahead/firefly-default-review-20261024-r1/installation-backup/`. `play_remaster.py --check` passed. A live in-game visual check remains open.
+
+[Private Google Drive review](https://drive.google.com/drive/folders/1ORBjrVL_gG3UrpPSub2EBrtcoNOzuYXD) contains the head-panel before/after and MW3 source-versus-current marking board. Original media and derived assets remain local. No commit was made. This asset pass claims no native-game acceptance credit; the retained count remains 131/144.

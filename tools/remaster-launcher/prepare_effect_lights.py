@@ -89,7 +89,7 @@ def banks(path):
     return out
 
 
-def prepare(bank_map, output, hash_library):
+def prepare(bank_map, output, hash_library, *, native_variant_power=False):
     if output.exists() or output.with_suffix(".json").exists():
         raise ValueError("Choose a fresh output; preserve previous catalog evidence")
     rows = {}
@@ -163,7 +163,7 @@ def prepare(bank_map, output, hash_library):
                 # The late impact frames are smoke. Their faint pixels must
                 # not carry the full power of the initial bright flash.
 
-                if e[0] == 5:
+                if e[0] == 5 and not native_variant_power:
                     brightness = np.maximum.reduce([r / 31, g / 63, b / 31]) * alpha / 255
                     visible = brightness[alpha >= 128]
                     level = float(np.quantile(visible, 0.95)) if visible.size else 0
@@ -211,7 +211,29 @@ def prepare(bank_map, output, hash_library):
                     ):
                         continue
                     key = (w, h, fmt, fnv(pixels))
-                    if key in rows and rows[key] != e:
+                    value = e
+                    if e[0] == 5 and native_variant_power:
+                        # Original banks can quantize two impact frames to the
+                        # same native pixels. Derive their response from those
+                        # exact keyed pixels, rather than their different source
+                        # precision. Other emitter ambiguities still fail below.
+                        packed = np.frombuffer(pixels, '<u2').astype(np.uint32)
+                        if fmt == 1:
+                            brightness = np.maximum.reduce([(packed >> 11)/31,
+                                ((packed >> 5)&63)/63, (packed&31)/31])
+                            alpha_native = np.where(packed != 0, 1., 0.)
+                        elif fmt == 2:
+                            brightness = np.maximum.reduce([((packed >> 10)&31)/31,
+                                ((packed >> 5)&31)/31, (packed&31)/31])
+                            alpha_native = (packed >> 15).astype(float)
+                        else:
+                            brightness = np.maximum.reduce([((packed >> 8)&15)/15,
+                                ((packed >> 4)&15)/15, (packed&15)/15])
+                            alpha_native = (packed >> 12)/15
+                        visible = (brightness*alpha_native)[alpha_native >= .5]
+                        level = float(np.quantile(visible,.95)) if visible.size else 0
+                        value = (*e[:2],e[2]*level*level,*e[3:])
+                    if key in rows and rows[key] != value:
                         # Shared exact pixels do not establish a unique emitter.
 
                         raise ValueError(
@@ -220,7 +242,7 @@ def prepare(bank_map, output, hash_library):
                             + " / "
                             + str(aliases[key])
                         )
-                    rows[key] = e
+                    rows[key] = value
                     aliases.setdefault(key, set()).add(name)
                 sources.append(
                     dict(
@@ -273,10 +295,12 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--banks", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--native-variant-power", action="store_true",
+                   help="Derive impact intensity from exact native pixels (original-bank catalogues)")
     p.add_argument(
         "--hash-library",
         type=Path,
         default=Path(__file__).resolve().parents[2] / "build/default/mw34_normal_hash.dll",
     )
     a = p.parse_args()
-    prepare(a.banks, a.output, a.hash_library)
+    prepare(a.banks, a.output, a.hash_library, native_variant_power=a.native_variant_power)

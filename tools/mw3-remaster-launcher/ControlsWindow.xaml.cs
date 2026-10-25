@@ -77,6 +77,7 @@ public partial class ControlsWindow : Window
         ProfileEditor.IsEnabled = true; SaveButton.IsEnabled = UseButton.IsEnabled = true;
         initializing = true; ProfileName.Text = p.Name; Search.Text = ""; initializing = false;
         dirty = id == null; RefreshRows();
+        LayoutDescription.Text = p.Description;
         Status.Text = "Select an action to change its bindings. Saving does not change the active game session.";
     }
     private IEnumerable<string> RegistryCandidates()
@@ -132,7 +133,8 @@ public partial class ControlsWindow : Window
             RequireClosedForImport();
             var original = store.ImportOriginal(RegistryCandidates());
             if (MessageBox.Show(this, "Reset this layout's bindings to your original game controls? Save afterward to keep the reset.", "Reset layout", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
-            working.Bindings = original.Bindings; dirty = true; RefreshRows(); Status.Text = "Original bindings copied into this layout. Save to keep the reset.";
+            working.Bindings = original.Bindings; working.Description = ""; LayoutDescription.Text = "";
+            dirty = true; RefreshRows(); Status.Text = "Original bindings copied into this layout. Save to keep the reset.";
         }
         catch (Exception ex) { Status.Text = ex.Message; }
     }

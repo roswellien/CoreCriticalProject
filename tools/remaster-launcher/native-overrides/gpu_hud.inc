@@ -346,11 +346,11 @@ bool hud_intercept(unsigned target,void*p,void*&result){if(target==0x577ba0||tar
  const bool ok=target==0x55b3c0?hud_blit():target==0x563b80?hud_line():target==0x563db0?hud_clipped_line():(target==0x5630a0||target==0x5641f0)?hud_pixel(target==0x5641f0):target==0x5630c0?hud_circle():hud_span();if(!ok){reject("primitive-guard");return false;}
  auto&g=state.gpr;const unsigned sp=g.rsp.dword;g.rip.dword=load(sp);g.rsp.dword=sp+4+args;result=p;return true;}
 // FPS/frame-time overlay on the direct presentation path: the presenter's overlay text is drawn into a small buffer and
-// rendered as an opaque textured quad onto the resident image just before it is presented (diagnostic; not guest state).
-void overlay_gpu(unsigned w,unsigned h){auto&ov=host.presenter->overlay;std::vector<std::uint16_t>buf(size_t(w)*ov.buffer_height,0);ov.draw(buf.data(),w,ov.buffer_height);const unsigned bw=ov.box_w,bh=ov.box_h;if(!bw||!bh)return;
+// rendered as an alpha-blended text tile beside the radar (diagnostic; not guest state).
+void overlay_gpu(unsigned w,unsigned h){auto&ov=host.presenter->overlay;ov.prepare(w,h);const unsigned bw=ov.box_w,bh=ov.box_h;if(!bw||!bh)return;std::vector<std::uint16_t>buf(size_t(bw)*bh,0);ov.paint(buf.data(),bw);
  namespace vs=mw34::vkscene;hud_sc=vs::Scene{};hud_sc.hud=true;hud_sc.width=w;hud_sc.height=h;hud_sc.has_depth=host.res_zb!=0;hud_w=w;hud_h=h;vs::TextureRef r{};r.key=0x4f564c0000000000ULL;r.width=bw;r.height=bh;r.format=vs::TexFormat::rgba8888;
- r.pixels32.resize(size_t(bw)*bh);for(unsigned y=0;y<bh;++y)for(unsigned x=0;x<bw;++x)r.pixels32[size_t(y)*bw+x]=hud_rgba(buf[size_t(y)*w+x],255);
+ r.pixels32.resize(size_t(bw)*bh);for(unsigned y=0;y<bh;++y)for(unsigned x=0;x<bw;++x)r.pixels32[size_t(y)*bw+x]=hud_rgba(buf[size_t(y)*bw+x],buf[size_t(y)*bw+x]?255:0);
  std::uint64_t hash=0xcbf29ce484222325ULL;for(auto v:r.pixels32){hash^=v;hash*=0x100000001b3ULL;}r.hash=hash;hud_sc.textures.push_back(std::move(r));
- const unsigned first=0;hud_vertex(-0.5f,-0.5f,0xffffffffu,0,0);hud_vertex(float(bw)-0.5f,-0.5f,0xffffffffu,1,0);hud_vertex(float(bw)-0.5f,float(bh)-0.5f,0xffffffffu,1,1);
- hud_vertex(-0.5f,-0.5f,0xffffffffu,0,0);hud_vertex(float(bw)-0.5f,float(bh)-0.5f,0xffffffffu,1,1);hud_vertex(-0.5f,float(bh)-0.5f,0xffffffffu,0,1);hud_draw(0,false,first,WideLeft);
- hud_sc.color.resize(size_t(w)*h);hud_sc.depth.resize(hud_sc.color.size());try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_sc=vs::Scene{};}
+ const float x=float(ov.box_x)-0.5f,y=float(ov.box_y)-0.5f;const unsigned first=0;hud_vertex(x,y,0xffffffffu,0,0);hud_vertex(x+bw,y,0xffffffffu,1,0);hud_vertex(x+bw,y+bh,0xffffffffu,1,1);
+ hud_vertex(x,y,0xffffffffu,0,0);hud_vertex(x+bw,y+bh,0xffffffffu,1,1);hud_vertex(x,y+bh,0xffffffffu,0,1);hud_draw(0,false,first,WideLeft);
+ /* GPU-resident overlay: no CPU color/depth upload or readback. */try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_sc=vs::Scene{};}

@@ -1,6 +1,6 @@
-; Inno Setup Script for MechWarrior 3 Remastered
-; Private preview. SourcePreparationIncluded adds signed tools that prepare the
-; native runtime locally from the player's verified original files.
+; Core Critical installer. Branding follows the launcher's charcoal/amber art.
+; The full private playtest bundles the precompiled native runtime; the player
+; supplies original game data through the first-run setup flow.
 ; See docs/public-release-readiness.md before assembling any release payload.
 
 #define MyAppName "Core Critical Launcher"
@@ -33,7 +33,17 @@ AllowNoIcons=yes
 OutputBaseFilename=corecriticalinstaller-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
-WizardStyle=modern
+WizardStyle=modern dark includetitlebar hidebevels
+WizardBackColor=#141717
+WizardImageBackColor=#0F1212
+WizardSmallImageBackColor=#141717
+WizardImageFile=Assets\Installer\wizard-welcome.png
+WizardSmallImageFile=Assets\Installer\wizard-mark.png
+WizardImageStretch=yes
+WizardSizePercent=120,120
+SetupIconFile=Assets\app-icon.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
+DisableWelcomePage=no
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 PrivilegesRequired=lowest
@@ -45,6 +55,16 @@ OutputDir=dist
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+WelcomeLabel1=Set up Core Critical
+#ifdef PrecompiledRuntimeIncluded
+WelcomeLabel2=Install the Core Critical Launcher and native MechWarrior 3 runtime.%n%nAfter installation, select your original game files and choose your display and graphics settings.%n%nStart with stock game content, then enable optional packs whenever you want.
+#else
+WelcomeLabel2=Install or update the Core Critical Launcher.%n%nYour selected game runtime and saved preferences are preserved. Game updates and optional content packs are managed in the launcher.
+#endif
+FinishedHeadingLabel=Core Critical is ready
+FinishedLabel=Open Core Critical to verify your original game files, choose graphics settings, and manage optional content packs.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -71,7 +91,7 @@ Source: "launcher-precompiled-installation.json"; DestDir: "{app}"; DestName: "l
 Source: "launcher-installation.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 #endif
 ; Default asset and font directories
-Source: "Assets\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "Assets\*"; Excludes: "Installer\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -1,11 +1,29 @@
 <Window x:Class="MW3RemasterLauncher.GameSetupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Set up MechWarrior 3" Width="690" Height="650" MinWidth="610" MinHeight="580"
+        xmlns:local="clr-namespace:MW3RemasterLauncher"
+        Title="Set up MechWarrior 3" Width="760" Height="740" MinWidth="640" MinHeight="600"
         WindowStartupLocation="CenterOwner" Background="#171D1B" Foreground="#ECE9DF">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="26">
-            <TextBlock Text="Set up your original game files" FontSize="23" Margin="0,0,0,12" />
+    <DockPanel Margin="24">
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,18">
+            <TextBlock Text="Set up MechWarrior 3" FontSize="24" Margin="0,0,0,12" />
+            <TextBlock x:Name="StepProgress" Text="STEP 1 OF 4 · GAME FILES" Foreground="#EFA348" FontWeight="SemiBold" />
+            <TextBlock Text="Game files → Display &amp; graphics → Optional packs → Install" Foreground="#B5BDB5" Margin="0,6,0,0" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
+            <TextBlock x:Name="PreparationNote" Text="Setup verifies your original files and saves your graphics choices. Optional packs can be added at any time." TextWrapping="Wrap" Foreground="#B5BDB5" Margin="0,8,0,12" />
+            <TextBlock x:Name="Status" TextWrapping="Wrap" Margin="0,0,0,10" />
+            <ProgressBar x:Name="Progress" Minimum="0" Maximum="100" Height="8" Visibility="Collapsed" Margin="0,0,0,16" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="CancelButton" Content="Cancel" Click="CancelSetup" Padding="18,8" Margin="0,0,10,0" />
+                <Button x:Name="BackButton" Content="Back" Click="PreviousStep" Padding="18,8" Margin="0,0,10,0" Visibility="Collapsed" />
+                <Button x:Name="ContinueButton" Content="Next: Display &amp; graphics" Click="ContinueSetup" Padding="18,8" IsDefault="True" />
+            </StackPanel>
+        </StackPanel>
+        <Grid>
+            <Grid x:Name="GameFilesStep">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="14">
+            <TextBlock Text="Choose your original game files" FontSize="20" Margin="0,0,0,12" />
             <TextBlock Text="Do you already have MechWarrior 3 installed?" FontSize="15" Margin="0,0,0,14" />
             <RadioButton x:Name="ExistingChoice" Content="Yes — use my existing installation" GroupName="Source" IsChecked="True" Foreground="#ECE9DF" Checked="SourceChanged" Margin="0,0,0,10" />
             <RadioButton x:Name="MediaChoice" Content="No — install from my ISO and 1.2 patch" GroupName="Source" Foreground="#ECE9DF" Checked="SourceChanged" Margin="0,0,0,20" />
@@ -22,22 +40,42 @@
                 <DockPanel><Button Content="Choose parent…" DockPanel.Dock="Right" Click="BrowseDestination" Padding="12,5" Margin="8,0,0,0"/><TextBox x:Name="DestinationPath" Padding="6" /></DockPanel>
                 <TextBlock Text="Supports the verified U.S. retail disc and English 1.2 patch. Installation uses a new folder and does not run the old setup program or updater." TextWrapping="Wrap" Foreground="#B5BDB5" Margin="0,12,0,0" />
             </StackPanel>
+                </StackPanel></ScrollViewer>
+            </Grid>
+            <Grid x:Name="GraphicsStep" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14">
+                        <TextBlock Text="Choose your starting graphics settings" FontSize="20" Margin="0,0,0,10" />
+                        <TextBlock Text="Keep the starting choices or adjust them now. These become your saved defaults and can be changed later on the Display tab." TextWrapping="Wrap" Margin="0,0,0,18" />
+                        <local:GraphicsPreferencesPanel x:Name="SetupGraphics" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+            <Grid x:Name="PacksStep" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="14">
             <StackPanel x:Name="PackPanel" Margin="0,16,0,12">
                 <TextBlock Text="Optional content packs" FontSize="15" Margin="0,0,0,8" />
-                <TextBlock Text="Choose soundtrack, mech or environment .mw3pack files to install after the original game is verified. You can also add them later in Mods &amp; Packs." TextWrapping="Wrap" />
+                <TextBlock Text="Choose soundtrack, mech or environment .mw3pack files to install after the original game is verified. Keep this empty to start with stock content. Packs can also be added later in Mods &amp; Packs." TextWrapping="Wrap" />
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,8">
                     <Button Content="Choose packs…" Click="BrowsePacks" Padding="12,5" />
                     <Button Content="Clear selection" Click="ClearPacks" Padding="12,5" Margin="8,0,0,0" />
                 </StackPanel>
                 <TextBlock x:Name="PackSelection" Text="No optional packs selected." TextWrapping="Wrap" />
             </StackPanel>
-            <TextBlock x:Name="PreparationNote" Text="This step installs or verifies the original data. The Remaster also needs its native runtime and prepared content before Play is available on a new PC." TextWrapping="Wrap" Foreground="#B5BDB5" Margin="0,8,0,12" />
-            <TextBlock x:Name="Status" TextWrapping="Wrap" Margin="0,0,0,10" />
-            <ProgressBar x:Name="Progress" Minimum="0" Maximum="100" Height="8" Visibility="Collapsed" Margin="0,0,0,16" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="CancelButton" Content="Later" Click="CancelSetup" Padding="18,8" Margin="0,0,10,0" />
-                <Button x:Name="ContinueButton" Content="Verify and use folder" Click="ContinueSetup" Padding="18,8" IsDefault="True" />
-            </StackPanel>
-        </StackPanel>
-    </ScrollViewer>
+                </StackPanel></ScrollViewer>
+            </Grid>
+            <Grid x:Name="ReviewStep" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="14">
+                    <TextBlock Text="Ready to set up your game" FontSize="20" Margin="0,0,0,16" />
+                    <TextBlock Text="Review your choices. Use Back to change them, or start setup below." TextWrapping="Wrap" Margin="0,0,0,20" />
+                    <TextBlock Text="GAME FILES" Foreground="#EFA348" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <TextBlock x:Name="ReviewSource" TextWrapping="Wrap" Margin="0,0,0,20" />
+                    <TextBlock Text="DISPLAY &amp; GRAPHICS" Foreground="#EFA348" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <TextBlock x:Name="ReviewGraphics" TextWrapping="Wrap" Margin="0,0,0,20" />
+                    <TextBlock Text="OPTIONAL PACKS" Foreground="#EFA348" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <TextBlock x:Name="ReviewPacks" TextWrapping="Wrap" />
+                </StackPanel></ScrollViewer>
+            </Grid>
+        </Grid>
+    </DockPanel>
 </Window>

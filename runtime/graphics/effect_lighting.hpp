@@ -10,6 +10,9 @@
 
 namespace mw34::effects {
 inline constexpr unsigned capacity = 64;
+// Procedural missile exhaust shares the weapon-light budget, but one salvo
+// must not displace every other weapon family or consume fixture reservation.
+inline constexpr unsigned missile_light_capacity = 8;
 // CPU/GPU protocol: xyz is an endpoint for capsules, a direction for spots.
 enum class LightKind : unsigned { point = 0, capsule = 1, spot = 2 };
 using Point = std::array<float, 3>;
@@ -41,6 +44,15 @@ struct Emitter {
     float radius{}, intensity{}, lifetime{};
     Point color{};
 };
+inline float weapon_intensity_scale(const Emitter &e) {
+    // MWFX1 kind 3 is PPC trail. Kind 2 groups PPC/Gauss/MAC muzzle flashes;
+    // only the PPC muzzle has this blue signature in prepare_effect_lights.py.
+    // Blue kind 5 impacts are shared with lasers and cannot identify a weapon.
+    // Apply the presentation gain here so existing installed catalogs work
+    // unchanged and repeated observations never compound the adjustment.
+    const bool ppc = e.kind == 3 || (e.kind == 2 && e.color == Point{.15f, .4f, 1.f});
+    return ppc ? 1.25f : 1.f;
+}
 using Catalog = std::map<materials::SurfaceKey, Emitter>;
 inline Catalog read_catalog(std::istream &f) {
     auto fail = [] { throw std::runtime_error("Invalid effect-light material catalog"); };
@@ -142,6 +154,7 @@ class Cache {
         Emitter emitter;
         Point a, b;
         double time;
+        std::uint64_t source{};
     };
     std::vector<Entry> entries_;
     double previous_{};
@@ -160,7 +173,10 @@ class Cache {
         previous_ = t;
         std::erase_if(entries_, [&](const Entry &e) { return t - e.time > e.emitter.lifetime; });
     }
-    void observe(const Emitter &e, const std::vector<Point> &points, double t) {
+
+  private:
+    void observe_impl(const Emitter &e, const std::vector<Point> &points, double t,
+                      std::uint64_t source) {
         expire(t);
         if (points.empty() || points.size() > 1024)
             return;
@@ -197,18 +213,39 @@ class Cache {
             b = a;
         }
         for (auto &old : entries_)
-            if (old.emitter.kind == e.kind && old.emitter.color == e.color &&
-                distance2(old.a, a) < .5625f && distance2(old.b, b) < .5625f) {
-                old = {e, a, b, t};
+            if ((source && old.source == source) ||
+                (!source && !old.source && old.emitter.kind == e.kind &&
+                 old.emitter.color == e.color && distance2(old.a, a) < .5625f &&
+                 distance2(old.b, b) < .5625f)) {
+                old = {e, a, b, t, source};
                 return;
             }
         if (entries_.size() >= 256) {
             auto old =
                 std::min_element(entries_.begin(), entries_.end(),
                                  [](const Entry &a, const Entry &b) { return a.time < b.time; });
-            *old = {e, a, b, t};
+            *old = {e, a, b, t, source};
         } else
-            entries_.push_back({e, a, b, t});
+            entries_.push_back({e, a, b, t, source});
+    }
+
+  public:
+    void observe(const Emitter &e, const std::vector<Point> &points, double t) {
+        observe_impl(e, points, t, 0);
+    }
+    // A moving emitter replaces its own previous position instead of leaving
+    // stationary lights along its path. The caller owns a nonzero identity that
+    // includes object generation and resets the cache when its context changes.
+    // Spatially coincident tracked sources and ordinary flashes remain distinct.
+    void observe_tracked(std::uint64_t source, const Emitter &e, const std::vector<Point> &points,
+                         double t) {
+        if (!source)
+            throw std::runtime_error("Tracked effect source identity must be nonzero");
+        observe_impl(e, points, t, source);
+    }
+    void erase_tracked(std::uint64_t source) {
+        if (source)
+            std::erase_if(entries_, [&](const Entry &entry) { return entry.source == source; });
     }
     Uniform uniform(double t, const Point &eye, unsigned limit, float strength) {
         expire(t);
@@ -217,11 +254,13 @@ class Cache {
         struct Candidate {
             float score;
             Light light;
+            bool missile;
         };
         std::vector<Candidate> picks;
         for (const auto &e : entries_) {
             const float fade = std::clamp(1.f - float((t - e.time) / e.emitter.lifetime), 0.f, 1.f);
-            const float power = e.emitter.intensity * strength * fade * fade;
+            const float power =
+                e.emitter.intensity * weapon_intensity_scale(e.emitter) * strength * fade * fade;
             if (power <= .0001f)
                 continue;
             const float radius = e.emitter.radius, d2 = distance2(eye, closest(eye, e.a, e.b));
@@ -230,15 +269,22 @@ class Cache {
             l.start = {e.a[0], e.a[1], e.a[2], radius};
             l.end = {e.b[0], e.b[1], e.b[2], e.emitter.kind == 1 ? 1.f : 0.f};
             l.color = {e.emitter.color[0], e.emitter.color[1], e.emitter.color[2], power};
-            picks.push_back({score, l});
+            // Kind 7 is internal procedural exhaust, never an MWFX1 catalog role.
+            picks.push_back({score, l, e.emitter.kind == 7});
         }
         std::stable_sort(picks.begin(), picks.end(),
                          [](const Candidate &a, const Candidate &b) { return a.score > b.score; });
         Uniform out;
-        const auto n = std::min<size_t>(limit, picks.size());
+        unsigned n{}, missiles{};
+        for (const auto &candidate : picks) {
+            if (candidate.missile && missiles >= std::min(missile_light_capacity, limit))
+                continue;
+            out.lights[n++] = candidate.light;
+            missiles += candidate.missile;
+            if (n == limit)
+                break;
+        }
         out.params[0] = float(n);
-        for (size_t i = 0; i < n; ++i)
-            out.lights[i] = picks[i].light;
         return out;
     }
 };

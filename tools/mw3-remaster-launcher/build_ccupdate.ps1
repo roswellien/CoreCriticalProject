@@ -22,7 +22,7 @@ if ($receipt.source_preparation_included -ne $false -or $receipt.precompiled_run
 $signature=Get-AuthenticodeSignature -LiteralPath $Installer
 if ($signature.Status -ne 'Valid' -or !$signature.TimeStamperCertificate) { throw 'The launcher installer needs a valid timestamped Windows signature' }
 New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
-$base='corecritical-'+$Version
+$base=$Version
 $archive=Join-Path $OutputDirectory ($base+'.zip')
 $zip=[IO.Compression.ZipFile]::Open($archive,[IO.Compression.ZipArchiveMode]::Create)
 try { $null=[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip,$Installer,'CoreCriticalSetup.exe',[IO.Compression.CompressionLevel]::Optimal) }

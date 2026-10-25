@@ -123,7 +123,13 @@ def stage(profile_path, output, python_home):
     for key, value in list(environment.items()):
         if isinstance(value, str) and not value.startswith('@game/') and ("/" in value or "\\" in value):
             environment[key] = target.asset(value)
-    native["sun_preset"]["source"] = target.asset(native["sun_preset"]["source"])
+    if native.get("sun_preset"):
+        native["sun_preset"]["source"] = target.asset(native["sun_preset"]["source"])
+    if native.get('stock_effect_lighting'):
+        native['stock_effect_lighting']['catalog'] = target.copy(
+            ROOT / native['stock_effect_lighting']['catalog'], 'resources/stock-effect-lights.bin')
+    if native.get('stock_soundtrack'):
+        native['stock_soundtrack']['root'] = target.asset(native['stock_soundtrack']['root'])
     native["effect_lighting"] = {}
     native["surface_detail"] = {"packs": {}}
     native["prepared_pack_roots"] = []
@@ -134,10 +140,11 @@ def stage(profile_path, output, python_home):
     # paths and is preserved in the original profile, not copied into this trial.
     keep = {"executable", "executable_sha256", "source_snapshot", "verify_source_snapshot", "installation_layout", "content_capabilities",
             "launch_inputs", "runtime_environment", "sun_preset", "effect_lighting", "surface_detail", "prepared_pack_roots", "mission_environment_versions", "cinematic_path_versions", "cinematic_codec_sha256", "original_support_versions",
-            "local_cd_audio", "graphics_capabilities", "supported_graphics_values", "cumulative_texture_banks",
+            "local_cd_audio", "graphics_capabilities", "supported_graphics_values", "supported_graphics_ranges", "cumulative_texture_banks",
             "model_ids", "skin_ids", "normal_map_formats", "world_normal_page_versions", "authored_normal_catalog_versions",
             "surface_detail_versions", "mesh_payload_versions", "effect_lighting_versions", "music_decoder",
-            "include_runtime_candidates", "authored_normal_catalog_budget_bytes", "world_normal_catalog_budget_bytes", "controller_input_version"}
+            "include_runtime_candidates", "authored_normal_catalog_budget_bytes", "world_normal_catalog_budget_bytes", "controller_input_version",
+            "stock_presentation_versions", "stock_effect_lighting", "stock_soundtrack", "dynamic_lighting_defaults", "presentation"}
     profile = {"schema_version": 1, "backend": "native", "graphics": profile["graphics"],
                "native": {k: v for k, v in native.items() if k in keep}}
     for role in profile["native"].get("surface_detail", {}).get("packs", {}).values():
@@ -147,7 +154,7 @@ def stage(profile_path, output, python_home):
     profile["native"]["surface_detail"] = {"packs": profile["native"].get("surface_detail", {}).get("packs", {})}
     (target.root / "profile.json").write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
     for name in ("play_remaster.py", "play_native.ps1", "resolve_sun_preset.ps1", "prepared_mech_packs.py",
-                 "prepared_environment_packs.py", "content_capabilities.py", "legacy_content_capabilities.json", "mission_lighting.py", "normal_materials.py", "native_assets.py", "local_music.py"):
+                 "prepared_environment_packs.py", "prepared_skin_packs.py", "content_capabilities.py", "legacy_content_capabilities.json", "mission_lighting.py", "normal_materials.py", "native_assets.py", "local_music.py", "presentation_policy.py"):
         target.copy(Path(__file__).with_name(name), Path("coordinator") / name)
     python_home = Path(python_home)
     for file in python_home.iterdir():

@@ -30,7 +30,15 @@ def apply(source: Path):
         raise RuntimeError('Expected one virtual surface allocation block')
     a, b = text.index(start), text.index(end)
     c, d = template.index(start), template.index(end)
-    path.write_text(text[:a] + template[c:d] + text[b:])
+    block = template[c:d]
+    # This prerequisite also supports older frozen hosts. Install the host
+    # texture storage change separately, after this guest-page pool migration.
+    if 'texture_backing.hpp' not in (source / 'mfc_stage.hpp').read_text():
+        block = block.replace('!h.vsurfaces[it->second].bytes?nullptr:', '!h.vsurfaces[it->second].mem?nullptr:')
+        block = block.replace('if(v.bytes&&!v.locks&&!pinned.count(v.guest)){', 'if(v.mem&&!v.locks&&!pinned.count(v.guest)){')
+        block = block.replace('if(v.mem){runtime.memory().unmap({v.mem});host.surface_free_pages.put(v.mem,unsigned(n));}v.pixels.clear();',
+                              'runtime.memory().unmap({v.mem});host.surface_free_pages.put(v.mem,unsigned(n));')
+    path.write_text(text[:a] + block + text[b:])
     shutil.copyfile(OVERRIDES / 'surface_page_pool.hpp', source / 'surface_page_pool.hpp')
 
 

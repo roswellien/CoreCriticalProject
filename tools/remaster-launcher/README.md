@@ -1,5 +1,11 @@
 # Local Remaster launcher
 
+The [full-size texture storage repair](../../docs/host-texture-storage-2026-10-23.md)
+moves unlocked texture pixels into host memory, shares identical texture Load
+copies with copy-on-write isolation, and maps guest pixels only during Lock.
+Native rebuilds must retain this integration and the corrected large archive
+seek adapter; older private host snapshots can reintroduce the playtest crashes.
+
 Launcher 1.0.16 adds unchanged-pack verification receipts, reusable merged
 environment resources, visible startup stages and a first-start warning. See
 [startup caching evidence](../../docs/launcher-startup-cache-2026-10-22.md).
@@ -474,3 +480,29 @@ page filenames, at most 16 pages and 256 MiB in aggregate. Each page retains the
 retain precedence over lazy world pages. Launcher profiles and matching snapshots
 must advertise `authored_normal_catalog_versions: [1]`. World page/resident limits
 remain unchanged. See the Campaign 1 report for the selected preview and evidence.
+
+### Native draw and buffer allocation reuse (2026-10-23)
+
+For the current pinned R6 host composition, apply `apply_early_triangle_commands.py`
+first, then `apply_draw_vertex_scratch.py` and `apply_buffer_reserve.py`. Both new
+adapters can be reapplied; the R6 adapter must precede the scratch adapter.
+Apply `apply_model_geometry_warmup.py` afterward to preload immutable model
+geometry at the first world scene. `MW34_MODEL_GEOMETRY_PREWARM=0` disables this
+preload for diagnosis. It caps geometry payload at 64 MiB; device-local and
+retained staging allocations both count toward its actual memory cost.
+They preserve original draw data, validation, queued ownership and ordering.
+`MW34_BUFFER_RESERVE=0` selects the diagnostic exact-capacity policy; the default
+reserves less than 64 KiB when an existing streaming buffer below 16 MiB grows.
+Initial allocations stay exact, and reserved allocation failures retry the exact
+requested size. Quality and replay behavior are unchanged. See the
+[measurements and checks](../../docs/performance-recent-changes-2026-10-23.md)
+for the small measured FPS difference and the larger allocation-count reduction.
+
+### DirectInput controller object query (2026-10-24)
+
+`apply_directinput_object_info.py` adds the missing ANSI `GetObjectInfo` bridge
+to a pinned native host without replacing its other stage code. Windows supplies
+the actual object metadata and HRESULT; the adapter supports the 292/316-byte
+guest layouts and preserves output on failure. The maintained stage includes
+the same handler. See the [startup crash fix](../../docs/controller-object-query-crash-2026-10-24.md)
+for the exact reproduction, native menu/Training checks and signed `.mw3update`.

@@ -6,6 +6,69 @@ changing translated gameplay, shaders, lighting, shadow coverage or asset qualit
 Strict acceptance remains **131/144**. Broader campaign, mission reload, combat
 and sustained visible-play validation remain open.
 
+## October 23: earlier command batching, performance revision 6
+
+Revision 6 moves compatible lit world-triangle batching ahead of repeated host
+scene preparation. Every original per-call validation, logging, geometry,
+lighting/effect capture and suppression decision still runs. Exact vertex bytes,
+triangle order and immutable bindings are retained. Clears, scene boundaries,
+models, HUD/zoom, unlit routing, indexed draws and fixture-proof commands remain
+barriers. The source adapter is `tools/remaster-launcher/apply_early_triangle_commands.py`;
+the authored helper and fixture are `native-overrides/early_triangle_commands.hpp`
+and `tests/early_triangle_commands_checks.cpp` in the same tools directory.
+The helper passes 96,028 ownership, byte-preservation, topology and barrier checks.
+
+These are visible, uncapped moving Training tests on Ryzen 7 9700X / Radeon
+RX 9070, 3440x1440, FXAA, AF16, fog 1100 and full existing lighting/shadows.
+Replay and the overlay are off. Each setting has two controls and two candidate
+runs in before/after/after/before order; timing excludes image capture/profiling.
+The fixed diagnostic guest clock is identical within each comparison block;
+interactive simulation timing is unchanged. Competing render/game processes
+prevent admission, including Blender. Warm frames are 1200–2699; heavy frames
+are 1200–1844. Compare within each block, not across the two settings.
+
+| Draw distance / metric | Revision 5 | Revision 6 |
+| --- | ---: | ---: |
+| 3200: warm average FPS | 85.53 | 92.73 |
+| 3200: warm 1% low FPS | 41.18 | 48.54 |
+| 3200: warm mean frame interval | 11.692 ms | 10.784 ms |
+| 3200: heavy average FPS | 62.26 | 71.53 |
+| 1600: warm average FPS | 117.06 | 132.30 |
+| 1600: warm 1% low FPS | 54.23 | 65.57 |
+| 1600: heavy average FPS | 80.30 | 95.92 |
+
+At the user's current 3200 setting, warmed throughput improves 8.4%, heavy
+throughput 14.9% and warmed 1% lows 17.9%. Both candidate heavy means beat both
+controls at each setting. All 2,800 original draw rows and seven full-resolution
+images match at each setting, fourteen images total; final GPU draw counts match.
+At 1600, renderer preparation records fall 5,051,626 -> 1,669,734 while final GPU
+draws stay 717,752. At 3200, records fall 6,981,677 -> 3,527,832 while GPU draws
+stay 1,179,646. This removes repeated CPU preparation and makes no measured
+whole-game RAM/VRAM claim. Shaders, shadow resolution, textures, gameplay and the
+translated module are unchanged. Broad campaign/combat/hardware coverage remains
+open. Bounded frame-budget exit 1 is not normal-quit or mission-completion evidence.
+
+Private evidence is `D:/MW3EarlyTriangleCommands-20261023-r1`; release assembly
+is `D:/MW3PerformanceUpdate-20261023-r6`. The timestamped signed native hash is
+`9032ffbc5b3e4bd5d6ee63ff8147f37809491b6079f73869fb109129727f717a`.
+Only `mfc_stage.hpp`, `d3d_provider.inc` and the new helper change from revision 5.
+Development selects this build with `MW34_EARLY_TRIANGLE_COMMANDS=1`; all user
+quality settings and installed asset bindings are preserved. The weaker camera,
+ownership, light-mask and GPU shadow-clipping experiments are excluded.
+
+The signed [revision-6 update](https://playtest.corecritical.dev/updates/mw3-performance-20261023-r6/MW3PerformanceUpdate.zip)
+is published under Setup as a ZIP containing the `.mw3update`, matching precompiled
+payload and instructions. Minimum launcher is 1.0.27, sequence 2026102309. Real
+verification, installation, activation, full validation and rollback passed from
+the retained 1.0.27 installer, current 1.0.28 installer and previous performance
+revision 5. Original inputs are verified; no compiler or regeneration is needed.
+All five remote objects match full local readback hashes; both Setup catalogs
+retain the 1.0.28 installer, ISO, English patch and every asset-pack row. The full
+1.0.28 installer itself still contains revision 5; apply the optional update for
+revision 6. The separate remote Op1M1 surface-arena report remains unresolved.
+
+The remaining sections retain the earlier October 22 late-batching investigation.
+
 ## Diagnosis and implementation
 
 A fresh CPU sample profile of the selected warmup host finds expensive frames

@@ -59,10 +59,10 @@ $fullSetup = Join-Path $OutputDirectory 'Setup'
 & (Join-Path $PSScriptRoot 'build_installer.ps1') @common -OutputDirectory $fullSetup -RuntimeDirectory $RuntimeDirectory
 
 $artifacts = @{}
-foreach ($relative in @("Setup/$setupFilename", "LauncherUpdate/corecritical-$numericVersion.ccupdate", "LauncherUpdate/corecritical-$numericVersion.zip")) {
+foreach ($relative in @("Setup/$setupFilename", "LauncherUpdate/$numericVersion.ccupdate", "LauncherUpdate/$numericVersion.zip")) {
     $path = Join-Path $OutputDirectory $relative
-    $artifacts[$relative] = @{ bytes=(Get-Item -LiteralPath $path).Length; sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+    $artifacts[$relative] = @{ download_filename=[IO.Path]::GetFileName($relative); bytes=(Get-Item -LiteralPath $path).Length; sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
-@{ version=$Version; launcher_sequence=$Sequence; artifacts=$artifacts; published=$false } |
+@{ version=$Version; installer_download_filename=$setupFilename; launcher_sequence=$Sequence; artifacts=$artifacts; published=$false } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'launcher-release.json') -Encoding utf8NoBOM
-Write-Output "Release built: Setup/$setupFilename and the matching LauncherUpdate .ccupdate + ZIP. Validate the upgrade before publication."
+Write-Output "Release built: Setup/$setupFilename and the matching LauncherUpdate .ccupdate + ZIP. Publish the installer using its exact versioned filename: $setupFilename. Validate the upgrade before publication."

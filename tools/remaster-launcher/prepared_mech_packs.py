@@ -75,7 +75,8 @@ def canonical_pack_root(directory):
 
 def compose(roots, host, verification=None):
     """Return selected records and a clean runtime environment; first chassis wins."""
-    environment = {k: v for k, v in host.get("runtime_environment", {}).items() if k not in ALL_MODEL_KEYS}
+    environment = {k: v for k, v in host.get("runtime_environment", {}).items()
+                   if k not in ALL_MODEL_KEYS and k != 'MW34_ADDITIONAL_SKINS'}
     selected = {}
     metadata = []
     enabled_ids = set()
@@ -88,6 +89,8 @@ def compose(roots, host, verification=None):
         enabled_ids.add(ident)
         metadata.append((root, manifest))
     for root, manifest in metadata:
+        if manifest.get('native_payload', {}).get('profile') == 'prepared-skins-v1':
+            continue  # Additions compose after the winning chassis is known.
         # These prepared-resource packs currently define no dependency-version
         # semantics. Reject such declarations rather than silently ignoring them.
         if manifest.get("dependencies") or manifest.get("conflicts"):
@@ -184,4 +187,6 @@ def compose(roots, host, verification=None):
             raise ValueError("Pack chassis declaration differs from registry")
     for model in selected.values():
         environment.update(model["environment"])
+    from prepared_skin_packs import select
+    select(metadata, host, list(selected.values()), verification)
     return list(selected.values()), environment

@@ -103,7 +103,7 @@ void*d3d_call(const Import&imp,unsigned token,const std::function<unsigned(unsig
   }
  if(imp.dll=="IDirect3DTexture2"){auto*t=vsurface(root);if(!t)deny("Texture object without its surface",root);
   if(n=="Load"){auto*s=vsurf_of(arg(1));if(!s||s->width!=t->width||s->height!=t->height||s->bpp!=t->bpp)deny("Texture Load between different surfaces is not modelled",arg(1));
-   gpu_sync(s->guest);gpu_sync(t->guest);std::vector<unsigned char>b(s->bytes);get_bytes(s->mem,b.data(),s->bytes);if(t->bytes!=s->bytes)deny("Texture Load with different pitches",arg(1));write_bytes(t->mem,b.data(),unsigned(b.size()));t->tex_masks=s->tex_masks;t->version=++host.surface_versions;return done(DD_OK,2);}
+   gpu_sync(s->guest);gpu_sync(t->guest);if(t->bytes!=s->bytes)deny("Texture Load with different pitches",arg(1));if(!s->mem&&!t->mem&&!s->pixels.empty()&&!t->pixels.empty())t->pixels=s->pixels;else{std::vector<unsigned char>b(s->bytes);surface_read(*s,0,b.data(),s->bytes);surface_write(*t,0,b.data(),unsigned(b.size()));}t->tex_masks=s->tex_masks;t->version=++host.surface_versions;return done(DD_OK,2);}
   if(n=="GetHandle"){if(!writable(arg(2),4))deny("GetHandle output outside the memory contract",arg(2));store(arg(2),t->guest);return done(DD_OK,3);}}
  stop(m4_runtime::FaultReason::unresolved_import,"Direct3D provider method not implemented: "+imp.dll+"::"+n,token);}
 // Texture formats the renderer samples: RGB565, ARGB1555, ARGB4444 (DDPIXELFORMAT words).
@@ -151,7 +151,7 @@ void render_scene(D3DDev&d){auto*rt=vsurface(d.target);if(!rt)deny("Scene render
   d.commands.clear();return;}
  if(!host.scene_t0)host.scene_t0=host.vclock()?std::max<std::uint64_t>(host.vclock_us/1000,1): ::GetTickCount64();
  namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.color.resize(px);sc.depth.assign(px,0);sc.has_depth=zb!=nullptr;
- auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){get_bytes(v.mem+y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
+ auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){surface_read(v,y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
  const bool lazy=lazy_rt();if(lazy&&host.res_dirty&&(host.res_rt!=rt->guest||host.res_zb!=(zb?zb->guest:0U)))gpu_sync(0);
  bool rescale=false;if(lazy){auto*sr=scene_renderer();if(sr==host.presenter.get()){const float want=render_scale(rt->height);
   if(want!=sr->current_scale()){rescale=true;if(host.res_dirty)gpu_sync(0);}sr->request_scale(want);}}  /* a new scale recreates the target: its content moves through guest memory */

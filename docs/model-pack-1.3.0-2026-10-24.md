@@ -1,0 +1,11 @@
+# MW3 Remastered Models 1.3.0 private playtest pack
+
+The owner requested an update to the MW5 model asset pack. The already-published combined 18-mech pack was version 1.2.0, so the owner chose 1.3.0 to preserve the launcher upgrade path. The pack ID remains `com.mw3remaster.mw5-mechs`; installing it updates the previous combined pack. The optional Sommerset skin pack remains separate.
+
+Version 1.3.0 freezes the currently selected local model resources: 18 mechs, 360 LOD/model/texture/normal/alternate-skin bindings, and 252 distinct referenced payloads. Compared with the published 1.2.0 archive, 30 bindings changed across Firefly, Bushwacker, Vulture, Thor, Orion, Daishi, Shadow Cat, Puma, Annihilator, Supernova, Black Hawk, and Champion. The pack excludes 34 older payload entries that the selected registry no longer references. It does not change the native host, original-game files, or gameplay.
+
+The complete `.mw3pack` has 254 archive members and 2,283,645,379 compressed bytes. Its SHA-256 is `7757efd5ed0471ef5e832baab5abdc43029b4069a5b4d82392636bfc9e27744b`. Archive closure and every member hash passed. The launcher's own pack importer installed 1.3.0 in both local pack roots; the active DEV root has exact archive-member closure. `play_remaster.py --check` passed with all 18 model candidates and the existing 38 environment banks. This is content selection and packaging evidence, not a new weapon/damage/LOD or native acceptance result; strict acceptance remains 131/144.
+
+The private Cloudflare R2 object is `packs/2026-10-24-models-r2/mw3-remastered-models-1.3.0.mw3pack`, served through [the protected playtest download](https://playtest.corecritical.dev/packs/2026-10-24-models-r2/mw3-remastered-models-1.3.0.mw3pack). Complete remote SHA-256 readback matched the local archive. Both protected catalog versions (`2026-10-21-r1` and `r2`) had only their model row, model metadata, model total, and checksum line updated; all other download rows were retained. Each changed catalog object was read back byte for byte. The 1.2.0 object remains on R2 as rollback.
+
+Private local build, source pins, import receipts, staged catalogs, and remote publication journal are under `local/work-ahead/model-pack-1.3.0-20261024/`. Original and derived media remain outside Git. No commit was made.

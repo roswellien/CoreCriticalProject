@@ -111,7 +111,8 @@ namespace MW3RemasterLauncher.Core
 
         [JsonIgnore]
         public string RuntimeLabel => SchemaVersion == 2 ?
-            (NativePayload?.Profile == CinematicPack.Profile ? "Cinematics — AVI replacements or launcher movie library" :
+            (NativePayload?.Profile == SkinPack.Profile ? "Additional skins — choose in Mech Lab" :
+             NativePayload?.Profile == CinematicPack.Profile ? "Cinematics — AVI replacements or launcher movie library" :
              NativePayload?.Profile == UiPack.Profile ? "HUD/menu artwork — original layout and input" :
              NativePayload?.Profile == MusicPack.Profile ? "Soundtrack — original game music controls" :
              NativePayload?.Profile == "prepared-environment-v1" ? "Environment textures, normals and lighting — playtest pending" : "Native mech candidates — gameplay validation pending") : "";

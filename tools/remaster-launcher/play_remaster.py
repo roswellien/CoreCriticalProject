@@ -22,6 +22,29 @@ def read_json(path):
         raise RuntimeError(f"Cannot read completed manifest {path}: {exc}") from exc
 
 
+def graphics_limitations(graphics, profile):
+    """Check declared host capabilities, including its bounded output dimensions."""
+    caps = profile["graphics_capabilities"]
+    choices = profile.get("supported_graphics_values", {})
+    ranges = profile.get("supported_graphics_ranges", {})
+    bounds = {"width": (640, 7680), "height": (480, 4320)}
+    for key, limits in ranges.items():
+        if (key not in bounds or not isinstance(limits, list) or len(limits) != 2
+                or any(type(n) is not int for n in limits)
+                or not bounds[key][0] <= limits[0] <= limits[1] <= bounds[key][1]):
+            raise RuntimeError("Invalid native graphics range: " + key)
+    errors = []
+    for key, value in graphics.items():
+        if caps.get(key) == value or value in choices.get(key, []):
+            continue
+        if key in ranges and type(value) is int and ranges[key][0] <= value <= ranges[key][1]:
+            continue
+        allowed = (f"{ranges[key][0]}..{ranges[key][1]}" if key in ranges else
+                   ", ".join(map(str, choices.get(key, [caps[key]] if key in caps else []))) or "not advertised")
+        errors.append(f"Unsupported native graphics setting {key}={value}; supported: {allowed}.")
+    return errors
+
+
 def plan(backend=None, original_models=False, *, config_path=None, registry_path=None, verification=None):
     """Resolve registered models, capabilities and command arguments without launching.
 
@@ -33,6 +56,12 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
     selected_config = (Path(config_path) if config_path is not None else CONFIG).resolve()
     config = read_json(selected_config)
     backend = backend or config["backend"]
+    from presentation_policy import choice, apply as apply_presentation
+    if choice(config.get('native', {})) is not None:
+        # Normal sessions never inherit optional developer registries/presets.
+        config['native'].setdefault('prepared_pack_roots', [])
+        config['native'].setdefault('prepared_environment_pack_roots', [])
+        config['native'].pop('sun_preset', None)
     installed_packs = "prepared_pack_roots" in config.get("native", {})
     prepared_profile = None
     if installed_packs:
@@ -88,6 +117,7 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         banks = read_json(bank_manifest) if bank_manifest.is_file() else []
     if not banks and not installed_packs and environment_packs is None:
         raise RuntimeError("Texture pack manifest is empty or missing")
+    apply_presentation(config.get('native', {}), environment_packs or {})
     graphics = dict(config["graphics"])
     # Settings UI persists the named off choice; the native sampler contract
     # uses one raster sample for disabled AA.
@@ -261,8 +291,8 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
             raise RuntimeError(
                 "Published models need a newer native mesh format: " + ", ".join(incompatible)
             )
-        choices = profile.get("supported_graphics_values", {})
-        supported = all(caps.get(k) == v or v in choices.get(k, []) for k, v in graphics.items())
+        limitations = graphics_limitations(graphics, profile)
+        supported = not limitations
         command = [
             "powershell.exe",
             "-NoProfile",
@@ -274,11 +304,6 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
             str(selected_config),
             "-RuntimeRoot", str(ROOT),
         ]
-        limitations = (
-            ["Native renderer does not yet implement this complete requested graphics profile."]
-            if not supported
-            else []
-        )
         if profile.get("cumulative_texture_banks") is not True:
             supported = False
             limitations.append(
@@ -465,12 +490,12 @@ def main():
             )
         for limitation in p["limitations"]:
             print(limitation)
-        if args.check:
-            return 0
         if not p["supported"]:
             raise RuntimeError(
-                "Requested graphics/assets are not supported by this native profile. No settings were silently disabled and no backend fallback was used."
+                " ".join(p["limitations"]) + " No settings were silently disabled and no backend fallback was used."
             )
+        if args.check:
+            return 0
         # All launch paths share the same singleton game identity; preserve an existing session.
 
         if not args.prepare_only:
@@ -512,14 +537,17 @@ def main():
                 bindings = {key: value for key, value in bindings.items() if key not in ALL_MODEL_KEYS}
                 bindings.update(model_bindings)
                 native['runtime_environment']=bindings
+                from presentation_policy import apply as apply_presentation
+                apply_presentation(native, p['environment_packs'])
+                bindings = native['runtime_environment']
                 for key in RESOURCE_KEYS: environment.pop(key,None)
                 environment.update(bindings)
             if p["music"]:
                 startup_progress('Preparing soundtrack…')
                 from local_music import prepare_music
 
-                music_output = (Path(args.asset_output or p['asset_output']) / 'music'
-                                if read_json(args.profile)['native'].get('installation_layout') == 1 else None)
+                music_root = args.asset_output or p['asset_output']
+                music_output = Path(music_root) / 'music' if music_root else None
                 environment.update(prepare_music(ROOT, supplied=p['music'], output=music_output))
             for key, value in p["graphics"].items():
                 environment["MW34_REMASTER_" + key.upper()] = str(value)
@@ -539,6 +567,15 @@ def main():
                 p["command"] += ["-GameExe", str(args.game_exe.resolve())]
             if args.input_script:
                 p["command"] += ["-Script", str(args.input_script.resolve())]
+        if p['backend'] == 'native':
+            from prepared_skin_packs import write_catalog, CATALOG_KEY
+            environment.pop(CATALOG_KEY, None)
+            skin_bindings = write_catalog(p['models'], args.asset_output or p['asset_output'])
+            environment.update(skin_bindings)
+            if p.get('prepared_profile') is not None:
+                native = p['prepared_profile']['native']
+                native.setdefault('runtime_environment', {}).pop(CATALOG_KEY, None)
+                native['runtime_environment'].update(skin_bindings)
         if p.get("prepared_profile") is not None:
             # PowerShell applies runtime_environment after preparation. Give it the
             # composed session profile so stale developer mech paths cannot return.

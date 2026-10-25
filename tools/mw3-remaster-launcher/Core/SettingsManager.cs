@@ -23,6 +23,9 @@ namespace MW3RemasterLauncher.Core
         public int CdAudioVolume { get; set; } = 80;
         public bool InstantReplay { get; set; } = false;
         public bool PerformanceMonitor { get; set; } = false;
+        public bool DynamicLighting { get; set; } = false;
+        public bool Shadows { get; set; } = false;
+        public bool InitialSetupCompleted { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();
         public bool PackSelectionInitialized { get; set; } = false;
@@ -65,9 +68,16 @@ namespace MW3RemasterLauncher.Core
             {
                 try
                 {
-                    var settings = JsonSerializer.Deserialize<LauncherSettings>(File.ReadAllText(_settingsPath))
+                    var raw = File.ReadAllText(_settingsPath);
+                    var settings = JsonSerializer.Deserialize<LauncherSettings>(raw)
                         ?? throw new JsonException("Settings are empty.");
                     settings.ActivePacks ??= new List<string>();
+                    // Existing users have already configured their launcher.
+                    // Newly saved first-run settings contain the explicit false
+                    // marker, so cancelling setup does not count as completing it.
+                    using var saved = JsonDocument.Parse(raw);
+                    if (!saved.RootElement.TryGetProperty(nameof(LauncherSettings.InitialSetupCompleted), out _))
+                        settings.InitialSetupCompleted = true;
                     if (settings.ReplayVideoSettingsVersion < 1) settings.InstantReplay = false;
                     return settings;
                 }

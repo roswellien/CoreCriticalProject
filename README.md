@@ -13,6 +13,7 @@ logic and behavior while making it usable on modern systems.
 · [Development videos](https://www.youtube.com/channel/UC0YGz5FEh7-ij1miUmXECiw/videos)
 · [Screenshots and media](docs/media/README.md)
 · [Setup](docs/setup-game.md)
+· [Known playtest issues](docs/known-issues.md)
 · [Mod Tools](#mod-tools)
 · [Contributing](CONTRIBUTING.md)
 

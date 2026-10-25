@@ -1,12 +1,12 @@
 // Virtual display surfaces (project presentation provider; included inside mf::Stage).
-// Surfaces are guest COM objects whose pixel memory lives in guest pages, so Lock hands the game a
-// guest pointer and the game's own (recompiled) renderer writes the pixels. Flip swaps the surface
+// Surfaces are guest COM objects. Unlocked textures retain their pixels in host-owned backing;
+// Lock maps a temporary guest view for the recompiled game. Other surfaces keep guest pages. Flip swaps the surface
 // memory of the front buffer and its attached back buffer (DirectDraw flip semantics) and presents the
 // front buffer to the game window. Blt/BltFast implement colour fill, copy, source colour key and
 // nearest stretch for same-format surfaces. Anything outside this model stops typed.
 
 using VSurface=VSurfaceRec;using VPalette=VPaletteRec;
-VSurface*vsurface(unsigned g){auto&h=host;for(;h.vsurf_indexed<h.vsurfaces.size();++h.vsurf_indexed)h.vsurf_index.emplace(h.vsurfaces[h.vsurf_indexed].guest,h.vsurf_indexed);const auto it=h.vsurf_index.find(g);return it==h.vsurf_index.end()||!h.vsurfaces[it->second].mem?nullptr:&h.vsurfaces[it->second];}
+VSurface*vsurface(unsigned g){auto&h=host;for(;h.vsurf_indexed<h.vsurfaces.size();++h.vsurf_indexed)h.vsurf_index.emplace(h.vsurfaces[h.vsurf_indexed].guest,h.vsurf_indexed);const auto it=h.vsurf_index.find(g);return it==h.vsurf_index.end()||!h.vsurfaces[it->second].bytes?nullptr:&h.vsurfaces[it->second];}
 unsigned vsurf_root(unsigned g){const auto*o=host.com_object(g);return o?root_of(*o):g;}
 VSurface*vsurf_of(unsigned g){return vsurface(vsurf_root(g));}
 void surface_collect_retired(){
@@ -19,10 +19,10 @@ void surface_collect_retired(){
  }
  for(size_t before=~size_t{};before!=pinned.size();){before=pinned.size();for(const auto&v:host.vsurfaces)if(pinned.count(v.guest)){pinned.insert(v.attached);pinned.insert(v.zbuffer);}}
  unsigned count=0;std::uint64_t bytes=0;
- for(auto&v:host.vsurfaces)if(v.mem&&!v.locks&&!pinned.count(v.guest)){
+ for(auto&v:host.vsurfaces)if(v.bytes&&!v.locks&&!pinned.count(v.guest)){
   const auto n=(std::uint64_t(v.bytes)+4095)&~std::uint64_t(4095);
   if(!n||n>0xffffffffULL)deny("Invalid retired surface extent",v.mem);
-  runtime.memory().unmap({v.mem});host.surface_free_pages.put(v.mem,unsigned(n));
+  if(v.mem){runtime.memory().unmap({v.mem});host.surface_free_pages.put(v.mem,unsigned(n));}v.pixels.clear();
   bytes+=n;++count;v.mem=0;v.bytes=0;
  }
  std::fprintf(stderr,"Surface page reclamation: %u retired surfaces, %llu bytes\n",count,(unsigned long long)bytes);
@@ -40,8 +40,31 @@ unsigned surface_pages(unsigned bytes){
  }
  bool bad{};try{runtime.memory().map({g},n,Permissions::read|Permissions::write);}catch(...){bad=true;}if(bad)deny("Checked surface memory mapping",g);return g;
 }
-unsigned make_surface(unsigned w,unsigned h,unsigned bpp,unsigned caps,const com::Iface&iface){const unsigned pitch=((w*bpp/8)+3U)&~3U,bytes=pitch*h;
- const unsigned g=com_wrap(nullptr,iface);host.com_object(g)->refs=1;host.vsurfaces.push_back({g,w,h,pitch,bpp,caps,surface_pages(bytes),bytes,0,0,0});host.vsurfaces.back().version=++host.surface_versions;return g;}
+unsigned make_surface(unsigned w,unsigned h,unsigned bpp,unsigned caps,const com::Iface&iface){const auto row=(std::uint64_t(w)*bpp/8+3)&~std::uint64_t(3);const auto extent=row*h;
+ if(!w||!h||!bpp||row>0xffffffffULL||extent>0xffffffffULL)deny("Surface dimensions overflow",w);const unsigned pitch=unsigned(row),bytes=unsigned(extent);
+ const unsigned g=com_wrap(nullptr,iface);host.com_object(g)->refs=1;host.vsurfaces.push_back({g,w,h,pitch,bpp,caps,(caps&DDSCAPS_TEXTURE)?0:surface_pages(bytes),bytes,0,0,0});if(caps&DDSCAPS_TEXTURE)host.vsurfaces.back().pixels.resize(bytes);if(host.vsurfaces.size()%128==0)surface_collect_retired();host.vsurfaces.back().version=++host.surface_versions;return g;}
+// Service reads/writes see the live guest Lock view when present, otherwise host storage.
+void surface_read(const VSurface& v,unsigned offset,void* out,unsigned bytes){
+ if(std::uint64_t(offset)+bytes>v.bytes)deny("Surface read outside pixels",v.guest);
+ if(v.mem)get_bytes(v.mem+offset,out,bytes);else v.pixels.read(offset,out,bytes);
+}
+void surface_write(const VSurface& v,unsigned offset,const void* in,unsigned bytes){
+ if(std::uint64_t(offset)+bytes>v.bytes)deny("Surface write outside pixels",v.guest);
+ if(v.mem)write_bytes(v.mem+offset,in,bytes);else v.pixels.write(offset,in,bytes);
+}
+unsigned surface_word(const VSurface& v,unsigned offset){unsigned word{};surface_read(v,offset,&word,4);return word;}
+void texture_lock_pages(VSurface& v){
+ if(v.pixels.empty()||v.mem)return;
+ v.mem=surface_pages(v.bytes);
+ std::vector<unsigned char> row(v.pitch);
+ for(unsigned y=0;y<v.height;++y){v.pixels.read(size_t(y)*v.pitch,row.data(),v.pitch);write_bytes(v.mem+y*v.pitch,row.data(),v.pitch);}
+}
+void texture_unlock_pages(VSurface& v){
+ if(v.pixels.empty()||!v.mem)return;
+ std::vector<unsigned char> row(v.pitch);
+ for(unsigned y=0;y<v.height;++y){get_bytes(v.mem+y*v.pitch,row.data(),v.pitch);v.pixels.write(size_t(y)*v.pitch,row.data(),v.pitch);}
+ runtime.memory().unmap({v.mem});host.surface_free_pages.put(v.mem,unsigned((std::uint64_t(v.bytes)+4095)&~std::uint64_t(4095)));v.mem=0;
+}
 DDPIXELFORMAT surface_format(const VSurface&v){if(v.caps&(DDSCAPS_TEXTURE|DDSCAPS_ZBUFFER)){DDPIXELFORMAT f{};f.dwSize=sizeof(f);f.dwRGBBitCount=16;
   if(v.caps&DDSCAPS_ZBUFFER){f.dwFlags=DDPF_ZBUFFER;f.dwRBitMask=0;f.dwGBitMask=0xffff;return f;}f.dwFlags=DDPF_RGB|(v.tex_masks[3]?DDPF_ALPHAPIXELS:0);f.dwRBitMask=v.tex_masks[0];f.dwGBitMask=v.tex_masks[1];f.dwBBitMask=v.tex_masks[2];f.dwRGBAlphaBitMask=v.tex_masks[3];return f;}
  return virtual_format(v.bpp);}
@@ -77,7 +100,7 @@ void resident_into(const VSurface&v){auto*rt=vsurface(host.res_rt);if(!rt||rt->w
  try{HostInternal hi(*this);host.sren->fetch_resident(sc);}catch(const std::exception&e){deny(std::string(e.what()),0);}
  for(unsigned y=0;y<v.height;++y)write_bytes(v.mem+y*v.pitch,sc.color.data()+size_t(y)*v.width,v.width*2);}
 void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.display.window)deny("Presentation without a cooperative window",v.guest);const unsigned w=v.width,h=v.height;
- std::vector<unsigned char>px;if(!present_direct){px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));}
+ std::vector<unsigned char>px;if(!present_direct){px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));if(v.bpp==16){mw34::vkscene::HostFpEnvironment fp;menu_version::paint_footer(px.data(),w,h,v.pitch);}}
  struct{BITMAPINFOHEADER h;DWORD masks[256];}bi{};bi.h.biSize=sizeof(BITMAPINFOHEADER);bi.h.biWidth=LONG(v.pitch/(v.bpp/8));bi.h.biHeight=-LONG(h);bi.h.biPlanes=1;bi.h.biBitCount=WORD(v.bpp);
  if(v.bpp==16){bi.h.biCompression=BI_BITFIELDS;bi.masks[0]=0xf800;bi.masks[1]=0x07e0;bi.masks[2]=0x001f;}else if(v.bpp==8){const auto*pal=vpalette(v.palette);if(!pal)deny("8-bit presentation without a palette",v.guest);
   for(unsigned i=0;i<256;++i)bi.masks[i]=RGB(pal->entries[i].peBlue,pal->entries[i].peGreen,pal->entries[i].peRed);bi.h.biClrUsed=256;}else deny("Presentation depth not modelled",v.bpp);
@@ -115,10 +138,10 @@ bool inside(const VSurface&v,const RECT&r){return r.left>=0&&r.top>=0&&r.right<=
 void blit(const VSurface&d,RECT dr,const VSurface&s,RECT sr,bool key,unsigned klo,unsigned khi){d.version=++host.surface_versions;if(d.bpp!=s.bpp)deny("Blt between surfaces of different depths is not modelled",d.bpp);
  const LONG dw=dr.right-dr.left,dh=dr.bottom-dr.top,sw=sr.right-sr.left,sh=sr.bottom-sr.top;if(dw<=0||dh<=0||sw<=0||sh<=0)return;
  gpu_sync(d.guest);gpu_sync(s.guest);if(!inside(d,dr)||!inside(s,sr))deny("Blt rectangle outside its surface",unsigned(dr.left));const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Blt depth not modelled",d.bpp);
- std::vector<unsigned char>src(size_t(sw)*sh*b),row(size_t(dw)*b);for(LONG y=0;y<sh;++y)get_bytes(s.mem+unsigned(sr.top+y)*s.pitch+unsigned(sr.left)*b,src.data()+size_t(y)*sw*b,unsigned(sw)*b);
- for(LONG y=0;y<dh;++y){const LONG sy=y*sh/dh;const unsigned da=d.mem+unsigned(dr.top+y)*d.pitch+unsigned(dr.left)*b;if(key)get_bytes(da,row.data(),unsigned(dw)*b);
+ std::vector<unsigned char>src(size_t(sw)*sh*b),row(size_t(dw)*b);for(LONG y=0;y<sh;++y)surface_read(s,unsigned(sr.top+y)*s.pitch+unsigned(sr.left)*b,src.data()+size_t(y)*sw*b,unsigned(sw)*b);
+ for(LONG y=0;y<dh;++y){const LONG sy=y*sh/dh;const unsigned da=unsigned(dr.top+y)*d.pitch+unsigned(dr.left)*b;if(key)surface_read(d,da,row.data(),unsigned(dw)*b);
   for(LONG x=0;x<dw;++x){const unsigned char*p=src.data()+(size_t(sy)*sw+size_t(x*sw/dw))*b;unsigned c=0;std::memcpy(&c,p,b);if(key&&c>=klo&&c<=khi)continue;std::memcpy(row.data()+size_t(x)*b,p,b);}
-  write_bytes(da,row.data(),unsigned(dw)*b);}}
+  surface_write(d,da,row.data(),unsigned(dw)*b);}}
 bool resident_current(){auto*rt=vsurface(host.res_rt);auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;return rt&&rt->version==host.res_ver_rt&&(!host.res_zb||(zb&&zb->version==host.res_ver_zb));}
 void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;sc.color.resize(size_t(sc.width)*sc.height);sc.depth.resize(sc.color.size());
  sc.has_depth=host.res_zb!=0;vs::Clear k{};const bool depth=d.guest==host.res_zb;k.flags=depth?2U:1U;k.color[0]=float((c>>11)&31)/31.f;k.color[1]=float((c>>5)&63)/63.f;k.color[2]=float(c&31)/31.f;k.color[3]=1.f;k.z=float(c&0xffff)/65535.f;
@@ -127,7 +150,7 @@ void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);
  d.version=++host.surface_versions;if(depth)host.res_ver_zb=d.version;else host.res_ver_rt=d.version;host.res_dirty=true;gpu_protect(true);}
 void fill(const VSurface&d,RECT r,unsigned c){if(lazy_rt()&&host.sren&&d.bpp==16&&r.right>r.left&&r.bottom>r.top&&inside(d,r)&&(d.guest==host.res_rt||(host.res_zb&&d.guest==host.res_zb))&&(host.res_dirty||resident_current())){gpu_fill(d,r,c);return;}gpu_sync(d.guest);d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));
  const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Fill depth not modelled",d.bpp);std::vector<unsigned char>row(size_t(r.right-r.left)*b);for(size_t x=0;x<row.size()/b;++x)std::memcpy(row.data()+x*b,&c,b);
- for(LONG y=r.top;y<r.bottom;++y)write_bytes(d.mem+unsigned(y)*d.pitch+unsigned(r.left)*b,row.data(),unsigned(row.size()));}
+ for(LONG y=r.top;y<r.bottom;++y)surface_write(d,unsigned(y)*d.pitch+unsigned(r.left)*b,row.data(),unsigned(row.size()));}
 
 void*vdd_create_surface(unsigned out,unsigned a,unsigned dsize,const std::function<void*(unsigned,unsigned)>&done){const DDSURFACEDESC2 d=get_desc(a,dsize);const unsigned caps=d.ddsCaps.dwCaps;
  if(!writable(out,4))deny("CreateSurface output outside the memory contract",out);if(!host.display.width)deny("CreateSurface before the virtual display mode is set",a);
@@ -164,10 +187,10 @@ void*vdd_surface(const Import&imp,unsigned token,const std::function<unsigned(un
   if(!(want&DDSCAPS_BACKBUFFER)||!v->attached){store(out,0);return done(unsigned(DDERR_NOTFOUND),3);}++host.com_object(v->attached)->refs;store(out,v->attached);return done(DD_OK,3);}
  if(n=="Lock"){const unsigned rect=arg(1),desc=arg(2),flags=arg(3);if(arg(4))deny("Lock event handle is not modelled",arg(4));if(!readable(desc,4)||load(desc)!=dsize)deny("Lock descriptor with a wrong dwSize",desc);
   if(gpu_hud()&&lazy_rt()&&host.sren&&host.res_dirty&&v->guest==host.res_rt&&!hud_gpu_active)hud_begin(*v);else gpu_sync(v->guest);
-  const RECT r=surf_rect(rect,*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);++v->locks;(void)flags;
+  const RECT r=surf_rect(rect,*v);texture_lock_pages(*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);++v->locks;(void)flags;
   {static const bool watch=[]{const char*e=std::getenv("MW34_HUD_WATCH");return e&&*e;}();if(watch&&v->width>=640&&v->height>=480&&v->bpp==16&&!hud_watch_hi){auto*b=reinterpret_cast<std::byte*>(runtime.memory().flat_base());if(b){hud_watch_lo=reinterpret_cast<std::uintptr_t>(b+v->mem);hud_watch_hi=hud_watch_lo+std::uintptr_t(v->pitch)*v->height;DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READONLY,&old);}}}
   return done(DD_OK,5);}
- if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);if(hud_gpu_active&&v->guest==host.res_rt){hud_flush();hud_gpu_active=false;--v->locks;return done(DD_OK,2);}if(hud_watch_hi){DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READWRITE,&old);hud_watch_lo=hud_watch_hi=0;if(host.frames%25==0)hud_watch_save();}--v->locks;v->version=++host.surface_versions;return done(DD_OK,2);}
+ if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);if(hud_gpu_active&&v->guest==host.res_rt){hud_flush();hud_gpu_active=false;--v->locks;return done(DD_OK,2);}if(hud_watch_hi){DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READWRITE,&old);hud_watch_lo=hud_watch_hi=0;if(host.frames%25==0)hud_watch_save();}--v->locks;if(!v->locks)texture_unlock_pages(*v);v->version=++host.surface_versions;return done(DD_OK,2);}
  if(n=="Flip"){if(!v->primary||!v->attached)deny("Flip on a surface without a flip chain",v->guest);if(arg(1))deny("Flip with an explicit target is not modelled",arg(1));auto*b=vsurface(v->attached);{const unsigned next=host.frames+1;const bool dump_due=host.frame_dump&&(next==1||next%host.frame_dump==0);
   present_direct=lazy_rt()&&host.res_dirty&&b->guest==host.res_rt&&host.sren&&host.presenter&&host.sren==host.presenter.get()&&!dump_due;}
   /* the guest memories swap: the protection follows the resident surface (b keeps the GPU image as its content) */

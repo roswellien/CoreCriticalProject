@@ -15,6 +15,9 @@ struct GuestHeap {
     // serialize access; callbacks implement actual guest mapping and zero fill.
     static constexpr unsigned lo = 0x50000000, hi = 0x70000000, chunk = 0x100000;
     unsigned top = lo, mapped = lo, region_end = lo;
+    // The translated fast bridge may use only the uninterrupted heap prefix.
+    // Allocations beyond a foreign mapping use the Stage's exact region checks.
+    unsigned fast_mapped = lo;
     std::map<unsigned, unsigned> free_blocks, live, regions, region_owners;
     std::uint64_t allocs{}, frees{};
 
@@ -26,9 +29,8 @@ struct GuestHeap {
         return address < it->second ? it->first : 0;
     }
     bool contains(unsigned address, unsigned bytes) const {
-        // Arena/high-water containment only. This does not prove that a pointer
-        // is a live allocation or that its region belongs to a particular heap.
-        return address >= lo && std::uint64_t(address) + bytes <= mapped;
+        const unsigned region = region_of(address);
+        return region && std::uint64_t(address) + bytes <= regions.at(region);
     }
     unsigned owner_of(unsigned address) const {
         auto it = region_owners.find(region_of(address));
@@ -37,8 +39,12 @@ struct GuestHeap {
         return it->second;
     }
 
-    template <class Commit, class Clear>
-    unsigned allocate(unsigned bytes, bool zero, unsigned owner, Commit commit, Clear clear) {
+    struct Unoccupied {
+        unsigned operator()(unsigned at, unsigned, unsigned) const { return at; }
+    };
+    template <class Commit, class Clear, class FindSpace = Unoccupied>
+    unsigned allocate(unsigned bytes, bool zero, unsigned owner, Commit commit, Clear clear,
+                      FindSpace find_space = {}) {
         // Reserve at least one byte, rounded to 16-byte alignment, while live[]
         // retains the requested size (including zero) for guest heap semantics.
         const auto aligned_bytes_wide =
@@ -66,13 +72,18 @@ struct GuestHeap {
                     chunk, (aligned_bytes_wide + 0xffffU) & ~std::uint64_t(0xffff)));
                 if (std::uint64_t(mapped) + size > hi)
                     return 0;
-                commit(mapped, size);
+                const unsigned next = find_space(mapped, size, hi);
+                if (!next) return 0;
+                if (next < mapped || (next & 0xffffU) || std::uint64_t(next) + size > hi)
+                    throw std::runtime_error("Invalid free guest heap range");
+                commit(next, size);
                 if (owner_changed)
                     free_blocks.emplace(top, region_end - top);
-                regions.emplace(mapped, mapped + size);
-                region_owners.emplace(mapped, owner);
-                top = mapped;
-                mapped += size;
+                regions.emplace(next, next + size);
+                region_owners.emplace(next, owner);
+                top = next;
+                mapped = next + size;
+                if (next == fast_mapped) fast_mapped = mapped;
                 region_end = mapped;
             }
             allocation_address = top;

@@ -1,0 +1,7 @@
+# Avatar default texture audit — 2026-10-24
+
+The detailed Avatar is original-MW3-derived and its default skin uses 45 selected material images, including original-family tiles and constant/detail materials. A side-by-side review of seven identity-bearing MW3 source tiles against their current versions confirmed the blue torso bands, cockpit layout, blue arm cover, red lamps and small red triangle remain. The current texture versions resolve panel and vent detail more clearly. The October 23 nose/canopy geometry and UV repair was reviewed using its current native capture; the older October 20 Blender preview is not evidence for the repaired nose.
+
+The installed default Avatar BWTEX1 has 117 batch indices and 45 material records. Its complete material-record bytes match a fresh encoding of the selected project images exactly, with zero differing bytes. The current repaired native screenshots show textured dark mechanics and visible light paint/metal edge wear; no missing identifying mark or broad flat-black painted panel justified another color edit. No mesh, pack, registry, normal, alternate skin, gameplay or runtime file was changed.
+
+[Private Drive review](https://drive.google.com/drive/folders/1goO3gkh4kKhDeh-Oo89dXDVof9F4X4s6) contains the MW3-versus-current tile board and repaired-nose review. Local comparison output is in ignored `local/work-ahead/avatar-default-audit-20261024-r1/`; source images and game media remain local. No commit was made. This audit claims no native acceptance credit; the retained count remains 131/144.

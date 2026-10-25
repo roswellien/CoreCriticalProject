@@ -5,6 +5,12 @@ the current game; Windows x64 and Vulkan are the first host/backend targets.
 This is the current implementation strategy. It supersedes older priority
 queues, not accepted evidence, frozen contracts or milestone completion rules.
 
+Owner clarification, 2026-10-24: the no-pack baseline must retain stock game
+content and presentation, with an independent optional Dynamic Lighting switch
+and authorable community replacement/addition packs. See the
+[stock baseline and community packs plan](stock-baseline-and-community-packs-plan.md)
+for required separation, current gaps and implementation order.
+
 ## Product and fidelity
 
 Preserve the original game logic through native recompilation. Supply modern

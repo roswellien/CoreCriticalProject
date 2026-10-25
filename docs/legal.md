@@ -20,6 +20,13 @@ through `.mw3update` packs extends the same private precompiled-runtime delivery
 to those updates. The original-input verification and content exclusions above
 continue to apply; updating must not require testers to regenerate native code.
 
+On October 24, 2026 the owner requested the missing original CD soundtrack as
+a default installer component for ISO-based playtests. This extends the private
+installer/update exception to the same two verified CD-audio tracks already
+approved for the protected playtest soundtrack download. Original game-data
+verification remains required. This does not include disc images, data archives,
+other original media or permission to commit audio assets; those remain local.
+
 Do not commit, redistribute, or package proprietary executables, DLLs, assets,
 music, video, installers, disc images, or memory dumps, including derived
 replacements. Do not download game content as part of builds or tests.

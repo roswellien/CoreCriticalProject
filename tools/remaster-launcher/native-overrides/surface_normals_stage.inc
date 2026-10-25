@@ -127,7 +127,7 @@ std::pair<bool, int> surface_normal_binding(VSurfaceRec &surface) {
     // excluded so differently pitched copies of the same image share one key.
     std::vector<unsigned char> pixels(size_t(surface.width) * surface.height * 2);
     for (unsigned y = 0; y < surface.height; ++y)
-        get_bytes(surface.mem + y * surface.pitch, pixels.data() + size_t(y) * surface.width * 2,
+        surface_read(surface,y * surface.pitch, pixels.data() + size_t(y) * surface.width * 2,
                   surface.width * 2);
     const mw34::materials::SurfaceKey key{
         surface.width, surface.height, format,

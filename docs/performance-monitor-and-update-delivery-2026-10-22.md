@@ -18,8 +18,8 @@ cadence, not GPU-only timing or externally measured monitor scanout.
 The monitor draws only in the existing host overlay path and changes no guest
 memory, simulation timing, gameplay or lighting settings. When off, it performs
 no sampling, sorting or drawing. Statistics sorting occurs at the four-Hz display
-refresh, not on every frame. The four rows use the existing small texture upload;
-the direct path's overlay buffer now accommodates all four rows.
+refresh, not on every frame. The current single line uses a small transparent
+text tile on the direct GPU path; the CPU fallback paints only glyph pixels.
 
 The native candidate derives from the tested display-cache host, preserving that
 performance fix. `apply_performance_monitor.py` installs the authored header and
@@ -28,7 +28,52 @@ unexpected old overlay/buffer rather than silently editing different code.
 The maintained renderer template is older than the current host, so the current
 host is patched in isolation rather than replaced with that template.
 
+## October 23 compact layout
+
+The monitor now occupies one line immediately right of the normal radar and
+below the compass. The font changes from 10x14 glyphs to 6x8, approximately a
+40% reduction. Labels retain average FPS, 1% low FPS, high FPS and average frame
+time. Both presentation paths leave the scene visible between glyphs; the GPU
+tile uses zero alpha for its background. Its left-edge aspect correction follows
+the radar, and the GPU scene retains the existing no-readback/no-full-frame
+host-allocation optimization. Measurement formulas, refresh cadence and saved
+on/off preference are unchanged.
+
+The authored monitor checks cover the rolling statistics, disabled behavior,
+clipped small targets, the compact HUD bounds and preservation of scene pixels
+between glyphs. Native placement validation and selected-host identity are
+recorded privately under `local/work-ahead/performance-monitor-20261023-r1`.
+No formal acceptance credit is added; the count remains 131/144.
+
 ## Delivering to an existing installation
+
+### Required naming for future releases — October 24, 2026
+
+The owner's naming rule is recorded in the root `AGENTS.md` and supersedes
+historical descriptive update filenames in earlier release examples:
+
+| Update target | Required filename | Example |
+| --- | --- | --- |
+| Game runtime | `<version>.<game-abbreviation>update` | `1.0.34.mw3update` |
+| Core Critical Launcher | `<version>.ccupdate` | `1.0.34.ccupdate` |
+
+The stem is the public release version, without prefixes such as `corecritical-`
+or descriptive runtime/task labels. The game abbreviation is its registered
+file stem, such as `mw3`, `mw3pm` or `mw4`; naming does not establish runtime
+support for an otherwise unimplemented title.
+
+The current signed-metadata-plus-payload contract remains in force: keep the
+matching payload beside the update as `<version>.zip`, preserving signatures,
+hashes and references. Keep launcher and game pairs in separate directories
+when their version numbers match, so their payloads cannot overwrite each other.
+If an extra download wrapper is offered for browser compatibility, identify the
+version and target in its name (for example `1.0.34-mw3-update.zip` or
+`1.0.34-cc-update.zip`) and include the correctly named metadata/payload pair.
+Never disguise an ordinary ZIP as `.mw3update` or `.ccupdate`.
+
+Packaging scripts and release checks must produce these names before the next
+publication. Existing signed releases remain historical evidence; do not rename
+or replace them merely to apply this prospective rule.
 
 The existing `.mw3update` format is signed metadata, accompanied by a matching
 ZIP (or a signed HTTPS download URL). The current updater prepares and selects

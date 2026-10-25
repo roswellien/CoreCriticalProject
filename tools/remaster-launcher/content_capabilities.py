@@ -13,6 +13,7 @@ PROFILES = {
     'prepared-native-v1': 'prepared-mechs',
     'prepared-environment-v1': 'environment-resources',
     'prepared-music-v1': 'soundtrack',
+    'prepared-skins-v1': 'additional-mech-skins',
 }
 
 

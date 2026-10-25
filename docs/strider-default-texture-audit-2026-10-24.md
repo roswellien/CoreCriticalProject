@@ -1,0 +1,7 @@
+# Strider default texture audit — 2026-10-24
+
+The detailed Strider is original-MW3-derived and uses 26 selected source-family material tiles, unlike the five-material MW5 replacement atlases reviewed immediately before it. Seven identity-bearing MW3 source tiles were compared visually with their current default versions: blue arrows, bands, window layout and blue mechanical covers are retained. Current tiles add clearer panel and vent detail. The current rendered torso shows varied metal in mechanical areas and bright paint/metal wear at armor edges; no missing identifying decal or broad flat-black painted panel was found that warranted another color edit.
+
+The installed default Strider BWTEX1 payload has 92 batch indices and 26 material records. Its material-record bytes were compared with a fresh encoding of the current `local/remaster/models.json` selected textures: **exact match, zero differing bytes**. The detailed model's original-derived scale and October 23 cockpit/vent/hip geometry repair remain unchanged. No pack, registry, normal map, alternate skin, runtime, or gameplay file was edited in this audit.
+
+[Private Drive review](https://drive.google.com/drive/folders/1AU0HB7pwu2YhbzsSfpJIo93wlpHExDpn) contains a source-versus-current tile board and the current torso render. Local board and inputs are under ignored `local/work-ahead/strider-default-audit-20261024-r1/`. Original media remains local. This audit adds no native-game acceptance credit; the retained count is 131/144. No commit was made.

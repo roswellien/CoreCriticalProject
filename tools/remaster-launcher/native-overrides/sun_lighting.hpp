@@ -28,6 +28,7 @@ struct Settings {
     // brightness, glow (colour, strength, focus), anti-sun brightness and
     // saturation, anti-sun haze brightness, horizon blend height.
     bool sky_shading{};
+    campaign::SkySource sky_source{campaign::SkySource::OriginalClouds};
     float sky_brightness{1}, glow_strength{0}, glow_focus{2.5f}, anti_brightness{1}, anti_saturation{1}, anti_haze{1}, horizon_low{.03f}, horizon{.28f};
     std::array<float,3> glow_color{1,1,1};
 
@@ -105,6 +106,7 @@ inline void atmosphere(Settings& s) {
     s.sky_shading=s.sky_active||s.haze_active||manual||s.glow_strength>0||s.sky_brightness!=1||s.anti_brightness!=1||s.anti_haze!=1;
 }
 inline void apply_campaign_environment(Settings& s, const campaign::MissionEnvironment& env, double time_sec) {
+    const bool interior = campaign::sealed_mission(env.id) || env.is_interior;
     const auto weather = s.weather_enabled?campaign::CampaignManager::instance().evaluate_weather(time_sec):campaign::CampaignManager::DynamicWeatherState{};
 
     s.azimuth = env.azimuth;
@@ -118,11 +120,11 @@ inline void apply_campaign_environment(Settings& s, const campaign::MissionEnvir
     // This changes presentation only; original sensors and visibility rules remain intact.
     if(env.night_world_gain<.5f){
         const float luminance=s.ambient*(.2126f*s.ambient_color[0]+.7152f*s.ambient_color[1]+.0722f*s.ambient_color[2]);
-        const float minimum=env.is_interior?.04f:.085f;
+        const float minimum=interior?.04f:.085f;
         if(luminance>1e-4f&&luminance<minimum)s.ambient=std::min(2.f,s.ambient*minimum/luminance);
     }
 
-    if (weather.lightning_flash > 0.01f) {
+    if (!interior && weather.lightning_flash > 0.01f) {
         float f = weather.lightning_flash;
         s.strength += f * 2.5f;
         s.ambient += f * 1.2f;
@@ -138,6 +140,7 @@ inline void apply_campaign_environment(Settings& s, const campaign::MissionEnvir
         };
     }
 
+    s.sky_source = campaign::mission_sky_source(env.id, interior);
     s.sky_tint = env.sky_tint;
     s.sky_brightness = env.sky_brightness;
     s.glow_color = env.sky_glow_color;
@@ -169,8 +172,13 @@ inline void apply_campaign_environment(Settings& s, const campaign::MissionEnvir
     s.valley_fog_density = weather.valley_fog_density;
     s.valley_fog_altitude = weather.valley_fog_altitude;
 
-    if (env.is_interior) {
-        s.night_world_gain = 0.0f;
+    if (interior) {
+        s.strength = s.glow_strength = s.sky_brightness = 0;
+        s.color = s.sky_tint = s.glow_color = {0,0,0};
+        s.shadows = false;
+        s.night_world_gain = 0;
+        s.rain_wetness = weather.wet_reflection; // Local damp surfaces may remain.
+        s.dust_intensity = s.heat_shimmer = s.lava_glow = 0;
     }
 }
 
@@ -279,7 +287,7 @@ inline Uniform uniform(const std::array<float,12>& normal,const Settings& s) {
     u.color={s.color[0],s.color[1],s.color[2],0};
     u.ambient={s.ambient*s.ambient_color[0],s.ambient*s.ambient_color[1],s.ambient*s.ambient_color[2],s.normals?1.f:0.f};
     u.extra={0,s.normal_strength,s.shadow_debug?1.f:0.f,0};
-    u.sky_tint={s.sky_tint[0],s.sky_tint[1],s.sky_tint[2],1};
+    u.sky_tint={s.sky_tint[0],s.sky_tint[1],s.sky_tint[2],float(s.sky_source)};
     u.sky_glow={s.glow_color[0],s.glow_color[1],s.glow_color[2],s.glow_strength};
     u.sky_grade={s.sky_brightness,s.anti_brightness,s.anti_saturation,s.glow_focus};
     u.sky_blend={s.horizon_low,s.horizon,s.anti_haze,0};

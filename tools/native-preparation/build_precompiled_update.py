@@ -31,8 +31,8 @@ def package(runtime, preparer, game, output, version, sequence, signing_key, key
     from re import fullmatch
     if not fullmatch(r'\d+\.\d+\.\d+', minimum_launcher_version):
         raise ValueError('Invalid minimum launcher version')
-    if not fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}', version):
-        raise ValueError('Invalid update version')
+    if not fullmatch(r'\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*)?', version):
+        raise ValueError('Use the public release version for update filenames, for example 1.0.34.mw3update')
     for path in (runtime, preparer, game, *runtime.rglob('*')):
         if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
             raise ValueError('Linked package inputs are unsupported')

@@ -62,6 +62,24 @@ class EffectCatalogTests(unittest.TestCase):
                 prepare(mapping, root / "catalog.bin", HELPER)
             self.assertFalse((root / "catalog.bin").exists())
 
+    def test_identical_native_impact_pixels_have_identical_power(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);bank=root/'impacts.zbd'
+            first=struct.pack('<IHHIHH',11,1,1,0,0,0)+struct.pack('<H',0xffff)+bytes([200])
+            second=struct.pack('<IHHIHH',11,1,1,0,0,0)+struct.pack('<H',0xffff)+bytes([201])
+            bank.write_bytes(struct.pack('<6I',0,1,0,2,0,0)+
+                struct.pack('<32sII',b'mgun_impact01',104,0xffffffff)+
+                struct.pack('<32sII',b'mgun_impact02',104+len(first),0xffffffff)+first+second)
+            key=b't1/rtexture.zbd';value=str(bank).encode();mapping=root/'banks.bin'
+            mapping.write_bytes(b'MWBANK1\0'+struct.pack('<III',1,len(key),len(value))+key+value)
+            # Distinct source alpha values collide after native quantization.
+            # The stock path must key their response to the pixels actually used.
+            with self.assertRaisesRegex(ValueError,'Ambiguous luminous'):
+                prepare(mapping,root/'legacy.bin',HELPER)
+            output=root/'stock.bin';prepare(mapping,output,HELPER,native_variant_power=True)
+            data=output.read_bytes();self.assertEqual(struct.unpack_from('<I',data,8)[0],4)
+            self.assertEqual(len(data),12+4*48) # RGB565, ARGB1555 and two ARGB4444 quantizations.
+
 
 if __name__ == "__main__":
     unittest.main()

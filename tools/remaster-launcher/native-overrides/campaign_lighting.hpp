@@ -1,6 +1,7 @@
 #pragma once
 #include "fixture_lighting.hpp"
 #include "mission_environment_pack.hpp"
+#include "campaign_environment_policy.hpp"
 #include <cstdlib>
 #include <array>
 #include <cmath>
@@ -572,6 +573,15 @@ public:
         s.volcanic_ash = current_env_->volcanic_ash;
         s.lava_glow = current_env_->lava_glow;
         s.is_interior = current_env_->is_interior;
+
+        // Sealed maps retain local dampness/vent mist, never outdoor weather.
+        // Identity also protects these maps from older exterior-style packs.
+        if (sealed_mission(current_env_->id) || current_env_->is_interior) {
+            s.is_interior = true;
+            s.rain_intensity = s.dust_intensity = s.smog_intensity = 0;
+            s.heat_shimmer = s.volcanic_ash = s.lava_glow = 0;
+            return s;
+        }
 
         // Lightning simulation for stormy missions
         if (current_env_->has_lightning) {

@@ -46,4 +46,22 @@ int main() {
     overlay.draw(pixels + 1, 7, 8);
     assert(pixels[0] == 0x1234 && pixels[57] == 0x1234);
     assert(overlay.box_w == 7 && overlay.box_h == 8);
+    std::vector<std::uint16_t> scene(1024 * 768, 0x1234);
+    overlay.reset();
+    overlay.draw(scene.data(), 1024, 768);
+    assert(overlay.box_x >= 120 && overlay.box_y > 32); // Beyond radar, below compass.
+    assert(overlay.box_h == 8); // Previously 14 pixels of glyphs, in an 80-pixel box.
+    unsigned text_pixels = 0, untouched_gaps = 0;
+    for (unsigned y = 0; y < 768; ++y)
+        for (unsigned x = 0; x < 1024; ++x) {
+            const auto pixel = scene[y * 1024 + x];
+            if (pixel != 0x1234) {
+                assert(pixel == 0xffe0);
+                assert(x >= overlay.box_x && x < overlay.box_x + overlay.box_w);
+                assert(y >= overlay.box_y && y < overlay.box_y + overlay.box_h);
+                ++text_pixels;
+            } else if (x >= overlay.box_x && x < overlay.box_x + overlay.box_w &&
+                       y >= overlay.box_y && y < overlay.box_y + overlay.box_h) ++untouched_gaps;
+        }
+    assert(text_pixels > 0 && untouched_gaps > text_pixels);
 }

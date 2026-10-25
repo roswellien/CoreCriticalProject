@@ -13,7 +13,7 @@ void surface_resident_texture_prewarm(mw34::vkscene::Scene& scene) {
        scene.frontend_canvas || !scene.world_eye_valid)return;
     namespace vs=mw34::vkscene;
     auto eligible=[&](const auto& surface) {
-        if(!surface.guest || !surface.mem || surface.locks || !surface.width || !surface.height ||
+        if(!surface.guest || !surface.bytes || surface.locks || !surface.width || !surface.height ||
            surface.width>4096 || surface.height>4096 || surface.pitch<surface.width*2 ||
            std::uint64_t(surface.mem)+std::uint64_t(surface.pitch)*(surface.height-1)+surface.width*2>0x100000000ULL ||
            !host.com_object(surface.guest) || !(surface.caps&DDSCAPS_TEXTURE) || surface.bpp!=16 ||
@@ -64,7 +64,7 @@ void surface_resident_texture_prewarm(mw34::vkscene::Scene& scene) {
             surface->tex_masks[0]==0x7c00?vs::TexFormat::argb1555:vs::TexFormat::argb4444;
         ref.pixels.resize(size_t(ref.width)*ref.height);
         for(unsigned y=0;y<ref.height;++y)
-            get_bytes(surface->mem+y*surface->pitch,ref.pixels.data()+size_t(y)*ref.width,ref.width*2);
+            surface_read(*surface,y*surface->pitch,ref.pixels.data()+size_t(y)*ref.width,ref.width*2);
         scene.textures.push_back(std::move(ref));remaining-=candidate.bytes;
         preparedBytes+=candidate.bytes;++prepared;
     }

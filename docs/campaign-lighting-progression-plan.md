@@ -16,7 +16,7 @@ no longer govern implementation.
 | Operation | User's operation label | Mission map IDs | Lighting progression |
 | --- | --- | --- | --- |
 | 1 | The Beachhead — Tropical/Coastal Basin | `c1m1`–`c1m4` | Dusk → early night → midnight → foggy dawn |
-| 2 | The Industrial Sector — High-Plains Badlands | `c2m1`–`c2m4` | Early morning → midday → early afternoon → polluted late afternoon |
+| 2 | The Industrial Sector — High-Plains Badlands | `c2m1`–`c2m4` | Early morning → sealed industrial interior → early afternoon → sealed power facility |
 | 3 | The Desert Plain — Arid Canyonlands | `c3m1`–`c3m6` | Noon → afternoon → dusk → underground interior → surface nightfall |
 | 4 | The Core — Volcanic Caldera & City Center | `c4m1`–`c4m6` | Volcanic midnight → pre-dawn → first light → dawn → sunrise → full daylight |
 
@@ -68,7 +68,12 @@ The campaign opens at dusk, moves into pitch black, and concludes under a dense,
 
 ## Operation 2 — The Industrial Sector (High-Plains Badlands)
 
-This operation takes place under harsh, oppressive midday conditions, transitioning into a smog-choked afternoon.
+Outdoor sections use high-plains morning/afternoon conditions. The installed
+map-specific corrections of October 21 identify `c2m2` and `c2m4` as sealed
+industrial interiors; those corrections take precedence over the earlier
+outdoor midday/smog and late-afternoon electrical-storm draft for those two
+rows. The October 24 campaign audit reconciles that direction here. Outdoor
+weather and natural sky illumination must not be introduced into either map.
 
 ### Mission 1 — Trainyard (`c2m1`)
 
@@ -77,8 +82,11 @@ This operation takes place under harsh, oppressive midday conditions, transition
 
 ### Mission 2 — Industrial Complex (`c2m2`)
 
-- **Time of day:** Midday (High Sun). Oppressive, direct overhead light. Minimal shadows, high contrast, and a harsh glare reflecting off metallic roofs and storage tanks.
-- **Weather:** Dry heat with heavy industrial smog. Thick black smoke columns rise from active smokestacks, blending into a yellow-brown haze that limits upper-hemisphere visibility.
+- **Lighting:** Indoor / Sealed Environment. Functional industrial fixtures and
+  the approved warm, dim ambient fill; no natural sunlight, sky or horizon glow.
+- **Atmosphere:** Enclosed industrial air. Preserve authored interior effects;
+  do not apply exterior rain, lightning, dust storms, volcanic ash or heat haze.
+  This supersedes the former outdoor high-sun/smog assignment.
 
 ### Mission 3 — Mining Facility (`c2m3`)
 
@@ -87,8 +95,12 @@ This operation takes place under harsh, oppressive midday conditions, transition
 
 ### Mission 4 — Power Plant (`c2m4`)
 
-- **Time of day:** Late Afternoon. A dirty, orange-tinted sky filtered through systemic industrial pollution.
-- **Weather:** Electrical storm/Turbulence. The massive power outputs generate a localized atmospheric static charge. Low clouds are tinted green by chemical exhaust, with heat lightning arching through the smoke.
+- **Lighting:** Indoor / Sealed Environment. Preserve industrial fixtures and
+  the user-selected map ambient strength of **0.40**. No natural sunlight,
+  sky/horizon glow or directional sun shadows.
+- **Atmosphere:** Enclosed power facility. No exterior precipitation or
+  lightning. This supersedes the former outdoor orange-sky/electrical-storm
+  assignment and does not disable weapon or fixture lighting.
 
 ## Operation 3 — The Desert Plain (Arid Canyonlands)
 

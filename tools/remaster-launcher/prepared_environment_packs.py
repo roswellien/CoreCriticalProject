@@ -167,23 +167,25 @@ def select(roots, host, verification=None):
 def profile_bindings(selected, host):
     """Remove stale development bindings, using installed inputs for plan checks."""
     environment={k:v for k,v in host.get('runtime_environment',{}).items() if k not in RESOURCE_KEYS}
+    from presentation_policy import environment as presentation_environment
     if not selected:
         environment['MW34_EFFECT_LIGHTS']='0'
         for key in ['MW34_WATER_DETAIL','MW34_SURF_DETAIL','MW34_CLOUD_DETAIL']:
             environment[key]='0'
-        return environment
+        return presentation_environment(host, selected, environment)
     first=next((p for p in selected.values() if 'effects' in p['registry']),None)
     if first is None:
         environment=profile_bindings({},host)
         shared=selected['shared-mechs']
         environment['MW34_SURFACE_NORMALS']=shared['paths'][shared['registry']['authored_manifest']]
-        return environment
+        return presentation_environment(host, selected, environment)
     registry=first['registry']; paths=first['paths']
     environment.update(MW34_WORLD_NORMALS=paths[registry['world_manifest']],
                        MW34_SURFACE_NORMALS=paths[registry['authored_manifest']],
-                       MW34_EFFECT_LIGHT_CATALOG=paths[registry['effects']])
+                       MW34_EFFECT_LIGHT_CATALOG=paths[registry['effects']],
+                       MW34_EFFECT_LIGHTS='1')
     for role,name in registry['detail'].items(): environment['MW34_'+role.upper()+'_NORMALS']=paths[name]
-    return environment
+    return presentation_environment(host, selected, environment)
 
 
 def detail_metadata(selected):
@@ -226,4 +228,5 @@ def prepare(selected, host, output):
         environment['MW34_SURFACE_NORMALS' if role=='authored' else 'MW34_WORLD_NORMALS']=str(path.resolve())
     from mission_lighting import prepare as prepare_lighting
     environment.update(prepare_lighting(selected, output))
-    return environment
+    from presentation_policy import environment as presentation_environment
+    return presentation_environment(host, selected, environment)

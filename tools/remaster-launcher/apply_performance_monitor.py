@@ -24,12 +24,18 @@ def apply(host: Path):
         text = text.replace('#pragma once\n', '#pragma once\n' + include, 1)
     hud = host / 'gpu_hud.inc'
     gpu = hud.read_text()
-    old = 'buf(size_t(w)*24,0);ov.draw(buf.data(),w,24);'
-    new = 'buf(size_t(w)*ov.buffer_height,0);ov.draw(buf.data(),w,ov.buffer_height);'
-    if new not in gpu:
-        if gpu.count(old) != 1:
-            raise RuntimeError('Expected one reviewed GPU overlay buffer')
-        gpu = gpu.replace(old, new)
+    marker = '// FPS/frame-time overlay on the direct presentation path:'
+    template = (Path(__file__).parent / 'native-overrides' / 'gpu_hud.inc').read_text()
+    if gpu.count(marker) != 1 or template.count(marker) != 1:
+        raise RuntimeError('Expected one reviewed GPU performance overlay')
+    start = gpu.index(marker)
+    tail = gpu[start:]
+    if (tail.count('void overlay_gpu(') != 1 or
+            not tail.rstrip().endswith('hud_sc=vs::Scene{};}') or
+            not any(anchor in tail for anchor in ('buf(size_t(w)*24,0)',
+                    'buf(size_t(w)*ov.buffer_height,0)', 'ov.prepare(w,h)'))):
+        raise RuntimeError('Unexpected GPU performance overlay implementation')
+    gpu = gpu[:start] + template[template.index(marker):]
     # Validate both adapters before changing either.
     renderer.write_text(text)
     hud.write_text(gpu)

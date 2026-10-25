@@ -18,6 +18,8 @@ def edit(path,old,new):
     path.write_text(text.replace(old,new))
 
 def apply(host):
+    if '/* GPU-resident overlay: no CPU color/depth upload or readback. */' in (host/'gpu_hud.inc').read_text():
+        return # The current performance-monitor adapter already preserves this optimization.
     edit(host/'gpu_hud.inc',
          ' hud_sc.color.resize(size_t(w)*h);hud_sc.depth.resize(hud_sc.color.size());try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}',
          ' /* resident: no host colour/depth buffers */try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}')

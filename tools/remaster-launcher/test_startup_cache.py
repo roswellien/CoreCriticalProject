@@ -107,6 +107,21 @@ class StartupCacheTests(unittest.TestCase):
         with patch('prepared_environment_packs.prepare', side_effect=AssertionError('Empty selection rebuilt')):
             self.assertEqual(environment_resources({}, host, self.root / 'cache'), disabled)
 
+    def test_admitted_runtime_update_reuses_images_with_current_bindings(self):
+        pack = self.fixtures.fixture(self.root / 'pack')
+        host = self.fixtures.host()
+        chosen = select([str(pack)], host)
+        first = environment_resources(chosen, host, self.root / 'cache')
+        # Resource reuse follows fresh admission, not a substitute for it. The
+        # separate admission test still rejects an incompatible executable.
+        updated = dict(host, executable_sha256='b' * 64,
+                       runtime_environment={'MW34_FRAME_TIMES': 'updated-session/times.txt'})
+        admitted = select([str(pack)], updated)
+        with patch('prepared_environment_packs.prepare', side_effect=AssertionError('EXE-only update rebuilt images')):
+            second = environment_resources(admitted, updated, self.root / 'cache')
+        self.assertEqual(first['MW34_REMASTER_BANKS'], second['MW34_REMASTER_BANKS'])
+        self.assertEqual(second['MW34_FRAME_TIMES'], 'updated-session/times.txt')
+
     def test_incomplete_attempt_and_concurrent_writer(self):
         with cache_writer(self.root / 'cache'):
             with self.assertRaises(RuntimeError):

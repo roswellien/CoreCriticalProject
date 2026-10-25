@@ -118,6 +118,9 @@ namespace MW3RemasterLauncher.Core
             if (installed != null) profileText = NativeRuntimeLayout.ResolveProfile(profileText, installed.Root, validation.GameDirectory);
             var profile = CreateLaunchProfile(profileText, settings,
                 Path.Combine(_dataRoot, "cache", "pipeline-warmup-v1"));
+            if (profile["native"]!["stock_presentation_versions"] is not JsonArray versions ||
+                !versions.Any(v => v?.GetValue<int>() == 1))
+                throw new InvalidOperationException("Install the stock presentation game update through Game Updates before launching with this launcher.");
             profile["native"]!["content_capabilities"] = RuntimeContentCapabilities.Advertised(profile["native"]!.AsObject());
             NativeRuntimeLayout.ValidateLaunchExecutable(Path.GetFullPath(profile["native"]!["executable"]!.GetValue<string>(), rootDir));
             if (installed != null)
@@ -138,24 +141,7 @@ namespace MW3RemasterLauncher.Core
                     if (name != null) profile["native"]!["music_decoder"] = Path.GetFullPath(Path.Combine(rootDir, name));
                 }
             }
-            MusicPack.Apply(profile, activeModDirs, settings.LocalCdAudio);
-            UiPack.Apply(profile, activeModDirs);
-            CinematicPack.Apply(profile, activeModDirs, runDir, validation.GameDirectory);
-            // Empty is deliberate: disable all optional replacements without loading the development registry.
-            var roots = new JsonArray();
-            var environmentRoots = new JsonArray();
-            foreach (var directory in activeModDirs)
-            {
-                var manifest = PackStorage.ReadManifest(Path.Combine(directory, "pack.json"));
-                if (manifest.NativePayload?.Profile is MusicPack.Profile or UiPack.Profile or CinematicPack.Profile) continue;
-                if (manifest.SchemaVersion == 2 && manifest.NativePayload?.Profile == "prepared-environment-v1")
-                    environmentRoots.Add(Path.GetFullPath(directory));
-                else if (manifest.SchemaVersion == 2) roots.Add(Path.GetFullPath(directory));
-                else if (manifest.Provides?.Mechs?.Count > 0)
-                    throw new InvalidDataException("This mech pack needs conversion to prepared-native-v1: " + manifest.Name);
-            }
-            profile["native"]!["prepared_pack_roots"] = roots;
-            ApplyEnvironmentSelection(profile, environmentRoots, installed != null, settings.EnvironmentPackSelectionInitialized);
+            ApplyContentSelection(profile, activeModDirs, settings.LocalCdAudio, runDir, validation.GameDirectory);
             profile["native"]!["launch_session_directory"] = Path.GetFullPath(runDir);
             new ControlProfiles(_dataRoot).PrepareLaunch(profile, _dataRoot, validation.GameDirectory);
             new ControllerProfiles(_dataRoot).PrepareLaunch(profile, runDir);
@@ -197,7 +183,7 @@ namespace MW3RemasterLauncher.Core
                 lock (logLock) File.AppendAllText(logPath, line + Environment.NewLine);
                 logCallback?.Invoke(line);
             }
-            Log($"Preparing native Remaster: {settings.Width}x{settings.Height}, prepared mech packs {roots.Count}. Logs: {logPath}");
+            Log($"Preparing native Remaster: {settings.Width}x{settings.Height}, prepared mech packs {profile["native"]!["prepared_pack_roots"]!.AsArray().Count}. Logs: {logPath}");
             Log($"Asset preparation runtime: {python}");
             var process = new Process { StartInfo = startInfo };
             process.OutputDataReceived += (_, e) => Log(e.Data);
@@ -208,6 +194,34 @@ namespace MW3RemasterLauncher.Core
             return process;
         }
 
+        /// <summary>Compose only the explicitly enabled content over original resources.</summary>
+        public static void ApplyContentSelection(JsonObject profile, IEnumerable<string> activeModDirs,
+            bool musicEnabled, string runDir, string gameDirectory)
+        {
+            MusicPack.Apply(profile, activeModDirs, musicEnabled, gameDirectory);
+            UiPack.Apply(profile, activeModDirs);
+            CinematicPack.Apply(profile, activeModDirs, runDir, gameDirectory);
+            // Empty is deliberate: disable all optional replacements without loading the development registry.
+            var roots = new JsonArray();
+            var environmentRoots = new JsonArray();
+            foreach (var directory in activeModDirs)
+            {
+                var manifest = PackStorage.ReadManifest(Path.Combine(directory, "pack.json"));
+                if (manifest.NativePayload?.Profile is MusicPack.Profile or UiPack.Profile or CinematicPack.Profile) continue;
+                if (manifest.SchemaVersion == 2 && manifest.NativePayload?.Profile == "prepared-environment-v1")
+                    environmentRoots.Add(Path.GetFullPath(directory));
+                else if (manifest.SchemaVersion == 2) roots.Add(Path.GetFullPath(directory));
+                else if (manifest.Provides?.Mechs?.Count > 0)
+                    throw new InvalidDataException("This mech pack needs conversion to prepared-native-v1: " + manifest.Name);
+            }
+            profile["native"]!["prepared_pack_roots"] = roots;
+            profile["native"]!["runtime_environment"] ??= new JsonObject();
+            var skinEnvironment = profile["native"]!["runtime_environment"]!.AsObject();
+            skinEnvironment.Remove("MW34_ADDITIONAL_SKINS");
+            skinEnvironment["MW34_SKIN_PREFERENCES"] = Path.Combine(LauncherPaths.DataRoot, "skins", "mw3.ini");
+            ApplyEnvironmentSelection(profile, environmentRoots, true, true);
+        }
+
         public static async System.Threading.Tasks.Task<int> WaitForCompletionAsync(Process process)
         {
             await process.WaitForExitAsync();
@@ -215,15 +229,10 @@ namespace MW3RemasterLauncher.Core
             return process.ExitCode;
         }
 
-        /// <summary>Keep an existing development setup until its first environment-pack selection.</summary>
+        /// <summary>Use explicit content selection, including an empty stock selection.</summary>
         public static void ApplyEnvironmentSelection(JsonObject profile, JsonArray roots, bool installed, bool initialized)
         {
-            // Installed players always use explicit pack choices. Only the existing
-            // development upgrade may retain its published environment bindings.
-            if (installed || initialized || roots.Count > 0)
-                profile["native"]!["prepared_environment_pack_roots"] = roots;
-            else
-                profile["native"]!.AsObject().Remove("prepared_environment_pack_roots");
+            profile["native"]!["prepared_environment_pack_roots"] = roots;
         }
 
         /// <summary>Serialize parsed and newly authored nodes with an explicit reflection resolver.</summary>
@@ -250,6 +259,7 @@ namespace MW3RemasterLauncher.Core
                 ?? throw new InvalidOperationException("Native profile is empty.");
             var graphics = profile["graphics"]?.AsObject()
                 ?? throw new InvalidOperationException("Native profile has no graphics settings.");
+            GraphicsPreferences.From(settings).Validate();
             if (settings.Width < 640 || settings.Height < 480 || settings.Width > 7680 || settings.Height > 4320)
                 throw new InvalidOperationException("Requested resolution is outside the renderer's output limits.");
             if (settings.AntiAliasing != "fxaa" && settings.AntiAliasing != "off" && settings.AntiAliasing != "1" && settings.AntiAliasing != "2" && settings.AntiAliasing != "4")
@@ -264,11 +274,18 @@ namespace MW3RemasterLauncher.Core
             graphics["fog_distance"] = settings.FogDistance;
             graphics["window_mode"] = settings.WindowMode;
             profile["native"]!["local_cd_audio"] = settings.LocalCdAudio;
+            profile["native"]!["presentation"] = new JsonObject
+            {
+                ["schema_version"] = 1,
+                ["dynamic_lighting"] = settings.DynamicLighting,
+                ["shadows"] = settings.Shadows
+            };
             if (settings.PerformanceMonitor && profile["native"]!["performance_monitor_version"]?.GetValue<int>() != 1)
                 throw new InvalidOperationException("This runtime needs the performance monitor update. Install it through Game Updates, or turn off the monitor to use this version.");
             // An explicit saved choice overrides both old profiles and inherited diagnostics.
             profile["native"]!["runtime_environment"] ??= new JsonObject();
             profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"] = settings.PerformanceMonitor ? "1" : "0";
+            profile["native"]!["runtime_environment"]!["MW34_CORE_CRITICAL_VERSION"] = typeof(GameRunner).Assembly.GetName().Version!.ToString(3);
             // Emit the existing native register/return-chain diagnostics only
             // when a guest memory fault occurs, including on remote playtest PCs.
             profile["native"]!["runtime_environment"]!["MW34_SEH_LOG"] = "1";

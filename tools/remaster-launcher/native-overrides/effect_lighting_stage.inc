@@ -36,7 +36,7 @@ const mw34::effects::Emitter* effect_material(VSurfaceRec&surface){
   if(e.version==surface.version&&e.width==surface.width&&e.height==surface.height&&e.pitch==surface.pitch&&e.memory==surface.mem&&e.format==format)return e.emitter;
  }
  gpu_sync(surface.guest);std::vector<unsigned char>pixels(size_t(surface.width)*surface.height*2);
- for(unsigned y=0;y<surface.height;++y)get_bytes(surface.mem+y*surface.pitch,pixels.data()+size_t(y)*surface.width*2,surface.width*2);
+ for(unsigned y=0;y<surface.height;++y)surface_read(surface,y*surface.pitch,pixels.data()+size_t(y)*surface.width*2,surface.width*2);
  const mw34::materials::SurfaceKey key{surface.width,surface.height,format,mw34::materials::normal_hash(pixels.data(),pixels.size())};
  const auto match=s.catalog.find(key);const auto*emitter=match==s.catalog.end()?nullptr:&match->second;
  s.surfaces[surface.guest]={surface.version,surface.width,surface.height,surface.pitch,surface.mem,format,emitter};

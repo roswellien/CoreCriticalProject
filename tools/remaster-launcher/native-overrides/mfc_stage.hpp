@@ -15,6 +15,7 @@
 // divide error) stops with a typed unresolved_translation Fault. SEH dispatch is not modelled.
 #include "vk_scene.hpp"
 #include "surface_page_pool.hpp"
+#include "texture_backing.hpp"
 #include <atomic>
 #include <deque>
 #include <string_view>
@@ -23,6 +24,7 @@
 #include <map>
 #include <mmsystem.h>
 #include "audio/local_cd_audio.hpp"
+#include "graphics/menu_version.hpp"
 #include <vfw.h>
 #include <fstream>
 #include <iterator>
@@ -66,7 +68,7 @@ struct Import{unsigned cell,bound;std::string dll,name;mutable const void*iface_
 struct VSurfaceRec{unsigned guest,width,height,pitch,bpp,caps,mem,bytes,attached,clipper,palette;DDCOLORKEY src_key{},dst_key{};bool has_src_key{},has_dst_key{};unsigned locks{};bool primary{};std::array<unsigned,4>tex_masks{0xf800,0x07e0,0x001f,0};unsigned zbuffer{};
  /* content version, unique across surfaces: advanced by every API path that writes the surface (Unlock,
     Blt/BltFast/colour fills as destination, Texture2::Load, Flip, scene write-back) */
- mutable std::uint64_t version{};};
+ mutable std::uint64_t version{};mutable mw34::textures::Backing pixels;};
 struct VPaletteRec{unsigned guest;PALETTEENTRY entries[256];unsigned flags;};
 // DIB sections: the real bitmap's bits are mirrored in guest pages (the game reads bmBits directly);
 // GDI drawing calls sync guest->host before and host->guest after.
@@ -348,7 +350,7 @@ struct Stage {
  // environment copy, wide command line (0x32000000..0x32200FFF) and the GetCommandLineA page 0x33000000.
  static bool provider_published(unsigned a,unsigned n){const auto e=std::uint64_t(a)+n;return (a>=0x32000000&&e<=0x32201000)||(a>=0x33000000&&e<=0x33001000);}
  // Virtual surface pixel memory (the game writes it through Lock pointers and its own renderer).
- bool in_surfaces(unsigned a,unsigned n)const{const auto e=std::uint64_t(a)+n;for(const auto&v:host.vsurfaces)if(a>=v.mem&&e<=std::uint64_t(v.mem)+v.bytes)return true;return false;}
+ bool in_surfaces(unsigned a,unsigned n)const{const auto e=std::uint64_t(a)+n;for(const auto&v:host.vsurfaces)if(v.mem&&a>=v.mem&&e<=std::uint64_t(v.mem)+v.bytes)return true;return false;}
  bool frame(unsigned a,unsigned n,bool write)const{if(kind==Kind::initterm)return a>=low&&std::uint64_t(a)+n<=game_stack_top;return a>=low&&std::uint64_t(a)+n<=(write?entry_esp:entry_esp+16);}
  bool in_module(unsigned a,unsigned n,bool write)const{const auto e=std::uint64_t(a)+n;for(const auto&m:host.modules){if(!write){if(a>=m.base&&e<=m.end)return true;}else for(const auto&[lo,hi]:m.writable)if(a>=lo&&e<=hi)return true;}return false;}
  bool in_thread_stack(unsigned a,unsigned n)const{for(const auto&t:host.threads)if(!t.exited&&a>=t.stack_lo&&std::uint64_t(a)+n<=t.stack_hi)return true;return false;}
@@ -926,6 +928,24 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      if(n=="GetProperty"&&SUCCEEDED(hr))for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({ph+i},b[i]);apis.back()+="("+std::to_string(pg<0x10000?pg:0)+")="+std::to_string(unsigned(hr));return done(unsigned(hr),3);}
     if(n=="GetCapabilities"){const unsigned a=arg(1);if(!readable(a,4))deny("DIDEVCAPS outside the memory contract",a);const unsigned z=load(a);if(z<24||z>sizeof(DIDEVCAPS)||!writable(a,z))deny("DIDEVCAPS size outside the model",z);DIDEVCAPS c{};c.dwSize=z;
      const HRESULT hr=dv->GetCapabilities(&c);if(SUCCEEDED(hr))for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},reinterpret_cast<const unsigned char*>(&c)[i]);return done(unsigned(hr),2);}
+    if(n=="GetObjectInfo") {
+     const unsigned out=arg(1);
+     if(!readable(out,4))deny("GetObjectInfo size outside the memory contract",out);
+     const unsigned size=load(out);
+     static_assert(sizeof(DIDEVICEOBJECTINSTANCEA)==316 && sizeof(DIDEVICEOBJECTINSTANCE_DX3A)==292);
+     static_assert(offsetof(DIDEVICEOBJECTINSTANCEA,tszName)==32 && offsetof(DIDEVICEOBJECTINSTANCEA,dwFFMaxForce)==292);
+     if(size!=sizeof(DIDEVICEOBJECTINSTANCEA) && size!=sizeof(DIDEVICEOBJECTINSTANCE_DX3A))
+      deny("DIDEVICEOBJECTINSTANCEA size outside the model",size);
+     if(!writable(out,size))deny("GetObjectInfo output outside the memory contract",out);
+     // Both ANSI layouts contain only DWORDs, WORDs, GUIDs and inline characters;
+     // they have identical x86/x64 offsets. Never expose a guest pointer to COM.
+     DIDEVICEOBJECTINSTANCEA info{};info.dwSize=size;
+     const HRESULT hr=dv->GetObjectInfo(&info,arg(2),arg(3));
+     if(SUCCEEDED(hr))for(unsigned i=0;i<size;++i)
+      runtime.memory().store<unsigned char>({out+i},reinterpret_cast<const unsigned char*>(&info)[i]);
+     apis.back()+="(size="+std::to_string(size)+",object="+std::to_string(arg(2))+",how="+std::to_string(arg(3))+")="+std::to_string(unsigned(hr));
+     return done(unsigned(hr),4);
+    }
     if(n=="GetDeviceInfo"){const unsigned a=arg(1);if(!readable(a,4))deny("DIDEVICEINSTANCEA outside the memory contract",a);const unsigned z=load(a);if(z!=580&&z!=572)deny("DIDEVICEINSTANCEA size outside the model",z);if(!writable(a,z))deny("GetDeviceInfo output outside the memory contract",a);
      DIDEVICEINSTANCEA d{};d.dwSize=z;const HRESULT hr=dv->GetDeviceInfo(&d);if(SUCCEEDED(hr))for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},reinterpret_cast<const unsigned char*>(&d)[i]);return done(unsigned(hr),2);}
     if(n=="EnumObjects"){const unsigned cb=arg(1),ctx=arg(2),fl=arg(3);if(!find(cb))deny("EnumObjects callback has no lifted body",cb);struct C{Stage*st;unsigned cb,ctx,calls;};C c{this,cb,ctx,0};
@@ -1036,7 +1056,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
       const int wr=r.right-r.left,hr=r.bottom-r.top;
       ::SetWindowLongPtrW(wnd,GWL_STYLE,WS_OVERLAPPEDWINDOW|WS_VISIBLE);
       ::SetWindowLongPtrW(wnd,GWL_EXSTYLE,(::GetWindowLongPtrW(wnd,GWL_EXSTYLE)&~WS_EX_TOPMOST)|WS_EX_APPWINDOW|WS_EX_WINDOWEDGE);
-      ::SetWindowTextW(wnd,L"MechWarrior 3 Remastered");
+      ::SetWindowTextW(wnd,menu_version::caption(L"MechWarrior 3 Remastered").c_str());
       const int pos_x=std::max(0,(sw-wr)/2),pos_y=std::max(0,(sh-hr)/2);
       {LastError l(host);::SetWindowPos(wnd,HWND_NOTOPMOST,pos_x,pos_y,wr,hr,SWP_FRAMECHANGED|SWP_SHOWWINDOW|(host.scripted?SWP_NOACTIVATE:0U));}
      }else if(wm&&std::string(wm)=="fullscreen"){
@@ -1142,7 +1162,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    DWORD exStyle=arg(0),style=arg(3);const char*wm=std::getenv("MW34_WINDOW_MODE");
    if(wm&&std::string(wm)=="windowed"){style=(style&~WS_POPUP)|WS_OVERLAPPEDWINDOW|WS_VISIBLE;exStyle=(exStyle&~WS_EX_TOPMOST)|WS_EX_APPWINDOW|WS_EX_WINDOWEDGE;}
    {LastError l(host);w=::CreateWindowExA(exStyle,cn<0x10000?MAKEINTATOM(cn):cls.c_str(),(title.empty()?"MechWarrior 3 Remastered":title.c_str()),style,int(arg(4)),int(arg(5)),int(arg(6)),int(arg(7)),hwnd_of(arg(8)),reinterpret_cast<HMENU>(std::intptr_t(std::int32_t(arg(9)))),host_instance(arg(10)),reinterpret_cast<void*>(std::uintptr_t(arg(11))));}
-   if(w&&wm&&std::string(wm)=="windowed")::SetWindowTextW(w,L"MechWarrior 3 Remastered");
+   if(w&&wm&&std::string(wm)=="windowed")::SetWindowTextW(w,menu_version::caption(L"MechWarrior 3 Remastered").c_str());
    apis.back()+="("+cls+","+title+")";return done(w?gwnd(w):0,12);}
   if(n=="DefWindowProcA")return done(unsigned(std::int32_t(to_host(nullptr,arg(0),arg(1),arg(2),arg(3)))),4);
   if(n=="CallWindowProcA"){const unsigned p=as_proc(arg(0));if(auto hp=host_proc(p))return done(unsigned(std::int32_t(to_host(hp,arg(1),arg(2),arg(3),arg(4)))),5);
@@ -1382,7 +1402,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      if(rw&&cx>0&&cx<=800&&!(flags&SWP_NOSIZE)){flags|=SWP_NOSIZE|SWP_NOMOVE;}}}
    BOOL r{};{LastError l(host);r=::SetWindowPos(hw,after,px,py,cx,cy,flags);}return done(r?1U:0U,7);}
   if(n=="InvalidateRect"||n=="ValidateRect"){RECT r{};const bool has=arg(1)!=0;if(has)r=rect_in(arg(1));BOOL ok{};{LastError l(host);ok=n=="InvalidateRect"?::InvalidateRect(W(0),has?&r:nullptr,BOOL(arg(2))): ::ValidateRect(W(0),has?&r:nullptr);}return done(ok?1U:0U,n=="InvalidateRect"?3:2);}
-  if(n=="SetWindowTextA"){const std::string t=arg(1)?guest_string(arg(1)):std::string();BOOL r{};{LastError l(host);r=::SetWindowTextA(W(0),arg(1)?t.c_str():nullptr);}return done(r?1U:0U,2);}
+  if(n=="SetWindowTextA"){const std::string t=arg(1)?menu_version::caption(guest_string(arg(1))):std::string();BOOL r{};{LastError l(host);r=::SetWindowTextA(W(0),arg(1)?t.c_str():nullptr);}return done(r?1U:0U,2);}
   if(n=="GetWindowTextA"){const unsigned a=arg(1),z=arg(2);if(!z)return done(0,3);if(!writable(a,z))deny("GetWindowTextA buffer outside the memory contract",a);std::vector<char>b(z);int k{};{LastError l(host);k=::GetWindowTextA(W(0),b.data(),int(z));}
    for(int i=0;i<=k&&unsigned(i)<z;++i)runtime.memory().store<unsigned char>({a+unsigned(i)},static_cast<unsigned char>(b[size_t(i)]));return done(unsigned(k),3);}
   if(n=="GetDC"&&arg(0)){HDC d{};{LastError l(host);d=::GetDC(W(0));}return done(d?ghandle(d):0,1);}
@@ -1610,7 +1630,9 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="auxGetDevCapsA"){const unsigned a=arg(1),z=arg(2);static_assert(sizeof(AUXCAPSA)==48);if(z<48||!writable(a,48))deny("auxGetDevCapsA output outside the memory contract",a);AUXCAPSA c{};auto&cd=host.music();const MMRESULT r=cd.enabled()&&arg(0)==cd.aux_id()?cd.aux_caps(c): ::auxGetDevCapsA(UINT_PTR(cd.enabled()&&arg(0)!=0xffffffffU?arg(0)-1U:arg(0)),&c,sizeof(c));
    if(!r)for(unsigned i=0;i<48;++i)runtime.memory().store<unsigned char>({a+i},reinterpret_cast<const unsigned char*>(&c)[i]);return done(r,3);}
   if(n=="auxGetVolume"){DWORD v{};auto&cd=host.music();const MMRESULT r=cd.enabled()&&arg(0)==cd.aux_id()?cd.aux_get_volume(v): ::auxGetVolume(cd.enabled()&&arg(0)!=0xffffffffU?arg(0)-1U:arg(0),&v);if(!writable(arg(1),4))deny("auxGetVolume output outside the memory contract",arg(1));store(arg(1),v);return done(r,2);}
-  if(n=="auxSetVolume"){auto&cd=host.music();if(cd.enabled()&&arg(0)==cd.aux_id())return done(cd.aux_set_volume(arg(1)),2);deny("auxSetVolume would change the host CD-audio mixer level; not authorized",arg(1));}
+  if(n=="auxSetVolume"){auto&cd=host.music();if(cd.enabled()&&arg(0)==cd.aux_id())return done(cd.aux_set_volume(arg(1)),2);
+   if(!audio::valid_host_aux_device(arg(0),cd.enabled(),::auxGetNumDevs()))return done(MMSYSERR_BADDEVICEID,2);
+   deny("auxSetVolume would change the host CD-audio mixer level; not authorized",arg(1));}
   // WINMM mixer (CD volume): real queries with field-wise x86<->x64 marshalling; setting levels would change
   // the host system volume and stops typed.
   if(n=="mixerGetNumDevs")return done(::mixerGetNumDevs(),0);

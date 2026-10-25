@@ -57,6 +57,33 @@ static class MusicPackChecks
                 throw new Exception("Music off did not clear bindings.");
             MusicPack.Apply(profile, Array.Empty<string>(), true);
             if (profile["native"]!["local_cd_audio"]!.GetValue<bool>()) throw new Exception("Missing optional pack blocks silence.");
+            profile["native"]!["stock_soundtrack"] = new JsonObject { ["schema_version"] = 1, ["root"] = second.DirectoryPath };
+            MusicPack.Apply(profile, Array.Empty<string>(), true);
+            if (!profile["native"]!["local_cd_audio"]!.GetValue<bool>() ||
+                !profile["native"]!["music_inputs"]!["tracks"]![0]!["source"]!.GetValue<string>().StartsWith(second.DirectoryPath))
+                throw new Exception("Bundled default soundtrack incorrectly requires an enabled pack.");
+            MusicPack.Apply(profile, new[] { first.DirectoryPath }, true);
+            if (!profile["native"]!["music_inputs"]!["tracks"]![0]!["source"]!.GetValue<string>().StartsWith(first.DirectoryPath))
+                throw new Exception("Bundled soundtrack overrode the selected replacement pack.");
+            MusicPack.Apply(profile, Array.Empty<string>(), false);
+            if (profile["native"]!["local_cd_audio"]!.GetValue<bool>() || profile["native"]!["music_inputs"] != null)
+                throw new Exception("Bundled soundtrack ignored the music-off preference.");
+            var original = Path.Combine(root, "OriginalGame", "Music");
+            Directory.CreateDirectory(original);
+            File.WriteAllText(Path.Combine(original, "1-02. MechWarrior 3 - Track 01.flac"), "authored source placeholder");
+            File.WriteAllText(Path.Combine(original, "1-03. MechWarrior 3 - Track 02.flac"), "authored source placeholder");
+            MusicPack.Apply(profile, Array.Empty<string>(), true, Path.GetDirectoryName(original));
+            if (!profile["native"]!["local_cd_audio"]!.GetValue<bool>() ||
+                !profile["native"]!["music_inputs"]!["tracks"]![0]!["source"]!.GetValue<string>().StartsWith(original))
+                throw new Exception("Original soundtrack incorrectly requires a replacement pack.");
+            MusicPack.Apply(profile, Array.Empty<string>(), false, Path.GetDirectoryName(original));
+            if (profile["native"]!["local_cd_audio"]!.GetValue<bool>() || profile["native"]!["music_inputs"] != null)
+                throw new Exception("Original soundtrack ignores the user's off choice.");
+            var stockRegistry = Path.Combine(second.DirectoryPath, MusicPack.Registry);
+            var savedRegistry = File.ReadAllBytes(stockRegistry);
+            File.WriteAllText(stockRegistry, "corrupt");
+            Reject(() => MusicPack.Apply(profile, Array.Empty<string>(), true));
+            File.WriteAllBytes(stockRegistry, savedRegistry);
             Reject(() => manager.InstallPack(Archive(first.Id, "../escape.wav")));
             Reject(() => manager.InstallPack(Archive(first.Id, corrupt: true)));
             File.WriteAllText(Path.Combine(first.DirectoryPath, "music/2.wav"), "tampered");

@@ -90,7 +90,7 @@ outer ordinary ZIP can deliver both matching files when unfamiliar metadata
 extensions are inconvenient to download. Launcher-only releases remain separate.
 
 Owner direction, October 22: every future launcher release delivers both
-`corecriticalinstaller.exe` for fresh installs and a matching signed
+`corecriticalinstaller-<version>.exe` for fresh installs and a matching signed
 `.ccupdate` plus ZIP for existing launchers. Use `build_launcher_release.ps1`
 after publishing/staging the launcher without a Runtime subdirectory. Supply
 Compiler, PublishDirectory, RuntimeDirectory, a fresh OutputDirectory, Version,
@@ -100,7 +100,8 @@ Windows signing inputs (WindowsSignTool, SigningDlib, SigningMetadata).
 The command builds a signed launcher-only setup and its update first, then the
 full precompiled installer. It verifies the update key against the publication's
 public trust before building, and writes `launcher-release.json` with artifact
-sizes and hashes. Deliver `Setup/corecriticalinstaller.exe` plus both files
+sizes, hashes and exact download filenames. Deliver the versioned executable
+from `Setup/` without renaming it, plus both files
 from `LauncherUpdate/`. The update ZIP retains the `CoreCriticalSetup.exe`
 internal entry for compatibility with existing installed launchers. Publication
 and an actual isolated upgrade check remain separate release steps.

@@ -12,7 +12,8 @@ layout(location=5) flat out vec4 specularFlat;
 
 // First 64 bytes match the unmodified fragment shader's Push ABI.
 // target = (guestWidth, guestHeight, nearScale, nearClip).
-// factor = the batch RGB colour; override draw arguments use TEXTURE/DIFFUSE,
+// factor = the batch RGB colour and original diagnostic vertex-fog factor;
+// override draw arguments use TEXTURE/DIFFUSE,
 // so the fragment shader never selects D3DTA_TFACTOR for a model draw.
 // projection = (scaleX, scaleY, centerX, centerY).
 layout(push_constant) uniform ModelPush {
@@ -40,5 +41,5 @@ void main() {
     gl_PointSize = 1.0;
     uvPerspective = uvAffine = uv;
     colorSmooth = colorFlat = vec4(rgb, 1.0);
-    specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0);
+    specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, draw.factor.a);
 }

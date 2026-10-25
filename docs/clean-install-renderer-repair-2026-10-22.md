@@ -45,9 +45,10 @@ Private evidence is under D:/MW3CleanLaunchRepair-20261022-r1.
 
 ## Delivery
 
-For subsequent builds, the owner selected `corecriticalinstaller.exe` as
-the installer filename for every package variant. The build and signing scripts
-use that name. The 1.0.22 artifact linked below retains its published filename.
+Historical October 22 naming: the installer used `corecriticalinstaller.exe`.
+The current October 24 rule supersedes this: all new installer downloads must
+retain the complete version, `corecriticalinstaller-<version>.exe`, including
+their cloud object names and website links. Historical links stay valid.
 
 The owner explicitly cleared publication of 1.0.22 for retesting after the
 temporary website hold. Both existing Setup lists now link the corrected build.

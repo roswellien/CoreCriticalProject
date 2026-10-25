@@ -11,7 +11,8 @@ public static class RuntimeContentCapabilities
         ["prepared-cinematic-v1"] = "cinematic-replacements",
         ["prepared-native-v1"] = "prepared-mechs",
         ["prepared-environment-v1"] = "environment-resources",
-        ["prepared-music-v1"] = "soundtrack"
+        ["prepared-music-v1"] = "soundtrack",
+        [SkinPack.Profile] = "additional-mech-skins"
     };
     private static readonly JsonObject Legacy = LoadLegacy();
     private static JsonObject LoadLegacy()

@@ -16,6 +16,10 @@ foreach($line in Get-Content "$projectRoot/build/m4-crt-heap-carry-O2-lazy/CMake
  }
 }
 $defs+="-DMW34_MFC_OBJECT_LIST=$target/optimized-mfc-objects.txt"
+$dpiManifest=Join-Path $target 'host-source/graphics/native_host.manifest'
+if(Test-Path -LiteralPath $dpiManifest){
+ $defs+="-DCMAKE_EXE_LINKER_FLAGS=/manifest:embed /manifestinput:`"$dpiManifest`""
+}
 & $cmake -G Ninja -S "$target/build-definition" -B "$target/build" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MAKE_PROGRAM=$ninja" "-DCMAKE_CXX_COMPILER=$compiler" @defs "-DMW34_COMPOSITION_SOURCE=$target/host-source/composition.cpp" "-DMW34_COMPOSITION_DIRECTORY=$target/host-source"
 if($LASTEXITCODE){throw 'Optimized Remaster configure failed'}
 & $cmake --build "$target/build" --parallel 3

@@ -71,7 +71,8 @@ continue to use launcher playback and need no in-game replacement capability.
 Future installer builds include the complete release version in the executable
 filename, for example `corecriticalinstaller-1.0.26-preview.exe`. The installer
 receipt records `setup_filename`, and the launcher release builder uses the
-same name. Download publication should preserve that filename. Existing
+same name. Cloud object names, website links and download publication must
+preserve that exact versioned filename; an unversioned basename is forbidden. Existing
 published links below describe the original 1.0.26 delivery and stay valid.
 
 `legacy_content_capabilities.json` is a frozen migration map for the 30

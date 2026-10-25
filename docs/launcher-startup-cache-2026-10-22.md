@@ -1,5 +1,9 @@
 # Launcher startup preparation, October 22
 
+October 24 follow-up: [demand loading and compatible runtime cache reuse](asset-pack-loading-performance-2026-10-24.md)
+removes EXE-only environment-cache invalidation and reduces eager model/skin reads.
+The measurements and release state below remain historical evidence.
+
 Launcher 1.0.16-preview advances installed-pack -> prepared-resource reuse.
 No native EXE/DLL or installer rebuild, signing, upload or commit was performed.
 Gameplay acceptance remains **131/144**. Native debugging and playtesting remain

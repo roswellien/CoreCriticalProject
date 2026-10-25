@@ -44,7 +44,7 @@ namespace MW3RemasterLauncher.Core
         }
 
         /// <summary>Rescan directories/archives, then restore the requested enabled order.</summary>
-        /// <remarks>Null means first-run defaults; an empty list means deliberately disable all packs.</remarks>
+        /// <remarks>Null and an empty list both start stock; existing explicit choices persist.</remarks>
         public void RefreshPacks(List<string>? activeOrder = null)
         {
             _packs.Clear();
@@ -109,6 +109,7 @@ namespace MW3RemasterLauncher.Core
                     .OrderBy(p => p.IsOfficial ? 0 : 1)
                     .ThenBy(p => p.Name)
                     .ToList();
+                foreach (var p in discovered) p.IsEnabled = false;
             }
 
             for (int i = 0; i < discovered.Count; i++)
@@ -234,6 +235,14 @@ namespace MW3RemasterLauncher.Core
 
                 if (pack.SchemaVersion == 2)
                 {
+                    if (pack.NativePayload?.Profile == SkinPack.Profile)
+                        foreach (var skin in SkinPack.Read(pack.DirectoryPath, pack))
+                        {
+                            var key = "skin/" + skin.Id;
+                            if (claimedFiles.TryGetValue(key, out var winner))
+                                conflicts.Add(new PackConflict { RelativePath = key, WinningPackName = winner.Name, OverriddenPackName = pack.Name });
+                            else claimedFiles[key] = pack;
+                        }
                     if (pack.NativePayload?.Profile == CinematicPack.Profile)
                         foreach (var clip in CinematicPack.Read(pack.DirectoryPath, pack).Where(c => c.Replaces != null))
                         {

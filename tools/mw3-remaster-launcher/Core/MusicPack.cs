@@ -10,6 +10,18 @@ public static class MusicPack
     public const string Profile = "prepared-music-v1";
     public const string Registry = "music/music.json";
 
+    private static JsonObject ReadVerifiedInputs(string directory, PackManifest manifest, JsonNode? decoder)
+    {
+        var registry = PackStorage.Resolve(directory, Registry);
+        if (manifest.SchemaVersion != 2 || manifest.NativePayload?.Profile != Profile ||
+            manifest.Files == null || !manifest.Files.TryGetValue(Registry, out var declared))
+            throw new InvalidDataException("Unsupported soundtrack component.");
+        using var input = File.OpenRead(registry);
+        if (input.Length != declared.Bytes || !Convert.ToHexString(SHA256.HashData(input)).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Soundtrack registry integrity check failed.");
+        return ReadInputs(directory, manifest, decoder);
+    }
+
     public static JsonObject ReadInputs(string directory, PackManifest manifest, JsonNode? decoder = null)
     {
         var path = PackStorage.Resolve(directory, Registry);
@@ -46,7 +58,7 @@ public static class MusicPack
     }
 
     /// <summary>First enabled pack wins, matching the launcher's displayed priority.</summary>
-    public static bool Apply(JsonObject profile, IEnumerable<string> directories, bool enabled)
+    public static bool Apply(JsonObject profile, IEnumerable<string> directories, bool enabled, string? originalGameDirectory = null)
     {
         string? selected = null;
         PackManifest? manifest = null;
@@ -60,16 +72,43 @@ public static class MusicPack
         }
         var native = profile["native"]!.AsObject();
         native.Remove("music_inputs");
+        native["runtime_environment"]?.AsObject().Remove("MW34_MUSIC_PACK");
         native["local_cd_audio"] = enabled && selected != null;
         if (enabled && selected != null)
         {
             RuntimeContentCapabilities.Require(native, manifest!.NativePayload!, manifest.Id);
-            var registry = PackStorage.Resolve(selected, Registry);
-            var declared = manifest!.Files![Registry];
-            using var input = File.OpenRead(registry);
-            if (input.Length != declared.Bytes || !Convert.ToHexString(SHA256.HashData(input)).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Soundtrack registry integrity check failed.");
-            native["music_inputs"] = ReadInputs(selected, manifest, native["music_decoder"]);
+            native["music_inputs"] = ReadVerifiedInputs(selected, manifest, native["music_decoder"]);
+        }
+        else if (enabled && originalGameDirectory != null)
+        {
+            // Original user-supplied CD tracks are base game resources. A music
+            // replacement pack takes priority, but is not required to play them.
+            var first = Path.Combine(originalGameDirectory, "Music", "1-02. MechWarrior 3 - Track 01.flac");
+            var second = Path.Combine(originalGameDirectory, "Music", "1-03. MechWarrior 3 - Track 02.flac");
+            if (File.Exists(first) && File.Exists(second))
+            {
+                native["local_cd_audio"] = true;
+                native["music_inputs"] = new JsonObject
+                {
+                    ["schema_version"] = 2, ["enabled"] = true,
+                    ["decoder"] = native["music_decoder"]?.DeepClone(),
+                    ["tracks"] = new JsonArray(
+                        new JsonObject { ["cd_track"] = 2, ["source"] = Path.GetFullPath(first) },
+                        new JsonObject { ["cd_track"] = 3, ["source"] = Path.GetFullPath(second) })
+                };
+            }
+        }
+        if (enabled && !native["local_cd_audio"]!.GetValue<bool>() && native["stock_soundtrack"] is JsonObject stock)
+        {
+            if (stock["schema_version"]?.GetValue<int>() != 1 || stock["root"]?.GetValue<string>() is not string directory ||
+                !Path.IsPathFullyQualified(directory))
+                throw new InvalidDataException("Default soundtrack metadata is incompatible. Repair the game runtime.");
+            var stockManifest = PackStorage.ReadManifest(PackStorage.Resolve(directory, "pack.json"));
+            if (stockManifest.NativePayload?.Profile != Profile)
+                throw new InvalidDataException("Default soundtrack component is incompatible. Repair the game runtime.");
+            RuntimeContentCapabilities.Require(native, stockManifest.NativePayload!, stockManifest.Id);
+            native["music_inputs"] = ReadVerifiedInputs(directory, stockManifest, native["music_decoder"]);
+            native["local_cd_audio"] = true;
         }
         return selected != null;
     }

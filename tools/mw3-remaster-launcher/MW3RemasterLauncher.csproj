@@ -10,7 +10,7 @@
     <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
     <AssemblyName>Core Critical Launcher</AssemblyName>
     <RootNamespace>MW3RemasterLauncher</RootNamespace>
-    <Version>1.0.28-preview</Version>
+    <Version>1.0.34-preview</Version>
     <Authors>MW3 Remaster Team</Authors>
   </PropertyGroup>
 

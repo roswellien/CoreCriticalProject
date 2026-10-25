@@ -74,6 +74,7 @@
             </Grid>
         </Grid>
         <StackPanel Grid.Row="3" Margin="0,14,0,12">
+            <TextBlock x:Name="LayoutDescription" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" Margin="0,0,0,6"/>
             <TextBlock x:Name="Status" Text="Copy your current controls to create the first layout. Existing game controls stay active until you select a saved layout." TextWrapping="Wrap" Foreground="{DynamicResource BrushAmber}"/>
             <TextBlock x:Name="ConflictSummary" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" MaxHeight="55" Margin="0,6,0,0"/>
         </StackPanel>

@@ -128,8 +128,11 @@ def _environment_resources(selected, host, cache_root, progress=None):
     # Only resource-generation inputs belong in this identity. The full host
     # includes fresh session/log paths and player controls on every launch.
     # Those bindings must remain current without rebuilding identical images.
-    resource_host = dict(executable_sha256=host.get('executable_sha256'),
-                         authored_normal_catalog_budget_bytes=host.get(
+    # Pack admission/capability checks run before this function. The EXE hash
+    # identifies an admitted runtime, not generated resource bytes; a new host
+    # using the same readers must not force all normal pages to be rebuilt.
+    # Reader/writer changes still invalidate through the producer pins above.
+    resource_host = dict(authored_normal_catalog_budget_bytes=host.get(
                              'authored_normal_catalog_budget_bytes', 536870912))
     identity = dict(selected=selected, host=resource_host, producers=producers)
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -155,7 +158,8 @@ def _environment_resources(selected, host, cache_root, progress=None):
             bindings = profile_bindings(selected, host)
             bindings.update({key: value for key, value in receipt['environment'].items()
                              if key in RESOURCE_KEYS})
-            return bindings
+            from presentation_policy import environment as presentation_environment
+            return presentation_environment(host, selected, bindings)
     except (OSError, ValueError, KeyError, TypeError):
         pass
     # Preserve incomplete/corrupt attempts, never publish a partial ready receipt.

@@ -193,10 +193,32 @@ void main() {
         result=vec4(sun.extra.w>1.5&&sun.extra.w<2.5?0.3+0.7*k:0.0,sun.extra.w>3.5?0.3+0.7*k:(sun.extra.w<1.5?0.15:0.0),sun.extra.w>2.5&&sun.extra.w<3.5?0.3+0.7*k:0.0,1.0);return;
     }
     if(sun.extra.w>1.5&&sun.extra.w<3.5){ // Sky dome (2) or horizon band (3).
+        // Sealed maps have no natural sky. This also avoids evaluating
+        // the valid interior horizon interval [0,0] through smoothstep.
+        if(sun.skyTint.w>4.5&&sun.skyTint.w<5.5){
+            result=vec4(0.0,0.0,0.0,operation(draw.mode.z).a);return;
+        }
         vec3 v=skyRay();float side=skySide(v);vec3 haze=hazeColor(v),c=haze;
         if(sun.extra.w<2.5){
-            vec3 base=operation(draw.mode.y).rgb*sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
-            if(sun.detail.x>2.5)base*=cloudRelief(uv,v);
+            vec3 base;
+            if(sun.skyTint.w>5.5){
+                // An opaque particulate canopy, not water-bearing storm clouds.
+                float height=pow(clamp(v.y,0.0,1.0),0.45);
+                base=mix(haze, sun.skyTint.rgb*sun.skyGrade.x*0.55, height);
+            }else if(sun.skyTint.w>1.5){
+                float height=pow(clamp(v.y,0.0,1.0),0.45);
+                if(sun.skyTint.w>3.5)
+                    base=mix(vec3(0.12,0.16,0.26),vec3(0.015,0.025,0.055),height);
+                else if(sun.skyTint.w>2.5)
+                    base=mix(vec3(0.36,0.42,0.60),vec3(0.13,0.18,0.33),height);
+                else
+                    base=mix(vec3(0.58,0.74,0.91),vec3(0.18,0.43,0.72),height);
+                base*=sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
+            }else{
+                vec3 legacy=operation(draw.mode.y).rgb*sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
+                if(sun.detail.x>2.5)legacy*=cloudRelief(uv,v);
+                base=legacy;
+            }
             float l=dot(base,vec3(0.2126,0.7152,0.0722));
             base=mix(vec3(l),base,mix(sun.skyGrade.z,1.0,side))+sun.skyGlow.rgb*skyGlowAmount(v,side);
             // Elevation-only blend into the haze. Below horizon_low the dome equals the haze exactly,

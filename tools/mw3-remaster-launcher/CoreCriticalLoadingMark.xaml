@@ -1,0 +1,35 @@
+<UserControl x:Class="MW3RemasterLauncher.CoreCriticalLoadingMark"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="14" Height="14" Focusable="False" IsHitTestVisible="False"
+        AutomationProperties.Name="Core Critical activity indicator">
+    <UserControl.Resources>
+        <!-- The four cut-out sections of the existing Core Critical mark. -->
+        <Geometry x:Key="TopLeft">M328,61 L578,61 L578,412 A225,225 0 0 0 406,571 L19,571 L19,550 Z</Geometry>
+        <Geometry x:Key="TopRight">M677,61 L929,61 L1229,550 L1229,571 L847,571 A225,225 0 0 0 677,412 Z</Geometry>
+        <Geometry x:Key="BottomRight">M1229,677 L1229,698 L925,1180 L677,1180 L677,847 A225,225 0 0 0 850,677 Z</Geometry>
+        <Geometry x:Key="BottomLeft">M19,677 L402,677 A225,225 0 0 0 575,847 L575,1180 L320,1180 L19,698 Z</Geometry>
+        <LinearGradientBrush x:Key="UnlitAmber" StartPoint="0,0" EndPoint="0.5,1">
+            <GradientStop Color="#C59043" Offset="0" />
+            <GradientStop Color="#A4672B" Offset="1" />
+        </LinearGradientBrush>
+        <RadialGradientBrush x:Key="Backlight" Center="0.5,0.5" GradientOrigin="0.5,0.42" RadiusX="0.8" RadiusY="0.8">
+            <GradientStop Color="#FFF6C5" Offset="0" />
+            <GradientStop Color="#FFD56F" Offset="0.45" />
+            <GradientStop Color="#F2A73E" Offset="0.85" />
+            <GradientStop Color="#D7862D" Offset="1" />
+        </RadialGradientBrush>
+    </UserControl.Resources>
+    <Viewbox Stretch="Uniform">
+        <Canvas Width="1254" Height="1254">
+            <Path Data="{StaticResource TopLeft}" Fill="{StaticResource UnlitAmber}" />
+            <Path Data="{StaticResource TopRight}" Fill="{StaticResource UnlitAmber}" />
+            <Path Data="{StaticResource BottomRight}" Fill="{StaticResource UnlitAmber}" />
+            <Path Data="{StaticResource BottomLeft}" Fill="{StaticResource UnlitAmber}" />
+            <Path x:Name="LightTopRight" Data="{StaticResource TopRight}" Fill="{StaticResource Backlight}" Opacity="0" />
+            <Path x:Name="LightBottomRight" Data="{StaticResource BottomRight}" Fill="{StaticResource Backlight}" Opacity="0" />
+            <Path x:Name="LightBottomLeft" Data="{StaticResource BottomLeft}" Fill="{StaticResource Backlight}" Opacity="0" />
+            <Path x:Name="LightTopLeft" Data="{StaticResource TopLeft}" Fill="{StaticResource Backlight}" Opacity="0" />
+        </Canvas>
+    </Viewbox>
+</UserControl>
