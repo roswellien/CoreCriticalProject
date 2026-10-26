@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
                 require(rejected(compressed.substr(0, size), {"Armor", "Glass"}),
                         "Compressed truncation accepted");
             auto invalid = compressed;
-            invalid[80] = char(255);
+            invalid[80] = '\xff';
             require(rejected(invalid, {"Armor", "Glass"}), "Oversized run accepted");
             invalid = compressed;
             invalid.back() = 0;

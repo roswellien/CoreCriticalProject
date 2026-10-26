@@ -8,12 +8,11 @@ int main() {
     assert(::GetLastError() == 4321);
     // A hidden authored window checks that native client and screen coordinates
     // agree. It never captures, clips or moves the user's real mouse.
-    HWND window = ::CreateWindowExW(0, L"STATIC", L"DPI coordinate fixture",
-                                  WS_POPUP, 20, 30, 400, 300,
-                                  nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+    HWND window = ::CreateWindowExW(0, L"STATIC", L"DPI coordinate fixture", WS_POPUP, 20, 30, 400,
+                                    300, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
     assert(window);
     assert(::AreDpiAwarenessContextsEqual(::GetWindowDpiAwarenessContext(window),
-                                         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2));
+                                          DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2));
     RECT client{};
     assert(::GetClientRect(window, &client));
     assert(client.right == 400 && client.bottom == 300);
@@ -28,9 +27,14 @@ int main() {
     auto previous = ::SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
     assert(previous);
     bool rejected = false;
-    try { mw34::display::require_native_coordinates(); }
-    catch (const std::runtime_error&) { rejected = true; }
+    try {
+        mw34::display::require_native_coordinates();
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
     assert(rejected);
     assert(::SetThreadDpiAwarenessContext(previous));
-    std::printf("Native DPI context, hidden-window center, override rejection and last-error preservation passed (local monitor DPI %u).\n", dpi);
+    std::printf("Native DPI context, hidden-window center, override rejection and last-error "
+                "preservation passed (local monitor DPI %u).\n",
+                dpi);
 }
