@@ -130,10 +130,10 @@
     <p>The result is <strong>correct, but nameless</strong>. The function is named after its address in the old exe, and the variables are CPU registers. Proving that <code>sub_0045A1C0</code> is really "fire weapon" takes evidence, so the project's rule is: unproven functions keep their <code>sub_XXXXXXXX</code> names. A plausible guess would be invented, not readable.</p>
   </section>
 
-  <section class="lesson" data-part="1" data-title="Original, modern, shared">
+  <section class="lesson" data-part="1" data-title="Original, modern, kept out">
     <div class="eyebrow">Part 1 · What changes and what doesn't</div>
-    <h2>Original logic, modern services, nothing of the game shared</h2>
-    <p>The translated game still decides everything a mech does. What changes is everything it talks to. And because the translation is made from the copyrighted game, it never leaves the player's machine.</p>
+    <h2>Original logic, modern services, no game in the repository</h2>
+    <p>The translated game still decides everything a mech does. What changes is everything it talks to. And because the translation is made from the copyrighted game, it is never committed to the repository.</p>
     <div class="trio">
       <div class="box hot">
         <div class="box-head">Kept original</div>
@@ -144,11 +144,11 @@
         <ul><li>Vulkan rendering, widescreen, anti-aliasing</li><li>Input, audio, files, Windows integration</li><li>Optional visual upgrades, kept as separate settings</li></ul>
       </div>
       <div class="box">
-        <div class="box-head">Never distributed</div>
-        <ul><li>The game, its exe and data</li><li>The lifted game code</li><li>Builds made from it</li></ul>
+        <div class="box-head">Never in the repository</div>
+        <ul><li>The game, its exe and data</li><li>The lifted game code</li><li>Original media and asset packs</li></ul>
       </div>
     </div>
-    <p>So every player brings their own legally obtained copy of MW3, and everything in the public repository is project-written code around the game.</p>
+    <p>Every player still needs their own legally obtained copy of MW3, which the installer verifies. Private playtest builds ship a precompiled runtime so testers don't have to generate it themselves, but the repository only ever holds project-written code around the game.</p>
     <div class="fork">
       <p>That's the big picture. Part 2 is for developers who want to help: how the pieces fit, where things live, and the rules that keep the project honest.</p>
       <div class="fork-actions">
@@ -240,7 +240,7 @@
     <div class="trio">
       <div class="box cool">
         <div class="box-head">Launcher <small>players</small></div>
-        <p>A Windows app checks the installation and settings, hands off to Python that prepares local files, then starts the host. Planning, preparing and launching are separate steps on purpose.</p>
+        <p>A Windows app installs the game from its disc image or uses an existing install, applies settings, hands off to Python that prepares local files, then starts the host. It keeps itself and the runtime up to date. Planning, preparing and launching are separate steps on purpose.</p>
       </div>
       <div class="box cool">
         <div class="box-head">D7VK wrapper <small>players</small></div>
@@ -284,7 +284,7 @@ ctest --preset default</pre>
         <p>Builds the asset-free runtime and runs the tests, the same as CI. Add <code>-A x64</code> on Windows with Visual Studio. A <code>format-check</code> target checks C++ formatting.</p>
       </div>
       <div class="box hot">
-        <div class="box-head">The full game <small>local setup</small></div>
+        <div class="box-head">Building the game yourself <small>local setup</small></div>
         <ul><li>Your own MW3 installation</li><li>A prepared local environment and generated lifts</li><li>Needed for behaviour changes to timing, rendering or input, which need an original-game baseline</li></ul>
       </div>
     </div>
