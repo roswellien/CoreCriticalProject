@@ -14,6 +14,7 @@ PROFILES = {
     'prepared-environment-v1': 'environment-resources',
     'prepared-music-v1': 'soundtrack',
     'prepared-skins-v1': 'additional-mech-skins',
+    'additional-chassis-v1': 'additional-mech-chassis',
 }
 
 

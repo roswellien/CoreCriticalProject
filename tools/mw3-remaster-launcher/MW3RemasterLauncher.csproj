@@ -10,11 +10,13 @@
     <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
     <AssemblyName>Core Critical Launcher</AssemblyName>
     <RootNamespace>MW3RemasterLauncher</RootNamespace>
-    <Version>1.0.34-preview</Version>
+    <Version>1.0.42-preview</Version>
     <Authors>MW3 Remaster Team</Authors>
   </PropertyGroup>
 
   <ItemGroup>
+    <None Update="online-updates.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="update-trust.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Core\SupportedMedia.json" />
     <EmbeddedResource Include="Core\Mw3ControlActions.json" />
     <EmbeddedResource Include="../remaster-launcher/legacy_content_capabilities.json" Link="Core/legacy_content_capabilities.json" LogicalName="MW3RemasterLauncher.Core.legacy_content_capabilities.json" />

@@ -58,8 +58,8 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual(env['MW34_EFFECT_LIGHT_CATALOG'],str(self.catalog.resolve()))
         self.assertEqual(env['MW34_SUN_STRENGTH'],'0')
         self.assertEqual(env['MW34_SUN_AMBIENT'],'1')
-        self.assertEqual(env['MW34_CAMPAIGN_LIGHTING'],'0')
-        self.assertEqual(env['MW34_WEATHER'],'0')
+        self.assertEqual(env['MW34_CAMPAIGN_LIGHTING'],'1')
+        self.assertEqual(env['MW34_WEATHER'],'1')
         self.assertNotIn('sun_preset',host)
 
     def test_pack_and_warm_cache_cannot_enable_disabled_lighting(self):
@@ -81,6 +81,17 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertNotIn('MW34_REMASTER_BANKS',disabled)
         self.assertNotIn('MW34_SURFACE_NORMALS',disabled)
         self.assertEqual(disabled['MW34_SUN'],'0')
+
+    def test_authored_normals_do_not_enable_normal_color_diagnostics(self):
+        host = self.host(True)
+        enabled = environment(host, {}, {'MW34_WORLD_NORMALS': 'world.txt',
+                                        'MW34_SUN_NORMALS': '1'})
+        self.assertEqual(enabled['MW34_NORMAL_MAPS'], '1')
+        self.assertEqual(enabled['MW34_SUN_NORMALS'], '0')
+        host['presentation']['dynamic_lighting'] = False
+        disabled = environment(host, {}, enabled)
+        self.assertEqual(disabled['MW34_NORMAL_MAPS'], '0')
+        self.assertNotIn('MW34_SUN_NORMALS', disabled)
 
     def test_mission_catalog_requires_selected_pack_and_lighting_choice(self):
         selected={'operation1':{'registry':{'effects':'effect.bin'},

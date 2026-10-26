@@ -26,6 +26,7 @@ namespace MW3RemasterLauncher.Core
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
         public bool InitialSetupCompleted { get; set; } = false;
+        public bool AutomaticUpdateChecks { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();
         public bool PackSelectionInitialized { get; set; } = false;

@@ -25,7 +25,8 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={localappdata}\Programs\MW3Remaster
+DefaultDirName={sd}\Games\Core Critical\Launcher
+UsePreviousAppDir=yes
 DisableDirPage=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=no
@@ -122,6 +123,7 @@ var
   ResultCode: Integer;
 begin
   if (CurStep = ssPostInstall) and WizardIsTaskSelected('addtosteam') then
-    Exec(AddBackslash(ExpandConstant('{app}')) + '{#MyAppExeName}',
-      '--add-steam --silent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      if not Exec(AddBackslash(ExpandConstant('{app}')) + '{#MyAppExeName}',
+        '--add-steam --silent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+        MsgBox('The Steam shortcut could not be added. Exit Steam completely, then open Core Critical and use Settings & Steam > Add to Steam Library. Your launcher installation is ready.', mbInformation, MB_OK);
 end;

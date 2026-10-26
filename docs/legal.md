@@ -6,6 +6,13 @@ The project does not supply games or grant rights to their content.
 
 ## Owner-authorized private playtest delivery
 
+On October 25, 2026 the owner explicitly selected public **update-only**
+downloads for in-launcher updating. This extends the authorized precompiled
+launcher/runtime update delivery to the read-only update endpoint, while the
+bucket, original media, optional packs and playtest website remain private.
+Original-game verification and the prohibition on committing generated game
+code or media remain in effect.
+
 On October 22, 2026 the owner explicitly replaced the source-only delivery
 restriction for the private MW3 playtest installer. That installer may include
 the precompiled native host, translated native module and required runtime

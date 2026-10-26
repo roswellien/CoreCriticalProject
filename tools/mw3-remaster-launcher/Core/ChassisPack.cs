@@ -1,0 +1,144 @@
+using System.IO;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace MW3RemasterLauncher.Core;
+
+/// <summary>Additional, namespaced chassis with data-only definitions and visual payloads.</summary>
+public static class ChassisPack
+{
+    public const string Profile = "additional-chassis-v1";
+    public const string Registry = "chassis/chassis.json";
+    public sealed record Chassis(string Id, string Name);
+    private static readonly HashSet<string> Templates = new(StringComparer.Ordinal) {
+        "annihilator", "avatar", "blackhawk", "bushwacker", "cauldron", "champion", "daishi",
+        "firefly", "madcat", "orion", "owens", "puma", "shadowcat", "strider", "sunder",
+        "supernova", "thor", "vulture"
+    };
+
+    public static List<Chassis> Read(string root, PackManifest manifest)
+    {
+        if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
+            !(manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" })) ||
+            manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||
+            manifest.Files == null || manifest.Files.Count is < 1 or > 1025 ||
+            manifest.Files.Values.Sum(p => p.Bytes) > 4L * 1024 * 1024 * 1024)
+            throw new InvalidDataException("Invalid additional chassis pack contract.");
+        var used = new HashSet<string>(StringComparer.Ordinal) { Registry };
+        string Verify(string name, string? format = null)
+        {
+            if (!manifest.Files.TryGetValue(name, out var pin) || pin.Format != format ||
+                pin.Bytes is < 1 or > 256L * 1024 * 1024)
+                throw new InvalidDataException("Undeclared or unsupported chassis resource: " + name);
+            var path = PackStorage.Resolve(root, name);
+            using var stream = File.OpenRead(path);
+            if (stream.Length != pin.Bytes ||
+                !Convert.ToHexString(SHA256.HashData(stream)).Equals(pin.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Chassis resource integrity failure: " + name);
+            if (format != null)
+            {
+                stream.Position = 0;
+                using var reader = new BinaryReader(stream);
+                var expected = System.Text.Encoding.ASCII.GetBytes(format.PadRight(8, '\0'));
+                if (!reader.ReadBytes(8).SequenceEqual(expected))
+                    throw new InvalidDataException("Incorrect chassis payload format: " + name);
+            }
+            used.Add(name);
+            return path;
+        }
+        var registryPath = Verify(Registry);
+        if (new FileInfo(registryPath).Length > PackStorage.MaxJsonBytes)
+            throw new InvalidDataException("Chassis registry exceeds size limit.");
+        using var document = JsonDocument.Parse(File.ReadAllText(registryPath));
+        PackStorage.ValidateUniqueProperties(document.RootElement);
+        var registry = document.RootElement;
+        if (registry.GetProperty("schema_version").GetInt32() != 2 ||
+            registry.GetProperty("payload_profile").GetString() != Profile)
+            throw new InvalidDataException("Unsupported chassis registry.");
+        var rows = registry.GetProperty("chassis");
+        if (rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() is < 1 or > 128)
+            throw new InvalidDataException("Invalid chassis count.");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<Chassis>();
+        var fields = new HashSet<string>(new[] { "id", "name", "controller", "metadata_template", "definition", "meshes", "textures" });
+        foreach (var row in rows.EnumerateArray())
+        {
+            var rowFields = row.EnumerateObject().Select(p => p.Name).ToHashSet();
+            if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets"))
+                throw new InvalidDataException("Unknown chassis registration field.");
+            if (row.TryGetProperty("sockets", out var sockets))
+            {
+                if (!manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var required) || required < 2 ||
+                    sockets.ValueKind != JsonValueKind.Array || sockets.GetArrayLength() is < 1 or > 64)
+                    throw new InvalidDataException("Chassis sockets require version 2 and 1–64 bindings.");
+                var nodes = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var socket in sockets.EnumerateArray())
+                {
+                    if (socket.ValueKind != JsonValueKind.Object ||
+                        !new HashSet<string>(new[]{"node","bone","position"}).SetEquals(socket.EnumerateObject().Select(p=>p.Name)))
+                        throw new InvalidDataException("Invalid chassis socket fields.");
+                    var node=socket.GetProperty("node").GetString() ?? "";
+                    var bone=socket.GetProperty("bone").GetString() ?? "";
+                    var position=socket.GetProperty("position");
+                    if (!Regex.IsMatch(node,@"\Afirepoint[0-9]{2}\z") || !nodes.Add(node) ||
+                        !Regex.IsMatch(bone,@"\A[A-Za-z0-9_.-]{1,31}\z") || position.ValueKind!=JsonValueKind.Array ||
+                        position.GetArrayLength()!=3 || position.EnumerateArray().Any(v=>v.ValueKind!=JsonValueKind.Number ||
+                            !v.TryGetDouble(out var number) || !double.IsFinite(number) || Math.Abs(number)>100))
+                        throw new InvalidDataException("Invalid or duplicate chassis socket.");
+                }
+            }
+            if (row.TryGetProperty("base_skin_name", out var baseSkin))
+            {
+                var label = baseSkin.GetString() ?? "";
+                if (label.Length is < 1 or > 64 || label.Any(c => c < 32 || c > 126) ||
+                    !manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var required) || required < 2)
+                    throw new InvalidDataException("Invalid base skin name or missing chassis version 2 requirement.");
+            }
+            var id = row.GetProperty("id").GetString() ?? "";
+            var name = row.GetProperty("name").GetString() ?? "";
+            var controller = row.GetProperty("controller").GetString() ?? "";
+            if (!id.StartsWith(manifest.Id + ":", StringComparison.Ordinal) ||
+                !Regex.IsMatch(id, @"\A[a-z0-9][a-z0-9._-]{0,127}:[a-z0-9][a-z0-9._-]{0,63}\z") || !ids.Add(id) ||
+                name.Length is < 1 or > 64 || name.Any(c => c < 32 || c > 126) ||
+                !Templates.Contains(controller) || !Templates.Contains(row.GetProperty("metadata_template").GetString() ?? ""))
+                throw new InvalidDataException("Invalid chassis identity, name or controller.");
+            var authored = Verify(row.GetProperty("definition").GetString() ?? "");
+            if (new FileInfo(authored).Length > PackStorage.MaxJsonBytes)
+                throw new InvalidDataException("Chassis definition exceeds size limit.");
+            using (var definition = JsonDocument.Parse(File.ReadAllText(authored)))
+            {
+                var data = definition.RootElement;
+                PackStorage.ValidateUniqueProperties(data);
+                if (data.GetProperty("schema_version").GetInt32() != 1 ||
+                    data.GetProperty("template").GetString() != controller ||
+                    data.GetProperty("fields").ValueKind != JsonValueKind.Object ||
+                    !new HashSet<string>(new[] { "schema_version", "template", "fields" }).SetEquals(data.EnumerateObject().Select(p => p.Name)))
+                    throw new InvalidDataException("Unsupported authored chassis definition.");
+            }
+            foreach (var role in new[] { "meshes", "textures" })
+            {
+                var bindings = row.GetProperty(role);
+                if (!new HashSet<string>(new[] { "close", "distance" }).SetEquals(bindings.EnumerateObject().Select(p => p.Name)))
+                    throw new InvalidDataException("Chassis needs close and distance resources.");
+                foreach (var lod in new[] { "close", "distance" })
+                    Verify(bindings.GetProperty(lod).GetString() ?? "", role == "meshes" ? "BWMESH4" : "BWTEX1");
+            }
+            if (row.TryGetProperty("silhouette", out var silhouette))
+            {
+                if (!manifest.NativePayload.RequiredFormats.Contains("MW3ICON1") ||
+                    !manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var version) || version < 2)
+                    throw new InvalidDataException("Chassis silhouette requires additional-mech-chassis version 2.");
+                var bytes = File.ReadAllBytes(Verify(silhouette.GetString() ?? "", "MW3ICON1"));
+                if (bytes.Length != 2066 || BitConverter.ToUInt32(bytes, 8) != 41 ||
+                    BitConverter.ToUInt32(bytes, 12) != 50 || !bytes.Skip(16).Any(b => b != 0))
+                    throw new InvalidDataException("Chassis silhouette must be a nonempty 41x50 MW3ICON1 mask.");
+            }
+            result.Add(new(id, name));
+        }
+        if (!used.SetEquals(manifest.Files.Keys) || !ids.SetEquals(manifest.Provides?.Mechs ?? new List<string>()))
+            throw new InvalidDataException("Chassis manifest and resources disagree.");
+        return result;
+    }
+}

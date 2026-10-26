@@ -51,9 +51,10 @@ def apply(host):
          'if(preview&&!original){const unsigned pointer=load(0x5eda90);if(!readable(pointer,4))throw std::runtime_error("Status models: missing model-view stack");o.scope.preview_camera=override_matrix(load(pointer));return;}'
          'if(preview?o.preview_emitted.count(o.scope.node)!=0:o.emitted.count({o.scope.root,o.scope.owner})!=0)return;'
          'unsigned preview_specular=0xff000000U;'
-         'if(preview){if(original->vertices.empty())return;std::memcpy(&preview_specular,original->vertices.data()+20,4);'
-         'for(size_t i=0;i<original->vertices.size();i+=32){unsigned spec;std::memcpy(&spec,original->vertices.data()+i+20,4);'
-         'if((spec>>24)!=(preview_specular>>24))throw std::runtime_error("Status models: nonuniform original component damage factor");}}')
+         'if(preview){if(original->vertices.empty())return;unsigned alpha_sum=0,alpha_count=0;'
+         'for(size_t i=0;i+32<=original->vertices.size();i+=32){unsigned spec;std::memcpy(&spec,original->vertices.data()+i+20,4);'
+         'alpha_sum+=spec>>24;++alpha_count;}'
+         'if(!alpha_count)return;preview_specular=((alpha_sum+alpha_count/2)/alpha_count)<<24;}')
     edit('mesh_override_stage.inc', 'auto node_to_camera=override_matrix(load(pointer));',
          'auto node_to_camera=preview?o.scope.preview_camera:override_matrix(load(pointer));')
     edit('mesh_override_stage.inc', 'auto state_=snapshot(*device);',

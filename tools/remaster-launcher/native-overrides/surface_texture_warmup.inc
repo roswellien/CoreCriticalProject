@@ -50,6 +50,7 @@ void surface_texture_prewarm(mw34::vkscene::Scene& scene) {
         if(already_bound(key) || (host.sren&&host.sren->current(key,texture.hash,texture.width,texture.height)))continue;
         const auto bytes=cost(texture.width,texture.height);
         if(bytes>remaining){++budgetSkipped;continue;}
+        surface_normals_require_image(index);
         vs::TextureRef ref{};ref.key=key;ref.hash=texture.hash;ref.width=texture.width;ref.height=texture.height;
         ref.format=vs::TexFormat::rgba8888;ref.pixels32=texture.pixels32;
         scene.textures.push_back(std::move(ref));remaining-=bytes;preparedBytes+=bytes;++normals;

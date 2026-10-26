@@ -60,9 +60,18 @@ namespace MW3RemasterLauncher.Core
             Directory.CreateDirectory(session);
             LastLogPath = Path.Combine(session, "launcher.log");
             File.WriteAllText(LastLogPath, "Launcher " + typeof(GameRunner).Assembly.GetName().Version + Environment.NewLine);
-            try { return LaunchGameCore(settings, activeModDirs, session, logCallback); }
+            var gate = GameUpdateGate.Acquire(_dataRoot);
+            try
+            {
+                var process = LaunchGameCore(settings, activeModDirs, session, logCallback);
+                process.Exited += (_, _) => gate.Dispose();
+                process.EnableRaisingEvents = true;
+                if (process.HasExited) gate.Dispose();
+                return process;
+            }
             catch (Exception ex)
             {
+                gate.Dispose();
                 File.AppendAllText(LastLogPath, "ERROR: " + ex.Message + Environment.NewLine);
                 throw;
             }
@@ -142,6 +151,9 @@ namespace MW3RemasterLauncher.Core
                 }
             }
             ApplyContentSelection(profile, activeModDirs, settings.LocalCdAudio, runDir, validation.GameDirectory);
+            // Photo mode writes screenshots, replays and videos beneath the player's selected game installation.
+            profile["native"]!["runtime_environment"]!["MW34_PHOTO_REPLAY_DIR"] =
+                Path.GetFullPath(validation.GameDirectory);
             profile["native"]!["launch_session_directory"] = Path.GetFullPath(runDir);
             new ControlProfiles(_dataRoot).PrepareLaunch(profile, _dataRoot, validation.GameDirectory);
             new ControllerProfiles(_dataRoot).PrepareLaunch(profile, runDir);
@@ -218,6 +230,7 @@ namespace MW3RemasterLauncher.Core
             profile["native"]!["runtime_environment"] ??= new JsonObject();
             var skinEnvironment = profile["native"]!["runtime_environment"]!.AsObject();
             skinEnvironment.Remove("MW34_ADDITIONAL_SKINS");
+            skinEnvironment.Remove("MW34_ADDITIONAL_CHASSIS");
             skinEnvironment["MW34_SKIN_PREFERENCES"] = Path.Combine(LauncherPaths.DataRoot, "skins", "mw3.ini");
             ApplyEnvironmentSelection(profile, environmentRoots, true, true);
         }

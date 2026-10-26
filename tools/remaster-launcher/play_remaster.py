@@ -64,6 +64,7 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         config['native'].pop('sun_preset', None)
     installed_packs = "prepared_pack_roots" in config.get("native", {})
     prepared_profile = None
+    chassis_records = []
     if installed_packs:
         if backend != "native" or registry_path is not None:
             raise RuntimeError("Prepared mech packs require the native backend and cannot mix legacy registries")
@@ -71,7 +72,7 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         roots = [] if original_models else config["native"]["prepared_pack_roots"]
         if not isinstance(roots, list) or len(roots) > 128 or any(not isinstance(p, str) for p in roots):
             raise RuntimeError("Invalid installed pack roots")
-        ready, bindings = compose(roots, config["native"], verification)
+        ready, bindings = compose(roots, config["native"], verification, chassis_records)
         config["native"]["runtime_environment"] = bindings
         prepared_profile = config
         offline = []
@@ -340,6 +341,7 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         asset_output=asset_output,
         prepared_profile=prepared_profile,
         environment_packs=environment_packs,
+        chassis_records=chassis_records,
     )
 
 
@@ -418,10 +420,14 @@ def main():
             verification.save()
             startup_progress(f'Content checks complete: {verification.reused} unchanged, {verification.hashed} fully checked.')
         lighting_profile = p.get('prepared_profile') or read_json(args.profile)
-        lighting_config = lighting_profile.get("native", {}).get("sun_preset")
+        native_lighting = lighting_profile.get("native", {})
+        lighting_config = native_lighting.get("sun_preset")
+        presentation_off = native_lighting.get("presentation", {}).get("dynamic_lighting") is False
         if args.lighting_preset and p["backend"] != "native":
             raise RuntimeError("Lighting presets require the native renderer")
-        if p["backend"] == "native" and (lighting_config or args.lighting_preset):
+        if args.lighting_preset and presentation_off:
+            raise RuntimeError("Lighting presets require Dynamic Lighting to be enabled")
+        if p["backend"] == "native" and not presentation_off and (lighting_config or args.lighting_preset):
             # The selected pack catalog must also reach the read-only resolver;
             # the original GUI profile still contains the previous selection.
             resolved = subprocess.run(
@@ -570,12 +576,20 @@ def main():
         if p['backend'] == 'native':
             from prepared_skin_packs import write_catalog, CATALOG_KEY
             environment.pop(CATALOG_KEY, None)
-            skin_bindings = write_catalog(p['models'], args.asset_output or p['asset_output'])
+            skin_bindings = write_catalog(p['models'] + p.get('chassis_records', []), args.asset_output or p['asset_output'])
             environment.update(skin_bindings)
             if p.get('prepared_profile') is not None:
                 native = p['prepared_profile']['native']
                 native.setdefault('runtime_environment', {}).pop(CATALOG_KEY, None)
                 native['runtime_environment'].update(skin_bindings)
+            from prepared_chassis_packs import prepare as prepare_chassis, CATALOG_KEY as CHASSIS_KEY
+            environment.pop(CHASSIS_KEY, None)
+            chassis_bindings = prepare_chassis(p.get('chassis_records', []), args.game_exe or ROOT / 'MW3/Mech3.exe',
+                                               args.asset_output or p['asset_output'] or ROOT / 'local/remaster/prepared', environment)
+            environment.update(chassis_bindings)
+            if p.get('prepared_profile') is not None:
+                native['runtime_environment'].pop(CHASSIS_KEY, None)
+                native['runtime_environment'].update(chassis_bindings)
         if p.get("prepared_profile") is not None:
             # PowerShell applies runtime_environment after preparation. Give it the
             # composed session profile so stale developer mech paths cannot return.

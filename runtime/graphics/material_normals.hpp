@@ -1,4 +1,5 @@
 #pragma once
+#include "normal_codec.hpp"
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -58,7 +59,7 @@ struct NormalPack {
 // batch unperturbed (glass, constants or an intentionally absent map).
 // BWNRM1 remains readable; its glass exception uses its material name, not slot 3.
 inline NormalPack read_normals(std::istream &input, const std::vector<std::string> &materials) {
-    // Read from the stream's current position; BWSNR2 places its BWNRM2 payload
+    // Read from the stream's current position; BWSNR2/3 places its BWNRM payload
     // immediately after a source-surface header. Counts and aggregate pixel bytes
     // are bounded before allocation. Truncation/trailing bytes fail visibly.
     auto fail = [] { throw std::runtime_error("Invalid normal-map sidecar"); };
@@ -78,7 +79,8 @@ inline NormalPack read_normals(std::istream &input, const std::vector<std::strin
     };
     char magic[8];
     bytes(magic, 8);
-    const bool version2 = std::memcmp(magic, "BWNRM2\0\0", 8) == 0;
+    const bool compressed = std::memcmp(magic, "BWNRM3\0\0", 8) == 0;
+    const bool version2 = compressed || std::memcmp(magic, "BWNRM2\0\0", 8) == 0;
     if (!version2 && std::memcmp(magic, "BWNRM1\0\0", 8))
         fail();
     const auto batches = u32(), count = u32();
@@ -112,7 +114,17 @@ inline NormalPack read_normals(std::istream &input, const std::vector<std::strin
         if (total > 256ULL * 1024 * 1024)
             fail();
         image.pixels.resize(std::size_t(size / 4));
-        bytes(image.pixels.data(), std::size_t(size));
+        if (compressed) {
+            const auto encoded_size = u64();
+            if (!encoded_size || encoded_size > size * 2)
+                fail();
+            std::vector<unsigned char> encoded(static_cast<std::size_t>(encoded_size));
+            bytes(encoded.data(), encoded.size());
+            decode_normal_pixels(encoded, reinterpret_cast<unsigned char *>(image.pixels.data()),
+                                 static_cast<std::size_t>(size));
+        } else {
+            bytes(image.pixels.data(), std::size_t(size));
+        }
         if (version2 && normal_hash(image.pixels.data(), std::size_t(size)) != image.hash)
             fail();
         pack.images.push_back(std::move(image));
@@ -145,8 +157,8 @@ struct SurfaceNormals {
     NormalPack pack;
     std::map<SurfaceKey, std::uint32_t> bindings;
 };
-// Authored catalogs can span small pages while retaining the original single
-// BWSNR2 sidecar contract. Enhanced host catalogs have a bounded 512 MiB
+// Authored catalogs can span small pages using BWSNR2 or lossless BWSNR3.
+// Enhanced host catalogs have a bounded 512 MiB
 // aggregate budget (matching automatic world normals); each page stays within
 // its original 256 MiB limit. Guest image/resource limits are unchanged.
 inline constexpr std::uint64_t authored_normal_budget = 512ULL * 1024 * 1024;
@@ -162,7 +174,7 @@ surface_normal_catalog_paths(const std::filesystem::path &path) {
     char magic[8];
     if (!input.read(magic, 8))
         fail();
-    if (!std::memcmp(magic, "BWSNR2\0\0", 8))
+    if (!std::memcmp(magic, "BWSNR2\0\0", 8) || !std::memcmp(magic, "BWSNR3\0\0", 8))
         return {path};
     if (std::memcmp(magic, "MW34SNA1", 8))
         fail();
@@ -226,7 +238,7 @@ read_surface_normal_header(std::istream &input) {
     };
     char magic[8];
     bytes(magic, 8);
-    if (std::memcmp(magic, "BWSNR2\0\0", 8))
+    if (std::memcmp(magic, "BWSNR2\0\0", 8) && std::memcmp(magic, "BWSNR3\0\0", 8))
         fail();
     const auto count = u32();
     if (!count || count > 256)

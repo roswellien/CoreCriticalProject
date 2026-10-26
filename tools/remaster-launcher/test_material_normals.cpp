@@ -43,6 +43,11 @@ struct SurfaceFixture {
             throw std::runtime_error("Fixture read out of bounds");
         std::memcpy(out, memory.data() + address, size);
     }
+    void surface_read(const VSurfaceRec &surface, unsigned offset, void *out, unsigned size) {
+        if (std::uint64_t(surface.mem) + offset > memory.size())
+            throw std::runtime_error("Fixture surface offset out of bounds");
+        get_bytes(surface.mem + offset, out, size);
+    }
 #include "native-overrides/surface_normals_stage.inc"
 };
 
@@ -92,9 +97,87 @@ static bool rejected(const std::string &bytes, const std::vector<std::string> &n
 }
 int main(int argc, char **argv) {
     try {
+        {
+            auto compressed = pack("Armor");
+            compressed[5] = '3';
+            compressed.resize(compressed.size() - 4);
+            u32(compressed, 5);
+            u32(compressed, 0);
+            const unsigned char encoded[]{3, 128, 128, 255, 255};
+            compressed.append(reinterpret_cast<const char *>(encoded), sizeof encoded);
+            auto decoded = read(compressed, {"Armor", "Glass"});
+            require(decoded.images[0].pixels[0] == 0xffff8080U &&
+                        decoded.bindings[1] == no_normal,
+                    "Compressed normal changed channels/exclusions");
+            for (std::size_t size = 0; size < compressed.size(); ++size)
+                require(rejected(compressed.substr(0, size), {"Armor", "Glass"}),
+                        "Compressed truncation accepted");
+            auto invalid = compressed;
+            invalid[80] = char(255);
+            require(rejected(invalid, {"Armor", "Glass"}), "Oversized run accepted");
+            invalid = compressed;
+            invalid.back() = 0;
+            require(rejected(invalid, {"Armor", "Glass"}), "Decoded hash mismatch accepted");
+            require(rejected(compressed + "x", {"Armor", "Glass"}),
+                    "Compressed trailing bytes accepted");
+        }
+        if (argc == 3 && std::string(argv[1]) == "--world-catalog-cache") {
+            environment("MW34_SURFACE_NORMALS", "");
+            environment("MW34_WORLD_NORMALS", argv[2]);
+            environment("MW34_NORMAL_MAPS", "1");
+            SurfaceFixture fixture;
+            fixture.surface_normals_load();
+            std::uint64_t peak{};
+            size_t slots{}, evictions{};
+            for (unsigned pass = 0; pass < 2; ++pass) {
+                for (size_t page = 0; page < fixture.surface_normals.pages.size(); ++page) {
+                    std::vector<bool> loaded;
+                    for (const auto &entry : fixture.surface_normals.pages)
+                        loaded.push_back(entry.loaded);
+                    fixture.surface_normals_load_page(page);
+                    std::uint64_t retained{};
+                    for (size_t i = 0; i < fixture.surface_normals.pages.size(); ++i) {
+                        const auto &entry = fixture.surface_normals.pages[i];
+                        if (loaded[i] && !entry.loaded)
+                            ++evictions;
+                        for (int index : entry.normal_indices) {
+                            const auto &texture = fixture.override_data.normal_textures.at(size_t(index));
+                            require(texture.pixels32.size() == (entry.loaded ?
+                                        size_t(texture.width) * texture.height : 0),
+                                    "Page state and retained normal pixels disagree");
+                            retained += texture.pixels32.size() * 4;
+                        }
+                    }
+                    require(retained == fixture.surface_normals.world_bytes &&
+                                retained <= 512ULL * 1024 * 1024,
+                            "Retained world normal cache exceeded its fixed budget");
+                    peak = std::max(peak, retained);
+                }
+                if (!pass)
+                    slots = fixture.override_data.normal_textures.size();
+                else
+                    require(slots == fixture.override_data.normal_textures.size(),
+                            "Second catalog traversal appended normal slots");
+            }
+            std::cout << "World CPU cache: pages " << fixture.surface_normals.pages.size()
+                      << " traversals 2 slots " << slots << " evictions " << evictions
+                      << " peak retained bytes " << peak << '\n';
+            return 0;
+        }
+        if (argc == 3 && std::string(argv[1]) == "--surface-file") {
+            std::ifstream input(argv[2], std::ios::binary);
+            const auto surface = read_surface_normals(input);
+            std::cout << "Decoded bindings " << surface.bindings.size() << " images "
+                      << surface.pack.images.size() << '\n';
+            for (const auto &image : surface.pack.images)
+                std::cout << image.width << 'x' << image.height << " hash " << image.hash << '\n';
+            return 0;
+        }
         if (argc == 2 && (std::string(argv[1]) == "--world-pages" ||
+                          std::string(argv[1]) == "--world-pages-compressed" ||
                           std::string(argv[1]) == "--world-pages-off")) {
             const bool disabled = std::string(argv[1]) == "--world-pages-off";
+            const bool compressed = std::string(argv[1]) == "--world-pages-compressed";
             const auto folder =
                 std::filesystem::temp_directory_path() /
                 ("mw34-world-normals-" +
@@ -110,7 +193,7 @@ int main(int argc, char **argv) {
             unsigned char colour[10]{};
             const auto source_hash = normal_hash(colour, sizeof colour);
             auto page = [&](std::uint64_t first) {
-                std::string out("BWSNR2\0\0", 8);
+                std::string out(compressed ? "BWSNR3\0\0" : "BWSNR2\0\0", 8);
                 u32(out, 2);
                 for (unsigned i = 0; i < 2; ++i) {
                     u32(out, 5);
@@ -122,7 +205,16 @@ int main(int argc, char **argv) {
                     name.resize(32, 0);
                     out += name;
                 }
-                return out + pack("Armor");
+                auto pixels = pack("Armor");
+                if (compressed) {
+                    pixels[5] = '3';
+                    pixels.resize(pixels.size() - 4);
+                    u32(pixels, 5);
+                    u32(pixels, 0);
+                    const unsigned char encoded[]{3, 128, 128, 255, 255};
+                    pixels.append(reinterpret_cast<const char *>(encoded), sizeof encoded);
+                }
+                return out + pixels;
             };
             auto write = [&](const std::filesystem::path &name, const std::string &data) {
                 std::ofstream file(folder / name, std::ios::binary);
@@ -149,6 +241,59 @@ int main(int argc, char **argv) {
                     "Unreferenced normal page was loaded");
             require(fixture.synchronizations == 1, "World identity was rehashed per draw");
             if (!disabled) {
+                SurfaceFixture cache;
+                require(cache.surface_normal_index(surface) == 0, "Initial cached normal missing");
+                cache.surface_normals_load_page(1, 4);
+                require(cache.surface_normals.world_bytes == 4 &&
+                            !cache.surface_normals.pages[0].loaded &&
+                            cache.override_data.normal_textures[0].pixels32.empty(),
+                        "Retained CPU normal pixels were not evicted");
+                // A valid replacement payload with different pixels/hash must
+                // not silently change a stable slot following eviction.
+                auto replacement = page(source_hash);
+                replacement[replacement.size() - 4] ^= 1;
+                const unsigned char changed_pixel[]{129, 128, 255, 255};
+                const auto changed_hash = normal_hash(changed_pixel, 4);
+                for (unsigned i = 0; i < 8; ++i)
+                    replacement[180 + i] = char(changed_hash >> (i * 8));
+                write("page-0.bin", replacement);
+                require(cache.surface_normal_index(surface) == 0 &&
+                            !cache.surface_normals.pages[0].loaded &&
+                            cache.surface_normals.world_bytes == 4,
+                        "Identity-only lookup needlessly reloaded an evicted page");
+                bool reload_refused = false;
+                try { cache.surface_normals_require_image(0); }
+                catch (const std::runtime_error &) { reload_refused = true; }
+                require(reload_refused && cache.surface_normals.world_bytes == 4 &&
+                            cache.override_data.normal_textures.size() == 2,
+                        "Changed normal payload accepted during cache reload");
+                write("page-0.bin", page(source_hash));
+                cache.surface_normals_require_image(0);
+                require(cache.surface_normal_index(surface) == 0 &&
+                            cache.override_data.normal_textures.size() == 2 &&
+                            cache.override_data.normal_textures[0].pixels32[0] == 0xffff8080U &&
+                            cache.synchronizations == 1,
+                        "Cached surface did not restore its exact stable normal slot");
+
+                write("page-2.bin", page(source_hash + 4));
+                write("world.txt", "MW34SNP1\npage-0.bin\npage-1.bin\npage-2.bin\n");
+                SurfaceFixture lru;
+                lru.surface_normals_load();
+                lru.surface_normals_load_page(0, 8);
+                lru.surface_normals_load_page(1, 8);
+                lru.surface_normals_load_page(0, 8); // Touch the first page.
+                lru.surface_normals_load_page(2, 8);
+                require(lru.surface_normals.world_bytes == 8 &&
+                            lru.surface_normals.pages[0].loaded &&
+                            !lru.surface_normals.pages[1].loaded &&
+                            lru.surface_normals.pages[2].loaded,
+                        "World normal eviction did not retain the recently used page");
+                lru.surface_normals_load_page(1, 8);
+                require(lru.surface_normals.world_bytes == 8 &&
+                            lru.override_data.normal_textures.size() == 3 &&
+                            lru.surface_normals.pages[1].normal_indices[0] == 1,
+                        "Reload appended or reassigned a normal slot");
+                write("world.txt", "MW34SNP1\npage-0.bin\npage-1.bin\n");
                 auto authored = page(source_hash);
                 for (unsigned i = 0; i < 4; ++i)
                     authored[132 + i] = char(-1); // explicit first-material exclusion

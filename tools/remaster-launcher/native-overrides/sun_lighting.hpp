@@ -285,7 +285,9 @@ inline Uniform uniform(const std::array<float,12>& normal,const Settings& s) {
     Uniform u;u.normal=normal;
     u.direction={float(std::cos(el)*std::cos(az)),float(std::sin(el)),float(std::cos(el)*std::sin(az)),s.strength};
     u.color={s.color[0],s.color[1],s.color[2],0};
-    u.ambient={s.ambient*s.ambient_color[0],s.ambient*s.ambient_color[1],s.ambient*s.ambient_color[2],s.normals?1.f:0.f};
+    // Ambient alpha is a shader diagnostic switch, not the normal-map enable flag.
+    // Setting it for normal mapping replaces the textured result with RGB normals.
+    u.ambient={s.ambient*s.ambient_color[0],s.ambient*s.ambient_color[1],s.ambient*s.ambient_color[2],0};
     u.extra={0,s.normal_strength,s.shadow_debug?1.f:0.f,0};
     u.sky_tint={s.sky_tint[0],s.sky_tint[1],s.sky_tint[2],float(s.sky_source)};
     u.sky_glow={s.glow_color[0],s.glow_color[1],s.glow_color[2],s.glow_strength};

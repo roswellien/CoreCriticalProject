@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "catalog_url": "https://core-critical-updates.jcblackwell84.workers.dev/channels/playtest/catalog.json",
+  "channel": "playtest",
+  "delivery_policy": "public-readonly-v1",
+  "approved_hosts": ["core-critical-updates.jcblackwell84.workers.dev"]
+}

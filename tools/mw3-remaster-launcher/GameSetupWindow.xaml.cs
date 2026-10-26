@@ -11,6 +11,7 @@ public partial class GameSetupWindow : Window
     public string? GameDirectory { get; private set; }
     public string[] SelectedPacks { get; private set; } = Array.Empty<string>();
     public GraphicsPreferences? SelectedGraphics { get; private set; }
+    public bool AutomaticUpdateChecks => SetupAutomaticUpdateChecks.IsChecked == true;
     private bool _busy;
     private CancellationTokenSource? _nativePreparation;
     private string? _verifiedDirectory;
@@ -22,8 +23,9 @@ public partial class GameSetupWindow : Window
         _dataRoot = dataRoot ?? LauncherPaths.DataRoot;
         InitializeComponent();
         SetupGraphics.Load(settings ?? new LauncherSettings());
+        SetupAutomaticUpdateChecks.IsChecked = settings?.AutomaticUpdateChecks == true;
         ExistingPath.Text = existingPath ?? GameValidator.AutoDetectGameDirectory() ?? "";
-        DestinationPath.Text = Path.Combine(_dataRoot, "OriginalGame");
+        DestinationPath.Text = LauncherPaths.SuggestedGameDirectory();
         ShowStep(0);
         if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
             PreparationNote.Text = "The native game is already installed. This step only installs or verifies your original game files; no game-code compilation is needed.";
@@ -117,8 +119,8 @@ public partial class GameSetupWindow : Window
     }
     private void BrowseDestination(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFolderDialog { Title = "Choose the parent folder for a new MW3-Original folder" };
-        if (dialog.ShowDialog(this) == true) DestinationPath.Text = Path.Combine(dialog.FolderName, "MW3-Original");
+        var dialog = new OpenFolderDialog { Title = "Choose where to create the MechWarrior 3 folder" };
+        if (dialog.ShowDialog(this) == true) DestinationPath.Text = Path.Combine(dialog.FolderName, LauncherPaths.GameFolderName);
     }
     private void CancelSetup(object sender, RoutedEventArgs e)
     {

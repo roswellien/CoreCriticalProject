@@ -45,7 +45,7 @@ class LauncherDispatchTests(unittest.TestCase):
             self.assertEqual(actual['MW34_REMASTER_BANKS'],'prepared-banks.bin')
             self.assertNotIn('MW34_ORION_MESH',actual)
 
-    def run_launch(self, *extra):
+    def run_launch(self, *extra, dynamic_lighting=None):
         graphics = dict(width=3440, height=1440, aa="fxaa", af=16, window_mode="fullscreen")
         planned = dict(
             backend="native",
@@ -63,6 +63,9 @@ class LauncherDispatchTests(unittest.TestCase):
             prepare=lambda *a, **kw: {"MW34_BUSHWACKER_TEST": "prepared-mesh.bin"}
         )
         executable = Path(__file__).resolve()
+        native_profile = {"executable": "native.exe", "sun_preset": {"default": "sunset", "source": "authored-presets.json", "map": "BIG LAKE"}}
+        if dynamic_lighting is not None:
+            native_profile["presentation"] = {"dynamic_lighting": dynamic_lighting}
         with (
             patch.object(
                 sys,
@@ -73,9 +76,7 @@ class LauncherDispatchTests(unittest.TestCase):
             patch.object(
                 play_remaster,
                 "read_json",
-                return_value={
-                    "native": {"executable": "native.exe", "sun_preset": {"default": "sunset", "source": "authored-presets.json", "map": "BIG LAKE"}}
-                },
+                return_value={"native": native_profile},
             ),
             patch.dict(sys.modules, {"native_assets": assets}),
             patch.dict(os.environ, {"MW34_STALE_MODEL": "wrong", "MW34_WIDTH": "1920"}),
@@ -123,6 +124,12 @@ class LauncherDispatchTests(unittest.TestCase):
         _, call, _ = self.run_launch("--lighting-preset", "sunset")
         command = call.call_args.args[0]
         self.assertEqual(command[command.index("-LightingPreset") + 1], "sunset")
+
+    def test_dynamic_lighting_off_ignores_pack_sun_preset(self):
+        with patch.object(play_remaster.subprocess, "run") as resolve:
+            _, call, _ = self.run_launch(dynamic_lighting=False)
+        self.assertNotIn("-LightingPreset", call.call_args.args[0])
+        resolve.assert_not_called()
 
 
 if __name__ == "__main__":

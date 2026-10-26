@@ -40,11 +40,25 @@ namespace MW3RemasterLauncher
                 var basePath = AppDomain.CurrentDomain.BaseDirectory;
                 var launcherExe = Path.Combine(basePath, "Core Critical Launcher.exe");
                 var artworkDir = Path.Combine(basePath, "Assets", "Plates");
-                SteamHelper.AddToSteam(launcherExe, artworkDir);
+                var success = true;
+                try { SteamHelper.AddToSteam(launcherExe, artworkDir); }
+                catch (Exception error)
+                {
+                    success = false;
+                    try
+                    {
+                        Directory.CreateDirectory(LauncherPaths.DataRoot);
+                        File.WriteAllText(Path.Combine(LauncherPaths.DataRoot, "steam-integration.log"), error.Message);
+                    }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                    if (!argsList.Contains("--silent", StringComparer.OrdinalIgnoreCase))
+                        MessageBox.Show(error.Message, "Steam integration", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
 
                 if (argsList.Contains("--silent", StringComparer.OrdinalIgnoreCase))
                 {
-                    Shutdown(0);
+                    Shutdown(success ? 0 : 1);
                     return;
                 }
             }

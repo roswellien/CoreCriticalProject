@@ -57,10 +57,16 @@ def environment(host, selected, bindings):
     result.pop('MW34_MISSION_ENVIRONMENTS', None)
     if not enabled:
         return result
-    # With no environment pack the original vertex lighting/sky/weather stays
-    # intact. The receiver starts at identity and adds actual dynamic lights.
+    # Before a campaign map loads, the receiver starts at identity and adds
+    # actual dynamic lights. Campaign maps use the host's authored settings.
+    # The native host contains validated built-in settings for each campaign
+    # map. A selected environment pack may replace them, but does not enable
+    # per-map lighting itself. Without this flag the global Training/IA preview
+    # values can darken C1M1 and every other campaign map.
     result.update(MW34_SUN='1', MW34_SUN_STRENGTH='0', MW34_SUN_AMBIENT='1',
                   MW34_SUN_COLOR='1,1,1', MW34_SUN_AMBIENT_COLOR='1,1,1',
+                  MW34_CAMPAIGN_LIGHTING='1',
+                  MW34_WEATHER='1',
                   MW34_EFFECT_LIGHTS='1', MW34_FIXTURE_LIGHTS='1',
                   MW34_FIXTURE_SHADOWS='1' if host['presentation'].get('shadows', False) else '0')
     pack = next((p for p in selected.values() if 'effects' in p['registry']), None)
@@ -69,7 +75,9 @@ def environment(host, selected, bindings):
     else:
         result['MW34_EFFECT_LIGHT_CATALOG'] = catalog(host)
     if any(key in result for key in ('MW34_WORLD_NORMALS', 'MW34_SURFACE_NORMALS')):
-        result.update(MW34_NORMAL_MAPS='1', MW34_SUN_NORMALS='1',
+        # SUN_NORMALS selects RGB diagnostic visualization (ambient.w), not
+        # perturbation. Normal textures are enabled independently by NORMAL_MAPS.
+        result.update(MW34_NORMAL_MAPS='1', MW34_SUN_NORMALS='0',
                       MW34_SUN_NORMAL_STRENGTH=normal_strength,
                       MW34_SUN_GROUND_NORMAL_STRENGTH=ground_strength)
     # Existing v1 environment packs bundle their authored conditions. Separating

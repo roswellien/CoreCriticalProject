@@ -2,6 +2,21 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
+
+if(args.Length==1 && args[0]=="--steam-only") { SteamShortcutChecks.Run(); return; }
+if(args.Length==4 && args[0]=="--add-steam-shortcut")
+{
+    var result=SteamHelper.AddToSteam(args[1],args[2]);
+    File.WriteAllText(args[3],System.Text.Json.JsonSerializer.Serialize(result));
+    Console.WriteLine("Steam shortcut verified and installed for the selected local profile.");return;
+}
+
+if(args.Length==1 && args[0]=="--online-updates-only") { OnlineUpdateChecks.Run(); await UpdateDownloadChecks.Run(); return; }
+
+if(args.Length==1 && args[0]=="--chassis-only") { ChassisPackChecks.Run(); return; }
+if(args.Length==3 && args[0]=="--install-chassis-pack") { ChassisPackChecks.Install(args[1],args[2]); return; }
+
 if(args.Length==1 && args[0]=="--skins-only") { SkinPackChecks.Run(); return; }
 if(args.Length==3 && args[0]=="--install-skin-pack") { SkinPackChecks.Install(args[1],args[2]); return; }
 
@@ -62,6 +77,7 @@ if (args.Length == 1 && args[0] == "--runtime-layout-only")
 }
 if (args.Length == 1 && args[0] == "--content-only")
 {
+    ChassisPackChecks.Run();
     SkinPackChecks.Run();
     PackStorageChecks.Run();
     EnvironmentPackChecks.Run();
@@ -355,6 +371,9 @@ if (!profilesOnly)
 {
 PackStorageChecks.Run();
 UniversalLauncherChecks.Run();
+SteamShortcutChecks.Run();
+OnlineUpdateChecks.Run();
+await UpdateDownloadChecks.Run();
 EnvironmentPackChecks.Run();
 MusicPackChecks.Run();
 GraphicsPreferencesChecks.Run();

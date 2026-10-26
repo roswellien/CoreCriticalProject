@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -6,11 +8,12 @@ using Microsoft.Win32;
 
 namespace MW3RemasterLauncher.Core
 {
+    public sealed record SteamIntegrationResult(string Profile, uint AppId, string? Backup, bool Changed, string? ArtworkWarning);
+
     /// <summary>Locate Steam and write local non-Steam shortcut/artwork records.</summary>
     /// <remarks>
     /// This is an opt-in filesystem integration, not a Steam Web API or network client.
-    /// The legacy VDF writer's indexing/atomic-replacement limitations remain review items;
-    /// documentation does not establish safe updates to every existing Steam profile.
+    /// Steam must be closed before changing its local shortcut table.
     /// </remarks>
     public static class SteamHelper
     {
@@ -77,216 +80,120 @@ namespace MW3RemasterLauncher.Core
             return ~crc;
         }
 
-        /// <summary>Attempt shortcut/artwork installation in discovered local userdata profiles.</summary>
-        /// <returns>Whether at least one shortcut write reported success.</returns>
-        /// <remarks>The result does not mean Steam has reloaded or displayed the shortcut.</remarks>
-        public static bool AddToSteam(string launcherExePath, string artworkSourceDir)
+
+        public static void RequireSteamClosed()
         {
-            var steamPath = GetSteamPath();
-            if (string.IsNullOrEmpty(steamPath)) return false;
-
-            var userDataDir = Path.Combine(steamPath, "userdata");
-            if (!Directory.Exists(userDataDir)) return false;
-
-            var userFolders = Directory.GetDirectories(userDataDir);
-            if (userFolders.Length == 0) return false;
-
-            const string appName = "Core Critical Launcher";
-            var targetExe = $"\"{launcherExePath}\"";
-            var startDir = $"\"{Path.GetDirectoryName(launcherExePath)}\"";
-            uint appId = CalculateShortcutAppId(targetExe, appName);
-
-            bool successAny = false;
-
-            foreach (var userFolder in userFolders)
-            {
-                var configDir = Path.Combine(userFolder, "config");
-                if (!Directory.Exists(configDir))
-                {
-                    Directory.CreateDirectory(configDir);
-                }
-
-                var shortcutsPath = Path.Combine(configDir, "shortcuts.vdf");
-                if (WriteShortcutEntry(shortcutsPath, appName, targetExe, startDir, appId))
-                {
-                    successAny = true;
-                }
-
-                // Copy Grid artwork
-                var gridDir = Path.Combine(configDir, "grid");
-                if (!Directory.Exists(gridDir))
-                {
-                    Directory.CreateDirectory(gridDir);
-                }
-
-                InstallGridArtwork(gridDir, appId, artworkSourceDir);
-            }
-
-            return successAny;
-        }
-
-        private static bool WriteShortcutEntry(string vdfPath, string appName, string targetExe, string startDir, uint appId)
-        {
+            var processes = Process.GetProcessesByName("steam");
             try
             {
-                // Simple binary append/replacement for Valve KeyValues format
-                var memory = new MemoryStream();
-                using (var writer = new BinaryWriter(memory, Encoding.UTF8, true))
-                {
-                    // \x00 = Subkey start
-                    writer.Write((byte)0x00);
-                    WriteString(writer, "0"); // Entry index
-
-                    writer.Write((byte)0x02); // int32
-                    WriteString(writer, "appid");
-                    writer.Write((int)appId);
-
-                    writer.Write((byte)0x01); // string
-                    WriteString(writer, "AppName");
-                    WriteString(writer, appName);
-
-                    writer.Write((byte)0x01);
-                    WriteString(writer, "Exe");
-                    WriteString(writer, targetExe);
-
-                    writer.Write((byte)0x01);
-                    WriteString(writer, "StartDir");
-                    WriteString(writer, startDir);
-
-                    writer.Write((byte)0x01);
-                    WriteString(writer, "icon");
-                    WriteString(writer, targetExe);
-
-                    writer.Write((byte)0x01);
-                    WriteString(writer, "ShortcutPath");
-                    WriteString(writer, "");
-
-                    writer.Write((byte)0x01);
-                    WriteString(writer, "LaunchOptions");
-                    WriteString(writer, "");
-
-                    writer.Write((byte)0x02);
-                    WriteString(writer, "IsHidden");
-                    writer.Write(0);
-
-                    writer.Write((byte)0x02);
-                    WriteString(writer, "AllowDesktopConfig");
-                    writer.Write(1);
-
-                    writer.Write((byte)0x02);
-                    WriteString(writer, "AllowOverlay");
-                    writer.Write(1);
-
-                    writer.Write((byte)0x02);
-                    WriteString(writer, "OpenVR");
-                    writer.Write(0);
-
-                    writer.Write((byte)0x02);
-                    WriteString(writer, "Devkit");
-                    writer.Write(0);
-
-                    writer.Write((byte)0x01);
-                    WriteString(writer, "DevkitGameID");
-                    WriteString(writer, "");
-
-                    writer.Write((byte)0x02);
-                    WriteString(writer, "DevkitOverrideAppID");
-                    writer.Write(0);
-
-                    writer.Write((byte)0x02);
-                    WriteString(writer, "LastPlayTime");
-                    writer.Write(0);
-
-                    writer.Write((byte)0x00);
-                    WriteString(writer, "tags");
-                    writer.Write((byte)0x01);
-                    WriteString(writer, "0");
-                    WriteString(writer, "MechWarrior");
-                    writer.Write((byte)0x08); // End tags
-
-                    writer.Write((byte)0x08); // End entry
-                }
-
-                var entryBytes = memory.ToArray();
-
-                if (!File.Exists(vdfPath))
-                {
-                    // Create brand new shortcuts.vdf
-                    using var fs = File.Create(vdfPath);
-                    using var bw = new BinaryWriter(fs);
-                    bw.Write((byte)0x00);
-                    WriteString(bw, "shortcuts");
-                    bw.Write(entryBytes);
-                    bw.Write((byte)0x08); // End shortcuts
-                    bw.Write((byte)0x08); // End file
-                    return true;
-                }
-
-                // If file exists, check if appName already present
-                var existing = File.ReadAllBytes(vdfPath);
-                var existingStr = Encoding.UTF8.GetString(existing);
-                if (existingStr.Contains(appName))
-                {
-                    // Already registered
-                    return true;
-                }
-
-                // Insert entry before the final trailing 0x08 0x08 bytes
-                if (existing.Length >= 2 && existing[^2] == 0x08 && existing[^1] == 0x08)
-                {
-                    var updated = new byte[existing.Length - 2 + entryBytes.Length + 2];
-                    Buffer.BlockCopy(existing, 0, updated, 0, existing.Length - 2);
-                    Buffer.BlockCopy(entryBytes, 0, updated, existing.Length - 2, entryBytes.Length);
-                    updated[^2] = 0x08;
-                    updated[^1] = 0x08;
-                    File.WriteAllBytes(vdfPath, updated);
-                    return true;
-                }
-
-                return false;
+                if (processes.Length != 0)
+                    throw new InvalidOperationException("Exit Steam completely using Steam → Exit, then click Add to Steam again. Start Steam afterwards to load the shortcut.");
             }
-            catch
+            finally { foreach (var process in processes) process.Dispose(); }
+        }
+
+        public static string SelectProfile(string steamPath, uint activeUser = 0)
+        {
+            var userdata = Path.Combine(steamPath, "userdata");
+            PackStorage.EnsureNoLinks(userdata);
+            if (!Directory.Exists(userdata)) throw new DirectoryNotFoundException("Sign in to Steam once before adding the launcher.");
+            var profiles = Directory.GetDirectories(userdata).Where(p => uint.TryParse(Path.GetFileName(p), out var id) && id != 0 &&
+                Directory.Exists(Path.Combine(p, "config"))).ToArray();
+            var active = profiles.SingleOrDefault(p => Path.GetFileName(p) == activeUser.ToString());
+            if (active != null) return active;
+            if (profiles.Length == 1) return profiles[0];
+            var login = Path.Combine(steamPath, "config", "loginusers.vdf");
+            if (File.Exists(login))
             {
-                return false;
+                PackStorage.EnsureNoLinks(login);
+                if (new FileInfo(login).Length > 2 * 1024 * 1024) throw new InvalidDataException("Steam login profile file is too large.");
+                const string quoted = "\"(?:\\\\.|[^\"\\\\])*\"";
+                var accounts = Regex.Matches(File.ReadAllText(login), "\"(?<id>[0-9]{17})\"\\s*\\{(?<fields>(?:\\s*" + quoted + "\\s*" + quoted + "\\s*)*)\\}",
+                    RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+                var recent = new List<string>();
+                foreach (Match account in accounts)
+                {
+                    var pairs = Regex.Matches(account.Groups["fields"].Value, "(?<key>" + quoted + ")\\s*(?<value>" + quoted + ")",
+                        RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+                    if (!pairs.Any(pair => pair.Groups["key"].Value.Equals("\"MostRecent\"", StringComparison.OrdinalIgnoreCase) && pair.Groups["value"].Value == "\"1\"")) continue;
+                    var id = (uint)(ulong.Parse(account.Groups["id"].Value) & uint.MaxValue);
+                    recent.AddRange(profiles.Where(p => Path.GetFileName(p) == id.ToString()));
+                }
+                if (recent.Count == 1) return recent[0];
             }
+            throw new InvalidOperationException(profiles.Length == 0 ? "No Steam user profile is available. Sign in to Steam once, exit it, and retry." :
+                "Several Steam profiles are available. Sign in to the desired account, exit Steam, then retry so the shortcut is added to the right library.");
         }
 
-        private static void WriteString(BinaryWriter writer, string text)
+        public static SteamIntegrationResult AddToSteam(string launcherExePath, string artworkSourceDir)
         {
-            var bytes = Encoding.UTF8.GetBytes(text);
-            writer.Write(bytes);
-            writer.Write((byte)0x00); // null terminator
+            RequireSteamClosed();
+            var steam = GetSteamPath() ?? throw new DirectoryNotFoundException("Steam was not found. Install and sign in to Steam first.");
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam\ActiveProcess");
+            var active = key?.GetValue("ActiveUser") is int value ? unchecked((uint)value) : 0;
+            return InstallForProfile(SelectProfile(steam, active), launcherExePath, artworkSourceDir);
         }
 
-        private static void InstallGridArtwork(string gridDir, uint appId, string artworkSourceDir)
+        /// <summary>Selected-profile write path; also permits isolated integration fixtures.</summary>
+        public static SteamIntegrationResult InstallForProfile(string profile, string executable, string artwork)
         {
+            RequireSteamClosed();
+            executable = Path.GetFullPath(executable);
+            if (!File.Exists(executable) || !executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                throw new FileNotFoundException("The Core Critical launcher executable is missing. Repair the launcher installation first.");
+            var config = Path.Combine(Path.GetFullPath(profile), "config");
+            PackStorage.EnsureNoLinks(config); Directory.CreateDirectory(config);
+            var path = Path.Combine(config, "shortcuts.vdf");
+            var lockPath = Path.Combine(config, ".corecritical-shortcut-lock");
+            PackStorage.EnsureNoLinks(path); PackStorage.EnsureNoLinks(lockPath);
+            using var writerLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            byte[]? before = null;
+            if (File.Exists(path))
+            {
+                if (new FileInfo(path).Length > SteamShortcuts.MaximumBytes) throw new InvalidDataException("Steam shortcut file is too large.");
+                before = File.ReadAllBytes(path);
+            }
+            var icon = Path.Combine(Path.GetDirectoryName(executable)!, "Assets", "app-icon.ico");
+            var updated = SteamShortcuts.Upsert(before, executable, File.Exists(icon) ? icon : executable);
+            string? backup = null;
+            if (updated.Changed)
+            {
+                var temporary = Path.Combine(config, ".corecritical-shortcuts-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    { output.Write(updated.Bytes); output.Flush(true); }
+                    RequireSteamClosed();
+                    if (before == null)
+                    {
+                        if (File.Exists(path)) throw new IOException("Steam shortcuts changed while adding the launcher. Exit Steam and retry.");
+                        File.Move(temporary, path);
+                    }
+                    else
+                    {
+                        if (!File.ReadAllBytes(path).SequenceEqual(before)) throw new IOException("Steam shortcuts changed while adding the launcher. Exit Steam and retry.");
+                        backup = path + ".corecritical-backup-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8];
+                        File.Replace(temporary, path, backup);
+                    }
+                    if (!File.ReadAllBytes(path).SequenceEqual(updated.Bytes)) throw new IOException("Steam shortcut write did not verify.");
+                }
+                finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            }
+            string? warning = null;
             try
             {
-                var heroSrc = Path.Combine(artworkSourceDir, "hero-art.png");
-                var markSrc = Path.Combine(artworkSourceDir, "brand-mark.png");
-
-                // Steam capsule (portrait vertical)
-                var pDst = Path.Combine(gridDir, $"{appId}p.png");
-                // Steam hero banner (landscape)
-                var heroDst = Path.Combine(gridDir, $"{appId}_hero.png");
-                // Steam logo
-                var logoDst = Path.Combine(gridDir, $"{appId}_logo.png");
-                // Steam standard grid
-                var gridDst = Path.Combine(gridDir, $"{appId}.png");
-
-                if (File.Exists(heroSrc))
+                var grid = Path.Combine(config, "grid"); PackStorage.EnsureNoLinks(grid); Directory.CreateDirectory(grid);
+                foreach (var (source, suffix) in new[] { ("hero-art.png", "_hero.png"), ("hero-art.png", ".png"), ("hero-art.png", "p.png"), ("brand-mark.png", "_logo.png") })
                 {
-                    File.Copy(heroSrc, heroDst, true);
-                    File.Copy(heroSrc, gridDst, true);
-                    File.Copy(heroSrc, pDst, true);
-                }
-
-                if (File.Exists(markSrc))
-                {
-                    File.Copy(markSrc, logoDst, true);
+                    var from = Path.Combine(artwork, source); var to = Path.Combine(grid, updated.AppId + suffix);
+                    PackStorage.EnsureNoLinks(to);
+                    if (File.Exists(from) && !File.Exists(to)) File.Copy(from, to);
+                    else if (!File.Exists(from)) warning = "The shortcut is ready, but bundled artwork was not available.";
                 }
             }
-            catch { }
+            catch (IOException) { warning = "The shortcut is ready, but some Steam artwork could not be copied."; }
+            catch (UnauthorizedAccessException) { warning = "The shortcut is ready, but access to Steam artwork was denied."; }
+            return new(Path.GetFullPath(profile), updated.AppId, backup, updated.Changed, warning);
         }
     }
 }

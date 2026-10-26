@@ -1099,7 +1099,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   // are carried in); SET actions would change the host user's system settings and stop typed.
   if(n=="SystemParametersInfoA"){const unsigned act=arg(0),ui=arg(1),pv=arg(2),ini=arg(3);apis.back()+="("+std::to_string(act)+")";
    static const std::map<unsigned,unsigned>gets{{SPI_GETMOUSE,12},{SPI_GETKEYBOARDSPEED,4},{SPI_GETSCREENSAVETIMEOUT,4},{SPI_GETSCREENSAVEACTIVE,4},{SPI_GETKEYBOARDDELAY,4},{SPI_GETWORKAREA,16},
-    {SPI_GETFILTERKEYS,24},{SPI_GETTOGGLEKEYS,8},{SPI_GETSTICKYKEYS,8},{SPI_GETMOUSESPEED,4},{SPI_GETLOWPOWERACTIVE,4},{SPI_GETPOWEROFFACTIVE,4},{SPI_GETSCREENREADER,4},{SPI_GETMENUDROPALIGNMENT,4},{SPI_GETDRAGFULLWINDOWS,4}};
+    {SPI_GETFILTERKEYS,24},{SPI_GETTOGGLEKEYS,8},{SPI_GETSTICKYKEYS,8},{SPI_GETMOUSESPEED,4},{SPI_GETWHEELSCROLLLINES,4},{SPI_GETLOWPOWERACTIVE,4},{SPI_GETPOWEROFFACTIVE,4},{SPI_GETSCREENREADER,4},{SPI_GETMENUDROPALIGNMENT,4},{SPI_GETDRAGFULLWINDOWS,4}};
    const auto it=gets.find(act);if(it==gets.end())deny("SystemParametersInfoA action not modelled (SET actions would change host settings): "+std::to_string(act),act);
    const unsigned bytes=it->second;if(!writable(pv,bytes))deny("SystemParametersInfoA output outside the memory contract",pv);std::vector<unsigned char>buf(bytes);for(unsigned i=0;i<bytes;++i)buf[i]=runtime.memory().load<unsigned char>({pv+i});
    BOOL ok{};{LastError l(host);ok=::SystemParametersInfoA(act,ui,buf.data(),ini);}if(ok)for(unsigned i=0;i<bytes;++i)runtime.memory().store<unsigned char>({pv+i},buf[i]);return done(ok?1U:0U,4);}

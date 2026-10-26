@@ -87,7 +87,8 @@ def select(metadata, host, models, verification=None):
             prefix = 'MW34_' + chassis.upper()
             for lod, key in [('close', prefix + ('_TEST' if chassis == 'bushwacker' else '_MESH')),
                              ('distance', prefix + '_LOD1_MESH')]:
-                with Path(model['environment'][key]).open('rb') as stream:
+                mesh = model['visuals'][lod]['mesh'] if 'visuals' in model else model['environment'][key]
+                with Path(mesh).open('rb') as stream:
                     actual = hashlib.file_digest(stream, 'sha256').hexdigest()
                 if hashes[lod] != actual:
                     raise ValueError(f"Skin '{name}' does not match the enabled {chassis} {lod} mesh")

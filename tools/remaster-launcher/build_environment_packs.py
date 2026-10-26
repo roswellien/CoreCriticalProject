@@ -109,7 +109,9 @@ def build(profile_path,output):
             selection=host['sun_preset'];source=ROOT/selection['source']
             provenance[str(source)]=sha(source)
             catalog=json.loads(source.read_text(encoding='utf-8-sig'))
-            entry=dict(catalog['maps'][selection['map']]);entry['default']=selection['default']
+            # The pack owns its authored default. A developer profile may select
+            # a different preview preset without changing the shipped map.
+            entry=dict(catalog['maps'][selection['map']])
             lighting['maps']={selection['map']:entry}
         validate_lighting(lighting,operation)
         lighting_path=stage/'environment/lighting.json';write_json(lighting_path,lighting)
@@ -118,11 +120,12 @@ def build(profile_path,output):
             registry['detail'][role]=add('environment/detail/'+role+'.bin',env['MW34_'+role.upper()+'_NORMALS'],'BWSNR2')
         registry_path=stage/REGISTRY;write_json(registry_path,registry);add(REGISTRY,registry_path)
         title='Training' if operation=='training' else 'Operation '+operation[-1]
-        manifest=dict(schema_version=2, game_id="mw3",id='com.mw3remaster.textures.'+operation,name=title+' Textures and Lighting',version='1.1.0',author='MW3 Remaster Project',category='Textures',description='Prepared textures, normals, mission day/night, atmosphere and dynamic-light settings. Local playtest candidate.',provides=dict(textures=True,normal_maps=True),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',required_capabilities={'environment-resources':1}, reference_host_sha256=host['executable_sha256'],required_formats=['ZBD-texture-v1','BWSNR2','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1']),files=filetable)
+        version='1.1.1' if operation=='training' else '1.1.0'
+        manifest=dict(schema_version=2, game_id="mw3",id='com.mw3remaster.textures.'+operation,name=title+' Textures and Lighting',version=version,author='MW3 Remaster Project',category='Textures',description='Prepared textures, normals, mission day/night, atmosphere and dynamic-light settings. Local playtest candidate.',provides=dict(textures=True,normal_maps=True),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',required_capabilities={'environment-resources':1}, reference_host_sha256=host['executable_sha256'],required_formats=['ZBD-texture-v1','BWSNR2','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1']),files=filetable)
         if sum(p['bytes'] for p in filetable.values())>16*1024**3:raise ValueError('Pack exceeds installer budget')
         write_json(stage/'pack.json',manifest);prepared.append((operation,stage,sources,manifest))
     def package(item):
-        operation,stage,sources,manifest=item;path=output/(operation+'-textures-1.1.0.mw3pack');temporary=path.with_suffix('.partial')
+        operation,stage,sources,manifest=item;path=output/(operation+'-textures-'+manifest['version']+'.mw3pack');temporary=path.with_suffix('.partial')
         with zipfile.ZipFile(temporary,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=1,allowZip64=True) as archive:
             archive.write(stage/'pack.json','pack.json')
             for name,source in sources.items():

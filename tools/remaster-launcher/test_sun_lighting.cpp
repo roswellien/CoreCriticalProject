@@ -66,8 +66,9 @@ static void math(){
     require(n[0]==1&&n[4]==-2&&n[5]==1,"Shear inverse transpose");
     m=identity();m[0]=-1;n=mw34::sun::normal_matrix(m);require(n[0]==-1,"Mirrored normal transform");
     m[0]=0;bool rejected=false;try{mw34::sun::normal_matrix(m);}catch(...){rejected=true;}require(rejected,"Singular normal matrix rejected");
-    mw34::sun::Settings s;s.azimuth=0;s.elevation=30;
+    mw34::sun::Settings s;s.azimuth=0;s.elevation=30;s.normals=true;
     const auto u=mw34::sun::uniform(n,s);require(std::abs(u.direction[1]-.5f)<1e-6,"Sun uses world +Y up");
+    require(u.ambient[3]==0.f,"Normal mapping must not replace textured colour with normal diagnostics");
 }
 struct Tl {float x,y,z,rhw;unsigned color,spec;float u,v;};
 static Scene scene(){Scene s{};s.width=s.height=64;s.has_depth=true;s.color.assign(4096,0);s.depth.assign(4096,0);return s;}
@@ -88,7 +89,7 @@ static Draw quad(Scene& s,bool world,bool rotate,bool faceSun,bool fog=false){
     s.draws.push_back(d);s.order.push_back({false,0});return d;
 }
 int main(){try{
-    math();_putenv_s("MW34_GPU_MODELS","1");_putenv_s("MW34_SUN","1");
+    math();_putenv_s("MW34_GPU_MODELS","1");_putenv_s("MW34_SUN","1");_putenv_s("MW34_SUN_NORMALS","1");
     _putenv_s("MW34_SUN_AZIMUTH","0");_putenv_s("MW34_SUN_ELEVATION","30");
     _putenv_s("MW34_SUN_STRENGTH","1");_putenv_s("MW34_SUN_AMBIENT","0.25");
     CaptureFixture{}.run();

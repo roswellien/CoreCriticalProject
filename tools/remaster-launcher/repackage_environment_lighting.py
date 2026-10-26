@@ -28,20 +28,22 @@ def build(roots, profile_path, output):
         operation,pack=item
         data=dict(schema_version=1,missions={key:missions[key] for key in sorted(MISSIONS[operation])},maps={})
         if operation=='training':
-            selection=host['sun_preset'];entry=copy.deepcopy(training['maps'][selection['map']]);entry['default']=selection['default']
+            # Preserve the catalog's map default even when the build profile
+            # happens to be running a different preview preset.
+            selection=host['sun_preset'];entry=copy.deepcopy(training['maps'][selection['map']])
             data['maps']={selection['map']:entry}
         validate(data,operation)
         registry=copy.deepcopy(pack['registry']);previous_lighting=registry.get('lighting');registry['lighting']='environment/lighting.json'
         generated={REGISTRY:(json.dumps(registry,indent=2)+'\n').encode(),
                    'environment/lighting.json':(json.dumps(data,indent=2)+'\n').encode()}
-        manifest=json.loads((Path(pack['root'])/'pack.json').read_bytes());manifest['version']='1.1.0'
+        manifest=json.loads((Path(pack['root'])/'pack.json').read_bytes());manifest['version']='1.1.1' if operation=='training' else '1.1.0'
         if previous_lighting and previous_lighting!='environment/lighting.json':manifest['files'].pop(previous_lighting)
         manifest['native_payload']['reference_host_sha256']=host['executable_sha256']
         manifest['native_payload']['required_formats']=sorted(set(manifest['native_payload']['required_formats'])|{'MW34-lighting-v1'})
         for name,raw in generated.items():
             manifest['files'][name]=dict(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
         manifest['files']['environment/lighting.json']['format']='MW34-lighting-v1'
-        path=output/(operation+'-textures-1.1.0.mw3pack');partial=path.with_suffix('.partial')
+        path=output/(operation+'-textures-'+manifest['version']+'.mw3pack');partial=path.with_suffix('.partial')
         with zipfile.ZipFile(partial,'x',compression=zipfile.ZIP_DEFLATED,compresslevel=1,allowZip64=True) as archive:
             archive.writestr('pack.json',json.dumps(manifest,indent=2))
             for name,pin in manifest['files'].items():

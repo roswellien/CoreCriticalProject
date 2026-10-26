@@ -95,12 +95,19 @@ def apply(host):
         provider_text=provider_text.replace(anchor,
             '  if(bind_normal_idx<0&&(c.sun_tl||(c.model&&c.model->world))&&tex)'
             'if(auto*surface=vsurface(tex))bind_normal_idx=surface_normal_index(*surface);\n'+anchor)
+    # An evicted page's stable binding may still name an uploaded GPU texture.
+    # Restore CPU pixels only inside the existing upload-copy branch.
+    upload='r.pixels32=t.pixels32;'
+    if 'surface_normals_require_image(bind_normal_idx)' not in provider_text:
+        if provider_text.count(upload)!=1:raise ValueError('Missing unique normal pixel-copy anchor')
+        provider_text=provider_text.replace(upload,'{surface_normals_require_image(bind_normal_idx);r.pixels32=t.pixels32;}')
     # Surface-only materials must work with original models as well.
     updated=updated.replace('if(std::getenv("MW34_GROUND_NORMALS"))return true;',
                             'if(std::getenv("MW34_GROUND_NORMALS")||std::getenv("MW34_SURFACE_NORMALS"))return true;')
     updated=updated.replace('if(std::getenv("MW34_GROUND_NORMALS")||std::getenv("MW34_SURFACE_NORMALS"))return true;',
                             'if(std::getenv("MW34_GROUND_NORMALS")||std::getenv("MW34_SURFACE_NORMALS")||std::getenv("MW34_WORLD_NORMALS"))return true;')
     shutil.copyfile(Path(__file__).resolve().parents[2] / 'runtime/graphics/material_normals.hpp', host / 'material_normals.hpp')
+    shutil.copyfile(Path(__file__).resolve().parents[2] / 'runtime/graphics/normal_codec.hpp', host / 'normal_codec.hpp')
     shutil.copyfile(Path(__file__).parent / 'native-overrides/surface_normals_stage.inc',host / 'surface_normals_stage.inc')
     shutil.copyfile(Path(__file__).parent / 'native-overrides/world_normals_pages.inc',host / 'world_normals_pages.inc')
     stage.write_text(updated)

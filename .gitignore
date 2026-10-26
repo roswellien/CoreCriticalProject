@@ -1,5 +1,7 @@
 # User-owned media and proprietary input must never enter source control.
 /local/
+# Local installable asset packs and derived media.
+/assets/
 /MW3/
 /MW3-PiratesMoon/
 /MW4/

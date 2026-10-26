@@ -12,9 +12,15 @@ static class SkinPackChecks
         var manager = new PackManager(output);
         var installed = manager.InstallPack(archive);
         var skins = SkinPack.Read(installed.DirectoryPath, installed);
-        if (skins.Count != 1 || skins[0].Name != "Sommerset" || installed.Provides?.Mechs?.Count > 0)
-            throw new Exception("Sommerset installation did not preserve additive identity.");
-        Console.WriteLine("Unsigned Sommerset asset pack installed and verified: " + installed.DirectoryPath);
+        using var zip = ZipFile.OpenRead(archive);
+        using var registry = zip.GetEntry(SkinPack.Registry)!.Open();
+        using var document = JsonDocument.Parse(registry);
+        var expected = document.RootElement.GetProperty("skins").EnumerateArray().Select(row =>
+            new SkinPack.Skin(row.GetProperty("id").GetString()!, row.GetProperty("name").GetString()!,
+                row.GetProperty("chassis").GetString()!));
+        if (!skins.SequenceEqual(expected) || skins.Count == 0 || installed.Provides?.Mechs?.Count > 0)
+            throw new Exception("Skin installation did not preserve its declared additive identities.");
+        Console.WriteLine("Unsigned skin asset pack installed and verified: " + installed.DirectoryPath);
     }
 
     public static void Run()
@@ -48,6 +54,14 @@ static class SkinPackChecks
             catch(InvalidDataException) { }
             var host=JsonNode.Parse("""{"content_capabilities":{"additional-mech-skins":[1]}}""")!.AsObject();
             RuntimeContentCapabilities.Require(host,installed.NativePayload!,installed.Id);
+            var addedRegistry=JsonNode.Parse(registry)!.AsObject();
+            addedRegistry["skins"]![0]!["chassis"]="community.additional-mech-pack:additional-chassis";
+            var addedBytes=JsonSerializer.SerializeToUtf8Bytes(addedRegistry);
+            File.WriteAllBytes(Path.Combine(installed.DirectoryPath,SkinPack.Registry),addedBytes);
+            installed.Files![SkinPack.Registry]=new PackFile {Bytes=addedBytes.Length,
+                Sha256=Convert.ToHexString(SHA256.HashData(addedBytes)).ToLowerInvariant()};
+            if(SkinPack.Read(installed.DirectoryPath,installed).Single().Chassis!="community.additional-mech-pack:additional-chassis")
+                throw new Exception("Additional chassis skin identity was rejected.");
             File.WriteAllBytes(Path.Combine(installed.DirectoryPath,"payload.bin"),new byte[8]);
             try { SkinPack.Read(installed.DirectoryPath,installed);throw new Exception("Corrupt skin accepted."); }
             catch(InvalidDataException) { }

@@ -115,8 +115,9 @@ public static class PackStorage
             var ui = manifest.NativePayload?.Profile == UiPack.Profile;
             var cinematic = manifest.NativePayload?.Profile == CinematicPack.Profile;
             var skins = manifest.NativePayload?.Profile == SkinPack.Profile;
-            var registry = skins ? SkinPack.Registry : cinematic ? CinematicPack.Registry : ui ? UiPack.Registry : music ? MusicPack.Registry : environment ? "environment/environment.json" : "models/models.json";
-            if ((manifest.NativePayload?.Profile != "prepared-native-v1" && !environment && !music && !ui && !cinematic && !skins) || manifest.NativePayload!.PathBase != "pack-root" ||
+            var chassis = manifest.NativePayload?.Profile == ChassisPack.Profile;
+            var registry = chassis ? ChassisPack.Registry : skins ? SkinPack.Registry : cinematic ? CinematicPack.Registry : ui ? UiPack.Registry : music ? MusicPack.Registry : environment ? "environment/environment.json" : "models/models.json";
+            if ((manifest.NativePayload?.Profile != "prepared-native-v1" && !environment && !music && !ui && !cinematic && !skins && !chassis) || manifest.NativePayload!.PathBase != "pack-root" ||
                 manifest.NativePayload.Registry != registry || manifest.Files == null || manifest.Files.Count > 10000)
                 throw new InvalidDataException("Unsupported prepared-native pack contract.");
             var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pack.json" };
@@ -135,7 +136,7 @@ public static class PackStorage
         return manifest;
     }
 
-    private static void ValidateUniqueProperties(JsonElement value)
+    internal static void ValidateUniqueProperties(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Object)
         {
@@ -263,6 +264,8 @@ public static class PackStorage
                     throw new InvalidDataException("Unsupported model registry.");
                 if (manifest.NativePayload.Profile == SkinPack.Profile)
                     SkinPack.Read(stage, manifest);
+                else if (manifest.NativePayload.Profile == ChassisPack.Profile)
+                    ChassisPack.Read(stage, manifest);
                 else if (manifest.NativePayload.Profile == CinematicPack.Profile)
                     CinematicPack.Read(stage, manifest);
                 else if (manifest.NativePayload.Profile == UiPack.Profile)

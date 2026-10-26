@@ -30,6 +30,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" /> <!-- Top Custom Title Bar -->
                     <RowDefinition Height="Auto" /> <!-- Nav Bar Tabs -->
+                    <RowDefinition Height="Auto" /> <!-- Available updates -->
                     <RowDefinition Height="*" />    <!-- Main Content Area -->
                     <RowDefinition Height="Auto" /> <!-- Bottom Action Rail -->
                 </Grid.RowDefinitions>
@@ -86,7 +87,18 @@
             </Border>
 
             <!-- 3. Main Content Views Area -->
-            <Grid Grid.Row="2" Margin="24,20">
+            <Border x:Name="UpdateNotification" Grid.Row="2" Visibility="Collapsed"
+                    Background="#24291E" BorderBrush="{StaticResource BrushAmber}" BorderThickness="0,0,0,1" Padding="24,10">
+                <DockPanel LastChildFill="True">
+                    <Button DockPanel.Dock="Right" Content="Review updates…" Click="BtnLauncherUpdates_Click"
+                            Style="{StaticResource SecondaryButton}" Margin="16,0,0,0" VerticalAlignment="Center" />
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="TxtUpdateNotificationTitle" Text="Updates available" FontWeight="Bold" Foreground="{StaticResource BrushAmber}" />
+                        <TextBlock x:Name="TxtUpdateNotificationDetails" TextWrapping="Wrap" Margin="0,3,0,0" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+            <Grid Grid.Row="3" Margin="24,20">
 
                 <!-- VIEW 1: PLAY DASHBOARD -->
                 <Grid x:Name="ViewPlay" Visibility="Visible">
@@ -460,12 +472,17 @@
                                     <WrapPanel>
                                         <Button Content="Open Logs" Style="{StaticResource SecondaryButton}" Click="BtnOpenLogs_Click" Margin="0,0,12,0" />
                                         <Button Content="Export Report..." Style="{StaticResource SecondaryButton}" Click="BtnExportReport_Click" />
-                                        <Button Content="Core Critical Updates..." Style="{StaticResource SecondaryButton}" Click="BtnLauncherUpdates_Click" Margin="12,0,0,0" />
-                                        <Button Content="MW3 Updates..." Style="{StaticResource SecondaryButton}" Click="BtnGameUpdates_Click" Margin="12,0,0,0" />
+                                        <Button Content="Updates..." Style="{StaticResource SecondaryButton}" Click="BtnLauncherUpdates_Click" Margin="12,0,0,0" />
                                         <Button Content="Save Backups..." Style="{StaticResource SecondaryButton}" Click="BtnSaveBackups_Click" Margin="12,0,0,0" />
                                     </WrapPanel>
                                 </StackPanel>
                             </Border>
+
+                            <TextBlock Text="UPDATES" FontFamily="{StaticResource FontHeader}" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,10" />
+                            <CheckBox x:Name="ChkAutomaticUpdateChecks" Content="Automatically check for launcher and game updates"
+                                      Foreground="{StaticResource BrushInk}" Checked="AutomaticUpdateChecks_Changed" Unchecked="AutomaticUpdateChecks_Changed" />
+                            <TextBlock Text="Optional startup and 30-minute checks while idle. Downloads and installation always require your choice. When off, use Updates above to check manually."
+                                       TextWrapping="Wrap" Foreground="{StaticResource BrushMuted}" FontSize="12" Margin="0,8,0,24" />
 
                             <!-- Standalone Disc-Free Media Installer -->
                             <Border Background="#1C2220" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,20">
@@ -495,7 +512,7 @@
             </Grid>
 
             <!-- 4. Bottom Action Rail -->
-            <Border Grid.Row="3" Background="#101414" BorderBrush="{StaticResource BrushRule}" BorderThickness="0,1,0,0" Padding="20,10">
+            <Border Grid.Row="4" Background="#101414" BorderBrush="{StaticResource BrushRule}" BorderThickness="0,1,0,0" Padding="20,10">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />

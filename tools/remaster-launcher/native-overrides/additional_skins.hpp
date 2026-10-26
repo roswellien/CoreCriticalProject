@@ -19,7 +19,7 @@ inline std::vector<Addition> read_additions(std::istream& file) {
     char magic[8];bytes(magic,8);if(std::string(magic,8)!=std::string("BWSKIN1\0",8))fail();
     const auto count=number();if(!count||count>128)fail();
     std::vector<Addition> result;std::set<std::string> ids;
-    for(unsigned i=0;i<count;++i){Addition a{text(193),text(256),text(32),text(4096),text(4096)};
+    for(unsigned i=0;i<count;++i){Addition a{text(193),text(256),text(193),text(4096),text(4096)};
         if(a.id.find(':')==std::string::npos||!ids.insert(a.id).second)fail();
         for(const auto c:a.name)if(static_cast<unsigned char>(c)<32||static_cast<unsigned char>(c)>126)fail();
         result.push_back(std::move(a));}

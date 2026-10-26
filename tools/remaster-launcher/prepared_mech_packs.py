@@ -73,10 +73,10 @@ def canonical_pack_root(directory):
     return manifest.resolve(strict=True).parent
 
 
-def compose(roots, host, verification=None):
+def compose(roots, host, verification=None, chassis_records=None):
     """Return selected records and a clean runtime environment; first chassis wins."""
     environment = {k: v for k, v in host.get("runtime_environment", {}).items()
-                   if k not in ALL_MODEL_KEYS and k != 'MW34_ADDITIONAL_SKINS'}
+                   if k not in ALL_MODEL_KEYS and k not in ('MW34_ADDITIONAL_SKINS', 'MW34_ADDITIONAL_CHASSIS')}
     selected = {}
     metadata = []
     enabled_ids = set()
@@ -89,6 +89,10 @@ def compose(roots, host, verification=None):
         enabled_ids.add(ident)
         metadata.append((root, manifest))
     for root, manifest in metadata:
+        if manifest.get('native_payload', {}).get('profile') == 'additional-chassis-v1':
+            if chassis_records is None:
+                raise ValueError('Additional chassis packs require the current launcher coordinator')
+            continue
         if manifest.get('native_payload', {}).get('profile') == 'prepared-skins-v1':
             continue  # Additions compose after the winning chassis is known.
         # These prepared-resource packs currently define no dependency-version
@@ -187,6 +191,15 @@ def compose(roots, host, verification=None):
             raise ValueError("Pack chassis declaration differs from registry")
     for model in selected.values():
         environment.update(model["environment"])
+    added = []
+    if chassis_records is not None:
+        from prepared_chassis_packs import select as select_chassis
+        added = select_chassis(metadata, host, verification)
+        chassis_records.extend(added)
     from prepared_skin_packs import select
-    select(metadata, host, list(selected.values()), verification)
+    views = [dict(id=r['registration']['id'], visuals=r['registration']['visuals']) for r in added]
+    select(metadata, host, list(selected.values()) + views, verification)
+    for record, view in zip(added, views):
+        if 'additional_skins' in view:
+            record['additional_skins'] = view['additional_skins']
     return list(selected.values()), environment

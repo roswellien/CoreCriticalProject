@@ -56,13 +56,19 @@ def build(project_path, output):
         chassis=project['chassis'], mesh_sha256=meshes, textures=textures)])
     encode = lambda value: (json.dumps(value, indent=2) + '\n').encode('utf-8')
     add(REGISTRY, encode(registry))
+    chassis_name = project.get('chassis_name', 'Additional Mech' if ':' in project['chassis'] else project['chassis'].title())
+    if not isinstance(chassis_name, str) or not 1 <= len(chassis_name) <= 64 or any(ord(c)<32 for c in chassis_name):
+        raise ValueError('Invalid chassis display name')
+    capabilities = {'additional-mech-skins': 1}
+    if ':' in project['chassis']:
+        capabilities['additional-mech-chassis'] = 1
     manifest = dict(schema_version=2, game_id='mw3', id=project['pack_id'],
-                    name=project['name'] + ' — ' + project['chassis'].title() + ' Skin',
+                    name=project['name'] + ' — ' + chassis_name + ' Skin',
                     version=project['version'], author=project.get('author', 'Core Critical'),
-                    category='Mech Skins', description='Additional selectable '+project['name']+
-                    ' skin. Select it in Mech Lab. Preserves all existing skins. Requires a compatible enabled model pack.',
+                    category='Mech Skins', description=project.get('description', 'Additional selectable '+project['name']+
+                    ' skin. Select it in Mech Lab. Preserves all existing skins. Requires a compatible enabled model pack.'),
                     native_payload=dict(profile=PROFILE, registry=REGISTRY, path_base='pack-root',
-                                        required_formats=['BWTEX1'], required_capabilities={'additional-mech-skins': 1}),
+                                        required_formats=['BWTEX1'], required_capabilities=capabilities),
                     provides=dict(textures=True), files=files)
     (stage / 'pack.json').write_bytes(encode(manifest))
     archive = output / (project['skin_id'] + '-' + project['version'] + '.mw3pack')

@@ -107,6 +107,7 @@ namespace MW3RemasterLauncher
             if (Environment.GetCommandLineArgs().Contains("--setup-game", StringComparer.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(_settingsMgr.Current.GamePath) || !_settingsMgr.Current.InitialSetupCompleted)
                 ShowGameSetup();
+            StartUpdateNotifications();
         }
 
         private void InitializeGamePath()
@@ -177,22 +178,20 @@ namespace MW3RemasterLauncher
             }
         }
 
-        private void BtnGameUpdates_Click(object sender, RoutedEventArgs e)
+        private async void BtnGameUpdates_Click(object sender, RoutedEventArgs e)
         {
-            if (_nativeSessionActive || _assetInstallActive)
+            if (_assetInstallActive)
             {
                 MessageBox.Show(this, "Close the game and wait for asset installation to finish before changing versions.", "Game updates");
                 return;
             }
-            try { new UpdatesWindow(_basePath, _settingsMgr.Current.GamePath) { Owner = this }.ShowDialog(); }
-            catch (Exception error) { MessageBox.Show(this, error.Message, "Game updates"); }
-            ValidateGamePath();
+            await OpenOnlineUpdatesAsync();
         }
 
-        private void BtnLauncherUpdates_Click(object sender, RoutedEventArgs e)
+        private async void BtnLauncherUpdates_Click(object sender, RoutedEventArgs e)
         {
-            if (_nativeSessionActive || _assetInstallActive) { MessageBox.Show(this, "Close the game and wait for asset installation to finish before updating Core Critical.", "Core Critical updates"); return; }
-            new LauncherUpdateWindow(_basePath) { Owner = this }.ShowDialog();
+            if (_assetInstallActive) { MessageBox.Show(this, "Wait for asset installation to finish before updating Core Critical.", "Core Critical updates"); return; }
+            await OpenOnlineUpdatesAsync();
         }
 
         private void PackGame_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -245,6 +244,7 @@ namespace MW3RemasterLauncher
             // Remaster options
             DisplayGraphics.Load(s);
             ChkCdAudio.IsChecked = s.LocalCdAudio;
+            ChkAutomaticUpdateChecks.IsChecked = s.AutomaticUpdateChecks;
             ChkInstantReplay.IsChecked = s.InstantReplay;
             ChkPerformanceMonitor.IsChecked = s.PerformanceMonitor;
 
@@ -694,6 +694,7 @@ namespace MW3RemasterLauncher
             if (setup.ShowDialog() != true || setup.GameDirectory == null) return;
             _settingsMgr.Current.GamePath = setup.GameDirectory;
             setup.SelectedGraphics!.ApplyTo(_settingsMgr.Current);
+            _settingsMgr.Current.AutomaticUpdateChecks = setup.AutomaticUpdateChecks;
             _settingsMgr.Current.InitialSetupCompleted = true;
             _settingsMgr.Save();
             _isInitializing = true;
@@ -708,24 +709,26 @@ namespace MW3RemasterLauncher
                 var installed = await InstallPacksAsync(setup.SelectedPacks);
                 TxtMediaStatus.Text = $"Original files verified. Installed {installed} of {setup.SelectedPacks.Length} selected packs.";
             }
+            ApplyUpdateNotificationPreference();
         }
 
         private void BtnAddToSteam_Click(object sender, RoutedEventArgs e)
         {
-            var launcherExe = Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(_basePath, "Core Critical Launcher.exe");
+            var launcherExe = Path.Combine(_basePath, "Core Critical Launcher.exe");
             var artworkDir = Path.Combine(_basePath, "Assets", "Plates");
 
-            bool ok = SteamHelper.AddToSteam(launcherExe, artworkDir);
-            if (ok)
+            try
             {
+                var result = SteamHelper.AddToSteam(launcherExe, artworkDir);
                 _settingsMgr.Current.HasAddedToSteam = true;
                 _settingsMgr.Save();
-                MessageBox.Show("Core Critical Launcher was successfully added to your Steam library!\n\nPlease restart Steam if it is currently running to see the launcher and artwork.",
+                MessageBox.Show("Core Critical Launcher is ready in your Steam library. Start Steam to load it.\n\n" +
+                    (result.ArtworkWarning ?? "Existing custom artwork was preserved; bundled artwork was added where missing."),
                     "Steam Integration", MessageBoxButton.OK, MessageBoxImage.Information);
             }
-            else
+            catch (Exception error)
             {
-                MessageBox.Show("Could not automatically locate your Steam installation or user profile.\nPlease ensure Steam is installed on this PC.",
+                MessageBox.Show("Core Critical could not be added to Steam: " + error.Message,
                     "Steam Integration", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
@@ -928,25 +931,37 @@ namespace MW3RemasterLauncher
 
         private void BtnOpenScreenshots_Click(object sender, RoutedEventArgs e)
         {
-            OpenSubFolder("local/screenshots");
+            OpenSubFolder("screenshots");
         }
 
         private void BtnOpenReplays_Click(object sender, RoutedEventArgs e)
         {
-            OpenSubFolder("local/replays");
+            OpenSubFolder("replays");
         }
 
         private void BtnOpenVideos_Click(object sender, RoutedEventArgs e)
         {
-            OpenSubFolder("local/videos");
+            OpenSubFolder("videos");
         }
 
-        private void OpenSubFolder(string relative)
+        private void OpenSubFolder(string folderName)
         {
-            var rootDir = Path.GetFullPath(Path.Combine(_basePath, @"..\.."));
-            var target = Path.Combine(rootDir, relative);
-            if (!Directory.Exists(target)) Directory.CreateDirectory(target);
-            Process.Start(new ProcessStartInfo("explorer.exe", target));
+            var validation = GameValidator.Validate(_settingsMgr.Current.GamePath);
+            if (!validation.IsValid)
+            {
+                MessageBox.Show(this, validation.StatusMessage, "Game location required", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            try
+            {
+                var target = Path.Combine(Path.GetFullPath(validation.GameDirectory), folderName);
+                Directory.CreateDirectory(target);
+                Process.Start(new ProcessStartInfo("explorer.exe", target));
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(this, error.Message, "Cannot open capture folder", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void MainWindow_StateChanged(object? sender, EventArgs e)

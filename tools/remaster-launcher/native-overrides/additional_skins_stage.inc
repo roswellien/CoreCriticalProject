@@ -34,6 +34,7 @@ void additional_skins_load(const OverrideModel& model,size_t first,size_t end,un
         if(r.chassis==model.id&&(requested==~0U||requested==8+i))override_load_textures(model,first,end,nullptr,8+i,(model.lod?r.distance:r.close).c_str());}
 }
 unsigned additional_skin_for(unsigned original,unsigned root,unsigned model,bool preview) {
+    additional_skins_read();
     const auto& id=override_models.at(model).id;
     const auto found=additional_skins.selected.find(id);
     const std::optional<unsigned> selected=found==additional_skins.selected.end()?std::nullopt:std::optional<unsigned>(found->second);

@@ -9,5 +9,5 @@ def copy_lighting_dependencies(host):
     shared = Path(__file__).parent / "native-overrides"
     for name in ["campaign_lighting.hpp", "fixture_lighting.hpp"]:
         shutil.copyfile(shared / name, host / name)
-    for name in ["effect_lighting.hpp", "material_normals.hpp"]:
+    for name in ["effect_lighting.hpp", "material_normals.hpp", "normal_codec.hpp"]:
         shutil.copyfile(root / "runtime/graphics" / name, host / name)

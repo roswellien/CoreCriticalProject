@@ -213,6 +213,8 @@ public sealed class RuntimeUpdates
     public async Task PrepareAsync(VerifiedRuntimeUpdate update, string game, string? localPackage,
         IProgress<string>? progress = null, CancellationToken cancellation = default)
     {
+        using var gate = GameUpdateGate.Acquire(_dataRoot);
+        LauncherUpdates.RequireGamesClosed();
         using var storageLock = MutationLock();
         RequireGameStopped();
         var state = State();
@@ -265,7 +267,8 @@ public sealed class RuntimeUpdates
             File.WriteAllText(owner, JsonSerializer.Serialize(new { manifest_sha256 = update.ManifestSha256 }));
         }
         var archive = Path.Combine(work, "source-tools.zip");
-        progress?.Report("Getting update tools…");
+        var precompiled = manifest.Files.ContainsKey("Runtime/runtime.json");
+        progress?.Report(precompiled ? "Verifying native runtime package…" : "Getting update tools…");
         if (!File.Exists(archive))
         {
             var partial = Path.Combine(work, "source-tools.zip.partial");
@@ -306,7 +309,8 @@ public sealed class RuntimeUpdates
         }
         InspectTools(tools);
         cancellation.ThrowIfCancellationRequested();
-        progress?.Report("Preparing this version from your game files. Your current version stays available…");
+        progress?.Report(precompiled ? "Installing native runtime. Your current version stays available…" :
+            "Preparing this version from your game files. Your current version stays available…");
         var output = Path.Combine(work, "runtime");
         Directory.CreateDirectory(output);
         var info = new ProcessStartInfo(PackStorage.Resolve(tools, manifest.Preparer))
@@ -477,6 +481,8 @@ public sealed class RuntimeUpdates
 
     public void Rollback()
     {
+        using var gate = GameUpdateGate.Acquire(_dataRoot);
+        LauncherUpdates.RequireGamesClosed();
         using var storageLock = MutationLock();
         RequireGameStopped();
         var state = State();

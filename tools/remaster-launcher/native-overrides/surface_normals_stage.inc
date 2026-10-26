@@ -11,10 +11,18 @@ struct SurfaceNormalState {
         std::filesystem::path path;
         std::set<mw34::materials::SurfaceKey> keys;
         bool loaded{};
+        // Stable slots survive pixel eviction: existing draw/renderer keys must
+        // never be rebound to a different normal when a page is read again.
+        std::vector<int> normal_indices;
+        std::map<mw34::materials::SurfaceKey, std::uint32_t> local_bindings;
+        std::uint64_t pixel_bytes{}, last_use{};
+        bool initialized{};
     };
     std::vector<Page> pages;
     std::map<mw34::materials::SurfaceKey, size_t> world_bindings;
     std::uint64_t world_bytes{};
+    std::uint64_t world_clock{};
+    std::map<int, size_t> world_images;
     struct Cached {
         std::uint64_t version{};
         unsigned width{}, height{}, pitch{}, memory{}, format{};
@@ -118,8 +126,9 @@ std::pair<bool, int> surface_normal_binding(VSurfaceRec &surface) {
         const auto &entry = cached_surface->second;
         if (entry.version == surface.version && entry.width == surface.width &&
             entry.height == surface.height && entry.pitch == surface.pitch &&
-            entry.memory == surface.mem && entry.format == format)
+            entry.memory == surface.mem && entry.format == format) {
             return {entry.registered, entry.index};
+        }
     }
     // Synchronize resident producers before inspecting the exact colour bytes.
     gpu_sync(surface.guest);
@@ -134,7 +143,8 @@ std::pair<bool, int> surface_normal_binding(VSurfaceRec &surface) {
         mw34::materials::normal_hash(pixels.data(), pixels.size())};
     const auto page = surface_normals.world_bindings.find(key);
     const bool world = page != surface_normals.world_bindings.end();
-    if (world && !surface_normals.authored.count(key) && mw34::materials::normal_maps_enabled())
+    if (world && !surface_normals.authored.count(key) && mw34::materials::normal_maps_enabled() &&
+        !surface_normals.pages[page->second].initialized)
         surface_normals_load_page(page->second);
     const auto binding = surface_normals.bindings.find(key);
     const int index = binding == surface_normals.bindings.end() ? -1 : binding->second;

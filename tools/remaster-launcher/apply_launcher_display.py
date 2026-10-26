@@ -13,6 +13,7 @@ def replace(path, old, new):
 def apply(host):
     shutil.copyfile(Path(__file__).parent/'native-overrides/launcher_display.hpp',host/'launcher_display.hpp')
     shutil.copyfile(Path(__file__).resolve().parents[2]/'runtime/graphics/material_normals.hpp',host/'material_normals.hpp')
+    shutil.copyfile(Path(__file__).resolve().parents[2]/'runtime/graphics/normal_codec.hpp',host/'normal_codec.hpp')
     replace(host/'surface_normals_stage.inc','if(authored_bytes>256ULL*1024*1024)','if(authored_bytes>mw34::materials::authored_normal_budget)')
     vk=host/'vk_scene.hpp'
     replace(vk,'#include "frontend_canvas.hpp"','#include "frontend_canvas.hpp"\n#include "launcher_display.hpp"')

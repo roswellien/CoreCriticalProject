@@ -47,7 +47,7 @@ public static class SkinPack
             if (!id.StartsWith(manifest.Id + ":", StringComparison.Ordinal) ||
                 !Regex.IsMatch(id, @"\A[a-z0-9][a-z0-9._-]{0,127}:[a-z0-9][a-z0-9._-]{0,63}\z") || !ids.Add(id) ||
                 name.Length is < 1 or > 64 || name.Any(c => c < 32 || c > 126) ||
-                !Regex.IsMatch(chassis, @"\A[a-z][a-z0-9_-]{0,31}\z"))
+                !Regex.IsMatch(chassis, @"\A(?:[a-z][a-z0-9_-]{0,31}|[a-z0-9][a-z0-9._-]{0,127}:[a-z0-9][a-z0-9._-]{0,63})\z"))
                 throw new InvalidDataException("Invalid skin identity or name.");
             var hashes = skin.GetProperty("mesh_sha256");
             var textures = skin.GetProperty("textures");

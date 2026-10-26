@@ -1,0 +1,212 @@
+import copy
+import hashlib
+import json
+from pathlib import Path
+import struct
+import tempfile
+import unittest
+
+from build_chassis_pack import build
+from prepared_chassis_packs import CAPABILITY, CATALOG_KEY, REGISTRY, definition, prepare, select, _banks
+from reader_archive import _directory
+from zrd_document import decode, encode
+
+
+def archive(members):
+    payload, records = bytearray(), bytearray()
+    for name, data in members.items():
+        records += struct.pack('<II', len(payload), len(data)) + name.encode().ljust(64, b'\0') + bytes(range(76))
+        payload += data
+    return bytes(payload + records + struct.pack('<II', 1, len(members)))
+
+
+class ChassisPackTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.host = dict(content_capabilities={CAPABILITY: [1]}, runtime_environment={})
+        self.document = dict(schema_version=1, template='madcat', fields=dict(max_mass=75, clan=False))
+        for name, data in [('mesh.bin', b'BWMESH4\0payload'), ('tex.bin', b'BWTEX1\0\0payload')]:
+            (self.root / name).write_bytes(data)
+        (self.root / 'definition.json').write_text(json.dumps(self.document))
+        self.project = dict(pack_id='community.test', name='Test chassis', version='1.0.0', chassis=[dict(
+            id='mech', name='Test Mech', metadata_template='orion', controller='madcat',
+            definition='definition.json', meshes=dict(close='mesh.bin', distance='mesh.bin'),
+            textures=dict(close='tex.bin', distance='tex.bin'))])
+        (self.root / 'project.json').write_text(json.dumps(self.project))
+        self.packfile = build(self.root / 'project.json', self.root / 'built')
+        self.pack = self.root / 'built/pack'
+        self.manifest = json.loads((self.pack / 'pack.json').read_text())
+
+    def selected(self):
+        return select([(self.pack, self.manifest)], self.host)
+
+    def registry(self, mutate):
+        path = self.pack / REGISTRY
+        data = json.loads(path.read_text()); mutate(data['chassis'][0])
+        raw = json.dumps(data).encode(); path.write_bytes(raw)
+        self.manifest['files'][REGISTRY] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+
+    def original(self, mass=75):
+        return encode([['version', [2], 'max_mass', [float(mass)], 'clan', ['false'],
+                        'skins', ['a', ['Default'], 'b', ['Other']]]])
+
+    def test_unsigned_pack_has_stable_namespaced_identity(self):
+        selected = self.selected()
+        self.assertTrue(self.packfile.is_file())
+        self.assertEqual(selected[0]['registration']['id'], 'community.test:mech')
+        self.assertTrue(selected[0]['registration']['resource'].startswith('c'))
+        self.assertEqual(self.selected(), selected)
+        self.assertNotIn('signature', self.manifest)
+
+    def test_silhouette_pack_requires_new_host_and_composes_named_images(self):
+        from chassis_icons import MAGIC, image
+        pixels = bytes([255]) * 2050
+        (self.root / 'icon.bin').write_bytes(MAGIC + struct.pack('<II', 41, 50) + pixels)
+        self.project['chassis'][0].update(silhouette='icon.bin', base_skin_name='Olive Drab')
+        (self.root / 'icons-project.json').write_text(json.dumps(self.project))
+        build(self.root / 'icons-project.json', self.root / 'icons')
+        root = self.root / 'icons/pack'; manifest = json.loads((root / 'pack.json').read_text())
+        with self.assertRaisesRegex(ValueError, 'Update the game runtime'):
+            select([(root, manifest)], self.host)
+        host = dict(content_capabilities={CAPABILITY: [1, 2]})
+        selected = select([(root, manifest)], host)
+        self.assertEqual(selected[0]['registration']['base_skin_name'], 'Olive Drab')
+        game = self.game()
+        original = (struct.pack('<6I', 0, 1, 0, 1, 0, 0) +
+                    struct.pack('<32sII', b'icon_madcat_green', 64, 0xffffffff) + image(pixels, (0, 255, 0)))
+        (game.parent / 'zbd/rimage.zbd').write_bytes(original)
+        output = prepare(selected, game, self.root / 'icons-prepared', {})
+        banks = _banks(output['MW34_REMASTER_BANKS'])
+        generated = Path(banks['zbd/rimage.zbd']).read_bytes()
+        self.assertIn(('icon_' + selected[0]['registration']['resource'] + '_green').encode(), generated)
+        self.assertEqual(generated[224:224 + len(original) - 64], original[64:])
+
+    def test_old_host_and_corruption_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'Update the game runtime'):
+            select([(self.pack, self.manifest)], dict(content_capabilities={}))
+        target = self.pack / self.manifest['files'].keys().__iter__().__next__()
+        target.write_bytes(b'x' * target.stat().st_size)
+        with self.assertRaisesRegex(ValueError, 'integrity'):
+            self.selected()
+
+    def test_undeclared_path_duplicate_id_and_code_rejected(self):
+        self.registry(lambda row: row['meshes'].update(close='../escape.bin'))
+        with self.assertRaisesRegex(ValueError, 'Undeclared'):
+            self.selected()
+        self.registry(lambda row: row['meshes'].update(close=self.project['chassis'][0]['meshes']['close']))
+        self.registry(lambda row: row.update(command='run.exe'))
+        with self.assertRaisesRegex(ValueError, 'fields'):
+            self.selected()
+
+    def test_definition_preserves_types_and_omits_unprovided_stock_skins(self):
+        result = decode(definition(self.document, self.original()))[0]
+        self.assertIs(type(result[result.index('max_mass') + 1][0]), float)
+        self.assertEqual(result[result.index('clan') + 1], ['false'])
+        self.assertEqual(result[result.index('skins') + 1], ['a', ['Default']])
+        for fields in (dict(command='run.exe'), dict(version=9), dict(skins=[])):
+            with self.assertRaises(ValueError):
+                definition({**self.document, 'fields': fields}, self.original())
+
+    def game(self):
+        directory = self.root / 'game/zbd'; directory.mkdir(parents=True)
+        reader = archive({'dfn_madcat.zrd': self.original(), 'dfn_orion.zrd': self.original()})
+        models = {}
+        for suffix in ('', '_1', '_hud'):
+            name = 'mech_madcat' + suffix + '.flt'
+            data = bytearray(512); data[:32] = name.encode().ljust(32, b'\0')
+            data[352:384] = b'madcat'.ljust(32, b'\0'); models[name] = bytes(data)
+        (directory / 'reader.zbd').write_bytes(reader)
+        (directory / 'mechlib.zbd').write_bytes(archive(models))
+        return directory.parent / 'Mech3.exe'
+
+    def test_private_resource_composition_preserves_every_original_member(self):
+        game = self.game(); original = game.parent / 'zbd'
+        bindings = prepare(self.selected(), game, self.root / 'prepared', {})
+        self.assertEqual(Path(bindings[CATALOG_KEY]).read_bytes()[:8], b'MWCHAS2\0')
+        banks = _banks(bindings['MW34_REMASTER_BANKS'])
+        for name in ('reader.zbd', 'mechlib.zbd'):
+            before, after = (original / name).read_bytes(), Path(banks['zbd/' + name]).read_bytes()
+            _, old = _directory(before); _, new = _directory(after)
+            self.assertEqual(new[:len(old)], old)
+            for _, offset, size, _ in old:
+                self.assertEqual(after[offset:offset + size], before[offset:offset + size])
+        self.assertEqual(len(_directory(Path(banks['zbd/mechlib.zbd']).read_bytes())[1]), 6)
+
+    def test_mass_mismatch_fails_and_disabling_has_no_resources(self):
+        game = self.game(); records = self.selected()
+        records[0]['definition']['fields']['max_mass'] = 80
+        with self.assertRaisesRegex(ValueError, 'mass'):
+            prepare(records, game, self.root / 'prepared', {})
+        self.assertEqual(prepare([], game, self.root / 'disabled', {}), {})
+        self.assertFalse((self.root / 'disabled').exists())
+
+    def test_second_independent_pack_is_order_independent(self):
+        project = copy.deepcopy(self.project)
+        project.update(pack_id='another.example', name='Another')
+        (self.root / 'second.json').write_text(json.dumps(project))
+        build(self.root / 'second.json', self.root / 'other')
+        other = self.root / 'other/pack'
+        metadata = [(self.pack, self.manifest), (other, json.loads((other / 'pack.json').read_text()))]
+        a, b = select(metadata, self.host), select(metadata[::-1], self.host)
+        self.assertEqual(a, b)
+        self.assertNotEqual(a[0]['registration']['resource'], a[1]['registration']['resource'])
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            select(metadata + metadata[:1], self.host)
+
+    def test_namespaced_chassis_skin_is_discovered_through_normal_composition(self):
+        from prepared_mech_packs import compose
+        from prepared_skin_packs import write_catalog, CATALOG_KEY as SKIN_KEY
+        skin = self.root / 'community-paint'; (skin / 'skins').mkdir(parents=True)
+        mesh_pin = hashlib.sha256((self.root / 'mesh.bin').read_bytes()).hexdigest()
+        raw = json.dumps(dict(schema_version=2, payload_profile='prepared-skins-v1', skins=[dict(
+            id='community.paint:new-look', name='New Look', chassis='community.test:mech',
+            mesh_sha256=dict(close=mesh_pin, distance=mesh_pin),
+            textures=dict(close='paint.bin', distance='paint.bin'))])).encode()
+        pixels = b'BWTEX1\0\0paint'
+        files = {}
+        for name, data in [('skins/skins.json', raw), ('paint.bin', pixels)]:
+            (skin / name).write_bytes(data)
+            files[name] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+            if name.endswith('.bin'): files[name]['format'] = 'BWTEX1'
+        manifest = dict(schema_version=2, game_id='mw3', id='community.paint', provides=dict(textures=True), files=files,
+                        native_payload=dict(profile='prepared-skins-v1', registry='skins/skins.json', path_base='pack-root',
+                                            required_formats=['BWTEX1'], required_capabilities={'additional-mech-skins': 1}))
+        (skin / 'pack.json').write_text(json.dumps(manifest))
+        host = copy.deepcopy(self.host); host['content_capabilities']['additional-mech-skins'] = [1]
+        added = []; models, environment = compose([str(skin), str(self.pack)], host, chassis_records=added)
+        self.assertEqual(models, [])
+        self.assertEqual(added[0]['additional_skins'][0]['chassis'], 'community.test:mech')
+        bindings = write_catalog(models + added, self.root / 'skins-out')
+        self.assertIn(b'community.paint:new-look', Path(bindings[SKIN_KEY]).read_bytes())
+        with self.assertRaisesRegex(ValueError, 'compatible'):
+            compose([str(skin)], host, chassis_records=[])
+
+    def test_generated_catalog_and_banks_reach_child_launch_profile(self):
+        import types
+        from unittest.mock import patch
+        import play_remaster
+        from native_assets import write_atomic
+        game = self.game()
+        game.write_bytes(b'fixture only')
+        planned = dict(backend='native', graphics=dict(width=1280,height=720,aa=1,af=1), supported=True,
+                       texture_banks=0, models=[], offline_models=[], limitations=[],
+                       command=['powershell.exe','-Profile','old.json'], music=None,
+                       asset_output=str(self.root/'output'), prepared_profile=dict(native=dict(runtime_environment={})),
+                       chassis_records=self.selected())
+        assets = types.SimpleNamespace(prepare=lambda *a,**kw: {}, write_atomic=write_atomic)
+        with (patch('sys.argv',['play_remaster','--game-exe',str(game)]),
+              patch.object(play_remaster,'plan',return_value=planned),
+              patch.object(play_remaster,'read_json',return_value={'native':{'executable':'fixture.exe'}}),
+              patch.dict('sys.modules',{'native_assets':assets}),
+              patch.object(play_remaster.subprocess,'run',return_value=types.SimpleNamespace(returncode=0)),
+              patch.object(play_remaster.subprocess,'call',return_value=0) as child):
+            self.assertEqual(play_remaster.main(),0)
+        command = child.call_args.args[0]
+        environment = json.loads(Path(command[command.index('-Profile')+1]).read_text())['native']['runtime_environment']
+        self.assertTrue(Path(environment[CATALOG_KEY]).is_file())
+        self.assertEqual(len(_banks(environment['MW34_REMASTER_BANKS'])),2)
+
+
+if __name__ == '__main__':
+    unittest.main()

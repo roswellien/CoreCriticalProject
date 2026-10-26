@@ -11,6 +11,11 @@ int main(){
     const auto blob=std::string("BWSKIN1\0",8)+number(1)+record;
     std::istringstream file(blob);const auto skins=mw34::skins::read_additions(file);
     require(skins.size()==1&&skins[0].name=="Sommerset");
+    const std::string chassis="community.additional-mech-pack:additional-chassis";
+    const auto added=std::string("BWSKIN1\0",8)+number(1)+text("community.paint:paint")+
+        text("New Paint")+text(chassis)+text("close.bin")+text("far.bin");
+    std::istringstream added_file(added);
+    require(mw34::skins::read_additions(added_file).at(0).chassis==chassis);
     auto rejected=[&](std::string data){try{std::istringstream in(data);mw34::skins::read_additions(in);}catch(const std::runtime_error&){++checks;return;}throw std::runtime_error("bad skin accepted");};
     rejected(blob.substr(0,blob.size()-1));rejected(blob+"x");rejected(std::string("BWSKIN1\0",8)+number(129));
     rejected(std::string("BWSKIN1\0",8)+number(2)+record+record);

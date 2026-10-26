@@ -48,7 +48,11 @@ if ($Weather -ne '') {
     $env:MW34_WEATHER = $Weather
 }
 $lighting = $null
-if ($config.native.sun_preset -or $LightingPreset) {
+$presentationOff = $null -ne $config.native.presentation -and $config.native.presentation.dynamic_lighting -eq $false
+if ($presentationOff -and $LightingPreset) {
+    throw 'Lighting presets require Dynamic Lighting to be enabled'
+}
+if (!$presentationOff -and ($config.native.sun_preset -or $LightingPreset)) {
     $lighting = (& (Join-Path $PSScriptRoot 'resolve_sun_preset.ps1') -Profile $Profile -Preset $LightingPreset -RuntimeRoot $taskRoot) | ConvertFrom-Json
     foreach ($binding in $lighting.environment.PSObject.Properties) {
         [Environment]::SetEnvironmentVariable($binding.Name, [string]$binding.Value, 'Process')

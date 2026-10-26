@@ -74,6 +74,11 @@
                     <TextBlock x:Name="ReviewGraphics" TextWrapping="Wrap" Margin="0,0,0,20" />
                     <TextBlock Text="OPTIONAL PACKS" Foreground="#EFA348" FontWeight="SemiBold" Margin="0,0,0,6" />
                     <TextBlock x:Name="ReviewPacks" TextWrapping="Wrap" />
+                    <TextBlock Text="UPDATES" Foreground="#EFA348" FontWeight="SemiBold" Margin="0,20,0,8" />
+                    <CheckBox x:Name="SetupAutomaticUpdateChecks" Content="Automatically check for launcher and game updates"
+                              Foreground="#ECE9DF" IsChecked="False" />
+                    <TextBlock Text="Optional. Check at startup and every 30 minutes while the launcher is idle. You choose when to download and install. Change this later in Settings &amp; Steam."
+                               TextWrapping="Wrap" Foreground="#B5BDB5" Margin="0,8,0,0" />
                 </StackPanel></ScrollViewer>
             </Grid>
         </Grid>

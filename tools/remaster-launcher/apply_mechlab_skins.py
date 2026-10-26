@@ -28,9 +28,9 @@ def apply(host):
          '#include "additional_skins_stage.inc"\n #include "mechlab_skins_stage.inc"')
     edit('mfc_stage.hpp','void*remaster_body_inner(State*s,unsigned target,void*p,Body body){void*result{};',
          'void*remaster_body_inner(State*s,unsigned target,void*p,Body body){void*result{};\n'
-         '  if(target==0x44cf70||target==0x44b1c0)return mechlab_skin_body(s,target,p,body);\n'
+         '  if(target==0x44cf70||target==0x44b1c0||target==0x44e6a0)return mechlab_skin_body(s,target,p,body);\n'
          '  if(target==0x448a20)mechlab_skin_closed();')
-    edit('body_dispatch.hpp','0x448960U,0x448a20U,','0x448960U,0x448a20U,0x44b1c0U,0x44cf70U,')
+    edit('body_dispatch.hpp','0x448960U,0x448a20U,','0x448960U,0x448a20U,0x44b1c0U,0x44cf70U,0x44e6a0U,')
     for name in ('additional_skins_stage.inc','mechlab_skins_stage.inc'):
         pending[host/name]=(Path(__file__).parent/'native-overrides'/name).read_text(encoding='utf-8')
     for path,text in pending.items():path.write_text(text,encoding='utf-8',newline='\n')

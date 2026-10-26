@@ -1,5 +1,26 @@
 # Launcher native runtime updates
 
+**Optional notifications, published 1.0.40, October 25:** automatic update checking is
+off by default for new and existing users. The final game-setup page offers an
+unchecked choice; Settings & Steam exposes the same saved preference. Opting in
+checks the signed catalog at startup and every 30 minutes while idle and shows
+a nonmodal banner listing launcher/runtime versions. Downloads and installation
+remain explicit actions. Opting out stops polling, cancels a background request
+and hides the banner; the Updates window remains available for manual checks.
+An unfinished update no longer forces the update window open on startup.
+Notification, preference persistence, minimum-window layout, gameplay/manual
+exclusion and close cleanup checks pass, along with existing signed-catalog and
+download checks. Launcher 1.0.40 and freshly compiled native runtime 1.0.39 are
+published in the signed feed and the playtest site's Setup category; see the
+[release checks](playtest-release-1.0.40-2026-10-25.md).
+
+**Online delivery, October 25:** launcher 1.0.38 now supplies a unified online
+Updates screen using a separate signed multi-product catalog. See the
+[release and integration checks](playtest-release-1.0.38-2026-10-25.md) and
+[publishing contract](../tools/update-service/README.md). Existing offline
+package protocols and installed trust remain compatible; the historical
+single-runtime feed configuration below is retained for reference.
+
 **Current private playtest delivery, October 22:** performance/native updates
 can use the existing `.mw3update` protocol with a precompiled runtime. See
 [precompiled performance update delivery](precompiled-performance-updates-2026-10-22.md).

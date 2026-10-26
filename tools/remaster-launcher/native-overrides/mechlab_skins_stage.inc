@@ -2,7 +2,7 @@
 // retain a host-owned identity; no nonexistent retail skin index enters a
 // loadout, preview-resource lookup or original save record.
 struct MechLabSkinState {
-    unsigned lab{},widget{},original_count{},rebuilding{};
+    unsigned lab{},widget{},original_count{},rebuilding{},selecting{};
     std::string chassis;
     std::vector<unsigned> additions;
     std::map<std::string,unsigned> names;
@@ -15,7 +15,9 @@ unsigned mechlab_skin_call(unsigned target,unsigned object,std::initializer_list
     }catch(...){state=saved;throw;}
 }
 unsigned mechlab_skin_configuration(unsigned lab) {
-    const unsigned config=mechlab_skin_call(0x44e6a0,lab,{0});
+    // 44E680 resolves the currently selected Mech Lab teammate. 44E6A0(0)
+    // always resolves Commander, which gives an ally the wrong chassis' skins.
+    const unsigned config=mechlab_skin_call(0x44e680,lab,{});
     if(config&&!readable(config,0x18))throw std::runtime_error("Mech Lab: selected configuration is unavailable");
     return config;
 }
@@ -47,6 +49,42 @@ unsigned mechlab_skin_text(const mw34::skins::Addition& record) {
     if(!address)throw std::runtime_error("Mech Lab: unable to allocate skin name");
     write_bytes(address,record.name.c_str(),unsigned(record.name.size()+1));names.emplace(record.id,address);return address;
 }
+void mechlab_skin_base_name(unsigned config) {
+    const unsigned id=load(config+4);
+    if(id<mw34::chassis::first_runtime_id)return;
+    const auto& records=mw34::chassis::configured_catalog();
+    const unsigned offset=id-mw34::chassis::first_runtime_id;
+    if(offset>=records.size())throw std::runtime_error("Mech Lab: unregistered chassis skin label");
+    const auto& registration=records[offset];if(registration.base_skin_name.empty())return;
+    auto& ui=mechlab_skins;
+    struct Row {unsigned text,data;};std::vector<Row> rows;
+    const unsigned selected=load(ui.widget+0x16c),first=load(ui.widget+0x15c);
+    for(unsigned i=0;i<ui.original_count;++i) {
+        const unsigned row=load(first+4*i);
+        if(!readable(row,8))throw std::runtime_error("Mech Lab: original skin row is unavailable");
+        std::string label;
+        if(i==0)label=registration.base_skin_name;
+        else {
+            const unsigned text=load(row);
+            for(unsigned n=0;;++n) {
+                if(n>=256||!readable(text+n,1))throw std::runtime_error("Mech Lab: invalid original skin label");
+                const auto c=runtime.memory().load<std::uint8_t>({text+n});if(!c)break;label+=char(c);
+            }
+        }
+        // Preserve copies before the original clear routine frees its labels.
+        const unsigned copy=mechlab_skin_text({registration.id+":retail:"+std::to_string(i),label,{},{},{}});
+        rows.push_back({copy,load(row+4)});
+    }
+    ++ui.rebuilding;
+    try {
+        mechlab_skin_call(0x48bda0,ui.widget,{});
+        for(unsigned i=0;i<rows.size();++i)
+            if(mechlab_skin_call(0x48bac0,ui.widget,{rows[i].text,rows[i].data})!=i)
+                throw std::runtime_error("Mech Lab: renamed skin displaced a retail row");
+        if(selected<rows.size())mechlab_skin_call(0x48b850,ui.widget,{selected});
+    }catch(...){--ui.rebuilding;throw;}
+    --ui.rebuilding;
+}
 void mechlab_skin_save(const std::string& chassis) {
     auto& a=additional_skins;if(a.preferences.empty())return;
     std::filesystem::create_directories(std::filesystem::path(a.preferences).parent_path());
@@ -62,6 +100,7 @@ void mechlab_skin_populated(unsigned lab) {
     ui.chassis=config?mechlab_skin_chassis(config):std::string{};
     if(ui.chassis.empty())return;
     if(!ui.original_count)return;
+    mechlab_skin_base_name(config);
     const unsigned first=load(ui.widget+0x15c),row=load(first);
     if(!readable(row,8))throw std::runtime_error("Mech Lab: original skin row is unavailable");
     const unsigned data=load(row+4); // List userdata is nonowning; names are copied by 48BAC0.
@@ -80,7 +119,20 @@ void mechlab_skin_populated(unsigned lab) {
     std::fprintf(stderr,"Mech Lab skin list: chassis=%s original=%u additions=%zu\n",ui.chassis.c_str(),ui.original_count,ui.additions.size());
 }
 void* mechlab_skin_body(State* s,unsigned target,void* p,Body body) {
-    if(!std::getenv("MW34_ADDITIONAL_SKINS"))return body(s,target,p);
+    if(target==0x44e6a0) {
+        // The original skin callback queries slot zero before writing the
+        // underlying retail skin. Scope that query to the visible teammate;
+        // execute the real getter with its normal return/stack ABI intact.
+        if(!mechlab_skins.selecting)return body(s,target,p);
+        const unsigned argument=state.gpr.rsp.dword+4,original=load(argument);
+        if(original!=0)return body(s,target,p);
+        const unsigned selected=load(0x605a28);
+        if(selected>=4)throw std::runtime_error("Mech Lab: selected teammate is unavailable");
+        store(argument,selected);
+        try {void* result=body(s,target,p);store(argument,original);return result;}
+        catch(...) {store(argument,original);throw;}
+    }
+    if(!std::getenv("MW34_ADDITIONAL_SKINS")&&!std::getenv("MW34_ADDITIONAL_CHASSIS"))return body(s,target,p);
     additional_skins_read();auto& ui=mechlab_skins;
     if(target==0x44cf70){const unsigned lab=state.gpr.rcx.dword;++ui.rebuilding;void* result{};
         try{result=body(s,target,p);}catch(...){--ui.rebuilding;throw;}
@@ -100,7 +152,9 @@ void* mechlab_skin_body(State* s,unsigned target,void* p,Body body) {
         a.selected[ui.chassis]=8+ui.additions[extra];store(stack+4,original);
     }else a.selected.erase(ui.chassis);
     void* result{};
-    try{result=body(s,target,p);}catch(...){store(stack+4,requested);if(prior)a.selected[ui.chassis]=*prior;else a.selected.erase(ui.chassis);throw;}
+    ++ui.selecting;
+    try{result=body(s,target,p);}catch(...){--ui.selecting;store(stack+4,requested);if(prior)a.selected[ui.chassis]=*prior;else a.selected.erase(ui.chassis);throw;}
+    --ui.selecting;
     store(stack+4,requested);
     if(requested>=ui.original_count)mechlab_skin_call(0x48b850,ui.widget,{requested});
     a.announced.clear();mechlab_skin_save(ui.chassis);

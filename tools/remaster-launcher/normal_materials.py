@@ -2,7 +2,9 @@
 
 BWNRM2 uses material names, explicit unperturbed batch bindings and full-pixel
 FNV-1a identities. Colour conversion, strength baking and normal-Y inversion
-are deliberately absent. Inputs and generated sidecars stay local.
+are deliberately absent. Optional BWNRM3/BWSNR3 transport compresses identical
+pixels losslessly; callers must select a reader supporting that format. Existing
+writers retain version 2 by default. Inputs and generated sidecars stay local.
 """
 
 from pathlib import Path
@@ -33,7 +35,7 @@ def normal_environment(texture_environment):
     return texture_environment[:-9] + "_NORMALS"
 
 
-def pack_normals(batch_materials, images):
+def pack_normals(batch_materials, images, *, compressed=False):
     """Encode BWNRM2 batch bindings and explicitly supplied linear normal pixels.
 
     ``images`` maps names to (width, height, raw RGBA bytes), or None. None writes
@@ -51,7 +53,7 @@ def pack_normals(batch_materials, images):
         raise ValueError("Invalid normal image count")
     indices = {name: i for i, name in enumerate(names)}
     bindings = [indices.get(name, NO_NORMAL) for name in batch_materials]
-    out = bytearray(b"BWNRM2\0\0" + struct.pack("<II", len(bindings), len(names)))
+    out = bytearray((b"BWNRM3\0\0" if compressed else b"BWNRM2\0\0") + struct.pack("<II", len(bindings), len(names)))
     out.extend(struct.pack("<" + "I" * len(bindings), *bindings))
     total = 0
     for name in names:
@@ -69,7 +71,13 @@ def pack_normals(batch_materials, images):
             raise ValueError("Invalid normal image size")
         out.extend(encoded.ljust(32, b"\0"))
         out.extend(struct.pack("<IIQ", width, height, pixel_hash(pixels)))
-        out.extend(pixels)
+        if compressed:
+            from normal_codec import encode
+            encoded_pixels = encode(pixels)
+            out.extend(struct.pack("<Q", len(encoded_pixels)))
+            out.extend(encoded_pixels)
+        else:
+            out.extend(pixels)
     return bytes(out)
 
 
@@ -112,7 +120,7 @@ def pack_surface_normals(entries):
     return pack_surface_bindings(keys)
 
 
-def pack_surface_bindings(entries):
+def pack_surface_bindings(entries, *, compressed=False):
     """Pack validated full-content keys, sharing byte-identical normal images.
 
     Up to 256 original surfaces can reference up to 64 images. A key supplied
@@ -120,7 +128,7 @@ def pack_surface_bindings(entries):
     """
     if not 0 < len(entries) <= 256:
         raise ValueError("Invalid surface binding count")
-    header = bytearray(b"BWSNR2\0\0" + struct.pack("<I", len(entries)))
+    header = bytearray((b"BWSNR3\0\0" if compressed else b"BWSNR2\0\0") + struct.pack("<I", len(entries)))
     images = {}
     keys = set()
     names = []
@@ -147,7 +155,7 @@ def pack_surface_bindings(entries):
         names.append(name)
         header.extend(struct.pack("<IIIQ", *key))
         header.extend(name.encode().ljust(32, b"\0"))
-    return bytes(header) + pack_normals(names, images)
+    return bytes(header) + pack_normals(names, images, compressed=compressed)
 
 
 def read_surface_bindings(data):
@@ -169,7 +177,8 @@ def read_surface_bindings(data):
             raise ValueError("Invalid surface material name")
         return raw.split(b"\0")[0].decode("ascii")
 
-    if read(8) != b"BWSNR2\0\0":
+    surface_magic = read(8)
+    if surface_magic not in (b"BWSNR2\0\0", b"BWSNR3\0\0"):
         raise ValueError("Unsupported surface catalog")
     count = u32()
     if not 0 < count <= 256:
@@ -184,7 +193,8 @@ def read_surface_bindings(data):
             raise ValueError("Invalid or duplicate surface key")
         keys.add(key)
         bindings.append((key, material))
-    if read(8) != b"BWNRM2\0\0" or u32() != count:
+    normal_magic = read(8)
+    if normal_magic != (b"BWNRM3\0\0" if surface_magic == b"BWSNR3\0\0" else b"BWNRM2\0\0") or u32() != count:
         raise ValueError("Invalid surface normal payload")
     image_count = u32()
     if image_count > 64:
@@ -200,7 +210,14 @@ def read_surface_bindings(data):
         if material in names or not 0 < w <= 4096 or not 0 < h <= 4096 or total > 256 * 1024 * 1024:
             raise ValueError("Invalid normal image")
         names.add(material)
-        pixels = read(w * h * 4)
+        if normal_magic == b"BWNRM3\0\0":
+            from normal_codec import decode
+            encoded_size = struct.unpack("<Q", read(8))[0]
+            if not 0 < encoded_size <= w * h * 8:
+                raise ValueError("Invalid encoded normal size")
+            pixels = decode(read(encoded_size), w * h * 4)
+        else:
+            pixels = read(w * h * 4)
         if pixel_hash(pixels) != hash_:
             raise ValueError("Normal image hash mismatch")
         images.append((material, (w, h, pixels)))

@@ -19,11 +19,13 @@ public sealed class LauncherUpdates
     private const long MaximumPackage = 512L * 1024 * 1024;
     private readonly string _application;
     private readonly RuntimeUpdateTrust _trust;
+    private readonly string _dataRoot;
     public string Store { get; }
     public LauncherUpdates(string application, RuntimeUpdateTrust trust, string? dataRoot = null)
     {
         _application = Path.TrimEndingDirectorySeparator(Path.GetFullPath(application));
         _trust = trust;
+        _dataRoot = dataRoot ?? LauncherPaths.DataRoot;
         var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(_application.ToUpperInvariant())))[..24];
         Store = Path.Combine(dataRoot ?? LauncherPaths.DataRoot, "launcher-updates", id);
     }
@@ -68,6 +70,7 @@ public sealed class LauncherUpdates
         var file = Path.Combine(Store, "installed-sequence.json");
         return File.Exists(file) ? JsonSerializer.Deserialize<long>(ReadMetadata(file)) : 0;
     }
+    public long InstalledSequence => HighestSequence();
     private FileStream Lock()
     {
         PackStorage.EnsureNoLinks(Store); Directory.CreateDirectory(Store);
@@ -102,6 +105,7 @@ public sealed class LauncherUpdates
     /// <summary>Validate all bytes before preparing the helper. This never closes the caller.</summary>
     public string Stage(VerifiedLauncherUpdate candidate, string package)
     {
+        using var gate = GameUpdateGate.Acquire(_dataRoot);
         using var updateLock = Lock(); RequireGamesClosed();
         candidate = Verify(candidate.Envelope);
         var manifest = candidate.Manifest;
@@ -158,7 +162,6 @@ public sealed class LauncherUpdates
             Path.GetDirectoryName(stage) != Path.GetFullPath(updates.Store) ||
             Path.GetFullPath(job.Metadata) != Path.Combine(stage, "update.ccupdate") || Path.GetFullPath(job.Installer) != Path.Combine(stage, "CoreCriticalSetup.exe"))
             throw new InvalidDataException("Update job is outside its owned staging directory.");
-        using var updateLock = updates.Lock();
         try
         {
             try
@@ -169,6 +172,8 @@ public sealed class LauncherUpdates
                 await parent.WaitForExitAsync(timeout.Token);
             }
             catch (ArgumentException) { /* Parent already exited. */ }
+            using var gate = GameUpdateGate.Acquire(updates._dataRoot);
+            using var updateLock = updates.Lock();
             RequireGamesClosed();
             updates.RequireApplicationClosed();
             var update = updates.Verify(ReadMetadata(job.Metadata));
