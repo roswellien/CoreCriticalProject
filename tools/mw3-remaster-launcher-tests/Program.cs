@@ -380,6 +380,7 @@ GraphicsPreferencesChecks.Run();
 ArtworkCinematicChecks.Run();
 PlaytestSupportChecks.Run();
 GameInstallationChecks.Run();
+GameValidatorChecks.Run();
 OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
 ControlProfileChecks.Run();
