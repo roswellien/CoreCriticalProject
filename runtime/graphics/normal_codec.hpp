@@ -7,11 +7,11 @@
 namespace mw34::materials {
 // BWNRM3 lossless channel-delta/byte-run codec. Decode directly into the final
 // interleaved pixel allocation; malformed tokens cannot grow that allocation.
-inline void decode_normal_pixels(const std::vector<unsigned char> &encoded,
-                                 unsigned char *output, std::size_t pixel_bytes) {
+inline void decode_normal_pixels(const std::vector<unsigned char> &encoded, unsigned char *output,
+                                 std::size_t pixel_bytes) {
     auto fail = [] { throw std::runtime_error("Invalid compressed normal pixels"); };
-    if (!pixel_bytes || pixel_bytes % 4 || pixel_bytes > 256ULL * 1024 * 1024 ||
-        encoded.empty() || encoded.size() > pixel_bytes * 2)
+    if (!pixel_bytes || pixel_bytes % 4 || pixel_bytes > 256ULL * 1024 * 1024 || encoded.empty() ||
+        encoded.size() > pixel_bytes * 2)
         fail();
     const auto pixels = pixel_bytes / 4;
     std::size_t cursor{}, decoded{};

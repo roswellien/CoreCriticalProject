@@ -32,7 +32,8 @@ namespace mw34::audio {
 // Invalid IDs must return WinMM's device error, rather than reaching the guard
 // against changing a physical mixer. AUX_MAPPER is not a volume-device ID.
 constexpr bool valid_host_aux_device(UINT id, bool private_cd, UINT host_count) noexcept {
-    if (id == UINT(-1) || (private_cd && id == 0)) return false;
+    if (id == UINT(-1) || (private_cd && id == 0))
+        return false;
     return (private_cd ? id - 1 : id) < host_count;
 }
 
