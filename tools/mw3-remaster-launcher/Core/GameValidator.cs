@@ -55,6 +55,36 @@ namespace MW3RemasterLauncher.Core
             return null;
         }
 
+        /// <summary>List candidate install folders recorded under one MechWarrior 3 registry key.</summary>
+        /// <remarks>
+        /// The retail installer (1.0, also after the 1.2 patch) writes the folder in a version
+        /// subkey, for example <c>MicroProse\MechWarrior 3\1.0</c>, as <c>Program</c> with a
+        /// trailing backslash. The base key's own values are read first, then each version
+        /// subkey's. Trailing separators are trimmed; a drive root keeps its separator.
+        /// </remarks>
+        /// <param name="subKeyNames">Subkey names under the base key, such as <c>1.0</c>.</param>
+        /// <param name="getValue">Returns a string value from the base key (subkey <c>null</c>) or a named subkey, or <c>null</c>.</param>
+        public static List<string> ReadRegistryInstallPaths(IEnumerable<string> subKeyNames, Func<string?, string, string?> getValue)
+        {
+            var valueNames = new[] { "InstallDir", "Path", "Program", "" };
+            var keyNames = new List<string?> { null };
+            keyNames.AddRange(subKeyNames);
+
+            var paths = new List<string>();
+            foreach (var keyName in keyNames)
+            {
+                foreach (var valueName in valueNames)
+                {
+                    var value = getValue(keyName, valueName);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        paths.Add(Path.TrimEndingDirectorySeparator(value.Trim()));
+                    }
+                }
+            }
+            return paths;
+        }
+
         /// <summary>Try repository-relative and conventional installed-game locations.</summary>
         public static string? AutoDetectGameDirectory()
         {
@@ -94,12 +124,22 @@ namespace MW3RemasterLauncher.Core
                     using var key = Registry.LocalMachine.OpenSubKey(keyPath);
                     if (key != null)
                     {
-                        var installPath = key.GetValue("InstallDir") as string ??
-                                          key.GetValue("Path") as string ??
-                                          key.GetValue("") as string;
-                        if (!string.IsNullOrWhiteSpace(installPath) && FindExecutableInDirectory(installPath) != null)
+                        string? GetValue(string? subKeyName, string valueName)
                         {
-                            return installPath;
+                            if (subKeyName == null)
+                            {
+                                return key.GetValue(valueName) as string;
+                            }
+                            using var subKey = key.OpenSubKey(subKeyName);
+                            return subKey?.GetValue(valueName) as string;
+                        }
+
+                        foreach (var installPath in ReadRegistryInstallPaths(key.GetSubKeyNames(), GetValue))
+                        {
+                            if (FindExecutableInDirectory(installPath) != null)
+                            {
+                                return installPath;
+                            }
                         }
                     }
                 }
@@ -113,10 +153,13 @@ namespace MW3RemasterLauncher.Core
                 @"C:\Games\MechWarrior 3",
                 @"C:\Program Files (x86)\MicroProse\MechWarrior 3",
                 @"C:\Program Files\MicroProse\MechWarrior 3",
+                @"C:\Games\MechWarrior3",
                 @"D:\Games\MW3",
                 @"D:\Games\MechWarrior 3",
+                @"D:\Games\MechWarrior3",
                 @"E:\Games\MW3",
-                @"E:\Games\MechWarrior 3"
+                @"E:\Games\MechWarrior 3",
+                @"E:\Games\MechWarrior3"
             };
 
             foreach (var p in commonPaths)
