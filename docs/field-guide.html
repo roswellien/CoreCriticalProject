@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MW3Recomp Field Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single walkthrough column. Two-part progress bar on top, one page at a time, pager below.
+   Deliberately one dark look (gunmetal and amber, a cockpit-manual feel), so no light variant. */
+:root {
+  color-scheme: dark;
+  --ground: #151918;
+  --panel: #1c2220;
+  --deep: #111514;
+  --ink: #ece5da;
+  --soft: #d2d1c9;
+  --muted: #a9aaa3;
+  --quiet: #7f837e;
+  --rule: #343a38;
+  --amber: #e8a04a;
+  --amber-ink: #ffd49c;
+  --amber-deep: #2b2217;
+  --amber-line: #9c6a30;
+  --steel: #9fb5ad;
+  --steel-deep: #1c2725;
+  --steel-line: #4e615b;
+  --code-bg: #0e1211;
+  --display: "Chakra Petch", "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 16.5px/1.6 var(--body);
+}
+h1, h2, p { margin: 0; }
+a { color: var(--amber); }
+button { font: inherit; color: inherit; }
+button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding-block: 30px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 22px;
+}
+
+/* Header */
+header { display: grid; gap: 8px; }
+.kicker {
+  font: 600 12px/1 var(--body);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+h1 {
+  font: 700 clamp(30px, 5.5vw, 46px)/1.05 var(--display);
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+.lede { color: var(--muted); max-width: 64ch; }
+
+/* Progress bar */
+.progress { display: grid; gap: 8px; }
+.progress-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.parts { display: flex; gap: 14px; flex: 1; min-width: 0; }
+.part { display: grid; gap: 6px; min-width: 0; }
+.part-label {
+  font: 600 11px/1.2 var(--body);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--quiet);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.part.on .part-label { color: var(--amber); }
+.segs { display: flex; gap: 4px; }
+.seg {
+  flex: 1;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  align-items: center;
+}
+.seg::before { content: ""; display: block; height: 5px; background: var(--rule); transition: background 0.2s; }
+.seg:hover::before { background: var(--quiet); }
+.seg.done::before { background: var(--amber-line); }
+.seg.now::before { background: var(--amber); height: 7px; }
+.contents-btn {
+  flex: none;
+  align-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--soft);
+  font-size: 14px;
+  cursor: pointer;
+}
+.contents-btn:hover, .contents-btn[aria-expanded="true"] { border-color: var(--amber-line); color: var(--ink); }
+.contents-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.contents {
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 28px;
+}
+.contents h3 { margin: 0 0 6px; font: 600 11px/1.2 var(--body); letter-spacing: 0.16em; text-transform: uppercase; color: var(--amber); }
+.contents ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.contents button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--soft);
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 3ch minmax(0, 1fr);
+  gap: 8px;
+}
+.contents button span { font-family: var(--mono); font-size: 12.5px; color: var(--quiet); padding-top: 2px; }
+.contents button:hover { background: var(--deep); color: var(--ink); }
+.contents button[aria-current="true"] { background: var(--amber-deep); color: var(--amber-ink); }
+
+/* Page panel */
+.lesson {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  padding: 28px clamp(18px, 4vw, 38px) 32px;
+  display: grid;
+  gap: 18px;
+}
+.eyebrow { font: 600 12px/1.2 var(--body); letter-spacing: 0.18em; text-transform: uppercase; color: var(--amber); }
+.lesson h2 { font: 700 clamp(24px, 3.4vw, 32px)/1.15 var(--display); text-wrap: balance; margin-top: -6px; }
+.lesson p { max-width: 68ch; color: var(--soft); }
+.lesson strong { color: var(--ink); font-weight: 600; }
+.lesson code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  padding: 1px 5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* Animated figures: input panel, machine, output panel */
+.anim { position: relative; display: grid; gap: 10px; }
+.anim-row { display: grid; grid-template-columns: minmax(0, 1fr) 34px auto 34px minmax(0, 1fr); align-items: center; }
+.panel { border: 1px solid var(--rule); background: var(--deep); display: grid; align-content: start; min-width: 0; align-self: stretch; }
+.panel-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+  font: 600 11px/1.2 var(--body);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+.panel-body { padding: 12px; display: grid; gap: 8px; align-content: start; }
+.line { font: 400 13.5px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.line .kw { color: var(--steel); }
+.line .fn { color: var(--amber); }
+.line .cm { color: var(--quiet); }
+.chip {
+  justify-self: start;
+  font: 500 13.5px/1.4 var(--mono);
+  color: var(--amber-ink);
+  background: var(--amber-deep);
+  border: 1px solid var(--amber-line);
+  padding: 3px 9px;
+}
+.call { display: grid; gap: 1px; padding: 6px 10px; border: 1px solid var(--rule); background: var(--panel); }
+.call b { font: 600 11px/1.3 var(--body); letter-spacing: 0.12em; text-transform: uppercase; color: var(--quiet); }
+.call span { font: 400 13.5px/1.4 var(--mono); color: var(--ink); overflow-wrap: anywhere; }
+.panel.out .call { border-color: var(--steel-line); background: var(--steel-deep); }
+.panel.out .call b { color: var(--steel); }
+.mid {
+  border: 1px solid var(--steel-line);
+  background: var(--steel-deep);
+  padding: 14px 16px;
+  text-align: center;
+  display: grid;
+  gap: 2px;
+  transition: background 0.2s, border-color 0.2s;
+}
+.mid b { font: 700 16px/1.2 var(--display); letter-spacing: 0.03em; color: var(--ink); }
+.mid span { font-size: 13px; color: var(--muted); }
+.mid.busy { background: var(--amber-deep); border-color: var(--amber); }
+.link { display: grid; place-items: center; }
+.link svg { width: 24px; height: 14px; fill: none; stroke: var(--amber); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.anim-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.anim-foot .note { margin: 0; }
+.ghost { position: absolute; z-index: 2; pointer-events: none; margin: 0; }
+
+/* Still diagrams */
+.chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.node { flex: 1 1 140px; min-width: 0; border: 1px solid var(--rule); background: var(--deep); padding: 10px 13px; display: grid; gap: 3px; align-content: start; }
+.node b { font-weight: 600; font-size: 15.5px; line-height: 1.25; }
+.node span { font-size: 14px; color: var(--muted); line-height: 1.4; }
+.node.hot { border-color: var(--amber-line); background: var(--amber-deep); }
+.node.hot b { color: var(--amber-ink); }
+.node.cool { border-color: var(--steel-line); background: var(--steel-deep); }
+.node.dim { border-style: dashed; }
+.node.dim b, .node.dim span { color: var(--quiet); }
+.arr { flex: 0 0 auto; display: grid; place-items: center; }
+.arr svg { width: 22px; height: 14px; fill: none; stroke: var(--amber); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.lanes { display: grid; gap: 12px; }
+.lane { display: grid; grid-template-columns: 11ch minmax(0, 1fr); gap: 14px; align-items: center; }
+.lane > b { font: 700 16px/1.2 var(--display); letter-spacing: 0.03em; }
+.lane .tag { display: block; margin-top: 5px; font: 600 10.5px/1.2 var(--body); letter-spacing: 0.16em; text-transform: uppercase; color: var(--amber); }
+.lane .tag.off { color: var(--quiet); }
+
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.box { border: 1px solid var(--rule); background: var(--deep); display: grid; grid-template-rows: auto 1fr; min-width: 0; }
+.box-head { font-weight: 600; font-size: 15.5px; padding: 9px 13px; border-bottom: 1px solid var(--rule); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.box-head small { font: 600 10.5px/1.2 var(--body); letter-spacing: 0.16em; text-transform: uppercase; color: var(--quiet); align-self: center; }
+.box ul { margin: 0; padding: 11px 13px 12px 30px; display: grid; gap: 5px; font-size: 14.5px; color: var(--soft); }
+.box li::marker { color: var(--amber); }
+.box p { padding: 11px 13px 12px; font-size: 14.5px; }
+.box.hot { border-color: var(--amber-line); }
+.box.hot .box-head { border-bottom-color: var(--amber-line); color: var(--amber-ink); }
+.box.cool { border-color: var(--steel-line); }
+.box.cool .box-head { border-bottom-color: var(--steel-line); }
+
+.nest { border: 1px solid var(--steel-line); background: var(--steel-deep); padding: 14px; display: grid; gap: 10px; }
+.nest .label { font: 700 14px/1.2 var(--display); letter-spacing: 0.06em; text-transform: uppercase; color: var(--steel); }
+.nest .inner { border: 1px dashed var(--amber-line); background: var(--amber-deep); padding: 13px; display: grid; gap: 5px; }
+.nest .inner .label { color: var(--amber); }
+.nest .gate { font-size: 14.5px; color: var(--muted); }
+
+pre.code {
+  margin: 0;
+  padding: 13px 14px;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  font: 400 13px/1.65 var(--mono);
+  color: var(--ink);
+  overflow-x: auto;
+}
+pre.code .kw { color: var(--steel); }
+pre.code .cm { color: var(--quiet); font-style: italic; }
+
+.map { display: grid; border-top: 1px solid var(--rule); }
+.map-row { display: grid; grid-template-columns: minmax(10ch, 15ch) minmax(0, 1fr); gap: 16px; padding: 10px 2px; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.map-row code { justify-self: start; }
+.map-row span { color: var(--soft); font-size: 15px; }
+
+.where { font-size: 15px; border-left: 3px solid var(--amber); padding: 3px 0 3px 13px; display: grid; gap: 3px; color: var(--soft); }
+.where > b { font: 600 11px/1.3 var(--body); letter-spacing: 0.18em; text-transform: uppercase; color: var(--amber); }
+.note { font-size: 13.5px; color: var(--quiet) !important; }
+
+.fork { border: 1px solid var(--amber-line); background: var(--amber-deep); padding: 18px; display: grid; gap: 12px; }
+.fork p { color: var(--amber-ink); }
+.fork-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+/* Pager */
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.navbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 10px 20px;
+  border: 1px solid var(--amber);
+  background: var(--amber-deep);
+  color: var(--amber-ink);
+  font: 600 15.5px/1 var(--body);
+  cursor: pointer;
+}
+.navbtn:hover:not(:disabled) { background: var(--amber); color: var(--ground); }
+.navbtn.quiet { background: transparent; border-color: var(--rule); color: var(--soft); }
+.navbtn.quiet:hover:not(:disabled) { border-color: var(--amber-line); background: transparent; color: var(--ink); }
+.navbtn:disabled { opacity: 0.35; cursor: default; }
+.navbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.count { font: 500 13px/1.3 var(--body); color: var(--muted); text-align: center; letter-spacing: 0.04em; }
+.count b { color: var(--amber); font-weight: 600; }
+
+footer { border-top: 1px solid var(--rule); padding-top: 18px; font-size: 13.5px; color: var(--quiet); }
+
+@media (max-width: 680px) {
+  .parts { gap: 10px; }
+  .contents { grid-template-columns: minmax(0, 1fr); }
+  .anim-row { grid-template-columns: minmax(0, 1fr); }
+  .anim-row .link svg { transform: rotate(90deg); }
+  .anim-row .link { height: 30px; }
+  .mid { justify-self: center; min-width: 60%; }
+  .chain { flex-direction: column; }
+  .chain .node { flex: 0 0 auto; }
+  .chain .arr svg { transform: rotate(90deg); }
+  .lane { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .pair, .trio { grid-template-columns: minmax(0, 1fr); }
+  .map-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .navbtn { padding: 10px 14px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .lesson:not([hidden]) { animation: rise 0.2s ease-out; }
+  @keyframes rise { from { transform: translateY(4px); } to { transform: none; } }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="ar" viewBox="0 0 24 14"><path d="M2 7 H20 M15 2 L20 7 L15 12"/></symbol>  </defs>
+</svg>
+
+<div class="wrap">
+  <header>
+    <div class="kicker">MechWarrior 3 recompilation</div>
+    <h1>MW3Recomp Field Guide</h1>
+    <p class="lede">How the MW3 recompile works, for anyone curious and for developers who want to help but have never worked on a recompile. Part 1 is the big picture. Part 2 is for contributors.</p>
+  </header>
+
+  <div class="progress">
+    <div class="progress-top">
+      <div class="parts" id="parts"></div>
+      <button class="contents-btn" id="contentsBtn" type="button" aria-expanded="false" aria-controls="contents">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/></svg>Contents
+      </button>
+    </div>
+    <div class="contents" id="contents" hidden></div>
+  </div>
+
+  <!-- ========== PART 1 ========== -->
+
+  <section class="lesson" data-part="1" data-title="What's inside the exe">
+    <div class="eyebrow">Part 1 · The starting point</div>
+    <h2>What's inside Mech3.exe</h2>
+    <p>MechWarrior 3 was written in C++ in the late 1990s. A compiler turned that source into machine code, the raw instructions a CPU reads, and only the machine code shipped in <code>Mech3.exe</code>. The original source was never released.</p>
+    <div class="anim">
+      <div class="anim-row">
+        <div class="panel">
+          <div class="panel-head">Source code</div>
+          <div class="panel-body">
+            <div class="line" data-src><span class="kw">void</span> Mech::Fire(Weapon&amp; w) {</div>
+            <div class="line" data-src>    heat += w.heat;</div>
+            <div class="line" data-src>}</div>
+          </div>
+        </div>
+        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+        <div class="mid"><b>Compiler</b><span>1999</span></div>
+        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+        <div class="panel">
+          <div class="panel-head">Mech3.exe</div>
+          <div class="panel-body">
+            <div class="chip" data-out>56</div>
+            <div class="chip" data-out>8B 46 14 01 47 30</div>
+            <div class="chip" data-out>5E C3</div>
+          </div>
+        </div>
+      </div>
+      <div class="anim-foot">
+        <p class="note">Illustration. Real x86 instructions, not taken from MW3.</p>      </div>
+    </div>
+    <p>Notice what didn't make it across: the names. <code>Mech</code>, <code>Fire</code>, <code>heat</code> and the structure around them were thrown away. The exe holds only numbers like <code>8B 46 14</code> ("load the value 20 bytes into this object"), millions of them.</p>
+  </section>
+
+  <section class="lesson" data-part="1" data-title="Three ways to revive a game">
+    <div class="eyebrow">Part 1 · The options</div>
+    <h2>Three ways to revive an old game</h2>
+    <p>The original exe targets 1999 Windows and DirectX 6-era graphics. On a modern PC it runs poorly or not at all. Preservation projects usually take one of three routes.</p>
+    <div class="lanes">
+      <div class="lane"><b>Wrapper<span class="tag">Also offered</span></b>
+        <div class="chain">
+          <div class="node"><b>Original Mech3.exe</b><span>unchanged, still 32-bit</span></div>
+          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+          <div class="node cool"><b>Translation layer</b><span>intercepts old DirectX calls</span></div>
+          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+          <div class="node"><b>Vulkan</b><span>modern graphics</span></div>
+        </div></div>
+      <div class="lane"><b>Emulator<span class="tag off">Not used</span></b>
+        <div class="chain">
+          <div class="node dim"><b>Original Mech3.exe</b><span>treated as data</span></div>
+          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+          <div class="node dim"><b>Interpreter</b><span>runs each instruction live, every time</span></div>
+        </div></div>
+      <div class="lane"><b>Recompile<span class="tag">This project</span></b>
+        <div class="chain">
+          <div class="node"><b>Original Mech3.exe</b><span>translated once, ahead of time</span></div>
+          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+          <div class="node hot"><b>New 64-bit program</b><span>original game logic, modern services</span></div>
+        </div></div>
+    </div>
+    <p>The main work is the recompile. A wrapper is kept alongside it as a separate way to play. There is no interpreter anywhere: code that hasn't been translated stops with an address and a reason instead of being run some other way.</p>
+  </section>
+
+  <section class="lesson" data-part="1" data-title="Lifting">
+    <div class="eyebrow">Part 1 · How the translation works</div>
+    <h2>Lifting: compiling in reverse</h2>
+    <p>A tool called a lifter runs the trip backwards. It reads the machine code one function at a time and writes out code that does exactly the same thing, which a modern compiler then builds into a native 64-bit program. This project uses <strong>Remill</strong>, an open-source lifter.</p>
+    <div class="anim">
+      <div class="anim-row">
+        <div class="panel">
+          <div class="panel-head">Mech3.exe</div>
+          <div class="panel-body">
+            <div class="chip" data-src>56</div>
+            <div class="chip" data-src>8B 46 14 01 47 30</div>
+            <div class="chip" data-src>5E C3</div>
+          </div>
+        </div>
+        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+        <div class="mid"><b>Lifter</b><span>Remill</span></div>
+        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+        <div class="panel">
+          <div class="panel-head">Lifted code</div>
+          <div class="panel-body">
+            <div class="line" data-static><span class="kw">void</span> <span class="fn">sub_0045A1C0</span>(State&amp; s, Memory&amp; m) {</div>
+            <div class="line" data-out>    push(s, s.esi);</div>
+            <div class="line" data-out>    s.eax = m.load32(s.esi + 0x14);
+    m.add32(s.edi + 0x30, s.eax);</div>
+            <div class="line" data-out>    s.esi = pop(s); <span class="kw">return</span>;</div>
+            <div class="line" data-static>}</div>
+          </div>
+        </div>
+      </div>
+      <div class="anim-foot">
+        <p class="note">Illustration, simplified from what a lifter really emits.</p>      </div>
+    </div>
+    <p>The result is <strong>correct, but nameless</strong>. The function is named after its address in the old exe, and the variables are CPU registers. Proving that <code>sub_0045A1C0</code> is really "fire weapon" takes evidence, so the project's rule is: unproven functions keep their <code>sub_XXXXXXXX</code> names. A plausible guess would be invented, not readable.</p>
+  </section>
+
+  <section class="lesson" data-part="1" data-title="Original, modern, shared">
+    <div class="eyebrow">Part 1 · What changes and what doesn't</div>
+    <h2>Original logic, modern services, nothing of the game shared</h2>
+    <p>The translated game still decides everything a mech does. What changes is everything it talks to. And because the translation is made from the copyrighted game, it never leaves the player's machine.</p>
+    <div class="trio">
+      <div class="box hot">
+        <div class="box-head">Kept original</div>
+        <ul><li>Gameplay, physics, AI and timing logic</li><li>Missions and campaign flow</li><li>The original HUD and menus</li></ul>
+      </div>
+      <div class="box cool">
+        <div class="box-head">Modernized</div>
+        <ul><li>Vulkan rendering, widescreen, anti-aliasing</li><li>Input, audio, files, Windows integration</li><li>Optional visual upgrades, kept as separate settings</li></ul>
+      </div>
+      <div class="box">
+        <div class="box-head">Never distributed</div>
+        <ul><li>The game, its exe and data</li><li>The lifted game code</li><li>Builds made from it</li></ul>
+      </div>
+    </div>
+    <p>So every player brings their own legally obtained copy of MW3, and everything in the public repository is project-written code around the game.</p>
+    <div class="fork">
+      <p>That's the big picture. Part 2 is for developers who want to help: how the pieces fit, where things live, and the rules that keep the project honest.</p>
+      <div class="fork-actions">
+        <button class="navbtn" type="button" data-go="next">Continue to Part 2<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 L16 12 L9 19"/></svg></button>
+        <button class="navbtn quiet" type="button" data-go="0">Back to the start</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== PART 2 ========== -->
+
+  <section class="lesson" data-part="2" data-title="Guest and host">
+    <div class="eyebrow">Part 2 · Two worlds in one program</div>
+    <h2>Guest and host</h2>
+    <p>The translated game still behaves like a 32-bit program, with 32-bit addresses. The program around it is 64-bit. The project calls the game's world the <strong>guest</strong> and the new program the <strong>host</strong>. Most design rules come down to keeping these two apart.</p>
+    <div class="nest">
+      <div class="label">Host · new 64-bit program</div>
+      <span class="gate">Renderer · audio · input · files · Windows integration</span>
+      <div class="inner">
+        <div class="label">Guest · translated game</div>
+        <span class="gate">Expects 1999 Windows. 32-bit addresses into memory the host owns.</span>
+      </div>
+      <span class="gate">Every guest memory access goes through a checked call, never a raw pointer.</span>
+    </div>
+    <p>A guest address is just a 32-bit number. The guest asks the host for bytes at that address, and the host checks the range before touching anything. From <code>runtime/memory</code>:</p>
+<pre class="code"><span class="cm">// Explicit little-endian serialization permits unaligned x86 accesses on any host.</span>
+<span class="kw">template</span> &lt;GuestScalar T&gt; [[nodiscard]] T load(GuestAddress address) <span class="kw">const</span> {
+    std::array&lt;std::byte, <span class="kw">sizeof</span>(T)&gt; bytes{};
+    read(address, bytes);    <span class="cm">// throws MemoryFault outside a mapping</span>
+    ...
+}</pre>
+    <p>That's why you'll never see a guest value cast to a host pointer, or a host pointer stored in guest memory. Bad accesses become clear errors instead of random crashes.</p>
+    <div class="where"><b>Read more</b><span><code>docs/architecture.md</code>, the guest memory contract.</span></div>
+  </section>
+
+  <section class="lesson" data-part="2" data-title="Host services">
+    <div class="eyebrow">Part 2 · Replacing 1999 Windows</div>
+    <h2>The game asks for old services, the host answers</h2>
+    <p>The game still calls DirectDraw, Direct3D, Win32, Microsoft's MFC framework and CD audio. In the recompile, each call lands on a project-written host implementation that does the same job with modern parts.</p>
+    <div class="anim">
+      <div class="anim-row">
+        <div class="panel">
+          <div class="panel-head">The game asks</div>
+          <div class="panel-body">
+            <div class="call" data-src><b>Direct3D</b><span>DrawPrimitive(triangles)</span></div>
+            <div class="call" data-src><b>DirectDraw</b><span>Flip()</span></div>
+            <div class="call" data-src><b>CD audio</b><span>play track 3</span></div>
+          </div>
+        </div>
+        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+        <div class="mid"><b>Host bridge</b><span>project-written</span></div>
+        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
+        <div class="panel out">
+          <div class="panel-head">What actually runs</div>
+          <div class="panel-body">
+            <div class="call" data-out><b>Vulkan</b><span>vkCmdDraw</span></div>
+            <div class="call" data-out><b>Vulkan</b><span>vkQueuePresentKHR</span></div>
+            <div class="call" data-out><b>Local music</b><span>decoded track 3</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="anim-foot">
+        <p class="note">Simplified. Real bridges handle many calls and state.</p>      </div>
+    </div>
+    <p>Bridges implement the behaviour the game was <em>observed</em> to need, not the whole old API. An unknown call fails loudly; it never returns a fake success. This is also where optional enhancements such as lighting, anti-aliasing and replacement models plug in, separate from gameplay logic.</p>
+    <div class="where"><b>Where</b><span><code>runtime/</code> (graphics, audio, input, Windows, MFC) and the enhanced renderer under <code>tools/</code>. The code guide names the current entry files.</span></div>
+  </section>
+
+  <section class="lesson" data-part="2" data-title="Code map">
+    <div class="eyebrow">Part 2 · Finding your way</div>
+    <h2>A map of the repository</h2>
+    <p>Most of the time spent on a first change goes into finding where it belongs. Here is the layout at the folder level.</p>
+    <div class="map">
+      <div class="map-row"><code>runtime/</code><span>Shared host services: checked guest memory, graphics, audio, input, Windows and MFC pieces.</span></div>
+      <div class="map-row"><code>recomp/</code><span>Where translation output goes. Only README files are committed; generated code stays local.</span></div>
+      <div class="map-row"><code>tools/</code><span>Exe validation and analysis, the lifting toolchain, launchers, the enhanced renderer, and a lot of dated research.</span></div>
+      <div class="map-row"><code>games/mw3/</code><span>Version-specific data, symbols and evidence, plus the Mod Tools.</span></div>
+      <div class="map-row"><code>tests/</code><span>Project-written fixtures and contract tests. No game files.</span></div>
+      <div class="map-row"><code>docs/</code><span>Architecture, plans, milestones, setup guides and the code guide.</span></div>
+    </div>
+    <p>One surprise: some active components live in folders named after the research step that produced them, including the main native host, which sits under <code>tools/</code> rather than <code>runtime/</code>.</p>
+    <div class="where"><b>Start here</b><span><code>docs/code-guide.md</code> lists every active component with its current entry files and what to watch for when changing it.</span></div>
+  </section>
+
+  <section class="lesson" data-part="2" data-title="Launcher, wrapper, Mod Tools">
+    <div class="eyebrow">Part 2 · The other workstreams</div>
+    <h2>Launcher, wrapper and Mod Tools</h2>
+    <p>Besides the native host, three other pieces make up the project. Each one is its own area to contribute to.</p>
+    <div class="trio">
+      <div class="box cool">
+        <div class="box-head">Launcher <small>players</small></div>
+        <p>A Windows app checks the installation and settings, hands off to Python that prepares local files, then starts the host. Planning, preparing and launching are separate steps on purpose.</p>
+      </div>
+      <div class="box cool">
+        <div class="box-head">D7VK wrapper <small>players</small></div>
+        <p>Runs the original, unchanged exe with a Vulkan graphics wrapper in an isolated profile. A separate way to play, not a fallback inside the native host.</p>
+      </div>
+      <div class="box cool">
+        <div class="box-head">Mod Tools <small>modders</small></div>
+        <p>A desktop map and mission editor and a browser 3D Map Studio. They read the game's own archives, keep the install read-only and export to a separate folder.</p>
+      </div>
+    </div>
+    <div class="where"><b>Read more</b><span>The setup guides in <code>docs/</code>, and <code>games/mw3/mod-tools/</code> with its format support matrix.</span></div>
+  </section>
+
+  <section class="lesson" data-part="2" data-title="Live code and frozen research">
+    <div class="eyebrow">Part 2 · Reading the map</div>
+    <h2>Live code versus frozen research</h2>
+    <p>The project keeps its experiments. Much of <code>tools/</code> is dated research: source models, comparers and acceptance runs whose file hashes are pinned in the project's evidence records. Change one byte and the record no longer matches.</p>
+    <div class="pair">
+      <div class="box cool">
+        <div class="box-head">Maintained <small>change freely</small></div>
+        <ul><li>Components listed in <code>docs/code-guide.md</code></li><li>Shared services under <code>runtime/</code></li><li>Launchers, editors, tests</li></ul>
+      </div>
+      <div class="box">
+        <div class="box-head">Frozen evidence <small>leave as is</small></div>
+        <ul><li>Dated research folders such as <code>tools/m4-*</code> and <code>tools/x87-*</code></li><li>Historical source models and hashes</li><li>Pinned tools used to measure a result</li></ul>
+      </div>
+    </div>
+    <p>So even ugly frozen code isn't reformatted, renamed or deleted as cleanup. If something in it is worth reusing, extract it into a reviewed, maintained module and leave the original untouched.</p>
+  </section>
+
+  <section class="lesson" data-part="2" data-title="Evidence and checks">
+    <div class="eyebrow">Part 2 · How the project knows things</div>
+    <h2>Evidence first, for progress and for your changes</h2>
+    <p>Progress is tracked as milestones, from the bootstrap through native startup, a playable Training mission and full campaign compatibility to later modernization and other platforms. A milestone only counts with recorded evidence against the original game. A run that works on someone's machine is noted, but it isn't acceptance.</p>
+    <div class="pair">
+      <div class="box cool">
+        <div class="box-head">Any checkout <small>no game needed</small></div>
+<pre class="code">cmake --preset default
+cmake --build --preset default
+ctest --preset default</pre>
+        <p>Builds the asset-free runtime and runs the tests, the same as CI. Add <code>-A x64</code> on Windows with Visual Studio. A <code>format-check</code> target checks C++ formatting.</p>
+      </div>
+      <div class="box hot">
+        <div class="box-head">The full game <small>local setup</small></div>
+        <ul><li>Your own MW3 installation</li><li>A prepared local environment and generated lifts</li><li>Needed for behaviour changes to timing, rendering or input, which need an original-game baseline</li></ul>
+      </div>
+    </div>
+    <p>Whatever you change, say which checks you ran and which ones need private inputs you couldn't run.</p>
+    <div class="where"><b>Current status</b><span><code>docs/project-milestones.md</code> and <code>docs/roadmap.md</code> are kept up to date. This guide deliberately doesn't repeat their numbers.</span></div>
+  </section>
+
+  <section class="lesson" data-part="2" data-title="Ground rules">
+    <div class="eyebrow">Part 2 · Your first change</div>
+    <h2>Ground rules</h2>
+    <p>Good first contributions: reproducible bug reports, focused contract tests, readable host-service code, documentation, hardware test reports and editor improvements. <code>CONTRIBUTING.md</code> has the full rules; these are the ones that catch newcomers.</p>
+    <div class="pair">
+      <div class="box cool">
+        <div class="box-head">Do</div>
+        <ul>
+          <li>Start from an observation and its evidence</li>
+          <li>Work on components the code guide lists as active</li>
+          <li>Keep each change to one behaviour or one readability concern</li>
+          <li>Comment the why: binary layouts, units, ownership, calling conventions</li>
+          <li>Say which checks you ran</li>
+        </ul>
+      </div>
+      <div class="box hot">
+        <div class="box-head">Don't</div>
+        <ul>
+          <li>Rename <code>sub_XXXXXXXX</code> functions without evidence</li>
+          <li>Reformat or rename frozen research files</li>
+          <li>Mix a formatting pass with gameplay or renderer changes</li>
+          <li>Commit or attach game files, memory dumps, saves or generated translations</li>
+          <li>Make an unknown API return a fake success</li>
+        </ul>
+      </div>
+    </div>
+    <div class="where"><b>Read next</b><span><code>CONTRIBUTING.md</code> · <code>docs/code-guide.md</code> · <code>docs/architecture.md</code> · <code>docs/faithful-modernization-plan.md</code></span></div>
+  </section>
+
+  <div class="pager">
+    <button class="navbtn quiet" id="prev" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5 L8 12 L15 19"/></svg>Back</button>
+    <span class="count" id="count" aria-live="polite"></span>
+    <button class="navbtn" id="next" type="button">Next<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 L16 12 L9 19"/></svg></button>
+  </div>
+
+  <footer>Last checked against the MW3Recomp repository in October 2026. For anything that changes often, the repository's own docs are the source of truth.</footer>
+</div>
+
+<script>
+(function () {
+  var pages = Array.prototype.slice.call(document.querySelectorAll(".lesson"));
+  var partNames = { "1": "Part 1 · The big picture", "2": "Part 2 · Contributing" };
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var current = 0;
+
+  var partsEl = document.getElementById("parts");
+  var contentsEl = document.getElementById("contents");
+  var contentsBtn = document.getElementById("contentsBtn");
+  var prev = document.getElementById("prev");
+  var next = document.getElementById("next");
+  var count = document.getElementById("count");
+
+  // Group pages by part for the progress bar and the contents list.
+  var groups = [];
+  pages.forEach(function (page, index) {
+    var part = page.dataset.part;
+    var last = groups[groups.length - 1];
+    if (!last || last.part !== part) { last = { part: part, pages: [] }; groups.push(last); }
+    last.pages.push(index);
+  });
+
+  var segs = [];
+  var contentItems = [];
+  var partEls = [];
+  groups.forEach(function (group) {
+    var partEl = document.createElement("div");
+    partEl.className = "part";
+    partEl.style.flex = String(group.pages.length);
+    var label = document.createElement("div");
+    label.className = "part-label";
+    label.textContent = partNames[group.part];
+    var row = document.createElement("div");
+    row.className = "segs";
+    partEl.appendChild(label);
+    partEl.appendChild(row);
+    partsEl.appendChild(partEl);
+    partEls.push({ el: partEl, part: group.part });
+
+    var block = document.createElement("div");
+    var heading = document.createElement("h3");
+    heading.textContent = partNames[group.part];
+    var list = document.createElement("ol");
+    block.appendChild(heading);
+    block.appendChild(list);
+    contentsEl.appendChild(block);
+
+    group.pages.forEach(function (index, n) {
+      var seg = document.createElement("button");
+      seg.type = "button";
+      seg.className = "seg";
+      seg.setAttribute("aria-label", "Go to " + pages[index].dataset.title);
+      seg.title = pages[index].dataset.title;
+      seg.addEventListener("click", function () { show(index, true); });
+      row.appendChild(seg);
+      segs[index] = seg;
+
+      var item = document.createElement("li");
+      var go = document.createElement("button");
+      go.type = "button";
+      var num = document.createElement("span");
+      num.textContent = String(n + 1);
+      go.appendChild(num);
+      go.appendChild(document.createTextNode(pages[index].dataset.title));
+      go.addEventListener("click", function () { setContents(false); show(index, true); });
+      item.appendChild(go);
+      list.appendChild(item);
+      contentItems[index] = go;
+    });
+  });
+
+  function setContents(open) {
+    contentsEl.hidden = !open;
+    contentsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  contentsBtn.addEventListener("click", function () { setContents(contentsEl.hidden); });
+
+  function positionInPart(index) {
+    var group = groups.filter(function (g) { return g.pages.indexOf(index) !== -1; })[0];
+    return { part: group.part, n: group.pages.indexOf(index) + 1, of: group.pages.length };
+  }
+
+  function show(index, scroll) {
+    var previous = pages[current];
+    current = Math.max(0, Math.min(pages.length - 1, index));
+    pages.forEach(function (page, i) { page.hidden = i !== current; });
+    segs.forEach(function (seg, i) {
+      seg.classList.toggle("done", i < current);
+      seg.classList.toggle("now", i === current);
+      seg.setAttribute("aria-current", i === current ? "step" : "false");
+    });
+    contentItems.forEach(function (item, i) { item.setAttribute("aria-current", i === current ? "true" : "false"); });
+    var pos = positionInPart(current);
+    partEls.forEach(function (p) { p.el.classList.toggle("on", p.part === pos.part); });
+    count.innerHTML = "<b>Part " + pos.part + "</b> · " + pos.n + " of " + pos.of;
+    prev.disabled = current === 0;
+    next.disabled = current === pages.length - 1;
+
+    if (previous && previous !== pages[current]) { stopAll(previous); }
+    var fig = pages[current].querySelector(".anim");
+    if (fig) {
+      if (reduceMotion) { stopFig(fig); } else { play(fig); }
+    }
+    if (scroll) { partsEl.scrollIntoView({ block: "nearest" }); }
+  }
+
+  prev.addEventListener("click", function () { show(current - 1, true); });
+  next.addEventListener("click", function () { show(current + 1, true); });
+  document.querySelectorAll("[data-go]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var target = button.dataset.go === "next" ? current + 1 : parseInt(button.dataset.go, 10);
+      show(target, true);
+    });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.altKey || event.ctrlKey || event.metaKey) { return; }
+    if (event.key === "Escape") { setContents(false); }
+    if (event.key === "ArrowRight") { show(current + 1, false); }
+    if (event.key === "ArrowLeft") { show(current - 1, false); }
+  });
+
+  // Play-once animation: each input item travels into the machine, then its output appears.
+  function wait(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+  function centre(el, base) {
+    var r = el.getBoundingClientRect();
+    return { x: r.left - base.left + r.width / 2, y: r.top - base.top + r.height / 2 };
+  }
+  function items(fig, attr) { return Array.prototype.slice.call(fig.querySelectorAll("[" + attr + "]")); }
+  function restState(fig) {
+    items(fig, "data-src").forEach(function (el) { el.style.opacity = "0.4"; });
+    items(fig, "data-out").forEach(function (el) { el.style.opacity = "1"; });
+    items(fig, "data-static").forEach(function (el) { el.style.opacity = "1"; });
+    fig.querySelector(".mid").classList.remove("busy");
+  }
+  function stopFig(fig) {
+    fig.runId = (fig.runId || 0) + 1;
+    fig.querySelectorAll(".ghost").forEach(function (g) { g.remove(); });
+    restState(fig);
+  }
+  function stopAll(page) {
+    var fig = page.querySelector(".anim");
+    if (fig) { stopFig(fig); }
+  }
+
+  // Loops for about a minute, then rests on the finished picture.
+  var LOOP_FOR_MS = 60000;
+  async function play(fig) {
+    var id = fig.runId = (fig.runId || 0) + 1;
+    var started = performance.now();
+    while (id === fig.runId) {
+      var finished = await runOnce(fig, id);
+      if (!finished) { return; }
+      await wait(1800);
+      if (id !== fig.runId) { return; }
+      if (performance.now() - started > LOOP_FOR_MS) { stopFig(fig); return; }
+    }
+  }
+
+  async function runOnce(fig, id) {
+    fig.querySelectorAll(".ghost").forEach(function (g) { g.remove(); });
+    var srcs = items(fig, "data-src");
+    var outs = items(fig, "data-out");
+    var statics = items(fig, "data-static");
+    var mid = fig.querySelector(".mid");
+    srcs.forEach(function (el) { el.style.opacity = "1"; });
+    outs.forEach(function (el) { el.style.opacity = "0"; });
+    statics.forEach(function (el) { el.style.opacity = "0"; });
+    await wait(450);
+    if (id !== fig.runId) { return false; }
+    statics.forEach(function (el) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400, fill: "forwards" }); el.style.opacity = "1"; });
+
+    for (var i = 0; i < srcs.length; i++) {
+      if (id !== fig.runId) { return false; }
+      var base = fig.getBoundingClientRect();
+      var src = srcs[i];
+      var rect = src.getBoundingClientRect();
+      var ghost = src.cloneNode(true);
+      ghost.removeAttribute("data-src");
+      ghost.classList.add("ghost");
+      ghost.style.left = (rect.left - base.left) + "px";
+      ghost.style.top = (rect.top - base.top) + "px";
+      ghost.style.width = rect.width + "px";
+      ghost.style.opacity = "1";
+      fig.appendChild(ghost);
+      src.style.opacity = "0.4";
+      var from = centre(src, base);
+      var to = centre(mid, base);
+      var trip = ghost.animate([
+        { transform: "translate(0, 0) scale(1)", opacity: 1 },
+        { transform: "translate(" + (to.x - from.x) + "px, " + (to.y - from.y) + "px) scale(0.55)", opacity: 0 }
+      ], { duration: 750, easing: "cubic-bezier(0.45, 0, 0.55, 1)", fill: "forwards" });
+      await trip.finished.catch(function () {});
+      ghost.remove();
+      if (id !== fig.runId) { return false; }
+      mid.classList.add("busy");
+      await wait(280);
+      mid.classList.remove("busy");
+      if (id !== fig.runId) { return false; }
+      var out = outs[i];
+      var outAt = centre(out, base);
+      var midAt = centre(mid, base);
+      out.style.opacity = "1";
+      out.animate([
+        { transform: "translate(" + (midAt.x - outAt.x) * 0.45 + "px, " + (midAt.y - outAt.y) * 0.45 + "px) scale(0.7)", opacity: 0 },
+        { transform: "translate(0, 0) scale(1)", opacity: 1 }
+      ], { duration: 550, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" });
+      await wait(550);
+    }
+    return id === fig.runId;
+  }
+
+  var match = /^#p(\d+)$/.exec(location.hash);
+  show(match ? parseInt(match[1], 10) - 1 : 0, false);
+})();
+</script>
+</body>
+</html>
