@@ -25,7 +25,28 @@ API success. No production interpreter/original-code fallback is authorized.
 
 Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
 code stay local. Full continuation instructions are in
-`docs/Codex-m4-continuation-handoff.md`. Do not commit unless the user asks.
+`docs/Codex-m4-continuation-handoff.md`.
+
+## Required GitHub PR workflow
+
+Owner direction, 2026-10-27: use pull requests for all new changes.
+
+- `main` is the stable release branch; `develop` is the shared integration branch.
+- Start each task on a `codex/<topic>` branch from current `origin/develop`,
+  preferably in an isolated worktree when other work is uncommitted.
+- Task-scoped commits, feature-branch pushes and PR creation are authorized as
+  part of implementing a requested change. Commit only that task's authored
+  files; preserve unrelated changes and keep generated code/media local.
+- Open feature/fix PRs against `develop`. Promote reviewed integration work
+  through a separate `develop` -> `main` release PR.
+- Never push directly or force-push to `main` or `develop`. Do not merge PRs or
+  enable auto-merge unless the user explicitly requests it.
+- Run relevant checks and describe behavior, validation and release impact in
+  each PR. Build normal playtest releases from merged `main`, recording its SHA.
+  An explicitly requested development preview must be identified as such.
+
+See `docs/github-workflow.md`. Current private-repository plan restrictions
+prevent GitHub branch-protection enforcement; this workflow still applies.
 
 ## Required launcher installer filenames
 
