@@ -16,6 +16,7 @@ logic and behavior while making it usable on modern systems.
 · [Known playtest issues](docs/known-issues.md)
 · [Mod Tools](#mod-tools)
 · [Contributing](CONTRIBUTING.md)
+· [GitHub PR workflow](docs/github-workflow.md)
 
 > **In development.** A playable portable release is being prepared and is not
 > available yet. A source checkout builds the asset-free runtime and tests, but
