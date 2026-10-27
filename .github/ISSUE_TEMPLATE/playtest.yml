@@ -1,0 +1,43 @@
+name: Playtest report
+description: How a playtest session went on your hardware.
+labels: [playtest]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never attach game executables, media, archives, memory dumps, saves or generated code. Redact logs and screenshots before attaching them (see CONTRIBUTING.md).
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: Launcher 1.0.43, runtime 1.0.44
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware
+      placeholder: GPU, CPU, resolution, Windows HDR on or off, input devices
+    validations:
+      required: true
+  - type: textarea
+    id: played
+    attributes:
+      label: What was played
+      description: Missions, modes and settings.
+    validations:
+      required: true
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+  - type: textarea
+    id: problems
+    attributes:
+      label: Problems found
+      description: List each one briefly. Each problem also gets its own bug issue.
+  - type: textarea
+    id: performance
+    attributes:
+      label: Performance
+      description: Frame rate, stutters, load times.
