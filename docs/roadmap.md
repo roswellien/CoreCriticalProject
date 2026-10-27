@@ -8,6 +8,13 @@ target; Windows x64 and Vulkan are selected. The experimental native host now
 executes a live menu, partial Training 1 and normal quit; whole-game fidelity,
 performance and formal acceptance remain open.
 
+Reporting policy updated 2026-10-27: use the
+[project status reporting rule](project-status-reporting.md). The dated execution
+notes below are retained history. Track present work through demonstrated native
+behavior, fidelity/compatibility coverage, known defects and release checks.
+The paused initializer audit does not measure current project progress or gate
+routine development/releases.
+
 ## Model activation: 2026-10-16
 
 [All prepared models](all-models-native-integration-2026-10-16.md) now have native
@@ -15,7 +22,7 @@ registrations:14MW5chassis plus the authored original-Strider variant. Original
 Avatar/Firefly/Owens remain, parked STL Avatar excluded. Current standard launcher
 uses the validated all-models host, unchanged graphics/HUD/music and current colors.
 This is optional visual integration; native normal mapping and full combat/LOD/
-muzzle/performance validation remain, with strict acceptance still131/144paused.
+muzzle/performance validation remain. The separate startup-equivalence audit is paused.
 
 ## Playtesting and frontend priorities: 2026-10-15
 
@@ -125,7 +132,7 @@ Original media and generated game code remain local.
 
 Wrapper operation advances the original EXE -> D7VK -> Vulkan boundary. It
 does not complete the native E1-E4 checkpoints, authorize an original-code
-fallback in the native host, or change the accepted **131/144** startup roots.
+fallback in the native host, or change the historical startup audit's acceptance.
 
 ## High-resolution texture pack track
 
@@ -148,9 +155,9 @@ content/provenance policy. This work does not change native acceptance criteria.
 - M1-M3 retain their accepted bounded scopes. See the
   [milestone register](project-milestones.md), [M2 audit](m2-completion-audit.md)
   and [M3 acceptance](m3-acceptance.md).
-- The selected startup gate remains **131/144**, with13 remaining. The
-  [accepted receipt](../reports/m4-joint-startup131-root/acceptance-r1/report.json)
-  is not a whole-M4 or whole-game percentage.
+- The [historical startup audit](m4-progress-startup131.md) and its accepted
+  receipt remain preserved. They are separate from current execution status
+  and are not routine project-progress or release-readiness indicators.
 - Claude's new registry, lock, import, CRT-page, global-page and ENV probes are
   reusable prerequisites, with explicit policy/completeness limits. See the
   [work review](m4-claude-work-review-2026-10-11.md) and [acceptance history](m4-execution-plan-r14.md).
@@ -176,11 +183,15 @@ Modern platform services are built from the start. Gameplay/visual changes remai
 explicit options and must not hide defects in original-compatible mode.
 
 The table records executed boundaries and remaining work, not formal checkpoint
-closure. Accepted selected roots remain **131/144**. Strict acceptance v6 still
-fails on the pinned `docs/m4-startup-plan.md` hash; the decision to rerun reviews
-or change the criterion remains with the user. This publication changes neither.
+closure. Report current evidence and defects for those boundaries. The paused
+strict audit's stale-input and review obligations remain in its historical
+records; they are not automatically blockers for current development/releases.
 
 ## Existing strict acceptance lane
+
+This is the historical audit continuation procedure. Resume it only on an
+explicit audit request or for an identified current defect that needs it.
+Routine work does not require completing this old review chain.
 
 Preserve the running controls composer and watcher; never inspect its active
 SQLite contents or launch a duplicate. After actual successful closed output,
@@ -189,12 +200,12 @@ finalization, configuration, exact allowance review and strict acceptance. Keep
 all39 gates/841 typed predicates and existing whole-input conservation rules.
 Planning/doc changes do not authorize running the long chain in this session.
 
-Current141 still needs collection-completeness confirmation, CRT/ENV policy
+At the pause, the 141-root audit still needed collection-completeness confirmation, CRT/ENV policy
 review/admission, the53 inherited-check rebind, the full paired141 comparer and
-acceptance. Connected HYPOT, version and loader remain open. Reuse existing probe
+acceptance. HYPOT, version and loader were also audit backlog items. Reuse existing probe
 results; do not repeat captures or create more evidence adapters by default.
-This lane can progress alongside independent execution work, with heavy readers
-serialized. Completing144 does not by itself complete startup, menus or Training.
+If expressly resumed, keep its heavy readers serialized. Completing the
+initializer inventory would not by itself establish whole-game fidelity.
 
 ## Reuse before rebuilding
 

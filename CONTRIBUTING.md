@@ -27,6 +27,10 @@ preserve recompiled gameplay while implementing modern platform services behind
 observed contracts. State the execution boundary advanced by each implementation
 and validate it narrowly. Existing acceptance gates remain strict; backend
 fixtures, original-game hooks and saved-scene replay are not native gameplay.
+Follow the [status reporting rule](docs/project-status-reporting.md): describe
+demonstrated behavior, fidelity coverage, defects and release checks. The paused
+startup-equivalence inventory is historical evidence, not routine project
+progress or a prerequisite for normal development/releases.
 For documentation-only changes, check links, diff and evidence consistency;
 do not launch game captures or full verifier runs solely to update documents.
 

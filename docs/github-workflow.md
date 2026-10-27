@@ -58,6 +58,7 @@ branch, then create a PR with `develop` as its base. The PR should explain:
 
 - The concrete problem and the resulting behavior.
 - Relevant tests, native validation where applicable, and remaining limitations.
+- Concrete execution/fidelity evidence under the [status reporting rule](project-status-reporting.md), without an unchanged historical startup fraction.
 - Launcher/runtime/pack compatibility, version or release consequences, or that
   the change is documentation only.
 
