@@ -3,10 +3,13 @@
 Established: 2026-10-07. First implementation target: MechWarrior 3, admitted
 U.S. retail 1.2 executable. First native host target: Windows x64.
 
-Current acceptance: **131/144 selected startup initializers**, with **13 remaining**,
-as recorded in the [milestone update r13](project-milestones-r13.md) and
-[131-root evidence](m4-progress-startup131.md). Inventory coverage is separate
-from total M4 or project completion.
+Reporting update, 2026-10-27: current progress is demonstrated native
+functionality, fidelity/compatibility coverage, known defects and release
+validation; follow the [status reporting rule](project-status-reporting.md).
+The [startup-equivalence audit](m4-progress-startup131.md) is paused historical
+evidence, not the current progress indicator or a normal development/release gate.
+Its criteria and receipts remain intact. Dated entries below retain their scopes;
+they must not be read as a current list of unimplemented game functions.
 
 Strategy update, 2026-10-11: the [faithful modernization plan](faithful-modernization-plan.md)
 adds execution checkpoints E0-E6 alongside these milestones. Prioritize the
@@ -31,7 +34,7 @@ game-derived translations stay local.
 | M1 | MW3 Bootstrap | Complete within its bounded scope | Buildable repository; admitted image and version provenance; reviewed PE/API inventory and research backlog; pinned authored x86-to-x64 comparisons; one actual MW3 function compared with its compiled native translation; reproducible evidence. |
 | M2 | CPU and ABI validation | Complete 2026-10-07 within its defined bounded scope | Reviewed contracts and original/native comparisons for required floating-point behavior, direct calls, global data, an observed import bridge and bounded indirect dispatch. Unsupported behavior is identified and rejected. Define the guest state and routing needed for the next game slice. |
 | M3 | First native game subsystem | Complete 2026-10-07 within the accepted two-entry buffer component | Select and recover a bounded subsystem from evidence; compile its reachable code into the x64 host; implement its observed dependencies; compare outputs and state against the original on directed and recorded workloads. |
-| M4 | Native startup and menus | Active; 131 selected initializers accepted on 2026-10-10, with 13 of 144 remaining. Original/native O0/O2 execution, persistent source/provider ownership, paired data, formatter/cosine roots, the MFC current-thread/codepage initializer and independent controls pass. Required providers/controls, thread/exception behavior, environment/mainargs, scheduling and native menus remain open. [Current evidence](m4-progress-startup131.md). | A project-built x64 executable loads admitted user data, initializes required services, presents correct menus and responds to input. File/configuration, graphics, input and audio dependencies have explicit implementations; unresolved required paths fail visibly. |
+| M4 | Native startup and menus | Native execution has reached live startup/menu, Training, Instant Action and normal shutdown; broader fidelity and lifecycle validation remain open. See the [execution record](session-summary-2026-10-13-native-host.md). The separate initializer-equivalence audit is paused and retained as historical evidence. This reporting change grants no new formal milestone credit. | A project-built x64 executable loads admitted user data, initializes required services, presents correct menus and responds to input. File/configuration, graphics, input and audio dependencies have explicit implementations; unresolved required paths fail visibly. |
 | M5 | Playable native Training mission | Planned | Load and play Training through the native runtime, including movement, weapons, collision, AI, HUD, input and audio. Complete a recorded test scenario with measured original-behavior comparisons and no unresolved required execution paths. |
 | M6 | Gameplay compatibility and reproducible release | Planned | Expand to campaign and Instant Action; compare representative missions, saves and timing behavior; pass defined regression and extended-play scenarios; document supported configurations, remaining defects and an asset-free user build/install recipe. Choose soak durations and performance thresholds from measured baselines before testing this gate. |
 | M7 | Configurable modernization | Later | Each improvement has an original-behavior baseline, explicit settings and regression checks. The graphics workstream first establishes correct texture/material sampling, then adds filtered mip chains and capability-limited anisotropic filtering, followed by separately configurable edge anti-aliasing and optional output upscaling. Acceptance includes original/modern comparison scenes, motion and distance shimmer checks, alpha/UV/color fidelity, memory and frame-cost measurements, and a tested fallback profile. Other candidates include smooth independent rendering, resolution/aspect/FOV/UI support, modern devices, audio, authored textures and normal maps after geometry/material behavior is recovered. |
@@ -369,22 +372,27 @@ command-line load `0x7800BBD6 -> 0x78037174`. Next carry the reviewed
 command-line producer into the existing mappings without
 duplicate mappings or reseeding, and establish locale/parser, allocator and
 environment contracts. Then connect the main initializer-table caller.
-The 27-root gate was the earlier connected acceptance. The [current count](m4-progress-startup131.md)
-is 131 of 144, with 13 inventory roots and full native startup/menu behavior still
-open. Ordinary game play is not needed for these isolated native gates.
+The 27-root gate and the later [initializer audit](m4-progress-startup131.md)
+belong to the historical acceptance lane. Ordinary game play was not required
+for those isolated gates. Later native startup/menu and gameplay execution is
+recorded separately and must not be summarized by that paused audit's fraction.
 
 The [M4 requirements](m4-startup-plan.md) extend beyond these individual prerequisites.
-The [current execution plan](m4-execution-plan-r14.md) proceeds from 131 accepted
-initializers to hypot, shared constructors, fonts, version and
-registry/loader services, with source/native/review lanes concurrent.
-Thirteen inventory roots remain outside acceptance.
-CRT/SEH/MFC context, remaining initializers,
-application callbacks, services and native menu/input behavior remain required.
-Native menus and Training have not been established.
+The [historical acceptance continuation](m4-execution-plan-r14.md) retains the
+formal review backlog for numeric support, constructors, fonts, version and
+registry/loader services. Its unfinished reviews do not mean those functions
+are absent from the current runtime. Required CRT/SEH/MFC, initialization,
+callback and service behavior still applies. The later
+[native execution record](session-summary-2026-10-13-native-host.md) includes
+live menus and Training; broader fidelity coverage remains distinct.
 
 ## Reporting rules
 
-The [windowed Vulkan replay](vulkan-windowed-replay.md) now presents a saved
+Follow [project status reporting](project-status-reporting.md) for current
+updates. The following replay description is historical, not a current limit
+on native execution.
+
+The [windowed Vulkan replay](vulkan-windowed-replay.md) presents a saved
 Training scene through the project-built x64 renderer. Resize, minimize/restore,
 Escape/close, image transport and validation checks pass. This is a fixed saved
 scene interval; full frame/sequence replay and live native rendering remain

@@ -1,5 +1,11 @@
 # Public release preparation
 
+Status-reporting policy, 2026-10-27: follow
+[project status reporting](project-status-reporting.md). The paused startup
+equivalence audit is historical evidence, not a current release-readiness gate.
+The dated preparation notes below do not replace current install/update,
+compatibility, fidelity or distribution checks.
+
 Working review, October 21, 2026. The repository remains private. This document
 tracks the owner's requested preparation; it does not authorize publication,
 commits, history replacement, or a change to distribution policy.
@@ -283,5 +289,6 @@ statements or invent semantic names for unresolved guest functions. Separate
 readability-only changes from behavior fixes and validate callers after each.
 
 This preparation advances documentation, packaging and contributor onboarding.
-It does not advance a native game execution boundary or accepted roots; the
-accepted count remains **131/144**.
+It does not establish additional native gameplay or formal milestone acceptance.
+The historical initializer audit remains preserved separately and is not a
+routine status or release-progress indicator.

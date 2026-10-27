@@ -16,6 +16,7 @@ logic and behavior while making it usable on modern systems.
 · [Known playtest issues](docs/known-issues.md)
 · [Mod Tools](#mod-tools)
 · [Contributing](CONTRIBUTING.md)
+· [GitHub PR workflow](docs/github-workflow.md)
 
 > **In development.** A playable portable release is being prepared and is not
 > available yet. A source checkout builds the asset-free runtime and tests, but
@@ -146,8 +147,10 @@ dumps, private logs or generated game translations to public issues.
 | [Milestones](docs/project-milestones.md) | Evidence and formal acceptance criteria |
 | [First native function proof](docs/mw3-leaf-experiment.md) | A bounded original/native comparison |
 
-Formal acceptance remains **131/144 selected startup roots**. This is a specific
-evidence set, not overall project completion. Live execution, optional enhanced
+Track progress through demonstrated native functionality, fidelity/compatibility
+coverage, known defects and release validation; see the
+[status reporting rule](docs/project-status-reporting.md). The paused startup
+equivalence audit remains historical evidence. Live execution, optional enhanced
 visuals, saved replay and original-process diagnostics have different scopes.
 
 ## License and original content

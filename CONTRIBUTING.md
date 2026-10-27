@@ -5,6 +5,17 @@ then make the smallest change that preserves the observed behavior.
 
 ## Before starting
 
+Use the [GitHub PR workflow](docs/github-workflow.md): create a feature branch
+from `develop`, submit a PR back to `develop`, then promote a reviewed release
+through a `develop` -> `main` PR. Do not push changes directly to either shared
+branch. Keep unrelated work on its own branches or worktrees.
+
+This is a standing rule for all contributors and agents, including changes to
+documentation, tests, build scripts, fixes and release versions. New follow-up
+work after a merged PR starts a new branch/PR. Agents may make task-scoped
+commits and open PRs for requested work; PR merges require explicit owner
+direction. The full guide includes branch synchronization and release steps.
+
 Use the [code guide](docs/code-guide.md) to find the active component. Check open
 issues and describe substantial changes before investing in a redesign. Bug fixes,
 hardware playtest reports, Mod Tools improvements and clear documentation are
@@ -16,6 +27,10 @@ preserve recompiled gameplay while implementing modern platform services behind
 observed contracts. State the execution boundary advanced by each implementation
 and validate it narrowly. Existing acceptance gates remain strict; backend
 fixtures, original-game hooks and saved-scene replay are not native gameplay.
+Follow the [status reporting rule](docs/project-status-reporting.md): describe
+demonstrated behavior, fidelity coverage, defects and release checks. The paused
+startup-equivalence inventory is historical evidence, not routine project
+progress or a prerequisite for normal development/releases.
 For documentation-only changes, check links, diff and evidence consistency;
 do not launch game captures or full verifier runs solely to update documents.
 

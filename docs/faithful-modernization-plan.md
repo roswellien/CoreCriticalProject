@@ -127,26 +127,33 @@ do not assume constructor return means successful asset loading.
 
 ## Existing acceptance work remains valid and separate
 
-Accepted selected startup roots remain **131/144**, with 13 remaining. The
-authoritative [acceptance receipt](../reports/m4-joint-startup131-root/acceptance-r1/report.json)
+Reporting update, 2026-10-27: follow the
+[project status reporting rule](project-status-reporting.md). The startup
+equivalence audit is paused historical work, not the project progress indicator,
+the current implementation queue or a prerequisite for normal playtest releases.
+Runtime fidelity, ABI/resource contracts and required initialization behavior
+remain mandatory; this does not waive meaningful validation of current changes.
+
+The historical October 10 audit accepted **131/144** selected startup roots.
+Its authoritative [acceptance receipt](../reports/m4-joint-startup131-root/acceptance-r1/report.json)
 has SHA256 `aa9462f30bf4fa6c80ef926488928bb8680f207020e4f0aa166968caaf724061`.
 This fraction is not total M4 or project completion. No new accepted function,
 native menu, Training or renderer claim is created by this plan.
 
-The legacy controls chain continues: composer, admission **v2**, independent
+If that audit is explicitly resumed, its legacy controls chain is: composer, admission **v2**, independent
 composite reviewer, actual 45-field review, candidate finalization, configuration,
 exact allowance review and strict acceptance. Preserve all 39 required gates,
 841 typed predicates, source/resource/semantic limits and fresh whole-input
-conservation. The active composer and any approved full review may be expensive;
-do not duplicate them. This task authorizes planning and documentation, not
-starting those long jobs. When continuing, Claude should finish the authorized
-chain in a separate lane while doing independent execution work.
+conservation. Do not duplicate an active composer or approved review. Ordinary
+implementation, status reporting and release work do not authorize restarting
+that chain or making its remaining formal reviews the next project task.
 
-Current141 probe evidence is reusable, but inventory completeness, CRT/ENV policy
+The audit's 141-root probe evidence remains available, but inventory completeness, CRT/ENV policy
 review/admission, 53 inherited-check rebinding, full paired141 comparer and final
-acceptance remain open. HYPOT, version and loader also remain connected blockers.
-These tasks enter the execution lane when a recovered application boundary
-actually requires them, and stay on the acceptance backlog otherwise. Do not
+acceptance were left open in that lane. HYPOT, version and loader appear in its
+historical backlog; this is not evidence that the current runtime is blocked.
+Investigate such boundaries when current execution identifies a concrete defect
+or when the audit itself is requested. Do not
 discard required initializer behavior or relabel probes as accepted progress.
 
 ## Validation and work discipline
@@ -169,7 +176,8 @@ concrete execution defect. Preserve failures in fresh namespaces, avoid giant
 eager JSON loads and serialize heavy readers. Documentation-only changes use
 diff/link/consistency checks, not game captures or hours-long verifier runs.
 Report actual execution boundary, changed code, validation, fidelity limits,
-accepted count and next blocker. Keep reports bounded and useful to the next
+current defects and next useful step. Omit the historical audit fraction from
+routine reports. Keep reports bounded and useful to the next
 developer. Original media, traces and generated game code remain local.
 
 ## Documentation authority
