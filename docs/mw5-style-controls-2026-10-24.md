@@ -23,6 +23,11 @@ MW3-specific adaptations shown in the editor:
   in the existing saved mouse-button format.
 - Right mouse/L freelook, M MASC, Z reverse. Standalone modifier keys cannot be
   encoded as ordinary command keys by this editor.
+- Ctrl + numpad 0 toggles the original torso mode, independently of held
+  right-mouse/L freelook. This mode is saved outside the key layout, so switching
+  between MW3 and MW5 layouts does not reset it. Both factory layouts provide
+  the toggle. The October 27 repair updates only an exact unmodified older MW5
+  preset; custom names, bindings and cleared controls remain intact.
 - Numpad 2–9 sets 20–90% throttle, Numpad 0 full. Native `CMD_THROTTLE1` is
   **stop**, so X uses it and Numpad 1 remains unassigned rather than pretending
   it sets 10%. Unsupported actions remain unassigned.

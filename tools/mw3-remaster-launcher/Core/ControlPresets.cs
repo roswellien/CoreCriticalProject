@@ -4,6 +4,7 @@ namespace MW3RemasterLauncher.Core;
 public static class ControlPresets
 {
     public const string Mw5Id = "eb2fc23f53dc4665ac573c8b5e9a7001";
+    private const string TorsoModeHint = "Ctrl + numpad 0 toggles torso mode. ";
 
     public static ControlProfile Mw5()
     {
@@ -12,6 +13,7 @@ public static class ControlPresets
             Description = "MW5-style keyboard layout adapted for MW3. WASD movement; X stop; C/F center torso/legs; R/T target; V camera. " +
                 "1–5 select a weapon group; left mouse fires it. MW3 has no sixth group or direct multi-group firing. " +
                 "Middle mouse zooms; right mouse or L uses freelook; M uses MASC; Z reverses throttle. " +
+                TorsoModeHint +
                 "Numpad 2–9 sets 20–90% throttle; Numpad 0 sets full. Numpad 1, side buttons and wheel are unsupported here. " +
                 "Other unmapped actions remain unassigned. Mouse axes and sensitivity stay unchanged.",
             Bindings = ControlProfiles.Actions.ToDictionary(a => a.Name, _ => new ControlBinding())
@@ -43,6 +45,7 @@ public static class ControlPresets
         Key("CMD_MASC", 0x32); // M: standalone Alt cannot be encoded as a command key.
         Key("CMD_CYCLE_CAM", 0x2f); // V.
         Key("CMD_FREELOOK", 0x26); p.Bindings["CMD_FREELOOK"].Mouse = 2; // L / right mouse.
+        Key("CMD_TOGGLE_TMODE", 0x252); // Ctrl + numpad 0: independent of held freelook.
         p.Bindings["CMD_RETICULE_ZOOM"].Mouse = 3;
         Key("CMD_TARGET_CURSOR", 0x13); // R.
         Key("CMD_TARGET_NEXT_E", 0x14); Key("CMD_TARGET_PREV_E", 0x414); // T / Shift T.
@@ -53,5 +56,17 @@ public static class ControlPresets
         Key("CMD_HUD_TOGGLE", 0x125); // Alt K.
         Key("CMD_MCB_COMMAND", 0x3b); // F1: MW3 command menu.
         return p;
+    }
+
+    public static bool IsUnmodifiedLegacyMw5(ControlProfile profile)
+    {
+        var legacy = Mw5();
+        legacy.Description = legacy.Description.Replace(TorsoModeHint, "", StringComparison.Ordinal);
+        legacy.Bindings["CMD_TOGGLE_TMODE"].Primary = 0;
+        return profile.Id == legacy.Id && profile.Name == legacy.Name &&
+            profile.Description == legacy.Description && profile.Bindings.Count == legacy.Bindings.Count &&
+            legacy.Bindings.All(pair => profile.Bindings.TryGetValue(pair.Key, out var binding) &&
+                binding.Primary == pair.Value.Primary && binding.Secondary == pair.Value.Secondary &&
+                binding.Mouse == pair.Value.Mouse && binding.Joystick == pair.Value.Joystick);
     }
 }
