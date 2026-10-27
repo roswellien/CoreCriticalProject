@@ -98,6 +98,7 @@ class TitleTests(unittest.TestCase):
             "Fix CI: MSVC truncating-cast error and clang-format 7 files",
             "Add docs: illustrated field guide for new contributors",
             "Add mod-tools: export selected terrain tiles",
+            "Re-enable renderer: dynamic shadows on NVIDIA",
         ):
             self.assertEqual(self.title_levels(title), [], title)
 
@@ -133,6 +134,33 @@ class AreaListTests(unittest.TestCase):
         area_block = text.split("id: area", 1)[1]
         options = set(re.findall(r"^ +- (.+)$", area_block, flags=re.MULTILINE)) - {"docs", "Not sure"}
         self.assertEqual(options, set(checker.AREAS), "general.yml area options differ")
+
+
+class IssueFormHeadingTests(unittest.TestCase):
+    """The CLI heading lists in docs/github-workflow.md must match each issue form's fields, in order."""
+
+    def form_fields(self):
+        forms = {}
+        for path in sorted((ROOT / ".github/ISSUE_TEMPLATE").glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            name = re.search(r"^name: (.+)$", text, flags=re.MULTILINE)
+            if name is None:  # config.yml
+                continue
+            # Field labels sit at six spaces; checkbox option labels are deeper ("- label:").
+            labels = re.findall(r"^      label: (.+)$", text, flags=re.MULTILINE)
+            forms[name[1].strip()] = [label.strip().strip("\"'") for label in labels]
+        return forms
+
+    def documented_headings(self):
+        text = (ROOT / "docs/github-workflow.md").read_text(encoding="utf-8")
+        section = text.split("Issues filed with `gh issue create`", 1)[1].split("### Labels", 1)[0]
+        bullets = re.findall(r"^- ([^:\n]+): (.*?)(?=^- |\Z)", section, flags=re.MULTILINE | re.DOTALL)
+        return {form: re.findall(r"`### ([^`]+)`", body) for form, body in bullets}
+
+    def test_headings_match_forms(self):
+        forms = self.form_fields()
+        self.assertEqual(len(forms), 6, sorted(forms))
+        self.assertEqual(self.documented_headings(), forms)
 
 
 class ReportTests(unittest.TestCase):

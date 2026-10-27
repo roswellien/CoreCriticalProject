@@ -36,8 +36,8 @@ BRANCH_PATTERN = re.compile(
     r"/(?P<type>" + "|".join(BRANCH_TYPES) + r")"
     r"/(?:[0-9]+-)?[a-z0-9]+(?:-[a-z0-9]+)*$"
 )
-# <Verb> <area>: <what changed>
-TITLE_PATTERN = re.compile(r"^[A-Z][a-z]+ (?P<area>[A-Za-z-]+): \S.*$")
+# <Verb> <area>: <what changed>; the verb may be hyphenated, as in "Re-enable".
+TITLE_PATTERN = re.compile(r"^[A-Z][a-z]+(?:-[a-z]+)* (?P<area>[A-Za-z-]+): \S.*$")
 
 BRANCH_FORMAT = "<username>/<type>/<issue>-<slug>"
 TITLE_FORMAT = "<Verb> <area>: <what changed>"
@@ -141,7 +141,9 @@ def report(findings: list[Finding], env: Mapping[str, str], out: TextIO) -> None
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description="Check a PR's base branch, branch name and title against the project conventions."
+    )
     parser.add_argument("--title", required=True)
     parser.add_argument("--head", required=True, help="the PR's source branch")
     parser.add_argument("--base", required=True, help="the branch the PR merges into")

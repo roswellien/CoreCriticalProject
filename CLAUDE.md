@@ -16,7 +16,7 @@ URL, checks and remaining limitations. Normal published builds use merged `main`
 
 Read `docs/faithful-modernization-plan.md`, `docs/roadmap.md` and
 `docs/m4-claude-work-review-2026-10-11.md` before choosing implementation work.
-The execution-first strategy was authorized on2026-10-11: preserve original
+The execution-first strategy was authorized on 2026-10-11: preserve original
 MW3 gameplay through recompilation, integrate modern platform services/Vulkan,
 and advance native host -> live menu -> live Training. Do not restart as a remake.
 
