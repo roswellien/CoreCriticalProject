@@ -1,5 +1,10 @@
 # Cinematic compression and recompile playback plan
 
+Current follow-up, 2026-10-27: the [native MP4 playback plan](mp4-cinematic-playback-plan-2026-10-27.md)
+proposes integrating the existing 1280x960/24 fps H.264/AAC pack first. The
+AV1/MKV/FLAC candidate and older deferral below remain dated research; they are
+not prerequisites for that first integration and do not describe its media pack.
+
 Status: proposed format contract and local compression screening. Integration
 remains deferred until the native recompile is ready, as requested by the user.
 Complete-library encoding settings remain undecided pending sample review.
