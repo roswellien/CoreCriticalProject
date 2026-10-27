@@ -70,12 +70,13 @@ static class GameInstallationChecks
         // The supported closure names every required file, and no tier the runtime can do without.
         var empty = Path.Combine(root, "empty-install");
         Directory.CreateDirectory(empty);
-        var closure = ExpectMissing(() => GameInstallation.VerifyExistingAsync(empty).GetAwaiter().GetResult());
+        var closure = ExpectMissing(() => GameInstallation.VerifyExistingAsync(empty).GetAwaiter().GetResult())
+            .Split(": ", 2)[1].Split(". ")[0].Split(", ").ToHashSet();
         foreach (var required in new[] { "Mech3.exe", "zbd/c1/gamez.zbd", "zbd/c1/rtexture.zbd", "zbd/t1/rtexture2.zbd",
             "zbd/c4b/rtexture3.zbd", "zbd/rmechtex.zbd", "zbd/rmechtex16.zbd", "zbd/soundsH.zbd or zbd/soundsL.zbd" })
-            if (!closure.Contains(required + ",") && !closure.EndsWith(required))
+            if (!closure.Contains(required))
                 throw new Exception("A required original file was not reported missing: " + required);
-        foreach (var optional in new[] { "/texture.zbd", "/texture1.zbd", "/texture2.zbd", "rmechtexs.zbd" })
+        foreach (var optional in new[] { "zbd/c1/texture.zbd", "zbd/t1/texture1.zbd", "zbd/c4/texture2.zbd", "zbd/rmechtexs.zbd" })
             if (closure.Contains(optional)) throw new Exception("An unused texture tier was required: " + optional);
 
         // Authored retail layout: no medium software textures and no low-fidelity sound bank.
@@ -116,7 +117,7 @@ static class GameInstallationChecks
         File.Delete(PackStorage.Resolve(install, high.Target));
         var message = ExpectMissing(Verify);
         if (message != "3 required installation files are missing: zbd/c1/gamez.zbd, zbd/c1/rtexture.zbd, " +
-            "zbd/soundsH.zbd or zbd/soundsL.zbd")
+            "zbd/soundsH.zbd or zbd/soundsL.zbd. Install from your ISO and 1.2 patch instead.")
             throw new Exception("Missing installation files were not all reported: " + message);
     }
     private static string ExpectMissing(Action action)

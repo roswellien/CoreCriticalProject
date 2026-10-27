@@ -72,6 +72,12 @@ public static class GameInstallation
     // bank (0x56fbf0), so an install needs only one of the disc's two sound banks.
     private static readonly string[] SoundComponents = ["Sound_High_Fidelity", "Sound_Low_Fidelity"];
 
+    /// <summary>Each installed file after patch overrides, with the disc component it belongs to.</summary>
+    private static (ContentFile File, string Component)[] Closure(ContentFile[] baseFiles, ContentFile[] patchFiles)
+        // A patched target keeps the component of the base file it replaces.
+        => baseFiles.Concat(patchFiles).GroupBy(f => f.Target, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (File: g.Last(), Component: g.First().Source.Split('/')[0])).ToArray();
+
     public static Task VerifyExistingAsync(string directory, Action<string, double>? progress = null)
         => VerifyExistingAsync(directory, Media.BaseFiles, Media.PatchFiles, progress);
 
@@ -82,9 +88,7 @@ public static class GameInstallation
         await Task.Run(() =>
         {
             // Check the complete admitted data closure, while allowing unrelated files and saves.
-            // A patched target keeps the component of the base file it replaces.
-            var entries = baseFiles.Concat(patchFiles).GroupBy(f => f.Target, StringComparer.OrdinalIgnoreCase)
-                .Select(g => (File: g.Last(), Component: g.First().Source.Split('/')[0])).ToArray();
+            var entries = Closure(baseFiles, patchFiles);
             bool Present(ContentFile file)
             {
                 var path = PackStorage.Resolve(directory, file.Target);
@@ -99,11 +103,10 @@ public static class GameInstallation
             if (sounds.Length != 0 && !sounds.Any(present.Contains))
                 missing.Add(string.Join(" or ", sounds.Select(e => e.File.Target)));
             // Report every missing file at once, before spending time hashing the rest.
-            if (missing.Count == 1)
-                throw new FileNotFoundException("Required installation file is missing: " + missing[0]);
-            if (missing.Count > 1)
-                throw new FileNotFoundException(missing.Count + " required installation files are missing: " +
-                    string.Join(", ", missing));
+            if (missing.Count != 0)
+                throw new FileNotFoundException((missing.Count == 1 ? "Required installation file is missing: "
+                    : missing.Count + " required installation files are missing: ") + string.Join(", ", missing) +
+                    ". Install from your ISO and 1.2 patch instead.");
             for (var i = 0; i < present.Length; i++)
             {
                 var file = present[i].File;
@@ -116,10 +119,8 @@ public static class GameInstallation
     /// <summary>Admit the retail eight-megabyte hardware component before advertising it to the game.</summary>
     public static void VerifyHardwareRendererFiles(string directory)
     {
-        var files = Media.BaseFiles.Where(f => f.Source.StartsWith("Hardware_Texture_8/", StringComparison.Ordinal))
-            .Concat(Media.PatchFiles).GroupBy(f => f.Target, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Any(f => f.Source.StartsWith("Hardware_Texture_8/", StringComparison.Ordinal)))
-            .Select(g => g.Last()).ToArray();
+        var files = Closure(Media.BaseFiles, Media.PatchFiles).Where(e => e.Component == "Hardware_Texture_8")
+            .Select(e => e.File).ToArray();
         if (files.Length != 6) throw new InvalidDataException("Hardware renderer component metadata is incomplete.");
         foreach (var file in files)
             VerifyFile(PackStorage.Resolve(directory, file.Target), file.Sha256, file.Bytes);
