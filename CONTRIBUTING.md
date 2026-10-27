@@ -5,6 +5,11 @@ then make the smallest change that preserves the observed behavior.
 
 ## Before starting
 
+Use the [GitHub PR workflow](docs/github-workflow.md): create a feature branch
+from `develop`, submit a PR back to `develop`, then promote a reviewed release
+through a `develop` -> `main` PR. Do not push changes directly to either shared
+branch. Keep unrelated work on its own branches or worktrees.
+
 Use the [code guide](docs/code-guide.md) to find the active component. Check open
 issues and describe substantial changes before investing in a redesign. Bug fixes,
 hardware playtest reports, Mod Tools improvements and clear documentation are
