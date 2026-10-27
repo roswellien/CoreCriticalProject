@@ -2,7 +2,7 @@
 
 ## Standing project rules
 
-Read `AGENTS.md`, `CONTRIBUTING.md`, `docs/github-workflow.md` and `docs/legal.md`
+Read `AGENTS.md`, `CODE_STYLE.md`, `CONTRIBUTING.md`, `docs/github-workflow.md` and `docs/legal.md`
 before changing this repository. The owner's October 27, 2026 PR workflow applies
 to all future changes, including documentation, fixes, tests, build scripts and
 release/version changes. It supersedes older session-specific commit scopes.
