@@ -88,10 +88,16 @@ class Check:
 
 @dataclass
 class Language:
-    """The file suffixes a language covers and the checks that run on them."""
+    """The file suffixes a language covers and the checks that run on them.
+
+    pinned_tool names the tool whose version is checked against requirements.txt or
+    package.json before running. dotnet and PSScriptAnalyzer are pinned elsewhere (CI and
+    check_powershell.ps1), so those languages have none.
+    """
 
     suffixes: list[str]
     checks: dict[str, Check]
+    pinned_tool: str | None = None
 
 
 # ---------------------------------------------------------------------------------------
@@ -231,9 +237,14 @@ def run_tool(command: list[str], stdin_text: str | None = None) -> ToolRun:
 # ---------------------------------------------------------------------------------------
 
 
+def tool_command(name: str) -> str:
+    """The path to run for a tool; a bare name if missing, which run_tool reports."""
+    return find_tool(name) or name
+
+
 def run_clang_format(paths: list[str], fix: bool) -> ToolRun:
     mode = ["-i"] if fix else ["--dry-run", "--Werror"]
-    return run_tool([find_tool("clang-format") or "clang-format", *mode, "--style=file", *paths])
+    return run_tool([tool_command("clang-format"), *mode, "--style=file", *paths])
 
 
 def parse_clang_format(output: str) -> list[str]:
@@ -244,7 +255,7 @@ def parse_clang_format(output: str) -> list[str]:
 
 def run_ruff_format(paths: list[str], fix: bool) -> ToolRun:
     mode = [] if fix else ["--check", "--output-format", "concise"]
-    return run_tool([find_tool("ruff") or "ruff", "format", "--no-cache", *mode, *paths])
+    return run_tool([tool_command("ruff"), "format", "--no-cache", *mode, *paths])
 
 
 def parse_ruff_format(output: str) -> list[str]:
@@ -254,8 +265,8 @@ def parse_ruff_format(output: str) -> list[str]:
 
 
 def run_ruff_lint(paths: list[str], fix: bool) -> ToolRun:
-    ruff = find_tool("ruff") or "ruff"
-    return run_tool([ruff, "check", "--no-fix", "--no-cache", "--output-format", "concise", *paths])
+    lint_options = ["--no-fix", "--no-cache", "--output-format", "concise"]
+    return run_tool([tool_command("ruff"), "check", *lint_options, *paths])
 
 
 def parse_ruff_lint(output: str) -> list[str]:
@@ -283,7 +294,7 @@ def parse_dotnet_format(output: str) -> list[str]:
 
 def run_prettier(paths: list[str], fix: bool) -> ToolRun:
     mode = "--write" if fix else "--list-different"
-    return run_tool([find_tool("prettier") or "prettier", mode, *paths])
+    return run_tool([tool_command("prettier"), mode, *paths])
 
 
 def powershell_runner(mode: str) -> Callable[[list[str], bool], ToolRun]:
@@ -304,6 +315,7 @@ LANGUAGES: dict[str, Language] = {
     "cpp": Language(
         suffixes=[".cpp", ".hpp", ".h", ".inc"],
         checks={"format": Check(run_clang_format, parse_clang_format, 1, can_fix=True)},
+        pinned_tool="clang-format",
     ),
     "python": Language(
         suffixes=[".py"],
@@ -311,6 +323,7 @@ LANGUAGES: dict[str, Language] = {
             "format": Check(run_ruff_format, parse_ruff_format, 1, can_fix=True),
             "lint": Check(run_ruff_lint, parse_ruff_lint, 1, can_fix=False),
         },
+        pinned_tool="ruff",
     ),
     "csharp": Language(
         suffixes=[".cs"],
@@ -320,6 +333,7 @@ LANGUAGES: dict[str, Language] = {
     "web": Language(
         suffixes=[".js", ".cjs", ".mjs", ".css", ".html"],
         checks={"format": Check(run_prettier, parse_lines, 1, can_fix=True)},
+        pinned_tool="prettier",
     ),
     "powershell": Language(
         suffixes=[".ps1", ".psm1", ".psd1"],
@@ -329,10 +343,6 @@ LANGUAGES: dict[str, Language] = {
         },
     ),
 }
-
-# Which pinned tool each language needs, checked against requirements.txt/package.json.
-# dotnet and PSScriptAnalyzer are pinned elsewhere (CI and check_powershell.ps1).
-PINNED_TOOL_FOR_LANGUAGE = {"cpp": "clang-format", "python": "ruff", "web": "prettier"}
 
 
 # ---------------------------------------------------------------------------------------
@@ -362,18 +372,36 @@ def overall_exit_code(results: list[CheckResult]) -> int:
     return EXIT_CLEAN
 
 
-def run_check(language: str, check_name: str, check: Check, paths: list[str]) -> CheckResult:
-    enforced = check_name in ENFORCED.get(language, set())
-    result = CheckResult(language, check_name, enforced, files_checked=len(paths))
+def short_error(tool_run: ToolRun) -> str:
+    """The exit code and last few output lines, enough to see why a tool failed."""
+    last_lines = " | ".join(tool_run.output.strip().splitlines()[-3:])
+    return f"exit code {tool_run.exit_code}: {last_lines}"
+
+
+def in_batches(paths: list[str]) -> Iterator[list[str]]:
     for start in range(0, len(paths), FILES_PER_CALL):
-        batch = paths[start : start + FILES_PER_CALL]
+        yield paths[start : start + FILES_PER_CALL]
+
+
+def is_enforced(language: str, check_name: str) -> bool:
+    return check_name in ENFORCED.get(language, set())
+
+
+def version_error_for(language: str, pins: dict[str, str]) -> str:
+    """Return why a language's pinned tool can't be used, or "" if it can."""
+    pinned_tool = LANGUAGES[language].pinned_tool
+    return check_tool_version(pinned_tool, pins[pinned_tool]) if pinned_tool else ""
+
+
+def run_check(language: str, check_name: str, check: Check, paths: list[str]) -> CheckResult:
+    result = CheckResult(language, check_name, is_enforced(language, check_name), len(paths))
+    for batch in in_batches(paths):
         tool_run = check.run(batch, False)
         tool_finished_normally = tool_run.exit_code in (0, check.found_exit_code)
         items = check.parse(tool_run.output) if tool_finished_normally else []
         outcome = classify_tool_run(tool_run, items, check.found_exit_code)
         if outcome == "error":
-            last_lines = " | ".join(tool_run.output.strip().splitlines()[-3:])
-            result.error = f"exit code {tool_run.exit_code}: {last_lines}"
+            result.error = short_error(tool_run)
             return result
         result.findings.extend(items)
     return result
@@ -441,20 +469,30 @@ def selected_checks(arguments: argparse.Namespace) -> Iterator[tuple[str, str, C
 
 def fix_enforced(arguments: argparse.Namespace, exclude_patterns: list[str]) -> int:
     """Rewrite files for enforced formatters only; never apply lint fixes."""
+    pins = read_pinned_versions()
     exit_code = EXIT_CLEAN
     for language, check_name, check in selected_checks(arguments):
         if not check.can_fix:
             continue
-        if check_name not in ENFORCED.get(language, set()):
+        if not is_enforced(language, check_name):
             print(f"{language} {check_name}: skipped, its cleanup has not landed yet")
             continue
+        # A different formatter version would lay files out differently from CI.
+        version_error = version_error_for(language, pins)
+        if version_error:
+            print(f"{language} {check_name}: error: {version_error}")
+            exit_code = EXIT_TOOL_ERROR
+            continue
         paths = list_files(LANGUAGES[language].suffixes, exclude_patterns)
-        for start in range(0, len(paths), FILES_PER_CALL):
-            tool_run = check.run(paths[start : start + FILES_PER_CALL], True)
+        failed_run = None
+        for batch in in_batches(paths):
+            tool_run = check.run(batch, True)
             if tool_run.exit_code != 0:
-                print(f"{language} {check_name}: error: exit code {tool_run.exit_code}")
-                exit_code = EXIT_TOOL_ERROR
+                failed_run = tool_run
                 break
+        if failed_run:
+            print(f"{language} {check_name}: error: {short_error(failed_run)}")
+            exit_code = EXIT_TOOL_ERROR
         else:
             print(f"{language} {check_name}: formatted {len(paths):,} files")
     return exit_code
@@ -480,10 +518,9 @@ def main(argv: list[str]) -> int:
     pins = read_pinned_versions()
     results = []
     for language, check_name, check in selected_checks(arguments):
-        enforced = check_name in ENFORCED.get(language, set())
-        pinned_tool = PINNED_TOOL_FOR_LANGUAGE.get(language)
-        version_error = check_tool_version(pinned_tool, pins[pinned_tool]) if pinned_tool else ""
+        version_error = version_error_for(language, pins)
         if version_error:
+            enforced = is_enforced(language, check_name)
             result = CheckResult(language, check_name, enforced, 0, error=version_error)
         else:
             paths = list_files(LANGUAGES[language].suffixes, exclude_patterns)
