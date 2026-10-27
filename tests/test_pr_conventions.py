@@ -4,6 +4,7 @@ import importlib.util
 import io
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -117,6 +118,21 @@ class TitleTests(unittest.TestCase):
         at_limit = prefix + "x" * (checker.MAX_TITLE_LENGTH - len(prefix))
         self.assertEqual(self.title_levels(at_limit), [])
         self.assertEqual(self.title_levels(at_limit + "x"), ["warning"])
+
+
+class AreaListTests(unittest.TestCase):
+    """The checker's AREAS is the one list in code; the docs and the General form must match it."""
+
+    def test_docs_area_labels_match(self):
+        text = (ROOT / "docs/github-workflow.md").read_text(encoding="utf-8")
+        documented = set(re.findall(r"`area: ([a-z-]+)`", text))
+        self.assertEqual(documented, set(checker.AREAS), "docs/github-workflow.md area labels differ")
+
+    def test_general_form_areas_match(self):
+        text = (ROOT / ".github/ISSUE_TEMPLATE/general.yml").read_text(encoding="utf-8")
+        area_block = text.split("id: area", 1)[1]
+        options = set(re.findall(r"^ +- (.+)$", area_block, flags=re.MULTILINE)) - {"docs", "Not sure"}
+        self.assertEqual(options, set(checker.AREAS), "general.yml area options differ")
 
 
 class ReportTests(unittest.TestCase):

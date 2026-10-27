@@ -82,6 +82,10 @@ content; a successful export does not authorize sharing it or prove native play.
 
 ## Issues and pull requests
 
+File issues with the repository's issue forms and follow
+[Names and formats](docs/github-workflow.md#names-and-formats) for branches,
+commits, PR titles and labels.
+
 For a bug, include the component/build, OS/GPU/driver when relevant, the supported
 game profile, steps to reproduce, expected result and actual result. Attach only
 reviewed, redacted logs/screenshots. Never upload archives, executables, memory

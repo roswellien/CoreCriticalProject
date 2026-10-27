@@ -41,7 +41,8 @@ tests, build scripts, hotfixes and release/version changes. It supersedes older
 task-specific commit instructions; it does not expand a task's file scope.
 
 - `main` is the stable release branch; `develop` is the shared integration branch.
-- Start each task on a `codex/<topic>` branch from current `origin/develop`,
+- Start each task on a `<username>/<type>/<issue>-<topic>` branch (see "Names
+  and formats" in `docs/github-workflow.md`) from current `origin/develop`,
   preferably in an isolated worktree when other work is uncommitted.
 - Task-scoped commits, feature-branch pushes and PR creation are authorized as
   part of implementing a requested change. Commit only that task's authored

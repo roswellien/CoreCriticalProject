@@ -4,9 +4,9 @@ Before changing files, read `AGENTS.md` and `docs/github-workflow.md`. The
 owner's October 27, 2026 PR workflow is a standing project rule for every task,
 including documentation, fixes, tests, build scripts and release/version changes.
 
-Create a topic branch from current `origin/develop` (`codex/<topic>` is the
-default for Codex; other contributors may use a descriptive topic prefix), and
-open a feature/fix PR into `develop`. Releases reach `main` through a separate
+Create a topic branch from current `origin/develop`
+(`<username>/<type>/<issue>-<topic>`; see "Names and formats" in
+`docs/github-workflow.md`), and open a feature/fix PR into `develop`. Releases reach `main` through a separate
 `develop` -> `main` PR. Never push directly or force-push to either shared branch.
 Do not merge PRs or enable auto-merge unless the owner explicitly requests it.
 Task-scoped commits and PR creation are authorized for requested work; preserve
