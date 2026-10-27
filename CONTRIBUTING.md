@@ -10,6 +10,12 @@ from `develop`, submit a PR back to `develop`, then promote a reviewed release
 through a `develop` -> `main` PR. Do not push changes directly to either shared
 branch. Keep unrelated work on its own branches or worktrees.
 
+This is a standing rule for all contributors and agents, including changes to
+documentation, tests, build scripts, fixes and release versions. New follow-up
+work after a merged PR starts a new branch/PR. Agents may make task-scoped
+commits and open PRs for requested work; PR merges require explicit owner
+direction. The full guide includes branch synchronization and release steps.
+
 Use the [code guide](docs/code-guide.md) to find the active component. Check open
 issues and describe substantial changes before investing in a redesign. Bug fixes,
 hardware playtest reports, Mod Tools improvements and clear documentation are
