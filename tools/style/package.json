@@ -1,0 +1,8 @@
+{
+  "name": "mw34-style-tools",
+  "private": true,
+  "description": "Pinned Prettier for tools/style/check_style.py. Install with: npm ci --prefix tools/style",
+  "devDependencies": {
+    "prettier": "3.9.9"
+  }
+}

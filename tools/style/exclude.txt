@@ -1,0 +1,28 @@
+# Files the style checkers never read or rewrite.
+#
+# One pattern per line, in one of three shapes that gitignore, Ruff and Prettier all read
+# the same way:
+#   - a folder, ending in "/" (may contain "*")
+#   - an exact file path
+#   - a file-name pattern with no "/"
+# The same lines are copied into ruff.toml (extend-exclude) and .prettierignore so that
+# running those tools on the whole repo by hand can't touch these files either.
+# tools/style/check_style.py fails if the three lists ever differ.
+
+# Frozen, hash-pinned evidence. Includes the native host. Formatting would break the pins.
+tools/m4-*/
+tools/x87-*/
+tools/m4-crt-locale-default-check.py
+
+# Hash-pinned host sources that the apply_*.py scripts patch by exact text match.
+tools/remaster-launcher/native-overrides/
+
+# Third-party code, listed in third-party.json beside it.
+games/mw3/mod-tools/editor/web/static/js/three.min.js
+games/mw3/mod-tools/editor/web/static/js/OrbitControls.js
+games/mw3/mod-tools/editor/web/static/js/TransformControls.js
+
+# Generated files.
+recomp/generated/
+*_vert.h
+*_frag.h
