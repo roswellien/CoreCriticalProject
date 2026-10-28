@@ -64,6 +64,9 @@ if(BUILD_TESTING)
     endif()
 
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME native_host_build_metadata
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${PROJECT_SOURCE_DIR}/tools/m4-crt-heap-carry/test_host_build.py")
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
     set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

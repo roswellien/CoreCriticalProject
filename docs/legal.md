@@ -6,6 +6,14 @@ The project does not supply games or grant rights to their content.
 
 ## Owner-authorized private playtest delivery
 
+For issue #25 on October 27, 2026, the owner authorized committing reviewed
+host lookup metadata with provenance: native address/symbol dispatch tables,
+mesh-name/count/attachment rosters, material hashes and reviewed UV-region
+tables, and admission range/hash metadata. This is a scoped repository decision
+for interoperability metadata. It does not authorize committing translated
+instruction bodies, original binaries, meshes, textures, media, or generated
+game objects. See `tools/m4-crt-heap-carry/HOST_BUILD.md` for the per-file record.
+
 On October 25, 2026 the owner explicitly selected public **update-only**
 downloads for in-launcher updating. This extends the authorized precompiled
 launcher/runtime update delivery to the read-only update endpoint, while the
