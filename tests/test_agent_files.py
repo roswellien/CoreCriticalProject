@@ -75,6 +75,12 @@ class PathTests(FixtureTree):
         self.write("AGENTS.md", GOOD_AGENTS.replace("`CODE_STYLE.md`", "`tools/style/`"))
         self.assertEqual(self.check(), [])
 
+    def test_folder_under_an_untracked_top_level_name_is_an_error(self):
+        self.write("AGENTS.md", GOOD_AGENTS.replace("`CODE_STYLE.md`", "`toolz/style/`"))
+        self.assertEqual(
+            messages(self.check()), ["AGENTS.md names `toolz/style/`, which isn't tracked."]
+        )
+
     def test_copilot_file_is_checked(self):
         self.write(".github/copilot-instructions.md", "Follow `AGENT.md`.\n")
         self.assertEqual(

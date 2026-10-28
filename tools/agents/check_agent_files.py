@@ -134,11 +134,15 @@ def _path_in_token(token: str, tracked: _TrackedTree) -> str | None:
     if any(character in CHARACTERS_NEVER_IN_A_PATH for character in token):
         return None
     # Drop a "#section" anchor, and the "@" of an import quoted as an example.
-    path = token.split("#", 1)[0].removeprefix("@").rstrip("/")
+    without_anchor = token.split("#", 1)[0].removeprefix("@")
+    path = without_anchor.rstrip("/")
     if not path:
         return None
     starts_with_tracked_name = path.split("/", 1)[0] in tracked.top_level_names
-    if path.endswith(PATH_EXTENSIONS) or starts_with_tracked_name:
+    # A trailing slash marks a folder even when its top-level name isn't tracked,
+    # so a typo or a deleted top-level folder is still caught.
+    names_a_folder = without_anchor.endswith("/")
+    if path.endswith(PATH_EXTENSIONS) or starts_with_tracked_name or names_a_folder:
         return path
     return None
 
