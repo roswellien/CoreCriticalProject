@@ -307,6 +307,23 @@ class SyncTests(FixtureTree):
         with self.assertRaisesRegex(syncer.SyncStopped, r"\.claude/skills is a link"):
             syncer.sync(self.root, [])
 
+    def test_linked_claude_folder_stops(self):
+        self.write_skill()
+        self.write("elsewhere/skills/README.md", "Not ours.\n")
+        if not link_folder(self.root / "elsewhere", self.root / ".claude"):
+            self.skipTest("this platform can't create a folder link here")
+        with self.assertRaisesRegex(syncer.SyncStopped, r"\.claude/skills is a link"):
+            syncer.sync(self.root, [])
+
+    def test_linked_source_skill_stops_without_changes(self):
+        self.write("elsewhere/SKILL.md", SKILL)
+        (self.root / ".agents/skills").mkdir(parents=True)
+        if not link_folder(self.root / "elsewhere", self.source("core-critical-demo")):
+            self.skipTest("this platform can't create a folder link here")
+        with self.assertRaisesRegex(syncer.SyncStopped, r"core-critical-demo is a link"):
+            syncer.sync(self.root, [])
+        self.assertFalse(self.copy("core-critical-demo").exists())
+
 
 def link_folder(target, link):
     """Link `link` to the folder `target`; return False when the platform refuses."""
@@ -510,6 +527,20 @@ class SkillTests(FixtureTree):
                     "which isn't tracked."
                 )
             ],
+        )
+
+    def test_linked_skill_file_is_an_error(self):
+        tracked = self.add_skill(files={"SKILL.md": SKILL, "notes.md": "Notes.\n"})
+        source_notes = self.root / ".agents/skills/core-critical-demo/notes.md"
+        source_notes.unlink()
+        try:
+            os.symlink(self.root / "CLAUDE.md", source_notes)
+        except OSError:
+            self.skipTest("this platform can't create a file link here")
+        self.write(".claude/skills/core-critical-demo/notes.md", GOOD_CLAUDE)
+        self.assertEqual(
+            messages(self.check(tracked)),
+            [".agents/skills/core-critical-demo/notes.md is a link; commit a real file instead."],
         )
 
     def test_valid_variations_pass(self):

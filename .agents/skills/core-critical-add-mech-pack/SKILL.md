@@ -28,8 +28,11 @@ this is the order to work in.
    beside it is the builder's staging copy.
 5. **Install** it in a compatible launcher (Mods & Packs, Install Pack), enable it
    and check it appears in the Mech Lab ("Installing and adding skins").
-6. **For a skin pack,** set its chassis to the full ID (`<pack_id>:<chassis_id>`)
-   and follow the same section.
+6. **For a skin pack** for an added mech: it isn't built with
+   `tools/remaster-launcher/build_chassis_pack.py`. It uses the existing skin-pack
+   format, with its chassis set to the full ID (`<pack_id>:<chassis_id>`), the
+   close and distance mesh SHA-256 identities of that mech, and textures that
+   match those meshes ("Installing and adding skins").
 7. **Before calling it release-ready,** run the gameplay and save checks the
    authoring doc lists with the exact installed pack. A successful build or import
    alone is not release qualification.

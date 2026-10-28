@@ -95,35 +95,35 @@ def _shared_skill_folders(skills_folder: Path) -> list[Path]:
 
 
 def _refuse_links(root: Path) -> None:
-    """Stop when the copy, or anything in its shared skills, is a link to somewhere else.
+    """Stop when either skills folder, or anything in their shared skills, is a link.
 
-    Someone may have linked the folders by hand instead of running this script;
-    copying through such a link would write a folder onto itself. os.path.realpath
-    follows both symlinks and Windows junctions (Python 3.11 has no
-    Path.is_junction), so a path whose real location differs from where it sits
-    under the copy's real location passes through a link.
+    Someone may have linked the folders by hand instead of running this script.
+    Copying through a link on the copy side would write a folder onto itself, and
+    a link on the source side would be copied as a real file, hiding the link.
+    os.path.realpath follows both symlinks and Windows junctions (Python 3.11 has
+    no Path.is_junction), so a path whose real location differs from where it sits
+    under the repository's real location passes through a link, including a linked
+    `.claude` or `.agents` folder.
     """
-    copy = root / SKILL_COPY
-    if not copy.exists():
-        return
-    expected_copy = os.path.join(os.path.realpath(copy.parent), copy.name)
-    paths_to_check = [(copy, expected_copy)]
-    real_copy = os.path.realpath(copy)
-    for skill_folder in _shared_skill_folders(copy):
-        # The skill folder first, so a linked folder is named rather than a file in it.
-        paths_to_check.append((skill_folder, os.path.join(real_copy, skill_folder.name)))
-        for folder, folder_names, file_names in os.walk(skill_folder):
-            for name in [*folder_names, *file_names]:
-                path = Path(folder) / name
-                expected = os.path.join(real_copy, *path.relative_to(copy).parts)
-                paths_to_check.append((path, expected))
+    real_root = os.path.realpath(root)
+    for skills_name in (SKILL_SOURCE, SKILL_COPY):
+        skills_folder = root / skills_name
+        if not skills_folder.exists():
+            continue
+        paths_to_check = [skills_folder]
+        for skill_folder in _shared_skill_folders(skills_folder):
+            # The skill folder first, so a linked folder is named rather than a file in it.
+            paths_to_check.append(skill_folder)
+            for folder, folder_names, file_names in os.walk(skill_folder):
+                paths_to_check += [Path(folder) / name for name in [*folder_names, *file_names]]
 
-    for path, expected in paths_to_check:
-        if os.path.normcase(os.path.realpath(path)) != os.path.normcase(expected):
-            raise SyncStopped(
-                f"{path.relative_to(root).as_posix()} is a link; replace it with a real "
-                "folder or file, then rerun."
-            )
+        for path in paths_to_check:
+            expected = os.path.join(real_root, *path.relative_to(root).parts)
+            if os.path.normcase(os.path.realpath(path)) != os.path.normcase(expected):
+                raise SyncStopped(
+                    f"{path.relative_to(root).as_posix()} is a link; replace it with a real "
+                    "folder or file, then rerun."
+                )
 
 
 def _refuse_edited_copies(source_files: dict[str, Path], copy_files: dict[str, Path]) -> None:

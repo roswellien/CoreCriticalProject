@@ -34,8 +34,14 @@ Then fill in the Validation section of the PR description
 - Each check you ran, with its result (for example "ctest: 23 of 23 passed").
 - Each check you couldn't run here, marked not run with the reason (a missing
   tool, the wrong OS). Never list it as passed.
-- Every remaining limit of the change.
-- Tick the template's checkboxes only when they are true.
+- Every remaining limit of the change, and any failure that already exists on
+  `develop`.
+- Each item of "Definition of done" in `CONTRIBUTING.md`: the issue's acceptance
+  criteria and where the change meets each, tests seen failing with their
+  behavior broken, a launcher or game run (or a "Playtest <what to check>"
+  issue), and a review by someone who didn't write the change.
+- Keep every checkbox from the template. Tick one only when it is true; for one
+  that doesn't apply, leave it unticked and say why beside it.
 
 Claim no more than the checks show; `docs/project-status-reporting.md` says what
 a build or test does and doesn't establish.

@@ -279,6 +279,17 @@ def _check_skills(root: Path, tracked: _TrackedTree) -> list[Finding]:
     source_files = _tracked_under(SKILL_SOURCE, tracked)
     copy_files = _tracked_under(SKILL_COPY, tracked)
     findings = _check_skill_copy(root, source_files, copy_files)
+    for skills_name, relative_paths in ((SKILL_SOURCE, source_files), (SKILL_COPY, copy_files)):
+        for relative_path in sorted(relative_paths):
+            # Git checks a symlink out as a plain text file on Windows, so a linked
+            # skill file would read differently there.
+            if (root / skills_name / relative_path).is_symlink():
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{skills_name}/{relative_path} is a link; commit a real file instead.",
+                    )
+                )
 
     skill_folders = set()
     for relative_path in sorted(source_files):
