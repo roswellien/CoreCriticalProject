@@ -6,6 +6,9 @@ files trustworthy:
 
 - Every repository path they name in backticks, and every Claude Code `@` import,
   must be a tracked file or folder. Claude Code skips a missing import silently.
+  A backticked path that .gitignore covers, such as a local `build/` folder, is
+  allowed, since it is deliberately never committed.
+- `CLAUDE.md` imports `@AGENTS.md`; without it Claude Code misses every rule.
 - `AGENTS.md` stays at or under 200 lines, with a warning from 150. Longer
   instruction files are followed less reliably, and Claude Code's guidance is to
   stay under 200 lines.
@@ -36,6 +39,7 @@ is at least one error.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -160,7 +164,8 @@ class _TrackedTree:
         self.top_level_names = {path.split("/", 1)[0] for path in tracked_paths}
 
     def contains(self, path: str) -> bool:
-        return path in self.files or path in self.folders
+        folder_or_file = path.rstrip("/")
+        return folder_or_file in self.files or folder_or_file in self.folders
 
     def ignores(self, path: str) -> bool:
         """Return whether .gitignore covers `path`, such as a local `build/` folder.
@@ -168,10 +173,20 @@ class _TrackedTree:
         Agent files may name a folder that is deliberately never committed. Any git
         failure, such as a folder that isn't a repository, counts as not ignored.
         """
+        # Only `root` itself may be the repository: without the ceiling, git would use
+        # the ignore rules of a repository that merely contains it.
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("GIT_DIR", "GIT_WORK_TREE")
+        }
+        environment["GIT_CEILING_DIRECTORIES"] = str(self.root.resolve().parent)
         try:
             result = subprocess.run(
-                ["git", "check-ignore", "-q", "--no-index", path],
+                ["git", "check-ignore", "-q", "--no-index", "--", path],
                 cwd=self.root,
+                env=environment,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 check=False,
             )
@@ -191,9 +206,7 @@ def _check_named_paths(
             continue
         if skill_folder is not None and tracked.contains(f"{skill_folder}/{path}"):
             continue
-        # A "build/" ignore rule matches only a name known to be a folder, so keep the slash.
-        named_as_folder = token.split("#", 1)[0].endswith("/")
-        if not tracked.ignores(f"{path}/" if named_as_folder else path):
+        if not tracked.ignores(path):
             findings.append(Finding("error", f"{name} names `{token}`, which isn't tracked."))
     for path in CLAUDE_IMPORT.findall(text):
         if not tracked.contains(path):
@@ -202,7 +215,11 @@ def _check_named_paths(
 
 
 def _path_in_token(token: str, tracked: _TrackedTree) -> str | None:
-    """Return the repository path a backticked token names, or None if it isn't a path."""
+    """Return the repository path a backticked token names, or None if it isn't a path.
+
+    A folder keeps one trailing slash, because a "build/" ignore rule matches only a
+    name known to be a folder.
+    """
     if any(character in CHARACTERS_NEVER_IN_A_PATH for character in token):
         return None
     # Drop a "#section" anchor, and the "@" of an import quoted as an example.
@@ -214,7 +231,9 @@ def _path_in_token(token: str, tracked: _TrackedTree) -> str | None:
     # A trailing slash marks a folder even when its top-level name isn't tracked,
     # so a typo or a deleted top-level folder is still caught.
     names_a_folder = without_anchor.endswith("/")
-    if path.endswith(PATH_EXTENSIONS) or starts_with_tracked_name or names_a_folder:
+    if names_a_folder:
+        return f"{path}/"
+    if path.endswith(PATH_EXTENSIONS) or starts_with_tracked_name:
         return path
     return None
 

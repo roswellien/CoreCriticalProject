@@ -96,6 +96,21 @@ class PathTests(FixtureTree):
             messages(self.check()), ["AGENTS.md names `toolz/style/`, which isn't tracked."]
         )
 
+    def test_outer_repository_ignore_rules_are_not_used(self):
+        # The checked folder sits inside another repository's ignored build/ folder,
+        # whose rules would otherwise excuse every path named here.
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        self.write(".gitignore", "build/\n")
+        inner = self.root / "build/inner"
+        inner.mkdir(parents=True)
+        (inner / "AGENTS.md").write_text(
+            GOOD_AGENTS.replace("`CODE_STYLE.md`", "`toolz/style/`"), encoding="utf-8"
+        )
+        self.assertEqual(
+            messages(checker.check(inner, TRACKED)),
+            ["AGENTS.md names `toolz/style/`, which isn't tracked."],
+        )
+
     def test_claude_file_without_the_agents_import_is_an_error(self):
         self.write("CLAUDE.md", GOOD_CLAUDE.replace("@AGENTS.md\n", "See AGENTS.md.\n"))
         self.assertEqual(
