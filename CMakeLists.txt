@@ -35,6 +35,11 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_mfc_receiver_tests)
     add_test(NAME mfc_receiver_lifecycle COMMAND mw34_mfc_receiver_tests)
 
+    add_executable(mw34_joystick_selection_tests tools/remaster-launcher/test_joystick_selection.cpp)
+    target_include_directories(mw34_joystick_selection_tests PRIVATE "${PROJECT_SOURCE_DIR}/tools/remaster-launcher")
+    mw34_warnings(mw34_joystick_selection_tests)
+    add_test(NAME joystick_selection COMMAND mw34_joystick_selection_tests)
+
     add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
     target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
