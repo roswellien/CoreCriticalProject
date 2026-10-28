@@ -287,8 +287,8 @@ When the integration branch is ready for a release, open a separate PR from
 `develop` to `main` summarizing the included changes and release validation.
 After that PR is merged, compile the release from the resulting `main` commit
 and retain its SHA in build/publication evidence. Existing versioned installer,
-update naming, signing, original-file verification and rollback requirements
-continue to apply. Development previews require an explicit request and a clear
+update naming (see `docs/release-filenames.md`), signing, original-file
+verification and rollback requirements continue to apply. Development previews require an explicit request and a clear
 development label.
 
 Follow the repository-only [launcher and website release checklist](launcher-and-website-release.md)

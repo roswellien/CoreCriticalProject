@@ -71,7 +71,8 @@ making the repository public.
 - `CODE_STYLE.md`: how to write and format code.
 - `docs/legal.md`: what may and may not be distributed.
 - `docs/project-status-reporting.md`: how to report progress and what not to claim.
-- `docs/release-filenames.md`: required installer and update filenames.
+- `docs/release-filenames.md`: required installer and update filenames; follow it
+  before naming or publishing any release file.
 - `docs/roadmap.md`: what is planned next.
 - `docs/code-guide.md`: how the code is organized and how it should explain itself.
 - `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
