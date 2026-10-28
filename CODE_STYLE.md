@@ -48,5 +48,5 @@ Assume the next person to change this code is new to the project and to the lang
   [tools/style/exclude.txt](tools/style/exclude.txt): frozen, hash-pinned evidence,
   third-party and generated files.
 
-Checks switched on today: none. Every language is report-only until its cleanup PR
-lands; CI shows the counts on each run.
+Checks switched on today: web format (JavaScript, CSS, HTML). Every other language is
+report-only until its cleanup PR lands; CI shows the counts on each run.
