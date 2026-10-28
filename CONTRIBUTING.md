@@ -142,9 +142,9 @@ A PR is ready to leave draft when:
 
 - It lists each acceptance criterion of its issue and where the change meets
   it, or says that it doesn't.
-- The build, CTest and `format-check` pass locally, and
-  `python tools/style/check_style.py --fix` has been run, or the PR names any
-  failure that already exists on `develop`.
+- The build, CTest, `format-check` and `python tools/style/check_style.py`
+  pass locally (run `check_style.py --fix` first), or the PR names any failure
+  that already exists on `develop`.
 - Its tests follow [Tests](#tests).
 - A change a player or modder would notice has been run in the real program
   (the launcher, or the game up to the affected screen), with a log line or
