@@ -152,9 +152,10 @@ form would produce, in this order, and pass its label with `--label`:
 
 Each issue and PR gets one type label and at least one area label. Type labels
 are `bug`, `enhancement`, `documentation` (pairs with the `docs` title area),
-`playtest`, `research` and `release`. `needs-triage` marks issues from the
-General form until they're sorted, and `needs-info` marks issues waiting on
-more detail from the reporter.
+`playtest`, `research` and `release`. `needs-triage` marks captures (issues from
+the General form or filed quickly with that label) until they're sorted; they
+need no type or area label until then (see [Triage](#triage)). `needs-info`
+marks issues waiting on more detail from the reporter.
 
 | Area label | Covers |
 | --- | --- |
@@ -252,6 +253,30 @@ gh project item-edit --project-id PVT_kwHODf7y6M4BpC8L --id <card id> --field-id
 
 To unassign yourself, use `gh issue edit <issue> --remove-assignee "@me"`.
 
+## Triage
+
+Capture what you find without stopping your work, and keep the board small
+enough to choose from.
+
+- **No issue needed:** something found mid-task that's in the task's scope and
+  takes under about 15 minutes is fixed in the same PR. A known limit the PR
+  leaves goes in its list of remaining limitations.
+- **Capture everything else** as a `needs-triage` issue: the General form, or
+  `gh issue create --label needs-triage` with its headings (`### Summary`,
+  `### Details`, `### Area`). It needs no type label or priority yet; add an
+  area label if it's obvious.
+- **Where captures show:** the board's "Inbox" view lists open `needs-triage`
+  issues; the "Triaged" view shows everything else.
+- **Sorting:** the maintainer, or someone they ask, sorts the Inbox on a regular
+  check and whenever it passes 10 open issues. Each capture becomes a focused
+  issue (its form's headings, type and area labels, a priority, and
+  `needs-triage` removed), is closed as a duplicate
+  (`gh issue close <issue> --duplicate-of <other>`), or is closed as not planned
+  with a one-line reason (`gh issue close <issue> --reason "not planned" --comment "<reason>"`).
+- **Idle issues:** on the same check, P2 issues with no activity for 60 days
+  (the board check lists them) are kept or closed as not planned with a reason. No bot closes issues, so a
+  report is never closed without someone reading it.
+
 ## Promote and publish a release
 
 When the integration branch is ready for a release, open a separate PR from
@@ -301,8 +326,9 @@ are required. Preserve the existing strict native acceptance accounting.
 `python tools/github/check_board.py` lists where the project board, the issues
 and the PRs disagree: open issues off the board or without a priority or
 labels, cards whose status doesn't match their issue or PR, empty PRs, PRs that
-close no issue, and recently closed issues or merged PRs that don't line up,
-against the rules in [Project board](#project-board). It only reads, using your own `gh` login with the `project` scope, and it exits
+close no issue, recently closed issues or merged PRs that don't line up, P2 issues idle for
+60 days, and an Inbox of more than 10 captures, against the rules in [Project board](#project-board)
+and [Triage](#triage). Captures (`needs-triage`) need no type, area or priority. It only reads, using your own `gh` login with the `project` scope, and it exits
 with 1 when it finds something. Run it before a release and whenever the board
 looks out of date.
 

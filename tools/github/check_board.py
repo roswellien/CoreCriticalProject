@@ -29,12 +29,16 @@ BOARD_OWNER = "roswellien"
 BOARD_NUMBER = 1
 
 TYPE_LABELS = ("bug", "enhancement", "documentation", "playtest", "research", "release")
-# Issues from the General form carry this until triage gives them a type.
+# Captures carry this until triage gives them a type, an area and a priority.
 TRIAGE_LABEL = "needs-triage"
+# More open captures than this means the Inbox is overdue for sorting.
+INBOX_LIMIT = 10
 AREA_LABELS = tuple(f"area: {area}" for area in check_pr_conventions.AREAS)
 
 # A card In progress whose issue hasn't changed for this long probably isn't.
 STALE_AFTER = timedelta(days=7)
+# A P2 issue idle this long is reviewed at triage: kept, or closed as not planned.
+IDLE_P2_AFTER = timedelta(days=60)
 # Merged PRs and closed issues older than this aren't checked, so old history stays quiet.
 RECENT = timedelta(days=14)
 
@@ -93,6 +97,7 @@ def find_problems(
         findings += _check_issue_labels(issue)
         findings += _check_card(issue, card, open_pulls_by_issue.get(issue.number, []), now)
         findings += _check_closed_issue(issue, merged_pulls_by_issue.get(issue.number, []), now)
+    findings += _check_inbox_size(issues)
     for pull in sorted(pulls, key=lambda pull: pull.number):
         findings += _check_pull(pull, issues_by_number, now)
     return findings
@@ -109,13 +114,17 @@ def _pulls_closing_each_issue(pulls: list[PullRequest], state: str) -> dict[int,
     return pulls_by_issue
 
 
+def _is_capture(issue: Issue) -> bool:
+    return issue.is_open and TRIAGE_LABEL in issue.labels
+
+
 def _check_issue_labels(issue: Issue) -> list[Finding]:
-    if not issue.is_open:
+    # Captures get their type and area labels when they're sorted.
+    if not issue.is_open or _is_capture(issue):
         return []
     subject = f"issue #{issue.number}"
     findings = []
-    has_type = any(label in TYPE_LABELS for label in issue.labels)
-    if not has_type and TRIAGE_LABEL not in issue.labels:
+    if not any(label in TYPE_LABELS for label in issue.labels):
         findings.append(
             Finding(subject, "has no type label", f"add one of: {', '.join(TYPE_LABELS)}")
         )
@@ -154,8 +163,17 @@ def _check_card(
                 "set the card to where the work is, or close the issue",
             )
         )
-    if not card.priority:
+    if not card.priority and not _is_capture(issue):
         findings.append(Finding(subject, "has no priority", "set P0, P1 or P2 on its card"))
+    if card.priority == "P2" and now - issue.updated_at > IDLE_P2_AFTER:
+        idle_days = (now - issue.updated_at).days
+        findings.append(
+            Finding(
+                subject,
+                f"is P2 and hasn't changed for {idle_days} days",
+                'keep it, or close it as not planned (see "Triage" in docs/github-workflow.md)',
+            )
+        )
     if card.status == "In progress":
         if not issue.assignees:
             findings.append(
@@ -183,6 +201,19 @@ def _check_card(
             )
         )
     return findings
+
+
+def _check_inbox_size(issues: list[Issue]) -> list[Finding]:
+    capture_count = sum(1 for issue in issues if _is_capture(issue))
+    if capture_count <= INBOX_LIMIT:
+        return []
+    return [
+        Finding(
+            "the Inbox",
+            f"has {capture_count} open {TRIAGE_LABEL} issues, more than {INBOX_LIMIT}",
+            'sort them (see "Triage" in docs/github-workflow.md)',
+        )
+    ]
 
 
 def _check_closed_issue(
