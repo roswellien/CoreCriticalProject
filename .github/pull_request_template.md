@@ -4,7 +4,7 @@
 
 <!-- Describe the problem and the resulting behavior. -->
 
-Closes #<!-- Issue number, or delete this line if there is none. -->
+Closes #<!-- Issue number. Every task has one; file it first if needed. Delete this line only in a release or sync PR. -->
 
 <!-- Native behavior: name the execution boundary changed and the original comparison or fixture used. -->
 
