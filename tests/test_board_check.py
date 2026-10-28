@@ -107,9 +107,29 @@ class IssueTests(unittest.TestCase):
             found, [("issue #1", "has no type label"), ("issue #1", "has no area label")]
         )
 
-    def test_triage_label_stands_in_for_a_type(self):
-        found = problems([issue(1, labels=("needs-triage", "area: launcher"))], cards=[card(1)])
+    def test_capture_needs_no_type_area_or_priority(self):
+        found = problems([issue(1, labels=("needs-triage",))], cards=[card(1, priority="")])
         self.assertEqual(found, [])
+
+    def test_inbox_over_its_limit(self):
+        over_limit = [("the Inbox", "has 11 open needs-triage issues, more than 10")]
+        cases = (
+            # (open captures, closed captures, expected findings)
+            (10, 0, []),
+            (11, 0, over_limit),
+            (10, 5, []),
+        )
+        for open_count, closed_count, expected in cases:
+            with self.subTest(open=open_count, closed=closed_count):
+                open_captures = [issue(n, labels=("needs-triage",)) for n in range(open_count)]
+                closed_captures = [
+                    issue(100 + n, is_open=False, labels=("needs-triage",))
+                    for n in range(closed_count)
+                ]
+                cards = [card(capture.number, priority="") for capture in open_captures]
+                cards += [card(capture.number, "Done", priority="") for capture in closed_captures]
+                found = problems(open_captures + closed_captures, cards=cards)
+                self.assertEqual(found, expected)
 
     def test_missing_priority(self):
         self.assertEqual(
@@ -136,12 +156,24 @@ class CardStatusTests(unittest.TestCase):
         found = problems([issue(1, assignees=())], cards=[card(1, "In progress")])
         self.assertEqual(found, [("issue #1", "is In progress with nobody assigned")])
 
-    def test_in_progress_gone_quiet(self):
-        found = problems([issue(1, idle_days=8)], cards=[card(1, "In progress")])
-        self.assertEqual(found, [("issue #1", "is In progress but hasn't changed for 8 days")])
-
-    def test_in_progress_within_a_week_is_fine(self):
-        self.assertEqual(problems([issue(1, idle_days=6)], cards=[card(1, "In progress")]), [])
+    def test_idle_cards(self):
+        cases = (
+            # (status, priority, idle days, expected findings)
+            (
+                "In progress",
+                "P1",
+                8,
+                [("issue #1", "is In progress but hasn't changed for 8 days")],
+            ),
+            ("In progress", "P1", 6, []),
+            ("Backlog", "P2", 61, [("issue #1", "is P2 and hasn't changed for 61 days")]),
+            ("Backlog", "P2", 59, []),
+            ("Backlog", "P1", 61, []),
+        )
+        for status, priority, idle_days, expected in cases:
+            with self.subTest(status=status, priority=priority, idle_days=idle_days):
+                found = problems([issue(1, idle_days=idle_days)], cards=[card(1, status, priority)])
+                self.assertEqual(found, expected)
 
     def test_in_review_without_open_pr(self):
         found = problems(
