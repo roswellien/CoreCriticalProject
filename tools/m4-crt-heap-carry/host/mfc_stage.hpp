@@ -43,6 +43,7 @@
 #include <iterator>
 #include <functional>
 #include "com_ddraw.hpp"
+#include "input/directinput_caps.hpp"
 #include <string>
 inline std::atomic<unsigned>mw34_frames_presented{0};  /* presented frames, for the host profiler window */
 extern "C" unsigned long long mw34_x87_counts[2];  /* composition.cpp: flog2/fexp2 bridge calls (diagnostic) */
@@ -1142,7 +1143,12 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      std::vector<unsigned char>b(z);get_bytes(ph,b.data(),z);const HRESULT hr=n=="SetProperty"?dv->SetProperty(*rp,reinterpret_cast<LPCDIPROPHEADER>(b.data())):dv->GetProperty(*rp,reinterpret_cast<LPDIPROPHEADER>(b.data()));
      if(n=="GetProperty"&&SUCCEEDED(hr))for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({ph+i},b[i]);apis.back()+="("+std::to_string(pg<0x10000?pg:0)+")="+std::to_string(unsigned(hr));return done(unsigned(hr),3);}
     if(n=="GetCapabilities"){const unsigned a=arg(1);if(!readable(a,4))deny("DIDEVCAPS outside the memory contract",a);const unsigned z=load(a);if(z<24||z>sizeof(DIDEVCAPS)||!writable(a,z))deny("DIDEVCAPS size outside the model",z);DIDEVCAPS c{};c.dwSize=z;
-     const HRESULT hr=dv->GetCapabilities(&c);if(SUCCEEDED(hr))for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},reinterpret_cast<const unsigned char*>(&c)[i]);return done(unsigned(hr),2);}
+     const HRESULT hr=dv->GetCapabilities(&c);
+     if(SUCCEEDED(hr)){
+      // No IFORCE2 or effect service exists, so the game must take its plain-joystick path (see directinput_caps.hpp).
+      if(mw34::directinput::hide_force_feedback(c))apis.back()+="(force feedback hidden)";
+      for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},reinterpret_cast<const unsigned char*>(&c)[i]);}
+     return done(unsigned(hr),2);}
     if(n=="GetObjectInfo") {
      const unsigned out=arg(1);
      if(!readable(out,4))deny("GetObjectInfo size outside the memory contract",out);
