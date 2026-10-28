@@ -239,6 +239,14 @@ including `develop`; it does not need a branch-filter change for this setup.
 Relevant native/launcher checks supplement CI where private original inputs
 are required. Preserve the existing strict native acceptance accounting.
 
+`python tools/github/check_board.py` lists where the project board, the issues
+and the PRs disagree: open issues off the board or without a priority or
+labels, cards whose status doesn't match their issue or PR, empty PRs, PRs that
+close no issue, and recently closed issues or merged PRs that don't line up.
+It only reads, using your own `gh` login with the `project` scope, and it exits
+with 1 when it finds something. Run it before a release and whenever the board
+looks out of date.
+
 GitHub currently rejects branch-protection and ruleset access for this private
 repository with HTTP 403 as of October 27, 2026, requesting GitHub Pro or a public
 repository. The repository remains private. Until the owner enables a supporting plan, the PR
