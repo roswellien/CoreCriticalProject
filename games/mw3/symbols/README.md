@@ -23,7 +23,7 @@ header; every other line is one function. No blank or comment lines.
 | `address` | Entry virtual address, 8 uppercase hex digits, no `0x`: `00409ED0`. Rows are sorted by address, each address once. |
 | `name` | `sub_<address>`, for example `sub_00409ED0`, until the function is confirmed. A confirmed row may get a real name: a C identifier (letters, digits, underscore) that no other row uses and that doesn't start with `sub_`. |
 | `confidence` | `guess`, `likely` or `confirmed`, as in [CODE_STYLE.md](../../../CODE_STYLE.md). It applies to the purpose, and to the name when it isn't `sub_`. |
-| `evidence` | Where the proof is: a repository path such as `games/mw3/docs/first-function.md`, optionally with `#heading`, or `none`. A confirmed row must give a path to a file that exists. |
+| `evidence` | Where the proof is: a repository path such as `games/mw3/docs/first-function.md`, optionally with `#heading`, or `none`. A confirmed row must give a path to a file committed to the repository; a local-only file, such as a private report under `reports/`, doesn't count. |
 | `purpose` | One line saying what the function does. A function nobody has studied yet gets `guess`, `none` and `unknown`. |
 
 To add or change a row: keep the rows in address order, keep the `sub_` name until

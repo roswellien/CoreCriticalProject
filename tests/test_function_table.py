@@ -7,6 +7,7 @@ at its evidence.
 """
 
 import re
+import subprocess
 import unittest
 from pathlib import Path, PurePosixPath
 
@@ -20,7 +21,7 @@ ADDRESS_PATTERN = re.compile(r"[0-9A-F]{8}")
 C_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-def evidence_path_problem(evidence, file_exists):
+def evidence_path_problem(evidence, is_committed_file):
     """Return why an evidence path is unusable, or an empty string if it is fine."""
     file_part = evidence.split("#", 1)[0]
     path = PurePosixPath(file_part)
@@ -33,16 +34,16 @@ def evidence_path_problem(evidence, file_exists):
     )
     if not is_plain_relative_path:
         return f"evidence {evidence!r} is not a forward-slash path inside the repository"
-    if not file_exists(file_part):
-        return f"evidence file {file_part!r} does not exist"
+    if not is_committed_file(file_part):
+        return f"evidence file {file_part!r} is not committed to the repository"
     return ""
 
 
-def find_problems(text, file_exists):
+def find_problems(text, is_committed_file):
     """Return (line number, problem) pairs for every rule the table text breaks.
 
-    file_exists takes a repository-relative path and says whether that file exists,
-    so tests can check made-up rows without real evidence files.
+    is_committed_file takes a repository-relative path and says whether git tracks
+    that file, so tests can check made-up rows without real evidence files.
     """
     problems = []
     if "\r" in text:
@@ -98,7 +99,7 @@ def find_problems(text, file_exists):
             if confidence == "confirmed":
                 problems.append((line_number, "a confirmed row must name its evidence file"))
         else:
-            path_problem = evidence_path_problem(evidence, file_exists)
+            path_problem = evidence_path_problem(evidence, is_committed_file)
             if path_problem:
                 problems.append((line_number, path_problem))
 
@@ -107,14 +108,24 @@ def find_problems(text, file_exists):
     return problems
 
 
-def repository_file_exists(relative_path):
-    return (ROOT / relative_path).is_file()
+def committed_files():
+    """List the files git tracks.
+
+    Evidence must be something every contributor and CI can read. A local-only file,
+    such as a private report under the git-ignored reports/ folder, exists on one PC
+    but not in the repository, so checking the disk would pass there and fail on CI.
+    """
+    listing = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
+    ).stdout.decode("utf-8")
+    return set(listing.split("\0")) - {""}
 
 
 class RealTableTests(unittest.TestCase):
     def test_table_follows_every_rule(self):
         text = TABLE.read_bytes().decode("utf-8")
-        problems = find_problems(text, repository_file_exists)
+        committed = committed_files()
+        problems = find_problems(text, lambda relative_path: relative_path in committed)
         report = "\n".join(f"line {number}: {problem}" for number, problem in problems)
         self.assertEqual(problems, [], f"{TABLE.name} has problems:\n{report}")
 
@@ -127,12 +138,12 @@ class RuleTests(unittest.TestCase):
     GOOD_ROW = "00409ED0\tsub_00409ED0\tconfirmed\tdocs/proof.md\tReturns an address"
 
     @staticmethod
-    def only_proof_exists(relative_path):
+    def only_proof_is_committed(relative_path):
         return relative_path == "docs/proof.md"
 
     def problems_for(self, *rows):
         text = "\n".join([HEADER, *rows]) + "\n"
-        return find_problems(text, self.only_proof_exists)
+        return find_problems(text, self.only_proof_is_committed)
 
     def test_good_rows_pass(self):
         rows = [
@@ -152,7 +163,7 @@ class RuleTests(unittest.TestCase):
             "real name on a guess": "00409ED0\tPlaySound\tguess\tnone\tMaybe plays a sound",
             "real name with a space": "00409ED0\tFire Weapon\tconfirmed\tdocs/proof.md\tFires",
             "confirmed without evidence": "00409ED0\tsub_00409ED0\tconfirmed\tnone\tunknown",
-            "evidence file missing": "00409ED0\tsub_00409ED0\tlikely\tdocs/missing.md\tunknown",
+            "evidence not committed": "00409ED0\tsub_00409ED0\tlikely\tdocs/missing.md\tunknown",
             "evidence outside the repo": "00409ED0\tsub_00409ED0\tlikely\t../proof.md\tunknown",
             "absolute evidence path": "00409ED0\tsub_00409ED0\tlikely\t/docs/proof.md\tunknown",
             "backslash evidence path": "00409ED0\tsub_00409ED0\tlikely\tdocs\\proof.md\tunknown",
@@ -160,9 +171,10 @@ class RuleTests(unittest.TestCase):
             "purpose with outer spaces": "00409ED0\tsub_00409ED0\tguess\tnone\t unknown",
             "blank line": "",
         }
+        # Each row breaks exactly one rule, so exactly one problem proves that rule fired.
         for label, row in cases.items():
             with self.subTest(label):
-                self.assertNotEqual(self.problems_for(row), [])
+                self.assertEqual(len(self.problems_for(row)), 1)
 
     def test_rows_out_of_order_or_repeated_are_reported(self):
         later = "00433F00\tsub_00433F00\tguess\tnone\tunknown"
@@ -183,10 +195,10 @@ class RuleTests(unittest.TestCase):
             "CRLF endings": good_text.replace("\n", "\r\n"),
             "no final newline": good_text.removesuffix("\n"),
         }
-        self.assertEqual(find_problems(good_text, self.only_proof_exists), [])
+        self.assertEqual(find_problems(good_text, self.only_proof_is_committed), [])
         for label, text in bad_texts.items():
             with self.subTest(label):
-                self.assertNotEqual(find_problems(text, self.only_proof_exists), [])
+                self.assertNotEqual(find_problems(text, self.only_proof_is_committed), [])
 
 
 if __name__ == "__main__":
