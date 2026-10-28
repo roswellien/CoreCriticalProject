@@ -1,0 +1,23 @@
+# Ruff settings for maintained Python. Rules and reasons: CODE_STYLE.md and tools/style/README.md.
+# 100 columns matches .clang-format; py311 matches the Python version CI uses.
+line-length = 100
+target-version = "py311"
+
+# Never read or rewrite frozen, third-party or generated files, even if named directly.
+# Must hold exactly the lines in tools/style/exclude.txt (check_style.py checks this).
+force-exclude = true
+extend-exclude = [
+    "tools/m4-*/",
+    "tools/x87-*/",
+    "tools/m4-crt-locale-default-check.py",
+    "tools/remaster-launcher/native-overrides/",
+    "games/mw3/mod-tools/editor/web/static/js/three.min.js",
+    "games/mw3/mod-tools/editor/web/static/js/OrbitControls.js",
+    "games/mw3/mod-tools/editor/web/static/js/TransformControls.js",
+    "recomp/generated/",
+    "*_vert.h",
+    "*_frag.h",
+]
+
+[format]
+line-ending = "auto"

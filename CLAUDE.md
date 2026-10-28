@@ -44,3 +44,4 @@ Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
 code stay local. Full continuation instructions are in
 `docs/claude-m4-continuation-handoff.md`. Follow the standing PR workflow above
 for task-scoped commits; do not include unrelated files.
+Follow the code style rules in @CODE_STYLE.md when writing or changing code.

@@ -32,6 +32,7 @@ API success. No production interpreter/original-code fallback is authorized.
 Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
 code stay local. Full continuation instructions are in
 `docs/Codex-m4-continuation-handoff.md`.
+Follow `CODE_STYLE.md` when writing or changing code.
 
 ## Required GitHub PR workflow
 

@@ -1,0 +1,11 @@
+# Must hold exactly the lines in tools/style/exclude.txt (tools/style/check_style.py checks this).
+tools/m4-*/
+tools/x87-*/
+tools/m4-crt-locale-default-check.py
+tools/remaster-launcher/native-overrides/
+games/mw3/mod-tools/editor/web/static/js/three.min.js
+games/mw3/mod-tools/editor/web/static/js/OrbitControls.js
+games/mw3/mod-tools/editor/web/static/js/TransformControls.js
+recomp/generated/
+*_vert.h
+*_frag.h

@@ -67,6 +67,7 @@ __pycache__/
 /tools/remaster-launcher/MW3RemasterLauncher.runtimeconfig.json
 .venv/
 .venv-mod-tools/
+/tools/style/node_modules/
 # Machine-specific Windows shortcuts and local GPU build outputs.
 *.lnk
 /tools/remaster-launcher/native-overrides/*.spv

@@ -74,6 +74,7 @@ addresses. Human readability does not justify invented gameplay semantics.
 Preserve frozen source models, hashes and historical evidence. Refactor maintained
 code with narrow checks; propose separate replacements for pinned historical tools
 rather than silently formatting or renaming their source.
+The day-to-day rules and style checks are in [CODE_STYLE.md](CODE_STYLE.md).
 
 For Mod Tools, keep the original installation read-only and place caches/projects/
 exports in a separate writable location. Validate identifiers, paths and sizes
