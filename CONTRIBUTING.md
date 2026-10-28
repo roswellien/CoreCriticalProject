@@ -60,6 +60,28 @@ inputs. The Mod Tools currently include local-installation integration scripts;
 do not describe them as asset-free CI tests. The public setup/package path is
 tracked in [release readiness](docs/public-release-readiness.md).
 
+## Tests
+
+Keep the test suite small and meaningful: each test should catch a failure that
+no other test catches.
+
+- Before adding a test, find the existing test for that behavior. When the new
+  case has the same setup and the same check, add it as a row in that test's
+  table of cases (a list of inputs and expected results the test loops over).
+  Otherwise extend that test. Add a new test file only for code that has no
+  test yet, and say why in the PR.
+- Show that each new or changed test fails when the behavior it covers breaks:
+  break the code locally, run the test, see it fail, then restore the code. Say
+  so in the PR.
+- Every check must be able to fail. Do not loosen a check until it passes, and
+  do not write tests that only check a mock or stub.
+- Remove throwaway tests written while debugging before opening the PR, unless
+  they cover behavior worth keeping.
+- When you find a near-copy of another test while working, merge the two in the
+  same PR if that takes under about 15 minutes; otherwise file it as a
+  `needs-triage` issue.
+- A PR that removes or loosens a test names it and says why.
+
 ## Readable, maintainable code
 
 Write modules around a clear responsibility and describe their entry points,
@@ -97,6 +119,7 @@ checks and their results, and identify remaining limits. For native behavior,
 name the execution boundary changed and the original comparison or fixture used.
 For docs, review links and claims. New dependencies need exact pins, provenance
 and applicable license notices. Include notices in the package as well as source.
+A PR leaves draft only once it meets the [definition of done](#definition-of-done).
 
 Follow the project's existing license for your own contributions and identify
 third-party material explicitly. This draft adds no contributor agreement or
@@ -112,3 +135,27 @@ Changes to timing, rendering, or input behavior need an original-behavior
 baseline. Unknown APIs must fail explicitly; a success-returning placeholder
 must never masquerade as compatibility. No remote repository or release is
 created automatically by this bootstrap.
+
+## Definition of done
+
+Open every PR as a draft. It is ready to leave draft when:
+
+- It lists each acceptance criterion of its issue and where the change meets
+  it, or says that it doesn't (not for release or sync PRs).
+- For code changes, the build, CTest and `format-check` pass locally, and the
+  `style` check passes in CI. That check runs `python tools/style/check_style.py`,
+  which also runs locally once its tools from
+  [tools/style/README.md](tools/style/README.md) are installed. Fix C++ layout
+  with the `format` CMake target, and other languages with
+  `check_style.py --fix` once they are switched on in its `ENFORCED` list.
+  Documentation-only changes need link, diff and evidence checks instead.
+  Either way, the PR names any failure that already exists on `develop`.
+- Its tests follow [Tests](#tests).
+- A change a player or modder would notice has been run in the real program
+  (the launcher, or the game up to the affected screen), with a log line or
+  screenshot in the PR. When that isn't possible, the PR says so and a
+  `needs-triage` issue titled "Playtest <what to check>" is filed for it.
+  Documentation-only changes don't need a run.
+- Someone who didn't write the change (a fresh agent session or another person)
+  has reviewed it against its issue and these rules, and each finding is fixed
+  or listed in the PR.

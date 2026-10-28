@@ -28,7 +28,8 @@ API success. No production interpreter/original-code fallback is authorized.
 Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
 code stay local, and private reports, build outputs, credentials and signing
 material are never committed.
-Follow `CODE_STYLE.md` when writing or changing code.
+Follow `CODE_STYLE.md` when writing or changing code. Follow "Tests" and
+"Definition of done" in `CONTRIBUTING.md` when adding tests or opening a PR.
 
 ## Required GitHub PR workflow
 
@@ -53,6 +54,8 @@ task-specific commit instructions; it does not expand a task's file scope.
 - Run relevant checks and describe behavior, validation and release impact in
   each PR. Build normal playtest releases from merged `main`, recording its SHA.
   An explicitly requested development preview must be identified as such.
+- Track each task as an issue on the project board, and move its card as the
+  task starts and its PR opens (see "Project board" in `docs/github-workflow.md`).
 - Report the topic branch, PR URL, checks and remaining limitations at handoff.
   A PR awaiting review is not a merged or published change. Synchronize changes
   from `main` back into `develop` through a synchronization PR when needed.
