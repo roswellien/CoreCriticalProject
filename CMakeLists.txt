@@ -61,6 +61,11 @@ if(BUILD_TESTING)
         target_link_libraries(mw34_local_cd_audio_tests PRIVATE winmm user32)
         mw34_warnings(mw34_local_cd_audio_tests)
         add_test(NAME local_cd_audio_failures COMMAND mw34_local_cd_audio_tests)
+
+        add_executable(mw34_directinput_caps_tests tests/directinput_caps_tests.cpp)
+        target_include_directories(mw34_directinput_caps_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
+        mw34_warnings(mw34_directinput_caps_tests)
+        add_test(NAME directinput_force_feedback_hidden COMMAND mw34_directinput_caps_tests)
     endif()
 
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
