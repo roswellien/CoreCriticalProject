@@ -302,6 +302,8 @@ namespace MW3RemasterLauncher.Core
             // Emit the existing native register/return-chain diagnostics only
             // when a guest memory fault occurs, including on remote playtest PCs.
             profile["native"]!["runtime_environment"]!["MW34_SEH_LOG"] = "1";
+            DirectInputJoystickSelection.ApplyRuntimeEnvironment(
+                profile["native"]!["runtime_environment"]!.AsObject(), settings);
             if (pipelineWarmupDirectory != null)
             {
                 if (!Path.IsPathFullyQualified(pipelineWarmupDirectory))

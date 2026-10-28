@@ -172,10 +172,25 @@
                                     <TextBlock x:Name="TxtSummaryDrawDist" Text="1600m (Standard)" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource BrushInk}" />
                                 </StackPanel>
 
+                                <StackPanel Margin="0,0,0,12">
+                                    <TextBlock Text="DirectInput joystick (native MW3):" FontSize="12" Foreground="{StaticResource BrushMuted}" />
+                                    <TextBlock x:Name="TxtSummaryJoystick" Text="None" FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{StaticResource BrushInk}" TextWrapping="Wrap" />
+                                </StackPanel>
+
+                                <StackPanel Margin="0,0,0,12">
+                                    <TextBlock Text="Controller setup layout (SDL3):" FontSize="12" Foreground="{StaticResource BrushMuted}" />
+                                    <TextBlock x:Name="TxtSummaryControllerLayout" Text="Off" FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{StaticResource BrushInk}" />
+                                </StackPanel>
+
                                 <StackPanel Margin="0,0,0,16">
                                     <TextBlock Text="Active Asset Packs:" FontSize="12" Foreground="{StaticResource BrushMuted}" />
                                     <TextBlock x:Name="TxtSummaryPacks" Text="3 Packs Enabled" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource BrushAmber}" />
                                 </StackPanel>
+
+                                <Button Content="Configure controls…" Click="OpenControls"
+                                        Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" />
 
                                 <Border Background="#1C2220" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="3" Padding="12" Margin="0,10,0,0">
                                     <StackPanel>

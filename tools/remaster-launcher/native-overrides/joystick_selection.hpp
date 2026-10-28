@@ -34,4 +34,14 @@ inline std::optional<std::size_t> find_selected_joystick(
     return std::nullopt;
 }
 
+inline bool should_forward_directinput_device(bool filter_joysticks, bool is_joystick,
+                                              bool has_selected, bool selected_guid_matches,
+                                              bool selected_already_forwarded) {
+    if (!filter_joysticks || !is_joystick) {
+        return true;
+    }
+
+    return has_selected && selected_guid_matches && !selected_already_forwarded;
+}
+
 } // namespace mw34::input

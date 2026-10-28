@@ -25,6 +25,9 @@ namespace MW3RemasterLauncher.Core
         public bool PerformanceMonitor { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
+        public string DirectInputJoystickInstanceGuid { get; set; } = string.Empty;
+        public string DirectInputJoystickProductName { get; set; } = string.Empty;
+        public bool DirectInputJoystickNone { get; set; }
         public bool InitialSetupCompleted { get; set; } = false;
         public bool AutomaticUpdateChecks { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
