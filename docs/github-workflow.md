@@ -217,7 +217,9 @@ which stays open until the files are published.
 
 1. **Start:** assign yourself and set the card to In progress.
 2. **Open the PR:** write `Closes #<issue>` in its description and set the card
-   to In review.
+   to In review. Linking the PR makes GitHub set the card to In progress, so set
+   In review after the PR exists. Linking a PR to an already closed issue does
+   the same; set that card back to Done.
 3. **After merge:** close the issue with a comment naming the PR. GitHub closes
    an issue by itself only when a PR merges into `main`, the default branch, so
    a merge into `develop` leaves it open. Closing it moves the card to Done;
