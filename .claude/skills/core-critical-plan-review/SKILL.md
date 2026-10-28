@@ -10,7 +10,9 @@ Part of stage 3 of [the plan-and-review flow](../core-critical-workflow/SKILL.md
 **Input:** the path of the plan file, which lives outside the checkout in the
 MW3Recomp-Private-specs folder next to its spec. If none is given and more than
 one plan could be meant, ask which. Read the spec too; the plan is checked
-against it.
+against it. If the spec can't be found, ask for it; if there is none, review
+the plan on its own and say in the report that coverage of the spec wasn't
+checked.
 
 **Run:** the loop in
 `.agents/skills/core-critical-workflow/references/review-loop.md`, with the

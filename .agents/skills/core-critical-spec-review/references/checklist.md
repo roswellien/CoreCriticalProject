@@ -12,24 +12,35 @@ a command works), and write down a finding for each gap.
 2. **Hidden assumptions:** what must be true for the approach to work (a file's
    layout, a tool's behaviour, another PR having merged)? Is each one stated,
    and does it hold today?
-3. **Failure modes:** what happens if a step fails halfway, a tool is missing,
+3. **Procedures:** for every step, command or catch-up routine the spec tells
+   someone to run, follow it through the real code and files it touches, as
+   they are today, and confirm it produces what the spec says. A step that
+   reads well but does nothing, or does something else, is a finding. Check
+   the order too: is every in-between state safe, and does each step still
+   work when an earlier one has already run?
+4. **Failure modes:** what happens if a step fails halfway, a tool is missing,
    or an input is unusual? Does the spec say what the user, player or
    contributor sees?
-4. **Blast radius:** what else uses the files, formats or behaviour being
+5. **Blast radius:** what else uses the files, formats or behaviour being
    changed: the launcher, the runtime, packs, CI, releases, other docs?
-5. **Rollback:** can the change be undone by reverting its PR? If not (data
+6. **Rollback:** can the change be undone by reverting its PR? If not (data
    written, files renamed, a release shipped), does the spec say how?
-6. **Measurable criteria:** can each acceptance criterion be checked against
+7. **Measurable criteria:** can each acceptance criterion be checked against
    the diff or a command's output, with no judgment call?
-7. **Dependencies:** which issues, PRs or people does it wait on, and does it
+8. **Dependencies:** which issues, PRs or people does it wait on, and does it
    say what happens if they change or don't land?
-8. **Security and distribution:** does anything risk committing original game
+9. **Security and distribution:** does anything risk committing original game
    media, generated game code, private build outputs, credentials or signing
    material (see `docs/legal.md` and `CONTRIBUTING.md`)? Does it run untrusted
    input?
-9. **Conflicts:** does it contradict `AGENTS.md`, `CONTRIBUTING.md`,
-   `CODE_STYLE.md` or `docs/github-workflow.md`? Do open PRs touch the same
-   files (`gh pr list --state open` and their diffs)?
+10. **Conflicts:** does it contradict `AGENTS.md`, `CONTRIBUTING.md`,
+    `CODE_STYLE.md` or `docs/github-workflow.md`? Do open PRs touch the same
+    files (`gh pr list --state open` and their diffs)?
+
+Then write down the sharp questions a hostile reviewer would ask that the spec
+can't answer yet. They often find gaps the areas above miss; turn any that
+expose a major gap into a finding, and put the rest under open questions in
+the report.
 
 ## Severity
 

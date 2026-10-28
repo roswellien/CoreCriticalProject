@@ -33,9 +33,9 @@ The loop in `.agents/skills/core-critical-workflow/references/review-loop.md`,
 with [references/checklist.md](references/checklist.md) as the checklist. Each
 pass covers both checklist passes, correctness and structure.
 
-On a branch, keep each pass's fixes building and the existing tests passing.
-When the loop ends, run `.agents/skills/core-critical-pre-pr-checks/SKILL.md`
-and fix anything it reports before the walkthrough. Commit fixes as their own
+On a branch, keep each pass's fixes building and the existing tests passing,
+and when the loop ends, run `.agents/skills/core-critical-pre-pr-checks/SKILL.md`
+and fix anything it reports before the walkthrough. On a plan, skip the checks. Commit fixes as their own
 commits on the topic branch; never push, open or mark ready a PR from this
 skill.
 
