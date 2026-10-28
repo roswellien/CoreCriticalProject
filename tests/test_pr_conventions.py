@@ -191,6 +191,13 @@ class ReportTests(unittest.TestCase):
         env = {name: value for name, value in os.environ.items() if not name.startswith("GITHUB_")}
         script = str(ROOT / "tools/github/check_pr_conventions.py")
         common = ["--title", GOOD_TITLE, "--author", "carson-nr"]
+        warning = subprocess.run(
+            [sys.executable, script, *common, "--head", "fix/x", "--base", "develop"],
+            env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(warning.returncode, 0, warning.stdout + warning.stderr)
+        self.assertIn("warning: Branch 'fix/x'", warning.stdout)
+        self.assertIn("does not match", warning.stdout)
         error = subprocess.run(
             [sys.executable, script, *common, "--head", "fix/x", "--base", "main"],
             env=env, capture_output=True, text=True,
