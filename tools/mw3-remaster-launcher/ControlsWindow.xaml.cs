@@ -13,26 +13,146 @@ namespace MW3RemasterLauncher;
 public partial class ControlsWindow : Window
 {
     private readonly ControlProfiles store;
+    private readonly SettingsManager settingsManager;
     private readonly string dataRoot, gamePath;
+    private bool initializingJoysticks = true;
+    private bool? controllerLayoutEnabled;
     private ControlDocument document = new();
     private ControlProfile? working;
     private string? savedId;
     private bool initializing = true, dirty, loadFailed;
     private (string Action, bool Secondary)? capture;
     private int nativeVirtualKey, nativeScan;
+    private enum JoystickChoiceKind { Automatic, None, Device, Unavailable }
+    private sealed record JoystickChoiceItem(string Label, string InstanceGuid, string ProductName,
+        JoystickChoiceKind Kind);
     public sealed record BindingRow(string Action, string Label, string Group, string Primary, string Secondary, string Mouse);
-    public ControlsWindow(string dataRoot, string gamePath)
+    public ControlsWindow(string dataRoot, string gamePath, SettingsManager? settingsManager = null)
     {
         this.dataRoot = dataRoot; this.gamePath = gamePath; store = new(dataRoot);
+        this.settingsManager = settingsManager ?? new SettingsManager(dataRoot, dataRoot);
         InitializeComponent();
         SourceInitialized += (_, _) => ((HwndSource)PresentationSource.FromVisual(this)).AddHook(RecordNativeKey);
         try { document = store.Load(); }
         catch (Exception ex) { loadFailed = true; Editor.IsEnabled = false; Status.Text = "Controls could not be loaded. The saved file is preserved. " + ex.Message; }
+        LoadJoystickChoices();
         Game.ItemsSource = GameCatalog.Games; Game.SelectedIndex = 0;
         Profiles.ItemsSource = document.Profiles;
         UpdateActive(); initializing = false;
         Profiles.SelectedItem = document.Profiles.FirstOrDefault(p => p.Id == document.ActiveId) ?? document.Profiles.FirstOrDefault();
         Closing += (_, _) => capture = null;
+    }
+    private void LoadJoystickChoices()
+    {
+        initializingJoysticks = true;
+        try
+        {
+            var settings = settingsManager.Current;
+            var attached = DirectInputJoystickCatalog.EnumerateAttached();
+            try
+            {
+                controllerLayoutEnabled = new ControllerProfiles(dataRoot).Load().Enabled;
+            }
+            catch
+            {
+                controllerLayoutEnabled = null;
+            }
+
+            var choices = new List<JoystickChoiceItem>
+            {
+                new("Windows default (first attached joystick)", "", "", JoystickChoiceKind.Automatic),
+                new("None", "", "", JoystickChoiceKind.None)
+            };
+            foreach (var device in attached)
+            {
+                var label = device.DisplayName;
+                if (attached.Count(other => other.DisplayName == label) > 1)
+                {
+                    label += " [" + device.InstanceGuid[^8..] + "]";
+                }
+
+                choices.Add(new JoystickChoiceItem(label, device.InstanceGuid, device.ProductName,
+                    JoystickChoiceKind.Device));
+            }
+
+            var instanceGuid = settings.DirectInputJoystickInstanceGuid?.Trim() ?? string.Empty;
+            var productName = settings.DirectInputJoystickProductName?.Trim() ?? string.Empty;
+            JoystickChoiceItem selected;
+            if (settings.DirectInputJoystickNone)
+            {
+                selected = choices[1];
+            }
+            else if (instanceGuid.Length == 0 && productName.Length == 0)
+            {
+                selected = choices[0];
+            }
+            else
+            {
+                var resolved = DirectInputJoystickSelection.Resolve(settings, attached);
+                selected = resolved == null
+                    ? new JoystickChoiceItem("Saved joystick is not attached — " + productName,
+                        instanceGuid, productName, JoystickChoiceKind.Unavailable)
+                    : choices.First(choice => choice.Kind == JoystickChoiceKind.Device &&
+                        Guid.TryParse(choice.InstanceGuid, out var choiceGuid) &&
+                        Guid.TryParse(resolved.InstanceGuid, out var resolvedGuid) && choiceGuid == resolvedGuid);
+                if (resolved == null)
+                {
+                    choices.Add(selected);
+                }
+            }
+
+            JoystickChoice.ItemsSource = choices;
+            JoystickChoice.SelectedItem = selected;
+            JoystickChoice.IsEnabled = true;
+            JoystickStatus.Text = attached.Count == 0
+                ? "No attached DirectInput joysticks were found. " + ControllerLayoutHint()
+                : ControllerLayoutHint();
+        }
+        catch (Exception error)
+        {
+            JoystickChoice.ItemsSource = Array.Empty<JoystickChoiceItem>();
+            JoystickChoice.IsEnabled = false;
+            JoystickStatus.Text = "DirectInput devices could not be listed. The saved joystick choice was left unchanged. " +
+                error.Message;
+        }
+        finally
+        {
+            initializingJoysticks = false;
+        }
+    }
+    private void RefreshJoystickChoices(object sender, RoutedEventArgs e) => LoadJoystickChoices();
+    private void JoystickChoiceChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (initializingJoysticks || JoystickChoice.SelectedItem is not JoystickChoiceItem choice ||
+            choice.Kind == JoystickChoiceKind.Unavailable)
+        {
+            return;
+        }
+
+        var settings = settingsManager.Current;
+        var previousGuid = settings.DirectInputJoystickInstanceGuid;
+        var previousName = settings.DirectInputJoystickProductName;
+        var previousNone = settings.DirectInputJoystickNone;
+        settings.DirectInputJoystickNone = choice.Kind == JoystickChoiceKind.None;
+        settings.DirectInputJoystickInstanceGuid = choice.Kind == JoystickChoiceKind.Device
+            ? choice.InstanceGuid
+            : string.Empty;
+        settings.DirectInputJoystickProductName = choice.Kind == JoystickChoiceKind.Device
+            ? choice.ProductName
+            : string.Empty;
+        try
+        {
+            settingsManager.Save();
+            JoystickStatus.Text = "Joystick choice saved. " + ControllerLayoutHint();
+        }
+        catch (Exception error)
+        {
+            settings.DirectInputJoystickInstanceGuid = previousGuid;
+            settings.DirectInputJoystickProductName = previousName;
+            settings.DirectInputJoystickNone = previousNone;
+            LoadJoystickChoices();
+            JoystickStatus.Text = "Joystick choice was not saved. " + error.Message;
+        }
     }
     private IntPtr RecordNativeKey(IntPtr window, int message, IntPtr key, IntPtr parameters, ref bool handled)
     {
@@ -48,7 +168,14 @@ public partial class ControlsWindow : Window
     {
         capture = null;
         new ControllerWindow(dataRoot) { Owner = this }.ShowDialog();
+        LoadJoystickChoices();
     }
+    private string ControllerLayoutHint() => controllerLayoutEnabled switch
+    {
+        true => "Controller setup is enabled and uses a separate SDL input path; this DirectInput choice is bypassed.",
+        false => "This choice applies on the next native MW3 launch. Controller setup is a separate SDL input path.",
+        _ => "Controller setup status is unavailable. This choice applies to DirectInput on the next launch."
+    };
     private static void RequireClosedForImport()
     {
         foreach (var name in new[] { "entry_commandline", "Mech3", "MW3RemasterNative" })
@@ -217,6 +344,7 @@ public partial class ControlsWindow : Window
         if (Editor == null) return;
         var supported = (Game.SelectedItem as GameDefinition)?.Id == GameCatalog.Mw3;
         Editor.IsEnabled = supported && !loadFailed;
+        JoystickSection.IsEnabled = supported;
         SaveButton.IsEnabled = UseButton.IsEnabled = supported && !loadFailed && working != null;
         if (!supported) { capture = null; ActiveSummary.Text = "Controls not available yet"; Status.Text = "Controls for this game will be available when its runtime is supported. MW3 layouts remain separate."; }
         else if (!initializing && !loadFailed) { UpdateActive(); Status.Text = "Select or copy a MW3 layout. In-game edits are not saved into a launcher layout automatically."; }
