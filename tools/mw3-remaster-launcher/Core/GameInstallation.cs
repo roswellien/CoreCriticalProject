@@ -30,7 +30,7 @@ public static class GameInstallation
             Target(drive.Name[..2]).Equals(target, StringComparison.OrdinalIgnoreCase)).ToArray();
         return matches.Length == 1 ? matches[0].Name[..1] : "";
     }
-    private sealed record ContentFile(string Source, string Target, long Bytes, string Sha256);
+    public sealed record ContentFile(string Source, string Target, long Bytes, string Sha256);
     private sealed record MediaManifest(string Profile, string BaseCabinet, string BaseHeader,
         string PatchPackage, string PatchCabinet, string PatchHeader, string PatchWrapperCabinet,
         int PatchWrapperOffset, int PatchWrapperBytes, string Unshield, string Zlib, string StaticUnshield,
@@ -64,18 +64,54 @@ public static class GameInstallation
             ?? throw new InvalidDataException("Supported media metadata is empty.");
     }
 
-    public static async Task VerifyExistingAsync(string directory, Action<string, double>? progress = null)
+    // The native runtime always selects the hardware renderer (PlayerRegistry), so it
+    // never opens the disc's software texture tiers. Retail installs often omit some.
+    private static readonly string[] UnusedComponents =
+        ["Software_Texture_Best", "Software_Texture_Medium", "Software_Texture_Low", "Mech_Texture_SW"];
+    // Retail 1.2 tries soundsH, soundsM and soundsL in turn from the player's preferred
+    // bank (0x56fbf0), so an install needs only one of the disc's two sound banks.
+    private static readonly string[] SoundComponents = ["Sound_High_Fidelity", "Sound_Low_Fidelity"];
+
+    /// <summary>Each installed file after patch overrides, with the disc component it belongs to.</summary>
+    private static (ContentFile File, string Component)[] Closure(ContentFile[] baseFiles, ContentFile[] patchFiles)
+        // A patched target keeps the component of the base file it replaces.
+        => baseFiles.Concat(patchFiles).GroupBy(f => f.Target, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (File: g.Last(), Component: g.First().Source.Split('/')[0])).ToArray();
+
+    public static Task VerifyExistingAsync(string directory, Action<string, double>? progress = null)
+        => VerifyExistingAsync(directory, Media.BaseFiles, Media.PatchFiles, progress);
+
+    /// <summary>Hash every present file of the closure; only tiers the runtime can do without may be absent.</summary>
+    public static async Task VerifyExistingAsync(string directory, ContentFile[] baseFiles, ContentFile[] patchFiles,
+        Action<string, double>? progress = null)
     {
         await Task.Run(() =>
         {
             // Check the complete admitted data closure, while allowing unrelated files and saves.
-            var files = Media.BaseFiles.Concat(Media.PatchFiles)
-                .GroupBy(f => f.Target, StringComparer.OrdinalIgnoreCase).Select(g => g.Last()).ToArray();
-            for (var i = 0; i < files.Length; i++)
+            var entries = Closure(baseFiles, patchFiles);
+            bool Present(ContentFile file)
             {
-                var file = files[i];
+                var path = PackStorage.Resolve(directory, file.Target);
+                PackStorage.EnsureNoLinks(path);
+                return File.Exists(path);
+            }
+            var present = entries.Where(e => Present(e.File)).ToArray();
+            var missing = entries.Except(present)
+                .Where(e => !UnusedComponents.Contains(e.Component) && !SoundComponents.Contains(e.Component))
+                .Select(e => e.File.Target).ToList();
+            var sounds = entries.Where(e => SoundComponents.Contains(e.Component)).ToArray();
+            if (sounds.Length != 0 && !sounds.Any(present.Contains))
+                missing.Add(string.Join(" or ", sounds.Select(e => e.File.Target)));
+            // Report every missing file at once, before spending time hashing the rest.
+            if (missing.Count != 0)
+                throw new FileNotFoundException((missing.Count == 1 ? "Required installation file is missing: "
+                    : missing.Count + " required installation files are missing: ") + string.Join(", ", missing) +
+                    ". Install from your ISO and 1.2 patch instead.");
+            for (var i = 0; i < present.Length; i++)
+            {
+                var file = present[i].File;
                 VerifyFile(PackStorage.Resolve(directory, file.Target), file.Sha256, file.Bytes);
-                progress?.Invoke("Checking original game files: " + file.Target, (i + 1.0) / files.Length);
+                progress?.Invoke("Checking original game files: " + file.Target, (i + 1.0) / present.Length);
             }
         });
     }
@@ -83,10 +119,8 @@ public static class GameInstallation
     /// <summary>Admit the retail eight-megabyte hardware component before advertising it to the game.</summary>
     public static void VerifyHardwareRendererFiles(string directory)
     {
-        var files = Media.BaseFiles.Where(f => f.Source.StartsWith("Hardware_Texture_8/", StringComparison.Ordinal))
-            .Concat(Media.PatchFiles).GroupBy(f => f.Target, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Any(f => f.Source.StartsWith("Hardware_Texture_8/", StringComparison.Ordinal)))
-            .Select(g => g.Last()).ToArray();
+        var files = Closure(Media.BaseFiles, Media.PatchFiles).Where(e => e.Component == "Hardware_Texture_8")
+            .Select(e => e.File).ToArray();
         if (files.Length != 6) throw new InvalidDataException("Hardware renderer component metadata is incomplete.");
         foreach (var file in files)
             VerifyFile(PackStorage.Resolve(directory, file.Target), file.Sha256, file.Bytes);

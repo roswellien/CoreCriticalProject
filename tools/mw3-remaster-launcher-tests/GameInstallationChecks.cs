@@ -47,6 +47,7 @@ static class GameInstallationChecks
             ExpectFailure(() => GameInstallation.VerifyFile(fixture, new string('0', 64)));
             ExpectFailure(() => GameInstallation.VerifyFile(fixture, hash, 1));
             ExpectFailure(() => GameInstallation.VerifyExistingAsync(root).GetAwaiter().GetResult());
+            CheckOptionalTiers(root);
             // An existing destination is protected even if source, patch and tools are invalid.
             var destination = Path.Combine(root, "game");
             Directory.CreateDirectory(destination);
@@ -63,6 +64,67 @@ static class GameInstallationChecks
             Console.WriteLine("Original-data setup checks passed.");
         }
         finally { Directory.Delete(root, true); }
+    }
+    private static void CheckOptionalTiers(string root)
+    {
+        // The supported closure names every required file, and no tier the runtime can do without.
+        var empty = Path.Combine(root, "empty-install");
+        Directory.CreateDirectory(empty);
+        var closure = ExpectMissing(() => GameInstallation.VerifyExistingAsync(empty).GetAwaiter().GetResult())
+            .Split(": ", 2)[1].Split(". ")[0].Split(", ").ToHashSet();
+        foreach (var required in new[] { "Mech3.exe", "zbd/c1/gamez.zbd", "zbd/c1/rtexture.zbd", "zbd/t1/rtexture2.zbd",
+            "zbd/c4b/rtexture3.zbd", "zbd/rmechtex.zbd", "zbd/rmechtex16.zbd", "zbd/soundsH.zbd or zbd/soundsL.zbd" })
+            if (!closure.Contains(required))
+                throw new Exception("A required original file was not reported missing: " + required);
+        foreach (var optional in new[] { "zbd/c1/texture.zbd", "zbd/t1/texture1.zbd", "zbd/c4/texture2.zbd", "zbd/rmechtexs.zbd" })
+            if (closure.Contains(optional)) throw new Exception("An unused texture tier was required: " + optional);
+
+        // Authored retail layout: no medium software textures and no low-fidelity sound bank.
+        var install = Path.Combine(root, "retail-install");
+        GameInstallation.ContentFile Authored(string source, string target, bool write = true)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes("authored " + source + "/" + target);
+            if (write)
+            {
+                var path = PackStorage.Resolve(install, target);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllBytes(path, bytes);
+            }
+            return new(source + "/" + target, target, bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)));
+        }
+        var gamez = Authored("Database_Files", "zbd/c1/gamez.zbd");
+        var reader = Authored("Database_Files", "zbd/c1/reader.zbd");
+        var hardware = Authored("Hardware_Texture_8", "zbd/c1/rtexture.zbd");
+        var best = Authored("Software_Texture_Best", "zbd/c1/texture.zbd");
+        var medium = Authored("Software_Texture_Medium", "zbd/c1/texture2.zbd", false);
+        var high = Authored("Sound_High_Fidelity", "zbd/soundsH.zbd");
+        var low = Authored("Sound_Low_Fidelity", "zbd/soundsL.zbd", false);
+        var patchedReader = Authored("Patch_Files", "zbd/c1/reader.zbd");
+        GameInstallation.ContentFile[] baseFiles = [gamez, reader, hardware, best, medium, high, low];
+        GameInstallation.ContentFile[] patchFiles = [patchedReader];
+        void Verify() => GameInstallation.VerifyExistingAsync(install, baseFiles, patchFiles).GetAwaiter().GetResult();
+        Verify();
+
+        // Present optional files are still identity-checked.
+        File.WriteAllText(PackStorage.Resolve(install, best.Target), "damaged");
+        ExpectFailure(Verify);
+        File.Delete(PackStorage.Resolve(install, best.Target));
+        Verify();
+
+        // Every missing required file is reported, and at least one sound bank must remain.
+        File.Delete(PackStorage.Resolve(install, gamez.Target));
+        File.Delete(PackStorage.Resolve(install, hardware.Target));
+        File.Delete(PackStorage.Resolve(install, high.Target));
+        var message = ExpectMissing(Verify);
+        if (message != "3 required installation files are missing: zbd/c1/gamez.zbd, zbd/c1/rtexture.zbd, " +
+            "zbd/soundsH.zbd or zbd/soundsL.zbd. Install from your ISO and 1.2 patch instead.")
+            throw new Exception("Missing installation files were not all reported: " + message);
+    }
+    private static string ExpectMissing(Action action)
+    {
+        try { action(); }
+        catch (FileNotFoundException error) { return error.Message; }
+        throw new Exception("An incomplete installation unexpectedly passed.");
     }
     private static void ExpectFailure(Action action)
     {
