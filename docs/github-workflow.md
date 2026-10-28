@@ -201,8 +201,10 @@ as described in [Project board](#project-board).
 ## Project board
 
 The [project board](https://github.com/users/roswellien/projects/1) shows where
-each piece of work is. Only issues go on it; a PR shows on its issue's card
-through the `Closes #<issue>` line in its description. So every piece of work
+each piece of work is. Only issues go on it. For PRs targeting `develop`, manually
+link the issue through the PR's Development sidebar before setting the card to
+In review in step 2 below. Keep `Closes #<issue>` in the description, but it does
+not create the link for a non-default branch. So every piece of work
 gets an issue before its PR: if there is none, file one first. Release and sync
 PRs are the exception: a release is tracked by its Release checklist issue,
 which stays open until the files are published.
