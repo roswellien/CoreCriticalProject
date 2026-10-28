@@ -45,5 +45,5 @@ earlier failed source-observer revisions are preserved alongside final proof.
 The selected initializer count remains 27 of 144; full CRT/table/menu execution
 and M4 completion remain open.
 
-See [the composition review](../../docs/m4-crt-entry-control-review.md) and
+See [the composition review](../../docs/archive/m4-crt-entry-control-review.md) and
 [root acceptance](../../reports/m4-crt-entry-control/root-acceptance-r1/report.json).

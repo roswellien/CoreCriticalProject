@@ -10,7 +10,7 @@ rendering in place of dgVoodoo in this profile. Original game execution does
 not complete native host/menu/Training milestones or change the last verified
 selected-startup acceptance count of **131/144**. The observations below describe
 the local setup as of the date above, not a claim of full campaign or cross-GPU
-compatibility. See the [wrapper plan](mw3-d7vk-wrapper-plan.md) for validation gates.
+compatibility. See the [wrapper plan](archive/mw3-d7vk-wrapper-plan.md) for validation gates.
 
 ---
 
@@ -63,7 +63,7 @@ A modern, standalone game launcher and patched Vulkan wrapper pipeline was devel
 ### Component Breakdown
 1. **Launcher**:
    * [`mw3_launcher.py`](../mw3_launcher.py): Python 3.14 Tkinter graphical interface + headless CLI. Available in the repository root and in the wrapper directory.
-   * [Root launch batch](../Launch%20MW3%20%28D7VK%20Vulkan%20Launcher%29.cmd): Double-click batch script with automatic Python path resolution.
+   * [Launch batch](../launchers/Launch%20MW3%20%28D7VK%20Vulkan%20Launcher%29.cmd): Double-click batch script with automatic Python path resolution.
 2. **D7VK Vulkan Wrapper**:
    * Upstream commit `ff123cb08ff1fcf6575a6ef8fb79d824a84e56c4` compiled with MSVC 2026 Developer Command Prompt v18.9 (x86 32-bit).
    * Maps `IDirectDraw4` and `IDirect3DDevice3` (`D3D6Device`) to DXVK D3D9, which compiles shaders to SPIR-V and renders directly on the host Vulkan driver.
@@ -160,9 +160,9 @@ their own licenses; the project's MIT license covers its own contributions.
 | Recompiled D7VK `ddraw.dll` | `local/work-ahead/mw3-d7vk-wrapper/game/ddraw.dll` | `bb6f56375c37c3de013e905328e3a81f52a1f8a3efc6355e6c28b6d72d943385` |
 | Hash Admittance Pin | `local/work-ahead/mw3-d7vk-wrapper/launcher-ddraw.sha256` | `bb6f56375c37c3de013e905328e3a81f52a1f8a3efc6355e6c28b6d72d943385` |
 | Primary Launcher | `mw3_launcher.py` | `006b1218f323aa112506f13b80daf609cfaff7f0e5afad2c585c550109aa6ef1` |
-| Root Launch Batch | `Launch MW3 (D7VK Vulkan Launcher).cmd` | Verified batch entry point |
-| Root Launch Alias (.cmd) | `Launch MW3 (D7VK Vulkan).cmd` | Verified batch entry point |
-| Root Launch Alias (.bat) | `Launch MW3 (D7VK Vulkan).bat` | Verified batch entry point |
+| Launch Batch | `launchers/Launch MW3 (D7VK Vulkan Launcher).cmd` | Verified batch entry point |
+| Launch Alias (.cmd) | `launchers/Launch MW3 (D7VK Vulkan).cmd` | Verified batch entry point |
+| Launch Alias (.bat) | `launchers/Launch MW3 (D7VK Vulkan).bat` | Verified batch entry point |
 | Verified Game Executable | `local/work-ahead/mw3-d7vk-wrapper/game/Mech3.exe` | `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf` |
 | Camera FOV Fix Plugin | `local/tools/mw3-fov-v1.6/MechWarrior3FOVFix.asi` | `57afb226033790cafa36f6409ee036c03dc38e42b6cc1fe8d62880b03be2205d` |
 | FOV Launcher Binary | `build/widescreen-test/Release/mw34_fov_launcher.exe` | Verified bootstrap |
@@ -182,7 +182,7 @@ The root launcher alone does not provision these dependencies. Original media,
 AI texture banks, generated game code and local builds remain excluded from Git.
 
 ### Running with GUI
-Double-click [the launch batch](../Launch%20MW3%20%28D7VK%20Vulkan%20Launcher%29.cmd) in the repository root, or run:
+Double-click [the launch batch](../launchers/Launch%20MW3%20%28D7VK%20Vulkan%20Launcher%29.cmd), or run:
 ```powershell
 python mw3_launcher.py
 ```

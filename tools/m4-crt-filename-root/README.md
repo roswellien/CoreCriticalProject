@@ -35,5 +35,5 @@ The original x86 API's volatile register/flag effects and guest TEB LastError
 are not claimed. The continued compiled MOV at BBD6 is refused before loading
 the uninitialized `_acmdln` pointer at 78037174.
 
-The [final review](../../docs/m4-crt-filename-review.md) documents the gate and
+The [final review](../../docs/archive/m4-crt-filename-review.md) documents the gate and
 next required producer. Main-table initialization and native menus remain open.

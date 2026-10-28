@@ -129,7 +129,7 @@ Use a separate build directory when changing compilers. See
 
 ## Help develop and test
 
-Read the [October 21 development update](docs/development-update-2026-10-21.md)
+Read the [October 21 development update](docs/archive/development-update-2026-10-21.md)
 for the current presentation, setup and source-readability work.
 
 Read the [contribution guide](CONTRIBUTING.md) and [code guide](docs/code-guide.md)
@@ -145,7 +145,7 @@ dumps, private logs or generated game translations to public issues.
 | [Latest recorded daily update](docs/mechlab/2026-10-20.md) | October 20 changes and their limits |
 | [Architecture](docs/architecture.md) | Guest ABI, runtime and graphics boundaries |
 | [Milestones](docs/project-milestones.md) | Evidence and formal acceptance criteria |
-| [First native function proof](docs/mw3-leaf-experiment.md) | A bounded original/native comparison |
+| [First native function proof](docs/archive/mw3-leaf-experiment.md) | A bounded original/native comparison |
 
 Track progress through demonstrated native functionality, fidelity/compatibility
 coverage, known defects and release validation; see the

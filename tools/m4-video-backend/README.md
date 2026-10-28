@@ -3,7 +3,7 @@
 `runtime/graphics/direct_draw_creation.cpp` implements the functional control and
 ownership boundary recovered for game routine `0x577D40`, plus the final
 DirectDraw-only teardown segment `0x57893A` through `0x578954`. Address-level
-sources and unknowns are in the [video contract](../../docs/m4-video-backend-contract-r1.md).
+sources and unknowns are in the [video contract](../../docs/archive/m4-video-backend-contract-r1.md).
 The admitted game remains SHA-256
 `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf`.
 

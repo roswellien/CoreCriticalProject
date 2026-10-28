@@ -1,6 +1,6 @@
 # Local Remaster launcher
 
-The [full-size texture storage repair](../../docs/host-texture-storage-2026-10-23.md)
+The [full-size texture storage repair](../../docs/archive/host-texture-storage-2026-10-23.md)
 moves unlocked texture pixels into host memory, shares identical texture Load
 copies with copy-on-write isolation, and maps guest pixels only during Lock.
 Native rebuilds must retain this integration and the corrected large archive
@@ -8,7 +8,7 @@ seek adapter; older private host snapshots can reintroduce the playtest crashes.
 
 Launcher 1.0.16 adds unchanged-pack verification receipts, reusable merged
 environment resources, visible startup stages and a first-start warning. See
-[startup caching evidence](../../docs/launcher-startup-cache-2026-10-22.md).
+[startup caching evidence](../../docs/archive/launcher-startup-cache-2026-10-22.md).
 New or changed packs still require preparation; native builds are unaffected.
 
 ## Maintainer entry points
@@ -23,7 +23,7 @@ backend that runs the original executable.
 sidecars and returns environment bindings. `normal_materials` defines the linear
 normal-map transport, its full-pixel format keys and explicit disabled bindings.
 The WPF launcher's soundtrack pack contract and first-run pack selection are
-documented in [soundtrack setup](../../docs/soundtrack-pack-setup-2026-10-21.md).
+documented in [soundtrack setup](../../docs/archive/soundtrack-pack-setup-2026-10-21.md).
 `build_music_pack.py` creates a local `.mw3pack` from two supplied audio sources.
 The updated GUI selects the first enabled soundtrack pack; absent/disabled packs
 leave music off instead of reading the private development music configuration.
@@ -41,7 +41,7 @@ subsequent repairs or the current selected executable.
 
 The local readability cleanup changes formatting, documentation and a small set
 of local variable names. It does not close the functional findings in the
-[code/provenance review](../../docs/code-provenance-review-2026-10-21.md), update
+[code/provenance review](../../docs/archive/code-provenance-review-2026-10-21.md), update
 the selected native host, or add strict acceptance credit.
 
 October 20 status-damage-colour repair: the original condition schematic uses
@@ -110,7 +110,7 @@ unless `--lighting-preset` is explicitly supplied. `--registry` defaults to the
 selected profile's `native.model_registry`. `--fixture-lights 0|1` and
 `--weather 0|1` independently override fixture lighting and supported weather
 shading. The combined light budget defaults to 16 with eight weapon-reserved
-slots. See [repair scope and evidence](../../docs/world-lighting-repair-2026-10-20.md).
+slots. See [repair scope and evidence](../../docs/archive/world-lighting-repair-2026-10-20.md).
 
 October 20 GUI launch repair: the WPF launcher now calls `play_remaster.py` so
 registered model assets are verified/prepared before `play_native.ps1` starts
@@ -179,14 +179,14 @@ Old launcher settings migrate to off once; subsequent explicit choices persist.
 Regular native and lighting-preview shortcuts also default off. Direct script
 users may opt in with `-InstantReplay 1` on `play_native.ps1` or
 `play_big_lake_sun.ps1`. Photo mode, screenshots, manual recording and game-state
-rewind remain separate controls. [Measurements and limits](../../docs/lighting-performance-2026-10-18.md).
+rewind remain separate controls. [Measurements and limits](../../docs/archive/lighting-performance-2026-10-18.md).
 
 October 15 maintained/well-used batch: Orion, Thor and Vulture now use the new
 worn base-color sets, alongside the previously installed Bushwacker and Mad Cat.
 The regular root launcher prepares them on each launch, including Orion LOD1.
 All four new prepared files match their source material pixels; other model
 registrations, geometry, build/profile and six unrelated sidecars are retained.
-Normal maps remain separate work. [Art, comparisons and installation checks](../../docs/orion-thor-vulture-worn-textures-2026-10-15.md).
+Normal maps remain separate work. [Art, comparisons and installation checks](../../docs/archive/orion-thor-vulture-worn-textures-2026-10-15.md).
 
 October 15 worn-texture publication: the normal `Play MW3Remaster.cmd` launcher
 now registers Bushwacker R7 worn colors and Mad Cat maintained/well-used R1 colors.
@@ -195,7 +195,7 @@ sets. The launcher repacks them on every launch; both prepared RGB565 files were
 checked against every source pixel after the existing 2048-pixel cap/vertical
 conversion. Other registrations, geometry, graphics and the selected build are
 unchanged. This enables the painted wear; normal mapping remains planned.
-See [installation and checks](../../docs/worn-mech-textures-launcher-install-2026-10-15.md).
+See [installation and checks](../../docs/archive/worn-mech-textures-launcher-install-2026-10-15.md).
 
 Current October15 arm-placement update selects
 `local/remaster/gpu-native-daishi-arms-r1/build/entry_commandline.exe`, SHA256
@@ -206,7 +206,7 @@ and all other model registrations remain. BWMESH3 adds rigid current-ancestor
 frame translation, supported by both GPU/CPU projection. Models declaring
 `required_native_mesh_format: 3` require a profile whose `mesh_payload_versions`
 includes 3; V1/V2 profiles default to versions 1/2. Incompatible hosts fail
-before launch. [Implementation, checks and previews](../../docs/mw5-daishi-arm-placement-2026-10-15.md).
+before launch. [Implementation, checks and previews](../../docs/archive/mw5-daishi-arm-placement-2026-10-15.md).
 
 Current profile, validated 2026-10-15: **native 3440x1440 ultrawide, FXAA, 16x AF**.
 Launch `D:/Projects/MW34Recomp/Play MW3Remaster.cmd`. It selects the completed
@@ -218,7 +218,7 @@ The current model registry includes the October 15 Daishi waist and Shadow Cat
 vertical-thigh corrections for both distance levels. Both draw in the unchanged
 r17 native build; all 4,700 original draw records match the prior cases. The other
 five models and texture PNG registrations are unchanged. See
-[the asset correction](../../docs/mw5-fit-corrections-2026-10-15.md).
+[the asset correction](../../docs/archive/mw5-fit-corrections-2026-10-15.md).
 Daishi's current second revision also corrects pelvis/torso connector ownership
 at the hips and shoulders; a further 2,600-frame native check matches all original
 draw records. The other six model records are retained in that second update.
@@ -228,7 +228,7 @@ whole mech. Exact source stump/remaining-roster checks preserve original damage,
 weapon logic and debris. Orionrightarm loss is verified in a6500frame native
 battle with all6500original draw records matchingr15. Training116/116,
 GPU1150/1150 and IA116/116 pass. Other live damage states, converteddebris and
-muzzle correction remain pending. [Details](../../docs/mw5-arm-damage-fix-2026-10-15.md).
+muzzle correction remain pending. [Details](../../docs/archive/mw5-arm-damage-fix-2026-10-15.md).
 
 r15 adds Orion, Daishi and Shadow Cat runtime candidates to the existing four.
 All three render in bounded native IA tests; Training116/116, original
@@ -236,7 +236,7 @@ GPUdraw1150/1150 and IA116/116 match r14. Both distance texture bindings refresh
 from current registered PNGs at launch. Visible muzzle alignment, controlled
 damage/debris, actual new LOD1 selection and material review remain pending.
 Normal maps are prepared offline; the native adapter samples base color only.
-See [the batch record](../../docs/mw5-next-mechs-2026-10-15.md).
+See [the batch record](../../docs/archive/mw5-next-mechs-2026-10-15.md).
 
 r14 retains r12 zoom alignment, r9 HUD repairs, r8 campaign movie timing and r7
 performance changes. It corrects the zoom window's marker-occlusion footprint
@@ -247,7 +247,7 @@ Training116/116, GPU1150/1150 and IA116/116 match r12. A matched1000-frame
 1920x1440 control captures are identical. The Vulkan validation layer was
 unavailable; normal-renderer checks pass. Radar semantics and controlled damage
 progression remain open; Mech Lab is investigation-only. See
-[the October15 findings](../../docs/hud-mechlab-investigation-2026-10-15.md).
+[the October15 findings](../../docs/archive/hud-mechlab-investigation-2026-10-15.md).
 
 
 Local MW3 music is now enabled on both Remaster variants. The supplied Track 01
@@ -455,13 +455,13 @@ GPU-world geometry and fast binding are enabled with the current seven models,
 original scene-defined fog. Both normal and alpha profiles use this distance.
 Both normal and alpha profiles enable the original-device fog-cache repair
 (`MW34_DEVICE_FOG_REBIND=1`), restoring fog after the gameplay display-mode switch.
-See [fog investigation](../../docs/fog-rendering-investigation-2026-10-15.md).
+See [fog investigation](../../docs/archive/fog-rendering-investigation-2026-10-15.md).
 
 `--check` validates the build/assets without launching. Interactive launch has
 no frame budget or scripted clock. World counters and geometry CPU timings go
 to each session's `local/remaster/runs/` directory; heavy diagnostic payloads
 are disabled. The recurring divergence remains under investigation; see
-[results](../../docs/gpu-divergence-investigation-2026-10-15.md).
+[results](../../docs/archive/gpu-divergence-investigation-2026-10-15.md).
 
 ### Bounded campaign-normal authoring continuation
 
@@ -495,7 +495,7 @@ They preserve original draw data, validation, queued ownership and ordering.
 reserves less than 64 KiB when an existing streaming buffer below 16 MiB grows.
 Initial allocations stay exact, and reserved allocation failures retry the exact
 requested size. Quality and replay behavior are unchanged. See the
-[measurements and checks](../../docs/performance-recent-changes-2026-10-23.md)
+[measurements and checks](../../docs/archive/performance-recent-changes-2026-10-23.md)
 for the small measured FPS difference and the larger allocation-count reduction.
 
 ### DirectInput controller object query (2026-10-24)
@@ -504,5 +504,5 @@ for the small measured FPS difference and the larger allocation-count reduction.
 to a pinned native host without replacing its other stage code. Windows supplies
 the actual object metadata and HRESULT; the adapter supports the 292/316-byte
 guest layouts and preserves output on failure. The maintained stage includes
-the same handler. See the [startup crash fix](../../docs/controller-object-query-crash-2026-10-24.md)
+the same handler. See the [startup crash fix](../../docs/archive/controller-object-query-crash-2026-10-24.md)
 for the exact reproduction, native menu/Training checks and signed `.mw3update`.

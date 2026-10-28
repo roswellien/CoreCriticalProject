@@ -21,7 +21,7 @@ does not by itself close a campaign or combat issue.
   identify the cause, then verify the correction in the reported situation.
 - **Workaround:** None verified.
 
-See the [Harasser investigation](vehicle-lighting-and-harasser-investigation-2026-10-24.md#harasser-investigation--unresolved).
+See the [Harasser investigation](archive/vehicle-lighting-and-harasser-investigation-2026-10-24.md#harasser-investigation--unresolved).
 
 ## MW3-004 — Main-menu pointer confined to the edges on one laptop
 
@@ -49,7 +49,7 @@ See the [Harasser investigation](vehicle-lighting-and-harasser-investigation-202
   the affected laptop, confirmed by the owner. This is temporary; it does not
   count as a software correction.
 
-See the [DPI investigation and retest candidate](main-menu-dpi-mouse-2026-10-24.md).
+See the [DPI investigation and retest candidate](archive/main-menu-dpi-mouse-2026-10-24.md).
 
 ## MW3-002 — APC/vehicle headlight direction and destruction cleanup
 
@@ -65,7 +65,7 @@ See the [DPI investigation and retest candidate](main-menu-dpi-mouse-2026-10-24.
 - **Still required:** Confirm forward beam appearance and removal after
   destruction in live combat, including looking away and back at the wreck.
 
-See the [vehicle lighting repair](vehicle-lighting-and-harasser-investigation-2026-10-24.md#vehicle-lighting-repair).
+See the [vehicle lighting repair](archive/vehicle-lighting-and-harasser-investigation-2026-10-24.md#vehicle-lighting-repair).
 
 ## MW3-003 — Destroyed mech reverts to the stock model
 

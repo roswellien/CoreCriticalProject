@@ -2,7 +2,7 @@
 
 Status: the exact installed U.S. version 1.2 executable is admitted as research
 input `mw3-us-1-2-retail`. This is identity verification, not runtime or
-recompilation validation. See [media and installation provenance](../../../docs/media-inventory.md).
+recompilation validation. See [media and installation provenance](../../../docs/archive/media-inventory.md).
 
 | Topic | Status | Next evidence |
 | --- | --- | --- |
@@ -102,7 +102,7 @@ baseline while researching smoother simulation and rendering later.
   extended gameplay stability and the helper's precise object type remain open.
   This integer result does not establish physics or renderer compatibility.
 
-See the [G2 experiment and replay record](../../../docs/mw3-leaf-experiment.md)
+See the [G2 experiment and replay record](../../../docs/archive/mw3-leaf-experiment.md)
 and [function dossier](first-function.md). The pending comparison noted in the
 2026-10-06 static review above records the earlier state; this result closes it.
 

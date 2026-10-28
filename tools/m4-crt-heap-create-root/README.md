@@ -33,6 +33,6 @@ records 72 production scenarios, 132 independent hostile cases and 12 separate
 nonzero host-error cases. The [final independent affine audit](../../reports/m4-crt-heap-create-root-audit/final-r1/report.json)
 binds all 48 ordinary native rows and their 31 complete checkpoints.
 
-See [current progress](../../docs/m4-progress-heap-create.md) and
-[review](../../docs/m4-crt-heap-create-review.md). Earlier accepted namespaces
+See [current progress](../../docs/archive/m4-progress-heap-create.md) and
+[review](../../docs/archive/m4-crt-heap-create-review.md). Earlier accepted namespaces
 and reports remain frozen.

@@ -18,5 +18,5 @@ strict capture archives and the unique current physical dependency closure.
 Historical acceptance and superseded attempts are fixed SHA anchors only.
 The final receipt is `reports/m4-crt-heap-init-root/root-acceptance-r1/report.json`.
 
-See [current status](../../docs/m4-progress-heap-init.md) and
-[review](../../docs/m4-crt-heap-init-review.md).
+See [current status](../../docs/archive/m4-progress-heap-init.md) and
+[review](../../docs/archive/m4-crt-heap-init-review.md).

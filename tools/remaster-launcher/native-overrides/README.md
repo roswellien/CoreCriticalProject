@@ -3,7 +3,7 @@
 These are project-authored source files from the local `gpu-native-r5` host.
 They preserve the enhanced renderer/HUD, replacement-model adapter, registered
 texture-bank redirection, FXAA/AF and widescreen implementations reviewed for the
-[October 14 update](../../../docs/session-summary-2026-10-14-remaster.md).
+[October 14 update](../../../docs/archive/session-summary-2026-10-14-remaster.md).
 They contain no model vertices, texture pixels, music or generated game bodies.
 Mesh names/counts describe the observed format contracts.
 
@@ -35,7 +35,7 @@ r8-compatible tree by `../apply_hud_repairs.py`. It preserves each original
 translucent HUD panel's display anchor across the sorted deferred queue. The
 same applicator restores original diagnostic schematic geometry in the two
 status previews. It does not update the historical r5 snapshot or its manifest.
-See [the October 15 investigation](../../../docs/hud-mechlab-investigation-2026-10-15.md)
+See [the October 15 investigation](../../../docs/archive/hud-mechlab-investigation-2026-10-15.md)
 for r9 validation, unresolved zoom/radar checks and the separate Mech Lab proposal.
 
 `zoom_alignment_stage.inc` is the later r12 repair. `../apply_zoom_alignment.py`

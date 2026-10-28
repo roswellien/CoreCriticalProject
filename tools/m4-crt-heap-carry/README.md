@@ -13,7 +13,7 @@ strike): laser beams, hits on buildings, and an overheat explosion ran natively.
 primitives still stop visibly. These are executed runs, not
 formal acceptance; the accepted count stays **131/144**.
 
-See the [session summary](../../docs/session-summary-2026-10-13-native-host.md)
+See the [session summary](../../docs/archive/session-summary-2026-10-13-native-host.md)
 for the full source/evidence record and limitations. Camera flip and leg animation
 were observed in interactive play; the built FPATAN quadrant correction in 57
 re-lifted functions awaits a play retest. Visible intro playback, remaining

@@ -9,7 +9,7 @@ Current strategy update, 2026-10-11: [faithful modernization](faithful-moderniza
 preserves recompiled game logic and implements modern services behind observed
 guest contracts. The initial-design descriptions below retain their historical
 scope; they do not imply that later runtime/registry components are absent.
-The [milestone register](project-milestones.md) and [Claude work review](m4-claude-work-review-2026-10-11.md)
+The [milestone register](project-milestones.md) and [Claude work review](archive/m4-claude-work-review-2026-10-11.md)
 describe current evidence. No whole native game or live renderer is available yet.
 
 ## Integration decision and service boundary
@@ -183,7 +183,7 @@ bootstrap memory objects are not a concurrent process model.
 Updated direction, 2026-10-08: the user selected **Vulkan** as the renderer target
 for modern capabilities and portability. The assessments below preserve the
 earlier alternatives, but no longer represent an open backend selection.
-See [the Vulkan learning prototype](vulkan-learning-prototype.md) for the first
+See [the Vulkan learning prototype](archive/vulkan-learning-prototype.md) for the first
 executed GPU experiment, scope limits and graphics recovery gates. No integrated
 game renderer exists yet; ray tracing remains an optional capability tier.
 

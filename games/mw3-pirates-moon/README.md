@@ -11,5 +11,5 @@ MW3 is still the default target and retains its existing acceptance criteria.
 
 The current Windows x64/Vulkan build executes menu -> Options -> menu -> quit
 with normal native dependency detach. All 210 scene fingerprints match the
-original-side reference. See the [local handoff and limits](../../docs/pirates-moon-native-startup.md).
+original-side reference. See the [local handoff and limits](../../docs/archive/pirates-moon-native-startup.md).
 Missions, cinematics and manual physical-input testing remain open.

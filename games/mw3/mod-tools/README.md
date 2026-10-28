@@ -11,14 +11,14 @@ Home for MechWarrior 3 modding tools built on the native recompilation (`MW34Rec
 ## Quick Start: Launching the Editor
 
 For a separate source-preview installation, follow
-[Mod Tools setup](../../../docs/setup-mod-tools.md). `Setup Mod Tools.cmd` at the
+[Mod Tools setup](../../../docs/setup-mod-tools.md). `launchers\Setup Mod Tools.cmd` at the
 package root selects your own game and Mech3AX folders and creates an isolated
 Python environment. Preview geometry and exported game-derived archives remain
 local; see the setup guide for Studio's additional prerequisites.
 
-Launch the editor using the root shortcut:
+Launch the editor using the launcher shortcut:
 ```cmd
-Play MW3 - Mission Editor.cmd
+launchers\Play MW3 - Mission Editor.cmd
 ```
 or via Python directly:
 ```powershell
@@ -28,7 +28,7 @@ or via Python directly:
 ## Running the Automated Test Suite
 
 The browser-based 3D Map Studio is an additional prototype, launched with
-`Play MW3 - Visual Map Studio.cmd`. Its HTTP/export checks are in
+`launchers\Play MW3 - Visual Map Studio.cmd`. Its HTTP/export checks are in
 `tests/test_studio_server.py`. Editing and export tests do not establish that a
 custom mission plays correctly in the native game.
 
@@ -67,7 +67,7 @@ plausible. The original node hierarchy/unknown fields remain relevant on export.
 
 Keep these responsibilities separate when making repairs. The known undo/save,
 failed-load, source-cache and export/run defects remain tracked in the
-[code review](../../../docs/code-provenance-review-2026-10-21.md); the comments
+[code review](../../../docs/archive/code-provenance-review-2026-10-21.md); the comments
 describe the current implementation and do not mark those defects fixed.
 
 The browser's `editor/web/static/js/studio.js` has a different state model from

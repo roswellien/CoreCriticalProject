@@ -31,10 +31,10 @@ as such; they do not establish live native gameplay by themselves.
 
 ## Historical startup-equivalence audit
 
-The [October 10 acceptance record](m4-progress-startup131.md) accepted 131 of
+The [October 10 acceptance record](archive/m4-progress-startup131.md) accepted 131 of
 144 selected startup initializers under that audit's original/native comparison
 requirements. Its continuation was paused on October 13. The later
-[native execution record](session-summary-2026-10-13-native-host.md) separately
+[native execution record](archive/session-summary-2026-10-13-native-host.md) separately
 records execution through all 144 initializers, live menus, Training, Instant
 Action and normal shutdown. Execution and formal equivalence acceptance are
 different claims.

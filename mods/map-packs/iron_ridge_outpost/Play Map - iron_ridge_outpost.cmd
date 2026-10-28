@@ -17,7 +17,7 @@ set "MW34_SUN_ELEVATION=35.0"
 set "MW34_SUN_STRENGTH=0.85"
 set "MW34_SUN_AMBIENT=0.2"
 
-call "Play MW3Remaster.cmd" --profile "local\effect-lighting-r1\launcher.json" --registry "local\material-authoring-r1\normal-registry.json" %*
+call "launchers\Play MW3Remaster.cmd" --profile "local\effect-lighting-r1\launcher.json" --registry "local\material-authoring-r1\normal-registry.json" %*
 if errorlevel 1 (
     echo.
     echo Map launch exited with code %errorlevel%.

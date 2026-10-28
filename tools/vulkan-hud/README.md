@@ -1,7 +1,7 @@
 # Isolated Vulkan HUD pass
 
 First integration step for the private v3 component package described in
-[the handoff](../../docs/hud-vulkan-integration-handoff.md). This emits SCN4 HUD
+[the handoff](../../docs/archive/hud-vulkan-integration-handoff.md). This emits SCN4 HUD
 draw commands for the existing Vulkan replay backend. It does not replace the
 HUD in MW3 or consume live gameplay state.
 

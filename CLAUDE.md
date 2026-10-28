@@ -15,7 +15,7 @@ supersede older task-specific commit restrictions. At handoff, report the PR
 URL, checks and remaining limitations. Normal published builds use merged `main`.
 
 Read `docs/faithful-modernization-plan.md`, `docs/roadmap.md` and
-`docs/m4-claude-work-review-2026-10-11.md` before choosing implementation work.
+`docs/archive/m4-claude-work-review-2026-10-11.md` before choosing implementation work.
 The execution-first strategy was authorized on 2026-10-11: preserve original
 MW3 gameplay through recompilation, integrate modern platform services/Vulkan,
 and advance native host -> live menu -> live Training. Do not restart as a remake.
@@ -42,6 +42,6 @@ API success. No production interpreter/original-code fallback is authorized.
 
 Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
 code stay local. Full continuation instructions are in
-`docs/claude-m4-continuation-handoff.md`. Follow the standing PR workflow above
+`docs/archive/claude-m4-continuation-handoff.md`. Follow the standing PR workflow above
 for task-scoped commits; do not include unrelated files.
 Follow the code style rules in @CODE_STYLE.md when writing or changing code.

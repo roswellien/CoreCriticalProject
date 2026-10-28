@@ -22,5 +22,5 @@ Eight direct calls use the required dispatcher and all eleven entries require
 an ownership check. Undefined arithmetic flag behavior still requires an
 explicit reviewed representative at its bridge.
 
-See [the CRT entry preparation record](../../docs/m4-crt-entry-preparation.md)
+See [the CRT entry preparation record](../../docs/archive/m4-crt-entry-preparation.md)
 for required integration stages and the remaining full startup scope.

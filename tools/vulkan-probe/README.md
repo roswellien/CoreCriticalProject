@@ -46,7 +46,7 @@ hashes and record mapped offsets. A static match is a lead, not proof that the
 game requests or uses that interface. Absence is not proof of non-use.
 Keep output under ignored reports; do not commit game-derived traces/assets.
 
-See [the investigation record](../../docs/vulkan-learning-prototype.md).
+See [the investigation record](../../docs/archive/vulkan-learning-prototype.md).
 
 ## Textured raster experiment
 
@@ -64,4 +64,4 @@ checks all pixels through the independent oracle. It isolates implicit overlays
 only for its child process and restores the previous environment. Raw executable
 success means validation passed; pixel acceptance additionally requires the
 oracle. PPM outputs are authored four-quadrant diagnostic images, not game frames.
-See [the raster acceptance record](../../docs/vulkan-raster-prototype.md).
+See [the raster acceptance record](../../docs/archive/vulkan-raster-prototype.md).

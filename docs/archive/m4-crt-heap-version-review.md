@@ -1,0 +1,43 @@
+# Version-query bridge and selector return
+
+The gate preserves the accepted heap creation, token publication, selector prologue and genuine stack-probe return. It adds 60 guarded source bytes across four spans: the conditional version checks, the prefix leading to the environment query, the cold mode-1 path and the shared selector epilogue. Eight new AMD64 objects cover O0/O2; all 30 older objects and both FDIV libraries are preserved.
+
+Qualifying witnessed responses execute 169 combined original source bytes, 51 instructions, 31 source accesses, five CALLs and two genuine RETs. Two separate API-return reads and 37 API-output DWORD writes are kept outside the source ledger. The complete source identity is 2,086 bytes. The additional raw RX page at `0x7800C000` makes 21 mappings and preserves the preceding 20.
+
+## Finite API contract
+
+Original source supplies the `OSVERSIONINFOA` pointer `0x200017B8` and size `0x94`. The original query CALL at `0x78003A2B` reads import slot `0x7802E0A0` and stores return `0x78003A31` at `0x20000618`. The API bridge reads the complete actual 148-byte input, checks complete destination permissions using a deep private memory copy, then calls the measured native `GetVersionExA` through an aligned private structure.
+
+The private host scratch begins with the actual guest bytes, including the source size field. All scratch output is witnessed and copied through 37 checked DWORD writes, even when an API returns zero; unchanged failure output is not assumed. The checked API return reads the genuine source word and changes only low EAX, ESP and EIP. It removes the return and argument slots, setting ESP `0x20000620` and EIP `0x78003A31`. Source arithmetic flags and all other State/FX/runtime CPU data are preserved by that finite seam.
+
+The native BOOL remains its full four-byte result. Version fields and BOOL drive the original conditional instructions; the bridge does not force an OS version. Windows version reporting can depend on the executable's manifest or compatibility context, so this gate makes no universal equivalence claim for the original process's API internals or version response. See [Microsoft's GetVersionExA contract](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getversionexa).
+
+## Source frontiers
+
+For a nonzero BOOL, platform 2 and unsigned major version at least 5, the source executes its cold PUSH/POP/JMP, restores EBX, executes LEAVE and reads the outer return word through its genuine RET. Ordinary runs stop at EIP `0x780039E8`, ESP `0x20001858`, EAX 1, with the selector's saved EBX and EBP restored. The caller's comparison, heap-mode global store and heap-initializer RET remain unexecuted.
+
+Other actual responses reach the genuine `GetEnvironmentVariableA` CALL at `0x78003A5C`, using the original import and source-produced arguments; that API remains uncalled. The source-only model covers BOOL zero, non-NT platform and lower major versions explicitly. Those hypothetical responses are not production API witnesses or native branch-coverage credit.
+
+The version output range ends at `0x2000184C` exclusively. It overwrites historical saved ECX bytes that the probe already consumed, while excluding the probe return word, saved EBP and outer selector return. Private committed-byte guards account for that exact API effect and partial transport. Undefined AF has representative zero at five exact source XOR/TEST sites; universal undefined-flag equivalence is not claimed.
+
+## Ownership and failures
+
+The opaque guest heap token refers to one full-width private HANDLE. The original resource remains live during the query and selector, and cleanup releases that same handle once on ordinary and tested fault paths. Caller LastError and rich native CPU/FP state are preserved. The query input/output, result, counters and source routing are checked against private authority; public witness edits cannot change the accepted API result.
+
+Directed faults cover full destination permissions before the OS call, permissions after the call, observer exceptions around the native call, partial and complete output copies, return-word integrity, exceptions before return projection, modified registers or source code, outer selector returns and terminal cleanup. The original TIB and Policy limits remain unchanged; the declared lower-stack page does not prove original guard-page growth.
+
+## Evidence
+
+The author passed 72 integrated native rows, created and released 72 real heaps, and witnessed 70 actual version queries. All 48 ordinary rows completed the qualifying selector return. The two additional completed selector returns belong to terminal fault controls. The author records 2,296 actual output DWORD commits across ordinary and partial fault cases.
+
+Root ordinary comparison passes 256,046 checks and 4,176 selected corruption denials over 48 rows and 40 checkpoints. The independent draft audit passes 6,894 comparisons over 48 original-BEFORE models, 12 hypothetical response formulas and 12 declared lower-stack formulas. Actual native API witness data supplies only the finite API effect; native AFTER State never seeds the expected source model.
+
+The final independent source-model audit passes 14,910 comparisons over all 1,920 complete ordinary phase sets. It checks every query witness, private input/output, separate transport ledger and heap registry, plus 1,632 unused ledgers and 96 distinct typed-owner checks. It verifies 997 physical pins and binds the actual native execution and corrected ordinary observer.
+
+Independent compiled review passes 196 integrated scenarios and 11,042 assertions, with 40 malformed-token denials. Its strict archive/hardware review checks 396 hardware pairs, 548 hardware-semantic corruption denials and 56 inventory/request denials. It witnesses 148 actual heap creations and matching releases, 82 integrated version queries, 1,934 actual output DWORD commits and 20 genuine selector returns. Four separate malformed-size host-only API diagnostics exercise actual BOOL-zero outputs and nonzero LastError restoration; they do not provide alternate live selector-branch coverage. Together, the author and independent corpus contain 268 integrated scenarios and 220 successfully matched heap acquisitions/releases.
+
+The initial root checker retained the previous import-fault enum and refused the new selector-return boundary. Its corrected revision passed on the same frozen native captures; no native rerun followed. A broad ancestral source-copy manifest also referenced a changed graphics README. The fresh compilation map excludes documentary `.md` entries while requiring exact equality for compiled sources, objects and libraries. Its immutable earlier snapshot and failed attempt are retained as history. A temporary build-receipt scope edit was restored and separately preserved; the final frozen build includes its finished runner before downstream review.
+
+The initial independent native run stopped at the unchanged FDIV writer's hardware boundary, before entering the new version-query binding. Its seeded legacy instruction/data pointer metadata became zero while the other checked hardware fields were preserved. The failed raw sample and a read-only diagnosis remain available; the cause is unproved. The identical compiled O0/O2 retry passed with every rich-hardware comparison unchanged. An independent archive checker subsequently refused a tuple-truthiness error in its zero-record test; the corrected checker enforces the same byte-zero requirement and passes the same immutable archives without another native run. The final admission-script review also caught normalization of the literal `pack` command as a path; the corrected check compares that token exactly and binds the actual path arguments.
+
+Receipts include [author execution](../../reports/m4-crt-heap-version/execution-r1/report.json), [ordinary comparison](../../reports/m4-crt-heap-version-root/observe-r2/report.json), [final independent source-model audit](../../reports/m4-crt-heap-version-root-audit/final-r1/report.json), [independent native execution](../../reports/m4-crt-heap-version-review/native-r2/report.json), [strict hardware review](../../reports/m4-crt-heap-version-review/check-r2/report.json), [preserved metadata failure](../../reports/m4-crt-heap-version-review/failed-native-r1/report.json), and [read-only diagnosis](../../reports/m4-crt-heap-version-host-review/diagnosis-r1/report.json). The [root acceptance](../../reports/m4-crt-heap-version-root/root-acceptance-r1/report.json) and [final checks](../../reports/m4-crt-heap-version-root/final-check-r1/report.json) bind the completed proof. Complete CRT, menus and Training are outside this gate.
