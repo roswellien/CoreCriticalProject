@@ -10,7 +10,9 @@ MW3 gameplay through recompilation, integrate modern platform services/Vulkan,
 and advance native host -> live menu -> live Training. Do not restart as a remake.
 
 Follow `docs/project-status-reporting.md` when reporting progress in updates,
-PRs and release notes.
+PRs and release notes. Probes, replay and original-game hooks do not establish
+live native gameplay. Guest ABI/FP, resource contracts and required
+initialization effects still apply.
 
 Inspect current process identities before expensive work. Protect the existing
 controls composer/watcher and never open active SQLite or duplicate a long job.
