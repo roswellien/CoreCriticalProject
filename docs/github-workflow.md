@@ -21,8 +21,9 @@ continue to apply.
 
 Every contributor and agent uses the branch format in
 [Names and formats](#names-and-formats). Agents use the GitHub username of the
-account they push with. Keep `main` as the repository default branch and keep
-`develop` as the shared integration branch.
+account they push with. `develop` is the repository's default branch, so a
+merged PR's `Closes #<issue>` line closes its issue; `main` is the release
+branch.
 
 ## Start a task
 
@@ -83,7 +84,8 @@ warns about names that don't follow them.
 `<username>/<type>/<issue>-<slug>`, all lowercase. The username is the GitHub
 account that pushes the branch; an agent uses the account it pushes with. The
 type is `feature`, `fix`, `docs`, `ci` or `refactor`. The issue number comes
-first in the last part when an issue exists and is left out when none does.
+first in the last part. Every task has an issue (see
+[Project board](#project-board)); only branches made before that rule leave it out.
 Examples: `carson-nr/fix/10-setup-verify-optional-tiers`,
 `roswellien/feature/torso-mode-preset`.
 
@@ -198,6 +200,8 @@ Once a PR has merged, a new fix or follow-up uses a fresh branch from current
 additional changes. At handoff, report the branch, PR URL, checks and open limits;
 distinguish "awaiting review" from "merged" and "published".
 
+After merge, check that the issue's card is Done (see [Project board](#project-board)).
+
 ## Project board
 
 The [project board](https://github.com/users/roswellien/projects/1) shows where
@@ -305,6 +309,6 @@ requirement is a project rule rather than a GitHub-enforced restriction. The PR
 conventions check fails PRs into `main` that don't come from `develop`, but it
 cannot stop a direct push. Once
 available, protect both shared branches against direct pushes, force-pushes and
-deletion, and require PRs and the applicable passing CI checks. Keep `main` as
-the repository's default branch. Do not change account plans, repository
+deletion, and require PRs and the applicable passing CI checks. Keep `develop`
+as the repository's default branch. Do not change account plans, repository
 visibility or access controls as a workaround without explicit owner direction.
