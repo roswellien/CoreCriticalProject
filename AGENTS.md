@@ -75,6 +75,9 @@ making the repository public.
   before naming or publishing any release file.
 - `docs/roadmap.md`: what is planned next.
 - `docs/code-guide.md`: how the code is organized and how it should explain itself.
+- `.agents/skills/`: shared agent skills. `.claude/skills/` is a generated copy for
+  Claude Code; never edit it by hand, and run `python tools/agents/sync_skills.py`
+  after changing a skill.
 - `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
 
 Agent rules live only in this file. `CLAUDE.md` and
