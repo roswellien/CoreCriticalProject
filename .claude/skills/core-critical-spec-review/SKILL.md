@@ -1,14 +1,14 @@
 ---
 name: core-critical-spec-review
-description: Adversarially reviews a spec for this repository, fixes its major gaps by editing the spec, and loops until it holds or the loop stops, then reports what is left. Use after writing a spec, as stage 2 of core-critical-workflow.
+description: Adversarially review a spec for this repository, fix its major gaps by editing the spec, and loop until it holds or the loop stops, then report what is left. Use after writing a spec, as stage 2 of core-critical-workflow.
 ---
 
 # Spec review
 
 Part of stage 2 of [the plan-and-review flow](../core-critical-workflow/SKILL.md).
 
-**Input:** the path of the spec file, which lives outside the checkout in
-`MW3Recomp-Private-specs/`. If none is given and more than one spec could be
+**Input:** the path of the spec file, which lives outside the checkout in the
+MW3Recomp-Private-specs folder. If none is given and more than one spec could be
 meant, ask which.
 
 **Run:** the loop in

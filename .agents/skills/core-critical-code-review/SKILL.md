@@ -1,6 +1,6 @@
 ---
 name: core-critical-code-review
-description: Reviews a plan file or the current branch for bugs, breakage, security and code structure, fixes major findings by editing the plan or the code, and loops until it is clean or the loop stops, then reports what is left. Use on a plan after the plan review (stage 3 of core-critical-workflow), and on a branch in a fresh session as the independent review before a PR (stage 5).
+description: Review a plan file or the current branch for bugs, breakage, security and code structure, fix major findings by editing the plan or the code, and loop until it is clean or the loop stops, then report what is left. Use on a plan after the plan review (stage 3 of core-critical-workflow), and on a branch in a fresh session as the independent review before a PR (stage 5).
 ---
 
 # Code review

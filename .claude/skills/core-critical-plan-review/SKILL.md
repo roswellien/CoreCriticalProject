@@ -1,14 +1,14 @@
 ---
 name: core-critical-plan-review
-description: Reviews an implementation plan for this repository against the real files and its spec, fixes major problems by editing the plan, and loops until it passes or the loop stops, then reports what is left. Use after writing a plan, as stage 3 of core-critical-workflow, before the code review of the plan.
+description: Review an implementation plan for this repository against the real files and its spec, fix major problems by editing the plan, and loop until it passes or the loop stops, then report what is left. Use after writing a plan, as stage 3 of core-critical-workflow, before the code review of the plan.
 ---
 
 # Plan review
 
 Part of stage 3 of [the plan-and-review flow](../core-critical-workflow/SKILL.md).
 
-**Input:** the path of the plan file, which lives outside the checkout in
-`MW3Recomp-Private-specs/` next to its spec. If none is given and more than
+**Input:** the path of the plan file, which lives outside the checkout in the
+MW3Recomp-Private-specs folder next to its spec. If none is given and more than
 one plan could be meant, ask which. Read the spec too; the plan is checked
 against it.
 

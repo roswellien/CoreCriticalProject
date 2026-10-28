@@ -1,6 +1,6 @@
 ---
 name: core-critical-workflow
-description: Runs a change through this repository's plan-and-review flow (grill, spec, plan, implement, review) and says which skill each stage uses and where to stop for approval. Use when starting work on an issue, or when unsure which stage comes next.
+description: Run a change through this repository's plan-and-review flow (grill, spec, plan, implement, review) and say which skill each stage uses and where to stop for approval. Use when starting work on an issue, or when unsure which stage comes next.
 ---
 
 # Plan-and-review workflow

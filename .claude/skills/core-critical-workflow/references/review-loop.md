@@ -5,8 +5,8 @@ skill gives two things:
 
 - **The target:** a spec or plan file, or the current branch's changes against
   `origin/develop`.
-- **The checklist:** that skill's `references/checklist.md`, which lists what
-  to check and what makes a finding major or minor.
+- **The checklist:** the checklist file in that skill's own references folder,
+  which lists what to check and what makes a finding major or minor.
 
 ## Loop
 

@@ -1,6 +1,6 @@
 ---
 name: core-critical-grill
-description: Interviews the requester one question at a time about an issue until both sides share one understanding of what to build, before any spec is written. Use at the start of work on an issue, as the first stage of core-critical-workflow.
+description: Interview the requester one question at a time about an issue until both sides share one understanding of what to build, before any spec is written. Use at the start of work on an issue, as the first stage of core-critical-workflow.
 ---
 
 # Grill
