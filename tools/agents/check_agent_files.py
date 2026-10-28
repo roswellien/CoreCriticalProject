@@ -1,4 +1,4 @@
-"""Check the agent instruction files for missing paths and for size.
+"""Check the agent instruction files and shared skills for missing paths, size and drift.
 
 `AGENTS.md` is the single source of agent rules; `CLAUDE.md` and
 `.github/copilot-instructions.md` only point to it. This check keeps the three
@@ -13,6 +13,22 @@ files trustworthy:
   "## Commands and layout" or "## Where to find more" heading) fits in 4,000
   characters, because Copilot code review reads only the first 4,000 characters
   of an instruction file.
+
+Shared skills live in `.agents/skills/core-critical-<task>/`, with an exact copy
+in `.claude/skills/` for Claude Code (made by `tools/agents/sync_skills.py`):
+
+- The tracked files in both folders match byte for byte.
+- Each skill is a folder with a `SKILL.md` whose frontmatter uses only the keys
+  every tool reads the same way (`name`, `description`, `disable-model-invocation`,
+  `paths`). A tool that can't parse a skill's frontmatter skips the skill
+  silently, so values YAML would misread must be quoted.
+- `name` equals the folder name, starts `core-critical-`, uses lowercase letters,
+  digits and single hyphens, and is at most 64 characters; `description` is 1 to
+  1,024 characters. These are the limits of the Agent Skills format.
+- An optional `agents/openai.yaml` (read by Codex) sets only
+  `policy.allow_implicit_invocation`.
+- Backticked paths in a skill's Markdown files are tracked, either from the
+  repository root or from the skill's own folder.
 
 Exit codes: 0 when there are no errors (warnings may be printed), 1 when there
 is at least one error.
@@ -40,6 +56,15 @@ MUST_FOLLOW_END_HEADINGS = ("## Commands and layout", "## Where to find more")
 SKILL_SOURCE = ".agents/skills"
 SKILL_COPY = ".claude/skills"
 SKILL_PREFIX = "core-critical-"
+SKILL_KEYS = ("name", "description", "disable-model-invocation", "paths")
+SKILL_NAME = re.compile(rf"{re.escape(SKILL_PREFIX)}[a-z0-9]+(-[a-z0-9]+)*")
+MAX_SKILL_NAME_CHARACTERS = 64
+MAX_DESCRIPTION_CHARACTERS = 1024
+# Unquoted, YAML reads a value starting with one of these, or holding ": " or " #",
+# as something other than plain text, or fails to parse it at all.
+YAML_SPECIAL_STARTS = tuple("[]{}>|*&!%@`")
+OPENAI_POLICY_LINE = re.compile(r"\s+allow_implicit_invocation: (true|false)")
+SYNC_ADVICE = f"edit skills only in {SKILL_SOURCE}/, then run `python tools/agents/sync_skills.py`"
 
 # Backticks also hold branch names, version numbers and placeholders, so a token
 # only counts as a path when it ends in one of these extensions or starts with a
@@ -91,6 +116,7 @@ def check(root: Path, tracked_paths: list[str]) -> list[Finding]:
                 )
             )
     findings += _check_size(agents_file.read_text(encoding="utf-8"))
+    findings += _check_skills(root, tracked)
     return findings
 
 
@@ -152,11 +178,16 @@ class _TrackedTree:
         return result.returncode == 0
 
 
-def _check_named_paths(name: str, text: str, tracked: _TrackedTree) -> list[Finding]:
+def _check_named_paths(
+    name: str, text: str, tracked: _TrackedTree, skill_folder: str | None = None
+) -> list[Finding]:
+    """Report named paths that aren't tracked; in a skill, a path may also be relative to its folder."""
     findings = []
     for token in BACKTICKED_TOKEN.findall(text):
         path = _path_in_token(token, tracked)
         if path is None or tracked.contains(path):
+            continue
+        if skill_folder is not None and tracked.contains(f"{skill_folder}/{path}"):
             continue
         # A "build/" ignore rule matches only a name known to be a folder, so keep the slash.
         named_as_folder = token.split("#", 1)[0].endswith("/")
@@ -221,6 +252,221 @@ def _check_size(agents_text: str) -> list[Finding]:
             )
         )
     return findings
+
+
+def _check_skills(root: Path, tracked: _TrackedTree) -> list[Finding]:
+    source_files = _tracked_under(SKILL_SOURCE, tracked)
+    copy_files = _tracked_under(SKILL_COPY, tracked)
+    findings = _check_skill_copy(root, source_files, copy_files)
+
+    skill_folders = set()
+    for relative_path in sorted(source_files):
+        folder, separator, _ = relative_path.partition("/")
+        if separator:
+            skill_folders.add(folder)
+        else:
+            findings.append(
+                Finding(
+                    "error",
+                    f"{SKILL_SOURCE}/{relative_path} sits directly in {SKILL_SOURCE}/; "
+                    "each skill is a folder holding a SKILL.md.",
+                )
+            )
+    for folder in sorted(skill_folders):
+        findings += _check_skill_folder(root, folder, source_files, tracked)
+    return findings
+
+
+def _tracked_under(folder: str, tracked: _TrackedTree) -> set[str]:
+    """Return the tracked files under `folder`, relative to it."""
+    prefix = f"{folder}/"
+    return {path.removeprefix(prefix) for path in tracked.files if path.startswith(prefix)}
+
+
+def _check_skill_copy(root: Path, source_files: set[str], copy_files: set[str]) -> list[Finding]:
+    """Report every difference between the shared skills and their Claude Code copy."""
+    findings = []
+    for relative_path in sorted(source_files | copy_files):
+        source_name = f"{SKILL_SOURCE}/{relative_path}"
+        copy_name = f"{SKILL_COPY}/{relative_path}"
+        folder, separator, _ = relative_path.partition("/")
+        is_shared = separator != "" and folder.startswith(SKILL_PREFIX)
+        if not is_shared:
+            if relative_path in copy_files:
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{copy_name} is tracked but isn't a shared skill; shared skills go in "
+                        f"{SKILL_SOURCE}/ under a `{SKILL_PREFIX}` name, and a personal skill "
+                        "stays out of git.",
+                    )
+                )
+            # A source file outside a shared skill folder is reported by the folder checks.
+            continue
+
+        if relative_path not in copy_files:
+            problem = f"{source_name} has no copy in {SKILL_COPY}/"
+        elif relative_path not in source_files:
+            problem = f"{copy_name} has no source in {SKILL_SOURCE}/"
+        elif _bytes_or_none(root / source_name) != _bytes_or_none(root / copy_name):
+            # A tracked file deleted from disk reads as None, so it counts as a difference.
+            problem = f"{copy_name} differs from {source_name}"
+        else:
+            continue
+        findings.append(Finding("error", f"{problem}; {SYNC_ADVICE}."))
+    return findings
+
+
+def _bytes_or_none(path: Path) -> bytes | None:
+    return path.read_bytes() if path.is_file() else None
+
+
+def _check_skill_folder(
+    root: Path, folder: str, source_files: set[str], tracked: _TrackedTree
+) -> list[Finding]:
+    skill_folder = f"{SKILL_SOURCE}/{folder}"
+    skill_file = root / skill_folder / "SKILL.md"
+    if f"{folder}/SKILL.md" not in source_files or not skill_file.is_file():
+        return [Finding("error", f"{skill_folder}/ has no SKILL.md.")]
+
+    findings = _check_frontmatter(
+        f"{skill_folder}/SKILL.md", folder, skill_file.read_text(encoding="utf-8")
+    )
+    openai_file = root / skill_folder / "agents/openai.yaml"
+    if f"{folder}/agents/openai.yaml" in source_files and openai_file.is_file():
+        findings += _check_openai_settings(
+            f"{skill_folder}/agents/openai.yaml", openai_file.read_text(encoding="utf-8")
+        )
+    for relative_path in sorted(source_files):
+        markdown_file = root / SKILL_SOURCE / relative_path
+        in_this_skill = relative_path.startswith(f"{folder}/")
+        if in_this_skill and relative_path.endswith(".md") and markdown_file.is_file():
+            findings += _check_named_paths(
+                f"{SKILL_SOURCE}/{relative_path}",
+                markdown_file.read_text(encoding="utf-8"),
+                tracked,
+                skill_folder,
+            )
+    return findings
+
+
+def _check_frontmatter(skill_name: str, folder: str, text: str) -> list[Finding]:
+    """Check a SKILL.md's frontmatter, reading only the small YAML subset skills here use."""
+    lines = text.splitlines()
+    if not lines or lines[0].rstrip() != "---":
+        return [Finding("error", f"{skill_name} must start with a `---` frontmatter line.")]
+    closing_line = next(
+        (index for index in range(1, len(lines)) if lines[index].rstrip() == "---"), None
+    )
+    if closing_line is None:
+        return [Finding("error", f"{skill_name} has no closing `---` frontmatter line.")]
+
+    findings = []
+    raw_values: dict[str, str] = {}
+    for line in lines[1:closing_line]:
+        # Indented and "- " lines continue the key above, such as a `paths` list.
+        is_continuation = line.startswith((" ", "\t", "-"))
+        if not line.strip() or line.startswith("#") or is_continuation:
+            continue
+        key, _, value = line.partition(":")
+        if key not in SKILL_KEYS:
+            allowed = ", ".join(f"`{allowed_key}`" for allowed_key in SKILL_KEYS)
+            findings.append(
+                Finding("error", f"{skill_name} has frontmatter key `{key}`; only {allowed}.")
+            )
+        raw_values[key] = value.strip()
+
+    for key in ("name", "description"):
+        if key not in raw_values:
+            findings.append(Finding("error", f"{skill_name} needs a `{key}` in its frontmatter."))
+            continue
+        problem = _plain_value_problem(raw_values[key])
+        if problem is not None:
+            findings.append(Finding("error", f"{skill_name}'s `{key}` {problem}."))
+            raw_values.pop(key)
+
+    if "name" in raw_values:
+        findings += _check_skill_name(skill_name, folder, _unquoted(raw_values["name"]))
+    if "description" in raw_values:
+        description_length = len(_unquoted(raw_values["description"]))
+        if not 1 <= description_length <= MAX_DESCRIPTION_CHARACTERS:
+            findings.append(
+                Finding(
+                    "error",
+                    f"{skill_name}'s `description` is {description_length} characters; it must "
+                    f"be 1 to {MAX_DESCRIPTION_CHARACTERS}.",
+                )
+            )
+    invocation = raw_values.get("disable-model-invocation")
+    if invocation is not None and invocation not in ("true", "false"):
+        findings.append(
+            Finding("error", f"{skill_name}'s `disable-model-invocation` must be true or false.")
+        )
+    return findings
+
+
+def _plain_value_problem(raw_value: str) -> str | None:
+    """Say why a one-line frontmatter value would be misread, or None if it reads as written."""
+    if raw_value != _unquoted(raw_value):
+        return None
+    if raw_value.startswith((">", "|")):
+        return "is a `>` or `|` block; write it on one line"
+    if raw_value.startswith(YAML_SPECIAL_STARTS) or ": " in raw_value or " #" in raw_value:
+        return "needs quotes, because YAML reads it differently or can't parse it unquoted"
+    return None
+
+
+def _unquoted(raw_value: str) -> str:
+    is_quoted = len(raw_value) >= 2 and raw_value[0] in "'\"" and raw_value[-1] == raw_value[0]
+    return raw_value[1:-1] if is_quoted else raw_value
+
+
+def _check_skill_name(skill_name: str, folder: str, name: str) -> list[Finding]:
+    findings = []
+    if name != folder:
+        findings.append(
+            Finding("error", f"{skill_name}'s `name` is `{name}`; it must match its folder.")
+        )
+    if not SKILL_NAME.fullmatch(name):
+        findings.append(
+            Finding(
+                "error",
+                f"{skill_name}'s `name` must start `{SKILL_PREFIX}` and use only lowercase "
+                "letters, digits and single hyphens.",
+            )
+        )
+    if len(name) > MAX_SKILL_NAME_CHARACTERS:
+        findings.append(
+            Finding(
+                "error",
+                f"{skill_name}'s `name` is {len(name)} characters, over "
+                f"{MAX_SKILL_NAME_CHARACTERS}.",
+            )
+        )
+    return findings
+
+
+def _check_openai_settings(settings_name: str, text: str) -> list[Finding]:
+    """Codex settings may only switch implicit use of the skill on or off."""
+    meaningful_lines = [
+        line.rstrip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    only_the_policy_line = (
+        len(meaningful_lines) == 2
+        and meaningful_lines[0] == "policy:"
+        and OPENAI_POLICY_LINE.fullmatch(meaningful_lines[1]) is not None
+    )
+    if only_the_policy_line:
+        return []
+    return [
+        Finding(
+            "error",
+            f"{settings_name} may hold only `policy:` and one indented "
+            "`allow_implicit_invocation: true` or `false` line.",
+        )
+    ]
 
 
 def main() -> int:

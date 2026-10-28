@@ -300,6 +300,201 @@ def link_folder(target, link):
         return False
 
 
+class SkillTests(FixtureTree):
+    def add_skill(self, folder="core-critical-demo", files=None):
+        """Write a skill to both folders, as sync_skills would, and return the tracked list."""
+        files = files or {"SKILL.md": SKILL.replace("core-critical-demo", folder)}
+        tracked = list(TRACKED)
+        for relative_path, text in files.items():
+            for skills_folder in (".agents/skills", ".claude/skills"):
+                path = f"{skills_folder}/{folder}/{relative_path}"
+                self.write(path, text)
+                tracked.append(path)
+        return tracked
+
+    def errors_for_skill_md(self, text, folder="core-critical-demo"):
+        return messages(self.check(self.add_skill(folder, {"SKILL.md": text})))
+
+    def test_clean_skill_passes(self):
+        self.assertEqual(self.check(self.add_skill()), [])
+
+    def test_no_skills_at_all_passes(self):
+        self.assertEqual(self.check(), [])
+
+    def test_byte_difference_is_an_error(self):
+        tracked = self.add_skill()
+        self.write(".claude/skills/core-critical-demo/SKILL.md", SKILL + "Edited.\n")
+        self.assertEqual(
+            messages(self.check(tracked)),
+            [
+                (
+                    ".claude/skills/core-critical-demo/SKILL.md differs from "
+                    ".agents/skills/core-critical-demo/SKILL.md; "
+                    f"{checker.SYNC_ADVICE}."
+                )
+            ],
+        )
+
+    def test_file_missing_from_the_copy_is_an_error(self):
+        tracked = self.add_skill()
+        tracked.remove(".claude/skills/core-critical-demo/SKILL.md")
+        errors = messages(self.check(tracked))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("SKILL.md has no copy in .claude/skills/", errors[0])
+
+    def test_extra_file_in_the_copy_is_an_error(self):
+        tracked = self.add_skill()
+        self.write(".claude/skills/core-critical-demo/notes.md", "Extra.\n")
+        tracked.append(".claude/skills/core-critical-demo/notes.md")
+        errors = messages(self.check(tracked))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("notes.md has no source in .agents/skills/", errors[0])
+
+    def test_tracked_personal_skill_in_the_copy_is_an_error(self):
+        tracked = self.add_skill()
+        self.write(".claude/skills/my-own-skill/SKILL.md", "Mine.\n")
+        tracked.append(".claude/skills/my-own-skill/SKILL.md")
+        errors = messages(self.check(tracked))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("isn't a shared skill", errors[0])
+
+    def test_tracked_file_deleted_from_disk_is_a_difference(self):
+        tracked = self.add_skill()
+        (self.root / ".claude/skills/core-critical-demo/SKILL.md").unlink()
+        errors = messages(self.check(tracked))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("differs from", errors[0])
+
+    def test_copy_with_no_source_is_an_error(self):
+        self.write(".claude/skills/core-critical-demo/SKILL.md", SKILL)
+        tracked = [*TRACKED, ".claude/skills/core-critical-demo/SKILL.md"]
+        errors = messages(self.check(tracked))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("has no source", errors[0])
+
+    def test_file_directly_in_the_skills_folder_is_an_error(self):
+        self.write(".agents/skills/README.md", "Skills.\n")
+        errors = messages(self.check([*TRACKED, ".agents/skills/README.md"]))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("sits directly in .agents/skills/", errors[0])
+
+    def test_missing_skill_md_is_an_error(self):
+        tracked = self.add_skill(files={"notes.md": "Notes.\n"})
+        self.assertEqual(
+            messages(self.check(tracked)), [".agents/skills/core-critical-demo/ has no SKILL.md."]
+        )
+
+    def test_missing_frontmatter_is_an_error(self):
+        errors = self.errors_for_skill_md("# Demo\n\nSteps.\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("must start with a `---` frontmatter line", errors[0])
+
+    def test_unclosed_frontmatter_is_an_error(self):
+        errors = self.errors_for_skill_md("---\nname: core-critical-demo\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no closing", errors[0])
+
+    def test_name_not_matching_its_folder_is_an_error(self):
+        errors = self.errors_for_skill_md(
+            SKILL.replace("name: core-critical-demo", "name: core-critical-other")
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("must match its folder", errors[0])
+
+    def test_badly_formed_names_are_errors(self):
+        for folder in ("core-critical-Demo", "core-critical--demo"):
+            with self.subTest(folder=folder):
+                errors = self.errors_for_skill_md(
+                    SKILL.replace("core-critical-demo", folder), folder
+                )
+                self.assertEqual(len(errors), 1)
+                self.assertIn("lowercase letters, digits and single hyphens", errors[0])
+
+    def test_name_without_the_prefix_is_an_error(self):
+        # sync_skills skips such a folder, so only the source holds it.
+        self.write(".agents/skills/demo/SKILL.md", SKILL.replace("core-critical-demo", "demo"))
+        errors = messages(self.check([*TRACKED, ".agents/skills/demo/SKILL.md"]))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("must start `core-critical-`", errors[0])
+
+    def test_name_of_65_characters_is_an_error(self):
+        folder = "core-critical-" + "a" * 51
+        errors = self.errors_for_skill_md(SKILL.replace("core-critical-demo", folder), folder)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("65 characters, over 64", errors[0])
+
+    def test_description_length_limits(self):
+        for description, length in (('""', 0), ("d" * 1025, 1025)):
+            with self.subTest(length=length):
+                errors = self.errors_for_skill_md(SKILL.replace("Demo skill.", description))
+                self.assertEqual(len(errors), 1)
+                self.assertIn(f"is {length} characters", errors[0])
+
+    def test_values_yaml_would_misread_are_errors(self):
+        cases = (
+            ("description: >\n  Folded.", "is a `>` or `|` block"),
+            ("description: Run checks: then report.", "needs quotes"),
+            ("description: `tool` first.", "needs quotes"),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                errors = self.errors_for_skill_md(SKILL.replace("description: Demo skill.", line))
+                self.assertEqual(len(errors), 1)
+                self.assertIn(expected, errors[0])
+
+    def test_unknown_key_is_an_error(self):
+        errors = self.errors_for_skill_md(SKILL.replace("---\n\n", "allowed-tools: Bash\n---\n\n"))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("frontmatter key `allowed-tools`", errors[0])
+
+    def test_disable_model_invocation_must_be_true_or_false(self):
+        errors = self.errors_for_skill_md(
+            SKILL.replace("---\n\n", "disable-model-invocation: maybe\n---\n\n")
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("must be true or false", errors[0])
+
+    def test_openai_settings_beyond_the_policy_are_an_error(self):
+        settings = "policy:\n  allow_implicit_invocation: false\ninterface:\n  display_name: Demo\n"
+        tracked = self.add_skill(files={"SKILL.md": SKILL, "agents/openai.yaml": settings})
+        errors = messages(self.check(tracked))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("agents/openai.yaml may hold only", errors[0])
+
+    def test_missing_backticked_path_in_a_skill_is_an_error(self):
+        errors = self.errors_for_skill_md(SKILL + "Read `docs/missing.md`.\n")
+        self.assertEqual(
+            errors,
+            [
+                (
+                    ".agents/skills/core-critical-demo/SKILL.md names `docs/missing.md`, "
+                    "which isn't tracked."
+                )
+            ],
+        )
+
+    def test_valid_variations_pass(self):
+        variations = {
+            "a valid openai.yaml": {
+                "SKILL.md": SKILL,
+                "agents/openai.yaml": "# Codex\npolicy:\n  allow_implicit_invocation: false\n",
+            },
+            "a paths list": {
+                "SKILL.md": SKILL.replace("---\n\n", "paths:\n  - tools/**\n---\n\n"),
+            },
+            "a quoted description holding ': '": {
+                "SKILL.md": SKILL.replace("Demo skill.", '"Run checks: then report."'),
+            },
+            "a path relative to the skill folder": {
+                "SKILL.md": SKILL + "Use `references/checklist.md` and `docs/guide.md`.\n",
+                "references/checklist.md": "Checklist.\n",
+            },
+        }
+        for variation, files in variations.items():
+            with self.subTest(variation=variation):
+                self.assertEqual(self.check(self.add_skill(files=files)), [])
+
+
 class RepositoryTests(unittest.TestCase):
     """The real agent files in this checkout pass the check."""
 
