@@ -8,27 +8,13 @@ from tools.sync_mechlab import read_notes
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "dist"
 OUT.mkdir(exist_ok=True)
-site_files = (
-    "index.html",
-    "styles.css",
-    "site.js",
-    "projects.html",
-    "news.html",
-    "projects.html",
-    "media.html",
-    "about.html",
-    "native.html",
-    "vulkan.html",
-    "tools.html",
-    "project.html",
-    "404.html",
-)
-for name in site_files:
+for name in ("index.html", "styles.css", "site.js", "news.html", "media.html", "about.html", "native.html", "vulkan.html", "tools.html", "404.html"):
     source = ROOT / name
     if source.is_file():
         shutil.copy2(source, OUT / name)
 shutil.copytree(ROOT / "assets", OUT / "assets", dirs_exist_ok=True)
-notes = read_notes(ROOT.parent / "docs" / "mechlab", ROOT.parent)
+repository_root = ROOT.parent
+notes = read_notes(repository_root / "docs" / "mechlab", repository_root)
 render_site(ROOT, OUT, notes)
 render_media(ROOT, OUT)
 print(f"Static preview ready: {OUT}")

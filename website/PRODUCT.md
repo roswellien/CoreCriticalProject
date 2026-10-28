@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Plain HTML/CSS/JavaScript, selected by the user on 2026-10-14. Build a local preview from the approved Mad Cat homepage concept. The user selected Cloudflare Pages with GitHub-connected builds using a separate website repository and authenticated Wrangler locally. The corecritical.dev zone is verified active in the authenticated account. The private roswellien/corecritical-website repository has been created, with a prepared local checkout at D:/Projects/CoreCriticalWeb. Initial commit/push, Cloudflare GitHub authorization, Pages creation and deployment are pending.
+Plain HTML/CSS/JavaScript. Build and preview from this repository's `website/` directory. The site is hosted on Cloudflare Pages at `corecritical.dev` using the existing `core-critical` project; the maintainer is moving its source from the former website-only repository.
 
 ## Users
 
@@ -26,11 +26,11 @@ Core Critical encompasses the recompilation projects and supporting modernizatio
 
 ## Capabilities and Constraints
 
-The project will be open source and hosted on GitHub. Cloudflare Pages is selected for the website. The separate website repository, deployment mode, launch content, community destinations, and release distribution details are not yet settled.
+The project is hosted on GitHub. Cloudflare Pages serves the website. The site source and the published MechLab notes are maintained in this repository; Cloudflare's production connection is switched by the maintainer.
 
 Website status and capability claims must reflect verified project evidence. Future targets must remain distinguishable from active implementation and publicly available releases.
 
-The repository distribution policy in ../docs/legal.md keeps original media and generated game code local. Public website assets must respect that policy.
+The recomp project's distribution policy keeps original media and generated game code local. The website contains authored site files, licensed fonts, generated website illustrations, and links to already-published media; it does not include game files.
 
 ## Brand Commitments
 

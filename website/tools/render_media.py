@@ -1,9 +1,70 @@
 """Build the public media gallery and individual mech features."""
 from html import escape
 import json
+import re
+from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 from .render_mechlab import frame
 
 TRAILER = '2olchoLkZro'
+YOUTUBE_CHANNEL = 'UC0YGz5FEh7-ij1miUmXECiw'
+YOUTUBE_FEED = f'https://www.youtube.com/feeds/videos.xml?channel_id={YOUTUBE_CHANNEL}'
+
+
+def latest_videos(root):
+    """Use YouTube's uploads feed, retaining a local snapshot for offline builds."""
+    fallback = json.loads((root / 'data/youtube-latest.json').read_text(encoding='utf-8'))
+    try:
+        request = Request(YOUTUBE_FEED, headers={'User-Agent': 'CoreCriticalWebsite/1.0'})
+        with urlopen(request, timeout=6) as response:
+            feed = ElementTree.fromstring(response.read())
+        namespaces = {
+            'atom': 'http://www.w3.org/2005/Atom',
+            'yt': 'http://www.youtube.com/xml/schemas/2015',
+        }
+        videos = []
+        for entry in feed.findall('atom:entry', namespaces):
+            video_id = entry.findtext('yt:videoId', namespaces=namespaces)
+            title = entry.findtext('atom:title', namespaces=namespaces)
+            published = entry.findtext('atom:published', namespaces=namespaces)
+            if video_id and re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id) and title and published:
+                videos.append({'id': video_id, 'title': title, 'published': published[:10]})
+        if videos:
+            return videos[:8]
+    except (OSError, ElementTree.ParseError, ValueError) as error:
+        print(f'YouTube feed unavailable; using saved video list: {error}')
+    return fallback[:8]
+
+
+def video_carousel(videos):
+    cards = []
+    for index, video in enumerate(videos):
+        video_id = video['id']
+        if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
+            raise ValueError(f'Invalid YouTube video ID: {video_id}')
+        title = escape(video['title'])
+        published = escape(video['published'])
+        featured_class = ' youtube-card-featured' if index == 0 else ''
+        badge = '<span class="youtube-card-badge">Newest video</span>' if index == 0 else ''
+        cards.append(
+            f'<a class="youtube-card{featured_class}" href="https://www.youtube.com/watch?v={video_id}" '
+            f'target="_blank" rel="noopener noreferrer" aria-label="Watch {title} on YouTube">'
+            + badge +
+            f'<img src="https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" alt="" '
+            'width="480" height="360" loading="lazy">'
+            f'<span class="youtube-card-title">{title}</span>'
+            f'<time datetime="{published}">{published}</time></a>'
+        )
+    return (
+        '<section class="youtube-latest" aria-labelledby="youtube-latest-heading">'
+        '<div class="youtube-carousel-heading"><div><h2 id="youtube-latest-heading">Latest on YouTube</h2>'
+        '<p>The newest upload leads the lineup. Fresh videos appear automatically.</p></div>'
+        '<div class="youtube-carousel-controls">'
+        '<button type="button" data-carousel-prev aria-label="Previous videos">←</button>'
+        '<button type="button" data-carousel-next aria-label="Next videos">→</button></div></div>'
+        '<div class="youtube-carousel" tabindex="0" aria-label="Latest Core Critical videos">'
+        + ''.join(cards) + '</div></section>'
+    )
 
 
 def trailer():
@@ -57,6 +118,7 @@ def render_media(root, out):
                 raise ValueError(f'Missing published media identity: {name}')
     intro = '<header class="media-intro"><h1>Media</h1><p>Meet the mechs. See the game in motion.</p></header>'
     content = ('<div class="media-shell">' + intro + media_nav('All media') +
+        video_carousel(latest_videos(root)) +
         '<section class="media-trailer" aria-labelledby="trailer-heading"><div><h2 id="trailer-heading">Announcement trailer</h2>'
         '<p>A first look at Core Critical: MW3. Familiar battlefields, rebuilt mech visuals, and lighting in development.</p>'
         '<a class="text-link" href="media-gameplay.html">Explore Gameplay <span aria-hidden="true">→</span></a></div>' + trailer() + '</section>'
