@@ -1,556 +1,992 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MechWarrior 3 - Visual 3D Map Studio</title>
-  <link rel="stylesheet" href="/static/css/studio.css">
-  <!-- Vendor 3D Libraries -->
-  <script src="/static/js/three.min.js"></script>
-  <script src="/static/js/OrbitControls.js"></script>
-  <script src="/static/js/TransformControls.js"></script>
-</head>
-<body>
-
-  <!-- App Header -->
-  <header>
-    <div class="brand-section">
-      <div class="brand-logo">
-        <span>⚔️ MECHWARRIOR 3</span>
-        <span class="brand-badge">MAP STUDIO</span>
-      </div>
-    </div>
-
-    <div class="project-meta">
-      <div class="input-group">
-        <span class="input-label">Map Title</span>
-        <input type="text" id="project-title" class="text-input" value="Iron Ridge Outpost" style="width: 170px;">
-      </div>
-      <div class="input-group">
-        <span class="input-label">Pack ID</span>
-        <input type="text" id="project-id" class="text-input" value="iron_ridge_outpost" style="width: 150px;">
-      </div>
-      <div class="input-group">
-        <span class="input-label">Operation / Biome</span>
-        <select id="biome-select" class="select-input" style="width: 220px;">
-          <option value="c1" selected>Op 1: Coastal Basin / Big Lake (c1)</option>
-          <option value="c2">Op 2: Desert Canyons (c2)</option>
-          <option value="c3">Op 3: Volcanic Badlands (c3)</option>
-          <option value="c4">Op 4: Highland Mountains (c4)</option>
-          <option value="t1">Training Grounds (t1)</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="header-actions">
-      <button id="btn-objectives" class="btn" title="Edit mission objectives and intel briefing">🎯 Objectives</button>
-      <button id="btn-mechlab" class="btn" title="Customize Player Mech loadout and lance drop configuration">🦾 MechLab</button>
-      <button id="btn-load-demo" class="btn" title="Load sample military base layout">📥 Load Demo</button>
-      <button id="btn-export" class="btn btn-primary" title="Compile and export standalone mod pack">⚡ Export Map Pack</button>
-      <button id="btn-launch-game" class="btn btn-accent" title="Launch custom map in native Vulkan engine">▶️ Play in Engine</button>
-    </div>
-  </header>
-
-  <!-- Main Work Area -->
-  <div class="app-container">
-
-    <!-- Left Sidebar: Visual Asset Palette -->
-    <div class="sidebar">
-      <div class="sidebar-tabs">
-        <button class="tab-btn active">Visual Asset Palette</button>
-      </div>
-      <div class="sidebar-content">
-
-        <div class="section-title">🌲 In-Game Environment & Props</div>
-        <div class="asset-grid">
-          <div class="asset-card" data-type="bridge_span">
-            <div class="asset-icon">🌉</div>
-            <div class="asset-name">Bridge Span</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="ramp">
-            <div class="asset-icon">📐</div>
-            <div class="asset-name">Vehicle Ramp</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="dock">
-            <div class="asset-icon">⚓</div>
-            <div class="asset-name">Shoreline Dock</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="defense_wall">
-            <div class="asset-icon">🧱</div>
-            <div class="asset-name">Defense Wall</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="security_gate">
-            <div class="asset-icon">🚧</div>
-            <div class="asset-name">Security Gate</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="powerline_pole">
-            <div class="asset-icon">⚡</div>
-            <div class="asset-name">Power Pole</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-        </div>
-
-        <div class="section-title">🛡️ In-Game Defenses</div>
-        <div class="asset-grid">
-          <div class="asset-card" data-type="turret_srm">
-            <div class="asset-icon">🚀</div>
-            <div class="asset-name">SRM Turret</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="turret_laser">
-            <div class="asset-icon">⚡</div>
-            <div class="asset-name">Laser Tower</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-        </div>
-
-        <div class="section-title">🏛️ In-Game Base Structures</div>
-        <div class="asset-grid">
-          <div class="asset-card" data-type="bunker">
-            <div class="asset-icon">🏢</div>
-            <div class="asset-name">Command Bunker</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="comm_center">
-            <div class="asset-icon">📡</div>
-            <div class="asset-name">Radar Comms Dish</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="fuel_tank">
-            <div class="asset-icon">🛢️</div>
-            <div class="asset-name">Coolant Silo</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="city_building">
-            <div class="asset-icon">🏬</div>
-            <div class="asset-name">City Garrison</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="repair_station">
-            <div class="asset-icon">🔧</div>
-            <div class="asset-name">MFB Gantry</div>
-            <div class="asset-badge">Mech Service</div>
-          </div>
-          <div class="asset-card" data-type="factory">
-            <div class="asset-icon">🏭</div>
-            <div class="asset-name">Mech Factory</div>
-            <div class="asset-badge">Industrial</div>
-          </div>
-        </div>
-
-        <div class="section-title">🤖 In-Game BattleMechs</div>
-        <div class="asset-grid">
-          <div class="asset-card" data-type="mech_madcat">
-            <div class="asset-icon">🦾</div>
-            <div class="asset-name">Mad Cat / Timber</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="mech_bushwacker">
-            <div class="asset-icon">🦾</div>
-            <div class="asset-name">Bushwacker</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="mech_thor">
-            <div class="asset-icon">🦾</div>
-            <div class="asset-name">Thor / Summoner</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="mech_shadowcat">
-            <div class="asset-icon">🦾</div>
-            <div class="asset-name">Shadow Cat</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="mech_vulture">
-            <div class="asset-icon">🦾</div>
-            <div class="asset-name">Vulture / Mad Dog</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-          <div class="asset-card" data-type="mech_daishi">
-            <div class="asset-icon">🦾</div>
-            <div class="asset-name">Daishi / Dire Wolf</div>
-            <div class="asset-badge">In-Game 3D</div>
-          </div>
-        </div>
-
-        <div class="section-title">🎯 Tactical Spawns & Navs</div>
-        <div class="asset-grid">
-          <div class="asset-card" data-type="spawn">
-            <div class="asset-icon">🪂</div>
-            <div class="asset-name">Drop Zone</div>
-            <div class="asset-badge">Player Spawn</div>
-          </div>
-          <div class="asset-card" data-type="nav">
-            <div class="asset-icon">🚩</div>
-            <div class="asset-name">Nav Point</div>
-            <div class="asset-badge">Objective Nav</div>
-          </div>
-        </div>
-
-        <div class="section-title">⚡ Mission Triggers & Volumes</div>
-        <div class="asset-grid">
-          <div class="asset-card" data-type="trig_evac">
-            <div class="asset-icon">🚁</div>
-            <div class="asset-name">Evac Zone</div>
-            <div class="asset-badge">Mission Goal</div>
-          </div>
-          <div class="asset-card" data-type="trig_ambush">
-            <div class="asset-icon">⚠️</div>
-            <div class="asset-name">Ambush Trigger</div>
-            <div class="asset-badge">Reinforcements</div>
-          </div>
-          <div class="asset-card" data-type="trig_sensor">
-            <div class="asset-icon">📡</div>
-            <div class="asset-name">Sensor Grid</div>
-            <div class="asset-badge">Perimeter Alert</div>
-          </div>
-          <div class="asset-card" data-type="trig_minefield">
-            <div class="asset-icon">💥</div>
-            <div class="asset-name">Minefield</div>
-            <div class="asset-badge">Hazard Zone</div>
-          </div>
-        </div>
-
-        <div style="margin-top: 20px; padding: 12px; background: rgba(0, 240, 255, 0.05); border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-          <b style="color:var(--accent-cyan)">💡 Quick Tip:</b> Click any asset card above, then click anywhere on the 3D terrain to place. Drag the handles to reposition, or press <kbd style="background: #222; padding: 2px 5px; border-radius: 3px; color: #fff;">DEL</kbd> to delete.
-        </div>
-
-      </div>
-    </div>
-
-    <!-- Center 3D Viewport -->
-    <div class="viewport-container" id="viewport">
-
-      <!-- Top HUD View Controls -->
-      <div class="viewport-hud-top">
-        <button id="btn-view-orbit" class="hud-btn active" onclick="setViewMode('orbit')">🌐 3D Orbit (O)</button>
-        <button id="btn-view-topdown" class="hud-btn" onclick="setViewMode('topdown')">📐 Top-Down (T)</button>
-        <button id="btn-view-iso" class="hud-btn" onclick="setViewMode('iso')">🎲 Isometric (I)</button>
-      </div>
-
-      <!-- Placement Notification Banner -->
-      <div class="viewport-hud-bottom">
-        <div class="hud-status-pill">
-          <div class="indicator"></div>
-          <span id="stat-coords">X: 0 | Y: 0 | Z: 0</span>
-          <span>Entities: <b id="stat-entities" style="color:var(--accent-amber)">0</b></span>
-        </div>
-
-        <div id="placement-banner" class="placement-banner">
-          PLACING ASSET (Click on terrain to place)
-        </div>
-      </div>
-
-    </div>
-
-    <!-- Right Sidebar: Inspector & Environment -->
-    <div class="sidebar right">
-      <div class="sidebar-tabs">
-        <button class="tab-btn active">Inspector & Environment</button>
-      </div>
-      <div class="sidebar-content">
-
-        <!-- Inspector Section -->
-        <div class="section-title">🔍 Selected Entity</div>
-        <div id="inspector-empty" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px; border: 1px dashed var(--border-color); border-radius: 6px;">
-          No entity selected.<br>Click an object in the 3D scene to edit its properties.
-        </div>
-
-        <div id="inspector-content" class="inspector-card" style="display: none;">
-          <div class="prop-row">
-            <span class="prop-name">Name</span>
-            <input type="text" id="insp-name" class="text-input" style="width: 160px;">
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Archetype</span>
-            <span id="insp-type" class="prop-value" style="color:var(--accent-cyan); font-weight:700;">-</span>
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Position (X, Y, Z)</span>
-            <div style="display: flex; gap: 4px;">
-              <input type="text" id="insp-pos-x" class="text-input" style="width: 50px;" readonly>
-              <input type="text" id="insp-pos-y" class="text-input" style="width: 45px;" readonly>
-              <input type="text" id="insp-pos-z" class="text-input" style="width: 50px;" readonly>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>MechWarrior 3 - Visual 3D Map Studio</title>
+        <link rel="stylesheet" href="/static/css/studio.css" />
+        <!-- Vendor 3D Libraries -->
+        <script src="/static/js/three.min.js"></script>
+        <script src="/static/js/OrbitControls.js"></script>
+        <script src="/static/js/TransformControls.js"></script>
+    </head>
+    <body>
+        <!-- App Header -->
+        <header>
+            <div class="brand-section">
+                <div class="brand-logo">
+                    <span>⚔️ MECHWARRIOR 3</span>
+                    <span class="brand-badge">MAP STUDIO</span>
+                </div>
             </div>
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Rotation Yaw</span>
-            <div style="display:flex; align-items:center; gap:8px;">
-              <input type="range" id="insp-yaw" class="range-slider" min="0" max="360" value="0">
-              <span id="insp-yaw-label" class="prop-value" style="width:35px;">0°</span>
-            </div>
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Faction</span>
-            <select id="insp-faction" class="select-input" style="width: 120px;">
-              <option value="player">Player</option>
-              <option value="friendly">Friendly</option>
-              <option value="enemy">Enemy</option>
-              <option value="neutral">Neutral</option>
-            </select>
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Armor / HP</span>
-            <div style="display:flex; align-items:center; gap:8px;">
-              <input type="range" id="insp-health" class="range-slider" min="10" max="500" value="100">
-              <span id="insp-health-label" class="prop-value" style="width:35px;">100</span>
-            </div>
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Primary Objective</span>
-            <input type="checkbox" id="insp-objective" style="accent-color: var(--accent-cyan);">
-          </div>
-          <div class="prop-row" id="insp-objective-desc-row">
-            <span class="prop-name">Objective Label</span>
-            <input type="text" id="insp-objective-desc" class="text-input" placeholder="e.g. Destroy Command Bunker" style="width: 160px;">
-          </div>
 
-          <div id="insp-trigger-section" style="display:none; border-top: 1px dashed var(--border-color); padding-top: 10px; margin-top: 10px;">
-            <div class="prop-row">
-              <span class="prop-name">Trigger Radius</span>
-              <div style="display:flex; align-items:center; gap:8px;">
-                <input type="range" id="insp-trigger-radius" class="range-slider" min="15" max="250" value="40">
-                <span id="insp-trigger-radius-label" class="prop-value" style="width:40px;">40m</span>
-              </div>
+            <div class="project-meta">
+                <div class="input-group">
+                    <span class="input-label">Map Title</span>
+                    <input
+                        type="text"
+                        id="project-title"
+                        class="text-input"
+                        value="Iron Ridge Outpost"
+                        style="width: 170px"
+                    />
+                </div>
+                <div class="input-group">
+                    <span class="input-label">Pack ID</span>
+                    <input
+                        type="text"
+                        id="project-id"
+                        class="text-input"
+                        value="iron_ridge_outpost"
+                        style="width: 150px"
+                    />
+                </div>
+                <div class="input-group">
+                    <span class="input-label">Operation / Biome</span>
+                    <select id="biome-select" class="select-input" style="width: 220px">
+                        <option value="c1" selected>Op 1: Coastal Basin / Big Lake (c1)</option>
+                        <option value="c2">Op 2: Desert Canyons (c2)</option>
+                        <option value="c3">Op 3: Volcanic Badlands (c3)</option>
+                        <option value="c4">Op 4: Highland Mountains (c4)</option>
+                        <option value="t1">Training Grounds (t1)</option>
+                    </select>
+                </div>
             </div>
-            <div class="prop-row">
-              <span class="prop-name">Trigger Action</span>
-              <select id="insp-trigger-action" class="select-input" style="width: 140px;">
-                <option value="evac_complete">Complete Evac</option>
-                <option value="spawn_ambush">Spawn Ambush</option>
-                <option value="sound_alarm">Perimeter Alarm</option>
-                <option value="minefield_detonate">Minefield Detonation</option>
-              </select>
-            </div>
-            <div class="prop-row">
-              <span class="prop-name">HUD Prompt</span>
-              <input type="text" id="insp-trigger-msg" class="text-input" placeholder="e.g. Warning: Ambush detected!" style="width: 160px;">
-            </div>
-          </div>
 
-          <div style="display: flex; gap: 8px; margin-top: 14px;">
-            <button id="btn-insp-dup" class="btn" style="flex:1;">Duplicate</button>
-            <button id="btn-insp-delete" class="btn btn-danger" style="flex:1;">Delete</button>
-          </div>
+            <div class="header-actions">
+                <button
+                    id="btn-objectives"
+                    class="btn"
+                    title="Edit mission objectives and intel briefing"
+                >
+                    🎯 Objectives
+                </button>
+                <button
+                    id="btn-mechlab"
+                    class="btn"
+                    title="Customize Player Mech loadout and lance drop configuration"
+                >
+                    🦾 MechLab
+                </button>
+                <button id="btn-load-demo" class="btn" title="Load sample military base layout">
+                    📥 Load Demo
+                </button>
+                <button
+                    id="btn-export"
+                    class="btn btn-primary"
+                    title="Compile and export standalone mod pack"
+                >
+                    ⚡ Export Map Pack
+                </button>
+                <button
+                    id="btn-launch-game"
+                    class="btn btn-accent"
+                    title="Launch custom map in native Vulkan engine"
+                >
+                    ▶️ Play in Engine
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Work Area -->
+        <div class="app-container">
+            <!-- Left Sidebar: Visual Asset Palette -->
+            <div class="sidebar">
+                <div class="sidebar-tabs">
+                    <button class="tab-btn active">Visual Asset Palette</button>
+                </div>
+                <div class="sidebar-content">
+                    <div class="section-title">🌲 In-Game Environment & Props</div>
+                    <div class="asset-grid">
+                        <div class="asset-card" data-type="bridge_span">
+                            <div class="asset-icon">🌉</div>
+                            <div class="asset-name">Bridge Span</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="ramp">
+                            <div class="asset-icon">📐</div>
+                            <div class="asset-name">Vehicle Ramp</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="dock">
+                            <div class="asset-icon">⚓</div>
+                            <div class="asset-name">Shoreline Dock</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="defense_wall">
+                            <div class="asset-icon">🧱</div>
+                            <div class="asset-name">Defense Wall</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="security_gate">
+                            <div class="asset-icon">🚧</div>
+                            <div class="asset-name">Security Gate</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="powerline_pole">
+                            <div class="asset-icon">⚡</div>
+                            <div class="asset-name">Power Pole</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title">🛡️ In-Game Defenses</div>
+                    <div class="asset-grid">
+                        <div class="asset-card" data-type="turret_srm">
+                            <div class="asset-icon">🚀</div>
+                            <div class="asset-name">SRM Turret</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="turret_laser">
+                            <div class="asset-icon">⚡</div>
+                            <div class="asset-name">Laser Tower</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title">🏛️ In-Game Base Structures</div>
+                    <div class="asset-grid">
+                        <div class="asset-card" data-type="bunker">
+                            <div class="asset-icon">🏢</div>
+                            <div class="asset-name">Command Bunker</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="comm_center">
+                            <div class="asset-icon">📡</div>
+                            <div class="asset-name">Radar Comms Dish</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="fuel_tank">
+                            <div class="asset-icon">🛢️</div>
+                            <div class="asset-name">Coolant Silo</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="city_building">
+                            <div class="asset-icon">🏬</div>
+                            <div class="asset-name">City Garrison</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="repair_station">
+                            <div class="asset-icon">🔧</div>
+                            <div class="asset-name">MFB Gantry</div>
+                            <div class="asset-badge">Mech Service</div>
+                        </div>
+                        <div class="asset-card" data-type="factory">
+                            <div class="asset-icon">🏭</div>
+                            <div class="asset-name">Mech Factory</div>
+                            <div class="asset-badge">Industrial</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title">🤖 In-Game BattleMechs</div>
+                    <div class="asset-grid">
+                        <div class="asset-card" data-type="mech_madcat">
+                            <div class="asset-icon">🦾</div>
+                            <div class="asset-name">Mad Cat / Timber</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="mech_bushwacker">
+                            <div class="asset-icon">🦾</div>
+                            <div class="asset-name">Bushwacker</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="mech_thor">
+                            <div class="asset-icon">🦾</div>
+                            <div class="asset-name">Thor / Summoner</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="mech_shadowcat">
+                            <div class="asset-icon">🦾</div>
+                            <div class="asset-name">Shadow Cat</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="mech_vulture">
+                            <div class="asset-icon">🦾</div>
+                            <div class="asset-name">Vulture / Mad Dog</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                        <div class="asset-card" data-type="mech_daishi">
+                            <div class="asset-icon">🦾</div>
+                            <div class="asset-name">Daishi / Dire Wolf</div>
+                            <div class="asset-badge">In-Game 3D</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title">🎯 Tactical Spawns & Navs</div>
+                    <div class="asset-grid">
+                        <div class="asset-card" data-type="spawn">
+                            <div class="asset-icon">🪂</div>
+                            <div class="asset-name">Drop Zone</div>
+                            <div class="asset-badge">Player Spawn</div>
+                        </div>
+                        <div class="asset-card" data-type="nav">
+                            <div class="asset-icon">🚩</div>
+                            <div class="asset-name">Nav Point</div>
+                            <div class="asset-badge">Objective Nav</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title">⚡ Mission Triggers & Volumes</div>
+                    <div class="asset-grid">
+                        <div class="asset-card" data-type="trig_evac">
+                            <div class="asset-icon">🚁</div>
+                            <div class="asset-name">Evac Zone</div>
+                            <div class="asset-badge">Mission Goal</div>
+                        </div>
+                        <div class="asset-card" data-type="trig_ambush">
+                            <div class="asset-icon">⚠️</div>
+                            <div class="asset-name">Ambush Trigger</div>
+                            <div class="asset-badge">Reinforcements</div>
+                        </div>
+                        <div class="asset-card" data-type="trig_sensor">
+                            <div class="asset-icon">📡</div>
+                            <div class="asset-name">Sensor Grid</div>
+                            <div class="asset-badge">Perimeter Alert</div>
+                        </div>
+                        <div class="asset-card" data-type="trig_minefield">
+                            <div class="asset-icon">💥</div>
+                            <div class="asset-name">Minefield</div>
+                            <div class="asset-badge">Hazard Zone</div>
+                        </div>
+                    </div>
+
+                    <div
+                        style="
+                            margin-top: 20px;
+                            padding: 12px;
+                            background: rgba(0, 240, 255, 0.05);
+                            border: 1px solid var(--border-color);
+                            border-radius: 6px;
+                            font-size: 11px;
+                            color: var(--text-muted);
+                            line-height: 1.4;
+                        "
+                    >
+                        <b style="color: var(--accent-cyan)">💡 Quick Tip:</b> Click any asset card
+                        above, then click anywhere on the 3D terrain to place. Drag the handles to
+                        reposition, or press
+                        <kbd
+                            style="
+                                background: #222;
+                                padding: 2px 5px;
+                                border-radius: 3px;
+                                color: #fff;
+                            "
+                            >DEL</kbd
+                        >
+                        to delete.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center 3D Viewport -->
+            <div class="viewport-container" id="viewport">
+                <!-- Top HUD View Controls -->
+                <div class="viewport-hud-top">
+                    <button
+                        id="btn-view-orbit"
+                        class="hud-btn active"
+                        onclick="setViewMode('orbit')"
+                    >
+                        🌐 3D Orbit (O)
+                    </button>
+                    <button id="btn-view-topdown" class="hud-btn" onclick="setViewMode('topdown')">
+                        📐 Top-Down (T)
+                    </button>
+                    <button id="btn-view-iso" class="hud-btn" onclick="setViewMode('iso')">
+                        🎲 Isometric (I)
+                    </button>
+                </div>
+
+                <!-- Placement Notification Banner -->
+                <div class="viewport-hud-bottom">
+                    <div class="hud-status-pill">
+                        <div class="indicator"></div>
+                        <span id="stat-coords">X: 0 | Y: 0 | Z: 0</span>
+                        <span
+                            >Entities:
+                            <b id="stat-entities" style="color: var(--accent-amber)">0</b></span
+                        >
+                    </div>
+
+                    <div id="placement-banner" class="placement-banner">
+                        PLACING ASSET (Click on terrain to place)
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Sidebar: Inspector & Environment -->
+            <div class="sidebar right">
+                <div class="sidebar-tabs">
+                    <button class="tab-btn active">Inspector & Environment</button>
+                </div>
+                <div class="sidebar-content">
+                    <!-- Inspector Section -->
+                    <div class="section-title">🔍 Selected Entity</div>
+                    <div
+                        id="inspector-empty"
+                        style="
+                            padding: 20px;
+                            text-align: center;
+                            color: var(--text-muted);
+                            font-size: 12px;
+                            border: 1px dashed var(--border-color);
+                            border-radius: 6px;
+                        "
+                    >
+                        No entity selected.<br />Click an object in the 3D scene to edit its
+                        properties.
+                    </div>
+
+                    <div id="inspector-content" class="inspector-card" style="display: none">
+                        <div class="prop-row">
+                            <span class="prop-name">Name</span>
+                            <input
+                                type="text"
+                                id="insp-name"
+                                class="text-input"
+                                style="width: 160px"
+                            />
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Archetype</span>
+                            <span
+                                id="insp-type"
+                                class="prop-value"
+                                style="color: var(--accent-cyan); font-weight: 700"
+                                >-</span
+                            >
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Position (X, Y, Z)</span>
+                            <div style="display: flex; gap: 4px">
+                                <input
+                                    type="text"
+                                    id="insp-pos-x"
+                                    class="text-input"
+                                    style="width: 50px"
+                                    readonly
+                                />
+                                <input
+                                    type="text"
+                                    id="insp-pos-y"
+                                    class="text-input"
+                                    style="width: 45px"
+                                    readonly
+                                />
+                                <input
+                                    type="text"
+                                    id="insp-pos-z"
+                                    class="text-input"
+                                    style="width: 50px"
+                                    readonly
+                                />
+                            </div>
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Rotation Yaw</span>
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <input
+                                    type="range"
+                                    id="insp-yaw"
+                                    class="range-slider"
+                                    min="0"
+                                    max="360"
+                                    value="0"
+                                />
+                                <span id="insp-yaw-label" class="prop-value" style="width: 35px"
+                                    >0°</span
+                                >
+                            </div>
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Faction</span>
+                            <select id="insp-faction" class="select-input" style="width: 120px">
+                                <option value="player">Player</option>
+                                <option value="friendly">Friendly</option>
+                                <option value="enemy">Enemy</option>
+                                <option value="neutral">Neutral</option>
+                            </select>
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Armor / HP</span>
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <input
+                                    type="range"
+                                    id="insp-health"
+                                    class="range-slider"
+                                    min="10"
+                                    max="500"
+                                    value="100"
+                                />
+                                <span id="insp-health-label" class="prop-value" style="width: 35px"
+                                    >100</span
+                                >
+                            </div>
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Primary Objective</span>
+                            <input
+                                type="checkbox"
+                                id="insp-objective"
+                                style="accent-color: var(--accent-cyan)"
+                            />
+                        </div>
+                        <div class="prop-row" id="insp-objective-desc-row">
+                            <span class="prop-name">Objective Label</span>
+                            <input
+                                type="text"
+                                id="insp-objective-desc"
+                                class="text-input"
+                                placeholder="e.g. Destroy Command Bunker"
+                                style="width: 160px"
+                            />
+                        </div>
+
+                        <div
+                            id="insp-trigger-section"
+                            style="
+                                display: none;
+                                border-top: 1px dashed var(--border-color);
+                                padding-top: 10px;
+                                margin-top: 10px;
+                            "
+                        >
+                            <div class="prop-row">
+                                <span class="prop-name">Trigger Radius</span>
+                                <div style="display: flex; align-items: center; gap: 8px">
+                                    <input
+                                        type="range"
+                                        id="insp-trigger-radius"
+                                        class="range-slider"
+                                        min="15"
+                                        max="250"
+                                        value="40"
+                                    />
+                                    <span
+                                        id="insp-trigger-radius-label"
+                                        class="prop-value"
+                                        style="width: 40px"
+                                        >40m</span
+                                    >
+                                </div>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Trigger Action</span>
+                                <select
+                                    id="insp-trigger-action"
+                                    class="select-input"
+                                    style="width: 140px"
+                                >
+                                    <option value="evac_complete">Complete Evac</option>
+                                    <option value="spawn_ambush">Spawn Ambush</option>
+                                    <option value="sound_alarm">Perimeter Alarm</option>
+                                    <option value="minefield_detonate">Minefield Detonation</option>
+                                </select>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">HUD Prompt</span>
+                                <input
+                                    type="text"
+                                    id="insp-trigger-msg"
+                                    class="text-input"
+                                    placeholder="e.g. Warning: Ambush detected!"
+                                    style="width: 160px"
+                                />
+                            </div>
+                        </div>
+
+                        <div style="display: flex; gap: 8px; margin-top: 14px">
+                            <button id="btn-insp-dup" class="btn" style="flex: 1">Duplicate</button>
+                            <button id="btn-insp-delete" class="btn btn-danger" style="flex: 1">
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Lighting & Atmosphere Section -->
+                    <div class="section-title" style="margin-top: 20px">
+                        ☀️ Atmosphere & Lighting
+                    </div>
+                    <div class="env-control-grid">
+                        <div id="preset-noon" class="preset-chip" onclick="setEnvPreset('noon')">
+                            ☀️ High Noon
+                        </div>
+                        <div
+                            id="preset-sunset"
+                            class="preset-chip active"
+                            onclick="setEnvPreset('sunset')"
+                        >
+                            🌅 Golden Sunset
+                        </div>
+                        <div id="preset-night" class="preset-chip" onclick="setEnvPreset('night')">
+                            🌙 Night Op
+                        </div>
+                        <div id="preset-storm" class="preset-chip" onclick="setEnvPreset('storm')">
+                            🌪️ Dust Storm
+                        </div>
+                    </div>
+
+                    <div class="inspector-card" style="margin-top: 10px">
+                        <div class="prop-row">
+                            <span class="prop-name">Sun Azimuth</span>
+                            <input
+                                type="range"
+                                id="env-azimuth"
+                                class="range-slider"
+                                min="0"
+                                max="360"
+                                value="235"
+                                oninput="
+                                    state.project.lighting.azimuth = parseFloat(this.value);
+                                    updateLighting();
+                                "
+                            />
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Sun Elevation</span>
+                            <input
+                                type="range"
+                                id="env-elevation"
+                                class="range-slider"
+                                min="5"
+                                max="85"
+                                value="28"
+                                oninput="
+                                    state.project.lighting.elevation = parseFloat(this.value);
+                                    updateLighting();
+                                "
+                            />
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Sun Intensity</span>
+                            <input
+                                type="range"
+                                id="env-strength"
+                                class="range-slider"
+                                min="0.1"
+                                max="2.0"
+                                step="0.05"
+                                value="0.9"
+                                oninput="
+                                    state.project.lighting.strength = parseFloat(this.value);
+                                    updateLighting();
+                                "
+                            />
+                        </div>
+                        <div class="prop-row">
+                            <span class="prop-name">Ambient Light</span>
+                            <input
+                                type="range"
+                                id="env-ambient"
+                                class="range-slider"
+                                min="0.05"
+                                max="0.8"
+                                step="0.02"
+                                value="0.22"
+                                oninput="
+                                    state.project.lighting.ambient = parseFloat(this.value);
+                                    updateLighting();
+                                "
+                            />
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <!-- Lighting & Atmosphere Section -->
-        <div class="section-title" style="margin-top: 20px;">☀️ Atmosphere & Lighting</div>
-        <div class="env-control-grid">
-          <div id="preset-noon" class="preset-chip" onclick="setEnvPreset('noon')">☀️ High Noon</div>
-          <div id="preset-sunset" class="preset-chip active" onclick="setEnvPreset('sunset')">🌅 Golden Sunset</div>
-          <div id="preset-night" class="preset-chip" onclick="setEnvPreset('night')">🌙 Night Op</div>
-          <div id="preset-storm" class="preset-chip" onclick="setEnvPreset('storm')">🌪️ Dust Storm</div>
+        <!-- Mission Objectives & Briefing Modal -->
+        <div id="objectives-modal" class="modal-overlay">
+            <div class="modal-card" style="width: 680px">
+                <div class="modal-title">
+                    <span>🎯 MISSION OBJECTIVES & TACTICAL INTEL</span>
+                </div>
+                <div class="modal-body">
+                    <div style="margin-bottom: 14px">
+                        <label
+                            style="
+                                display: block;
+                                font-size: 11px;
+                                text-transform: uppercase;
+                                color: var(--text-secondary);
+                                margin-bottom: 4px;
+                            "
+                            >Intel Briefing Dossier</label
+                        >
+                        <textarea
+                            id="briefing-textarea"
+                            class="text-input"
+                            style="
+                                width: 100%;
+                                height: 80px;
+                                resize: vertical;
+                                font-family: var(--font-mono);
+                                font-size: 12px;
+                                line-height: 1.4;
+                                padding: 8px;
+                            "
+                        ></textarea>
+                    </div>
+
+                    <div style="display: flex; gap: 16px; margin-bottom: 14px">
+                        <div style="flex: 1">
+                            <div
+                                style="
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                    margin-bottom: 6px;
+                                "
+                            >
+                                <span
+                                    style="
+                                        font-weight: 700;
+                                        color: var(--accent-cyan);
+                                        font-size: 12px;
+                                    "
+                                    >PRIMARY OBJECTIVES</span
+                                >
+                                <button
+                                    id="btn-add-primary-obj"
+                                    class="btn"
+                                    style="padding: 2px 8px; font-size: 11px"
+                                >
+                                    + Add Goal
+                                </button>
+                            </div>
+                            <div id="primary-objectives-list" class="objectives-list-box"></div>
+                        </div>
+                        <div style="flex: 1">
+                            <div
+                                style="
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                    margin-bottom: 6px;
+                                "
+                            >
+                                <span
+                                    style="
+                                        font-weight: 700;
+                                        color: var(--accent-amber);
+                                        font-size: 12px;
+                                    "
+                                    >SECONDARY OBJECTIVES</span
+                                >
+                                <button
+                                    id="btn-add-secondary-obj"
+                                    class="btn"
+                                    style="padding: 2px 8px; font-size: 11px"
+                                >
+                                    + Add Goal
+                                </button>
+                            </div>
+                            <div id="secondary-objectives-list" class="objectives-list-box"></div>
+                        </div>
+                    </div>
+
+                    <div
+                        style="
+                            display: flex;
+                            align-items: center;
+                            gap: 12px;
+                            padding: 10px;
+                            background: var(--bg-tertiary);
+                            border-radius: 6px;
+                        "
+                    >
+                        <span
+                            style="
+                                font-size: 11px;
+                                text-transform: uppercase;
+                                color: var(--text-secondary);
+                            "
+                            >Combat Audio Profile:</span
+                        >
+                        <select id="audio-track-select" class="select-input" style="width: 200px">
+                            <option value="action_theme_1">Theme 1: Combat Engagement</option>
+                            <option value="action_theme_2">Theme 2: Heavy Armor Clash</option>
+                            <option value="ambient_winds">Ambient: Barren Winds</option>
+                            <option value="tranquil_night">Stealth: Tranquil Night</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button id="btn-close-objectives" class="btn">Close & Apply</button>
+                </div>
+            </div>
         </div>
 
-        <div class="inspector-card" style="margin-top: 10px;">
-          <div class="prop-row">
-            <span class="prop-name">Sun Azimuth</span>
-            <input type="range" id="env-azimuth" class="range-slider" min="0" max="360" value="235" oninput="state.project.lighting.azimuth = parseFloat(this.value); updateLighting();">
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Sun Elevation</span>
-            <input type="range" id="env-elevation" class="range-slider" min="5" max="85" value="28" oninput="state.project.lighting.elevation = parseFloat(this.value); updateLighting();">
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Sun Intensity</span>
-            <input type="range" id="env-strength" class="range-slider" min="0.1" max="2.0" step="0.05" value="0.9" oninput="state.project.lighting.strength = parseFloat(this.value); updateLighting();">
-          </div>
-          <div class="prop-row">
-            <span class="prop-name">Ambient Light</span>
-            <input type="range" id="env-ambient" class="range-slider" min="0.05" max="0.8" step="0.02" value="0.22" oninput="state.project.lighting.ambient = parseFloat(this.value); updateLighting();">
-          </div>
+        <!-- MechLab & Drop Configuration Modal -->
+        <div id="mechlab-modal" class="modal-overlay">
+            <div class="modal-card" style="width: 720px">
+                <div class="modal-title">
+                    <span>🦾 MECHLAB & COMBAT DROP CONFIGURATION</span>
+                </div>
+                <div class="modal-body">
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 1fr 1fr;
+                            gap: 16px;
+                            margin-bottom: 14px;
+                        "
+                    >
+                        <div>
+                            <label
+                                style="
+                                    display: block;
+                                    font-size: 11px;
+                                    text-transform: uppercase;
+                                    color: var(--text-secondary);
+                                    margin-bottom: 4px;
+                                "
+                                >Player BattleMech Chassis</label
+                            >
+                            <select id="mechlab-chassis" class="select-input" style="width: 100%">
+                                <option value="mech_madcat" selected>
+                                    Mad Cat / Timber Wolf (75 Tons - Heavy Clan OmniMech)
+                                </option>
+                                <option value="mech_bushwacker">
+                                    Bushwacker BSW-X1 (55 Tons - Medium IS Mech)
+                                </option>
+                                <option value="mech_thor">
+                                    Thor / Summoner (70 Tons - Heavy Clan OmniMech)
+                                </option>
+                                <option value="mech_shadowcat">
+                                    Shadow Cat (45 Tons - Medium Clan OmniMech)
+                                </option>
+                                <option value="mech_vulture">
+                                    Vulture / Mad Dog (60 Tons - Heavy Clan OmniMech)
+                                </option>
+                                <option value="mech_daishi">
+                                    Daishi / Dire Wolf (100 Tons - Assault Clan OmniMech)
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <label
+                                style="
+                                    display: block;
+                                    font-size: 11px;
+                                    text-transform: uppercase;
+                                    color: var(--text-secondary);
+                                    margin-bottom: 4px;
+                                "
+                                >Insertion Deployment Type</label
+                            >
+                            <select id="mechlab-drop-type" class="select-input" style="width: 100%">
+                                <option value="orbital_drop_pod">
+                                    Orbital Combat Drop Pod (Direct Orbit)
+                                </option>
+                                <option value="dropship_insertion">
+                                    Union-Class Dropship Low Insertion
+                                </option>
+                                <option value="hot_lz_combat">Hot LZ Perimeter Touchdown</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Hardpoint Configuration -->
+                    <div
+                        style="
+                            margin-bottom: 14px;
+                            padding: 12px;
+                            background: var(--bg-tertiary);
+                            border-radius: 6px;
+                            border: 1px solid var(--border-color);
+                        "
+                    >
+                        <div
+                            style="
+                                font-weight: 700;
+                                color: var(--accent-cyan);
+                                font-size: 12px;
+                                margin-bottom: 10px;
+                                display: flex;
+                                justify-content: space-between;
+                            "
+                        >
+                            <span>WEAPON HARDPOINT LOADOUT</span>
+                            <span
+                                id="mechlab-tonnage-badge"
+                                style="color: var(--accent-green); font-family: var(--font-mono)"
+                                >75.0 / 75.0 TONS</span
+                            >
+                        </div>
+                        <div
+                            style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px"
+                        >
+                            <div>
+                                <span class="prop-name" style="font-size: 10px">Left Arm</span>
+                                <select id="wpn-left-arm" class="select-input" style="width: 100%">
+                                    <option value="ER PPC">Clan ER PPC</option>
+                                    <option value="Large Pulse Laser">Large Pulse Laser</option>
+                                    <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
+                                    <option value="Ultra AC/20">Ultra AC/20</option>
+                                    <option value="None">Empty</option>
+                                </select>
+                            </div>
+                            <div>
+                                <span class="prop-name" style="font-size: 10px">Center Torso</span>
+                                <select
+                                    id="wpn-center-torso"
+                                    class="select-input"
+                                    style="width: 100%"
+                                >
+                                    <option value="Medium Pulse Laser">Medium Pulse Laser</option>
+                                    <option value="ER Medium Laser">Clan ER Medium Laser</option>
+                                    <option value="SRM-6 Streak">Streak SRM-6</option>
+                                    <option value="None">Empty</option>
+                                </select>
+                            </div>
+                            <div>
+                                <span class="prop-name" style="font-size: 10px">Right Arm</span>
+                                <select id="wpn-right-arm" class="select-input" style="width: 100%">
+                                    <option value="ER PPC">Clan ER PPC</option>
+                                    <option value="Large Pulse Laser">Large Pulse Laser</option>
+                                    <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
+                                    <option value="Ultra AC/20">Ultra AC/20</option>
+                                    <option value="None">Empty</option>
+                                </select>
+                            </div>
+                            <div>
+                                <span class="prop-name" style="font-size: 10px">Left Torso</span>
+                                <select
+                                    id="wpn-left-torso"
+                                    class="select-input"
+                                    style="width: 100%"
+                                >
+                                    <option value="Clan LRM-20">Clan LRM-20 Rack</option>
+                                    <option value="Streak SRM-6">Streak SRM-6</option>
+                                    <option value="Ultra AC/10">Ultra AC/10</option>
+                                    <option value="None">Empty</option>
+                                </select>
+                            </div>
+                            <div>
+                                <span class="prop-name" style="font-size: 10px">Armor Tonnage</span>
+                                <div style="display: flex; align-items: center; gap: 6px">
+                                    <input
+                                        type="range"
+                                        id="mechlab-armor"
+                                        class="range-slider"
+                                        min="8"
+                                        max="22"
+                                        step="0.5"
+                                        value="14"
+                                    />
+                                    <span
+                                        id="mechlab-armor-val"
+                                        class="prop-value"
+                                        style="width: 40px"
+                                        >14.0T</span
+                                    >
+                                </div>
+                            </div>
+                            <div>
+                                <span class="prop-name" style="font-size: 10px">Right Torso</span>
+                                <select
+                                    id="wpn-right-torso"
+                                    class="select-input"
+                                    style="width: 100%"
+                                >
+                                    <option value="Clan LRM-20">Clan LRM-20 Rack</option>
+                                    <option value="Streak SRM-6">Streak SRM-6</option>
+                                    <option value="Ultra AC/10">Ultra AC/10</option>
+                                    <option value="None">Empty</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 20px; margin-top: 10px; font-size: 11px">
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <span>Double Heat Sinks:</span>
+                                <input
+                                    type="number"
+                                    id="mechlab-heatsinks"
+                                    class="text-input"
+                                    value="16"
+                                    min="10"
+                                    max="28"
+                                    style="width: 50px"
+                                />
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <span>Jump Jets:</span>
+                                <input
+                                    type="number"
+                                    id="mechlab-jumpjets"
+                                    class="text-input"
+                                    value="0"
+                                    min="0"
+                                    max="6"
+                                    style="width: 50px"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Lancemate Roster -->
+                    <div
+                        style="
+                            padding: 10px;
+                            background: var(--bg-tertiary);
+                            border-radius: 6px;
+                            border: 1px solid var(--border-color);
+                        "
+                    >
+                        <div
+                            style="
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                                margin-bottom: 8px;
+                            "
+                        >
+                            <span
+                                style="
+                                    font-weight: 700;
+                                    color: var(--accent-amber);
+                                    font-size: 12px;
+                                "
+                                >SUPPORT LANCE ROSTER</span
+                            >
+                            <button
+                                id="btn-add-lancemate"
+                                class="btn"
+                                style="padding: 2px 8px; font-size: 11px"
+                            >
+                                + Add Lancemate
+                            </button>
+                        </div>
+                        <div id="lancemate-list" class="lancemate-list-box"></div>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button id="btn-close-mechlab" class="btn">Close & Apply</button>
+                </div>
+            </div>
         </div>
 
-      </div>
-    </div>
-
-  </div>
-
-  <!-- Mission Objectives & Briefing Modal -->
-  <div id="objectives-modal" class="modal-overlay">
-    <div class="modal-card" style="width: 680px;">
-      <div class="modal-title">
-        <span>🎯 MISSION OBJECTIVES & TACTICAL INTEL</span>
-      </div>
-      <div class="modal-body">
-        <div style="margin-bottom: 14px;">
-          <label style="display:block; font-size:11px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:4px;">Intel Briefing Dossier</label>
-          <textarea id="briefing-textarea" class="text-input" style="width:100%; height:80px; resize:vertical; font-family:var(--font-mono); font-size:12px; line-height:1.4; padding:8px;"></textarea>
+        <!-- Export Success Modal -->
+        <div id="export-modal" class="modal-overlay">
+            <div class="modal-card">
+                <div class="modal-title">
+                    <span>⚡ MAP PACK COMPILED SUCCESSFULLY!</span>
+                </div>
+                <div class="modal-body">
+                    Your standalone custom map pack has been built and packaged cleanly into the
+                    isolated <code>mods/map-packs/</code> folder without altering base game files.
+                    <div id="modal-export-details"></div>
+                </div>
+                <div class="modal-actions">
+                    <button id="btn-modal-close" class="btn">Close</button>
+                    <button onclick="launchGameEngine()" class="btn btn-accent">
+                        ▶️ Launch Game Now
+                    </button>
+                </div>
+            </div>
         </div>
 
-        <div style="display:flex; gap:16px; margin-bottom:14px;">
-          <div style="flex:1;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-              <span style="font-weight:700; color:var(--accent-cyan); font-size:12px;">PRIMARY OBJECTIVES</span>
-              <button id="btn-add-primary-obj" class="btn" style="padding:2px 8px; font-size:11px;">+ Add Goal</button>
-            </div>
-            <div id="primary-objectives-list" class="objectives-list-box"></div>
-          </div>
-          <div style="flex:1;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-              <span style="font-weight:700; color:var(--accent-amber); font-size:12px;">SECONDARY OBJECTIVES</span>
-              <button id="btn-add-secondary-obj" class="btn" style="padding:2px 8px; font-size:11px;">+ Add Goal</button>
-            </div>
-            <div id="secondary-objectives-list" class="objectives-list-box"></div>
-          </div>
-        </div>
-
-        <div style="display:flex; align-items:center; gap:12px; padding:10px; background:var(--bg-tertiary); border-radius:6px;">
-          <span style="font-size:11px; text-transform:uppercase; color:var(--text-secondary);">Combat Audio Profile:</span>
-          <select id="audio-track-select" class="select-input" style="width:200px;">
-            <option value="action_theme_1">Theme 1: Combat Engagement</option>
-            <option value="action_theme_2">Theme 2: Heavy Armor Clash</option>
-            <option value="ambient_winds">Ambient: Barren Winds</option>
-            <option value="tranquil_night">Stealth: Tranquil Night</option>
-          </select>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button id="btn-close-objectives" class="btn">Close & Apply</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- MechLab & Drop Configuration Modal -->
-  <div id="mechlab-modal" class="modal-overlay">
-    <div class="modal-card" style="width: 720px;">
-      <div class="modal-title">
-        <span>🦾 MECHLAB & COMBAT DROP CONFIGURATION</span>
-      </div>
-      <div class="modal-body">
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:14px;">
-          <div>
-            <label style="display:block; font-size:11px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:4px;">Player BattleMech Chassis</label>
-            <select id="mechlab-chassis" class="select-input" style="width:100%;">
-              <option value="mech_madcat" selected>Mad Cat / Timber Wolf (75 Tons - Heavy Clan OmniMech)</option>
-              <option value="mech_bushwacker">Bushwacker BSW-X1 (55 Tons - Medium IS Mech)</option>
-              <option value="mech_thor">Thor / Summoner (70 Tons - Heavy Clan OmniMech)</option>
-              <option value="mech_shadowcat">Shadow Cat (45 Tons - Medium Clan OmniMech)</option>
-              <option value="mech_vulture">Vulture / Mad Dog (60 Tons - Heavy Clan OmniMech)</option>
-              <option value="mech_daishi">Daishi / Dire Wolf (100 Tons - Assault Clan OmniMech)</option>
-            </select>
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:4px;">Insertion Deployment Type</label>
-            <select id="mechlab-drop-type" class="select-input" style="width:100%;">
-              <option value="orbital_drop_pod">Orbital Combat Drop Pod (Direct Orbit)</option>
-              <option value="dropship_insertion">Union-Class Dropship Low Insertion</option>
-              <option value="hot_lz_combat">Hot LZ Perimeter Touchdown</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Hardpoint Configuration -->
-        <div style="margin-bottom:14px; padding:12px; background:var(--bg-tertiary); border-radius:6px; border:1px solid var(--border-color);">
-          <div style="font-weight:700; color:var(--accent-cyan); font-size:12px; margin-bottom:10px; display:flex; justify-content:space-between;">
-            <span>WEAPON HARDPOINT LOADOUT</span>
-            <span id="mechlab-tonnage-badge" style="color:var(--accent-green); font-family:var(--font-mono);">75.0 / 75.0 TONS</span>
-          </div>
-          <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px;">
-            <div>
-              <span class="prop-name" style="font-size:10px;">Left Arm</span>
-              <select id="wpn-left-arm" class="select-input" style="width:100%;">
-                <option value="ER PPC">Clan ER PPC</option>
-                <option value="Large Pulse Laser">Large Pulse Laser</option>
-                <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
-                <option value="Ultra AC/20">Ultra AC/20</option>
-                <option value="None">Empty</option>
-              </select>
-            </div>
-            <div>
-              <span class="prop-name" style="font-size:10px;">Center Torso</span>
-              <select id="wpn-center-torso" class="select-input" style="width:100%;">
-                <option value="Medium Pulse Laser">Medium Pulse Laser</option>
-                <option value="ER Medium Laser">Clan ER Medium Laser</option>
-                <option value="SRM-6 Streak">Streak SRM-6</option>
-                <option value="None">Empty</option>
-              </select>
-            </div>
-            <div>
-              <span class="prop-name" style="font-size:10px;">Right Arm</span>
-              <select id="wpn-right-arm" class="select-input" style="width:100%;">
-                <option value="ER PPC">Clan ER PPC</option>
-                <option value="Large Pulse Laser">Large Pulse Laser</option>
-                <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
-                <option value="Ultra AC/20">Ultra AC/20</option>
-                <option value="None">Empty</option>
-              </select>
-            </div>
-            <div>
-              <span class="prop-name" style="font-size:10px;">Left Torso</span>
-              <select id="wpn-left-torso" class="select-input" style="width:100%;">
-                <option value="Clan LRM-20">Clan LRM-20 Rack</option>
-                <option value="Streak SRM-6">Streak SRM-6</option>
-                <option value="Ultra AC/10">Ultra AC/10</option>
-                <option value="None">Empty</option>
-              </select>
-            </div>
-            <div>
-              <span class="prop-name" style="font-size:10px;">Armor Tonnage</span>
-              <div style="display:flex; align-items:center; gap:6px;">
-                <input type="range" id="mechlab-armor" class="range-slider" min="8" max="22" step="0.5" value="14">
-                <span id="mechlab-armor-val" class="prop-value" style="width:40px;">14.0T</span>
-              </div>
-            </div>
-            <div>
-              <span class="prop-name" style="font-size:10px;">Right Torso</span>
-              <select id="wpn-right-torso" class="select-input" style="width:100%;">
-                <option value="Clan LRM-20">Clan LRM-20 Rack</option>
-                <option value="Streak SRM-6">Streak SRM-6</option>
-                <option value="Ultra AC/10">Ultra AC/10</option>
-                <option value="None">Empty</option>
-              </select>
-            </div>
-          </div>
-          <div style="display:flex; gap:20px; margin-top:10px; font-size:11px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <span>Double Heat Sinks:</span>
-              <input type="number" id="mechlab-heatsinks" class="text-input" value="16" min="10" max="28" style="width:50px;">
-            </div>
-            <div style="display:flex; align-items:center; gap:8px;">
-              <span>Jump Jets:</span>
-              <input type="number" id="mechlab-jumpjets" class="text-input" value="0" min="0" max="6" style="width:50px;">
-            </div>
-          </div>
-        </div>
-
-        <!-- Lancemate Roster -->
-        <div style="padding:10px; background:var(--bg-tertiary); border-radius:6px; border:1px solid var(--border-color);">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <span style="font-weight:700; color:var(--accent-amber); font-size:12px;">SUPPORT LANCE ROSTER</span>
-            <button id="btn-add-lancemate" class="btn" style="padding:2px 8px; font-size:11px;">+ Add Lancemate</button>
-          </div>
-          <div id="lancemate-list" class="lancemate-list-box"></div>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button id="btn-close-mechlab" class="btn">Close & Apply</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Export Success Modal -->
-  <div id="export-modal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">
-        <span>⚡ MAP PACK COMPILED SUCCESSFULLY!</span>
-      </div>
-      <div class="modal-body">
-        Your standalone custom map pack has been built and packaged cleanly into the isolated <code>mods/map-packs/</code> folder without altering base game files.
-        <div id="modal-export-details"></div>
-      </div>
-      <div class="modal-actions">
-        <button id="btn-modal-close" class="btn">Close</button>
-        <button onclick="launchGameEngine();" class="btn btn-accent">▶️ Launch Game Now</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="/static/js/studio.js"></script>
-</body>
+        <script src="/static/js/studio.js"></script>
+    </body>
 </html>

@@ -1,124 +1,200 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MW3Recomp Field Guide</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="guide.css">
-</head>
-<body>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>MW3Recomp Field Guide</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        />
+        <link rel="stylesheet" href="guide.css" />
+    </head>
+    <body>
+        <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+            <defs>
+                <symbol id="ar" viewBox="0 0 24 14">
+                    <path d="M2 7 H20 M15 2 L20 7 L15 12" />
+                </symbol>
+            </defs>
+        </svg>
 
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <symbol id="ar" viewBox="0 0 24 14"><path d="M2 7 H20 M15 2 L20 7 L15 12"/></symbol>  </defs>
-</svg>
+        <div class="wrap">
+            <header>
+                <div class="kicker">MechWarrior 3 recompilation</div>
+                <h1>MW3Recomp Field Guide</h1>
+                <p class="lede">
+                    How the MW3 recompile works, for anyone curious and for developers who want to
+                    help but have never worked on a recompile. Part 1 is the big picture. Part 2 is
+                    for contributors.
+                </p>
+            </header>
 
-<div class="wrap">
-  <header>
-    <div class="kicker">MechWarrior 3 recompilation</div>
-    <h1>MW3Recomp Field Guide</h1>
-    <p class="lede">How the MW3 recompile works, for anyone curious and for developers who want to help but have never worked on a recompile. Part 1 is the big picture. Part 2 is for contributors.</p>
-  </header>
+            <div class="progress">
+                <div class="progress-top">
+                    <div class="parts" id="parts"></div>
+                    <button
+                        class="contents-btn"
+                        id="contentsBtn"
+                        type="button"
+                        aria-expanded="false"
+                        aria-controls="contents"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M5 7h14M5 12h14M5 17h9" /></svg
+                        >Contents
+                    </button>
+                </div>
+                <div class="contents" id="contents" hidden></div>
+            </div>
 
-  <div class="progress">
-    <div class="progress-top">
-      <div class="parts" id="parts"></div>
-      <button class="contents-btn" id="contentsBtn" type="button" aria-expanded="false" aria-controls="contents">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/></svg>Contents
-      </button>
-    </div>
-    <div class="contents" id="contents" hidden></div>
-  </div>
+            <!-- ========== PART 1 ========== -->
 
-  <!-- ========== PART 1 ========== -->
-
-  <section class="lesson" data-part="1" data-title="What's inside the exe">
-    <div class="eyebrow">Part 1 · The starting point</div>
-    <h2>What's inside Mech3.exe</h2>
-    <p>MechWarrior 3 was written in C++ in the late 1990s. A compiler turned that source into machine code, the raw instructions a CPU reads, and only the machine code shipped in <code>Mech3.exe</code>. The original source was never released.</p>
-    <div class="anim">
-      <div class="anim-row">
-        <div class="panel">
-          <div class="panel-head">Source code</div>
-          <!-- .line is white-space: pre-wrap, so every space below shows on screen. -->
-          <!-- prettier-ignore -->
-          <div class="panel-body">
+            <section class="lesson" data-part="1" data-title="What's inside the exe">
+                <div class="eyebrow">Part 1 · The starting point</div>
+                <h2>What's inside Mech3.exe</h2>
+                <p>
+                    MechWarrior 3 was written in C++ in the late 1990s. A compiler turned that
+                    source into machine code, the raw instructions a CPU reads, and only the machine
+                    code shipped in <code>Mech3.exe</code>. The original source was never released.
+                </p>
+                <div class="anim">
+                    <div class="anim-row">
+                        <div class="panel">
+                            <div class="panel-head">Source code</div>
+                            <!-- .line is white-space: pre-wrap, so every space below shows on screen. -->
+                            <!-- prettier-ignore -->
+                            <div class="panel-body">
             <div class="line" data-src><span class="kw">void</span> Mech::Fire(Weapon&amp; w) {</div>
             <div class="line" data-src>    heat += w.heat;</div>
             <div class="line" data-src>}</div>
           </div>
-        </div>
-        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-        <div class="mid"><b>Compiler</b><span>1999</span></div>
-        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-        <div class="panel">
-          <div class="panel-head">Mech3.exe</div>
-          <div class="panel-body">
-            <div class="chip" data-out>56</div>
-            <div class="chip" data-out>8B 46 14 01 47 30</div>
-            <div class="chip" data-out>5E C3</div>
-          </div>
-        </div>
-      </div>
-      <div class="anim-foot">
-        <p class="note">Illustration. Real x86 instructions, not taken from MW3.</p>      </div>
-    </div>
-    <p>Notice what didn't make it across: the names. <code>Mech</code>, <code>Fire</code>, <code>heat</code> and the structure around them were thrown away. The exe holds only numbers like <code>8B 46 14</code> ("load the value 20 bytes into this object"), millions of them.</p>
-  </section>
+                        </div>
+                        <div class="link">
+                            <svg aria-hidden="true"><use href="#ar" /></svg>
+                        </div>
+                        <div class="mid"><b>Compiler</b><span>1999</span></div>
+                        <div class="link">
+                            <svg aria-hidden="true"><use href="#ar" /></svg>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-head">Mech3.exe</div>
+                            <div class="panel-body">
+                                <div class="chip" data-out>56</div>
+                                <div class="chip" data-out>8B 46 14 01 47 30</div>
+                                <div class="chip" data-out>5E C3</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="anim-foot">
+                        <p class="note">Illustration. Real x86 instructions, not taken from MW3.</p>
+                    </div>
+                </div>
+                <p>
+                    Notice what didn't make it across: the names. <code>Mech</code>,
+                    <code>Fire</code>, <code>heat</code> and the structure around them were thrown
+                    away. The exe holds only numbers like <code>8B 46 14</code> ("load the value 20
+                    bytes into this object"), millions of them.
+                </p>
+            </section>
 
-  <section class="lesson" data-part="1" data-title="Three ways to revive a game">
-    <div class="eyebrow">Part 1 · The options</div>
-    <h2>Three ways to revive an old game</h2>
-    <p>The original exe targets 1999 Windows and DirectX 6-era graphics. On a modern PC it runs poorly or not at all. Preservation projects usually take one of three routes.</p>
-    <div class="lanes">
-      <div class="lane"><b>Wrapper<span class="tag">Also offered</span></b>
-        <div class="chain">
-          <div class="node"><b>Original Mech3.exe</b><span>unchanged, still 32-bit</span></div>
-          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-          <div class="node cool"><b>Translation layer</b><span>intercepts old DirectX calls</span></div>
-          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-          <div class="node"><b>Vulkan</b><span>modern graphics</span></div>
-        </div></div>
-      <div class="lane"><b>Emulator<span class="tag off">Not used</span></b>
-        <div class="chain">
-          <div class="node dim"><b>Original Mech3.exe</b><span>treated as data</span></div>
-          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-          <div class="node dim"><b>Interpreter</b><span>runs each instruction live, every time</span></div>
-        </div></div>
-      <div class="lane"><b>Recompile<span class="tag">This project</span></b>
-        <div class="chain">
-          <div class="node"><b>Original Mech3.exe</b><span>translated once, ahead of time</span></div>
-          <div class="arr"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-          <div class="node hot"><b>New 64-bit program</b><span>original game logic, modern services</span></div>
-        </div></div>
-    </div>
-    <p>The main work is the recompile. A wrapper is kept alongside it as a separate way to play. There is no interpreter anywhere: code that hasn't been translated stops with an address and a reason instead of being run some other way.</p>
-  </section>
+            <section class="lesson" data-part="1" data-title="Three ways to revive a game">
+                <div class="eyebrow">Part 1 · The options</div>
+                <h2>Three ways to revive an old game</h2>
+                <p>
+                    The original exe targets 1999 Windows and DirectX 6-era graphics. On a modern PC
+                    it runs poorly or not at all. Preservation projects usually take one of three
+                    routes.
+                </p>
+                <div class="lanes">
+                    <div class="lane">
+                        <b>Wrapper<span class="tag">Also offered</span></b>
+                        <div class="chain">
+                            <div class="node">
+                                <b>Original Mech3.exe</b><span>unchanged, still 32-bit</span>
+                            </div>
+                            <div class="arr">
+                                <svg aria-hidden="true"><use href="#ar" /></svg>
+                            </div>
+                            <div class="node cool">
+                                <b>Translation layer</b><span>intercepts old DirectX calls</span>
+                            </div>
+                            <div class="arr">
+                                <svg aria-hidden="true"><use href="#ar" /></svg>
+                            </div>
+                            <div class="node"><b>Vulkan</b><span>modern graphics</span></div>
+                        </div>
+                    </div>
+                    <div class="lane">
+                        <b>Emulator<span class="tag off">Not used</span></b>
+                        <div class="chain">
+                            <div class="node dim">
+                                <b>Original Mech3.exe</b><span>treated as data</span>
+                            </div>
+                            <div class="arr">
+                                <svg aria-hidden="true"><use href="#ar" /></svg>
+                            </div>
+                            <div class="node dim">
+                                <b>Interpreter</b
+                                ><span>runs each instruction live, every time</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="lane">
+                        <b>Recompile<span class="tag">This project</span></b>
+                        <div class="chain">
+                            <div class="node">
+                                <b>Original Mech3.exe</b><span>translated once, ahead of time</span>
+                            </div>
+                            <div class="arr">
+                                <svg aria-hidden="true"><use href="#ar" /></svg>
+                            </div>
+                            <div class="node hot">
+                                <b>New 64-bit program</b
+                                ><span>original game logic, modern services</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <p>
+                    The main work is the recompile. A wrapper is kept alongside it as a separate way
+                    to play. There is no interpreter anywhere: code that hasn't been translated
+                    stops with an address and a reason instead of being run some other way.
+                </p>
+            </section>
 
-  <section class="lesson" data-part="1" data-title="Lifting">
-    <div class="eyebrow">Part 1 · How the translation works</div>
-    <h2>Lifting: compiling in reverse</h2>
-    <p>A tool called a lifter runs the trip backwards. It reads the machine code one function at a time and writes out code that does exactly the same thing, which a modern compiler then builds into a native 64-bit program. This project uses <strong>Remill</strong>, an open-source lifter.</p>
-    <div class="anim">
-      <div class="anim-row">
-        <div class="panel">
-          <div class="panel-head">Mech3.exe</div>
-          <div class="panel-body">
-            <div class="chip" data-src>56</div>
-            <div class="chip" data-src>8B 46 14 01 47 30</div>
-            <div class="chip" data-src>5E C3</div>
-          </div>
-        </div>
-        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-        <div class="mid"><b>Lifter</b><span>Remill</span></div>
-        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-        <div class="panel">
-          <div class="panel-head">Lifted code</div>
-          <!-- .line is white-space: pre-wrap, so every space below shows on screen. -->
-          <!-- prettier-ignore -->
-          <div class="panel-body">
+            <section class="lesson" data-part="1" data-title="Lifting">
+                <div class="eyebrow">Part 1 · How the translation works</div>
+                <h2>Lifting: compiling in reverse</h2>
+                <p>
+                    A tool called a lifter runs the trip backwards. It reads the machine code one
+                    function at a time and writes out code that does exactly the same thing, which a
+                    modern compiler then builds into a native 64-bit program. This project uses
+                    <strong>Remill</strong>, an open-source lifter.
+                </p>
+                <div class="anim">
+                    <div class="anim-row">
+                        <div class="panel">
+                            <div class="panel-head">Mech3.exe</div>
+                            <div class="panel-body">
+                                <div class="chip" data-src>56</div>
+                                <div class="chip" data-src>8B 46 14 01 47 30</div>
+                                <div class="chip" data-src>5E C3</div>
+                            </div>
+                        </div>
+                        <div class="link">
+                            <svg aria-hidden="true"><use href="#ar" /></svg>
+                        </div>
+                        <div class="mid"><b>Lifter</b><span>Remill</span></div>
+                        <div class="link">
+                            <svg aria-hidden="true"><use href="#ar" /></svg>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-head">Lifted code</div>
+                            <!-- .line is white-space: pre-wrap, so every space below shows on screen. -->
+                            <!-- prettier-ignore -->
+                            <div class="panel-body">
             <div class="line" data-static><span class="kw">void</span> <span class="fn">sub_0045A1C0</span>(State&amp; s, Memory&amp; m) {</div>
             <div class="line" data-out>    push(s, s.esi);</div>
             <div class="line" data-out>    s.eax = m.load32(s.esi + 0x14);
@@ -126,214 +202,452 @@
             <div class="line" data-out>    s.esi = pop(s); <span class="kw">return</span>;</div>
             <div class="line" data-static>}</div>
           </div>
-        </div>
-      </div>
-      <div class="anim-foot">
-        <p class="note">Illustration, simplified from what a lifter really emits.</p>      </div>
-    </div>
-    <p>The result is <strong>correct, but nameless</strong>. The function is named after its address in the old exe, and the variables are CPU registers. Proving that <code>sub_0045A1C0</code> is really "fire weapon" takes evidence, so the project's rule is: unproven functions keep their <code>sub_XXXXXXXX</code> names. A plausible guess would be invented, not readable.</p>
-  </section>
+                        </div>
+                    </div>
+                    <div class="anim-foot">
+                        <p class="note">
+                            Illustration, simplified from what a lifter really emits.
+                        </p>
+                    </div>
+                </div>
+                <p>
+                    The result is <strong>correct, but nameless</strong>. The function is named
+                    after its address in the old exe, and the variables are CPU registers. Proving
+                    that <code>sub_0045A1C0</code> is really "fire weapon" takes evidence, so the
+                    project's rule is: unproven functions keep their
+                    <code>sub_XXXXXXXX</code> names. A plausible guess would be invented, not
+                    readable.
+                </p>
+            </section>
 
-  <section class="lesson" data-part="1" data-title="Original, modern, kept out">
-    <div class="eyebrow">Part 1 · What changes and what doesn't</div>
-    <h2>Original logic, modern services, no game in the repository</h2>
-    <p>The translated game still decides everything a mech does. What changes is everything it talks to. And because the translation is made from the copyrighted game, it is never committed to the repository.</p>
-    <div class="trio">
-      <div class="box hot">
-        <div class="box-head">Kept original</div>
-        <ul><li>Gameplay, physics, AI and timing logic</li><li>Missions and campaign flow</li><li>The original HUD and menus</li></ul>
-      </div>
-      <div class="box cool">
-        <div class="box-head">Modernized</div>
-        <ul><li>Vulkan rendering, widescreen, anti-aliasing</li><li>Input, audio, files, Windows integration</li><li>Optional visual upgrades, kept as separate settings</li></ul>
-      </div>
-      <div class="box">
-        <div class="box-head">Never in the repository</div>
-        <ul><li>The game, its exe and data</li><li>The lifted game code</li><li>Original media and asset packs</li></ul>
-      </div>
-    </div>
-    <p>Every player still needs their own legally obtained copy of MW3, which the installer verifies. Private playtest builds ship a precompiled runtime so testers don't have to generate it themselves, but the repository only ever holds project-written code around the game.</p>
-    <div class="fork">
-      <p>That's the big picture. Part 2 is for developers who want to help: how the pieces fit, where things live, and the rules that keep the project honest.</p>
-      <div class="fork-actions">
-        <button class="navbtn" type="button" data-go="next">Continue to Part 2<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 L16 12 L9 19"/></svg></button>
-        <button class="navbtn quiet" type="button" data-go="0">Back to the start</button>
-      </div>
-    </div>
-  </section>
+            <section class="lesson" data-part="1" data-title="Original, modern, kept out">
+                <div class="eyebrow">Part 1 · What changes and what doesn't</div>
+                <h2>Original logic, modern services, no game in the repository</h2>
+                <p>
+                    The translated game still decides everything a mech does. What changes is
+                    everything it talks to. And because the translation is made from the copyrighted
+                    game, it is never committed to the repository.
+                </p>
+                <div class="trio">
+                    <div class="box hot">
+                        <div class="box-head">Kept original</div>
+                        <ul>
+                            <li>Gameplay, physics, AI and timing logic</li>
+                            <li>Missions and campaign flow</li>
+                            <li>The original HUD and menus</li>
+                        </ul>
+                    </div>
+                    <div class="box cool">
+                        <div class="box-head">Modernized</div>
+                        <ul>
+                            <li>Vulkan rendering, widescreen, anti-aliasing</li>
+                            <li>Input, audio, files, Windows integration</li>
+                            <li>Optional visual upgrades, kept as separate settings</li>
+                        </ul>
+                    </div>
+                    <div class="box">
+                        <div class="box-head">Never in the repository</div>
+                        <ul>
+                            <li>The game, its exe and data</li>
+                            <li>The lifted game code</li>
+                            <li>Original media and asset packs</li>
+                        </ul>
+                    </div>
+                </div>
+                <p>
+                    Every player still needs their own legally obtained copy of MW3, which the
+                    installer verifies. Private playtest builds ship a precompiled runtime so
+                    testers don't have to generate it themselves, but the repository only ever holds
+                    project-written code around the game.
+                </p>
+                <div class="fork">
+                    <p>
+                        That's the big picture. Part 2 is for developers who want to help: how the
+                        pieces fit, where things live, and the rules that keep the project honest.
+                    </p>
+                    <div class="fork-actions">
+                        <button class="navbtn" type="button" data-go="next">
+                            Continue to Part 2<svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M9 5 L16 12 L9 19" />
+                            </svg>
+                        </button>
+                        <button class="navbtn quiet" type="button" data-go="0">
+                            Back to the start
+                        </button>
+                    </div>
+                </div>
+            </section>
 
-  <!-- ========== PART 2 ========== -->
+            <!-- ========== PART 2 ========== -->
 
-  <section class="lesson" data-part="2" data-title="Guest and host">
-    <div class="eyebrow">Part 2 · Two worlds in one program</div>
-    <h2>Guest and host</h2>
-    <p>The translated game still behaves like a 32-bit program, with 32-bit addresses. The program around it is 64-bit. The project calls the game's world the <strong>guest</strong> and the new program the <strong>host</strong>. Most design rules come down to keeping these two apart.</p>
-    <div class="nest">
-      <div class="label">Host · new 64-bit program</div>
-      <span class="gate">Renderer · audio · input · files · Windows integration</span>
-      <div class="inner">
-        <div class="label">Guest · translated game</div>
-        <span class="gate">Expects 1999 Windows. 32-bit addresses into memory the host owns.</span>
-      </div>
-      <span class="gate">Every guest memory access goes through a checked call, never a raw pointer.</span>
-    </div>
-    <p>A guest address is just a 32-bit number. The guest asks the host for bytes at that address, and the host checks the range before touching anything. From <code>runtime/memory</code>:</p>
-<pre class="code"><span class="cm">// Explicit little-endian serialization permits unaligned x86 accesses on any host.</span>
+            <section class="lesson" data-part="2" data-title="Guest and host">
+                <div class="eyebrow">Part 2 · Two worlds in one program</div>
+                <h2>Guest and host</h2>
+                <p>
+                    The translated game still behaves like a 32-bit program, with 32-bit addresses.
+                    The program around it is 64-bit. The project calls the game's world the
+                    <strong>guest</strong> and the new program the <strong>host</strong>. Most
+                    design rules come down to keeping these two apart.
+                </p>
+                <div class="nest">
+                    <div class="label">Host · new 64-bit program</div>
+                    <span class="gate">Renderer · audio · input · files · Windows integration</span>
+                    <div class="inner">
+                        <div class="label">Guest · translated game</div>
+                        <span class="gate"
+                            >Expects 1999 Windows. 32-bit addresses into memory the host owns.</span
+                        >
+                    </div>
+                    <span class="gate"
+                        >Every guest memory access goes through a checked call, never a raw
+                        pointer.</span
+                    >
+                </div>
+                <p>
+                    A guest address is just a 32-bit number. The guest asks the host for bytes at
+                    that address, and the host checks the range before touching anything. From
+                    <code>runtime/memory</code>:
+                </p>
+                <pre
+                    class="code"
+                ><span class="cm">// Explicit little-endian serialization permits unaligned x86 accesses on any host.</span>
 <span class="kw">template</span> &lt;GuestScalar T&gt; [[nodiscard]] T load(GuestAddress address) <span class="kw">const</span> {
     std::array&lt;std::byte, <span class="kw">sizeof</span>(T)&gt; bytes{};
     read(address, bytes);    <span class="cm">// throws MemoryFault outside a mapping</span>
     ...
 }</pre>
-    <p>That's why you'll never see a guest value cast to a host pointer, or a host pointer stored in guest memory. Bad accesses become clear errors instead of random crashes.</p>
-    <div class="where"><b>Read more</b><span><code>docs/architecture.md</code>, the guest memory contract.</span></div>
-  </section>
+                <p>
+                    That's why you'll never see a guest value cast to a host pointer, or a host
+                    pointer stored in guest memory. Bad accesses become clear errors instead of
+                    random crashes.
+                </p>
+                <div class="where">
+                    <b>Read more</b
+                    ><span><code>docs/architecture.md</code>, the guest memory contract.</span>
+                </div>
+            </section>
 
-  <section class="lesson" data-part="2" data-title="Host services">
-    <div class="eyebrow">Part 2 · Replacing 1999 Windows</div>
-    <h2>The game asks for old services, the host answers</h2>
-    <p>The game still calls DirectDraw, Direct3D, Win32, Microsoft's MFC framework and CD audio. In the recompile, each call lands on a project-written host implementation that does the same job with modern parts.</p>
-    <div class="anim">
-      <div class="anim-row">
-        <div class="panel">
-          <div class="panel-head">The game asks</div>
-          <div class="panel-body">
-            <div class="call" data-src><b>Direct3D</b><span>DrawPrimitive(triangles)</span></div>
-            <div class="call" data-src><b>DirectDraw</b><span>Flip()</span></div>
-            <div class="call" data-src><b>CD audio</b><span>play track 3</span></div>
-          </div>
-        </div>
-        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-        <div class="mid"><b>Host bridge</b><span>project-written</span></div>
-        <div class="link"><svg aria-hidden="true"><use href="#ar"/></svg></div>
-        <div class="panel out">
-          <div class="panel-head">What actually runs</div>
-          <div class="panel-body">
-            <div class="call" data-out><b>Vulkan</b><span>vkCmdDraw</span></div>
-            <div class="call" data-out><b>Vulkan</b><span>vkQueuePresentKHR</span></div>
-            <div class="call" data-out><b>Local music</b><span>decoded track 3</span></div>
-          </div>
-        </div>
-      </div>
-      <div class="anim-foot">
-        <p class="note">Simplified. Real bridges handle many calls and state.</p>      </div>
-    </div>
-    <p>Bridges implement the behaviour the game was <em>observed</em> to need, not the whole old API. An unknown call fails loudly; it never returns a fake success. This is also where optional enhancements such as lighting, anti-aliasing and replacement models plug in, separate from gameplay logic.</p>
-    <div class="where"><b>Where</b><span><code>runtime/</code> (graphics, audio, input, Windows, MFC) and the enhanced renderer under <code>tools/</code>. The code guide names the current entry files.</span></div>
-  </section>
+            <section class="lesson" data-part="2" data-title="Host services">
+                <div class="eyebrow">Part 2 · Replacing 1999 Windows</div>
+                <h2>The game asks for old services, the host answers</h2>
+                <p>
+                    The game still calls DirectDraw, Direct3D, Win32, Microsoft's MFC framework and
+                    CD audio. In the recompile, each call lands on a project-written host
+                    implementation that does the same job with modern parts.
+                </p>
+                <div class="anim">
+                    <div class="anim-row">
+                        <div class="panel">
+                            <div class="panel-head">The game asks</div>
+                            <div class="panel-body">
+                                <div class="call" data-src>
+                                    <b>Direct3D</b><span>DrawPrimitive(triangles)</span>
+                                </div>
+                                <div class="call" data-src>
+                                    <b>DirectDraw</b><span>Flip()</span>
+                                </div>
+                                <div class="call" data-src>
+                                    <b>CD audio</b><span>play track 3</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="link">
+                            <svg aria-hidden="true"><use href="#ar" /></svg>
+                        </div>
+                        <div class="mid"><b>Host bridge</b><span>project-written</span></div>
+                        <div class="link">
+                            <svg aria-hidden="true"><use href="#ar" /></svg>
+                        </div>
+                        <div class="panel out">
+                            <div class="panel-head">What actually runs</div>
+                            <div class="panel-body">
+                                <div class="call" data-out><b>Vulkan</b><span>vkCmdDraw</span></div>
+                                <div class="call" data-out>
+                                    <b>Vulkan</b><span>vkQueuePresentKHR</span>
+                                </div>
+                                <div class="call" data-out>
+                                    <b>Local music</b><span>decoded track 3</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="anim-foot">
+                        <p class="note">Simplified. Real bridges handle many calls and state.</p>
+                    </div>
+                </div>
+                <p>
+                    Bridges implement the behaviour the game was <em>observed</em> to need, not the
+                    whole old API. An unknown call fails loudly; it never returns a fake success.
+                    This is also where optional enhancements such as lighting, anti-aliasing and
+                    replacement models plug in, separate from gameplay logic.
+                </p>
+                <div class="where">
+                    <b>Where</b
+                    ><span
+                        ><code>runtime/</code> (graphics, audio, input, Windows, MFC) and the
+                        enhanced renderer under <code>tools/</code>. The code guide names the
+                        current entry files.</span
+                    >
+                </div>
+            </section>
 
-  <section class="lesson" data-part="2" data-title="Code map">
-    <div class="eyebrow">Part 2 · Finding your way</div>
-    <h2>A map of the repository</h2>
-    <p>Most of the time spent on a first change goes into finding where it belongs. Here is the layout at the folder level.</p>
-    <div class="map">
-      <div class="map-row"><code>runtime/</code><span>Shared host services: checked guest memory, graphics, audio, input, Windows and MFC pieces.</span></div>
-      <div class="map-row"><code>recomp/</code><span>Where translation output goes. Only README files are committed; generated code stays local.</span></div>
-      <div class="map-row"><code>tools/</code><span>Exe validation and analysis, the lifting toolchain, launchers, the enhanced renderer, and a lot of dated research.</span></div>
-      <div class="map-row"><code>games/mw3/</code><span>Version-specific data, symbols and evidence, plus the Mod Tools.</span></div>
-      <div class="map-row"><code>tests/</code><span>Project-written fixtures and contract tests. No game files.</span></div>
-      <div class="map-row"><code>docs/</code><span>Architecture, plans, milestones, setup guides and the code guide.</span></div>
-    </div>
-    <p>One surprise: some active components live in folders named after the research step that produced them, including the main native host, which sits under <code>tools/</code> rather than <code>runtime/</code>.</p>
-    <div class="where"><b>Start here</b><span><code>docs/code-guide.md</code> lists every active component with its current entry files and what to watch for when changing it.</span></div>
-  </section>
+            <section class="lesson" data-part="2" data-title="Code map">
+                <div class="eyebrow">Part 2 · Finding your way</div>
+                <h2>A map of the repository</h2>
+                <p>
+                    Most of the time spent on a first change goes into finding where it belongs.
+                    Here is the layout at the folder level.
+                </p>
+                <div class="map">
+                    <div class="map-row">
+                        <code>runtime/</code
+                        ><span
+                            >Shared host services: checked guest memory, graphics, audio, input,
+                            Windows and MFC pieces.</span
+                        >
+                    </div>
+                    <div class="map-row">
+                        <code>recomp/</code
+                        ><span
+                            >Where translation output goes. Only README files are committed;
+                            generated code stays local.</span
+                        >
+                    </div>
+                    <div class="map-row">
+                        <code>tools/</code
+                        ><span
+                            >Exe validation and analysis, the lifting toolchain, launchers, the
+                            enhanced renderer, and a lot of dated research.</span
+                        >
+                    </div>
+                    <div class="map-row">
+                        <code>games/mw3/</code
+                        ><span
+                            >Version-specific data, symbols and evidence, plus the Mod Tools.</span
+                        >
+                    </div>
+                    <div class="map-row">
+                        <code>tests/</code
+                        ><span>Project-written fixtures and contract tests. No game files.</span>
+                    </div>
+                    <div class="map-row">
+                        <code>docs/</code
+                        ><span
+                            >Architecture, plans, milestones, setup guides and the code guide.</span
+                        >
+                    </div>
+                </div>
+                <p>
+                    One surprise: some active components live in folders named after the research
+                    step that produced them, including the main native host, which sits under
+                    <code>tools/</code> rather than <code>runtime/</code>.
+                </p>
+                <div class="where">
+                    <b>Start here</b
+                    ><span
+                        ><code>docs/code-guide.md</code> lists every active component with its
+                        current entry files and what to watch for when changing it.</span
+                    >
+                </div>
+            </section>
 
-  <section class="lesson" data-part="2" data-title="Launcher, wrapper, Mod Tools">
-    <div class="eyebrow">Part 2 · The other workstreams</div>
-    <h2>Launcher, wrapper and Mod Tools</h2>
-    <p>Besides the native host, three other pieces make up the project. Each one is its own area to contribute to.</p>
-    <div class="trio">
-      <div class="box cool">
-        <div class="box-head">Launcher <small>players</small></div>
-        <p>A Windows app installs the game from its disc image or uses an existing install, applies settings, hands off to Python that prepares local files, then starts the host. It keeps itself and the runtime up to date. Planning, preparing and launching are separate steps on purpose.</p>
-      </div>
-      <div class="box cool">
-        <div class="box-head">D7VK wrapper <small>players</small></div>
-        <p>Runs the original, unchanged exe with a Vulkan graphics wrapper in an isolated profile. A separate way to play, not a fallback inside the native host.</p>
-      </div>
-      <div class="box cool">
-        <div class="box-head">Mod Tools <small>modders</small></div>
-        <p>A desktop map and mission editor and a browser 3D Map Studio. They read the game's own archives, keep the install read-only and export to a separate folder.</p>
-      </div>
-    </div>
-    <div class="where"><b>Read more</b><span>The setup guides in <code>docs/</code>, and <code>games/mw3/mod-tools/</code> with its format support matrix.</span></div>
-  </section>
+            <section class="lesson" data-part="2" data-title="Launcher, wrapper, Mod Tools">
+                <div class="eyebrow">Part 2 · The other workstreams</div>
+                <h2>Launcher, wrapper and Mod Tools</h2>
+                <p>
+                    Besides the native host, three other pieces make up the project. Each one is its
+                    own area to contribute to.
+                </p>
+                <div class="trio">
+                    <div class="box cool">
+                        <div class="box-head">Launcher <small>players</small></div>
+                        <p>
+                            A Windows app installs the game from its disc image or uses an existing
+                            install, applies settings, hands off to Python that prepares local
+                            files, then starts the host. It keeps itself and the runtime up to date.
+                            Planning, preparing and launching are separate steps on purpose.
+                        </p>
+                    </div>
+                    <div class="box cool">
+                        <div class="box-head">D7VK wrapper <small>players</small></div>
+                        <p>
+                            Runs the original, unchanged exe with a Vulkan graphics wrapper in an
+                            isolated profile. A separate way to play, not a fallback inside the
+                            native host.
+                        </p>
+                    </div>
+                    <div class="box cool">
+                        <div class="box-head">Mod Tools <small>modders</small></div>
+                        <p>
+                            A desktop map and mission editor and a browser 3D Map Studio. They read
+                            the game's own archives, keep the install read-only and export to a
+                            separate folder.
+                        </p>
+                    </div>
+                </div>
+                <div class="where">
+                    <b>Read more</b
+                    ><span
+                        >The setup guides in <code>docs/</code>, and
+                        <code>games/mw3/mod-tools/</code> with its format support matrix.</span
+                    >
+                </div>
+            </section>
 
-  <section class="lesson" data-part="2" data-title="Live code and frozen research">
-    <div class="eyebrow">Part 2 · Reading the map</div>
-    <h2>Live code versus frozen research</h2>
-    <p>The project keeps its experiments. Much of <code>tools/</code> is dated research: source models, comparers and acceptance runs whose file hashes are pinned in the project's evidence records. Change one byte and the record no longer matches.</p>
-    <div class="pair">
-      <div class="box cool">
-        <div class="box-head">Maintained <small>change freely</small></div>
-        <ul><li>Components listed in <code>docs/code-guide.md</code></li><li>Shared services under <code>runtime/</code></li><li>Launchers, editors, tests</li></ul>
-      </div>
-      <div class="box">
-        <div class="box-head">Frozen evidence <small>leave as is</small></div>
-        <ul><li>Dated research folders such as <code>tools/m4-*</code> and <code>tools/x87-*</code></li><li>Historical source models and hashes</li><li>Pinned tools used to measure a result</li></ul>
-      </div>
-    </div>
-    <p>So even ugly frozen code isn't reformatted, renamed or deleted as cleanup. If something in it is worth reusing, extract it into a reviewed, maintained module and leave the original untouched.</p>
-  </section>
+            <section class="lesson" data-part="2" data-title="Live code and frozen research">
+                <div class="eyebrow">Part 2 · Reading the map</div>
+                <h2>Live code versus frozen research</h2>
+                <p>
+                    The project keeps its experiments. Much of <code>tools/</code> is dated
+                    research: source models, comparers and acceptance runs whose file hashes are
+                    pinned in the project's evidence records. Change one byte and the record no
+                    longer matches.
+                </p>
+                <div class="pair">
+                    <div class="box cool">
+                        <div class="box-head">Maintained <small>change freely</small></div>
+                        <ul>
+                            <li>Components listed in <code>docs/code-guide.md</code></li>
+                            <li>Shared services under <code>runtime/</code></li>
+                            <li>Launchers, editors, tests</li>
+                        </ul>
+                    </div>
+                    <div class="box">
+                        <div class="box-head">Frozen evidence <small>leave as is</small></div>
+                        <ul>
+                            <li>
+                                Dated research folders such as <code>tools/m4-*</code> and
+                                <code>tools/x87-*</code>
+                            </li>
+                            <li>Historical source models and hashes</li>
+                            <li>Pinned tools used to measure a result</li>
+                        </ul>
+                    </div>
+                </div>
+                <p>
+                    So even ugly frozen code isn't reformatted, renamed or deleted as cleanup. If
+                    something in it is worth reusing, extract it into a reviewed, maintained module
+                    and leave the original untouched.
+                </p>
+            </section>
 
-  <section class="lesson" data-part="2" data-title="Evidence and checks">
-    <div class="eyebrow">Part 2 · How the project knows things</div>
-    <h2>Evidence first, for progress and for your changes</h2>
-    <p>Progress is tracked as milestones, from the bootstrap through native startup, a playable Training mission and full campaign compatibility to later modernization and other platforms. A milestone only counts with recorded evidence against the original game. A run that works on someone's machine is noted, but it isn't acceptance.</p>
-    <div class="pair">
-      <div class="box cool">
-        <div class="box-head">Any checkout <small>no game needed</small></div>
-<pre class="code">cmake --preset default
+            <section class="lesson" data-part="2" data-title="Evidence and checks">
+                <div class="eyebrow">Part 2 · How the project knows things</div>
+                <h2>Evidence first, for progress and for your changes</h2>
+                <p>
+                    Progress is tracked as milestones, from the bootstrap through native startup, a
+                    playable Training mission and full campaign compatibility to later modernization
+                    and other platforms. A milestone only counts with recorded evidence against the
+                    original game. A run that works on someone's machine is noted, but it isn't
+                    acceptance.
+                </p>
+                <div class="pair">
+                    <div class="box cool">
+                        <div class="box-head">Any checkout <small>no game needed</small></div>
+                        <pre class="code">
+cmake --preset default
 cmake --build --preset default
 ctest --preset default</pre>
-        <p>Builds the asset-free runtime and runs the tests, the same as CI. Add <code>-A x64</code> on Windows with Visual Studio. A <code>format-check</code> target checks C++ formatting.</p>
-      </div>
-      <div class="box hot">
-        <div class="box-head">Building the game yourself <small>local setup</small></div>
-        <ul><li>Your own MW3 installation</li><li>A prepared local environment and generated lifts</li><li>Needed for behaviour changes to timing, rendering or input, which need an original-game baseline</li></ul>
-      </div>
-    </div>
-    <p>Whatever you change, say which checks you ran and which ones need private inputs you couldn't run.</p>
-    <div class="where"><b>Current status</b><span><code>docs/project-milestones.md</code> and <code>docs/roadmap.md</code> are kept up to date. This guide deliberately doesn't repeat their numbers.</span></div>
-  </section>
+                        <p>
+                            Builds the asset-free runtime and runs the tests, the same as CI. Add
+                            <code>-A x64</code> on Windows with Visual Studio. A
+                            <code>format-check</code> target checks C++ formatting.
+                        </p>
+                    </div>
+                    <div class="box hot">
+                        <div class="box-head">
+                            Building the game yourself <small>local setup</small>
+                        </div>
+                        <ul>
+                            <li>Your own MW3 installation</li>
+                            <li>A prepared local environment and generated lifts</li>
+                            <li>
+                                Needed for behaviour changes to timing, rendering or input, which
+                                need an original-game baseline
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                <p>
+                    Whatever you change, say which checks you ran and which ones need private inputs
+                    you couldn't run.
+                </p>
+                <div class="where">
+                    <b>Current status</b
+                    ><span
+                        ><code>docs/project-milestones.md</code> and
+                        <code>docs/roadmap.md</code> are kept up to date. This guide deliberately
+                        doesn't repeat their numbers.</span
+                    >
+                </div>
+            </section>
 
-  <section class="lesson" data-part="2" data-title="Ground rules">
-    <div class="eyebrow">Part 2 · Your first change</div>
-    <h2>Ground rules</h2>
-    <p>Good first contributions: reproducible bug reports, focused contract tests, readable host-service code, documentation, hardware test reports and editor improvements. <code>CONTRIBUTING.md</code> has the full rules; these are the ones that catch newcomers.</p>
-    <div class="pair">
-      <div class="box cool">
-        <div class="box-head">Do</div>
-        <ul>
-          <li>Start from an observation and its evidence</li>
-          <li>Work on components the code guide lists as active</li>
-          <li>Keep each change to one behaviour or one readability concern</li>
-          <li>Comment the why: binary layouts, units, ownership, calling conventions</li>
-          <li>Say which checks you ran</li>
-        </ul>
-      </div>
-      <div class="box hot">
-        <div class="box-head">Don't</div>
-        <ul>
-          <li>Rename <code>sub_XXXXXXXX</code> functions without evidence</li>
-          <li>Reformat or rename frozen research files</li>
-          <li>Mix a formatting pass with gameplay or renderer changes</li>
-          <li>Commit or attach game files, memory dumps, saves or generated translations</li>
-          <li>Make an unknown API return a fake success</li>
-        </ul>
-      </div>
-    </div>
-    <div class="where"><b>Read next</b><span><code>CONTRIBUTING.md</code> · <code>docs/code-guide.md</code> · <code>docs/architecture.md</code> · <code>docs/faithful-modernization-plan.md</code></span></div>
-  </section>
+            <section class="lesson" data-part="2" data-title="Ground rules">
+                <div class="eyebrow">Part 2 · Your first change</div>
+                <h2>Ground rules</h2>
+                <p>
+                    Good first contributions: reproducible bug reports, focused contract tests,
+                    readable host-service code, documentation, hardware test reports and editor
+                    improvements. <code>CONTRIBUTING.md</code> has the full rules; these are the
+                    ones that catch newcomers.
+                </p>
+                <div class="pair">
+                    <div class="box cool">
+                        <div class="box-head">Do</div>
+                        <ul>
+                            <li>Start from an observation and its evidence</li>
+                            <li>Work on components the code guide lists as active</li>
+                            <li>Keep each change to one behaviour or one readability concern</li>
+                            <li>
+                                Comment the why: binary layouts, units, ownership, calling
+                                conventions
+                            </li>
+                            <li>Say which checks you ran</li>
+                        </ul>
+                    </div>
+                    <div class="box hot">
+                        <div class="box-head">Don't</div>
+                        <ul>
+                            <li>Rename <code>sub_XXXXXXXX</code> functions without evidence</li>
+                            <li>Reformat or rename frozen research files</li>
+                            <li>Mix a formatting pass with gameplay or renderer changes</li>
+                            <li>
+                                Commit or attach game files, memory dumps, saves or generated
+                                translations
+                            </li>
+                            <li>Make an unknown API return a fake success</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="where">
+                    <b>Read next</b
+                    ><span
+                        ><code>CONTRIBUTING.md</code> · <code>docs/code-guide.md</code> ·
+                        <code>docs/architecture.md</code> ·
+                        <code>docs/faithful-modernization-plan.md</code></span
+                    >
+                </div>
+            </section>
 
-  <div class="pager">
-    <button class="navbtn quiet" id="prev" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5 L8 12 L15 19"/></svg>Back</button>
-    <span class="count" id="count" aria-live="polite"></span>
-    <button class="navbtn" id="next" type="button">Next<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 L16 12 L9 19"/></svg></button>
-  </div>
+            <div class="pager">
+                <button class="navbtn quiet" id="prev" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5 L8 12 L15 19" /></svg
+                    >Back
+                </button>
+                <span class="count" id="count" aria-live="polite"></span>
+                <button class="navbtn" id="next" type="button">
+                    Next<svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 5 L16 12 L9 19" />
+                    </svg>
+                </button>
+            </div>
 
-  <footer>Last checked against the MW3Recomp repository in October 2026. For anything that changes often, the repository's own docs are the source of truth.</footer>
-</div>
+            <footer>
+                Last checked against the MW3Recomp repository in October 2026. For anything that
+                changes often, the repository's own docs are the source of truth.
+            </footer>
+        </div>
 
-<script src="guide.js"></script>
-</body>
+        <script src="guide.js"></script>
+    </body>
 </html>
