@@ -37,6 +37,8 @@ static class ControlProfileChecks
                 defaults.Bindings["CMD_TRIGGER1"].Mouse == 1 && defaults.Bindings["CMD_TRIGGER1"].Joystick == 1 &&
                 defaults.Bindings["CMD_CENTER_TORSO"].Primary == 0x435, "Original MW3 defaults changed");
             Check(mw5.Bindings.Count == 105 && ControlProfiles.Conflicts(mw5).Count == 0, "MW5 layout incomplete or conflicting");
+            Check(mw5.Bindings["CMD_TOGGLE_TMODE"].Primary == 0x252 &&
+                ControlProfiles.Preset(mw5).Contains("CMD_TOGGLE_TMODE keya(0x252)"), "MW5 torso mode reset missing");
             Check(mw5.Bindings["CMD_THROTTLE1"].Primary == 0x2d && mw5.Bindings["CMD_THROTTLE0"].Primary == 0x52,
                 "MW5 stop/full throttle semantics reversed");
             Check(mw5.Bindings["CMD_WEPGRP_1"].Primary == 2 && mw5.Bindings["CMD_TRIGGER1"].Mouse == 1,
@@ -44,9 +46,18 @@ static class ControlProfileChecks
             Check(mw5.Bindings.Values.All(b => b.Mouse is >= 0 and <= 3 && b.Joystick == 0 &&
                 new[] { b.Primary, b.Secondary }.All(k => (k & 255) is not (0x43 or 0x44 or 0x57 or 0x58))), "Unsupported or reserved input in MW5 layout");
             Check(store.Load().Profiles.Count == 2 && System.IO.File.Exists(System.IO.Path.Combine(root, "controls/mw3/profiles.json")), "Built-in layouts not persisted or duplicated");
+            mw5.Bindings["CMD_TOGGLE_TMODE"].Primary = 0;
+            mw5.Description = mw5.Description.Replace("Ctrl + numpad 0 toggles torso mode. ", "");
+            doc.ActiveId = mw5.Id; store.Save(doc);
+            doc = store.Load(); mw5 = doc.Profiles.Single(p => p.Id == ControlPresets.Mw5Id);
+            defaults = doc.Profiles.Single(p => p.Id == Mw3DefaultControls.Id);
+            Check(mw5.Bindings["CMD_TOGGLE_TMODE"].Primary == 0x252 && doc.ActiveId == mw5.Id &&
+                store.Load().Profiles.Count == 2, "Legacy torso-toggle migration changed selection or was not persisted");
             mw5.Name = "Edited MW5"; mw5.Bindings["CMD_THROTTLE_UP"].Primary = 0;
+            mw5.Bindings["CMD_TOGGLE_TMODE"].Primary = 0;
             store.Save(doc);
-            Check(store.Load().Profiles.Single(p => p.Id == ControlPresets.Mw5Id).Name == "Edited MW5" && store.Load().Profiles.Single(p => p.Id == ControlPresets.Mw5Id).Bindings["CMD_THROTTLE_UP"].Primary == 0,
+            Check(store.Load().Profiles.Single(p => p.Id == ControlPresets.Mw5Id).Name == "Edited MW5" && store.Load().Profiles.Single(p => p.Id == ControlPresets.Mw5Id).Bindings["CMD_THROTTLE_UP"].Primary == 0 &&
+                store.Load().Profiles.Single(p => p.Id == ControlPresets.Mw5Id).Bindings["CMD_TOGGLE_TMODE"].Primary == 0,
                 "Built-in seeding overwrote user edits");
             defaults.Name = "Edited MW3"; defaults.Bindings["CMD_TRIGGER1"].Primary = 0;
             doc.ActiveId = defaults.Id; store.Save(doc);
