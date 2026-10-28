@@ -25,8 +25,10 @@ def evidence_path_problem(evidence, is_committed_file):
     """Return why an evidence path is unusable, or an empty string if it is fine."""
     file_part = evidence.split("#", 1)[0]
     path = PurePosixPath(file_part)
+    # Git lists paths in one exact spelling, so "./a/b" or "a//b" would never match it.
     is_plain_relative_path = (
         file_part != ""
+        and str(path) == file_part
         and "\\" not in file_part
         and ":" not in file_part
         and not path.is_absolute()
@@ -167,6 +169,7 @@ class RuleTests(unittest.TestCase):
             "evidence outside the repo": "00409ED0\tsub_00409ED0\tlikely\t../proof.md\tunknown",
             "absolute evidence path": "00409ED0\tsub_00409ED0\tlikely\t/docs/proof.md\tunknown",
             "backslash evidence path": "00409ED0\tsub_00409ED0\tlikely\tdocs\\proof.md\tunknown",
+            "dot-slash evidence path": "00409ED0\tsub_00409ED0\tlikely\t./docs/proof.md\tunknown",
             "empty purpose": "00409ED0\tsub_00409ED0\tguess\tnone\t",
             "purpose with outer spaces": "00409ED0\tsub_00409ED0\tguess\tnone\t unknown",
             "blank line": "",
