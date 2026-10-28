@@ -195,16 +195,11 @@ Once a PR has merged, a new fix or follow-up uses a fresh branch from current
 additional changes. At handoff, report the branch, PR URL, checks and open limits;
 distinguish "awaiting review" from "merged" and "published".
 
-After a PR into `develop` merges, close its issue with a comment naming the PR,
-as described in [Project board](#project-board).
-
 ## Project board
 
 The [project board](https://github.com/users/roswellien/projects/1) shows where
-each piece of work is. Only issues go on it. For PRs targeting `develop`, manually
-link the issue through the PR's Development sidebar before setting the card to
-In review in step 2 below. Keep `Closes #<issue>` in the description, but it does
-not create the link for a non-default branch. So every piece of work
+each piece of work is. Only issues go on it; a PR shows on its issue's card
+through the `Closes #<issue>` line in its description. So every piece of work
 gets an issue before its PR: if there is none, file one first. Release and sync
 PRs are the exception: a release is tracked by its Release checklist issue,
 which stays open until the files are published.
@@ -222,10 +217,10 @@ which stays open until the files are published.
    to In review. Linking the PR makes GitHub set the card to In progress, so set
    In review after the PR exists. Linking a PR to an already closed issue does
    the same; restore that card to Done using the status command below.
-3. **After merge:** close the issue with a comment naming the PR. GitHub closes
-   an issue by itself only when a PR merges into `main`, the default branch, so
-   a merge into `develop` leaves it open. Closing it moves the card to Done;
-   only manually set Done to restore a closed issue's card after linking a PR.
+3. **After merge:** GitHub closes the issue named by `Closes #<issue>`, which
+   moves its card to Done. If the PR had no such line, close the issue with a
+   comment naming the PR. Setting a card to Done also closes its issue, so set
+   Done by hand only to restore a closed issue's card after linking a PR.
 4. **If work stops before a PR:** unassign yourself and set the card back to
    Ready or Backlog.
 
