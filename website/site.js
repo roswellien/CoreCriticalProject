@@ -19,9 +19,9 @@ document.addEventListener('click', event => {
 });
 document.querySelectorAll('.primary-nav a').forEach(link => link.addEventListener('click', () => closeMenu()));
 window.matchMedia('(min-width: 761px)').addEventListener('change', event => { if (event.matches) closeMenu(); });
-const activePage = window.location.pathname.split('/').pop();
+const activePage = (window.location.pathname.split('/').pop() || 'index').replace(/\.html$/, '');
 document.querySelectorAll('.primary-nav a').forEach(link => {
-  if (link.getAttribute('href') === activePage) link.setAttribute('aria-current', 'page');
+  if (link.getAttribute('href')?.replace(/\.html$/, '') === activePage) link.setAttribute('aria-current', 'page');
 });
 const projectKey = new URLSearchParams(window.location.search).get('id') || 'mw3';
 if (document.body.hasAttribute('data-project-page')) {
