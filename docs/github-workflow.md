@@ -211,6 +211,14 @@ the applicable playtest path before publishing the requested release. Preserve
 historical artifacts and compatibility URLs. Optional pack publication still
 obeys the distribution policy; large local assets do not belong in a PR.
 
+Native host releases use the maintained [host-only build](../tools/m4-crt-heap-carry/HOST_BUILD.md)
+from the merged release checkout. Build `entry_commandline.exe` directly from
+the committed `host/` sources with `build_host.ps1 -Release`; retain its complete
+source/dependency receipt in the staged runtime metadata and compare fingerprints
+before publication. The existing local `MW3Translated.dll` remains unchanged
+for host-only fixes. Private patched host folders, saved object lists and an
+unrecorded `apply_*.py` sequence are not release build inputs.
+
 For an urgent repair, use the same feature/fix PR and release PR route. Any
 different route requires an explicit owner instruction for that specific case;
 agents must not invent a direct-push exception.

@@ -1,5 +1,11 @@
 # Integrated native MW3 host (retail entry route)
 
+For the maintained host-only build introduced for issue #25, use
+[HOST_BUILD.md](HOST_BUILD.md) and `build_host.ps1`. The historical research
+instructions and dated execution observations below remain preserved. New host
+fixes compile the complete committed `host/` source against an existing local
+translated DLL, without replaying the historical patch/lift build chain.
+
 Current status, 2026-10-13: this experimental x64 host has executed the live
 animated main menu, Vulkan-rendered Training 1 with the game HUD, startup and
 walking, and normal Quit -> confirm shutdown with exit code 0. The intro's
