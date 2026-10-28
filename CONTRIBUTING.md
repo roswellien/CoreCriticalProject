@@ -138,18 +138,23 @@ created automatically by this bootstrap.
 
 ## Definition of done
 
-A PR is ready to leave draft when:
+Open every PR as a draft. It is ready to leave draft when:
 
 - It lists each acceptance criterion of its issue and where the change meets
-  it, or says that it doesn't.
-- The build, CTest, `format-check` and `python tools/style/check_style.py`
-  pass locally (run `check_style.py --fix` first), or the PR names any failure
-  that already exists on `develop`.
+  it, or says that it doesn't (not for release or sync PRs).
+- For code changes, the build, CTest and `format-check` pass locally, and the
+  `style` check passes in CI. That check runs `python tools/style/check_style.py`,
+  which also runs locally once its tools from
+  [tools/style/README.md](tools/style/README.md) are installed. Fix C++ layout
+  with the `format` CMake target, and other languages with
+  `check_style.py --fix` once they are switched on in its `ENFORCED` list.
+  Documentation-only changes need link, diff and evidence checks instead.
+  Either way, the PR names any failure that already exists on `develop`.
 - Its tests follow [Tests](#tests).
 - A change a player or modder would notice has been run in the real program
   (the launcher, or the game up to the affected screen), with a log line or
   screenshot in the PR. When that isn't possible, the PR says so and a
-  `needs-triage` issue titled "Playtest: <what to check>" is filed for it.
+  `needs-triage` issue titled "Playtest <what to check>" is filed for it.
   Documentation-only changes don't need a run.
 - Someone who didn't write the change (a fresh agent session or another person)
   has reviewed it against its issue and these rules, and each finding is fixed
