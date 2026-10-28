@@ -70,7 +70,7 @@ for its dated research users. The wrapper selects `MW34_HOST_ONLY=ON`, whose
 `host-source-manifest.json` records every canonical file, its size, SHA-256,
 classification and decision. `host-dependencies.json` pins consumed external
 headers. The owner approved committing the reviewed interoperability metadata
-on October 27, 2026; see [the scoped distribution decision](../../../docs/legal.md).
+on October 27, 2026; see [the scoped distribution decision](../../docs/legal.md).
 
 | File family | Decision and provenance |
 | --- | --- |
@@ -80,6 +80,7 @@ on October 27, 2026; see [the scoped distribution decision](../../../docs/legal.
 | `override_*roster*.inc`, `override_arm_damage_plans.inc`, `override_bushwacker_lod1.inc` | Commit reviewed mesh-name/count/attachment lookup metadata. Preserve the shipped snapshot; the prior ad hoc authoring recipe is not a build dependency |
 | `c1_material_fixtures.inc` through `c4_material_fixtures.inc`, `t1_material_fixtures.inc` | Commit reviewed material-name/hash and authored lighting/UV-region metadata; no texture pixels |
 | `spec.hpp` | Commit reviewed admission range/size/hash metadata previously generated into an ignored report directory; no original instruction bytes |
+| `host.def`, `translated.def`, `translated.lib` | Regenerate locally from the supplied translated DLL's symbol metadata using the committed builder and pinned LLVM tools; keep build outputs outside Git |
 | `body_dispatch.hpp` | Commit authored dispatch classification; historical generator `tools/remaster-launcher/apply_body_dispatch.py` |
 | Authored GLSL and compiled `*_vert.h` / `*_frag.h` | Commit matching source and compiled shader arrays. The arrays are compiled project shaders. Existing shader scripts remain authoring tools, not an ordered host-build prerequisite |
 | `audio/local_cd_audio.hpp`, `graphics/menu_version.hpp`, `memory/guest_memory.hpp` | Commit and recursively fingerprint these previously omitted nested host dependencies |
