@@ -66,13 +66,23 @@ def check(root: Path, tracked_paths: list[str]) -> list[Finding]:
     if not agents_file.is_file():
         return [Finding("error", "AGENTS.md is missing; it holds every agent rule.")]
 
-    tracked = _TrackedTree(tracked_paths)
+    tracked = _TrackedTree(tracked_paths, root)
     findings: list[Finding] = []
     for name in AGENT_FILES:
         instruction_file = root / name
         if instruction_file.is_file():
             text = instruction_file.read_text(encoding="utf-8")
             findings += _check_named_paths(name, text, tracked)
+    claude_file = root / "CLAUDE.md"
+    if claude_file.is_file():
+        claude_imports = CLAUDE_IMPORT.findall(claude_file.read_text(encoding="utf-8"))
+        if "AGENTS.md" not in claude_imports:
+            findings.append(
+                Finding(
+                    "error",
+                    "CLAUDE.md doesn't import @AGENTS.md, so Claude Code misses every rule.",
+                )
+            )
     findings += _check_size(agents_file.read_text(encoding="utf-8"))
     return findings
 
@@ -104,7 +114,8 @@ def tracked_paths_from_git(root: Path) -> list[str]:
 class _TrackedTree:
     """Answers whether a path names a tracked file or a folder that holds one."""
 
-    def __init__(self, tracked_paths: list[str]) -> None:
+    def __init__(self, tracked_paths: list[str], root: Path) -> None:
+        self.root = root
         self.files = set(tracked_paths)
         self.folders: set[str] = set()
         for path in tracked_paths:
@@ -116,12 +127,33 @@ class _TrackedTree:
     def contains(self, path: str) -> bool:
         return path in self.files or path in self.folders
 
+    def ignores(self, path: str) -> bool:
+        """Return whether .gitignore covers `path`, such as a local `build/` folder.
+
+        Agent files may name a folder that is deliberately never committed. Any git
+        failure, such as a folder that isn't a repository, counts as not ignored.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "check-ignore", "-q", "--no-index", path],
+                cwd=self.root,
+                capture_output=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False
+        return result.returncode == 0
+
 
 def _check_named_paths(name: str, text: str, tracked: _TrackedTree) -> list[Finding]:
     findings = []
     for token in BACKTICKED_TOKEN.findall(text):
         path = _path_in_token(token, tracked)
-        if path is not None and not tracked.contains(path):
+        if path is None or tracked.contains(path):
+            continue
+        # A "build/" ignore rule matches only a name known to be a folder, so keep the slash.
+        named_as_folder = token.split("#", 1)[0].endswith("/")
+        if not tracked.ignores(f"{path}/" if named_as_folder else path):
             findings.append(Finding("error", f"{name} names `{token}`, which isn't tracked."))
     for path in CLAUDE_IMPORT.findall(text):
         if not tracked.contains(path):

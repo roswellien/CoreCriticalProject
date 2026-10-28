@@ -1,6 +1,7 @@
 """Checks for tools/agents/check_agent_files.py, the agent instruction file check."""
 
 import importlib.util
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -79,6 +80,23 @@ class PathTests(FixtureTree):
         self.write("AGENTS.md", GOOD_AGENTS.replace("`CODE_STYLE.md`", "`toolz/style/`"))
         self.assertEqual(
             messages(self.check()), ["AGENTS.md names `toolz/style/`, which isn't tracked."]
+        )
+
+    def test_ignored_folders_pass_and_untracked_ones_still_fail(self):
+        # check-ignore needs a repository, so this fixture is one.
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        self.write(".gitignore", "build/\nlocal/\n")
+        named = "`build/`, `local/` and `toolz/style/`"
+        self.write("AGENTS.md", GOOD_AGENTS.replace("`CODE_STYLE.md`", named))
+        self.assertEqual(
+            messages(self.check()), ["AGENTS.md names `toolz/style/`, which isn't tracked."]
+        )
+
+    def test_claude_file_without_the_agents_import_is_an_error(self):
+        self.write("CLAUDE.md", GOOD_CLAUDE.replace("@AGENTS.md\n", "See AGENTS.md.\n"))
+        self.assertEqual(
+            messages(self.check()),
+            ["CLAUDE.md doesn't import @AGENTS.md, so Claude Code misses every rule."],
         )
 
     def test_copilot_file_is_checked(self):
