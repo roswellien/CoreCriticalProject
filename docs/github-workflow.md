@@ -203,6 +203,12 @@ update naming, signing, original-file verification and rollback requirements
 continue to apply. Development previews require an explicit request and a clear
 development label.
 
+Follow the repository-only [launcher and website release checklist](launcher-and-website-release.md)
+for launcher inputs, packaging, signing, install/update validation, R2 upload,
+signed feed promotion and Cloudflare Pages deployment. It names the maintainer-
+supplied credentials and the externally generated runtime input without storing
+them in Git.
+
 Include release/version edits and release notes in reviewed source changes
 before the release build; do not silently modify source or version values after
 checking out the release commit. Record the merged SHA, relevant build/tool

@@ -1,0 +1,156 @@
+[
+  {
+    "slug": "madcat",
+    "name": "Mad Cat",
+    "alias": "Timber Wolf",
+    "focus": "The familiar twin-rack silhouette.",
+    "profile": "Twin shoulder missile racks, a rounded central cockpit, and reverse-jointed legs give the Mad Cat its unmistakable outline. The orbit moves around that silhouette to show the relationship between its torso, arms, and leg assemblies.",
+    "project": "This preview uses the updated attachment geometry, upgraded armor textures, and normal maps. Walking and firing remain driven by the original game.",
+    "location": "Grasslands",
+    "lighting": "Sunrise",
+    "duration": 12
+  },
+  {
+    "slug": "bushwacker",
+    "name": "Bushwacker",
+    "alias": "",
+    "focus": "Low-slung armor. Forward fire.",
+    "profile": "The Bushwacker’s low cockpit and broad, asymmetric torso give it a very different profile from the taller machines in the roster. Its arms and weapon housings frame a compact central body.",
+    "project": "The night preview follows the upgraded model while green laser fire lights the armor and nearby ground. It shows the experimental local weapon lighting in motion.",
+    "location": "Campaign Operation 1 Mission 3",
+    "lighting": "Night",
+    "duration": 18
+  },
+  {
+    "slug": "shadowcat",
+    "name": "Shadow Cat",
+    "alias": "",
+    "focus": "A compact frame in the morning light.",
+    "profile": "The Shadow Cat pairs a compact upper body with long, articulated legs. Its separated arm assemblies and low central cockpit read clearly as the camera travels from a frontal view toward the side.",
+    "project": "This sunrise capture shows the upgraded model and materials during original-game walking and firing. The changing view makes the armor surfaces and joint movement easier to inspect.",
+    "location": "Grasslands",
+    "lighting": "Sunrise",
+    "duration": 12
+  },
+  {
+    "slug": "thor",
+    "name": "Thor",
+    "alias": "Summoner",
+    "focus": "A towering silhouette after dark.",
+    "profile": "The Thor’s tall torso, offset shoulder equipment, and articulated arms give it a strongly asymmetric silhouette. Its broad stance and exposed lower-body joints are prominent from the three-quarter view.",
+    "project": "The moonlit Rolling Hills capture shows the upgraded model walking and firing. Brief weapon flashes pick out nearby surfaces against the darker terrain.",
+    "location": "Rolling Hills",
+    "lighting": "Night",
+    "duration": 12
+  },
+  {
+    "slug": "vulture",
+    "name": "Vulture",
+    "alias": "Mad Dog",
+    "focus": "Shoulder racks above a narrow frame.",
+    "profile": "The Vulture’s elevated missile racks dominate a narrow torso and reverse-jointed legs. Long arm assemblies sit below the racks, leaving a recognizable open space around the central cockpit.",
+    "project": "This capture uses the corrected attachment geometry and matching upgraded textures and normal maps. The walking camera arc reveals the model from the front and side in the Gorge.",
+    "location": "Gorge",
+    "lighting": "Sunrise",
+    "duration": 12
+  },
+  {
+    "slug": "strider",
+    "name": "Strider",
+    "alias": "",
+    "focus": "Original geometry, given more detail.",
+    "profile": "The Strider’s compact body, angular armor, and long legs make it a distinct part of the roster. The orbit gives a close view of its panel shapes, joint spacing, and original-game gait.",
+    "project": "Core Critical’s Strider preview builds on the original MW3 model with added geometric detail and revised materials. It follows the original animation controls rather than introducing an independent walking animation.",
+    "location": "Gorge",
+    "lighting": "Sunrise",
+    "duration": 12
+  },
+  {
+    "slug": "orion",
+    "name": "Orion",
+    "alias": "",
+    "focus": "Broad shoulders and a planted stance.",
+    "profile": "The Orion has a broad, upright torso and a solid, conventional leg arrangement. The camera arc highlights the contrast between its large shoulder sections, central cockpit, and separate arm-mounted equipment.",
+    "project": "This Big Lake capture shows the upgraded model with its corrected arm alignment. Warm sunset light moves across the armor as the original walking and firing controls run.",
+    "location": "Big Lake",
+    "lighting": "Sunset",
+    "duration": 12
+  },
+  {
+    "slug": "supernova",
+    "name": "Supernova",
+    "alias": "",
+    "focus": "A wide frame in the sunrise.",
+    "profile": "The Supernova’s broad upper body and substantial arm assemblies give it a heavy, balanced outline. Its separated weapon housings are especially visible as the camera approaches the side.",
+    "project": "The Grasslands preview shows the upgraded geometry, worn armor surfaces, and normal-mapped detail under sunrise lighting. The footage follows live original-game movement and firing.",
+    "location": "Grasslands",
+    "lighting": "Sunrise",
+    "duration": 12
+  },
+  {
+    "slug": "cauldron",
+    "name": "Cauldron-Born",
+    "alias": "Ebon Jaguar",
+    "focus": "Angular armor, from front to flank.",
+    "profile": "The Cauldron-Born combines an angular central body with distinct arm and shoulder assemblies. Its compact torso and reverse-jointed legs create a sharply defined side profile.",
+    "project": "This Gorge camera arc shows the upgraded model walking and firing in the development build. Sunrise lighting reveals the armor shapes and material detail from several angles.",
+    "location": "Gorge",
+    "lighting": "Sunrise",
+    "duration": 12
+  },
+  {
+    "slug": "sunder",
+    "name": "Sunder",
+    "alias": "",
+    "focus": "A broad torso built around its weapons.",
+    "profile": "The Sunder’s wide torso and large arm assemblies create a substantial frontal silhouette. Its upright body and broad stance give the orbit plenty of armor surfaces to reveal.",
+    "project": "The Big Lake sunset preview shows the upgraded model and materials responding to warm directional light. Original-game animation continues to drive its walking and firing.",
+    "location": "Big Lake",
+    "lighting": "Sunset",
+    "duration": 12
+  },
+  {
+    "slug": "champion",
+    "name": "Champion",
+    "alias": "",
+    "focus": "Swept shoulders in the Gorge.",
+    "profile": "The Champion’s swept shoulder shapes and low, broad upper body stand apart from the more upright machines. Its long legs and compact central frame are most apparent in the side view.",
+    "project": "The sunrise orbit follows the upgraded model through the Gorge. It highlights the maintained-but-used armor treatment, normal-mapped surface detail, and original walking motion.",
+    "location": "Gorge",
+    "lighting": "Sunrise",
+    "duration": 12
+  },
+  {
+    "slug": "annihilator",
+    "name": "Annihilator",
+    "alias": "",
+    "focus": "An unmistakably tall profile.",
+    "profile": "The Annihilator’s elevated cockpit and towering torso make it one of the most distinctive shapes in the gallery. Large arm assemblies flank the body above long, heavy-looking legs.",
+    "project": "This Rolling Hills sunset capture shows the upgraded model with its corrected arm alignment. The orbit reveals its scale and joint motion while original-game movement and weapons remain in control.",
+    "location": "Rolling Hills",
+    "lighting": "Sunset",
+    "duration": 12
+  },
+  {
+    "slug": "puma",
+    "name": "Puma",
+    "alias": "Adder",
+    "focus": "Blue weapon light on a compact chassis.",
+    "profile": "The Puma’s compact central body sits between large arm-mounted weapon housings. The low upper silhouette and articulated legs give the camera a clear view of both the cockpit and its paired arms.",
+    "project": "The Grasslands night capture shows walking and PPC fire. Blue weapon illumination spreads across the model and surrounding terrain, demonstrating local lighting currently in development.",
+    "location": "Grasslands",
+    "lighting": "Night",
+    "duration": 17
+  },
+  {
+    "slug": "blackhawk",
+    "name": "Black Hawk",
+    "alias": "Nova",
+    "focus": "Paired arms, lit by laser fire.",
+    "profile": "The Black Hawk’s substantial arm assemblies flank a compact torso, creating a broad, balanced frontal view. Its articulated legs and central cockpit become clearer as the camera turns toward the side.",
+    "project": "This night orbit on Rolling Hills shows the upgraded model walking and firing green lasers. Local illumination reveals armor detail between the darker moonlit views.",
+    "location": "Rolling Hills",
+    "lighting": "Night",
+    "duration": 12
+  }
+]
