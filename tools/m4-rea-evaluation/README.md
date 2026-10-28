@@ -10,4 +10,4 @@ The game pilot establishes table-entry availability and representative export be
 
 Keep each completed pilot directory frozen. Keep its Ghidra project for reuse; new exports and refinements belong in a fresh output receipt. The measured REA neutral snapshot retained evidence but did not eliminate cold Ghidra initialization. Related REA requests should share one open target.
 
-See [evaluation](../../docs/m4-tooling-evaluation.md) and [execution plan r4](../../docs/m4-execution-plan-r4.md) for the adopted division of work. Exact instruction translation and original/native validation remain in the existing Remill/LLVM pipeline.
+See [evaluation](../../docs/archive/m4-tooling-evaluation.md) and [execution plan r4](../../docs/archive/m4-execution-plan-r4.md) for the adopted division of work. Exact instruction translation and original/native validation remain in the existing Remill/LLVM pipeline.

@@ -5,7 +5,7 @@ decodes literal game/provider instructions, and compares the isolated native
 startup chain through the actual `GetModuleFileNameA` import attempt. It does
 not use native AFTER state as an expected seed or import the author's model.
 The final [acceptance receipt](../../reports/m4-crt-mainargs/root-acceptance-r1/report.json)
-passes; the [review note](../../docs/m4-crt-entry-mainargs-review.md) describes
+passes; the [review note](../../docs/archive/m4-crt-entry-mainargs-review.md) describes
 the admitted boundary and remaining services.
 
 The real route is game CALL `0x5AC468` → `__getmainargs` `0x7800BA5E` → ordinary

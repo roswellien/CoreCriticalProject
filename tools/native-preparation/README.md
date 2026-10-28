@@ -65,7 +65,7 @@ authored host, excluding original images and the compiled translated game DLL.
 The signed installer update/reuse integration passes. A fresh packaged first
 install is running and remains unproven until final validation/activation.
 Performance, production trust/feed, distribution review and clean-Windows tests
-remain open. See the [October 22 handoff](../../docs/source-installer-integration-2026-10-22.md).
+remain open. See the [October 22 handoff](../../docs/archive/source-installer-integration-2026-10-22.md).
 
 Evidence and continuation details:
-[native generation preparation](../../docs/native-generation-preparation-2026-10-21.md).
+[native generation preparation](../../docs/archive/native-generation-preparation-2026-10-21.md).

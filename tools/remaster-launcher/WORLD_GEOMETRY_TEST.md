@@ -1,7 +1,7 @@
 # Original-world geometry development test
 
 This is a bounded original static-mesh projection bridge, not a production
-renderer setting. Read the [contract/results](../../docs/gpu-world-geometry-prototype-2026-10-15.md)
+renderer setting. Read the [contract/results](../../docs/archive/gpu-world-geometry-prototype-2026-10-15.md)
 and [development plan](../../docs/gpu-geometry-development-plan.md).
 
 Prerequisites: a fresh frozen host snapshot based on the stage1 geometry-profile
@@ -85,7 +85,7 @@ The same private game harness now lives in `local/gpu-world-direct-r1/run-review
 use fresh run names and the direct-r2 executable for new runs. `benchmark.ps1`
 retains four alternating search/direct runs; `validation.json` records the results
 and the first divergent disabled control rather than silently discarding it.
-See [direct-binding results and limits](../../docs/gpu-world-direct-binding-2026-10-15.md).
+See [direct-binding results and limits](../../docs/archive/gpu-world-direct-binding-2026-10-15.md).
 
 ## Cached triangles and fast binding
 
@@ -101,4 +101,4 @@ new snapshot. Retained private-save runs use
 `local/gpu-world-fast-r1/run-review.ps1 -GpuWorld -FastBinding` and fresh names.
 Omit `-FastBinding` to exercise the cached-triangle audited control; omit
 `-GpuWorld` for the disabled control. Use separate capture and timing runs.
-See [contract and results](../../docs/gpu-world-fast-binding-2026-10-15.md).
+See [contract and results](../../docs/archive/gpu-world-fast-binding-2026-10-15.md).

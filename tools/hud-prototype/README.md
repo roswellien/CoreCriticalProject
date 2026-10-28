@@ -37,5 +37,5 @@ receipt. Existing output PNGs/receipts are rejected. Skia's Arial rasterization
 is distinct from original Windows GDI; neither these checks nor the HTML's
 layout checks establish browser interaction or game integration correctness.
 
-The [HUD investigation](../../docs/mw3-hud-fidelity-investigation.md) records the
+The [HUD investigation](../../docs/archive/mw3-hud-fidelity-investigation.md) records the
 original text-cache path and required native integration boundaries.

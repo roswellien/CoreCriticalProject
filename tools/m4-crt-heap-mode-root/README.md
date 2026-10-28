@@ -8,4 +8,4 @@ Native executors are the delegated author and independent reviewer. Root perform
 
 The lower page is a declared owned research input; TIB and Policy limits are preserved. Probe RET is complete. `GetVersionExA`, selector RET, heap-initializer RET, locale, parser and full M4 are incomplete. The selected initializer count remains 27/144.
 
-See [the technical review](../../docs/m4-crt-heap-mode-review.md) and [progress](../../docs/m4-progress-heap-mode.md).
+See [the technical review](../../docs/archive/m4-crt-heap-mode-review.md) and [progress](../../docs/archive/m4-progress-heap-mode.md).

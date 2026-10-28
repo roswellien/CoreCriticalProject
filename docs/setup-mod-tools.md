@@ -27,7 +27,7 @@ documentation work. Extract it into a writable folder such as
 From the extracted folder, open a terminal and run:
 
 ```powershell
-& ".\Setup Mod Tools.cmd" --game-root "C:\Games\MechWarrior 3" --mech3ax-dir "C:\Tools\mech3ax-v0.7.0-rc3"
+& ".\launchers\Setup Mod Tools.cmd" --game-root "C:\Games\MechWarrior 3" --mech3ax-dir "C:\Tools\mech3ax-v0.7.0-rc3"
 ```
 
 Use the actual folders on your machine. Setup creates only a dedicated
@@ -40,10 +40,10 @@ archives and working developer game/launcher profiles are untouched.
 Check an existing setup without installing or changing settings:
 
 ```powershell
-& ".\Setup Mod Tools.cmd" --check
+& ".\launchers\Setup Mod Tools.cmd" --check
 ```
 
-Launch `Play MW3 - Mission Editor.cmd`. The configured game folder is used from
+Launch `launchers\Play MW3 - Mission Editor.cmd`. The configured game folder is used from
 any working directory; `--game-root` can override it for a session. The existing
 operation/mission options, for example `--operation c1 --mission c1m1`, remain
 available. Extraction caches live in `local/mod-tools/cache` under a folder for
@@ -52,7 +52,7 @@ the selected installation; desktop exports go to
 
 ## Visual Map Studio limitations
 
-`Play MW3 - Visual Map Studio.cmd` starts a loopback-only HTTP preview and opens
+`launchers\Play MW3 - Visual Map Studio.cmd` starts a loopback-only HTTP preview and opens
 the local address in a browser. Its Three.js renderer and license are included.
 Real MW3 preview geometry is generated locally from your own archives and is
 intentionally absent from the package. An empty/missing preview asset catalog

@@ -5,9 +5,9 @@ Updated **2026-10-20** from the user's replacement campaign plan. Status:
 and supported environment shading wired in R7**. Configuration/lifecycle checks
 cover all 20 identities; bounded native checks cover Operation 1 Missions 1 and 3.
 Full campaign visual review and the remaining weather effects are still open;
-see the [repair evidence and limits](world-lighting-repair-2026-10-20.md).
+see the [repair evidence and limits](archive/world-lighting-repair-2026-10-20.md).
 This revision supersedes the previous twelve-entry schedule.
-The [2026-10-18 plan](campaign-lighting-progression-plan-2026-10-18-superseded.md)
+The [2026-10-18 plan](archive/campaign-lighting-progression-plan-2026-10-18-superseded.md)
 is retained as a historical reference; its conflicting timings and environments
 no longer govern implementation.
 

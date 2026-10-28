@@ -8,4 +8,4 @@ The resulting boundary is `0x78001843`, before its TEST or argument cleanup. The
 
 `accept.py` binds the source, compilation, execution, independent hardware review and independent whole-capture audit to exact physical hashes, worker requests, completed stages and strict archives. Earlier refusal receipts are history without passing credit. Current archives are not expanded into a flat evidence tree.
 
-See [progress](../../docs/m4-progress-heap-return.md) and [technical review](../../docs/m4-crt-heap-return-review.md).
+See [progress](../../docs/archive/m4-progress-heap-return.md) and [technical review](../../docs/archive/m4-crt-heap-return-review.md).

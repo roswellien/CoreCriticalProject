@@ -10,19 +10,21 @@ before changing this boundary.
 
 | Component | Start here | Responsibility and review focus |
 | --- | --- | --- |
-| GUI launcher | `tools/mw3-remaster-launcher/Core/GameRunner.cs`, `Core/D7VkRunner.cs`, `MainWindow.xaml.cs` | Validate installation, select Python, prepare a session, apply settings, capture errors; separate UI from launch/profile decisions |
+| GUI launcher | `tools/mw3-remaster-launcher/Core/GameRunner.cs`, `Core/D7VkRunner.cs`, `MainWindow.xaml.cs` | Validate installation, select Python, prepare a session, apply settings, capture errors; separate UI from launch/profile decisions ([executable naming](core-critical-executable-naming.md), [stock baseline and packs](stock-baseline-and-community-packs-plan.md), [pack capabilities](content-pack-capabilities.md)) |
 | Original-game compatibility launcher | `mw3_launcher.py` | Own the isolated D7VK profile, staged bank links, temporary current-user registry choices and original-process handles; this is separate from native recompilation |
-| Native launch preparation | `tools/remaster-launcher/play_remaster.py`, `play_native.ps1` | Verify pinned host and registrations, prepare local data and start the host; make path ownership, schemas and failures understandable |
-| Native application host | `tools/m4-crt-heap-carry/composition.cpp`, `mfc_stage.hpp` | Connect translated entry, initialization, ABI, callbacks and services; distinguish authored adapters from local generated game bodies |
-| Enhanced renderer | `tools/remaster-launcher/native-overrides/`, `runtime/graphics/` | Surface/command lifetime, GPU scene transport, HUD, materials, lighting and capture; document format and state contracts at their boundaries |
+| Native launch preparation | `tools/remaster-launcher/play_remaster.py`, `play_native.ps1` | Verify pinned host and registrations, prepare local data and start the host; make path ownership, schemas and failures understandable ([additional mech packs](additional-mech-packs.md), [authoring additional mechs](authoring-additional-mechs.md)) |
+| Native application host | `tools/m4-crt-heap-carry/composition.cpp`, `mfc_stage.hpp` | Connect translated entry, initialization, ABI, callbacks and services; distinguish authored adapters from local generated game bodies ([MP4 cinematics plan](mp4-cinematic-playback-plan-2026-10-27.md)) |
+| Enhanced renderer | `tools/remaster-launcher/native-overrides/`, `runtime/graphics/` | Surface/command lifetime, GPU scene transport, HUD, materials, lighting and capture; document format and state contracts at their boundaries ([GPU geometry plan](gpu-geometry-development-plan.md), [campaign lighting plan](campaign-lighting-progression-plan.md)) |
 | Shared services | `runtime/memory/`, `runtime/mfc/`, `runtime/audio/` | Checked guest memory, receiver ownership and local music; retain cleanup and error behavior |
 | Desktop Mod Editor | `games/mw3/mod-tools/run_editor.py`, `editor/core/`, `editor/ui/` | Read original archives, represent edit deltas, undo/redo and local export; keep source installation read-only |
 | Browser Map Studio | `games/mw3/mod-tools/run_studio.py`, `editor/web/static/js/studio.js` | Loopback preview and prototype pack APIs; validate request input and separate preview from accepted gameplay |
-| Binary analysis and lifting | `tools/analysis/`, `tools/binary-validator/`, `tools/lifting/` | Exact identity, PE parsing and pinned offline compilation; generated translations remain local |
+| Binary analysis and lifting | `tools/analysis/`, `tools/binary-validator/`, `tools/lifting/` | Exact identity ([supported binaries](supported-binaries.md)), PE parsing ([reverse-engineering workflow](reverse-engineering.md)) and pinned offline compilation ([recompilation research](recompilation-research.md)); generated translations remain local |
 | Authored regression fixtures | `tests/`, `tools/mw3-remaster-launcher-tests/`, focused `test_*` files | Exercise contracts and rejection paths without proprietary data where possible |
 
 `tools/m4-*/` and `tools/x87-*/` also contain dated source models, comparers and
-acceptance work. Their names and source hashes may be pinned by evidence. A
+acceptance work. Their names and source hashes may be pinned by evidence. Dated
+session summaries, handoffs, superseded plan revisions and one-off investigations
+live in `docs/archive/`. A
 historical interpreter used to measure a contract is not a production fallback.
 Do not delete, rename or format these files as general cleanup. Extract reusable
 active code into reviewed modules without silently replacing frozen inputs.
@@ -83,7 +85,7 @@ For each reviewed directory record the inspected revision/files, concrete issues
 changes, test results and remaining limits. Inventory/pattern scans do not count
 as a line-by-line review. The October 21 initial audit found portable setup gaps,
 an inconsistent binary identity, prototype Studio input risks and a CI compile
-failure. The [code/provenance review](code-provenance-review-2026-10-21.md) records
+failure. The [code/provenance review](archive/code-provenance-review-2026-10-21.md) records
 the subsequent reproduced defects, provenance dispositions and remaining coverage.
 Full source review is still open in [release readiness](public-release-readiness.md).
 

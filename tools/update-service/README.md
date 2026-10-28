@@ -73,4 +73,4 @@ automatic catalog-renewal job has been created.
 Fixture checks: `dotnet run --project tools/mw3-remaster-launcher-tests/LauncherChecks.csproj
  -c Release -- --online-updates-only` and `node --test tools/update-service/worker.test.mjs`.
 Real release checks and scope are recorded in
-[the 1.0.38 release record](../../docs/playtest-release-1.0.38-2026-10-25.md).
+[the 1.0.38 release record](../../docs/archive/playtest-release-1.0.38-2026-10-25.md).

@@ -61,14 +61,14 @@ existing evidence. No commits, new runtime dependency, interpreter fallback,
 gameplay timing change or acceptance-count increase is part of this plan.
 Performance conclusions must name the route, hardware, build and measured scope.
 
-Context: [lighting/shadows investigation](dynamic-lighting-shadows-investigation-2026-10-15.md).
+Context: [lighting/shadows investigation](archive/dynamic-lighting-shadows-investigation-2026-10-15.md).
 
-Stage1 completed2026-10-15: [bounded live comparison results](gpu-geometry-test-results-2026-10-15.md).
+Stage1 completed2026-10-15: [bounded live comparison results](archive/gpu-geometry-test-results-2026-10-15.md).
 The initial model comparison averages25% less presentation time on the GPU
 control; Play already uses this path. Stage2 world geometry recovery is next.
 
 Stage2 initial prototype completed2026-10-15:
-[original-world GPU geometry bridge](gpu-world-geometry-prototype-2026-10-15.md).
+[original-world GPU geometry bridge](archive/gpu-world-geometry-prototype-2026-10-15.md).
 A bounded scenery subset now uses cached raw mesh data and GPU projection with
 matching original colors/fog. All1400 original records match; lifetime eviction,
 broader classification and normal/tangent validation remain open before production.
@@ -76,21 +76,21 @@ Next implementation work removes prototype matching and establishes direct
 polygon/instance ownership before bypassing proven redundant CPU render work.
 
 Stage3 direct-binding step completed2026-10-15:
-[direct polygon binding and guarded metadata cache](gpu-world-direct-binding-2026-10-15.md).
+[direct polygon binding and guarded metadata cache](archive/gpu-world-direct-binding-2026-10-15.md).
 Matched-route mean frame time improves4.72% against the search prototype, with
 unchanged comparison captures. Original CPU projection remains because clipping
 and material callbacks consume its output. One divergent disabled-control run
 is retained; two unchanged repeats match. No production/acceptance promotion.
 
 Stage3 bridge-cost follow-up:
-[cached world triangles and bounded audit removal](gpu-world-fast-binding-2026-10-15.md).
+[cached world triangles and bounded audit removal](archive/gpu-world-fast-binding-2026-10-15.md).
 Retain triangle lists per source revision and omit the bridge's repeated CPU
 projection only for proven unchanged textured polygons. Original CPU producers
 still execute. Their material callback can queue copies of projected TL vertices;
 that consumer must be owned before the original perspective loop can be removed.
 
 Stage3 original-producer experiment:
-[first CPU perspective bypass test](gpu-projection-bypass-test-2026-10-15.md).
+[first CPU perspective bypass test](archive/gpu-projection-bypass-test-2026-10-15.md).
 A bounded lit-scenery path now conditionally omits the first n-1 original
 projection iterations. The 550-frame pair matches; the longer test matches
 1,254 completed frames and four captures, then stops on a scratch-read alert.
@@ -100,7 +100,7 @@ writes. Expand observation before promoting the bypass or claiming a speedup.
 Both playable launchers remain unchanged.
 
 Performance follow-up:
-[alpha regression isolation](gpu-alpha-regression-investigation-2026-10-15.md)
+[alpha regression isolation](archive/gpu-alpha-regression-investigation-2026-10-15.md)
 finds that the disabled projection experiment still carried a slower CPU
 producer object. Restoring its production optimization recipe recovers the
 normal launcher's approximate137FPS with GPU scenery retained. Keep original
@@ -112,7 +112,7 @@ unchanged; the corrected alpha is approximately level with normal performance
 on this bounded route, not a newly established GPU geometry FPS gain.
 
 The next CPU-removal safety step is tracked in
-[the observed projection test](gpu-projection-watch-test-2026-10-15.md).
+[the observed projection test](archive/gpu-projection-watch-test-2026-10-15.md).
 The optimized original-loop and host observer fixtures pass, including explicit
 State/token arguments under the original noalias contract. All 37,201 watched
 objects now compile/link and the disabled control matches 1,000 original draws
@@ -122,7 +122,7 @@ but fails gameplay image equivalence and changes original draw counts from
 frame 489. Resolve this regression before timing or promotion; neither playable
 launcher changes and no new speedup is established.
 
-The [differences investigation](gpu-projection-differences-investigation-2026-10-15.md)
+The [differences investigation](archive/gpu-projection-differences-investigation-2026-10-15.md)
 finds that the failed run already differs before the first bypass admission.
 Subsequent 1,800-frame repeats match all semantic records and six captures, but
 the exact earlier initialization/movement divergence remains unresolved. Expanded

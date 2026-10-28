@@ -150,7 +150,7 @@ enable optional packs or reset user graphics choices. Pack compatibility follows
 implemented capability/format versions rather than each native executable hash.
 
 The first stock-selection/graphics milestone is now implemented in
-[Core Critical 1.0.30](stock-presentation-and-first-run-setup-2026-10-24.md),
+[Core Critical 1.0.30](archive/stock-presentation-and-first-run-setup-2026-10-24.md),
 including shared first-run/Display options and independent shadow preferences.
 The linked record states the checks and limits. Finer pack component separation,
 independent environment/effects authoring and additive content registries remain

@@ -85,7 +85,7 @@ game checkpoint.
 
 | Checkpoint | Deliverable and required evidence | Present status |
 | --- | --- | --- |
-| E0: execution path audit | Source-bound map from host/guest entry through initialization, application callbacks, menu, message loop, asset loading and Training render/update. Distinguish static candidates from executed routes. Classify dependencies and select one first implementation blocker. | First map recorded in [E0 path audit](e0-application-execution-path.md): retail translated entry chosen; native execution now reaches the CRT `malloc` CALL after the connected parser; next blocker is CRT heap/provider attach state. |
+| E0: execution path audit | Source-bound map from host/guest entry through initialization, application callbacks, menu, message loop, asset loading and Training render/update. Distinguish static candidates from executed routes. Classify dependencies and select one first implementation blocker. | First map recorded in [E0 path audit](archive/e0-application-execution-path.md): retail translated entry chosen; native execution now reaches the CRT `malloc` CALL after the connected parser; next blocker is CRT heap/provider attach state. |
 | E1: integrated native host | Existing guest runtime and required window/backend services in one project-built x64 executable. Execute a justified translated application boundary; stop with exact PC/service/state if incomplete. Authored surface upload alone is backend readiness. | Open; separate runtime and replay viewer are not this host. |
 | E2: live native menu | Required initialization, archive/widget receivers and live rendering from translated producers; real input changes menu state and normal shutdown releases resources. A displayed bitmap or recorded scene does not qualify. | Open; contributes to M4 when all required M4 criteria close. |
 | E3: live native Training frame | Load Training assets and execute the game update/render path into Vulkan. Frame evidence identifies translated producers and original-comparable scene state. | Open; no replay substitution. |
@@ -95,12 +95,12 @@ game checkpoint.
 
 ## Immediate queue
 
-1. Read the [Claude work review](m4-claude-work-review-2026-10-11.md). Leave
+1. Read the [Claude work review](archive/m4-claude-work-review-2026-10-11.md). Leave
    composer PID44416 and its watcher intact. Inspect current status rather than
    trusting this dated snapshot. Do not open its active SQLite database.
 2. Perform E0 using `tools/m4-startup/`, `tools/m4-runtime/`,
    `runtime/mfc/app_receiver_state.*`, `runtime/graphics/direct_draw_creation.*`
-   and [application workahead](m4-application-workahead.md). Reuse the receiver,
+   and [application workahead](archive/m4-application-workahead.md). Reuse the receiver,
    reader, video/COM and presenter contracts; inspect actual current files.
    Document PC/call, required input state, source provenance, translated-code
    availability, service owner, first missing dependency and a narrow test.
@@ -113,10 +113,10 @@ game checkpoint.
    existing components over another standalone harness. If execution stops,
    capture one useful boundary and fix it; avoid arbitrary success stubs.
 5. Progress live Vulkan integration through the recovered surface/command path.
-   Coordinate with [current graphics work](live-native-rendering-current-work.md)
-   and reuse [video contracts](m4-video-backend-contract-r1.md),
-   [presenter review](m4-vulkan-presenter-extraction-review-r1.md) and
-   [viewer audit](m4-vulkan-viewer-reproducibility-audit-r1.md). Other writers
+   Coordinate with [current graphics work](archive/live-native-rendering-current-work.md)
+   and reuse [video contracts](archive/m4-video-backend-contract-r1.md),
+   [presenter review](archive/m4-vulkan-presenter-extraction-review-r1.md) and
+   [viewer audit](archive/m4-vulkan-viewer-reproducibility-audit-r1.md). Other writers
    own current graphics edits; do not overlap without coordinating.
 
 The retained application map is static evidence, not a launch claim. It describes
@@ -184,7 +184,7 @@ developer. Original media, traces and generated game code remain local.
 
 This plan controls current strategy; [roadmap](roadmap.md) and
 [milestones](project-milestones.md) summarize it. [Architecture](architecture.md)
-retains guest ABI/FP/runtime contracts. [Plan r14](m4-execution-plan-r14.md) is
+retains guest ABI/FP/runtime contracts. [Plan r14](archive/m4-execution-plan-r14.md) is
 the detailed acceptance/probe history, not the sole implementation queue.
 Older revisions, audits and frozen receipts retain their dated scopes. Change
 documentation priorities without modifying evidence hashes or erasing failures.

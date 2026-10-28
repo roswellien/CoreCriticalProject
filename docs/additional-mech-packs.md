@@ -1,7 +1,7 @@
 # Additional mech packs
 
 Statistics and named-variant reference:
-[Marauder statistics and MW3 mapping](marauder-stats-reference-2026-10-25.md).
+[Marauder statistics and MW3 mapping](archive/marauder-stats-reference-2026-10-25.md).
 
 The intended modder workflow matches additional skin packs: author content,
 build a data-only `.mw3pack`, install it under Mods & Packs, enable it and select

@@ -41,6 +41,6 @@ Require an absolute DLL path. The fixture returns 1 on a graphics/pixel failure,
 substitute a provider after failure. Build with `-A x64` into another directory
 when evaluating an actual x64 provider; the v2.3 x32 release cannot load there.
 
-See the [evaluation](../../docs/d7vk-evaluation-r1.md) for source/binary identities,
+See the [evaluation](../../docs/archive/d7vk-evaluation-r1.md) for source/binary identities,
 retained failures and the adaptation decision. Do not copy this DLL into the
 existing game installation or system directory for this fixture.
