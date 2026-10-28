@@ -34,6 +34,13 @@ WARNING_LINES = 150
 MAX_MUST_FOLLOW_CHARACTERS = 4000
 MUST_FOLLOW_END_HEADINGS = ("## Commands and layout", "## Where to find more")
 
+# Shared skills are written in SKILL_SOURCE and copied into SKILL_COPY for Claude
+# Code by tools/agents/sync_skills.py. Only folders named with SKILL_PREFIX are
+# shared; other folders in SKILL_COPY are a contributor's own skills.
+SKILL_SOURCE = ".agents/skills"
+SKILL_COPY = ".claude/skills"
+SKILL_PREFIX = "core-critical-"
+
 # Backticks also hold branch names, version numbers and placeholders, so a token
 # only counts as a path when it ends in one of these extensions or starts with a
 # tracked top-level name. That leaves `origin/develop` and `1.0.34.mw3update` alone.

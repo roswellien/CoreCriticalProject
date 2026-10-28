@@ -1,6 +1,7 @@
-"""Checks for tools/agents/check_agent_files.py, the agent instruction file check."""
+"""Checks for the agent-file tools in tools/agents: the instruction file check and the skill copy."""
 
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -8,12 +9,14 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools/agents"
 
 
-def load_checker():
-    spec = importlib.util.spec_from_file_location(
-        "check_agent_files", ROOT / "tools/agents/check_agent_files.py"
-    )
+def load_tool(name):
+    # sync_skills imports check_agent_files as a sibling module, so the folder goes on the path.
+    if str(TOOLS) not in sys.path:
+        sys.path.insert(0, str(TOOLS))
+    spec = importlib.util.spec_from_file_location(name, TOOLS / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     # Registered before running, because dataclasses look their module up in sys.modules.
     sys.modules[spec.name] = module
@@ -21,7 +24,8 @@ def load_checker():
     return module
 
 
-checker = load_checker()
+checker = load_tool("check_agent_files")
+syncer = load_tool("sync_skills")
 
 GOOD_AGENTS = (
     "# Rules\n\nFollow `docs/guide.md` and `CODE_STYLE.md`.\n\n"
@@ -174,6 +178,126 @@ class SizeTests(FixtureTree):
     def test_commands_heading_also_ends_the_must_follow_part(self):
         text = "# Rules\n\nRule.\n\n## Commands and layout\n\n" + "y" * 5000 + "\n"
         self.assertEqual(checker.must_follow_length(text), len("# Rules\n\nRule.\n\n"))
+
+
+SKILL = "---\nname: core-critical-demo\ndescription: Demo skill.\n---\n\nSteps.\n"
+
+
+class SyncTests(FixtureTree):
+    def source(self, relative_path):
+        return self.root / ".agents/skills" / relative_path
+
+    def copy(self, relative_path):
+        return self.root / ".claude/skills" / relative_path
+
+    def write_skill(self, relative_path="core-critical-demo/SKILL.md", text=SKILL):
+        self.write(f".agents/skills/{relative_path}", text)
+
+    def make_older(self, path):
+        # A whole minute back, so file systems with coarse timestamps still order the two.
+        older = path.stat().st_mtime - 60
+        os.utime(path, (older, older))
+
+    def test_new_skill_is_added(self):
+        self.write_skill()
+        self.assertEqual(
+            syncer.sync(self.root), ["added .claude/skills/core-critical-demo/SKILL.md"]
+        )
+        self.assertEqual(self.copy("core-critical-demo/SKILL.md").read_text(), SKILL)
+
+    def test_changed_source_is_updated(self):
+        self.write_skill()
+        syncer.sync(self.root)
+        self.make_older(self.copy("core-critical-demo/SKILL.md"))
+        self.write_skill(text=SKILL + "More steps.\n")
+        self.assertEqual(
+            syncer.sync(self.root), ["updated .claude/skills/core-critical-demo/SKILL.md"]
+        )
+        self.assertEqual(
+            self.copy("core-critical-demo/SKILL.md").read_text(), SKILL + "More steps.\n"
+        )
+
+    def test_files_and_skills_gone_from_the_source_are_removed_with_their_folders(self):
+        self.write_skill()
+        self.write_skill("core-critical-demo/references/old.md", "Old.\n")
+        self.write_skill("core-critical-retired/SKILL.md")
+        syncer.sync(self.root)
+        self.source("core-critical-demo/references/old.md").unlink()
+        self.source("core-critical-demo/references").rmdir()
+        self.source("core-critical-retired/SKILL.md").unlink()
+        self.source("core-critical-retired").rmdir()
+        self.assertEqual(
+            syncer.sync(self.root),
+            [
+                "removed .claude/skills/core-critical-demo/references/old.md",
+                "removed .claude/skills/core-critical-retired/SKILL.md",
+            ],
+        )
+        self.assertFalse(self.copy("core-critical-demo/references").exists())
+        self.assertFalse(self.copy("core-critical-retired").exists())
+        self.assertTrue(self.copy("core-critical-demo/SKILL.md").exists())
+
+    def test_other_claude_files_and_unshared_skills_are_left_alone(self):
+        self.write_skill()
+        self.write(".claude/settings.json", "{}\n")
+        self.write(".claude/skills/my-own-skill/SKILL.md", "Mine.\n")
+        self.write_skill("not-shared/SKILL.md", "Skipped.\n")
+        self.assertEqual(
+            syncer.sync(self.root), ["added .claude/skills/core-critical-demo/SKILL.md"]
+        )
+        self.assertTrue((self.root / ".claude/settings.json").exists())
+        self.assertTrue(self.copy("my-own-skill/SKILL.md").exists())
+        self.assertFalse(self.copy("not-shared").exists())
+
+    def test_second_run_changes_nothing(self):
+        self.write_skill()
+        syncer.sync(self.root)
+        self.assertEqual(syncer.sync(self.root), [])
+
+    def test_copy_edited_after_its_source_stops_without_changes(self):
+        self.write_skill()
+        syncer.sync(self.root)
+        self.make_older(self.source("core-critical-demo/SKILL.md"))
+        self.write(".claude/skills/core-critical-demo/SKILL.md", "Edited copy.\n")
+        self.write_skill("core-critical-new/SKILL.md")
+        with self.assertRaisesRegex(syncer.SyncStopped, "core-critical-demo/SKILL.md changed"):
+            syncer.sync(self.root)
+        self.assertEqual(self.copy("core-critical-demo/SKILL.md").read_text(), "Edited copy.\n")
+        self.assertFalse(self.copy("core-critical-new").exists())
+
+    def test_missing_source_stops(self):
+        self.write(".claude/skills/core-critical-demo/SKILL.md", SKILL)
+        with self.assertRaisesRegex(syncer.SyncStopped, "missing"):
+            syncer.sync(self.root)
+        self.assertTrue(self.copy("core-critical-demo/SKILL.md").exists())
+
+    def test_linked_copy_folder_stops(self):
+        self.write_skill()
+        (self.root / ".claude").mkdir()
+        if not link_folder(self.root / ".agents/skills", self.copy("")):
+            self.skipTest("this platform can't create a folder link here")
+        with self.assertRaisesRegex(syncer.SyncStopped, r"\.claude/skills is a link"):
+            syncer.sync(self.root)
+
+
+def link_folder(target, link):
+    """Link `link` to the folder `target`; return False when the platform refuses."""
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return True
+    except OSError:
+        pass
+    if sys.platform != "win32":
+        return False
+    # Windows needs Developer Mode for symlinks, but any user can make a junction,
+    # which is how a contributor would most likely link the folders by hand.
+    import _winapi
+
+    try:
+        _winapi.CreateJunction(str(target), str(link))
+        return True
+    except OSError:
+        return False
 
 
 class RepositoryTests(unittest.TestCase):
