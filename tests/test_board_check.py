@@ -1,10 +1,13 @@
 """Checks for tools/github/check_board.py, the read-only project board check."""
 
+import contextlib
 import importlib.util
+import io
 import sys
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -268,6 +271,28 @@ class ParsingTests(unittest.TestCase):
             }
         )
         self.assertEqual(cards, [board.Card(issue_number=21, status="Ready", priority="P2")])
+
+
+class ExitCodeTests(unittest.TestCase):
+    def test_missing_gh_exits_2_not_1(self):
+        # Exit code 1 means "problems found", so a missing gh must not end there.
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(board.subprocess, "run", side_effect=FileNotFoundError("gh")),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertEqual(board.main([]), 2)
+        self.assertIn("gh is not installed", stderr.getvalue())
+
+    def test_failing_gh_exits_2(self):
+        failed = mock.Mock(returncode=1, stdout="", stderr="missing project scope")
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(board.subprocess, "run", return_value=failed),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertEqual(board.main([]), 2)
+        self.assertIn("missing project scope", stderr.getvalue())
 
 
 if __name__ == "__main__":

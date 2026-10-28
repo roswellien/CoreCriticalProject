@@ -223,6 +223,8 @@ def _check_pull(
     findings = []
     if pull.changed_files == 0:
         findings.append(Finding(subject, "has no changed files", "push the work, or close the PR"))
+    # Only the base-branch rule is an error there; the author only affects naming
+    # warnings, which are dropped here, so it is left empty.
     base_errors = [
         finding
         for finding in check_pr_conventions.check(pull.title, pull.head, pull.base, "")
@@ -262,9 +264,14 @@ def _parse_time(text: str | None) -> datetime | None:
 
 def _run_gh(arguments: list[str]) -> list[dict] | dict:
     # The return code is checked below so the error can carry gh's own message.
-    result = subprocess.run(
-        ["gh", *arguments], capture_output=True, text=True, encoding="utf-8", check=False
-    )
+    try:
+        result = subprocess.run(
+            ["gh", *arguments], capture_output=True, text=True, encoding="utf-8", check=False
+        )
+    except FileNotFoundError as error:
+        # Without this, a missing gh would end in a traceback and exit code 1, which means
+        # "problems found" to anyone scripting around this check.
+        raise RuntimeError("gh is not installed or not on PATH") from error
     if result.returncode != 0:
         raise RuntimeError(f"gh {' '.join(arguments[:2])} failed: {result.stderr.strip()}")
     return json.loads(result.stdout)
@@ -327,47 +334,11 @@ def fetch() -> tuple[list[Issue], list[PullRequest], list[Card]]:
     pull_fields = (
         "number,title,state,baseRefName,headRefName,changedFiles,mergedAt,closingIssuesReferences"
     )
-    issues = _run_gh(
-        [
-            "issue",
-            "list",
-            "-R",
-            REPOSITORY,
-            "--state",
-            "all",
-            "--limit",
-            LIST_LIMIT,
-            "--json",
-            issue_fields,
-        ]
-    )
-    pulls = _run_gh(
-        [
-            "pr",
-            "list",
-            "-R",
-            REPOSITORY,
-            "--state",
-            "all",
-            "--limit",
-            LIST_LIMIT,
-            "--json",
-            pull_fields,
-        ]
-    )
-    board = _run_gh(
-        [
-            "project",
-            "item-list",
-            str(BOARD_NUMBER),
-            "--owner",
-            BOARD_OWNER,
-            "--limit",
-            LIST_LIMIT,
-            "--format",
-            "json",
-        ]
-    )
+    every_item = ["-R", REPOSITORY, "--state", "all", "--limit", LIST_LIMIT]
+    issues = _run_gh(["issue", "list", *every_item, "--json", issue_fields])
+    pulls = _run_gh(["pr", "list", *every_item, "--json", pull_fields])
+    board_options = ["--owner", BOARD_OWNER, "--limit", LIST_LIMIT, "--format", "json"]
+    board = _run_gh(["project", "item-list", str(BOARD_NUMBER), *board_options])
     return parse_issues(issues), parse_pulls(pulls), parse_cards(board)
 
 
