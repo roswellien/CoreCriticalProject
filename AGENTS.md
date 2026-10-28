@@ -9,14 +9,10 @@ The execution-first strategy was authorized on 2026-10-11: preserve original
 MW3 gameplay through recompilation, integrate modern platform services/Vulkan,
 and advance native host -> live menu -> live Training. Do not restart as a remake.
 
-Follow `docs/project-status-reporting.md`: report demonstrated native behavior,
-fidelity/compatibility coverage, current defects and release validation. The
-paused startup-equivalence audit is historical evidence, not the current project
-progress indicator or a prerequisite for routine development/releases. Do not
-repeat its unchanged fraction in routine updates, PRs or release notes. Preserve
-its criteria and receipts without claiming new audit acceptance. Probes, replay
-and original-game hooks do not establish live native gameplay. Guest ABI/FP,
-resource contracts and required initialization effects still apply.
+Follow `docs/project-status-reporting.md` when reporting progress in updates,
+PRs and release notes. Probes, replay and original-game hooks do not establish
+live native gameplay. Guest ABI/FP, resource contracts and required
+initialization effects still apply.
 
 Inspect current process identities before expensive work. Protect the existing
 controls composer/watcher and never open active SQLite or duplicate a long job.
@@ -30,8 +26,8 @@ concrete defect. Fail unknown required services visibly; no AFTER seeding or fak
 API success. No production interpreter/original-code fallback is authorized.
 
 Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
-code stay local. Full continuation instructions are in
-`docs/archive/claude-m4-continuation-handoff.md`.
+code stay local, and private reports, build outputs, credentials and signing
+material are never committed.
 Follow `CODE_STYLE.md` when writing or changing code. Follow "Tests" and
 "Definition of done" in `CONTRIBUTING.md` when adding tests or opening a PR.
 
@@ -48,7 +44,8 @@ task-specific commit instructions; it does not expand a task's file scope.
   preferably in an isolated worktree when other work is uncommitted.
 - Task-scoped commits, feature-branch pushes and PR creation are authorized as
   part of implementing a requested change. Commit only that task's authored
-  files; preserve unrelated changes and keep generated code/media local.
+  files; preserve unrelated changes and keep generated code/media local. Keep
+  unrelated tasks in separate PRs.
 - Open feature/fix PRs against `develop`. Promote reviewed integration work
   through a separate `develop` -> `main` release PR. If a prior task's PR has
   already merged, start a new branch and PR rather than extending its old branch.
@@ -63,34 +60,22 @@ task-specific commit instructions; it does not expand a task's file scope.
   A PR awaiting review is not a merged or published change. Synchronize changes
   from `main` back into `develop` through a synchronization PR when needed.
 
-See `docs/github-workflow.md`. Current private-repository plan restrictions
-prevent GitHub branch-protection enforcement; this workflow still applies.
+Current private-repository plan restrictions prevent GitHub branch-protection
+enforcement; this workflow still applies, and the limitation doesn't authorize
+making the repository public.
 
-## Required launcher installer filenames
+## Where to find more
 
-Every launcher installer download must retain its release version in the actual
-filename: `corecriticalinstaller-<version>.exe`, for example
-`corecriticalinstaller-1.0.34-preview.exe`. This applies to the built artifact,
-cloud/R2 object basename, website link, download filename, instructions and
-checksums. A versioned folder or link label does not satisfy this requirement.
-Publish the exact `setup_filename` from the installer build receipt; never
-rename a new release to `corecriticalinstaller.exe` or another unversioned name.
-Preserve historical release evidence and existing compatibility URLs.
+- `docs/github-workflow.md`: the full PR, issue, project board and release workflow.
+- `CONTRIBUTING.md`: what every contribution and PR must include.
+- `CODE_STYLE.md`: how to write and format code.
+- `docs/legal.md`: what may and may not be distributed.
+- `docs/project-status-reporting.md`: how to report progress and what not to claim.
+- `docs/release-filenames.md`: required installer and update filenames; follow it
+  before naming or publishing any release file.
+- `docs/roadmap.md`: what is planned next.
+- `docs/code-guide.md`: how the code is organized and how it should explain itself.
+- `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
 
-## Required update filenames
-
-All future update releases must use the public release version as the filename
-stem, with the correct lowercase product extension:
-
-- Game runtime: `<version>.<game-abbreviation>update`, for example
-  `1.0.34.mw3update` or `2.0.0.mw4update`. Use the game's registered file stem
-  (`mw3`, `mw3pm`, `mw4`, etc.); the placeholders do not impose a length limit.
-- Core Critical Launcher: `<version>.ccupdate`, for example `1.0.34.ccupdate`.
-
-Do not prepend product names or substitute descriptive build/task IDs for the
-release version. Apply this rule to packaging scripts, release checks, site
-links and instructions before publishing. Keep matching payload ZIP names and
-signed metadata references consistent. An optional download wrapper ZIP must
-also identify its version and target and contain the correctly named update;
-renaming ZIP bytes to an update extension is not a valid conversion. Preserve
-published historical artifacts and their verification evidence.
+Agent rules live only in this file. `CLAUDE.md` and
+`.github/copilot-instructions.md` point here; edit this file instead.

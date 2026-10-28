@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        The governing rules are "Required launcher installer filenames" and "Required update filenames" in `AGENTS.md`, and "Promote and publish a release" in `docs/github-workflow.md`. If this list disagrees with them, they win.
+        The governing rules are "Required launcher installer filenames" and "Required update filenames" in `docs/release-filenames.md`, and "Promote and publish a release" in `docs/github-workflow.md`. If this list disagrees with them, they win.
   - type: input
     id: version
     attributes:

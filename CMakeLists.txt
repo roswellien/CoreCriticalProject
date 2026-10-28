@@ -116,6 +116,9 @@ if(BUILD_TESTING)
     add_test(NAME host_adapter_controls
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_host_adapter.py -v)
     set_tests_properties(host_adapter_controls PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME agent_files
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_agent_files.py -v)
+    set_tests_properties(agent_files PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 endif()
 
 find_program(MW34_CLANG_FORMAT clang-format)
