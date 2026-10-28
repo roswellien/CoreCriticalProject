@@ -1,0 +1,2 @@
+address	name	confidence	evidence	purpose
+00409ED0	sub_00409ED0	confirmed	games/mw3/docs/first-function.md	Returns ECX + 188 * n + 312, where n is its one stack argument; gameplay role unknown
