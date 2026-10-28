@@ -1,0 +1,74 @@
+name: Bug
+description: Something in the game, launcher, runtime or Mod Tools doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never attach game executables, media, archives, memory dumps, saves or generated code. Redact logs and screenshots before attaching them (see CONTRIBUTING.md).
+  - type: textarea
+    id: what_happens
+    attributes:
+      label: What happens
+      description: The symptom, including any error text.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the launcher
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: launcher_version
+    attributes:
+      label: Launcher version
+      placeholder: "1.0.43"
+  - type: input
+    id: runtime_version
+    attributes:
+      label: Runtime version
+      placeholder: "1.0.44"
+  - type: input
+    id: game
+    attributes:
+      label: Game and version
+      placeholder: MW3 US 1.2 retail
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 24H2
+  - type: input
+    id: gpu_driver
+    attributes:
+      label: GPU and driver
+      placeholder: GPU model, driver version
+  - type: dropdown
+    id: hdr
+    attributes:
+      label: Windows HDR
+      options:
+        - "On"
+        - "Off"
+        - Not sure
+  - type: input
+    id: input_devices
+    attributes:
+      label: Input devices
+      description: Controllers, wheels, joysticks or anything else plugged in.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Redacted.
+      render: text

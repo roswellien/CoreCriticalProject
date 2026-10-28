@@ -1,0 +1,34 @@
+name: PR conventions
+
+# Checks the PR's base branch, branch name and title against "Names and formats"
+# in docs/github-workflow.md. A PR into main from anything but develop fails;
+# naming problems are warnings only. The checker's unit tests run in the
+# Bootstrap checks workflow through CTest.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  conventions:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The check only reads files; it never needs git credentials.
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      # PR text reaches the script only through environment variables, never
+      # through ${{ }} inside run:, so a crafted title cannot inject shell.
+      - name: Check base branch, branch name and title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD: ${{ github.head_ref }}
+          PR_BASE: ${{ github.base_ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: python tools/github/check_pr_conventions.py --title "$PR_TITLE" --head "$PR_HEAD" --base "$PR_BASE" --author "$PR_AUTHOR"

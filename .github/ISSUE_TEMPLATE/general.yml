@@ -1,0 +1,29 @@
+name: General
+description: Anything no other form fits, including questions. Triage turns it into a focused issue or closes it.
+labels: [needs-triage]
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - launcher
+        - runtime
+        - renderer
+        - mod-tools
+        - content
+        - analysis
+        - ci
+        - website
+        - docs
+        - Not sure

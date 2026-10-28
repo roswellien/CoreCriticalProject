@@ -1,0 +1,71 @@
+name: Research finding
+description: A reverse-engineering or investigation result, with the evidence CONTRIBUTING.md asks for.
+labels: [research]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never attach game executables, media, archives, memory dumps, saves or generated code. Keep unknown functions named `sub_XXXXXXXX`; a guess is not proof (see CONTRIBUTING.md).
+  - type: textarea
+    id: question
+    attributes:
+      label: Question investigated
+    validations:
+      required: true
+  - type: input
+    id: exe_sha256
+    attributes:
+      label: Executable SHA-256
+    validations:
+      required: true
+  - type: dropdown
+    id: address_kind
+    attributes:
+      label: Address kind
+      options:
+        - RVA
+        - VA
+        - Not applicable
+  - type: input
+    id: addresses
+    attributes:
+      label: Addresses
+  - type: input
+    id: tool_version
+    attributes:
+      label: Tool and version
+      placeholder: Ghidra 12.1.3
+    validations:
+      required: true
+  - type: textarea
+    id: method
+    attributes:
+      label: Method
+    validations:
+      required: true
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: Confidence
+      options:
+        - Guess
+        - Likely
+        - Confirmed
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Reproducible evidence for the finding.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Unresolved alternatives
+  - type: input
+    id: write_up
+    attributes:
+      label: Full write-up
+      description: Path or link to the detailed notes, if any.

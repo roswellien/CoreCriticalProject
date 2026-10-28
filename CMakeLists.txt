@@ -82,6 +82,9 @@ if(BUILD_TESTING)
     add_test(NAME in_game_hook_evidence
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_in_game_hook.py -v)
     set_tests_properties(in_game_hook_evidence PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME pr_conventions
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_pr_conventions.py -v)
+    set_tests_properties(pr_conventions PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME game_monitor
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_game_monitor.py -v)
     set_tests_properties(game_monitor PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
