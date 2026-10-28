@@ -16,6 +16,10 @@ Closes #<!-- Issue number. Every task has one; file it first if needed. Delete t
 - [ ] Correct base: `develop` for feature/fix or synchronization work; `main` for a release from `develop`.
 - [ ] Changes are task-scoped; unrelated work and private/generated inputs are excluded.
 - [ ] Relevant checks and remaining limitations are recorded above.
+- [ ] Each acceptance criterion of the issue is listed above with where this change meets it. (Skip for a release or sync PR.)
+- [ ] Tests: extended ___ (name the test), or added a new file because ___; each new or changed test was seen failing with its behavior broken. (Skip if no tests changed.)
+- [ ] A change players or modders would notice was run in the launcher or game, with a log line or screenshot above, or the reason it wasn't and a "Playtest <what to check>" issue filed. (Skip for documentation only.)
+- [ ] Reviewed by someone who didn't write it; findings are fixed or listed above.
 
 ## Release impact
 

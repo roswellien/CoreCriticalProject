@@ -66,6 +66,9 @@ branch, then create a PR with `develop` as its base. The PR should explain:
 - Launcher/runtime/pack compatibility, version or release consequences, or that
   the change is documentation only.
 
+Mark a PR ready for review only once it meets the
+[definition of done](../CONTRIBUTING.md#definition-of-done) in `CONTRIBUTING.md`.
+
 Local feature builds, test packs and game captures may validate a PR before it
 merges; they are not normal published releases. Documentation-only work needs
 link/diff/evidence checks, not an unnecessary game capture or native recompile.
