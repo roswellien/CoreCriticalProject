@@ -16,13 +16,16 @@ commands; where it and this list disagree, follow the doc.
 2. **C++ formatting:** `cmake --build build/default --target format-check`. The
    target exists only when CMake found clang-format; if it is missing, configure
    again with `-DMW34_CLANG_FORMAT=<path to clang-format>`. The pinned version is
-   in `tools/style/README.md`.
+   in `tools/style/requirements.txt`.
 3. **Style:** `python tools/style/check_style.py` (one-time setup in
    `tools/style/README.md`). Before committing, run it with `--fix`, as
-   `CODE_STYLE.md` says. Languages not yet switched on only report counts; note
-   any new findings in the files you changed.
+   `CODE_STYLE.md` says. Languages not yet switched on only report counts; run
+   with `--verbose` to see findings per file, and note any in the files you
+   changed. If it exits 2 because a tool is missing or the wrong version, run the
+   languages you can with `--language <name>` and list the rest as not run.
 4. **Area checks:** if the changed area's own README lists checks (for example the
-   launcher checks in `tools/mw3-remaster-launcher-tests`), run those too.
+   launcher's "Narrow checks" in `tools/remaster-launcher/README.md`), run those
+   too.
 
 Then fill in the Validation section of the PR description
 (`.github/pull_request_template.md`), as "Issues and pull requests" in

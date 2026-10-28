@@ -21,9 +21,11 @@ this is the order to work in.
 3. **Use prepared payloads only** ("Prepared models and textures"): close and
    distance meshes in `BWMESH4`, textures in `BWTEX1`. A GLB or PNG renamed to
    `.bin` is not a payload.
-4. **Build** into a new, empty output folder:
+4. **Build** into an output folder that doesn't exist yet (the builder creates it
+   and refuses an existing one, even if empty):
    `python tools/remaster-launcher/build_chassis_pack.py --project <project file> --output <new folder>`.
-   The output holds `<pack_id>-<version>.mw3pack`.
+   Install the `<pack_id>-<version>.mw3pack` it writes there; the `pack` folder
+   beside it is the builder's staging copy.
 5. **Install** it in a compatible launcher (Mods & Packs, Install Pack), enable it
    and check it appears in the Mech Lab ("Installing and adding skins").
 6. **For a skin pack,** set its chassis to the full ID (`<pack_id>:<chassis_id>`)
