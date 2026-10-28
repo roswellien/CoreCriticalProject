@@ -8,6 +8,8 @@ drifts from its source.
 
 Only `core-critical-*` skill folders are managed. Any other folder in
 `.claude/skills/` is a contributor's own Claude Code skill and is left alone.
+A copy file with no source is removed only when git tracks it, so git can bring
+it back.
 
 Exit codes: 0 when the copy matches its source (after any changes), 1 when the
 script stopped without changing anything.
@@ -20,15 +22,25 @@ import shutil
 import sys
 from pathlib import Path
 
-from check_agent_files import REPO_ROOT, SKILL_COPY, SKILL_PREFIX, SKILL_SOURCE
+from check_agent_files import (
+    REPO_ROOT,
+    SKILL_COPY,
+    SKILL_PREFIX,
+    SKILL_SOURCE,
+    GitUnavailable,
+    tracked_paths_from_git,
+)
 
 
 class SyncStopped(Exception):
     """Raised, before anything changes, when copying would lose or corrupt work."""
 
 
-def sync(root: Path) -> list[str]:
-    """Mirror the shared skills under `root` into the Claude Code copy; return one line per change."""
+def sync(root: Path, tracked_paths: list[str]) -> list[str]:
+    """Mirror the shared skills under `root` into the Claude Code copy; return one line per change.
+
+    `tracked_paths` are the files git tracks under `root`, with forward slashes.
+    """
     source = root / SKILL_SOURCE
     copy = root / SKILL_COPY
     if not source.is_dir():
@@ -38,6 +50,7 @@ def sync(root: Path) -> list[str]:
     source_files = _shared_skill_files(source)
     copy_files = _shared_skill_files(copy)
     _refuse_edited_copies(source_files, copy_files)
+    _refuse_untracked_removals(source_files, copy_files, tracked_paths)
 
     changes = []
     for relative_path, source_file in sorted(source_files.items()):
@@ -133,6 +146,28 @@ def _refuse_edited_copies(source_files: dict[str, Path], copy_files: dict[str, P
         )
 
 
+def _refuse_untracked_removals(
+    source_files: dict[str, Path], copy_files: dict[str, Path], tracked_paths: list[str]
+) -> None:
+    """Stop when a copy file has no source and git doesn't track it, so removing it would lose it.
+
+    Claude Code creates new skills in `.claude/skills/`, so a new shared skill can
+    start there by mistake. Git can bring back a tracked file, not an untracked one.
+    """
+    tracked = set(tracked_paths)
+    untracked = [
+        f"{SKILL_COPY}/{relative_path}"
+        for relative_path in sorted(copy_files.keys() - source_files.keys())
+        if f"{SKILL_COPY}/{relative_path}" not in tracked
+    ]
+    if untracked:
+        raise SyncStopped(
+            f"{', '.join(untracked)} has no source in {SKILL_SOURCE}/ and isn't tracked, so "
+            f"removing it would lose it; move it into {SKILL_SOURCE}/, where new shared skills "
+            "go, or delete it to discard it, then rerun."
+        )
+
+
 def _remove_empty_folders(copy: Path) -> None:
     for skill_folder in _shared_skill_folders(copy):
         # Bottom-up, so a folder emptied by removing its subfolders goes too.
@@ -143,7 +178,10 @@ def _remove_empty_folders(copy: Path) -> None:
 
 def main() -> int:
     try:
-        changes = sync(REPO_ROOT)
+        changes = sync(REPO_ROOT, tracked_paths_from_git(REPO_ROOT))
+    except GitUnavailable as reason:
+        print(f"error: can't list tracked files ({reason}); run this inside a git checkout.")
+        return 1
     except SyncStopped as reason:
         print(f"error: {reason}")
         return 1

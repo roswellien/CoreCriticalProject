@@ -60,9 +60,11 @@ SKILL_KEYS = ("name", "description", "disable-model-invocation", "paths")
 SKILL_NAME = re.compile(rf"{re.escape(SKILL_PREFIX)}[a-z0-9]+(-[a-z0-9]+)*")
 MAX_SKILL_NAME_CHARACTERS = 64
 MAX_DESCRIPTION_CHARACTERS = 1024
-# Unquoted, YAML reads a value starting with one of these, or holding ": " or " #",
-# as something other than plain text, or fails to parse it at all.
-YAML_SPECIAL_STARTS = tuple("[]{}>|*&!%@`")
+# Unquoted, YAML reads a value starting with one of these, or holding a colon before
+# a space or the end, or a "#" after a space, as something other than plain text, or
+# fails to parse it at all.
+YAML_SPECIAL_STARTS = tuple("[]{}>|*&!%@`#,?-")
+YAML_SPECIAL_INSIDE = re.compile(r":(\s|$)|\s#")
 OPENAI_POLICY_LINE = re.compile(r"\s+allow_implicit_invocation: (true|false)")
 SYNC_ADVICE = f"edit skills only in {SKILL_SOURCE}/, then run `python tools/agents/sync_skills.py`"
 
@@ -363,10 +365,16 @@ def _check_frontmatter(skill_name: str, folder: str, text: str) -> list[Finding]
 
     findings = []
     raw_values: dict[str, str] = {}
+    key = ""
+    value = ""
     for line in lines[1:closing_line]:
-        # Indented and "- " lines continue the key above, such as a `paths` list.
-        is_continuation = line.startswith((" ", "\t", "-"))
-        if not line.strip() or line.startswith("#") or is_continuation:
+        if not line.strip() or line.startswith("#"):
+            continue
+        # Indented and "- " lines continue the key above, such as a `paths` list. A
+        # `>` or `|` block's lines are reported once, with the block itself, below.
+        if line.startswith((" ", "\t", "-")):
+            if key and not value.strip().startswith((">", "|")):
+                findings += _check_continuation(skill_name, key, line)
             continue
         key, _, value = line.partition(":")
         if key not in SKILL_KEYS:
@@ -402,7 +410,29 @@ def _check_frontmatter(skill_name: str, folder: str, text: str) -> list[Finding]
         findings.append(
             Finding("error", f"{skill_name}'s `disable-model-invocation` must be true or false.")
         )
+    inline_paths = raw_values.get("paths", "")
+    paths_problem = _plain_value_problem(inline_paths) if inline_paths else None
+    if paths_problem is not None:
+        findings.append(Finding("error", f"{skill_name}'s `paths` {paths_problem}."))
     return findings
+
+
+def _check_continuation(skill_name: str, key: str, line: str) -> list[Finding]:
+    """Check a line that continues the key above: only a `paths` list item may."""
+    if key != "paths":
+        return [
+            Finding(
+                "error",
+                f"{skill_name}'s `{key}` continues onto another line; write it on one line.",
+            )
+        ]
+    item = line.strip()
+    if not item.startswith("- "):
+        return [Finding("error", f"{skill_name}'s `paths` lines must each be `- <pattern>`.")]
+    problem = _plain_value_problem(item[2:].strip())
+    if problem is None:
+        return []
+    return [Finding("error", f"{skill_name}'s `paths` entry `{item[2:].strip()}` {problem}.")]
 
 
 def _plain_value_problem(raw_value: str) -> str | None:
@@ -411,7 +441,9 @@ def _plain_value_problem(raw_value: str) -> str | None:
         return None
     if raw_value.startswith((">", "|")):
         return "is a `>` or `|` block; write it on one line"
-    if raw_value.startswith(YAML_SPECIAL_STARTS) or ": " in raw_value or " #" in raw_value:
+    if raw_value.startswith(("'", '"')):
+        return "opens a quote that isn't closed at the end of the value; quote the whole value"
+    if raw_value.startswith(YAML_SPECIAL_STARTS) or YAML_SPECIAL_INSIDE.search(raw_value):
         return "needs quotes, because YAML reads it differently or can't parse it unquoted"
     return None
 

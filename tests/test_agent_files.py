@@ -201,17 +201,17 @@ class SyncTests(FixtureTree):
     def test_new_skill_is_added(self):
         self.write_skill()
         self.assertEqual(
-            syncer.sync(self.root), ["added .claude/skills/core-critical-demo/SKILL.md"]
+            syncer.sync(self.root, []), ["added .claude/skills/core-critical-demo/SKILL.md"]
         )
         self.assertEqual(self.copy("core-critical-demo/SKILL.md").read_text(), SKILL)
 
     def test_changed_source_is_updated(self):
         self.write_skill()
-        syncer.sync(self.root)
+        syncer.sync(self.root, [])
         self.make_older(self.copy("core-critical-demo/SKILL.md"))
         self.write_skill(text=SKILL + "More steps.\n")
         self.assertEqual(
-            syncer.sync(self.root), ["updated .claude/skills/core-critical-demo/SKILL.md"]
+            syncer.sync(self.root, []), ["updated .claude/skills/core-critical-demo/SKILL.md"]
         )
         self.assertEqual(
             self.copy("core-critical-demo/SKILL.md").read_text(), SKILL + "More steps.\n"
@@ -221,13 +221,17 @@ class SyncTests(FixtureTree):
         self.write_skill()
         self.write_skill("core-critical-demo/references/old.md", "Old.\n")
         self.write_skill("core-critical-retired/SKILL.md")
-        syncer.sync(self.root)
+        syncer.sync(self.root, [])
         self.source("core-critical-demo/references/old.md").unlink()
         self.source("core-critical-demo/references").rmdir()
         self.source("core-critical-retired/SKILL.md").unlink()
         self.source("core-critical-retired").rmdir()
+        tracked = [
+            ".claude/skills/core-critical-demo/references/old.md",
+            ".claude/skills/core-critical-retired/SKILL.md",
+        ]
         self.assertEqual(
-            syncer.sync(self.root),
+            syncer.sync(self.root, tracked),
             [
                 "removed .claude/skills/core-critical-demo/references/old.md",
                 "removed .claude/skills/core-critical-retired/SKILL.md",
@@ -243,7 +247,7 @@ class SyncTests(FixtureTree):
         self.write(".claude/skills/my-own-skill/SKILL.md", "Mine.\n")
         self.write_skill("not-shared/SKILL.md", "Skipped.\n")
         self.assertEqual(
-            syncer.sync(self.root), ["added .claude/skills/core-critical-demo/SKILL.md"]
+            syncer.sync(self.root, []), ["added .claude/skills/core-critical-demo/SKILL.md"]
         )
         self.assertTrue((self.root / ".claude/settings.json").exists())
         self.assertTrue(self.copy("my-own-skill/SKILL.md").exists())
@@ -251,24 +255,33 @@ class SyncTests(FixtureTree):
 
     def test_second_run_changes_nothing(self):
         self.write_skill()
-        syncer.sync(self.root)
-        self.assertEqual(syncer.sync(self.root), [])
+        syncer.sync(self.root, [])
+        self.assertEqual(syncer.sync(self.root, []), [])
 
     def test_copy_edited_after_its_source_stops_without_changes(self):
         self.write_skill()
-        syncer.sync(self.root)
+        syncer.sync(self.root, [])
         self.make_older(self.source("core-critical-demo/SKILL.md"))
         self.write(".claude/skills/core-critical-demo/SKILL.md", "Edited copy.\n")
         self.write_skill("core-critical-new/SKILL.md")
         with self.assertRaisesRegex(syncer.SyncStopped, "core-critical-demo/SKILL.md changed"):
-            syncer.sync(self.root)
+            syncer.sync(self.root, [])
         self.assertEqual(self.copy("core-critical-demo/SKILL.md").read_text(), "Edited copy.\n")
         self.assertFalse(self.copy("core-critical-new").exists())
+
+    def test_untracked_copy_with_no_source_stops_without_changes(self):
+        # Claude Code writes a new skill straight into the copy; removing it would lose it.
+        self.write_skill()
+        self.write(".claude/skills/core-critical-new/SKILL.md", "New skill.\n")
+        with self.assertRaisesRegex(syncer.SyncStopped, "core-critical-new/SKILL.md has no source"):
+            syncer.sync(self.root, [])
+        self.assertTrue(self.copy("core-critical-new/SKILL.md").exists())
+        self.assertFalse(self.copy("core-critical-demo").exists())
 
     def test_missing_source_stops(self):
         self.write(".claude/skills/core-critical-demo/SKILL.md", SKILL)
         with self.assertRaisesRegex(syncer.SyncStopped, "missing"):
-            syncer.sync(self.root)
+            syncer.sync(self.root, [])
         self.assertTrue(self.copy("core-critical-demo/SKILL.md").exists())
 
     def test_linked_copy_folder_stops(self):
@@ -277,7 +290,7 @@ class SyncTests(FixtureTree):
         if not link_folder(self.root / ".agents/skills", self.copy("")):
             self.skipTest("this platform can't create a folder link here")
         with self.assertRaisesRegex(syncer.SyncStopped, r"\.claude/skills is a link"):
-            syncer.sync(self.root)
+            syncer.sync(self.root, [])
 
 
 def link_folder(target, link):
@@ -435,6 +448,17 @@ class SkillTests(FixtureTree):
             ("description: >\n  Folded.", "is a `>` or `|` block"),
             ("description: Run checks: then report.", "needs quotes"),
             ("description: `tool` first.", "needs quotes"),
+            ("description: # Heading", "needs quotes"),
+            ("description: - item", "needs quotes"),
+            ("description: ? key", "needs quotes"),
+            ("description: , then", "needs quotes"),
+            ("description: Ends in a colon:", "needs quotes"),
+            ("description: Tab:\tafter", "needs quotes"),
+            ('description: "Run" checks', "opens a quote that isn't closed"),
+            ("description: Wrapped\n  onto a second line.", "continues onto another line"),
+            ("description: Demo skill.\npaths: *.py", "`paths` needs quotes"),
+            ("description: Demo skill.\npaths:\n  - *.py", "`paths` entry `*.py` needs quotes"),
+            ("description: Demo skill.\npaths:\n  tools/", "`paths` lines must each be"),
         )
         for line, expected in cases:
             with self.subTest(line=line):
