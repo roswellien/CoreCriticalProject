@@ -6,6 +6,9 @@ tools/remaster-launcher/native-overrides/
 games/mw3/mod-tools/editor/web/static/js/three.min.js
 games/mw3/mod-tools/editor/web/static/js/OrbitControls.js
 games/mw3/mod-tools/editor/web/static/js/TransformControls.js
+tools/weapon-effects-lab/preview.html
+tools/weapon-effects-lab/comparison.html
+tools/weapon-effects-lab/sprite_lighting.html
 recomp/generated/
 *_vert.h
 *_frag.h
