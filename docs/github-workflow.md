@@ -6,8 +6,8 @@ contributors and agents and to all new source, documentation, tests, fixes,
 build scripts, release/version changes and authored content-pipeline changes.
 Urgency or missing GitHub enforcement does not create an exception.
 
-`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md` and `CONTRIBUTING.md`
-point here for the complete workflow. Older session-specific commit instructions
+`AGENTS.md` (which `CLAUDE.md` and `.github/copilot-instructions.md` point to)
+and `CONTRIBUTING.md` point here for the complete workflow. Older session-specific commit instructions
 do not override this rule; the distribution policy and unrelated-work protections
 continue to apply.
 
