@@ -21,15 +21,18 @@ continue to apply.
 
 Every contributor and agent uses the branch format in
 [Names and formats](#names-and-formats). Agents use the GitHub username of the
-account they push with. Keep `main` as the repository default branch and keep
-`develop` as the shared integration branch.
+account they push with. `develop` is the repository's default branch, so a
+merged PR's `Closes #<issue>` line closes its issue; `main` is the release
+branch.
 
 ## Start a task
 
 1. Read the project instructions, this guide and the distribution policy.
 2. Inspect `git status`, the current branch, worktrees and running build/game
    processes. Preserve existing work and respect other writers.
-3. Fetch the current remote branches. Start a task-specific branch from
+3. Find the task's issue, or file one if it has none, then assign yourself and
+   set its card to In progress (see [Project board](#project-board)).
+4. Fetch the current remote branches. Start a task-specific branch from
    `origin/develop`; do not start development on either shared branch.
 
 Start a task from the latest `origin/develop`. Use an isolated worktree when
@@ -78,7 +81,8 @@ warns about names that don't follow them.
 `<username>/<type>/<issue>-<slug>`, all lowercase. The username is the GitHub
 account that pushes the branch; an agent uses the account it pushes with. The
 type is `feature`, `fix`, `docs`, `ci` or `refactor`. The issue number comes
-first in the last part when an issue exists and is left out when none does.
+first in the last part. Every task has an issue (see
+[Project board](#project-board)); only branches made before that rule leave it out.
 Examples: `carson-nr/fix/10-setup-verify-optional-tiers`,
 `roswellien/feature/torso-mode-preset`.
 
@@ -193,6 +197,62 @@ Once a PR has merged, a new fix or follow-up uses a fresh branch from current
 additional changes. At handoff, report the branch, PR URL, checks and open limits;
 distinguish "awaiting review" from "merged" and "published".
 
+After merge, check that the issue's card is Done (see [Project board](#project-board)).
+
+## Project board
+
+The [project board](https://github.com/users/roswellien/projects/1) shows where
+each piece of work is. Only issues go on it; a PR shows on its issue's card
+through the `Closes #<issue>` line in its description. So every piece of work
+gets an issue before its PR: if there is none, file one first. Release and sync
+PRs are the exception: a release is tracked by its Release checklist issue,
+which stays open until the files are published.
+
+| Column | Meaning | Who moves the card there |
+| --- | --- | --- |
+| Backlog | Filed, not yet ready to start | GitHub, when the issue is filed |
+| Ready | Clear enough to pick up | Whoever triages it |
+| In progress | A person or agent is working on it | Whoever starts the work |
+| In review | Its PR is open | Whoever opens the PR |
+| Done | The issue is closed | GitHub, when the issue closes |
+
+1. **Start:** assign yourself and set the card to In progress.
+2. **Open the PR:** write `Closes #<issue>` in its description and set the card
+   to In review. Linking the PR makes GitHub set the card to In progress, so set
+   In review after the PR exists. Linking a PR to an already closed issue does
+   the same; restore that card to Done using the status command below.
+3. **After merge:** GitHub closes the issue named by `Closes #<issue>`, which
+   moves its card to Done. If the PR had no such line, close the issue with a
+   comment naming the PR. Setting a card to Done also closes its issue, so set
+   Done by hand only to restore a closed issue's card after linking a PR.
+4. **If work stops before a PR:** unassign yourself and set the card back to
+   Ready or Backlog.
+
+The Priority field says what to pick up first: P0 blocks players or other work,
+P1 is next up, P2 is later. Set it when you file an issue if you know it; the
+maintainer may change it.
+
+Agents and the command line make these moves with `gh`. Run
+`gh auth refresh -s project` once so your login may change the board, then:
+
+```powershell
+# Assign yourself
+gh issue edit <issue> --add-assignee "@me"
+
+# Find the issue's card id
+gh project item-list 1 --owner roswellien --limit 1000 --format json --jq '.items[] | select(.content.number == <issue>) | .id'
+
+# Set the card's status or priority
+gh project item-edit --project-id PVT_kwHODf7y6M4BpC8L --id <card id> --field-id <field id> --single-select-option-id <option id>
+```
+
+| Field | Field id | Option ids |
+| --- | --- | --- |
+| Status | `PVTSSF_lAHODf7y6M4BpC8LzhngSSM` | Backlog `f75ad846`, Ready `61e4505c`, In progress `47fc9ee4`, In review `df73e18b`, Done `98236657` |
+| Priority | `PVTSSF_lAHODf7y6M4BpC8LzhngSb0` | P0 `79628723`, P1 `0a877460`, P2 `da944a9c` |
+
+To unassign yourself, use `gh issue edit <issue> --remove-assignee "@me"`.
+
 ## Promote and publish a release
 
 When the integration branch is ready for a release, open a separate PR from
@@ -252,6 +312,6 @@ requirement is a project rule rather than a GitHub-enforced restriction. The PR
 conventions check fails PRs into `main` that don't come from `develop`, but it
 cannot stop a direct push. Once
 available, protect both shared branches against direct pushes, force-pushes and
-deletion, and require PRs and the applicable passing CI checks. Keep `main` as
-the repository's default branch. Do not change account plans, repository
+deletion, and require PRs and the applicable passing CI checks. Keep `develop`
+as the repository's default branch. Do not change account plans, repository
 visibility or access controls as a workaround without explicit owner direction.
