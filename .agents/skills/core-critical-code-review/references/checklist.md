@@ -40,9 +40,8 @@ cause it, and label it as pre-existing.
 
 - **Acceptance criteria:** for each criterion in the issue, name where the
   diff meets it, or report it as missing.
-- **Definition of done:** check the change against the definition of done and
-  test rules in issue #54 (`gh issue view 54 -R roswellien/MW3Recomp-Private`);
-  don't repeat them here.
+- **Definition of done:** check the change against "Definition of done" and
+  "Tests" in `CONTRIBUTING.md`; don't repeat them here.
 
 ## Severity
 
