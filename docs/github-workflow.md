@@ -196,9 +196,6 @@ Once a PR has merged, a new fix or follow-up uses a fresh branch from current
 additional changes. At handoff, report the branch, PR URL, checks and open limits;
 distinguish "awaiting review" from "merged" and "published".
 
-After a PR into `develop` merges, close its issue with a comment naming the PR,
-as described in [Project board](#project-board).
-
 ## Project board
 
 The [project board](https://github.com/users/roswellien/projects/1) shows where
@@ -220,11 +217,11 @@ which stays open until the files are published.
 2. **Open the PR:** write `Closes #<issue>` in its description and set the card
    to In review. Linking the PR makes GitHub set the card to In progress, so set
    In review after the PR exists. Linking a PR to an already closed issue does
-   the same; set that card back to Done.
-3. **After merge:** close the issue with a comment naming the PR. GitHub closes
-   an issue by itself only when a PR merges into `main`, the default branch, so
-   a merge into `develop` leaves it open. Closing it moves the card to Done;
-   never set Done by hand.
+   the same; restore that card to Done using the status command below.
+3. **After merge:** GitHub closes the issue named by `Closes #<issue>`, which
+   moves its card to Done. If the PR had no such line, close the issue with a
+   comment naming the PR. Setting a card to Done also closes its issue, so set
+   Done by hand only to restore a closed issue's card after linking a PR.
 4. **If work stops before a PR:** unassign yourself and set the card back to
    Ready or Backlog.
 
@@ -248,7 +245,7 @@ gh project item-edit --project-id PVT_kwHODf7y6M4BpC8L --id <card id> --field-id
 
 | Field | Field id | Option ids |
 | --- | --- | --- |
-| Status | `PVTSSF_lAHODf7y6M4BpC8LzhngSSM` | Backlog `f75ad846`, Ready `61e4505c`, In progress `47fc9ee4`, In review `df73e18b` |
+| Status | `PVTSSF_lAHODf7y6M4BpC8LzhngSSM` | Backlog `f75ad846`, Ready `61e4505c`, In progress `47fc9ee4`, In review `df73e18b`, Done `98236657` |
 | Priority | `PVTSSF_lAHODf7y6M4BpC8LzhngSb0` | P0 `79628723`, P1 `0a877460`, P2 `da944a9c` |
 
 To unassign yourself, use `gh issue edit <issue> --remove-assignee "@me"`.
