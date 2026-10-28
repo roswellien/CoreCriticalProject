@@ -42,17 +42,17 @@ class BaseBranchTests(unittest.TestCase):
         findings = checker.check("Release launcher 1.0.45", "fix/x", "main", "carson-nr")
         self.assertEqual(levels(findings), ["error"])
 
-    def test_release_title_must_follow_format(self):
+    def test_release_title_is_only_a_warning(self):
         findings = checker.check("Promote the workflow to main", "develop", "main", "roswellien")
-        self.assertEqual(levels(findings), ["error"])
+        self.assertEqual(levels(findings), ["warning"])
 
     def test_sync_from_main_is_allowed(self):
         self.assertEqual(
             checker.check("Sync main into develop after launcher 1.0.45", "main", "develop", "roswellien"), []
         )
 
-    def test_sync_title_must_follow_format(self):
-        self.assertEqual(levels(checker.check("Merge main", "main", "develop", "roswellien")), ["error"])
+    def test_sync_title_is_only_a_warning(self):
+        self.assertEqual(levels(checker.check("Merge main", "main", "develop", "roswellien")), ["warning"])
 
     def test_topic_branch_into_develop_is_allowed(self):
         self.assertEqual(checker.check(GOOD_TITLE, GOOD_BRANCH, "develop", "carson-nr"), [])
@@ -73,7 +73,7 @@ class BranchNameTests(unittest.TestCase):
         for branch_type in checker.BRANCH_TYPES:
             self.assert_branch(f"carson-nr/{branch_type}/x", [])
 
-    def test_bad_branches_are_errors(self):
+    def test_bad_branches_warn(self):
         for head in (
             "carson-nr/feat/x",  # unknown type
             "Carson-NR/fix/x",  # uppercase
@@ -81,10 +81,10 @@ class BranchNameTests(unittest.TestCase):
             "fix/launcher-autodetect",  # no username
             "carson-nr/fix/x-",  # trailing hyphen
         ):
-            self.assert_branch(head, ["error"])
+            self.assert_branch(head, ["warning"])
 
     def test_username_must_match_author(self):
-        self.assert_branch("roswellien/fix/x", ["error"], author="carson-nr")
+        self.assert_branch("roswellien/fix/x", ["warning"], author="carson-nr")
         self.assert_branch("carson-nr/fix/x", [], author="Carson-NR")
 
 
@@ -102,23 +102,23 @@ class TitleTests(unittest.TestCase):
         ):
             self.assertEqual(self.title_levels(title), [], title)
 
-    def test_bad_titles_are_errors(self):
+    def test_bad_titles_warn(self):
         for title in (
             "fix launcher: lowercase verb",
             "feat: conventional commit prefix",
             "Fix the launcher without an area",
             "Fix ui: unknown area",
         ):
-            self.assertEqual(self.title_levels(title), ["error"], title)
+            self.assertEqual(self.title_levels(title), ["warning"], title)
 
-    def test_trailing_period_is_an_error(self):
-        self.assertEqual(self.title_levels("Fix launcher: stop at the period."), ["error"])
+    def test_trailing_period_warns(self):
+        self.assertEqual(self.title_levels("Fix launcher: stop at the period."), ["warning"])
 
     def test_length_limit(self):
         prefix = "Fix launcher: "
         at_limit = prefix + "x" * (checker.MAX_TITLE_LENGTH - len(prefix))
         self.assertEqual(self.title_levels(at_limit), [])
-        self.assertEqual(self.title_levels(at_limit + "x"), ["error"])
+        self.assertEqual(self.title_levels(at_limit + "x"), ["warning"])
 
 
 class AreaListTests(unittest.TestCase):
@@ -169,35 +169,41 @@ class ReportTests(unittest.TestCase):
 
     def test_plain_output_outside_actions(self):
         out = io.StringIO()
-        checker.report([checker.Finding("error", "Title ends with a period.")], {}, out)
-        self.assertEqual(out.getvalue(), "error: Title ends with a period.\n")
+        checker.report([checker.Finding("warning", "Title ends with a period.")], {}, out)
+        self.assertEqual(out.getvalue(), "warning: Title ends with a period.\n")
 
     def test_workflow_command_is_escaped(self):
         out = io.StringIO()
-        checker.report([checker.Finding("error", "100%\r\n::error::injected")], {"GITHUB_ACTIONS": "true"}, out)
-        self.assertEqual(out.getvalue(), "::error title=PR conventions::100%25%0D%0A::error::injected\n")
+        checker.report([checker.Finding("warning", "100%\r\n::error::injected")], {"GITHUB_ACTIONS": "true"}, out)
+        self.assertEqual(out.getvalue(), "::warning title=PR conventions::100%25%0D%0A::error::injected\n")
 
     def test_step_summary_is_written(self):
         with tempfile.TemporaryDirectory() as folder:
             summary = Path(folder) / "summary.md"
-            finding = checker.Finding("error", "Branch '`x`' is odd.\nsecond line")
+            finding = checker.Finding("warning", "Branch '`x`' is odd.\nsecond line")
             checker.report([finding], {"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": str(summary)}, io.StringIO())
             text = summary.read_text(encoding="utf-8")
         self.assertIn("## PR conventions", text)
-        self.assertIn("- **error**: `Branch 'x' is odd. second line`", text)
+        self.assertIn("- **warning**: `Branch 'x' is odd. second line`", text)
 
     def test_exit_code(self):
         # A subprocess without GITHUB_* variables, so main() cannot reach the CI run's summary.
         env = {name: value for name, value in os.environ.items() if not name.startswith("GITHUB_")}
         script = str(ROOT / "tools/github/check_pr_conventions.py")
         common = ["--title", GOOD_TITLE, "--author", "carson-nr"]
-        error = subprocess.run(
+        warning = subprocess.run(
             [sys.executable, script, *common, "--head", "fix/x", "--base", "develop"],
             env=env, capture_output=True, text=True,
         )
+        self.assertEqual(warning.returncode, 0, warning.stdout + warning.stderr)
+        self.assertIn("warning: Branch 'fix/x'", warning.stdout)
+        self.assertIn("does not match", warning.stdout)
+        error = subprocess.run(
+            [sys.executable, script, *common, "--head", "fix/x", "--base", "main"],
+            env=env, capture_output=True, text=True,
+        )
         self.assertEqual(error.returncode, 1, error.stdout + error.stderr)
-        self.assertIn("error: Branch 'fix/x'", error.stdout)
-        self.assertIn("does not match", error.stdout)
+        self.assertTrue(error.stdout.startswith("error: "), error.stdout)
         clean = subprocess.run(
             [sys.executable, script, *common, "--head", GOOD_BRANCH, "--base", "develop"],
             env=env, capture_output=True, text=True,

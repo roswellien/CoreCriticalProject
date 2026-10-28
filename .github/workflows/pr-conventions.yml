@@ -2,7 +2,7 @@ name: PR conventions
 
 # Checks the PR's base branch, branch name and title against "Names and formats"
 # in docs/github-workflow.md. A PR into main from anything but develop fails;
-# naming problems fail the check. The checker's unit tests run in the
+# naming problems are warnings only. The checker's unit tests run in the
 # Bootstrap checks workflow through CTest.
 
 on:
