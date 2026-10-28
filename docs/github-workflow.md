@@ -47,6 +47,55 @@ Use a fresh worktree directory. Do not reset, clean, mass-stash or commit other
 contributors' work to obtain a clean tree. Existing local experiments remain
 uncommitted until deliberately separated into their own task branches/PRs.
 
+## Plan and review
+
+Every change follows this flow before its PR leaves draft, whoever or whatever
+does the work. The requester (whoever asked for the work) approves each move to
+the next stage; an agent never starts the next stage on its own. Each stage has
+a shared skill in `.agents/skills/` (copied to `.claude/skills/`); a tool that
+can't load skills opens the `SKILL.md` at the path given and follows it.
+
+1. **Grill:** interview the requester one question at a time until they confirm
+   a shared understanding of the issue. Their "yes" starts the spec.
+   Skill: `.agents/skills/core-critical-grill/SKILL.md`.
+2. **Spec:** write the spec, run the spec review, then walk the requester
+   through what it leaves. Stop until the requester approves the spec.
+   Skill: `.agents/skills/core-critical-spec-review/SKILL.md`.
+3. **Plan:** write the plan, run the plan review, then the code review on the
+   plan, then one walkthrough of what both leave. Stop until the requester
+   approves implementing. Skills: `.agents/skills/core-critical-plan-review/SKILL.md`
+   and `.agents/skills/core-critical-code-review/SKILL.md`.
+4. **Implement:** carry out the plan through its own checks, then go straight on
+   to review.
+5. **Review:** run the code review on the branch in a fresh session that didn't
+   write the change, rerun the checks with
+   `.agents/skills/core-critical-pre-pr-checks/SKILL.md`, then walk the
+   requester through what is left. The PR stays a draft until the requester
+   says it's ready.
+
+`.agents/skills/core-critical-workflow/SKILL.md` ties the stages together and
+holds the spec and plan sections. Each review loops: fix only major findings,
+re-read and review again, and stop on a clean pass, after five passes, or when
+the same major findings come back. The full loop is in
+`.agents/skills/core-critical-workflow/references/review-loop.md`.
+
+In a walkthrough, apply obvious low-risk fixes and list them in one line. Put
+each real decision to the requester one at a time, with a recommendation: fix
+it now, file a follow-up issue, or drop it.
+
+Short path: a change that can be described in one sentence and is already
+covered by tests skips the grill, spec and plan when the requester agrees. It
+still gets stage 5. Release promotions (`develop` -> `main`) and branch syncs
+carry no new change and are exempt. Cloud agents (Copilot cloud agent, Codex
+cloud) take only short-path tasks, since they can't hold the interview or keep
+a local spec.
+
+Specs and plans are working files, never committed. Keep them outside every
+checkout, in `MW3Recomp-Private-specs/` beside the main checkout, named
+`<issue>-<slug>-spec.md` and `<issue>-<slug>-plan.md`. The folder is named
+after the repository so that the spec, plan and review of one task, each
+possibly in a different worktree, find the same files.
+
 ## Implement, validate and open a PR
 
 Implement and validate the task, commit only its authored source and relevant
