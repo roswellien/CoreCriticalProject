@@ -233,6 +233,10 @@ class PullRequestTests(unittest.TestCase):
         )
         self.assertIn(("PR #2", "merged, but issue #1 is still open"), found)
 
+    def test_stacked_pr_merged_into_a_topic_branch_leaves_its_issue_open(self):
+        stacked = pull(2, state="MERGED", merged_days_ago=1, base="carson-nr/docs/41-board")
+        self.assertEqual(problems([issue(1)], [stacked], [card(1, "In progress")]), [])
+
     def test_old_merged_prs_stay_quiet(self):
         found = problems([issue(1)], [pull(2, state="MERGED", merged_days_ago=30)], [card(1)])
         self.assertEqual(found, [])
@@ -270,7 +274,14 @@ class ParsingTests(unittest.TestCase):
                     "headRefName": "copilot/generate-release-notes-from-prs",
                     "changedFiles": 0,
                     "mergedAt": None,
-                    "closingIssuesReferences": [{"number": 21}],
+                    "closingIssuesReferences": [
+                        {
+                            "number": 21,
+                            "url": "https://github.com/roswellien/MW3Recomp-Private/issues/21",
+                        },
+                        # Another repository's issue, which must not pass for our #1.
+                        {"number": 1, "url": "https://github.com/other/project/issues/1"},
+                    ],
                 }
             ]
         )
@@ -325,6 +336,27 @@ class ExitCodeTests(unittest.TestCase):
         ):
             self.assertEqual(board.main([]), 2)
         self.assertIn("missing project scope", stderr.getvalue())
+
+    def run_with_reads(self, issue_rows, board_items, board_total):
+        # The three reads come back in order: issues, PRs, then the board.
+        reads = [issue_rows, [], {"items": board_items, "totalCount": board_total}]
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(board, "_run_gh", side_effect=reads),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = board.main([])
+        return exit_code, stderr.getvalue()
+
+    def test_full_read_exits_2_instead_of_checking_part_of_the_list(self):
+        exit_code, stderr = self.run_with_reads([{}] * board.LIST_LIMIT, [], 0)
+        self.assertEqual(exit_code, 2)
+        self.assertIn("some may be missing", stderr)
+
+    def test_board_with_more_items_than_read_exits_2(self):
+        exit_code, stderr = self.run_with_reads([], [], board.LIST_LIMIT + 5)
+        self.assertEqual(exit_code, 2)
+        self.assertIn("only 0 were read", stderr)
 
 
 if __name__ == "__main__":
