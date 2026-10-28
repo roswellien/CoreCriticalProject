@@ -71,7 +71,7 @@ link/diff/evidence checks, not an unnecessary game capture or native recompile.
 
 These formats apply to every contributor and agent. The PR conventions check
 (`.github/workflows/pr-conventions.yml`) enforces the base-branch rule and
-warns about names that don't follow them.
+fails when names don't follow them.
 
 ### Branches
 
@@ -169,7 +169,7 @@ more detail from the reporter.
 
 A PR into `main` from any branch other than `develop` fails the check. A branch
 name or title that doesn't follow the formats above, or a branch whose username
-doesn't match the PR author, gets a warning on the PR but doesn't block it.
+doesn't match the PR author, fails the check.
 
 ### No AI tool attribution
 

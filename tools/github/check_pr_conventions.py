@@ -3,12 +3,11 @@
 The rules are described in "Names and formats" in docs/github-workflow.md. A PR
 into `main` that does not come from `develop` is an error, because GitHub branch
 protection is unavailable on this repository's plan. Branch names and titles
-that break the documented formats are warnings only, so in-flight work is not
-blocked while contributors and agents adopt the formats.
+that break the documented formats are errors.
 
 Inputs: --title, --head, --base and --author (the PR author's GitHub login).
-Exit codes: 0 when there are no errors (warnings may be printed), 1 when there
-is at least one error, 2 for invalid command-line usage.
+Exit codes: 0 when there are no errors, 1 when there is at least one error, 2
+for invalid command-line usage.
 """
 
 from __future__ import annotations
@@ -69,23 +68,23 @@ def _check_release(title: str, head: str) -> list[Finding]:
             Finding("error", f"PRs into main come only from develop, not from {head!r} (docs/github-workflow.md).")
         )
     if not title.startswith("Release "):
-        findings.append(Finding("warning", f"A release PR title starts with 'Release ' ({DOCS_REFERENCE})."))
+        findings.append(Finding("error", f"A release PR title starts with 'Release ' ({DOCS_REFERENCE})."))
     return findings
 
 
 def _check_sync(title: str) -> list[Finding]:
     if title.startswith("Sync main into develop"):
         return []
-    return [Finding("warning", f"A sync PR title starts with 'Sync main into develop' ({DOCS_REFERENCE}).")]
+    return [Finding("error", f"A sync PR title starts with 'Sync main into develop' ({DOCS_REFERENCE}).")]
 
 
 def _check_branch(head: str, author: str) -> list[Finding]:
     match = BRANCH_PATTERN.match(head)
     if match is None:
-        return [Finding("warning", f"Branch {head!r} does not match {BRANCH_FORMAT} ({DOCS_REFERENCE}).")]
+        return [Finding("error", f"Branch {head!r} does not match {BRANCH_FORMAT} ({DOCS_REFERENCE}).")]
     if match["user"] != author.lower():
         return [
-            Finding("warning", f"Branch {head!r} starts with {match['user']!r}, but the PR author is {author!r}.")
+            Finding("error", f"Branch {head!r} starts with {match['user']!r}, but the PR author is {author!r}.")
         ]
     return []
 
@@ -94,16 +93,16 @@ def _check_title(title: str) -> list[Finding]:
     findings = []
     match = TITLE_PATTERN.match(title)
     if match is None:
-        findings.append(Finding("warning", f"Title {title!r} does not match {TITLE_FORMAT} ({DOCS_REFERENCE})."))
+        findings.append(Finding("error", f"Title {title!r} does not match {TITLE_FORMAT} ({DOCS_REFERENCE})."))
     else:
         area = match["area"].lower()
         if area not in AREAS and area != DOCS_AREA:
             allowed = ", ".join(AREAS + (DOCS_AREA,))
-            findings.append(Finding("warning", f"Title area {match['area']!r} is not one of: {allowed}."))
+            findings.append(Finding("error", f"Title area {match['area']!r} is not one of: {allowed}."))
     if title.endswith("."):
-        findings.append(Finding("warning", "Title ends with a period."))
+        findings.append(Finding("error", "Title ends with a period."))
     if len(title) > MAX_TITLE_LENGTH:
-        findings.append(Finding("warning", f"Title is {len(title)} characters; keep it to {MAX_TITLE_LENGTH}."))
+        findings.append(Finding("error", f"Title is {len(title)} characters; keep it to {MAX_TITLE_LENGTH}."))
     return findings
 
 
