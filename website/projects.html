@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore Core Critical projects and their current development tracks.">
+  <meta name="theme-color" content="#141717">
+  <title>Projects | Core Critical</title>
+  <link rel="icon" href="assets/plates/brand-mark.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="Core Critical home"><img src="assets/plates/brand-mark.png" alt="" width="32" height="32"><span>CORE CRITICAL</span></a>
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="primary-nav"><span>Menu</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
+      <a href="projects.html" aria-current="page">Projects</a><a href="news.html">News</a><a href="media.html">Media</a><a href="about.html">About</a><a href="https://github.com/roswellien/MW3Recomp">GitHub</a>
+    </nav>
+  </header>
+  <main id="main" class="section-shell">
+    <section class="section-heading" aria-labelledby="projects-title">
+      <h1 id="projects-title">Projects</h1>
+      <p>Preserving classic mech games through faithful recompilation and modern platform support.</p>
+    </section>
+    <section id="mw3" class="modernization" aria-labelledby="mw3-title">
+      <h2 id="mw3-title">MechWarrior 3</h2>
+      <div class="track-grid">
+        <a class="track" href="native.html"><img src="assets/plates/native-art.png" alt="" width="2048" height="768"><div class="track-content"><div><h3>Native Recompilation</h3><p>Faithful modernization of the original game for current systems.</p></div></div></a>
+        <a class="track" href="vulkan.html"><img src="assets/plates/vulkan-art.png" alt="" width="2048" height="768"><div class="track-content"><div><h3>Vulkan Graphics</h3><p>A modern rendering pipeline for broader compatibility.</p></div></div></a>
+        <a class="track" href="tools.html"><img src="assets/plates/tools-art.png" alt="" width="2048" height="768"><div class="track-content"><div><h3>Launcher and Tools</h3><p>Install, configure, and update the project.</p></div></div></a>
+      </div>
+    </section>
+    <section id="project-family" class="more-projects" aria-labelledby="family-title">
+      <div class="section-heading"><h2 id="family-title">Future targets</h2></div>
+      <div class="project-family">
+        <article class="family-project" id="pirates-moon"><img src="assets/plates/vulkan-art.png" alt="" width="2048" height="768" loading="lazy"><div><span class="state">Future target</span><h3>MW3: Pirate’s Moon</h3><p>A new chapter for the same core.</p></div></article>
+        <article class="family-project" id="mw4"><img src="assets/plates/hero-art.png" alt="" width="2056" height="765" loading="lazy"><div><span class="state">Future targets</span><h3>MW4</h3><p>Vengeance. Black Knight. Mercenaries.</p></div></article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
