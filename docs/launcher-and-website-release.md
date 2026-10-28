@@ -200,9 +200,12 @@ runtime inputs and release artifacts outside Git.
 
 The public project site at `corecritical.dev` is a separate Cloudflare Pages
 project. From `website/`, run `python build.py`, inspect the generated `dist/`,
-and confirm the approved files from the ignored `website/assets/plates/` input
-are present in `dist/assets/plates/`. A fresh clone needs the maintainer's
-current approved site-art bundle staged there. Then publish with:
+and confirm the complete deployed site source is present. This repository
+snapshot does not contain the linked `projects.html`, `media.html`, `about.html`
+or `project.html` pages, and the approved artwork in ignored
+`website/assets/plates/` needs to be staged by the maintainer. Reconcile those
+inputs with the current Pages site, and verify all links and assets in `dist/`
+before deployment. Then publish with:
 
 ```powershell
 npx --yes wrangler@4.151.0 pages deploy dist --project-name core-critical

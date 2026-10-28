@@ -19,11 +19,15 @@ and builds `news.html` from the dated Markdown updates in `docs/mechlab/` at the
 repository root. Edit those source updates rather than editing generated news
 HTML.
 
-The approved display artwork in `assets/plates/` is ignored by Git. The
-maintainer supplies the current site-art files locally before a fresh-clone
-build; the build output must contain every referenced plate before deployment.
-Use only approved website artwork. Original game media and generated game code
-remain local.
+The approved display artwork in `assets/plates/` is ignored by Git. The tracked
+homepage also links to `projects.html`, `media.html`, `about.html` and
+`project.html`, which are absent from this repository snapshot. A fresh clone
+therefore does not yet contain the complete production Pages source. Before a
+production deployment, the maintainer must reconcile those current page files
+and supply the current approved site-art files locally; verify all links and
+assets are present in `dist/`. Use only approved website artwork. Original game
+media and generated game code remain local. This checkout gap is why the Pages
+deploy command below is documented but was not run from a fresh clone.
 
 ## Publish
 
