@@ -4,6 +4,7 @@ Usage, from the repository root:
     python tools/style/check_style.py           report every language and check
     python tools/style/check_style.py --fix     format the languages whose cleanup has landed
     python tools/style/check_style.py --list    show which files each language checks
+    python tools/style/check_style.py --preflight --language python  run pre-cleanup safety checks
 
 Setup, the pinned tool versions and the rollout plan are in tools/style/README.md. The
 rules themselves are in CODE_STYLE.md.
@@ -17,6 +18,7 @@ look like a clean result.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -445,6 +447,264 @@ def print_github_warnings(results: list[CheckResult]) -> None:
 
 
 # ---------------------------------------------------------------------------------------
+# Pre-cleanup safety checks
+# ---------------------------------------------------------------------------------------
+
+CODE_FILE_EXTENSIONS = {
+    ".py",
+    ".ps1",
+    ".psm1",
+    ".psd1",
+    ".cs",
+    ".cpp",
+    ".hpp",
+    ".h",
+    ".c",
+    ".inc",
+    ".js",
+    ".ts",
+    ".cjs",
+    ".mjs",
+    ".sh",
+    ".bash",
+    ".cmake",
+}
+
+READ_PATTERNS = [
+    r"\bread_text\b",
+    r"\bread_bytes\b",
+    r"\breadFileSync\b",
+    r"\breadFile\b",
+    r"\bGet-Content\b",
+    r"\bReadAllText\b",
+    r"\bReadAllBytes\b",
+    r"\bReadAllLines\b",
+    r"\bGet-FileHash\b",
+    r"\bsha256\b",
+    r"\bSHA256\b",
+    r"\bhashlib\b",
+    r"\bfile_digest\b",
+    r"\binspect\.getsource\b",
+    r"\bfile\s*\(\s*(?:SHA256|READ|STRINGS)\b",
+    r"\brequire_pin\b",
+    r"\bCopy-HlpPin\b",
+    r"\bHash-Hlp\b",
+    r"\bsha\s*\(",
+    r"\bpin\s*\(",
+]
+READ_OPERATION_REGEX = re.compile("|".join(READ_PATTERNS))
+
+
+@dataclass
+class StoredHashHit:
+    """A tracked file that contains a formatted file's hash or duplicate bytes."""
+
+    holding_file: str
+    target_file: str
+    label: str  # "pin on that path" or "identical copy"
+
+    def describe(self) -> str:
+        if self.label == "identical copy":
+            return f"{self.holding_file}: identical copy of {self.target_file}"
+        return f"{self.holding_file}: pin on that path ({self.target_file})"
+
+
+@dataclass
+class TextReadHit:
+    """A code location reading, slicing, or hashing a language file as text."""
+
+    holding_file: str
+    line_number: int
+    target_file: str
+
+    def describe(self) -> str:
+        return f"{self.holding_file}:{self.line_number}: reads {self.target_file}"
+
+
+def is_code_file(path: str) -> bool:
+    name = Path(path).name
+    if name in ("CMakeLists.txt", "Makefile"):
+        return True
+    return Path(path).suffix.lower() in CODE_FILE_EXTENSIONS
+
+
+def list_all_tracked_files(repo_root: Path = REPO_ROOT) -> list[str]:
+    """List all tracked files in the repository."""
+    listing = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    tracked = [path for path in listing.stdout.split("\0") if path]
+    return [path for path in tracked if (repo_root / path).is_file()]
+
+
+def run_stored_hash_scan(
+    changed_files: list[str],
+    all_tracked_files: list[str],
+    repo_root: Path = REPO_ROOT,
+) -> list[StoredHashHit]:
+    """Find any tracked file containing the SHA-256 of a file the formatter would change.
+
+    Labels hits as either an identical copy or a pin on that path.
+    """
+    if not changed_files:
+        return []
+
+    targets: dict[str, tuple[int, str, bytes]] = {}
+    for path in changed_files:
+        full_path = repo_root / path
+        if not full_path.is_file():
+            continue
+        content = full_path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest().lower()
+        targets[path] = (len(content), digest, digest.encode("ascii"))
+
+    if not targets:
+        return []
+
+    hits: list[StoredHashHit] = []
+    for candidate in all_tracked_files:
+        candidate_path = repo_root / candidate
+        if not candidate_path.is_file():
+            continue
+        try:
+            candidate_bytes = candidate_path.read_bytes()
+        except OSError:
+            continue
+        candidate_size = len(candidate_bytes)
+        candidate_digest: str | None = None
+
+        for target_path, (target_size, target_hex, target_sha_bytes) in targets.items():
+            if candidate == target_path:
+                continue
+
+            # Check for identical copy (matching size and SHA-256)
+            if candidate_size == target_size:
+                if candidate_digest is None:
+                    candidate_digest = hashlib.sha256(candidate_bytes).hexdigest().lower()
+                if candidate_digest == target_hex:
+                    hits.append(StoredHashHit(candidate, target_path, "identical copy"))
+                    continue
+
+            # Check for hash pin (candidate contains the target SHA-256 string)
+            if target_sha_bytes in candidate_bytes:
+                hits.append(StoredHashHit(candidate, target_path, "pin on that path"))
+
+    hits.sort(key=lambda h: (h.holding_file, h.target_file, h.label))
+    return hits
+
+
+def run_text_read_search(
+    target_files: list[str],
+    all_tracked_files: list[str],
+    repo_root: Path = REPO_ROOT,
+) -> list[TextReadHit]:
+    """Search code files for reads, slices, or hashes of target language files."""
+    if not target_files:
+        return []
+
+    target_names = {Path(f).name: f for f in target_files}
+    target_paths = {Path(f).as_posix(): f for f in target_files}
+
+    suffixes = {Path(f).suffix.lower().lstrip(".") for f in target_files if Path(f).suffix}
+    if not suffixes:
+        return []
+    suffix_pattern = "|".join(re.escape(s) for s in sorted(suffixes))
+    token_re = re.compile(r"[\w\-./\\]+\.(?:" + suffix_pattern + r")\b")
+
+    code_candidates = [f for f in all_tracked_files if is_code_file(f)]
+    hits: list[TextReadHit] = []
+    seen: set[tuple[str, int, str]] = set()
+
+    for code_file in code_candidates:
+        full_code_path = repo_root / code_file
+        if not full_code_path.is_file():
+            continue
+        try:
+            content = full_code_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        if not READ_OPERATION_REGEX.search(content):
+            continue
+
+        lines = content.splitlines()
+        for idx, line in enumerate(lines, 1):
+            line_stripped = line.strip()
+            if line_stripped.startswith(("#include", "import ", "from ")):
+                continue
+
+            tokens = token_re.findall(line)
+            if not tokens:
+                continue
+
+            matched_targets = set()
+            for tok in tokens:
+                tok_norm = tok.replace("\\", "/").rstrip("\"'")
+                tok_base = Path(tok_norm).name
+                if tok_norm in target_paths:
+                    matched_targets.add(target_paths[tok_norm])
+                elif tok_base in target_names:
+                    matched_targets.add(target_names[tok_base])
+
+            if not matched_targets:
+                continue
+
+            window_start = max(0, idx - 6)
+            window_end = min(len(lines), idx + 5)
+            window = "\n".join(lines[window_start:window_end])
+            if READ_OPERATION_REGEX.search(window):
+                for target_file in sorted(matched_targets):
+                    key = (code_file, idx, target_file)
+                    if key not in seen:
+                        seen.add(key)
+                        hits.append(TextReadHit(code_file, idx, target_file))
+
+    hits.sort(key=lambda h: (h.holding_file, h.line_number, h.target_file))
+    return hits
+
+
+def run_preflight(language: str, exclude_patterns: list[str]) -> int:
+    """Run pre-cleanup safety checks for one language."""
+    if language not in LANGUAGES:
+        print(f"preflight: error: unknown language {language!r}")
+        return EXIT_TOOL_ERROR
+
+    pins = read_pinned_versions()
+    version_error = version_error_for(language, pins)
+    if version_error:
+        print(f"preflight: {language}: error: {version_error}")
+        return EXIT_TOOL_ERROR
+
+    all_tracked = list_all_tracked_files(REPO_ROOT)
+    target_files = list_files(LANGUAGES[language].suffixes, exclude_patterns)
+
+    format_check = LANGUAGES[language].checks.get("format")
+    changed_files: list[str] = []
+    if format_check:
+        result = run_check(language, "format", format_check, target_files)
+        if result.error:
+            print(f"preflight: {language} format: error: {result.error}")
+            return EXIT_TOOL_ERROR
+        changed_files = result.findings
+
+    hash_hits = run_stored_hash_scan(changed_files, all_tracked, REPO_ROOT)
+    print(f"preflight: {language}: stored-hash scan: {len(hash_hits):,} findings")
+    for hit in hash_hits:
+        print(f"  {hit.describe()}")
+
+    text_hits = run_text_read_search(target_files, all_tracked, REPO_ROOT)
+    print(f"preflight: {language}: text-read search: {len(text_hits):,} findings")
+    for hit in text_hits:
+        print(f"  {hit.describe()}")
+
+    return EXIT_CLEAN
+
+
+# ---------------------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------------------
 
@@ -455,6 +715,9 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--check", choices=["format", "lint"])
     parser.add_argument("--fix", action="store_true", help="format enforced languages in place")
     parser.add_argument("--list", action="store_true", help="print the files each language checks")
+    parser.add_argument(
+        "--preflight", action="store_true", help="run pre-cleanup safety checks for one language"
+    )
     parser.add_argument("--verbose", action="store_true", help="print every file or finding")
     return parser.parse_args(argv)
 
@@ -511,6 +774,12 @@ def main(argv: list[str]) -> int:
             for path in list_files(LANGUAGES[language].suffixes, exclude_patterns):
                 print(f"{language}\t{path}")
         return EXIT_CLEAN
+
+    if arguments.preflight:
+        if not arguments.language or len(arguments.language) != 1:
+            print("preflight: error: --preflight requires exactly one --language")
+            return EXIT_TOOL_ERROR
+        return run_preflight(arguments.language[0], exclude_patterns)
 
     if arguments.fix:
         return fix_enforced(arguments, exclude_patterns)

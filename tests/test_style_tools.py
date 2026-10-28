@@ -4,8 +4,10 @@ They cover the decisions the script makes on its own: which files are excluded, 
 the exclusion copies still agree, how each tool's exit code is read, and when a run fails.
 """
 
+import hashlib
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -141,6 +143,96 @@ class RunOutcomeTests(unittest.TestCase):
         result = check_style.run_check("python", "lint", crashing_check, ["a.py"])
         self.assertIn("exit code 3", result.error)
         self.assertEqual(result.findings, [])
+
+
+class PreflightTests(unittest.TestCase):
+    def test_stored_hash_scan_reports_identical_copy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source = temp_path / "source.cpp"
+            copy = temp_path / "copy.cpp"
+            other = temp_path / "other.cpp"
+            source.write_text("int x = 42;\n", encoding="utf-8")
+            copy.write_text("int x = 42;\n", encoding="utf-8")
+            other.write_text("int y = 99;\n", encoding="utf-8")
+
+            hits = check_style.run_stored_hash_scan(
+                ["source.cpp"], ["source.cpp", "copy.cpp", "other.cpp"], repo_root=temp_path
+            )
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0].holding_file, "copy.cpp")
+            self.assertEqual(hits[0].target_file, "source.cpp")
+            self.assertEqual(hits[0].label, "identical copy")
+            self.assertIn("identical copy of source.cpp", hits[0].describe())
+
+    def test_stored_hash_scan_reports_path_pin(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            target = temp_path / "target.py"
+            manifest = temp_path / "manifest.json"
+            target.write_text("print('test')\n", encoding="utf-8")
+            target_digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            manifest.write_text(f'{{"hash": "{target_digest}"}}\n', encoding="utf-8")
+
+            hits = check_style.run_stored_hash_scan(
+                ["target.py"], ["target.py", "manifest.json"], repo_root=temp_path
+            )
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0].holding_file, "manifest.json")
+            self.assertEqual(hits[0].target_file, "target.py")
+            self.assertEqual(hits[0].label, "pin on that path")
+            self.assertIn("pin on that path (target.py)", hits[0].describe())
+
+    def test_stored_hash_scan_ignores_unchanged_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "a.cpp").write_text("int a = 1;\n", encoding="utf-8")
+            (temp_path / "b.cpp").write_text("int a = 1;\n", encoding="utf-8")
+
+            hits = check_style.run_stored_hash_scan([], ["a.cpp", "b.cpp"], repo_root=temp_path)
+            self.assertEqual(hits, [])
+
+    def test_text_read_search_finds_read_operations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "fixture_template.html").write_text("<h1>Test</h1>", encoding="utf-8")
+            builder = temp_path / "build.py"
+            builder.write_text(
+                'template = Path("fixture_template.html").read_text(encoding="utf-8")\n',
+                encoding="utf-8",
+            )
+            ignored = temp_path / "ignored.py"
+            ignored.write_text("import sys\nprint('hello')\n", encoding="utf-8")
+
+            hits = check_style.run_text_read_search(
+                ["fixture_template.html"],
+                ["fixture_template.html", "build.py", "ignored.py"],
+                repo_root=temp_path,
+            )
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0].holding_file, "build.py")
+            self.assertEqual(hits[0].target_file, "fixture_template.html")
+            self.assertEqual(hits[0].line_number, 1)
+            self.assertEqual(hits[0].describe(), "build.py:1: reads fixture_template.html")
+
+    def test_text_read_search_ignores_non_read_code(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "header.hpp").write_text("#pragma once\n", encoding="utf-8")
+            source = temp_path / "main.cpp"
+            source.write_text('#include "header.hpp"\nint main() { return 0; }\n', encoding="utf-8")
+
+            hits = check_style.run_text_read_search(
+                ["header.hpp"], ["header.hpp", "main.cpp"], repo_root=temp_path
+            )
+            self.assertEqual(hits, [])
+
+    def test_preflight_cli_requires_exactly_one_language(self):
+        self.assertEqual(check_style.main(["--preflight"]), check_style.EXIT_TOOL_ERROR)
+        self.assertEqual(
+            check_style.main(["--preflight", "--language", "cpp", "--language", "python"]),
+            check_style.EXIT_TOOL_ERROR,
+        )
 
 
 if __name__ == "__main__":
