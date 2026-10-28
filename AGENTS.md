@@ -27,8 +27,7 @@ API success. No production interpreter/original-code fallback is authorized.
 
 Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
 code stay local, and private reports, build outputs, credentials and signing
-material are never committed. Full continuation instructions are in
-`docs/archive/claude-m4-continuation-handoff.md`.
+material are never committed.
 Follow `CODE_STYLE.md` when writing or changing code.
 
 ## Required GitHub PR workflow
@@ -58,9 +57,9 @@ task-specific commit instructions; it does not expand a task's file scope.
   A PR awaiting review is not a merged or published change. Synchronize changes
   from `main` back into `develop` through a synchronization PR when needed.
 
-See `docs/github-workflow.md`. Current private-repository plan restrictions
-prevent GitHub branch-protection enforcement; this workflow still applies, and
-the limitation doesn't authorize making the repository public.
+Current private-repository plan restrictions prevent GitHub branch-protection
+enforcement; this workflow still applies, and the limitation doesn't authorize
+making the repository public.
 
 ## Where to find more
 
@@ -72,6 +71,7 @@ the limitation doesn't authorize making the repository public.
 - `docs/release-filenames.md`: required installer and update filenames.
 - `docs/roadmap.md`: what is planned next.
 - `docs/code-guide.md`: how the code is organized and how it should explain itself.
+- `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
 
 Agent rules live only in this file. `CLAUDE.md` and
 `.github/copilot-instructions.md` point here; edit this file instead.
