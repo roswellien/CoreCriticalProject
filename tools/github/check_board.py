@@ -38,7 +38,10 @@ STALE_AFTER = timedelta(days=7)
 # Merged PRs and closed issues older than this aren't checked, so old history stays quiet.
 RECENT = timedelta(days=14)
 
-LIST_LIMIT = "1000"
+# The most items one read asks for. A read that comes back this full may have been cut
+# short, so it is treated as a failed read rather than checked as if it were complete.
+LIST_LIMIT = 1000
+INTEGRATION_BRANCH = "develop"
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,7 @@ class PullRequest:
     head: str
     changed_files: int
     merged_at: datetime | None
-    closes: tuple[int, ...]  # issue numbers from "Closes #N" or a manual link
+    closes: tuple[int, ...]  # this repository's issues from "Closes #N" or a manual link
 
 
 @dataclass(frozen=True)
@@ -206,7 +209,10 @@ def _check_pull(
 ) -> list[Finding]:
     subject = f"PR #{pull.number}"
     if pull.state == "MERGED":
-        if pull.merged_at is None or now - pull.merged_at > RECENT:
+        # A stacked PR merged into another topic branch hasn't reached the integration
+        # branch yet, so its issue rightly stays open.
+        reached_integration = pull.base == INTEGRATION_BRANCH
+        if not reached_integration or pull.merged_at is None or now - pull.merged_at > RECENT:
             return []
         still_open = [number for number in pull.closes if _is_open(issues_by_number.get(number))]
         return [
@@ -307,10 +313,21 @@ def parse_pulls(rows: Iterable[dict]) -> list[PullRequest]:
             head=row["headRefName"],
             changed_files=row["changedFiles"],
             merged_at=_parse_time(row.get("mergedAt")),
-            closes=tuple(reference["number"] for reference in row["closingIssuesReferences"]),
+            closes=_issues_closed_here(row["closingIssuesReferences"]),
         )
         for row in rows
     ]
+
+
+def _issues_closed_here(references: list[dict]) -> tuple[int, ...]:
+    # "Closes other/project#1" is a reference too; kept as a bare number it would pass
+    # for this repository's issue #1.
+    our_issue_url = f"https://github.com/{REPOSITORY}/issues/"
+    return tuple(
+        reference["number"]
+        for reference in references
+        if reference["url"].startswith(our_issue_url)
+    )
 
 
 def parse_cards(board: dict) -> list[Card]:
@@ -334,12 +351,29 @@ def fetch() -> tuple[list[Issue], list[PullRequest], list[Card]]:
     pull_fields = (
         "number,title,state,baseRefName,headRefName,changedFiles,mergedAt,closingIssuesReferences"
     )
-    every_item = ["-R", REPOSITORY, "--state", "all", "--limit", LIST_LIMIT]
+    every_item = ["-R", REPOSITORY, "--state", "all", "--limit", str(LIST_LIMIT)]
     issues = _run_gh(["issue", "list", *every_item, "--json", issue_fields])
+    _require_complete(len(issues), "issues")
     pulls = _run_gh(["pr", "list", *every_item, "--json", pull_fields])
-    board_options = ["--owner", BOARD_OWNER, "--limit", LIST_LIMIT, "--format", "json"]
+    _require_complete(len(pulls), "pull requests")
+    board_options = ["--owner", BOARD_OWNER, "--limit", str(LIST_LIMIT), "--format", "json"]
     board = _run_gh(["project", "item-list", str(BOARD_NUMBER), *board_options])
+    _require_complete(len(board["items"]), "board items")
+    if board["totalCount"] > len(board["items"]):
+        raise RuntimeError(
+            f"the board has {board['totalCount']} items but only {len(board['items'])} were read"
+        )
     return parse_issues(issues), parse_pulls(pulls), parse_cards(board)
+
+
+def _require_complete(count: int, what: str) -> None:
+    # Checking a partial read would report missing cards and PRs that exist, or a clean
+    # board that isn't, so stop instead and say how to fix it.
+    if count >= LIST_LIMIT:
+        raise RuntimeError(
+            f"read {count} {what}, the most one read returns, so some may be missing; "
+            "raise LIST_LIMIT in tools/github/check_board.py"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
