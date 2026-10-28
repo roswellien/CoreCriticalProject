@@ -5,7 +5,7 @@ Before changing files, follow the Required GitHub PR workflow below and read
 
 Read `docs/faithful-modernization-plan.md`, `docs/roadmap.md` and
 `docs/m4-Codex-work-review-2026-10-11.md` before choosing implementation work.
-The execution-first strategy was authorized on2026-10-11: preserve original
+The execution-first strategy was authorized on 2026-10-11: preserve original
 MW3 gameplay through recompilation, integrate modern platform services/Vulkan,
 and advance native host -> live menu -> live Training. Do not restart as a remake.
 
@@ -32,6 +32,7 @@ API success. No production interpreter/original-code fallback is authorized.
 Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
 code stay local. Full continuation instructions are in
 `docs/Codex-m4-continuation-handoff.md`.
+Follow `CODE_STYLE.md` when writing or changing code.
 
 ## Required GitHub PR workflow
 
@@ -41,7 +42,8 @@ tests, build scripts, hotfixes and release/version changes. It supersedes older
 task-specific commit instructions; it does not expand a task's file scope.
 
 - `main` is the stable release branch; `develop` is the shared integration branch.
-- Start each task on a `codex/<topic>` branch from current `origin/develop`,
+- Start each task on a `<username>/<type>/<issue>-<topic>` branch (see "Names
+  and formats" in `docs/github-workflow.md`) from current `origin/develop`,
   preferably in an isolated worktree when other work is uncommitted.
 - Task-scoped commits, feature-branch pushes and PR creation are authorized as
   part of implementing a requested change. Commit only that task's authored

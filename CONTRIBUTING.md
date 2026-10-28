@@ -74,6 +74,7 @@ addresses. Human readability does not justify invented gameplay semantics.
 Preserve frozen source models, hashes and historical evidence. Refactor maintained
 code with narrow checks; propose separate replacements for pinned historical tools
 rather than silently formatting or renaming their source.
+The day-to-day rules and style checks are in [CODE_STYLE.md](CODE_STYLE.md).
 
 For Mod Tools, keep the original installation read-only and place caches/projects/
 exports in a separate writable location. Validate identifiers, paths and sizes
@@ -81,6 +82,10 @@ before file access or process launch. Exported game archives are local derived
 content; a successful export does not authorize sharing it or prove native play.
 
 ## Issues and pull requests
+
+File issues with the repository's issue forms and follow
+[Names and formats](docs/github-workflow.md#names-and-formats) for branches,
+commits, PR titles and labels.
 
 For a bug, include the component/build, OS/GPU/driver when relevant, the supported
 game profile, steps to reproduce, expected result and actual result. Attach only

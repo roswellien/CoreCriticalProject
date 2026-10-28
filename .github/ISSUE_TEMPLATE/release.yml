@@ -1,0 +1,42 @@
+name: Release checklist
+description: Track one release from merged main to published files.
+labels: [release]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The governing rules are "Required launcher installer filenames" and "Required update filenames" in `AGENTS.md`, and "Promote and publish a release" in `docs/github-workflow.md`. If this list disagrees with them, they win.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "1.0.45"
+    validations:
+      required: true
+  - type: input
+    id: main_sha
+    attributes:
+      label: Merged main SHA
+      description: The commit the release is built from.
+    validations:
+      required: true
+  - type: checkboxes
+    id: products
+    attributes:
+      label: Products in this release
+      options:
+        - label: Launcher
+        - label: Runtime
+        - label: Packs
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: Installer is named `corecriticalinstaller-<version>.exe` everywhere it appears.
+        - label: Updates are named `<version>.<game>update` and `<version>.ccupdate`.
+        - label: Built from merged `main`, with its SHA recorded.
+        - label: Signing verified.
+        - label: Install, update and rollback tested.
+        - label: Site links, download names and checksums match the build receipt.
+        - label: Historical artifacts and compatibility URLs kept.

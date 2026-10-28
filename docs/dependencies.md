@@ -20,6 +20,25 @@ revision and target triple with translated IR. Do not automatically track a
 lifter's default branch. clang-format/clang-tidy are optional developer tools;
 agree on a formatting major version before enforcing it for release builds.
 
+## Style checkers (developer tools)
+
+Used only by `tools/style/check_style.py` and the CI `style` job, never by builds or the
+game. Each is pinned to an exact release at least one month old, in exactly one place
+(listed in [tools/style/README.md](../tools/style/README.md)); update this table in the
+same commit as a bump. Formatting major version: this setup proposes clang-format 18,
+the version CI's Ubuntu 24.04 image ships and `format-check` already uses.
+
+| Tool | Version | License | Integrity | Why it's needed |
+| --- | --- | --- | --- | --- |
+| clang-format (PyPI wheel) | 18.1.3 | Apache-2.0 with LLVM exception | every published SHA-256 in `tools/style/requirements.txt` | Same formatter and `.clang-format` the existing `format-check` uses, installable at an exact version on Windows and Linux |
+| Ruff | 0.16.9 | MIT | every published SHA-256 in `tools/style/requirements.txt` | No Python formatter or linter exists in the project; one tool does both |
+| Prettier | 3.9.9 | MIT | `sha512-Z/CJHIkdujO/OtN7nXUii0Rf3VT5SRuhjBA82Xvu2XhBUgX3nhP67T0LHceBdQLex7OOFGTox+Q5Yg8Jk2Qivg==` in `tools/style/package-lock.json` | No JavaScript, CSS or HTML formatter exists in the project |
+| PSScriptAnalyzer | 1.25.0 | MIT | PowerShell Gallery SHA-512 `5/tXMmLmBLqymRSuYpIdJLl8L4i1GbQSd7QD72zhY/FLfRs23HNEmmjlrlqNlQKJGxDCZBMf0YE63ym/ExwWYw==` (the gallery has no client-side pin; version pinned in `tools/style/check_powershell.ps1`) | Microsoft's PowerShell formatter and linter; nothing else covers PowerShell |
+| .NET SDK (`dotnet format`) | 8.0.425 | MIT | installed by `actions/setup-dotnet` and selected with a job-only `global.json` | Already required for the launcher; `dotnet format` reads the existing `.editorconfig` |
+| Node.js | 22.23.3 | MIT | installed by `actions/setup-node` | Runs Prettier in CI |
+| `actions/setup-node` | v7.0.0 / `820762786026740c76f36085b0efc47a31fe5020` | MIT | commit SHA | Installs the pinned Node.js |
+| `actions/setup-dotnet` | v6.0.0 / `a98b56852c35b8e3190ac28c8c2271da59106c68` | MIT | commit SHA | Installs the pinned .NET SDK |
+
 ## Opt-in arithmetic experiment
 
 | Dependency | Pin observed in the built source | License |

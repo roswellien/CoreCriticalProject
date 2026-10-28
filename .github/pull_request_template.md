@@ -1,6 +1,12 @@
+<!-- Title: <Verb> <area>: <what changed>. Branch: <username>/<type>/<issue>-<slug>. See "Names and formats" in docs/github-workflow.md. -->
+
 ## Change
 
 <!-- Describe the problem and the resulting behavior. -->
+
+Closes #<!-- Issue number, or delete this line if there is none. -->
+
+<!-- Native behavior: name the execution boundary changed and the original comparison or fixture used. -->
 
 ## Validation
 

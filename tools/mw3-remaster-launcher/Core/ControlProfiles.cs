@@ -10,11 +10,11 @@ public sealed record ControlAction(string Name, int Command)
 {
     public string Label => System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(Name[4..]
         .Replace("THROTTLE_DN", "Throttle down").Replace("JJ_", "Jump jets ").Replace("CYCLE_CAM", "Cycle camera")
-        .Replace("VMODE_TOGGLE", "Toggle view mode").Replace("WEPGRP", "Weapon group").Replace("WEP", "Weapon").Replace('_', ' ').ToLowerInvariant());
+        .Replace("VMODE_TOGGLE", "Toggle view mode").Replace("TOGGLE_TMODE", "Toggle torso mode").Replace("WEPGRP", "Weapon group").Replace("WEP", "Weapon").Replace('_', ' ').ToLowerInvariant());
     public string Group => Name.Contains("TARGET") ? "Targeting" :
         Name.Contains("CAM") || Name.Contains("LOOK") || Name.Contains("ZOOM") || Name.Contains("VMODE") ? "Camera & view" :
         Name.Contains("THROTTLE") || Name.Contains("TURN") || Name.Contains("TWIST") || Name.Contains("PITCH") ||
-        Name.Contains("CENTER") || Name.Contains("JJ_") || Name.Contains("CROUCH") || Name.Contains("GETUP") ? "Movement & aiming" :
+        Name.Contains("CENTER") || Name.Contains("TMODE") || Name.Contains("JJ_") || Name.Contains("CROUCH") || Name.Contains("GETUP") ? "Movement & aiming" :
         Name.Contains("WEP") || Name.Contains("WEAPON") || Name.Contains("TRIGGER") || Name.Contains("FIRE") || Name.Contains("ALPHA") ? "Weapons" : "Systems & commands";
 }
 public sealed class ControlBinding
@@ -74,7 +74,21 @@ public sealed class ControlProfiles
         bool added = false;
         foreach (var preset in new[] { ControlPresets.Mw5(), Mw3DefaultControls.Create() })
         {
-            if (doc.Profiles.Count >= 24 || doc.Profiles.Any(p => p.Id == preset.Id)) continue;
+            var existing = doc.Profiles.FindIndex(p => p.Id == preset.Id);
+            if (existing >= 0)
+            {
+                // Repair only the exact old factory layout. Renamed, rebound or
+                // deliberately cleared user layouts retain every customization.
+                var previous = doc.Profiles[existing];
+                if (preset.Id == ControlPresets.Mw5Id && ControlPresets.IsUnmodifiedLegacyMw5(previous))
+                {
+                    doc.Profiles[existing] = preset;
+                    if (Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(doc, Json)) <= 256 * 1024) added = true;
+                    else doc.Profiles[existing] = previous;
+                }
+                continue;
+            }
+            if (doc.Profiles.Count >= 24) continue;
             doc.Profiles.Add(preset);
             if (Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(doc, Json)) <= 256 * 1024) added = true;
             else doc.Profiles.RemoveAt(doc.Profiles.Count - 1);

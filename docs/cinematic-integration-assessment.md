@@ -1,5 +1,10 @@
 # Cinematic integration assessment
 
+Current follow-up, 2026-10-27: the owner resumed native MP4 integration planning.
+See the [native MP4 playback plan](mp4-cinematic-playback-plan-2026-10-27.md)
+for the current 960p24 pack, recovered command lifecycle and implementation gates.
+The original-game hook proposal and deferral below remain historical research.
+
 User decision after this assessment: defer integration until the native
 recompile is ready. The legacy-hook proposal below is retained as research,
 not active implementation work. The current native format proposal is in
