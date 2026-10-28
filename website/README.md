@@ -55,3 +55,7 @@ Only dated `docs/mechlab/YYYY-MM-DD.md` notes feed the development news. The
 build does not call GitHub APIs, create a copied `data/mechlab.json`, or need a
 cross-repository deploy key. Do not add original game media, generated game
 code, Cloudflare tokens or signing credentials to this tree.
+
+The site pages are static HTML/CSS/JavaScript; the Pages Function in
+`functions/api/crash-reports.js` is the server-side crash-report endpoint.
+`python build.py` does not publish or change DNS.

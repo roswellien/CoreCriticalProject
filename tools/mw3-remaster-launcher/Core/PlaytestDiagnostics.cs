@@ -12,6 +12,41 @@ public static class PlaytestDiagnostics
 {
     public const int MaxLogBytes = 64 * 1024;
 
+    public static object CreateCrashReport(LauncherSettings settings, IEnumerable<PackManifest> packs,
+        string? launchLog, string applicationRoot)
+    {
+        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+        var logs = new Dictionary<string, string>();
+        if (launchLog != null)
+        {
+            var folder = Path.GetDirectoryName(launchLog)!;
+            foreach (var (name, path) in new[] { ("launcher", launchLog),
+                ("native_stderr", Path.Combine(folder, "native", "stderr.txt")),
+                ("native_stdout", Path.Combine(folder, "native", "stdout.txt")) })
+                if (File.Exists(path)) logs[name] = Redact(ReadTail(path), roots);
+        }
+        var failureSummary = Redact(FailureSummary(launchLog), roots);
+        if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
+
+        return new
+        {
+            format_version = 1,
+            report_id = Guid.NewGuid().ToString("N"),
+            created_utc = DateTimeOffset.UtcNow,
+            launcher_version = typeof(GameRunner).Assembly.GetName().Version?.ToString(),
+            os = RuntimeInformation.OSDescription,
+            architecture = RuntimeInformation.ProcessArchitecture.ToString(),
+            dotnet_runtime = RuntimeInformation.FrameworkDescription,
+            failure_summary = failureSummary,
+            settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
+                settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
+                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor },
+            packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
+            logs
+        };
+    }
+
     public static string ReadTail(string path)
     {
         if (!File.Exists(path)) return "";
@@ -40,7 +75,10 @@ public static class PlaytestDiagnostics
         {
             var lines = ReadTail(file).Split('\n', StringSplitOptions.RemoveEmptyEntries);
             var error = lines.LastOrDefault(line => line.StartsWith("ERROR:", StringComparison.Ordinal) ||
-                line.Contains("loader-order entry fault:", StringComparison.Ordinal));
+                line.StartsWith("[D7VK ERR]", StringComparison.Ordinal) ||
+                line.Contains("loader-order entry fault:", StringComparison.Ordinal) ||
+                line.Contains("Unhandled exception", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Fatal error", StringComparison.OrdinalIgnoreCase));
             if (error != null) return error.Trim();
         }
         return "The launch or game ended unexpectedly. Open Logs for details.";

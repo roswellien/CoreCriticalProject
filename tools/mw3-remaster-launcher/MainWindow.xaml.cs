@@ -83,7 +83,7 @@ namespace MW3RemasterLauncher
             CmbPackGame.ItemsSource = GameCatalog.Games;
             CmbPackGame.SelectedValue = GameCatalog.Mw3;
             _gameRunner = new GameRunner(_basePath, _dataRoot);
-            _d7vkRunner = new D7VkRunner(_basePath);
+            _d7vkRunner = new D7VkRunner(_basePath, _dataRoot);
 
             Loaded += MainWindow_Loaded;
         }
@@ -249,6 +249,7 @@ namespace MW3RemasterLauncher
             DisplayGraphics.Load(s);
             ChkCdAudio.IsChecked = s.LocalCdAudio;
             ChkAutomaticUpdateChecks.IsChecked = s.AutomaticUpdateChecks;
+            ChkAutomaticCrashReports.IsChecked = s.AutomaticCrashReports;
             ChkInstantReplay.IsChecked = s.InstantReplay;
             ChkPerformanceMonitor.IsChecked = s.PerformanceMonitor;
 
@@ -819,15 +820,7 @@ namespace MW3RemasterLauncher
                     SetLaunchPreparing(false);
 
                     proc.EnableRaisingEvents = true;
-                    proc.Exited += (sObj, args) =>
-                    {
-                        Dispatcher.Invoke(() =>
-                        {
-                            BtnLaunchGame.IsEnabled = true;
-                            BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
-                            TxtStatusReady.Text = "GAME STATUS: READY";
-                        });
-                    };
+                    _ = ObserveD7VkCompletionAsync(proc);
                 }
                 catch (Exception ex)
                 {
@@ -911,9 +904,7 @@ namespace MW3RemasterLauncher
                 ResetNativeLaunchControls();
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ LAUNCH OR GAME FAILED";
                 if (exit != 0)
-                    MessageBox.Show(PlaytestDiagnostics.FailureSummary(_gameRunner.LastLogPath) +
-                        "\n\nUse Open Logs or Export Report under Settings & Steam.",
-                        "Remaster stopped (exit " + exit + ")", MessageBoxButton.OK, MessageBoxImage.Error);
+                    await HandleCrashReportAsync(exit, _gameRunner.LastLogPath);
             }
             catch (Exception ex)
             {
@@ -922,6 +913,61 @@ namespace MW3RemasterLauncher
                 MessageBox.Show(ex.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally { process.Dispose(); }
+        }
+
+        private async Task ObserveD7VkCompletionAsync(Process process)
+        {
+            try
+            {
+                var exit = await GameRunner.WaitForCompletionAsync(process);
+                BtnLaunchGame.IsEnabled = true;
+                BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
+                TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ ORIGINAL GAME OR WRAPPER FAILED";
+                if (exit != 0) await HandleCrashReportAsync(exit, _d7vkRunner.LastLogPath);
+            }
+            catch (Exception error)
+            {
+                BtnLaunchGame.IsEnabled = true;
+                BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
+                TxtStatusReady.Text = "⚠ COULD NOT READ GAME EXIT STATUS";
+                MessageBox.Show(this, error.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally { process.Dispose(); }
+        }
+
+        private async Task HandleCrashReportAsync(int exitCode, string? launchLog)
+        {
+            var summary = PlaytestDiagnostics.FailureSummary(launchLog);
+            var automatic = _settingsMgr.Current.AutomaticCrashReports;
+            if (automatic)
+            {
+                MessageBox.Show(summary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
+                    "Remaster stopped (exit " + exitCode + ")", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            else
+            {
+                var choice = MessageBox.Show(this,
+                    summary + "\n\nSend the redacted recent launcher and native logs, launcher/runtime details, selected graphics settings and pack IDs to Core Critical for review? No saves, original media or memory dumps are included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
+                    "Remaster stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                if (choice != MessageBoxResult.Yes) return;
+            }
+
+            try
+            {
+                var report = PlaytestDiagnostics.CreateCrashReport(_settingsMgr.Current, _packMgr.Packs,
+                    launchLog, _basePath);
+                var result = await new CrashReportService().SubmitAsync(report);
+                var action = result.ExistingIssueUpdated ? "Added this report to the existing crash issue:" : "Created a crash issue for review:";
+                MessageBox.Show(this, action + "\n" + result.IssueUrl,
+                    "Crash report sent", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(this,
+                    "The crash report could not be sent. Your logs remain on this PC. " + error.Message +
+                    "\n\nUse Export Report under Settings & Steam to save a local copy.",
+                    "Crash report not sent", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
