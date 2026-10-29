@@ -283,6 +283,18 @@ enough to choose from.
 
 ## Promote and publish a release
 
+GitHub Releases are the canonical home for release notes. When preparing a
+release, generate notes from the previous release tag to the new tag using
+`.github/release.yml`, then lightly edit them to clarify the shipped products,
+versions and player impact without changing the generated PR groups. The
+playtest site should link to the corresponding GitHub Release rather than
+maintaining a second copy; GitHub Release access follows this private
+repository's access settings. Do not duplicate the notes in a changelog or a
+dated preparation document. Before generating the first release, the maintainer
+must create a baseline tag at the source commit of the latest already-published
+release, verified from its release receipt; do not infer that commit from a
+preparation document.
+
 When the integration branch is ready for a release, open a separate PR from
 `develop` to `main` summarizing the included changes and release validation.
 After that PR is merged, compile the release from the resulting `main` commit
@@ -297,12 +309,13 @@ signed feed promotion and Cloudflare Pages deployment. It names the maintainer-
 supplied credentials and the externally generated runtime input without storing
 them in Git.
 
-Include release/version edits and release notes in reviewed source changes
-before the release build; do not silently modify source or version values after
-checking out the release commit. Record the merged SHA, relevant build/tool
-identities and artifact hashes. Verify signing, installation/update/rollback and
-the applicable playtest path before publishing the requested release. Preserve
-historical artifacts and compatibility URLs. Optional pack publication still
+Include release/version edits in reviewed source changes before the release
+build; draft and review release notes in the GitHub Release before publishing.
+Do not silently modify source or version values after checking out the release
+commit. Record the merged SHA, relevant build/tool identities and artifact
+hashes. Verify signing, installation/update/rollback and the applicable
+playtest path before publishing the requested release. Preserve historical
+artifacts and compatibility URLs. Optional pack publication still
 obeys the distribution policy; large local assets do not belong in a PR.
 
 Native host releases use the maintained [host-only build](../tools/m4-crt-heap-carry/HOST_BUILD.md)

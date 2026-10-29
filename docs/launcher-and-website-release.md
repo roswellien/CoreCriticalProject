@@ -171,10 +171,15 @@ runtime inputs and release artifacts outside Git.
 
 8. **Promote the feed last.** Extend the existing Worker's `PUBLIC_OBJECTS`
    allowlist with the four exact new update metadata/package paths and byte
-   counts from `publication.json`, retaining every existing entry. Deploy the
-   `core-critical-updates` Worker with the existing `UPDATES` binding to
-   `core-critical-playtests`; do not replace the allowlist with only the new
-   release. Upload the signed catalog first to its sequence archive key
+   counts from `publication.json`, retaining every existing entry. In the
+   Cloudflare dashboard, open Workers & Pages → `core-critical-updates` →
+   Settings → Variables and Secrets. Copy the current `PUBLIC_OBJECTS` JSON
+   object, add one entry for each item in its `objects` array using `public_path`
+   as the property name and `key` and `bytes` as the value, then save and deploy.
+   Keep the `UPDATES` R2 binding connected to `core-critical-playtests`;
+   never replace the allowlist with only the new release. The Worker source is
+   tracked at `tools/update-service/worker.mjs`. Upload the signed catalog first
+   to its sequence archive key
    `online-updates/catalogs/playtest/<sequence>.json`, then to the live feed
    object `online-updates/catalogs/playtest/catalog.json`. This live object is
    the **playtest update feed**. Confirm the prior live catalog has not changed

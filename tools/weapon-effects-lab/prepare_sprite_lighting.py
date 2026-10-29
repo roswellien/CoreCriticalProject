@@ -3,7 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
+from page_data import fill_page_data, read_page_data
 
 HERE=Path(__file__).resolve().parent
 
@@ -19,16 +19,12 @@ def main():
         p.error('Reference must be an existing isolated local lab comparison')
     if source.stat().st_size>32*1024*1024:raise ValueError('Reference exceeds bounded input size')
     raw=source.read_bytes()
-    match=re.search(r'const DATA=(.*?);\r?\nif\(!DATA\)',raw.decode('utf-8'),re.S)
-    if not match:raise ValueError('Reference payload missing')
-    references=json.loads(match.group(1))['references']
+    references=read_page_data(raw.decode('utf-8'))['references']
     for bank in ('stock','current'):
         if len(references[bank])!=31:raise ValueError('Unexpected reference image coverage')
-    payload=json.dumps(dict(references=references),separators=(',',':')).replace('<','\\u003c')
     template=(HERE/'sprite_lighting.html').read_text(encoding='utf-8')
-    if template.count('/*SPRITE_LIGHT_DATA*/null')!=1:raise ValueError('Ambiguous template marker')
     out.parent.mkdir(parents=True,exist_ok=True)
-    out.write_text(template.replace('/*SPRITE_LIGHT_DATA*/null',payload),encoding='utf-8')
+    out.write_text(fill_page_data(template,dict(references=references)),encoding='utf-8')
     receipt=dict(reference=str(source),reference_sha256=hashlib.sha256(raw).hexdigest(),
         sprite_policy='Byte-identical embedded stock/current source PNGs; no particle replacements',
         lighting_scope='CPU diffuse point-light receiver fixture; not the game lighting engine',

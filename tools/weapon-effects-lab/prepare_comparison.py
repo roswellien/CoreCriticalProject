@@ -2,6 +2,8 @@
 from pathlib import Path
 import argparse,base64,hashlib,json,struct,sys
 
+from page_data import append_page_script, fill_page_data
+
 HERE=Path(__file__).resolve().parent
 ROOT=HERE.parents[1]
 sys.path.insert(0,str(ROOT/'tools/asset-inventory'))
@@ -68,12 +70,10 @@ window.addEventListener('message',event=>{
  scene=d.scene;t=d.time;playing=false;playLabel();draw();
 });
 """
-    native=native.replace('</script>',bridge+'</script>',1)
+    native=append_page_script(native,bridge)
     native=native.replace('<main>', '<style>main{padding:0;max-width:none}header,aside,.transport,.detail,.stamp{display:none}.layout{display:block;border:0}.stage{height:500px}canvas{height:500px!important}</style><main>',1)
-    payload=json.dumps(dict(references=data,native=native),separators=(',',':')).replace('<','\\u003c')
     template=(HERE/'comparison.html').read_text(encoding='utf-8')
-    if template.count('/*COMPARISON_DATA*/null')!=1:raise ValueError('Ambiguous comparison marker')
-    out.write_text(template.replace('/*COMPARISON_DATA*/null',payload),encoding='utf-8')
+    out.write_text(fill_page_data(template,dict(references=data,native=native)),encoding='utf-8')
     receipt=dict(stock_path=str(stock),current_path=row['source'],current_manifest_sha256=row['expected_sha256'],
         current_whole_bank_hash_recomputed=False,particle_preview=str(preview),particle_sha256=hashlib.sha256(preview.read_bytes()).hexdigest(),
         method='Bounded texture-entry decoding and offline illustrative composition; not native playback',
