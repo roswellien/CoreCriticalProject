@@ -38,7 +38,7 @@ REPO_ROOT = STYLE_DIR.parents[1]
 # Which checks are switched on, per language. Each language's one-time cleanup PR adds
 # its entry here (for example "python": {"format"}). This is the only switch: it decides
 # both what --fix rewrites and which findings fail CI.
-ENFORCED: dict[str, set[str]] = {}
+ENFORCED: dict[str, set[str]] = {"web": {"format"}}
 
 # Tools get at most this many file paths per call, to stay under the Windows
 # command-line length limit (about 32,000 characters).
