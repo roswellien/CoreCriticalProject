@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.bat text eol=crlf
+# Preserve maintained host bytes across autocrlf settings for release fingerprints.
+/tools/m4-crt-heap-carry/host/** -text -eol whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

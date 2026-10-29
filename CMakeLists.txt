@@ -35,6 +35,11 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_mfc_receiver_tests)
     add_test(NAME mfc_receiver_lifecycle COMMAND mw34_mfc_receiver_tests)
 
+    add_executable(mw34_joystick_selection_tests tools/remaster-launcher/test_joystick_selection.cpp)
+    target_include_directories(mw34_joystick_selection_tests PRIVATE "${PROJECT_SOURCE_DIR}/tools/remaster-launcher")
+    mw34_warnings(mw34_joystick_selection_tests)
+    add_test(NAME joystick_selection COMMAND mw34_joystick_selection_tests)
+
     add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
     target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -61,9 +66,17 @@ if(BUILD_TESTING)
         target_link_libraries(mw34_local_cd_audio_tests PRIVATE winmm user32)
         mw34_warnings(mw34_local_cd_audio_tests)
         add_test(NAME local_cd_audio_failures COMMAND mw34_local_cd_audio_tests)
+
+        add_executable(mw34_directinput_caps_tests tests/directinput_caps_tests.cpp)
+        target_include_directories(mw34_directinput_caps_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
+        mw34_warnings(mw34_directinput_caps_tests)
+        add_test(NAME directinput_force_feedback_hidden COMMAND mw34_directinput_caps_tests)
     endif()
 
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME native_host_build_metadata
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${PROJECT_SOURCE_DIR}/tools/m4-crt-heap-carry/test_host_build.py")
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
     set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
@@ -79,12 +92,18 @@ if(BUILD_TESTING)
     add_test(NAME style_tools
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_style_tools.py -v)
     set_tests_properties(style_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME function_table
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_function_table.py -v)
+    set_tests_properties(function_table PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME in_game_hook_evidence
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_in_game_hook.py -v)
     set_tests_properties(in_game_hook_evidence PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME pr_conventions
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_pr_conventions.py -v)
     set_tests_properties(pr_conventions PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME board_check
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_board_check.py -v)
+    set_tests_properties(board_check PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME game_monitor
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_game_monitor.py -v)
     set_tests_properties(game_monitor PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
@@ -97,6 +116,9 @@ if(BUILD_TESTING)
     add_test(NAME host_adapter_controls
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_host_adapter.py -v)
     set_tests_properties(host_adapter_controls PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME agent_files
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_agent_files.py -v)
+    set_tests_properties(agent_files PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 endif()
 
 find_program(MW34_CLANG_FORMAT clang-format)

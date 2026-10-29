@@ -22,5 +22,5 @@ sequence does not launch native menus or Training.
 `configuration.py` freezes the measured gate hashes and extents. `accept.py`
 authenticates their physical dependencies, complete sequence and ownership scope
 before sealing an additive acceptance directory. Existing captures and failed
-receipts remain preserved. See the [progress report](../../docs/m4-progress-startup71.md)
-and [next execution plan](../../docs/m4-execution-plan-r5.md).
+receipts remain preserved. See the [progress report](../../docs/archive/m4-progress-startup71.md)
+and [next execution plan](../../docs/archive/m4-execution-plan-r5.md).

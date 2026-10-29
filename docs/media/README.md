@@ -59,7 +59,7 @@ not native custom-map gameplay; the source download excludes those assets.
 The four JPEGs here are unmodified copies of the reviewed October 19 trailer
 poster and shots 08, 18 and 23. Private source selection is recorded in ignored
 `reports/announcement-trailer-20261019-r5/`; no source path or private Drive link
-is needed to view this gallery. See the [dated edit notes](../announcement-trailer-revision-5-2026-10-19.md)
+is needed to view this gallery. See the [dated edit notes](../archive/announcement-trailer-revision-5-2026-10-19.md)
 for capture and editing scope. Promotional images do not change the asset
 distribution policy or grant rights to underlying game content.
 

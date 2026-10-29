@@ -1,7 +1,9 @@
-.impeccable/build/
-.impeccable/review/
-.impeccable/mocks/
-.impeccable/questions/
-.impeccable/live/server.json
-assets/plates/
 dist/
+node_modules/
+.wrangler/
+.impeccable/
+.env
+.env.*
+!.env.example
+__pycache__/
+assets/media/

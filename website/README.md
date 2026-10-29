@@ -1,30 +1,58 @@
 # Core Critical website
 
-Local, portable HTML/CSS/JavaScript implementation of the approved Mad Cat homepage concept. Cloudflare Pages is the selected host; publication is pending. No game runtime code or acceptance criteria are changed by this work.
+The live site is [corecritical.dev](https://corecritical.dev), hosted by the
+existing Cloudflare Pages project `core-critical`. Website source now lives in
+this repository's `website/` directory. Cloudflare still needs to be switched
+to this repository by the maintainer; this change does not alter the live Pages
+settings or publish a deployment.
 
-Cloudflare Pages is now the selected hosting target. Wrangler login is verified and corecritical.dev is active in the authenticated Cloudflare account. The local wrangler.jsonc points at dist and proposes core-critical as the project name. Project creation, deployment mode, domain attachment, and publication are still pending. Do not run a production deployment until the site is complete and publication is authorized.
+## Build and preview
 
-## Local preview
-
-From this directory:
+From the repository root, build the static pages and MechLab news:
 
 ```powershell
-python build.py
-python -m http.server 4173 --bind 127.0.0.1 --directory dist
+python website/build.py
 ```
 
-Open http://127.0.0.1:4173/. Re-run `python build.py` after source edits. The build copies only website files and assets, keeping design notes and tools outside the served directory. Python is a local build/preview convenience; the finished site requires only a static web host.
+The build reads public dated notes from `docs/mechlab/` in this repository and
+generates the homepage updates, `news.html`, dated `updates/` pages and `feed.xml`.
+It also generates the media gallery from the metadata in `website/data/`.
+Original footage remains at the already-published URLs in
+`data/media-assets.json`; the build does not download or package it.
 
-## Current state
+To preview the site and its YouTube Pages Function, run Wrangler from
+`website/` after building:
 
-The homepage is assembled with approved artwork, live title/navigation, modernization entries, project-family sections, development updates, and a GitHub link. Its first viewport awaits the Impeccable assembled-page review before implementation proceeds. Supporting pages and final mobile/functional checks remain unfinished; local links to those supporting pages are planned destinations at this checkpoint.
+```powershell
+Set-Location website
+npx --yes wrangler@4.151.0 pages dev dist
+```
 
-Approved assets remain in ignored `assets/plates/`; local artwork and mockups are not part of a public release. Generation prompts are embedded in every raster asset. The original cover was used as a local visual reference for the user-requested Mad Cat and is not served.
+Wrangler serves the static build and discovers the Function in `website/functions/`.
+For a static-only preview, use `python -m http.server 4173 --directory dist`
+from `website/`.
 
-## Fonts
+## Publish
 
-Fonts are self-hosted from the Google Fonts source repository. Each family retains its SIL Open Font License alongside the font files in `assets/fonts/`. Exact installed file identities are recorded in `assets/fonts/provenance.json`; the original game-content policy does not license these fonts or other third-party material.
+The maintainer keeps the existing `core-critical` Pages project and custom
+domain, and points its Git integration at this repository with `website/` as
+the root directory. Configure the build command as `python3 build.py` and the
+output directory as `dist`. The Pages Function must stay in the project root
+(`website/functions/`), outside `dist/`. See [CLOUDFLARE.md](CLOUDFLARE.md) for
+the cutover checklist.
 
-## Boundaries
+The media gallery uses files and hashes in `data/media-assets.json` that are
+hosted on the existing pinned Pages deployment. Keep that deployment available;
+the migration does not recreate or remove it.
 
-This work advances the website's approved mockup → local semantic HTML boundary, not a game execution milestone. The accepted startup-root count remains 131/144. No commit, push, deployment, domain, or DNS change has been performed.
+The maintainer supplies Cloudflare access through the existing account or a
+local Wrangler login. Keep API tokens and signing credentials outside Git.
+After the first verified deploy from this repository, the maintainer can remove
+the legacy cross-repository MechLab publishing workflow and deploy key.
+
+## Content and boundaries
+
+Only dated `docs/mechlab/YYYY-MM-DD.md` notes feed the development news. The
+build does not call GitHub APIs, create a copied `data/mechlab.json`, or need a
+cross-repository deploy key. Do not add original game media, generated game
+code, Cloudflare tokens or signing credentials to this tree.

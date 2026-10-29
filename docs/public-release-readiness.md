@@ -10,58 +10,58 @@ Working review, October 21, 2026. The repository remains private. This document
 tracks the owner's requested preparation; it does not authorize publication,
 commits, history replacement, or a change to distribution policy.
 
-The latest [original-input native generation work](native-generation-preparation-2026-10-21.md)
+The latest [original-input native generation work](archive/native-generation-preparation-2026-10-21.md)
 now includes complete body regeneration, native linking and isolated live-menu
-launches. The [October 22 source installer integration](source-installer-integration-2026-10-22.md)
+launches. The [October 22 source installer integration](archive/source-installer-integration-2026-10-22.md)
 adds a bundled preparer and private source-tool installer. Signed update/reuse
 integration passes; fresh packaged first-install generation is running.
 Clean-machine installation and public release clearance remain open.
 
-The subsequent [playtest launcher preparation](playtest-launcher-preparation-2026-10-21.md)
+The subsequent [playtest launcher preparation](archive/playtest-launcher-preparation-2026-10-21.md)
 adds persistent per-user settings/sessions, actionable failures and local support
 exports in deployed launcher 1.0.3-preview. Its actual launch/normal-quit check
-passes. The [1.0.4 installer setup follow-up](installer-original-game-setup-2026-10-21.md)
+passes. The [1.0.4 installer setup follow-up](archive/installer-original-game-setup-2026-10-21.md)
 adds the requested existing-installation or ISO-plus-patch choice and verifies
 original-data extraction against the supplied media. Complete installed runtime,
 content preparation and clean-machine setup remain open. The
-[first installed-runtime trial](installed-runtime-first-stage-2026-10-21.md)
+[first installed-runtime trial](archive/installed-runtime-first-stage-2026-10-21.md)
 now reaches the native live menu and normal close using external runtime/data
 directories; it is a private baseline integration, not a distributable installer.
-The [installed content follow-up](installed-content-trial-2026-10-21.md) tests
+The [installed content follow-up](archive/installed-content-trial-2026-10-21.md) tests
 Training with mech/environment packs and optional music, repairs fresh-pilot
 keyboard services, and resolves existing-install support-file import. Permitted
 local generation, environment-pack migration and clean-machine installer tests
 remain open.
-The [soundtrack/setup follow-up](soundtrack-pack-setup-2026-10-21.md) adds
+The [soundtrack/setup follow-up](archive/soundtrack-pack-setup-2026-10-21.md) adds
 verified soundtrack `.mw3pack` loading and optional pack imports during first-run
 game setup. The staged GUI is 1.0.7-preview; a shareable game installer remains open.
-The [launcher migration and extraction build](launcher-migration-media-build-2026-10-21.md)
+The [launcher migration and extraction build](archive/launcher-migration-media-build-2026-10-21.md)
 deploys 1.0.9 with preserved settings and a soundtrack pack, verifies actual GUI
 Play/normal quit, and replaces the Python-sourced extraction dependency with
 pinned source builds and notices. Native user-file generation and clean-machine
 installer validation remain open.
-The [environment mission-lighting follow-up](environment-pack-mission-lighting-2026-10-21.md)
+The [environment mission-lighting follow-up](archive/environment-pack-mission-lighting-2026-10-21.md)
 deploys launcher 1.0.10 and the optional native catalog reader, with five rebuilt
 1.1.0 environment packs. This closes the pack-data dependency for mission lighting;
 it does not clear native generation/distribution or whole-campaign fidelity gates.
-The [artwork/cinematic pack follow-up](artwork-cinematic-packs-2026-10-21.md)
+The [artwork/cinematic pack follow-up](archive/artwork-cinematic-packs-2026-10-21.md)
 adds independently installable HUD/menu artwork, original-compatible AVI
 replacement routing, an MP4 additions library and an explicit private original
 movie-decoder resource. Modern high-resolution movies inside native gameplay,
 new automatic story triggers and full enhanced movie masters remain open.
-The [user-input generation step](installer-user-input-generation-2026-10-21.md)
+The [user-input generation step](archive/installer-user-input-generation-2026-10-21.md)
 imports all four required support images from the player's ISO and generates
 the codec image and startup source pack locally. Fresh 151-file original setup
 and external native startup pass. The staged launcher is 1.0.12; native-host/entry
 generation and clean-machine lifecycle validation remain open. Inno Setup 7.1
 now compiles the launcher-only preview; isolated same-machine install, upgrade
 and uninstall tests pass, with settings and pack metadata preserved.
-The [native update follow-up](launcher-runtime-updates-2026-10-21.md) deploys
+The [native update follow-up](archive/launcher-runtime-updates-2026-10-21.md) deploys
 launcher 1.0.13 with signed source/tool update preparation, version selection,
 cancellation and rollback. Authored process fixtures pass; a production feed/key,
 the actual whole-game preparation tool and clean-Windows updated-game launch
 remain open. This does not make the preview a playable end-user installer.
-The [merged-native setup follow-up](merged-native-installer-2026-10-21.md) combines
+The [merged-native setup follow-up](archive/merged-native-installer-2026-10-21.md) combines
 the current pack/skin feature host, 21 audited readability files and installed
 user-provider bindings. External installed launch with five packs and normal
 quit passes; launcher 1.0.14 selects the merged build. Native generation from
@@ -200,7 +200,7 @@ or external service requirement is introduced by this draft.
 
 ## Code review coverage
 
-The [October 21 code/provenance review](code-provenance-review-2026-10-21.md)
+The [October 21 code/provenance review](archive/code-provenance-review-2026-10-21.md)
 records reproduced launcher pack deletion/traversal, desktop exporter command
 construction, ISO command construction, editor undo/save divergence and setup
 cache defects, plus provenance and packaging gaps. Keep the Mod Tools candidate

@@ -49,7 +49,7 @@ This intentionally supports a smaller subset than the external format research.
 PNG previews retain stored size, row order and alpha. RGB565 channels scale to
 RGBA8 by nearest rounding, without gamma adjustment or resampling. A manifest
 records source/tool/parser hashes, decode policy and output identities.
-The [pilot record](../../docs/work-ahead-texture-pilot.md) contains source
+The [pilot record](../../docs/archive/work-ahead-texture-pilot.md) contains source
 corroboration and the remaining original-renderer validation gate.
 
 ## Exact-size exports and alpha checks (Windows)
@@ -78,10 +78,10 @@ apply.
 
 See the [lock specification and command example](texture-lock-format.md) for
 settings and editable component behavior, and the
-[12-texture batch record](../../docs/work-ahead-texture-batch.md) for source
+[12-texture batch record](../../docs/archive/work-ahead-texture-batch.md) for source
 mapping, packaging and validation. Source-coordinate locks do not establish
 unknown UV mappings or renderer behavior.
-The later [full-AI batch](../../docs/work-ahead-texture-ai-batch.md) keeps generated
+The later [full-AI batch](../../docs/archive/work-ahead-texture-ai-batch.md) keeps generated
 RGBA as the selected starting version. It invokes this tool without RGB locks or
 source anchoring only for separately labeled original-alpha comparisons.
 
@@ -95,32 +95,32 @@ size, aspect, fresh local paths and saved-PNG invariants are checked.
 
 See the [material-map numerical specification](material-map-format.md) for the
 command, conventions and importer requirements, and the
-[four-material pilot](../../docs/work-ahead-material-pilot.md) for local outputs,
+[four-material pilot](../../docs/archive/work-ahead-material-pilot.md) for local outputs,
 moving-light review and remaining mesh/tangent gates. Four authored fixtures
 cover gradient signs, encoding, quantization, border, channel and input guards.
-The [eight-material batch](../../docs/work-ahead-material-batch.md) extends that
+The [eight-material batch](../../docs/archive/work-ahead-material-batch.md) extends that
 pilot to all selected mech and terrain textures, retaining the original pilot
 maps unchanged and independently checking all sixteen paired normal maps.
 
 ## Local effect animation preparation
 
-The [six-frame dust pilot](../../docs/work-ahead-effects-animation-pilot.md)
+The [six-frame dust pilot](../../docs/archive/work-ahead-effects-animation-pilot.md)
 combines strict source decoding with separately checked interpreter map-order
 evidence. Its local package retains full generated AI RGBA, exact atlas-cell
 exports, editable layers and descriptive alpha/motion checks. Script speed
 tokens are not treated as verified native frame rates. Local preparation recipes
 remain prototypes; native timing, blending and replacement routing are open.
-The [dust transparency revision](../../docs/work-ahead-effects-transparency-revision.md)
-is visually accepted. The [sixteen-frame fire pilot](../../docs/work-ahead-fire-animation-pilot.md)
+The [dust transparency revision](../../docs/archive/work-ahead-effects-transparency-revision.md)
+is visually accepted. The [sixteen-frame fire pilot](../../docs/archive/work-ahead-fire-animation-pilot.md)
 adds a configured one-shot burst, a recorded whole-atlas bicubic conversion,
 editable layers and descriptive brightness/fade checks. Its 512-pixel working
 exports do not imply intrinsic generated detail at that resolution.
-The [four-frame weapon-impact pilot](../../docs/work-ahead-weapon-impact-pilot.md)
+The [four-frame weapon-impact pilot](../../docs/archive/work-ahead-weapon-impact-pilot.md)
 uses explicit source indexes and count-aware evidence/validation, including
 bounded weapon-definition observations, while retaining unknown native dispatch
 and timing. Its neutral white flash and residue remain a review prototype.
-The [four-state smoke concept](../../docs/work-ahead-smoke-animation-concept.md)
-was followed by a [two-frame source-associated smoke pilot](../../docs/work-ahead-smoke-animation-pilot.md).
+The [four-state smoke concept](../../docs/archive/work-ahead-smoke-animation-concept.md)
+was followed by a [two-frame source-associated smoke pilot](../../docs/archive/work-ahead-smoke-animation-pilot.md).
 The interpreter/model name evidence supports a jump-smoke association, but
 compiled playback order and native timing remain unverified.
 
@@ -135,7 +135,7 @@ headers/chunks yield timing, dimensions, FOURCC and audio metadata; payloads
 are not decoded or copied. Multi-extent/interleaved files, unsupported sector
 sizes, malformed bounds and cycles fail. Full source identity must match the
 expected hash. Outputs are new metadata files under `local/work-ahead/`.
-See the [enhancement/video record](../../docs/work-ahead-enhancement-experiment.md)
+See the [enhancement/video record](../../docs/archive/work-ahead-enhancement-experiment.md)
 for current results and unresolved codec/index checks.
 
 ## Short local video pilot
@@ -152,7 +152,7 @@ The source is bounded and identity checked before extraction. Display holds are
 reconstructed at the original rate before trimming; audio is sample trimmed.
 The installed Video2X models, exact processing parameters and output hashes are
 recorded in the local pilot's manifest. See the
-[video pilot record](../../docs/work-ahead-video-pilot.md) for methods and results.
+[video pilot record](../../docs/archive/work-ahead-video-pilot.md) for methods and results.
 
 ```powershell
 python tools/asset-inventory/validate_video_pilot.py local/work-ahead/my-video-pilot
@@ -184,7 +184,7 @@ pass validation before they can be reused. Failed or partial outputs require
 inspection and a fresh output location before retrying; they are not overwritten.
 `processing.json` records argument vectors, elapsed times, output hashes and
 checks. Full-speed visual and playback review remains separate. See the
-[opening cinematic project](../../docs/opening-cinematic-upgrade.md).
+[opening cinematic project](../../docs/archive/opening-cinematic-upgrade.md).
 
 The separate full-movie interpolation workflow verifies the existing upscale
 and pilot RIFE identities, then produces and validates a 30 fps master and
@@ -197,7 +197,7 @@ python tools/asset-inventory/package_movie_download.py local/work-ahead/my-openi
 
 Download packaging splits exact bytes into 90 MiB parts with per-part hashes,
 reconstruction verification and Windows/Python reassembly scripts. It does not
-apply further compression. See the [full 30 fps record](../../docs/opening-cinematic-30fps-full.md).
+apply further compression. See the [full 30 fps record](../../docs/archive/opening-cinematic-30fps-full.md).
 
 For the admitted disc's remaining 18 videos, use the per-movie batch contract:
 
@@ -208,4 +208,4 @@ python tools/asset-inventory/upgrade_cinematic_batch.py local/work-ahead/my-cine
 
 This keeps each source's mono-8-bit or stereo-16-bit PCM format and exact complete
 sample count. Hash-matching validated outputs can resume; changed/partial outputs
-require inspection. See the [batch record](../../docs/cinematics-2160p-30fps-batch.md).
+require inspection. See the [batch record](../../docs/archive/cinematics-2160p-30fps-batch.md).

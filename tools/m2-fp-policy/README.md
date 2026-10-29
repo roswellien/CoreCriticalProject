@@ -1,7 +1,7 @@
 # Consolidated M2 floating-point policy evidence
 
 This new offline supplement leaves every previous source/worker/contract/report
-unchanged. Read [the policy](../../docs/m2-floating-point-policy.md) for the
+unchanged. Read [the policy](../../docs/archive/m2-floating-point-policy.md) for the
 exact admitted domains and remaining live-state acceptance requirement.
 No game assets or game session are required by the authored controls.
 

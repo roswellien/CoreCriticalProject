@@ -88,14 +88,14 @@ The fixture targets are `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc`.
 Host compilation uses `llc -O0`, and separately `opt default<O2>` then `llc -O2`.
 The x64 C++ bridge requires Clang's Remill-compatible State layout. Records include
 lifter, semantics, official LLVM DLL, generated IR/object and executable hashes.
-See [the experiment record](fixture-add-experiment.md) for measured results,
+See [the experiment record](archive/fixture-add-experiment.md) for measured results,
 reproduction, the State alignment contract and the resolved Application Control blocker.
-The [G1 suite](fixture-suite-experiment.md) extends that same pinned pipeline to
+The [G1 suite](archive/fixture-suite-experiment.md) extends that same pinned pipeline to
 signed branches, partial registers, memory writes, callee stack cleanup and shifts
 whose undefined intermediate flags are overwritten before observation.
 `tools/lifting/run_fixture_suite.ps1` builds/tests all four reviewed fixtures and
 verifies their combined evidence. `tools/lifting/build_mw3_leaf.ps1 -RunComparison`
-uses the same toolchain for the [admitted MW3 leaf](mw3-leaf-experiment.md).
+uses the same toolchain for the [admitted MW3 leaf](archive/mw3-leaf-experiment.md).
 No additional external dependency is required.
 
 ## Separate Mod Tools source preview

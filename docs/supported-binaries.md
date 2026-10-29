@@ -5,7 +5,7 @@ installation updated to version 1.2 on 2026-10-06. Its `Mech3.exe` is 2,384,384
 bytes, with SHA-256
 `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf`.
 The executable's file and product version resources are `1, 2, 22, 0`, and the
-installed registry version is `1.2`. See [installation provenance](media-inventory.md).
+installed registry version is `1.2`. See [installation provenance](archive/media-inventory.md).
 This establishes input identity, not a working recompiled game or tested gameplay.
 
 Possession of an installer, ISO, patch installer, filename or version label alone

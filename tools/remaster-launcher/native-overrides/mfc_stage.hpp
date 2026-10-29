@@ -18,6 +18,8 @@
 #include "texture_backing.hpp"
 #include <atomic>
 #include <deque>
+#include <exception>
+#include <cwchar>
 #include <string_view>
 #include <unordered_map>
 #include <set>
@@ -31,6 +33,8 @@
 #include <functional>
 #include "com_ddraw.hpp"
 #include <string>
+#include "joystick_selection.hpp"
+#include <vector>
 inline std::atomic<unsigned>mw34_frames_presented{0};  /* presented frames, for the host profiler window */
 extern "C" unsigned long long mw34_x87_counts[2];  /* composition.cpp: flog2/fexp2 bridge calls (diagnostic) */
 #include "guest_memory_fast.hpp"  /* the region cache of guest_memory_cached.cpp */
@@ -63,6 +67,43 @@ inline Body find_uncached(unsigned a){
 // exactly what the search returns.
 inline Body find(unsigned a){struct Slot{unsigned addr;bool valid;Body body;};thread_local std::array<Slot,4096>cache{};
  auto&s=cache[(a>>2)&4095];if(s.valid&&s.addr==a)return s.body;const Body b=find_uncached(a);s={a,true,b};return b;}
+enum class DirectInputJoystickMode{all,none,selected};
+struct DirectInputJoystickRequest{DirectInputJoystickMode mode;std::wstring instance_guid,product_name;};
+inline std::wstring directinput_guid_text(const GUID&guid){
+ wchar_t text[40]{};const int length=StringFromGUID2(guid,text,40);
+ if(!length)throw std::runtime_error("DirectInput joystick GUID could not be formatted");
+ return std::wstring(text,length-1);
+}
+inline std::wstring directinput_product_text(const char*product){
+ std::size_t product_length=0;
+ while(product_length<MAX_PATH&&product[product_length]!='\0')++product_length;
+ if(product_length==MAX_PATH)throw std::runtime_error("DirectInput joystick product name is not terminated");
+ if(!product_length)return{};
+ const int length=MultiByteToWideChar(CP_ACP,0,product,static_cast<int>(product_length),nullptr,0);
+ if(!length)throw std::runtime_error("DirectInput joystick product name could not be converted");
+ std::wstring text(length,L'\0');
+ if(!MultiByteToWideChar(CP_ACP,0,product,static_cast<int>(product_length),text.data(),length))
+  throw std::runtime_error("DirectInput joystick product name could not be converted");
+ return text;
+}
+inline DirectInputJoystickRequest directinput_joystick_request(){
+ const wchar_t*mode=::_wgetenv(L"MW34_DI_JOYSTICK_MODE");
+ if(!mode||!*mode||std::wcscmp(mode,L"default")==0)return{DirectInputJoystickMode::all,{},{}};
+ if(std::wcscmp(mode,L"none")==0)return{DirectInputJoystickMode::none,{},{}};
+ if(std::wcscmp(mode,L"device")!=0)throw std::runtime_error("Unknown DirectInput joystick selection mode");
+ DirectInputJoystickRequest request{DirectInputJoystickMode::selected,{},{}};
+ const wchar_t*guid=::_wgetenv(L"MW34_DI_JOYSTICK_GUID");
+ const wchar_t*name=::_wgetenv(L"MW34_DI_JOYSTICK_NAME");
+ if(guid&&*guid){
+  GUID parsed{};
+  if(FAILED(CLSIDFromString(guid,&parsed))){throw std::runtime_error("Selected DirectInput joystick GUID is invalid");}
+  request.instance_guid=directinput_guid_text(parsed);
+ }
+ if(name&&*name)request.product_name=name;
+ if(request.instance_guid.empty()&&request.product_name.empty())
+  throw std::runtime_error("Selected DirectInput joystick identity is empty");
+ return request;
+}
 
 struct Import{unsigned cell,bound;std::string dll,name;mutable const void*iface_cache{};mutable bool iface_resolved{};mutable std::string label[3];/* service-log text by prefix (none, MSVCRT>, GAME>), built once */mutable signed char op=-1;/* IDirect3DDevice3 hot-method selector, resolved once from the name */};
 struct VSurfaceRec{unsigned guest,width,height,pitch,bpp,caps,mem,bytes,attached,clipper,palette;DDCOLORKEY src_key{},dst_key{};bool has_src_key{},has_dst_key{};unsigned locks{};bool primary{};std::array<unsigned,4>tex_masks{0xf800,0x07e0,0x001f,0};unsigned zbuffer{};
@@ -892,12 +933,61 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    if(imp->dll=="IDirectInputA"){auto*di=reinterpret_cast<IDirectInputA*>(o->native);
     if(n=="CreateDevice"){const GUID g=guest_guid(arg(1));const unsigned out=arg(2);if(arg(3))deny("CreateDevice aggregation is not modelled",arg(3));if(!writable(out,4))deny("CreateDevice output outside the memory contract",out);
      LPDIRECTINPUTDEVICEA dev{};const HRESULT hr=di->CreateDevice(g,&dev,nullptr);apis.back()+="="+std::to_string(unsigned(hr));store(out,SUCCEEDED(hr)&&dev?com_wrap(dev,*com::by_name("IDirectInputDeviceA"),root_of(*o)):0);return done(unsigned(hr),4);}
-    if(n=="EnumDevices"){const unsigned type=arg(1),cb=arg(2),ctx=arg(3),fl=arg(4);if(!find(cb))deny("EnumDevices callback has no lifted body",cb);static_assert(sizeof(DIDEVICEINSTANCEA)==580);
-     struct C{Stage*st;unsigned cb,ctx,calls;};C c{this,cb,ctx,0};
-     const HRESULT hr=di->EnumDevices(type,[](LPCDIDEVICEINSTANCEA d,LPVOID p)->BOOL{auto&c=*static_cast<C*>(p);auto&st=*c.st;if(!st.callback_fault.empty())return DIENUM_STOP;
-       try{const unsigned at=((st.state.gpr.rsp.dword-0x200)&~15U)-580;const auto*b=reinterpret_cast<const unsigned char*>(d);for(unsigned i=0;i<580;++i)st.runtime.memory().store<unsigned char>({at+i},b[i]);st.store(at,580);++c.calls;
-        return BOOL(st.call_guest(c.cb,{at,c.ctx},true,"DirectInput EnumDevices callback",at&~15U));}catch(const std::exception&e){st.callback_fault=e.what();return DIENUM_STOP;}},&c,fl);
-     apis.back()+="("+std::to_string(c.calls)+" devices)="+std::to_string(unsigned(hr));return done(unsigned(hr),5);}}
+    if(n=="EnumDevices"){
+     const unsigned type=arg(1),cb=arg(2),ctx=arg(3),fl=arg(4);
+     if(!find(cb))deny("EnumDevices callback has no lifted body",cb);
+     static_assert(sizeof(DIDEVICEINSTANCEA)==580);
+     struct C{Stage*st;unsigned cb,ctx,calls;bool filter_joysticks,has_selected,selected_forwarded;GUID selected_guid;};
+     const auto request=directinput_joystick_request();
+     C c{this,cb,ctx,0,request.mode!=DirectInputJoystickMode::all,false,false,{}};
+     auto forward=+[](LPCDIDEVICEINSTANCEA d,LPVOID p)->BOOL{
+      auto&c=*static_cast<C*>(p);auto&st=*c.st;if(!st.callback_fault.empty())return DIENUM_STOP;
+      const bool is_joystick=(d->dwDevType&0xff)==DIDEVTYPE_JOYSTICK;
+      const bool selected_guid_matches=c.has_selected&&IsEqualGUID(d->guidInstance,c.selected_guid);
+      if(!mw34::input::should_forward_directinput_device(c.filter_joysticks,is_joystick,
+         c.has_selected,selected_guid_matches,c.selected_forwarded))return DIENUM_CONTINUE;
+      if(c.filter_joysticks&&is_joystick){
+       c.selected_forwarded=true;
+      }
+      try{
+       const unsigned at=((st.state.gpr.rsp.dword-0x200)&~15U)-580;
+       const auto*b=reinterpret_cast<const unsigned char*>(d);
+       for(unsigned i=0;i<580;++i)st.runtime.memory().store<unsigned char>({at+i},b[i]);
+       st.store(at,580);++c.calls;
+       return BOOL(st.call_guest(c.cb,{at,c.ctx},true,"DirectInput EnumDevices callback",at&~15U));
+      }catch(const std::exception&e){st.callback_fault=e.what();return DIENUM_STOP;}
+     };
+     HRESULT hr{};
+     if(request.mode!=DirectInputJoystickMode::selected){
+      hr=di->EnumDevices(type,forward,&c,fl);
+     }else{
+      struct Devices{std::vector<DIDEVICEINSTANCEA>items;std::exception_ptr failure;};
+      Devices devices;
+      auto collect=+[](LPCDIDEVICEINSTANCEA d,LPVOID p)->BOOL{
+       auto&devices=*static_cast<Devices*>(p);
+       try{devices.items.push_back(*d);return DIENUM_CONTINUE;}
+       catch(...){devices.failure=std::current_exception();return DIENUM_STOP;}
+      };
+      hr=di->EnumDevices(type,collect,&devices,fl);
+      if(devices.failure)std::rethrow_exception(devices.failure);
+      if(SUCCEEDED(hr)){
+       std::vector<mw34::input::DirectInputJoystickIdentity>identities;
+       std::vector<GUID>guids;
+       for(const auto&device:devices.items)if((device.dwDevType&0xff)==DIDEVTYPE_JOYSTICK){
+        identities.push_back({directinput_guid_text(device.guidInstance),
+                              directinput_product_text(device.tszProductName)});
+        guids.push_back(device.guidInstance);
+       }
+       if(request.mode==DirectInputJoystickMode::selected){
+        const auto selected=mw34::input::find_selected_joystick(
+            identities,request.instance_guid,request.product_name);
+        if(selected){c.has_selected=true;c.selected_guid=guids[*selected];}
+       }
+       hr=di->EnumDevices(type,forward,&c,fl);
+      }}
+     apis.back()+="("+std::to_string(c.calls)+" devices)="+std::to_string(unsigned(hr));
+     return done(unsigned(hr),5);
+    }}
    if(imp->dll=="IDirectInputDeviceA"||imp->dll=="IDirectInputDevice2A"){auto*dv=reinterpret_cast<IDirectInputDeviceA*>(o->native);
     if(n=="SetCooperativeLevel"){const HRESULT hr=dv->SetCooperativeLevel(hwnd_of(arg(1)),arg(2));apis.back()+="("+std::to_string(arg(2))+")="+std::to_string(unsigned(hr));return done(unsigned(hr),3);}
     if(n=="SetDataFormat"){const unsigned a=arg(1);if(!readable(a,24)||load(a)!=24||load(a+4)!=16)deny("DIDATAFORMAT outside the contract or with a wrong size",a);const unsigned cnt=load(a+16),objs=load(a+20);if(cnt>512||!readable(objs,16*cnt))deny("DIDATAFORMAT objects outside the memory contract",objs);

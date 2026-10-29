@@ -32,7 +32,7 @@ affect timing. This is a research session, not a performance setting.
 ## Build, test and launch
 
 The current surface-command recovery work is described in
-[live rendering work](../../docs/live-native-rendering-current-work.md).
+[live rendering work](../../docs/archive/live-native-rendering-current-work.md).
 Z-buffer surfaces are observed; selected flip intervals also retain bounded
 surface API input/result diagnostics, including write locks and GDI access.
 The observed D16 zero-depth fills and full-target RGB565 Lock/Unlock writes have
@@ -62,7 +62,7 @@ For passive exit/window-health monitoring of the printed game PID:
 
 Capture provider modules while the game is still running; `modules.json` records
 names, full local paths, bases, mapped sizes and SHA-256 hashes. The first accepted
-capture is documented in [the live record](../../docs/mw3-live-graphics-trace.md).
+capture is documented in [the live record](../../docs/archive/mw3-live-graphics-trace.md).
 Then run:
 
 ```powershell

@@ -1,5 +1,11 @@
 # Integrated native MW3 host (retail entry route)
 
+For the maintained host-only build introduced for issue #25, use
+[HOST_BUILD.md](HOST_BUILD.md) and `build_host.ps1`. The historical research
+instructions and dated execution observations below remain preserved. New host
+fixes compile the complete committed `host/` source against an existing local
+translated DLL, without replaying the historical patch/lift build chain.
+
 Current status, 2026-10-13: this experimental x64 host has executed the live
 animated main menu, Vulkan-rendered Training 1 with the game HUD, startup and
 walking, and normal Quit -> confirm shutdown with exit code 0. The intro's
@@ -13,7 +19,7 @@ strike): laser beams, hits on buildings, and an overheat explosion ran natively.
 primitives still stop visibly. These are executed runs, not
 formal acceptance; the accepted count stays **131/144**.
 
-See the [session summary](../../docs/session-summary-2026-10-13-native-host.md)
+See the [session summary](../../docs/archive/session-summary-2026-10-13-native-host.md)
 for the full source/evidence record and limitations. Camera flip and leg animation
 were observed in interactive play; the built FPATAN quadrant correction in 57
 re-lifted functions awaits a play retest. Visible intro playback, remaining

@@ -1,0 +1,1 @@
+inline static constexpr std::array<OverrideSourceMesh,13> override_bushwacker_lod1_meshes{{{"rthigh",8,"rthigh"},{"rcalf",16,"rcalf"},{"rfoot",33,"rfoot"},{"lthigh",8,"lthigh"},{"lcalf",16,"lcalf"},{"lfoot",33,"lfoot"},{"rarm",19,"rarm"},{"rhand",8,"rhand"},{"larm",20,"larm"},{"lhand",8,"lhand"},{"torso_polys",42,"torso"},{"head",4,"torso"},{"hip_polys",16,"hip"}}};

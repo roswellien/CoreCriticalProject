@@ -12,7 +12,12 @@ controller, HOTAS, pedals, multiple joystick and force-feedback support.
 The user-selected gamepad target is Xbox and PlayStation controllers on Windows,
 with a portable input/action layer for possible future Linux support. Both
 Traditional and FPS-style profiles are intended. See the
-[controller investigation](../../docs/controls-modernization-investigation-2026-10-18.md#controller-direction-selected-by-the-user)
+[controller investigation](../../docs/archive/controls-modernization-investigation-2026-10-18.md#controller-direction-selected-by-the-user)
 for the proposed input-only SDL3 backend, device/transport test scope and remaining
 integration work. This directory still has no implemented gamepad backend; the
 experimental native host's existing DirectInput bridge is a separate component.
+
+`directinput_caps.hpp` is the one rule that bridge takes from here: it reports
+every device without force-feedback capabilities, because the host implements
+no IFORCE2 or effect service. The game then takes its original plain-joystick
+path. Remove the rule when a force-feedback service exists.

@@ -36,7 +36,8 @@ def apply(source: Path):
         if text.count(old_create) != 1:
             raise RuntimeError('Expected reviewed DirectInput device creation')
         text = text.replace(old_create,new_create,1)
-    for name in ('controller_math.hpp', 'controller_input.hpp', 'controller_stage.inc', 'controller_virtual_test.hpp'):
+    for name in ('controller_math.hpp', 'controller_input.hpp', 'controller_stage.inc',
+                 'controller_virtual_test.hpp', 'joystick_selection.hpp'):
         shutil.copyfile(Path(__file__).parent / 'native-overrides' / name, source / name)
     path.write_text(text, encoding='utf-8')
 

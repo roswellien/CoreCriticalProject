@@ -73,7 +73,7 @@ class ModExporter:
 
     Export names currently select reusable directories rather than immutable
     versions. Callers must serialize exports that resolve to the same directory.
-    See docs/code-provenance-review-2026-10-21.md for outstanding export/run defects.
+    See docs/archive/code-provenance-review-2026-10-21.md for outstanding export/run defects.
     """
 
     def __init__(self, output_root: Optional[Path] = None):
@@ -288,7 +288,7 @@ setlocal
 cd /d "%~dp0..\\..\\.."
 echo Launching MW3 Mod: {project.project_name}...
 set "MW34_REMASTER_BANKS=%~dp0mod-banks.bin"
-call "Play MW3 - Dynamic Night Lighting Preview.cmd" %*
+call "launchers\\Play MW3 - Dynamic Night Lighting Preview.cmd" %*
 """
         cmd_path.write_text(cmd_script, encoding="utf-8")
 

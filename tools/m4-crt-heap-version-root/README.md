@@ -8,4 +8,4 @@ The current ordinary boundary is the genuine selector RET to its original caller
 
 Current broad historical source manifests are not expanded. The fresh build requires actual compilation dependencies and retains immutable documentary history for the changed graphics README.
 
-See [progress](../../docs/m4-progress-heap-version.md) and [the technical review](../../docs/m4-crt-heap-version-review.md).
+See [progress](../../docs/archive/m4-progress-heap-version.md) and [the technical review](../../docs/archive/m4-crt-heap-version-review.md).

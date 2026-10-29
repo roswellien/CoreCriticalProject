@@ -94,6 +94,10 @@ if (args.Length == 1 && args[0] == "--controllers-only")
 {
     ControllerChecks.Run(); ControllerChecks.Sdl(); return;
 }
+if (args.Length == 1 && args[0] == "--joystick-only")
+{
+    JoystickSelectionChecks.Run(); return;
+}
 if (args.Length == 2 && args[0] == "--preview-controller")
 {
     var thread = new Thread(() =>
@@ -385,6 +389,7 @@ OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
 ControlProfileChecks.Run();
 ControllerChecks.Run();
+JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
 NativeRuntimeLayoutChecks.Run();
 await RuntimeUpdateChecks.Run();

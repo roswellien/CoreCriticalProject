@@ -16,10 +16,10 @@
             <Setter Property="Padding" Value="8,10"/></Style>
     </Window.Resources>
     <Grid Margin="24">
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel>
-            <TextBlock Text="KEYBOARD &amp; MOUSE" FontFamily="{DynamicResource FontDisplay}" FontSize="22" Margin="0,0,0,8"/>
+            <TextBlock Text="CONTROLS" FontFamily="{DynamicResource FontDisplay}" FontSize="22" Margin="0,0,0,8"/>
             <TextBlock Text="Save a layout for each game. Your selected layout is applied the next time you launch the native game." Foreground="{DynamicResource BrushMuted}" TextWrapping="Wrap"/>
         </StackPanel>
         <DockPanel Grid.Row="1" Margin="0,18,0,16">
@@ -27,7 +27,15 @@
             <ComboBox x:Name="Game" Width="295" HorizontalAlignment="Left" DisplayMemberPath="DisplayName" SelectionChanged="GameChanged"/>
             <TextBlock x:Name="ActiveSummary" TextWrapping="Wrap" VerticalAlignment="Center" Margin="18,0,0,0" Foreground="{DynamicResource BrushAmber}"/>
         </DockPanel>
-        <Grid Grid.Row="2" x:Name="Editor">
+        <StackPanel Grid.Row="2" x:Name="JoystickSection" Margin="0,0,0,12">
+            <TextBlock Text="DIRECTINPUT JOYSTICK (NATIVE MW3)" Foreground="{DynamicResource BrushMuted}" Margin="0,0,0,6"/>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Refresh devices" Click="RefreshJoystickChoices" Margin="8,0,0,0"/>
+                <ComboBox x:Name="JoystickChoice" DisplayMemberPath="Label" SelectionChanged="JoystickChoiceChanged"/>
+            </DockPanel>
+            <TextBlock x:Name="JoystickStatus" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" Margin="0,6,0,0"/>
+        </StackPanel>
+        <Grid Grid.Row="3" x:Name="Editor">
             <Grid.ColumnDefinitions><ColumnDefinition Width="215"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -73,12 +81,12 @@
                 </WrapPanel>
             </Grid>
         </Grid>
-        <StackPanel Grid.Row="3" Margin="0,14,0,12">
+        <StackPanel Grid.Row="4" Margin="0,14,0,12">
             <TextBlock x:Name="LayoutDescription" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" Margin="0,0,0,6"/>
             <TextBlock x:Name="Status" Text="Copy your current controls to create the first layout. Existing game controls stay active until you select a saved layout." TextWrapping="Wrap" Foreground="{DynamicResource BrushAmber}"/>
             <TextBlock x:Name="ConflictSummary" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" MaxHeight="55" Margin="0,6,0,0"/>
         </StackPanel>
-        <DockPanel Grid.Row="4">
+        <DockPanel Grid.Row="5">
             <Button Content="Controller setup…" Click="OpenControllerSetup"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="SaveButton" Content="Save layout" Click="SaveProfile" IsEnabled="False"/>

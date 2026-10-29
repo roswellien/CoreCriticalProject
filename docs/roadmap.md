@@ -17,7 +17,7 @@ routine development/releases.
 
 ## Model activation: 2026-10-16
 
-[All prepared models](all-models-native-integration-2026-10-16.md) now have native
+[All prepared models](archive/all-models-native-integration-2026-10-16.md) now have native
 registrations:14MW5chassis plus the authored original-Strider variant. Original
 Avatar/Firefly/Owens remain, parked STL Avatar excluded. Current standard launcher
 uses the validated all-models host, unchanged graphics/HUD/music and current colors.
@@ -46,7 +46,7 @@ and comparative validation; settings must not claim those features work before
 the renderer supports them. None of these goals changes strict acceptance credit.
 
 For future MW5 replacement-model normal mapping, the user selected the
-[12x-equivalent Bushwacker preview](mw5-normal-strength-high-preview-2026-10-15.md#approved-target-for-future-native-normal-mapping)
+[12x-equivalent Bushwacker preview](archive/mw5-normal-strength-high-preview-2026-10-15.md#approved-target-for-future-native-normal-mapping)
 as the appearance target on 2026-10-15. Calibrate the native material response to
 that reference (Blender Strength 10.20 from baseline 0.85), preserving the glass
 exception and separate original-MW3 material tuning. This records the planned
@@ -60,7 +60,7 @@ Model direction selected on2026-10-16: retain the original MW3 Avatar, Firefly,
 Owens and Strider until suitable higher-polygon donors are found. MW4 reviews
 and the parked STL experiment do not replace that default. Continue optional
 MW5 model candidates with maintained-but-well-used materials and the approved
-12x preview target. [Supernova's prepared candidate](supernova-port-progress-2026-10-16.md)
+12x preview target. [Supernova's prepared candidate](archive/supernova-port-progress-2026-10-16.md)
 completes initial visual work for all 14 locally matching MW5 chassis: seven
 existing runtime registrations and seven offline candidates. The latter still
 need native visual retarget, weapon/damage/LOD and live checks; this is not
@@ -68,20 +68,20 @@ completion of 14 playable ports. Preserve the frontend/playtesting priorities ab
 
 The original Avatar, Owens, Firefly and Strider now all have upgraded-color
 12x normal-map walking/light previews. The latest
-[Firefly and Strider tests](mw3-firefly-strider-normal-preview-2026-10-16.md)
+[Firefly and Strider tests](archive/mw3-firefly-strider-normal-preview-2026-10-16.md)
 retain original geometry and 336 source poses per model, with matched on/off
 camera and lighting. These are offline material reviews; native normal-map
 integration and calibration remain separate renderer work.
 
 The user subsequently authorized an authored detail pass on the stock Strider
-design. The [first geometry prototype](strider-geometry-detail-prototype-2026-10-16.md)
+design. The [first geometry prototype](archive/strider-geometry-detail-prototype-2026-10-16.md)
 adds bevels, armor layers, cockpit frames, vents and bearing covers while keeping
 the original 16 moving controls and walk. It has 17,129 triangles versus 759;
 matched offline previews and editable assets are prepared. The installed Strider
 and gameplay are unchanged; native visual registration, damage and LOD checks
 remain before any runtime adoption.
 
-The [dynamic lighting and shadows investigation](dynamic-lighting-shadows-investigation-2026-10-15.md)
+The [dynamic lighting and shadows investigation](archive/dynamic-lighting-shadows-investigation-2026-10-15.md)
 records current renderer limits and a staged implementation path: capture scene
 geometry before projection/culling, add per-pixel lights, prove a bounded cast
 shadow, then expand outdoor coverage and normal-map materials. No lighting or
@@ -94,8 +94,8 @@ The development benchmark does not switch the playable launcher.
 
 ## Native execution update: 2026-10-13
 
-The [session summary](session-summary-2026-10-13-native-host.md) and
-[execution map](e0-application-execution-path.md) record startup through the live
+The [session summary](archive/session-summary-2026-10-13-native-host.md) and
+[execution map](archive/e0-application-execution-path.md) record startup through the live
 animated menu, Vulkan Training 1 scenes with the game HUD, and Quit -> confirm
 through native shutdown to exit code 0. The user confirmed startup and walking
 in interactive Training. Intro decoding by the recompiled Indeo IV50 codec was
@@ -125,7 +125,7 @@ Instant Action backbuffer fixes, binary identities, and launch instructions.
 
 Next, validate sustained original-game scenes and transitions, configuration
 regressions, and launch/restore behavior under the
-[wrapper plan](mw3-d7vk-wrapper-plan.md). A portable setup/build procedure and
+[wrapper plan](archive/mw3-d7vk-wrapper-plan.md). A portable setup/build procedure and
 third-party license/notice inventory are needed before a wrapper release.
 The current launcher requires prepared local files and a fixed checkout path.
 Original media and generated game code remain local.
@@ -136,7 +136,7 @@ fallback in the native host, or change the historical startup audit's acceptance
 
 ## High-resolution texture pack track
 
-An optional [Hi-Res texture upgrade pack](hi-res-texture-pack.md) is the third
+An optional [Hi-Res texture upgrade pack](archive/hi-res-texture-pack.md) is the third
 active project track. It develops AI-assisted mech, terrain/water, building and
 selected effects artwork alongside recompilation and the original-EXE wrapper.
 The current local audit records 39 cumulative archives and 19 complete primary
@@ -153,14 +153,14 @@ content/provenance policy. This work does not change native acceptance criteria.
 ## Current evidence
 
 - M1-M3 retain their accepted bounded scopes. See the
-  [milestone register](project-milestones.md), [M2 audit](m2-completion-audit.md)
-  and [M3 acceptance](m3-acceptance.md).
-- The [historical startup audit](m4-progress-startup131.md) and its accepted
+  [milestone register](project-milestones.md), [M2 audit](archive/m2-completion-audit.md)
+  and [M3 acceptance](archive/m3-acceptance.md).
+- The [historical startup audit](archive/m4-progress-startup131.md) and its accepted
   receipt remain preserved. They are separate from current execution status
   and are not routine project-progress or release-readiness indicators.
 - Claude's new registry, lock, import, CRT-page, global-page and ENV probes are
   reusable prerequisites, with explicit policy/completeness limits. See the
-  [work review](m4-claude-work-review-2026-10-11.md) and [acceptance history](m4-execution-plan-r14.md).
+  [work review](archive/m4-claude-work-review-2026-10-11.md) and [acceptance history](archive/m4-execution-plan-r14.md).
 - Vulkan viewer and captured-scene replay tests are separate from a live renderer.
   Original-game play with isolated native replacements is separate from a complete
   recompiled game. The integrated native host now executes its own live menu
@@ -209,11 +209,11 @@ initializer inventory would not by itself establish whole-game fidelity.
 
 ## Reuse before rebuilding
 
-Start from [application workahead](m4-application-workahead.md), the
-[MFC receiver](m4-mfc-app-receiver-adapter.md), [reader research](m4-reader-bridge-research-r1.md),
-[video contract](m4-video-backend-contract-r1.md), [native Vulkan build path](m4-native-vulkan-build-path-r1.md),
-[presenter extraction review](m4-vulkan-presenter-extraction-review-r1.md) and
-[current graphics work](live-native-rendering-current-work.md). Coordinate with
+Start from [application workahead](archive/m4-application-workahead.md), the
+[MFC receiver](archive/m4-mfc-app-receiver-adapter.md), [reader research](archive/m4-reader-bridge-research-r1.md),
+[video contract](archive/m4-video-backend-contract-r1.md), [native Vulkan build path](archive/m4-native-vulkan-build-path-r1.md),
+[presenter extraction review](archive/m4-vulkan-presenter-extraction-review-r1.md) and
+[current graphics work](archive/live-native-rendering-current-work.md). Coordinate with
 existing writers. Capture-to-Vulkan transport may prove a renderer boundary but
 must remain labelled original-process diagnostic execution until translated game
 producers drive it. Cinematic/HUD/asset work remains separately scoped.
@@ -239,11 +239,11 @@ next startup requirement. Vulkan remains selected. See the
 [M7 workstream](project-milestones.md#m7-graphics-and-texture-rendering-workstream).
 
 Linux, ARM64 and macOS require separate platform/ABI/backend validation. Pirate's
-Moon now has an [experimental native startup target](pirates-moon-native-startup.md)
+Moon now has an [experimental native startup target](archive/pirates-moon-native-startup.md)
 using the shared runtime with separate identities, dependencies and generated code;
 its scripted Vulkan menu/Options/normal-quit slice now matches the original's
 210 scene fingerprints. Physical input has not been manually checked, and PM
 missions/cinematics remain unverified. MW4 remains a later target. Earlier research and evidence remain available;
-[architecture](architecture.md) and [development workflow](m4-development-workflow.md)
-retain current contracts. The [Claude prompt](claude-m4-continuation-handoff.md)
+[architecture](architecture.md) and [development workflow](archive/m4-development-workflow.md)
+retain current contracts. The [Claude prompt](archive/claude-m4-continuation-handoff.md)
 provides the execution-first continuation instructions.

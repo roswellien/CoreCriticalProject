@@ -3,9 +3,6 @@
   "files": [
     "LICENSE",
     "MOD_TOOLS_README.txt",
-    "Play MW3 - Mission Editor.cmd",
-    "Play MW3 - Visual Map Studio.cmd",
-    "Setup Mod Tools.cmd",
     "docs/legal.md",
     "docs/setup-mod-tools.md",
     "games/mw3/mod-tools/README.md",
@@ -36,6 +33,9 @@
     "games/mw3/mod-tools/run_studio.py",
     "games/mw3/mod-tools/tests/test_editor_slice.py",
     "games/mw3/mod-tools/tests/test_studio_server.py",
+    "launchers/Play MW3 - Mission Editor.cmd",
+    "launchers/Play MW3 - Visual Map Studio.cmd",
+    "launchers/Setup Mod Tools.cmd",
     "tools/release/mod-tools-requirements.txt",
     "tools/release/setup_mod_tools.py"
   ]

@@ -6,8 +6,8 @@ extracted models, textures, music, or exported map packs.
 
 Start with docs/setup-mod-tools.md. Install Windows x64 Python 3.11–3.14 with
 Tkinter, obtain Mech3AX v0.7.0-rc3 separately, and supply your own original game.
-Run Setup Mod Tools.cmd with the two folder paths described in that guide.
-Then use Play MW3 - Mission Editor.cmd.
+Run launchers\Setup Mod Tools.cmd with the two folder paths described in that guide.
+Then use launchers\Play MW3 - Mission Editor.cmd.
 
 Studio is a prototype. Full preview/export/play needs additional local caches,
 geometry and a prepared native game host. Do not assume export means a map is

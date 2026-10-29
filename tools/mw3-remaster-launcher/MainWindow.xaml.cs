@@ -31,7 +31,11 @@ namespace MW3RemasterLauncher
             finally { button.IsEnabled = true; }
         }
         private readonly string _basePath;
-        private void OpenControls(object sender, RoutedEventArgs e) => new ControlsWindow(_dataRoot, _settingsMgr.Current.GamePath) { Owner = this }.ShowDialog();
+        private void OpenControls(object sender, RoutedEventArgs e)
+        {
+            new ControlsWindow(_dataRoot, _settingsMgr.Current.GamePath, _settingsMgr) { Owner = this }.ShowDialog();
+            UpdateSummaryDisplay();
+        }
         private bool _nativeSessionActive;
         private bool _assetInstallActive;
         private bool _launchPreparing;
@@ -322,6 +326,7 @@ namespace MW3RemasterLauncher
 
                 var activeCount = _packMgr.Packs.Count(p => p.IsEnabled);
                 TxtSummaryPacks.Text = $"{activeCount} of {_packMgr.Packs.Count} Packs Active";
+                UpdateInputSummary(s);
             }
             else
             {
@@ -337,6 +342,49 @@ namespace MW3RemasterLauncher
                 {
                     TxtSummaryD7vkTextures.Text = s.D7VkAiTextures ? "39 AI-Upscaled Banks Loaded" : "Original 1999 Texture Banks";
                 }
+            }
+        }
+
+        private void UpdateInputSummary(LauncherSettings settings)
+        {
+            bool controllerLayoutEnabled = false;
+            bool controllerLayoutKnown = false;
+            try
+            {
+                controllerLayoutEnabled = new ControllerProfiles(_dataRoot).Load().Enabled;
+                controllerLayoutKnown = true;
+                TxtSummaryControllerLayout.Text = controllerLayoutEnabled ? "On" : "Off";
+            }
+            catch
+            {
+                TxtSummaryControllerLayout.Text = "Unavailable (check Controls)";
+            }
+
+            if (controllerLayoutEnabled)
+            {
+                TxtSummaryJoystick.Text = "Not used (SDL controller layout is on)";
+                return;
+            }
+
+            try
+            {
+                var attached = DirectInputJoystickCatalog.EnumerateAttached();
+                var selected = DirectInputJoystickSelection.Resolve(settings, attached);
+                var hasSavedDevice = !string.IsNullOrWhiteSpace(settings.DirectInputJoystickInstanceGuid) ||
+                    !string.IsNullOrWhiteSpace(settings.DirectInputJoystickProductName);
+                TxtSummaryJoystick.Text = selected?.DisplayName ??
+                    (hasSavedDevice && !settings.DirectInputJoystickNone
+                        ? "None (saved joystick is not attached)"
+                        : "None");
+            }
+            catch
+            {
+                TxtSummaryJoystick.Text = "Unavailable (device enumeration failed)";
+            }
+
+            if (!controllerLayoutKnown)
+            {
+                TxtSummaryJoystick.Text += " (controller-layout status unavailable)";
             }
         }
 

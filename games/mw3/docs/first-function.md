@@ -2,7 +2,7 @@
 
 Static contract reviewed on 2026-10-06. **G2 passed on 2026-10-07:** 16,609 actual
 original-x86 inputs match generated native x64 at O0/O2, with zero mismatches
-and 49 rejection controls. See the [experiment record](../../../docs/mw3-leaf-experiment.md).
+and 49 rejection controls. See the [experiment record](../../../docs/archive/mw3-leaf-experiment.md).
 This function computes an address; its gameplay role
 and original source name are unknown. The selected slice has no API, global,
 floating-point, exception, or indirect-call dependency.
@@ -140,7 +140,7 @@ Evidence is in `reports/mw3-recon/review.json`, `slice.json`, `leaf-with-bytes.t
 and `sub_00409ed0-guest.ll`; proprietary slices and generated IR stay private.
 The extraction record itself performs no execution. Its immutable admission
 metadata retains the initial static-review label; the separate G2 verification
-records subsequent native execution. The [G2 recipe and evidence summary](../../../docs/mw3-leaf-experiment.md)
+records subsequent native execution. The [G2 recipe and evidence summary](../../../docs/archive/mw3-leaf-experiment.md)
 describe `build_mw3_leaf.ps1 -RunComparison` and the frozen result identities.
 
 ## Authored x86 replacement experiment (verified 2026-10-07)

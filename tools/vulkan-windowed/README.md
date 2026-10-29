@@ -1,6 +1,6 @@
 # Windowed Vulkan replay
 
-Double-click [Launch Vulkan Replay.cmd](../../Launch%20Vulkan%20Replay.cmd) at
+Double-click [Launch Vulkan Replay.cmd](../../launchers/Launch%20Vulkan%20Replay.cmd) at
 the repository root. The viewer opens at 960 × 720 and redraws a saved MW3
 Training scene through the project-built x64 Vulkan renderer. Resize the
 window normally; the scene keeps its aspect ratio with black borders. Press
@@ -43,4 +43,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/vulkan-windowed/ru
 
 The alternate admitted capture can be selected with
 `-CaptureRun reports/graphics-trace/20261009-061307-498`.
-See [the implementation and acceptance record](../../docs/vulkan-windowed-replay.md).
+See [the implementation and acceptance record](../../docs/archive/vulkan-windowed-replay.md).

@@ -1,6 +1,6 @@
 # Known playtest issues
 
-Updated October 24, 2026. Keep unresolved reports here until their fixes have
+Updated October 27, 2026. Keep unresolved reports here until their fixes have
 been verified in the affected scenario. A passing startup or Training check
 does not by itself close a campaign or combat issue.
 
@@ -21,7 +21,7 @@ does not by itself close a campaign or combat issue.
   identify the cause, then verify the correction in the reported situation.
 - **Workaround:** None verified.
 
-See the [Harasser investigation](vehicle-lighting-and-harasser-investigation-2026-10-24.md#harasser-investigation--unresolved).
+See the [Harasser investigation](archive/vehicle-lighting-and-harasser-investigation-2026-10-24.md#harasser-investigation--unresolved).
 
 ## MW3-004 — Main-menu pointer confined to the edges on one laptop
 
@@ -49,7 +49,7 @@ See the [Harasser investigation](vehicle-lighting-and-harasser-investigation-202
   the affected laptop, confirmed by the owner. This is temporary; it does not
   count as a software correction.
 
-See the [DPI investigation and retest candidate](main-menu-dpi-mouse-2026-10-24.md).
+See the [DPI investigation and retest candidate](archive/main-menu-dpi-mouse-2026-10-24.md).
 
 ## MW3-002 — APC/vehicle headlight direction and destruction cleanup
 
@@ -65,7 +65,7 @@ See the [DPI investigation and retest candidate](main-menu-dpi-mouse-2026-10-24.
 - **Still required:** Confirm forward beam appearance and removal after
   destruction in live combat, including looking away and back at the wreck.
 
-See the [vehicle lighting repair](vehicle-lighting-and-harasser-investigation-2026-10-24.md#vehicle-lighting-repair).
+See the [vehicle lighting repair](archive/vehicle-lighting-and-harasser-investigation-2026-10-24.md#vehicle-lighting-repair).
 
 ## MW3-003 — Destroyed mech reverts to the stock model
 
@@ -81,3 +81,20 @@ See the [vehicle lighting repair](vehicle-lighting-and-harasser-investigation-20
 - **Next step:** Capture an affected kill and trace replacement selection across
   the living, destruction and wreck states, including any LOD changes.
 - **Workaround:** None verified.
+
+## MW3-005 — Force-feedback wheel or joystick stops the game at startup
+
+**Status: Fix in review — reaches the main menu with a G920 connected; launcher check pending.**
+
+- **Reported behavior:** With a force-feedback device connected (a Logitech
+  G920 wheel on launcher 1.0.43, runtime 1.0.44), the game exits at startup with
+  "Unimplemented host service: IFORCE2.dll!_IFLoadProjectFile@8".
+- **Expected behavior:** The game starts and the device works as a joystick.
+- **Findings:** The host passed the device's real force-feedback capability to
+  the game, which then loads its effects through IFORCE2.dll. The host has no
+  IFORCE2 or effect service. The repair reports devices without force-feedback
+  capabilities, so the game takes its original plain-joystick path. Force
+  feedback itself is not supported yet.
+- **Workaround:** Unplug the force-feedback device before launching.
+
+See [issue #11](https://github.com/roswellien/MW3Recomp-Private/issues/11).

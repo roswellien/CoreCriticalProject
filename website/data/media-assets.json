@@ -1,0 +1,121 @@
+{
+  "base_url": "https://a67a6e69.core-critical.pages.dev/assets/media",
+  "files": {
+    "annihilator.jpg": {
+      "bytes": 183358,
+      "sha256": "b7c80c6a71fa0f9f607fd789e56b1187373842677cdbb11512a79c41b6640b45"
+    },
+    "annihilator.mp4": {
+      "bytes": 13735624,
+      "sha256": "1577c788311c1f0cf22dcc5d19366ee222c7d9c1174bfb8ef6ad8f75bfbd6f3a"
+    },
+    "announcement-trailer.jpg": {
+      "bytes": 425758,
+      "sha256": "8189387ff68296029f34e6fb0798aae37cf99d2fd96ff1d46746e9aa26e70e17"
+    },
+    "blackhawk.jpg": {
+      "bytes": 80813,
+      "sha256": "b6646f67ba222009e8e638a37dd7cd794b4b532162f4d4d8723f846bd10ee4e8"
+    },
+    "blackhawk.mp4": {
+      "bytes": 11122938,
+      "sha256": "4c42fb6f9bead3c940d7f574153013dc0119ed78f2ac23216fcddcd024a40139"
+    },
+    "bushwacker.jpg": {
+      "bytes": 17972,
+      "sha256": "8f8e662d86760e29235016a4930efede363c755e1b7084136d21c1bdb297ba2a"
+    },
+    "bushwacker.mp4": {
+      "bytes": 5573664,
+      "sha256": "7d04205a19701e846fd2b28ab5de861618a6ebabfdb84c272112200afdb81517"
+    },
+    "cauldron.jpg": {
+      "bytes": 104056,
+      "sha256": "67053e3753021d1153aa6e807e60d23ce974133d4d57d76573c5e1fb79a0f6d7"
+    },
+    "cauldron.mp4": {
+      "bytes": 10132258,
+      "sha256": "da53efe733ed2edb51675c67ca142d7b01f02eaf858f9c7ae7cf5bbcb6e14d60"
+    },
+    "champion.jpg": {
+      "bytes": 119119,
+      "sha256": "28707bccfe845c6f447bce26f482e5aa3be8ccaeebc0cc006a34d3e358b732aa"
+    },
+    "champion.mp4": {
+      "bytes": 10956608,
+      "sha256": "1913e0b7aa3b8fbf538eaf9a9596643b625ef902f936a2736962652196891bf3"
+    },
+    "madcat.jpg": {
+      "bytes": 66724,
+      "sha256": "ebcdf19042119c820f5198f80d2da2047ed4c71a1cd94e1c38d72b1c9ab7ad44"
+    },
+    "madcat.mp4": {
+      "bytes": 6773409,
+      "sha256": "eb23b214dd01250c7e2f4e9d0a95db50adda22b96e2567fc59e8d52530595e07"
+    },
+    "orion.jpg": {
+      "bytes": 79875,
+      "sha256": "0388b185bd9cc82c61d8568e139bb1ffb0fc428681790f907ba0c6c9619ed1fa"
+    },
+    "orion.mp4": {
+      "bytes": 6709497,
+      "sha256": "ef592014d077bdbbc6a0852ff78f6f657c26ad8ef2579ca1e024b770337b6359"
+    },
+    "puma.jpg": {
+      "bytes": 16525,
+      "sha256": "99c2819104d2df8ec3e7b5a7629b5c3463fa918933e06b33630bd9dfce661f18"
+    },
+    "puma.mp4": {
+      "bytes": 6553582,
+      "sha256": "6090cb54c6019cc077b75d226cfb93be5b20f0ce58508ff0c4967440ad029067"
+    },
+    "shadowcat.jpg": {
+      "bytes": 69754,
+      "sha256": "4f40189e551af6fa06490296b8ea8c250fe570189e8fd84bbe747d6537ec24a7"
+    },
+    "shadowcat.mp4": {
+      "bytes": 7410878,
+      "sha256": "4304542892b632755cc28cc7b12db03d713fbfc5046501f9e407b6401081b8ac"
+    },
+    "strider.jpg": {
+      "bytes": 106537,
+      "sha256": "1fb3f837d8aa3f8d3c853d200ead9aae8611aaba3f6b2d1f176cb19a2629c5c3"
+    },
+    "strider.mp4": {
+      "bytes": 11093217,
+      "sha256": "8902c46dadd674c0875b0895b45285abb30a6b421534a68c2eef555241f6559e"
+    },
+    "sunder.jpg": {
+      "bytes": 66090,
+      "sha256": "06d55faea9605abf33e1e20adad2664f1b6ce90cc60a232c7bb85a7e25c6af3a"
+    },
+    "sunder.mp4": {
+      "bytes": 6206350,
+      "sha256": "9c55d0ee28c1af4a42d904257ad1f636dfbc08de5d98dd66380b547168b2c86d"
+    },
+    "supernova.jpg": {
+      "bytes": 71943,
+      "sha256": "95651b0d324ca1c42fc2c6c1c4a78e17c337f11a52a06edea27b2c2338a78daf"
+    },
+    "supernova.mp4": {
+      "bytes": 5634968,
+      "sha256": "83d85b96c47e270ebcfe3543beb3bdc670af58dba4e9f1bcd1b579e525d60627"
+    },
+    "thor.jpg": {
+      "bytes": 59598,
+      "sha256": "38b75444bd0b162f1f4b5ccefdfe6275cd91405cdacb87345ac05d0a4ab6d428"
+    },
+    "thor.mp4": {
+      "bytes": 13390848,
+      "sha256": "c133998e981a6384343e5c9be9b33986d52515fc8565a4287995d77d0cd8d9a6"
+    },
+    "vulture.jpg": {
+      "bytes": 116712,
+      "sha256": "fa751ca9ada0fcbdab03ef33a5873933153e78ac7a8001055deec88594073725"
+    },
+    "vulture.mp4": {
+      "bytes": 11069284,
+      "sha256": "4074abfe8945b4b79e5b741acd7f8f64df15cb769dabdc151a5573f49fec9b82"
+    }
+  }
+}

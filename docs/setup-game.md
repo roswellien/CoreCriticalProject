@@ -24,8 +24,8 @@ objects and source snapshots remain local. The
 [enhanced launcher](../tools/remaster-launcher/README.md) additionally uses
 prepared bank/model/material registrations. Those are not included with source.
 
-In an already prepared checkout, the existing `Play-MW3.cmd` and
-`Play MW3Remaster.cmd` entry points select their local native profiles. The
+In an already prepared checkout, the existing `launchers\Play-MW3.cmd` and
+`launchers\Play MW3Remaster.cmd` entry points select their local native profiles. The
 graphical launcher invokes the same preparation path. Cloning the repository,
 compiling just the WPF project or running its existing Inno script does not
 create those inputs.
