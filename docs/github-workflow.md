@@ -68,8 +68,8 @@ can't load skills opens the `SKILL.md` at the path given and follows it.
 4. **Implement:** carry out the plan through its own checks, then go straight on
    to review.
 5. **Review:** run the code review on the branch in a fresh session that didn't
-   write the change, rerun the checks with
-   `.agents/skills/core-critical-pre-pr-checks/SKILL.md`, then walk the
+   write the change; it ends by rerunning the checks with
+   `.agents/skills/core-critical-pre-pr-checks/SKILL.md`. Then walk the
    requester through what is left. The PR stays a draft until the requester
    says it's ready.
 

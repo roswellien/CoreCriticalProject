@@ -53,5 +53,6 @@ One report when the loop stops:
 4. **Recommended follow-up issues**, if any.
 5. **Open questions** the target still can't answer.
 
-The walkthrough in the workflow skill then takes the requester through items
-3 to 5.
+The walkthrough in the workflow skill then takes the requester through every
+finding the report leaves: any major findings from item 1 first, then items 3
+to 5.

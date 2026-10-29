@@ -34,8 +34,9 @@ one skill from another.
    stopping for a go-ahead and without editing the plan. If the plan turns out
    to be wrong, stop and tell the requester; the plan is fixed before going on.
 5. **Review:** in a fresh session that didn't write the change, run
-   `.agents/skills/core-critical-code-review/SKILL.md` on the branch, then
-   `.agents/skills/core-critical-pre-pr-checks/SKILL.md`, then walk the
+   `.agents/skills/core-critical-code-review/SKILL.md` on the branch (it ends
+   by rerunning the checks with
+   `.agents/skills/core-critical-pre-pr-checks/SKILL.md`), then walk the
    requester through what is left. The implementing session stops after its
    checks; the requester, or the tool where it can, starts the review session.
    The PR opens as a draft and stays one until the requester says it's ready.
@@ -53,13 +54,6 @@ committed: `MW3Recomp-Private-specs/<issue>-<slug>-spec.md` and
   drop or defer a finding without asking.
 - A large, independent or risky refactor a review finds becomes a follow-up
   issue, not part of this change.
-
-## Short path
-
-A change that can be described in one sentence and is already covered by tests
-may skip the grill, spec and plan, only when the requester agrees for that
-change. It still gets stage 5. Release promotions (`develop` -> `main`) and
-branch syncs are exempt. Cloud agents take only short-path tasks.
 
 ## Reasons not to skip this step
 
