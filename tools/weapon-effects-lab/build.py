@@ -8,6 +8,8 @@ import base64
 import struct
 import zlib
 
+from page_data import fill_page_data
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 
@@ -77,12 +79,9 @@ def main():
                     encoded = png(field['width'],field['height'],raw.read_bytes())
                     raw.with_suffix('.png').write_bytes(encoded)
                     field[layer] = 'data:image/png;base64,'+base64.b64encode(encoded).decode('ascii')
-    payload = json.dumps(preview_data, separators=(',', ':'), allow_nan=False)
     template = (HERE / 'preview.html').read_text(encoding='utf-8')
-    if template.count('/*NATIVE_DATA*/null') != 1:
-        raise RuntimeError('Preview data insertion marker missing or ambiguous')
     preview = out / 'preview.html'
-    preview.write_text(template.replace('/*NATIVE_DATA*/null', payload), encoding='utf-8')
+    preview.write_text(fill_page_data(template, preview_data), encoding='utf-8')
     print(f'Preview: {preview}\nStandalone authored fixture; no game integration or lighting-engine changes.')
 
 
