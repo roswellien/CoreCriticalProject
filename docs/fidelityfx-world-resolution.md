@@ -269,6 +269,8 @@ promotion counters. This is a conservative rendering restriction: Training's
 depth-only frame starts no longer qualify for reduction, so earlier reduced-scene
 counts are historical evidence and do not describe the corrected host.
 
+The corrected host completed 2,200 offscreen Training frames with 50% requested and the verified published inputs (`preserve-hidden50`). It reports zero reduced scenes and promotions, with synchronization validation enabled and no validation errors. The captures differ from the earlier published 100% reference; this comparison remains unresolved. The maintained build, manifest checks, 25 standard tests, format-check and report-only style checks pass. Visible startup and integrated-adapter depth issues remain open.
+
 ## Remaining limits
 
 The retained-pixel correction below supersedes the initial persistence failures.
