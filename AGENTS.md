@@ -113,7 +113,7 @@ fixtures, no game install).
 ```powershell
 python -m venv tools/style/.venv
 tools/style/.venv/Scripts/python -m pip install --require-hashes -r tools/style/requirements.txt
-cmake --preset default -A x64 -DMW34_CLANG_FORMAT=tools/style/.venv/Scripts/clang-format.exe
+cmake --preset default -A x64 -DMW34_CLANG_FORMAT="$PWD/tools/style/.venv/Scripts/clang-format.exe"
 cmake --build build/default --target format-check
 dotnet run --project tools/mw3-remaster-launcher-tests -c Release
 ```
