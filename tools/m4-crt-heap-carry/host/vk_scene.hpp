@@ -802,10 +802,21 @@ class Renderer {
     std::uint64_t emission_draw_records{}, emission_payloads{};
     // Query the actual scene/presenter device, avoiding a throwaway render device
     // when enhanced texture banks need dimensions beyond the original 256 cap.
-    unsigned max_texture_dimension(HWND) {
+    unsigned max_texture_dimension(HWND window) {
         HostFpEnvironment fp;
-        if (!device)
-            init();
+        if (!device) {
+            // Capability queries can precede the first Flip. Select against the
+            // actual window now, before texture banks bind us to an adapter.
+            if (::IsWindow(window)) {
+                child = makeChild(window);
+                if (!child)
+                    throw std::runtime_error("Cannot create Vulkan capability-query window");
+                presentParent = window;
+                init(child);
+            } else {
+                return unbound_texture_dimension();
+            }
+        }
         if (!device)
             throw std::runtime_error("Vulkan device unavailable for enhanced texture capabilities");
         VkPhysicalDeviceProperties p{};
@@ -894,7 +905,8 @@ class Renderer {
                            depthOffset = mw34::depth::offset(size_t(colorBytes)),
                            depthBytes = pixels * sizeof(float);
         ensure(upload, depthOffset + depthBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        ensure(readback, depthOffset + depthBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        ensure(readback, depthOffset + VkDeviceSize(rw) * rh * sizeof(float),
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         ensure(vertexBuffer, std::max<VkDeviceSize>(s.vertices.size(), 32),
                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         auto *up = static_cast<unsigned char *>(upload.mapped);
@@ -1501,6 +1513,9 @@ class Renderer {
         check(f.vkBeginCommandBuffer(cmd, &bi), "begin readback");
         const VkDeviceSize pixels = VkDeviceSize(width) * height,
                            colorBytes = pixels * (rgba ? 4 : 2);
+        ensure(readback, mw34::depth::offset(size_t(colorBytes)) +
+                             VkDeviceSize(rw) * rh * sizeof(float),
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         if (in_attachment_layout) {
             barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1532,7 +1547,8 @@ class Renderer {
         copy_back(s);
     }
     // The caller has waited for GPU writes and sized both output vectors. The
-    // readback buffer packs all color bytes first, followed by guest-resolution D16.
+    // readback buffer packs guest color bytes first, then full-raster D32 depth.
+    // Depth is sampled and quantized only at the guest boundary.
     // RGB565 quantization deliberately uses integer rounding; preserve this arithmetic.
     void copy_back(Scene &s) {
         const VkDeviceSize pixels = VkDeviceSize(width) * height,
@@ -1546,11 +1562,65 @@ class Renderer {
             }
         } else
             std::memcpy(s.color.data(), rd, colorBytes);
-        mw34::depth::readback(s.depth.data(), rd + mw34::depth::offset(size_t(colorBytes)),
-                              size_t(pixels));
+        mw34::depth::readback_scaled(s.depth.data(), rd + mw34::depth::offset(size_t(colorBytes)),
+                                     width, height, rw, rh);
     }
 
   private:
+    // Enumeration may precede window creation. Advertise a limit every graphics
+    // adapter supports, without creating a device before presentation can choose.
+    static unsigned unbound_texture_dimension() {
+        struct Probe {
+            HMODULE library{};
+            VkInstance instance{};
+            PFN_vkDestroyInstance destroy{};
+            ~Probe() {
+                if (instance && destroy) destroy(instance, nullptr);
+                if (library) ::FreeLibrary(library);
+            }
+        } probe;
+        probe.library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!probe.library)
+            throw std::runtime_error("Vulkan capability loader unavailable");
+        const auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+            ::GetProcAddress(probe.library, "vkGetInstanceProcAddr"));
+        if (!get) throw std::runtime_error("Vulkan capability entry point unavailable");
+        const auto create = reinterpret_cast<PFN_vkCreateInstance>(get(nullptr, "vkCreateInstance"));
+        if (!create) throw std::runtime_error("Vulkan capability instance entry point unavailable");
+        VkInstanceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        check(create(&info, nullptr, &probe.instance), "create capability instance");
+        probe.destroy = reinterpret_cast<PFN_vkDestroyInstance>(get(probe.instance, "vkDestroyInstance"));
+        const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+            get(probe.instance, "vkEnumeratePhysicalDevices"));
+        const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+            get(probe.instance, "vkGetPhysicalDeviceProperties"));
+        const auto queues = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
+            get(probe.instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+        if (!probe.destroy || !enumerate || !properties || !queues)
+            throw std::runtime_error("Vulkan capability functions unavailable");
+        unsigned count{};
+        check(enumerate(probe.instance, &count, nullptr), "enumerate capability adapters");
+        std::vector<VkPhysicalDevice> adapters(count);
+        check(enumerate(probe.instance, &count, adapters.data()), "read capability adapters");
+        unsigned limit{};
+        for (unsigned index = 0; index < count; ++index) {
+            unsigned queue_count{};
+            queues(adapters[index], &queue_count, nullptr);
+            std::vector<VkQueueFamilyProperties> families(queue_count);
+            queues(adapters[index], &queue_count, families.data());
+            const bool graphics = std::any_of(families.begin(), families.end(), [](const auto &family) {
+                return family.queueCount && (family.queueFlags & VK_QUEUE_GRAPHICS_BIT);
+            });
+            if (!graphics) continue;
+            VkPhysicalDeviceProperties device_properties{};
+            properties(adapters[index], &device_properties);
+            const auto supported = device_properties.limits.maxImageDimension2D;
+            limit = limit ? std::min(limit, supported) : supported;
+        }
+        if (!limit) throw std::runtime_error("No graphics adapter supplies Vulkan texture limits");
+        return limit;
+    }
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
     struct Fns {
@@ -3157,7 +3227,7 @@ class Renderer {
              {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)},
               {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
             barrier(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
         copyIn(upload.buffer, 0, colorLo.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT);
         copyIn(upload.buffer, depthOffset, depthLo.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -3172,32 +3242,24 @@ class Renderer {
         blit_img(depthLo.image, width, height, depthImage.image, rw, rh, VK_IMAGE_ASPECT_DEPTH_BIT,
                  VK_FILTER_NEAREST);
     }
-    // Guest-resolution copy of the target images (which are in transfer-source layout) into the
-    // readback buffer.
+    // Guest color plus full-raster D32 copy. Keep depth resampling out of the
+    // driver's image-blit path; copy_back samples it at the guest boundary.
     void copy_out_scaled(VkDeviceSize depthOffset) {
         if (rw == width && rh == height) {
             copyOut(colorImage.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
             copyOut(depthImage.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT);
             return;
         }
-        for (auto [img, aspect] :
-             {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)},
-              {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
-            barrier(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        barrier(colorLo.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         blit_img(colorImage.image, rw, rh, colorLo.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT,
                  VK_FILTER_LINEAR);
-        blit_img(depthImage.image, rw, rh, depthLo.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT,
-                 VK_FILTER_NEAREST);
-        for (auto [img, aspect] :
-             {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)},
-              {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
-            barrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        barrier(colorLo.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         copyOut(colorLo.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
-        copyOut(depthLo.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT);
+        copyOut(depthImage.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT, rw, rh);
     }
     void copyIn(VkBuffer buf, VkDeviceSize off, VkImage img, unsigned w, unsigned h,
                 VkImageAspectFlags aspect) {
@@ -3207,11 +3269,12 @@ class Renderer {
         c.imageExtent = {w, h, 1};
         f.vkCmdCopyBufferToImage(cmd, buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
     }
-    void copyOut(VkImage img, VkBuffer buf, VkDeviceSize off, VkImageAspectFlags aspect) {
+    void copyOut(VkImage img, VkBuffer buf, VkDeviceSize off, VkImageAspectFlags aspect,
+                 unsigned copy_width = 0, unsigned copy_height = 0) {
         VkBufferImageCopy c{};
         c.bufferOffset = off;
         c.imageSubresource = {aspect, 0, 0, 1};
-        c.imageExtent = {width, height, 1};
+        c.imageExtent = {copy_width ? copy_width : width, copy_height ? copy_height : height, 1};
         f.vkCmdCopyImageToBuffer(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
     }
     // The child owns presentation pixels while input remains with the game window.

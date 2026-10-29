@@ -55,10 +55,14 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
     } window;
     Renderer renderer;
     if (visible) {
+        require(renderer.max_texture_dimension(nullptr) >= 640,
+                "Pre-window capability query cannot support the guest target");
         window.handle = ::CreateWindowExW(0, L"STATIC", L"World resolution presentation check",
                                           WS_OVERLAPPEDWINDOW, 40, 40, 800, 600, nullptr, nullptr,
                                           ::GetModuleHandleW(nullptr), nullptr);
         require(window.handle != nullptr, "Cannot create presentation test window");
+        require(renderer.max_texture_dimension(window.handle) >= 640,
+                "Presenting adapter cannot support the guest target");
         ::ShowWindow(window.handle, SW_SHOWNOACTIVATE);
         std::vector<std::uint16_t> pixels(640 * 480);
         require(renderer.present(window.handle, reinterpret_cast<unsigned char *>(pixels.data()),

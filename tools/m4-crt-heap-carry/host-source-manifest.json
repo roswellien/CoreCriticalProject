@@ -217,8 +217,8 @@
       "classification": "compiled-authored-shader"
     },
     "depth_transfer.hpp": {
-      "sha256": "b1c3647b73573ea239eaa6135841d1a6b8ebf51fea04703f038913ad193dd966",
-      "bytes": 1786,
+      "sha256": "567ebd10f5e9ab09b406c2fdea094c7648527720e5ef267f54a4076eba7469e5",
+      "bytes": 2760,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -925,8 +925,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "234ce3f8e46dbd1130bf8b034ed6fffe7b58a8f9f7c7245bc5b7568bd42907c0",
-      "bytes": 191378,
+      "sha256": "07b5232c69ac04ca0609b7785391305f4b681f6b34744f2a07b33e0e774957fa",
+      "bytes": 195247,
       "decision": "commit",
       "classification": "authored-host-source"
     },

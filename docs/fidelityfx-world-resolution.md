@@ -294,15 +294,89 @@ on retained-color frames remains blocked on coverage-aware composition; the
 warning makes the development limitation visible rather than accepting it as
 complete Stage 2 behavior.
 
+### Scaled depth readback correction
+
+The presenting integrated AMD adapter reproduced the guest-depth failure at 100%:
+1280x960 resident depth read back as 65535 where 49151 was required. The raw D32
+value was already 1.0 before D16 conversion. A 640x480 unscaled control passed.
+Adding early-depth synchronization, using a transfer clear, and changing cached
+host-memory selection did not fix it; those experiments were restored exactly.
+
+Depth readback now copies the full D32 raster directly to host staging, then
+samples texel centers with integer coordinates and quantizes once into guest D16.
+Color readback keeps its existing filter. Staging capacity covers the complete
+raster depth, including after promotion. This changes resident depth -> guest
+surface transport, with no gameplay or shader change. It increases depth-readback
+bandwidth and staging memory at enhanced resolutions; no performance gain is
+claimed. Depth upload and world-target depth promotion still use their existing
+GPU paths.
+
+The former visible fixture passes at 50/67/100 on `AMD Radeon(TM) Graphics`, with
+five swapchain presents and resize/minimize/hide restoration. The depth fixture's
+new `visible-scaled` mode selects the presenting adapter and passes all 65,536
+guest depths, color transfer, resident fetch, 64 close-surface positions and depth
+clear. Native/scaled/odd/2x/4x SSAA checks also pass. Authored CPU cases check
+center selection and odd-ratio sampling; removing the half-texel offset fails.
+
+The expanded synchronization run exposed scratch-image reuse hazards. Reuse now
+waits for preceding command stages before discarding/transferring the scratch
+image. The presenting depth suite then passes with synchronization validation and
+no errors; the initial failing validation log is preserved locally. The earlier
+visible depth mismatch is resolved within this tested scope. Broader adapter and
+physical-PC coverage remain open.
+
+A published-input native visible attempt still fails surface capabilities `-13`
+before drawing. The first rebuilt host completes 2,200 offscreen Training frames
+at 100%, with synchronization validation and no errors; captures 1801/2101 match
+the published reference exactly (`depth-direct-hidden100`). This native run
+precedes the final scratch-dependency adjustment and is not final-build evidence.
+
+### Capability-query device selection
+
+A fixture that calls `max_texture_dimension(window)` before its first upload
+reproduces the native surface-capability `-13`: the query previously initialized
+an offscreen-preferred adapter without considering the supplied window. The
+query now creates the host child and selects a window-compatible adapter before
+reporting its texture limits. A valid hidden window is included because the game
+queries before showing its window. Before a window exists, the query now enumerates physical graphics adapters and advertises their common minimum image limit without creating a logical device. This is conservative and may advertise less than a later-selected adapter can support. Once a window exists, limits come from its actual presenting device.
+
+The hidden-query -> show -> first upload fixture passes on the integrated adapter,
+then completes five swapchain presents with resize/minimize/hide restoration.
+A first native attempt checking visibility alone still failed; the final valid-
+window change includes hidden-window queries and receives separate validation.
+This changes device ownership before texture allocation, without inventing a
+texture limit or switching devices underneath existing resources.
+
+The pre-window enumeration -> hidden window -> visible presentation fixture passes
+with synchronization validation. Replacing the unbound physical-limit query with
+early device initialization reproduces `-13` and is rejected. The native final
+host (`a90f5a379d0eccdbf7ca16c49c53784bf77ea96fbd0f0d2a8ce3d496618a0237`)
+then reaches Training and completes 1,000 actual swapchain presentations on the
+integrated AMD GPU at 3440x1440 with published packs, FXAA/16x AF and lighting /
+shadows enabled (`deferred-device-visible100`). It records 1,342 native scenes
+and no synchronization or other validation errors. The selected GPU lighting / shadow paths are enabled, with directional sun strength 0 and ambient 1; this does not validate nonzero directional lighting. This is bounded startup /
+Training evidence, not broad multi-adapter startup acceptance. The maintained
+build, source pins, unchanged translated DLL and all 25 standard tests pass.
+
+The matched 50%-requested run completes 900 visible swapchain presentations and
+942 native scenes (`deferred-device-visible50`) with synchronization validation
+and no errors. It reports zero reduced scenes/promotions and explicitly warns
+that FXAA is deferred for retained color. This validates the conservative path,
+not reduced Training rendering. These are integrated-GPU compatibility runs: the
+RX 9070 still rejects this session's surface. The host selects a compatible
+presenting device rather than changing the display driver or forcing an adapter
+that cannot present. Local RX 9070 presentation and performance remain unverified
+by these runs.
+
 ## Remaining limits
 
-The retained-pixel correction below supersedes the initial persistence failures.
+The retained-pixel correction above supersedes the initial persistence failures.
 Stage 2 remains incomplete because retained-color frames cannot yet be reduced.
 FSR remains disabled; do not advance to Stage 3 implementation or mark this draft
 ready on the strength of passing CI. Fresh-overlay, stock Training, visible
 fixture lifecycle and synchronization checks have bounded evidence above.
 Comprehensive guest-write/fade sequences, visible lifecycle checks inside the
-game, intermittent visible startup, the visible fixture's depth mismatch, the
+game, broader startup and adapter depth coverage, the
 reported periodic size change, a second
 physical PC and independent review remain open. Mixed world passes after HUD
 remain full resolution.
