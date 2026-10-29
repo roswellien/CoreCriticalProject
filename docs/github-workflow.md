@@ -79,8 +79,8 @@ re-read and review again, and stop on a clean pass, after five passes, or when
 the same major findings come back. The full loop is in
 `.agents/skills/core-critical-workflow/references/review-loop.md`.
 
-Each review ends with a walkthrough of what it leaves, run as "Walkthroughs" in
-the workflow skill says.
+Each stage's reviews end with one walkthrough of what they leave, run as
+"Walkthroughs" in the workflow skill says.
 
 Short path: a change that can be described in one sentence and is already
 covered by tests skips the grill, spec and plan when the requester agrees. It
