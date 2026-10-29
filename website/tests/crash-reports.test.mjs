@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { onRequestPost } from "../functions/api/crash-reports.js";
+import { onRequestGet as getAdminCrashReports } from "../functions/admin/crash-reports.js";
+import { webcrypto } from "node:crypto";
 
 const originalFetch = globalThis.fetch;
+globalThis.crypto ??= webcrypto;
+const archivedReports = [];
 const database = {
-  prepare() {
+  prepare(query) {
+    if (query.includes("INSERT OR IGNORE INTO crash_report_archive")) {
+      return { bind: (...values) => ({ run: async () => { archivedReports.push(values); } }) };
+    }
     return { bind: (_day, limit) => ({ first: async () => limit > 0 ? { issue_count: 1 } : null }) };
   }
 };
@@ -16,7 +23,7 @@ const environment = {
   GITHUB_TOKEN: "test-token"
 };
 
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(() => { globalThis.fetch = originalFetch; archivedReports.length = 0; });
 
 function crashRequest(overrides = {}) {
   return new Request("https://corecritical.dev/api/crash-reports", {
@@ -65,6 +72,19 @@ test("creates a private-repository issue for Project auto-add and returns only a
   assert.equal(calls.length, 2);
   assert.ok(calls.some(query => query.includes("createIssue")));
   assert.ok(!JSON.stringify(result).includes("github.com"));
+  assert.equal(archivedReports.length, 1);
+  assert.equal(archivedReports[0][0], "abcdef1234567890");
+  assert.equal(JSON.parse(archivedReports[0][7]).failure_summary, "ERROR: access violation at 0x123456");
+});
+
+test("keeps an archived report and returns a clear accepted status when GitHub is unavailable", async () => {
+  globalThis.fetch = async () => { throw new Error("GitHub temporarily unavailable"); };
+  const response = await onRequestPost({ request: crashRequest(), env: environment });
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), {
+    report_id: "abcdef12", duplicate: false, overflow: false, archived_only: true
+  });
+  assert.equal(archivedReports.length, 1);
 });
 
 test("groups by mode, exit code, and message; reopens closed matches", async () => {
@@ -106,7 +126,11 @@ test("sends new issues beyond the daily cap to one log-free overflow issue", asy
   // Zero is invalid configuration; a valid exhausted D1 counter returns no row.
   cappedEnvironment.CRASH_REPORT_DAILY_ISSUE_LIMIT = "20";
   cappedEnvironment.CRASH_REPORT_DB = {
-    prepare() { return { bind: () => ({ first: async () => null }) }; }
+    prepare(query) {
+      if (query.includes("INSERT OR IGNORE INTO crash_report_archive"))
+        return { bind: (...values) => ({ run: async () => { archivedReports.push(values); } }) };
+      return { bind: () => ({ first: async () => null }) };
+    }
   };
   const response = await onRequestPost({ request: crashRequest(), env: cappedEnvironment });
   assert.deepEqual(await response.json(), { report_id: "abcdef12", duplicate: true, overflow: true });
@@ -114,6 +138,38 @@ test("sends new issues beyond the daily cap to one log-free overflow issue", asy
   assert.ok(!calls.some(query => query.includes("createIssue")));
   assert.ok(overflowBody.includes('"logs": {}'));
   assert.ok(!overflowBody.includes("FULL_LOG_SENTINEL"));
+});
+
+test("returns archive-only success when the daily cap is exhausted and the overflow issue is missing", async () => {
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.query.includes("issue(number:")) {
+      return Response.json({ data: { repository: { issue: null } } });
+    }
+    return Response.json({ data: {
+      repository: { id: "R_repo", isPrivate: true },
+      matched: { nodes: [] }
+    } });
+  };
+  const cappedEnvironment = {
+    ...environment,
+    CRASH_REPORT_DB: {
+      prepare(query) {
+        if (query.includes("INSERT OR IGNORE INTO crash_report_archive")) {
+          return { bind: (...values) => ({ run: async () => { archivedReports.push(values); } }) };
+        }
+        return { bind: () => ({ first: async () => null }) };
+      }
+    }
+  };
+
+  const response = await onRequestPost({ request: crashRequest(), env: cappedEnvironment });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), {
+    report_id: "abcdef12", duplicate: false, overflow: false, archived_only: true
+  });
+  assert.equal(archivedReports.length, 1);
 });
 
 test("caps full logs on later matching reports", async () => {
@@ -151,6 +207,131 @@ test("rejects reports with missing server configuration", async () => {
 test("refuses to send crash logs to a public repository", async () => {
   globalThis.fetch = async () => Response.json({ data: { repository: { id: "R_repo", isPrivate: false } } });
   const response = await onRequestPost({ request: crashRequest(), env: environment });
-  assert.equal(response.status, 503);
-  assert.deepEqual(await response.json(), { error: "Crash reports require a configured private GitHub repository." });
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), {
+    report_id: "abcdef12", duplicate: false, overflow: false, archived_only: true
+  });
+  assert.equal(archivedReports.length, 1);
+});
+
+const adminEnvironment = {
+  ...environment,
+  CRASH_REPORT_ACCESS_ISSUER: "https://corecritical.cloudflareaccess.com",
+  CRASH_REPORT_ACCESS_AUD: "crash-report-admin-audience",
+  CRASH_REPORT_ADMIN_EMAIL: "admin@example.com"
+};
+
+function base64Url(bytes) { return Buffer.from(bytes).toString("base64url"); }
+
+async function makeAccessToken(privateKey, overrides = {}) {
+  const header = base64Url(JSON.stringify({ alg: "RS256", kid: "test-key" }));
+  const payload = base64Url(JSON.stringify({
+    iss: adminEnvironment.CRASH_REPORT_ACCESS_ISSUER,
+    aud: [adminEnvironment.CRASH_REPORT_ACCESS_AUD],
+    email: adminEnvironment.CRASH_REPORT_ADMIN_EMAIL,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 300,
+    ...overrides
+  }));
+  const input = `${header}.${payload}`;
+  const signature = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey,
+    new TextEncoder().encode(input)));
+  return `${input}.${base64Url(signature)}`;
+}
+
+let adminKeyPair;
+let adminJwk;
+async function createAdminAccess() {
+  if (!adminKeyPair) {
+    adminKeyPair = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    adminJwk = await crypto.subtle.exportKey("jwk", adminKeyPair.publicKey);
+    Object.assign(adminJwk, { kid: "test-key", alg: "RS256", use: "sig" });
+  }
+  const jwk = adminJwk;
+  globalThis.fetch = async () => Response.json({ keys: [jwk] });
+  return { privateKey: adminKeyPair.privateKey, token: await makeAccessToken(adminKeyPair.privateKey) };
+}
+
+test("keeps the report archive inaccessible without a valid admin Access token", async () => {
+  const unauthenticated = await getAdminCrashReports({
+    request: new Request("https://corecritical.dev/admin/crash-reports"), env: adminEnvironment
+  });
+  assert.equal(unauthenticated.status, 401);
+  assert.ok(!(await unauthenticated.text()).includes("abcdef1234567890"));
+
+  const { token } = await createAdminAccess();
+  const unauthorized = await getAdminCrashReports({
+    request: new Request("https://corecritical.dev/admin/crash-reports", {
+      headers: { "cf-access-jwt-assertion": token }
+    }),
+    env: { ...adminEnvironment, CRASH_REPORT_ADMIN_EMAIL: "other@example.com" }
+  });
+  assert.equal(unauthorized.status, 403);
+  assert.ok(!(await unauthorized.text()).includes("abcdef1234567890"));
+
+  const tokenParts = token.split(".");
+  tokenParts[2] = (tokenParts[2].startsWith("A") ? "B" : "A") + tokenParts[2].slice(1);
+  const tamperedToken = tokenParts.join(".");
+  const tampered = await getAdminCrashReports({
+    request: new Request("https://corecritical.dev/admin/crash-reports", {
+      headers: { "cf-access-jwt-assertion": tamperedToken }
+    }),
+    env: adminEnvironment
+  });
+  assert.equal(tampered.status, 403);
+  assert.ok(!(await tampered.text()).includes("abcdef1234567890"));
+});
+
+test("renders archived reports and log lines only for the configured admin", async () => {
+  const { token } = await createAdminAccess();
+  const report = {
+    report_id: "report-1234",
+    created_utc: "2026-10-29T13:00:00Z",
+    mode: "remaster",
+    exit_code: 7,
+    failure_summary: "<script>alert('xss')</script>",
+    logs: { launcher: "first line\nsecond line <script>" }
+  };
+  const row = {
+    report_id: report.report_id,
+    created_utc: report.created_utc,
+    stored_utc: "2026-10-29T13:01:00Z",
+    mode: report.mode,
+    exit_code: report.exit_code,
+    failure_summary: report.failure_summary,
+    crash_fingerprint: "deadbeef",
+    report_json: JSON.stringify(report)
+  };
+  const adminDb = {
+    prepare(query) {
+      return {
+        all: async () => ({ results: [row] }),
+        bind: () => ({ first: async () => query.includes("WHERE report_id") ? row : null })
+      };
+    }
+  };
+  const response = await getAdminCrashReports({
+    request: new Request("https://corecritical.dev/admin/crash-reports", {
+      headers: { "cf-access-jwt-assertion": token }
+    }),
+    env: { ...adminEnvironment, CRASH_REPORT_DB: adminDb }
+  });
+  const html = await response.text();
+  assert.equal(response.status, 200);
+  assert.ok(html.includes(report.report_id));
+  assert.ok(html.includes("&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"));
+  assert.ok(!html.includes("<script>"));
+
+  const detail = await getAdminCrashReports({
+    request: new Request("https://corecritical.dev/admin/crash-reports?id=report-1234", {
+      headers: { "cf-access-jwt-assertion": token }
+    }),
+    env: { ...adminEnvironment, CRASH_REPORT_DB: adminDb }
+  });
+  assert.equal(detail.status, 200);
+  const detailHtml = await detail.text();
+  assert.ok(detailHtml.includes("Recent log excerpts"));
+  assert.ok(detailHtml.includes("first line\nsecond line &lt;script&gt;"));
+  assert.ok(!detailHtml.includes("<script>"));
 });

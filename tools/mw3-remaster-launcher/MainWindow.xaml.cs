@@ -947,7 +947,7 @@ namespace MW3RemasterLauncher
             else
             {
                 var choice = MessageBox.Show(this,
-                    summary + "\n\nSend the redacted recent launcher and native logs, launcher/runtime details, selected graphics settings and pack IDs to Core Critical for review? No saves, original media or memory dumps are included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
+                    summary + "\n\nSend the redacted recent launcher and native logs, launcher/runtime details, selected graphics settings and pack IDs to Core Critical for review? Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. No saves, original media or memory dumps are included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
                     "Remaster stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
@@ -960,9 +960,11 @@ namespace MW3RemasterLauncher
                 var report = PlaytestDiagnostics.CreateCrashReport(_settingsMgr.Current, _packMgr.Packs,
                     launchLog, _basePath, runtimeVersion, exitCode);
                 var result = await new CrashReportService().SubmitAsync(report);
-                var detail = result.Overflow
-                    ? "Report sent, thanks. The report was added to the daily overflow queue."
-                    : "Report sent, thanks.";
+                var detail = result.ArchivedOnly
+                    ? "The report was saved to the private admin archive. GitHub issue delivery was unavailable."
+                    : result.Overflow
+                        ? "Report sent, thanks. The report was added to the daily overflow queue."
+                        : "Report sent, thanks.";
                 MessageBox.Show(this, detail + "\nReport ID: " + result.ReportId,
                     "Crash report sent", MessageBoxButton.OK, MessageBoxImage.Information);
             }
