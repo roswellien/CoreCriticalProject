@@ -1,18 +1,20 @@
 # Core Critical website
 
 The live site is [corecritical.dev](https://corecritical.dev), hosted by the
-existing Cloudflare Pages project `core-critical`. Website source now lives in
-this repository's `website/` directory. Cloudflare builds production from this
-repository's `main` branch, with `website/` as its project root. Automatic production deployments are enabled.
+existing Cloudflare Pages project `core-critical`. Website source lives in this
+repository's `website/` directory. Cloudflare builds production from this
+repository's `main` branch, with `website/` as its project root. Merging reviewed
+website changes into `main` automatically deploys the site.
 
 ## Build and preview
 
-From the repository root, build the static pages and MechLab news:
+From `website/`, build the static pages and MechLab news:
 
 ```powershell
-python website/build.py
+python build.py
 ```
 
+The equivalent command from the repository root is `python website/build.py`.
 The build reads public dated notes from `docs/mechlab/` in this repository and
 generates the homepage updates, `news.html`, dated `updates/` pages and `feed.xml`.
 It also generates the media gallery from the metadata in `website/data/`.
@@ -33,19 +35,21 @@ from `website/`.
 
 ## Publish
 
-The maintainer keeps the existing `core-critical` Pages project and custom
-domain, and points its Git integration at this repository with `website/` as
-the root directory. Configure the build command as `python3 build.py` and the
-output directory as `dist`. The Pages Function must stay in the project root
-(`website/functions/`), outside `dist/`. See [CLOUDFLARE.md](CLOUDFLARE.md) for
-the cutover checklist.
+The existing `core-critical` Pages project is connected to this repository with
+`website/` as its root directory, `python3 build.py` as its build command and
+`dist` as its output directory. The Pages Function stays in the project root
+(`website/functions/`), outside `dist/`. After a production deploy, verify
+[corecritical.dev](https://corecritical.dev). See
+[CLOUDFLARE.md](CLOUDFLARE.md) for deployment details and the
+[launcher and website release checklist](../docs/launcher-and-website-release.md)
+for the manual Wrangler deployment command.
 
 The media gallery uses files and hashes in `data/media-assets.json` that are
 hosted on the existing pinned Pages deployment. Keep that deployment available;
 the migration does not recreate or remove it.
 
 The maintainer supplies Cloudflare access through the existing account or a
-local Wrangler login. Keep API tokens and signing credentials outside Git.
+local Wrangler login. Keep API tokens outside Git.
 The legacy cross-repository MechLab publishing bridge is retired. Future site
 and dated MechLab changes publish from this repository's `main` branch.
 
