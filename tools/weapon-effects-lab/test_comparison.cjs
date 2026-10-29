@@ -1,9 +1,11 @@
 // Offline comparison-control and synchronization test; no browser/pixel claims.
+const { readPage, checkUnbuiltPage } = require("./test_page.cjs");
+checkUnbuiltPage("comparison.html", "Prepare this comparison before opening.");
 const fs = require("node:fs"),
     vm = require("node:vm"),
     assert = require("node:assert/strict");
 const html = fs.readFileSync(process.argv[2], "utf8");
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const { data, script } = readPage(html);
 let draws = 0;
 const messages = [],
     nodes = new Map();
@@ -49,12 +51,14 @@ const sandbox = {
         createElement: () => ({ complete: true, naturalWidth: 512, naturalHeight: 512 }),
     },
 };
+node("lab-data").textContent = data.textContent;
+assert.notEqual(JSON.parse(data.textContent), null, "Built page has no data");
 vm.createContext(sandbox);
 vm.runInContext(script, sandbox, { timeout: 10000 });
 assert.equal(messages.at(-1).scene, 1);
 assert.equal(messages.at(-1).time, 0.79);
 assert.match(node("particle").srcdoc, /mw34-comparison/);
-assert(!html.includes("/*COMPARISON_DATA*/null"));
+assert.notEqual(JSON.parse(readPage(node("particle").srcdoc).data.textContent), null);
 assert.equal(vm.runInContext("Object.keys(DATA.references.stock).length", sandbox), 31);
 assert.equal(vm.runInContext("Object.keys(DATA.references.current).length", sandbox), 31);
 for (const scene of [0, 1, 2])

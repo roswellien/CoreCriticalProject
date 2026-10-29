@@ -1,9 +1,11 @@
 // Actual lighting math + offline UI contracts. Does not automate a browser.
+const { readPage, checkUnbuiltPage } = require("./test_page.cjs");
+checkUnbuiltPage("sprite_lighting.html", "Prepare the local lighting study first.");
 const fs = require("node:fs"),
     vm = require("node:vm"),
     assert = require("node:assert/strict");
-const html = fs.readFileSync(process.argv[2], "utf8"),
-    script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const html = fs.readFileSync(process.argv[2], "utf8");
+const { data, script } = readPage(html);
 let sprites = 0,
     receivers = 0;
 const nodes = new Map();
@@ -55,6 +57,8 @@ const sandbox = {
             tag === "img" ? { complete: true, naturalWidth: 512 } : { getContext: () => context },
     },
 };
+node("lab-data").textContent = data.textContent;
+assert.notEqual(JSON.parse(data.textContent), null, "Built page has no data");
 vm.createContext(sandbox);
 vm.runInContext(script, sandbox, { timeout: 20000 });
 const off = vm.runInContext("receiverPixels(0)", sandbox),
@@ -92,7 +96,7 @@ node("replay").onclick();
 vm.runInContext("tick(100);", sandbox);
 assert(vm.runInContext("age>0", sandbox));
 assert(sprites > 20 && receivers > 20, "Receiver/sprite drawing not exercised");
-assert(!html.includes("/*SPRITE_LIGHT_DATA*/null"));
+assert.equal(vm.runInContext("Object.keys(DATA.references.stock).length", sandbox), 31);
 console.log(
     `Sprite lighting checks passed: ${changed} receiver pixels respond; ${sprites} unchanged sprite draws. Browser pixels unverified.`,
 );

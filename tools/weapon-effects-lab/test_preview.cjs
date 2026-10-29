@@ -1,10 +1,12 @@
 // Offline adapter test only. Does not launch/control a browser or prove appearance.
+const { readPage, checkUnbuiltPage } = require("./test_page.cjs");
+checkUnbuiltPage("preview.html", "Build this template with build.py before viewing.");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
 if (process.argv.length !== 3) throw Error("Usage: node test_preview.cjs built-preview.html");
 const html = fs.readFileSync(process.argv[2], "utf8");
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const { data, script } = readPage(html);
 let draws = 0,
     requests = 0,
     fieldDraws = 0,
@@ -92,6 +94,8 @@ const sandbox = {
                 : { width: 0, height: 0, getContext: () => context },
     },
 };
+node("lab-data").textContent = data.textContent;
+assert.notEqual(JSON.parse(data.textContent), null, "Built page has no data");
 vm.createContext(sandbox);
 vm.runInContext(script, sandbox, { timeout: 10000 });
 assert.equal(node("play").textContent, "Play", "Reduced motion does not start paused");
