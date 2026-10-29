@@ -217,8 +217,8 @@ The existing project uses this repository's `main` branch, `website/` root,
 build command, outside `dist/`. Keep the project and the pinned
 `a67a6e69.core-critical.pages.dev` media deployment. Confirm the deploy URL and
 inspect all pages, MechLab news, media gallery and YouTube carousel. Do not put
-Cloudflare tokens in Git. The cross-repository MechLab publishing bridge is retired; dated notes publish
-directly with this repository's website build.
+Cloudflare tokens in Git. The cross-repository MechLab publishing bridge is
+retired; dated notes publish directly with this repository's website build.
 See [website/README.md](../website/README.md) and
 [website/CLOUDFLARE.md](../website/CLOUDFLARE.md) for local preview and cutover
 details.

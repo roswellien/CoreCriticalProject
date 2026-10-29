@@ -27,8 +27,8 @@ production at `corecritical.dev`. Do not create a replacement Pages project or
 delete the pinned media deployment.
 
 Cloudflare account access and API tokens are supplied by the maintainer and
-stay outside Git. The old cross-repository MechLab workflow and template are retired; the build
-reads `docs/mechlab/` directly. The source history remains in
+stay outside Git. The old cross-repository MechLab workflow and template are
+retired; the build reads `docs/mechlab/` directly. The source history remains in
 `roswellien/corecritical-website`.
 
 ## Verified cutover
@@ -46,6 +46,8 @@ release checklist #74.
 
 The production domain and pinned media deployment were retained. GitHub App
 access is limited to selected repositories, including this private repository.
+The legacy `CORECRITICAL_WEBSITE_DEPLOY_KEY` Actions secret and the old site's
+"MechLab updates from game main" deploy key were deleted after verification.
 No repository was made public.
 
 References:

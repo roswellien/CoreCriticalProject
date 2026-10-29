@@ -2,8 +2,8 @@
 
 The live site is [corecritical.dev](https://corecritical.dev), hosted by the
 existing Cloudflare Pages project `core-critical`. Website source now lives in
-this repository's `website/` directory. Cloudflare builds production from this repository's `main` branch, with
-`website/` as its project root. Automatic production deployments are enabled.
+this repository's `website/` directory. Cloudflare builds production from this
+repository's `main` branch, with `website/` as its project root. Automatic production deployments are enabled.
 
 ## Build and preview
 

@@ -11,9 +11,10 @@ The custom domain and pinned media deployment were retained.
 
 The old `.github/workflows/publish-mechlab.yml` and inactive template have been
 removed. The build reads public dated notes directly from `docs/mechlab/` and
-needs no copied `data/mechlab.json` or cross-repository deploy key. The legacy
-secret and deploy key are removed separately through repository settings after
-production verification; current cleanup status is tracked in release issue #74.
+needs no copied `data/mechlab.json` or cross-repository deploy key. After
+production verification, the `CORECRITICAL_WEBSITE_DEPLOY_KEY` Actions secret
+and the old site's "MechLab updates from game main" deploy key were deleted
+through repository settings. Release issue #74 records the cleanup.
 Do not restore the old publishing bridge.
 
 Historical source remains in `roswellien/corecritical-website`; archival preserves
