@@ -197,9 +197,10 @@ def compose(roots, host, verification=None, chassis_records=None):
         added = select_chassis(metadata, host, verification)
         chassis_records.extend(added)
     from prepared_skin_packs import select
-    views = [dict(id=r['registration']['id'], visuals=r['registration']['visuals']) for r in added]
+    visual_records = [record for record in added if 'visuals' in record['registration']]
+    views = [dict(id=r['registration']['id'], visuals=r['registration']['visuals']) for r in visual_records]
     select(metadata, host, list(selected.values()) + views, verification)
-    for record, view in zip(added, views):
+    for record, view in zip(visual_records, views):
         if 'additional_skins' in view:
             record['additional_skins'] = view['additional_skins']
     return list(selected.values()), environment

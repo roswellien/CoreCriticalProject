@@ -1,5 +1,10 @@
 # Additional mech pack authoring (experimental)
 
+The [Pirate's Moon Atlas prototype](atlas-asset-pack-authoring.md) explores a
+separate, unreleased version-3 contract that retains a donor's own original
+model hierarchy and motions. Its compatibility gaps and authoring commands are
+documented there; the version-1/2 workflow below continues to use stock controllers.
+
 The launcher discovers enabled packs through their manifests, just as it does
 additional skin packs. A compatible new mech is content data. It does not need
 an entry added to launcher or engine source, a hard-coded numeric ID or another

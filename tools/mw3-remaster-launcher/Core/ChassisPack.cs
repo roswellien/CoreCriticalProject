@@ -21,7 +21,8 @@ public static class ChassisPack
     {
         if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
             !(manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" })) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" })) ||
             manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||
             manifest.Files == null || manifest.Files.Count is < 1 or > 1025 ||
             manifest.Files.Values.Sum(p => p.Bytes) > 4L * 1024 * 1024 * 1024)
@@ -65,6 +66,56 @@ public static class ChassisPack
         var fields = new HashSet<string>(new[] { "id", "name", "controller", "metadata_template", "definition", "meshes", "textures" });
         foreach (var row in rows.EnumerateArray())
         {
+            if (manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }))
+            {
+                if (!manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var version) || version != 3 ||
+                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name)))
+                    throw new InvalidDataException("Legacy chassis resources require version 3 and exact fields.");
+                var legacyId = row.GetProperty("id").GetString() ?? "";
+                var legacyName = row.GetProperty("name").GetString() ?? "";
+                if (!legacyId.StartsWith(manifest.Id + ":", StringComparison.Ordinal) ||
+                    !Regex.IsMatch(legacyId, @"\A[a-z0-9][a-z0-9._-]{0,127}:[a-z0-9][a-z0-9._-]{0,63}\z") || !ids.Add(legacyId) ||
+                    legacyName.Length is < 1 or > 64 || legacyName.Any(c => c < 32 || c > 126) ||
+                    !Templates.Contains(row.GetProperty("metadata_template").GetString() ?? ""))
+                    throw new InvalidDataException("Invalid legacy chassis identity or metadata template.");
+                var resourcePath = Verify(row.GetProperty("legacy").GetString() ?? "");
+                if (new FileInfo(resourcePath).Length > PackStorage.MaxJsonBytes)
+                    throw new InvalidDataException("Legacy chassis descriptor exceeds size limit.");
+                using var resourceDocument = JsonDocument.Parse(File.ReadAllText(resourcePath));
+                var descriptor = resourceDocument.RootElement;
+                PackStorage.ValidateUniqueProperties(descriptor);
+                var descriptorFields = new HashSet<string>(new[] { "schema_version", "resource", "definition", "materials", "silhouette", "models", "motions", "animations", "textures" });
+                if (!descriptorFields.SetEquals(descriptor.EnumerateObject().Select(p => p.Name)) ||
+                    descriptor.GetProperty("schema_version").GetInt32() != 1 ||
+                    !Regex.IsMatch(descriptor.GetProperty("resource").GetString() ?? "", @"\A[a-z][a-z0-9_]{0,15}\z"))
+                    throw new InvalidDataException("Invalid legacy chassis descriptor.");
+                void VerifyResource(string path)
+                {
+                    var resolved = Verify(path);
+                    if (new FileInfo(resolved).Length > 16 * 1024 * 1024)
+                        throw new InvalidDataException("Legacy chassis resource exceeds size limit.");
+                }
+                foreach (var field in new[] { "definition", "materials", "silhouette" })
+                    VerifyResource(descriptor.GetProperty(field).GetString() ?? "");
+                foreach (var (role, limit) in new[] { ("models", 3), ("motions", 64), ("animations", 16), ("textures", 512) })
+                {
+                    var table = descriptor.GetProperty(role);
+                    if (table.ValueKind != JsonValueKind.Object)
+                        throw new InvalidDataException("Invalid legacy chassis resource table.");
+                    var entries = table.EnumerateObject().ToArray();
+                    if (entries.Length < 1 || entries.Length > limit ||
+                        (role == "models" && !new HashSet<string>(new[] { "close", "distance", "cockpit" }).SetEquals(entries.Select(p => p.Name))))
+                        throw new InvalidDataException("Invalid legacy chassis resource count or LODs.");
+                    foreach (var entry in entries)
+                    {
+                        if (!Regex.IsMatch(entry.Name, @"\A[a-zA-Z0-9_.-]{1,31}\z"))
+                            throw new InvalidDataException("Invalid legacy chassis member name.");
+                        VerifyResource(entry.Value.GetString() ?? "");
+                    }
+                }
+                result.Add(new(legacyId, legacyName));
+                continue;
+            }
             var rowFields = row.EnumerateObject().Select(p => p.Name).ToHashSet();
             if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets"))
                 throw new InvalidDataException("Unknown chassis registration field.");

@@ -31,6 +31,27 @@ def build(project_path, output):
         return name
 
     for entry in project['chassis']:
+        if 'legacy' in entry:
+            from legacy_chassis_resources import resource_paths, load
+            row = {key: entry[key] for key in ('id', 'name', 'metadata_template')}
+            row['id'] = project['pack_id'] + ':' + row['id']
+            source = resolve(project_path.parent, entry['legacy'])
+            document = read_json(source)
+            def read_legacy(name):
+                path = resolve(source.parent, name)
+                if not 0 < path.stat().st_size <= 16 * 1024**2:
+                    raise ValueError('Legacy project resource exceeds size limit')
+                return path.read_bytes()
+            load(document, read_legacy)
+            for role, name, relative in list(resource_paths(document)):
+                payload = add(read_legacy(relative))
+                if name is None:
+                    document[role] = payload
+                else:
+                    document[role][name] = payload
+            row['legacy'] = add((json.dumps(document, indent=2) + '\n').encode(), extension='.json')
+            records.append(row)
+            continue
         row = {k: entry[k] for k in ('id', 'name', 'controller', 'metadata_template')}
         row['id'] = project['pack_id'] + ':' + row['id']
         if 'base_skin_name' in entry:
@@ -56,15 +77,18 @@ def build(project_path, output):
     (stage / REGISTRY).parent.mkdir(); (stage / REGISTRY).write_bytes(data)
     files[REGISTRY] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
     icons = any('silhouette' in row for row in records)
+    legacy = any('legacy' in row for row in records)
+    if legacy and not all('legacy' in row for row in records):
+        raise ValueError('Keep legacy and prepared-visual chassis in separate packs')
     version_two = icons or any('base_skin_name' in row or 'sockets' in row for row in records)
     manifest = dict(schema_version=2, game_id='mw3', id=project['pack_id'], name=project['name'],
                     version=project['version'], author=project.get('author', 'Community'), category='Mechs',
                     description=project.get('description', 'Additional selectable mechs. Choose in Mech Lab.'),
                     native_payload=dict(profile=PROFILE, registry=REGISTRY, path_base='pack-root',
-                                        required_formats=['BWMESH4', 'BWTEX1'] + (['MW3ICON1'] if icons else []), required_capabilities={CAPABILITY: 2 if version_two else 1}),
+                                        required_formats=['MW3LEGACY'] if legacy else ['BWMESH4', 'BWTEX1'] + (['MW3ICON1'] if icons else []), required_capabilities={CAPABILITY: 3 if legacy else 2 if version_two else 1}),
                     provides=dict(mechs=[r['id'] for r in records]), files=files)
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-    select([(stage, manifest)], {'content_capabilities': {CAPABILITY: [1, 2]}})
+    select([(stage, manifest)], {'content_capabilities': {CAPABILITY: [1, 2, 3]}})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
         for path in sorted(stage.rglob('*')):
