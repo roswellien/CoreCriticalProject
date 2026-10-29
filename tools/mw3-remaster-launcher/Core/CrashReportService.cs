@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 
 namespace MW3RemasterLauncher.Core;
 
-public sealed record CrashReportResult(string ReportId, bool ExistingIssueUpdated, bool Overflow);
+public sealed record CrashReportResult(string ReportId, bool ExistingIssueUpdated, bool Overflow, bool ArchivedOnly = false);
 
 /// <summary>Submit user-approved, redacted crash diagnostics to the project support endpoint.</summary>
 public sealed class CrashReportService
@@ -38,12 +38,13 @@ public sealed class CrashReportService
             result.ReportId.Any(character => !Uri.IsHexDigit(character)))
             throw new InvalidDataException("The crash report service returned an invalid report ID.");
 
-        return new CrashReportResult(result.ReportId, result.Duplicate, result.Overflow);
+        return new CrashReportResult(result.ReportId, result.Duplicate, result.Overflow, result.ArchivedOnly);
     }
 
     private sealed record Response(
         [property: JsonPropertyName("report_id")] string? ReportId,
         bool Duplicate,
         bool Overflow,
+        [property: JsonPropertyName("archived_only")] bool ArchivedOnly,
         string? Error);
 }

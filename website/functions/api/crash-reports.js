@@ -20,6 +20,10 @@ function json(body, status = 200) {
   });
 }
 
+function archivedOnlyResponse(reportId) {
+  return json({ report_id: reportId.slice(0, 8), duplicate: false, overflow: false, archived_only: true }, 202);
+}
+
 function validateEnvironment(env) {
   const repository = env.CRASH_REPORT_REPOSITORY;
   const token = env.GITHUB_TOKEN;
@@ -179,6 +183,15 @@ async function reserveDailyIssueSlot(config) {
   return row !== null;
 }
 
+async function archiveReport(database, report, crashFingerprint) {
+  await database.prepare(`
+    INSERT OR IGNORE INTO crash_report_archive (
+      report_id, created_utc, stored_utc, mode, exit_code, failure_summary, crash_fingerprint, report_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(report.report_id, report.created_utc, new Date().toISOString(), report.mode, report.exit_code,
+    report.failure_summary, crashFingerprint, JSON.stringify(report)).run();
+}
+
 async function fetchOverflowIssue(token, owner, name, number) {
   const data = await github(token, `query($owner:String!, $name:String!, $number:Int!) {
     repository(owner:$owner, name:$name) { issue(number:$number) { id url state } }
@@ -213,9 +226,12 @@ export async function onRequestPost({ request, env }) {
     return json({ error: error.message }, 503);
   }
 
+  let archivedReportId = null;
   try {
     const generic = isGenericFailure(report);
     const crashFingerprint = generic ? null : await fingerprint(report);
+    await archiveReport(config.database, report, crashFingerprint);
+    archivedReportId = report.report_id;
     const marker = crashFingerprint ? `crash-fingerprint:${crashFingerprint}` : null;
     const searchQuery = marker ? `repo:${config.owner}/${config.name} is:issue in:body "${marker}"` : null;
     const lookup = await github(config.token, searchQuery
@@ -229,8 +245,10 @@ export async function onRequestPost({ request, env }) {
           repository(owner:$owner, name:$name) { id isPrivate }
         }`,
     searchQuery ? { owner: config.owner, name: config.name, search: searchQuery } : { owner: config.owner, name: config.name });
-    if (!lookup.repository?.isPrivate)
-      return json({ error: "Crash reports require a configured private GitHub repository." }, 503);
+    if (!lookup.repository?.isPrivate) {
+      console.error("Crash report archived, but the configured GitHub repository is not private.");
+      return archivedOnlyResponse(archivedReportId);
+    }
 
     const existing = marker ? lookup.matched?.nodes.find(issue => issue.body?.includes(marker)) : null;
     if (existing) {
@@ -261,6 +279,7 @@ export async function onRequestPost({ request, env }) {
     return json({ report_id: report.report_id.slice(0, 8), duplicate: false, overflow: false });
   } catch (error) {
     console.error("Crash report delivery failed:", error.message);
+    if (archivedReportId) return archivedOnlyResponse(archivedReportId);
     return json({ error: "The report service could not save this crash report. Try again later." }, 502);
   }
 }

@@ -50,6 +50,24 @@ The legacy `CORECRITICAL_WEBSITE_DEPLOY_KEY` Actions secret and the old site's
 "MechLab updates from game main" deploy key were deleted after verification.
 No repository was made public.
 
+## Admin crash report archive
+
+The D1 database bound as `CRASH_REPORT_DB` stores each normalized accepted
+crash report for the admin archive, in addition to the existing private GitHub
+issue flow. Apply `migrations/0002_crash_report_archive.sql` to the production
+D1 database before deploying code that writes or reads the archive.
+
+Protect `corecritical.dev/admin/crash-reports*` with a Cloudflare Access
+self-hosted application whose allow policy names the maintainer's email. Add
+`CRASH_REPORT_ACCESS_ISSUER`, `CRASH_REPORT_ACCESS_AUD` and
+`CRASH_REPORT_ADMIN_EMAIL` as Pages production variables matching that
+application and policy. The Pages Function also verifies the signed Access
+JWT and exact email before reading D1, so a direct Pages URL without an admin
+JWT cannot return report data. No Access token or private signing key is stored
+in the repository. D1 rows persist until manually deleted with Wrangler; there
+is no automatic expiry or delete control in the page. See the archive setup and
+deletion instructions in `README.md`.
+
 References:
 
 - [Pages monorepos](https://developers.cloudflare.com/pages/configuration/monorepos/)
