@@ -157,7 +157,10 @@ public static class HardwareInventory
 
     private static IReadOnlyList<T> Query<T>(string query, Func<ManagementBaseObject, T> readRow)
     {
-        using var searcher = new ManagementObjectSearcher(query);
+        using var searcher = new ManagementObjectSearcher(query)
+        {
+            Options = new EnumerationOptions { Timeout = TimeSpan.FromSeconds(5) }
+        };
         using var results = searcher.Get();
         var rows = new List<T>();
         foreach (ManagementBaseObject row in results)

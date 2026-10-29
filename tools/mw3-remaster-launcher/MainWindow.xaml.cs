@@ -954,11 +954,13 @@ namespace MW3RemasterLauncher
 
             try
             {
-                var runtimeVersion = _settingsMgr.Current.EngineMode == "d7vk"
-                    ? GameValidator.Validate(_settingsMgr.Current.GamePath).DetectedVersion
+                var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
+                var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
+                var runtimeVersion = settingsSnapshot.EngineMode == "d7vk"
+                    ? GameValidator.Validate(settingsSnapshot.GamePath).DetectedVersion
                     : OnlineUpdateService.InstalledRuntimeVersion(_basePath, _dataRoot);
                 var hardwareInventory = await Task.Run(HardwareInventory.Capture);
-                var report = PlaytestDiagnostics.CreateCrashReport(_settingsMgr.Current, _packMgr.Packs,
+                var report = PlaytestDiagnostics.CreateCrashReport(settingsSnapshot, packsSnapshot,
                     launchLog, _basePath, runtimeVersion, exitCode, hardwareInventory);
                 var result = await new CrashReportService().SubmitAsync(report);
                 var detail = result.ArchivedOnly
@@ -1013,7 +1015,7 @@ namespace MW3RemasterLauncher
             catch (Exception error) { MessageBox.Show(error.Message, "Save backups", MessageBoxButton.OK, MessageBoxImage.Information); }
         }
 
-        private void BtnExportReport_Click(object sender, RoutedEventArgs e)
+        private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new SaveFileDialog
             {
@@ -1023,12 +1025,51 @@ namespace MW3RemasterLauncher
             if (dialog.ShowDialog() != true) return;
             try
             {
-                PlaytestDiagnostics.Export(dialog.FileName, _settingsMgr.Current, _packMgr.Packs,
-                    _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog(), _basePath);
+                var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
+                var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
+                var launchLog = _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog();
+                var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
+                PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
+                    launchLog, _basePath, hardwareInventory);
                 MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted recent log tails. Review it before sharing.",
                     "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot export report", MessageBoxButton.OK, MessageBoxImage.Error); }
+        }
+
+        private static LauncherSettings SnapshotCrashReportSettings(LauncherSettings settings)
+        {
+            return new LauncherSettings
+            {
+                GamePath = settings.GamePath,
+                EngineMode = settings.EngineMode,
+                Width = settings.Width,
+                Height = settings.Height,
+                WindowMode = settings.WindowMode,
+                AntiAliasing = settings.AntiAliasing,
+                AnisotropicFiltering = settings.AnisotropicFiltering,
+                DrawDistance = settings.DrawDistance,
+                FogDistance = settings.FogDistance,
+                LocalCdAudio = settings.LocalCdAudio,
+                InstantReplay = settings.InstantReplay,
+                PerformanceMonitor = settings.PerformanceMonitor,
+                D7VkResolution = settings.D7VkResolution,
+                D7VkAntiAliasing = settings.D7VkAntiAliasing,
+                D7VkAnisotropicFiltering = settings.D7VkAnisotropicFiltering,
+                D7VkAiTextures = settings.D7VkAiTextures
+            };
+        }
+
+        private static PackManifest[] SnapshotCrashReportPacks(IEnumerable<PackManifest> packs)
+        {
+            return packs.Select(pack => new PackManifest
+            {
+                Id = pack.Id,
+                Version = pack.Version,
+                SchemaVersion = pack.SchemaVersion,
+                IsEnabled = pack.IsEnabled,
+                Priority = pack.Priority
+            }).ToArray();
         }
 
         private void BtnOpenScreenshots_Click(object sender, RoutedEventArgs e)
