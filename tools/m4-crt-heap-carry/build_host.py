@@ -31,6 +31,26 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def verify_dependency_headers(dependencies, directories):
+    """Verify external header content and retain exact input identities for receipts."""
+    raw_pins = {}
+    for name, directory in directories.items():
+        dependency = dependencies[name]
+        require(dependency["hash_algorithm"] == "sha256-crlf-to-lf",
+                f"Unsupported {name} header hash algorithm")
+        raw_pins[name] = {}
+        for relative, digest in dependency["files"].items():
+            path = directory / relative
+            message = f"Pinned {name} header mismatch: {relative}"
+            require(path.is_file(), message)
+            content = path.read_bytes()
+            # Git checkouts and source archives can differ only in CRLF/LF endings.
+            normalized = content.replace(b"\r\n", b"\n")
+            require(hashlib.sha256(normalized).hexdigest() == digest, message)
+            raw_pins[name][relative] = hashlib.sha256(content).hexdigest()
+    return raw_pins
+
+
 def parse_symbols(text):
     """Parse the pinned llvm-readobj COFF text format, rejecting unknown seams."""
     exported = []
@@ -90,10 +110,8 @@ def main():
     original = next((p for p in game.iterdir() if p.name.lower() == "mech3.exe"), None)
     require(original is not None and sha(original) == GAME_SHA, "Supported original MW3 1.2 installation required")
     dependencies = json.loads((HERE / "host-dependencies.json").read_text())
-    for name, directory in (("remill", args.remill_include), ("vulkan", args.vulkan_include)):
-        for relative, digest in dependencies[name]["files"].items():
-            path = directory / relative
-            require(path.is_file() and sha(path) == digest, f"Pinned {name} header mismatch: {relative}")
+    dependency_directories = {"remill": args.remill_include, "vulkan": args.vulkan_include}
+    dependency_raw_pins = verify_dependency_headers(dependencies, dependency_directories)
     pins = source_pins()
     expected = json.loads((HERE / "host-source-manifest.json").read_text())["files"]
     changed = sorted(set(pins) ^ set(expected) | {name for name in pins.keys() & expected.keys()
@@ -138,6 +156,8 @@ def main():
             require(sha(path) == identity["sha256"], "Runtime support library integrity failure")
             shutil.copyfile(path, output / name)
     require(pins == source_pins() and sha(module) == pin["sha256"], "Source/dependency changed while building")
+    require(dependency_raw_pins == verify_dependency_headers(dependencies, dependency_directories),
+            "Dependency headers changed while building")
     ninja_deps = run([args.ninja, "-C", output / "build", "-t", "deps"], output, "dependencies")
     repo_pins = {}
     for line in ninja_deps.splitlines():
@@ -157,6 +177,7 @@ def main():
                    executable_sha256=sha(output / "entry_commandline.exe"),
                    tool_pins={tool:sha(args.llvm / tool) for tool in ("clang-cl.exe", "lld-link.exe", "llvm-lib.exe", "llvm-readobj.exe")},
                    dependency_header_pins=dependencies,
+                   dependency_header_raw_pins=dependency_raw_pins,
                    runtime_version=manifest["version"], windows_signed=False)
     (output / "source-snapshot.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
     print(f"Built {output / 'entry_commandline.exe'}; recorded {len(pins)} host files and {len(repo_pins)} repository dependencies.")

@@ -14,28 +14,30 @@
       "remill/Arch/Runtime/TypeTraits.h": "793565f9d67c98cf77ca43b5a2cd32094bf5f838f81126784593007b6fd9e323",
       "remill/Arch/Runtime/Types.h": "745091f34067612a75c5586d7022afa82e8d706aad82f98364742573e95d791a",
       "remill/Arch/X86/Runtime/State.h": "b5fa2699394b388547dba6ca58c38970b6d390ed25223e540dbf60607bbe2f0f"
-    }
+    },
+    "hash_algorithm": "sha256-crlf-to-lf"
   },
   "vulkan": {
     "version": "1.4.321",
     "source": "https://github.com/KhronosGroup/Vulkan-Headers/tree/v1.4.321/include",
     "license": "Apache-2.0 AND MIT",
     "files": {
-      "vk_video/vulkan_video_codec_av1std.h": "b2b6595bb25c2fff1936bda4b78e3ecfb32f5ec0af5b7e36e538dce2f8f15f80",
-      "vk_video/vulkan_video_codec_av1std_decode.h": "c0cb3e6715074ef8eb237e8da46eaf4d68eb1241867277156622466c6604c6e6",
-      "vk_video/vulkan_video_codec_av1std_encode.h": "b27d64639ac67feced8513d4ce41028b250373cd4310c7c49dbf9e8af8d261da",
-      "vk_video/vulkan_video_codec_h264std.h": "42523441d339b9f37df972b9e0b1ca6d746ebe9b7e93789eaf81c801e64f9a0a",
-      "vk_video/vulkan_video_codec_h264std_decode.h": "32799968821afae638c77d387eca01590122cdf531ac16c9882247bafc08e210",
-      "vk_video/vulkan_video_codec_h264std_encode.h": "b857cd260fe34db9a948b5a6f8f8887b4a181b6ec941a22cff91254ed7e7e8c6",
-      "vk_video/vulkan_video_codec_h265std.h": "52f2094518c484866537b9c02bfd051bc9283b6d95e91fe878d0b75ce6edb983",
-      "vk_video/vulkan_video_codec_h265std_decode.h": "63aafbc4e0c1d0a131d0e5b33a086a33f728bc19e4273d1c8d92c86b44b484d4",
-      "vk_video/vulkan_video_codec_h265std_encode.h": "43903b73c96944fe6313a84a1798202f46dc7f80069d17a0b2823722bbe9629b",
-      "vk_video/vulkan_video_codec_vp9std.h": "ddff642a6c2d88c84ffdaa5e24b301b1dbac6413d1120634fb2aa7a2f328545a",
-      "vk_video/vulkan_video_codec_vp9std_decode.h": "a69a09c5cbcd0461d8f8907633a8ca1d1e2a852373cc777e416aa4360ca71a02",
-      "vk_video/vulkan_video_codecs_common.h": "8aea50ea0ba86bd8a4dce0d4fc38a95ec40af79e43685e8aafadec20b686b1a2",
-      "vulkan/vk_platform.h": "7083b2b14ce2858b14474bcfe0ef31354d0e78f68bbe360f54b9361db259726d",
-      "vulkan/vulkan_core.h": "bcb5594556d6908f0fd818a486cbfed90df84db6bdac7fdec41ab2ed34bab750",
-      "vulkan/vulkan_win32.h": "16587fd6b3a8b99808cbb6716ec70d3823dc3ae5f3a6bd7e3e7950d6cc477eee"
-    }
+      "vk_video/vulkan_video_codec_av1std.h": "76c408eb8dce6e1f068594eb3239e75a05e3395f2ce10fef512599bd916fe879",
+      "vk_video/vulkan_video_codec_av1std_decode.h": "2b912389d39d6627ee8af01e052e9557d213b27c0b79a0e25f5366cfe1942f1a",
+      "vk_video/vulkan_video_codec_av1std_encode.h": "93ad363de123988cd7b27acc7930f7f93497bc2e5d74f8420ee8ba18e8746e0a",
+      "vk_video/vulkan_video_codec_h264std.h": "05859b58e094a8dcc88cb3766a1fcbfd62bcaab20c93d2c3e5cec853628f277c",
+      "vk_video/vulkan_video_codec_h264std_decode.h": "d2be01f84f773644a24b7634f49e63ff8c6f0e807119b1bf609176585031f93a",
+      "vk_video/vulkan_video_codec_h264std_encode.h": "c68a1fa4ebadd1b50992a61fb93310a6686d5ea932b91b850d3ad9bc8dec488e",
+      "vk_video/vulkan_video_codec_h265std.h": "a5d0b2e7b47843db610d2769c7b0202c90cd7db82108b60fb2631d1c7976a395",
+      "vk_video/vulkan_video_codec_h265std_decode.h": "944646ced5bf9f49b79144c18369f0b932900c375fd81c262a3c30e9c60de8c6",
+      "vk_video/vulkan_video_codec_h265std_encode.h": "aa8c75beac0962abf752a5ec741a42b1a108ee28fb6b3abcdc995e57e20c6c14",
+      "vk_video/vulkan_video_codec_vp9std.h": "85d729b33906f815157bd63ddef986712f250f5279dedb52d6b81d0478836658",
+      "vk_video/vulkan_video_codec_vp9std_decode.h": "318a21532405f31a7b977c340effbf5bff30790734153c29ed6ad9a8230efbaf",
+      "vk_video/vulkan_video_codecs_common.h": "7afc98e84d3bea72e40a65161463abbd4be2ff1e1853eca3f8c331afb7329a8b",
+      "vulkan/vk_platform.h": "2fa47dd60cd94eb6fd8d7615953878f5664eb57fdff3b1b9b856c1d8f1496737",
+      "vulkan/vulkan_core.h": "3172a758081a172f4c46771a88046a53d5791ef2bd24329ff4bd7ed8c6f12abd",
+      "vulkan/vulkan_win32.h": "256a5fb80fe43611f7218a63d8a1fc4d84e51d9e6b250f7254cae235d7c8d4a5"
+    },
+    "hash_algorithm": "sha256-crlf-to-lf"
   }
 }
