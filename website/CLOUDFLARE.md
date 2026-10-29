@@ -1,12 +1,11 @@
-# Cloudflare Pages cutover
+# Cloudflare Pages publishing
 
 The site uses the existing Cloudflare Pages project `core-critical` and its
 `corecritical.dev` custom domain. Keep this project; the gallery references
 media at the pinned deployment `a67a6e69.core-critical.pages.dev`.
 
-After this repository change is reviewed and merged, the maintainer switches
-the existing Pages project's Git connection to `roswellien/MW3Recomp-Private`
-and configures:
+The existing Pages project is connected to `roswellien/MW3Recomp-Private`.
+Automatic production deployments use these settings:
 
 | Setting | Value |
 | --- | --- |
@@ -21,18 +20,35 @@ Pages expects the `functions/` directory at the Pages project root, outside
 the static output directory. Keep it in `website/`; `build.py` must not copy
 it into `dist/`.
 
-Before changing the production source, build and preview from this checkout and
-confirm the homepage, navigation, MechLab pages, media gallery and YouTube
-carousel. Then connect the existing `core-critical` project to this repository
-and verify the first production deployment at `corecritical.dev`. Do not create
-a replacement Pages project or delete the pinned media deployment.
+Before merging website changes into `main`, build and preview from this checkout
+and confirm the homepage, navigation, MechLab pages, media gallery and YouTube
+carousel. A push to `main` automatically builds and deploys the site. Verify
+production at `corecritical.dev`. Do not create a replacement Pages project or
+delete the pinned media deployment.
 
 Cloudflare account access and API tokens are supplied by the maintainer and
-stay outside Git. After the first deploy from this repository is verified,
-remove the old cross-repository MechLab publishing workflow and its deploy-key
-secret, then revoke the corresponding deploy key from the old website repo.
-Keep `website/automation/README.md` as the migration record until that cleanup
-is complete.
+stay outside Git. The old cross-repository MechLab workflow and template are
+retired; the build reads `docs/mechlab/` directly. The source history remains in
+`roswellien/corecritical-website`.
+
+## Verified cutover
+
+On October 28, 2026, release PR #75 promoted the source to `main` at
+`f21105fa9d11b8b3fbc884affa3950b1c608885d`. The first deployment from this
+repository succeeded:
+[3b547114.core-critical.pages.dev](https://3b547114.core-critical.pages.dev).
+The homepage, all 41 content pages, existing fallback routes, RSS and pinned
+media returned HTTP 200. The YouTube Function returned its Atom feed on the
+new deployment URL, and the browser rendered the carousel. Some subsequent
+requests failed because YouTube returned HTTP 404 to the Function; the saved
+carousel remains available. This upstream refresh limitation is tracked in
+release checklist #74.
+
+The production domain and pinned media deployment were retained. GitHub App
+access is limited to selected repositories, including this private repository.
+The legacy `CORECRITICAL_WEBSITE_DEPLOY_KEY` Actions secret and the old site's
+"MechLab updates from game main" deploy key were deleted after verification.
+No repository was made public.
 
 References:
 
