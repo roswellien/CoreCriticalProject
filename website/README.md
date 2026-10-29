@@ -66,8 +66,9 @@ Reports are sent only after the player enables automatic sending or approves a
 one-time prompt. The endpoint targets a dedicated private repository such as
 `roswellien/corecritical-crash-reports`, groups specific failures by engine
 mode, exit code and message, reopens closed matching issues, and adds issues to
-the configured Project V2 board. The generic unexpected-exit message is never
-grouped. The launcher displays a short report ID, not a private GitHub URL.
+the configured Project V2 board through that board's built-in auto-add
+workflow. The generic unexpected-exit message is never grouped. The launcher
+displays a short report ID, not a private GitHub URL.
 
 New crash issues are capped at 20 per UTC day by default. The cap is reserved
 atomically in D1; reports beyond it are comments on one configured overflow
@@ -76,10 +77,14 @@ first three repeats. Create the private report repository, a private overflow
 issue in it, and a D1 database before enabling production reporting. Apply a
 Cloudflare rate-limit rule to `/api/crash-reports` as well.
 
+In the Project V2 board, enable its **Auto-add to project** workflow for the
+private crash-report repository with the filter `is:issue`. The overflow issue
+must already be on the board; manually add it if it was created before this
+workflow was enabled. GitHub auto-add workflows do not backfill existing issues.
+
 Configure the `core-critical` Pages production environment with:
 
 - `CRASH_REPORT_REPOSITORY=roswellien/corecritical-crash-reports`.
-- `CRASH_REPORT_PROJECT_ID`, the target Project V2 node ID beginning with `PVT_`.
 - `CRASH_REPORT_OVERFLOW_ISSUE_NUMBER`, the private repository's overflow issue number.
 - Optional `CRASH_REPORT_DAILY_ISSUE_LIMIT` (defaults to `20`, maximum `1000`).
 - Create a D1 database, apply the migration from `website/`, and bind it to
@@ -91,7 +96,8 @@ Configure the `core-critical` Pages production environment with:
   ```
 
 - A `GITHUB_TOKEN` secret with issue read/write access to the private report
-  repository and Project V2 read/write access for the project owner.
+  repository only. A fine-grained token can be restricted to this one repo;
+  Project access is handled by GitHub's built-in auto-add workflow.
 
 Keep the GitHub token in the Pages secret store and outside Git. The server
 requires all configuration, including D1 and the overflow issue, and fails

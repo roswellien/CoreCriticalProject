@@ -10,7 +10,6 @@ const database = {
 };
 const environment = {
   CRASH_REPORT_REPOSITORY: "roswellien/corecritical-crash-reports",
-  CRASH_REPORT_PROJECT_ID: "PVT_testproject",
   CRASH_REPORT_OVERFLOW_ISSUE_NUMBER: "1",
   CRASH_REPORT_DAILY_ISSUE_LIMIT: "20",
   CRASH_REPORT_DB: database,
@@ -37,7 +36,7 @@ function crashRequest(overrides = {}) {
   });
 }
 
-function githubResponder({ matches = [], closed = false, commentCount = 0, overflow = false } = {}) {
+function githubResponder({ matches = [] } = {}) {
   const calls = [];
   globalThis.fetch = async (_url, options) => {
     const body = JSON.parse(options.body);
@@ -48,8 +47,6 @@ function githubResponder({ matches = [], closed = false, commentCount = 0, overf
       return Response.json({ data: { repository: { id: "R_repo", isPrivate: true }, ...(body.query.includes("matched: search") ? { matched: { nodes: matches } } : {}) } });
     if (body.query.includes("createIssue"))
       return Response.json({ data: { createIssue: { issue: { id: "I_issue", url: "https://github.com/roswellien/corecritical-crash-reports/issues/42", state: "OPEN" } } } });
-    if (body.query.includes("addProjectV2ItemById"))
-      return Response.json({ data: { addProjectV2ItemById: { item: { id: "PVTI_item" } } } });
     if (body.query.includes("updateIssue"))
       return Response.json({ data: { updateIssue: { issue: { id: "I_issue", state: "OPEN" } } } });
     if (body.query.includes("addComment"))
@@ -59,13 +56,13 @@ function githubResponder({ matches = [], closed = false, commentCount = 0, overf
   return calls;
 }
 
-test("creates a private-repository issue, boards it, and returns only a report ID", async () => {
+test("creates a private-repository issue for Project auto-add and returns only a report ID", async () => {
   const calls = githubResponder();
   const response = await onRequestPost({ request: crashRequest(), env: environment });
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.deepEqual(result, { report_id: "abcdef12", duplicate: false, overflow: false });
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 2);
   assert.ok(calls.some(query => query.includes("createIssue")));
   assert.ok(!JSON.stringify(result).includes("github.com"));
 });
@@ -137,7 +134,7 @@ test("caps full logs on later matching reports", async () => {
       commentBody = body.variables.body;
       return Response.json({ data: { addComment: { commentEdge: { node: { id: "IC_comment" } } } } });
     }
-    return Response.json({ data: { addProjectV2ItemById: { item: { id: "PVTI_item" } } } });
+    throw new Error("Unexpected GraphQL operation: " + body.query);
   };
   await onRequestPost({ request: crashRequest(), env: environment });
   assert.ok(commentBody.includes('"logs": {}'));

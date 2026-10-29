@@ -22,12 +22,11 @@ function json(body, status = 200) {
 
 function validateEnvironment(env) {
   const repository = env.CRASH_REPORT_REPOSITORY;
-  const projectId = env.CRASH_REPORT_PROJECT_ID;
   const token = env.GITHUB_TOKEN;
   const overflowIssueNumber = Number(env.CRASH_REPORT_OVERFLOW_ISSUE_NUMBER);
   const configuredLimit = Number(env.CRASH_REPORT_DAILY_ISSUE_LIMIT || DEFAULT_DAILY_ISSUE_LIMIT);
   if (!repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
-      !projectId || !/^PVT_/.test(projectId) || !token ||
+      !token ||
       !Number.isSafeInteger(overflowIssueNumber) || overflowIssueNumber < 1 ||
       !Number.isSafeInteger(configuredLimit) || configuredLimit < 1 || configuredLimit > 1000 ||
       !env.CRASH_REPORT_DB?.prepare) {
@@ -36,7 +35,6 @@ function validateEnvironment(env) {
   return {
     owner: repository.split("/")[0],
     name: repository.split("/")[1],
-    projectId,
     token,
     overflowIssueNumber,
     dailyIssueLimit: configuredLimit,
@@ -151,16 +149,6 @@ function issueBody(report, crashFingerprint, { includeLogs = true, overflow = fa
   return `${marker}${note}\nReport ID: ${report.report_id}\n\n\`\`\`json\n${boundedReport}\n\`\`\``;
 }
 
-async function addToProject(token, projectId, issueId) {
-  try {
-    await github(token, `mutation($project:ID!, $issue:ID!) {
-      addProjectV2ItemById(input:{projectId:$project, contentId:$issue}) { item { id } }
-    }`, { project: projectId, issue: issueId });
-  } catch (error) {
-    if (!/already exists|already added|duplicate/i.test(error.message)) throw error;
-  }
-}
-
 async function reopenIfClosed(token, issue) {
   if (issue.state !== "CLOSED") return;
   await github(token, `mutation($issue:ID!) {
@@ -248,7 +236,6 @@ export async function onRequestPost({ request, env }) {
     if (existing) {
       const includeLogs = (existing.comments?.totalCount ?? 0) < MAX_FULL_LOG_REPEATS;
       await addReportComment(config.token, existing, report, crashFingerprint, { includeLogs });
-      await addToProject(config.token, config.projectId, existing.id);
       return json({ report_id: report.report_id.slice(0, 8), duplicate: true, overflow: false });
     }
 
@@ -256,14 +243,13 @@ export async function onRequestPost({ request, env }) {
       const overflow = await fetchOverflowIssue(config.token, config.owner, config.name, config.overflowIssueNumber);
       if (!overflow) return json({ error: "The configured overflow issue was not found." }, 503);
       await addReportComment(config.token, overflow, report, null, { includeLogs: false, overflow: true });
-      await addToProject(config.token, config.projectId, overflow.id);
       return json({ report_id: report.report_id.slice(0, 8), duplicate: true, overflow: true });
     }
 
     const titleReason = report.failure_summary.replace(/[\r\n\t]+/g, " ").trim().slice(0, 120);
     const suffix = crashFingerprint ? ` [${crashFingerprint.slice(0, 12)}]` : ` [${report.report_id.slice(0, 8)}]`;
     const title = `Crash (${report.mode}, exit ${report.exit_code}): ${titleReason}${suffix}`;
-    const created = await github(config.token, `mutation($repository:ID!, $title:String!, $body:String!) {
+    await github(config.token, `mutation($repository:ID!, $title:String!, $body:String!) {
       createIssue(input:{repositoryId:$repository, title:$title, body:$body}) {
         issue { id url state }
       }
@@ -272,8 +258,6 @@ export async function onRequestPost({ request, env }) {
       title,
       body: issueBody(report, crashFingerprint)
     });
-    const issue = created.createIssue.issue;
-    await addToProject(config.token, config.projectId, issue.id);
     return json({ report_id: report.report_id.slice(0, 8), duplicate: false, overflow: false });
   } catch (error) {
     console.error("Crash report delivery failed:", error.message);
