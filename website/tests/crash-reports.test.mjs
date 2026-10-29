@@ -67,6 +67,37 @@ test("creates a private-repository issue for Project auto-add and returns only a
   assert.ok(!JSON.stringify(result).includes("github.com"));
 });
 
+test("stores only the disclosed hardware inventory fields and redacts hardware paths", async () => {
+  githubResponder();
+  const baseFetch = globalThis.fetch;
+  let issueBody;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.query.includes("createIssue")) issueBody = body.variables.body;
+    return baseFetch(url, options);
+  };
+  const response = await onRequestPost({ request: crashRequest({
+    hardware: {
+      Processors: [{ Manufacturer: "AMD", Model: "Ryzen Example C:\\Users\\private\\computer", PhysicalCores: 8, LogicalProcessors: 16,
+        SerialNumber: "MUST_NOT_BE_STORED" }],
+      Memory: { TotalBytes: 34359738368, Modules: [{ CapacityBytes: 17179869184, Type: "DDR5",
+        ConfiguredSpeedMhz: 5600, PartNumber: "MUST_NOT_BE_STORED" }] },
+      GraphicsAdapters: [{ Name: "Example GPU", DedicatedVideoMemoryBytes: 12884901888,
+        SharedSystemMemoryBytes: 8589934592, DriverVersion: "1.2.3", DriverDate: "2026-01-01T00:00:00Z",
+        PnpDeviceId: "MUST_NOT_BE_STORED" }],
+      ExtraField: "MUST_NOT_BE_STORED"
+    }
+  }), env: environment });
+
+  assert.equal(response.status, 200);
+  assert.ok(issueBody.includes('"Model": "Ryzen Example <local-path>"'));
+  assert.ok(issueBody.includes('"Type": "DDR5"'));
+  assert.ok(issueBody.includes('"DedicatedVideoMemoryBytes": 12884901888'));
+  assert.ok(issueBody.includes('"DriverVersion": "1.2.3"'));
+  assert.ok(issueBody.includes("<local-path>"));
+  assert.ok(!issueBody.includes("MUST_NOT_BE_STORED"));
+});
+
 test("groups by mode, exit code, and message; reopens closed matches", async () => {
   const report = JSON.parse(await crashRequest().text());
   const { webcrypto } = await import("node:crypto");

@@ -20,6 +20,51 @@ function json(body, status = 200) {
   });
 }
 
+function boundedText(value, maxLength) {
+  return typeof value === "string" ? redactPaths(value.slice(0, maxLength)) : null;
+}
+
+function boundedCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000 ? value : null;
+}
+
+function boundedBytes(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function validateHardware(hardware) {
+  const source = hardware && typeof hardware === "object" && !Array.isArray(hardware) ? hardware : {};
+  const processors = Array.isArray(source.Processors) ? source.Processors.slice(0, 16).map(processor => ({
+    Manufacturer: boundedText(processor?.Manufacturer, 120),
+    Model: boundedText(processor?.Model, 200),
+    PhysicalCores: boundedCount(processor?.PhysicalCores),
+    LogicalProcessors: boundedCount(processor?.LogicalProcessors)
+  })) : [];
+  const sourceMemory = source.Memory && typeof source.Memory === "object" && !Array.isArray(source.Memory)
+    ? source.Memory : {};
+  const modules = Array.isArray(sourceMemory.Modules) ? sourceMemory.Modules.slice(0, 64).map(module => ({
+    CapacityBytes: boundedBytes(module?.CapacityBytes),
+    Type: boundedText(module?.Type, 80),
+    ConfiguredSpeedMhz: boundedCount(module?.ConfiguredSpeedMhz)
+  })) : [];
+  const graphicsAdapters = Array.isArray(source.GraphicsAdapters) ? source.GraphicsAdapters.slice(0, 16).map(adapter => ({
+    Name: boundedText(adapter?.Name, 200) ?? "Unknown graphics adapter",
+    DedicatedVideoMemoryBytes: boundedBytes(adapter?.DedicatedVideoMemoryBytes),
+    SharedSystemMemoryBytes: boundedBytes(adapter?.SharedSystemMemoryBytes),
+    DriverVersion: boundedText(adapter?.DriverVersion, 120),
+    DriverDate: boundedText(adapter?.DriverDate, 40)
+  })) : [];
+
+  return {
+    Processors: processors,
+    Memory: {
+      TotalBytes: boundedBytes(sourceMemory.TotalBytes),
+      Modules: modules
+    },
+    GraphicsAdapters: graphicsAdapters
+  };
+}
+
 function validateEnvironment(env) {
   const repository = env.CRASH_REPORT_REPOSITORY;
   const token = env.GITHUB_TOKEN;
@@ -90,6 +135,7 @@ function validateReport(report) {
     os: typeof report.os === "string" ? report.os.slice(0, 200) : "",
     architecture: typeof report.architecture === "string" ? report.architecture.slice(0, 80) : "",
     dotnet_runtime: typeof report.dotnet_runtime === "string" ? report.dotnet_runtime.slice(0, 120) : "",
+    hardware: validateHardware(report.hardware),
     failure_summary: redactPaths(report.failure_summary.slice(0, 2000)),
     settings,
     packs,
