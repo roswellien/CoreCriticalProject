@@ -11,7 +11,8 @@ Neither earlier PR is implicitly merged by this change.
 
 Owner direction: the RX 9070 is the primary validation target. Integrated-GPU
 compatibility passes do not satisfy the discrete-GPU presentation or performance
-criterion. RX 9070 Vulkan presentation remains an open Stage 2 gate.
+criterion. The combined RX 9070 presentation checks below use the experimental
+same-adapter Vulkan/DXGI bridge; raw Vulkan WSI remains defective on this driver.
 
 The canonical host accepts `MW34_WORLD_SCALE_PERCENT=50..100` (integer, default
 100). The percentage applies to each output dimension, rounding down. For
@@ -48,7 +49,7 @@ local edits. Refresh the canonical source manifest for intentional source change
 In an x64 Visual Studio developer shell, with the pinned LLVM and Vulkan headers:
 
 ```powershell
-clang-cl /nologo /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_CRT_SECURE_NO_WARNINGS /std:c++20 /EHsc /MD /Itools/m4-crt-heap-carry/host /I<Vulkan-Headers>/include tools/remaster-launcher/test_launcher_display.cpp /Fo<local-output>/display.obj /Fe<local-output>/display.exe /link user32.lib gdi32.lib /incremental:no
+clang-cl /nologo /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_CRT_SECURE_NO_WARNINGS /std:c++20 /EHsc /MD /Itools/m4-crt-heap-carry/host /I<Vulkan-Headers>/include tools/remaster-launcher/test_launcher_display.cpp /Fo<local-output>/display.obj /Fe<local-output>/display.exe /link user32.lib gdi32.lib dxgi.lib d3d11.lib /incremental:no
 $env:MW34_REMASTER_WIDTH = '1280'
 $env:MW34_REMASTER_HEIGHT = '960'
 $env:MW34_REMASTER_AA = '1'
@@ -398,7 +399,65 @@ This narrows the current failure to Vulkan presentation rather than establishing
 that the RX 9070 cannot present to this display. No driver reset, update or remote
 session interruption was performed.
 
-AMD's [RX 9070 download page](https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-9000-series/amd-radeon-rx-9070.html) lists 26.10.1 WHQL, dated 2026-10-20. A controlled driver update/restart followed by the same standalone Vulkan probe is the next proposed environmental test; it is not a proven fix. This session lacks an administrator token, and installation/restart may interrupt RustDesk, so that maintenance requires owner involvement. Once Vulkan presentation succeeds on the 9070, repeat the visible fixture and published-input Training checks on that GPU before accepting the primary-target criterion.
+AMD's [RX 9070 download page](https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-9000-series/amd-radeon-rx-9070.html) lists 26.10.1 WHQL, dated 2026-10-20. The initial proposed environmental test was a controlled driver update/restart followed by the same standalone Vulkan probe; it is not a proven fix. This session lacks an administrator token, and installation/restart may interrupt RustDesk, so that maintenance requires owner involvement. Once Vulkan presentation succeeds on the 9070, repeat the visible fixture and published-input Training checks on that GPU before accepting the primary-target criterion.
+
+### Combined RX 9070 integration
+
+The owner declined driver changes. PR #105 supplies an experimental same-GPU
+Vulkan/DXGI presentation path instead. This branch incorporates that topic branch
+for combined validation; neither PR nor either shared branch is merged by these
+local feature-branch changes. The option remains `MW34_DXGI_PRESENT=1`, absent
+from launcher settings. Vulkan still renders on the RX 9070; DXGI presents the
+shared GPU texture on the matching adapter. See the
+[presentation contract](dxgi-presentation-bridge.md).
+
+The combination preserves Stage 2's full-raster D32 readback and deferred
+window-based adapter selection for direct Vulkan WSI. The explicit bridge can
+initialize before a window exists because it matches adapters by LUID. Initially,
+the combined pre-window fixture failed with `DXGI presentation request was not
+selected`; allowing only an explicitly requested bridge to initialize there
+restores it. The 25-presentation bridge fixture then passes. Unknown settings and
+exclusive fullscreen still reject visibly.
+
+Combined focused checks on RX 9070, with Khronos synchronization validation:
+
+- Visible world/promotion/lifecycle, retained HUD and partial-world persistence
+  pass at 50%, 67% and 100%, with AA Off and FXAA (18 cases).
+- The visible cases each count five real presentations and restore after resize,
+  minimize and hide. Synthetic full-color replacements exercise actual reduced
+  raster dimensions; these are fixture results rather than live Training scaling.
+- The depth suite passes native/scaled/odd/2x/4x SSAA and visible-scaled modes,
+  including all 65,536 guest depth values and close-surface tests.
+- The 25-frame bridge check includes actual copied backbuffer pixels and 16
+  alternating frames without diagnostic readback. Configuration rejection modes,
+  standard CMake build, 25 CTest cases and format-check pass.
+
+The combined maintained host SHA-256 is
+`14d3f0d1f1b64daf535e1d1edf4aff14e30fbe7b18740711d14f9c3d4b068328`.
+Its receipt records seven host objects, zero translated objects, and the unchanged
+translated DLL. Canonical host pins match the receipt. Private inputs, logs and
+captures are under `D:/Projects/MW34-stage2-9070/local/integration/`.
+
+Using published runtime 1.0.44 support inputs and the same 13 verified published
+packs, the combined host reaches native menu -> Training on RX 9070 at 3440x1440,
+FXAA/16x AF, with GPU lighting/shadow paths enabled (sun strength 0, ambient 1).
+At 100% it completes 2,200 actual bridge presentations / 6,142 native scenes with
+no validation errors. Captures 1801/2101 match the published runtime byte for byte
+(the hashes recorded above). The latest update catalog still names 1.0.44 as the
+promoted runtime. The configured budget deliberately stops with exit 1; this is
+not normal-quit acceptance or original-executable equivalence.
+
+The matched 50%-requested run also completes 2,200 actual bridge presentations /
+6,142 scenes without validation errors. It records zero reduced scenes and zero
+promotions, with the explicit retained-color/deferred-FXAA warning. Captures
+1801/2101 match the earlier AA-Off control exactly:
+`fba31799aa42bc0193ac9b25560e27ee29209240aa4240710be3f1c381df361e` and
+`75e3322255fef1394bb59439fb562ad20c32dfa4ab34bc417d2202f7940c3880`.
+They differ from the published FXAA reference as expected. This demonstrates
+preservation through the bridge, not reduced live Training or complete AA support.
+The periodic shrink/grow observation still needs visual confirmation in the game;
+the destination-bounds regression passes, but frame counts do not prove that symptom
+absent. No performance gain is claimed from these validation runs.
 
 ## Remaining limits
 
@@ -409,7 +468,7 @@ ready on the strength of passing CI. Fresh-overlay, stock Training, visible
 fixture lifecycle and synchronization checks have bounded evidence above.
 Comprehensive guest-write/fade sequences, visible lifecycle checks inside the
 game, broader startup and adapter depth coverage, the
-reported periodic size change, RX 9070 Vulkan presentation, a second
+reported periodic size change, raw RX 9070 Vulkan WSI, a second
 physical PC and independent review remain open. Mixed world passes after HUD
 remain full resolution.
 No build, asset, release or version was published or merged by these checks.

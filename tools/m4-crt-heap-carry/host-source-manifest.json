@@ -258,6 +258,12 @@
       "decision": "commit",
       "classification": "authored-host-source"
     },
+    "dxgi_present.hpp": {
+      "sha256": "f3f1b7956fa6b2ae25e0fe8d853930754d40bbba6682a266f8bd4d9f42226c95",
+      "bytes": 18511,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
     "early_triangle_commands.hpp": {
       "sha256": "d19803fb44c11269e7d063148da8e70d8e7d9c4ac1b7b50245235db6a65a179f",
       "bytes": 4008,
@@ -913,8 +919,8 @@
       "classification": "authored-host-source"
     },
     "vdd.inc": {
-      "sha256": "28176ed33947660757083c02ab17c107f656015a61640e971e7d7737978088d4",
-      "bytes": 61965,
+      "sha256": "61a89992e1ef848a1b0ed3dae4272cb3f383ed19539a9eafb9ae8b8a6720a0b0",
+      "bytes": 62051,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -925,8 +931,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "07b5232c69ac04ca0609b7785391305f4b681f6b34744f2a07b33e0e774957fa",
-      "bytes": 195247,
+      "sha256": "b50d1335fe5530e5b0e7cd0347716a8cbd2c1855a6821bdf8243e255f5d893d0",
+      "bytes": 203157,
       "decision": "commit",
       "classification": "authored-host-source"
     },

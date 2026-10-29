@@ -22,6 +22,7 @@
 #include "texture_staging.hpp"
 #include "buffer_reserve.hpp"
 #include <vulkan/vulkan_win32.h>
+#include "dxgi_present.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <array>
@@ -219,6 +220,8 @@ class Renderer {
                 ::DestroyWindow(child);
             child = makeChild(hwnd);
             presentParent = hwnd;
+            if (!child && DxgiPresent::requested())
+                throw std::runtime_error("Cannot create the required DXGI presentation window");
             if (!child)
                 return false;
             // A presenting instance selects the device that can present to this window (on hybrid
@@ -228,7 +231,7 @@ class Renderer {
             else if (presentable && !surface(child))
                 return false;
         }
-        if (!presentable || !windowSurface)
+        if (!presentable || (!windowSurface && !dxgi.active()))
             return false;
         // The previous Flip's copy/blit is waited for here, before its upload buffer, command pool
         // or source image are reused, instead of right after vkQueuePresentKHR (presentation stays
@@ -259,17 +262,21 @@ class Renderer {
         if (overlay.on && !rgba32)
             overlay.draw(reinterpret_cast<std::uint16_t *>(dst), w, h);
         unsigned index = 0;
-        VkResult r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired,
-                                             VK_NULL_HANDLE, &index);
-        if ((r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
-            dropSwapchain();
-            if (!swapchainReady())
-                return true;
-            r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE,
-                                        &index);
+        VkResult r = VK_SUCCESS;
+        if (!dxgi.active()) {
+            r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired,
+                                       VK_NULL_HANDLE, &index);
+            if ((r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
+                dropSwapchain();
+                if (!swapchainReady())
+                    return true;
+                r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE,
+                                            &index);
+            }
+            if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
+                check(r, "acquire swapchain image");
         }
-        if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
-            check(r, "acquire swapchain image");
+        const VkImage swap_target = dxgi.active() ? dxgi.image() : swapImages[index];
         check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -300,7 +307,8 @@ class Renderer {
         bar(srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
             VK_ACCESS_TRANSFER_READ_BIT);
-        bar(swapImages[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+        if (dxgi.active()) dxgi.acquire_image(presentCmd, f.vkCmdPipelineBarrier, f.vkCmdClearColorImage);
+        else bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
             VK_ACCESS_TRANSFER_WRITE_BIT);
         // Scaled to the window's client area with nearest sampling (the GDI presenter's
         // COLORONCOLOR).
@@ -319,30 +327,46 @@ class Renderer {
             destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            f.vkCmdClearColorImage(presentCmd, swapImages[index],
+            f.vkCmdClearColorImage(presentCmd, swap_target,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
-            bar(swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT);
         }
+        if (dxgi.active() && wide_world && remaster_width()) {
+            const auto fit = mw34::frontend::CanvasFit::fit(remaster_width(), remaster_height(),
+                                                           swapExtent.width, swapExtent.height);
+            blit.dstOffsets[0] = {fit.x, fit.y, 0};
+            blit.dstOffsets[1] = {fit.x + fit.width, fit.y + fit.height, 1};
+        }
         f.vkCmdBlitImage(presentCmd, srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                         swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                          VK_FILTER_NEAREST);
-        bar(swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        if (dxgi.active()) dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
+        else bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0);
         check(f.vkEndCommandBuffer(presentCmd), "end present");
         const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.waitSemaphoreCount = 1;
+        const auto shared_sync = dxgi.synchronization();
+        si.pNext = dxgi.active() ? &shared_sync : nullptr;
+        si.waitSemaphoreCount = dxgi.active() ? 0 : 1;
         si.pWaitSemaphores = &acquired;
         si.pWaitDstStageMask = &waitStage;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &presentCmd;
-        si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores = &swapRendered[index];
+        si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
+        si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
         check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
         check(f.vkQueueSubmit(queue, 1, &si, presentFence), "submit present");
+        if (dxgi.active()) {
+            presentInFlight = true;
+            const char *vsync = std::getenv("MW34_VSYNC");
+            if (dxgi.present(!vsync || std::strcmp(vsync, "0")))
+                ++presents;
+            return true;
+        }
         VkPresentInfoKHR pi{};
         pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         pi.waitSemaphoreCount = 1;
@@ -375,7 +399,7 @@ class Renderer {
         finish_world();
         if (!::IsWindowVisible(hwnd))
             return true;
-        if (hwnd != presentParent || !child || !presentable || !windowSurface ||
+        if (hwnd != presentParent || !child || !presentable || (!windowSurface && !dxgi.active()) ||
             !colorImage.image || w != width || h != height)
             return false;
         if (presentInFlight) {
@@ -395,17 +419,21 @@ class Renderer {
         if (!swapchainReady())
             return true;
         unsigned index = 0;
-        VkResult r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired,
-                                             VK_NULL_HANDLE, &index);
-        if ((r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
-            dropSwapchain();
-            if (!swapchainReady())
-                return true;
-            r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE,
-                                        &index);
+        VkResult r = VK_SUCCESS;
+        if (!dxgi.active()) {
+            r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired,
+                                       VK_NULL_HANDLE, &index);
+            if ((r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
+                dropSwapchain();
+                if (!swapchainReady())
+                    return true;
+                r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE,
+                                            &index);
+            }
+            if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
+                check(r, "acquire swapchain image");
         }
-        if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
-            check(r, "acquire swapchain image");
+        const VkImage swap_target = dxgi.active() ? dxgi.image() : swapImages[index];
         check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -430,7 +458,8 @@ class Renderer {
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT);
-        bar(swapImages[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+        if (dxgi.active()) dxgi.acquire_image(presentCmd, f.vkCmdPipelineBarrier, f.vkCmdClearColorImage);
+        else bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
             VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT);
         // The frame keeps its aspect ratio (side or top bars are cleared to black when the window's
@@ -445,9 +474,9 @@ class Renderer {
             destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            f.vkCmdClearColorImage(presentCmd, swapImages[index],
+            f.vkCmdClearColorImage(presentCmd, swap_target,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
-            bar(swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -458,9 +487,10 @@ class Renderer {
         blit.dstOffsets[0] = {destination.left, destination.top, 0};
         blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
         f.vkCmdBlitImage(presentCmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                         swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                          (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
-        bar(swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        if (dxgi.active()) dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
+        else bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         bar(colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -481,15 +511,26 @@ class Renderer {
         const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.waitSemaphoreCount = 1;
+        const auto shared_sync = dxgi.synchronization();
+        si.pNext = dxgi.active() ? &shared_sync : nullptr;
+        si.waitSemaphoreCount = dxgi.active() ? 0 : 1;
         si.pWaitSemaphores = &acquired;
         si.pWaitDstStageMask = &waitStage;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &presentCmd;
-        si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores = &swapRendered[index];
+        si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
+        si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
         check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
         check(f.vkQueueSubmit(queue, 1, &si, presentFence), "submit resident present");
+        if (dxgi.active()) {
+            presentInFlight = true;
+            const char *vsync = std::getenv("MW34_VSYNC");
+            if (dxgi.present(!vsync || std::strcmp(vsync, "0"))) {
+                ++presents;
+                ++resident_presents;
+            }
+            return true;
+        }
         VkPresentInfoKHR pi{};
         pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         pi.waitSemaphoreCount = 1;
@@ -512,6 +553,17 @@ class Renderer {
         return true;
     }
     std::uint64_t resident_presents{};
+    bool dxgi_presenting() const { return dxgi.active(); }
+    void request_presented_bgra_pixel(unsigned x, unsigned y) {
+        if (!dxgi.active()) throw std::runtime_error("Presentation capture requires the DXGI bridge");
+        dxgi.request_pixel(x, y);
+    }
+    std::array<unsigned char, 4> presented_bgra_pixel() {
+        HostFpEnvironment fp;
+        if (!dxgi.active()) throw std::runtime_error("Presented-pixel diagnostics require the DXGI bridge");
+        return dxgi.read_pixel();
+    }
+
     // Diagnostic: the resident colour image at the render resolution as a binary PPM.
     void dump_fullres(const char *path) {
         HostFpEnvironment fp;
@@ -804,6 +856,9 @@ class Renderer {
     // when enhanced texture banks need dimensions beyond the original 256 cap.
     unsigned max_texture_dimension(HWND window) {
         HostFpEnvironment fp;
+        // The explicit bridge selects by adapter identity and needs no WSI window.
+        if (!device && DxgiPresent::requested())
+            init();
         if (!device) {
             // Capability queries can precede the first Flip. Select against the
             // actual window now, before texture banks bind us to an adapter.
@@ -1621,6 +1676,7 @@ class Renderer {
         if (!limit) throw std::runtime_error("No graphics adapter supplies Vulkan texture limits");
         return limit;
     }
+    DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
     struct Fns {
@@ -2240,6 +2296,9 @@ class Renderer {
     // window surface before selecting a graphics queue; a headless render does not.
     // Requested quality features fail visibly if the device lacks their contracts.
     void init(HWND forPresent = nullptr) {
+        const bool bridge_requested = DxgiPresent::requested();
+        if (bridge_requested && exclusiveRequested())
+            throw std::runtime_error("DXGI presentation bridge requires windowed or borderless mode");
         library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!library)
             throw std::runtime_error("Vulkan scene renderer: system Vulkan loader unavailable");
@@ -2252,7 +2311,7 @@ class Renderer {
         VkApplicationInfo app{};
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "MW34 Direct3D scene renderer";
-        app.apiVersion = VK_API_VERSION_1_0;
+        app.apiVersion = bridge_requested ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
         VkInstanceCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ici.pApplicationInfo = &app;
@@ -2304,7 +2363,7 @@ class Renderer {
             MW34_VK_WSI_FNS(MW34_VK_OPT)
         }
         VkSurfaceKHR probe{};
-        if (forPresent && !instanceExtensions.empty() && f.vkCreateWin32SurfaceKHR) {
+        if (!bridge_requested && forPresent && !instanceExtensions.empty() && f.vkCreateWin32SurfaceKHR) {
             VkWin32SurfaceCreateInfoKHR ci{};
             ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
             ci.hinstance = ::GetModuleHandleW(nullptr);
@@ -2327,7 +2386,7 @@ class Renderer {
             f.vkGetPhysicalDeviceProperties(g, &p);
             for (unsigned i = 0; i < n; ++i)
                 if (q[i].queueCount && (q[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
-                    if (forPresent) {
+                    if (forPresent && !bridge_requested) {
                         VkBool32 ok = VK_FALSE;
                         VkSurfaceCapabilitiesKHR c{};
                         if (!probe ||
@@ -2347,7 +2406,7 @@ class Renderer {
                     break;
                 }
         }
-        if (!gpu && forPresent) {
+        if (!gpu && forPresent && !bridge_requested) {
             if (probe)
                 f.vkDestroySurfaceKHR(instance, probe, nullptr);
             presentable = false;
@@ -2427,6 +2486,15 @@ class Renderer {
                     !std::strcmp(p.extensionName, VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME))
                     exclusiveDevice = true;
             }
+            if (bridge_requested) {
+                for (const auto *required : {"VK_KHR_external_memory_win32", "VK_KHR_win32_keyed_mutex"}) {
+                    const bool supported = std::any_of(props.begin(), props.end(), [&](const auto &entry) {
+                        return !std::strcmp(entry.extensionName, required);
+                    });
+                    if (!supported) throw std::runtime_error(std::string("DXGI sharing requires ") + required);
+                    deviceExtensions.push_back(required);
+                }
+            }
             if (exclusiveRequested() && !exclusiveDevice)
                 throw std::runtime_error("GPU does not support Vulkan exclusive fullscreen");
         }
@@ -2434,9 +2502,9 @@ class Renderer {
             deviceExtensions.push_back(swapExt);
             if (exclusiveDevice)
                 deviceExtensions.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
-            dci.enabledExtensionCount = unsigned(deviceExtensions.size());
-            dci.ppEnabledExtensionNames = deviceExtensions.data();
         }
+        dci.enabledExtensionCount = unsigned(deviceExtensions.size());
+        dci.ppEnabledExtensionNames = deviceExtensions.data();
         check(f.vkCreateDevice(gpu, &dci, nullptr, &device), "create device");
 #define MW34_VK_DLOAD(n)                                                                           \
     f.n = reinterpret_cast<PFN_##n>(f.vkGetDeviceProcAddr(device, #n));                            \
@@ -2459,11 +2527,17 @@ class Renderer {
             reinterpret_cast<PFN_vkCmdBlitImage>(f.vkGetDeviceProcAddr(device, "vkCmdBlitImage"));
         if (!f.vkCmdBlitImage)
             throw std::runtime_error("Vulkan image blits unavailable");
-        if (presentable) {
-            MW34_VK_SWAP_FNS(MW34_VK_DLOAD)
+        if (presentable || bridge_requested) {
+            if (!bridge_requested) { MW34_VK_SWAP_FNS(MW34_VK_DLOAD) }
+            else {
+                f.vkCmdClearColorImage = reinterpret_cast<PFN_vkCmdClearColorImage>(
+                    f.vkGetDeviceProcAddr(device, "vkCmdClearColorImage"));
+                if (!f.vkCmdClearColorImage) throw std::runtime_error("DXGI color clear unavailable");
+            }
             VkSemaphoreCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            check(f.vkCreateSemaphore(device, &sci, nullptr, &acquired), "semaphore");
+            if (!bridge_requested)
+                check(f.vkCreateSemaphore(device, &sci, nullptr, &acquired), "semaphore");
             VkCommandPoolCreateInfo ppi{};
             ppi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             ppi.queueFamilyIndex = family;
@@ -2479,6 +2553,49 @@ class Renderer {
             check(f.vkCreateFence(device, &pfi, nullptr, &presentFence), "present fence");
         }
         f.vkGetDeviceQueue(device, family, 0, &queue);
+        if (bridge_requested) {
+            const auto properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                get(instance, "vkGetPhysicalDeviceProperties2"));
+            if (!properties2) throw std::runtime_error("DXGI sharing requires Vulkan 1.1 properties");
+            VkPhysicalDeviceIDProperties identity{};
+            identity.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+            VkPhysicalDeviceProperties2 properties{};
+            properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            properties.pNext = &identity;
+            properties2(gpu, &properties);
+            if (properties.properties.apiVersion < VK_API_VERSION_1_1)
+                throw std::runtime_error("DXGI sharing requires a Vulkan 1.1 device");
+            const auto image_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceImageFormatProperties2>(
+                get(instance, "vkGetPhysicalDeviceImageFormatProperties2"));
+            if (!image_properties) throw std::runtime_error("DXGI shared-image capability query unavailable");
+            VkPhysicalDeviceExternalImageFormatInfo external{};
+            external.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO;
+            external.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+            VkPhysicalDeviceImageFormatInfo2 query{};
+            query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+            query.pNext = &external;
+            query.format = VK_FORMAT_B8G8R8A8_UNORM;
+            query.type = VK_IMAGE_TYPE_2D;
+            query.tiling = VK_IMAGE_TILING_OPTIMAL;
+            query.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            VkExternalImageFormatProperties shared_properties{};
+            shared_properties.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES;
+            VkImageFormatProperties2 limits{};
+            limits.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+            limits.pNext = &shared_properties;
+            check(image_properties(gpu, &query, &limits), "query DXGI shared-image support");
+            if (!(shared_properties.externalMemoryProperties.externalMemoryFeatures &
+                  VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT))
+                throw std::runtime_error("GPU cannot import a DXGI shared texture");
+            VkFormatProperties format_properties{};
+            f.vkGetPhysicalDeviceFormatProperties(gpu, VK_FORMAT_B8G8R8A8_UNORM, &format_properties);
+            if (!(format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT))
+                throw std::runtime_error("GPU cannot blit into a DXGI shared texture");
+            dxgi.attach(device, identity, family, f.vkGetDeviceProcAddr, limits.imageFormatProperties.maxExtent);
+            presentable = true;
+            std::fprintf(stderr, "Presentation bridge: Vulkan/DXGI on %s; adapter LUID matched\n", device_name.c_str());
+        }
         if (probe) {
             if (presentable) {
                 windowSurface = probe;
@@ -3304,6 +3421,7 @@ class Renderer {
                                  nullptr);
     }
     bool surface(HWND hwnd) {
+        if (dxgi.active()) { presentWindow = hwnd; return true; }
         VkWin32SurfaceCreateInfoKHR ci{};
         ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
         ci.hinstance = ::GetModuleHandleW(nullptr);
@@ -3326,6 +3444,7 @@ class Renderer {
         presentWindow = {};
     }
     void dropSwapchain() {
+        if (dxgi.active()) { dxgi.reset_window(); return; }
         if (!swapchain)
             return;
         f.vkDeviceWaitIdle(device);
@@ -3343,6 +3462,14 @@ class Renderer {
     // A zero-sized surface is a temporary no-present state. A changed extent drains
     // presentation and rebuilds both the swapchain and its per-image semaphores.
     bool swapchainReady() {
+        if (dxgi.active()) {
+            RECT client{};
+            ::GetClientRect(child, &client);
+            if (::IsIconic(presentParent) || client.right <= 0 || client.bottom <= 0) return false;
+            dxgi.prepare(child, unsigned(client.right), unsigned(client.bottom));
+            swapExtent = {unsigned(client.right), unsigned(client.bottom)};
+            return true;
+        }
         VkSurfaceCapabilitiesKHR caps{};
         if (const VkResult r =
                 f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu, windowSurface, &caps);
@@ -3549,6 +3676,7 @@ class Renderer {
             f.vkDestroyPipeline(device, p, nullptr);
         for (auto &[k, s] : samplers)
             f.vkDestroySampler(device, s, nullptr);
+        dxgi.detach();
         dropSwapchain();
         dropSurface();
         if (child)
