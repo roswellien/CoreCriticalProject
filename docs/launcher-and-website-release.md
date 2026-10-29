@@ -212,14 +212,13 @@ Set-Location website
 npx --yes wrangler@4.151.0 pages deploy dist --project-name core-critical
 ```
 
-The maintainer supplies Cloudflare authentication locally and configures the
-existing project to use this repository's `main` branch, `website/` root,
+The existing project uses this repository's `main` branch, `website/` root,
 `python3 build.py` build command and `dist` output. Keep `functions/` beside the
 build command, outside `dist/`. Keep the project and the pinned
 `a67a6e69.core-critical.pages.dev` media deployment. Confirm the deploy URL and
 inspect all pages, MechLab news, media gallery and YouTube carousel. Do not put
-Cloudflare tokens in Git. After the first verified deploy from this repository,
-the maintainer removes the cross-repository MechLab workflow and deploy key.
+Cloudflare tokens in Git. The cross-repository MechLab publishing bridge is retired; dated notes publish
+directly with this repository's website build.
 See [website/README.md](../website/README.md) and
 [website/CLOUDFLARE.md](../website/CLOUDFLARE.md) for local preview and cutover
 details.

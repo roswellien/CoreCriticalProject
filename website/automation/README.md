@@ -1,22 +1,20 @@
-# Legacy MechLab publishing handoff
+# Website source migration record
 
-This workflow template documents the old cross-repository publishing bridge.
-The active copy is `.github/workflows/publish-mechlab.yml` in
-`roswellien/MW3Recomp-Private`: it copies dated `docs/mechlab/` notes into
-`data/mechlab.json` in `roswellien/corecritical-website` using the
-`CORECRITICAL_WEBSITE_DEPLOY_KEY` Actions secret.
+The permanent website source is `website/` in `roswellien/MW3Recomp-Private`.
+Cloudflare Pages project `core-critical` builds this repository's `main` branch
+with root `website`, command `python3 build.py`, and output `dist`.
 
-The moved site build reads those notes directly from this repository instead.
-Do not install or re-enable this template after Pages has switched to this
-repository. Keep the current workflow, secret and deploy key until the
-maintainer has verified the first deploy from this repository, so the existing
-live site can continue receiving its updates during the cutover.
+The first production deployment from this repository was verified on October 28,
+2026: [3b547114.core-critical.pages.dev](https://3b547114.core-critical.pages.dev),
+from main commit `f21105fa9d11b8b3fbc884affa3950b1c608885d` (release PR #75).
+The custom domain and pinned media deployment were retained.
 
-After that verification, the maintainer removes the game-repository workflow,
-deletes the `CORECRITICAL_WEBSITE_DEPLOY_KEY` secret, and revokes its public key
-from the old website repository. The old website repository can then be
-archived with a README pointing to `website/` here. The workflow in this folder
-is retained as source-migration history until that cleanup is complete; it is
-not active from this path.
+The old `.github/workflows/publish-mechlab.yml` and inactive template have been
+removed. The build reads public dated notes directly from `docs/mechlab/` and
+needs no copied `data/mechlab.json` or cross-repository deploy key. The legacy
+secret and deploy key are removed separately through repository settings after
+production verification; current cleanup status is tracked in release issue #74.
+Do not restore the old publishing bridge.
 
-No deploy key, private key, token or credential is stored in this repository.
+Historical source remains in `roswellien/corecritical-website`; archival preserves
+that history and must retain a README pointing to this permanent source.
