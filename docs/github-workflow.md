@@ -69,10 +69,9 @@ path given and follows it.
 4. **Implement:** carry out the plan through its own checks, then hand over to a
    fresh session for stage 5 without waiting for approval.
 5. **Review:** run the code review on the branch in a fresh session that didn't
-   write the change; it ends by rerunning the checks with
-   `.agents/skills/core-critical-pre-pr-checks/SKILL.md`. Then walk the
+   write the change; it ends by rerunning the change's checks. Then walk the
    requester through what is left. The PR stays a draft until the requester
-   says it's ready.
+   says it's ready. Skill: `.agents/skills/core-critical-code-review/SKILL.md`.
 
 `.agents/skills/core-critical-workflow/SKILL.md` ties the stages together and
 holds the spec and plan sections. Each review loops: fix only major findings,

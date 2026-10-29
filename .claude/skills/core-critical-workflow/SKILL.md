@@ -35,9 +35,8 @@ one skill from another.
    to be wrong, stop and tell the requester; the plan is fixed before going on.
 5. **Review:** in a fresh session that didn't write the change, run
    `.agents/skills/core-critical-code-review/SKILL.md` on the branch (it ends
-   by rerunning the checks with
-   `.agents/skills/core-critical-pre-pr-checks/SKILL.md`), then walk the
-   requester through what is left. The implementing session stops after its
+   by rerunning the change's checks), then walk the requester through what is
+   left. The implementing session stops after its
    checks; the requester, or the tool where it can, starts the review session.
    The PR opens as a draft and stays one until the requester says it's ready.
 
