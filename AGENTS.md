@@ -67,6 +67,8 @@ making the repository public.
 ## Where to find more
 
 - `docs/github-workflow.md`: the full PR, issue, project board and release workflow.
+- `docs/github-workflow.md` "Plan and review": the flow every change follows before
+  its PR; the `core-critical-*` skills run each stage.
 - `CONTRIBUTING.md`: what every contribution and PR must include.
 - `CODE_STYLE.md`: how to write and format code.
 - `docs/legal.md`: what may and may not be distributed.
