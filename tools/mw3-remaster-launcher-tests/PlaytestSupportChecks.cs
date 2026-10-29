@@ -29,13 +29,31 @@ static class PlaytestSupportChecks
                 "Crash-report path scrubbing exposed a local or network path");
             var d7vkReport = JsonSerializer.SerializeToDocument(PlaytestDiagnostics.CreateCrashReport(
                 new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
-                Array.Empty<PackManifest>(), null, app, "1.2.3", 7));
+                Array.Empty<PackManifest>(), null, app, "1.2.3", 7,
+                new HardwareInventoryData(
+                    new[] { new ProcessorInventory("AMD", "Ryzen Example", 8, 16) },
+                    new MemoryInventory(32UL * 1024 * 1024 * 1024,
+                        new[] { new MemoryModuleInventory(16UL * 1024 * 1024 * 1024, "DDR5", 5600) }),
+                    new[] { new GraphicsAdapterInventory("Example GPU", 12UL * 1024 * 1024 * 1024,
+                        8UL * 1024 * 1024 * 1024, "1.2.3", new DateTime(2026, 1, 1)) })));
             var d7vkSettings = d7vkReport.RootElement.GetProperty("settings");
             Check(d7vkReport.RootElement.GetProperty("runtime_version").GetString() == "1.2.3" &&
                 d7vkReport.RootElement.GetProperty("exit_code").GetInt32() == 7 &&
                 d7vkSettings.GetProperty("D7VkResolution").GetString() == "1920x1080" &&
                 !d7vkSettings.TryGetProperty("Width", out _),
                 "Crash report omitted runtime/exit details or used native graphics settings for D7VK");
+            var hardware = d7vkReport.RootElement.GetProperty("hardware");
+            Check(hardware.GetProperty("Processors")[0].GetProperty("Model").GetString() == "Ryzen Example" &&
+                hardware.GetProperty("Memory").GetProperty("Modules")[0].GetProperty("Type").GetString() == "DDR5" &&
+                hardware.GetProperty("GraphicsAdapters")[0].GetProperty("DedicatedVideoMemoryBytes").GetUInt64() ==
+                    12UL * 1024 * 1024 * 1024,
+                "Crash report omitted CPU, memory type, or full-width VRAM inventory");
+            Check(HardwareInventory.MemoryTypeName(34, null) == "DDR5" &&
+                HardwareInventory.MemoryTypeName(null, null) == "Unknown",
+                "RAM type codes were not described safely");
+            var capturedHardware = HardwareInventory.Capture();
+            Check(capturedHardware.Processors.Count > 0 && capturedHardware.Memory != null,
+                "Hardware inventory did not read processor and installed-memory information");
             Check(settings.Current.Width == 1920 && settings.Current.InstantReplay && settings.Current.ActivePacks.SequenceEqual(new[] { "test.mech" }), "Legacy choices not migrated");
             Check(File.ReadAllText(legacy) == original, "Migration modified legacy settings");
             settings.Current.Width = 2560; settings.Save();
