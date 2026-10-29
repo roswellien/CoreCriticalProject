@@ -68,8 +68,28 @@ public static class HardwareInventory
 
     public static string MemoryTypeName(ulong? smbiosType, ulong? legacyType)
     {
-        var type = smbiosType ?? legacyType;
-        return type switch
+        if (smbiosType.HasValue)
+        {
+            return smbiosType.Value switch
+            {
+                18 => "DDR",
+                19 => "DDR2",
+                20 => "DDR2 FB-DIMM",
+                24 => "DDR3",
+                25 => "FBD2",
+                26 => "DDR4",
+                27 => "LPDDR",
+                28 => "LPDDR2",
+                29 => "LPDDR3",
+                30 => "LPDDR4",
+                34 => "DDR5",
+                35 => "LPDDR5",
+                _ => $"Unknown (SMBIOS type {smbiosType})"
+            };
+        }
+
+        if (!legacyType.HasValue) return "Unknown";
+        return legacyType.Value switch
         {
             20 => "DDR",
             21 => "DDR2",
@@ -83,8 +103,7 @@ public static class HardwareInventory
             30 => "LPDDR5",
             34 => "DDR5",
             35 => "LPDDR5X",
-            null => "Unknown",
-            _ => $"Unknown (SMBIOS type {type})"
+            _ => $"Unknown (legacy type {legacyType})"
         };
     }
 
@@ -233,7 +252,7 @@ public static class HardwareInventory
         var matchedDrivers = new HashSet<int>();
         foreach (var adapter in adapters)
         {
-            var driverIndex = FindDriver(adapter.Name, drivers);
+            var driverIndex = FindDriver(adapter.Name, drivers, matchedDrivers);
             if (driverIndex >= 0) matchedDrivers.Add(driverIndex);
             var driver = driverIndex >= 0 ? drivers[driverIndex] : null;
             graphics.Add(new GraphicsAdapterInventory(adapter.Name, adapter.DedicatedVideoMemoryBytes,
@@ -248,11 +267,13 @@ public static class HardwareInventory
         return graphics;
     }
 
-    private static int FindDriver(string adapterName, IReadOnlyList<DriverDetails> drivers)
+    private static int FindDriver(string adapterName, IReadOnlyList<DriverDetails> drivers,
+        IReadOnlySet<int> matchedDrivers)
     {
         for (var index = 0; index < drivers.Count; index++)
         {
-            if (string.Equals(adapterName, drivers[index].Name, StringComparison.OrdinalIgnoreCase))
+            if (!matchedDrivers.Contains(index) &&
+                string.Equals(adapterName, drivers[index].Name, StringComparison.OrdinalIgnoreCase))
                 return index;
         }
         return -1;

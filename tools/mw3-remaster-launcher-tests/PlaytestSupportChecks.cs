@@ -27,10 +27,17 @@ static class PlaytestSupportChecks
                 !redactedPaths.Contains(@"\\nas01\users\jcbla", StringComparison.OrdinalIgnoreCase) &&
                 redactedPaths.Contains("<local-path>") && redactedPaths.Contains("<network-path>"),
                 "Crash-report path scrubbing exposed a local or network path");
+            var privateNetworkRoot = @"\\nas01\users\Jane Doe\private-game";
+            var redactedNetworkPath = PlaytestDiagnostics.Redact(
+                "Network: " + privateNetworkRoot + @"\file.bin", privateNetworkRoot);
+            Check(redactedNetworkPath == "Network: <network-path>" &&
+                !redactedNetworkPath.Contains("Jane Doe", StringComparison.Ordinal) &&
+                !redactedNetworkPath.Contains("private-game", StringComparison.Ordinal),
+                "Crash-report path scrubbing exposed a spaced UNC path suffix");
             var nestedPath = PlaytestDiagnostics.Redact(
                 @"C:\Users\jcbla\AppData\Local\Packages\Launcher\sessions\profile.json", @"C:\Users\jcbla");
             Check(nestedPath == "<local-path>", "Crash-report path scrubbing exposed the suffix after a known local root");
-            var d7vkReport = JsonSerializer.SerializeToDocument(PlaytestDiagnostics.CreateCrashReport(
+            var crashReport = PlaytestDiagnostics.CreateCrashReport(
                 new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
                 Array.Empty<PackManifest>(), null, app, "1.2.3", 7,
                 new HardwareInventoryData(
@@ -38,20 +45,37 @@ static class PlaytestSupportChecks
                     new MemoryInventory(32UL * 1024 * 1024 * 1024,
                         new[] { new MemoryModuleInventory(16UL * 1024 * 1024 * 1024, "DDR5", 5600) }),
                     new[] { new GraphicsAdapterInventory("Example GPU", 12UL * 1024 * 1024 * 1024,
-                        8UL * 1024 * 1024 * 1024, "1.2.3", new DateTime(2026, 1, 1)) })));
+                        8UL * 1024 * 1024 * 1024, "1.2.3", new DateTime(2026, 1, 1)) }));
+            var d7vkReport = JsonSerializer.SerializeToDocument(crashReport);
             var d7vkSettings = d7vkReport.RootElement.GetProperty("settings");
             Check(d7vkReport.RootElement.GetProperty("runtime_version").GetString() == "1.2.3" &&
                 d7vkReport.RootElement.GetProperty("exit_code").GetInt32() == 7 &&
                 d7vkSettings.GetProperty("D7VkResolution").GetString() == "1920x1080" &&
                 !d7vkSettings.TryGetProperty("Width", out _),
                 "Crash report omitted runtime/exit details or used native graphics settings for D7VK");
+            var webHardware = JsonSerializer.SerializeToDocument(crashReport,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)).RootElement.GetProperty("hardware");
+            Check(webHardware.TryGetProperty("processors", out var webProcessors) &&
+                webProcessors[0].GetProperty("model").GetString() == "Ryzen Example" &&
+                webHardware.GetProperty("memory").GetProperty("modules")[0].GetProperty("type").GetString() == "DDR5" &&
+                webHardware.GetProperty("graphicsAdapters")[0]
+                    .GetProperty("dedicatedVideoMemoryBytes").GetUInt64() == 12UL * 1024 * 1024 * 1024,
+                "Crash report's HTTP JSON format did not serialize hardware with camelCase fields");
             var hardware = d7vkReport.RootElement.GetProperty("hardware");
             Check(hardware.GetProperty("Processors")[0].GetProperty("Model").GetString() == "Ryzen Example" &&
                 hardware.GetProperty("Memory").GetProperty("Modules")[0].GetProperty("Type").GetString() == "DDR5" &&
                 hardware.GetProperty("GraphicsAdapters")[0].GetProperty("DedicatedVideoMemoryBytes").GetUInt64() ==
                     12UL * 1024 * 1024 * 1024,
                 "Crash report omitted CPU, memory type, or full-width VRAM inventory");
-            Check(HardwareInventory.MemoryTypeName(34, null) == "DDR5" &&
+            Check(HardwareInventory.MemoryTypeName(18, null) == "DDR" &&
+                HardwareInventory.MemoryTypeName(19, null) == "DDR2" &&
+                HardwareInventory.MemoryTypeName(20, null) == "DDR2 FB-DIMM" &&
+                HardwareInventory.MemoryTypeName(27, null) == "LPDDR" &&
+                HardwareInventory.MemoryTypeName(30, null) == "LPDDR4" &&
+                HardwareInventory.MemoryTypeName(35, null) == "LPDDR5" &&
+                HardwareInventory.MemoryTypeName(null, 20) == "DDR" &&
+                HardwareInventory.MemoryTypeName(null, 27) == "LPDDR3" &&
+                HardwareInventory.MemoryTypeName(null, 30) == "LPDDR5" &&
                 HardwareInventory.MemoryTypeName(null, null) == "Unknown",
                 "RAM type codes were not described safely");
             var capturedHardware = HardwareInventory.Capture();

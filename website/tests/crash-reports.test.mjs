@@ -78,15 +78,16 @@ test("stores only the disclosed hardware inventory fields and redacts hardware p
   };
   const response = await onRequestPost({ request: crashRequest({
     hardware: {
-      Processors: [{ Manufacturer: "AMD", Model: "Ryzen Example C:\\Users\\private\\computer", PhysicalCores: 8, LogicalProcessors: 16,
-        SerialNumber: "MUST_NOT_BE_STORED" }],
-      Memory: { TotalBytes: 34359738368, Modules: [{ CapacityBytes: 17179869184, Type: "DDR5",
-        ConfiguredSpeedMhz: 5600, PartNumber: "MUST_NOT_BE_STORED" }] },
-      GraphicsAdapters: [{ Name: "Example GPU", DedicatedVideoMemoryBytes: 12884901888,
-        SharedSystemMemoryBytes: 8589934592, DriverVersion: "1.2.3", DriverDate: "2026-01-01T00:00:00Z",
-        PnpDeviceId: "MUST_NOT_BE_STORED" }],
-      ExtraField: "MUST_NOT_BE_STORED"
-    }
+      processors: [{ manufacturer: "AMD", model: "Ryzen Example C:\\Users\\private\\computer", physicalCores: 8,
+        logicalProcessors: 16, serialNumber: "MUST_NOT_BE_STORED" }],
+      memory: { totalBytes: 34359738368, modules: [{ capacityBytes: 17179869184, type: "DDR5",
+        configuredSpeedMhz: 5600, partNumber: "MUST_NOT_BE_STORED" }] },
+      graphicsAdapters: [{ name: "Example GPU", dedicatedVideoMemoryBytes: 12884901888,
+        sharedSystemMemoryBytes: 8589934592, driverVersion: "1.2.3", driverDate: "2026-01-01T00:00:00Z",
+        pnpDeviceId: "MUST_NOT_BE_STORED" }],
+      extraField: "MUST_NOT_BE_STORED"
+    },
+    logs: { launcher: "Network: \\\\nas01\\users\\Jane Doe\\private-game\\file.bin\n" }
   }), env: environment });
 
   assert.equal(response.status, 200);
@@ -95,6 +96,8 @@ test("stores only the disclosed hardware inventory fields and redacts hardware p
   assert.ok(issueBody.includes('"DedicatedVideoMemoryBytes": 12884901888'));
   assert.ok(issueBody.includes('"DriverVersion": "1.2.3"'));
   assert.ok(issueBody.includes("<local-path>"));
+  assert.ok(issueBody.includes("<network-path>"));
+  assert.ok(!issueBody.includes("Jane Doe") && !issueBody.includes("private-game"));
   assert.ok(!issueBody.includes("MUST_NOT_BE_STORED"));
 });
 
@@ -188,6 +191,52 @@ test("caps full logs on later matching reports", async () => {
   await onRequestPost({ request: crashRequest(), env: environment });
   assert.ok(commentBody.includes("Log excerpts were omitted for overflow or repeat-report limits."));
   assert.ok(!commentBody.includes("FULL_LOG_SENTINEL"));
+});
+
+test("keeps oversized escaped metadata within GitHub's issue-body limit", async () => {
+  githubResponder();
+  const baseFetch = globalThis.fetch;
+  let issueBody;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.query.includes("createIssue")) issueBody = body.variables.body;
+    return baseFetch(url, options);
+  };
+  const packs = Array.from({ length: 64 }, () => ({
+    Id: "`".repeat(120), Version: "`".repeat(80), SchemaVersion: 1, IsEnabled: true, Priority: 1
+  }));
+  const report = { packs, logs: { launcher: "`".repeat(64 * 1024) } };
+  const response = await onRequestPost({ request: crashRequest(report), env: environment });
+
+  assert.equal(response.status, 200);
+  assert.ok(issueBody.length <= 48_000);
+  assert.ok(issueBody.includes("Some report details were omitted to fit GitHub's issue size limit."));
+  assert.ok(issueBody.includes("Additional log excerpts omitted") ||
+    issueBody.includes("Earlier log lines omitted"));
+});
+
+test("bounds issue bodies when logs are omitted or absent", async () => {
+  githubResponder();
+  const baseFetch = globalThis.fetch;
+  let issueBody;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.query.includes("createIssue") || body.query.includes("addComment"))
+      issueBody = body.variables.body;
+    return baseFetch(url, options);
+  };
+  const packs = Array.from({ length: 64 }, () => ({
+    Id: "`".repeat(120), Version: "`".repeat(80), SchemaVersion: 1, IsEnabled: true, Priority: 1
+  }));
+  await onRequestPost({ request: crashRequest({ packs, logs: {} }), env: environment });
+  assert.ok(issueBody.length <= 48_000);
+
+  const exhaustedEnvironment = {
+    ...environment,
+    CRASH_REPORT_DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) }
+  };
+  await onRequestPost({ request: crashRequest({ packs, logs: {} }), env: exhaustedEnvironment });
+  assert.ok(issueBody.length <= 48_000);
 });
 
 test("rejects reports with missing server configuration", async () => {

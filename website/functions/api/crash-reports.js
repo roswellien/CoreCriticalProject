@@ -1,5 +1,6 @@
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ISSUE_BODY_CHARS = 48_000;
+const MAX_ISSUE_REPORT_CHARS = 20_000;
 const MAX_FULL_LOG_REPEATS = 3;
 const DEFAULT_DAILY_ISSUE_LIMIT = 20;
 const GENERIC_FAILURES = [
@@ -10,7 +11,12 @@ const GENERIC_FAILURES = [
 function redactPaths(value) {
   return value
     .replace(/\b[A-Za-z]:[\\/][^\r\n\t"<>|]*/g, "<local-path>")
-    .replace(/\\\\[^\s"<>|]+/g, "<network-path>");
+    .replace(/\\\\[^\r\n\t"<>|]+/g, "<network-path>");
+}
+
+function hardwareField(source, name) {
+  const camelName = name[0].toLowerCase() + name.slice(1);
+  return source?.[camelName] ?? source?.[name];
 }
 
 function json(body, status = 200) {
@@ -34,31 +40,34 @@ function boundedBytes(value) {
 
 function validateHardware(hardware) {
   const source = hardware && typeof hardware === "object" && !Array.isArray(hardware) ? hardware : {};
-  const processors = Array.isArray(source.Processors) ? source.Processors.slice(0, 8).map(processor => ({
-    Manufacturer: boundedText(processor?.Manufacturer, 120),
-    Model: boundedText(processor?.Model, 200),
-    PhysicalCores: boundedCount(processor?.PhysicalCores),
-    LogicalProcessors: boundedCount(processor?.LogicalProcessors)
+  const sourceProcessors = hardwareField(source, "Processors");
+  const processors = Array.isArray(sourceProcessors) ? sourceProcessors.slice(0, 8).map(processor => ({
+    Manufacturer: boundedText(hardwareField(processor, "Manufacturer"), 120),
+    Model: boundedText(hardwareField(processor, "Model"), 200),
+    PhysicalCores: boundedCount(hardwareField(processor, "PhysicalCores")),
+    LogicalProcessors: boundedCount(hardwareField(processor, "LogicalProcessors"))
   })) : [];
-  const sourceMemory = source.Memory && typeof source.Memory === "object" && !Array.isArray(source.Memory)
-    ? source.Memory : {};
-  const modules = Array.isArray(sourceMemory.Modules) ? sourceMemory.Modules.slice(0, 32).map(module => ({
-    CapacityBytes: boundedBytes(module?.CapacityBytes),
-    Type: boundedText(module?.Type, 80),
-    ConfiguredSpeedMhz: boundedCount(module?.ConfiguredSpeedMhz)
+  const memory = hardwareField(source, "Memory");
+  const sourceMemory = memory && typeof memory === "object" && !Array.isArray(memory) ? memory : {};
+  const sourceModules = hardwareField(sourceMemory, "Modules");
+  const modules = Array.isArray(sourceModules) ? sourceModules.slice(0, 32).map(module => ({
+    CapacityBytes: boundedBytes(hardwareField(module, "CapacityBytes")),
+    Type: boundedText(hardwareField(module, "Type"), 80),
+    ConfiguredSpeedMhz: boundedCount(hardwareField(module, "ConfiguredSpeedMhz"))
   })) : [];
-  const graphicsAdapters = Array.isArray(source.GraphicsAdapters) ? source.GraphicsAdapters.slice(0, 8).map(adapter => ({
-    Name: boundedText(adapter?.Name, 200) ?? "Unknown graphics adapter",
-    DedicatedVideoMemoryBytes: boundedBytes(adapter?.DedicatedVideoMemoryBytes),
-    SharedSystemMemoryBytes: boundedBytes(adapter?.SharedSystemMemoryBytes),
-    DriverVersion: boundedText(adapter?.DriverVersion, 120),
-    DriverDate: boundedText(adapter?.DriverDate, 40)
+  const sourceGraphicsAdapters = hardwareField(source, "GraphicsAdapters");
+  const graphicsAdapters = Array.isArray(sourceGraphicsAdapters) ? sourceGraphicsAdapters.slice(0, 8).map(adapter => ({
+    Name: boundedText(hardwareField(adapter, "Name"), 200) ?? "Unknown graphics adapter",
+    DedicatedVideoMemoryBytes: boundedBytes(hardwareField(adapter, "DedicatedVideoMemoryBytes")),
+    SharedSystemMemoryBytes: boundedBytes(hardwareField(adapter, "SharedSystemMemoryBytes")),
+    DriverVersion: boundedText(hardwareField(adapter, "DriverVersion"), 120),
+    DriverDate: boundedText(hardwareField(adapter, "DriverDate"), 40)
   })) : [];
 
   return {
     Processors: processors,
     Memory: {
-      TotalBytes: boundedBytes(sourceMemory.TotalBytes),
+      TotalBytes: boundedBytes(hardwareField(sourceMemory, "TotalBytes")),
       Modules: modules
     },
     GraphicsAdapters: graphicsAdapters
@@ -186,17 +195,40 @@ function issueBody(report, crashFingerprint, { includeLogs = true, overflow = fa
   const marker = crashFingerprint ? `<!-- crash-fingerprint:${crashFingerprint} -->\n\n` : "";
   const reportLogs = includeLogs ? report.logs : {};
   const safeReport = { ...report };
+  safeReport.packs = [...report.packs];
   delete safeReport.logs;
-  const reportText = JSON.stringify(safeReport, null, 2).replace(/```/g, "\\u0060\\u0060\\u0060");
+  const serializeReport = value => JSON.stringify(value, null, 2).replace(/```/g, "\\u0060\\u0060\\u0060");
+  let reportText = serializeReport(safeReport);
+  let reportDetailsOmitted = false;
+  while (reportText.length > MAX_ISSUE_REPORT_CHARS && safeReport.packs.length > 0) {
+    safeReport.packs.pop();
+    reportDetailsOmitted = true;
+    reportText = serializeReport(safeReport);
+  }
+  if (reportText.length > MAX_ISSUE_REPORT_CHARS) {
+    reportDetailsOmitted = true;
+    reportText = serializeReport({
+      format_version: safeReport.format_version,
+      report_id: safeReport.report_id,
+      mode: safeReport.mode,
+      exit_code: safeReport.exit_code,
+      failure_summary: safeReport.failure_summary,
+      metadata_omitted: true
+    });
+  }
   const note = overflow
     ? "Daily new-issue limit reached. This report is in the overflow queue."
     : "Crash report sent with the player's report setting or one-time approval.";
-  const header = `${marker}${note}\nReport ID: ${report.report_id}\n\n### Report details\n\n\`\`\`json\n${reportText}\n\`\`\``;
-  if (!includeLogs) return `${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`;
+  const omittedMetadataNote = reportDetailsOmitted
+    ? "\n\nSome report details were omitted to fit GitHub's issue size limit."
+    : "";
+  const header = `${marker}${note}\nReport ID: ${report.report_id}\n\n### Report details\n\n\`\`\`json\n${reportText}\n\`\`\`${omittedMetadataNote}`;
+  if (!includeLogs) return boundIssueBody(`${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`);
 
   const logNames = { launcher: "Launcher log", native_stderr: "Native standard error", native_stdout: "Native standard output" };
   const entries = Object.entries(reportLogs).filter(([, content]) => typeof content === "string" && content.length > 0);
-  if (entries.length === 0) return `${header}\n\n### Recent log excerpts\n\nNo log files were available in this report.`;
+  if (entries.length === 0)
+    return boundIssueBody(`${header}\n\n### Recent log excerpts\n\nNo log files were available in this report.`);
   let body = `${header}\n\n### Recent log excerpts\n\n`;
   for (let index = 0; index < entries.length; index++) {
     const [name, content] = entries[index];
@@ -221,6 +253,10 @@ function issueBody(report, crashFingerprint, { includeLogs = true, overflow = fa
     }
     body += `${heading}${fence}text\n${truncationNote}${excerpt.trimEnd()}\n${fence}\n\n`;
   }
+  return boundIssueBody(body);
+}
+
+function boundIssueBody(body) {
   return body.length > MAX_ISSUE_BODY_CHARS ? body.slice(0, MAX_ISSUE_BODY_CHARS) : body;
 }
 
