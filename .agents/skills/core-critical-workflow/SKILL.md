@@ -11,7 +11,7 @@ section first; this skill says how to run it.
 
 The requester is whoever asked for the work. They approve every move to the
 next stage. Never start the next stage on your own, except that implementing
-runs straight on into review.
+hands straight over to a fresh session for the review.
 
 ## Stages and their skills
 

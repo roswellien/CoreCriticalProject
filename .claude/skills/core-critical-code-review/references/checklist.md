@@ -38,8 +38,9 @@ cause it, and label it as pre-existing.
 
 ## On a branch, also
 
-- **Acceptance criteria:** for each criterion in the issue, name where the
-  diff meets it, or report it as missing.
+- **Acceptance criteria:** for each criterion in the issue (the number in the
+  branch name, or the PR's `Closes #N`), name where the diff meets it, or
+  report it as missing.
 - **Definition of done:** check the change against "Definition of done" and
   "Tests" in `CONTRIBUTING.md`; don't repeat them here.
 

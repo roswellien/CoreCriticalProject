@@ -65,8 +65,8 @@ can't load skills opens the `SKILL.md` at the path given and follows it.
    plan, then one walkthrough of what both leave. Stop until the requester
    approves implementing. Skills: `.agents/skills/core-critical-plan-review/SKILL.md`
    and `.agents/skills/core-critical-code-review/SKILL.md`.
-4. **Implement:** carry out the plan through its own checks, then go straight on
-   to review.
+4. **Implement:** carry out the plan through its own checks, then hand over to a
+   fresh session for stage 5 without waiting for approval.
 5. **Review:** run the code review on the branch in a fresh session that didn't
    write the change; it ends by rerunning the checks with
    `.agents/skills/core-critical-pre-pr-checks/SKILL.md`. Then walk the
