@@ -1,5 +1,9 @@
 # Pirate's Moon Atlas asset-pack prototype
 
+Start with [How to add a mech with an asset pack](authoring-additional-mechs.md)
+for the reusable workflow and pack README template. This page is its ongoing
+Atlas worked example and compatibility record.
+
 Issue #104 starts Atlas through the same portable project, `.mw3pack` builder,
 launcher import and private resource composition used by modders. The pack is
 data-only. Its stable identity is `com.corecritical.pm-atlas:mech`; no Atlas

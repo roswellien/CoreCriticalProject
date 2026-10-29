@@ -92,6 +92,10 @@ have a separate download/setup path from the Game / Launcher.
 - **Format documentation:** recovered archive structures and a
   [support matrix](games/mw3/mod-tools/docs/format-support-matrix.md) that identifies
   unresolved fields.
+- **Add a mech with an asset pack:** [step-by-step authoring guide](docs/authoring-additional-mechs.md),
+  including project setup, building, installation, testing and a pack README template.
+  The [Atlas worked example](docs/atlas-asset-pack-authoring.md) tracks the experimental
+  Pirate's Moon route and its remaining compatibility work.
 
 Editing or exporting a project does not establish that its custom mission plays
 correctly. Original preview geometry is extracted locally; it is not bundled.
