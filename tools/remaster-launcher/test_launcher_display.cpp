@@ -2,6 +2,43 @@
 #include "vk_scene.hpp"
 #include <cassert>
 #include <iostream>
+static void presentation_bounds_check() {
+    auto same = [](const RECT &a, const RECT &b) {
+        return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+    };
+    struct Case {
+        unsigned output_width, output_height, window_width, window_height;
+        RECT expected;
+    };
+    // Include the observed window, tall/wide resizes, and an odd one-pixel bar.
+    for (const auto &test : std::array<Case, 5>{{
+             {3440, 1440, 3456, 1479, {0, 16, 3456, 1463}},
+             {1920, 1080, 1920, 1080, {0, 0, 1920, 1080}},
+             {1920, 1080, 1000, 1000, {0, 218, 1000, 781}},
+             {1920, 1080, 2000, 1000, {111, 0, 1889, 1000}},
+             {1920, 1080, 1920, 1081, {0, 0, 1920, 1080}},
+         }}) {
+        const auto uploaded = mw34::display::upload_presentation_rect(
+            1024, 768, test.output_width, test.output_height, test.window_width,
+            test.window_height, true);
+        if (!same(uploaded, test.expected))
+            throw std::runtime_error("World upload changed presentation bounds");
+        for (const auto *aa : {"1", "2", "4"}) {
+            const auto samples = mw34::display::samples(aa);
+            const auto resident = mw34::display::presentation_rect(
+                double(test.output_width * samples.x) / samples.x,
+                double(test.output_height * samples.y) / samples.y,
+                test.window_width, test.window_height);
+            if (!same(resident, test.expected))
+                throw std::runtime_error("Resident presentation changed bounds");
+        }
+    }
+    const auto menu = mw34::display::upload_presentation_rect(640, 480, 3440, 1440,
+                                                             1920, 1080, false);
+    if (!same(menu, {240, 0, 1680, 1080}))
+        throw std::runtime_error("Menu upload lost its original aspect ratio");
+    std::cout << "PASS resident/upload presentation bounds, resize, SSAA and menu aspect\n";
+}
 static void world_resolution_check(bool persistent_hud = false, bool visible = false,
                                    bool partial_world = false) {
     using namespace mw34::vkscene;
@@ -241,6 +278,15 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
                  "transitions\n";
 }
 int main(int argc, char **argv) {
+    if (argc > 1 && std::string(argv[1]) == "--presentation-bounds") {
+        try {
+            presentation_bounds_check();
+            return 0;
+        } catch (const std::exception &error) {
+            std::cerr << error.what() << '\n';
+            return 1;
+        }
+    }
     if (argc > 1 && (std::string(argv[1]) == "--world-resolution" ||
                      std::string(argv[1]) == "--world-persistence" ||
                      std::string(argv[1]) == "--world-persistence-partial" ||

@@ -307,14 +307,16 @@ class Renderer {
         VkImageBlit blit{};
         blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {int(w), int(h), 1};
-        blit.dstOffsets[1] = {int(swapExtent.width), int(swapExtent.height), 1};
         // Original menu/movie rasters retain their proportions in the centre.
-        // A guest-resolution readback of the corrected world spans the wide view.
-        if (!wide_world) {
-            const double fit =
-                std::min(double(swapExtent.width) / w, double(swapExtent.height) / h);
-            const int dw = int(std::lround(w * fit)), dh = int(std::lround(h * fit)),
-                      dx = (int(swapExtent.width) - dw) / 2, dy = (int(swapExtent.height) - dh) / 2;
+        // A world readback must use the resident output's aspect ratio, rather
+        // than stretching to the window on frames that need a guest upload.
+        const auto destination = mw34::display::upload_presentation_rect(
+            w, h, remaster_width(), remaster_height(), swapExtent.width, swapExtent.height,
+            wide_world);
+        blit.dstOffsets[0] = {destination.left, destination.top, 0};
+        blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
+        if (destination.left || destination.top || destination.right != LONG(swapExtent.width) ||
+            destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             f.vkCmdClearColorImage(presentCmd, swapImages[index],
@@ -322,8 +324,6 @@ class Renderer {
             bar(swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT);
-            blit.dstOffsets[0] = {dx, dy, 0};
-            blit.dstOffsets[1] = {dx + dw, dy + dh, 1};
         }
         f.vkCmdBlitImage(presentCmd, srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
@@ -438,10 +438,12 @@ class Renderer {
         // differs).
         const auto ss = mw34::display::samples(std::getenv("MW34_REMASTER_AA"));
         const double ow = double(rw) / ss.x, oh = double(rh) / ss.y;
-        const double fit = std::min(double(swapExtent.width) / ow, double(swapExtent.height) / oh);
-        const int dw = int(std::lround(ow * fit)), dh = int(std::lround(oh * fit)),
-                  dx = (int(swapExtent.width) - dw) / 2, dy = (int(swapExtent.height) - dh) / 2;
-        if (dx > 0 || dy > 0) {
+        const auto destination = mw34::display::presentation_rect(ow, oh, swapExtent.width,
+                                                                 swapExtent.height);
+        const int dw = destination.right - destination.left;
+        const int dh = destination.bottom - destination.top;
+        if (destination.left || destination.top || destination.right != LONG(swapExtent.width) ||
+            destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             f.vkCmdClearColorImage(presentCmd, swapImages[index],
@@ -454,8 +456,8 @@ class Renderer {
         VkImageBlit blit{};
         blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {int(rw), int(rh), 1};
-        blit.dstOffsets[0] = {dx, dy, 0};
-        blit.dstOffsets[1] = {dx + dw, dy + dh, 1};
+        blit.dstOffsets[0] = {destination.left, destination.top, 0};
+        blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
         f.vkCmdBlitImage(presentCmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                          (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);

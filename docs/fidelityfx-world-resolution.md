@@ -209,8 +209,47 @@ path change; it does not yet prove the cause of the visual symptom.
 A matched feature run with `MW34_FRAME_DUMP=0` completed 2,200 visible frames;
 the final readback counter stayed at 1 instead of the recurring periodic readbacks.
 Only two output-resolution captures remain, which do not force upload presentation.
-The user's visual confirmation is pending. Do not report the size-change symptom
-as fixed solely from these counters.
+The owner is now remote and asked to assume the symptom persists while proceeding.
+Visual confirmation remains open; these counters do not establish a fix.
+
+### Presentation bounds correction
+
+The two Vulkan presentation paths had different destination rectangles even at
+100% world scale. Resident presentation fits the configured output aspect ratio
+inside the window. Uploaded corrected-world pixels previously stretched to the
+entire client area. With the recorded 3456x1479 client and 3440x1440 output, the
+resident image is 3456x1447 at y=16, while an uploaded frame was 3456x1479 at y=0.
+This is a reproducible 32-pixel height change whenever those paths alternate;
+periodic diagnostic readbacks are one such trigger, not the only possible one.
+
+Both paths now use the same fitting calculation. A corrected-world upload uses
+the configured output aspect even though its storage is guest-sized. Menus and
+movies keep their original raster aspect. Bars are cleared even when rounding
+leaves a single pixel on only the bottom or right edge. The execution boundary
+changed is completed frame -> Vulkan swapchain destination; world rasterization,
+guest memory synchronization and filtering are unchanged.
+
+`display.exe --presentation-bounds` passes the recorded ultrawide case, tall and
+wide resizes, exact-size output, a one-pixel bar, SSAA aspect and menu aspect.
+Restoring the old stretch-to-window branch deliberately fails this check.
+The existing offscreen world checks pass at 50%, 67% and 100% with FXAA.
+The maintained host build, source-manifest checks, CMake build, 25 CTest cases,
+format-check and report-only style checks pass. The new development host hash is
+`f7fd767d096fae2b063c54a68b3ed161449583f9a0d745da45b56d0e75c46105`;
+its seven host objects and unchanged translated DLL are recorded in
+`local/world-resolution/host-present-bounds/source-snapshot.json`.
+
+The same published inputs completed 2,200 offscreen Training frames at 100%
+(`bounds-hidden100`) with synchronization validation enabled and no validation
+errors. Frames 1801 and 2101 remain byte-identical to the signed runtime's
+reference captures listed above. This preserves rendered scene contents; the
+offscreen run does not exercise swapchain destination placement.
+
+The visible published-pack attempt (`bounds-visible100-r2`) still fails surface
+capabilities `-13` before drawing. An earlier attempt with a relative executable
+path failed input opening and receives no native validation credit. The rectangle
+defect is fixed and regression-tested, but neither this remote session nor the
+bounds fixture establishes that the owner's observed symptom has disappeared.
 
 ## Remaining limits
 
