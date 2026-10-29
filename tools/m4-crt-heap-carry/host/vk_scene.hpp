@@ -372,6 +372,8 @@ class Renderer {
     // true also covers hidden/minimized windows, where no image needs to be presented.
     bool present_resident(HWND hwnd, unsigned w, unsigned h) {
         HostFpEnvironment fp;
+        finish_world();
+        world_frame_boundary = true;
         if (!::IsWindowVisible(hwnd))
             return true;
         if (hwnd != presentParent || !child || !presentable || !windowSurface ||
@@ -776,6 +778,7 @@ class Renderer {
     // Called before the performance overlay/presentation if no HUD followed the world.
     void finish_world() {
         HostFpEnvironment fp;
+        select_world_target(false, false);
         if (!fxaa_enabled() || !quality_world_dirty || !colorImage.image)
             return;
         settle();
@@ -836,6 +839,9 @@ class Renderer {
     float current_scale() const { return scale; }
     void request_scale(float s) { scale_req = s; }
     std::uint64_t readbacks{}, target_uploads{};
+    std::uint64_t reduced_world_scenes{}, world_promotions{};
+    unsigned raster_width() const { return rw; }
+    unsigned raster_height() const { return rh; }
     // A scene without copy-back is not waited for; the next scene or copy-back waits before reusing
     // the command pool, upload, vertex and descriptor resources, so the game computes the next
     // scene while the GPU renders this one.
@@ -857,6 +863,20 @@ class Renderer {
         if (s.width != width || s.height != height || scale_req != scale ||
             s.frontend_canvas != target_frontend)
             target(s.width, s.height, s.frontend_canvas);
+        if (worldColor.image) {
+            // Presentation plus a full depth clear marks the next world frame.
+            // A full color clear can also replace all previous composition mid-frame.
+            const auto cleared = leading_full_clear(s);
+            const bool restart = !s.hud && !s.frontend_canvas &&
+                ((cleared & 1) || (world_frame_boundary && (cleared & 2)));
+            if (restart) quality_world_dirty = false;
+            if (s.hud || readback_out || s.frontend_canvas)
+                select_world_target(false, false);
+            else if (restart)
+                select_world_target(true, upload_in);
+            settle();
+        }
+        if (!s.order.empty()) world_frame_boundary = false;
         if (upload_in)
             quality_world_dirty = false;
         const VkDeviceSize pixels = VkDeviceSize(width) * height;
@@ -1424,8 +1444,9 @@ class Renderer {
             combined_draws += logicalDraws - 1;
         }
         f.vkCmdEndRenderPass(cmd);
-        if (!s.hud && !s.draws.empty())
+        if (!s.hud && !s.draws.empty() && (!worldColor.image || reduced_world_active))
             quality_world_dirty = true;
+        if (reduced_world_active) ++reduced_world_scenes;
         if (readback_out) {
             barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -2808,6 +2829,7 @@ class Renderer {
     void target(unsigned w, unsigned h, bool frontend) {
         target_frontend = frontend;
         f.vkDeviceWaitIdle(device);
+        destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
@@ -2864,7 +2886,7 @@ class Renderer {
                      remaster_width(), remaster_height(), rw, rh, samples.x, samples.y,
                      unsigned(target_frontend));
         scale_x = float(rw) / float(w);
-        if (rw != w || rh != h) {
+        if (rw != w || rh != h || world_scale_percent() != 100) {
             image(colorLo.image, colorLo.memory, colorLo.view, w, h,
                   rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -2910,6 +2932,7 @@ class Renderer {
         }
         width = w;
         height = h;
+        create_world_target();
     }
     void pool(unsigned n) {
         if (descriptorPool)
@@ -3479,6 +3502,12 @@ class Renderer {
                 f.vkDestroyBuffer(device, b->buffer, nullptr);
                 f.vkFreeMemory(device, b->memory, nullptr);
             }
+        if (worldColor.image) {
+            std::fprintf(stderr, "World resolution: reduced scenes %llu, promotions %llu\n",
+                         (unsigned long long)reduced_world_scenes,
+                         (unsigned long long)world_promotions);
+        }
+        destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
@@ -3539,6 +3568,7 @@ class Renderer {
         ::FreeLibrary(static_cast<HMODULE>(library));
         device = {};
     }
+#include "world_resolution_stage.inc"
 #include "quality_stage.inc"
 };
 } // namespace mw34::vkscene
