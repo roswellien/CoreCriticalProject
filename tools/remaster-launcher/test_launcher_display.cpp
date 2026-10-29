@@ -134,6 +134,8 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
     std::vector<unsigned char> rgb;
     unsigned w{}, h{};
     renderer.capture_fullres_rgb(rgb, w, h);
+    if (Renderer::fxaa_enabled())
+        require(renderer.fxaa_passes > 0, "Fresh world color did not receive FXAA");
     const unsigned x = output_width * 100 / 640, y = output_height * 150 / 480;
     auto red = [&](unsigned xx) { return rgb[(size_t(y) * w + xx) * 3]; };
     require(red(x) > 240 && red(x - 1) < 8 && red(x + output_width / 640) < 8,
@@ -220,11 +222,15 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
     require(renderer.raster_width() == output_width,
             "Depth-only frame reduced retained output pixels");
     if (persistent_hud) {
+        const auto previous_fxaa = renderer.fxaa_passes;
         // This draw does not overlap the retained HUD line. Both a depth-only
         // frame and a partial world frame must leave that line unchanged.
         if (partial_world)
             renderer.render(later, false, false);
         renderer.capture_fullres_rgb(rgb, w, h);
+        if (percent < 100 && Renderer::fxaa_enabled())
+            require(renderer.fxaa_passes == previous_fxaa,
+                    "FXAA filtered retained output color");
         std::cout << "Persistent HUD red: center=" << unsigned(red(x))
                   << " outside=" << unsigned(red(x - 1)) << '\n';
         require(red(x) > 240 && red(x - 1) < 8 && red(x + output_width / 640) < 8,

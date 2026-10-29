@@ -271,6 +271,29 @@ counts are historical evidence and do not describe the corrected host.
 
 The corrected host completed 2,200 offscreen Training frames with 50% requested and the verified published inputs (`preserve-hidden50`). It reports zero reduced scenes and promotions, with synchronization validation enabled and no validation errors. The captures differ from the earlier published 100% reference; this comparison remains unresolved. The maintained build, manifest checks, 25 standard tests, format-check and report-only style checks pass. Visible startup and integrated-adapter depth issues remain open.
 
+### FXAA mismatch diagnosis
+
+The earlier capture mismatch is explained by deferred FXAA. A matched 100% run
+with AA explicitly Off (`retained-aaoff100`) completed 2,200 offscreen Training
+frames without validation errors. Its captures at 1801 and 2101 are byte-identical
+to `preserve-hidden50`, whose requested FXAA was skipped on retained-color frames.
+This isolates the observed difference to the effective AA behavior in these runs;
+it does not establish visible presentation compatibility.
+
+The development host now logs a one-time warning when retained output color
+prevents both reduction and full-image FXAA. The fixture requires FXAA on fresh
+world color and verifies that retained-color composition does not add an FXAA
+pass at reduced settings. Temporarily disabling the actual FXAA implementation
+fails the fresh-color assertion. The restored renderer passes at 50/67/100.
+
+The maintained host builds with refreshed source pins and unchanged translated
+DLL. CTest passed 24 cases initially; `release_and_mod_tools` encountered a local
+socket abort (WinError 10053), then passed alone on rerun. Format-check and the
+report-only style checks complete. Restoring reduced rendering and selected FXAA
+on retained-color frames remains blocked on coverage-aware composition; the
+warning makes the development limitation visible rather than accepting it as
+complete Stage 2 behavior.
+
 ## Remaining limits
 
 The retained-pixel correction below supersedes the initial persistence failures.

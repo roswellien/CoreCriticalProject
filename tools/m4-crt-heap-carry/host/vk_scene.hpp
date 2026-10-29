@@ -868,6 +868,12 @@ class Renderer {
             // A depth-only frame may retain full-resolution HUD color. Reduce
             // only when a full color clear replaces every retained pixel.
             const auto cleared = leading_full_clear(s);
+            if (!s.hud && !reduced_world_active && (cleared & 2) && !(cleared & 1) &&
+                fxaa_enabled() && !retained_color_warning) {
+                std::fprintf(stderr, "World resolution: retained color stays at output resolution; "
+                                     "full-image FXAA is deferred to preserve retained HUD pixels\n");
+                retained_color_warning = true;
+            }
             const bool restart = !s.hud && !s.frontend_canvas &&
                 (cleared & 1);
             if (restart) quality_world_dirty = false;

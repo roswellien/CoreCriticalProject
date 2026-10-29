@@ -4,6 +4,7 @@ Image worldColor, worldDepth;
 VkFramebuffer worldFramebuffer{};
 unsigned alternate_width{}, alternate_height{};
 bool reduced_world_active{};
+bool retained_color_warning{};
 
 static unsigned world_scale_percent() {
     static const unsigned percent = [] {
