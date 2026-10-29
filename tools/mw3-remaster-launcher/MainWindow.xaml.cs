@@ -954,11 +954,16 @@ namespace MW3RemasterLauncher
 
             try
             {
+                var runtimeVersion = _settingsMgr.Current.EngineMode == "d7vk"
+                    ? GameValidator.Validate(_settingsMgr.Current.GamePath).DetectedVersion
+                    : OnlineUpdateService.InstalledRuntimeVersion(_basePath, _dataRoot);
                 var report = PlaytestDiagnostics.CreateCrashReport(_settingsMgr.Current, _packMgr.Packs,
-                    launchLog, _basePath);
+                    launchLog, _basePath, runtimeVersion, exitCode);
                 var result = await new CrashReportService().SubmitAsync(report);
-                var action = result.ExistingIssueUpdated ? "Added this report to the existing crash issue:" : "Created a crash issue for review:";
-                MessageBox.Show(this, action + "\n" + result.IssueUrl,
+                var detail = result.Overflow
+                    ? "Report sent, thanks. The report was added to the daily overflow queue."
+                    : "Report sent, thanks.";
+                MessageBox.Show(this, detail + "\nReport ID: " + result.ReportId,
                     "Crash report sent", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception error)

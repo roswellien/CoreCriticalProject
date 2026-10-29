@@ -13,7 +13,7 @@ public static class PlaytestDiagnostics
     public const int MaxLogBytes = 64 * 1024;
 
     public static object CreateCrashReport(LauncherSettings settings, IEnumerable<PackManifest> packs,
-        string? launchLog, string applicationRoot)
+        string? launchLog, string applicationRoot, string? runtimeVersion = null, int? exitCode = null)
     {
         var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
@@ -35,13 +35,19 @@ public static class PlaytestDiagnostics
             report_id = Guid.NewGuid().ToString("N"),
             created_utc = DateTimeOffset.UtcNow,
             launcher_version = typeof(GameRunner).Assembly.GetName().Version?.ToString(),
+            runtime_version = runtimeVersion ?? "unknown",
+            mode = settings.EngineMode,
+            exit_code = exitCode,
             os = RuntimeInformation.OSDescription,
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             dotnet_runtime = RuntimeInformation.FrameworkDescription,
             failure_summary = failureSummary,
-            settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
-                settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
-                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor },
+            settings = settings.EngineMode == "d7vk"
+                ? (object)new { settings.D7VkResolution, settings.D7VkAntiAliasing,
+                    settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
+                : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
+                    settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
+                    settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor },
             packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
             logs
         };

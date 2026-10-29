@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 
 namespace MW3RemasterLauncher.Core;
 
-public sealed record CrashReportResult(Uri IssueUrl, bool ExistingIssueUpdated);
+public sealed record CrashReportResult(string ReportId, bool ExistingIssueUpdated, bool Overflow);
 
 /// <summary>Submit user-approved, redacted crash diagnostics to the project support endpoint.</summary>
 public sealed class CrashReportService
@@ -34,15 +34,16 @@ public sealed class CrashReportService
         var result = await response.Content.ReadFromJsonAsync<Response>(cancellationToken: cancellationToken);
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(result?.Error ?? "The crash report service is unavailable.", null, response.StatusCode);
-        if (result?.IssueUrl == null || !Uri.TryCreate(result.IssueUrl, UriKind.Absolute, out var issueUrl) ||
-            issueUrl.Scheme != Uri.UriSchemeHttps || issueUrl.Host != "github.com")
-            throw new InvalidDataException("The crash report service returned an invalid issue link.");
+        if (result?.ReportId == null || result.ReportId.Length is < 1 or > 16 ||
+            result.ReportId.Any(character => !Uri.IsHexDigit(character)))
+            throw new InvalidDataException("The crash report service returned an invalid report ID.");
 
-        return new CrashReportResult(issueUrl, result.Duplicate);
+        return new CrashReportResult(result.ReportId, result.Duplicate, result.Overflow);
     }
 
     private sealed record Response(
-        [property: JsonPropertyName("issue_url")] string? IssueUrl,
+        [property: JsonPropertyName("report_id")] string? ReportId,
         bool Duplicate,
+        bool Overflow,
         string? Error);
 }
