@@ -39,9 +39,10 @@ commit the fixes on the topic branch before the walkthrough. For a change that
 touches code, the checks are
 `.agents/skills/core-critical-pre-pr-checks/SKILL.md`; for a
 documentation-only change, they are the link, diff and evidence checks in
-"Definition of done" in `CONTRIBUTING.md`. If no PR exists yet, keep the check results in the report for
-the PR description. Never push, open or mark ready a PR from this skill. On a
-plan, skip the checks and the commit.
+"Definition of done" in `CONTRIBUTING.md`. A change to `AGENTS.md` or a skill
+also runs `python tools/agents/check_agent_files.py`. If no PR exists yet, keep
+the check results in the report for the PR description. Never push, open or
+mark ready a PR from this skill. On a plan, skip the checks and the commit.
 
 ## Reasons not to skip this step
 

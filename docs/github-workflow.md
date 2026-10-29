@@ -79,9 +79,8 @@ re-read and review again, and stop on a clean pass, after five passes, or when
 the same major findings come back. The full loop is in
 `.agents/skills/core-critical-workflow/references/review-loop.md`.
 
-In a walkthrough, apply obvious low-risk fixes and list them in one line. Put
-each real decision to the requester one at a time, with a recommendation: fix
-it now, file a follow-up issue, or drop it.
+Each review ends with a walkthrough of what it leaves, run as "Walkthroughs" in
+the workflow skill says.
 
 Short path: a change that can be described in one sentence and is already
 covered by tests skips the grill, spec and plan when the requester agrees. It

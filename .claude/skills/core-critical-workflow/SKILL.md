@@ -55,6 +55,9 @@ committed: `MW3Recomp-Private-specs/<issue>-<slug>-spec.md` and
 - Put each remaining finding to the requester one at a time, most severe first,
   with your recommendation: fix now, file a follow-up issue, or drop. Never
   drop or defer a finding without asking.
+- On a branch, after the fix-now items, rerun the change's checks and commit.
+- In the PR description, list each finding that was filed or dropped, with its
+  issue number or the reason for dropping it.
 - A large, independent or risky refactor a review finds becomes a follow-up
   issue, not part of this change.
 
