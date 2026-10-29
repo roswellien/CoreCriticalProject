@@ -113,7 +113,7 @@ test("formats each log as readable, line-preserving issue text", async () => {
 
   assert.equal(response.status, 200);
   assert.ok(issueBody.includes("#### Launcher log\n\n```text\nfirst diagnostic line\nsecond diagnostic line\n```"));
-  assert.ok(issueBody.includes('"logs": {}'));
+  assert.ok(!issueBody.includes('"logs": {}'));
 });
 
 test("groups by mode, exit code, and message; reopens closed matches", async () => {
@@ -161,7 +161,7 @@ test("sends new issues beyond the daily cap to one log-free overflow issue", asy
   assert.deepEqual(await response.json(), { report_id: "abcdef12", duplicate: true, overflow: true });
   assert.ok(calls.some(query => query.includes("addComment")));
   assert.ok(!calls.some(query => query.includes("createIssue")));
-  assert.ok(overflowBody.includes('"logs": {}'));
+  assert.ok(overflowBody.includes("Log excerpts were omitted for overflow or repeat-report limits."));
   assert.ok(!overflowBody.includes("FULL_LOG_SENTINEL"));
 });
 
@@ -186,7 +186,7 @@ test("caps full logs on later matching reports", async () => {
     throw new Error("Unexpected GraphQL operation: " + body.query);
   };
   await onRequestPost({ request: crashRequest(), env: environment });
-  assert.ok(commentBody.includes('"logs": {}'));
+  assert.ok(commentBody.includes("Log excerpts were omitted for overflow or repeat-report limits."));
   assert.ok(!commentBody.includes("FULL_LOG_SENTINEL"));
 });
 

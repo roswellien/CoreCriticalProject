@@ -185,16 +185,18 @@ async function github(token, query, variables) {
 function issueBody(report, crashFingerprint, { includeLogs = true, overflow = false } = {}) {
   const marker = crashFingerprint ? `<!-- crash-fingerprint:${crashFingerprint} -->\n\n` : "";
   const reportLogs = includeLogs ? report.logs : {};
-  const safeReport = { ...report, logs: {} };
+  const safeReport = { ...report };
+  delete safeReport.logs;
   const reportText = JSON.stringify(safeReport, null, 2).replace(/```/g, "\\u0060\\u0060\\u0060");
   const note = overflow
     ? "Daily new-issue limit reached. This report is in the overflow queue."
     : "Crash report sent with the player's report setting or one-time approval.";
   const header = `${marker}${note}\nReport ID: ${report.report_id}\n\n### Report details\n\n\`\`\`json\n${reportText}\n\`\`\``;
-  if (!includeLogs) return `${header}\n\nLog excerpts omitted for overflow or repeat-report limits.`;
+  if (!includeLogs) return `${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`;
 
   const logNames = { launcher: "Launcher log", native_stderr: "Native standard error", native_stdout: "Native standard output" };
   const entries = Object.entries(reportLogs).filter(([, content]) => typeof content === "string" && content.length > 0);
+  if (entries.length === 0) return `${header}\n\n### Recent log excerpts\n\nNo log files were available in this report.`;
   let body = `${header}\n\n### Recent log excerpts\n\n`;
   for (let index = 0; index < entries.length; index++) {
     const [name, content] = entries[index];
