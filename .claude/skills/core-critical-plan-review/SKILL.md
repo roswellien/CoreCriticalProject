@@ -20,10 +20,9 @@ plan as the target and [references/checklist.md](references/checklist.md) as
 the checklist. Fixes are edits to the plan only; never carry out a plan step
 during the review.
 
-After the loop's report, run `.agents/skills/core-critical-code-review/SKILL.md`
-on the same plan file, then give the requester one walkthrough of what both
-reviews leave. The plan waits for their approval before anything is
-implemented.
+The loop ends with one report. Then the workflow runs the code review on the
+plan and one walkthrough of what both reviews leave, and the plan waits for the
+requester's approval before anything is implemented.
 
 ## Reasons not to skip this step
 

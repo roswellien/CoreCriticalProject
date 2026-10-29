@@ -34,11 +34,11 @@ with [references/checklist.md](references/checklist.md) as the checklist. Each
 pass covers both checklist passes, correctness and structure.
 
 On a branch, keep each pass's fixes building and the existing tests passing.
-Once the loop ends, commit each pass's fixes as their own commits on the topic
-branch, then run `.agents/skills/core-critical-pre-pr-checks/SKILL.md` and fix
-anything it reports before the walkthrough. If no PR exists yet, keep the
-check results in the report for the PR description. Never push, open or mark
-ready a PR from this skill. On a plan, skip the commits and the checks.
+Once the loop ends, run `.agents/skills/core-critical-pre-pr-checks/SKILL.md`
+and fix anything it reports, then commit the fixes on the topic branch before
+the walkthrough. If no PR exists yet, keep the check results in the report for
+the PR description. Never push, open or mark ready a PR from this skill. On a
+plan, skip the checks and the commit.
 
 ## Reasons not to skip this step
 

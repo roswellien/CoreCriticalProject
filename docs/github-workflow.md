@@ -51,9 +51,10 @@ uncommitted until deliberately separated into their own task branches/PRs.
 
 Every change follows this flow before its PR leaves draft, whoever or whatever
 does the work. The requester (whoever asked for the work) approves each move to
-the next stage; an agent never starts the next stage on its own. Each stage has
-a shared skill in `.agents/skills/` (copied to `.claude/skills/`); a tool that
-can't load skills opens the `SKILL.md` at the path given and follows it.
+the next stage; an agent never starts the next stage on its own. Each stage
+except Implement has a shared skill in `.agents/skills/` (copied to
+`.claude/skills/`); a tool that can't load skills opens the `SKILL.md` at the
+path given and follows it.
 
 1. **Grill:** interview the requester one question at a time until they confirm
    a shared understanding of the issue. Their "yes" starts the spec.
