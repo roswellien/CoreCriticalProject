@@ -21,8 +21,18 @@ int main(int argc,char**argv){try{
     }
     const std::string mode=argc>1?argv[1]:"native";
     _putenv_s("MW34_SUN","0");_putenv_s("MW34_REMASTER_AF","1");
-    _putenv_s("MW34_REMASTER_WIDTH",mode=="scaled"||mode=="visible-scaled"?"1280":mode.starts_with("ssaa")?"640":"");
-    _putenv_s("MW34_REMASTER_HEIGHT",mode=="scaled"||mode=="visible-scaled"?"960":mode.starts_with("ssaa")?"480":"");
+    const bool scaled_output = mode == "scaled" || mode == "visible-scaled" || mode == "odd-scaled";
+    const bool odd_guest = mode == "odd" || mode == "odd-scaled";
+    const char *output_width = "", *output_height = "";
+    if (scaled_output) {
+        output_width = "1280";
+        output_height = "960";
+    } else if (mode.starts_with("ssaa")) {
+        output_width = "640";
+        output_height = "480";
+    }
+    _putenv_s("MW34_REMASTER_WIDTH", output_width);
+    _putenv_s("MW34_REMASTER_HEIGHT", output_height);
     _putenv_s("MW34_REMASTER_AA",mode=="ssaa"?"4":mode=="ssaa2"?"2":"1");
     auto require=[](bool b,const char* why){if(!b)throw std::runtime_error(why);};
     std::vector<std::uint16_t> values(65536),back(65536);for(unsigned i=0;i<65536;++i)values[i]=std::uint16_t(i);
@@ -40,7 +50,12 @@ int main(int argc,char**argv){try{
         require(renderer->presents>0,"Depth test did not reach swapchain");
         std::cout<<"Depth check GPU: "<<renderer->device_name<<'\n';
     }
-    Scene s{};s.width=mode=="odd"?641:640;s.height=mode=="odd"?479:480;s.has_depth=true;s.color.assign(size_t(s.width)*s.height,0x07e0);s.depth.resize(s.color.size());
+    Scene s{};
+    s.width = odd_guest ? 641 : 640;
+    s.height = odd_guest ? 479 : 480;
+    s.has_depth = true;
+    s.color.assign(size_t(s.width) * s.height, 0x07e0);
+    s.depth.resize(s.color.size());
     for(size_t i=0;i<s.depth.size();++i)s.depth[i]=std::uint16_t(i%65536);const auto expected=s.depth;
     renderer->render(s,true,true);require(s.depth==expected,"Vulkan depth upload/readback changed guest D16 values");for(auto p:s.color)require(p==0x07e0,"colour transfer corrupted");
     Scene resident{};resident.width=s.width;resident.height=s.height;resident.has_depth=true;renderer->render(resident,false,false);renderer->fetch_resident(s);require(s.depth==expected,"resident fetch changed guest depth");

@@ -5,7 +5,186 @@ VkFramebuffer worldFramebuffer{};
 unsigned alternate_width{}, alternate_height{};
 bool reduced_world_active{};
 bool retained_color_warning{};
+enum class ReconstructionStage { normal, shading, coverage };
+ReconstructionStage reconstruction_stage{ReconstructionStage::normal};
+bool world_scene_prepared{};
+Image reconstructedColor;
+VkFramebuffer reconstructionFramebuffer{};
+VkShaderModule coverageFrag{};
 
+// Only opaque resident submissions can replace their shaded RGB during replay.
+// Blended draws and guest uploads keep the existing ordered full-resolution path.
+bool can_reconstruct_world(const Scene &scene, bool upload, bool readback) const {
+    return worldColor.image && !scene.hud && !scene.frontend_canvas && !upload && !readback &&
+           !scene.draws.empty() && !(leading_full_clear(scene) & 1) &&
+           std::any_of(scene.order.begin(), scene.order.end(), [&](const Command &command) {
+               if (command.clear)
+                   return false;
+               const auto &draw = scene.draws.at(command.index);
+               return !draw.key.blend && !draw.key.points;
+           });
+}
+// Keep the guest command stream ordered. Only contiguous opaque runs use the
+// reconstruction path; intervening clears, fades and transparent draws retain
+// their original order and full-resolution destination reads.
+void render_reconstructed_world(Scene &scene) {
+    // Sky routing can use a later draw's camera. Prepare the complete original
+    // scene once before splitting, then share that prepared state in both passes.
+    apply_atmosphere(scene, mw34::sun::current_settings(scene.detail_time));
+    struct PreparedScene {
+        Renderer &renderer;
+        explicit PreparedScene(Renderer &owner) : renderer(owner) {
+            renderer.world_scene_prepared = true;
+        }
+        ~PreparedScene() { renderer.world_scene_prepared = false; }
+    } prepared(*this);
+    Scene batch{};
+    batch.detail_time = scene.detail_time;
+    batch.world_frame = scene.world_frame;
+    batch.world_generation = scene.world_generation;
+    batch.world_context = scene.world_context;
+    batch.world_eye = scene.world_eye;
+    batch.world_eye_valid = scene.world_eye_valid;
+    batch.effect_lights = scene.effect_lights;
+    batch.width = scene.width;
+    batch.height = scene.height;
+    batch.has_depth = scene.has_depth;
+    batch.model_warmup = scene.model_warmup;
+    // Geometry, immutable texture inputs and emission indices have one owner.
+    // Move their containers for batching, then restore them even on exceptions.
+    struct ResidentInputs {
+        Scene &source;
+        Scene &batch;
+        ResidentInputs(Scene &source_scene, Scene &batch_scene)
+            : source(source_scene), batch(batch_scene) {
+            swap();
+        }
+        void swap() {
+            source.vertices.swap(batch.vertices);
+            source.textures.swap(batch.textures);
+            std::swap(source.emissions, batch.emissions);
+        }
+        ~ResidentInputs() { swap(); }
+    } inputs(scene, batch);
+    const auto original_scene_count = scenes;
+    auto prepared_draws = scene.draws;
+    std::vector<unsigned> original_indices;
+    bool opaque = false, has_draw = false;
+    auto flush = [&] {
+        if (batch.order.empty())
+            return;
+        if (opaque && has_draw && !(leading_full_clear(batch) & 1))
+            render_opaque_world_batch(batch);
+        else
+            render_scene(batch, false, false);
+        for (size_t index = 0; index < original_indices.size(); ++index)
+            prepared_draws[original_indices[index]] = batch.draws[index];
+        batch.order.clear();
+        batch.draws.clear();
+        batch.clears.clear();
+        original_indices.clear();
+        has_draw = false;
+    };
+    for (const auto &command : scene.order) {
+        if (command.clear) {
+            batch.order.push_back({true, unsigned(batch.clears.size())});
+            batch.clears.push_back(scene.clears.at(command.index));
+        } else {
+            const auto &draw = scene.draws.at(command.index);
+            const bool next_opaque = !draw.key.blend && !draw.key.points;
+            if (has_draw && opaque != next_opaque)
+                flush();
+            opaque = next_opaque;
+            has_draw = true;
+            batch.order.push_back({false, unsigned(batch.draws.size())});
+            batch.draws.push_back(draw);
+            original_indices.push_back(command.index);
+        }
+    }
+    flush();
+    scene.draws.swap(prepared_draws);
+    // Batching and coverage replay are GPU work, not additional guest scenes.
+    scenes = original_scene_count + 1;
+}
+void render_opaque_world_batch(Scene &scene) {
+    finish_world();
+    struct ResetStage {
+        Renderer &renderer;
+        ~ResetStage() { renderer.reconstruction_stage = ReconstructionStage::normal; }
+    } reset{*this};
+    reconstruction_stage = ReconstructionStage::shading;
+    select_world_target(true, false);
+    render_scene(scene, false, false);
+    settle();
+    reconstruct_world_color();
+    reconstruction_stage = ReconstructionStage::coverage;
+    render_scene(scene, false, false);
+    quality_world_dirty = false;
+    ++coverage_scenes;
+}
+void reconstruct_world_color() {
+    check(f.vkResetCommandPool(device, commandPool, 0), "reset reconstruction pool");
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(f.vkBeginCommandBuffer(cmd, &begin), "begin reconstruction");
+    barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    barrier(depthImage.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    const auto shaded_image = colorImage.image;
+    const auto shaded_width = rw, shaded_height = rh;
+    // No promotion copy: keep the old output color and precise output depth.
+    // The original geometry/depth operations will update those during replay.
+    select_world_target(false, true);
+    barrier(reconstructedColor.image, VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+    blit_img(shaded_image, shaded_width, shaded_height, reconstructedColor.image, rw, rh,
+             VK_IMAGE_ASPECT_COLOR_BIT, VK_FILTER_LINEAR);
+    barrier(reconstructedColor.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    if (fxaa_enabled()) {
+        std::swap(colorImage, reconstructedColor);
+        std::swap(framebuffer, reconstructionFramebuffer);
+        quality_world_dirty = true;
+        record_fxaa();
+        barrier(depthImage.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        std::swap(colorImage, reconstructedColor);
+        std::swap(framebuffer, reconstructionFramebuffer);
+    }
+    barrier(reconstructedColor.image,
+            fxaa_enabled() ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                           : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            fxaa_enabled() ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_READ_BIT,
+            VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    in_attachment_layout = false;
+    quality_world_dirty = false;
+    check(f.vkEndCommandBuffer(cmd), "end reconstruction");
+    check(f.vkResetFences(device, 1, &fence), "reset reconstruction fence");
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    check(f.vkQueueSubmit(queue, 1, &submit, fence), "submit reconstruction");
+    scene_pending = true;
+}
 static unsigned world_scale_percent() {
     static const unsigned percent = [] {
         const char* value = std::getenv("MW34_WORLD_SCALE_PERCENT");
@@ -37,6 +216,13 @@ static unsigned leading_full_clear(const Scene& scene) {
     return scene.has_depth ? cleared : 0;
 }
 void destroy_world_target() {
+    if (reconstructionFramebuffer)
+        f.vkDestroyFramebuffer(device, reconstructionFramebuffer, nullptr);
+    reconstructionFramebuffer = {};
+    if (reconstructedColor.view) f.vkDestroyImageView(device, reconstructedColor.view, nullptr);
+    if (reconstructedColor.image) f.vkDestroyImage(device, reconstructedColor.image, nullptr);
+    if (reconstructedColor.memory) f.vkFreeMemory(device, reconstructedColor.memory, nullptr);
+    reconstructedColor = {};
     if (worldFramebuffer) f.vkDestroyFramebuffer(device, worldFramebuffer, nullptr);
     worldFramebuffer = {};
     for (Image* image : {&worldColor, &worldDepth}) {
@@ -82,6 +268,15 @@ void create_world_target() {
     info.height = alternate_height;
     info.layers = 1;
     check(f.vkCreateFramebuffer(device, &info, nullptr, &worldFramebuffer), "world framebuffer");
+    image(reconstructedColor.image, reconstructedColor.memory, reconstructedColor.view, rw, rh,
+          color_format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    const VkImageView reconstruction_views[]{reconstructedColor.view, depthImage.view};
+    info.pAttachments = reconstruction_views;
+    info.width = rw;
+    info.height = rh;
+    check(f.vkCreateFramebuffer(device, &info, nullptr, &reconstructionFramebuffer),
+          "reconstruction framebuffer");
     std::fprintf(stderr, "World resolution: internal %ux%u, output %ux%u, guest %ux%u\n",
                  alternate_width, alternate_height, rw, rh, width, height);
 }

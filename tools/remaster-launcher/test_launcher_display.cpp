@@ -361,12 +361,84 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
         const auto previous_fxaa = renderer.fxaa_passes;
         // This draw does not overlap the retained HUD line. Both a depth-only
         // frame and a partial world frame must leave that line unchanged.
-        if (partial_world)
-            renderer.render(later, false, false);
+        if (partial_world) {
+            const auto previous_coverage = renderer.coverage_scenes;
+            renderer.capture_fullres_rgb(rgb, w, h);
+            const auto retained = rgb;
+            Scene mixed = later;
+            const auto original_vertex_bytes = mixed.vertices.size();
+            mixed.vertices.resize(original_vertex_bytes * 2);
+            std::memcpy(mixed.vertices.data() + original_vertex_bytes, mixed.vertices.data(),
+                        original_vertex_bytes);
+            for (size_t at = original_vertex_bytes; at < mixed.vertices.size(); at += 32) {
+                float horizontal;
+                std::memcpy(&horizontal, mixed.vertices.data() + at, 4);
+                horizontal -= 150;
+                std::memcpy(mixed.vertices.data() + at, &horizontal, 4);
+                unsigned transparent_color = 0x0000ff00;
+                std::memcpy(mixed.vertices.data() + at + 16, &transparent_color, 4);
+            }
+            Draw transparent_world = mixed.draws[0];
+            transparent_world.first = unsigned(original_vertex_bytes / 32);
+            transparent_world.key = {1, 5, 6, 0, 8, 0, 1};
+            mixed.order.push_back({false, unsigned(mixed.draws.size())});
+            mixed.draws.push_back(transparent_world);
+            renderer.render(mixed, false, false);
+            renderer.capture_fullres_rgb(rgb, w, h);
+            if (percent < 100)
+                require(renderer.coverage_scenes == previous_coverage + 1,
+                        "Partial world did not use coverage reconstruction");
+            // The opt-in reduced path guarantees untouched output pixels.
+            // The unchanged 100% path retains its historical whole-image FXAA.
+            if (percent < 100)
+                for (unsigned yy = 0; yy < h; ++yy)
+                    for (unsigned xx = 0; xx < w; ++xx) {
+                        const double guest_x = (xx + .5) * 640 / w - .5;
+                        const double guest_y = (yy + .5) * 480 / h - .5;
+                        if (guest_x >= 199 && guest_y >= 99 && guest_x + guest_y <= 501)
+                            continue;
+                        const auto pixel = (size_t(yy) * w + xx) * 3;
+                        require(std::equal(rgb.begin() + pixel, rgb.begin() + pixel + 3,
+                                           retained.begin() + pixel),
+                                "Coverage replay changed an untouched output pixel");
+                    }
+            Scene precise_depth = world;
+            renderer.fetch_resident(precise_depth);
+            require(precise_depth.depth[150 * 640 + 100] == 49151,
+                    "Coverage reconstruction changed untouched guest depth");
+            // A discarded world fragment must not replace the retained HUD,
+            // even when its triangle geometrically overlaps the HUD line.
+            if (percent < 100) {
+                Scene discarded = later;
+                for (size_t at = 0; at < discarded.vertices.size(); at += 32) {
+                    float horizontal;
+                    std::memcpy(&horizontal, discarded.vertices.data() + at, 4);
+                    horizontal -= 150;
+                    std::memcpy(discarded.vertices.data() + at, &horizontal, 4);
+                }
+                TextureRef transparent{};
+                transparent.key = 0x9911;
+                transparent.hash = 0x9911;
+                transparent.width = transparent.height = 1;
+                transparent.format = TexFormat::rgba8888;
+                transparent.pixels32 = {0x00ffffff};
+                discarded.textures.push_back(transparent);
+                auto &alpha_draw = discarded.draws[0];
+                alpha_draw.texture = 0;
+                alpha_draw.push.mode[0] = 4 | 32;
+                alpha_draw.push.mode[2] = 2 | (2 << 8);
+                alpha_draw.push.mode[3] = 5 | (128 << 8);
+                const auto before_discard = rgb;
+                renderer.render(discarded, false, false);
+                renderer.capture_fullres_rgb(rgb, w, h);
+                require(rgb == before_discard, "World alpha rejection changed retained output");
+            }
+        }
         renderer.capture_fullres_rgb(rgb, w, h);
         if (percent < 100 && Renderer::fxaa_enabled())
-            require(renderer.fxaa_passes == previous_fxaa,
-                    "FXAA filtered retained output color");
+            require(partial_world ? renderer.fxaa_passes > previous_fxaa :
+                                    renderer.fxaa_passes == previous_fxaa,
+                    "World AA did not follow covered versus untouched pixels");
         std::cout << "Persistent HUD red: center=" << unsigned(red(x))
                   << " outside=" << unsigned(red(x - 1)) << '\n';
         require(red(x) > 240 && red(x - 1) < 8 && red(x + output_width / 640) < 8,

@@ -715,8 +715,8 @@
       "classification": "authored-host-source"
     },
     "quality_stage.inc": {
-      "sha256": "3db87acaefe9c3ec044a94d3d66c9ba8fdfdabbf070aa4d79de5c800ae23781d",
-      "bytes": 12285,
+      "sha256": "39e27b19a7281514a680a1d3471c7baced09e830bbada6e4c9b16ffedf53a538",
+      "bytes": 12286,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -931,8 +931,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "b50d1335fe5530e5b0e7cd0347716a8cbd2c1855a6821bdf8243e255f5d893d0",
-      "bytes": 203157,
+      "sha256": "820a3b4fb0d12ae1b1f28134a540eb826496a667e8359b985278b179e262eee6",
+      "bytes": 205477,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -951,6 +951,18 @@
     "world_binding.hpp": {
       "sha256": "f4902fd87e4befce16aadbabd25256f9ca59d45153658b9f640d37b89b033b53",
       "bytes": 3364,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "world_coverage.frag": {
+      "sha256": "8dec71137530776b0a7aa2e2dd0271bf0b2df70e480dc97e9bc7347455d43e34",
+      "bytes": 3469,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "world_coverage_frag.h": {
+      "sha256": "335fa97c531b8e99d9ed5e08d59cec3815a22623d4c4f424e60e22a50f7d7ab0",
+      "bytes": 26300,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -978,6 +990,12 @@
       "decision": "commit",
       "classification": "authored-host-source"
     },
+    "world_resolution_stage.inc": {
+      "sha256": "a31e7a48cc0372648671e5cae0e2afead198f13e0f15a810eb3117f9a1d170eb",
+      "bytes": 18491,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
     "world_scene_vert.h": {
       "sha256": "46f8964dad258b97f3c53afc1f525f87889eae880352bfead39f6367f6445934",
       "bytes": 13724,
@@ -987,12 +1005,6 @@
     "zoom_alignment_stage.inc": {
       "sha256": "86e702a7c96aeb79b03b257e6e07fbde182f8ebc44392d4b0792b12fdd4806b4",
       "bytes": 3465,
-      "decision": "commit",
-      "classification": "authored-host-source"
-    },
-    "world_resolution_stage.inc": {
-      "sha256": "921a626b44c6713f026f1fea7e940a439152d72bb8c296b461a11e164252c28f",
-      "bytes": 8419,
       "decision": "commit",
       "classification": "authored-host-source"
     }

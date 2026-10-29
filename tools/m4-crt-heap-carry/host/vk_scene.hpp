@@ -60,6 +60,7 @@
 #include "d3d_scene_frag.h"
 #include "fxaa_vert.h"
 #include "fxaa_frag.h"
+#include "world_coverage_frag.h"
 #include "frontend_canvas.hpp"
 #include "launcher_display.hpp"
 
@@ -906,7 +907,7 @@ class Renderer {
     float current_scale() const { return scale; }
     void request_scale(float s) { scale_req = s; }
     std::uint64_t readbacks{}, target_uploads{};
-    std::uint64_t reduced_world_scenes{}, world_promotions{};
+    std::uint64_t reduced_world_scenes{}, world_promotions{}, coverage_scenes{}, coverage_draws{};
     unsigned raster_width() const { return rw; }
     unsigned raster_height() const { return rh; }
     // A scene without copy-back is not waited for; the next scene or copy-back waits before reusing
@@ -930,14 +931,28 @@ class Renderer {
         if (s.width != width || s.height != height || scale_req != scale ||
             s.frontend_canvas != target_frontend)
             target(s.width, s.height, s.frontend_canvas);
-        if (worldColor.image) {
+        if (can_reconstruct_world(s, upload_in, readback_out))
+            render_reconstructed_world(s);
+        else
+            render_scene(s, upload_in, readback_out);
+    }
+  private:
+    void render_scene(Scene &s, bool upload_in, bool readback_out) {
+        HostFpEnvironment fp;
+        settle();
+        if (!device)
+            init();
+        if (s.width != width || s.height != height || scale_req != scale ||
+            s.frontend_canvas != target_frontend)
+            target(s.width, s.height, s.frontend_canvas);
+        if (worldColor.image && reconstruction_stage == ReconstructionStage::normal) {
             // A depth-only frame may retain full-resolution HUD color. Reduce
             // only when a full color clear replaces every retained pixel.
             const auto cleared = leading_full_clear(s);
-            if (!s.hud && !reduced_world_active && (cleared & 2) && !(cleared & 1) &&
+            if (!s.hud && !reduced_world_active && !s.draws.empty() &&
                 fxaa_enabled() && !retained_color_warning) {
-                std::fprintf(stderr, "World resolution: retained color stays at output resolution; "
-                                     "full-image FXAA is deferred to preserve retained HUD pixels\n");
+                std::fprintf(stderr, "World resolution: non-reconstructed submissions retain output resolution; "
+                                     "world FXAA applies separately to reconstructed opaque batches\n");
                 retained_color_warning = true;
             }
             const bool restart = !s.hud && !s.frontend_canvas &&
@@ -983,7 +998,8 @@ class Renderer {
         const auto environment = (s.hud || s.frontend_canvas)
                                      ? mw34::sun::settings()
                                      : mw34::sun::current_settings(s.detail_time);
-        apply_atmosphere(s, environment);
+        if (!world_scene_prepared)
+            apply_atmosphere(s, environment);
         if (!s.vertices.empty())
             std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
         // Collect each immutable geometry upload once even if several instances use it.
@@ -1193,6 +1209,13 @@ class Renderer {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &info;
                 f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+                if (reconstruction_stage == ReconstructionStage::coverage) {
+                    VkDescriptorImageInfo reconstructed{sampler(3U | (3U << 4) | (3U << 8)),
+                        reconstructedColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    w.dstBinding = 1;
+                    w.pImageInfo = &reconstructed;
+                    f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+                }
                 it = sets.emplace(std::make_pair(t, d.sampler), set).first;
             }
             drawSets[i] = it->second;
@@ -1512,9 +1535,13 @@ class Renderer {
                                      sizeof(Push), &d.push);
             }
             f.vkCmdDraw(cmd, vertexCount, 1, d.model && d.model->world ? 0 : d.first, 0);
-            draws += logicalDraws;
-            ++submitted_draws;
-            combined_draws += logicalDraws - 1;
+            if (reconstruction_stage == ReconstructionStage::coverage)
+                coverage_draws += logicalDraws;
+            else {
+                draws += logicalDraws;
+                ++submitted_draws;
+                combined_draws += logicalDraws - 1;
+            }
         }
         f.vkCmdEndRenderPass(cmd);
         if (!s.hud && !s.draws.empty() && (!worldColor.image || reduced_world_active))
@@ -1547,13 +1574,15 @@ class Renderer {
         si.pCommandBuffers = &cmd;
         check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
         fixture_atlas_submitted();
-        ++scenes;
+        if (reconstruction_stage != ReconstructionStage::coverage)
+            ++scenes;
         if (readback_out) {
             check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait");
             copy_back(s);
         } else
             scene_pending = true;
     }
+  public:
     // Copies the resident target images into s.color/s.depth (s sized to the target).
     void fetch_resident(Scene &s) {
         HostFpEnvironment fp;
@@ -2615,12 +2644,13 @@ class Renderer {
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         check(f.vkCreateFence(device, &fci, nullptr, &fence), "fence");
-        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        const VkDescriptorSetLayoutBinding bindings[2]{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 1;
-        li.pBindings = &b;
+        li.bindingCount = world_scale_percent() < 100 ? 2 : 1;
+        li.pBindings = bindings;
         check(f.vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout),
               "descriptor set layout");
         VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -2699,6 +2729,8 @@ class Renderer {
         };
         vert = module(d3d_scene_vert_spv, sizeof(d3d_scene_vert_spv));
         frag = module(d3d_scene_frag_spv, sizeof(d3d_scene_frag_spv));
+        if (world_scale_percent() < 100)
+            coverageFrag = module(world_coverage_frag_spv, sizeof(world_coverage_frag_spv));
         if (gpu_models()) {
             modelVert = module(model_scene_vert_spv, sizeof(model_scene_vert_spv));
             worldVert = module(world_scene_vert_spv, sizeof(world_scene_vert_spv));
@@ -3131,7 +3163,7 @@ class Renderer {
         if (descriptorPool)
             f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
         const std::array<VkDescriptorPoolSize, 3> ps{
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 2 + 2},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 3 + 2},
              {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
              {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}}};
         VkDescriptorPoolCreateInfo pi{};
@@ -3178,7 +3210,8 @@ class Renderer {
                         bool lit = false) {
         // points uses bit56 (0/1); bit57 distinguishes this private model pipeline.
         const std::uint64_t key = k.packed() | (model ? (1ULL << 57) : 0ULL) |
-                                  (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL);
+                                  (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL) |
+                                  (reconstruction_stage == ReconstructionStage::coverage ? (1ULL << 60) : 0ULL);
         auto it = pipelines.find(key);
         if (it != pipelines.end())
             return it->second;
@@ -3189,6 +3222,8 @@ class Renderer {
             st[i].module =
                 lit ? (i ? sunFrag : (world ? sunWorldVert : (model ? sunModelVert : sunTlVert)))
                     : (i ? frag : (world ? worldVert : (model ? modelVert : vert)));
+            if (i && reconstruction_stage == ReconstructionStage::coverage)
+                st[i].module = coverageFrag;
             st[i].pName = "main";
         }
         VkVertexInputBindingDescription vb{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
@@ -3294,7 +3329,8 @@ class Renderer {
         VkPipeline p{};
         check(f.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &p),
               "graphics pipeline");
-        pipelineWarmup.record(key);
+        if (reconstruction_stage != ReconstructionStage::coverage)
+            pipelineWarmup.record(key);
         return pipelines[key] = p;
     }
     void barrier(VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags src,
@@ -3644,6 +3680,9 @@ class Renderer {
         }
         f.vkDeviceWaitIdle(device);
         pipelineWarmup.save();
+        if (coverage_scenes)
+            std::fprintf(stderr, "World reconstruction: %llu opaque scenes, %llu coverage draws\n",
+                         (unsigned long long)coverage_scenes, (unsigned long long)coverage_draws);
         std::fprintf(stderr, "Submission: %llu logical draws, %llu GPU draws, %llu adjacent TL draws combined\n",
             (unsigned long long)draws, (unsigned long long)submitted_draws,
             (unsigned long long)combined_draws);
@@ -3657,6 +3696,8 @@ class Renderer {
             f.vkDestroyShaderModule(device, qualityVert, nullptr);
         if (qualityFrag)
             f.vkDestroyShaderModule(device, qualityFrag, nullptr);
+        if (coverageFrag)
+            f.vkDestroyShaderModule(device, coverageFrag, nullptr);
         for (auto &[key, b] : model_buffers)
             for (Buffer *p : {&b.local, &b.staging}) {
                 if (p->buffer)

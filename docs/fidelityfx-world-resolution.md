@@ -22,22 +22,25 @@ FXAA and rejects SSAA. FXAA retains its existing resident-rendering/GPU-HUD
 requirements. This control is intentionally absent from launcher settings.
 
 The renderer owns a second color/D32-depth image pair and framebuffer. A leading
-full color clear can begin reduced work. A depth-only clear preserves output
-resolution because previous color may contain retained HUD pixels. This also
-applies after presentation. Live Training's depth-only starts consequently stay
-at output resolution until a full color replacement is demonstrated.
+full color clear can begin reduced work. Otherwise resident opaque world runs
+shade at reduced resolution and use output-resolution coverage replay, described
+below. Depth-only submissions themselves retain output color; they no longer
+prevent the following opaque world runs from using reduced shading.
 
-Before HUD, guest readback, capture or resident presentation, the world image is
-linearly scaled to output size and D32 depth is transferred with nearest sampling.
-FXAA runs before HUD. Subsequent mixed world passes stay at output size until a
-new frame boundary or full color clear; they cannot repeatedly filter the HUD.
+Before HUD, guest readback, capture or resident presentation, full-clear world
+images promote to output size with linear color and nearest depth sampling.
+Retained opaque runs instead reconstruct color in a temporary output image,
+apply selected FXAA there, and replay original geometry, alpha rejection and
+depth operations into the preserved output target. Untouched output pixels are
+not copied or filtered. Contiguous blended/point runs, guest uploads/readbacks
+and HUD operations retain the ordered full-resolution path.
 Menus/frontend canvases retain their existing fitted output size. Target changes and shutdown retire
 both image pairs after device work completes. Guest surface dimensions, D16
 upload/readback conversion and translated code stay unchanged.
 
-Depth-only starts preserve prior color at its existing resolution. This is a
-diagnostic scale path, not a claim that every fade or guest-written overlay
-sequence is ready for temporal reconstruction.
+Depth-only starts preserve prior color at its existing resolution. Reconstruction
+is a development path; complete fade/guest-write coverage and temporal inputs
+remain separate acceptance work.
 The 100% default retains the original allocation and rendering path.
 
 ## Reproduce focused checks
@@ -459,16 +462,105 @@ The periodic shrink/grow observation still needs visual confirmation in the game
 the destination-bounds regression passes, but frame counts do not prove that symptom
 absent. No performance gain is claimed from these validation runs.
 
+### Retained opaque world reconstruction
+
+The initial whole-scene opaque rule exercised only one native batch because
+Training interleaves opaque and blended draws. The implementation now partitions
+the original command stream into contiguous opaque and blended/point runs without
+reordering clears or draws. Eligible opaque runs shade in the reduced target,
+then reconstruct into a separate output-sized color image. Selected FXAA filters
+that temporary, not the retained output image. The original geometry, scissor,
+texture-alpha rejection and depth tests run at output resolution with a small
+fragment shader that samples reconstructed RGB. Output depth is produced by the
+original full-resolution replay, rather than a scaled depth approximation.
+
+This advances retained opaque world shading -> reconstructed color -> covered
+output pixels while preserving untouched HUD/color/depth. Blended runs continue
+at output resolution, reading the updated destination in command order; this
+keeps fades from downsampling retained UI. Upload/readback and point runs also
+keep the full-resolution path. The 100% path is unchanged. Its historical
+whole-image FXAA can reprocess pixels outside a partial world draw; the new strict
+untouched-pixel guarantee applies to the opt-in reduced reconstruction path.
+That broader assertion exposed the historical 100% behavior during testing; the
+failure log is retained rather than relabeled as reduced-path acceptance.
+
+Atmosphere/sky routing is prepared once from the complete original scene, because
+it can use camera state from a later draw. Batches share those prepared states.
+Geometry, texture and emission containers retain one owner and are restored after
+batching, including on exceptions. Coverage replay and batching are reported as
+GPU work separately from the count of original guest scenes.
+
+The existing persistence fixture now exercises an opaque draw and an intervening
+transparent world draw within one scene. It checks reduced execution, selected
+FXAA, retained HUD edges, untouched guest depth, and every pixel safely outside
+the original triangle, including pixels inside its bounding rectangle. An
+alpha-tested world triangle overlaps the retained HUD but discards all its
+fragments; the entire output remains byte-identical. Disabling reconstruction
+fails the execution assertion; removing shader alpha rejection fails retained
+output preservation. All temporary mutations are restored. Synchronization
+validation found a missing depth-store dependency in the scratch FXAA pass;
+the corrected barrier includes depth writes. The reusable FXAA source image also
+orders prior shader reads before its next discard/transfer write.
+
+The authored coverage shader is `host/world_coverage.frag`. Its checked-in header
+is reproduced with `glslangValidator -V host/world_coverage.frag --vn world_coverage_frag_spv -o host/world_coverage_frag.h`
+from `tools/m4-crt-heap-carry/`; the local SDK reproduces its bytes exactly, and both inputs are pinned in the canonical host manifest. They contain
+project-authored shader code, not translated game code. No new runtime shader
+compiler or DLL is packaged.
+
+Final source-pinned development host:
+`6451159f01a95060b23b1cb2c302722481b55d1682fe06db0f0a1b64edaba901`.
+It builds seven host objects with no translated regeneration and retains the same
+translated DLL. Both 100% and 50%-requested native runs complete 2,200 actual
+Vulkan/DXGI presentations / 6,142 original guest scenes on RX 9070, with published
+runtime 1.0.44 support inputs, the 13 verified published packs, 3440x1440, FXAA/16x
+AF, sun strength 0 and ambient 1. Both have synchronization validation enabled
+and zero diagnostics, and deliberately stop at the configured budget (exit 1).
+
+At 50%, the world raster is 1720x720. The renderer records 1,475 reduced opaque
+batches / 1,475 promotions, with 468,743 logical coverage draws in addition to
+shading work. The log calls those batches "opaque scenes"; they are not additional
+guest scenes. Captures 1801/2101 are
+`6f13822cc471e0dc0e3e49e382819aabca76b32cb34c8caeed38629ed09b72ed` and
+`6af77b31b2c6cf6e39686e2a925918825cf9ce017a26fb88b0d73a22a5b4ceb4`.
+The world differs as expected. The timer's green-glyph masks match the 100%
+reference at both frames; the Training/HUD capture was visually inspected.
+This does not establish whole-HUD or original-executable equivalence.
+The 100% captures still match the published runtime byte for byte at both frames.
+
+Final focused checks pass: 18 world/lifecycle/persistence cases at 50/67/100 with
+AA Off and FXAA; 25 actual bridge presentations with 50% requested; six standard
+depth modes at 100% and scaled/odd-scaled/visible-scaled at 50% and 67%. The new
+`odd-scaled` fixture mode supplies explicit output dimensions for 641x479 guest
+surfaces; its pre-change call rejected the missing-output contract, and the new
+mode passes. All GPU cases have clean synchronization validation. CMake build,
+25 CTest cases, format-check, host-builder tests and style checks pass (web
+formatting is enforced; other existing findings remain report-only).
+
+The stronger untouched-pixel assertion was also run against the prior `740ed0f`
+100% renderer and reproduces its whole-image FXAA behavior; it is not a regression
+introduced by reconstruction. Private receipts, failure controls and captures
+remain under `D:/Projects/MW34-retained-composition/local/retained/`.
+
+This path adds geometry replay, texture-alpha sampling, an output-sized scratch
+image, copies and queue synchronization. It avoids CPU pixel transport but is a
+correctness implementation, not a measured performance improvement. Broader
+alpha/guest-write sequences, nonzero directional lighting, performance and
+independent review remain open; these checks do not enable FSR or frame generation.
+
 ## Remaining limits
 
 The retained-pixel correction above supersedes the initial persistence failures.
-Stage 2 remains incomplete because retained-color frames cannot yet be reduced.
+Stage 2 remains incomplete pending broader ordered-write/fade/lifecycle coverage
+and independent review. Resident opaque retained-color runs now have a reduced
+shading/coverage-reconstruction path; blended and guest-write paths remain full
+resolution by design.
 FSR remains disabled; do not advance to Stage 3 implementation or mark this draft
 ready on the strength of passing CI. Fresh-overlay, stock Training, visible
 fixture lifecycle and synchronization checks have bounded evidence above.
 Comprehensive guest-write/fade sequences, visible lifecycle checks inside the
 game, broader startup and adapter depth coverage, the
 reported periodic size change, raw RX 9070 Vulkan WSI, a second
-physical PC and independent review remain open. Mixed world passes after HUD
-remain full resolution.
+physical PC and independent review remain open. Opaque runs after HUD can use
+coverage reconstruction; blended/point and guest-write paths remain full resolution.
 No build, asset, release or version was published or merged by these checks.
