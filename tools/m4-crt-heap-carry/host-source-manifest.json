@@ -217,8 +217,8 @@
       "classification": "compiled-authored-shader"
     },
     "depth_transfer.hpp": {
-      "sha256": "b1c3647b73573ea239eaa6135841d1a6b8ebf51fea04703f038913ad193dd966",
-      "bytes": 1786,
+      "sha256": "567ebd10f5e9ab09b406c2fdea094c7648527720e5ef267f54a4076eba7469e5",
+      "bytes": 2760,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -255,6 +255,12 @@
     "draw_emissions.hpp": {
       "sha256": "85aeef90428935dd8994f3893872aa4e3eeaaa59a9134ed73afb4ab8c5e735fd",
       "bytes": 1459,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "dxgi_present.hpp": {
+      "sha256": "f3f1b7956fa6b2ae25e0fe8d853930754d40bbba6682a266f8bd4d9f42226c95",
+      "bytes": 18511,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -463,8 +469,8 @@
       "classification": "authored-host-source"
     },
     "launcher_display.hpp": {
-      "sha256": "9cebd9869163b3c5b7a2c7756e6fffc1f8e32d4dc22858b778057801cad9df1c",
-      "bytes": 4074,
+      "sha256": "b1db2ab0ce8c510f9d6d73f5284d5381900d3c4529097ca4371f671d0a821e7f",
+      "bytes": 5480,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -913,8 +919,8 @@
       "classification": "authored-host-source"
     },
     "vdd.inc": {
-      "sha256": "28176ed33947660757083c02ab17c107f656015a61640e971e7d7737978088d4",
-      "bytes": 61965,
+      "sha256": "61a89992e1ef848a1b0ed3dae4272cb3f383ed19539a9eafb9ae8b8a6720a0b0",
+      "bytes": 62051,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -925,8 +931,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "c58ea49c5e656f5fdef3e7880b960ca4eaf8c5d4d6dcfac384281b362c527125",
-      "bytes": 189303,
+      "sha256": "b50d1335fe5530e5b0e7cd0347716a8cbd2c1855a6821bdf8243e255f5d893d0",
+      "bytes": 203157,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -981,6 +987,12 @@
     "zoom_alignment_stage.inc": {
       "sha256": "86e702a7c96aeb79b03b257e6e07fbde182f8ebc44392d4b0792b12fdd4806b4",
       "bytes": 3465,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "world_resolution_stage.inc": {
+      "sha256": "921a626b44c6713f026f1fea7e940a439152d72bb8c296b461a11e164252c28f",
+      "bytes": 8419,
       "decision": "commit",
       "classification": "authored-host-source"
     }
