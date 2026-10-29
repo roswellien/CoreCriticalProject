@@ -2,9 +2,8 @@
 
 The live site is [corecritical.dev](https://corecritical.dev), hosted by the
 existing Cloudflare Pages project `core-critical`. Website source now lives in
-this repository's `website/` directory. Cloudflare still needs to be switched
-to this repository by the maintainer; this change does not alter the live Pages
-settings or publish a deployment.
+this repository's `website/` directory. Cloudflare builds production from this
+repository's `main` branch, with `website/` as its project root. Automatic production deployments are enabled.
 
 ## Build and preview
 
@@ -47,8 +46,8 @@ the migration does not recreate or remove it.
 
 The maintainer supplies Cloudflare access through the existing account or a
 local Wrangler login. Keep API tokens and signing credentials outside Git.
-After the first verified deploy from this repository, the maintainer can remove
-the legacy cross-repository MechLab publishing workflow and deploy key.
+The legacy cross-repository MechLab publishing bridge is retired. Future site
+and dated MechLab changes publish from this repository's `main` branch.
 
 ## Content and boundaries
 
