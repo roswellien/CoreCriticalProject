@@ -41,6 +41,10 @@ one skill from another.
    checks; the requester, or the tool where it can, starts the review session.
    The PR opens as a draft and stays one until the requester says it's ready.
 
+**Short path:** a change that fits the guide's short path skips stages 1 to 3
+when the requester agrees for that change, and still gets stage 5. The guide
+says which changes fit and which are exempt.
+
 Specs and plans are working files kept outside every checkout and never
 committed: `MW3Recomp-Private-specs/<issue>-<slug>-spec.md` and
 `<issue>-<slug>-plan.md`, beside the main checkout.
