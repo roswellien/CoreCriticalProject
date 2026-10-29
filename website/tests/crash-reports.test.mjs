@@ -140,6 +140,38 @@ test("sends new issues beyond the daily cap to one log-free overflow issue", asy
   assert.ok(!overflowBody.includes("FULL_LOG_SENTINEL"));
 });
 
+test("returns archive-only success when the daily cap is exhausted and the overflow issue is missing", async () => {
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.query.includes("issue(number:")) {
+      return Response.json({ data: { repository: { issue: null } } });
+    }
+    return Response.json({ data: {
+      repository: { id: "R_repo", isPrivate: true },
+      matched: { nodes: [] }
+    } });
+  };
+  const cappedEnvironment = {
+    ...environment,
+    CRASH_REPORT_DB: {
+      prepare(query) {
+        if (query.includes("INSERT OR IGNORE INTO crash_report_archive")) {
+          return { bind: (...values) => ({ run: async () => { archivedReports.push(values); } }) };
+        }
+        return { bind: () => ({ first: async () => null }) };
+      }
+    }
+  };
+
+  const response = await onRequestPost({ request: crashRequest(), env: cappedEnvironment });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), {
+    report_id: "abcdef12", duplicate: false, overflow: false, archived_only: true
+  });
+  assert.equal(archivedReports.length, 1);
+});
+
 test("caps full logs on later matching reports", async () => {
   const { webcrypto } = await import("node:crypto");
   globalThis.crypto ??= webcrypto;
@@ -254,7 +286,7 @@ test("keeps the report archive inaccessible without a valid admin Access token",
 test("renders archived reports and log lines only for the configured admin", async () => {
   const { token } = await createAdminAccess();
   const report = {
-    report_id: "abcdef1234567890",
+    report_id: "report-1234",
     created_utc: "2026-10-29T13:00:00Z",
     mode: "remaster",
     exit_code: 7,
@@ -287,12 +319,12 @@ test("renders archived reports and log lines only for the configured admin", asy
   });
   const html = await response.text();
   assert.equal(response.status, 200);
-  assert.ok(html.includes("abcdef1234567890"));
+  assert.ok(html.includes(report.report_id));
   assert.ok(html.includes("&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"));
   assert.ok(!html.includes("<script>"));
 
   const detail = await getAdminCrashReports({
-    request: new Request("https://corecritical.dev/admin/crash-reports?id=abcdef1234567890", {
+    request: new Request("https://corecritical.dev/admin/crash-reports?id=report-1234", {
       headers: { "cf-access-jwt-assertion": token }
     }),
     env: { ...adminEnvironment, CRASH_REPORT_DB: adminDb }

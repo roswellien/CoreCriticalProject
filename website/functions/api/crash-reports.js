@@ -259,7 +259,7 @@ export async function onRequestPost({ request, env }) {
 
     if (!await reserveDailyIssueSlot(config)) {
       const overflow = await fetchOverflowIssue(config.token, config.owner, config.name, config.overflowIssueNumber);
-      if (!overflow) return json({ error: "The configured overflow issue was not found." }, 503);
+      if (!overflow) return archivedOnlyResponse(archivedReportId);
       await addReportComment(config.token, overflow, report, null, { includeLogs: false, overflow: true });
       return json({ report_id: report.report_id.slice(0, 8), duplicate: true, overflow: true });
     }

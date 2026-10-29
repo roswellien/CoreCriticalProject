@@ -74,7 +74,7 @@ export async function onRequestGet({ request, env }) {
   const reportId = new URL(request.url).searchParams.get("id");
   try {
     if (reportId !== null) {
-      if (!/^[a-fA-F0-9-]{1,64}$/.test(reportId)) return failurePage(404, "Report not found.");
+      if (!/^[a-zA-Z0-9-]{1,64}$/.test(reportId)) return failurePage(404, "Report not found.");
       const report = await env.CRASH_REPORT_DB.prepare(`
         SELECT report_id, created_utc, stored_utc, mode, exit_code, failure_summary, crash_fingerprint, report_json
         FROM crash_report_archive WHERE report_id = ?
