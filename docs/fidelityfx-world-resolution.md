@@ -9,6 +9,10 @@ Neither earlier PR is implicitly merged by this change.
 
 ## Contract
 
+Owner direction: the RX 9070 is the primary validation target. Integrated-GPU
+compatibility passes do not satisfy the discrete-GPU presentation or performance
+criterion. RX 9070 Vulkan presentation remains an open Stage 2 gate.
+
 The canonical host accepts `MW34_WORLD_SCALE_PERCENT=50..100` (integer, default
 100). The percentage applies to each output dimension, rounding down. For
 1920x1080 output, 50 selects a 960x540 world raster. Set an explicit
@@ -368,6 +372,34 @@ presenting device rather than changing the display driver or forcing an adapter
 that cannot present. Local RX 9070 presentation and performance remain unverified
 by these runs.
 
+### RX 9070 primary-target investigation
+
+Windows identifies the RX 9070 as the active 3440x1440 primary display adapter.
+The session is an active console session with both input and thread desktops
+named `Default`; remote access alone is not an established cause of the failure.
+Installed versions are RX 9070 32.0.31035.1003 and integrated AMD graphics
+32.0.21045.1000. AMD lists both in the [26.7.1 package](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-7-1.html), so the version difference itself is not evidence of a bad installation.
+
+A small local program independent of game code reproduces RX 9070 Vulkan
+`vkGetPhysicalDeviceSurfaceCapabilitiesKHR` returning `-13` for ordinary
+top-level, disabled/enabled child and popup windows. Surface creation, generic
+Win32 presentation support and per-surface queue support succeed. The newer
+capabilities2 query also fails. Vulkan 1.0/1.1 and pumping pending window messages
+do not change the outcome. Selecting only the RX 9070 ICD, disabling AMD's
+switchable layer, and disabling all implicit layers for the process also leave
+the failure. Controls use process-local environment only; installed drivers and
+registry settings are unchanged. Initial forward-slash driver-manifest overrides
+failed instance creation and receive no presentation credit; Windows-path retries
+reproduced the actual surface error.
+
+A separate D3D11/DXGI control explicitly selects vendor 1002 / device 7550
+(RX 9070), creates a flip-discard swapchain and presents successfully (HRESULT 0).
+This narrows the current failure to Vulkan presentation rather than establishing
+that the RX 9070 cannot present to this display. No driver reset, update or remote
+session interruption was performed.
+
+AMD's [RX 9070 download page](https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-9000-series/amd-radeon-rx-9070.html) lists 26.10.1 WHQL, dated 2026-10-20. A controlled driver update/restart followed by the same standalone Vulkan probe is the next proposed environmental test; it is not a proven fix. This session lacks an administrator token, and installation/restart may interrupt RustDesk, so that maintenance requires owner involvement. Once Vulkan presentation succeeds on the 9070, repeat the visible fixture and published-input Training checks on that GPU before accepting the primary-target criterion.
+
 ## Remaining limits
 
 The retained-pixel correction above supersedes the initial persistence failures.
@@ -377,7 +409,7 @@ ready on the strength of passing CI. Fresh-overlay, stock Training, visible
 fixture lifecycle and synchronization checks have bounded evidence above.
 Comprehensive guest-write/fade sequences, visible lifecycle checks inside the
 game, broader startup and adapter depth coverage, the
-reported periodic size change, a second
+reported periodic size change, RX 9070 Vulkan presentation, a second
 physical PC and independent review remain open. Mixed world passes after HUD
 remain full resolution.
 No build, asset, release or version was published or merged by these checks.
