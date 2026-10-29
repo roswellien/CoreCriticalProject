@@ -59,4 +59,7 @@ void main() {
         if (!pass) discard;
     }
     result = textureLod(reconstructedWorld, gl_FragCoord.xy / vec2(textureSize(reconstructedWorld, 0)), 0.0);
+    // Later full-resolution passes can use destination-alpha blend factors.
+    // Only RGB comes from reconstruction; alpha follows the original fragment.
+    result.a = alpha;
 }

@@ -172,7 +172,7 @@ static void presentation_bounds_check() {
     std::cout << "PASS resident/upload presentation bounds, resize, SSAA and menu aspect\n";
 }
 static void world_resolution_check(bool persistent_hud = false, bool visible = false,
-                                   bool partial_world = false) {
+                                   bool partial_world = false, bool rgba_target = false) {
     using namespace mw34::vkscene;
     auto require = [](bool ok, const char *message) {
         if (!ok)
@@ -185,7 +185,8 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
                 ::DestroyWindow(handle);
         }
     } window;
-    Renderer renderer;
+    Renderer renderer(rgba_target ? Renderer::ColorTarget::rgba8 :
+                                    Renderer::ColorTarget::device_default);
     if (visible) {
         require(renderer.max_texture_dimension(nullptr) >= 640,
                 "Pre-window capability query cannot support the guest target");
@@ -244,6 +245,8 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
     };
     triangle(world, .800004f, 0xff00ff00);
     renderer.render(world, true, false);
+    if (rgba_target)
+        require(renderer.alpha_target(), "RGBA fixture did not select RGBA8 target");
     std::cout << "World resolution check GPU: " << renderer.device_name << '\n';
     const char *configured_percent = std::getenv("MW34_WORLD_SCALE_PERCENT");
     const unsigned percent = configured_percent ? std::stoul(configured_percent) : 100;
@@ -432,6 +435,47 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
                 renderer.render(discarded, false, false);
                 renderer.capture_fullres_rgb(rgb, w, h);
                 require(rgb == before_discard, "World alpha rejection changed retained output");
+                if (Renderer::fxaa_enabled()) {
+                    // RGB reconstruction cannot supply native destination alpha.
+                    // A point-sampled alpha step must retain its full-resolution
+                    // boundary when a later pass reads D3DBLEND_DESTALPHA.
+                    Scene alpha_destination = later;
+                    TextureRef alpha_step{};
+                    alpha_step.key = alpha_step.hash = 0x9912;
+                    alpha_step.width = 2;
+                    alpha_step.height = 1;
+                    alpha_step.format = TexFormat::rgba8888;
+                    alpha_step.pixels32 = {0x0000ff00, 0xff00ff00};
+                    alpha_destination.textures.push_back(alpha_step);
+                    auto& textured = alpha_destination.draws[0];
+                    textured.texture = 0;
+                    textured.sampler = (3 << 4) | (3 << 8);
+                    textured.push.mode[0] = 4;
+                    textured.push.mode[1] = textured.push.mode[2] = 2 | (2 << 8);
+                    for (unsigned vertex = 0; vertex < 3; ++vertex) {
+                        const float uv[2]{vertex == 1 ? 1.f : 0.f, 0};
+                        std::memcpy(alpha_destination.vertices.data() + vertex * 32 + 24, uv, 8);
+                    }
+                    const auto base_bytes = alpha_destination.vertices.size();
+                    alpha_destination.vertices.resize(base_bytes * 2);
+                    std::memcpy(alpha_destination.vertices.data() + base_bytes,
+                                alpha_destination.vertices.data(), base_bytes);
+                    for (size_t at = base_bytes; at < base_bytes * 2; at += 32) {
+                        const unsigned red_source = 0xffff0000;
+                        std::memcpy(alpha_destination.vertices.data() + at + 16, &red_source, 4);
+                    }
+                    Draw destination_alpha = later.draws[0];
+                    destination_alpha.first = unsigned(base_bytes / 32);
+                    destination_alpha.key = {1, 7, 1, 0, 8, 0, 1};
+                    alpha_destination.order.push_back({false, 1});
+                    alpha_destination.draws.push_back(destination_alpha);
+                    renderer.render(alpha_destination, false, false);
+                    renderer.capture_fullres_rgb(rgb, w, h);
+                    const auto left = (size_t(h * 120 / 480) * w + w * 300 / 640) * 3;
+                    require((renderer.alpha_target() ? rgb[left] < 8 : rgb[left] > 240) &&
+                                rgb[left + 6] > 240,
+                            "World replay lost full-resolution destination alpha");
+                }
             }
         }
         renderer.capture_fullres_rgb(rgb, w, h);
@@ -531,11 +575,13 @@ int main(int argc, char **argv) {
     if (argc > 1 && (std::string(argv[1]) == "--world-resolution" ||
                      std::string(argv[1]) == "--world-persistence" ||
                      std::string(argv[1]) == "--world-persistence-partial" ||
-                     std::string(argv[1]) == "--world-present")) {
+                     std::string(argv[1]) == "--world-present" ||
+                     std::string(argv[1]) == "--world-persistence-partial-rgba")) {
         try {
             world_resolution_check(std::string(argv[1]).starts_with("--world-persistence"),
                                    std::string(argv[1]) == "--world-present",
-                                   std::string(argv[1]) == "--world-persistence-partial");
+                                   std::string(argv[1]).starts_with("--world-persistence-partial"),
+                                   std::string(argv[1]).ends_with("-rgba"));
             return 0;
         } catch (const std::exception &error) {
             std::cerr << error.what() << '\n';

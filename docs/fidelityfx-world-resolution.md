@@ -471,7 +471,8 @@ reordering clears or draws. Eligible opaque runs shade in the reduced target,
 then reconstruct into a separate output-sized color image. Selected FXAA filters
 that temporary, not the retained output image. The original geometry, scissor,
 texture-alpha rejection and depth tests run at output resolution with a small
-fragment shader that samples reconstructed RGB. Output depth is produced by the
+fragment shader that samples reconstructed RGB and preserves the original
+full-resolution fragment alpha. Output depth is produced by the
 original full-resolution replay, rather than a scaled depth approximation.
 
 This advances retained opaque world shading -> reconstructed color -> covered
@@ -502,6 +503,16 @@ validation found a missing depth-store dependency in the scratch FXAA pass;
 the corrected barrier includes depth writes. The reusable FXAA source image also
 orders prior shader reads before its next discard/transfer write.
 
+A destination-alpha regression additionally places a point-sampled alpha step
+under a later `D3DBLEND_DESTALPHA` draw. Its first probe assumed RGBA, but RX 9070
+normally selects RGB565, whose destination alpha is implicitly 1. The fixture now
+checks the selected format and uses a renderer-constructor preference to exercise
+the RGBA8 fallback explicitly, without altering reported device capabilities or
+process settings. Both defaults and explicit RGBA are tested. Sampling alpha from
+the reconstructed image fails the RGBA regression; retaining the original fragment
+alpha passes. This is internal format selection for testing, not a launcher option.
+RGBA persistence/alpha cases pass at 50% and 67% with clean synchronization validation.
+
 The authored coverage shader is `host/world_coverage.frag`. Its checked-in header
 is reproduced with `glslangValidator -V host/world_coverage.frag --vn world_coverage_frag_spv -o host/world_coverage_frag.h`
 from `tools/m4-crt-heap-carry/`; the local SDK reproduces its bytes exactly, and both inputs are pinned in the canonical host manifest. They contain
@@ -509,7 +520,7 @@ project-authored shader code, not translated game code. No new runtime shader
 compiler or DLL is packaged.
 
 Final source-pinned development host:
-`6451159f01a95060b23b1cb2c302722481b55d1682fe06db0f0a1b64edaba901`.
+`e6deb25f762c029f8f4393554c61449e7204d29aa02ae303ccae1c3c89ec31dc`.
 It builds seven host objects with no translated regeneration and retains the same
 translated DLL. Both 100% and 50%-requested native runs complete 2,200 actual
 Vulkan/DXGI presentations / 6,142 original guest scenes on RX 9070, with published
@@ -547,6 +558,8 @@ image, copies and queue synchronization. It avoids CPU pixel transport but is a
 correctness implementation, not a measured performance improvement. Broader
 alpha/guest-write sequences, nonzero directional lighting, performance and
 independent review remain open; these checks do not enable FSR or frame generation.
+Per-batch reconstruction still starts from retained output, so this is not yet a
+validated, clean frame-level world-only history/input contract for temporal FSR.
 
 ## Remaining limits
 

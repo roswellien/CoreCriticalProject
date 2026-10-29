@@ -192,6 +192,12 @@ struct Scene {
 // Scene and presentation submissions use separate command pools and fences on one queue.
 class Renderer {
   public:
+    enum class ColorTarget { device_default, rgba8 };
+    // An explicit format preference lets format-sensitive callers exercise the
+    // RGBA fallback without changing device capabilities or process settings.
+    explicit Renderer(ColorTarget color_target = ColorTarget::device_default)
+        : require_rgba8(color_target == ColorTarget::rgba8) {}
+    bool alpha_target() const { return rgba; }
     std::string device_name;
     std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{}, combined_draws{};
     using PerfOverlay = mw34::performance::Overlay;
@@ -1705,6 +1711,7 @@ class Renderer {
         if (!limit) throw std::runtime_error("No graphics adapter supplies Vulkan texture limits");
         return limit;
     }
+    const bool require_rgba8;
     DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
@@ -2456,7 +2463,7 @@ class Renderer {
         f.vkGetPhysicalDeviceFormatProperties(gpu, VK_FORMAT_R5G6B5_UNORM_PACK16, &cp);
         const VkFormatFeatureFlags need =
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT;
-        rgba = (cp.optimalTilingFeatures & need) != need;
+        rgba = require_rgba8 || (cp.optimalTilingFeatures & need) != need;
         float priority = 1;
         VkDeviceQueueCreateInfo q{};
         q.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
