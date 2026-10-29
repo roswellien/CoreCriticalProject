@@ -61,6 +61,11 @@ for lint findings. Never mix a cleanup with other changes. Steps:
 
 1. Run the pre-cleanup safety checks and handle every hit:
    `python tools/style/check_style.py --preflight --language <language>`.
+   Digest-only hits are candidates, not proof of a path-specific pin; verify the
+   associated path before changing a stored hash. Dynamic inventories may report
+   every target, or every target with a matching suffix, for manual review. An
+   unreadable input makes preflight exit with an error instead of reporting an
+   incomplete scan.
    For stored-hash hits, leave those files out of the cleanup by adding them to
    `exclude.txt`, or update the stored hashes and duplicate files in the same PR with
    the owner's approval. For text-read hits, check whether the callers depend on exact

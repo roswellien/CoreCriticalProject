@@ -6,10 +6,13 @@ the exclusion copies still agree, how each tool's exit code is read, and when a 
 
 import hashlib
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -165,13 +168,13 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(hits[0].label, "identical copy")
             self.assertIn("identical copy of source.cpp", hits[0].describe())
 
-    def test_stored_hash_scan_reports_path_pin(self):
+    def test_stored_hash_scan_reports_case_insensitive_unresolved_digest_match(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             target = temp_path / "target.py"
             manifest = temp_path / "manifest.json"
             target.write_text("print('test')\n", encoding="utf-8")
-            target_digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            target_digest = hashlib.sha256(target.read_bytes()).hexdigest().upper()
             manifest.write_text(f'{{"hash": "{target_digest}"}}\n', encoding="utf-8")
 
             hits = check_style.run_stored_hash_scan(
@@ -180,8 +183,8 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(len(hits), 1)
             self.assertEqual(hits[0].holding_file, "manifest.json")
             self.assertEqual(hits[0].target_file, "target.py")
-            self.assertEqual(hits[0].label, "pin on that path")
-            self.assertIn("pin on that path (target.py)", hits[0].describe())
+            self.assertEqual(hits[0].label, "unresolved digest match")
+            self.assertIn("unresolved digest match for target.py", hits[0].describe())
 
     def test_stored_hash_scan_ignores_unchanged_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -215,6 +218,163 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(hits[0].line_number, 1)
             self.assertEqual(hits[0].describe(), "build.py:1: reads fixture_template.html")
 
+    def test_text_read_search_finds_open_and_path_open_with_separate_references(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "fixture_template.html").write_text("<h1>Test</h1>", encoding="utf-8")
+            builder = temp_path / "build.py"
+            builder.write_text(
+                'template_name = "fixture_template.html"\n'
+                'with open(template_name, encoding="utf-8") as template:\n'
+                "    contents = template.read()\n"
+                'Path(template_name).open("rb").read()\n',
+                encoding="utf-8",
+            )
+
+            hits = check_style.run_text_read_search(
+                ["fixture_template.html"],
+                ["fixture_template.html", "build.py"],
+                repo_root=temp_path,
+            )
+            self.assertEqual(
+                [(hit.line_number, hit.target_file) for hit in hits],
+                [(1, "fixture_template.html")],
+            )
+
+    def test_text_read_search_resolves_sibling_before_ambiguous_basename(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            graphics_verify = "tools/graphics-trace/verify.py"
+            vulkan_verify = "tools/vulkan-windowed/verify.py"
+            caller = "tools/graphics-trace/check_controls.py"
+            for path in (graphics_verify, vulkan_verify, caller):
+                full_path = temp_path / path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text("# fixture\n", encoding="utf-8")
+            (temp_path / caller).write_text(
+                'verify_path = "verify.py"\nopen(verify_path).read()\n', encoding="utf-8"
+            )
+
+            hits = check_style.run_text_read_search(
+                [graphics_verify, vulkan_verify],
+                [graphics_verify, vulkan_verify, caller],
+                repo_root=temp_path,
+            )
+            self.assertEqual(
+                [(hit.line_number, hit.target_file) for hit in hits],
+                [(1, graphics_verify)],
+            )
+
+    def test_text_read_search_reports_all_ambiguous_basename_targets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            target_files = ["first/verify.py", "second/verify.py"]
+            caller = "tools/check.py"
+            for path in target_files + [caller]:
+                full_path = temp_path / path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text("# fixture\n", encoding="utf-8")
+            (temp_path / caller).write_text(
+                'filename = "verify.py"\nopen(filename).read()\n', encoding="utf-8"
+            )
+
+            hits = check_style.run_text_read_search(
+                target_files, target_files + [caller], repo_root=temp_path
+            )
+            self.assertEqual(
+                [(hit.line_number, hit.target_file) for hit in hits],
+                [(1, "first/verify.py"), (1, "second/verify.py")],
+            )
+
+    def test_text_read_search_reports_dynamic_suffix_inventory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            target_files = ["runtime/first.py", "runtime/second.py"]
+            caller = "tools/inventory.py"
+            for path in target_files + [caller]:
+                full_path = temp_path / path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text("# fixture\n", encoding="utf-8")
+            (temp_path / caller).write_text(
+                'for path in root.rglob("*"):\n'
+                "    hashlib.sha256(path.read_bytes()).hexdigest()\n",
+                encoding="utf-8",
+            )
+
+            hits = check_style.run_text_read_search(
+                target_files, target_files + [caller], repo_root=temp_path
+            )
+            self.assertEqual(
+                [(hit.line_number, hit.target_file) for hit in hits],
+                [(1, "runtime/first.py"), (1, "runtime/second.py")],
+            )
+
+    def test_text_read_search_finds_self_hashes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source = temp_path / "source.py"
+            source.write_text(
+                "import hashlib\n"
+                "root = Path(__file__).resolve().parents[1]\n"
+                "hashlib.sha256(Path(__file__).read_bytes()).hexdigest()\n",
+                encoding="utf-8",
+            )
+
+            hits = check_style.run_text_read_search(
+                ["source.py"], ["source.py"], repo_root=temp_path
+            )
+            self.assertEqual(
+                [(hit.line_number, hit.target_file) for hit in hits],
+                [(3, "source.py")],
+            )
+
+    def test_scans_raise_path_specific_errors_when_files_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            target = temp_path / "target.py"
+            target.write_text("print('test')\n", encoding="utf-8")
+            original_read_bytes = Path.read_bytes
+
+            def deny_manifest(path):
+                if path.name == "manifest.json":
+                    raise PermissionError("access denied")
+                return original_read_bytes(path)
+
+            (temp_path / "manifest.json").write_text("{}", encoding="utf-8")
+            with patch.object(Path, "read_bytes", autospec=True, side_effect=deny_manifest):
+                with self.assertRaisesRegex(
+                    check_style.PreflightReadError, "manifest.json: access denied"
+                ):
+                    check_style.run_stored_hash_scan(
+                        ["target.py"],
+                        ["target.py", "manifest.json"],
+                        repo_root=temp_path,
+                    )
+
+            (temp_path / "reader.py").write_text("open('target.py').read()\n", encoding="utf-8")
+            original_read_text = Path.read_text
+
+            def deny_reader(path, *args, **kwargs):
+                if path.name == "reader.py":
+                    raise PermissionError("access denied")
+                return original_read_text(path, *args, **kwargs)
+
+            with patch.object(Path, "read_text", autospec=True, side_effect=deny_reader):
+                with self.assertRaisesRegex(
+                    check_style.PreflightReadError, "reader.py: access denied"
+                ):
+                    check_style.run_text_read_search(
+                        ["target.py"],
+                        ["target.py", "reader.py"],
+                        repo_root=temp_path,
+                    )
+
+    def test_formatter_paths_are_normalized(self):
+        self.assertEqual(
+            check_style.normalize_repo_path(r"tools\style\check.py"),
+            "tools/style/check.py",
+        )
+
     def test_text_read_search_ignores_non_read_code(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -232,6 +392,57 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(
             check_style.main(["--preflight", "--language", "cpp", "--language", "python"]),
             check_style.EXIT_TOOL_ERROR,
+        )
+        self.assertEqual(
+            check_style.main(["--preflight", "--list"]),
+            check_style.EXIT_TOOL_ERROR,
+        )
+
+    def test_preflight_returns_tool_error_for_incomplete_scans(self):
+        check_result = check_style.CheckResult(
+            "python", "format", False, 1, findings=["target.py"]
+        )
+        with (
+            patch.object(check_style, "read_pinned_versions", return_value={}),
+            patch.object(check_style, "version_error_for", return_value=None),
+            patch.object(check_style, "list_all_tracked_files", return_value=["target.py"]),
+            patch.object(check_style, "list_files", return_value=["target.py"]),
+            patch.object(check_style, "run_check", return_value=check_result),
+            patch.object(check_style, "run_text_read_search", return_value=[]),
+        ):
+            for scan_name in ("run_stored_hash_scan", "run_text_read_search"):
+                with self.subTest(scan=scan_name):
+                    output = io.StringIO()
+                    with (
+                        patch.object(
+                            check_style,
+                            "run_stored_hash_scan",
+                            return_value=[],
+                        ),
+                        patch.object(
+                            check_style,
+                            "run_text_read_search",
+                            return_value=[],
+                        ),
+                        patch.object(
+                            check_style,
+                            scan_name,
+                            side_effect=check_style.PreflightReadError(
+                                "cannot read target.py: access denied"
+                            ),
+                        ),
+                        redirect_stdout(output),
+                    ):
+                        self.assertEqual(
+                            check_style.run_preflight("python", []),
+                            check_style.EXIT_TOOL_ERROR,
+                        )
+                    self.assertIn("target.py: access denied", output.getvalue())
+
+    def test_formatter_paths_collapse_relative_segments(self):
+        self.assertEqual(
+            check_style.normalize_repo_path(r"tools\style\..\check.py"),
+            "tools/check.py",
         )
 
 

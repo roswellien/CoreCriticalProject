@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ import tempfile
 import tomllib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 STYLE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = STYLE_DIR.parents[1]
@@ -471,6 +472,9 @@ CODE_FILE_EXTENSIONS = {
 }
 
 READ_PATTERNS = [
+    r"\bopen\s*\(",
+    r"\.open\s*\(",
+    r"\.read\b",
     r"\bread_text\b",
     r"\bread_bytes\b",
     r"\breadFileSync\b",
@@ -493,6 +497,19 @@ READ_PATTERNS = [
     r"\bpin\s*\(",
 ]
 READ_OPERATION_REGEX = re.compile("|".join(READ_PATTERNS))
+DYNAMIC_INVENTORY_REGEX = re.compile(
+    r"\b(?:rglob|glob|walk|Get-ChildItem|EnumerateFiles|GetFiles|scandir)\b", re.IGNORECASE
+)
+SELF_PATH_REGEX = re.compile(r"\b__file__\b|\$PSCommandPath\b", re.IGNORECASE)
+
+
+class PreflightReadError(Exception):
+    """A preflight scan could not read one of its repository inputs."""
+
+
+def normalize_repo_path(path: str) -> str:
+    """Normalize Git and formatter paths to repository-style separators."""
+    return posixpath.normpath(path.replace("\\", "/"))
 
 
 @dataclass
@@ -501,12 +518,12 @@ class StoredHashHit:
 
     holding_file: str
     target_file: str
-    label: str  # "pin on that path" or "identical copy"
+    label: str  # "unresolved digest match" or "identical copy"
 
     def describe(self) -> str:
         if self.label == "identical copy":
             return f"{self.holding_file}: identical copy of {self.target_file}"
-        return f"{self.holding_file}: pin on that path ({self.target_file})"
+        return f"{self.holding_file}: unresolved digest match for {self.target_file}"
 
 
 @dataclass
@@ -548,19 +565,23 @@ def run_stored_hash_scan(
 ) -> list[StoredHashHit]:
     """Find any tracked file containing the SHA-256 of a file the formatter would change.
 
-    Labels hits as either an identical copy or a pin on that path.
+    Labels hits as identical copies or unresolved digest matches.
     """
     if not changed_files:
         return []
 
     targets: dict[str, tuple[int, str, bytes]] = {}
     for path in changed_files:
+        path = normalize_repo_path(path)
         full_path = repo_root / path
         if not full_path.is_file():
-            continue
-        content = full_path.read_bytes()
+            raise PreflightReadError(f"cannot read {path}: file is not available")
+        try:
+            content = full_path.read_bytes()
+        except OSError as error:
+            raise PreflightReadError(f"cannot read {path}: {error}") from error
         digest = hashlib.sha256(content).hexdigest().lower()
-        targets[path] = (len(content), digest, digest.encode("ascii"))
+        targets[path] = (len(content), digest, content)
 
     if not targets:
         return []
@@ -568,30 +589,28 @@ def run_stored_hash_scan(
     hits: list[StoredHashHit] = []
     for candidate in all_tracked_files:
         candidate_path = repo_root / candidate
-        if not candidate_path.is_file():
-            continue
         try:
             candidate_bytes = candidate_path.read_bytes()
-        except OSError:
-            continue
+        except OSError as error:
+            raise PreflightReadError(f"cannot read {candidate}: {error}") from error
         candidate_size = len(candidate_bytes)
         candidate_digest: str | None = None
 
-        for target_path, (target_size, target_hex, target_sha_bytes) in targets.items():
+        for target_path, (target_size, target_hex, target_bytes) in targets.items():
             if candidate == target_path:
                 continue
 
-            # Check for identical copy (matching size and SHA-256)
+            # Compare original bytes so hash-string case normalization cannot affect copies.
             if candidate_size == target_size:
                 if candidate_digest is None:
                     candidate_digest = hashlib.sha256(candidate_bytes).hexdigest().lower()
-                if candidate_digest == target_hex:
+                if candidate_digest == target_hex and candidate_bytes == target_bytes:
                     hits.append(StoredHashHit(candidate, target_path, "identical copy"))
                     continue
 
-            # Check for hash pin (candidate contains the target SHA-256 string)
-            if target_sha_bytes in candidate_bytes:
-                hits.append(StoredHashHit(candidate, target_path, "pin on that path"))
+            # A digest alone does not establish which path or copy a holder identifies.
+            if target_hex.encode("ascii") in candidate_bytes.lower():
+                hits.append(StoredHashHit(candidate, target_path, "unresolved digest match"))
 
     hits.sort(key=lambda h: (h.holding_file, h.target_file, h.label))
     return hits
@@ -606,14 +625,26 @@ def run_text_read_search(
     if not target_files:
         return []
 
-    target_names = {Path(f).name: f for f in target_files}
-    target_paths = {Path(f).as_posix(): f for f in target_files}
+    normalized_targets = {normalize_repo_path(path) for path in target_files}
+    target_names: dict[str, list[str]] = {}
+    for path in sorted(normalized_targets):
+        target_names.setdefault(PurePosixPath(path).name, []).append(path)
+    target_paths = {path: path for path in normalized_targets}
 
-    suffixes = {Path(f).suffix.lower().lstrip(".") for f in target_files if Path(f).suffix}
+    suffixes = {
+        PurePosixPath(path).suffix.lower().lstrip(".") for path in normalized_targets
+        if PurePosixPath(path).suffix
+    }
     if not suffixes:
         return []
     suffix_pattern = "|".join(re.escape(s) for s in sorted(suffixes))
     token_re = re.compile(r"[\w\-./\\]+\.(?:" + suffix_pattern + r")\b")
+    inventory_suffix_re = re.compile(r"\*?\.(?:" + suffix_pattern + r")\b", re.IGNORECASE)
+    targets_by_suffix: dict[str, list[str]] = {}
+    for target in sorted(normalized_targets):
+        suffix = PurePosixPath(target).suffix.lower().lstrip(".")
+        if suffix:
+            targets_by_suffix.setdefault(suffix, []).append(target)
 
     code_candidates = [f for f in all_tracked_files if is_code_file(f)]
     hits: list[TextReadHit] = []
@@ -621,15 +652,53 @@ def run_text_read_search(
 
     for code_file in code_candidates:
         full_code_path = repo_root / code_file
-        if not full_code_path.is_file():
-            continue
         try:
-            content = full_code_path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+            content = full_code_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise PreflightReadError(f"cannot read {code_file}: {error}") from error
+
+        read_operation = READ_OPERATION_REGEX.search(content)
+        if not read_operation:
             continue
 
-        if not READ_OPERATION_REGEX.search(content):
-            continue
+        normalized_code_file = normalize_repo_path(code_file)
+        self_references = list(SELF_PATH_REGEX.finditer(content))
+        direct_self_references = []
+        for self_reference in self_references:
+            line_start = content.rfind("\n", 0, self_reference.start()) + 1
+            line_end = content.find("\n", self_reference.start())
+            if line_end == -1:
+                line_end = len(content)
+            if READ_OPERATION_REGEX.search(content[line_start:line_end]):
+                direct_self_references.append(self_reference)
+        selected_self_references = direct_self_references or self_references
+        if selected_self_references and normalized_code_file in target_paths:
+            for self_reference in selected_self_references:
+                line_number = content.count("\n", 0, self_reference.start()) + 1
+                key = (code_file, line_number, normalized_code_file)
+                if key not in seen:
+                    seen.add(key)
+                    hits.append(TextReadHit(code_file, line_number, normalized_code_file))
+
+        for inventory_match in DYNAMIC_INVENTORY_REGEX.finditer(content):
+            inventory_line = content.count("\n", 0, inventory_match.start()) + 1
+            suffix_matches = {
+                match.group(0).lstrip("*").lstrip(".").lower()
+                for match in inventory_suffix_re.finditer(content)
+            }
+            if suffix_matches:
+                inventory_targets = {
+                    target
+                    for suffix in suffix_matches
+                    for target in targets_by_suffix.get(suffix, [])
+                }
+            else:
+                inventory_targets = normalized_targets
+            for target_file in sorted(inventory_targets):
+                key = (code_file, inventory_line, target_file)
+                if key not in seen:
+                    seen.add(key)
+                    hits.append(TextReadHit(code_file, inventory_line, target_file))
 
         lines = content.splitlines()
         for idx, line in enumerate(lines, 1):
@@ -644,24 +713,25 @@ def run_text_read_search(
             matched_targets = set()
             for tok in tokens:
                 tok_norm = tok.replace("\\", "/").rstrip("\"'")
-                tok_base = Path(tok_norm).name
                 if tok_norm in target_paths:
-                    matched_targets.add(target_paths[tok_norm])
-                elif tok_base in target_names:
-                    matched_targets.add(target_names[tok_base])
+                    matched_targets.add(tok_norm)
+                    continue
+                sibling_path = normalize_repo_path(
+                    (PurePosixPath(code_file).parent / tok_norm).as_posix()
+                )
+                if sibling_path in target_paths:
+                    matched_targets.add(sibling_path)
+                    continue
+                matched_targets.update(target_names.get(PurePosixPath(tok_norm).name, []))
 
             if not matched_targets:
                 continue
 
-            window_start = max(0, idx - 6)
-            window_end = min(len(lines), idx + 5)
-            window = "\n".join(lines[window_start:window_end])
-            if READ_OPERATION_REGEX.search(window):
-                for target_file in sorted(matched_targets):
-                    key = (code_file, idx, target_file)
-                    if key not in seen:
-                        seen.add(key)
-                        hits.append(TextReadHit(code_file, idx, target_file))
+            for target_file in sorted(matched_targets):
+                key = (code_file, idx, target_file)
+                if key not in seen:
+                    seen.add(key)
+                    hits.append(TextReadHit(code_file, idx, target_file))
 
     hits.sort(key=lambda h: (h.holding_file, h.line_number, h.target_file))
     return hits
@@ -691,12 +761,21 @@ def run_preflight(language: str, exclude_patterns: list[str]) -> int:
             return EXIT_TOOL_ERROR
         changed_files = result.findings
 
-    hash_hits = run_stored_hash_scan(changed_files, all_tracked, REPO_ROOT)
+    changed_files = [normalize_repo_path(path) for path in changed_files]
+    try:
+        hash_hits = run_stored_hash_scan(changed_files, all_tracked, REPO_ROOT)
+    except PreflightReadError as error:
+        print(f"preflight: {language}: stored-hash scan: error: {error}")
+        return EXIT_TOOL_ERROR
     print(f"preflight: {language}: stored-hash scan: {len(hash_hits):,} findings")
     for hit in hash_hits:
         print(f"  {hit.describe()}")
 
-    text_hits = run_text_read_search(target_files, all_tracked, REPO_ROOT)
+    try:
+        text_hits = run_text_read_search(target_files, all_tracked, REPO_ROOT)
+    except PreflightReadError as error:
+        print(f"preflight: {language}: text-read search: error: {error}")
+        return EXIT_TOOL_ERROR
     print(f"preflight: {language}: text-read search: {len(text_hits):,} findings")
     for hit in text_hits:
         print(f"  {hit.describe()}")
@@ -769,17 +848,20 @@ def main(argv: list[str]) -> int:
             print(f"exclusions: error: {problem}")
         return EXIT_TOOL_ERROR
 
+    if arguments.preflight:
+        if arguments.list:
+            print("preflight: error: --preflight cannot be combined with --list")
+            return EXIT_TOOL_ERROR
+        if not arguments.language or len(arguments.language) != 1:
+            print("preflight: error: --preflight requires exactly one --language")
+            return EXIT_TOOL_ERROR
+        return run_preflight(arguments.language[0], exclude_patterns)
+
     if arguments.list:
         for language in arguments.language or sorted(LANGUAGES):
             for path in list_files(LANGUAGES[language].suffixes, exclude_patterns):
                 print(f"{language}\t{path}")
         return EXIT_CLEAN
-
-    if arguments.preflight:
-        if not arguments.language or len(arguments.language) != 1:
-            print("preflight: error: --preflight requires exactly one --language")
-            return EXIT_TOOL_ERROR
-        return run_preflight(arguments.language[0], exclude_patterns)
 
     if arguments.fix:
         return fix_enforced(arguments, exclude_patterns)
