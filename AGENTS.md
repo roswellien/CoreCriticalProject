@@ -111,7 +111,7 @@ ctest --preset default
 That job does not run `format-check`. In PowerShell 7, install the pinned
 formatter, reconfigure `build/default`, then run the target. Fetch the pinned
 SDL3 controller runtime into ignored `local/` once per checkout; the WPF launcher
-checks and publish need it (authored fixtures, no game install).
+checks (authored fixtures, no game install) and publish need it.
 
 ```powershell
 python -m venv tools/style/.venv
@@ -121,7 +121,8 @@ cmake --build build/default --target format-check
 pwsh -NoProfile -File tools/mw3-remaster-launcher/fetch_controller_runtime.ps1
 dotnet run --project tools/mw3-remaster-launcher-tests -c Release
 ```
-Launcher publish, from the root on Windows (`net8.0-windows`). Ignored `local/` output; not a release.
+Launcher publish, from the root on Windows (`net8.0-windows`), after the SDL3
+fetch above. Ignored `local/` output; not a release.
 
 ```sh
 dotnet publish tools/mw3-remaster-launcher/MW3RemasterLauncher.csproj -c Release -r win-x64 --self-contained true -o local/launcher-publish
