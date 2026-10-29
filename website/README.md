@@ -117,9 +117,21 @@ line-preserving log sections. Dynamic report text is HTML-escaped. The page
 does not generate public or static report documents.
 
 Before enabling the archive in production, configure a Cloudflare Access
-self-hosted application for `corecritical.dev/admin/crash-reports*` and create
-a policy that allows the maintainer's email. Configure these Pages production
-variables to match that Access application:
+self-hosted application for `corecritical.dev/admin/crash-reports*`. Enable
+Cloudflare's **One-time PIN** login method and create an Allow policy for the
+admin email address or addresses. When an allowed admin visits the archive,
+Access asks for their email and sends a single-use PIN to that inbox. The admin
+enters the PIN on the Access login page before the archive opens. Cloudflare
+PINs expire after 10 minutes. An email address by itself does not grant access;
+the visitor must complete the PIN login and the Pages Function must also
+validate the resulting signed Access token. An identity provider can be enabled
+as an alternative login method if desired.
+
+Choose the admin email before enabling the archive; it is not hard-coded in
+this repository. For the current single-admin authorization check, set the one
+allowed email in `CRASH_REPORT_ADMIN_EMAIL`. The Access Allow policy and this
+Pages production variable must match. Configure the remaining Pages production
+variables to match the Access application:
 
 - `CRASH_REPORT_ACCESS_ISSUER=https://<team>.cloudflareaccess.com`.
 - `CRASH_REPORT_ACCESS_AUD=<application-audience-tag>`.
