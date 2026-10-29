@@ -26,11 +26,19 @@ them alone does not change the maintained host.
 | Drive the player | [`main_v2.inc`](../tools/m4-crt-heap-carry/host/main_v2.inc) parses `MW34_INPUT_SCRIPT`; [`mfc_stage.hpp`](../tools/m4-crt-heap-carry/host/mfc_stage.hpp) implements `script_due`, immediate and buffered DirectInput reads | Frame/time scheduling, not named screen readiness or mission assertions; no scripted joystick path |
 | Save periodic images | [`vdd.inc`](../tools/m4-crt-heap-carry/host/vdd.inc), `present` / `dump_frame`, uses `MW34_FRAME_DUMP` | Guest-sized RGB565 PPMs, not necessarily the final enhanced display; no named checkpoint receipt |
 | Save selected full-resolution images | `vdd.inc` uses `MW34_HIRES_DUMP_FRAMES` and `MW34_HIRES_DUMP_DIR`; [`vk_scene.hpp`](../tools/m4-crt-heap-carry/host/vk_scene.hpp), `dump_fullres`, writes PPM | Runs only on the direct GPU presentation branch; a requested menu frame can produce no file |
+| Save scheduled enhanced-menu images | [`vdd.inc`](../tools/m4-crt-heap-carry/host/vdd.inc), `menu_hd_present` / `menu_dl_present`, uses `MW34_MENU_HD_DUMP` and `MW34_MENU_HD_DUMP_FRAMES` | Requires a valid `MW34_MENU_HD_BG` and an accepted 16-bit 640x480 menu frame on the non-direct Vulkan path; unavailable with `MW34_PRESENT=gdi` |
 | F9 PNG capture | [`photo_replay_stage.inc`](../tools/m4-crt-heap-carry/host/photo_replay_stage.inc) calls `capture_fullres_bgra` and the PNG encoder | F9 is detected through host `GetAsyncKeyState`, not the scripted DirectInput stream |
 | Record progress and outcome | `MW34_FRAME_TIMES`, `MW34_DRAW_LOG`, native stdout/stderr and the launcher's `run.json` | Frame/draw counts do not prove which menu or mission was reached; a draw hash is not a complete pixel/state comparison |
 | Observe crashes and window health | [`game-monitor`](../tools/game-monitor/README.md) records process exits, optional debug exceptions, logs and OS window responsiveness | Its CLI admits the original MW3 executable hash, not a newly built native host; collection success is separate from target success |
 | Compare saved graphics | [`graphics-trace`](../tools/graphics-trace/README.md), `package_replay.py`, `compare_replay.py` and `compare_capture_scenes.py` | Original-process diagnostics and offline comparisons do not execute native game transitions |
 | Display a replay | [`Launch Vulkan Replay.cmd`](../launchers/Launch%20Vulkan%20Replay.cmd) invokes [`vulkan-windowed/run.ps1`](../tools/vulkan-windowed/run.ps1) | Opens a captured scene in the viewer, not the native game; its optional auto-close is a viewer timer |
+
+Set `MW34_MENU_HD_DUMP` to a filename prefix and `MW34_MENU_HD_DUMP_FRAMES` to a
+comma-separated list of frame numbers. For frame N, `menu_hd_present` writes
+`<prefix>.<N>.ppm`; `menu_dl_present` writes `<prefix>.dl.<N>.ppm`. Both compare
+N with `host.frames` before the per-presentation increment, so the first
+presentation is frame 0. These schedules produce images, not a named checkpoint
+receipt, and do not verify that every requested image was written completely.
 
 ## Input and clock contract
 
