@@ -169,6 +169,8 @@ namespace MW3RemasterLauncher.Core
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
                 CreateNoWindow = true
             };
             foreach (var argument in new[] { "-u", installed?.Coordinator ?? Path.Combine(rootDir, @"tools\remaster-launcher\play_remaster.py"),

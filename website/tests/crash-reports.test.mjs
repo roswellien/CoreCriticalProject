@@ -98,6 +98,24 @@ test("stores only the disclosed hardware inventory fields and redacts hardware p
   assert.ok(!issueBody.includes("MUST_NOT_BE_STORED"));
 });
 
+test("formats each log as readable, line-preserving issue text", async () => {
+  githubResponder();
+  const baseFetch = globalThis.fetch;
+  let issueBody;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.query.includes("createIssue")) issueBody = body.variables.body;
+    return baseFetch(url, options);
+  };
+  const response = await onRequestPost({ request: crashRequest({
+    logs: { launcher: "first diagnostic line\nsecond diagnostic line\n" }
+  }), env: environment });
+
+  assert.equal(response.status, 200);
+  assert.ok(issueBody.includes("#### Launcher log\n\n```text\nfirst diagnostic line\nsecond diagnostic line\n```"));
+  assert.ok(issueBody.includes('"logs": {}'));
+});
+
 test("groups by mode, exit code, and message; reopens closed matches", async () => {
   const report = JSON.parse(await crashRequest().text());
   const { webcrypto } = await import("node:crypto");

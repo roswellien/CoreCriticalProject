@@ -27,6 +27,9 @@ static class PlaytestSupportChecks
                 !redactedPaths.Contains(@"\\nas01\users\jcbla", StringComparison.OrdinalIgnoreCase) &&
                 redactedPaths.Contains("<local-path>") && redactedPaths.Contains("<network-path>"),
                 "Crash-report path scrubbing exposed a local or network path");
+            var nestedPath = PlaytestDiagnostics.Redact(
+                @"C:\Users\jcbla\AppData\Local\Packages\Launcher\sessions\profile.json", @"C:\Users\jcbla");
+            Check(nestedPath == "<local-path>", "Crash-report path scrubbing exposed the suffix after a known local root");
             var d7vkReport = JsonSerializer.SerializeToDocument(PlaytestDiagnostics.CreateCrashReport(
                 new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
                 Array.Empty<PackManifest>(), null, app, "1.2.3", 7,
