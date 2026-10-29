@@ -21,9 +21,7 @@ static unsigned world_scale_percent() {
     }();
     return percent;
 }
-// A depth-only clear starts a reduced frame only after presentation. Mid-frame
-// depth resets (for example cockpit passes) must not resample an existing HUD.
-bool world_frame_boundary{true};
+// Full color replacement is required before reducing a retained output image.
 static unsigned leading_full_clear(const Scene& scene) {
     unsigned cleared = 0;
     for (const auto& command : scene.order) {
@@ -47,7 +45,6 @@ void destroy_world_target() {
         *image = {};
     }
     reduced_world_active = false;
-    world_frame_boundary = true;
 }
 void create_world_target() {
     const auto percent = world_scale_percent();

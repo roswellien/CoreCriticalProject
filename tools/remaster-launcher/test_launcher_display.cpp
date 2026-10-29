@@ -217,8 +217,8 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
                                  std::to_string(world.depth[150 * 640 + 100]));
     renderer.present_resident(nullptr, 640, 480); // Hidden presentation still ends the frame.
     renderer.render(depth_reset, false, false);
-    require(renderer.raster_width() == output_width * percent / 100,
-            "Presented frame followed by depth-only clear did not restart world");
+    require(renderer.raster_width() == output_width,
+            "Depth-only frame reduced retained output pixels");
     if (persistent_hud) {
         // This draw does not overlap the retained HUD line. Both a depth-only
         // frame and a partial world frame must leave that line unchanged.

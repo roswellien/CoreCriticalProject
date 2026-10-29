@@ -373,7 +373,6 @@ class Renderer {
     bool present_resident(HWND hwnd, unsigned w, unsigned h) {
         HostFpEnvironment fp;
         finish_world();
-        world_frame_boundary = true;
         if (!::IsWindowVisible(hwnd))
             return true;
         if (hwnd != presentParent || !child || !presentable || !windowSurface ||
@@ -866,11 +865,11 @@ class Renderer {
             s.frontend_canvas != target_frontend)
             target(s.width, s.height, s.frontend_canvas);
         if (worldColor.image) {
-            // Presentation plus a full depth clear marks the next world frame.
-            // A full color clear can also replace all previous composition mid-frame.
+            // A depth-only frame may retain full-resolution HUD color. Reduce
+            // only when a full color clear replaces every retained pixel.
             const auto cleared = leading_full_clear(s);
             const bool restart = !s.hud && !s.frontend_canvas &&
-                ((cleared & 1) || (world_frame_boundary && (cleared & 2)));
+                (cleared & 1);
             if (restart) quality_world_dirty = false;
             if (s.hud || readback_out || s.frontend_canvas)
                 select_world_target(false, false);
@@ -878,7 +877,6 @@ class Renderer {
                 select_world_target(true, upload_in);
             settle();
         }
-        if (!s.order.empty()) world_frame_boundary = false;
         if (upload_in)
             quality_world_dirty = false;
         const VkDeviceSize pixels = VkDeviceSize(width) * height;

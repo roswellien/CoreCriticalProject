@@ -17,9 +17,10 @@ FXAA and rejects SSAA. FXAA retains its existing resident-rendering/GPU-HUD
 requirements. This control is intentionally absent from launcher settings.
 
 The renderer owns a second color/D32-depth image pair and framebuffer. A leading
-full color clear can begin reduced work. Live Training instead submits a separate
-full depth clear: this begins reduced work only at a new target or after resident
-presentation. A mid-frame depth clear cannot restart reduced work after the HUD.
+full color clear can begin reduced work. A depth-only clear preserves output
+resolution because previous color may contain retained HUD pixels. This also
+applies after presentation. Live Training's depth-only starts consequently stay
+at output resolution until a full color replacement is demonstrated.
 
 Before HUD, guest readback, capture or resident presentation, the world image is
 linearly scaled to output size and D32 depth is transferred with nearest sampling.
@@ -29,10 +30,9 @@ Menus/frontend canvases retain their existing fitted output size. Target changes
 both image pairs after device work completes. Guest surface dimensions, D16
 upload/readback conversion and translated code stay unchanged.
 
-Depth-only starts preserve prior color by sampling it into the reduced target.
-Content retained from an earlier frame therefore inherits world sampling until
-redrawn. This is a diagnostic scale path, not a claim that every persistent HUD,
-fade or guest-written overlay sequence is ready for temporal reconstruction.
+Depth-only starts preserve prior color at its existing resolution. This is a
+diagnostic scale path, not a claim that every fade or guest-written overlay
+sequence is ready for temporal reconstruction.
 The 100% default retains the original allocation and rendering path.
 
 ## Reproduce focused checks
@@ -109,12 +109,13 @@ generated game code, executable or game capture is included in this PR.
 ## Stage 2 follow-up checks
 
 The added `--world-persistence` and `--world-persistence-partial` modes expose a
-**confirmed blocker**, not a passing acceptance criterion. Draw a sharp HUD line,
+**confirmed blocker in the initial implementation**. Draw a sharp HUD line,
 present, then submit a full depth-only clear in the next frame. At 50%, the line's
 red center changes from 255 to 189 and its outside neighbor from 0 to 65. At 67%,
 the values are 189 and 16. At 100%, they remain 255 and 0. Both reduced modes exit
-1. The partial-world variant draws elsewhere without overlapping the HUD and
-fails the same way. These checks must pass before P1 can be accepted; they are
+1 in that implementation. The partial-world variant draws elsewhere without
+overlapping the HUD and originally failed the same way. These checks must pass
+before P1 can be accepted; they are
 optional fixture modes outside CTest, not marked as expected successes or
 suppressed. The standard CMake build, 25 CTest cases and format-check pass;
 the local style report completes with existing report-only findings. Those
@@ -251,9 +252,27 @@ path failed input opening and receives no native validation credit. The rectangl
 defect is fixed and regression-tested, but neither this remote session nor the
 bounds fixture establishes that the owner's observed symptom has disappeared.
 
+### Retained output correction
+
+Reduced rendering now requires a leading full color clear. A depth-only clear
+keeps the output target, including across presentation, so a partial world draw
+cannot filter untouched HUD pixels. The obsolete presentation-boundary flag is
+removed. This advances correctness at the previous-output -> next-frame resource
+boundary without claiming coverage-aware reduced composition.
+
+The ordinary, depth-only persistence and partial-world persistence checks all
+pass at 50%, 67% and 100% with FXAA: the retained line stays 255 at its center and
+0 outside. The earlier implementation was observed failing these same sharpness
+assertions. The raster assertion now requires output resolution after depth-only
+clear; full-color-clear checks still require reduced raster dimensions and actual
+promotion counters. This is a conservative rendering restriction: Training's
+depth-only frame starts no longer qualify for reduction, so earlier reduced-scene
+counts are historical evidence and do not describe the corrected host.
+
 ## Remaining limits
 
-Stage 2 is blocked by persistent output pixels being resampled across frames.
+The retained-pixel correction below supersedes the initial persistence failures.
+Stage 2 remains incomplete because retained-color frames cannot yet be reduced.
 FSR remains disabled; do not advance to Stage 3 implementation or mark this draft
 ready on the strength of passing CI. Fresh-overlay, stock Training, visible
 fixture lifecycle and synchronization checks have bounded evidence above.
