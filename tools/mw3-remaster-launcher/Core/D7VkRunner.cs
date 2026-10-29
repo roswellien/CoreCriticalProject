@@ -24,10 +24,13 @@ namespace MW3RemasterLauncher.Core
     public class D7VkRunner
     {
         private readonly string _basePath;
+        private readonly string _dataRoot;
+        public string? LastLogPath { get; private set; }
 
-        public D7VkRunner(string basePath)
+        public D7VkRunner(string basePath, string? dataRoot = null)
         {
             _basePath = basePath;
+            _dataRoot = dataRoot ?? LauncherPaths.DataRoot;
         }
 
         /// <summary>Search known runtimes, optionally exercising the required Pillow operation.</summary>
@@ -237,7 +240,17 @@ namespace MW3RemasterLauncher.Core
                 CreateNoWindow = true
             };
 
-            logCallback?.Invoke($"Launching Original Mech3 with D7VK: {settings.D7VkResolution}, AA: {settings.D7VkAntiAliasing}, AF: {settings.D7VkAnisotropicFiltering}, Textures: {textureArg}...");
+            var session = Path.Combine(_dataRoot, "sessions", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(session);
+            LastLogPath = Path.Combine(session, "launcher.log");
+            File.WriteAllText(LastLogPath, "Core Critical D7VK session" + Environment.NewLine);
+            var logLock = new object();
+            void Log(string line)
+            {
+                lock (logLock) File.AppendAllText(LastLogPath, line + Environment.NewLine);
+                logCallback?.Invoke(line);
+            }
+            Log($"Launching Original Mech3 with D7VK: {settings.D7VkResolution}, AA: {settings.D7VkAntiAliasing}, AF: {settings.D7VkAnisotropicFiltering}, Textures: {textureArg}...");
 
             var proc = new Process { StartInfo = psi };
 
@@ -245,14 +258,14 @@ namespace MW3RemasterLauncher.Core
             {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                    logCallback?.Invoke($"[D7VK] {e.Data}");
+                    Log($"[D7VK] {e.Data}");
                 }
             };
             proc.ErrorDataReceived += (s, e) =>
             {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                    logCallback?.Invoke($"[D7VK ERR] {e.Data}");
+                    Log($"[D7VK ERR] {e.Data}");
                 }
             };
 

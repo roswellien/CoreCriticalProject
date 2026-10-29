@@ -13,6 +13,7 @@ if(args.Length==4 && args[0]=="--add-steam-shortcut")
 }
 
 if(args.Length==1 && args[0]=="--online-updates-only") { OnlineUpdateChecks.Run(); await UpdateDownloadChecks.Run(); return; }
+if(args.Length==1 && args[0]=="--playtest-support-only") { PlaytestSupportChecks.Run(); return; }
 
 if(args.Length==1 && args[0]=="--chassis-only") { ChassisPackChecks.Run(); return; }
 if(args.Length==3 && args[0]=="--install-chassis-pack") { ChassisPackChecks.Install(args[1],args[2]); return; }

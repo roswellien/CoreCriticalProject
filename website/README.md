@@ -55,3 +55,51 @@ Only dated `docs/mechlab/YYYY-MM-DD.md` notes feed the development news. The
 build does not call GitHub APIs, create a copied `data/mechlab.json`, or need a
 cross-repository deploy key. Do not add original game media, generated game
 code, Cloudflare tokens or signing credentials to this tree.
+
+The site pages are static HTML/CSS/JavaScript; the Pages Function in
+`functions/api/crash-reports.js` is the server-side crash-report endpoint.
+`python build.py` does not publish or change DNS.
+
+## Crash report endpoint
+
+Reports are sent only after the player enables automatic sending or approves a
+one-time prompt. The endpoint targets a dedicated private repository such as
+`roswellien/corecritical-crash-reports`, groups specific failures by engine
+mode, exit code and message, reopens closed matching issues, and adds issues to
+the configured Project V2 board through that board's built-in auto-add
+workflow. The generic unexpected-exit message is never grouped. The launcher
+displays a short report ID, not a private GitHub URL.
+
+New crash issues are capped at 20 per UTC day by default. The cap is reserved
+atomically in D1; reports beyond it are comments on one configured overflow
+issue, without full logs. Matching issues include full logs for only their
+first three repeats. Create the private report repository, a private overflow
+issue in it, and a D1 database before enabling production reporting. Apply a
+Cloudflare rate-limit rule to `/api/crash-reports` as well.
+
+In the Project V2 board, enable its **Auto-add to project** workflow for the
+private crash-report repository with the filter `is:issue`. The overflow issue
+must already be on the board; manually add it if it was created before this
+workflow was enabled. GitHub auto-add workflows do not backfill existing issues.
+
+Configure the `core-critical` Pages production environment with:
+
+- `CRASH_REPORT_REPOSITORY=roswellien/corecritical-crash-reports`.
+- `CRASH_REPORT_OVERFLOW_ISSUE_NUMBER`, the private repository's overflow issue number.
+- Optional `CRASH_REPORT_DAILY_ISSUE_LIMIT` (defaults to `20`, maximum `1000`).
+- Create a D1 database, apply the migration from `website/`, and bind it to
+  Pages as `CRASH_REPORT_DB`:
+
+  ```powershell
+  npx wrangler d1 create corecritical-crash-reports
+  npx wrangler d1 execute corecritical-crash-reports --remote --file migrations/0001_crash_issue_daily_limits.sql
+  ```
+
+- A `GITHUB_TOKEN` secret with issue read/write access to the private report
+  repository only. A fine-grained token can be restricted to this one repo;
+  Project access is handled by GitHub's built-in auto-add workflow.
+
+Keep the GitHub token in the Pages secret store and outside Git. The server
+requires all configuration, including D1 and the overflow issue, and fails
+visibly when any part is missing. Run endpoint checks from `website/` with
+`npm test`.
