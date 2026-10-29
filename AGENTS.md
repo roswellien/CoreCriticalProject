@@ -82,3 +82,69 @@ making the repository public.
 
 Agent rules live only in this file. `CLAUDE.md` and
 `.github/copilot-instructions.md` point here; edit this file instead.
+
+## Commands and layout
+
+Fresh checkout, from the root unless noted. Presets: `CMakePresets.json`.
+Detail: `docs/code-guide.md`.
+Linux matches the Clang job in `.github/workflows/build.yml` (that image has
+clang-format 18). The last command is the Linux launcher check; authored
+fixtures only.
+
+```sh
+cmake --preset default -DCMAKE_CXX_COMPILER=clang++
+cmake --build --preset default
+ctest --preset default
+cmake --build build/default --target format-check
+python -m unittest discover -s tools/remaster-launcher -p test_launcher_dispatch.py
+```
+Windows, Visual Studio C++ x64 developer shell. These three match the MSVC job
+in `.github/workflows/build.yml`.
+
+```sh
+cmake --preset default -A x64
+cmake --build --preset default
+ctest --preset default
+```
+That job does not run `format-check`. Install the pinned formatter, reconfigure
+`build/default`, then run the target and the WPF launcher checks (authored
+fixtures, no game install).
+
+```powershell
+python -m venv tools/style/.venv
+tools/style/.venv/Scripts/python -m pip install --require-hashes -r tools/style/requirements.txt
+cmake --preset default -A x64 -DMW34_CLANG_FORMAT=tools/style/.venv/Scripts/clang-format.exe
+cmake --build build/default --target format-check
+dotnet run --project tools/mw3-remaster-launcher-tests -c Release
+```
+Launcher publish, from the root on Windows (`net8.0-windows`). Ignored `local/` output; not a release.
+
+```sh
+dotnet publish tools/mw3-remaster-launcher/MW3RemasterLauncher.csproj -c Release -r win-x64 --self-contained true -o local/launcher-publish
+```
+Website, from `website/`. Open http://127.0.0.1:4173/.
+
+```sh
+python build.py
+python -m http.server 4173 --bind 127.0.0.1 --directory dist
+```
+Installer, signing, upload, the update feed and Cloudflare deploy are
+maintainer-only (`docs/launcher-and-website-release.md`). Issue 40 tracks
+moving those steps into the repo.
+CTest and the checks above need no original installation. These do, and they
+are not asset-free CI tests; keep inputs and output local:
+`tools/analysis/extract_mw3_leaf.py` and dated `tools/m4-*` / `tools/x87-*`
+comparisons that take a Mech3.exe path; `launchers/Setup Mod Tools.cmd` with
+`--game-root` and `games/mw3/mod-tools/editor/core/extract_assets_3d.py`;
+`tools/mw3-remaster-launcher-tests` commands `--verify-original`,
+`--install-original-source`, `--install-original-iso`, `--prepare-support` and
+`--launch-installed-trial`.
+Layout: `.agents` shared skills (edit only here); `.claude` generated skill
+copy (do not edit; run `python tools/agents/sync_skills.py`); `.github`
+workflows, forms and templates; `cmake` shared CMake modules; `docs` plans and
+evidence; `games` MW3, Pirate's Moon and Mod Tools; `launchers` Windows play
+and setup shortcuts; `mods` authored map packs, not original media; `recomp`
+translator and patches, generated game code under ignored `recomp/generated/`;
+`runtime` asset-free C++ host services; `tests` asset-free CTest fixtures;
+`tools` launcher, analysis, lifting, style and historical evidence; `website`
+static site (`website/build.py`).
