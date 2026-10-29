@@ -106,13 +106,121 @@ generated game code, executable or game capture is included in this PR.
 - Existing D32 fixture: native, scaled, odd guest dimensions, 2x and 4x SSAA passed,
   including all 65,536 guest depth values and 64 close-surface positions.
 
+## Stage 2 follow-up checks
+
+The added `--world-persistence` and `--world-persistence-partial` modes expose a
+**confirmed blocker**, not a passing acceptance criterion. Draw a sharp HUD line,
+present, then submit a full depth-only clear in the next frame. At 50%, the line's
+red center changes from 255 to 189 and its outside neighbor from 0 to 65. At 67%,
+the values are 189 and 16. At 100%, they remain 255 and 0. Both reduced modes exit
+1. The partial-world variant draws elsewhere without overlapping the HUD and
+fails the same way. These checks must pass before P1 can be accepted; they are
+optional fixture modes outside CTest, not marked as expected successes or
+suppressed. The standard CMake build, 25 CTest cases and format-check pass;
+the local style report completes with existing report-only findings. Those
+results do not supersede the failing persistence checks.
+
+The full-image color blits in `select_world_target` resample untouched prior-frame
+content. Merely skipping the color transfer for a depth-only submission is
+insufficient: the partial-world case needs preservation too. Correct composition
+must retain untouched output pixels when a frame does not replace all color.
+
+Additional passing checks:
+
+- Actual GPU HUD inputs at alpha 0, 128 and 255 preserve transparent pixels and
+  blend/replace fresh overlays correctly at 50%, 67% and 100%. This tests the
+  renderer input after color-key conversion, not every guest image decoder.
+  Disabling renderer blending makes the alpha check fail; restoring it passes.
+- `--world-present` uses real swapchain counters, resizes the test window,
+  minimizes/restores, hides/restores, and presents again. The initial FXAA run on
+  RX 9070 completed five swapchain presents before alpha coverage was added.
+  Omitting presentation counter increments makes its success assertion fail;
+  after restoring the renderer, the ordinary offscreen check passes. The final
+  visible check instead fails guest-depth readback, as detailed below. Canonical
+  source bytes and manifest pins are unchanged by these temporary failure controls.
+- Khronos validation layer 1.4.321 reports synchronization validation enabled;
+  the visible FXAA fixture and the stock native run report no Vulkan validation
+  errors or synchronization hazards. No diagnostics are filtered out.
+- Stock native Training reached 2,200 visible swapchain presentations at 1920x1080,
+  50% scale and lighting Off, with 5,565 reduced scenes and 1,855 promotions.
+  Its entry object, CRT provider and CRT pack are byte-identical to the current
+  installed runtime's resolved inputs; translated DLL identity is unchanged.
+
+The final visible fixture now selects `AMD Radeon(TM) Graphics` instead of the
+RX 9070 and fails guest D16 readback: expected 49151 after a 0.75 depth clear,
+observed 0 at 50% and 65535 at 67%/100% with AA Off. The FXAA 50% control also
+returns 0. Synchronization validation reports no error for the AA Off failure.
+The fixture now prints its selected adapter and the mismatched depth value.
+Adapter selection checks surface capabilities before preferring a discrete GPU;
+this is consistent with the surface-capability failures, but the underlying cause
+and the depth defect's relationship to Stage 2 are unresolved. Passing earlier
+visible checks do not supersede this final failure.
+
+### Published input verification
+
+At the user's request, the subsequent comparison uses **latest published** updates,
+not the mixed development installation. The current live playtest catalog names
+launcher 1.0.44-preview and native runtime 1.0.44. All 670 installed runtime files
+match its manifest. The signed installed executable hash is
+`eb6fd89089f9cb31981bd3278b9a6872396ab6478586d00ce60f076779674c50`.
+
+The live R2 `packs/2026-10-21-r2/packs.json` catalog was fetched read-only. All 13
+local archives match its byte counts and SHA-256 values and were extracted into
+an isolated test directory. Published versions are environment packs 1.1.0,
+remastered models 1.3.0, shared-mech textures 1.1.0, HUD/menu/CD-audio 1.0.0,
+Sommerset 1.0.1, Marauder 0.1.1-preview and Gun Metal 0.1.3-preview. Newer local-only
+packs are excluded. The published runtime's own coordinator freshly prepares
+these inputs; no historical skin-composition environment is reused.
+
+The profile uses 3440x1440, FXAA, 16x AF, dynamic lighting and shadows enabled.
+Only the window mode is changed to windowed for controlled visible runs. The
+native feature host remains the previously fingerprinted development build.
+The intro is skipped through scripted player input before Training navigation.
+The first unadjusted run reached the movie/menu only and is not Training evidence.
+
+Visible Training at 50% completed 2,200 swapchain presentations, 4,384 reduced
+scenes and 1,460 promotions; the internal world target is 1720x720. The 100% feature
+run also completed 2,200 swapchain presentations. Both report no validation errors
+with synchronization validation enabled. Captures and complete environments are
+local under `published-training50` and `published-feature100`.
+
+The signed published runtime reproduced the prior visible surface-capability
+failure (`-13`) before world drawing (`published-reference100`). Later feature-host
+attempts (`published50-no-dump`, `published50-no-dump-no-obs`) reproduced it too,
+before allocating a reduced world target. The second control disabled the OBS
+Vulkan hook only for that process and still failed. Successful visible runs do not
+establish reliable startup or resolve this intermittent failure.
+
+The published runtime then completed 2,200 offscreen frames without validation
+errors (`published-reference-hidden`). Its output captures at frames 1801 and 2101
+are byte-identical to the 100% feature run with periodic dumping disabled:
+`0c822b3dd82b25444b1c0dc66dd14bdc26ffb1f49c89a64087404b4ff24389cd` and
+`0f7f6f526a793c5cbdd63748fd69949471a298582e83544fe87111dd4d52638e`.
+This compares rendered targets, not visible presentation success.
+
+### Periodic size-change observation
+
+The owner observed a small shrink/grow approximately once per second during the
+visible runs. The diagnostic harness had `MW34_FRAME_DUMP=100`. In `vdd.inc`, a
+scheduled dump explicitly disables resident presentation, synchronizes to guest
+pixels, then uses the upload presentation path for that frame. This is a concrete
+path change; it does not yet prove the cause of the visual symptom.
+
+A matched feature run with `MW34_FRAME_DUMP=0` completed 2,200 visible frames;
+the final readback counter stayed at 1 instead of the recurring periodic readbacks.
+Only two output-resolution captures remain, which do not force upload presentation.
+The user's visual confirmation is pending. Do not report the size-change symptom
+as fixed solely from these counters.
+
 ## Remaining limits
 
-This advances the live native rendering resource boundary, not gameplay coverage.
-FSR remains disabled. Comprehensive overlay/persistent-pixel ordering, stock/no-pack
-coverage, resize/minimize and visible swapchain validation, Vulkan validation-layer
-coverage and a second physical PC remain open. The earlier visible surface-capability
-failure is not resolved by these offscreen runs. Mixed world work after HUD stays
-full resolution; P4 cannot assume the whole frame is one low-resolution world pass.
-Independent review is required before this draft is ready. This is not a packaged,
-signed, merged or published playtest release.
+Stage 2 is blocked by persistent output pixels being resampled across frames.
+FSR remains disabled; do not advance to Stage 3 implementation or mark this draft
+ready on the strength of passing CI. Fresh-overlay, stock Training, visible
+fixture lifecycle and synchronization checks have bounded evidence above.
+Comprehensive guest-write/fade sequences, visible lifecycle checks inside the
+game, intermittent visible startup, the visible fixture's depth mismatch, the
+reported periodic size change, a second
+physical PC and independent review remain open. Mixed world passes after HUD
+remain full resolution.
+No build, asset, release or version was published or merged by these checks.

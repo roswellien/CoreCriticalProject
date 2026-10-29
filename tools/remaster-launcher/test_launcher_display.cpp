@@ -2,13 +2,33 @@
 #include "vk_scene.hpp"
 #include <cassert>
 #include <iostream>
-static void world_resolution_check() {
+static void world_resolution_check(bool persistent_hud = false, bool visible = false,
+                                   bool partial_world = false) {
     using namespace mw34::vkscene;
     auto require = [](bool ok, const char *message) {
         if (!ok)
             throw std::runtime_error(message);
     };
+    struct TestWindow {
+        HWND handle{};
+        ~TestWindow() {
+            if (handle)
+                ::DestroyWindow(handle);
+        }
+    } window;
     Renderer renderer;
+    if (visible) {
+        window.handle = ::CreateWindowExW(0, L"STATIC", L"World resolution presentation check",
+                                          WS_OVERLAPPEDWINDOW, 40, 40, 800, 600, nullptr, nullptr,
+                                          ::GetModuleHandleW(nullptr), nullptr);
+        require(window.handle != nullptr, "Cannot create presentation test window");
+        ::ShowWindow(window.handle, SW_SHOWNOACTIVATE);
+        std::vector<std::uint16_t> pixels(640 * 480);
+        require(renderer.present(window.handle, reinterpret_cast<unsigned char *>(pixels.data()),
+                                 640, 480, 1280),
+                "Cannot initialize visible Vulkan presentation");
+        require(renderer.presents > 0, "Visible upload did not reach the swapchain");
+    }
     Scene world{};
     world.width = 640;
     world.height = 480;
@@ -51,6 +71,7 @@ static void world_resolution_check() {
     };
     triangle(world, .800004f, 0xff00ff00);
     renderer.render(world, true, false);
+    std::cout << "World resolution check GPU: " << renderer.device_name << '\n';
     const char *configured_percent = std::getenv("MW34_WORLD_SCALE_PERCENT");
     const unsigned percent = configured_percent ? std::stoul(configured_percent) : 100;
     const unsigned output_width = Renderer::remaster_width();
@@ -80,6 +101,50 @@ static void world_resolution_check() {
     auto red = [&](unsigned xx) { return rgb[(size_t(y) * w + xx) * 3]; };
     require(red(x) > 240 && red(x - 1) < 8 && red(x + output_width / 640) < 8,
             "Output-resolution HUD edge was filtered");
+    // The HUD converts color keys to zero alpha and uses straight alpha for
+    // masks/fades. Exercise those GPU inputs over a known world color.
+    Scene panel{};
+    panel.width = 640;
+    panel.height = 480;
+    panel.has_depth = true;
+    panel.hud = true;
+    Clear green{};
+    green.flags = 1;
+    green.color[1] = 1;
+    green.color[3] = 1;
+    green.rects.push_back({{200, 100}, {40, 40}});
+    panel.clears.push_back(green);
+    panel.order.push_back({true, 0});
+    for (unsigned alpha : {0U, 128U, 255U}) {
+        renderer.render(panel, false, false);
+        Scene masked{};
+        masked.width = 640;
+        masked.height = 480;
+        masked.has_depth = true;
+        masked.hud = true;
+        TextureRef texture{};
+        texture.key = 1000 + alpha;
+        texture.hash = 2000 + alpha;
+        texture.width = texture.height = 1;
+        texture.format = TexFormat::rgba8888;
+        texture.pixels32.push_back(0x000000ffU | (alpha << 24));
+        masked.textures.push_back(texture);
+        triangle(masked, 0, 0xffffffff);
+        auto &draw = masked.draws[0];
+        draw.texture = 0;
+        draw.sampler = (3U << 4) | (3U << 8);
+        draw.key = {1, 5, 6, 0, 8, 0, 1};
+        draw.push.mode[0] = 4;
+        draw.push.mode[1] = draw.push.mode[2] = 2 | (2 << 8);
+        draw.push.mode[3] = 0;
+        renderer.render(masked, false, false);
+        renderer.capture_fullres_rgb(rgb, w, h);
+        const size_t pixel = (size_t(output_height * 120 / 480) * w + output_width * 220 / 640) * 3;
+        require(std::abs(int(rgb[pixel]) - int(alpha)) <= 8 &&
+                    std::abs(int(rgb[pixel + 1]) - int(255 - alpha)) <= 8,
+                "HUD transparent/half-alpha/opaque composition changed");
+    }
+    renderer.render(panel, false, false);
     // A subsequent partial world pass cannot resample the HUD already drawn.
     Scene later{};
     later.width = 640;
@@ -110,11 +175,24 @@ static void world_resolution_check() {
     renderer.fetch_resident(world);
     require(world.color[120 * 640 + 220] == 0x07e0, "Promotion lost precise world depth");
     require(world.color[150 * 640 + 100] == 0xf800, "Guest readback lost HUD pixels");
-    require(world.depth[150 * 640 + 100] == 49151, "Guest depth conversion changed");
+    if (world.depth[150 * 640 + 100] != 49151)
+        throw std::runtime_error("Guest depth conversion changed: expected 49151, got " +
+                                 std::to_string(world.depth[150 * 640 + 100]));
     renderer.present_resident(nullptr, 640, 480); // Hidden presentation still ends the frame.
     renderer.render(depth_reset, false, false);
     require(renderer.raster_width() == output_width * percent / 100,
             "Presented frame followed by depth-only clear did not restart world");
+    if (persistent_hud) {
+        // This draw does not overlap the retained HUD line. Both a depth-only
+        // frame and a partial world frame must leave that line unchanged.
+        if (partial_world)
+            renderer.render(later, false, false);
+        renderer.capture_fullres_rgb(rgb, w, h);
+        std::cout << "Persistent HUD red: center=" << unsigned(red(x))
+                  << " outside=" << unsigned(red(x - 1)) << '\n';
+        require(red(x) > 240 && red(x - 1) < 8 && red(x + output_width / 640) < 8,
+                "Persistent HUD edge changed across the world-frame boundary");
+    }
     renderer.render(world, false, false);
     require(renderer.raster_width() == output_width * percent / 100,
             "Full clear did not restart reduced rendering");
@@ -132,13 +210,45 @@ static void world_resolution_check() {
     require(percent == 100 ||
                 (renderer.reduced_world_scenes >= 3 && renderer.world_promotions >= 2),
             "Reduced target path did not execute");
+    if (visible) {
+        auto present = [&] {
+            const auto previous = renderer.presents;
+            require(renderer.present_resident(window.handle, 640, 480),
+                    "Resident presentation failed");
+            require(renderer.presents > previous, "Resident frame did not reach the swapchain");
+        };
+        present();
+        ::SetWindowPos(window.handle, nullptr, 0, 0, 960, 540,
+                       SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        present();
+        ::ShowWindow(window.handle, SW_MINIMIZE);
+        require(::IsIconic(window.handle), "Test window did not minimize");
+        require(renderer.present_resident(window.handle, 640, 480),
+                "Minimized presentation failed");
+        ::ShowWindow(window.handle, SW_RESTORE);
+        present();
+        const auto before_hidden = renderer.presents;
+        ::ShowWindow(window.handle, SW_HIDE);
+        require(renderer.present_resident(window.handle, 640, 480), "Hidden presentation failed");
+        require(renderer.presents == before_hidden, "Hidden window submitted presentation");
+        ::ShowWindow(window.handle, SW_SHOWNOACTIVATE);
+        present();
+        std::cout << "PASS visible presentation, resize, minimize/restore and hide/restore; "
+                     "swapchain presents "
+                  << renderer.presents << '\n';
+    }
     std::cout << "PASS world/output separation, HUD edges, mixed draws, readback and frontend "
                  "transitions\n";
 }
 int main(int argc, char **argv) {
-    if (argc > 1 && std::string(argv[1]) == "--world-resolution") {
+    if (argc > 1 && (std::string(argv[1]) == "--world-resolution" ||
+                     std::string(argv[1]) == "--world-persistence" ||
+                     std::string(argv[1]) == "--world-persistence-partial" ||
+                     std::string(argv[1]) == "--world-present")) {
         try {
-            world_resolution_check();
+            world_resolution_check(std::string(argv[1]).starts_with("--world-persistence"),
+                                   std::string(argv[1]) == "--world-present",
+                                   std::string(argv[1]) == "--world-persistence-partial");
             return 0;
         } catch (const std::exception &error) {
             std::cerr << error.what() << '\n';
