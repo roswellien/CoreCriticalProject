@@ -20,6 +20,22 @@ static class PlaytestSupportChecks
             var original = """{"Width":1920,"Height":1080,"ActivePacks":["test.mech"],"InstantReplay":true,"ReplayVideoSettingsVersion":1}""";
             File.WriteAllText(legacy, original);
             var settings = new SettingsManager(app, data);
+            var redactedPaths = PlaytestDiagnostics.Redact(
+                "Local: C:\\Users\\jcbla\\private\\Mech3.exe\nNetwork: \\\\nas01\\users\\jcbla\\Mech3.exe",
+                @"C:\Users\jcbla");
+            Check(!redactedPaths.Contains(@"C:\Users\jcbla", StringComparison.OrdinalIgnoreCase) &&
+                !redactedPaths.Contains(@"\\nas01\users\jcbla", StringComparison.OrdinalIgnoreCase) &&
+                redactedPaths.Contains("<local-path>") && redactedPaths.Contains("<network-path>"),
+                "Crash-report path scrubbing exposed a local or network path");
+            var d7vkReport = JsonSerializer.SerializeToDocument(PlaytestDiagnostics.CreateCrashReport(
+                new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
+                Array.Empty<PackManifest>(), null, app, "1.2.3", 7));
+            var d7vkSettings = d7vkReport.RootElement.GetProperty("settings");
+            Check(d7vkReport.RootElement.GetProperty("runtime_version").GetString() == "1.2.3" &&
+                d7vkReport.RootElement.GetProperty("exit_code").GetInt32() == 7 &&
+                d7vkSettings.GetProperty("D7VkResolution").GetString() == "1920x1080" &&
+                !d7vkSettings.TryGetProperty("Width", out _),
+                "Crash report omitted runtime/exit details or used native graphics settings for D7VK");
             Check(settings.Current.Width == 1920 && settings.Current.InstantReplay && settings.Current.ActivePacks.SequenceEqual(new[] { "test.mech" }), "Legacy choices not migrated");
             Check(File.ReadAllText(legacy) == original, "Migration modified legacy settings");
             settings.Current.Width = 2560; settings.Save();
