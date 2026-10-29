@@ -1,5 +1,6 @@
 """Render daily notes as static HTML; raw HTML is always escaped."""
-from datetime import date, datetime, timezone
+from datetime import date
+from datetime import datetime, timezone
 from email.utils import format_datetime
 from html import escape
 import re

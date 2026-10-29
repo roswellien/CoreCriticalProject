@@ -6,10 +6,10 @@ contributors and agents and to all new source, documentation, tests, fixes,
 build scripts, release/version changes and authored content-pipeline changes.
 Urgency or missing GitHub enforcement does not create an exception.
 
-`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md` and `CONTRIBUTING.md`
-point here for the complete workflow. Older session-specific commit instructions
-do not override this rule; the distribution policy and unrelated-work protections
-continue to apply.
+`AGENTS.md` (which `CLAUDE.md` and `.github/copilot-instructions.md` point to)
+and `CONTRIBUTING.md` point here for the complete workflow. Older
+session-specific commit instructions do not override this rule; the
+distribution policy and unrelated-work protections continue to apply.
 
 ## Branch roles
 
@@ -21,15 +21,18 @@ continue to apply.
 
 Every contributor and agent uses the branch format in
 [Names and formats](#names-and-formats). Agents use the GitHub username of the
-account they push with. Keep `main` as the repository default branch and keep
-`develop` as the shared integration branch.
+account they push with. `develop` is the repository's default branch, so a
+merged PR's `Closes #<issue>` line closes its issue; `main` is the release
+branch.
 
 ## Start a task
 
 1. Read the project instructions, this guide and the distribution policy.
 2. Inspect `git status`, the current branch, worktrees and running build/game
    processes. Preserve existing work and respect other writers.
-3. Fetch the current remote branches. Start a task-specific branch from
+3. Find the task's issue, or file one if it has none, then assign yourself and
+   set its card to In progress (see [Project board](#project-board)).
+4. Fetch the current remote branches. Start a task-specific branch from
    `origin/develop`; do not start development on either shared branch.
 
 Start a task from the latest `origin/develop`. Use an isolated worktree when
@@ -63,6 +66,9 @@ branch, then create a PR with `develop` as its base. The PR should explain:
 - Launcher/runtime/pack compatibility, version or release consequences, or that
   the change is documentation only.
 
+Mark a PR ready for review only once it meets the
+[definition of done](../CONTRIBUTING.md#definition-of-done) in `CONTRIBUTING.md`.
+
 Local feature builds, test packs and game captures may validate a PR before it
 merges; they are not normal published releases. Documentation-only work needs
 link/diff/evidence checks, not an unnecessary game capture or native recompile.
@@ -78,7 +84,8 @@ warns about names that don't follow them.
 `<username>/<type>/<issue>-<slug>`, all lowercase. The username is the GitHub
 account that pushes the branch; an agent uses the account it pushes with. The
 type is `feature`, `fix`, `docs`, `ci` or `refactor`. The issue number comes
-first in the last part when an issue exists and is left out when none does.
+first in the last part. Every task has an issue (see
+[Project board](#project-board)); only branches made before that rule leave it out.
 Examples: `carson-nr/fix/10-setup-verify-optional-tiers`,
 `roswellien/feature/torso-mode-preset`.
 
@@ -150,9 +157,10 @@ form would produce, in this order, and pass its label with `--label`:
 
 Each issue and PR gets one type label and at least one area label. Type labels
 are `bug`, `enhancement`, `documentation` (pairs with the `docs` title area),
-`playtest`, `research` and `release`. `needs-triage` marks issues from the
-General form until they're sorted, and `needs-info` marks issues waiting on
-more detail from the reporter.
+`playtest`, `research` and `release`. `needs-triage` marks captures (issues from
+the General form or filed quickly with that label) until they're sorted; they
+need no type or area label until then (see [Triage](#triage)). `needs-info`
+marks issues waiting on more detail from the reporter.
 
 | Area label | Covers |
 | --- | --- |
@@ -193,15 +201,95 @@ Once a PR has merged, a new fix or follow-up uses a fresh branch from current
 additional changes. At handoff, report the branch, PR URL, checks and open limits;
 distinguish "awaiting review" from "merged" and "published".
 
+After merge, check that the issue's card is Done (see [Project board](#project-board)).
+
+## Project board
+
+The [project board](https://github.com/users/roswellien/projects/1) shows where
+each piece of work is. Only issues go on it; a PR shows on its issue's card
+through the `Closes #<issue>` line in its description. So every piece of work
+gets an issue before its PR: if there is none, file one first. Release and sync
+PRs are the exception: a release is tracked by its Release checklist issue,
+which stays open until the files are published.
+
+| Column | Meaning | Who moves the card there |
+| --- | --- | --- |
+| Backlog | Filed, not yet ready to start | GitHub, when the issue is filed |
+| Ready | Clear enough to pick up | Whoever triages it |
+| In progress | A person or agent is working on it | Whoever starts the work |
+| In review | Its PR is open | Whoever opens the PR |
+| Done | The issue is closed | GitHub, when the issue closes |
+
+1. **Start:** assign yourself and set the card to In progress.
+2. **Open the PR:** write `Closes #<issue>` in its description and set the card
+   to In review. Linking the PR makes GitHub set the card to In progress, so set
+   In review after the PR exists. Linking a PR to an already closed issue does
+   the same; restore that card to Done using the status command below.
+3. **After merge:** GitHub closes the issue named by `Closes #<issue>`, which
+   moves its card to Done. If the PR had no such line, close the issue with a
+   comment naming the PR. Setting a card to Done also closes its issue, so set
+   Done by hand only to restore a closed issue's card after linking a PR.
+4. **If work stops before a PR:** unassign yourself and set the card back to
+   Ready or Backlog.
+
+The Priority field says what to pick up first: P0 blocks players or other work,
+P1 is next up, P2 is later. Set it when you file an issue if you know it; the
+maintainer may change it.
+
+Agents and the command line make these moves with `gh`. Run
+`gh auth refresh -s project` once so your login may change the board, then:
+
+```powershell
+# Assign yourself
+gh issue edit <issue> --add-assignee "@me"
+
+# Find the issue's card id
+gh project item-list 1 --owner roswellien --limit 1000 --format json --jq '.items[] | select(.content.number == <issue>) | .id'
+
+# Set the card's status or priority
+gh project item-edit --project-id PVT_kwHODf7y6M4BpC8L --id <card id> --field-id <field id> --single-select-option-id <option id>
+```
+
+| Field | Field id | Option ids |
+| --- | --- | --- |
+| Status | `PVTSSF_lAHODf7y6M4BpC8LzhngSSM` | Backlog `f75ad846`, Ready `61e4505c`, In progress `47fc9ee4`, In review `df73e18b`, Done `98236657` |
+| Priority | `PVTSSF_lAHODf7y6M4BpC8LzhngSb0` | P0 `79628723`, P1 `0a877460`, P2 `da944a9c` |
+
+To unassign yourself, use `gh issue edit <issue> --remove-assignee "@me"`.
+
+## Triage
+
+Capture what you find without stopping your work, and keep the board small
+enough to choose from.
+
+- **No issue needed:** something found mid-task that's in the task's scope and
+  takes under about 15 minutes is fixed in the same PR. A known limit the PR
+  leaves goes in its list of remaining limitations.
+- **Capture everything else** as a `needs-triage` issue: the General form, or
+  `gh issue create --label needs-triage` with its headings (`### Summary`,
+  `### Details`, `### Area`). It needs no type label or priority yet; add an
+  area label if it's obvious.
+- **Where captures show:** the board's "Inbox" view lists open `needs-triage`
+  issues; the "Triaged" view shows everything else.
+- **Sorting:** the maintainer, or someone they ask, sorts the Inbox on a regular
+  check and whenever it passes 10 open issues. Each capture becomes a focused
+  issue (its form's headings, type and area labels, a priority, and
+  `needs-triage` removed), is closed as a duplicate
+  (`gh issue close <issue> --duplicate-of <other>`), or is closed as not planned
+  with a one-line reason (`gh issue close <issue> --reason "not planned" --comment "<reason>"`).
+- **Idle issues:** on the same check, P2 issues with no activity for 60 days
+  (the board check lists them) are kept or closed as not planned with a reason. No bot closes issues, so a
+  report is never closed without someone reading it.
+
 ## Promote and publish a release
 
 When the integration branch is ready for a release, open a separate PR from
 `develop` to `main` summarizing the included changes and release validation.
 After that PR is merged, compile the release from the resulting `main` commit
 and retain its SHA in build/publication evidence. Existing versioned installer,
-update naming, signing, original-file verification and rollback requirements
-continue to apply. Development previews require an explicit request and a clear
-development label.
+update naming (see `docs/release-filenames.md`), signing, original-file
+verification and rollback requirements continue to apply. Development previews
+require an explicit request and a clear development label.
 
 Follow the repository-only [launcher and website release checklist](launcher-and-website-release.md)
 for launcher inputs, packaging, signing, install/update validation, R2 upload,
@@ -245,6 +333,15 @@ including `develop`; it does not need a branch-filter change for this setup.
 Relevant native/launcher checks supplement CI where private original inputs
 are required. Preserve the existing strict native acceptance accounting.
 
+`python tools/github/check_board.py` lists where the project board, the issues
+and the PRs disagree: open issues off the board or without a priority or
+labels, cards whose status doesn't match their issue or PR, empty PRs, PRs that
+close no issue, recently closed issues or merged PRs that don't line up, P2 issues idle for
+60 days, and an Inbox of more than 10 captures, against the rules in [Project board](#project-board)
+and [Triage](#triage). Captures (`needs-triage`) need no type, area or priority. It only reads, using your own `gh` login with the `project` scope, and it exits
+with 1 when it finds something. Run it before a release and whenever the board
+looks out of date.
+
 GitHub currently rejects branch-protection and ruleset access for this private
 repository with HTTP 403 as of October 27, 2026, requesting GitHub Pro or a public
 repository. The repository remains private. Until the owner enables a supporting plan, the PR
@@ -252,6 +349,6 @@ requirement is a project rule rather than a GitHub-enforced restriction. The PR
 conventions check fails PRs into `main` that don't come from `develop`, but it
 cannot stop a direct push. Once
 available, protect both shared branches against direct pushes, force-pushes and
-deletion, and require PRs and the applicable passing CI checks. Keep `main` as
-the repository's default branch. Do not change account plans, repository
+deletion, and require PRs and the applicable passing CI checks. Keep `develop`
+as the repository's default branch. Do not change account plans, repository
 visibility or access controls as a workaround without explicit owner direction.

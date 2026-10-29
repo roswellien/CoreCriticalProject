@@ -35,6 +35,13 @@ public partial class MainWindow
         ApplyUpdateNotificationPreference();
     }
 
+    private void AutomaticCrashReports_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isInitializing) return;
+        _settingsMgr.Current.AutomaticCrashReports = ChkAutomaticCrashReports.IsChecked == true;
+        _settingsMgr.Save();
+    }
+
     private void ApplyUpdateNotificationPreference()
     {
         if (_settingsMgr.Current.AutomaticUpdateChecks) StartUpdateNotifications();

@@ -1,46 +1,105 @@
 # Core Critical website
 
-The site is live on Cloudflare Pages at [corecritical.dev](https://corecritical.dev).
-The Pages project is `core-critical`, with the static build in `dist/` as set in
-[wrangler.jsonc](wrangler.jsonc). The production page sources and approved
-illustrations are kept in this repository's `website/` tree.
+The live site is [corecritical.dev](https://corecritical.dev), hosted by the
+existing Cloudflare Pages project `core-critical`. Website source now lives in
+this repository's `website/` directory. Cloudflare builds production from this
+repository's `main` branch, with `website/` as its project root. Automatic production deployments are enabled.
 
 ## Build and preview
 
-From `website/`:
+From the repository root, build the static pages and MechLab news:
 
 ```powershell
-python build.py
-python -m http.server 4173 --bind 127.0.0.1 --directory dist
+python website/build.py
 ```
 
-Open <http://127.0.0.1:4173/>. The build copies the site and approved artwork,
-then generates `news.html`, dated `updates/` pages, `feed.xml`, and the media
-gallery. Its MechLab summaries come directly from dated Markdown files in the
-repository-root `docs/mechlab/` directory. The homepage shows the latest three
-notes; the news archive contains all dated notes. See
-[`docs/mechlab/README.md`](../docs/mechlab/README.md) for the public-note format.
+The build reads public dated notes from `docs/mechlab/` in this repository and
+generates the homepage updates, `news.html`, dated `updates/` pages and `feed.xml`.
+It also generates the media gallery from the metadata in `website/data/`.
+Original footage remains at the already-published URLs in
+`data/media-assets.json`; the build does not download or package it.
 
-The gallery references previously published video and thumbnail URLs listed in
-`data/media-assets.json`; the build does not download or package game footage.
-Original game media and generated game code remain local.
+To preview the site and its YouTube Pages Function, run Wrangler from
+`website/` after building:
+
+```powershell
+Set-Location website
+npx --yes wrangler@4.151.0 pages dev dist
+```
+
+Wrangler serves the static build and discovers the Function in `website/functions/`.
+For a static-only preview, use `python -m http.server 4173 --directory dist`
+from `website/`.
 
 ## Publish
 
-Build and review `dist/`, then deploy to the existing Pages project:
+The maintainer keeps the existing `core-critical` Pages project and custom
+domain, and points its Git integration at this repository with `website/` as
+the root directory. Configure the build command as `python3 build.py` and the
+output directory as `dist`. The Pages Function must stay in the project root
+(`website/functions/`), outside `dist/`. See [CLOUDFLARE.md](CLOUDFLARE.md) for
+the cutover checklist.
 
-```powershell
-npx --yes wrangler@4.151.0 pages deploy dist --project-name core-critical
-```
+The media gallery uses files and hashes in `data/media-assets.json` that are
+hosted on the existing pinned Pages deployment. Keep that deployment available;
+the migration does not recreate or remove it.
 
-The maintainer supplies Cloudflare authentication through a local Wrangler login
-or `CLOUDFLARE_API_TOKEN`. Keep tokens outside the repository. Check the deploy
-URL and verify the home page, MechLab news, media pages, navigation, fonts and
-illustrations on `corecritical.dev`.
+The maintainer supplies Cloudflare access through the existing account or a
+local Wrangler login. Keep API tokens and signing credentials outside Git.
+The legacy cross-repository MechLab publishing bridge is retired. Future site
+and dated MechLab changes publish from this repository's `main` branch.
 
 ## Content and boundaries
 
-This is a static HTML/CSS/JavaScript site. `python build.py` does not publish or
-change DNS. Only the explicitly authored `docs/mechlab/YYYY-MM-DD.md` notes feed
-the development news. Do not add original game media, generated game code,
-signing credentials or Cloudflare tokens to the site source.
+Only dated `docs/mechlab/YYYY-MM-DD.md` notes feed the development news. The
+build does not call GitHub APIs, create a copied `data/mechlab.json`, or need a
+cross-repository deploy key. Do not add original game media, generated game
+code, Cloudflare tokens or signing credentials to this tree.
+
+The site pages are static HTML/CSS/JavaScript; the Pages Function in
+`functions/api/crash-reports.js` is the server-side crash-report endpoint.
+`python build.py` does not publish or change DNS.
+
+## Crash report endpoint
+
+Reports are sent only after the player enables automatic sending or approves a
+one-time prompt. The endpoint targets a dedicated private repository such as
+`roswellien/corecritical-crash-reports`, groups specific failures by engine
+mode, exit code and message, reopens closed matching issues, and adds issues to
+the configured Project V2 board through that board's built-in auto-add
+workflow. The generic unexpected-exit message is never grouped. The launcher
+displays a short report ID, not a private GitHub URL.
+
+New crash issues are capped at 20 per UTC day by default. The cap is reserved
+atomically in D1; reports beyond it are comments on one configured overflow
+issue, without full logs. Matching issues include full logs for only their
+first three repeats. Create the private report repository, a private overflow
+issue in it, and a D1 database before enabling production reporting. Apply a
+Cloudflare rate-limit rule to `/api/crash-reports` as well.
+
+In the Project V2 board, enable its **Auto-add to project** workflow for the
+private crash-report repository with the filter `is:issue`. The overflow issue
+must already be on the board; manually add it if it was created before this
+workflow was enabled. GitHub auto-add workflows do not backfill existing issues.
+
+Configure the `core-critical` Pages production environment with:
+
+- `CRASH_REPORT_REPOSITORY=roswellien/corecritical-crash-reports`.
+- `CRASH_REPORT_OVERFLOW_ISSUE_NUMBER`, the private repository's overflow issue number.
+- Optional `CRASH_REPORT_DAILY_ISSUE_LIMIT` (defaults to `20`, maximum `1000`).
+- Create a D1 database, apply the migration from `website/`, and bind it to
+  Pages as `CRASH_REPORT_DB`:
+
+  ```powershell
+  npx wrangler d1 create corecritical-crash-reports
+  npx wrangler d1 execute corecritical-crash-reports --remote --file migrations/0001_crash_issue_daily_limits.sql
+  ```
+
+- A `GITHUB_TOKEN` secret with issue read/write access to the private report
+  repository only. A fine-grained token can be restricted to this one repo;
+  Project access is handled by GitHub's built-in auto-add workflow.
+
+Keep the GitHub token in the Pages secret store and outside Git. The server
+requires all configuration, including D1 and the overflow issue, and fails
+visibly when any part is missing. Run endpoint checks from `website/` with
+`npm test`.

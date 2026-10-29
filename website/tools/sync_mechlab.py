@@ -1,10 +1,9 @@
-"""Read the public daily summaries directly from the repository's MechLab notes."""
+"""Read public MechLab notes from this repository for the site build."""
 from datetime import date
+import os
 from pathlib import Path
 import re
 import subprocess
-
-REPOSITORY_URL = "https://github.com/roswellien/MW3Recomp-Private"
 
 
 def source_commit(repository_root: Path, note_path: Path) -> str:
@@ -20,6 +19,11 @@ def source_commit(repository_root: Path, note_path: Path) -> str:
     match = re.search(r"\b[0-9a-f]{40}\b", result.stdout)
     if match:
         return match.group(0)
+
+    for variable in ("CF_PAGES_COMMIT_SHA", "GITHUB_SHA"):
+        commit = os.environ.get(variable, "")
+        if re.fullmatch(r"[0-9a-f]{40}", commit):
+            return commit
 
     current = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -68,6 +72,8 @@ def parse_note(path: Path, repository_root: Path) -> dict[str, str]:
 
 
 def read_notes(source: Path, repository_root: Path) -> list[dict[str, str]]:
+    if not source.is_dir():
+        raise FileNotFoundError(f"MechLab note directory not found: {source}")
     notes = [parse_note(path, repository_root) for path in source.glob("????-??-??.md")]
     if not notes:
         raise ValueError(f"No public daily notes found in {source}")

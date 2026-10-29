@@ -32,9 +32,10 @@ Assume the next person to change this code is new to the project and to the lang
 - In maintained code that calls one, describe what you think it does in a comment, with
   a confidence word (guess, likely, confirmed) and where the evidence is, in this shape:
   `// sub_XXXXXXXX: <what it seems to do> (<guess|likely|confirmed>; evidence: <where>)`
-- Evidence records live in [games/mw3/symbols/](games/mw3/symbols/README.md).
+- Record each function's name, confidence, evidence and one-line purpose in
+  [games/mw3/symbols/functions.tsv](games/mw3/symbols/README.md); evidence records live beside it.
 - Never add such comments to files on the exclusion list below; those notes go in the
-  symbols records instead.
+  function table instead.
 
 ## Formatting and checks
 

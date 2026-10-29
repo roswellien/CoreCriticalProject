@@ -198,21 +198,30 @@ runtime inputs and release artifacts outside Git.
 
 ## Website deployment
 
-The public project site at `corecritical.dev` is a separate Cloudflare Pages
-project. Its page sources and approved illustrations are tracked in
-`website/`. From `website/`, run `python build.py` and inspect the generated
-`dist/`. The build renders MechLab news from the repository-root `docs/mechlab/`
-and uses the existing public media URLs in `data/media-assets.json`; it does not
-copy or download original footage. Then publish with:
+The public project site at `corecritical.dev` uses the existing Cloudflare Pages
+project `core-critical`. Its sources, approved illustrations, media metadata and
+Pages Function are tracked in `website/`. From the repository root, run
+`python website/build.py` and inspect the generated `website/dist/`. The build
+reads MechLab news directly from `docs/mechlab/` and uses the existing public
+media URLs in `website/data/media-assets.json`; it does not copy or download
+original footage. To publish with Wrangler, run from `website/` so it discovers
+the Pages Function in that project root:
 
 ```powershell
+Set-Location website
 npx --yes wrangler@4.151.0 pages deploy dist --project-name core-critical
 ```
 
-The maintainer supplies Cloudflare authentication locally. Confirm the deploy
-URL and inspect the live homepage, generated development news, navigation and
-assets. Do not put Cloudflare tokens in Git. See [website/README.md](../website/README.md)
-for the local preview and site details.
+The existing project uses this repository's `main` branch, `website/` root,
+`python3 build.py` build command and `dist` output. Keep `functions/` beside the
+build command, outside `dist/`. Keep the project and the pinned
+`a67a6e69.core-critical.pages.dev` media deployment. Confirm the deploy URL and
+inspect all pages, MechLab news, media gallery and YouTube carousel. Do not put
+Cloudflare tokens in Git. The cross-repository MechLab publishing bridge is
+retired; dated notes publish directly with this repository's website build.
+See [website/README.md](../website/README.md) and
+[website/CLOUDFLARE.md](../website/CLOUDFLARE.md) for local preview and cutover
+details.
 
 ## Evidence and external inputs
 

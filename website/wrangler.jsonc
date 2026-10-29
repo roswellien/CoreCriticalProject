@@ -2,5 +2,16 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "core-critical",
   "pages_build_output_dir": "./dist",
-  "compatibility_date": "2026-10-14"
+  "compatibility_date": "2026-10-14",
+  "d1_databases": [
+    {
+      "binding": "CRASH_REPORT_DB",
+      "database_name": "corecritical-crash-reports",
+      "database_id": "91068621-6ab1-447f-9673-db939b1b0cf3"
+    }
+  ],
+  "vars": {
+    "CRASH_REPORT_REPOSITORY": "roswellien/corecritical-crash-reports",
+    "CRASH_REPORT_OVERFLOW_ISSUE_NUMBER": "1"
+  }
 }
