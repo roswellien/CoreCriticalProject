@@ -345,7 +345,7 @@ void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.dis
   if(gameplay!=measured_gameplay)host.presenter->overlay.reset();measured_gameplay=gameplay;}
  world_present();geometry_profile.present(host.frames);
  if(host.frame_dump&&(host.frames==1||host.frames%host.frame_dump==0))dump_frame(v,px);
- if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.presenter?host.presenter->presents:0)+" through the Vulkan swapchain"+(host.presenter&&host.presenter->presents?" on "+host.presenter->device_name:std::string())+")",host.frames);}
+ if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.presenter?host.presenter->presents:0)+(host.presenter&&host.presenter->dxgi_presenting()?" through the Vulkan/DXGI bridge":" through the Vulkan swapchain")+(host.presenter&&host.presenter->presents?" on "+host.presenter->device_name:std::string())+")",host.frames);}
 // Evidence: the presented frame as a binary PPM (converted from RGB565) under the run's frame directory.
 void dump_frame(const VSurface&v,const std::vector<unsigned char>&px){if(host.frame_dir.empty()||v.bpp!=16)return;std::ofstream f(host.frame_dir+"/frame-"+std::to_string(host.frames)+".ppm",std::ios::binary);
  f<<"P6\n"<<v.width<<" "<<v.height<<"\n255\n";for(unsigned y=0;y<v.height;++y)for(unsigned x=0;x<v.width;++x){const unsigned p=unsigned(px[size_t(y)*v.pitch+2*x])|unsigned(px[size_t(y)*v.pitch+2*x+1])<<8;
@@ -368,6 +368,8 @@ void blit(const VSurface&d,RECT dr,const VSurface&s,RECT sr,bool key,unsigned kl
   surface_write(d,da,row.data(),unsigned(dw)*b);}}
 bool resident_current(){auto*rt=vsurface(host.res_rt);auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;return rt&&rt->version==host.res_ver_rt&&(!host.res_zb||(zb&&zb->version==host.res_ver_zb));}
 void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=host.sren->frontend_canvas();sc.width=rt->width;sc.height=rt->height;
+ // DirectDraw fills use guest surface coordinates, not a preceding world raster scale.
+ sc.guest_surface_write=true;
  sc.has_depth=host.res_zb!=0;vs::Clear k{};const bool depth=d.guest==host.res_zb;k.flags=depth?2U:1U;k.color[0]=float((c>>11)&31)/31.f;k.color[1]=float((c>>5)&63)/63.f;k.color[2]=float(c&31)/31.f;k.color[3]=1.f;k.z=float(c&0xffff)/65535.f;
  k.rects.push_back({{r.left,r.top},{unsigned(r.right-r.left),unsigned(r.bottom-r.top)}});sc.order.push_back({true,0});sc.clears.push_back(std::move(k));
  try{HostInternal hi(*this);host.sren->render(sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}
