@@ -76,10 +76,10 @@ there is no interpreter/original-code fallback, guest state seeding or fake serv
 
 ## Bounded validation
 
-Current-source development host SHA-256
+The implementation's pre-review development host SHA-256 is
 `e2a154cfd8d0fd3ed2c13da9187cf14cdd561df058f0a1efbfc4c953bb6c7206`.
 Its build receipt records all 169 host source hashes and 186 repository dependencies;
-the current host sources match those hashes. The translated DLL is unchanged.
+the runs in the table below matched those source hashes. The translated DLL is unchanged.
 Native runs used RX 9070, unchanged installed driver, explicit Vulkan/DXGI bridge,
 3440x1440/FXAA/16x AF and synchronization validation. Every run below reached its
 deliberate presentation-budget stop (exit 1), with zero VUID/validation errors.
@@ -129,6 +129,29 @@ advancement, omitted load epoch, erased sticky guest-write invalidation, bypasse
 inverse admission, omitted camera dispatch target, missing reader epoch,
 lighting-only activation and bypassed projection agreement. Source mutations were
 restored and positive checks rerun.
+
+Independent branch review completed in two correctness/structure passes. It found
+that the new reader epoch inherited legacy substring matching, so unrelated names
+such as `readeria.txt` advanced temporal load identity. Epoch admission now uses
+the known Training/Instant Action/Multiplayer archive names while preserving
+existing lighting classification. The extended lifecycle fixture failed before
+the fix and passes afterwards, including all recognized mode-reader variants.
+The removed-reader-epoch and lighting-only activation negative controls still fail.
+No major or minor review findings remain.
+
+The post-review development host SHA-256 is
+`0290443b55b59902265f3a8846f391bf3f9c38ce97ba22f57574a2fd26563d15`;
+all 169 current host sources match its build receipt. Its matched published 100%
+temporal-On Training run (`local/p2a/review-published100-on-reference/`) completes
+2,200 actual RX 9070 Vulkan/DXGI presentations / 6,142 guest scenes, with 1,471 valid
+pairs including the final frame, zero validation errors and deliberate budget exit 1.
+Captures 1801/2101 match the stored temporal-Off/On and P1 references above byte for
+byte. The full native configuration table remains evidence for the pre-review
+host, rather than an unperformed repeat of every configuration after this fix.
+Fresh review checks also pass the CMake build, 25/25 CTest, format-check, games-closed
+launcher .NET checks, eight launcher-dispatch tests, seven function-index tests,
+two host-builder tests, history/capture/dispatch/lifecycle fixtures and all 70 RX 9070
+renderer cases described above. The two inherited web-style failures below remain.
 
 Receipts and captures remain local under `local/p2a/`. The live update catalog
 selects runtime 1.0.44; a fresh read of the published R2 pack catalog confirms all

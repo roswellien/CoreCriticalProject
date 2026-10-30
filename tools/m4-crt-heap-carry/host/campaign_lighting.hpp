@@ -450,18 +450,24 @@ public:
         }
 
         // Check for non-campaign modes first (Training, Instant Action, Multiplayer)
+        // Keep legacy lighting classification, but only proven archive names
+        // advance temporal load identity. Unrelated paths can contain these words.
         if (lower.find("/t1/readerm") != std::string::npos && lower.ends_with(".zbd")) {
-            ++reader_epoch_;
+            if (lower.ends_with("/t1/readerm.zbd") || lower.ends_with("/t1/readerm1.zbd"))
+                ++reader_epoch_;
             reset("t1");
             return;
         }
         if (lower.find("readeria") != std::string::npos) {
-            ++reader_epoch_;
+            if (lower.ends_with("/readeria1.zbd") || lower.ends_with("/readeria2.zbd") ||
+                lower.ends_with("/readeria3.zbd"))
+                ++reader_epoch_;
             reset("ia");
             return;
         }
         if (lower.find("readermp") != std::string::npos) {
-            ++reader_epoch_;
+            if (lower.ends_with("/readermp1.zbd") || lower.ends_with("/readermp2.zbd"))
+                ++reader_epoch_;
             reset("mp");
             return;
         }

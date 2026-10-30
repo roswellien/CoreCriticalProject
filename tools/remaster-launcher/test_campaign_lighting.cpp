@@ -49,7 +49,12 @@ int main(int argc,char**){try{
  const auto loaded_reader=manager.reader_epoch();
  manager.observe_file("D:/isolated/zbd/t1/readerm.zbd",false);
  manager.observe_file("D:/isolated/games/pilot0101.mw3",true);
+ for(const char* path:{"D:/notes/readeria.txt","D:/notes/readermp.txt","D:/readeria/config.ini","D:/readermp/config.ini","D:/isolated/zbd/t1/readerm-notes.zbd"})
+  manager.observe_file(path,true);
  require(manager.reader_epoch()==loaded_reader,"Failed or unrelated file open advanced reader epoch");
+ for(const char* path:{"D:/isolated/zbd/t1/readerm1.zbd","D:/isolated/zbd/c1/readeria1.zbd","D:/isolated/zbd/c1/readeria2.zbd","D:/isolated/zbd/c1/readeria3.zbd","D:/isolated/zbd/c1/readermp1.zbd","D:/isolated/zbd/c1/readermp2.zbd"}){
+  const auto before=manager.reader_epoch();manager.observe_file(path,true);
+  require(manager.reader_epoch()==before+1,"Recognized mode reader did not advance reader epoch");}
  manager.frontend();
  std::cout<<"20 mission states, manual mode, failed opens, save-name isolation, menu/mode resets, weather fields and fixture lifecycle passed\n";return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}

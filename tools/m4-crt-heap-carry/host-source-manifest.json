@@ -91,8 +91,8 @@
       "classification": "authored-host-source"
     },
     "campaign_lighting.hpp": {
-      "sha256": "3572e9e1f43c0f7f4e76c297fff9bcbe51c07f491427114c7c47c0777b267012",
-      "bytes": 25060,
+      "sha256": "45a3ce3a34b94b5ed9a8d3504d663c1579c0d9e86dfd415e2c64f179af083c0a",
+      "bytes": 25554,
       "decision": "commit",
       "classification": "authored-host-source"
     },
