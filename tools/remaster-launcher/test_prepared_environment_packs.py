@@ -2,7 +2,7 @@
 import hashlib,json,struct,tempfile,unittest
 from pathlib import Path
 from normal_materials import pack_surface_bindings,read_surface_bindings
-from prepared_environment_packs import select,prepare,detail_metadata,PROFILE,REGISTRY,REGIONS,sha
+from prepared_environment_packs import select,prepare,detail_metadata,encode_normal_pages,PROFILE,REGISTRY,REGIONS,sha
 
 class EnvironmentPackTests(unittest.TestCase):
     def test_detail_pins_follow_selected_pack_revision(self):
@@ -15,7 +15,7 @@ class EnvironmentPackTests(unittest.TestCase):
                 self.assertEqual(pin['sha256'],sha(Path(pin['path'])))
                 self.assertEqual(pin['bytes'],Path(pin['path']).stat().st_size)
             self.assertEqual(detail_metadata({}),{})
-    def fixture(self,root,operation='training',normal=b'\x80\x80\xff\xff'):
+    def fixture(self,root,operation='training',normal=b'\x80\x80\xff\xff',world_format='BWSNR2',world_normal=None):
         root.mkdir(); files={}
         def put(name,data,fmt=None):
             p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(data)
@@ -25,8 +25,11 @@ class EnvironmentPackTests(unittest.TestCase):
         bank=put('environment/bank.bin',struct.pack('<6I',0,1,0,1,0,0),'ZBD-texture-v1')
         reg=dict(schema_version=2,payload_profile=PROFILE,operation=operation,banks={f'zbd/{r}/{n}.zbd':bank for r in REGIONS[operation] for n in ['rtexture','rtexture2','rtexture3','texture','texture1','texture2']},detail={})
         data=pack_surface_bindings([((1,1,1,123),(1,1,normal))])
+        world_data=pack_surface_bindings([((1,1,1,123),(1,1,world_normal or normal))],compressed=world_format=='BWSNR3')
         for role,magic in [('authored','MW34SNA1'),('world','MW34SNP1')]:
-            reg[role]=[put('environment/'+role+'.bin',data,'BWSNR2')]
+            page_data=world_data if role=='world' else data
+            page_format=world_format if role=='world' else 'BWSNR2'
+            reg[role]=[put('environment/'+role+'.bin',page_data,page_format)]
             reg[role+'_manifest']=put('environment/'+role+'.txt',(magic+'\n'+role+'.bin\n').encode(),magic)
         for role in ['water','surf','cloud']:reg['detail'][role]=put('environment/'+role+'-detail.bin',data,'BWSNR2')
         reg['effects']=put('environment/effects.bin',b'MWFX1\0\0\0'+struct.pack('<I',0),'MWFX1')
@@ -36,7 +39,7 @@ class EnvironmentPackTests(unittest.TestCase):
             used={bank,*reg['authored'],reg['authored_manifest']}
             files={k:v for k,v in files.items() if k in used}
         put(REGISTRY,json.dumps(reg).encode())
-        manifest=dict(schema_version=2,id='test.'+root.name.replace(' ','-').lower(),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',reference_host_sha256='a'*64,required_formats=['BWSNR2']),files=files)
+        manifest=dict(schema_version=2,id='test.'+root.name.replace(' ','-').lower(),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',reference_host_sha256='a'*64,required_formats=['BWSNR2']+(['BWSNR3'] if world_format=='BWSNR3' else [])),files=files)
         (root/'pack.json').write_text(json.dumps(manifest))
         return root
     def host(self):
@@ -54,6 +57,30 @@ class EnvironmentPackTests(unittest.TestCase):
             self.assertEqual(len(read_surface_bindings(page.read_bytes())),1)
             empty=prepare({},self.host(),root/'disabled');self.assertNotIn('MW34_WORLD_NORMALS',empty);self.assertNotIn('MW34_REMASTER_BANKS',empty)
             self.assertEqual(empty['MW34_EFFECT_LIGHTS'],'0')
+    def test_compressed_world_catalog_selection_and_repacking(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t);pack=self.fixture(root/'compressed','operation2',world_format='BWSNR3')
+            chosen=select([str(pack)],self.host())
+            self.assertIn('operation2',chosen)
+            output=root/'launch';env=prepare(chosen,self.host(),output)
+            world_manifest=Path(env['MW34_WORLD_NORMALS'])
+            world_name=world_manifest.read_text().splitlines()[1]
+            page=(world_manifest.parent/world_name).read_bytes()
+            self.assertEqual(page[:8],b'BWSNR3\0\0')
+            self.assertEqual(len(read_surface_bindings(page)),1)
+            entries=[((1,1,1,123),(1,1,b'\x80\x80\xff\xff'))]
+            pages=list(encode_normal_pages(entries,world=True))
+            self.assertEqual(pages[0][:8],b'BWSNR3\0\0')
+    def test_shared_surface_conflict_uses_fixed_campaign_priority(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t)
+            op3=self.fixture(root/'op3','operation3',world_normal=b'\x81\x80\xff\xff')
+            op2=self.fixture(root/'op2','operation2',world_normal=b'\x82\x80\xff\xff')
+            chosen=select([str(op3),str(op2)],self.host())
+            output=root/'launch';env=prepare(chosen,self.host(),output)
+            manifest=Path(env['MW34_WORLD_NORMALS']);name=manifest.read_text().splitlines()[1]
+            page=read_surface_bindings((manifest.parent/name).read_bytes())
+            self.assertEqual(page[0][1][2],b'\x82\x80\xff\xff')
     def test_reject_bad_host_corruption_and_conflicts(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);one=self.fixture(root/'one');two=self.fixture(root/'two','operation1',b'\x90\x80\xff\xff')

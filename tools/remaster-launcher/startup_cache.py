@@ -133,7 +133,7 @@ def _environment_resources(selected, host, cache_root, progress=None):
     # using the same readers must not force all normal pages to be rebuilt.
     # Reader/writer changes still invalidate through the producer pins above.
     resource_host = dict(authored_normal_catalog_budget_bytes=host.get(
-                             'authored_normal_catalog_budget_bytes', 536870912))
+                             'authored_normal_catalog_budget_bytes', 1610612736))
     identity = dict(selected=selected, host=resource_host, producers=producers)
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     directory = Path(cache_root) / 'environment-cache' / key

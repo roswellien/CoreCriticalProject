@@ -238,9 +238,9 @@ def prepare(banks_path, inventory_path, output, hash_library):
     if (
         not pages
         or len(pages) > 256
-        or sum((output / p["name"]).stat().st_size for p in pages) > 512 * 1024 * 1024
+        or sum((output / p["name"]).stat().st_size for p in pages) > 4096 * 1024 * 1024
     ):
-        raise ValueError("World-normal package exceeds its bounded resident budget")
+        raise ValueError("World-normal package exceeds its bounded encoded budget")
     for bank in banks:
         if sha(Path(bank["path"])) != bank["sha256"]:
             raise ValueError("World bank changed during preparation")

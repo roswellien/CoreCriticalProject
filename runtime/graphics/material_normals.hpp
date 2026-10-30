@@ -158,10 +158,12 @@ struct SurfaceNormals {
     std::map<SurfaceKey, std::uint32_t> bindings;
 };
 // Authored catalogs can span small pages using BWSNR2 or lossless BWSNR3.
-// Enhanced host catalogs have a bounded 512 MiB
-// aggregate budget (matching automatic world normals); each page stays within
-// its original 256 MiB limit. Guest image/resource limits are unchanged.
-inline constexpr std::uint64_t authored_normal_budget = 512ULL * 1024 * 1024;
+// The authored aggregate is bounded at 1536 MiB; pages retain their original
+// 256 MiB limit. World bytes and resident pixels use separate budgets below.
+inline constexpr std::uint64_t authored_normal_budget = 1536ULL * 1024 * 1024;
+// World catalogs are file-backed and page-loaded. Their encoded package can be
+// larger than the independent 512 MiB decoded resident cache.
+inline constexpr std::uint64_t world_normal_catalog_budget = 4096ULL * 1024 * 1024;
 inline std::vector<std::filesystem::path>
 surface_normal_catalog_paths(const std::filesystem::path &path) {
     // Accept one binary sidecar or a bounded text list of pages. Resolve paths,
