@@ -18,6 +18,7 @@ from prepare_surface_normals import bank_entries
 
 REGIONS = {"t1", "c1", "c2", "c3", "c4", "c4b"}
 EXCLUDED = {"effects_animation", "sky_candidate", "water_shore_candidate"}
+WORLD_PAGE_BYTES = 16 * 1024 * 1024
 
 
 def sha(path):
@@ -45,6 +46,19 @@ def accelerated_hash(path):
         if digest(data) != pixel_hash(data):
             raise ValueError("Normal hash helper failed its reference control")
     return digest
+
+
+def pack_bounded_world_page(bindings):
+    """Split generated pages until every encoded page fits the native limit."""
+    data = pack_surface_bindings(bindings)
+    if len(data) <= WORLD_PAGE_BYTES:
+        return [(data, len(bindings))]
+    if len(bindings) == 1:
+        raise ValueError("One world-normal binding exceeds native page byte budget")
+    middle = len(bindings) // 2
+    return pack_bounded_world_page(bindings[:middle]) + pack_bounded_world_page(
+        bindings[middle:]
+    )
 
 
 def generate_normal(colour, width, height, format_, *, terrain=False, max_size=128):
@@ -229,11 +243,13 @@ def prepare(banks_path, inventory_path, output, hash_library):
             )
         )
         if len(batch) == 64 or number == len(entries) - 1:
-            name = f"page-{len(pages):03d}.bin"
-            data = pack_surface_bindings(batch)
-            (output / name).write_bytes(data)
-            pages.append(dict(name=name, sha256=sha(output / name), bindings=len(batch)))
-            print("Prepared", name, "through", number + 1, "/", len(entries), flush=True)
+            for data, binding_count in pack_bounded_world_page(batch):
+                name = f"page-{len(pages):03d}.bin"
+                (output / name).write_bytes(data)
+                pages.append(
+                    dict(name=name, sha256=sha(output / name), bindings=binding_count)
+                )
+                print("Prepared", name, "through", number + 1, "/", len(entries), flush=True)
             batch.clear()
     if (
         not pages

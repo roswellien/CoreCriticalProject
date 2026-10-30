@@ -98,7 +98,7 @@ class StartupCacheTests(unittest.TestCase):
         actual = Path.read_bytes
         def changed(path):
             data = actual(path)
-            return data + b'\n# changed producer' if path.name == 'mission_lighting.py' else data
+            return data + b'\n# changed producer' if path.name == 'normal_codec.py' else data
         with patch.object(Path, 'read_bytes', changed):
             third = environment_resources(chosen, host, self.root / 'cache')
         self.assertNotEqual(first['MW34_REMASTER_BANKS'], third['MW34_REMASTER_BANKS'])

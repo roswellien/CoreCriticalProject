@@ -11,7 +11,11 @@ import struct
 from pathlib import Path
 
 from prepared_mech_packs import canonical_pack_root, read_json, resolve
-from normal_materials import read_surface_bindings, pack_surface_bindings
+from normal_materials import (
+    DecodedSurfaceBudgetExceeded,
+    pack_surface_bindings,
+    read_surface_bindings,
+)
 
 PROFILE = 'prepared-environment-v1'
 REGISTRY = 'environment/environment.json'
@@ -24,6 +28,7 @@ MAX_BYTES = 16 * 1024**3
 AUTHORED_CATALOG_BYTES = 1536 * 1024**2
 WORLD_CATALOG_BYTES = 4096 * 1024**2
 WORLD_PAGE_BYTES = 16 * 1024**2
+MERGED_NORMAL_DECODED_BYTES = 240 * 1024**2
 REGION_PRIORITY = {'operation1': 0, 'operation2': 1, 'operation3': 2,
                    'operation4': 3, 'training': 4, 'shared-mechs': 5}
 
@@ -70,35 +75,80 @@ def write_merged_normal_catalog(selected, role, output):
     """Merge installed pages with bounded decoded memory, writing each page immediately."""
     world=role=='world'; page_limit=WORLD_PAGE_BYTES if world else 256*1024**2
     catalog_limit=WORLD_CATALOG_BYTES if world else AUTHORED_CATALOG_BYTES
-    decoded_limit=240*1024**2
+    decoded_limit=MERGED_NORMAL_DECODED_BYTES
     from normal_codec import encode as encode_normal
     seen_keys={}; batch=[]; images={}; encoded_sizes={}; page_encoded=0
-    decoded=0; total=0; names=[]; conflicts=0
+    decoded=0; total=0; names=[]; conflicts=0; pending_checks=[]
+
+    def signatures(entries):
+        return [
+            (key,None if value is None else
+             (value[0],value[1],hashlib.sha256(value[2]).digest()))
+            for key,value in entries
+        ]
 
     def page_bytes(entries):
-        data=pack_surface_bindings(entries,compressed=world)
-        if len(data)>page_limit:
-            if len(entries)<=1: raise ValueError('One normal binding exceeds native page byte budget')
+        data=pack_surface_bindings(entries,compressed=world,cache_hashes=False)
+        unique_images={value for _,value in entries if value is not None}
+        decoded_bytes=sum(len(value[2]) for value in unique_images)
+        largest_image=max((len(value[2]) for value in unique_images),default=0)
+        decoder_peak=decoded_bytes+2*largest_image if world else decoded_bytes
+        if len(data)>page_limit or decoder_peak>decoded_limit:
+            if len(entries)<=1:
+                raise ValueError('One normal binding exceeds native page or decoded working budget')
             middle=len(entries)//2
-            return page_bytes(entries[:middle])+page_bytes(entries[middle:])
-        if dict(read_surface_bindings(data))!=dict(entries):
-            raise ValueError('Normal page full-pixel roundtrip failed')
-        return [data]
+            yield from page_bytes(entries[:middle]);yield from page_bytes(entries[middle:])
+            return
+        yield data,signatures(entries)
 
     def emit(entries):
         nonlocal total
-        for data in page_bytes(entries):
+        for data,expected in page_bytes(entries):
             total+=len(data)
             if total>catalog_limit or len(names)>=(256 if world else 16):
                 raise ValueError('Normal catalog exceeds native count/byte budget')
             name=f'{role}-{len(names)}.bin'
             (output/name).write_bytes(data); names.append(name)
+            pending_checks.append((output/name,expected))
+
+    def verify_pending():
+        while pending_checks:
+            path,expected=pending_checks.pop(0)
+            actual=read_surface_bindings(
+                path.read_bytes(),
+                max_decoded_bytes=decoded_limit,
+                max_working_bytes=decoded_limit,
+                cache_hashes=False,
+            )
+            actual_signatures=signatures(actual)
+            del actual
+            if actual_signatures!=expected:
+                raise ValueError('Normal page full-pixel roundtrip failed')
 
     ordered=sorted(selected.items(),key=lambda item:(REGION_PRIORITY.get(item[0],99),item[0]))
     for _region,pack in ordered:
         registry=pack['registry']; paths=pack['paths']
         for name in registry.get(role,[]):
-            entries=read_surface_bindings(Path(paths[name]).read_bytes())
+            source_data=Path(paths[name]).read_bytes()
+            try:
+                entries=read_surface_bindings(
+                    source_data,
+                    max_decoded_bytes=decoded_limit-decoded,
+                    max_working_bytes=decoded_limit,
+                    retained_decoded_bytes=decoded,
+                    cache_hashes=False,
+                )
+            except DecodedSurfaceBudgetExceeded:
+                if not batch:
+                    raise
+                emit(batch);batch=[];images={};page_encoded=0;decoded=0
+                verify_pending()
+                entries=read_surface_bindings(
+                    source_data,
+                    max_decoded_bytes=decoded_limit,
+                    max_working_bytes=decoded_limit,
+                    cache_hashes=False,
+                )
             page_signatures={}
             for key,value in entries:
                 value_id=id(value)
@@ -135,13 +185,20 @@ def write_merged_normal_catalog(selected, role, output):
                     projected=28+56+56*int(new_image)+encoded_bytes
                 if world and projected>page_limit:
                     raise ValueError('One normal binding exceeds native page byte budget')
-                batch.append((key,value))
                 if new_image:
                     images[image_id]=value;decoded+=image_bytes;page_encoded+=encoded_bytes
+                elif value is not None:
+                    value=images[image_id]
+                batch.append((key,value))
                 if len(batch)>=256:
                     emit(batch);batch=[];images={};page_encoded=0;decoded=0
+            del value
             del entries
-    if batch: emit(batch)
+            if not batch:
+                verify_pending()
+    if batch:
+        emit(batch);batch=[];images={};decoded=0
+    verify_pending()
     return names,total,conflicts
 
 
