@@ -63,6 +63,7 @@
 #include "world_coverage_frag.h"
 #include "frontend_canvas.hpp"
 #include "launcher_display.hpp"
+#include "camera_history.hpp"
 
 namespace mw34::vkscene {
 // The stage mirrors the guest's x87 control word and MXCSR into the host while guest code runs;
@@ -149,6 +150,7 @@ struct Draw {
     std::shared_ptr<const mw34::sun::Tl> sun_tl{};
     unsigned char sky{};
     std::shared_ptr<const mw34::sun::Tl> sky_view{};
+    std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
     unsigned detail_role{};
     std::uint64_t shadow_source{};
     std::function<bool()> shadow_valid;
@@ -200,6 +202,23 @@ class Renderer {
         : require_rgba8(color_target == ColorTarget::rgba8) {}
     bool alpha_target() const { return rgba; }
     std::string device_name;
+    mw34::temporal::History camera_history;
+    void invalidate_camera_history(mw34::temporal::Reset reason) {
+        if (mw34::temporal::enabled()) camera_history.invalidate(reason);
+    }
+    void complete_camera_history(std::uint64_t frame, unsigned target, const char *admission = "none") {
+        if (!mw34::temporal::enabled()) return;
+        camera_history.complete(frame, target);
+        unsigned valid = 0, mode_mask = 0;
+        for (const auto &[view, pair] : camera_history.pairs()) {
+            valid += pair.valid();
+            if (pair.current && pair.current->mode < 32) mode_mask |= 1U << pair.current->mode;
+        }
+        std::fprintf(stderr, "Camera history frame=%llu views=%zu pairs=%u mode_mask=%x reset=%s rejected=%s mismatch=%s\n",
+                     (unsigned long long)frame, camera_history.pairs().size(), valid, mode_mask,
+                     mw34::temporal::name(camera_history.last_reset()), admission,
+                     camera_history.disagreement());
+    }
     std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{}, combined_draws{};
     using PerfOverlay = mw34::performance::Overlay;
     PerfOverlay overlay;
@@ -938,6 +957,47 @@ class Renderer {
         if (s.width != width || s.height != height || scale_req != scale ||
             s.frontend_canvas != target_frontend)
             target(s.width, s.height, s.frontend_canvas);
+        if (mw34::temporal::enabled()) {
+            if (s.frontend_canvas) camera_history.invalidate(mw34::temporal::Reset::transition);
+            if (upload_in && !(leading_full_clear(s) & 1))
+                camera_history.invalidate(mw34::temporal::Reset::external_write);
+            if (s.guest_surface_write) {
+                // A complete clear before this frame's first world draw is
+                // normal frame initialization. Partial/interleaved fills are
+                // unsupported temporal writes and poison this frame.
+                bool initial_clear = !camera_history.pending() && s.draws.empty() && !s.clears.empty();
+                for (const auto &clear : s.clears) {
+                    initial_clear &= clear.flags && !(clear.flags & ~3U) && clear.rects.size() == 1;
+                    if (clear.rects.size() == 1) {
+                        const auto &rectangle = clear.rects[0];
+                        initial_clear &= rectangle.offset.x == 0 && rectangle.offset.y == 0 &&
+                            rectangle.extent.width == s.width && rectangle.extent.height == s.height;
+                    }
+                }
+                if (!initial_clear) camera_history.invalidate(mw34::temporal::Reset::external_write);
+            }
+            // Observe only this original submission. Internal shading/coverage
+            // replays never pass through this entry point.
+            for (const auto &draw : s.draws) {
+                // P2 history belongs to admitted static scenery. Cockpit/effect
+                // projections sharing a camera address are not that world view.
+                if (!draw.camera_view || !draw.model || !draw.model->world) continue;
+                if (draw.camera_view->projection != draw.model->projection) {
+                    camera_history.invalidate(mw34::temporal::Reset::invalid);
+                    continue;
+                }
+                auto snapshot = std::make_shared<mw34::temporal::Snapshot>(*draw.camera_view);
+                const unsigned output_width = reduced_world_active ? alternate_width : rw;
+                const unsigned output_height = reduced_world_active ? alternate_height : rh;
+                const unsigned world_width = worldColor.image ?
+                    (reduced_world_active ? rw : alternate_width) : rw;
+                const unsigned world_height = worldColor.image ?
+                    (reduced_world_active ? rh : alternate_height) : rh;
+                snapshot->sizes = {s.width, s.height, output_width, output_height,
+                                   world_width, world_height};
+                camera_history.observe(std::move(snapshot));
+            }
+        }
         if (can_reconstruct_world(s, upload_in, readback_out))
             render_reconstructed_world(s);
         else
@@ -3065,6 +3125,7 @@ class Renderer {
     // width/height remain guest dimensions; rw/rh describe physical GPU storage.
     // Guest-sized transfer images bridge the two without resizing guest allocations.
     void target(unsigned w, unsigned h, bool frontend) {
+        invalidate_camera_history(mw34::temporal::Reset::transition);
         target_frontend = frontend;
         f.vkDeviceWaitIdle(device);
         destroy_world_target();

@@ -165,7 +165,7 @@ using GuestHeap=mw34::heap_partitions::GuestHeap;
 struct SoundLock{unsigned buffer;void*p1;DWORD b1;void*p2;DWORD b2;unsigned g1,g2;};
 // Direct3D provider records: per-device state and the commands of the current scene.
 unsigned fixture_mesh_node{},fixture_mesh_frame{};
-struct D3DCmd{enum Kind{Clear,Draw}kind;unsigned flags,a;float z;std::vector<RECT>rects;std::vector<unsigned char>vertices;unsigned prim{};std::vector<unsigned short>indices;std::shared_ptr<const std::vector<unsigned>>state_snapshot;unsigned texture{};unsigned fixture_node{},fixture_polygon{};int override_texture{-1};int override_normal_texture{-1};std::shared_ptr<const mw34::vkscene::ModelInstance>model{};std::shared_ptr<const mw34::sun::Tl>sun_tl{};std::shared_ptr<const mw34::sun::Tl>sky_view{};bool missile_exhaust{};bool condition_schematic{};unsigned hud_role{};float zoom_anchor{};bool zoom_anchor_known{};};
+struct D3DCmd{enum Kind{Clear,Draw}kind;unsigned flags,a;float z;std::vector<RECT>rects;std::vector<unsigned char>vertices;unsigned prim{};std::vector<unsigned short>indices;std::shared_ptr<const std::vector<unsigned>>state_snapshot;unsigned texture{};unsigned fixture_node{},fixture_polygon{};int override_texture{-1};int override_normal_texture{-1};std::shared_ptr<const mw34::vkscene::ModelInstance>model{};std::shared_ptr<const mw34::sun::Tl>sun_tl{};std::shared_ptr<const mw34::sun::Tl>sky_view{};std::shared_ptr<const mw34::temporal::Snapshot>camera_view{};bool missile_exhaust{};bool condition_schematic{};unsigned hud_role{};float zoom_anchor{};bool zoom_anchor_known{};};
 struct D3DDev{unsigned guest,target,zbuffer,d3d;std::array<unsigned,256>rs{};std::array<std::array<unsigned,32>,8>tss{};std::array<unsigned,8>textures{};std::vector<unsigned>viewports;unsigned current{};bool in_scene{};std::vector<D3DCmd>commands;
  /* draws share one state snapshot until a state setter advances the epoch (the stage-0 texture is per draw) */
  std::uint64_t epoch{1},snap_epoch{};std::shared_ptr<const std::vector<unsigned>>snap;};
@@ -497,6 +497,7 @@ std::string pose_name(unsigned address,unsigned limit){std::string result;
  // on every host exception, including a guest non-local return.
  #include "world_direct_stage.inc"
  #include "sun_lighting_stage.inc"
+ #include "camera_capture_stage.inc"
  #include "surface_normals_stage.inc"
 bool render_reuse_enabled(){
  static const bool enabled=[] {
@@ -607,7 +608,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
    try{result=body(s,target,p);}catch(...){missile_end();override_restore(previous);throw;}missile_end();override_restore(previous);
   }else result=body(s,target,p);if(target==0x51fb30){override_emit();missile_emit();}return result;}
  void*controller_next_body(State*s,unsigned target,void*p,Body body){
-  return photo_replay_body(s,target,p,[&]{return turret_aim_body(s,target,p,[&]{return lighting_body(s,target,p,body);});});
+  return camera_body(s,target,p,[&]{return photo_replay_body(s,target,p,[&]{return turret_aim_body(s,target,p,[&]{return lighting_body(s,target,p,body);});});});
  }
  #include "controller_stage.inc"
  void*remaster_body(State*s,unsigned target,void*p,Body body){

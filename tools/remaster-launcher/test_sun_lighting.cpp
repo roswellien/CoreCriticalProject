@@ -26,13 +26,30 @@ struct CaptureFixture {
     static OverrideMatrix override_product(const OverrideMatrix&a,const OverrideMatrix&b){OverrideMatrix c{};for(unsigned i=0;i<4;++i)for(unsigned j=0;j<4;++j)for(unsigned k=0;k<4;++k)c[i*4+j]+=a[i*4+k]*b[k*4+j];return c;}
     OverrideMatrix override_matrix(unsigned a){OverrideMatrix m=identity();for(unsigned row=0;row<3;++row)for(unsigned col=0;col<4;++col){const unsigned bits=load(a+4*(col*3+row));float value;std::memcpy(&value,&bits,4);m[row*4+col]=value;}return m;}
     #include "sun_lighting_stage.inc"
-    void run(){
+    void activate(){
         words={{0x7402f4,0x1000},{0x5f4c8c,0x2000},{0x2004,0x3000},{0x3034,1},{0x3038,0x1000}};
         const std::array<float,12> camera{0,1,0,-1,0,0,0,0,1,0,0,0};
         for(unsigned j=0;j<12;++j){unsigned bits;std::memcpy(&bits,&camera[j],4);words[0x1044+4*j]=bits;}
         for(unsigned j=0;j<12;++j){unsigned bits=words.at(0x1044+4*j);if(j>=3&&j<9)bits^=0x80000000U;words[0x73fc00+4*j]=bits;}
         for(unsigned j=0;j<12;++j)words[0x73fbc0+4*j]=words.at(0x73fc00+4*j);
         sun_view_binding.capture(0x1044,sun_view_words(0x1044),sun_view_words(0x73fc00),sun_view_words(0x73fbc0));
+    }
+    void camera_only(){
+        activate();
+        require(sun_view_capture_enabled(),"Independent camera activation was disabled");
+        const auto original=words;
+        ::SetLastError(5432);const unsigned saved=_mm_getcsr();_mm_setcsr(0x5f81);
+        OverrideMatrix matrix{};
+        {SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
+         require(sun_camera_world(matrix),"Authenticated lighting-Off view was rejected");}
+        require(words==original&&::GetLastError()==5432&&_mm_getcsr()==0x5f81,"Camera observation changed guest inputs or FP/LastError");
+        _mm_setcsr(saved);
+        auto changed=sun_view_words(0x73fbc0);changed[0]^=1;
+        bool rejected=false;try{sun_view_binding.validate(changed);}catch(...){rejected=true;}
+        require(rejected,"Independent capture accepted changed inverse words");
+    }
+    void run(){
+        activate();
         auto worldBinding=sun_view_binding;sun_view_binding.source=0x9000;
         ModelInstance effect{};sun_capture_world(effect,0);require(!effect.sun_eligible,"Temporary original effect camera receives no world light");sun_view_binding=worldBinding;
         auto changed=sun_view_words(0x73fc00);changed[0]^=1;
@@ -88,7 +105,10 @@ static Draw quad(Scene& s,bool world,bool rotate,bool faceSun,bool fog=false){
         const auto*p=reinterpret_cast<const unsigned char*>(&v);s.vertices.insert(s.vertices.end(),p,p+sizeof(v));}
     s.draws.push_back(d);s.order.push_back({false,0});return d;
 }
-int main(){try{
+int main(int argc,char**argv){try{
+    if(argc>1&&std::string(argv[1])=="--capture-only"){
+        CaptureFixture{}.camera_only();std::cout<<"Independent camera authentication and FP preservation pass\n";return 0;
+    }
     math();_putenv_s("MW34_GPU_MODELS","1");_putenv_s("MW34_SUN","1");_putenv_s("MW34_SUN_NORMALS","1");
     _putenv_s("MW34_SUN_AZIMUTH","0");_putenv_s("MW34_SUN_ELEVATION","30");
     _putenv_s("MW34_SUN_STRENGTH","1");_putenv_s("MW34_SUN_AMBIENT","0.25");

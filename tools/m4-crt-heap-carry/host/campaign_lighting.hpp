@@ -451,14 +451,17 @@ public:
 
         // Check for non-campaign modes first (Training, Instant Action, Multiplayer)
         if (lower.find("/t1/readerm") != std::string::npos && lower.ends_with(".zbd")) {
+            ++reader_epoch_;
             reset("t1");
             return;
         }
         if (lower.find("readeria") != std::string::npos) {
+            ++reader_epoch_;
             reset("ia");
             return;
         }
         if (lower.find("readermp") != std::string::npos) {
+            ++reader_epoch_;
             reset("mp");
             return;
         }
@@ -493,6 +496,7 @@ public:
 
         for (size_t i = 0; i < sizeof(campaign_patterns) / sizeof(campaign_patterns[0]); i += 2) {
             if (lower.ends_with(campaign_patterns[i])) {
+                ++reader_epoch_;
                 set_active_mission(campaign_patterns[i + 1]);
                 return;
             }
@@ -524,6 +528,7 @@ public:
     void frontend() { if(!pending_world_) reset(); }
     void enter_world() { pending_world_=false; }
     std::uint64_t generation() const { return generation_; }
+    std::uint64_t reader_epoch() const { return reader_epoch_; }
 
     bool is_campaign_active() const {
         return campaign_active_ && current_env_ != nullptr;
@@ -606,7 +611,7 @@ public:
 private:
     CampaignManager() = default;
     bool campaign_active_{false},pending_world_{false};
-    std::uint64_t generation_{};
+    std::uint64_t generation_{}, reader_epoch_{};
     std::string active_mission_id_{};
     const MissionEnvironment* current_env_{nullptr};
 };

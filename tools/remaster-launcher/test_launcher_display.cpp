@@ -2,6 +2,76 @@
 #include "vk_scene.hpp"
 #include <cassert>
 #include <iostream>
+static void camera_history_check() {
+    using namespace mw34::temporal;
+    auto require = [](bool value, const char *message) {
+        if (!value) throw std::runtime_error(message);
+    };
+    mw34::vkscene::Renderer renderer;
+    auto &history = renderer.camera_history;
+    Snapshot source{};
+    source.view = {1, 2, 3, 0}; source.frame = 1;
+    source.target = 7; source.attachment = 8; source.viewport = 9;
+    source.camera[0] = source.camera[4] = source.camera[8] = std::bit_cast<unsigned>(1.f);
+    source.inverse = source.camera;
+    source.projection = {1, 20, 20, 32, 32, .1f};
+    source.far_clip = 100;
+    source.viewport_rect = {0, 0, 64, 64}; source.sizes.fill(64);
+    auto submit = [&] { history.observe(std::make_shared<const Snapshot>(source)); };
+    submit(); submit(); submit();
+    require(history.completed_frame() == 0, "Submission advanced camera history");
+    renderer.complete_camera_history(1, 7);
+    require(!history.pairs().at(source.view).valid(), "First frame inherited history");
+    source.frame = 2; source.camera[9] = std::bit_cast<unsigned>(.25f);
+    submit(); submit(); renderer.complete_camera_history(2, 7);
+    const auto pair = history.pairs().at(source.view);
+    require(pair.valid() && pair.previous->camera[9] == 0 &&
+                pair.current->camera[9] == source.camera[9], "Continuous camera movement lost history");
+    source.camera[9] = 0;
+    require(pair.current->camera[9] != 0, "Camera snapshot retained mutable input");
+    bool duplicate = false;
+    try { renderer.complete_camera_history(2, 7); } catch (...) { duplicate = true; }
+    require(duplicate && history.pairs().at(source.view).valid(), "Duplicate completion changed history");
+    source.frame = 3; submit(); source.camera[9] = std::bit_cast<unsigned>(1.f); submit();
+    renderer.complete_camera_history(3, 7);
+    require(history.pairs().empty() && history.last_reset() == Reset::ambiguous,
+            "Conflicting same-frame cameras were accepted");
+    source.frame = 4; submit(); renderer.complete_camera_history(4, 7);
+    source.frame = 5; submit(); renderer.complete_camera_history(5, 7);
+    require(history.pairs().at(source.view).valid(), "Valid history did not recover");
+    source.frame = 6; ++source.load_epoch; submit(); renderer.complete_camera_history(6, 7);
+    require(!history.pairs().at(source.view).valid(), "Load epoch reused history");
+    source.frame = 7; submit();
+    renderer.invalidate_camera_history(Reset::external_write);
+    submit(); renderer.complete_camera_history(7, 7);
+    require(history.pairs().empty(), "Later draw erased guest-write invalidation");
+    source.frame = 8; submit(); renderer.complete_camera_history(8, 99);
+    require(history.pairs().empty() && history.last_reset() == Reset::wrong_target,
+            "Unrelated Flip target accepted camera history");
+    source.frame = 9; submit(); renderer.complete_camera_history(9, 0);
+    require(history.pairs().empty() && history.last_reset() == Reset::non_flip,
+            "Non-Flip presentation committed history");
+    source.frame = 10;
+    const auto main_view = source.view;
+    submit(); source.view = {1, 20, 30, 6}; submit(); renderer.complete_camera_history(10, 7);
+    source.frame = 11;
+    submit(); source.view = main_view; submit(); renderer.complete_camera_history(11, 7);
+    require(history.pairs().size() == 2 && history.pairs().at(main_view).valid() &&
+                history.pairs().at(View{1, 20, 30, 6}).previous->view.role == 6,
+            "Main and zoom history contaminated each other");
+    source.frame = 12;
+    for (unsigned i = 0; i <= History::capacity; ++i) {
+        source.view.node = 100 + i; submit();
+    }
+    renderer.complete_camera_history(12, 7);
+    require(history.pairs().empty() && history.last_reset() == Reset::capacity,
+            "Camera history grew beyond its view bound");
+    source.frame = 13; source.view = main_view;
+    source.camera[0] = 0x7fc00000; submit(); renderer.complete_camera_history(13, 7);
+    require(history.pairs().empty() && history.last_reset() == Reset::invalid,
+            "Nonfinite camera history accepted");
+    std::cout << "Camera history: immutable pairs, movement, real-frame completion, reset and view bounds pass\n";
+}
 static void dxgi_presentation_check() {
     using namespace mw34::vkscene;
     _putenv_s("MW34_DXGI_PRESENT", "1");
@@ -712,6 +782,26 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
                  "transitions\n";
 }
 int main(int argc, char **argv) {
+    if (argc > 1 && std::string(argv[1]) == "--camera-history-off") {
+        _putenv_s("MW34_TEMPORAL_INPUTS", "0");
+        mw34::vkscene::Renderer renderer;
+        renderer.complete_camera_history(1, 7);
+        return renderer.camera_history.completed_frame() == 0 ? 0 : 1;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--camera-history-invalid") {
+        _putenv_s("MW34_TEMPORAL_INPUTS", "yes");
+        try {
+            mw34::vkscene::Renderer renderer;
+            renderer.complete_camera_history(1, 7);
+        } catch (const std::exception &error) {
+            return std::string(error.what()).find("MW34_TEMPORAL_INPUTS") != std::string::npos ? 0 : 1;
+        }
+        return 1;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--camera-history") {
+        try { camera_history_check(); return 0; }
+        catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
+    }
     if (argc > 1 && (std::string(argv[1]) == "--dxgi-exclusive-reject" ||
                      std::string(argv[1]) == "--dxgi-setting-reject")) {
         const bool exclusive = std::string(argv[1]) == "--dxgi-exclusive-reject";
