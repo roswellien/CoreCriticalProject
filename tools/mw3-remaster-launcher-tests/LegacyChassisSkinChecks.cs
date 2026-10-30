@@ -22,7 +22,8 @@ static class LegacyChassisSkinChecks
                 """)!;
             var skins = descriptor["skins"]!.AsArray();
             for (var index = 0; index < 8; index++)
-                skins.Add(new JsonObject {
+                skins.Add(new JsonObject
+                {
                     ["id"] = index == 0 ? "primary" : "variant" + (char)('b' + index - 1),
                     ["message"] = index == 0 ? "MSG_SKIN_PRIMARY" : "MSG_SKIN_VARIANT" + (char)('A' + index),
                     ["suffix"] = index == 0 ? "" : "_" + (char)('a' + index)
@@ -31,21 +32,30 @@ static class LegacyChassisSkinChecks
                 {"schema_version":2,"payload_profile":"additional-chassis-v1","chassis":[
                   {"id":"community.skins:mech","name":"Example","metadata_template":"annihilator","legacy":"legacy.json"}]}
                 """)!;
-            var resources = new Dictionary<string, byte[]> {
+            var resources = new Dictionary<string, byte[]>
+            {
                 ["raw.bin"] = new byte[] { 1 }, // Binary semantics belong to the coordinator.
                 ["legacy.json"] = JsonSerializer.SerializeToUtf8Bytes(descriptor),
                 [ChassisPack.Registry] = JsonSerializer.SerializeToUtf8Bytes(registry)
             };
-            var manifest = new PackManifest {
-                SchemaVersion = 2, Id = "community.skins", Name = "Eight legacy skins",
+            var manifest = new PackManifest
+            {
+                SchemaVersion = 2,
+                Id = "community.skins",
+                Name = "Eight legacy skins",
                 Provides = new PackProvides { Mechs = new() { "community.skins:mech" } },
-                NativePayload = new NativePackPayload {
-                    Profile = ChassisPack.Profile, Registry = ChassisPack.Registry, PathBase = "pack-root",
+                NativePayload = new NativePackPayload
+                {
+                    Profile = ChassisPack.Profile,
+                    Registry = ChassisPack.Registry,
+                    PathBase = "pack-root",
                     RequiredFormats = new() { "MW3LEGACY" },
                     RequiredCapabilities = new() { ["additional-mech-chassis"] = 3, [LegacyChassisSkins.Capability] = 1 }
                 },
-                Files = resources.ToDictionary(p => p.Key, p => new PackFile {
-                    Bytes = p.Value.Length, Sha256 = Convert.ToHexString(SHA256.HashData(p.Value)).ToLowerInvariant()
+                Files = resources.ToDictionary(p => p.Key, p => new PackFile
+                {
+                    Bytes = p.Value.Length,
+                    Sha256 = Convert.ToHexString(SHA256.HashData(p.Value)).ToLowerInvariant()
                 })
             };
             var archive = Path.Combine(root, "fixture.mw3pack");
@@ -77,8 +87,10 @@ static class LegacyChassisSkinChecks
             {
                 var bytes = JsonSerializer.SerializeToUtf8Bytes(value);
                 File.WriteAllBytes(Path.Combine(installed.DirectoryPath, "legacy.json"), bytes);
-                installed.Files!["legacy.json"] = new PackFile {
-                    Bytes = bytes.Length, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()
+                installed.Files!["legacy.json"] = new PackFile
+                {
+                    Bytes = bytes.Length,
+                    Sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()
                 };
             }
             foreach (var mutate in new Action<JsonNode>[] {

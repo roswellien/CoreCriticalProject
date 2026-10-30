@@ -89,11 +89,10 @@ def build(project_path, output):
                     native_payload=dict(profile=PROFILE, registry=REGISTRY, path_base='pack-root',
                                         required_formats=['MW3LEGACY'] if legacy else ['BWMESH4', 'BWTEX1'] + (['MW3ICON1'] if icons else []), required_capabilities={CAPABILITY: 3 if legacy else 2 if version_two else 1}),
                     provides=dict(mechs=[r['id'] for r in records]), files=files)
-    (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
     if legacy_skins:
         manifest['native_payload']['required_capabilities'][SKIN_CAPABILITY] = 1
-        (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     select([(stage, manifest)], {'content_capabilities': {CAPABILITY: [1, 2, 3], SKIN_CAPABILITY: [1]}})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
