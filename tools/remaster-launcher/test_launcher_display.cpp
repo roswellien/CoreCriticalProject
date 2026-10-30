@@ -172,7 +172,8 @@ static void presentation_bounds_check() {
     std::cout << "PASS resident/upload presentation bounds, resize, SSAA and menu aspect\n";
 }
 static void world_resolution_check(bool persistent_hud = false, bool visible = false,
-                                   bool partial_world = false, bool rgba_target = false) {
+                                   bool partial_world = false, bool rgba_target = false,
+                                   bool ordered_writes = false) {
     using namespace mw34::vkscene;
     auto require = [](bool ok, const char *message) {
         if (!ok)
@@ -255,6 +256,181 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
     require(renderer.raster_width() == output_width * percent / 100 &&
                 renderer.raster_height() == output_height * percent / 100,
             "World did not use independent raster resolution");
+    if (ordered_writes) {
+        // The same upload into a fresh full-resolution target is an independent
+        // oracle: it never enters the reduced world target before this write.
+        Renderer reference(rgba_target ? Renderer::ColorTarget::rgba8
+                                       : Renderer::ColorTarget::device_default);
+        if (percent < 100) {
+            Scene known = world;
+            known.color.assign(640 * 480, 0x001f);
+            known.depth.assign(640 * 480, 49151);
+            known.order.clear();
+            known.draws.clear();
+            known.clears.clear();
+            known.vertices.clear();
+            for (const unsigned flags : {1U, 2U}) {
+                renderer.render(world, true, false);
+                reference.render(known, true, false);
+                Scene surface_write{};
+                surface_write.width = 640;
+                surface_write.height = 480;
+                surface_write.has_depth = true;
+                surface_write.guest_surface_write = true;
+                Clear pixel{};
+                pixel.flags = flags;
+                pixel.color[1] = pixel.color[3] = 1;
+                pixel.z = .25f;
+                pixel.rects.push_back({{500, 50}, {1, 1}});
+                surface_write.clears.push_back(pixel);
+                surface_write.order.push_back({true, 0});
+                renderer.render(surface_write, false, false);
+                require(renderer.raster_width() == output_width &&
+                            renderer.raster_height() == output_height,
+                        "Guest surface fill stayed in the reduced world target");
+                reference.render(surface_write, false, false);
+                std::vector<unsigned char> actual_fill, expected_fill;
+                unsigned actual_fill_width{}, actual_fill_height{}, expected_fill_width{},
+                    expected_fill_height{};
+                renderer.capture_fullres_rgb(actual_fill, actual_fill_width, actual_fill_height);
+                reference.capture_fullres_rgb(expected_fill, expected_fill_width,
+                                              expected_fill_height);
+                require(actual_fill_width == expected_fill_width &&
+                            actual_fill_height == expected_fill_height,
+                        "Guest fill changed output dimensions");
+                // The right quarter is outside the initial world triangle and
+                // contains the one-guest-pixel fill plus its untouched neighbors.
+                for (unsigned y = 0; y < actual_fill_height; ++y)
+                    for (unsigned x = actual_fill_width * 3 / 4; x < actual_fill_width; ++x) {
+                        const auto index = (size_t(y) * actual_fill_width + x) * 3;
+                        require(
+                            std::equal(actual_fill.begin() + index, actual_fill.begin() + index + 3,
+                                       expected_fill.begin() + index),
+                            "Guest surface fill resampled output pixels or ran AA after the write");
+                    }
+                Scene actual_depth = known, expected_depth = known;
+                renderer.fetch_resident(actual_depth);
+                reference.fetch_resident(expected_depth);
+                for (unsigned y = 0; y < 480; ++y)
+                    for (unsigned x = 480; x < 640; ++x)
+                        require(actual_depth.depth[size_t(y) * 640 + x] ==
+                                    expected_depth.depth[size_t(y) * 640 + x],
+                                "Guest surface fill changed exact D16 coordinates");
+            }
+            renderer.render(world, true, false);
+            std::cout << "PASS guest color/depth fills preserve output coordinates\n";
+        }
+        Scene guest{};
+        guest.width = 640;
+        guest.height = 480;
+        guest.has_depth = true;
+        guest.color.resize(640 * 480);
+        guest.depth.resize(640 * 480);
+        for (unsigned y = 0; y < 480; ++y)
+            for (unsigned x = 0; x < 640; ++x) {
+                const auto index = size_t(y) * 640 + x;
+                guest.color[index] = ((x + y) & 1) ? 0xf800 : 0x07e0;
+                guest.depth[index] = std::uint16_t(index % 65536);
+            }
+        renderer.render(guest, true, false);
+        require(renderer.raster_width() == output_width &&
+                    renderer.raster_height() == output_height,
+                "Guest upload stayed in the reduced world target");
+        reference.render(guest, true, false);
+        std::vector<unsigned char> actual, expected;
+        unsigned actual_width{}, actual_height{}, expected_width{}, expected_height{};
+        renderer.capture_fullres_rgb(actual, actual_width, actual_height);
+        reference.capture_fullres_rgb(expected, expected_width, expected_height);
+        require(actual_width == expected_width && actual_height == expected_height &&
+                    actual == expected,
+                "Guest upload resampled color after a reduced world pass");
+        Scene guest_copy = guest;
+        renderer.fetch_resident(guest_copy);
+        require(guest_copy.color == guest.color && guest_copy.depth == guest.depth,
+                "Guest upload/readback changed native color or depth values");
+        if (percent < 100 || !Renderer::fxaa_enabled()) {
+            Scene ordered{};
+            ordered.width = 640;
+            ordered.height = 480;
+            ordered.has_depth = true;
+            triangle(ordered, .1f, 0xff00ff00);
+            Scene reference_layers{};
+            reference_layers.width = 640;
+            reference_layers.height = 480;
+            reference_layers.has_depth = reference_layers.hud = true;
+            auto fade = [](Scene &scene, unsigned color) {
+                struct Vertex {
+                    float x, y, z, rhw;
+                    unsigned color, specular;
+                    float u, v;
+                };
+                Draw draw{};
+                draw.first = unsigned(scene.vertices.size() / 32);
+                draw.count = 6;
+                draw.texture = -1;
+                draw.key = {1, 5, 6, 0, 8, 0, 1};
+                draw.scissor = {{0, 0}, {640, 480}};
+                draw.push.target[0] = 640;
+                draw.push.target[1] = 480;
+                draw.push.target[2] = .5f;
+                draw.push.mode[1] = draw.push.mode[2] = 2;
+                for (auto point : {std::array<float, 2>{-.5f, -.5f},
+                                   {639.5f, -.5f},
+                                   {-.5f, 479.5f},
+                                   {639.5f, -.5f},
+                                   {639.5f, 479.5f},
+                                   {-.5f, 479.5f}}) {
+                    Vertex vertex{point[0], point[1], 0, 1, color, 0, 0, 0};
+                    const auto *bytes = reinterpret_cast<const unsigned char *>(&vertex);
+                    scene.vertices.insert(scene.vertices.end(), bytes, bytes + sizeof(Vertex));
+                }
+                scene.order.push_back({false, unsigned(scene.draws.size())});
+                scene.draws.push_back(draw);
+            };
+            auto partial_clear = [](Scene &scene) {
+                Clear clear{};
+                clear.flags = 1;
+                clear.color[0] = clear.color[1] = clear.color[3] = 1;
+                clear.rects.push_back({{500, 50}, {80, 50}});
+                scene.order.push_back({true, unsigned(scene.clears.size())});
+                scene.clears.push_back(clear);
+            };
+            // The reference has only full-resolution HUD-style operations.
+            // The tested scene interleaves them between reconstructed runs.
+            for (auto *scene : {&ordered, &reference_layers}) {
+                fade(*scene, 0x800000ff);
+                partial_clear(*scene);
+                fade(*scene, 0x40ff0000);
+            }
+            triangle(ordered, .05f, 0xff00ff00);
+            renderer.render(ordered, false, false);
+            reference.render(reference_layers, false, false);
+            renderer.capture_fullres_rgb(actual, actual_width, actual_height);
+            reference.capture_fullres_rgb(expected, expected_width, expected_height);
+            for (unsigned y = 0; y < actual_height; ++y)
+                for (unsigned x = 0; x < actual_width; ++x) {
+                    const double guest_x = (x + .5) * 640 / actual_width - .5;
+                    const double guest_y = (y + .5) * 480 / actual_height - .5;
+                    if (guest_x >= 199 && guest_y >= 99 && guest_x + guest_y <= 501)
+                        continue;
+                    const auto index = (size_t(y) * actual_width + x) * 3;
+                    require(std::equal(actual.begin() + index, actual.begin() + index + 3,
+                                       expected.begin() + index),
+                            "Ordered fades and clear changed guest pixels outside world coverage");
+                }
+            renderer.fetch_resident(guest_copy);
+            for (unsigned y = 0; y < 480; ++y)
+                for (unsigned x = 0; x < 640; ++x)
+                    if (x < 199 || y < 99 || x + y > 501)
+                        require(guest_copy.depth[size_t(y) * 640 + x] ==
+                                    guest.depth[size_t(y) * 640 + x],
+                                "Color fades or clear changed untouched guest depth");
+            std::cout << "PASS ordered opaque/fade/clear/fade/opaque sequence\n";
+        }
+        // Restore the initial reduced world state for the other fixture checks.
+        renderer.render(world, true, false);
+        std::cout << "PASS ordered guest upload: full-resolution color and all D16 values\n";
+    }
     Scene hud{};
     hud.width = 640;
     hud.height = 480;
@@ -576,12 +752,15 @@ int main(int argc, char **argv) {
                      std::string(argv[1]) == "--world-persistence" ||
                      std::string(argv[1]) == "--world-persistence-partial" ||
                      std::string(argv[1]) == "--world-present" ||
-                     std::string(argv[1]) == "--world-persistence-partial-rgba")) {
+                     std::string(argv[1]) == "--world-persistence-partial-rgba" ||
+                     std::string(argv[1]) == "--world-ordered-writes" ||
+                     std::string(argv[1]) == "--world-ordered-writes-rgba")) {
         try {
             world_resolution_check(std::string(argv[1]).starts_with("--world-persistence"),
                                    std::string(argv[1]) == "--world-present",
                                    std::string(argv[1]).starts_with("--world-persistence-partial"),
-                                   std::string(argv[1]).ends_with("-rgba"));
+                                   std::string(argv[1]).ends_with("-rgba"),
+                                   std::string(argv[1]).starts_with("--world-ordered-writes"));
             return 0;
         } catch (const std::exception &error) {
             std::cerr << error.what() << '\n';

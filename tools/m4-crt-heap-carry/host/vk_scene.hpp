@@ -178,6 +178,7 @@ struct Scene {
     bool has_depth;
     bool frontend_canvas{};
     bool hud{}; // Host HUD/overlay draws keep their original sampling and follow world AA.
+    bool guest_surface_write{}; // DirectDraw surface operation outside the 3D command stream.
     std::vector<unsigned char> vertices; // 32-byte TL vertices, triangle list
     std::vector<TextureRef> textures;
     std::vector<Draw> draws;
@@ -964,7 +965,11 @@ class Renderer {
             const bool restart = !s.hud && !s.frontend_canvas &&
                 (cleared & 1);
             if (restart) quality_world_dirty = false;
-            if (s.hud || readback_out || s.frontend_canvas)
+            // An imported guest image can contain UI or software-rendered
+            // pixels. Preserve its full output resolution unless this same
+            // submission proves a complete color replacement with a clear.
+            if (s.hud || s.guest_surface_write || readback_out || s.frontend_canvas ||
+                (upload_in && !restart))
                 select_world_target(false, false);
             else if (restart)
                 select_world_target(true, upload_in);
@@ -1396,7 +1401,8 @@ class Renderer {
         }
         in_attachment_layout = true;
         // Apply world AA before the first HUD pass so text and overlays stay sharp.
-        if (s.hud && quality_world_dirty && fxaa_enabled())
+        if ((s.hud || (s.guest_surface_write && worldColor.image)) &&
+            quality_world_dirty && fxaa_enabled())
             record_fxaa();
         if (shadowFrame.active && !shadowFrame.reused)
             record_shadow(shadowFrame);

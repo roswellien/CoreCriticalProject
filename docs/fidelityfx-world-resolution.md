@@ -561,11 +561,71 @@ independent review remain open; these checks do not enable FSR or frame generati
 Per-batch reconstruction still starts from retained output, so this is not yet a
 validated, clean frame-level world-only history/input contract for temporal FSR.
 
+### Ordered guest uploads, surface fills and fades
+
+Follow-up inspection found two preservation defects after a full-clear world
+submission left the reduced target active. A subsequent guest image upload without
+a full replacement clear could stay in that reduced target. GPU DirectDraw color
+or depth fills also lacked provenance distinguishing them from ordinary 3D clears.
+Both could inherit a preceding world raster scale.
+
+Guest uploads that do not prove complete color replacement now promote to the
+output target before importing native color/depth. `Scene::guest_surface_write`
+marks actual DirectDraw GPU fills in `vdd.inc`; the renderer excludes these
+operations from world reconstruction and preserves output coordinates. On the
+reduced path, pending world FXAA finishes before an external surface write, so it
+cannot later filter that write. The 100% path retains its existing behavior.
+Original 3D full-replacement clears can still begin reduced work.
+
+Boundary advanced: guest import / DirectDraw surface operation -> full output
+color/D32 storage -> ordered world/HUD composition. This adds no temporal state,
+FSR dispatch, optional-pack dependency or guest ABI change.
+
+The existing display fixture's `--world-ordered-writes` and
+`--world-ordered-writes-rgba` modes compare against a fresh full-resolution GPU
+reference. A guest checkerboard and every D16 value survive import/readback.
+One-guest-pixel color/depth fills and neighboring pixels retain native output
+coordinates; those comparisons use the right quarter, outside the preceding
+world triangle. An opaque -> blue fade -> partial clear -> red fade -> opaque
+sequence matches the full-resolution reference outside world geometry, including
+untouched guest depth. Reduced-mode AA Off/FXAA and device-default/RGBA formats
+pass at 50/67; 100% cases cover unchanged guest import (the historical 100% FXAA
+outside-pixel behavior remains scoped as above).
+
+Before correction the upload and fill cases reject a reduced target. Running AA
+after the write makes the fill comparison fail; reversing the blended/clear
+command run makes the fade comparison fail. Temporary mutations are restored.
+Twelve ordered-write configurations pass with Khronos synchronization validation
+and no diagnostics, alongside existing world/persistence/bridge checks.
+
+Source-pinned host:
+`5b88f192c9894e4e3cfdd7b28c7133b4f2a5426e4fef6153cdb6f231b43965d9`;
+seven host objects, no translated regeneration, unchanged translated DLL. Native
+Training completes 2,200 actual RX 9070 Vulkan/DXGI presentations / 6,142 guest
+scenes at 50%, with 1,475 reduced opaque batches and matching prior reduced
+captures at 1801/2101. A separate published-input menu -> Instant Action -> Mech
+Lab -> briefing/launch run completes 1,300 actual presentations / 2,211 guest
+scenes. Lab canvas enters at frame 681 and exits at 935, staying logical 640x480
+with a fitted output raster; capture 801 shows the native Lab controls and model.
+Both runs use 3440x1440, FXAA/16x AF, published runtime 1.0.44 support inputs and
+13 verified published packs, sun strength 0 and ambient 1, with clean
+synchronization validation. Both stop deliberately at their budgets (exit 1),
+not through normal-quit acceptance. Receipts/captures stay under
+`D:/Projects/MW34-stage2-ordering/local/ordering/`.
+
+The approved plan in PR #96 assigns camera-only history/velocities, jitter and
+static-world depth validation to **P2 (Stage 3)**; those are upcoming implementation
+work, not features P1 must already provide. P1's actual criteria are explicit
+independent sizing, preserved guest/HUD ordering, resource/lifetime/settings
+checks and bounded native Training/menu/Lab evidence. The current per-batch
+reconstruction is still not a validated temporal FSR input/history contract.
+
 ## Remaining limits
 
 The retained-pixel correction above supersedes the initial persistence failures.
-Stage 2 remains incomplete pending broader ordered-write/fade/lifecycle coverage
-and independent review. Resident opaque retained-color runs now have a reduced
+Stage 2 has bounded ordered-write/fade, resource-lifecycle and native
+Training/menu/Lab evidence above. Independent review and the requester's readiness
+decision remain required before the draft can be marked ready. Resident opaque retained-color runs now have a reduced
 shading/coverage-reconstruction path; blended and guest-write paths remain full
 resolution by design.
 FSR remains disabled; do not advance to Stage 3 implementation or mark this draft

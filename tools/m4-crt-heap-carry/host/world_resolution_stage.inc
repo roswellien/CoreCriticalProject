@@ -15,7 +15,8 @@ VkShaderModule coverageFrag{};
 // Only opaque resident submissions can replace their shaded RGB during replay.
 // Blended draws and guest uploads keep the existing ordered full-resolution path.
 bool can_reconstruct_world(const Scene &scene, bool upload, bool readback) const {
-    return worldColor.image && !scene.hud && !scene.frontend_canvas && !upload && !readback &&
+    return worldColor.image && !scene.hud && !scene.guest_surface_write &&
+           !scene.frontend_canvas && !upload && !readback &&
            !scene.draws.empty() && !(leading_full_clear(scene) & 1) &&
            std::any_of(scene.order.begin(), scene.order.end(), [&](const Command &command) {
                if (command.clear)
