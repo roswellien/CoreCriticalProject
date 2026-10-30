@@ -311,6 +311,9 @@ article[id] {
     height: 100%;
     object-fit: cover;
 }
+.track-tools > img {
+    object-position: center top;
+}
 .track-content {
     position: absolute;
     left: 16px;
@@ -1196,6 +1199,14 @@ details p {
     object-fit: cover;
     object-position: 65% center;
     opacity: 0.8;
+}
+.overview-art.gameplay-screenshot {
+    object-position: center;
+    opacity: 1;
+}
+.overview-art.launcher-screenshot {
+    object-position: center top;
+    opacity: 1;
 }
 .about-banner .overview-art {
     object-position: 64% center;
