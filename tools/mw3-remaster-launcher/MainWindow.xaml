@@ -500,8 +500,13 @@
                                        TextWrapping="Wrap" Foreground="{StaticResource BrushMuted}" FontSize="12" Margin="0,8,0,24" />
 
                             <TextBlock Text="CRASH REPORTS" FontFamily="{StaticResource FontHeader}" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,10" />
-                            <CheckBox x:Name="ChkAutomaticCrashReports" Content="Automatically send crash reports for review"
-                                      Foreground="{StaticResource BrushInk}" Checked="AutomaticCrashReports_Changed" Unchecked="AutomaticCrashReports_Changed" />
+                            <StackPanel Orientation="Horizontal">
+                                <CheckBox x:Name="ChkAutomaticCrashReports" Content="Automatically send crash reports for review"
+                                          Foreground="{StaticResource BrushInk}" Checked="AutomaticCrashReports_Changed" Unchecked="AutomaticCrashReports_Changed" />
+                                <TextBlock Margin="12,0,0,0" VerticalAlignment="Center">
+                                    <Hyperlink Foreground="{StaticResource BrushAmber}" Click="CrashReportDisclosure_Click">What's included?</Hyperlink>
+                                </TextBlock>
+                            </StackPanel>
                             <TextBlock Text="Optional. When off, the launcher asks before sending after a failed session. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. No saves, original media or memory dumps are sent."
                                        TextWrapping="Wrap" Foreground="{StaticResource BrushMuted}" FontSize="12" Margin="0,8,0,24" />
 

@@ -947,18 +947,21 @@ namespace MW3RemasterLauncher
             else
             {
                 var choice = MessageBox.Show(this,
-                    summary + "\n\nSend the redacted recent launcher and native logs, launcher/runtime details, selected graphics settings and pack IDs to Core Critical for review? Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. No saves, original media or memory dumps are included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
+                    summary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
                     "Remaster stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
 
             try
             {
-                var runtimeVersion = _settingsMgr.Current.EngineMode == "d7vk"
-                    ? GameValidator.Validate(_settingsMgr.Current.GamePath).DetectedVersion
+                var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
+                var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
+                var runtimeVersion = settingsSnapshot.EngineMode == "d7vk"
+                    ? GameValidator.Validate(settingsSnapshot.GamePath).DetectedVersion
                     : OnlineUpdateService.InstalledRuntimeVersion(_basePath, _dataRoot);
-                var report = PlaytestDiagnostics.CreateCrashReport(_settingsMgr.Current, _packMgr.Packs,
-                    launchLog, _basePath, runtimeVersion, exitCode);
+                var hardwareInventory = await Task.Run(HardwareInventory.Capture);
+                var report = PlaytestDiagnostics.CreateCrashReport(settingsSnapshot, packsSnapshot,
+                    launchLog, _basePath, runtimeVersion, exitCode, hardwareInventory);
                 var result = await new CrashReportService().SubmitAsync(report);
                 var detail = result.ArchivedOnly
                     ? "The report was saved to the private admin archive. GitHub issue delivery was unavailable."
@@ -1012,7 +1015,7 @@ namespace MW3RemasterLauncher
             catch (Exception error) { MessageBox.Show(error.Message, "Save backups", MessageBoxButton.OK, MessageBoxImage.Information); }
         }
 
-        private void BtnExportReport_Click(object sender, RoutedEventArgs e)
+        private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new SaveFileDialog
             {
@@ -1022,12 +1025,51 @@ namespace MW3RemasterLauncher
             if (dialog.ShowDialog() != true) return;
             try
             {
-                PlaytestDiagnostics.Export(dialog.FileName, _settingsMgr.Current, _packMgr.Packs,
-                    _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog(), _basePath);
+                var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
+                var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
+                var launchLog = _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog();
+                var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
+                PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
+                    launchLog, _basePath, hardwareInventory);
                 MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted recent log tails. Review it before sharing.",
                     "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot export report", MessageBoxButton.OK, MessageBoxImage.Error); }
+        }
+
+        private static LauncherSettings SnapshotCrashReportSettings(LauncherSettings settings)
+        {
+            return new LauncherSettings
+            {
+                GamePath = settings.GamePath,
+                EngineMode = settings.EngineMode,
+                Width = settings.Width,
+                Height = settings.Height,
+                WindowMode = settings.WindowMode,
+                AntiAliasing = settings.AntiAliasing,
+                AnisotropicFiltering = settings.AnisotropicFiltering,
+                DrawDistance = settings.DrawDistance,
+                FogDistance = settings.FogDistance,
+                LocalCdAudio = settings.LocalCdAudio,
+                InstantReplay = settings.InstantReplay,
+                PerformanceMonitor = settings.PerformanceMonitor,
+                D7VkResolution = settings.D7VkResolution,
+                D7VkAntiAliasing = settings.D7VkAntiAliasing,
+                D7VkAnisotropicFiltering = settings.D7VkAnisotropicFiltering,
+                D7VkAiTextures = settings.D7VkAiTextures
+            };
+        }
+
+        private static PackManifest[] SnapshotCrashReportPacks(IEnumerable<PackManifest> packs)
+        {
+            return packs.Select(pack => new PackManifest
+            {
+                Id = pack.Id,
+                Version = pack.Version,
+                SchemaVersion = pack.SchemaVersion,
+                IsEnabled = pack.IsEnabled,
+                Priority = pack.Priority
+            }).ToArray();
         }
 
         private void BtnOpenScreenshots_Click(object sender, RoutedEventArgs e)
