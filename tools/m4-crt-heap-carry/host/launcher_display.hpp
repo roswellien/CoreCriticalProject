@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -6,6 +8,27 @@
 #include <windows.h>
 
 namespace mw34::display {
+// Resident and uploaded frames share these destination bounds. A world readback
+// has guest-sized storage, but still contains the configured output's wide view.
+inline RECT presentation_rect(double content_width, double content_height,
+                              unsigned window_width, unsigned window_height) {
+    if (content_width <= 0 || content_height <= 0)
+        throw std::runtime_error("Presentation content dimensions must be positive");
+    const double fit = std::min(window_width / content_width, window_height / content_height);
+    const LONG width = LONG(std::lround(content_width * fit));
+    const LONG height = LONG(std::lround(content_height * fit));
+    const LONG x = (LONG(window_width) - width) / 2;
+    const LONG y = (LONG(window_height) - height) / 2;
+    return {x, y, x + width, y + height};
+}
+inline RECT upload_presentation_rect(unsigned guest_width, unsigned guest_height,
+                                     unsigned output_width, unsigned output_height,
+                                     unsigned window_width, unsigned window_height,
+                                     bool wide_world) {
+    if (wide_world && output_width && output_height)
+        return presentation_rect(output_width, output_height, window_width, window_height);
+    return presentation_rect(guest_width, guest_height, window_width, window_height);
+}
 struct Samples {
     unsigned x{1}, y{1};
 };
