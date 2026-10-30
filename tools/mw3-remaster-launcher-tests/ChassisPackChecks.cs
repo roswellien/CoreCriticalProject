@@ -90,6 +90,38 @@ static class ChassisPackChecks
             File.WriteAllBytes(Path.Combine(installed.DirectoryPath,"mesh.bin"),new byte[8]);
             try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Corrupt chassis accepted.");}
             catch(InvalidDataException) {}
+
+            // Import checks pin and bound every legacy reference. The coordinator
+            // separately validates the binary model/motion formats before launch.
+            installed.Files!.Clear();
+            var legacyDescriptor = JsonNode.Parse("""
+                {"schema_version":1,"resource":"example","definition":"raw.bin",
+                 "materials":"raw.bin","silhouette":"raw.bin",
+                 "models":{"close":"raw.bin","distance":"raw.bin","cockpit":"raw.bin"},
+                 "motions":{"example_walk":"raw.bin"},"animations":{"anim_example.zrd":"raw.bin"},
+                 "textures":{"example01":"raw.bin"}}
+                """)!;
+            var legacyRegistry = JsonNode.Parse("""
+                {"schema_version":2,"payload_profile":"additional-chassis-v1","chassis":[
+                  {"id":"community.test:mech","name":"Example","metadata_template":"annihilator","legacy":"legacy.json"}]}
+                """)!;
+            SetResource("raw.bin",new byte[]{1});
+            SetResource("legacy.json",JsonSerializer.SerializeToUtf8Bytes(legacyDescriptor));
+            SetResource(ChassisPack.Registry,JsonSerializer.SerializeToUtf8Bytes(legacyRegistry));
+            installed.NativePayload.RequiredFormats=new(){"MW3LEGACY"};
+            try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Legacy data accepted without version 3.");}
+            catch(InvalidDataException) {}
+            installed.NativePayload.RequiredCapabilities["additional-mech-chassis"]=3;
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            try {RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);throw new Exception("Old host accepted legacy chassis.");}
+            catch(InvalidDataException) {}
+            foreach (var invalid in new[]{"undeclared.bin","../raw.bin"})
+            {
+                legacyDescriptor["motions"]!["example_walk"]=invalid;
+                SetResource("legacy.json",JsonSerializer.SerializeToUtf8Bytes(legacyDescriptor));
+                try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Unpinned legacy reference accepted.");}
+                catch(InvalidDataException) {}
+            }
             Console.WriteLine("Chassis checks passed: unsigned import, stable identity, runtime capability gating, corruption rejection.");
         }
         finally {Directory.Delete(root,true);}

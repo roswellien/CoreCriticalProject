@@ -1,18 +1,20 @@
 # Core Critical website
 
 The live site is [corecritical.dev](https://corecritical.dev), hosted by the
-existing Cloudflare Pages project `core-critical`. Website source now lives in
-this repository's `website/` directory. Cloudflare builds production from this
-repository's `main` branch, with `website/` as its project root. Automatic production deployments are enabled.
+existing Cloudflare Pages project `core-critical`. Website source lives in this
+repository's `website/` directory. Cloudflare builds production from this
+repository's `main` branch, with `website/` as its project root. Merging reviewed
+website changes into `main` automatically deploys the site.
 
 ## Build and preview
 
-From the repository root, build the static pages and MechLab news:
+From `website/`, build the static pages and MechLab news:
 
 ```powershell
-python website/build.py
+python build.py
 ```
 
+The equivalent command from the repository root is `python website/build.py`.
 The build reads public dated notes from `docs/mechlab/` in this repository and
 generates the homepage updates, `news.html`, dated `updates/` pages and `feed.xml`.
 It also generates the media gallery from the metadata in `website/data/`.
@@ -33,19 +35,21 @@ from `website/`.
 
 ## Publish
 
-The maintainer keeps the existing `core-critical` Pages project and custom
-domain, and points its Git integration at this repository with `website/` as
-the root directory. Configure the build command as `python3 build.py` and the
-output directory as `dist`. The Pages Function must stay in the project root
-(`website/functions/`), outside `dist/`. See [CLOUDFLARE.md](CLOUDFLARE.md) for
-the cutover checklist.
+The existing `core-critical` Pages project is connected to this repository with
+`website/` as its root directory, `python3 build.py` as its build command and
+`dist` as its output directory. The Pages Function stays in the project root
+(`website/functions/`), outside `dist/`. After a production deploy, verify
+[corecritical.dev](https://corecritical.dev). See
+[CLOUDFLARE.md](CLOUDFLARE.md) for deployment details and the
+[launcher and website release checklist](../docs/launcher-and-website-release.md)
+for the manual Wrangler deployment command.
 
 The media gallery uses files and hashes in `data/media-assets.json` that are
 hosted on the existing pinned Pages deployment. Keep that deployment available;
 the migration does not recreate or remove it.
 
 The maintainer supplies Cloudflare access through the existing account or a
-local Wrangler login. Keep API tokens and signing credentials outside Git.
+local Wrangler login. Keep API tokens outside Git.
 The legacy cross-repository MechLab publishing bridge is retired. Future site
 and dated MechLab changes publish from this repository's `main` branch.
 
@@ -73,9 +77,11 @@ displays a short report ID, not a private GitHub URL.
 New crash issues are capped at 20 per UTC day by default. The cap is reserved
 atomically in D1; reports beyond it are comments on one configured overflow
 issue, without full logs. Matching issues include full logs for only their
-first three repeats. Create the private report repository, a private overflow
-issue in it, and a D1 database before enabling production reporting. Apply a
-Cloudflare rate-limit rule to `/api/crash-reports` as well.
+first three repeats. The admin D1 archive retains each accepted report's
+bounded logs until the maintainer deletes it (see below). Create the private
+report repository, a private overflow issue in it, and a D1 database before
+enabling production reporting. Apply a Cloudflare rate-limit rule to
+`/api/crash-reports` as well.
 
 In the Project V2 board, enable its **Auto-add to project** workflow for the
 private crash-report repository with the filter `is:issue`. The overflow issue
@@ -93,6 +99,7 @@ Configure the `core-critical` Pages production environment with:
   ```powershell
   npx wrangler d1 create corecritical-crash-reports
   npx wrangler d1 execute corecritical-crash-reports --remote --file migrations/0001_crash_issue_daily_limits.sql
+  npx wrangler d1 execute corecritical-crash-reports --remote --file migrations/0002_crash_report_archive.sql
   ```
 
 - A `GITHUB_TOKEN` secret with issue read/write access to the private report
@@ -103,3 +110,50 @@ Keep the GitHub token in the Pages secret store and outside Git. The server
 requires all configuration, including D1 and the overflow issue, and fails
 visibly when any part is missing. Run endpoint checks from `website/` with
 `npm test`.
+
+### Admin crash report archive
+
+Every accepted report is also stored as normalized JSON in the server-only D1
+table `crash_report_archive`. The GitHub issue flow remains active for triage.
+Open `https://corecritical.dev/admin/crash-reports` to review the latest 100
+reports and open a report's hardware, settings, pack metadata and separate
+line-preserving log sections. Dynamic report text is HTML-escaped. The page
+does not generate public or static report documents.
+
+Before enabling the archive in production, configure a Cloudflare Access
+self-hosted application for `corecritical.dev/admin/crash-reports*`. Enable
+Cloudflare's **One-time PIN** login method and create an Allow policy for the
+admin email address or addresses. When an allowed admin visits the archive,
+Access asks for their email and sends a single-use PIN to that inbox. The admin
+enters the PIN on the Access login page before the archive opens. Cloudflare
+PINs expire after 10 minutes. An email address by itself does not grant access;
+the visitor must complete the PIN login and the Pages Function must also
+validate the resulting signed Access token. An identity provider can be enabled
+as an alternative login method if desired.
+
+Choose the admin email before enabling the archive; it is not hard-coded in
+this repository. For the current single-admin authorization check, set the one
+allowed email in `CRASH_REPORT_ADMIN_EMAIL`. The Access Allow policy and this
+Pages production variable must match. Configure the remaining Pages production
+variables to match the Access application:
+
+- `CRASH_REPORT_ACCESS_ISSUER=https://<team>.cloudflareaccess.com`.
+- `CRASH_REPORT_ACCESS_AUD=<application-audience-tag>`.
+- `CRASH_REPORT_ADMIN_EMAIL=<admin-email>`.
+
+The Pages Function independently verifies the Access JWT signature, issuer,
+audience, expiration and exact admin email before querying D1. The Access
+application provides the login flow; its signed JWT reaches the function as
+`Cf-Access-Jwt-Assertion`. Keep the app's email allow policy and the function's
+email variable aligned. Requests through a Pages preview or direct Pages URL
+without a valid admin JWT receive no report data. D1 remains bound only to
+Pages server code; Cloudflare account administrators can still access the
+database through their Cloudflare account permissions.
+
+Archive records, including bounded logs, are retained until the maintainer
+deletes them. There is no automatic expiry or delete control in the page.
+To remove a report, use an authorized Wrangler session:
+
+```powershell
+npx wrangler d1 execute corecritical-crash-reports --remote --command "DELETE FROM crash_report_archive WHERE report_id = '<report-id>';"
+```

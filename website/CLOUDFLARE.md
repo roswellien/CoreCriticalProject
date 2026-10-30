@@ -50,6 +50,31 @@ The legacy `CORECRITICAL_WEBSITE_DEPLOY_KEY` Actions secret and the old site's
 "MechLab updates from game main" deploy key were deleted after verification.
 No repository was made public.
 
+## Admin crash report archive
+
+The D1 database bound as `CRASH_REPORT_DB` stores each normalized accepted
+crash report for the admin archive, in addition to the existing private GitHub
+issue flow. Apply `migrations/0002_crash_report_archive.sql` to the production
+D1 database before deploying code that writes or reads the archive.
+
+Protect `corecritical.dev/admin/crash-reports*` with a Cloudflare Access
+self-hosted application. Enable the **One-time PIN** identity provider and add
+an Allow policy for the email address or addresses that should administer the
+archive. At sign-in, an allowed admin enters their email and Cloudflare sends a
+single-use PIN to that inbox; the admin enters it on the Access login page.
+The PIN expires after 10 minutes. An email address alone does not grant access.
+See Cloudflare's [One-time PIN login guide](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/).
+
+The current Pages Function permits one admin email. The maintainer must choose
+it and set `CRASH_REPORT_ADMIN_EMAIL` to that same value as the Access policy.
+Also add `CRASH_REPORT_ACCESS_ISSUER` and `CRASH_REPORT_ACCESS_AUD` as Pages
+production variables matching the Access application. The Pages Function also
+verifies the signed Access JWT and exact email before reading D1, so a direct
+Pages URL without an admin JWT cannot return report data. No Access token or
+private signing key is stored in the repository. D1 rows persist until manually
+deleted with Wrangler; there is no automatic expiry or delete control in the
+page. See the archive setup and deletion instructions in `README.md`.
+
 References:
 
 - [Pages monorepos](https://developers.cloudflare.com/pages/configuration/monorepos/)

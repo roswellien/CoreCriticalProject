@@ -90,7 +90,7 @@ def select(metadata, host, verification=None):
         require(host, payload, manifest['id'])
         if (manifest.get('schema_version') != 2 or manifest.get('game_id') != 'mw3'
                 or payload.get('registry') != REGISTRY or payload.get('path_base') != 'pack-root'
-                or payload.get('required_formats') not in (['BWMESH4', 'BWTEX1'], ['BWMESH4', 'BWTEX1', 'MW3ICON1'])
+                or payload.get('required_formats') not in (['BWMESH4', 'BWTEX1'], ['BWMESH4', 'BWTEX1', 'MW3ICON1'], ['MW3LEGACY'])
                 or manifest.get('dependencies') or manifest.get('conflicts')):
             raise ValueError('Unsupported additional chassis pack contract')
         files = manifest.get('files')
@@ -133,6 +133,27 @@ def select(metadata, host, verification=None):
             raise ValueError('Unsupported chassis registry')
         used = {REGISTRY}
         for row in records:
+            if payload.get('required_formats') == ['MW3LEGACY']:
+                from legacy_chassis_resources import load
+                if (not isinstance(row, dict) or set(row) != {'id', 'name', 'metadata_template', 'legacy'}
+                        or payload.get('required_capabilities', {}).get(CAPABILITY) != 3):
+                    raise ValueError('Legacy chassis resources require version 3 and exact fields')
+                ident = row['id']
+                if not isinstance(ident, str) or not ident.startswith(manifest['id'] + ':') or ident in ids:
+                    raise ValueError('Duplicate or unowned legacy chassis identity')
+                record = dict(id=ident, name=row['name'], metadata_template=row['metadata_template'],
+                              resource='c' + hashlib.sha256(ident.encode()).hexdigest()[:12])
+                encode_catalog([record])
+                def legacy_read(name):
+                    if not isinstance(name, str) or name not in verified or files[name].get('format') is not None:
+                        raise ValueError('Undeclared legacy chassis resource')
+                    used.add(name)
+                    return Path(verified[name]).read_bytes()
+                legacy_read(row['legacy'])
+                document = read_json(Path(verified[row['legacy']]))
+                result.append(dict(registration=record, legacy=load(document, legacy_read)))
+                ids.add(ident)
+                continue
             if not isinstance(row, dict) or not FIELDS <= set(row) or set(row) - FIELDS - {'silhouette', 'base_skin_name', 'sockets'}:
                 raise ValueError('Invalid chassis registry fields')
             ident = row['id']
@@ -231,7 +252,12 @@ def prepare(records, game_exe, output, environment):
         blob = path.read_bytes(); _, directory = _directory(blob)
         sources[archive] = (blob, {name: blob[offset:offset + size] for name, offset, size, _ in directory})
     definitions, models, registrations = {}, {}, []
+    legacy_records = []
     for item in records:
+        if 'legacy' in item:
+            legacy_records.append(item)
+            registrations.append(item['registration'])
+            continue
         record, document = item['registration'], item['definition']
         controller, resource = document['template'], record['resource']
         original = sources['reader.zbd'][1]['dfn_' + controller + '.zrd']
@@ -258,11 +284,20 @@ def prepare(records, game_exe, output, environment):
             models[new] = (bytes(data), old)
         registrations.append(record)
     for archive, additions in [('reader.zbd', definitions), ('mechlib.zbd', models)]:
+        if not additions:
+            continue
         path = output / archive
         path.write_bytes(add_members(sources[archive][0], additions))
         banks['zbd/' + archive] = str(path.resolve())
+    if legacy_records:
+        from legacy_chassis_resources import compose
+        legacy_output = output / 'legacy'
+        legacy_output.mkdir()
+        banks = compose(legacy_records, banks, Path(game_exe).resolve().parent, legacy_output)
     silhouettes = {item['registration']['resource']: Path(item['silhouette']).read_bytes()
                    for item in records if 'silhouette' in item}
+    silhouettes.update({item['registration']['resource']: item['legacy']['silhouette']
+                        for item in legacy_records})
     if silhouettes:
         from chassis_icons import append_icons
         source = Path(banks.get('zbd/rimage.zbd', Path(game_exe).resolve().parent / 'zbd/rimage.zbd'))

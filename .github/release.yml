@@ -1,0 +1,23 @@
+changelog:
+  categories:
+    - title: Features
+      labels:
+        - enhancement
+    - title: Bugs fixed
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Playtest reports
+      labels:
+        - playtest
+    - title: Research
+      labels:
+        - research
+    - title: Release operations
+      labels:
+        - release
+    - title: Other changes
+      labels:
+        - "*"
