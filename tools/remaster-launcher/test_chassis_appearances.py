@@ -171,13 +171,15 @@ class AppearanceTests(unittest.TestCase):
         world = self.root / "compressed.bin"
         large_normal = (16, 16, self.normal[2] * 256)
         world.write_bytes(pack_surface_bindings([((1, 1, 1, 99), large_normal)], compressed=True))
-        with patch("chassis_appearances.MAX_CATALOG_BYTES", 512):
-            with self.assertRaisesRegex(ValueError, "resident budget"):
-                compose_normals(
-                    [{"appearance_normal_pages": [self.page]}],
-                    {"MW34_SURFACE_NORMALS": str(world)},
-                    self.root / "too-large",
-                )
+        with (
+            patch("chassis_appearances.MAX_CATALOG_BYTES", 512),
+            self.assertRaisesRegex(ValueError, "resident budget"),
+        ):
+            compose_normals(
+                [{"appearance_normal_pages": [self.page]}],
+                {"MW34_SURFACE_NORMALS": str(world)},
+                self.root / "too-large",
+            )
 
     def test_composer_preserves_inherited_native_page_budget(self):
         world = self.root / "world.bin"
