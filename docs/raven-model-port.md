@@ -20,10 +20,42 @@ MW5 weapon or equipment behavior.
 The body has 136 skeleton joints and 29 bones used by vertex weights. Its
 inspected vertices each use one bone, and every named joint required by the
 native donor solver exists. Source metadata declares four LOD entries; only
-LOD0 is converted in this prototype. The preview uses donor Body/Variant mask
+LOD0 is converted in this prototype. The initial motion preview uses donor Body/Variant mask
 and normal textures, an authored olive palette and the existing 12x-equivalent
 normal reference. Weapons and glass use review materials. It is not a final
 skin or demonstrated native material response.
+
+## MW3-inspired texture study
+
+A separate local field-enamel set now applies muted olive-grey armor, dark
+machinery, dusty mottling and restrained scuffing to the same RVN-3L assembly.
+Local Owens textures and the existing Strider texture study informed the
+appearance. This is an authored interpretation, not an original MW3 Raven skin.
+
+The set has 17 PNG maps: Body and Variant each have 2048-square base color,
+roughness, metallic and normal maps; Weapons and MissileHead each have
+512-square base color, roughness and metallic maps; Window has three constant
+16-square maps. Base colors use sRGB, while material data uses non-color space.
+The two normal maps are unchanged donor files, with the existing Blender 10.2
+strength. They are not newly authored normals.
+
+An authored enamel swatch combines with the donor color and wear masks in
+Blender, then emission-bakes into the existing UV layouts without scene
+lighting. Green wear-channel values provide light scuffing and red values dark
+lines as an artistic choice, not a recovered claim about MW5 shader semantics.
+The saved scene uses those baked maps, including weapon and cockpit materials.
+
+The local build checks vertex, face and UV fingerprints before and after the
+material assignment. Front, rear and walking-pose Cycles renders support the
+visual review. These are offline views: native response, gameplay-distance
+readability, mipmaps, damage states and pack integration remain unvalidated.
+The motion/contact limitations below are unchanged.
+
+The texture study lives in ignored `local/raven-textures-mw3-r1/`, with
+`review.html`, the editable `raven-mw3-field-enamel.blend`, `maps/`,
+`build_texture_set.py`, the artwork prompt and `texture-set.json`.
+
+## Source identity
 
 The current archive differs from the older extraction inventory. Its freshly
 read main-index SHA-1 verifies; footer/main-index SHA-256 values are respectively
