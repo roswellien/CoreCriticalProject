@@ -163,8 +163,8 @@ AI, save/reload and pack removal in a compatible native runtime.
 ## Private evidence
 
 All original and derived media remain ignored under the isolated checkout's
-`local/raven-investigation-20261030/` and
-`local/raven-prototype-20261030-r1/`. The latter retains:
+`local/raven-investigation-20261030/`, `local/raven-prototype-20261030-r1/`
+and `local/raven-textures-mw3-r1/`. The motion prototype directory retains:
 
 - `extraction-files.json`, decoded metadata and source attachment selections.
 - `compare_motion.py`, `compare_foot_follow.py`, `compare_locomotion_fit.py`,
