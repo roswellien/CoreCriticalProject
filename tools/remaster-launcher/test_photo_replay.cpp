@@ -1,4 +1,4 @@
-#include "native-overrides/photo_replay_math.hpp"
+#include "../m4-crt-heap-carry/host/photo_replay_math.hpp"
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -99,6 +99,7 @@ static void test_replay_ring_buffer_and_serialization() {
         ground_truth_frames.push_back(guest_mem);
 
         ReplayFrameRecord rec{};
+        rec.headlights.push_back({0x2000,0x3000,0,f%2,123,float(f)/150});
         ReplayDeviceState dev{};
         dev.guest = 0x38000000;
         dev.viewport = 0x38000020;
@@ -145,6 +146,9 @@ static void test_replay_ring_buffer_and_serialization() {
         const auto& graphics = loaded.frame(idx);
         const unsigned source_frame = unsigned(idx + 60);
         assert(graphics.graphics_devices.size() == 1 && graphics.graphics_viewports.size() == 1);
+        assert(graphics.headlights.size()==1);
+        assert(graphics.headlights[0].generation==123 && graphics.headlights[0].desired==source_frame%2);
+        assert(graphics.headlights[0].intensity==float(source_frame)/150);
         const auto& dev = graphics.graphics_devices[0];
         assert(dev.guest == 0x38000000 && dev.viewport == 0x38000020);
         for (unsigned i = 0; i < 256; ++i) assert(dev.render_states[i] == source_frame * 1000 + i);
@@ -156,6 +160,28 @@ static void test_replay_ring_buffer_and_serialization() {
         assert(vp.guest == dev.viewport && vp.background == source_frame && vp.set == 1);
         for (unsigned i = 0; i < 11; ++i) assert(vp.words[i] == source_frame * 11 + i);
     }
+
+    // A one-frame v4 record with no lamps becomes an exact v3 fixture by
+    // removing its final count. Older recordings must start with lamps off.
+    PageDeltaReplayBuffer legacy_writer;
+    legacy_writer.record_frame(guest_mem.data(), ranges, nullptr, ReplayFrameRecord{});
+    assert(legacy_writer.save_to_file(tmp_replay));
+    std::ifstream version_input(tmp_replay, std::ios::binary);
+    std::string version_bytes((std::istreambuf_iterator<char>(version_input)), {});
+    version_input.close();
+    auto write_version = [&](const std::string& bytes) {
+        std::ofstream output(tmp_replay, std::ios::binary | std::ios::trunc);
+        output.write(bytes.data(), bytes.size());
+    };
+    auto bad_count = version_bytes;
+    bad_count[bad_count.size()-4]=1; bad_count[bad_count.size()-3]=4;
+    write_version(bad_count);
+    PageDeltaReplayBuffer malformed;
+    assert(!malformed.load_from_file(tmp_replay));
+    version_bytes.resize(version_bytes.size()-4); version_bytes[7]='3';
+    write_version(version_bytes);
+    PageDeltaReplayBuffer older;
+    assert(older.load_from_file(tmp_replay) && older.frame(0).headlights.empty());
 
     // Version 2 has no provider-state payload and must not load as version 3.
     {

@@ -17,6 +17,55 @@ public static class ChassisPack
         "supernova", "thor", "vulture"
     };
 
+    private static void ValidateHeadlights(JsonElement row, NativePackPayload payload)
+    {
+        if (!row.TryGetProperty("headlights", out var lights)) return;
+        if (lights.ValueKind != JsonValueKind.Array || lights.GetArrayLength() > 8)
+            throw new InvalidDataException("Expected zero through eight headlights.");
+        if (lights.GetArrayLength() > 0 &&
+            (!payload.RequiredCapabilities.TryGetValue("mech-headlights", out var version) || version != 1 ||
+             !payload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var chassisVersion) || chassisVersion < 2))
+            throw new InvalidDataException("Headlights require mech-headlights version 1 and chassis version 2 or newer.");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var fields = new HashSet<string>(new[] { "id", "space", "attachment", "position", "direction", "color",
+            "intensity", "range", "inner_angle", "outer_angle" });
+        double Number(JsonElement value, double low, double high)
+        {
+            if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var number) ||
+                !double.IsFinite(number) || number < low || number > high)
+                throw new InvalidDataException("Invalid headlight number.");
+            return number;
+        }
+        foreach (var light in lights.EnumerateArray())
+        {
+            if (light.ValueKind != JsonValueKind.Object || !fields.SetEquals(light.EnumerateObject().Select(p => p.Name)))
+                throw new InvalidDataException("Invalid headlight fields.");
+            string Text(string field) => light.GetProperty(field).ValueKind == JsonValueKind.String
+                ? light.GetProperty(field).GetString()! : "";
+            var space = Text("space");
+            if (!Regex.IsMatch(Text("id"), @"\A[a-z0-9_-]{1,31}\z") || !ids.Add(Text("id")) ||
+                !Regex.IsMatch(Text("attachment"), @"\A[A-Za-z0-9_.-]{1,31}\z") ||
+                (space != "guest_node" && space != "donor_bone") ||
+                (space == "donor_bone" && row.TryGetProperty("legacy", out _)))
+                throw new InvalidDataException("Invalid headlight identity or attachment.");
+            double[] Vector(string field, double low, double high)
+            {
+                var value = light.GetProperty(field);
+                if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != 3)
+                    throw new InvalidDataException("Invalid headlight vector.");
+                return value.EnumerateArray().Select(v => Number(v, low, high)).ToArray();
+            }
+            Vector("position", -100, 100);
+            Vector("color", 0, 1);
+            var direction = Vector("direction", -1e30, 1e30);
+            if (direction.All(v => v == 0)) throw new InvalidDataException("Headlight direction cannot be zero.");
+            Number(light.GetProperty("intensity"), 0, 8);
+            Number(light.GetProperty("range"), 1, 256);
+            if ((float)Number(light.GetProperty("inner_angle"), 0, 89) >= (float)Number(light.GetProperty("outer_angle"), 0, 89))
+                throw new InvalidDataException("Invalid headlight cone.");
+        }
+    }
+
     public static List<Chassis> Read(string root, PackManifest manifest)
     {
         if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
@@ -66,10 +115,11 @@ public static class ChassisPack
         var fields = new HashSet<string>(new[] { "id", "name", "controller", "metadata_template", "definition", "meshes", "textures" });
         foreach (var row in rows.EnumerateArray())
         {
+            ValidateHeadlights(row, manifest.NativePayload);
             if (manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }))
             {
                 if (!manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var version) || version != 3 ||
-                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name)))
+                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name).Where(name => name != "headlights")))
                     throw new InvalidDataException("Legacy chassis resources require version 3 and exact fields.");
                 var legacyId = row.GetProperty("id").GetString() ?? "";
                 var legacyName = row.GetProperty("name").GetString() ?? "";
@@ -117,7 +167,7 @@ public static class ChassisPack
                 continue;
             }
             var rowFields = row.EnumerateObject().Select(p => p.Name).ToHashSet();
-            if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets"))
+            if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets" && p != "headlights"))
                 throw new InvalidDataException("Unknown chassis registration field.");
             if (row.TryGetProperty("sockets", out var sockets))
             {

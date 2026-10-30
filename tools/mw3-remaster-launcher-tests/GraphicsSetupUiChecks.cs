@@ -9,6 +9,33 @@ using MW3RemasterLauncher.Core;
 
 static class GraphicsSetupUiChecks
 {
+    public static void RunHeadlights(string root)
+    {
+        root=Path.GetFullPath(root);Directory.CreateDirectory(root);
+        Exception failure=null!;
+        var thread=new Thread(()=>{
+            try {
+                var app=new App(false);app.InitializeComponent();
+                var panel=new GraphicsPreferencesPanel();
+                var window=new Window {Title="Headlight graphics check",Width=520,Height=980,Content=panel,ShowActivated=false,Left=-10000};
+                window.Show();
+                panel.Load(new LauncherSettings {DynamicLighting=true,Headlights=true});
+                var master=(CheckBox)panel.FindName("ChkHeadlights");
+                var dynamic=(CheckBox)panel.FindName("ChkDynamicLighting");
+                if(!master.IsEnabled||master.IsChecked!=true||!panel.Read().Headlights)throw new Exception("Headlight preference not displayed");
+                dynamic.IsChecked=false;
+                if(master.IsEnabled||master.IsChecked!=true||!panel.Read().Headlights)throw new Exception("Dynamic lighting off lost headlight choice");
+                dynamic.IsChecked=true;window.UpdateLayout();Capture(window,Path.Combine(root,"headlight-display.png"));
+                var bindings=new HeadlightBindingsWindow(root) {Owner=window,ShowActivated=false,Left=-10000,WindowStartupLocation=WindowStartupLocation.Manual};
+                bindings.Show();bindings.UpdateLayout();Capture(bindings,Path.Combine(root,"headlight-controls.png"));
+                bindings.Close();window.Close();app.Shutdown();
+            }catch(Exception ex){failure=ex;}
+        });
+        thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();
+        if(failure!=null)throw failure;
+        Console.WriteLine("Actual WPF Headlights switch, dependency preservation and binding dialog passed.");
+    }
+
     public static void Run(string root,string game)
     {
         root=Path.GetFullPath(root);Directory.CreateDirectory(root);

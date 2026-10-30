@@ -54,6 +54,27 @@ static class ChassisPackChecks
             catch(InvalidDataException) {}
             var host=JsonNode.Parse("""{"content_capabilities":{"additional-mech-chassis":[1]}}""")!.AsObject();
             RuntimeContentCapabilities.Require(host,installed.NativePayload!,installed.Id);
+            var headlightRegistry=JsonNode.Parse(resources[ChassisPack.Registry])!;
+            var light=JsonNode.Parse("""{"id":"left","space":"guest_node","attachment":"torso","position":[1,2,3],"direction":[0,0,-1],"color":[1,1,1],"intensity":2,"range":50,"inner_angle":15,"outer_angle":30}""")!;
+            headlightRegistry["chassis"]![0]!["headlights"]=new JsonArray(light);
+            void PutLights()
+            {
+                var bytes=JsonSerializer.SerializeToUtf8Bytes(headlightRegistry);
+                File.WriteAllBytes(Path.Combine(installed.DirectoryPath,ChassisPack.Registry),bytes);
+                installed.Files![ChassisPack.Registry]=new PackFile {Bytes=bytes.Length,Sha256=Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()};
+            }
+            PutLights();
+            try{ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Ungated headlights accepted");}catch(InvalidDataException){}
+            installed.NativePayload!.RequiredCapabilities["additional-mech-chassis"]=2;
+            installed.NativePayload.RequiredCapabilities["mech-headlights"]=1;
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            foreach(var invalid in new JsonNode[]{JsonValue.Create(true)!,JsonValue.Create(-1)!,JsonValue.Create(257)!})
+            {
+                light["range"]=invalid.DeepClone();PutLights();
+                try{ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Invalid lamp accepted");}catch(InvalidDataException){}
+            }
+            installed.NativePayload.RequiredCapabilities.Remove("mech-headlights");
+            installed.NativePayload.RequiredCapabilities["additional-mech-chassis"]=1;
             var icon = new byte[2066]; "MW3ICON1"u8.CopyTo(icon);
             BitConverter.GetBytes(41u).CopyTo(icon,8); BitConverter.GetBytes(50u).CopyTo(icon,12); icon[100]=255;
             var registry = JsonNode.Parse(resources[ChassisPack.Registry])!;
