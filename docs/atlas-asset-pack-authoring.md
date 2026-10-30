@@ -127,6 +127,26 @@ banks as the native test; ZIP member timestamps account for the archive change.
 The host uses the existing translated module; no original executable fallback
 or PM instruction-body port was introduced.
 
+## Original/upgraded appearance work (2026-10-30)
+
+The [generic appearance contract](authoring-additional-mechs.md#original-and-upgraded-appearances-development-contract)
+keeps Atlas as one namespaced chassis. The original PM descriptor remains the
+baseline; the upgraded alternative supplies enhanced color textures and matching
+BWSNR2 normal pages. Appearance selection cannot replace gameplay, animation,
+collision or headlight resources.
+
+The local original and upgraded source projects retain the four-lamp test
+configuration. Their texture-only derivation and normal-key correspondence can
+be checked independently of the pending headlight integration. The combined
+appearance/headlight pack build and native playtest remain pending integration
+with PR #119; do not remove its fields or lower its requirements to build against
+an older coordinator. The user's existing pack and settings remain unchanged.
+
+This step implements pack import and private resource preparation. It does not
+add the global three-mode launcher selector or fit the extracted MW5 Atlas to
+the owned PM controller. Those are separate subsequent steps. Local extraction
+and preview rendering do not demonstrate MW5 geometry working in native MW3.
+
 ## PM behavior that still needs porting or verification
 
 Preserve PM behavior rather than substituting a stock controller. Static

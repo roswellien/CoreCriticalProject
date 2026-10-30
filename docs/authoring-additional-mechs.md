@@ -282,6 +282,58 @@ Keep original media, generated game code and local donor-derived experiments
 out of Git and public pack delivery. A conversion does not change distribution
 eligibility; follow the project's [distribution policy](legal.md).
 
+## Original and upgraded appearances (development contract)
+
+Legacy chassis packs can carry an optional texture upgrade on their existing
+chassis row. Keep `legacy` pointing at the original descriptor and retain the
+same pack/chassis IDs. Add this field to the authoring project:
+
+```json
+"appearances": {
+  "upgraded": {
+    "textures": {"example01": "upgraded/example01.bin"},
+    "normals": ["upgraded/surface-normals.bin"]
+  }
+}
+```
+
+Texture names must already exist in the original descriptor. Paths are relative
+to the project root; the builder packages and hashes these resources. This
+contract replaces texture bytes only: definitions, models, motion, animations,
+materials, silhouette, attachments and gameplay remain the original resources.
+Unknown fields and appearance kinds fail validation. Inactive alternatives also
+receive integrity, format, path and file-closure checks.
+
+The builder declares `mech-appearances: 1` alongside
+`additional-mech-chassis: 3`, plus `BWSNR2` when normal pages are present.
+Use a coordinator that explicitly supports these contracts; historical runtime
+profiles are not upgraded implicitly. Each replacement uses a validated legacy
+image (at most 16 MiB). Version 1 allows 1–512 replacement textures and 0–16
+BWSNR2 pages, bounded to 128 MiB per authored page and 512 MiB total.
+Normal bindings must match the complete upgraded opaque RGB565 pixels, including
+dimensions and format. Alpha texture replacements are supported, but normal
+registration for their converted uploads is outside version 1. Duplicate keys,
+foreign surfaces and conflicting existing normal bindings are rejected.
+
+For explicit development profiles, `native.mech_appearance` accepts `original`,
+`upgraded` or `new`. Absent/null keeps the original selection. Upgraded without
+an alternative falls back to original with `upgrade-unavailable`; new selects
+upgraded when available, otherwise original, with `new-model-unavailable`.
+The coordinator returns and prints per-chassis coverage. New geometry is not a
+version 1 appearance. The global launcher selector, stock-pack filtering and
+old-setting migration are subsequent work, not delivered by this contract.
+
+Selected normal pages require native normal format 2 and are composed into a
+private session catalog alongside existing world normals. Selection does not
+change the user's lighting or normal-map switches. Output remains within the
+native 16-page, 4096-byte index and 512 MiB catalog limits. Original selection
+adds no upgrade normal pages and does not disable world normals.
+
+If another feature needs a newer builder (for example the pending headlight
+contract), retain that feature's fields and capability requirements. This
+builder rejects unsupported legacy fields rather than dropping them. Complete
+combined packaging and native validation after those interfaces are integrated.
+
 ## Troubleshooting
 
 | Symptom | Next action |

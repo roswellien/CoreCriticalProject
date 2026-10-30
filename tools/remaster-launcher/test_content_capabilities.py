@@ -32,6 +32,15 @@ class ContentCapabilityTests(unittest.TestCase):
                 require({'content_capabilities': {'ui-artwork': [1]}},
                         {'profile': 'prepared-ui-v1', 'required_capabilities': extra}, 'bad')
 
+    def test_appearances_are_an_independent_required_feature(self):
+        payload = {'profile': 'additional-chassis-v1',
+                   'required_capabilities': {'additional-mech-chassis': 3, 'mech-appearances': 1}}
+        host = {'content_capabilities': {'additional-mech-chassis': [1, 2, 3]}}
+        with self.assertRaises(ValueError):
+            require(host, payload, 'community.mech')
+        host['content_capabilities']['mech-appearances'] = [1]
+        require(host, payload, 'community.mech')
+
     def test_explicit_table_overrides_legacy_including_empty(self):
         legacy = {'executable_sha256': 'dee5e15e02ae18539a3f5b7a89f1e1abac55a2afd964717c28fb900351f85f0a'}
         require(legacy, {'profile': 'prepared-ui-v1'}, 'old.hud')

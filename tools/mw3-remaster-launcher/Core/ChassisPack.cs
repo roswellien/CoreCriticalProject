@@ -22,7 +22,8 @@ public static class ChassisPack
         if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
             !(manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" })) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWSNR2" })) ||
             manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||
             manifest.Files == null || manifest.Files.Count is < 1 or > 1025 ||
             manifest.Files.Values.Sum(p => p.Bytes) > 4L * 1024 * 1024 * 1024)
@@ -66,10 +67,10 @@ public static class ChassisPack
         var fields = new HashSet<string>(new[] { "id", "name", "controller", "metadata_template", "definition", "meshes", "textures" });
         foreach (var row in rows.EnumerateArray())
         {
-            if (manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }))
+            if (manifest.NativePayload.RequiredFormats.Contains("MW3LEGACY"))
             {
                 if (!manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var version) || version != 3 ||
-                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name)))
+                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name).Where(name => name != "appearances")))
                     throw new InvalidDataException("Legacy chassis resources require version 3 and exact fields.");
                 var legacyId = row.GetProperty("id").GetString() ?? "";
                 var legacyName = row.GetProperty("name").GetString() ?? "";
@@ -113,6 +114,8 @@ public static class ChassisPack
                         VerifyResource(entry.Value.GetString() ?? "");
                     }
                 }
+                if (row.TryGetProperty("appearances", out var appearances))
+                    ChassisAppearances.Read(appearances, descriptor.GetProperty("textures"), manifest.NativePayload, Verify);
                 result.Add(new(legacyId, legacyName));
                 continue;
             }

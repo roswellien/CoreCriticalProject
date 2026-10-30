@@ -79,7 +79,9 @@ def definition(document, original):
     return encode(tree)
 
 
-def select(metadata, host, verification=None):
+def select(metadata, host, verification=None, appearance_mode=None):
+    from chassis_appearances import CAPABILITY as APPEARANCES, mode, validate, choose
+    mode(appearance_mode)
     from prepared_mech_packs import read_json, resolve
     from content_capabilities import require
     result, ids = [], set()
@@ -90,7 +92,7 @@ def select(metadata, host, verification=None):
         require(host, payload, manifest['id'])
         if (manifest.get('schema_version') != 2 or manifest.get('game_id') != 'mw3'
                 or payload.get('registry') != REGISTRY or payload.get('path_base') != 'pack-root'
-                or payload.get('required_formats') not in (['BWMESH4', 'BWTEX1'], ['BWMESH4', 'BWTEX1', 'MW3ICON1'], ['MW3LEGACY'])
+                or payload.get('required_formats') not in (['BWMESH4', 'BWTEX1'], ['BWMESH4', 'BWTEX1', 'MW3ICON1'], ['MW3LEGACY'], ['MW3LEGACY', 'BWSNR2'])
                 or manifest.get('dependencies') or manifest.get('conflicts')):
             raise ValueError('Unsupported additional chassis pack contract')
         files = manifest.get('files')
@@ -118,7 +120,7 @@ def select(metadata, host, verification=None):
                 raise ValueError('Chassis integrity failure: ' + name)
             fmt = pin.get('format')
             if fmt is not None:
-                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1'):
+                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1', 'BWSNR2'):
                     raise ValueError('Unsupported chassis payload format')
                 with path.open('rb') as stream:
                     if stream.read(8) != fmt.encode().ljust(8, b'\0'):
@@ -133,9 +135,9 @@ def select(metadata, host, verification=None):
             raise ValueError('Unsupported chassis registry')
         used = {REGISTRY}
         for row in records:
-            if payload.get('required_formats') == ['MW3LEGACY']:
+            if 'MW3LEGACY' in payload.get('required_formats', []):
                 from legacy_chassis_resources import load
-                if (not isinstance(row, dict) or set(row) != {'id', 'name', 'metadata_template', 'legacy'}
+                if (not isinstance(row, dict) or set(row) - {'appearances'} != {'id', 'name', 'metadata_template', 'legacy'}
                         or payload.get('required_capabilities', {}).get(CAPABILITY) != 3):
                     raise ValueError('Legacy chassis resources require version 3 and exact fields')
                 ident = row['id']
@@ -151,7 +153,26 @@ def select(metadata, host, verification=None):
                     return Path(verified[name]).read_bytes()
                 legacy_read(row['legacy'])
                 document = read_json(Path(verified[row['legacy']]))
-                result.append(dict(registration=record, legacy=load(document, legacy_read)))
+                legacy = load(document, legacy_read)
+                upgraded = None
+                if 'appearances' in row:
+                    if payload.get('required_capabilities', {}).get(APPEARANCES) != 1:
+                        raise ValueError('Chassis appearances require version 1')
+                    def appearance_read(name, fmt):
+                        if name not in verified or files[name].get('format') != fmt:
+                            raise ValueError('Undeclared appearance resource')
+                        used.add(name)
+                        return Path(verified[name]).read_bytes()
+                    upgraded = validate(row['appearances'], legacy, appearance_read)
+                    if upgraded['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
+                        raise ValueError('Undeclared appearance normal format')
+                selected = dict(registration=record, legacy=legacy)
+                if upgraded is not None or appearance_mode is not None:
+                    selected['legacy'], pages, coverage = choose(legacy, upgraded, appearance_mode)
+                    if pages and 2 not in host.get('normal_map_formats', []):
+                        raise ValueError('Selected appearance requires normal map format 2')
+                    selected.update(appearance_normal_pages=pages, appearance=coverage)
+                result.append(selected)
                 ids.add(ident)
                 continue
             if not isinstance(row, dict) or not FIELDS <= set(row) or set(row) - FIELDS - {'silhouette', 'base_skin_name', 'sockets'}:
@@ -310,4 +331,7 @@ def prepare(records, game_exe, output, environment):
     for key, value in sorted(banks.items()):
         a, b = key.encode(), value.encode(); data += struct.pack('<II', len(a), len(b)) + a + b
     mapping = output / 'banks.bin'; mapping.write_bytes(data)
-    return {CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())}
+    from chassis_appearances import compose_normals
+    bindings = compose_normals(records, environment, output / 'appearance-normals')
+    bindings.update({CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())})
+    return bindings

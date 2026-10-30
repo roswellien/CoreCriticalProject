@@ -115,6 +115,7 @@ static class ChassisPackChecks
             ChassisPack.Read(installed.DirectoryPath,installed);
             try {RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);throw new Exception("Old host accepted legacy chassis.");}
             catch(InvalidDataException) {}
+            ChassisAppearanceChecks.Run(installed, legacyRegistry, SetResource);
             foreach (var invalid in new[]{"undeclared.bin","../raw.bin"})
             {
                 legacyDescriptor["motions"]!["example_walk"]=invalid;
