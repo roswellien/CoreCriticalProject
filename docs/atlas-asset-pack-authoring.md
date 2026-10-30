@@ -9,6 +9,41 @@ launcher import and private resource composition used by modders. The pack is
 data-only. Its stable identity is `com.corecritical.pm-atlas:mech`; no Atlas
 registration, numeric ID or executable is added to runtime source.
 
+## Eight original skins: authoring candidate
+
+Issue #132 adds generic legacy skin authoring and composition. PM's Atlas
+declares Gunmetal, Sunfire, Desert, Wasp, Slate, Jungle, Arctic and Spectre,
+using primary and `_b` through `_h`. MW3 has matching message labels. The
+original primary row contains 14 direct texture names and five aliases; the
+shared Atlas15 lens is outside that substitution list.
+
+Use the original [legacy skin workflow](authoring-additional-mechs.md#include-original-skins-in-an-owned-legacy-chassis-pack)
+with `--skins all`. The resulting schema-2 resource descriptor and
+`legacy-mech-skins: 1` requirement retain all eight paints under the same Atlas
+identity. Keep the existing four-lamp project's headlight metadata and use a
+builder supporting all of its declared features; the skin change alone does
+not implement or remove headlights.
+
+The local original-skin candidate contains 172 texture entries. Its 155 skin/
+damage texture references match donor bytes; the other entries are shared
+materials, cockpit and effects. All existing payloads, non-skin definition
+fields and the four headlight records were checked unchanged. It is an
+authoring project, not a new installed Atlas pack or a released update.
+Final pack construction and live acceptance wait for reviewed headlight
+integration. Synthetic pack import/composition checks do not establish native
+eight-skin gameplay, damage/LOD correctness or save compatibility.
+
+The detached cockpit-glass report remains open. Original camera values and
+converted mesh/parent data agree with the source; that does not establish
+correct live attachment. Diagnose exterior glass versus the separate cockpit
+overlay before choosing a correction. Remastering the seven alternate paints,
+packaged matching normals and the 16 skin/appearance combinations remain
+subsequent work. This change does not claim the Atlas pack is complete.
+
+Local authoring evidence: `local/work-ahead/atlas-skins-132-r1/` in the issue-132
+worktree, with source identities and unchanged-payload hashes in
+`original-validation.json`. Keep it and all donor-derived content out of Git.
+
 **This is an unreleased compatibility prototype.** The proposed
 `additional-mech-chassis: 3` contract is deliberately absent from released
 runtime profiles. Existing runtimes reject activation. Do not edit an installed
