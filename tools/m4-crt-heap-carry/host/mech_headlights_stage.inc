@@ -55,6 +55,27 @@ bool headlight_shutdown(unsigned actor) {
         return true;
     return runtime.memory().load<unsigned char>({actor + 0xde}) != 0 || load(actor + 0x578) == 10;
 }
+bool headlight_actor_root_matches(unsigned actor, unsigned root) {
+    return readable(actor, 8) && load(actor + 4) == root;
+}
+bool headlight_node_in_root(unsigned node, unsigned root) {
+    std::set<unsigned> seen;
+    for (unsigned depth = 0; depth < 64; ++depth) {
+        if (node == root)
+            return true;
+        if (!node || !seen.insert(node).second || !readable(node, 100))
+            return false;
+        const unsigned parent_link = load(node + 0x58);
+        if (load(node + 0x54) != 1 || !readable(parent_link, 4))
+            return false;
+        node = load(parent_link);
+    }
+    return false;
+}
+struct HeadlightOwnerSnapshot {
+    unsigned actor{}, root{};
+    std::uint64_t generation{};
+};
 void headlight_input(bool gameplay) {
     if (!headlight_enabled())
         return;
@@ -276,6 +297,19 @@ template <class Next> void *headlight_body(State *s, unsigned target, void *p, N
         return next();
     }
     const unsigned actor = state.gpr.rcx.dword;
+    std::optional<HeadlightOwnerSnapshot> retiring_actor;
+    std::vector<HeadlightOwnerSnapshot> retiring_node_owners;
+    if (target == 0x414f40 || target == 0x4152d0) {
+        const auto owner = headlight_owners.find(actor);
+        if (owner != headlight_owners.end() &&
+            (!readable(actor, 8) || headlight_actor_root_matches(actor, owner->second.root)))
+            retiring_actor = HeadlightOwnerSnapshot{actor, owner->second.root,
+                                                     owner->second.generation};
+    }
+    if (target == 0x4eaea0)
+        for (const auto &[owner_actor, owner] : headlight_owners)
+            if (owner.root && headlight_actor_root_matches(owner_actor, owner.root))
+                retiring_node_owners.push_back({owner_actor, owner.root, owner.generation});
     if (target == 0x4a8cd0) {
         headlight_ai_budget = 1;
         for (auto &[id, owner] : headlight_owners)
@@ -289,12 +323,6 @@ template <class Next> void *headlight_body(State *s, unsigned target, void *p, N
             throw std::runtime_error("Headlights: actor capacity exceeded");
         headlight_owners[actor] = {++headlight_generation};
     }
-    if (target == 0x414f40 || target == 0x4152d0) {
-        headlight_owners.erase(actor);
-    }
-    if (target == 0x4eaea0)
-        for (auto &[id, owner] : headlight_owners)
-            owner.retire_node(actor);
     if (target == 0x4a1160) {
         if (photo_replay_consume_input())
             return next();
@@ -348,6 +376,23 @@ template <class Next> void *headlight_body(State *s, unsigned target, void *p, N
     {
         ControllerFp preserve;
         mw34::vkscene::HostFpEnvironment fp;
+        if (target == 0x4eaea0)
+            for (const auto &snapshot : retiring_node_owners) {
+                const auto owner = headlight_owners.find(snapshot.actor);
+                if (owner != headlight_owners.end() &&
+                    owner->second.generation == snapshot.generation &&
+                    owner->second.root == snapshot.root &&
+                    ((actor == snapshot.root &&
+                      !headlight_actor_root_matches(snapshot.actor, snapshot.root)) ||
+                     (actor != snapshot.root && !headlight_node_in_root(actor, snapshot.root))))
+                    owner->second.retire_node(actor, snapshot.generation);
+            }
+        if (retiring_actor && headlight_shutdown(actor)) {
+            const auto owner = headlight_owners.find(retiring_actor->actor);
+            if (owner != headlight_owners.end() && owner->second.root == retiring_actor->root)
+                mw34::headlights::erase_generation(headlight_owners, retiring_actor->actor,
+                                                   retiring_actor->generation);
+        }
         if (target == 0x41e870)
             headlight_ai_candidate(actor);
         auto found = headlight_owners.find(actor);

@@ -68,16 +68,19 @@ struct Owner {
         source_ancestry.clear();
         // A root/LOD change is not a new actor lifetime: damaged mounts stay retired.
     }
-    void retire_node(unsigned node) {
+    bool retire_node(unsigned node, std::uint64_t expected_generation) {
+        if (generation != expected_generation)
+            return false;
         if (node == root) {
             bind_root(0);
-            return;
+            return true;
         }
         for (const auto &[id, ancestry] : source_ancestry)
             if (std::find(ancestry.begin(), ancestry.end(), node) != ancestry.end()) {
                 retired_emitters.insert(id);
                 emitters[id].valid = false;
             }
+        return true;
     }
 };
 inline std::set<std::string> emitter_ids(const chassis::Registration &record) {
@@ -108,6 +111,13 @@ inline void restore_retirement(Owner &owner, const chassis::Registration &record
     }
 };
 using Owners = std::map<unsigned, Owner>;
+inline bool erase_generation(Owners &owners, unsigned actor, std::uint64_t generation) {
+    const auto owner = owners.find(actor);
+    if (owner == owners.end() || owner->second.generation != generation)
+        return false;
+    owners.erase(owner);
+    return true;
+}
 using Matrix = std::array<double, 16>;
 inline Emitter transform(const chassis::Headlight &lamp, const Matrix &world) {
     Emitter result;

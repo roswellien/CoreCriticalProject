@@ -67,7 +67,9 @@ int main() {
     owner.emitters["left"] = emitter;
     owner.emitters["right"] = emitter;
     owner.source_ancestry = {{"left", {103, 102, 100}}, {"right", {104, 100}}};
-    owner.retire_node(102);
+    require(!owner.retire_node(102, 0) && owner.emitters.at("left").valid,
+            "stale generation cannot retire a reused actor mount");
+    require(owner.retire_node(102, 1), "current generation accepts mount retirement");
     require(!owner.emitters.at("left").valid && owner.emitters.at("right").valid,
             "ancestor retirement isolates lamps");
     owner.bind_root(200);
@@ -92,12 +94,18 @@ int main() {
     require(rejected, "replay rejects unknown retirement bits");
     owner.source_ancestry = {{"right", {204, 200}}};
     owner.emitters["right"] = emitter;
-    owner.retire_node(200);
+    owner.retire_node(200, owner.generation);
     require(!owner.root && owner.emitters.empty() && !owner.retired_emitters.count("right"),
             "root teardown invalidates rather than damaging intact mounts");
     owner = {2};
     require(owner.retired_emitters.empty() && !owner.envelope.desired && !owner.root,
             "same-address reconstruction resets lifetime");
+    Owners owners;
+    owners[100] = {2};
+    require(!erase_generation(owners, 100, 1) && owners.at(100).generation == 2,
+            "stale generation cannot erase a reused actor");
+    require(erase_generation(owners, 100, 2) && owners.empty(),
+            "current generation can erase its actor");
     auto &fixtures = mw34::fixtures::FixtureManager::instance();
     fixtures.clear();
     mw34::fixtures::MovingLight light{{{0, 0, 0, 50}, {0, 0, -1, 2}, {1, 1, 1, 2}},
