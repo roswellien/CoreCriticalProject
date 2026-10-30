@@ -32,8 +32,11 @@ images promote to output size with linear color and nearest depth sampling.
 Retained opaque runs instead reconstruct color in a temporary output image,
 apply selected FXAA there, and replay original geometry, alpha rejection and
 depth operations into the preserved output target. Untouched output pixels are
-not copied or filtered. Contiguous blended/point runs, guest uploads/readbacks
-and HUD operations retain the ordered full-resolution path.
+not copied or filtered. In retained-color batching, contiguous blended/point runs
+use the ordered full-resolution path. The full-clear path keeps world submissions
+reduced until promotion, including blended/point draws. HUD, guest readback and
+external surface writes promote to output resolution. Guest uploads also promote
+unless that same submission proves complete color replacement with a clear.
 Menus/frontend canvases retain their existing fitted output size. Target changes and shutdown retire
 both image pairs after device work completes. Guest surface dimensions, D16
 upload/readback conversion and translated code stay unchanged.
@@ -476,10 +479,13 @@ full-resolution fragment alpha. Output depth is produced by the
 original full-resolution replay, rather than a scaled depth approximation.
 
 This advances retained opaque world shading -> reconstructed color -> covered
-output pixels while preserving untouched HUD/color/depth. Blended runs continue
+output pixels while preserving untouched HUD/color/depth. Within retained-color
+batching, blended runs continue
 at output resolution, reading the updated destination in command order; this
-keeps fades from downsampling retained UI. Upload/readback and point runs also
-keep the full-resolution path. The 100% path is unchanged. Its historical
+keeps fades from downsampling retained UI. Point runs in that batching path also
+keep full resolution. Guest readback always promotes; guest uploads promote
+unless their submission proves complete color replacement. The full-clear world
+path can remain reduced until promotion. The 100% path is unchanged. Its historical
 whole-image FXAA can reprocess pixels outside a partial world draw; the new strict
 untouched-pixel guarantee applies to the opt-in reduced reconstruction path.
 That broader assertion exposed the historical 100% behavior during testing; the
@@ -613,6 +619,22 @@ synchronization validation. Both stop deliberately at their budgets (exit 1),
 not through normal-quit acceptance. Receipts/captures stay under
 `D:/Projects/MW34-stage2-ordering/local/ordering/`.
 
+A fresh independent branch review found no major correctness or structure
+findings in one pass. It qualified the full-resolution claims above to distinguish
+retained-color batching from the full-clear path. The review rebuilt the display
+fixture and repeated all 12 ordered-write and 18 world/persistence/lifecycle
+configurations with clean synchronization validation, plus the CMake build,
+25 CTest cases, format/style and launcher checks. The same source-pinned host
+also completed an independent 100% visible Training run: 2,200 actual RX 9070
+Vulkan/DXGI presentations / 6,142 guest scenes, zero validation diagnostics and
+the intentional budget stop (exit 1). Captures 1801/2101 match the published
+reference byte for byte, with SHA-256 values
+`0c822b3dd82b25444b1c0dc66dd14bdc26ffb1f49c89a64087404b4ff24389cd`
+and `0f7f6f526a793c5cbdd63748fd69949471a298582e83544fe87111dd4d52638e`.
+The receipt is `local/ordering/review-native100/`; canonical host and repository
+source pins in its build receipt match the reviewed sources. This confirms the
+bounded default-path comparison, not normal shutdown or whole-game fidelity.
+
 The approved plan in PR #96 assigns camera-only history/velocities, jitter and
 static-world depth validation to **P2 (Stage 3)**; those are upcoming implementation
 work, not features P1 must already provide. P1's actual criteria are explicit
@@ -624,16 +646,20 @@ reconstruction is still not a validated temporal FSR input/history contract.
 
 The retained-pixel correction above supersedes the initial persistence failures.
 Stage 2 has bounded ordered-write/fade, resource-lifecycle and native
-Training/menu/Lab evidence above. Independent review and the requester's readiness
-decision remain required before the draft can be marked ready. Resident opaque retained-color runs now have a reduced
-shading/coverage-reconstruction path; blended and guest-write paths remain full
-resolution by design.
+Training/menu/Lab evidence above. Independent review completed as recorded above;
+the requester's readiness decision remains required before the draft can be
+marked ready. Resident opaque
+retained-color runs now have a reduced shading/coverage-reconstruction path;
+intervening blended/point runs stay at output resolution. Full-clear world
+submissions retain their reduced path until promotion. External guest surface
+writes and uploads without a full-replacement clear promote to output resolution.
 FSR remains disabled; do not advance to Stage 3 implementation or mark this draft
 ready on the strength of passing CI. Fresh-overlay, stock Training, visible
 fixture lifecycle and synchronization checks have bounded evidence above.
 Comprehensive guest-write/fade sequences, visible lifecycle checks inside the
 game, broader startup and adapter depth coverage, the
-reported periodic size change, raw RX 9070 Vulkan WSI, a second
-physical PC and independent review remain open. Opaque runs after HUD can use
-coverage reconstruction; blended/point and guest-write paths remain full resolution.
+reported periodic size change, raw RX 9070 Vulkan WSI and a second
+physical PC remain open. Opaque runs after HUD can use
+coverage reconstruction; the full-resolution guarantees and full-clear exceptions
+are scoped above.
 No build, asset, release or version was published or merged by these checks.
