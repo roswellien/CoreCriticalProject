@@ -103,7 +103,7 @@ The 50% captures match their P1 references:
 `6f13822cc471e0dc0e3e49e382819aabca76b32cb34c8caeed38629ed09b72ed` and
 `6af77b31b2c6cf6e39686e2a925918825cf9ce017a26fb88b0d73a22a5b4ceb4`.
 
-Pause entry at frame 1501 invalidates; frames 1501â€“1581 retain no pair. Exit at
+Pause entry at frame 1501 invalidates; frames 1501-1581 retain no pair. Exit at
 1582 invalidates; the following fresh view starts without history and then recovers.
 Camera cycling at 1301 resets mode zero before mode one starts; a later mode-two
 controller is rejected even though it reuses the mode-zero table. These are
