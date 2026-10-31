@@ -3,7 +3,9 @@
 Issue [#133](https://github.com/roswellien/MW3Recomp-Private/issues/133),
 2026-10-30. An assembled MW5 Raven RVN-3L now follows original MW3 Owens and
 Strider motion through the existing donor retarget solver in offline previews.
-Owens is the preferred starting controller. This is **not an installed chassis,
+Owens is the preferred starting point for leg motion, not Raven aim limits.
+The owner selected completing the RVN-3L visual/animation prototype and deferring
+the playable loadout. This is **not an installed chassis,
 a playable Raven, or a native gameplay result**. No runtime source or installed
 pack changed, and no native execution boundary advanced.
 
@@ -27,7 +29,7 @@ skin or demonstrated native material response.
 
 ## MW3-inspired texture study
 
-A separate local field-enamel set now applies muted olive-grey armor, dark
+The first local field-enamel set applies muted olive-grey armor, dark
 machinery, dusty mottling and restrained scuffing to the same RVN-3L assembly.
 Local Owens textures and the existing Strider texture study informed the
 appearance. This is an authored interpretation, not an original MW3 Raven skin.
@@ -54,6 +56,42 @@ The motion/contact limitations below are unchanged.
 The texture study lives in ignored `local/raven-textures-mw3-r1/`, with
 `review.html`, the editable `raven-mw3-field-enamel.blend`, `maps/`,
 `build_texture_set.py`, the artwork prompt and `texture-set.json`.
+
+### Revision 2: maintained but well used
+
+The owner's review found the first set too plain. Revision 2 makes worn edges
+lighter and more metallic, with lower roughness at exposed metal while keeping
+most armor painted. It adds sharper surface scratches, localized gouges and
+soot-marked impact scars on inspected armor UV regions. Existing MissileHead
+surfaces use yellow enamel. These are authored appearance details, not game
+damage events or new damaged-mesh states.
+
+The revision keeps the 17-map layout and unchanged donor normals. Source art,
+the bake recipe, previews and packed Blender scenes remain under ignored
+`local/raven-textures-mw3-r2/`. Revision 1 is retained. No original installation,
+runtime or installed pack changes.
+
+### Independent torso aim
+
+The Raven rig contains `Torso_Twist`, and the existing donor solver separately
+derives it from the original `torso` control while deriving `Pelvis` from `hip`.
+Reusing Owens leg motion therefore does not require locking Raven torso yaw.
+The decoded stock MW3 definitions list Owens `maxYaw` as 15 degrees and Strider
+as 75 degrees; neither is a recovered Raven limit.
+
+An offline diagnostic passes an authored +/-45-degree yaw sweep through the
+existing compiled solver. It rotates torso and arm controls together while
+holding pelvis and leg controls at their respective standing or walking poses.
+The resulting Blender scene retains separately named standing and walking aim
+actions. The sweep is a binding check, not native gameplay or an assertion of
+the final Raven yaw range. Final aim limits and gameplay integration remain
+deferred with the playable loadout.
+
+Across 33 standing and 57 walking samples, the diagnostic's lower-body matrices
+match their neutral counterparts exactly. Maximum tested upper-body matrix
+error against the requested yaw is 0.000001431, and maximum attachment error
+is 0.000001908. Reach-clamp counts are unchanged. These checks establish the
+offline solver/binding behavior, not live aim input, collision or firing.
 
 ## Source identity
 
@@ -164,7 +202,8 @@ AI, save/reload and pack removal in a compatible native runtime.
 
 All original and derived media remain ignored under the isolated checkout's
 `local/raven-investigation-20261030/`, `local/raven-prototype-20261030-r1/`
-and `local/raven-textures-mw3-r1/`. The motion prototype directory retains:
+and `local/raven-textures-mw3-r1/` plus `local/raven-textures-mw3-r2/`.
+The motion prototype directory retains:
 
 - `extraction-files.json`, decoded metadata and source attachment selections.
 - `compare_motion.py`, `compare_foot_follow.py`, `compare_locomotion_fit.py`,
