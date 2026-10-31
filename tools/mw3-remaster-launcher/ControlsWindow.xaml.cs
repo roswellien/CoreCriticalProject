@@ -42,6 +42,11 @@ public partial class ControlsWindow : Window
         Profiles.SelectedItem = document.Profiles.FirstOrDefault(p => p.Id == document.ActiveId) ?? document.Profiles.FirstOrDefault();
         Closing += (_, _) => capture = null;
     }
+    private void OpenHeadlightBindings(object sender, RoutedEventArgs e)
+    {
+        try { new HeadlightBindingsWindow(dataRoot) { Owner = this }.ShowDialog(); }
+        catch (Exception ex) { Status.Text = "Headlight controls could not be loaded. " + ex.Message; }
+    }
     private void LoadJoystickChoices()
     {
         initializingJoysticks = true;

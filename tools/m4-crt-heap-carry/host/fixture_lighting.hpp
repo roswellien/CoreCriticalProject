@@ -13,6 +13,10 @@
 namespace mw34::fixtures {
 
 using Point = std::array<float, 3>;
+// Moving sources participate in the same final selection without entering the
+// scenery retention cache. Caller order is its stable identity tie breaker.
+struct MovingLight { effects::Light light; std::array<float, 4> cone{}; };
+struct SelectedLight { effects::Light light; std::array<float, 4> cone{}; };
 
 struct FixtureDef {
     const char* name;
@@ -125,14 +129,14 @@ public:
         if(fixtures_.size()>=4096){auto oldest=std::min_element(fixtures_.begin(),fixtures_.end(),[](const auto&a,const auto&b){return a.last_frame<b.last_frame;});*oldest={c,normal,&def,frame,source,0,time_};}
         else fixtures_.push_back({c,normal,&def,frame,source,0,time_});
     }
-    std::vector<effects::Light> select_lights(const Point& eye,unsigned limit,float strength=1,float range_scale=1,float retain_distance=160,float fade_distance=32){
+    std::vector<SelectedLight> select_combined(const Point& eye,unsigned limit,float strength=1,float range_scale=1,float retain_distance=160,float fade_distance=32,const std::vector<MovingLight>& moving={},bool scenery=true){
         // View-frustum visibility never deletes a fixture. Invalidated original
         // sources still remove it immediately. Keep proven identities until their
         // owner invalidates, so returning toward a cached source needs no redraw.
         // Only anonymous observations expire by distance.
         std::erase_if(fixtures_,[&](const auto& f){const float keep=std::max(retain_distance,f.def->radius*range_scale*4);return !f.source&&f.last_frame!=frame_&&effects::distance2(eye,f.position)>keep*keep;});
-        struct Candidate{float score;effects::Light light;size_t index;};std::vector<Candidate> picks;
-        for(size_t index=0;index<fixtures_.size();++index){auto& f=fixtures_[index];const auto& d=*f.def;
+        struct Candidate{float score;effects::Light light;size_t index;std::array<float,4> cone{};};std::vector<Candidate> picks;
+        for(size_t index=0;scenery&&index<fixtures_.size();++index){auto& f=fixtures_[index];const auto& d=*f.def;
             const float radius=d.radius*range_scale,radius2=radius*radius,distance2=effects::distance2(eye,f.position);
             const float distance=std::sqrt(distance2);
             const float keep=std::max(retain_distance,radius*4),band=std::max(fade_distance,radius);
@@ -148,9 +152,27 @@ public:
             // Keep incumbents unless a new candidate is materially stronger.
             picks.push_back({power*radius2/(radius2+distance2)*(f.selected?1.25f:1.f),l,index});
         }
+        for(const auto& source:moving){
+            const auto& light=source.light;
+            const float radius2=light.start[3]*light.start[3];
+            const float distance2=effects::distance2(eye,{light.start[0],light.start[1],light.start[2]});
+            if(light.color[3]>0&&radius2>0)
+                picks.push_back({light.color[3]*radius2/(radius2+distance2),light,fixtures_.size(),source.cone});
+        }
         std::stable_sort(picks.begin(),picks.end(),[](const auto&a,const auto&b){return a.score>b.score;});
         for(auto& f:fixtures_)f.selected=false;
-        std::vector<effects::Light> out;for(size_t i=0;i<std::min<size_t>(limit,picks.size());++i){fixtures_[picks[i].index].selected=true;out.push_back(picks[i].light);}return out;
+        std::vector<SelectedLight> out;
+        for(size_t i=0;i<std::min<size_t>(limit,picks.size());++i){
+            if(picks[i].index<fixtures_.size())fixtures_[picks[i].index].selected=true;
+            out.push_back({picks[i].light,picks[i].cone});
+        }
+        return out;
+    }
+
+    std::vector<effects::Light> select_lights(const Point& eye,unsigned limit,float strength=1,float range_scale=1,float retain_distance=160,float fade_distance=32){
+        std::vector<effects::Light> result;
+        for(const auto& selected:select_combined(eye,limit,strength,range_scale,retain_distance,fade_distance))result.push_back(selected.light);
+        return result;
     }
 
     struct UvPoint { Point p; float u,v; };

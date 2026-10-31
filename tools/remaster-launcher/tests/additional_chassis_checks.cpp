@@ -1,4 +1,4 @@
-#include "../native-overrides/additional_chassis.hpp"
+#include "../../m4-crt-heap-carry/host/additional_chassis.hpp"
 #include <fstream>
 #include <sstream>
 #include <limits>
@@ -78,6 +78,18 @@ int main(int argc, char** argv) {
     auto bad_position=socket_catalog;
     const double bad=std::numeric_limits<double>::quiet_NaN();
     std::memcpy(bad_position.data()+bad_position.size()-8,&bad,8);rejected(bad_position);
+    auto lamps=socket_catalog;lamps[6]='5';number(lamps,1);
+    text(lamps,"left");text(lamps,"donor_bone");text(lamps,"Forearm_Right");
+    for(float value:{1.f,2.f,3.f,0.f,0.f,-1.f,1.f,.9f,.8f,2.f,50.f,15.f,30.f})number(lamps,std::bit_cast<unsigned>(value));
+    std::istringstream lamp_stream(lamps);
+    const auto lamp_records=mw34::chassis::read_catalog(lamp_stream);
+    check(lamp_records[0].headlights.size()==1&&lamp_records[0].headlights[0].range==50);
+    for(size_t n=0;n<lamps.size();++n)rejected(lamps.substr(0,n));
+    rejected(lamps+"x");
+    auto invalid_cone=lamps;
+    const unsigned angle=std::bit_cast<unsigned>(15.f);
+    for(unsigned i=0;i<4;++i)invalid_cone[invalid_cone.size()-4+i]=char(angle>>(8*i));
+    rejected(invalid_cone);
     if (argc == 2) {
         std::ifstream file(argv[1], std::ios::binary);
         check(mw34::chassis::read_catalog(file).size() == 2);
