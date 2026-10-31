@@ -8,6 +8,7 @@ import unittest
 
 from build_chassis_pack import build
 from prepared_chassis_packs import CAPABILITY, CATALOG_KEY, REGISTRY, definition, prepare, select, _banks
+from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
 from reader_archive import _directory
 from zrd_document import decode, encode
 
@@ -53,6 +54,8 @@ class ChassisPackTests(unittest.TestCase):
                 manifest = json.loads((output/'pack/pack.json').read_text())
                 self.assertEqual(manifest['native_payload']['required_capabilities']['mech-headlights'], 1)
                 host = dict(content_capabilities={CAPABILITY:[1,2,3]})
+                if legacy:
+                    host['content_capabilities'][SKIN_CAPABILITY] = [1]
                 with self.assertRaisesRegex(ValueError, 'mech-headlights'):
                     select([(output/'pack',manifest)],host)
                 host['content_capabilities']['mech-headlights'] = [1]

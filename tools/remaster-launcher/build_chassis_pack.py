@@ -20,6 +20,7 @@ def build(project_path, output):
     output = Path(output); output.mkdir(parents=True, exist_ok=False)
     stage = output / 'pack'; stage.mkdir()
     files, records = {}, []
+    legacy_skins = False
 
     def add(data, fmt=None, extension='.bin'):
         name = 'payload/' + hashlib.sha256(data).hexdigest() + extension
@@ -43,6 +44,7 @@ def build(project_path, output):
                     raise ValueError('Legacy project resource exceeds size limit')
                 return path.read_bytes()
             load(document, read_legacy)
+            legacy_skins = legacy_skins or document['schema_version'] == 2
             for role, name, relative in list(resource_paths(document)):
                 payload = add(read_legacy(relative))
                 if name is None:
@@ -94,8 +96,12 @@ def build(project_path, output):
                     provides=dict(mechs=[r['id'] for r in records]), files=files)
     if headlights:
         manifest['native_payload']['required_capabilities']['mech-headlights'] = 1
+    from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
+    if legacy_skins:
+        manifest['native_payload']['required_capabilities'][SKIN_CAPABILITY] = 1
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-    select([(stage, manifest)], {'content_capabilities': {CAPABILITY: [1, 2, 3], 'mech-headlights': [1]}})
+    select([(stage, manifest)], {'content_capabilities': {
+        CAPABILITY: [1, 2, 3], 'mech-headlights': [1], SKIN_CAPABILITY: [1]}})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
         for path in sorted(stage.rglob('*')):

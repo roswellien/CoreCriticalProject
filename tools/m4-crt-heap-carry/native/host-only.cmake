@@ -43,6 +43,6 @@ target_compile_definitions(entry_commandline PRIVATE
     MW34_MSVCP50_PATH="${MW34_GAME_DIRECTORY}/MSVCP50.DLL")
 target_compile_options(entry_commandline PRIVATE /EHs /O2 /Ob2)
 target_link_libraries(entry_commandline PRIVATE
-    "${MW34_TRANSLATED_LIBRARY}" bcrypt dxguid version winmm vfw32)
+    "${MW34_TRANSLATED_LIBRARY}" bcrypt dxguid dxgi d3d11 version winmm vfw32)
 target_link_options(entry_commandline PRIVATE
     "/DEF:${MW34_HOST_DEFINITION}" /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /OPT:REF /OPT:ICF)
