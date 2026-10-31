@@ -135,8 +135,9 @@ public static class ChassisPack
                 var descriptor = resourceDocument.RootElement;
                 PackStorage.ValidateUniqueProperties(descriptor);
                 var descriptorFields = new HashSet<string>(new[] { "schema_version", "resource", "definition", "materials", "silhouette", "models", "motions", "animations", "textures" });
+                if (LegacyChassisSkins.Validate(descriptor, manifest.NativePayload) == 2)
+                    descriptorFields.Add("skins");
                 if (!descriptorFields.SetEquals(descriptor.EnumerateObject().Select(p => p.Name)) ||
-                    descriptor.GetProperty("schema_version").GetInt32() != 1 ||
                     !Regex.IsMatch(descriptor.GetProperty("resource").GetString() ?? "", @"\A[a-z][a-z0-9_]{0,15}\z"))
                     throw new InvalidDataException("Invalid legacy chassis descriptor.");
                 void VerifyResource(string path)
@@ -154,6 +155,7 @@ public static class ChassisPack
                         throw new InvalidDataException("Invalid legacy chassis resource table.");
                     var entries = table.EnumerateObject().ToArray();
                     if (entries.Length < 1 || entries.Length > limit ||
+                        entries.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != entries.Length ||
                         (role == "models" && !new HashSet<string>(new[] { "close", "distance", "cockpit" }).SetEquals(entries.Select(p => p.Name))))
                         throw new InvalidDataException("Invalid legacy chassis resource count or LODs.");
                     foreach (var entry in entries)
