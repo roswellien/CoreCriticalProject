@@ -85,14 +85,14 @@
       "classification": "interoperability-metadata"
     },
     "campaign_environment_policy.hpp": {
-      "sha256": "4bef5421c3f5889513805359c2e8aa8caf7d831e9b3e06fe85306b39b417660b",
-      "bytes": 1135,
+      "sha256": "eda3db9725c42cc49a1a4263802b797341be51dd65d95510688d93597e5d3396",
+      "bytes": 1186,
       "decision": "commit",
       "classification": "authored-host-source"
     },
     "campaign_lighting.hpp": {
-      "sha256": "5dbb08a320bf9a576dfa1c83fdc4201050f7a8bc355e49c83220e415c7d289d3",
-      "bytes": 24858,
+      "sha256": "d9e170f9e3021485b123762e6d402054d2a37ca186b704e8037d38d6ab91916e",
+      "bytes": 25309,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -565,8 +565,8 @@
       "classification": "authored-host-source"
     },
     "mission_environment_pack.hpp": {
-      "sha256": "1089817c99117d62f8ba0f15cf4270aa73c5395ca3633c58fc52fcf24b3238e6",
-      "bytes": 5427,
+      "sha256": "429f2f63a18f2def30e710fc7041f896d3bddf2d4e84558c968727e280a3c46e",
+      "bytes": 5959,
       "decision": "commit",
       "classification": "authored-host-source"
     },
