@@ -135,7 +135,7 @@ def select(metadata, host, verification=None):
         for row in records:
             if payload.get('required_formats') == ['MW3LEGACY']:
                 from legacy_chassis_resources import load
-                if (not isinstance(row, dict) or set(row) != {'id', 'name', 'metadata_template', 'legacy'}
+                if (not isinstance(row, dict) or set(row) - {'headlights'} != {'id', 'name', 'metadata_template', 'legacy'}
                         or payload.get('required_capabilities', {}).get(CAPABILITY) != 3):
                     raise ValueError('Legacy chassis resources require version 3 and exact fields')
                 ident = row['id']
@@ -143,6 +143,7 @@ def select(metadata, host, verification=None):
                     raise ValueError('Duplicate or unowned legacy chassis identity')
                 record = dict(id=ident, name=row['name'], metadata_template=row['metadata_template'],
                               resource='c' + hashlib.sha256(ident.encode()).hexdigest()[:12])
+                _headlights(row, record, payload)
                 encode_catalog([record])
                 def legacy_read(name):
                     if not isinstance(name, str) or name not in verified or files[name].get('format') is not None:
@@ -158,7 +159,7 @@ def select(metadata, host, verification=None):
                 result.append(dict(registration=record, legacy=load(document, legacy_read)))
                 ids.add(ident)
                 continue
-            if not isinstance(row, dict) or not FIELDS <= set(row) or set(row) - FIELDS - {'silhouette', 'base_skin_name', 'sockets'}:
+            if not isinstance(row, dict) or not FIELDS <= set(row) or set(row) - FIELDS - {'silhouette', 'base_skin_name', 'sockets', 'headlights'}:
                 raise ValueError('Invalid chassis registry fields')
             ident = row['id']
             if not isinstance(ident, str) or not ident.startswith(manifest['id'] + ':') or ident in ids:
@@ -197,6 +198,7 @@ def select(metadata, host, verification=None):
                 if payload.get('required_capabilities', {}).get(CAPABILITY, 0) < 2:
                     raise ValueError('Chassis sockets require chassis version 2')
                 record['sockets'] = row['sockets']
+            _headlights(row, record, payload)
             encode_catalog([record])  # Shared wire validation; pack cannot supply runtime IDs or commands.
             selected = dict(registration=record, definition=document)
             if 'silhouette' in row:
@@ -315,3 +317,14 @@ def prepare(records, game_exe, output, environment):
         a, b = key.encode(), value.encode(); data += struct.pack('<II', len(a), len(b)) + a + b
     mapping = output / 'banks.bin'; mapping.write_bytes(data)
     return {CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())}
+
+
+def _headlights(row, record, payload):
+    if 'headlights' not in row:
+        return
+    from chassis_catalog import validate_headlights
+    lights = validate_headlights(row['headlights'], 'visuals' in record)
+    if lights and (payload.get('required_capabilities', {}).get('mech-headlights') != 1
+                   or payload.get('required_capabilities', {}).get(CAPABILITY, 0) < 2):
+        raise ValueError('Headlights require mech-headlights version 1 and chassis version 2 or newer')
+    record['headlights'] = lights

@@ -35,6 +35,26 @@ class PresentationPolicyTests(unittest.TestCase):
                         'MW34_FIXTURE_SHADOWS':'1','MW34_SEH_LOG':'1'})
         return host
 
+    def test_headlight_master_and_version_negotiation(self):
+        for dynamic in (False, True):
+            for headlights in (False, True):
+                with self.subTest(dynamic=dynamic, headlights=headlights):
+                    host = self.host(dynamic)
+                    host['stock_presentation_versions'] = [1, 2]
+                    host['presentation'].update(schema_version=2, headlights=headlights)
+                    inherited = dict(MW34_MECH_HEADLIGHTS='1', MW34_HEADLIGHT_AI='1')
+                    result = environment(host, {}, inherited)
+                    self.assertEqual(result['MW34_MECH_HEADLIGHTS'], str(int(dynamic and headlights)))
+                    self.assertEqual(result['MW34_HEADLIGHT_AI'], '0')
+                    self.assertEqual(environment(host, {}, result), result)
+        old = self.host(True)
+        self.assertEqual(environment(old, {}, {'MW34_MECH_HEADLIGHTS': '1'})['MW34_MECH_HEADLIGHTS'], '0')
+        old['presentation'].update(schema_version=2, headlights=True)
+        with self.assertRaises(ValueError): environment(old, {}, {})
+        old['stock_presentation_versions'] = [1, 2]
+        old['presentation']['headlights'] = 1
+        with self.assertRaises(ValueError): environment(old, {}, {})
+
     def test_stock_clears_all_enhancements_and_old_training(self):
         host = self.host(False)
         host['runtime_environment'].update(MW34_EFFECT_LIGHT_CATALOG='stale.bin',

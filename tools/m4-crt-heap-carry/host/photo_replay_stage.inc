@@ -684,6 +684,7 @@ void photo_replay_record_live_snapshot() {
     rec.gheap_free_blocks.assign(host.gheap.free_blocks.begin(), host.gheap.free_blocks.end());
     rec.gheap_live.assign(host.gheap.live.begin(), host.gheap.live.end());
     rec.gheap_regions.assign(host.gheap.regions.begin(), host.gheap.regions.end());
+    rec.headlights = headlight_snapshot();
     rec.gheap_region_owners.assign(host.gheap.region_owners.begin(), host.gheap.region_owners.end());
 
     // Guest render-state caches and the host device must describe the same frame.
@@ -831,6 +832,8 @@ void photo_replay_restore_snapshot(std::size_t frame_idx, float subframe_alpha) 
             }
         }
     }
+    // Mounted lamps must sample the same interpolated pose that will be rendered.
+    headlight_restore(rec.headlights);
 }
 
 void photo_replay_stop_video() {
