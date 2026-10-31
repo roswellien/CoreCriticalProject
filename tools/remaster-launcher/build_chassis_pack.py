@@ -33,7 +33,7 @@ def build(project_path, output):
 
     for entry in project['chassis']:
         if 'legacy' in entry:
-            if set(entry) - {'id', 'name', 'metadata_template', 'legacy', 'appearances'}:
+            if set(entry) - {'id', 'name', 'metadata_template', 'legacy', 'appearances', 'headlights'}:
                 raise ValueError('Unsupported legacy project fields; use a compatible builder')
             from legacy_chassis_resources import resource_paths, load
             row = {key: entry[key] for key in ('id', 'name', 'metadata_template')}
@@ -72,12 +72,16 @@ def build(project_path, output):
                     elif packed not in variant['normals']:
                         variant['normals'].append(packed)
                 row['appearances'] = dict(upgraded=variant)
+            if 'headlights' in entry:
+                row['headlights'] = entry['headlights']
             records.append(row)
             continue
         row = {k: entry[k] for k in ('id', 'name', 'controller', 'metadata_template')}
         row['id'] = project['pack_id'] + ':' + row['id']
         if 'base_skin_name' in entry:
             row['base_skin_name'] = entry['base_skin_name']
+        if 'headlights' in entry:
+            row['headlights'] = entry['headlights']
         if 'sockets' in entry:
             row['sockets'] = entry['sockets']
         definition = read_json(resolve(project_path.parent, entry['definition']))
@@ -102,13 +106,16 @@ def build(project_path, output):
     legacy = any('legacy' in row for row in records)
     if legacy and not all('legacy' in row for row in records):
         raise ValueError('Keep legacy and prepared-visual chassis in separate packs')
-    version_two = icons or any('base_skin_name' in row or 'sockets' in row for row in records)
+    headlights = any(row.get('headlights') for row in records)
+    version_two = headlights or icons or any('base_skin_name' in row or 'sockets' in row for row in records)
     manifest = dict(schema_version=2, game_id='mw3', id=project['pack_id'], name=project['name'],
                     version=project['version'], author=project.get('author', 'Community'), category='Mechs',
                     description=project.get('description', 'Additional selectable mechs. Choose in Mech Lab.'),
                     native_payload=dict(profile=PROFILE, registry=REGISTRY, path_base='pack-root',
                                         required_formats=['MW3LEGACY'] if legacy else ['BWMESH4', 'BWTEX1'] + (['MW3ICON1'] if icons else []), required_capabilities={CAPABILITY: 3 if legacy else 2 if version_two else 1}),
                     provides=dict(mechs=[r['id'] for r in records]), files=files)
+    if headlights:
+        manifest['native_payload']['required_capabilities']['mech-headlights'] = 1
     from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
     if legacy_skins:
         manifest['native_payload']['required_capabilities'][SKIN_CAPABILITY] = 1
@@ -119,7 +126,8 @@ def build(project_path, output):
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     select([(stage, manifest)], {
         'content_capabilities': {
-            CAPABILITY: [1, 2, 3], SKIN_CAPABILITY: [1], 'mech-appearances': [1]
+            CAPABILITY: [1, 2, 3], SKIN_CAPABILITY: [1],
+            'mech-appearances': [1], 'mech-headlights': [1]
         },
         'normal_map_formats': [2],
     })

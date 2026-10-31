@@ -394,3 +394,60 @@ combined packaging and native validation after those interfaces are integrated.
 | Chassis missing from the list | Check selected game, enabled pack, compatibility errors and unlimited-inventory Instant Action stockpile; scroll through the list |
 | Saved mech fails after disabling its pack | Re-enable the required pack with the same stable IDs; capture an error if recovery still fails |
 | PM field/resource appears to have no effect | Verify the runtime implements its consumer and dependencies; track it as an unsupported behavior until demonstrated |
+
+## Optional headlights (development runtime)
+
+This adapter is a development feature, not general PM compatibility. Use a
+runtime that explicitly advertises `mech-headlights: [1]`; never add that claim
+to an older binary. Nonempty lists also require additional-mech-chassis version
+2 for prepared visuals or version 3 for legacy resources. The builder declares
+these requirements automatically. Published runtime profiles remain unchanged.
+
+Add `headlights` alongside `sockets` in each project chassis. Omit it or use `[]`
+for an unequipped mech. This authored two-lamp example demonstrates independent
+offsets; it does not claim that the PM Atlas has two lamps:
+
+```json
+"headlights": [
+  {"id":"left", "space":"guest_node", "attachment":"torso",
+   "position":[-1,2,-2], "direction":[0,0,-1], "color":[1,0.95,0.85],
+   "intensity":2, "range":80, "inner_angle":15, "outer_angle":30},
+  {"id":"right", "space":"guest_node", "attachment":"torso",
+   "position":[1,2,-2], "direction":[0,0,-1], "color":[1,0.95,0.85],
+   "intensity":2, "range":80, "inner_angle":15, "outer_angle":30}
+]
+```
+
+Up to eight lamps may share or use different attachments. Each has a unique
+1–31 character lowercase ASCII ID (letters, digits, underscore or hyphen).
+Attachment names use 1–31 ASCII letters, digits, periods, underscores or hyphens.
+Unknown fields, duplicate IDs, nonfinite numbers and Boolean numbers are rejected.
+Position components are within ±100 game units. Direction must be nonzero and
+is normalized. RGB is 0–1, intensity 0–8, range 1–256 game units, and cone
+half-angles satisfy `0 <= inner_angle < outer_angle <= 89` degrees after conversion
+to runtime float precision.
+
+`guest_node` resolves a live node under the actor's current root. `donor_bone`
+requires prepared visuals and names a donor skeleton bone, using the same axis
+conversion and root-world basis as firepoints. Direction receives rotation/scale
+and normalization, never translation. Missing required mounts fail visibly;
+reconstructed visual bones alone cannot keep a removed component's lamp alive.
+
+Build, import and enable the pack normally. Enable Dynamic Lighting and Headlights
+in Display, then assign a key or enabled-controller button in Controls → Headlight
+controls. Both bindings start unassigned; avoid conflicts with existing actions.
+One press toggles all player lamps; another reverses a fade immediately. The
+roughly 0.8-second fade uses simulation time, so pause/photo mode holds it.
+Disabling Dynamic Lighting keeps the saved Headlights preference. Headlights off
+suppresses the feature on the next launch; bindings and original controls remain.
+
+New actors start off. Shutdown suppresses on requests; destruction discards lamp
+state. Original campaign saves are unchanged. Host replay v4 carries lamp state;
+v3 remains readable with lamps off. Stock MW3 missions have no imported PM AI
+headlight policy and leave AI lamps off. Each lamp consumes one shared light slot
+and respects weapon reservation. Scenery fixtures can be off independently.
+This adds cone illumination, not PM's lamp facade or volumetric beams.
+
+The coordinator emits MWCHAS5 only for nonempty lists and retains MWCHAS1–4
+compatibility. Presentation-policy v2 must ship with its matching host; copying
+the coordinator alone does not upgrade an older runtime.

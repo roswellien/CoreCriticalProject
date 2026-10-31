@@ -165,6 +165,20 @@ class LegacySkinTests(unittest.TestCase):
         upgraded = struct.pack("<IHHIHHH", 3, 1, 1, 0, 0, 0, 99)
         (self.root / "upgrade.bin").write_bytes(upgraded)
         project = json.loads(self.project.read_text())
+        project["chassis"][0]["headlights"] = [
+            {
+                "id": "lamp",
+                "space": "guest_node",
+                "attachment": "torso",
+                "position": [1.0, 2.0, 3.0],
+                "direction": [0.0, 0.0, 1.0],
+                "color": [1.0, 0.8, 0.6],
+                "intensity": 2.0,
+                "range": 92.0,
+                "inner_angle": 15.0,
+                "outer_angle": 30.0,
+            }
+        ]
         project["chassis"][0]["appearances"] = {
             "upgraded": {"textures": {"paint0": "upgrade.bin"}, "normals": []}
         }
@@ -173,14 +187,17 @@ class LegacySkinTests(unittest.TestCase):
         required = manifest["native_payload"]["required_capabilities"]
         self.assertEqual(required[CAPABILITY], 1)
         self.assertEqual(required[APPEARANCES_CAPABILITY], 1)
+        self.assertEqual(required["mech-headlights"], 1)
 
         host = copy.deepcopy(self.host)
         host["content_capabilities"][APPEARANCES_CAPABILITY] = [1]
+        host["content_capabilities"]["mech-headlights"] = [1]
         selected = select([(root, manifest)], host, appearance_mode="upgraded")
         self.assertEqual(selected[0]["appearance"]["selected"], "upgraded")
         self.assertEqual(selected[0]["legacy"]["textures"]["paint0"], upgraded)
+        self.assertEqual(selected[0]["registration"]["headlights"][0]["id"], "lamp")
 
-        for capability in (CAPABILITY, APPEARANCES_CAPABILITY):
+        for capability in (CAPABILITY, APPEARANCES_CAPABILITY, "mech-headlights"):
             unsupported_host = copy.deepcopy(host)
             unsupported_host["content_capabilities"].pop(capability)
             with self.subTest(capability=capability), self.assertRaisesRegex(

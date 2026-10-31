@@ -12,6 +12,7 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <bit>
 
 namespace mw34::chassis {
 // Stock 0..18 and the retail Mech Lab's 19 (unselected) stay untouched.
@@ -22,6 +23,11 @@ inline constexpr std::array<const char*, 19> stock_names{
     "daishi", "elemental", "firefly", "madcat", "orion", "owens", "puma",
     "shadowcat", "strider", "sunder", "supernova", "thor", "vulture"};
 struct Socket {std::string node, bone;std::array<double,3> position;};
+struct Headlight {
+    std::string id, space, attachment;
+    std::array<float, 3> position{}, direction{}, color{};
+    float intensity{}, range{}, inner_angle{}, outer_angle{};
+};
 struct Registration {
     std::string id, name, resource;
     unsigned metadata_template{};
@@ -29,6 +35,7 @@ struct Registration {
     std::string base_skin_name;
     std::array<std::string, 2> meshes, textures;
     std::vector<Socket> sockets;
+    std::vector<Headlight> headlights;
 };
 inline bool identifier(const std::string& value, unsigned maximum) {
     if (value.empty() || value.size() > maximum) return false;
@@ -52,7 +59,8 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
         return value;
     };
     char magic[8]; bytes(magic, 8);
-    const bool sockets = std::string(magic, 8) == std::string("MWCHAS4\0", 8);
+    const bool headlights = std::string(magic, 8) == std::string("MWCHAS5\0", 8);
+    const bool sockets = headlights || std::string(magic, 8) == std::string("MWCHAS4\0", 8);
     const bool names = sockets || std::string(magic, 8) == std::string("MWCHAS3\0", 8);
     const bool visuals = names || std::string(magic, 8) == std::string("MWCHAS2\0", 8);
     if (!visuals && std::string(magic, 8) != std::string("MWCHAS1\0", 8)) fail();
@@ -97,6 +105,39 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
                 for(unsigned char c:socket.bone)if(!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-'))fail();
                 for(auto& value:socket.position){bytes(reinterpret_cast<char*>(&value),8);if(!std::isfinite(value)||std::abs(value)>100)fail();}
                 r.sockets.push_back(std::move(socket));
+            }
+        }
+        if (headlights) {
+            const unsigned count = number();
+            if (count > 8) fail();
+            std::set<std::string> light_ids;
+            auto scalar = [&](float low, float high) {
+                const float value = std::bit_cast<float>(std::uint32_t(number()));
+                if (!std::isfinite(value) || value < low || value > high) fail();
+                return value;
+            };
+            for (unsigned index = 0; index < count; ++index) {
+                Headlight light{text(31), text(10), text(31)};
+                for (unsigned char c : light.id)
+                    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) fail();
+                if (!light_ids.insert(light.id).second ||
+                    (light.space != "guest_node" && light.space != "donor_bone") ||
+                    (light.space == "donor_bone" && r.visual_template.empty())) fail();
+                for (unsigned char c : light.attachment)
+                    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) fail();
+                for (auto& v : light.position) v = scalar(-100, 100);
+                for (auto& v : light.direction) v = scalar(-1, 1);
+                const double length = std::hypot(double(light.direction[0]), double(light.direction[1]), double(light.direction[2]));
+                if (std::abs(length - 1) > 0.00001) fail();
+                for (auto& v : light.direction) v = float(v / length);
+                for (auto& v : light.color) v = scalar(0, 1);
+                light.intensity = scalar(0, 8);
+                light.range = scalar(1, 256);
+                light.inner_angle = scalar(0, 89);
+                light.outer_angle = scalar(0, 89);
+                if (light.inner_angle >= light.outer_angle) fail();
+                r.headlights.push_back(std::move(light));
             }
         }
         result.push_back(std::move(r));

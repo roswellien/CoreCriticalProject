@@ -8,6 +8,7 @@ import unittest
 
 from build_chassis_pack import build
 from prepared_chassis_packs import CAPABILITY, CATALOG_KEY, REGISTRY, definition, prepare, select, _banks
+from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
 from reader_archive import _directory
 from zrd_document import decode, encode
 
@@ -37,6 +38,30 @@ class ChassisPackTests(unittest.TestCase):
         self.packfile = build(self.root / 'project.json', self.root / 'built')
         self.pack = self.root / 'built/pack'
         self.manifest = json.loads((self.pack / 'pack.json').read_text())
+
+    def test_headlight_project_build_select_and_capability(self):
+        lamp = dict(id='torso', space='guest_node', attachment='torso', position=[1,2,3],
+                    direction=[0,0,-2], color=[1,1,1], intensity=2, range=50,
+                    inner_angle=15, outer_angle=30)
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                project = self.legacy_project()[0] if legacy else self.root / 'project.json'
+                data = json.loads(project.read_text())
+                data['chassis'][0]['headlights'] = [lamp]
+                project.write_text(json.dumps(data))
+                output = self.root / ('lamp-legacy' if legacy else 'lamp-prepared')
+                build(project, output)
+                manifest = json.loads((output/'pack/pack.json').read_text())
+                self.assertEqual(manifest['native_payload']['required_capabilities']['mech-headlights'], 1)
+                host = dict(content_capabilities={CAPABILITY:[1,2,3]})
+                if legacy:
+                    host['content_capabilities'][SKIN_CAPABILITY] = [1]
+                with self.assertRaisesRegex(ValueError, 'mech-headlights'):
+                    select([(output/'pack',manifest)],host)
+                host['content_capabilities']['mech-headlights'] = [1]
+                records = select([(output/'pack',manifest)],host)
+                actual = records[0]['registration']['headlights'][0]
+                self.assertEqual(actual, dict(lamp, direction=[0,0,-1]))
 
     def selected(self):
         return select([(self.pack, self.manifest)], self.host)
