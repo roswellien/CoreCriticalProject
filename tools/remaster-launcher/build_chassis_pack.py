@@ -33,6 +33,8 @@ def build(project_path, output):
 
     for entry in project['chassis']:
         if 'legacy' in entry:
+            if set(entry) - {'id', 'name', 'metadata_template', 'legacy', 'appearances'}:
+                raise ValueError('Unsupported legacy project fields; use a compatible builder')
             from legacy_chassis_resources import resource_paths, load
             row = {key: entry[key] for key in ('id', 'name', 'metadata_template')}
             row['id'] = project['pack_id'] + ':' + row['id']
@@ -43,7 +45,7 @@ def build(project_path, output):
                 if not 0 < path.stat().st_size <= 16 * 1024**2:
                     raise ValueError('Legacy project resource exceeds size limit')
                 return path.read_bytes()
-            load(document, read_legacy)
+            legacy_resources = load(document, read_legacy)
             legacy_skins = legacy_skins or document['schema_version'] == 2
             for role, name, relative in list(resource_paths(document)):
                 payload = add(read_legacy(relative))
@@ -54,6 +56,24 @@ def build(project_path, output):
             row['legacy'] = add((json.dumps(document, indent=2) + '\n').encode(), extension='.json')
             if 'headlights' in entry:
                 row['headlights'] = entry['headlights']
+            if 'appearances' in entry:
+                from chassis_appearances import references, validate, MAX_PAGE_BYTES
+                def read_appearance(name, fmt):
+                    path = resolve(project_path.parent, name)
+                    limit = MAX_PAGE_BYTES if fmt else 16 * 1024**2
+                    if not 0 < path.stat().st_size <= limit:
+                        raise ValueError('Appearance project resource exceeds size limit')
+                    return path.read_bytes()
+                validate(entry['appearances'], legacy_resources, read_appearance)
+                variant = dict(textures={}, normals=[])
+                for role, name, relative in references(entry['appearances'], legacy_resources['textures']):
+                    fmt = 'BWSNR2' if role == 'normals' else None
+                    packed = add(read_appearance(relative, fmt), fmt)
+                    if role == 'textures':
+                        variant['textures'][name] = packed
+                    elif packed not in variant['normals']:
+                        variant['normals'].append(packed)
+                row['appearances'] = dict(upgraded=variant)
             records.append(row)
             continue
         row = {k: entry[k] for k in ('id', 'name', 'controller', 'metadata_template')}
@@ -99,8 +119,12 @@ def build(project_path, output):
     from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
     if legacy_skins:
         manifest['native_payload']['required_capabilities'][SKIN_CAPABILITY] = 1
+    if any('appearances' in row for row in records):
+        manifest['native_payload']['required_capabilities']['mech-appearances'] = 1
+        if any(row.get('appearances', {}).get('upgraded', {}).get('normals') for row in records):
+            manifest['native_payload']['required_formats'].append('BWSNR2')
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-    select([(stage, manifest)], {'content_capabilities': {CAPABILITY: [1, 2, 3], SKIN_CAPABILITY: [1], 'mech-headlights': [1]}})
+    select([(stage, manifest)], {'content_capabilities': {CAPABILITY: [1, 2, 3], 'mech-appearances': [1], SKIN_CAPABILITY: [1], 'mech-headlights': [1]}, 'normal_map_formats': [2]})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
         for path in sorted(stage.rglob('*')):

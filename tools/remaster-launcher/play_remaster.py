@@ -64,6 +64,8 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         config['native'].pop('sun_preset', None)
     installed_packs = "prepared_pack_roots" in config.get("native", {})
     prepared_profile = None
+    from chassis_appearances import mode as validate_appearance_mode
+    validate_appearance_mode(config.get('native', {}).get('mech_appearance'))
     chassis_records = []
     if installed_packs:
         if backend != "native" or registry_path is not None:
@@ -342,6 +344,8 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         prepared_profile=prepared_profile,
         environment_packs=environment_packs,
         chassis_records=chassis_records,
+        appearance_coverage=[dict(chassis=row['registration']['id'], **row['appearance'])
+                             for row in chassis_records if 'appearance' in row],
     )
 
 
@@ -494,6 +498,8 @@ def main():
             print(
                 "Models awaiting compatible runtime integration: " + ", ".join(p["offline_models"])
             )
+        for appearance in p.get('appearance_coverage', []):
+            print('Mech appearance: ' + json.dumps(appearance))
         for limitation in p["limitations"]:
             print(limitation)
         if not p["supported"]:
