@@ -2,8 +2,8 @@
 
 Mech3AX is an author-side dependency, never a runtime or pack executable. Source
 archives stay read-only. The project retains the selected chassis's three model
-hierarchies, named motions and primary configuration. Other configurations and
-skin variants are deliberately outside this first authoring pass.
+hierarchies, named motions and primary configuration. Authors can retain the
+primary skin or all supported original skin slots.
 """
 
 import argparse
@@ -38,19 +38,16 @@ def field(items, name):
     return items[items.index(name) + 1]
 
 
-def strings(tree):
-    if isinstance(tree, list):
-        for value in tree:
-            yield from strings(value)
-    elif isinstance(tree, str):
-        yield tree
-
-
-def prepare(game, game_kind, resource, converter, output, pack_id, name, metadata_template):
+def prepare(
+    game, game_kind, resource, converter, output, pack_id, name, metadata_template, skins="primary"
+):
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,15}", resource):
         raise ValueError("Invalid source chassis resource")
     if game_kind not in ("mw", "pm"):
         raise ValueError("Unsupported source game")
+    if skins not in ("primary", "all"):
+        raise ValueError("Unsupported source skin selection")
+    all_skins = skins == "all"
     game, converter, output = (
         Path(game).resolve(),
         Path(converter).resolve(),
@@ -64,6 +61,7 @@ def prepare(game, game_kind, resource, converter, output, pack_id, name, metadat
     work.mkdir()
     project.mkdir()
     provenance = {"source_game": game_kind, "resource": resource, "inputs": {}, "commands": []}
+    provenance["skins"] = skins
 
     def remember(path):
         provenance["inputs"][str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -132,11 +130,18 @@ def prepare(game, game_kind, resource, converter, output, pack_id, name, metadat
         "MSG_CONFIG_PRIMARY",
         field(configurations, "MSG_CONFIG_PRIMARY"),
     ]
-    skins = field(body, "skins")
-    primary = ["MSG_SKIN_PRIMARY", field(skins, "MSG_SKIN_PRIMARY")]
-    if "damage" in skins:
-        primary.extend(["damage", field(skins, "damage")])
-    body[body.index("skins") + 1] = primary
+    from legacy_chassis_skins import definition_skins
+
+    skin_metadata = None
+    if all_skins:
+        skin_metadata, _, skin_textures = definition_skins(definition)
+    else:
+        donor_skins = field(body, "skins")
+        primary = ["MSG_SKIN_PRIMARY", field(donor_skins, "MSG_SKIN_PRIMARY")]
+        if "damage" in donor_skins:
+            primary.extend(["damage", field(donor_skins, "damage")])
+        body[body.index("skins") + 1] = primary
+        _, _, skin_textures = definition_skins(definition)
     textures = {}
     texture_path = game / "zbd/rmechtex.zbd"
     remember(texture_path)
@@ -144,7 +149,7 @@ def prepare(game, game_kind, resource, converter, output, pack_id, name, metadat
     required = {
         entry["Textured"]["texture_name"] for entry in selected_materials if "Textured" in entry
     }
-    required.update(value for value in strings(primary) if value in texture_bank)
+    required.update(skin_textures)
     for texture in sorted(required):
         if texture not in texture_bank:
             shared_path = game / "zbd/c1/rtexture.zbd"
@@ -175,7 +180,7 @@ def prepare(game, game_kind, resource, converter, output, pack_id, name, metadat
         return relative
 
     descriptor = {
-        "schema_version": 1,
+        "schema_version": 2 if all_skins else 1,
         "resource": resource,
         "definition": write("definition.zrd", encode(definition)),
         "materials": write("materials.bin", model_data["materials"]),
@@ -192,6 +197,8 @@ def prepare(game, game_kind, resource, converter, output, pack_id, name, metadat
             key: write("textures/" + key + ".bin", value) for key, value in textures.items()
         },
     }
+    if all_skins:
+        descriptor["skins"] = skin_metadata
     for member in ("anim_" + resource + ".zrd", resource + "_prints.zrd"):
         descriptor["animations"][member] = write("animations/" + member, reader[member])
     write("resources.json", (json.dumps(descriptor, indent=2) + "\n").encode())
@@ -200,7 +207,9 @@ def prepare(game, game_kind, resource, converter, output, pack_id, name, metadat
         "name": name + " - Additional Chassis",
         "version": "0.1.0-preview",
         "author": "Local author",
-        "description": "Local legacy chassis conversion candidate. Primary configuration and skin; native compatibility requires validation.",
+        "description": "Local legacy chassis conversion candidate. Primary configuration; "
+        + ("all original skins" if all_skins else "primary skin")
+        + "; native compatibility requires validation.",
         "chassis": [
             {
                 "id": "mech",
@@ -230,6 +239,7 @@ if __name__ == "__main__":
     parser.add_argument("--pack-id", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--metadata-template", required=True)
+    parser.add_argument("--skins", choices=("primary", "all"), default="primary")
     args = parser.parse_args()
     print(
         prepare(
@@ -241,5 +251,6 @@ if __name__ == "__main__":
             args.pack_id,
             args.name,
             args.metadata_template,
+            args.skins,
         )
     )

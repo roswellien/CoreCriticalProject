@@ -1,8 +1,12 @@
 """Asset-free checks of operation selection, relocation and disabled bindings."""
 import hashlib,json,struct,tempfile,unittest
 from pathlib import Path
-from normal_materials import pack_surface_bindings,read_surface_bindings
-from prepared_environment_packs import select,prepare,detail_metadata,PROFILE,REGISTRY,REGIONS,sha
+from unittest.mock import patch
+import weakref
+from normal_materials import pack_surface_bindings,pixel_hash,read_surface_bindings
+from normal_materials import DecodedSurfaceBudgetExceeded
+import prepared_environment_packs
+from prepared_environment_packs import select,prepare,detail_metadata,encode_normal_pages,PROFILE,REGISTRY,REGIONS,sha
 
 class EnvironmentPackTests(unittest.TestCase):
     def test_detail_pins_follow_selected_pack_revision(self):
@@ -15,7 +19,15 @@ class EnvironmentPackTests(unittest.TestCase):
                 self.assertEqual(pin['sha256'],sha(Path(pin['path'])))
                 self.assertEqual(pin['bytes'],Path(pin['path']).stat().st_size)
             self.assertEqual(detail_metadata({}),{})
-    def fixture(self,root,operation='training',normal=b'\x80\x80\xff\xff'):
+    def fixture(
+        self,
+        root,
+        operation='training',
+        normal=b'\x80\x80\xff\xff',
+        world_format='BWSNR2',
+        world_normal=None,
+        surface_hash=123,
+    ):
         root.mkdir(); files={}
         def put(name,data,fmt=None):
             p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(data)
@@ -25,8 +37,14 @@ class EnvironmentPackTests(unittest.TestCase):
         bank=put('environment/bank.bin',struct.pack('<6I',0,1,0,1,0,0),'ZBD-texture-v1')
         reg=dict(schema_version=2,payload_profile=PROFILE,operation=operation,banks={f'zbd/{r}/{n}.zbd':bank for r in REGIONS[operation] for n in ['rtexture','rtexture2','rtexture3','texture','texture1','texture2']},detail={})
         data=pack_surface_bindings([((1,1,1,123),(1,1,normal))])
+        world_data=pack_surface_bindings(
+            [((1,1,1,surface_hash),(1,1,world_normal or normal))],
+            compressed=world_format=='BWSNR3',
+        )
         for role,magic in [('authored','MW34SNA1'),('world','MW34SNP1')]:
-            reg[role]=[put('environment/'+role+'.bin',data,'BWSNR2')]
+            page_data=world_data if role=='world' else data
+            page_format=world_format if role=='world' else 'BWSNR2'
+            reg[role]=[put('environment/'+role+'.bin',page_data,page_format)]
             reg[role+'_manifest']=put('environment/'+role+'.txt',(magic+'\n'+role+'.bin\n').encode(),magic)
         for role in ['water','surf','cloud']:reg['detail'][role]=put('environment/'+role+'-detail.bin',data,'BWSNR2')
         reg['effects']=put('environment/effects.bin',b'MWFX1\0\0\0'+struct.pack('<I',0),'MWFX1')
@@ -36,7 +54,7 @@ class EnvironmentPackTests(unittest.TestCase):
             used={bank,*reg['authored'],reg['authored_manifest']}
             files={k:v for k,v in files.items() if k in used}
         put(REGISTRY,json.dumps(reg).encode())
-        manifest=dict(schema_version=2,id='test.'+root.name.replace(' ','-').lower(),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',reference_host_sha256='a'*64,required_formats=['BWSNR2']),files=files)
+        manifest=dict(schema_version=2,id='test.'+root.name.replace(' ','-').lower(),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',reference_host_sha256='a'*64,required_formats=['BWSNR2']+(['BWSNR3'] if world_format=='BWSNR3' else [])),files=files)
         (root/'pack.json').write_text(json.dumps(manifest))
         return root
     def host(self):
@@ -54,6 +72,103 @@ class EnvironmentPackTests(unittest.TestCase):
             self.assertEqual(len(read_surface_bindings(page.read_bytes())),1)
             empty=prepare({},self.host(),root/'disabled');self.assertNotIn('MW34_WORLD_NORMALS',empty);self.assertNotIn('MW34_REMASTER_BANKS',empty)
             self.assertEqual(empty['MW34_EFFECT_LIGHTS'],'0')
+    def test_compressed_world_catalog_selection_and_repacking(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t);pack=self.fixture(root/'compressed','operation2',world_format='BWSNR3')
+            chosen=select([str(pack)],self.host())
+            self.assertIn('operation2',chosen)
+            output=root/'launch';env=prepare(chosen,self.host(),output)
+            world_manifest=Path(env['MW34_WORLD_NORMALS'])
+            world_name=world_manifest.read_text().splitlines()[1]
+            page=(world_manifest.parent/world_name).read_bytes()
+            self.assertEqual(page[:8],b'BWSNR3\0\0')
+            self.assertEqual(len(read_surface_bindings(page)),1)
+            entries=[((1,1,1,123),(1,1,b'\x80\x80\xff\xff'))]
+            pages=list(encode_normal_pages(entries,world=True))
+            self.assertEqual(pages[0][:8],b'BWSNR3\0\0')
+    def test_decoded_source_page_budget_is_checked_before_decode(self):
+        page=pack_surface_bindings([((1,1,1,123),(1,1,b'\x80\x80\xff\xff'))],compressed=True)
+        with patch('normal_codec.decode',side_effect=AssertionError('Oversized image decoded')):
+            with self.assertRaises(DecodedSurfaceBudgetExceeded):
+                read_surface_bindings(page,max_decoded_bytes=3)
+            with self.assertRaises(DecodedSurfaceBudgetExceeded):
+                read_surface_bindings(page,max_working_bytes=11)
+    def test_world_merge_flushes_before_decoding_remaining_budget(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t)
+            first=self.fixture(root/'first','operation1',world_format='BWSNR3',surface_hash=123)
+            second=self.fixture(root/'second','operation2',world_format='BWSNR3',surface_hash=124)
+            chosen=select([str(first),str(second)],self.host())
+            output=root/'launch';output.mkdir()
+            pixel_hash.cache_clear()
+            source_pixel_reference=[None]
+            read_count=[0]
+            read_page=prepared_environment_packs.read_surface_bindings
+            def track_source_pixels(data,**kwargs):
+                read_count[0]+=1
+                if read_count[0]==3:
+                    self.assertIsNone(source_pixel_reference[0]())
+                entries=read_page(data,**kwargs)
+                if source_pixel_reference[0] is None:
+                    key,value=entries[0]
+                    pixels=memoryview(value[2])
+                    source_pixel_reference[0]=weakref.ref(pixels)
+                    return [(key,(value[0],value[1],pixels))]
+                return entries
+            with patch.object(prepared_environment_packs,'MERGED_NORMAL_DECODED_BYTES',15):
+                with patch.object(
+                    prepared_environment_packs,
+                    'read_surface_bindings',
+                    side_effect=track_source_pixels,
+                ):
+                    names,_,_=prepared_environment_packs.write_merged_normal_catalog(
+                        chosen,'world',output
+                    )
+            self.assertEqual(len(names),2)
+            self.assertIsNone(source_pixel_reference[0]())
+            self.assertEqual(pixel_hash.cache_info().currsize,0)
+            self.assertEqual(
+                [len(read_surface_bindings((output/name).read_bytes())) for name in names],
+                [1,1],
+            )
+    def test_world_merge_reuses_decoded_images_across_source_pages(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t);page_names=[];paths={}
+            for index in range(20):
+                name=f'page-{index}.bin'
+                path=root/name
+                path.write_bytes(pack_surface_bindings(
+                    [((1,1,1,index+1),(1,1,b'\x80\x80\xff\xff'))],
+                    compressed=True,
+                ))
+                page_names.append(name);paths[name]=str(path)
+            selected={'training':dict(registry={'world':page_names},paths=paths)}
+            output=root/'launch';output.mkdir()
+            captured=[];pack_page=pack_surface_bindings
+            def capture_entries(entries,**kwargs):
+                captured.extend(entries)
+                return pack_page(entries,**kwargs)
+            with patch.object(prepared_environment_packs,'MERGED_NORMAL_DECODED_BYTES',64):
+                with patch.object(
+                    prepared_environment_packs,'pack_surface_bindings',
+                    side_effect=capture_entries,
+                ):
+                    prepared_environment_packs.write_merged_normal_catalog(
+                        selected,'world',output
+                    )
+            canonical_image=captured[0][1]
+            self.assertEqual(len(captured),20)
+            self.assertTrue(all(value is canonical_image for _,value in captured))
+    def test_shared_surface_conflict_uses_fixed_campaign_priority(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=Path(t)
+            op3=self.fixture(root/'op3','operation3',world_normal=b'\x81\x80\xff\xff')
+            op2=self.fixture(root/'op2','operation2',world_normal=b'\x82\x80\xff\xff')
+            chosen=select([str(op3),str(op2)],self.host())
+            output=root/'launch';env=prepare(chosen,self.host(),output)
+            manifest=Path(env['MW34_WORLD_NORMALS']);name=manifest.read_text().splitlines()[1]
+            page=read_surface_bindings((manifest.parent/name).read_bytes())
+            self.assertEqual(page[0][1][2],b'\x82\x80\xff\xff')
     def test_reject_bad_host_corruption_and_conflicts(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);one=self.fixture(root/'one');two=self.fixture(root/'two','operation1',b'\x90\x80\xff\xff')

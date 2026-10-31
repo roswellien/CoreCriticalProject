@@ -22,12 +22,17 @@ ROLES = ("definition", "materials", "silhouette", "models", "motions", "animatio
 def resource_paths(document):
     """Validate descriptor shape and yield every declared payload reference."""
     expected = {"schema_version", "resource", *ROLES}
+    if isinstance(document, dict) and document.get("schema_version") == 2:
+        from legacy_chassis_skins import metadata
+
+        expected.add("skins")
+        metadata(document.get("skins"))
     if not isinstance(document, dict) or set(document) != expected:
         raise ValueError("Invalid legacy chassis descriptor fields")
     resource = document["resource"]
     if (
         type(document["schema_version"]) is not int
-        or document["schema_version"] != 1
+        or document["schema_version"] not in (1, 2)
         or not isinstance(resource, str)
         or not re.fullmatch(r"[a-z][a-z0-9_]{0,15}", resource)
     ):
@@ -258,6 +263,12 @@ def load(document, read):
         or not isinstance(result["definition"][0], list)
     ):
         raise ValueError("Unsupported legacy definition root")
+    from legacy_chassis_skins import validate
+
+    validate(result["definition"], result["textures"], document.get("skins"))
+    if document["schema_version"] == 2:
+        result["schema_version"] = 2
+        result["skins"] = document["skins"]
     for data in result["models"].values():
         model(data, len(table))
     for data in result["textures"].values():
@@ -399,9 +410,11 @@ def compose(records, banks, game_root, output):
             names[name] = target + name[len(source) :]
         for index, name in enumerate(sorted(data["animations"])):
             names[name] = target + "_a" + str(index) + ".zrd"
-        for index, name in enumerate(sorted(data["textures"])):
-            names[name] = target + "_t" + str(index)
-            textures[names[name]] = data["textures"][name]
+        from legacy_chassis_skins import texture_names, validate
+
+        for name, generated in texture_names(data, target).items():
+            names[name] = generated
+            textures[generated] = data["textures"][name]
         donor_materials = materials(data["materials"])
         base = len(material_records)
         for raw, name in donor_materials:
@@ -421,9 +434,21 @@ def compose(records, banks, game_root, output):
         )
         for tree in data["animations"].values():
             animation_names(tree, source, target, names)
-        additions["reader.zbd"]["dfn_" + target + ".zrd"] = encode(
-            replace_strings(data["definition"], names)
-        )
+        rewritten = replace_strings(data["definition"], names)
+        if "skins" in definition:
+            # Skin keys and suffixes are literals, even when a resource happens
+            # to use the same name. Only primary/damage texture references move.
+            position = definition.index("skins")
+            rewritten[0][position] = "skins"
+            original_block = definition[position + 1]
+            block = rewritten[0][position + 1]
+            for offset in range(0, len(block), 2):
+                key = original_block[offset]
+                block[offset] = key
+                if key not in ("MSG_SKIN_PRIMARY", "damage"):
+                    block[offset + 1] = original_block[offset + 1].copy()
+        validate(rewritten, textures, data.get("skins"))
+        additions["reader.zbd"]["dfn_" + target + ".zrd"] = encode(rewritten)
         for name, tree in data["animations"].items():
             additions["reader.zbd"][names[name]] = encode(replace_strings(tree, names))
         animation_root = common[0][common[0].index("ANIMATION_DEFINITIONS") + 1]

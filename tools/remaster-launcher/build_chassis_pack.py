@@ -20,6 +20,7 @@ def build(project_path, output):
     output = Path(output); output.mkdir(parents=True, exist_ok=False)
     stage = output / 'pack'; stage.mkdir()
     files, records = {}, []
+    legacy_skins = False
 
     def add(data, fmt=None, extension='.bin'):
         name = 'payload/' + hashlib.sha256(data).hexdigest() + extension
@@ -45,6 +46,7 @@ def build(project_path, output):
                     raise ValueError('Legacy project resource exceeds size limit')
                 return path.read_bytes()
             legacy_resources = load(document, read_legacy)
+            legacy_skins = legacy_skins or document['schema_version'] == 2
             for role, name, relative in list(resource_paths(document)):
                 payload = add(read_legacy(relative))
                 if name is None:
@@ -107,12 +109,20 @@ def build(project_path, output):
                     native_payload=dict(profile=PROFILE, registry=REGISTRY, path_base='pack-root',
                                         required_formats=['MW3LEGACY'] if legacy else ['BWMESH4', 'BWTEX1'] + (['MW3ICON1'] if icons else []), required_capabilities={CAPABILITY: 3 if legacy else 2 if version_two else 1}),
                     provides=dict(mechs=[r['id'] for r in records]), files=files)
+    from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
+    if legacy_skins:
+        manifest['native_payload']['required_capabilities'][SKIN_CAPABILITY] = 1
     if any('appearances' in row for row in records):
         manifest['native_payload']['required_capabilities']['mech-appearances'] = 1
         if any(row.get('appearances', {}).get('upgraded', {}).get('normals') for row in records):
             manifest['native_payload']['required_formats'].append('BWSNR2')
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-    select([(stage, manifest)], {'content_capabilities': {CAPABILITY: [1, 2, 3], 'mech-appearances': [1]}, 'normal_map_formats': [2]})
+    select([(stage, manifest)], {
+        'content_capabilities': {
+            CAPABILITY: [1, 2, 3], SKIN_CAPABILITY: [1], 'mech-appearances': [1]
+        },
+        'normal_map_formats': [2],
+    })
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
         for path in sorted(stage.rglob('*')):

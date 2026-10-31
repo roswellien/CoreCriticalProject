@@ -153,6 +153,10 @@ def select(metadata, host, verification=None, appearance_mode=None):
                     return Path(verified[name]).read_bytes()
                 legacy_read(row['legacy'])
                 document = read_json(Path(verified[row['legacy']]))
+                from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
+                if (document.get('schema_version') == 2
+                        and payload.get('required_capabilities', {}).get(SKIN_CAPABILITY) != 1):
+                    raise ValueError('Legacy skin descriptor requires legacy-mech-skins version 1')
                 legacy = load(document, legacy_read)
                 upgraded = None
                 if 'appearances' in row:

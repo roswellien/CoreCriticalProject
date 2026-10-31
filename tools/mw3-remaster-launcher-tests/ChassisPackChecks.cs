@@ -19,6 +19,7 @@ static class ChassisPackChecks
 
     public static void Run()
     {
+        LegacyChassisSkinChecks.Run();
         var root = Path.Combine(Path.GetTempPath(), "CC chassis checks " + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
