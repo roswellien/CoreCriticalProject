@@ -24,7 +24,7 @@ FIELDS = [
 ]
 MISSIONS = {f'operation{o}': {f'c{o}m{m}' for m in range(1, count + 1)}
             for o, count in ((1, 4), (2, 4), (3, 6), (4, 6))}
-MISSIONS['training'] = set()
+MISSIONS['training'] = {f't1m{mission}' for mission in range(1, 5)}
 
 
 def number(value, low, high):
@@ -85,7 +85,7 @@ def validate_training(maps):
 def validate(data, operation):
     if not isinstance(data, dict) or set(data) != {'schema_version', 'missions', 'maps'} or type(data['schema_version']) is not int or data['schema_version'] != 1:
         raise ValueError('Unsupported lighting catalog')
-    if not isinstance(data['missions'], dict) or set(data['missions']) != MISSIONS[operation]:
+    if not isinstance(data['missions'], dict) or (set(data['missions']) != MISSIONS[operation] and not (operation == 'training' and not data['missions'])):
         raise ValueError('Incomplete or out-of-operation mission lighting')
     for settings in data['missions'].values(): validate_mission(settings)
     if operation == 'training': validate_training(data['maps'])
