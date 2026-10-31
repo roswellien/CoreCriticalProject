@@ -12,10 +12,34 @@ try:
 except ImportError:
     np = None
 
-from prepare_world_normals import generate_normal, prepare
+from prepare_world_normals import generate_normal, pack_bounded_world_page, prepare
 from normal_materials import read_surface_bindings, pixel_hash
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class WorldNormalPageTests(unittest.TestCase):
+    def test_oversized_generated_page_is_split(self):
+        bindings = [(index, None) for index in range(8)]
+
+        def pack_page(page):
+            return b"x" * (9 if len(page) > 2 else len(page))
+
+        with patch("prepare_world_normals.WORLD_PAGE_BYTES", 8), patch(
+            "prepare_world_normals.pack_surface_bindings", side_effect=pack_page
+        ):
+            pages = pack_bounded_world_page(bindings)
+
+        self.assertEqual([count for _, count in pages], [2, 2, 2, 2])
+        self.assertTrue(all(len(data) <= 8 for data, _ in pages))
+
+    def test_single_binding_over_native_page_limit_is_rejected(self):
+        with patch("prepare_world_normals.WORLD_PAGE_BYTES", 8), patch(
+            "prepare_world_normals.pack_surface_bindings", return_value=b"x" * 9
+        ):
+            with self.assertRaisesRegex(ValueError, "One world-normal binding"):
+                pack_bounded_world_page([(1, None)])
 
 
 @unittest.skipIf(np is None, "Offline material preparation requires NumPy")

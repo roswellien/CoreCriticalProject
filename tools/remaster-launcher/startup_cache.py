@@ -124,7 +124,7 @@ def _environment_resources(selected, host, cache_root, progress=None):
     source = Path(__file__).parent
     producers = {name: hashlib.sha256((source / name).read_bytes()).hexdigest()
                  for name in ('startup_cache.py', 'prepared_environment_packs.py',
-                              'normal_materials.py', 'mission_lighting.py')}
+                              'normal_materials.py', 'normal_codec.py', 'mission_lighting.py')}
     # Only resource-generation inputs belong in this identity. The full host
     # includes fresh session/log paths and player controls on every launch.
     # Those bindings must remain current without rebuilding identical images.
@@ -133,7 +133,7 @@ def _environment_resources(selected, host, cache_root, progress=None):
     # using the same readers must not force all normal pages to be rebuilt.
     # Reader/writer changes still invalidate through the producer pins above.
     resource_host = dict(authored_normal_catalog_budget_bytes=host.get(
-                             'authored_normal_catalog_budget_bytes', 536870912))
+                             'authored_normal_catalog_budget_bytes', 1610612736))
     identity = dict(selected=selected, host=resource_host, producers=producers)
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     directory = Path(cache_root) / 'environment-cache' / key
