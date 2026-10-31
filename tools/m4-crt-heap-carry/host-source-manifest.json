@@ -13,8 +13,8 @@
       "classification": "authored-host-source"
     },
     "additional_chassis_stage.inc": {
-      "sha256": "7eda1f4fac5ab2caba8013f2cc3b7e4ab25828ee44e15ab16730e566b40687ad",
-      "bytes": 7887,
+      "sha256": "99ee75e721ef02d3be078d80219e0652a2fcae5dc4a5753de22586373df0240e",
+      "bytes": 7863,
       "decision": "commit",
       "classification": "authored-host-source"
     },
