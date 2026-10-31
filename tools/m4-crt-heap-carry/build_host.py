@@ -51,6 +51,31 @@ def verify_dependency_headers(dependencies, directories):
     return raw_pins
 
 
+def verify_consumed_dependency_headers(dependencies, directories, ninja_deps):
+    """Require Ninja's compiler dependencies to resolve to the pinned header files."""
+    compiler_dependencies = set()
+    for line in ninja_deps.splitlines():
+        if line.startswith("    "):
+            compiler_dependencies.add(Path(line.strip()).resolve())
+
+    consumed_paths = {}
+    for name, directory in directories.items():
+        consumed_paths[name] = {}
+        for relative in dependencies[name]["files"]:
+            expected_path = (directory / relative).resolve()
+            suffix = tuple(part.casefold() for part in Path(relative).parts)
+            matching_paths = {
+                path for path in compiler_dependencies
+                if tuple(part.casefold() for part in path.parts[-len(suffix):]) == suffix
+            }
+            require(expected_path in compiler_dependencies,
+                    f"Compiler did not consume pinned {name} header: {relative}")
+            require(matching_paths == {expected_path},
+                    f"Compiler consumed an unpinned {name} header: {relative}")
+            consumed_paths[name][relative] = str(expected_path)
+    return consumed_paths
+
+
 def parse_symbols(text):
     """Parse the pinned llvm-readobj COFF text format, rejecting unknown seams."""
     exported = []
@@ -159,6 +184,8 @@ def main():
     require(dependency_raw_pins == verify_dependency_headers(dependencies, dependency_directories),
             "Dependency headers changed while building")
     ninja_deps = run([args.ninja, "-C", output / "build", "-t", "deps"], output, "dependencies")
+    dependency_consumed_paths = verify_consumed_dependency_headers(
+        dependencies, dependency_directories, ninja_deps)
     repo_pins = {}
     for line in ninja_deps.splitlines():
         path = Path(line.strip())
@@ -178,6 +205,7 @@ def main():
                    tool_pins={tool:sha(args.llvm / tool) for tool in ("clang-cl.exe", "lld-link.exe", "llvm-lib.exe", "llvm-readobj.exe")},
                    dependency_header_pins=dependencies,
                    dependency_header_raw_pins=dependency_raw_pins,
+                   dependency_header_consumed_paths=dependency_consumed_paths,
                    runtime_version=manifest["version"], windows_signed=False)
     (output / "source-snapshot.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
     print(f"Built {output / 'entry_commandline.exe'}; recorded {len(pins)} host files and {len(repo_pins)} repository dependencies.")

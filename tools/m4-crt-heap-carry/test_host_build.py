@@ -5,7 +5,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from build_host import parse_symbols, source_pins, verify_dependency_headers
+from build_host import (
+    parse_symbols,
+    source_pins,
+    verify_consumed_dependency_headers,
+    verify_dependency_headers,
+)
 
 
 class HostBuildTests(unittest.TestCase):
@@ -44,6 +49,42 @@ class HostBuildTests(unittest.TestCase):
                         else:
                             with self.assertRaisesRegex(ValueError, f"Pinned {name} header mismatch"):
                                 verify_dependency_headers(dependencies, {name: directory})
+
+    def test_consumed_dependency_headers_must_match_pinned_paths(self):
+        relative = "vulkan/vulkan_core.h"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vulkan_directory = root / "Vulkan-Headers" / "include"
+            pinned_header = vulkan_directory / relative
+            pinned_header.parent.mkdir(parents=True)
+            pinned_header.write_bytes(b"// Vulkan fixture\n")
+            shadow_header = root / "Remill" / "include" / relative
+            shadow_header.parent.mkdir(parents=True)
+            shadow_header.write_bytes(b"// shadow fixture\n")
+            dependencies = {
+                "vulkan": {
+                    "files": {relative: hashlib.sha256(pinned_header.read_bytes()).hexdigest()}
+                }
+            }
+            directories = {"vulkan": vulkan_directory}
+            expected_path = str(pinned_header.resolve())
+            cases = (
+                ("pinned header", f"    {expected_path}\n", True),
+                ("missing pinned header", "", False),
+                ("shadow header", f"    {shadow_header.resolve()}\n", False),
+                ("pinned and shadow headers",
+                 f"    {expected_path}\n    {shadow_header.resolve()}\n", False),
+            )
+            for label, ninja_deps, accepted in cases:
+                with self.subTest(case=label):
+                    if accepted:
+                        consumed_paths = verify_consumed_dependency_headers(
+                            dependencies, directories, ninja_deps)
+                        self.assertEqual(consumed_paths["vulkan"][relative], expected_path)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "Compiler"):
+                            verify_consumed_dependency_headers(
+                                dependencies, directories, ninja_deps)
 
     def test_named_native_seam(self):
         text = """Export {

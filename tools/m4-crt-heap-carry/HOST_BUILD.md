@@ -79,6 +79,9 @@ and `source-snapshot.json`. No signing credential is needed for a developer buil
 Release Windows signing is a separate existing release step.
 The receipt's `dependency_header_pins` records the normalized hash algorithm and
 expected hashes; `dependency_header_raw_pins` records the actual bytes consumed.
+The build also checks Ninja's recorded compiler dependency paths against those
+pinned files and records the exact paths in `dependency_header_consumed_paths`;
+shadowed or missing pinned headers fail the build.
 Raw dependency hashes may differ across LF/CRLF checkouts. Host and repository
 source pins remain exact byte hashes, and historical receipts retain their
 original hash semantics.
