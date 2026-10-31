@@ -17,6 +17,7 @@
 #include "missile_exhaust.hpp"
 #include "early_triangle_commands.hpp"
 #include "controller_input.hpp"
+#include "mech_headlights.hpp"
 #include "surface_page_pool.hpp"
 #include "texture_backing.hpp"
 #include "menu_wave.hpp"
@@ -38,6 +39,7 @@
 #include <mmsystem.h>
 #include "audio/local_cd_audio.hpp"
 #include "graphics/menu_version.hpp"
+#include "graphics/retained_texture_cache.hpp"
 #include <vfw.h>
 #include <fstream>
 #include <iterator>
@@ -490,6 +492,7 @@ std::string pose_name(unsigned address,unsigned limit){std::string result;
  #include "mechlab_skins_stage.inc"
  #include "additional_chassis_stage.inc"
  #include "chassis_sockets_stage.inc"
+ #include "mech_headlights_stage.inc"
  #include "chassis_selection_stage.inc"
  #include "remaster_banks.inc"
  #include "cinematic_paths.inc"
@@ -622,7 +625,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
    body_dispatch_warmed=true;
   }
 
-  return controller_body(s,target,p,[&]{return controller_next_body(s,target,p,body);});
+  return headlight_body(s,target,p,[&]{return controller_body(s,target,p,[&]{return controller_next_body(s,target,p,body);});});
  }
  void*enter(State*s,unsigned target,void*p,Body body){if(depth>=returns.size())deny("MFC42-stage call depth bound",target);if(hud_log)hud_capture(target);{void*r{};if(hud_intercept(target,p,r))return r;}
   if(kind==Kind::initterm&&depth==0)for(unsigned i=0;i<145;++i)if(load(0x5e0000+4*i)==target&&load(state.gpr.rsp.dword)>=msvcrt_base){root_index=i;root_addr=target;break;}{const unsigned sp=state.gpr.rsp.dword,w=load(sp);
@@ -1128,15 +1131,18 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      if(z==16){int dx=0,dy=0;auto&sc=host.script;while(host.script_mouse_at<sc.size()&&(!sc[host.script_mouse_at].mouse||script_due(sc[host.script_mouse_at]))){const auto&e=sc[host.script_mouse_at++];if(e.mouse){dx+=e.dx;dy+=e.dy;host.script_buttons=e.buttons;}}
       store(a,unsigned(dx));store(a+4,unsigned(dy));for(unsigned b=0;b<4;++b)runtime.memory().store<unsigned char>({a+12+b},(host.script_buttons>>b)&1?0x80:0);if(dx||dy)apis.back()+="(scripted "+std::to_string(dx)+","+std::to_string(dy)+" b"+std::to_string(host.script_buttons)+")";}
      if(z==256){auto&sc=host.script;auto&ks=host.script_keys;while(host.script_kstate_at<sc.size()&&(sc[host.script_kstate_at].mouse||script_due(sc[host.script_kstate_at]))){const auto&e=sc[host.script_kstate_at++];if(!e.mouse)ks[e.scan&255]=e.down?0x80:0;}
-      std::string held;for(unsigned i=0;i<256;++i)if(ks[i]){runtime.memory().store<unsigned char>({a+i},ks[i]);char h[8];std::snprintf(h,sizeof h," %02x",i);held+=h;}if(!held.empty())apis.back()+="(scripted keys"+held+")";}
+      headlight_keyboard(256,ks.data());std::string held;for(unsigned i=0;i<256;++i)if(ks[i]){runtime.memory().store<unsigned char>({a+i},ks[i]);char h[8];std::snprintf(h,sizeof h," %02x",i);held+=h;}if(!held.empty())apis.back()+="(scripted keys"+held+")";}
      return done(0,3);}
-    if(n=="GetDeviceState"){const unsigned z=arg(1),a=arg(2);if(z>4096||!writable(a,z))deny("GetDeviceState buffer outside the memory contract",a);std::vector<unsigned char>b(z);const HRESULT hr=dv->GetDeviceState(z,b.data());if(SUCCEEDED(hr)){photo_replay_filter_device_state(z,b.data());for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},b[i]);}return done(unsigned(hr),3);}
+    if(n=="GetDeviceState"){const unsigned z=arg(1),a=arg(2);if(z>4096||!writable(a,z))deny("GetDeviceState buffer outside the memory contract",a);std::vector<unsigned char>b(z);const HRESULT hr=dv->GetDeviceState(z,b.data());headlight_keyboard(z,b.data(),SUCCEEDED(hr));if(SUCCEEDED(hr)){photo_replay_filter_device_state(z,b.data());for(unsigned i=0;i<z;++i)runtime.memory().store<unsigned char>({a+i},b[i]);}return done(unsigned(hr),3);}
     if(n=="GetDeviceData"&&host.scripted){const unsigned z=arg(1),a=arg(2),pn=arg(3),fl=arg(4);if(z!=16||!writable(pn,4))deny("GetDeviceData record size or count outside the model",z);const DWORD cnt=load(pn);if(cnt>4096||(a&&!writable(a,16*cnt)))deny("GetDeviceData buffer outside the memory contract",a);
      if(host.di_format[arg(0)]!=256)deny("Scripted GetDeviceData for a device other than the keyboard",arg(0));auto&sc=host.script;DWORD k=0;size_t at=host.script_key_at;
-     while(at<sc.size()&&k<cnt){const auto&e=sc[at];if(e.mouse){++at;continue;}if(!script_due(e))break;if(a){store(a+16*k,e.scan);store(a+16*k+4,e.down?0x80U:0U);store(a+16*k+8,host.vclock()?unsigned(host.vclock_query()/1000):host.guest_tick());store(a+16*k+12,++host.script_seq);}apis.back()+="(scripted key "+std::to_string(e.scan)+(e.down?" down)":" up)");++k;++at;}
+     while(at<sc.size()&&k<cnt){const auto&e=sc[at];if(e.mouse){++at;continue;}if(!script_due(e))break;if(a){if(headlight_enabled()&&!(fl&DIGDD_PEEK)){headlight_keyboard_valid=true;headlight_keys[e.scan&255]=e.down?0x80:0;}store(a+16*k,e.scan);store(a+16*k+4,e.down?0x80U:0U);store(a+16*k+8,host.vclock()?unsigned(host.vclock_query()/1000):host.guest_tick());store(a+16*k+12,++host.script_seq);}apis.back()+="(scripted key "+std::to_string(e.scan)+(e.down?" down)":" up)");++k;++at;}
      if(!(fl&DIGDD_PEEK))host.script_key_at=at;store(pn,k);return done(0,5);}
     if(n=="GetDeviceData"){const unsigned z=arg(1),a=arg(2),pn=arg(3),fl=arg(4);if(z!=16||!writable(pn,4))deny("GetDeviceData record size or count outside the model",z);DWORD cnt=load(pn);if(cnt>4096||(a&&!writable(a,16*cnt)))deny("GetDeviceData buffer outside the memory contract",a);
      std::vector<DIDEVICEOBJECTDATA_DX3>b(std::max<DWORD>(cnt,1));static_assert(sizeof(DIDEVICEOBJECTDATA_DX3)==16);const HRESULT hr=dv->GetDeviceData(16,a?reinterpret_cast<LPDIDEVICEOBJECTDATA>(b.data()):nullptr,&cnt,fl);
+     if(headlight_enabled()&&host.di_format[arg(0)]==256&&a&&!(fl&DIGDD_PEEK)){
+      if(SUCCEEDED(hr)){headlight_keyboard_valid=true;for(DWORD k=0;k<cnt;++k)if(b[k].dwOfs<256)headlight_keys[b[k].dwOfs]=static_cast<unsigned char>(b[k].dwData);}
+      else{headlight_keyboard_valid=false;headlight_edge={};}}
      if(SUCCEEDED(hr)){photo_replay_filter_device_data(b.data(),cnt);if(a)for(DWORD k=0;k<cnt;++k){b[k].dwTimeStamp=host.guest_tick_of(b[k].dwTimeStamp);for(unsigned i=0;i<16;++i)runtime.memory().store<unsigned char>({a+16*k+i},reinterpret_cast<const unsigned char*>(&b[k])[i]);}store(pn,cnt);}return done(unsigned(hr),5);}
     if(n=="SetProperty"||n=="GetProperty"){const unsigned pg=arg(1),ph=arg(2);GUID gp{};const GUID*rp;if(pg<0x10000)rp=reinterpret_cast<const GUID*>(std::uintptr_t(pg));else{gp=guest_guid(pg);rp=&gp;}
      if(!readable(ph,16)||load(ph+4)!=16)deny(n+" DIPROPHEADER outside the contract",ph);const unsigned z=load(ph);if(z<16||z>256||!(n=="SetProperty"?readable(ph,z):writable(ph,z)))deny(n+" property outside the memory contract",ph);

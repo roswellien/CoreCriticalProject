@@ -60,6 +60,8 @@
 
         <CheckBox x:Name="ChkDynamicLighting" Content="Dynamic Lighting" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
         <TextBlock Text="Adds lighting from weapons and scene fixtures. Works with stock assets or enabled packs. Off retains original lighting. Applies on the next launch." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+        <CheckBox x:Name="ChkHeadlights" Content="Headlights" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
+        <TextBlock Text="Enables headlights on equipped mechs. Assign the toggle in Controls. Requires Dynamic Lighting; your choice is kept when lighting is off. Applies on the next launch." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
         <CheckBox x:Name="ChkShadows" Content="Shadows" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
         <TextBlock Text="Adds shadows from supported lights. Requires Dynamic Lighting; your choice is kept when lighting is off." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
     </StackPanel>
