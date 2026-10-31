@@ -269,12 +269,12 @@ class AppearanceTests(unittest.TestCase):
         for name, data in stock.items():
             self.assertEqual((directory / name).read_bytes(), data)
 
-    def test_builder_rejects_unknown_fields_instead_of_dropping_headlights(self):
+    def test_builder_rejects_malformed_headlights(self):
         project, _, _ = fixtures.ChassisPackTests.legacy_project(self)
         document = json.loads(project.read_text())
         document["chassis"][0]["headlights"] = [{"id": "preserve-me"}]
         project.write_text(json.dumps(document))
-        with self.assertRaisesRegex(ValueError, "compatible builder"):
+        with self.assertRaisesRegex(ValueError, "Invalid headlight fields"):
             build(project, self.root / "rejected")
 
     def test_builder_rejects_unsafe_appearance_path(self):

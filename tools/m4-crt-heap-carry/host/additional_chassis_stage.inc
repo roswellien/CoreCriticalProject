@@ -15,7 +15,7 @@ const char* chassis_actor_resource(unsigned root) {
     const auto at = additional_chassis.actor_roots.find(root);
     if (at == additional_chassis.actor_roots.end()) return nullptr;
     const auto& record = additional_chassis.records.at(at->second - mw34::chassis::first_runtime_id);
-    return record.registration.visual_template.empty() ? nullptr : record.registration.resource.c_str();
+    return record.registration.visual_template.empty() && !record.registration.owned_visuals ? nullptr : record.registration.resource.c_str();
 }
 
 static bool chassis_target(unsigned target) {
@@ -51,7 +51,6 @@ unsigned chassis_call(unsigned target, unsigned object, std::initializer_list<un
         state = saved; return result;
     } catch (...) { state = saved; throw; }
 }
-void headlight_clear();
 void chassis_cleanup() {
     headlight_clear();
     additional_chassis.actor_roots.clear();

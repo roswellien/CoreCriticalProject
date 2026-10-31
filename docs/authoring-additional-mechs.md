@@ -451,3 +451,56 @@ This adds cone illumination, not PM's lamp facade or volumetric beams.
 The coordinator emits MWCHAS5 only for nonempty lists and retains MWCHAS1–4
 compatibility. Presentation-policy v2 must ship with its matching host; copying
 the coordinator alone does not upgrade an older runtime.
+
+
+## New geometry on an owned legacy controller (development)
+
+A legacy chassis can retain its original definition, collision meshes, hierarchy,
+motion clips, cockpit and attachments while adding a visual-only `new` appearance.
+Keep its original `legacy` descriptor and stable chassis ID. The additional record
+uses this portable authoring shape:
+
+```json
+{
+  "appearances": {
+    "new": {
+      "schema_version": 1,
+      "meshes": {"close": "visual/close.mesh", "distance": "visual/distance.mesh"},
+      "textures": {"close": "visual/close.textures", "distance": "visual/distance.textures"},
+      "normals": ["visual/normals.bin"]
+    }
+  }
+}
+```
+
+Both geometry files use BWMESH4 and their matching texture files use BWTEX1.
+Normals are optional BWSNR2 pages whose full RGB565 keys must belong to the selected
+visual textures. `upgraded` may coexist with `new`; retain each alternative's own
+UVs, color resources and normal bindings. Do not apply PM skin pixels to MW5 UVs.
+Inactive resources still undergo path, hash and format validation. Selecting new
+geometry requires `owned-chassis-visuals: 1` on the runtime; Original mode does not
+acquire this renderer requirement. Existing appearance capability support is still
+required by the coordinator.
+
+Authors supply visual batches, original control names and original visibility
+nodes. They do not supply a suppression roster. The coordinator derives exact
+mesh names/counts and ancestry from the pinned original close/distance models,
+and requires each visual visibility node to belong to its original controller.
+The original cockpit signature is derived separately and remains outside the
+exterior replacement. The private MWCHAS6 session catalog carries those derived
+rosters, paths and authoritative namespaced original skin lookup names. Existing
+MWCHAS1 through MWCHAS5 inputs retain their prior layouts; the serialized
+headlight block is unchanged.
+
+The development Atlas candidate uses an AS7-K visual weapon assembly to match
+the PM primary configuration, with a neutral test livery and donor body normals.
+It retains the eight original skin rows and the existing Gunmetal upgrade.
+The new visual currently covers the primary skin; unavailable alternate new-model
+skin bindings retain original geometry at runtime. Final paint appearance,
+full limb damage behavior, both live LOD transitions, player/allied isolation,
+save/reload and exterior fit acceptance remain playtest work. A first-person
+mission and status-model draw do not establish all of those criteria.
+
+Use a development runtime implementing this contract before importing/launching
+the candidate. Do not advertise it on a historical runtime profile. Keep the
+prior pack and selections for rollback, and keep donor/derived media local.

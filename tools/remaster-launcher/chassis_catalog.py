@@ -72,7 +72,7 @@ def encode_catalog(records):
     ids, resources, validated = set(), set(), []
     for record in records:
         if (not isinstance(record, dict) or not {'id', 'name', 'resource', 'metadata_template'} <= set(record)
-                or set(record) - {'id', 'name', 'resource', 'metadata_template', 'visuals', 'base_skin_name', 'sockets', 'headlights'}):
+                or set(record) - {'id', 'name', 'resource', 'metadata_template', 'visuals', 'base_skin_name', 'sockets', 'headlights', 'owned_visuals'}):
             raise ValueError('Invalid chassis registration fields')
         ident, name, resource, template = (record[k] for k in
                                            ('id', 'name', 'resource', 'metadata_template'))
@@ -115,11 +115,12 @@ def encode_catalog(records):
         ids.add(ident)
         resources.add(resource)
         validated.append(record)
-    with_headlights = any(r.get('headlights') for r in validated)
+    with_owned = any('owned_visuals' in r for r in validated)
+    with_headlights = with_owned or any(r.get('headlights') for r in validated)
     with_sockets = with_headlights or any('sockets' in r for r in validated)
     with_names = with_sockets or any('base_skin_name' in r for r in validated)
     with_visuals = with_names or any('visuals' in r for r in validated)
-    blob = bytearray((b'MWCHAS5\0' if with_headlights else b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
+    blob = bytearray((b'MWCHAS6\0' if with_owned else b'MWCHAS5\0' if with_headlights else b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
     for record in sorted(validated, key=lambda r: r['id']):
         for field in ('id', 'name', 'resource'):
             value = record[field].encode('ascii')
@@ -158,4 +159,42 @@ def encode_catalog(records):
                 blob.extend(struct.pack('<13f', *light['position'], *light['direction'],
                                         *light['color'], light['intensity'], light['range'],
                                         light['inner_angle'], light['outer_angle']))
+        if with_owned:
+            owned = record.get('owned_visuals')
+            blob.extend(struct.pack('<I', int(owned is not None)))
+            if owned is not None:
+                if 'visuals' in record or set(owned) != {'rosters', 'cockpit', 'meshes', 'textures', 'skin_textures'}:
+                    raise ValueError('Invalid owned visual catalog fields')
+                def text(value):
+                    if not isinstance(value, str) or not 0 < len(value.encode('utf-8')) <= 4096 or '\0' in value:
+                        raise ValueError('Invalid owned catalog text')
+                    raw = value.encode('utf-8')
+                    blob.extend(struct.pack('<I', len(raw)) + raw)
+                def roster(rows):
+                    if not isinstance(rows, list) or len(rows) > 256:
+                        raise ValueError('Invalid owned mesh roster')
+                    blob.extend(struct.pack('<I', len(rows)))
+                    names = set()
+                    for row in rows:
+                        if (not isinstance(row, dict) or set(row) != {'name', 'owner', 'vertices'}
+                                or not all(isinstance(row[k], str) and re.fullmatch('[A-Za-z0-9_.-]{1,31}', row[k]) for k in ('name', 'owner'))
+                                or row['name'] in names or type(row['vertices']) is not int
+                                or not 1 <= row['vertices'] <= 100000):
+                            raise ValueError('Invalid owned mesh roster entry')
+                        names.add(row['name']);text(row['name']);text(row['owner'])
+                        blob.extend(struct.pack('<I', row['vertices']))
+                for lod in ('close', 'distance'):
+                    text(owned['meshes'][lod]);text(owned['textures'][lod])
+                    if not owned['rosters'][lod]:
+                        raise ValueError('Empty owned source roster')
+                    roster(owned['rosters'][lod])
+                roster(owned['cockpit'])
+                skins = owned['skin_textures']
+                if not isinstance(skins, dict) or len(skins) > 4096:
+                    raise ValueError('Invalid owned source skin map')
+                blob.extend(struct.pack('<I', len(skins)))
+                for name, skin in sorted(skins.items()):
+                    if not re.fullmatch('[A-Za-z0-9_.-]{1,31}', name) or type(skin) is not int or not 0 <= skin <= 7:
+                        raise ValueError('Invalid owned source skin binding')
+                    text(name);blob.extend(struct.pack('<I', skin))
     return bytes(blob)

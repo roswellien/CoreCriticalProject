@@ -92,7 +92,7 @@ def select(metadata, host, verification=None, appearance_mode=None):
         require(host, payload, manifest['id'])
         if (manifest.get('schema_version') != 2 or manifest.get('game_id') != 'mw3'
                 or payload.get('registry') != REGISTRY or payload.get('path_base') != 'pack-root'
-                or payload.get('required_formats') not in (['BWMESH4', 'BWTEX1'], ['BWMESH4', 'BWTEX1', 'MW3ICON1'], ['MW3LEGACY'], ['MW3LEGACY', 'BWSNR2'])
+                or payload.get('required_formats') not in (['BWMESH4', 'BWTEX1'], ['BWMESH4', 'BWTEX1', 'MW3ICON1'], ['MW3LEGACY'], ['MW3LEGACY', 'BWSNR2'], ['MW3LEGACY', 'BWMESH4', 'BWTEX1'], ['MW3LEGACY', 'BWMESH4', 'BWTEX1', 'BWSNR2'])
                 or manifest.get('dependencies') or manifest.get('conflicts')):
             raise ValueError('Unsupported additional chassis pack contract')
         files = manifest.get('files')
@@ -137,11 +137,7 @@ def select(metadata, host, verification=None, appearance_mode=None):
         for row in records:
             if 'MW3LEGACY' in payload.get('required_formats', []):
                 from legacy_chassis_resources import load
-<<<<<<< HEAD
-                if (not isinstance(row, dict) or set(row) - {'headlights'} != {'id', 'name', 'metadata_template', 'legacy'}
-=======
-                if (not isinstance(row, dict) or set(row) - {'appearances'} != {'id', 'name', 'metadata_template', 'legacy'}
->>>>>>> origin/roswellien/feature/126-atlas-visual-options
+                if (not isinstance(row, dict) or set(row) - {'appearances', 'headlights'} != {'id', 'name', 'metadata_template', 'legacy'}
                         or payload.get('required_capabilities', {}).get(CAPABILITY) != 3):
                     raise ValueError('Legacy chassis resources require version 3 and exact fields')
                 ident = row['id']
@@ -158,15 +154,13 @@ def select(metadata, host, verification=None, appearance_mode=None):
                     return Path(verified[name]).read_bytes()
                 legacy_read(row['legacy'])
                 document = read_json(Path(verified[row['legacy']]))
-<<<<<<< HEAD
                 from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
                 if (document.get('schema_version') == 2
                         and payload.get('required_capabilities', {}).get(SKIN_CAPABILITY) != 1):
                     raise ValueError('Legacy skin descriptor requires legacy-mech-skins version 1')
-                result.append(dict(registration=record, legacy=load(document, legacy_read)))
-=======
                 legacy = load(document, legacy_read)
                 upgraded = None
+                owned = None
                 if 'appearances' in row:
                     if payload.get('required_capabilities', {}).get(APPEARANCES) != 1:
                         raise ValueError('Chassis appearances require version 1')
@@ -175,17 +169,34 @@ def select(metadata, host, verification=None, appearance_mode=None):
                             raise ValueError('Undeclared appearance resource')
                         used.add(name)
                         return Path(verified[name]).read_bytes()
-                    upgraded = validate(row['appearances'], legacy, appearance_read)
-                    if upgraded['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
+                    validated = validate(row['appearances'], legacy, appearance_read)
+                    upgraded = validated if 'upgraded' in row['appearances'] else None
+                    if 'new' in row['appearances']:
+                        from owned_chassis_visuals import validate as validate_owned
+                        owned = validate_owned(row['appearances']['new'], legacy, appearance_read)
+                        if not {'BWMESH4', 'BWTEX1'} <= set(payload['required_formats']):
+                            raise ValueError('Undeclared owned visual formats')
+                        if owned['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
+                            raise ValueError('Undeclared owned normal format')
+                    if upgraded is not None and upgraded['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
                         raise ValueError('Undeclared appearance normal format')
                 selected = dict(registration=record, legacy=legacy)
-                if upgraded is not None or appearance_mode is not None:
+                if not (appearance_mode == 'new' and owned is not None) and (upgraded is not None or appearance_mode is not None):
                     selected['legacy'], pages, coverage = choose(legacy, upgraded, appearance_mode)
                     if pages and 2 not in host.get('normal_map_formats', []):
                         raise ValueError('Selected appearance requires normal map format 2')
                     selected.update(appearance_normal_pages=pages, appearance=coverage)
                 result.append(selected)
->>>>>>> origin/roswellien/feature/126-atlas-visual-options
+                if appearance_mode == 'new' and owned is not None:
+                    from owned_chassis_visuals import CAPABILITY as OWNED_CAPABILITY
+                    from content_capabilities import advertised
+                    if 1 not in advertised(host).get(OWNED_CAPABILITY, []):
+                        raise ValueError('Selected new appearance requires owned-chassis-visuals version 1')
+                    if owned['normal_pages'] and (2 not in host.get('normal_map_formats', []) or 'BWSNR2' not in payload['required_formats']):
+                        raise ValueError('Selected owned normals require format 2')
+                    selected.update(owned_visuals=owned, appearance_normal_pages=owned['normal_pages'],
+                                    appearance=dict(requested='new', selected='new', reason=None))
+                    selected['legacy'] = legacy
                 ids.add(ident)
                 continue
             if not isinstance(row, dict) or not FIELDS <= set(row) or set(row) - FIELDS - {'silhouette', 'base_skin_name', 'sockets', 'headlights'}:
@@ -291,7 +302,7 @@ def prepare(records, game_exe, output, environment):
     for item in records:
         if 'legacy' in item:
             legacy_records.append(item)
-            registrations.append(item['registration'])
+            registrations.append(dict(item['registration']))
             continue
         record, document = item['registration'], item['definition']
         controller, resource = document['template'], record['resource']
@@ -338,6 +349,28 @@ def prepare(records, game_exe, output, environment):
         source = Path(banks.get('zbd/rimage.zbd', Path(game_exe).resolve().parent / 'zbd/rimage.zbd'))
         path = output / 'rimage.zbd'; path.write_bytes(append_icons(source.read_bytes(), silhouettes))
         banks['zbd/rimage.zbd'] = str(path.resolve())
+    for item in records:
+        if 'owned_visuals' in item:
+            owned = item['owned_visuals']
+            visual = dict(rosters=owned['rosters'], cockpit=owned['cockpit'], meshes={}, textures={}, skin_textures={})
+            from legacy_chassis_skins import definition_skins, texture_names
+            legacy = item['legacy']
+            if 'skins' in legacy['definition'][0]:
+                rows, primary, _ = definition_skins(legacy['definition'])
+                names = texture_names(legacy, item['registration']['resource'])
+                for skin, row in enumerate(rows):
+                    for name in primary:
+                        visual['skin_textures'][names[name + row['suffix']]] = skin
+            folder = output / ('visual-' + hashlib.sha256(item['registration']['id'].encode()).hexdigest()[:16])
+            folder.mkdir()
+            for role in ('meshes', 'textures'):
+                for lod, data in owned['payloads'][role].items():
+                    path = folder / (role + '-' + lod + '.bin')
+                    path.write_bytes(data)
+                    visual[role][lod] = str(path.resolve())
+            # Registrations are private session copies, never installed manifest objects.
+            registration = next(r for r in registrations if r['id'] == item['registration']['id'])
+            registration['owned_visuals'] = visual
     catalog = output / 'chassis.bin'; catalog.write_bytes(encode_catalog(registrations))
     if len(banks) > 256:
         raise ValueError('Composed resource map exceeds native limit')
@@ -345,8 +378,10 @@ def prepare(records, game_exe, output, environment):
     for key, value in sorted(banks.items()):
         a, b = key.encode(), value.encode(); data += struct.pack('<II', len(a), len(b)) + a + b
     mapping = output / 'banks.bin'; mapping.write_bytes(data)
-<<<<<<< HEAD
-    return {CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())}
+    from chassis_appearances import compose_normals
+    bindings = compose_normals(records, environment, output / 'appearance-normals')
+    bindings.update({CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())})
+    return bindings
 
 
 def _headlights(row, record, payload):
@@ -358,9 +393,3 @@ def _headlights(row, record, payload):
                    or payload.get('required_capabilities', {}).get(CAPABILITY, 0) < 2):
         raise ValueError('Headlights require mech-headlights version 1 and chassis version 2 or newer')
     record['headlights'] = lights
-=======
-    from chassis_appearances import compose_normals
-    bindings = compose_normals(records, environment, output / 'appearance-normals')
-    bindings.update({CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())})
-    return bindings
->>>>>>> origin/roswellien/feature/126-atlas-visual-options
