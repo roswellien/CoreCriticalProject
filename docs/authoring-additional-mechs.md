@@ -226,6 +226,54 @@ required model produces a compatibility error.
 This separate-skin route is not yet supported for Atlas's legacy-resource
 prototype. See the worked example's current limits before adding appearances.
 
+### Include original skins in an owned legacy chassis pack
+
+For a converted MW3/PM chassis, use `prepare_legacy_chassis.py --skins all`
+to retain the supported original skin block and its textures in the same pack.
+The default `--skins primary` preserves the previous single-skin workflow.
+This route uses the original Mech Lab skin rows, not prepared-visual skin
+overrides or additional chassis entries. Keep the primary configuration and
+existing chassis identity when updating a project.
+
+The legacy descriptor uses `schema_version: 2` and adds ordered metadata:
+
+```json
+"skins": [
+  {"id": "primary", "message": "MSG_SKIN_PRIMARY", "suffix": ""},
+  {"id": "variantb", "message": "MSG_SKIN_VARIANTB", "suffix": "_b"}
+]
+```
+
+The supported grammar has one primary and up to seven consecutive alternatives
+(`MSG_SKIN_VARIANTB` through `H`), followed by optional damage bindings. These
+are existing game message keys. IDs must be unique lowercase resource IDs;
+keep them and row order stable across updates. Each alternate supplies one
+unique suffix beginning with `_`, followed by 1–8 lowercase letters or digits.
+Metadata must agree with the embedded definition. Unknown donor grammars fail
+instead of silently losing skins.
+
+Primary entries are texture names or two-name aliases. Supply both alias names
+with every suffix, as well as all material and damage textures. The composer
+preserves these implicit relationships when it namespaces resources. Shared
+textures outside the skin block, such as cockpit glass, are not automatically
+suffixed. The existing limits remain: 512 textures, 31-byte texture names and
+16 MiB per raw resource. Ambiguous families, missing resources, invalid paths
+and collisions fail before launch. Schema-1 packs cannot carry alternate skin
+declarations; rebuild them with schema 2.
+
+The builder adds `legacy-mech-skins: 1` alongside the chassis capability.
+Use a runtime containing the matching reviewed coordinator. Editing an older
+profile's capability strings is not an upgrade. Launcher import checks metadata,
+pins and file closure; the coordinator additionally checks binary resources and
+embedded skin lookups before composing private banks. Original archives remain
+read-only. Keep other required capabilities, including headlights, intact.
+
+Skin choice and original/upgraded appearance mode are independent. This contract
+provides original paints; upgraded colors and normals require the separate
+appearance contract and validation. Back up the previous pack, settings and
+saved selections before testing updates. Retain a separate test library until
+all declared skins, aliases, damage, LODs and save/reload behavior are checked.
+
 ## 7. Test the exact installed pack
 
 Record the pack version/hash, launcher/runtime versions, settings and result

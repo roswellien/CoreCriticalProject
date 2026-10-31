@@ -151,6 +151,10 @@ def select(metadata, host, verification=None):
                     return Path(verified[name]).read_bytes()
                 legacy_read(row['legacy'])
                 document = read_json(Path(verified[row['legacy']]))
+                from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
+                if (document.get('schema_version') == 2
+                        and payload.get('required_capabilities', {}).get(SKIN_CAPABILITY) != 1):
+                    raise ValueError('Legacy skin descriptor requires legacy-mech-skins version 1')
                 result.append(dict(registration=record, legacy=load(document, legacy_read)))
                 ids.add(ident)
                 continue

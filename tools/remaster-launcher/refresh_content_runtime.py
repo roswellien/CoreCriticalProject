@@ -46,7 +46,7 @@ def stage(source, output, version):
     profile['native']['content_capabilities'] = capabilities
     (output / manifest['profile']).write_text(json.dumps(profile, indent=2) + '\n')
     for name in ('play_remaster.py', 'prepared_mech_packs.py', 'prepared_environment_packs.py',
-                 'prepared_skin_packs.py', 'prepared_chassis_packs.py', 'legacy_chassis_resources.py', 'chassis_catalog.py', 'chassis_icons.py',
+                 'prepared_skin_packs.py', 'prepared_chassis_packs.py', 'legacy_chassis_resources.py', 'legacy_chassis_skins.py', 'chassis_catalog.py', 'chassis_icons.py',
                  'reader_archive.py', 'zrd_document.py',
                  'content_capabilities.py', 'legacy_content_capabilities.json'):
         shutil.copyfile(Path(__file__).with_name(name), output / 'coordinator' / name)
