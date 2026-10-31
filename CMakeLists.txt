@@ -25,6 +25,11 @@ mw34_warnings(mw34_runtime)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(mw34_retained_texture_cache_tests tests/retained_texture_cache_tests.cpp)
+    target_link_libraries(mw34_retained_texture_cache_tests PRIVATE mw34_runtime)
+    mw34_warnings(mw34_retained_texture_cache_tests)
+    add_test(NAME retained_texture_cache COMMAND mw34_retained_texture_cache_tests)
+
     add_executable(mw34_runtime_tests tests/runtime_tests.cpp)
     target_link_libraries(mw34_runtime_tests PRIVATE mw34_runtime)
     mw34_warnings(mw34_runtime_tests)

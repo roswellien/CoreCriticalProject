@@ -39,6 +39,7 @@
 #include <mmsystem.h>
 #include "audio/local_cd_audio.hpp"
 #include "graphics/menu_version.hpp"
+#include "graphics/retained_texture_cache.hpp"
 #include <vfw.h>
 #include <fstream>
 #include <iterator>
