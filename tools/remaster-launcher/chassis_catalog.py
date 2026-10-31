@@ -14,6 +14,42 @@ STOCK = ('annihilator', 'avatar', 'blackhawk', 'bushwacker', 'cauldron',
          'owens', 'puma', 'shadowcat', 'strider', 'sunder', 'supernova',
          'thor', 'vulture')
 
+HEADLIGHT_CAPABILITY = 'mech-headlights'
+HEADLIGHT_FIELDS = {'id', 'space', 'attachment', 'position', 'direction', 'color',
+                    'intensity', 'range', 'inner_angle', 'outer_angle'}
+
+
+def validate_headlights(lights, donor=False):
+    """Return normalized copies; pack coordinates are never modified in place."""
+    if not isinstance(lights, list) or len(lights) > 8:
+        raise ValueError('Expected 0..8 authored headlights')
+    ids, result = set(), []
+    for light in lights:
+        if not isinstance(light, dict) or set(light) != HEADLIGHT_FIELDS:
+            raise ValueError('Invalid headlight fields')
+        if (not isinstance(light['id'], str)
+                or not re.fullmatch(r'[a-z0-9_-]{1,31}', light['id']) or light['id'] in ids
+                or light['space'] not in ('guest_node', 'donor_bone')
+                or (light['space'] == 'donor_bone' and not donor)
+                or not isinstance(light['attachment'], str)
+                or not re.fullmatch(r'[A-Za-z0-9_.-]{1,31}', light['attachment'])):
+            raise ValueError('Invalid headlight identity or attachment')
+        def number(value, low, high):
+            return type(value) in (int, float) and low <= value <= high and math.isfinite(value)
+        for field, low, high in [('position', -100, 100), ('direction', -1e30, 1e30), ('color', 0, 1)]:
+            vector = light[field]
+            if not isinstance(vector, list) or len(vector) != 3 or not all(number(v, low, high) for v in vector):
+                raise ValueError('Invalid headlight ' + field)
+        for field, low, high in [('intensity', 0, 8), ('range', 1, 256), ('inner_angle', 0, 89), ('outer_angle', 0, 89)]:
+            if not number(light[field], low, high):
+                raise ValueError('Invalid headlight ' + field)
+        length = math.hypot(*light['direction'])
+        if length == 0 or struct.unpack('<f', struct.pack('<f', light['inner_angle']))[0] >= struct.unpack('<f', struct.pack('<f', light['outer_angle']))[0]:
+            raise ValueError('Invalid headlight direction or cone')
+        ids.add(light['id'])
+        result.append(dict(light, direction=[v / length for v in light['direction']]))
+    return result
+
 
 def validate_sockets(sockets):
     if not isinstance(sockets, list) or not 1 <= len(sockets) <= 64:
@@ -36,7 +72,7 @@ def encode_catalog(records):
     ids, resources, validated = set(), set(), []
     for record in records:
         if (not isinstance(record, dict) or not {'id', 'name', 'resource', 'metadata_template'} <= set(record)
-                or set(record) - {'id', 'name', 'resource', 'metadata_template', 'visuals', 'base_skin_name', 'sockets'}):
+                or set(record) - {'id', 'name', 'resource', 'metadata_template', 'visuals', 'base_skin_name', 'sockets', 'headlights'}):
             raise ValueError('Invalid chassis registration fields')
         ident, name, resource, template = (record[k] for k in
                                            ('id', 'name', 'resource', 'metadata_template'))
@@ -61,6 +97,8 @@ def encode_catalog(records):
             validate_sockets(record['sockets'])
             if 'visuals' not in record:
                 raise ValueError('Chassis sockets require a donor visual controller')
+        if 'headlights' in record:
+            record = dict(record, headlights=validate_headlights(record['headlights'], 'visuals' in record))
         if 'visuals' in record:
             visual = record['visuals']
             if (not isinstance(visual, dict) or set(visual) != {'controller', 'close', 'distance'}
@@ -77,10 +115,11 @@ def encode_catalog(records):
         ids.add(ident)
         resources.add(resource)
         validated.append(record)
-    with_sockets = any('sockets' in r for r in validated)
+    with_headlights = any(r.get('headlights') for r in validated)
+    with_sockets = with_headlights or any('sockets' in r for r in validated)
     with_names = with_sockets or any('base_skin_name' in r for r in validated)
     with_visuals = with_names or any('visuals' in r for r in validated)
-    blob = bytearray((b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
+    blob = bytearray((b'MWCHAS5\0' if with_headlights else b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
     for record in sorted(validated, key=lambda r: r['id']):
         for field in ('id', 'name', 'resource'):
             value = record[field].encode('ascii')
@@ -107,4 +146,16 @@ def encode_catalog(records):
                     raw = socket[field].encode('ascii')
                     blob.extend(struct.pack('<I', len(raw)) + raw)
                 blob.extend(struct.pack('<3d', *socket['position']))
+        if with_headlights:
+            lights = record.get('headlights', [])
+            blob.extend(struct.pack('<I', len(lights)))
+            for light in lights:
+                # MWCHAS5: three u32-length ASCII strings, then 13 IEEE754
+                # binary32 values, all little endian. Counts are bounded above.
+                for field in ('id', 'space', 'attachment'):
+                    raw = light[field].encode('ascii')
+                    blob.extend(struct.pack('<I', len(raw)) + raw)
+                blob.extend(struct.pack('<13f', *light['position'], *light['direction'],
+                                        *light['color'], light['intensity'], light['range'],
+                                        light['inner_angle'], light['outer_angle']))
     return bytes(blob)

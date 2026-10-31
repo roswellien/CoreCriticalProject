@@ -87,6 +87,7 @@
             <TextBlock x:Name="ConflictSummary" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" MaxHeight="55" Margin="0,6,0,0"/>
         </StackPanel>
         <DockPanel Grid.Row="5">
+            <Button Content="Headlight controls…" Click="OpenHeadlightBindings"/>
             <Button Content="Controller setup…" Click="OpenControllerSetup"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="SaveButton" Content="Save layout" Click="SaveProfile" IsEnabled="False"/>

@@ -12,12 +12,13 @@ def choice(host):
     if policy is None:
         return None
     if (not isinstance(policy, dict) or not {'schema_version', 'dynamic_lighting'} <= policy.keys()
-            or policy.keys() - {'schema_version', 'dynamic_lighting', 'shadows'}
-            or type(policy['schema_version']) is not int or policy['schema_version'] != 1
+            or policy.keys() - ({'schema_version', 'dynamic_lighting', 'shadows', 'headlights'} if policy.get('schema_version') == 2 else {'schema_version', 'dynamic_lighting', 'shadows'})
+            or type(policy['schema_version']) is not int or policy['schema_version'] not in (1, 2)
             or type(policy['dynamic_lighting']) is not bool
-            or type(policy.get('shadows', False)) is not bool):
+            or type(policy.get('shadows', False)) is not bool
+            or type(policy.get('headlights', False)) is not bool):
         raise ValueError('Unsupported launcher presentation settings')
-    if 1 not in host.get('stock_presentation_versions', []):
+    if policy['schema_version'] not in host.get('stock_presentation_versions', []):
         raise ValueError('Install the stock presentation runtime update before using these graphics settings')
     return policy['dynamic_lighting']
 
@@ -50,6 +51,7 @@ def environment(host, selected, bindings):
     result.update(MW34_CAMPAIGN_LIGHTING='0', MW34_MANUAL_LIGHTING='0',
                   MW34_WEATHER='0', MW34_SKY_AUTO='0', MW34_NIGHT_WORLD_GAIN='1',
                   MW34_SUN_SHADOWS='0', MW34_FIXTURE_SHADOWS='0',
+                  MW34_MECH_HEADLIGHTS='0', MW34_HEADLIGHT_AI='0',
                   MW34_MISSILE_EXHAUST='0', MW34_SUN='0', MW34_NORMAL_MAPS='0',
                   MW34_EFFECT_LIGHTS='0', MW34_FIXTURE_LIGHTS='0',
                   MW34_WATER_DETAIL='0', MW34_SURF_DETAIL='0', MW34_CLOUD_DETAIL='0')
@@ -66,6 +68,7 @@ def environment(host, selected, bindings):
     result.update(MW34_SUN='1', MW34_SUN_STRENGTH='0', MW34_SUN_AMBIENT='1',
                   MW34_SUN_COLOR='1,1,1', MW34_SUN_AMBIENT_COLOR='1,1,1',
                   MW34_CAMPAIGN_LIGHTING='1',
+                  MW34_MECH_HEADLIGHTS='1' if host['presentation'].get('headlights', False) else '0',
                   MW34_WEATHER='1',
                   MW34_EFFECT_LIGHTS='1', MW34_FIXTURE_LIGHTS='1',
                   MW34_FIXTURE_SHADOWS='1' if host['presentation'].get('shadows', False) else '0')

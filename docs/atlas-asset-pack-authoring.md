@@ -9,11 +9,47 @@ launcher import and private resource composition used by modders. The pack is
 data-only. Its stable identity is `com.corecritical.pm-atlas:mech`; no Atlas
 registration, numeric ID or executable is added to runtime source.
 
+## Eight original skins: authoring candidate
+
+Issue #132 adds generic legacy skin authoring and composition. PM's Atlas
+declares Gunmetal, Sunfire, Desert, Wasp, Slate, Jungle, Arctic and Spectre,
+using primary and `_b` through `_h`. MW3 has matching message labels. The
+original primary row contains 14 direct texture names and five aliases; the
+shared Atlas15 lens is outside that substitution list.
+
+Use the original [legacy skin workflow](authoring-additional-mechs.md#include-original-skins-in-an-owned-legacy-chassis-pack)
+with `--skins all`. The resulting schema-2 resource descriptor and
+`legacy-mech-skins: 1` requirement retain all eight paints under the same Atlas
+identity. Keep the existing four-lamp project's headlight metadata and use a
+builder supporting all of its declared features; the skin change alone does
+not implement or remove headlights.
+
+The local original-skin candidate contains 172 texture entries. Its 155 skin/
+damage texture references match donor bytes; the other entries are shared
+materials, cockpit and effects. All existing payloads, non-skin definition
+fields and the four headlight records were checked unchanged. It is an
+authoring project, not a new installed Atlas pack or a released update.
+Final pack construction and live acceptance wait for reviewed headlight
+integration. Synthetic pack import/composition checks do not establish native
+eight-skin gameplay, damage/LOD correctness or save compatibility.
+
+The detached cockpit-glass report remains open. Original camera values and
+converted mesh/parent data agree with the source; that does not establish
+correct live attachment. Diagnose exterior glass versus the separate cockpit
+overlay before choosing a correction. Remastering the seven alternate paints,
+packaged matching normals and the 16 skin/appearance combinations remain
+subsequent work. This change does not claim the Atlas pack is complete.
+
+Local authoring evidence: `local/work-ahead/atlas-skins-132-r1/` in the issue-132
+worktree, with source identities and unchanged-payload hashes in
+`original-validation.json`. Keep it and all donor-derived content out of Git.
+
 **This is an unreleased compatibility prototype.** The proposed
 `additional-mech-chassis: 3` contract is deliberately absent from released
 runtime profiles. Existing runtimes reject activation. Do not edit an installed
-profile to claim support: PM headlights and compiled effect dependencies remain
-unfinished. Neither this change nor a successful import publishes an update.
+profile to claim support: the modern headlight adapter remains under validation,
+and compiled effect dependencies remain unfinished. Neither this change nor a
+successful import publishes an update.
 
 ## Build from the user's original installation
 
@@ -63,7 +99,7 @@ tracks, weapon locations or loadout.
 | Model hierarchy | PM close, distance and cockpit models, selectively converted to MW v27 |
 | Materials/textures | Compact material table; 39 primary, damage and cockpit texture payloads |
 | Motion | All 15 Atlas clips, converted to MW v4; original part tracks retained |
-| Definition | PM fields and primary configuration; headlight field retained but unsupported |
+| Definition | PM fields and primary configuration; headlight field retained; modern lamps use explicit pack attachments |
 | Reader animation data | Atlas damage/effect and footprint scripts |
 | UI | Original green silhouette converted to the existing 41×50 mask contract |
 | Not yet included | Other four configurations, seven alternate skins, headlight model and five footprint objects/compiled effects |
@@ -135,8 +171,14 @@ comparison and the native prototype narrow the next work to concrete gaps:
 1. **Headlights.** `headlight/model_offset` is present in PM chassis definitions
    and absent from all MW3 chassis definitions. Keeping the key does not make
    MW3 implement it. PM also supplies `headlight.flt` in its mech library.
-   Recover the object's ownership, update, toggle and render lifecycle, then
-   implement the equivalent runtime contract before advertising compatibility.
+   The development adapter consumes explicit pack attachments; retaining this
+   PM key alone still does not enable it. See the [headlight authoring contract](authoring-additional-mechs.md#optional-headlights-development-runtime).
+   Atlas's recovered torso-local offset is `(0.96, 2.06, -2.2)`. The modern cone
+   starts at that mount; PM's illumination center was 80 units forward.
+   Time-based fading and immediate reversal are intentional modern behavior.
+   Native toggling and fading have been demonstrated as described below;
+   broader lifecycle and appearance validation remains required before
+   advertising compatibility.
 2. **Compiled effects and footprints.** The 33 definitions in PM
    `anim_atlas.zrd` match MW3 `anim_annihilator.zrd` after chassis-name
    normalization, but adding reader scripts does not prove registration in
@@ -157,7 +199,7 @@ Focused static PM function candidates (virtual addresses, **not RVAs**):
 | `0x46D8D0` | Definition parser callsite finds `headlight`, passes mech field `+0x1A8` to `sub_479440` |
 | `sub_479440` | Reads `light0`, `model_offset`, `lodrange`; computes range constants |
 | `sub_479510` | Loads `headlight.flt`, allocates a 64-byte supporting object |
-| `sub_4795C0` | Finds `spotlight`, initializes and offsets that object |
+| `sub_4795C0` | Creates/names `spotlight`, initializes and offsets that object |
 | `sub_479780`, `sub_4799B0` | Constructor callees; update/render closure remains unresolved |
 
 These are LLVM 21.1.8 static observations of PM executable SHA-256
@@ -169,3 +211,45 @@ Function candidates are not renamed or treated as complete ports.
 Keep engine support generic and capability-versioned. Pack installation must
 never execute bundled code, transplant pointers between executable layouts,
 or claim success for an unimplemented required PM service.
+
+## Modern headlight development result
+
+The reusable adapter takes the optional `headlights` array documented in the
+[authoring guide](authoring-additional-mechs.md#optional-headlights-development-runtime).
+The local Atlas project was rebuilt, imported through the C# pack installer and
+composed through the normal content pipeline. A second authored variant adds a
+left lamp at `(-0.96, 2.06, -2.2)` beside the recovered right mount; this is a
+multi-lamp test, not a claim about the original Atlas equipment.
+
+The October 29 development host (`7b634fbfc295bf908d5fd61db4ebc9a94d98824798eba70d47bba78b5269b2fe`)
+reached live Instant Action and ran 2,400 frames with the unchanged translated
+module. One input toggled the mounted lamp on, its intensity reached one, and
+the next input faded it to zero. An otherwise identical master-off run emitted
+no headlight. Captures before activation and after fade-out were pixel-identical
+between those runs; while on, the difference covered the illuminated ground.
+The two-lamp variant toggled both lamps together with fixture shadows enabled
+and completed the same frame budget. Scenery fixture lighting was disabled.
+
+These are hidden-window live native render-target results, not replay renders
+or visible-window playtests. Visible-window attempts failed Vulkan surface setup
+with result `-13`. Each successful bounded run ended at its requested frame
+budget, not normal quit. Private receipts and captures are in
+`local/headlights/native-hidden-r3`, `native-master-off`, `native-two-shadows`
+and `paired-captures.json` in the headlight worktree.
+
+The final reviewed host
+(`247b2abdccec83f895c79593587e236bf60ee60413e47e4af4cb0fe52d658f9a`)
+completed another 2,400-frame run in `local/headlights/native-final-matrix`.
+Holding the key for 15 frames caused one toggle; subsequent presses reversed
+the fade immediately. Both lamps survived the external-to-cockpit camera
+switch. After the original shutdown sequence completed, intensity fell to zero
+and an attempted on request was suppressed. Shadows remained enabled.
+
+CPU/GPU checks cover frame-rate-independent fading at 30/60/120/240 Hz,
+reversal, input edges, attachment transforms, shared light budgets, cone
+shading and replay serialization. Actual launcher controls were also exercised.
+Those checks do not establish live damaged-mount retirement, full LOD/offscreen
+coverage, original save/load, controller hotplug, replay restoration or crowded
+scene performance. These remain [playtest requirements](https://github.com/roswellien/MW3Recomp-Private/issues/115)
+before capability promotion. Released runtime profiles and original game save formats remain
+unchanged; no update or installer is published by this work.
