@@ -541,8 +541,8 @@
       "classification": "interoperability-metadata"
     },
     "mfc_stage.hpp": {
-      "sha256": "6f4d57b803a13a99eb0318379dd1b043c64ffde70e52ca87c884287841436ace",
-      "bytes": 314184,
+      "sha256": "7c4cefe6c1037550fc895debd1b236b8d93f4134b4e8b0811aa116c1f1d133f2",
+      "bytes": 314881,
       "decision": "commit",
       "classification": "authored-host-source"
     },
