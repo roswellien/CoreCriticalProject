@@ -81,7 +81,8 @@ inline bool valid_surface_identifier(const std::string &value, std::size_t max_b
                                      bool allow_colon) {
     if (value.empty() || value.size() > max_bytes || value.find("..") != std::string::npos)
         return false;
-    for (unsigned char c : value) {
+    for (char raw : value) {
+        const auto c = static_cast<unsigned char>(raw);
         const bool alpha = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
         const bool digit = (c >= '0' && c <= '9');
         const bool symbol = c == '_' || c == '.' || c == '-' || (allow_colon && c == ':');

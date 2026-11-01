@@ -265,7 +265,7 @@ int main() {
 
         // Corrupted image pixel rejected by FNV-1a hash check.
         bad = valid;
-        bad.back() ^= 0xff;
+        bad.back() = static_cast<char>(static_cast<unsigned char>(bad.back()) ^ 0xffU);
         require(rejected(bad, "bushwacker:close", mesh_hash, materials),
                 "Corrupted image pixel was accepted");
 
