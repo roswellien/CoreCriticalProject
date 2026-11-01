@@ -39,7 +39,7 @@ def require(host, payload, ident):
         raise ValueError('Unsupported content profile: ' + str(profile))
     extra = payload.get('required_capabilities', {})
     if (not isinstance(extra, dict) or len(extra) > 32 or any(
-            name not in {*PROFILES.values(), 'mech-headlights', 'legacy-mech-skins'}
+            name not in {*PROFILES.values(), 'mech-headlights', 'legacy-mech-skins', 'surface-materials'}
             or type(version) is not int or version < 1
             for name, version in extra.items())):
         raise ValueError('Invalid content capability requirements')

@@ -71,7 +71,11 @@ public static class ChassisPack
         if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
             !(manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "BWSFM1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1", "BWSFM1" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" })) ||
+            (manifest.NativePayload.RequiredFormats.Contains("BWSFM1") &&
+             (!manifest.NativePayload.RequiredCapabilities.TryGetValue("surface-materials", out var surfaceVersion) || surfaceVersion != 1)) ||
             manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||
             manifest.Files == null || manifest.Files.Count is < 1 or > 1025 ||
             manifest.Files.Values.Sum(p => p.Bytes) > 4L * 1024 * 1024 * 1024)
@@ -169,7 +173,7 @@ public static class ChassisPack
                 continue;
             }
             var rowFields = row.EnumerateObject().Select(p => p.Name).ToHashSet();
-            if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets" && p != "headlights"))
+            if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets" && p != "headlights" && p != "surface_materials"))
                 throw new InvalidDataException("Unknown chassis registration field.");
             if (row.TryGetProperty("sockets", out var sockets))
             {
@@ -237,6 +241,31 @@ public static class ChassisPack
                 if (bytes.Length != 2066 || BitConverter.ToUInt32(bytes, 8) != 41 ||
                     BitConverter.ToUInt32(bytes, 12) != 50 || !bytes.Skip(16).Any(b => b != 0))
                     throw new InvalidDataException("Chassis silhouette must be a nonempty 41x50 MW3ICON1 mask.");
+            }
+            if (row.TryGetProperty("surface_materials", out var surfaceMaterials))
+            {
+                if (!manifest.NativePayload.RequiredFormats.Contains("BWSFM1") ||
+                    !manifest.NativePayload.RequiredCapabilities.TryGetValue("surface-materials", out var surfVer) || surfVer != 1 ||
+                    surfaceMaterials.ValueKind != JsonValueKind.Object ||
+                    !new HashSet<string>(new[] { "close", "distance" }).SetEquals(surfaceMaterials.EnumerateObject().Select(p => p.Name)))
+                    throw new InvalidDataException("Chassis surface_materials require BWSFM1 and surface-materials version 1.");
+                foreach (var lod in new[] { "close", "distance" })
+                {
+                    var surfPath = Verify(surfaceMaterials.GetProperty(lod).GetString() ?? "", "BWSFM1");
+                    var surfLen = new FileInfo(surfPath).Length;
+                    if (surfLen is < 36 or > 64L * 1024 * 1024)
+                        throw new InvalidDataException("Chassis surface-material sidecar size is out of bounds.");
+                    using var surfStream = File.OpenRead(surfPath);
+                    using var surfReader = new BinaryReader(surfStream);
+                    surfStream.Position = 8;
+                    var version = surfReader.ReadUInt32();
+                    var batches = surfReader.ReadUInt32();
+                    var records = surfReader.ReadUInt32();
+                    var images = surfReader.ReadUInt32();
+                    if (version != 1 || batches is < 1 or > 4096 || records > 4096 || images > 64 ||
+                        surfLen < 32L + batches * 4L)
+                        throw new InvalidDataException("Invalid BWSFM1 header in chassis pack.");
+                }
             }
             result.Add(new(id, name));
         }

@@ -54,6 +54,14 @@ if(BUILD_TESTING)
     add_test(NAME world_normal_pages COMMAND mw34_material_normal_tests --world-pages)
     add_test(NAME world_normal_pages_disabled COMMAND mw34_material_normal_tests --world-pages-off)
 
+    add_executable(mw34_surface_material_tests tools/remaster-launcher/test_surface_materials.cpp)
+    target_include_directories(mw34_surface_material_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/tools/m4-crt-heap-carry/host"
+        "${PROJECT_SOURCE_DIR}/runtime/graphics")
+    target_compile_definitions(mw34_surface_material_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_surface_material_tests)
+    add_test(NAME surface_materials COMMAND mw34_surface_material_tests)
+
     add_library(mw34_normal_hash SHARED tools/remaster-launcher/normal_hash.cpp)
     target_include_directories(mw34_normal_hash PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_normal_hash PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -82,6 +90,9 @@ if(BUILD_TESTING)
     add_test(NAME native_host_build_metadata
         COMMAND "${Python3_EXECUTABLE}" -B
             "${PROJECT_SOURCE_DIR}/tools/m4-crt-heap-carry/test_host_build.py")
+    add_test(NAME surface_materials_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_surface_materials.py -v)
+    set_tests_properties(surface_materials_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
     set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
