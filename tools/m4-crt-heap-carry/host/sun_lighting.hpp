@@ -10,6 +10,9 @@
 namespace mw34::sun {
 struct Settings {
     bool enabled{}, normals{}, shadows{}, shadow_debug{},weather_enabled{true};
+    bool pom_enabled{};
+    float pom_max_distance{120.0f};
+    unsigned pom_debug{0};
     float azimuth{45}, elevation{35}, strength{.85f}, ambient{.30f}, normal_strength{1.0f}, ground_normal_strength{1.0f};
     // Optional sun shadow map: half-width of the square sun-space region in
     // world units, depth-map resolution, receiver bias and shadow opacity.
@@ -208,7 +211,12 @@ inline const Settings& static_settings() {
                 if(float(s.shadow_size)!=size||(s.shadow_size&(s.shadow_size-1)))
                     throw std::runtime_error("MW34_SUN_SHADOW_SIZE must be a power of two");
             }
+            s.pom_enabled=flag("MW34_POM");
+            s.pom_max_distance=parameter("MW34_POM_MAX_DISTANCE",120.0f,4.0f,1000.0f);
+            s.pom_debug=flag("MW34_POM_DEBUG")?1U:0U;
+            if(s.pom_enabled&&!s.normals)throw std::runtime_error("POM requires MW34_SUN_NORMALS=1");
         }else if(flag("MW34_SUN_SHADOWS"))throw std::runtime_error("Sun shadows require MW34_SUN=1");
+        else if(flag("MW34_POM"))throw std::runtime_error("POM requires MW34_SUN=1");
         return s;
     }();return value;
 }
@@ -275,8 +283,14 @@ struct alignas(16) Uniform {
     std::array<float,4> weather{},weather_fog{}; // wetness, heat haze, dust, lava; density, altitude, reserved
     std::array<float,4> emission_params{};
     std::array<std::array<float,4>,32> emission_regions{};
+    // Optional POM (Parallax Occlusion Mapping) parameters; zero means disabled/legacy path.
+    std::array<float,4> pom_params{};       // (active, height_reference, height_amplitude, max_steps)
+    std::array<float,4> pom_uv_transform{}; // (uv_scale.x, uv_scale.y, uv_offset.x, uv_offset.y)
+    std::array<float,4> pom_atlas_rect{};   // (min_u, min_v, max_u, max_v)
+    std::array<float,4> pom_fade{};         // (packed_address_u_v, fade_start_dist, fade_end_dist, debug_mode)
+    std::array<float,4> pom_eye{};          // (eye_x, eye_y, eye_z, eye_valid)
 };
-static_assert(sizeof(Uniform)==912);
+static_assert(sizeof(Uniform)==992);
 struct Tl {
     std::array<float,12> camera_world{};
     std::array<float,6> projection{};

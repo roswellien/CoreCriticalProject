@@ -62,6 +62,14 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_surface_material_tests)
     add_test(NAME surface_materials COMMAND mw34_surface_material_tests)
 
+    add_executable(mw34_parallax_material_tests tools/remaster-launcher/test_parallax_materials.cpp)
+    target_include_directories(mw34_parallax_material_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/tools/m4-crt-heap-carry/host"
+        "${PROJECT_SOURCE_DIR}/runtime/graphics")
+    target_compile_definitions(mw34_parallax_material_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_parallax_material_tests)
+    add_test(NAME parallax_materials COMMAND mw34_parallax_material_tests)
+
     add_library(mw34_normal_hash SHARED tools/remaster-launcher/normal_hash.cpp)
     target_include_directories(mw34_normal_hash PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_normal_hash PRIVATE _CRT_SECURE_NO_WARNINGS)

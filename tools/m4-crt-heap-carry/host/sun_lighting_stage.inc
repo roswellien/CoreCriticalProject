@@ -52,7 +52,8 @@ void sun_capture_world(mw34::vkscene::ModelInstance& instance,unsigned) {
  OverrideMatrix camera_world;if(!sun_camera_world(camera_world))return;
  auto local_camera=override_identity();for(unsigned i=0;i<12;++i)local_camera[i]=instance.camera[i];
  const auto local_world=override_product(camera_world,local_camera);
- instance.sun_normal=mw34::sun::normal_matrix(local_world);instance.sun_world=mw34::sun::world_matrix(local_world);instance.sun_eligible=true;
+ instance.sun_normal=mw34::sun::normal_matrix(local_world);instance.sun_world=mw34::sun::world_matrix(local_world);
+ instance.sun_eye={float(camera_world[3]),float(camera_world[7]),float(camera_world[11])};instance.sun_eye_valid=true;instance.sun_eligible=true;
 }
 void sun_capture_model(mw34::vkscene::ModelInstance& instance,unsigned source_node,
                        const OverrideMatrix&,const OverrideMatrix& batch_camera) {
@@ -62,5 +63,6 @@ void sun_capture_model(mw34::vkscene::ModelInstance& instance,unsigned source_no
  OverrideMatrix camera_world;if(!sun_camera_world(camera_world))return;
  const auto local_world=override_product(camera_world,batch_camera);
  instance.shadow_source=source_node;
- instance.sun_normal=mw34::sun::normal_matrix(local_world);instance.sun_world=mw34::sun::world_matrix(local_world);instance.sun_eligible=true;
+ instance.sun_normal=mw34::sun::normal_matrix(local_world);instance.sun_world=mw34::sun::world_matrix(local_world);
+ instance.sun_eye={float(camera_world[3]),float(camera_world[7]),float(camera_world[11])};instance.sun_eye_valid=true;instance.sun_eligible=true;
 }

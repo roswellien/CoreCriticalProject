@@ -117,21 +117,28 @@ inline std::uint64_t compute_mesh_uv_hash(const BatchRange &batches, std::size_t
     return hash;
 }
 
+namespace detail {
+
 inline SurfaceMaterialPack
-read_surface_materials(std::istream &input, const std::string &expected_asset_id,
-                       std::uint64_t expected_mesh_uv_hash,
-                       const std::vector<std::string> &expected_batch_materials,
-                       std::uint64_t max_bytes = max_surface_sidecar_bytes) {
+read_surface_materials_impl(std::istream &input, const std::string &expected_asset_id,
+                            bool check_mesh_uv_hash, std::uint64_t expected_mesh_uv_hash,
+                            const std::vector<std::string> *expected_batch_materials,
+                            std::uint64_t max_bytes) {
     auto fail = [] { throw std::runtime_error("Invalid surface-material sidecar"); };
-    if (!max_bytes || max_bytes > max_surface_sidecar_bytes || expected_batch_materials.empty() ||
-        expected_batch_materials.size() > max_surface_batches)
+    if (!max_bytes || max_bytes > max_surface_sidecar_bytes)
+        fail();
+    if (expected_batch_materials &&
+        (expected_batch_materials->empty() ||
+         expected_batch_materials->size() > max_surface_batches))
         fail();
     if (!expected_asset_id.empty() &&
         !valid_surface_identifier(expected_asset_id, max_surface_identifier_bytes, true))
         fail();
-    for (const auto &mat_name : expected_batch_materials) {
-        if (!valid_surface_identifier(mat_name, max_surface_material_name_bytes, false))
-            fail();
+    if (expected_batch_materials) {
+        for (const auto &mat_name : *expected_batch_materials) {
+            if (!valid_surface_identifier(mat_name, max_surface_material_name_bytes, false))
+                fail();
+        }
     }
 
     std::uint64_t consumed_bytes = 0;
@@ -181,9 +188,10 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
     const auto image_count = u32();
     pack.mesh_uv_hash = u64();
 
-    if (pack.version != 1U || batch_count != expected_batch_materials.size() ||
+    if (pack.version != 1U || batch_count > max_surface_batches ||
         record_count > max_surface_records || image_count > max_surface_images ||
-        pack.mesh_uv_hash != expected_mesh_uv_hash)
+        (expected_batch_materials && batch_count != expected_batch_materials->size()) ||
+        (check_mesh_uv_hash && pack.mesh_uv_hash != expected_mesh_uv_hash))
         fail();
 
     pack.bindings.reserve(batch_count);
@@ -310,15 +318,37 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
             fail();
     }
 
-    for (std::uint32_t i = 0; i < batch_count; ++i) {
-        const auto rec_index = pack.bindings[i];
-        if (rec_index == no_surface_material)
-            continue;
-        if (pack.records[rec_index]->material_name != expected_batch_materials[i])
-            fail();
+    if (expected_batch_materials) {
+        for (std::uint32_t i = 0; i < batch_count; ++i) {
+            const auto rec_index = pack.bindings[i];
+            if (rec_index == no_surface_material)
+                continue;
+            if (pack.records[rec_index]->material_name != (*expected_batch_materials)[i])
+                fail();
+        }
     }
 
     return pack;
+}
+
+} // namespace detail
+
+inline SurfaceMaterialPack
+read_surface_materials(std::istream &input, const std::string &expected_asset_id,
+                       std::uint64_t expected_mesh_uv_hash,
+                       const std::vector<std::string> &expected_batch_materials,
+                       std::uint64_t max_bytes = max_surface_sidecar_bytes) {
+    return detail::read_surface_materials_impl(input, expected_asset_id, true,
+                                               expected_mesh_uv_hash, &expected_batch_materials,
+                                               max_bytes);
+}
+
+inline SurfaceMaterialPack
+read_environment_surface_materials(std::istream &input,
+                                   const std::string &expected_asset_id = "",
+                                   std::uint64_t max_bytes = max_surface_sidecar_bytes) {
+    return detail::read_surface_materials_impl(input, expected_asset_id, false, 0ULL, nullptr,
+                                               max_bytes);
 }
 
 } // namespace mw34::materials

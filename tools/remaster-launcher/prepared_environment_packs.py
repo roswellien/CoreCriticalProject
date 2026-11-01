@@ -23,7 +23,8 @@ REGIONS = {'training': {'t1'}, 'operation1': {'c1'}, 'operation2': {'c2'},
            'operation3': {'c3'}, 'operation4': {'c4', 'c4b'}, 'shared-mechs': set()}
 RESOURCE_KEYS = {'MW34_REMASTER_BANKS', 'MW34_WORLD_NORMALS', 'MW34_SURFACE_NORMALS',
                  'MW34_EFFECT_LIGHT_CATALOG', 'MW34_WATER_NORMALS',
-                 'MW34_SURF_NORMALS', 'MW34_CLOUD_NORMALS', 'MW34_MISSION_ENVIRONMENTS'}
+                 'MW34_SURF_NORMALS', 'MW34_CLOUD_NORMALS', 'MW34_MISSION_ENVIRONMENTS',
+                 'MW34_GROUND_SURFACE_MATERIALS', 'MW34_SURFACE_MATERIALS'}
 MAX_BYTES = 16 * 1024**3
 AUTHORED_CATALOG_BYTES = 1536 * 1024**2
 WORLD_CATALOG_BYTES = 4096 * 1024**2
@@ -219,12 +220,23 @@ def select(roots, host, verification=None):
         if manifest.get('dependencies') or manifest.get('conflicts'):
             raise ValueError('Environment pack dependencies/conflicts are unsupported')
         from content_capabilities import require
+        from surface_materials import (
+            CAPABILITY as SURFACE_CAPABILITY,
+            FORMAT as SURFACE_FORMAT,
+            read_surface_materials,
+        )
         require(host, payload, ident)
-        formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1'}
+        formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1',SURFACE_FORMAT}
         if not set(payload.get('required_formats',[])).issubset(formats):
             raise ValueError('Unsupported environment resource format')
         files = manifest.get('files',{}); total = 0; seen = {'pack.json'}
         if not files or len(files)>10000: raise ValueError('Invalid environment file table')
+        uses_surface_materials = (
+            SURFACE_FORMAT in payload.get('required_formats', [])
+            or any(isinstance(pin, dict) and pin.get('format') == SURFACE_FORMAT for pin in files.values())
+        )
+        if uses_surface_materials and payload.get('required_capabilities', {}).get(SURFACE_CAPABILITY) != 1:
+            raise ValueError('Environment surface materials require surface-materials capability version 1')
         paths = {}
         for name,pin in files.items():
             path = resolve(root,name); size = pin.get('bytes'); digest = pin.get('sha256','')
@@ -239,7 +251,7 @@ def select(roots, host, verification=None):
             fmt=pin.get('format')
             if fmt:
                 with path.open('rb') as stream: magic=stream.read(24)
-                expected={'BWSNR2':b'BWSNR2\0\0','BWSNR3':b'BWSNR3\0\0','MWFX1':b'MWFX1\0\0\0','MW34SNA1':b'MW34SNA1','MW34SNP1':b'MW34SNP1'}
+                expected={'BWSNR2':b'BWSNR2\0\0','BWSNR3':b'BWSNR3\0\0','MWFX1':b'MWFX1\0\0\0','MW34SNA1':b'MW34SNA1','MW34SNP1':b'MW34SNP1',SURFACE_FORMAT:b'BWSFM1\0\0'}
                 if fmt=='ZBD-texture-v1':
                     if len(magic)!=24 or struct.unpack('<3I',magic[:12])!=(0,1,0): raise ValueError('Invalid texture bank')
                 elif fmt != 'MW34-lighting-v1' and (fmt not in expected or not magic.startswith(expected[fmt])): raise ValueError('Mislabeled environment payload')
@@ -258,13 +270,21 @@ def select(roots, host, verification=None):
             if not isinstance(pages,list) or not 0<len(pages)<=16:
                 raise ValueError('Invalid shared mech normal pages')
             references.update(pages);references.add(index)
+            if 'surface_materials' in registry:
+                surf_name = registry['surface_materials']
+                if (not uses_surface_materials or not isinstance(surf_name, str) or
+                        surf_name not in paths or files[surf_name].get('format') != SURFACE_FORMAT):
+                    raise ValueError('Undeclared or mislabeled shared mech surface materials')
+                read_surface_materials(Path(paths[surf_name]).read_bytes(), expected_asset_id=region)
+                references.add(surf_name)
             if references!=set(paths) or any(files[p].get('format')!='ZBD-texture-v1' for p in banks.values()):
                 raise ValueError('Invalid shared mech resource closure')
             if files[index].get('format')!='MW34SNA1' or any(files[p].get('format')!='BWSNR2' for p in pages):
                 raise ValueError('Invalid shared mech normal formats')
             if Path(paths[index]).read_text().splitlines()!=['MW34SNA1',*[str(Path(p).relative_to('environment')).replace('\\','/') for p in pages]]:
                 raise ValueError('Shared mech normal manifest differs from declared pages')
-            if set(registry)!={'schema_version','payload_profile','operation','banks','authored','authored_manifest'}:
+            required_shared_keys = {'schema_version','payload_profile','operation','banks','authored','authored_manifest'}
+            if not required_shared_keys.issubset(set(registry)) or not set(registry).issubset(required_shared_keys | {'surface_materials'}):
                 raise ValueError('Unexpected shared mech registry fields')
             selected.setdefault(region,dict(root=str(root),registry=registry,paths=paths,files=files,lighting=None))
             continue
@@ -278,6 +298,14 @@ def select(roots, host, verification=None):
                 raise ValueError('Undeclared or mislabeled lighting catalog')
             lighting = validate(read_json(Path(paths[name])), region)
             references.add(name)
+        for surf_role in ('ground_surface_materials', 'surface_materials'):
+            if surf_role in registry:
+                surf_name = registry[surf_role]
+                if (not uses_surface_materials or not isinstance(surf_name, str) or
+                        surf_name not in paths or files[surf_name].get('format') != SURFACE_FORMAT):
+                    raise ValueError('Undeclared or mislabeled environment surface materials')
+                read_surface_materials(Path(paths[surf_name]).read_bytes(), expected_asset_id=region)
+                references.add(surf_name)
         for role in ['authored','world']:
             pages=registry.get(role,[])
             if not isinstance(pages,list) or not 0<len(pages)<=(16 if role=='authored' else 256): raise ValueError('Invalid normal page list')
@@ -333,6 +361,8 @@ def profile_bindings(selected, host):
         environment=profile_bindings({},host)
         shared=selected['shared-mechs']
         environment['MW34_SURFACE_NORMALS']=shared['paths'][shared['registry']['authored_manifest']]
+        if 'surface_materials' in shared['registry']:
+            environment['MW34_SURFACE_MATERIALS']=shared['paths'][shared['registry']['surface_materials']]
         return presentation_environment(host, selected, environment)
     registry=first['registry']; paths=first['paths']
     environment.update(MW34_WORLD_NORMALS=paths[registry['world_manifest']],
@@ -340,6 +370,12 @@ def profile_bindings(selected, host):
                        MW34_EFFECT_LIGHT_CATALOG=paths[registry['effects']],
                        MW34_EFFECT_LIGHTS='1')
     for role,name in registry['detail'].items(): environment['MW34_'+role.upper()+'_NORMALS']=paths[name]
+    ordered=[pack for _region,pack in sorted(selected.items(),key=lambda item:(REGION_PRIORITY.get(item[0],99),item[0]))]
+    for surf_role,env_key in (('ground_surface_materials','MW34_GROUND_SURFACE_MATERIALS'),
+                              ('surface_materials','MW34_SURFACE_MATERIALS')):
+        chosen_pack=next((p for p in ordered if surf_role in p['registry']),None)
+        if chosen_pack is not None:
+            environment[env_key]=chosen_pack['paths'][chosen_pack['registry'][surf_role]]
     return presentation_environment(host, selected, environment)
 
 

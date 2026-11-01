@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : enable
 // Direct3D 6 fixed-function pixel stage for one texture stage: colour/alpha operation and arguments,
 // flat or Gouraud colour, perspective or affine texture coordinates, specular add, vertex fog (specular
 // alpha) and alpha test. Unmodelled states are refused on the host before a draw reaches this shader.
@@ -22,6 +23,7 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 detail; vec4 detailMotion;
  vec4 weather; vec4 weatherFog;
  vec4 emissionParams; vec4 emissionRegions[32];
+ vec4 pomParams; vec4 pomUvTransform; vec4 pomAtlasRect; vec4 pomFade; vec4 pomEye;
 } sun;
 #ifdef MW34_EFFECT_LIGHTING
 struct EffectLight {vec4 start;vec4 end;vec4 color;};
@@ -94,6 +96,8 @@ vec3 effectIllumination(vec3 p,vec3 n){
 layout(set=0,binding=0) uniform sampler2D image;
 layout(set=1,binding=1) uniform sampler2DShadow shadowMap;
 layout(set=2,binding=0) uniform sampler2D normalMap;
+layout(set=2,binding=1) uniform sampler2D heightMap;
+#include "parallax_material.glsl"
 layout(location=0) out vec4 result;
 // mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test.
 // mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
@@ -275,6 +279,8 @@ void main() {
     }
     vec3 dp1 = dFdx(worldPosition);
     vec3 dp2 = dFdy(worldPosition);
+    vec3 dp1_world = dFdx(shadowPosition);
+    vec3 dp2_world = dFdy(shadowPosition);
     vec2 duv1 = dFdx(uv);
     vec2 duv2 = dFdy(uv);
     vec3 dp2perp = cross(dp2, N);
@@ -287,11 +293,29 @@ void main() {
     // (an absolute 1e-10 cut-off dropped the normal map on nearby ground, leaving a flat band).
     bool waterDetail=sun.detail.x>.5&&sun.detail.x<2.5;
     float waterMask=waterDetail&&sun.detail.x>1.5?surfMask(uv):1.0;
+    vec2 pom_uv = uv;
+    vec2 pom_ddx = duv1;
+    vec2 pom_ddy = duv2;
+    vec3 pom_debug = vec3(0.0);
+    bool pom_applied = false;
+    if (!waterDetail) {
+        pom_applied = pomEvaluate(uv, shadowPosition, N, dp1_world, dp2_world, duv1, duv2, pom_uv, pom_ddx, pom_ddy, pom_debug);
+        if (sun.pomFade.w > 0.5 && pom_applied) {
+            result = vec4(pom_debug, 1.0);
+            return;
+        }
+        if (pom_applied) {
+            uv = pom_uv;
+            if ((flags & 4u) != 0u) {
+                texel = textureGrad(image, uv, pom_ddx, pom_ddy);
+            }
+        }
+    }
     if(waterDetail){
         n=waterNormal(N,waterMask);
     }else if (det > 1e-30) {
         float invmax = inversesqrt(det);
-        vec3 map = texture(normalMap, uv).xyz * 2.0 - 1.0;
+        vec3 map = (pom_applied ? textureGrad(normalMap, uv, pom_ddx, pom_ddy) : texture(normalMap, uv)).xyz * 2.0 - 1.0;
         float strength = max(sun.extra.y, 0.0);
         vec3 n_tan = normalize(vec3(map.xy * strength, map.z));
         n = normalize(T * (invmax * n_tan.x) + B * (invmax * n_tan.y) + N * n_tan.z);

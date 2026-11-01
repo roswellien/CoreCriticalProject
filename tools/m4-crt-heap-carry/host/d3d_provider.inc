@@ -308,6 +308,13 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
    }
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.surface_material=c.surface_material;
+  if(!dr.surface_material&&bind_normal_idx>=0&&!dr.detail_role){const auto&o=override_state();
+   if(size_t(bind_normal_idx)<o.normal_textures.size()){const auto&t=o.normal_textures[bind_normal_idx];auto found=o.ground_surface_material_by_name.find(t.name);if(found!=o.ground_surface_material_by_name.end())dr.surface_material=found->second;else if(bind_normal_idx==o.ground_normal_texture&&o.ground_surface_material)dr.surface_material=o.ground_surface_material;}}
+  if(mw34::sun::settings().enabled&&mw34::sun::settings().pom_enabled&&mw34::materials::normal_maps_enabled()&&dr.normal_texture>=0&&dr.surface_material&&dr.surface_material->host_height_texture>=0&&!dr.key.blend&&!(dr.push.mode[0]&32U)&&!dr.sky_view&&!dr.condition_schematic&&!dr.detail_role){
+   const auto&o=override_state();const int height_idx=dr.surface_material->host_height_texture;
+   if(size_t(height_idx)<o.surface_material_textures.size()){const auto&t=o.surface_material_textures[size_t(height_idx)];
+    const std::uint64_t key=0x425753464d000000ULL+unsigned(height_idx);auto it=std::find_if(sc.textures.begin(),sc.textures.end(),[&](const vs::TextureRef&r){return r.key==key;});
+    if(it==sc.textures.end()){vs::TextureRef r{};r.key=key;r.hash=t.hash;r.width=t.width;r.height=t.height;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->current(key,t.hash,t.width,t.height))r.pixels32=t.pixels32;sc.textures.push_back(std::move(r));dr.height_texture=int(sc.textures.size()-1);}else dr.height_texture=int(it-sc.textures.begin());}}
   if(c.model&&c.model->world)dr.model=c.model;
   if(c.model&&!c.model->world){if(!mw34::vkscene::Renderer::gpu_models()||!c.model->geometry)deny("Optional GPU model draw is not enabled",0);
    dr.model=c.model;dr.first=0;dr.count=unsigned(c.model->geometry->vertices.size());wide_adapt_tl(sc,dr,c.hud_role,c.zoom_anchor_known?&c.zoom_anchor:nullptr);sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(std::move(dr));continue;}

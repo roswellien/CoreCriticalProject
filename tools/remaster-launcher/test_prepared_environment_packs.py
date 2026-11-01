@@ -205,4 +205,64 @@ class EnvironmentPackTests(unittest.TestCase):
             self.assertIn('MW34_WORLD_NORMALS',env)
             disabled=prepare({},self.host(),root/'disabled-shared');self.assertNotIn('MW34_REMASTER_BANKS',disabled)
 
+    def test_optional_environment_surface_materials_bind_and_require_capability(self):
+        from surface_materials import ROLE_HEIGHT, pack_surface_materials
+        from startup_cache import VerificationCache
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            pack = self.fixture(root / 'surf-op', 'training')
+            surf_bytes = pack_surface_materials(
+                asset_id='training',
+                mesh_uv_hash=0,
+                batch_materials=['ground_sand'],
+                records=[dict(
+                    asset_id='training',
+                    material_name='ground_sand',
+                    height_image='sand_h',
+                    height_reference=0.5,
+                    height_amplitude=0.08,
+                    max_displacement=0.08,
+                )],
+                images={'sand_h': (ROLE_HEIGHT, 2, 2, b'\x40\x00\x00\xff' * 4)},
+            )
+            surf_rel = 'environment/ground-surface.bin'
+            surf_path = pack / surf_rel
+            surf_path.write_bytes(surf_bytes)
+            reg = json.loads((pack / REGISTRY).read_text())
+            reg['ground_surface_materials'] = surf_rel
+            (pack / REGISTRY).write_text(json.dumps(reg))
+            manifest = json.loads((pack / 'pack.json').read_text())
+            manifest['files'][surf_rel] = dict(bytes=len(surf_bytes), sha256=sha(surf_path), format='BWSFM1')
+            manifest['files'][REGISTRY] = dict(bytes=(pack / REGISTRY).stat().st_size, sha256=sha(pack / REGISTRY))
+            manifest['native_payload']['required_formats'].append('BWSFM1')
+            (pack / 'pack.json').write_text(json.dumps(manifest))
+
+            # Missing required_capabilities['surface-materials'] == 1 must fail.
+            host_with_cap = self.host()
+            host_with_cap['content_capabilities']['surface-materials'] = [1]
+            with self.assertRaises(ValueError):
+                select([str(pack)], host_with_cap)
+
+            manifest['native_payload']['required_capabilities'] = {'surface-materials': 1}
+            (pack / 'pack.json').write_text(json.dumps(manifest))
+
+            # Host without surface-materials capability must reject the pack.
+            with self.assertRaises(ValueError):
+                select([str(pack)], self.host())
+
+            cache_dir = root / 'cache'
+            cache1 = VerificationCache(cache_dir)
+            chosen = select([str(pack)], host_with_cap, verification=cache1)
+            cache1.save()
+            env = prepare(chosen, host_with_cap, root / 'launch-surf')
+            self.assertEqual(Path(env['MW34_GROUND_SURFACE_MATERIALS']), surf_path.resolve())
+
+            # Corrupting the BWSFM1 file on disk invalidates VerificationCache and fails select().
+            bad_bytes = bytearray(surf_bytes)
+            bad_bytes[-1] ^= 0xFF
+            surf_path.write_bytes(bytes(bad_bytes))
+            cache2 = VerificationCache(cache_dir)
+            with self.assertRaises(ValueError):
+                select([str(pack)], host_with_cap, verification=cache2)
+
 if __name__=='__main__':unittest.main()

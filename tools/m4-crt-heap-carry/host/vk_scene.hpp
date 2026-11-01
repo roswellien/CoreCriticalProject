@@ -127,6 +127,8 @@ struct ModelInstance {
     float diagnostic_fog_factor{1.f};
     bool world{};
     std::array<float, 12> sun_normal{}, sun_world{};
+    std::array<float, 3> sun_eye{};
+    bool sun_eye_valid{};
     bool sun_eligible{};
     std::uint64_t shadow_source{};
     std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
@@ -142,6 +144,7 @@ struct Draw {
     unsigned first, count;
     int texture;
     int normal_texture{-1};
+    int height_texture{-1};
     unsigned sampler;
     PipelineKey key;
     Push push;
@@ -1038,6 +1041,8 @@ class Renderer {
         }
         const ShadowFrame shadowFrame = prepare_shadow(s, environment);
         const auto fixtureLights = prepare_fixture_shadows(s, bound);
+        // One POM predicate per draw keeps the uniform and set 2 height binding in agreement.
+        std::vector<unsigned char> pomActive(s.draws.size(), 0);
         // Upload memory can be write-combined: never read it for CPU comparisons.
         mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
         std::vector<unsigned> sunUniformIds(s.draws.size());
@@ -1120,6 +1125,43 @@ class Renderer {
                           (draw.sun_tl || (draw.model && draw.model->world)))))
                         mw34::detail::uniform(u, draw.detail_role, s.detail_time);
                     u.detail_motion[3] = draw.key.blend ? -1.f : environment.night_world_gain;
+                    if (environment.pom_enabled && mw34::materials::normal_maps_enabled() &&
+                        draw.normal_texture >= 0 && draw.height_texture >= 0 &&
+                        size_t(draw.height_texture) < bound.size() && draw.surface_material && !draw.key.blend && !(draw.push.mode[0] & 32U) &&
+                        !draw.sky && !draw.condition_schematic && !draw.detail_role &&
+                        u.extra[1] > 0.f) {
+                        const auto &mat = *draw.surface_material;
+                        std::array<float, 3> eye{};
+                        bool eye_ok = false;
+                        if (draw.model && draw.model->sun_eye_valid) {
+                            eye = draw.model->sun_eye;
+                            eye_ok = true;
+                        } else if (draw.sun_tl && !draw.sky) {
+                            eye = {draw.sun_tl->camera_world[3], draw.sun_tl->camera_world[7],
+                                   draw.sun_tl->camera_world[11]};
+                            eye_ok = true;
+                        } else if (s.world_eye_valid) {
+                            eye = s.world_eye;
+                            eye_ok = true;
+                        } else if (skyEyeValid) {
+                            eye = {skyEye[3], skyEye[7], skyEye[11]};
+                            eye_ok = true;
+                        }
+                        if (eye_ok) {
+                            const float max_dist = std::max(4.0f, environment.pom_max_distance);
+                            const float fade_start = 0.65f * max_dist;
+                            const unsigned addr_packed =
+                                (mat.address_mode_u & 15U) | ((mat.address_mode_v & 15U) << 4U);
+                            u.pom_params = {1.0f, mat.height_reference, mat.height_amplitude, 32.0f};
+                            u.pom_uv_transform = {mat.uv_scale[0], mat.uv_scale[1],
+                                                  mat.uv_offset[0], mat.uv_offset[1]};
+                            u.pom_atlas_rect = mat.atlas_rect;
+                            u.pom_fade = {float(addr_packed), fade_start, max_dist,
+                                          float(environment.pom_debug)};
+                            u.pom_eye = {eye[0], eye[1], eye[2], 1.0f};
+                            pomActive[at] = 1;
+                        }
+                    }
                     s.emissions.apply(draw.emission_index, u);
                     sunUniformIds[at] = uniformRuns.identify(u);
                     std::memcpy(static_cast<unsigned char *>(sunBuffer.mapped) + at * sunStride, &u,
@@ -1160,7 +1202,22 @@ class Renderer {
             drawSets[i] = it->second;
         }
         fixture_shadow_sets(sets);
-        std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> normalSets;
+        struct NormalSetKey {
+            Tex *normal{};
+            unsigned normal_sampler{};
+            Tex *height{};
+            unsigned height_sampler{};
+            bool operator<(const NormalSetKey &o) const {
+                if (normal != o.normal)
+                    return normal < o.normal;
+                if (normal_sampler != o.normal_sampler)
+                    return normal_sampler < o.normal_sampler;
+                if (height != o.height)
+                    return height < o.height;
+                return height_sampler < o.height_sampler;
+            }
+        };
+        std::map<NormalSetKey, VkDescriptorSet> normalSets;
         std::vector<VkDescriptorSet> drawNormalSets(s.draws.size());
         if (mw34::sun::settings().enabled) {
             for (size_t i = 0; i < s.draws.size(); ++i) {
@@ -1178,7 +1235,14 @@ class Renderer {
                              : &flatNormal;
                 const unsigned normal_sampler =
                     d.detail_role > 0 && d.detail_role < 3 ? 0x10113U : d.sampler;
-                auto it = normalSets.find({t, normal_sampler});
+                const bool height_active = pomActive[i] != 0;
+                Tex *ht = height_active ? bound[size_t(d.height_texture)] : &zeroHeight;
+                const unsigned height_sampler =
+                    height_active ? (0x10003U | ((d.surface_material->address_mode_u & 15U) << 4U) |
+                                     ((d.surface_material->address_mode_v & 15U) << 8U))
+                                  : normal_sampler;
+                const NormalSetKey key{t, normal_sampler, ht, height_sampler};
+                auto it = normalSets.find(key);
                 if (it == normalSets.end()) {
                     VkDescriptorSetAllocateInfo ai{};
                     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1187,16 +1251,25 @@ class Renderer {
                     ai.pSetLayouts = &normalSetLayout;
                     VkDescriptorSet set{};
                     check(f.vkAllocateDescriptorSets(device, &ai, &set), "normal descriptor set");
-                    VkDescriptorImageInfo info{sampler(normal_sampler), t->view,
-                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                    VkWriteDescriptorSet w{};
-                    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    w.dstSet = set;
-                    w.descriptorCount = 1;
-                    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    w.pImageInfo = &info;
-                    f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
-                    it = normalSets.emplace(std::make_pair(t, normal_sampler), set).first;
+                    VkDescriptorImageInfo normalInfo{sampler(normal_sampler), t->view,
+                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    VkDescriptorImageInfo heightInfo{sampler(height_sampler), ht->view,
+                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    std::array<VkWriteDescriptorSet, 2> w{};
+                    w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w[0].dstSet = set;
+                    w[0].dstBinding = 0;
+                    w[0].descriptorCount = 1;
+                    w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    w[0].pImageInfo = &normalInfo;
+                    w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w[1].dstSet = set;
+                    w[1].dstBinding = 1;
+                    w[1].descriptorCount = 1;
+                    w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    w[1].pImageInfo = &heightInfo;
+                    f.vkUpdateDescriptorSets(device, 2, w.data(), 0, nullptr);
+                    it = normalSets.emplace(key, set).first;
                 }
                 drawNormalSets[i] = it->second;
             }
@@ -2158,7 +2231,7 @@ class Renderer {
     float scale = 1.f, scale_req = 1.f, scale_x = 1.f;
     bool target_frontend{};
     unsigned rw{}, rh{};
-    Tex white, flatNormal;
+    Tex white, flatNormal, zeroHeight;
     std::map<std::uint64_t, Tex> textures;
     std::map<std::uint64_t, VkPipeline> pipelines;
     std::map<unsigned, VkSampler> samplers;
@@ -2569,12 +2642,15 @@ class Renderer {
                 si.pBindings = sb.data();
                 check(f.vkCreateDescriptorSetLayout(device, &si, nullptr, &sunSetLayout),
                       "sun descriptor layout");
-                VkDescriptorSetLayoutBinding nb{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                                                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                const std::array<VkDescriptorSetLayoutBinding, 2> nb{
+                    {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                      nullptr},
+                     {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                      nullptr}}};
                 VkDescriptorSetLayoutCreateInfo ni{};
                 ni.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-                ni.bindingCount = 1;
-                ni.pBindings = &nb;
+                ni.bindingCount = 2;
+                ni.pBindings = nb.data();
                 check(f.vkCreateDescriptorSetLayout(device, &ni, nullptr, &normalSetLayout),
                       "normal descriptor layout");
                 sets[1] = sunSetLayout;
@@ -2676,11 +2752,14 @@ class Renderer {
         // 1x1 opaque white texture for draws without a texture (D3DTA_TEXTURE then reads 1.0).
         create(white, 1, 1);
         create(flatNormal, 1, 1);
-        ensure(texUpload, 8, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        create(zeroHeight, 1, 1);
+        ensure(texUpload, 12, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         const std::uint32_t one = 0xffffffffu;
         const std::uint32_t flat_norm = 0xffff8080u;
+        const std::uint32_t zero_height = 0xff000000u;
         std::memcpy(texUpload.mapped, &one, 4);
         std::memcpy(static_cast<char *>(texUpload.mapped) + 4, &flat_norm, 4);
+        std::memcpy(static_cast<char *>(texUpload.mapped) + 8, &zero_height, 4);
         check(f.vkResetCommandPool(device, commandPool, 0), "reset command pool");
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -2691,13 +2770,21 @@ class Renderer {
         barrier(flatNormal.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        barrier(zeroHeight.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         copyIn(texUpload.buffer, 0, white.image, 1, 1, VK_IMAGE_ASPECT_COLOR_BIT);
         copyIn(texUpload.buffer, 4, flatNormal.image, 1, 1, VK_IMAGE_ASPECT_COLOR_BIT);
+        copyIn(texUpload.buffer, 8, zeroHeight.image, 1, 1, VK_IMAGE_ASPECT_COLOR_BIT);
         barrier(white.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         barrier(flatNormal.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        barrier(zeroHeight.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -2720,6 +2807,7 @@ class Renderer {
         check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait");
         white.valid = true;
         flatNormal.valid = true;
+        zeroHeight.valid = true;
         pipelineWarmup.load(forPresent ? "present" : "scene");
         unsigned warmed = 0;
         for (auto key : pipelineWarmup.states()) {
@@ -3032,7 +3120,7 @@ class Renderer {
         if (descriptorPool)
             f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
         const std::array<VkDescriptorPoolSize, 3> ps{
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 2 + 2},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 3 + 2},
              {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
              {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}}};
         VkDescriptorPoolCreateInfo pi{};
@@ -3580,6 +3668,7 @@ class Renderer {
             destroy(t);
         destroy(white);
         destroy(flatNormal);
+        destroy(zeroHeight);
         for (auto &[k, p] : pipelines)
             f.vkDestroyPipeline(device, p, nullptr);
         for (auto &[k, s] : samplers)
