@@ -199,8 +199,8 @@
       "classification": "authored-host-source"
     },
     "d3d_provider.inc": {
-      "sha256": "3b1e27f13a0b1eb8bb65953445820263605f82a1b8d6bcccf41e255ea8aa0cf9",
-      "bytes": 46753,
+      "sha256": "56248be9d2bebf53f7f223cee90ba672d51910d73cb1f7150ee2036a6a7d6a6d",
+      "bytes": 46647,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -289,8 +289,8 @@
       "classification": "authored-host-source"
     },
     "effect_scene_frag.h": {
-      "sha256": "d2786581ad0f2f72a343ccc5266aeca4b4b16c5f5db0f3992a44464db6cb65a9",
-      "bytes": 258702,
+      "sha256": "90a15fed95d81547b25bc5d2307c9ccd949e93ca78dd398b5b88296153e7eca9",
+      "bytes": 259522,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -541,8 +541,8 @@
       "classification": "authored-host-source"
     },
     "mesh_override_stage.inc": {
-      "sha256": "88d6defaf3fa8aec7d526148be3f3e5999f04a3306d7cd3b983644c33fb7165a",
-      "bytes": 60633,
+      "sha256": "9ea5023956a697d35286b121abff95df19fb3fb555cafc554ab088a197c6d0b4",
+      "bytes": 60327,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -693,14 +693,14 @@
     "parallax_material.glsl": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "sha256": "b080f8957c74d355b89e172bff66a9be88f71742c1dbb9e282b5b1d3e28fcb5f",
-      "bytes": 7405
+      "sha256": "d424cdf5ee83dd70fe2a916e137c47ba1e3e88148bf441dc94c6b75d9aa64726",
+      "bytes": 7726
     },
     "parallax_materials.hpp": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "sha256": "ed7e2d81420a2ac76452dcc90d867050eb20f3ef38acdaa01f54f0ee0b37b79e",
-      "bytes": 14006
+      "sha256": "6b550c9d7ad71c12c5abfc6a0325fcf026b6f90f38164ca5beb22b11a2a6096a",
+      "bytes": 14204
     },
     "parser_stage.hpp": {
       "sha256": "207f0076b2ce0508b18d8489aba8a0accbb7c3fe8e5e283cb5162ab0cb63a955",
@@ -823,8 +823,8 @@
       "classification": "authored-host-source"
     },
     "sun_scene_frag.h": {
-      "sha256": "1890e4d82ab875e14239da38fb368f68bf084ec2f8d7e64c2d17ed7053b396e5",
-      "bytes": 213802,
+      "sha256": "70e8ed03be486545b2a015689125e27a9b086b12a1ca883f9ff6082da6e06fb4",
+      "bytes": 214622,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -961,7 +961,7 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "673e5b3569b13f487289a4d4f04c98d49f88ac4009183cfc9392ab269aa51659",
+      "sha256": "d9be8c295e70d537ecdcedc31262b77bf3f6f734811022a5630baac110aff37d",
       "bytes": 202745,
       "decision": "commit",
       "classification": "authored-host-source"

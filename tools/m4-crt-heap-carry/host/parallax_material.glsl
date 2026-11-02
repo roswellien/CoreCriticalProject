@@ -80,8 +80,9 @@ bool pomEvaluate(
     ivec2 tex_size_i = max(textureSize(heightMap, 0), ivec2(1));
     vec2 tex_size = vec2(tex_size_i);
     vec2 inv_tex_size = 1.0 / tex_size;
-    vec2 ddx_scaled = duv1 * sun.pomUvTransform.xy;
-    vec2 ddy_scaled = duv2 * sun.pomUvTransform.xy;
+    vec2 atlas_span = sun.pomAtlasRect.zw - sun.pomAtlasRect.xy;
+    vec2 ddx_scaled = duv1 * sun.pomUvTransform.xy * atlas_span;
+    vec2 ddy_scaled = duv2 * sun.pomUvTransform.xy * atlas_span;
     out_ddx_uv = duv1;
     out_ddy_uv = duv2;
 
@@ -103,24 +104,29 @@ bool pomEvaluate(
         return false;
     }
 
-    // Orthonormal tangent basis aligned with world units.
+    // Reconstruct tangent derivatives in world units.
     // Cotangent identity: dp1 * duv2.y - dp2 * duv1.y = dP/du * uv_det.
     vec3 dPdu = (dp1 * duv2.y - dp2 * duv1.y) / uv_det;
     vec3 dPdv = (dp2 * duv1.x - dp1 * duv2.x) / uv_det;
-    float du_world = max(length(dPdu), 1e-4);
-    float dv_world = max(length(dPdv), 1e-4);
-    float handedness = uv_det < 0.0 ? -1.0 : 1.0;
-
-    vec3 T_unit = normalize(dPdu - N * dot(N, dPdu));
-    vec3 B_ortho = cross(N, T_unit) * handedness;
-    vec3 B_proj = dPdv - N * dot(N, dPdv);
-    vec3 B_unit = dot(B_proj, B_proj) > 1e-12 ? normalize(B_proj) : B_ortho;
-    if (dot(cross(T_unit, B_unit), N) * handedness < 0.0) {
-        B_unit = -B_unit;
+    vec3 tangent_u = dPdu - N * dot(N, dPdu);
+    vec3 tangent_v = dPdv - N * dot(N, dPdv);
+    float metric_uu = dot(tangent_u, tangent_u);
+    float metric_uv = dot(tangent_u, tangent_v);
+    float metric_vv = dot(tangent_v, tangent_v);
+    float metric_det = metric_uu * metric_vv - metric_uv * metric_uv;
+    if (metric_det <= 1e-12 * metric_uu * metric_vv) {
+        if (debug_on) {
+            out_debug_color = vec3(1.0, 0.2, 0.1);
+            return true;
+        }
+        return false;
     }
 
-    // View ray step in raw UV per unit world height.
-    vec2 view_uv_per_world = vec2(dot(V, T_unit) / du_world, dot(V, B_unit) / dv_world);
+    // Reciprocal tangent basis avoids shearing on non-orthogonal UV charts.
+    float view_u = dot(V, tangent_u);
+    float view_v = dot(V, tangent_v);
+    vec2 view_uv_per_world = vec2((view_u * metric_vv - view_v * metric_uv) / metric_det,
+                                  (view_v * metric_uu - view_u * metric_uv) / metric_det);
     vec2 full_delta_uv = -view_uv_per_world * (effective_amp / max(ndotv, 0.08));
     float max_uv_span = 0.125;
     float delta_len = length(full_delta_uv);
