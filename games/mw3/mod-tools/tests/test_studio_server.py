@@ -99,6 +99,46 @@ def test_studio_api():
         if test_folder.is_dir():
             shutil.rmtree(test_folder)
 
+        # 4. Test POST /api/export-campaign
+        sample_campaign = {
+            "campaign_id": "test_api_campaign",
+            "campaign_title": "Test Campaign",
+            "author": "API Tester",
+            "version": "1.0.0",
+            "missions": [
+                {
+                    "mission_id": "m1_test",
+                    "pack_id": "iron_ridge_outpost",
+                    "title": "Stage 1: Beachhead",
+                    "briefing_text": "Establish beachhead at Iron Ridge.",
+                }
+            ],
+        }
+        req_camp = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/export-campaign",
+            data=json.dumps(sample_campaign).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req_camp) as resp:
+            assert resp.status == 200
+            res_camp = json.loads(resp.read().decode("utf-8"))
+            assert res_camp["status"] == "ok"
+            assert res_camp["campaign_id"] == "test_api_campaign"
+            print("[OK] POST /api/export-campaign compiled and returned ok")
+
+        # 5. Test GET /api/list-campaigns
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/list-campaigns") as resp:
+            assert resp.status == 200
+            data_camp = json.loads(resp.read().decode("utf-8"))
+            assert data_camp["status"] == "ok"
+            assert any(c["campaign_id"] == "test_api_campaign" for c in data_camp["campaigns"])
+            print(f"[OK] GET /api/list-campaigns returned {len(data_camp['campaigns'])} campaigns")
+
+        # Cleanup test campaign
+        test_camp_folder = ROOT / "mods/campaign-packs/test_api_campaign"
+        if test_camp_folder.is_dir():
+            shutil.rmtree(test_camp_folder)
+
         print("\nAll Studio API tests PASSED successfully!")
     finally:
         server.shutdown()

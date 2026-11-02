@@ -55,6 +55,30 @@
 
             <div class="header-actions">
                 <button
+                    id="btn-mode-toggle"
+                    class="btn btn-primary"
+                    onclick="toggleViewMode()"
+                    title="Toggle between 2D Top-Down Tactical Map and 3D Perspective Studio (Tab)"
+                >
+                    🗺️ Mode: 3D View
+                </button>
+                <button
+                    id="btn-atmosphere"
+                    class="btn"
+                    onclick="openAtmosphereModal()"
+                    title="Open Time of Day, Atmosphere & Weather Studio (A)"
+                >
+                    ⛅ Atmosphere & Weather
+                </button>
+                <button
+                    id="btn-campaign"
+                    class="btn"
+                    onclick="openCampaignModal()"
+                    title="Design and sequence multi-mission campaigns"
+                >
+                    📜 Campaign Creator
+                </button>
+                <button
                     id="btn-objectives"
                     class="btn"
                     title="Edit mission objectives and intel briefing"
@@ -96,154 +120,175 @@
                     <button class="tab-btn active">Visual Asset Palette</button>
                 </div>
                 <div class="sidebar-content">
-                    <div class="section-title">🌲 In-Game Environment & Props</div>
-                    <div class="asset-grid">
-                        <div class="asset-card" data-type="bridge_span">
+                    <!-- Palette Search and Category Filters -->
+                    <div style="margin-bottom: 12px;">
+                        <input
+                            type="text"
+                            id="asset-search-input"
+                            class="text-input"
+                            placeholder="🔍 Filter assets (e.g. Mad Cat, Turret)..."
+                            style="width: 100%; margin-bottom: 8px; font-size: 11px;"
+                            oninput="filterAssetPalette(this.value)"
+                        />
+                        <div class="palette-pills-row">
+                            <div class="palette-pill active" onclick="setPaletteCategory('all')">All</div>
+                            <div class="palette-pill" onclick="setPaletteCategory('combat')">Combat</div>
+                            <div class="palette-pill" onclick="setPaletteCategory('defense')">Defenses</div>
+                            <div class="palette-pill" onclick="setPaletteCategory('facility')">Facilities</div>
+                            <div class="palette-pill" onclick="setPaletteCategory('props')">Props</div>
+                            <div class="palette-pill" onclick="setPaletteCategory('tactical')">Tactical</div>
+                            <div class="palette-pill" onclick="setPaletteCategory('trigger')">Triggers</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title" data-category="props">🌲 In-Game Environment & Props</div>
+                    <div class="asset-grid" data-category="props">
+                        <div class="asset-card" data-type="bridge_span" data-category="props">
                             <div class="asset-icon">🌉</div>
                             <div class="asset-name">Bridge Span</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="ramp">
+                        <div class="asset-card" data-type="ramp" data-category="props">
                             <div class="asset-icon">📐</div>
                             <div class="asset-name">Vehicle Ramp</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="dock">
+                        <div class="asset-card" data-type="dock" data-category="props">
                             <div class="asset-icon">⚓</div>
                             <div class="asset-name">Shoreline Dock</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="defense_wall">
+                        <div class="asset-card" data-type="defense_wall" data-category="props">
                             <div class="asset-icon">🧱</div>
                             <div class="asset-name">Defense Wall</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="security_gate">
+                        <div class="asset-card" data-type="security_gate" data-category="props">
                             <div class="asset-icon">🚧</div>
                             <div class="asset-name">Security Gate</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="powerline_pole">
+                        <div class="asset-card" data-type="powerline_pole" data-category="props">
                             <div class="asset-icon">⚡</div>
                             <div class="asset-name">Power Pole</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
                     </div>
 
-                    <div class="section-title">🛡️ In-Game Defenses</div>
-                    <div class="asset-grid">
-                        <div class="asset-card" data-type="turret_srm">
+                    <div class="section-title" data-category="defense">🛡️ In-Game Defenses</div>
+                    <div class="asset-grid" data-category="defense">
+                        <div class="asset-card" data-type="turret_srm" data-category="defense">
                             <div class="asset-icon">🚀</div>
                             <div class="asset-name">SRM Turret</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="turret_laser">
+                        <div class="asset-card" data-type="turret_laser" data-category="defense">
                             <div class="asset-icon">⚡</div>
                             <div class="asset-name">Laser Tower</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
                     </div>
 
-                    <div class="section-title">🏛️ In-Game Base Structures</div>
-                    <div class="asset-grid">
-                        <div class="asset-card" data-type="bunker">
+                    <div class="section-title" data-category="facility">🏛️ In-Game Base Structures</div>
+                    <div class="asset-grid" data-category="facility">
+                        <div class="asset-card" data-type="bunker" data-category="facility">
                             <div class="asset-icon">🏢</div>
                             <div class="asset-name">Command Bunker</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="comm_center">
+                        <div class="asset-card" data-type="comm_center" data-category="facility">
                             <div class="asset-icon">📡</div>
                             <div class="asset-name">Radar Comms Dish</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="fuel_tank">
+                        <div class="asset-card" data-type="fuel_tank" data-category="facility">
                             <div class="asset-icon">🛢️</div>
                             <div class="asset-name">Coolant Silo</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="city_building">
+                        <div class="asset-card" data-type="city_building" data-category="facility">
                             <div class="asset-icon">🏬</div>
                             <div class="asset-name">City Garrison</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="repair_station">
+                        <div class="asset-card" data-type="repair_station" data-category="facility">
                             <div class="asset-icon">🔧</div>
                             <div class="asset-name">MFB Gantry</div>
                             <div class="asset-badge">Mech Service</div>
                         </div>
-                        <div class="asset-card" data-type="factory">
+                        <div class="asset-card" data-type="factory" data-category="facility">
                             <div class="asset-icon">🏭</div>
                             <div class="asset-name">Mech Factory</div>
                             <div class="asset-badge">Industrial</div>
                         </div>
                     </div>
 
-                    <div class="section-title">🤖 In-Game BattleMechs</div>
-                    <div class="asset-grid">
-                        <div class="asset-card" data-type="mech_madcat">
+                    <div class="section-title" data-category="combat">🤖 In-Game BattleMechs</div>
+                    <div class="asset-grid" data-category="combat">
+                        <div class="asset-card" data-type="mech_madcat" data-category="combat">
                             <div class="asset-icon">🦾</div>
                             <div class="asset-name">Mad Cat / Timber</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="mech_bushwacker">
+                        <div class="asset-card" data-type="mech_bushwacker" data-category="combat">
                             <div class="asset-icon">🦾</div>
                             <div class="asset-name">Bushwacker</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="mech_thor">
+                        <div class="asset-card" data-type="mech_thor" data-category="combat">
                             <div class="asset-icon">🦾</div>
                             <div class="asset-name">Thor / Summoner</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="mech_shadowcat">
+                        <div class="asset-card" data-type="mech_shadowcat" data-category="combat">
                             <div class="asset-icon">🦾</div>
                             <div class="asset-name">Shadow Cat</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="mech_vulture">
+                        <div class="asset-card" data-type="mech_vulture" data-category="combat">
                             <div class="asset-icon">🦾</div>
                             <div class="asset-name">Vulture / Mad Dog</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
-                        <div class="asset-card" data-type="mech_daishi">
+                        <div class="asset-card" data-type="mech_daishi" data-category="combat">
                             <div class="asset-icon">🦾</div>
                             <div class="asset-name">Daishi / Dire Wolf</div>
                             <div class="asset-badge">In-Game 3D</div>
                         </div>
                     </div>
 
-                    <div class="section-title">🎯 Tactical Spawns & Navs</div>
-                    <div class="asset-grid">
-                        <div class="asset-card" data-type="spawn">
+                    <div class="section-title" data-category="tactical">🎯 Tactical Spawns & Navs</div>
+                    <div class="asset-grid" data-category="tactical">
+                        <div class="asset-card" data-type="spawn" data-category="tactical">
                             <div class="asset-icon">🪂</div>
                             <div class="asset-name">Drop Zone</div>
                             <div class="asset-badge">Player Spawn</div>
                         </div>
-                        <div class="asset-card" data-type="nav">
+                        <div class="asset-card" data-type="nav" data-category="tactical">
                             <div class="asset-icon">🚩</div>
                             <div class="asset-name">Nav Point</div>
                             <div class="asset-badge">Objective Nav</div>
                         </div>
                     </div>
 
-                    <div class="section-title">⚡ Mission Triggers & Volumes</div>
-                    <div class="asset-grid">
-                        <div class="asset-card" data-type="trig_evac">
+                    <div class="section-title" data-category="trigger">⚡ Mission Triggers & Volumes</div>
+                    <div class="asset-grid" data-category="trigger">
+                        <div class="asset-card" data-type="trig_evac" data-category="trigger">
                             <div class="asset-icon">🚁</div>
                             <div class="asset-name">Evac Zone</div>
                             <div class="asset-badge">Mission Goal</div>
                         </div>
-                        <div class="asset-card" data-type="trig_ambush">
+                        <div class="asset-card" data-type="trig_ambush" data-category="trigger">
                             <div class="asset-icon">⚠️</div>
                             <div class="asset-name">Ambush Trigger</div>
                             <div class="asset-badge">Reinforcements</div>
                         </div>
-                        <div class="asset-card" data-type="trig_sensor">
+                        <div class="asset-card" data-type="trig_sensor" data-category="trigger">
                             <div class="asset-icon">📡</div>
                             <div class="asset-name">Sensor Grid</div>
                             <div class="asset-badge">Perimeter Alert</div>
                         </div>
-                        <div class="asset-card" data-type="trig_minefield">
+                        <div class="asset-card" data-type="trig_minefield" data-category="trigger">
                             <div class="asset-icon">💥</div>
                             <div class="asset-name">Minefield</div>
                             <div class="asset-badge">Hazard Zone</div>
@@ -287,15 +332,75 @@
                         id="btn-view-orbit"
                         class="hud-btn active"
                         onclick="setViewMode('orbit')"
+                        title="Full 3D Perspective Studio View (O)"
                     >
-                        🌐 3D Orbit (O)
+                        🌐 3D Perspective (O)
                     </button>
-                    <button id="btn-view-topdown" class="hud-btn" onclick="setViewMode('topdown')">
-                        📐 Top-Down (T)
+                    <button
+                        id="btn-view-topdown"
+                        class="hud-btn"
+                        onclick="setViewMode('topdown')"
+                        title="2D Top-Down Tactical Orthographic Map (T)"
+                    >
+                        🗺️ 2D Tactical View (T)
                     </button>
-                    <button id="btn-view-iso" class="hud-btn" onclick="setViewMode('iso')">
-                        🎲 Isometric (I)
+                    <button
+                        id="btn-view-iso"
+                        class="hud-btn"
+                        onclick="setViewMode('iso')"
+                        title="Isometric 3D Angle (I)"
+                    >
+                        📐 Isometric (I)
                     </button>
+                    <button
+                        id="btn-view-atmo"
+                        class="hud-btn"
+                        onclick="openAtmosphereModal()"
+                        title="Atmosphere, Lighting & Weather Studio (A)"
+                    >
+                        ⛅ Atmosphere (A)
+                    </button>
+                    <button
+                        id="btn-sculpt-mode"
+                        class="hud-btn"
+                        onclick="toggleSculptMode()"
+                        title="Real-Time Brush Terrain Sculpting (S)"
+                    >
+                        ⛰️ Sculpt Terrain (S)
+                    </button>
+                </div>
+
+                <!-- Real-Time Terrain Sculpting Toolbar -->
+                <div id="sculpt-toolbar" class="sculpt-toolbar" style="display: none;">
+                    <div style="font-size: 11px; font-weight: 800; color: var(--accent-cyan); text-transform: uppercase;">
+                        ⛰️ Sculpt Brush:
+                    </div>
+                    <div style="display: flex; gap: 4px;">
+                        <button class="sculpt-mode-btn active" id="sculpt-btn-raise" onclick="setSculptBrushMode('raise')" title="Pull Terrain Vertices Up">⬆️ Raise</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-lower" onclick="setSculptBrushMode('lower')" title="Push Terrain Vertices Down">⬇️ Lower</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-flatten" onclick="setSculptBrushMode('flatten')" title="Flatten to Clicked Plateau Height">➖ Flatten</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-smooth" onclick="setSculptBrushMode('smooth')" title="Smooth Rough Slopes">〰️ Smooth</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-noise" onclick="setSculptBrushMode('noise')" title="Add Rugged Procedural Noise">✨ Noise</button>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px; font-size: 11px;">
+                        <span>Radius:</span>
+                        <input type="range" id="sculpt-radius" class="range-slider" min="10" max="250" value="45" style="width: 75px;" oninput="updateSculptParams()" />
+                        <span id="sculpt-radius-val" style="font-family: var(--font-mono); width: 35px;">45m</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px; font-size: 11px;">
+                        <span>Strength:</span>
+                        <input type="range" id="sculpt-strength" class="range-slider" min="0.2" max="4.0" step="0.1" value="1.2" style="width: 65px;" oninput="updateSculptParams()" />
+                        <span id="sculpt-strength-val" style="font-family: var(--font-mono); width: 28px;">1.2</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px; font-size: 11px;">
+                        <span>Falloff:</span>
+                        <select id="sculpt-falloff" class="select-input" style="font-size: 10px; padding: 2px 4px;" onchange="updateSculptParams()">
+                            <option value="smooth">Smooth Bell</option>
+                            <option value="linear">Linear</option>
+                            <option value="sharp">Sharp Cone</option>
+                        </select>
+                    </div>
+                    <button class="btn" style="padding: 2px 8px; font-size: 10px;" onclick="resetSculptedTerrain()" title="Reset modified terrain heights to original map baseline">🔄 Reset</button>
                 </div>
 
                 <!-- Placement Notification Banner -->
@@ -400,6 +505,23 @@
                             </div>
                         </div>
                         <div class="prop-row">
+                            <span class="prop-name">Height Offset</span>
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <input
+                                    type="range"
+                                    id="insp-height-offset"
+                                    class="range-slider"
+                                    min="-20"
+                                    max="100"
+                                    step="1"
+                                    value="0"
+                                />
+                                <span id="insp-height-offset-val" class="prop-value" style="width: 35px"
+                                    >0m</span
+                                >
+                            </div>
+                        </div>
+                        <div class="prop-row">
                             <span class="prop-name">Faction</span>
                             <select id="insp-faction" class="select-input" style="width: 120px">
                                 <option value="player">Player</option>
@@ -443,6 +565,46 @@
                             />
                         </div>
 
+                        <!-- Multi-Tier AI Combat Doctrine (Applied to Mechs, Turrets, Tanks) -->
+                        <div id="insp-ai-section" style="border-top: 1px dashed var(--border-color); padding-top: 10px; margin-top: 10px;">
+                            <div style="font-size: 11px; font-weight: 700; color: var(--accent-amber); text-transform: uppercase; margin-bottom: 8px;">
+                                🤖 Multi-Tier AI & Combat Orders
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Pilot Skill</span>
+                                <select id="insp-ai-skill" class="select-input" style="width: 140px;">
+                                    <option value="regular">Regular (Standard)</option>
+                                    <option value="green">Green (Recruit)</option>
+                                    <option value="veteran">Veteran (Tactical)</option>
+                                    <option value="elite">Elite (Ace Clan)</option>
+                                </select>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Combat Stance</span>
+                                <select id="insp-ai-stance" class="select-input" style="width: 140px;">
+                                    <option value="guard">Guard (Hold Ground)</option>
+                                    <option value="patrol">Patrol (Follow Navs)</option>
+                                    <option value="ambush">Ambush (Wait Trigger)</option>
+                                    <option value="free_fire">Free Fire (Seek & Destroy)</option>
+                                </select>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Engagement Range</span>
+                                <select id="insp-ai-range" class="select-input" style="width: 140px;">
+                                    <option value="medium">Medium (200-500m)</option>
+                                    <option value="short">Short (0-200m)</option>
+                                    <option value="long">Long (500m+ Sniping)</option>
+                                </select>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Retreat/Eject At</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="insp-ai-retreat" class="range-slider" min="0" max="50" step="5" value="15" />
+                                    <span id="insp-ai-retreat-val" class="prop-value" style="width: 35px;">15%</span>
+                                </div>
+                            </div>
+                        </div>
+
                         <div
                             id="insp-trigger-section"
                             style="
@@ -452,6 +614,9 @@
                                 margin-top: 10px;
                             "
                         >
+                            <div style="font-size: 11px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase; margin-bottom: 8px;">
+                                ⚡ Mission Event Scripting
+                            </div>
                             <div class="prop-row">
                                 <span class="prop-name">Trigger Radius</span>
                                 <div style="display: flex; align-items: center; gap: 8px">
@@ -481,7 +646,22 @@
                                     <option value="evac_complete">Complete Evac</option>
                                     <option value="spawn_ambush">Spawn Ambush</option>
                                     <option value="sound_alarm">Perimeter Alarm</option>
+                                    <option value="radio_callout">Radio Callout</option>
                                     <option value="minefield_detonate">Minefield Detonation</option>
+                                </select>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Audio Callout</span>
+                                <select
+                                    id="insp-trigger-audio"
+                                    class="select-input"
+                                    style="width: 140px"
+                                >
+                                    <option value="betty_alarm">Betty: Perimeter Alert</option>
+                                    <option value="radio_clan_incoming">Clan Chatter: Targets Sighted</option>
+                                    <option value="hq_roger">HQ: Orders Received</option>
+                                    <option value="dropship_inbound">Dropship: Inbound for Dustoff</option>
+                                    <option value="custom_file">Custom Audio File (.wav/.ogg)</option>
                                 </select>
                             </div>
                             <div class="prop-row">
@@ -983,6 +1163,240 @@
                     <button onclick="launchGameEngine()" class="btn btn-accent">
                         ▶️ Launch Game Now
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Atmosphere, Lighting & Dynamic Weather Studio Modal -->
+        <div id="atmosphere-modal" class="modal-overlay">
+            <div class="modal-card" style="width: 820px; max-height: 92vh; overflow-y: auto;">
+                <div class="modal-title">
+                    <span>⛅ ATMOSPHERE, LIGHTING & DYNAMIC WEATHER STUDIO</span>
+                </div>
+                <div class="modal-body">
+                    <!-- Top: Time of Day Scrub & Presets -->
+                    <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-size: 12px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase;">
+                                ☀️ Solar Trajectory & 24-Hour Time of Day
+                            </span>
+                            <span id="atmo-tod-display" style="font-family: var(--font-mono); font-size: 14px; font-weight: 800; color: var(--accent-amber); background: rgba(255,170,0,0.12); padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent-amber);">
+                                18:00 (Sunset)
+                            </span>
+                        </div>
+                        <input
+                            type="range"
+                            id="atmo-tod-slider"
+                            class="range-slider"
+                            style="width: 100%; height: 8px; margin-bottom: 10px;"
+                            min="0"
+                            max="24"
+                            step="0.1"
+                            value="18"
+                            oninput="onTimeOfDaySliderChange(this.value)"
+                        />
+                        <div style="display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px;">
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('dawn')">Dawn (06:00)</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('morning')">Morning (09:00)</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('noon')">Noon (12:30)</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('afternoon')">Afternoon (15:30)</div>
+                            <div class="preset-chip active" id="chip-sunset" onclick="applyTimeOfDayPreset('sunset')">Sunset (18:15)</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('dusk')">Dusk (20:00)</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('night')">Night (23:30)</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('stealth')">Stealth (01:00)</div>
+                        </div>
+                    </div>
+
+                    <!-- Middle 2-Column Grid: Sun / Sky vs Weather -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px;">
+                        <!-- Column 1: Sun & Sky Lighting -->
+                        <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">
+                            <div style="font-size: 11px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase; margin-bottom: 10px;">
+                                🔆 Directional Sun & Ambient Lighting
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 8px;">
+                                <span class="prop-name">Sun Azimuth (Heading)</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="atmo-azimuth" class="range-slider" min="0" max="360" value="235" oninput="onAtmosphereDirectInput()" />
+                                    <span id="atmo-azimuth-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">235°</span>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 8px;">
+                                <span class="prop-name">Sun Elevation (Altitude)</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="atmo-elevation" class="range-slider" min="0" max="90" value="28" oninput="onAtmosphereDirectInput()" />
+                                    <span id="atmo-elevation-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">28°</span>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 8px;">
+                                <span class="prop-name">Direct Sun Color & Power</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="color" id="atmo-sun-color" value="#ffbe80" style="width: 28px; height: 24px; border: 1px solid var(--border-color); background: none; cursor: pointer;" oninput="onAtmosphereDirectInput()" />
+                                    <input type="range" id="atmo-sun-strength" class="range-slider" min="0" max="3" step="0.05" value="0.9" oninput="onAtmosphereDirectInput()" />
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 8px;">
+                                <span class="prop-name">Ambient Sky Fill & Power</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="color" id="atmo-ambient-color" value="#615273" style="width: 28px; height: 24px; border: 1px solid var(--border-color); background: none; cursor: pointer;" oninput="onAtmosphereDirectInput()" />
+                                    <input type="range" id="atmo-ambient-strength" class="range-slider" min="0.02" max="1.0" step="0.02" value="0.22" oninput="onAtmosphereDirectInput()" />
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 8px;">
+                                <span class="prop-name">Sky Tint & Fog Distance</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="color" id="atmo-sky-tint" value="#61477a" style="width: 28px; height: 24px; border: 1px solid var(--border-color); background: none; cursor: pointer;" oninput="onAtmosphereDirectInput()" />
+                                    <input type="range" id="atmo-fog-dist" class="range-slider" min="300" max="4000" step="50" value="1200" oninput="onAtmosphereDirectInput()" />
+                                </div>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Realtime Sun Shadows</span>
+                                <input type="checkbox" id="atmo-shadows-check" checked onchange="onAtmosphereDirectInput()" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;" />
+                            </div>
+                        </div>
+
+                        <!-- Column 2: Dynamic Weather System -->
+                        <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">
+                            <div style="font-size: 11px; font-weight: 700; color: var(--accent-amber); text-transform: uppercase; margin-bottom: 10px;">
+                                ⛈️ Dynamic Weather & Atmospheric Effects
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 10px;">
+                                <div class="preset-chip" onclick="applyWeatherPreset('clear')">Clear</div>
+                                <div class="preset-chip" onclick="applyWeatherPreset('rain')">Rain</div>
+                                <div class="preset-chip" onclick="applyWeatherPreset('storm')">Storm ⚡</div>
+                                <div class="preset-chip" onclick="applyWeatherPreset('dust')">Dust</div>
+                                <div class="preset-chip" onclick="applyWeatherPreset('smog')">Smog</div>
+                                <div class="preset-chip" onclick="applyWeatherPreset('heat')">Mirage</div>
+                                <div class="preset-chip" onclick="applyWeatherPreset('volcanic')">Volcano</div>
+                                <div class="preset-chip" onclick="applyWeatherPreset('interior')">Interior</div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 6px;">
+                                <span class="prop-name">Rain Downpour Intensity</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="weather-rain" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
+                                    <span id="weather-rain-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">0%</span>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 6px;">
+                                <span class="prop-name">Surface Wetness / Puddle Sheen</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="weather-wetness" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
+                                    <span id="weather-wetness-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">0%</span>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 6px;">
+                                <span class="prop-name">Lightning Strike System</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer;">
+                                        <input type="checkbox" id="weather-lightning-check" onchange="onAtmosphereDirectInput()" style="accent-color: var(--accent-amber);" /> Enable
+                                    </label>
+                                    <button class="btn" style="padding: 1px 6px; font-size: 10px;" onclick="triggerLightningFlash()">⚡ Test Flash</button>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 6px;">
+                                <span class="prop-name">Desert Dust / Sandstorm</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="weather-dust" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
+                                    <span id="weather-dust-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">0%</span>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 6px;">
+                                <span class="prop-name">Industrial Pollution / Smog</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="weather-smog" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
+                                    <span id="weather-smog-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">0%</span>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 6px;">
+                                <span class="prop-name">Heat Shimmer / Thermal Mirage</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="weather-shimmer" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
+                                    <span id="weather-shimmer-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">0%</span>
+                                </div>
+                            </div>
+                            <div class="prop-row" style="margin-bottom: 6px;">
+                                <span class="prop-name">Volcanic Ash & Lava Underglow</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="range" id="weather-volcano" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
+                                    <span id="weather-volcano-val" style="font-family: var(--font-mono); font-size: 11px; width: 35px;">0%</span>
+                                </div>
+                            </div>
+                            <div class="prop-row">
+                                <span class="prop-name">Underground / Sealed Facility</span>
+                                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer;">
+                                    <input type="checkbox" id="weather-interior-check" onchange="onAtmosphereDirectInput()" style="accent-color: var(--accent-red);" /> Sealed Interior
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" onclick="applyTimeOfDayPreset('sunset')">Reset Sunset Default</button>
+                    <button class="btn btn-primary" onclick="closeAtmosphereModal()">Apply & Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Campaign Creator & Sequence Manager Modal -->
+        <div id="campaign-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" style="width: 820px; max-height: 90vh; display: flex; flex-direction: column;">
+                <div class="modal-title">
+                    📜 Campaign Creator & Mission Sequencer
+                </div>
+                <div class="modal-body" style="overflow-y: auto; flex: 1; padding-right: 6px;">
+                    <!-- Campaign Metadata -->
+                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                        <div>
+                            <span class="input-label">Campaign Title</span>
+                            <input type="text" id="camp-title" class="text-input" value="Operation Damocles" style="width: 100%;" />
+                        </div>
+                        <div>
+                            <span class="input-label">Campaign ID</span>
+                            <input type="text" id="camp-id" class="text-input" value="operation_damocles" style="width: 100%;" />
+                        </div>
+                        <div>
+                            <span class="input-label">Player Faction</span>
+                            <select id="camp-faction" class="select-input" style="width: 100%;">
+                                <option value="Inner Sphere">Inner Sphere</option>
+                                <option value="Clan Smoke Jaguar">Clan Smoke Jaguar</option>
+                                <option value="Mercenary Corps">Mercenary Corps</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 12px;">
+                        <div>
+                            <span class="input-label">Campaign Lore & Strategic Briefing</span>
+                            <textarea id="camp-desc" class="text-input" style="width: 100%; height: 50px; resize: none; font-size: 11px;">Operation Damocles: Deep strike behind Clan Smoke Jaguar lines on Tranquil to disrupt regional communications and neutralize command garrisons.</textarea>
+                        </div>
+                        <div>
+                            <span class="input-label">Theater of Operations</span>
+                            <input type="text" id="camp-theater" class="text-input" value="Tranquil Coastal Basin" style="width: 100%;" />
+                            <div style="margin-top: 6px; display: flex; align-items: center; gap: 6px;">
+                                <input type="checkbox" id="camp-salvage-enabled" checked style="accent-color: var(--accent-cyan);" />
+                                <span style="font-size: 11px;">Carryover Salvage & Repairs</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Mission Sequencer List -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span style="font-size: 12px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase;">
+                            🎯 Mission Progression & Branching Graph
+                        </span>
+                        <button class="btn btn-primary" style="padding: 3px 10px; font-size: 11px;" onclick="addCampaignMission()">
+                            + Add Mission Stage
+                        </button>
+                    </div>
+
+                    <div id="campaign-missions-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto;">
+                        <!-- Dynamic Campaign Mission Cards rendered by JS -->
+                    </div>
+                </div>
+
+                <div class="modal-actions" style="margin-top: 14px;">
+                    <button class="btn" onclick="closeCampaignModal()">Cancel</button>
+                    <button class="btn btn-primary" id="btn-export-campaign" onclick="exportCampaignProject()">⚡ Compile Campaign Pack</button>
+                    <button class="btn btn-accent" id="btn-launch-campaign" onclick="launchCampaignProject()">▶️ Play Campaign</button>
                 </div>
             </div>
         </div>

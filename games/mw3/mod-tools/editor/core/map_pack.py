@@ -20,6 +20,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from .formats import pack_gamez_zbd, pack_reader_zbd
 from .exporter import compute_sha256, build_bank_file
+from .environment import EnvironmentConfig, encode_mw34env1, get_environment_preset
 from ..config import cache_directory, game_directory
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -55,6 +56,12 @@ class MapAsset:
     trigger_radius: float = 40.0
     trigger_action: str = ""
     trigger_message: str = ""
+    trigger_audio: str = "betty_alarm"
+    height_offset: float = 0.0
+    ai_skill: str = "regular"  # green, regular, veteran, elite
+    ai_stance: str = "guard"  # guard, patrol, ambush, free_fire
+    ai_range: str = "medium"  # short, medium, long
+    ai_retreat_health: int = 15
 
 
 @dataclass
@@ -67,20 +74,10 @@ class TerrainConfig:
     height_scale: float = 80.0
     water_level: float = 3.0
     roughness: float = 0.5
+    height_modifications: Dict[str, float] = field(default_factory=dict)
 
 
-@dataclass
-class LightingConfig:
-    """Preview light settings; azimuth/elevation are degrees and colours are RGB gains."""
-
-    preset_name: str = "sunset"
-    azimuth: float = 225.0
-    elevation: float = 35.0
-    strength: float = 0.85
-    ambient: float = 0.20
-    sun_color: List[float] = field(default_factory=lambda: [1.0, 0.85, 0.7])
-    sky_tint: List[float] = field(default_factory=lambda: [0.35, 0.45, 0.75])
-    fog_distance: int = 1100
+LightingConfig = EnvironmentConfig
 
 
 @dataclass
@@ -143,17 +140,9 @@ class MapPackProject:
                 "height_scale": self.terrain.height_scale,
                 "water_level": self.terrain.water_level,
                 "roughness": self.terrain.roughness,
+                "height_modifications": self.terrain.height_modifications,
             },
-            "lighting": {
-                "preset_name": self.lighting.preset_name,
-                "azimuth": self.lighting.azimuth,
-                "elevation": self.lighting.elevation,
-                "strength": self.lighting.strength,
-                "ambient": self.lighting.ambient,
-                "sun_color": self.lighting.sun_color,
-                "sky_tint": self.lighting.sky_tint,
-                "fog_distance": self.lighting.fog_distance,
-            },
+            "lighting": self.lighting.to_dict(),
             "objectives": self.objectives,
             "drop_config": self.drop_config,
             "assets": [
@@ -173,6 +162,12 @@ class MapPackProject:
                     "trigger_radius": a.trigger_radius,
                     "trigger_action": a.trigger_action,
                     "trigger_message": a.trigger_message,
+                    "trigger_audio": a.trigger_audio,
+                    "height_offset": a.height_offset,
+                    "ai_skill": a.ai_skill,
+                    "ai_stance": a.ai_stance,
+                    "ai_range": a.ai_range,
+                    "ai_retreat_health": a.ai_retreat_health,
                 }
                 for a in self.assets
             ],
@@ -199,6 +194,12 @@ class MapPackProject:
                 trigger_radius=float(a.get("trigger_radius", 40.0)),
                 trigger_action=a.get("trigger_action", ""),
                 trigger_message=a.get("trigger_message", ""),
+                trigger_audio=a.get("trigger_audio", "betty_alarm"),
+                height_offset=float(a.get("height_offset", 0.0)),
+                ai_skill=a.get("ai_skill", "regular"),
+                ai_stance=a.get("ai_stance", "guard"),
+                ai_range=a.get("ai_range", "medium"),
+                ai_retreat_health=int(a.get("ai_retreat_health", 15)),
             )
             for a in data.get("assets", [])
         ]
@@ -216,17 +217,9 @@ class MapPackProject:
                 height_scale=float(tc.get("height_scale", 80.0)),
                 water_level=float(tc.get("water_level", 3.0)),
                 roughness=float(tc.get("roughness", 0.5)),
+                height_modifications=tc.get("height_modifications", {}),
             ),
-            lighting=LightingConfig(
-                preset_name=lc.get("preset_name", "sunset"),
-                azimuth=float(lc.get("azimuth", 225.0)),
-                elevation=float(lc.get("elevation", 35.0)),
-                strength=float(lc.get("strength", 0.85)),
-                ambient=float(lc.get("ambient", 0.20)),
-                sun_color=lc.get("sun_color", [1.0, 0.85, 0.7]),
-                sky_tint=lc.get("sky_tint", [0.35, 0.45, 0.75]),
-                fog_distance=int(lc.get("fog_distance", 1100)),
-            ),
+            lighting=EnvironmentConfig.from_dict(lc) if isinstance(lc, dict) else EnvironmentConfig(),
             objectives=data.get("objectives", {
                 "primary": [
                     {"id": "obj_pri_1", "desc": "Neutralize Clan Smoke Jaguar defenders", "target": "any_enemy", "completed": False},
@@ -528,8 +521,17 @@ class MapPackBuilder:
             },
             "lighting_summary": {
                 "preset": project.lighting.preset_name,
+                "time_of_day": project.lighting.time_of_day,
                 "sun_azimuth": project.lighting.azimuth,
                 "sun_elevation": project.lighting.elevation,
+                "weather": {
+                    "rain": project.lighting.rain_intensity,
+                    "wetness": project.lighting.wet_reflection,
+                    "lightning": project.lighting.has_lightning,
+                    "dust": project.lighting.dust_intensity,
+                    "smog": project.lighting.smog_intensity,
+                    "is_interior": project.lighting.is_interior,
+                },
             },
             "objectives_summary": {
                 "primary_count": len(project.objectives.get("primary", [])),
@@ -558,7 +560,25 @@ class MapPackBuilder:
         drop_config_file = pack_folder / "drop_config.json"
         drop_config_file.write_text(json.dumps(project.drop_config, indent=2), encoding="utf-8")
 
-        # 5. Generate Tactical Briefing Text Dossier
+        # 5. Compile MW34ENV1 Native Binary Lighting & Weather Catalog
+        env_file = pack_folder / "environment.json"
+        env_file.write_text(json.dumps(project.lighting.to_dict(), indent=2), encoding="utf-8")
+
+        mission_lighting_bin = pack_folder / "mission-lighting.bin"
+        mission_ident = f"{project.base_operation}m1"
+        try:
+            raw_env_bytes = encode_mw34env1(mission_ident, project.lighting)
+            mission_lighting_bin.write_bytes(raw_env_bytes)
+            modified_records.append({
+                "target": "mission-lighting.bin",
+                "size_bytes": len(raw_env_bytes),
+                "sha256": compute_sha256(mission_lighting_bin),
+                "summary": f"MW34ENV1 binary catalog ({project.lighting.preset_name}, ToD {project.lighting.time_of_day:.1f}h)",
+            })
+        except Exception as e:
+            print(f"Warning: could not encode MW34ENV1 catalog: {e}")
+
+        # 6. Generate Tactical Briefing Text Dossier
         briefing_file = pack_folder / "briefing.txt"
         pri_objs = "\n".join(f"  [ ] {i+1}. {o.get('desc', '')}" for i, o in enumerate(project.objectives.get("primary", [])))
         sec_objs = "\n".join(f"  [ ] {i+1}. {o.get('desc', '')}" for i, o in enumerate(project.objectives.get("secondary", [])))
@@ -618,7 +638,7 @@ DROP FORCE & COMBAT CONFIGURATION:
         merged_redirects.update(redirects)
         build_bank_file(merged_redirects, mod_banks_bin)
 
-        # 7. Generate Play Map Runner Command Script
+        # 8. Generate Play Map Runner Command Script
         run_cmd = pack_folder / f"Play Map - {project.pack_id}.cmd"
         cmd_content = f"""@echo off
 setlocal
@@ -628,16 +648,19 @@ echo ======================================================================
 echo   MECHWARRIOR 3 - CUSTOM MISSION LAUNCH
 echo   Map Title: {project.pack_title} [{project.pack_id}]
 echo   Operation: {project.base_operation.upper()} | Biome: {project.terrain.biome}
+echo   Atmosphere: {project.lighting.preset_name.upper()} | Time: {project.lighting.time_of_day:.1f}h
 echo ======================================================================
 echo.
 type "%MAP_DIR%briefing.txt"
 echo.
-echo Initializing native Vulkan engine redirect banks...
+echo Initializing native Vulkan engine redirect banks and atmosphere...
 set "MW34_REMASTER_BANKS=%MAP_DIR%map-banks.bin"
+set "MW34_MISSION_ENVIRONMENTS=%MAP_DIR%mission-lighting.bin"
+set "MW34_WEATHER=1"
 set "MW34_SUN_AZIMUTH={project.lighting.azimuth}"
 set "MW34_SUN_ELEVATION={project.lighting.elevation}"
-set "MW34_SUN_STRENGTH={project.lighting.strength}"
-set "MW34_SUN_AMBIENT={project.lighting.ambient}"
+set "MW34_SUN_STRENGTH={project.lighting.sun_strength}"
+set "MW34_SUN_AMBIENT={project.lighting.ambient_strength}"
 
 call "launchers\\Play MW3Remaster.cmd" --profile "local\\effect-lighting-r1\\launcher.json" --registry "local\\material-authoring-r1\\normal-registry.json" %*
 if errorlevel 1 (
