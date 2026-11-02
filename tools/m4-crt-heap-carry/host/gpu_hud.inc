@@ -338,7 +338,7 @@ void*hud_jitter_body(State*s,unsigned target,void*p,Body body,bool line=false){H
 void hud_flush(){if(hud_sc.draws.empty())return;if(photo_replay_hide_hud()){hud_begin(*vsurface(host.res_rt));return;}
  try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_begin(*vsurface(host.res_rt));}
 // The lock reverts to the CPU: draws so far reach the target, guest memory is synchronized and unprotected.
-void hud_fallback(){hud_flush();hud_gpu_active=false;++hud_fallbacks;gpu_sync(host.res_rt);}
+void hud_fallback(){mw34::surface::run_cpu_fallback([&]{if(auto*rt=vsurface(host.res_rt);rt&&rt->locks&&rt->lock_access.writable())camera_surface_written(host.res_rt);},[&]{hud_flush();},[&]{if(auto*rt=vsurface(host.res_rt);rt&&rt->locks)rt->lock_access.expose_cpu_access();hud_gpu_active=false;++hud_fallbacks;gpu_sync(host.res_rt);});}
 // Entry interception (enter()): true when the primitive was recorded and the call returned to its caller.
 bool hud_intercept(unsigned target,void*p,void*&result){if(target==0x577ba0||target==0x577bd0){text_hooks(target);return false;}if(!hud_gpu_active)return false;unsigned args;
  if(target==0x55b3c0)args=12;else if(target==0x563b80)args=16;else if(target==0x563db0)args=20;else if(target==0x5630a0)args=4;else if(target==0x5641f0)args=8;else if(target==0x5630c0)args=12;else if(target==0x564080)args=0;else return false;
