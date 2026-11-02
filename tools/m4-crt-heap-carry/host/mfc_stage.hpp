@@ -18,6 +18,7 @@
 #include "early_triangle_commands.hpp"
 #include "controller_input.hpp"
 #include "surface_page_pool.hpp"
+#include "surface_access.hpp"
 #include "texture_backing.hpp"
 #include "menu_wave.hpp"
 #include "sun_camera_binding.hpp"
@@ -149,7 +150,7 @@ inline Body find(unsigned a){struct Slot{unsigned addr;bool valid;Body body;};th
  auto&s=cache[(a>>2)&4095];if(s.valid&&s.addr==a)return s.body;const Body b=find_uncached(a);s={a,true,b};return b;}
 
 struct Import{unsigned cell,bound;std::string dll,name;mutable const void*iface_cache{};mutable bool iface_resolved{};mutable const std::string*label[3]{};/* service-log text by prefix (none, MSVCRT>, GAME>), built once */mutable signed char op=-1;/* IDirect3DDevice3 hot-method selector, resolved once from the name */};
-struct VSurfaceRec{unsigned guest,width,height,pitch,bpp,caps,mem,bytes,attached,clipper,palette;DDCOLORKEY src_key{},dst_key{};bool has_src_key{},has_dst_key{};unsigned locks{};bool primary{};std::array<unsigned,4>tex_masks{0xf800,0x07e0,0x001f,0};unsigned zbuffer{};
+struct VSurfaceRec{unsigned guest,width,height,pitch,bpp,caps,mem,bytes,attached,clipper,palette;DDCOLORKEY src_key{},dst_key{};bool has_src_key{},has_dst_key{};unsigned locks{};mw34::surface::LockAccess lock_access;bool primary{};std::array<unsigned,4>tex_masks{0xf800,0x07e0,0x001f,0};unsigned zbuffer{};
  /* content version, unique across surfaces: advanced by every API path that writes the surface (Unlock,
     Blt/BltFast/colour fills as destination, Texture2::Load, Flip, scene write-back) */
  mutable std::uint64_t version{};mutable mw34::textures::Backing pixels;};
