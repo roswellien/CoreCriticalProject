@@ -46,14 +46,14 @@ except ImportError:
 
 
 FAMILY_PROFILES = {
-    "cliff": {"height_amplitude": 0.50, "max_displacement": 0.50, "color_weight": 0.10},
-    "rock": {"height_amplitude": 0.45, "max_displacement": 0.45, "color_weight": 0.09},
-    "road": {"height_amplitude": 0.20, "max_displacement": 0.20, "color_weight": 0.05},
-    "asphalt": {"height_amplitude": 0.18, "max_displacement": 0.18, "color_weight": 0.04},
-    "sand": {"height_amplitude": 0.25, "max_displacement": 0.25, "color_weight": 0.08},
-    "beach": {"height_amplitude": 0.22, "max_displacement": 0.22, "color_weight": 0.07},
-    "terrain": {"height_amplitude": 0.35, "max_displacement": 0.35, "color_weight": 0.08},
-    "default": {"height_amplitude": 0.30, "max_displacement": 0.30, "color_weight": 0.06},
+    "cliff": {"height_amplitude": 0.50, "max_displacement": 0.50, "color_weight": 0.10, "roughness": 0.85, "reflectivity": 0.03, "metallic": 0.0},
+    "rock": {"height_amplitude": 0.45, "max_displacement": 0.45, "color_weight": 0.09, "roughness": 0.80, "reflectivity": 0.04, "metallic": 0.0},
+    "road": {"height_amplitude": 0.20, "max_displacement": 0.20, "color_weight": 0.05, "roughness": 0.60, "reflectivity": 0.05, "metallic": 0.0},
+    "asphalt": {"height_amplitude": 0.18, "max_displacement": 0.18, "color_weight": 0.04, "roughness": 0.55, "reflectivity": 0.05, "metallic": 0.0},
+    "sand": {"height_amplitude": 0.25, "max_displacement": 0.25, "color_weight": 0.08, "roughness": 0.80, "reflectivity": 0.03, "metallic": 0.0},
+    "beach": {"height_amplitude": 0.22, "max_displacement": 0.22, "color_weight": 0.07, "roughness": 0.75, "reflectivity": 0.04, "metallic": 0.0},
+    "terrain": {"height_amplitude": 0.35, "max_displacement": 0.35, "color_weight": 0.08, "roughness": 0.75, "reflectivity": 0.04, "metallic": 0.0},
+    "default": {"height_amplitude": 0.30, "max_displacement": 0.30, "color_weight": 0.06, "roughness": 0.70, "reflectivity": 0.04, "metallic": 0.0},
 }
 
 
@@ -372,6 +372,9 @@ def build_region_terrain_sidecar(
             "uv_scale": (1.0, 1.0),
             "uv_offset": (0.0, 0.0),
             "atlas_rect": (0.0, 0.0, 1.0, 1.0),
+            "roughness": float(prof.get("roughness", 0.70)),
+            "reflectivity": float(prof.get("reflectivity", 0.04)),
+            "metallic": float(prof.get("metallic", 0.0)),
         }
         records.append(rec)
         image_idx += 1
@@ -392,6 +395,9 @@ def build_region_terrain_sidecar(
             "max_displacement": 0.35,
             "address_mode_u": ADDRESS_WRAP,
             "address_mode_v": ADDRESS_WRAP,
+            "roughness": 0.75,
+            "reflectivity": 0.04,
+            "metallic": 0.0,
         })
 
     sidecar_bytes = pack_surface_materials(

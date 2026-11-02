@@ -52,13 +52,13 @@ python tools/remaster-launcher/terrain_height_maps.py generate `
 
 ## Material families & parameters
 
-| Family | Pattern keywords | Height amplitude | Max displacement | Colour weight |
-| :--- | :--- | :--- | :--- | :--- |
-| **cliff** | `txwall`, `cliff`, `bluff` | 0.50 | 0.50 | 0.10 |
-| **rock** | `rock`, `boulder`, `stone` | 0.45 | 0.45 | 0.09 |
-| **road** | `road`, `hwy`, `pave`, `path` | 0.20 | 0.20 | 0.05 |
-| **asphalt**| `asphalt`, `tarmac`, `runway` | 0.18 | 0.18 | 0.04 |
-| **sand** | `sand`, `dune` | 0.25 | 0.25 | 0.08 |
-| **beach** | `beach`, `shore` | 0.22 | 0.22 | 0.07 |
-| **terrain**| `txgter`, `ter`, `dirt`, `grass`| 0.35 | 0.35 | 0.08 |
-| **default**| (fallback) | 0.30 | 0.30 | 0.06 |
+| Family | Pattern keywords | Height amplitude | Max displacement | Colour weight | Roughness | Reflectivity | Metallic |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **cliff** | `txwall`, `cliff`, `bluff` | 0.50 | 0.50 | 0.10 | 0.85 | 0.03 | 0.0 |
+| **rock** | `rock`, `boulder`, `stone` | 0.45 | 0.45 | 0.09 | 0.80 | 0.04 | 0.0 |
+| **road** | `road`, `hwy`, `pave`, `path` | 0.20 | 0.20 | 0.05 | 0.60 | 0.05 | 0.0 |
+| **asphalt**| `asphalt`, `tarmac`, `runway` | 0.18 | 0.18 | 0.04 | 0.55 | 0.05 | 0.0 |
+| **sand** | `sand`, `dune` | 0.25 | 0.25 | 0.08 | 0.80 | 0.03 | 0.0 |
+| **beach** | `beach`, `shore` | 0.22 | 0.22 | 0.07 | 0.75 | 0.04 | 0.0 |
+| **terrain**| `txgter`, `ter`, `dirt`, `grass`| 0.35 | 0.35 | 0.08 | 0.75 | 0.04 | 0.0 |
+| **default**| (fallback) | 0.30 | 0.30 | 0.06 | 0.70 | 0.04 | 0.0 |

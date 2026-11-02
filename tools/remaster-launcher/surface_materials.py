@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import math
+from pathlib import Path
 import re
 import struct
 
@@ -32,11 +33,11 @@ ADDRESS_CLAMP = 3
 
 MAX_BATCHES = 4096
 MAX_RECORDS = 4096
-MAX_IMAGES = 64
+MAX_IMAGES = 512
 MAX_IDENTIFIER_BYTES = 4096
 MAX_MATERIAL_NAME_BYTES = 31
 MAX_DIMENSION = 4096
-MAX_SIDECAR_BYTES = 64 * 1024 * 1024
+MAX_SIDECAR_BYTES = 256 * 1024 * 1024
 MAX_WORLD_AMPLITUDE = 16.0
 MAX_UV_TRANSFORM = 1024.0
 
@@ -91,7 +92,16 @@ def mesh_uv_identity(mesh_bytes: bytes) -> int:
     """
     if not isinstance(mesh_bytes, (bytes, bytearray)) or len(mesh_bytes) < 12:
         raise ValueError("Invalid mesh payload for UV identity")
-    stream = io.BytesIO(mesh_bytes)
+    return _mesh_uv_identity(io.BytesIO(mesh_bytes))
+
+
+def mesh_uv_identity_file(path: Path) -> int:
+    """Compute a mesh/UV identity without loading the complete payload."""
+    with Path(path).open("rb") as stream:
+        return _mesh_uv_identity(stream)
+
+
+def _mesh_uv_identity(stream) -> int:
 
     def take(size: int) -> bytes:
         chunk = stream.read(size)
@@ -157,7 +167,16 @@ def texture_batch_materials(texture_bytes: bytes) -> list[str]:
     """Extract the ordered per-batch material names from a validated BWTEX1 payload."""
     if not isinstance(texture_bytes, (bytes, bytearray)) or len(texture_bytes) < 16:
         raise ValueError("Invalid BWTEX1 payload")
-    stream = io.BytesIO(texture_bytes)
+    return _texture_batch_materials(io.BytesIO(texture_bytes))
+
+
+def texture_batch_materials_file(path: Path) -> list[str]:
+    """Extract material names without loading the complete texture payload."""
+    with Path(path).open("rb") as stream:
+        return _texture_batch_materials(stream)
+
+
+def _texture_batch_materials(stream) -> list[str]:
 
     def take(size: int) -> bytes:
         chunk = stream.read(size)
@@ -184,7 +203,10 @@ def texture_batch_materials(texture_bytes: bytes) -> list[str]:
         width, height, _hash = struct.unpack("<IIQ", take(16))
         if not 1 <= width <= MAX_DIMENSION or not 1 <= height <= MAX_DIMENSION:
             raise ValueError("Invalid BWTEX1 dimensions")
-        take(width * height * 2)
+        remaining = width * height * 2
+        while remaining:
+            chunk = take(min(remaining, 1024 * 1024))
+            remaining -= len(chunk)
         names.append(name)
     if stream.read(1):
         raise ValueError("Trailing BWTEX1 data")
@@ -213,6 +235,9 @@ def normalize_record(record: dict, image_roles: dict[str, int]) -> dict:
         "sss_tint",
         "sss_radius",
         "thickness_scale",
+        "roughness",
+        "reflectivity",
+        "metallic",
     }
     if not {"asset_id", "material_name"} <= set(record) or set(record) - allowed_keys:
         raise ValueError("Invalid surface material record fields")
@@ -303,6 +328,10 @@ def normalize_record(record: dict, image_roles: dict[str, int]) -> dict:
     ):
         raise ValueError("Non-zero SSS radius, thickness scale, or thickness image requires sss_participation > 0")
 
+    roughness = _f32(record.get("roughness", 0.7), "roughness", 0.0, 1.0)
+    reflectivity = _f32(record.get("reflectivity", 0.04), "reflectivity", 0.0, 1.0)
+    metallic = _f32(record.get("metallic", 0.0), "metallic", 0.0, 1.0)
+
     return {
         "asset_id": record["asset_id"],
         "material_name": record["material_name"],
@@ -321,6 +350,9 @@ def normalize_record(record: dict, image_roles: dict[str, int]) -> dict:
         "sss_tint": sss_tint,
         "sss_radius": sss_radius,
         "thickness_scale": thickness_scale,
+        "roughness": roughness,
+        "reflectivity": reflectivity,
+        "metallic": metallic,
     }
 
 
@@ -435,7 +467,7 @@ def pack_surface_materials(
         out.extend(struct.pack("<I", len(mat_bytes)) + mat_bytes)
         out.extend(
             struct.pack(
-                "<IIfffIffffIIffffffffff",
+                "<IIfffIffffIIfffffffffffff",
                 h_idx,
                 t_idx,
                 rec["height_reference"],
@@ -458,6 +490,9 @@ def pack_surface_materials(
                 rec["sss_tint"][2],
                 rec["sss_radius"],
                 rec["thickness_scale"],
+                rec["roughness"],
+                rec["reflectivity"],
+                rec["metallic"],
             )
         )
 
@@ -473,7 +508,7 @@ def pack_surface_materials(
         out.extend(raw_pixels)
 
     if len(out) > MAX_SIDECAR_BYTES:
-        raise ValueError("Surface material sidecar exceeds 64 MiB limit")
+        raise ValueError("Surface material sidecar exceeds 256 MiB limit")
     return bytes(out)
 
 
@@ -563,7 +598,7 @@ def read_surface_materials(
             raise ValueError("Duplicate or unsorted surface material record")
         previous_key = sort_key
 
-        fields = struct.unpack("<IIfffIffffIIffffffffff", take(88))
+        fields = struct.unpack("<IIfffIffffIIfffffffffffff", take(100))
         (
             h_idx,
             t_idx,
@@ -587,6 +622,9 @@ def read_surface_materials(
             tint_b,
             sss_radius,
             thickness_scale,
+            roughness,
+            reflectivity,
+            metallic,
         ) = fields
 
         if h_idx != NO_SURFACE_IMAGE and h_idx >= image_count:
@@ -632,6 +670,10 @@ def read_surface_materials(
         ):
             raise ValueError("SSS parameters set while sss_participation is zero")
 
+        _f32(roughness, "roughness", 0.0, 1.0)
+        _f32(reflectivity, "reflectivity", 0.0, 1.0)
+        _f32(metallic, "metallic", 0.0, 1.0)
+
         raw_records.append(
             {
                 "asset_id": rec_asset,
@@ -651,6 +693,9 @@ def read_surface_materials(
                 "sss_tint": (tint_r, tint_g, tint_b),
                 "sss_radius": sss_radius,
                 "thickness_scale": thickness_scale,
+                "roughness": roughness,
+                "reflectivity": reflectivity,
+                "metallic": metallic,
             }
         )
 
@@ -713,3 +758,25 @@ def read_surface_materials(
         "records": raw_records,
         "images": images,
     }
+
+
+def read_surface_materials_file(
+    path: Path,
+    *,
+    expected_asset_id: str | None = None,
+    expected_mesh_uv_hash: int | None = None,
+    expected_batch_materials: list[str] | None = None,
+    max_bytes: int = MAX_SIDECAR_BYTES,
+) -> dict:
+    """Read at most the sidecar budget plus one byte before parsing."""
+    if type(max_bytes) is not int or not 0 < max_bytes <= MAX_SIDECAR_BYTES:
+        raise ValueError("Invalid surface material budget")
+    with Path(path).open("rb") as stream:
+        data = stream.read(max_bytes + 1)
+    return read_surface_materials(
+        data,
+        expected_asset_id=expected_asset_id,
+        expected_mesh_uv_hash=expected_mesh_uv_hash,
+        expected_batch_materials=expected_batch_materials,
+        max_bytes=max_bytes,
+    )

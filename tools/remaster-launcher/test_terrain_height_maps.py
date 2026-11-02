@@ -124,6 +124,11 @@ class TerrainHeightMapsTests(unittest.TestCase):
             self.assertEqual(rec0["asset_id"], "training")
             self.assertEqual(rec0["address_mode_u"], ADDRESS_WRAP)
             self.assertEqual(rec0["address_mode_v"], ADDRESS_WRAP)
+            self.assertIn("roughness", rec0)
+            self.assertIn("reflectivity", rec0)
+            self.assertIn("metallic", rec0)
+            self.assertGreaterEqual(rec0["roughness"], 0.0)
+            self.assertLessEqual(rec0["roughness"], 1.0)
 
             img0 = verified["images"][0]
             self.assertEqual(img0["role"], ROLE_HEIGHT)
