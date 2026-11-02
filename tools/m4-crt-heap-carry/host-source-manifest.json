@@ -991,8 +991,8 @@
       "classification": "authored-host-source"
     },
     "world_direct_stage.inc": {
-      "sha256": "418ac047a8e6e584eaaae4ab03c4ce67679a22e4e34b471bcb1eee69cf71bd8c",
-      "bytes": 12235,
+      "sha256": "12c004c25da7133a3d8492c42ef9421cf3d7892097d016dae62c4a306f43cdbf",
+      "bytes": 8529,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1097,6 +1097,12 @@
       "classification": "authored-host-source",
       "bytes": 271,
       "sha256": "61b7f844baf82d274090b660c2de8c96968b2a061d27e19f4e9fe73a313c9f1e"
+    },
+    "world_polygon_capture_stage.inc": {
+      "decision": "commit",
+      "classification": "authored-host-source",
+      "bytes": 5681,
+      "sha256": "459deef7b2a6b3ae2fdcedd1de264b41b057ac8d8cbf8df902a444e5bd1ba345"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."

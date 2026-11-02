@@ -4,6 +4,7 @@
 #define NOMINMAX
 #include "vk_scene.hpp"
 #include <iostream>
+#include "world_fast_binding.hpp"
 
 using namespace mw34::vkscene;
 struct TlVertex { float x,y,z,rhw;std::uint32_t diffuse,specular;float u,v; };
@@ -301,8 +302,10 @@ static void temporal_gpu_check(Renderer& renderer,Scene scene){
     std::cout<<"Temporal GPU: signed pixel motion, sampled depth, phase, opaque/alpha validity on "
              <<renderer.device_name<<" at "<<result.width<<"x"<<result.height<<" pass\n";
 }
+#include "tests/world_polygon_capture_fixture.inc"
 int main(int argc, char **argv) {
     try {
+        world_polygon_capture_checks();
         _putenv_s("MW34_GPU_MODELS","1");
         const bool temporal_test=argc>1&&std::string(argv[1])=="--temporal-inputs";
         _putenv_s("MW34_REMASTER_WIDTH",temporal_test?"640":"");_putenv_s("MW34_REMASTER_HEIGHT",temporal_test?"480":"");
