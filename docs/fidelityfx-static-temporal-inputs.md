@@ -235,6 +235,13 @@ object; a private variant omitting the static-source condition fails the asserti
 Alpha, unknown occlusion, color/guest-depth isolation, source-lifetime and
 per-submission-completion controls also fail their respective checks.
 
-Lighting/stock configurations and camera/zoom/pause/reload coverage remain required. Independent
+The full published lighting profile also completes 2,200 presentations with
+sun, effects, shadows and campaign lighting enabled, both with temporal diagnostics
+On and Off. Both runs have zero Vulkan validation errors; their four color captures
+match exactly. The On run retains the same valid static coverage counts at
+1801/2071/2101 as the lighting-Off run. Lighting-On color differs from lighting-Off,
+so this comparison exercises an active rendered lighting path.
+
+Stock configurations and camera/zoom/pause/reload coverage remain required. Independent
 review and a draft PR also remain open. No upscaler or frame generation is
 dispatched, and these checks do not establish P2 (Stage 3) acceptance.
