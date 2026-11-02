@@ -201,7 +201,7 @@ required before P2 acceptance. FSR dispatch and frame generation remain Off.
 
 The topic now includes develop through e8129d3, retaining the newer material,
 headlight and controller changes alongside temporal metadata. Training readers
-1–4 retain their load-epoch invalidation; failed and unrelated opens do not
+1â€“4 retain their load-epoch invalidation; failed and unrelated opens do not
 advance that epoch. Default and manual campaign-lighting fixtures pass.
 
 The integrated host completed two 2,200-presentation RX 9070 Vulkan/DXGI runs at
@@ -209,7 +209,7 @@ The integrated host completed two 2,200-presentation RX 9070 Vulkan/DXGI runs at
 from runtime 1.0.46. Both stopped at the configured budget and reported zero
 Vulkan validation errors. The 100% color captures at 801/999/1801/2101 match the
 pre-integration reference byte-for-byte. At 50%, the diagnostic target is
-1720×720 for the 3440×1440 output: 14,250 valid pixels at 801, 14,240 at 1801,
+1720Ã—720 for the 3440Ã—1440 output: 14,250 valid pixels at 801, 14,240 at 1801,
 13,413 at 2071 and 12,252 at 2101. Every valid moving pixel at 2071/2101 has
 finite, nonzero motion; median vectors are (0.68048,-0.43210) and
 (1.73544,-0.13282) render pixels. This remains sparse static-surface coverage.
@@ -271,13 +271,13 @@ native near-plane acceptance and menu/Lab checks remain open.
 ## Instrumentation and preliminary timing
 
 The validation runs above are not representative gameplay performance tests.
-With all published packs, their live 800–2200 interval is about 12.8 FPS even with
+With all published packs, their live 800â€“2200 interval is about 12.8 FPS even with
 temporal diagnostics Off. A separate minimally instrumented run removes Vulkan
 validation, scheduled captures and optional logs; it retains the world bridge's
 required log and frame timing. The DXGI bridge defaults to VSync, yielding about
 60 FPS. The existing development VSync-Off option removes that ceiling.
 
-Single 800–2200 interval measurements at 3440×1440, FXAA, AF16, 1200/1100 distance,
+Single 800â€“2200 interval measurements at 3440Ã—1440, FXAA, AF16, 1200/1100 distance,
 all published packs and lighting On are:
 
 | Host / temporal diagnostics | VSync | Mean presentation FPS |
@@ -387,3 +387,78 @@ scratch also feeds culling/lighting, while projected scratch feeds clipping and
 material queues. Those consumers and required effects must be owned before an
 earlier GPU producer replaces CPU work. The historical narrow loop bypass had
 no net performance win and is not restored by this change.
+
+
+## Independent review and final-source measurement, November 2
+
+The independent review found an overlapping dependency defect in reduced-world
+fixture-shadow preparation. PR #120 head 542a93a is now integrated locally as
+commit e9362c95987a71b6fc4ea388f7e480c4392bf65c: all reconstructed batches share
+full-scene shadow preparation, and TL casters read the captured vertex owner.
+P2b diagnostic model/source fields, ordered depth clears, first-reset retention
+and the count rejection guard are preserved. The existing captured-vertex
+shadow regression passes at 50/67/100 percent under RX 9070 validation.
+
+The final clean maintained candidate is built from e9362c9, with 183 host files,
+197 repository dependencies, source_dirty=false and no changed_source_files.
+Executable SHA256:
+`3d813f24e887563bd17f9843d7816fbff504740a27999ad2cf3f228e696b5459`.
+A private control uses the same commit and unmodified builder with only the
+four-line count rejection guard removed. Every other consumed source, manifest,
+tool/header pin and translated DLL agrees byte-for-byte. Its executable SHA256 is
+`9f06f481a6c48d7cf0fd74c47a4d40313282d88c3516832a01d8bdbb214aebbc`.
+The control records source_dirty=true and exactly one changed_source_files entry,
+world_polygon_capture_stage.inc; it is a diagnostic control, never release input.
+
+A fresh ABBA comparison uses the same settings, current 13 published packs and
+800-2200 interval described above. Each run completes 2,200 presentations/7,689
+scenes with no competing compiler/game or timeout. Validation and capture remain
+disabled equally during timing; compiler guards remain enabled.
+
+| Run order | Guard | Mean FPS | Mean ms |
+| --- | --- | ---: | ---: |
+| A1 | Removed |62.070|16.111|
+| B1 | Enabled |70.408|14.203|
+| B2 | Enabled |70.745|14.135|
+| A2 | Removed |62.325|16.045|
+
+Across 2,800 intervals per build, the control is 62.197 FPS/16.078 ms and the candidate
+is 70.576 FPS/14.169 ms: 11.872% less frame time and 13.472% more presentation throughput.
+Combined p95 is 20.898 versus 18.153 ms. This isolates the count shortcut after the
+dependency repair. It remains a bounded virtual-clock scripted Training result;
+it establishes no original-producer migration, 100 FPS target, FSR or FG benefit.
+The earlier 9b21565-versus-4fb4222 numbers remain historical measurements of those
+specific executables. Private final receipts are reviewer-performance.json and
+reviewer-perf-{old-A1,new-B1,new-B2,old-A2} under local/p2b.
+
+Separate validation-enabled final control and candidate runs each complete 3,200
+presentations/13,889 scenes with zero VUID, synchronization or host-exception
+messages. All 30 authoritative color and temporal capture files at 801/1801/2101/
+2102/2801/3001 match byte-for-byte. The same 30 candidate files also match the
+pre-integration 9b21565 captures. Positive stationary, W movement and D turn
+coverage and numeric bounds are unchanged. See reviewer-native-validation.json
+and reviewer-validate-{old100,new100}.
+
+The final candidate also completes 2,200 presentations/7,742 reported scenes at
+50% scale with the same published packs and lighting, zero validation/sync/host
+exceptions and 1,720x720 diagnostic images. Frames 801/1801 have 14,250/14,240 valid
+static pixels and maximum 0.0000611-pixel motion. W movement at 2101 has 12,252
+finite, nonzero-motion pixels. Native counters include 626,805 authenticated TL
+lighting draws, two fixture lights and 1,475 sun-shadow scenes. This exercises the
+integrated reduced-world rendering path; it adds no native near-plane credit.
+See reviewer-native50-validation.json and reviewer-validate-new50.
+
+Fresh final checks pass: CMake build/CTest 30/format, enforced web style, launcher
+.NET suite, builder/dispatch/function-table tests, all six rebuilt renderer
+fixtures, 70 presentation/depth/bridge/sun/world-camera cases, six temporal
+scale/jitter cases, camera/source/capture/campaign checks and the three-scale
+shadow regression. Shader compilation exactly reproduces the three canonical
+authored headers. The private guard-removed CPU fixture fails its rejection
+assertion while the production adapter fixture passes. Other style categories
+remain report-only. No standalone spirv-val result is claimed.
+
+The scoped optimization and integrated shadow repair are reviewed; #107 remains
+partial and must stay draft. Native near-plane positive acceptance remains open;
+supported positive zoom is fixture-only. No Stage 3 closure, release, SDK/pack
+format change, public setting, FSR/P3/FG enablement or original-producer bypass
+follows from this result.
