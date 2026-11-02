@@ -5,7 +5,10 @@ import struct
 import tempfile
 import unittest
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 from surface_materials import (
     read_surface_materials,
@@ -25,6 +28,7 @@ from terrain_height_maps import (
 )
 
 
+@unittest.skipIf(np is None, "Terrain height-map derivation requires NumPy")
 class TerrainHeightMapsTests(unittest.TestCase):
     def test_frankot_chellappa_synthetic_reconstruction(self):
         w, h = 64, 64

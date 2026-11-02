@@ -16,7 +16,10 @@ import re
 import struct
 import sys
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 try:
     from surface_materials import (
@@ -80,6 +83,8 @@ def frankot_chellappa(nx: np.ndarray, ny: np.ndarray, nz: np.ndarray) -> np.ndar
     Integrates surface slopes p = -nx/nz and q = -ny/nz in Fourier space
     using the Frankot-Chellappa least-squares formulation under periodic boundaries.
     """
+    if np is None:
+        raise RuntimeError("Terrain height-map derivation requires NumPy")
     if nx.shape != ny.shape or nx.shape != nz.shape:
         raise ValueError("Normal components must have identical shapes")
     h, w = nx.shape
@@ -115,6 +120,8 @@ def extract_color_highpass(
 
     Suppresses broad illumination gradients while preserving surface grain.
     """
+    if np is None:
+        raise RuntimeError("Terrain height-map derivation requires NumPy")
     if len(color_bytes) < width * height * 4:
         raise ValueError("Incomplete colour byte payload")
     arr = np.frombuffer(color_bytes[: width * height * 4], dtype=np.uint8).reshape(height, width, 4)
@@ -157,6 +164,8 @@ def derive_height_map(
     Returns:
         (rgba_bytes, height_reference, metrics)
     """
+    if np is None:
+        raise RuntimeError("Terrain height-map derivation requires NumPy")
     if len(normal_bytes) < width * height * 4:
         raise ValueError("Incomplete normal byte payload")
     arr = np.frombuffer(normal_bytes[: width * height * 4], dtype=np.uint8).reshape(height, width, 4)
@@ -215,6 +224,8 @@ def evaluate_height_quality(
     scale: float = 1.0,
 ) -> dict[str, float]:
     """Compare central-difference gradients of height map with original normals."""
+    if np is None:
+        raise RuntimeError("Terrain height-map derivation requires NumPy")
     h_arr = np.frombuffer(height_rgba_bytes[: width * height * 4], dtype=np.uint8).reshape(height, width, 4)
     z = h_arr[..., 0].astype(np.float32) / 255.0
 
@@ -277,6 +288,8 @@ def build_region_terrain_sidecar(
     max_sidecar_bytes: int = 256 * 1024 * 1024,
 ) -> tuple[bytes, dict]:
     """Generate a valid BWSFM1 surface-material sidecar bytes and audit summary."""
+    if np is None:
+        raise RuntimeError("Terrain height-map derivation requires NumPy")
     if region not in REGIONS:
         raise ValueError(f"Unknown region identifier: {region}")
 
