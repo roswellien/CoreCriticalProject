@@ -8,6 +8,11 @@ bool retained_color_warning{};
 enum class ReconstructionStage { normal, shading, coverage };
 ReconstructionStage reconstruction_stage{ReconstructionStage::normal};
 bool world_scene_prepared{};
+const Scene *world_shadow_scene{};
+bool world_shadow_inputs_ready{};
+bool world_shadow_recorded{};
+ShadowFrame world_shadow_frame{};
+mw34::effects::Uniform world_fixture_lights{};
 Image reconstructedColor;
 VkFramebuffer reconstructionFramebuffer{};
 VkShaderModule coverageFrag{};
@@ -34,11 +39,23 @@ void render_reconstructed_world(Scene &scene) {
     apply_atmosphere(scene, mw34::sun::current_settings(scene.detail_time));
     struct PreparedScene {
         Renderer &renderer;
-        explicit PreparedScene(Renderer &owner) : renderer(owner) {
+        explicit PreparedScene(Renderer &owner, const Scene &source) : renderer(owner) {
             renderer.world_scene_prepared = true;
+            renderer.world_shadow_scene = &source;
+            renderer.world_shadow_inputs_ready = false;
+            renderer.world_shadow_recorded = false;
+            renderer.world_shadow_frame = {};
+            renderer.world_fixture_lights = {};
         }
-        ~PreparedScene() { renderer.world_scene_prepared = false; }
-    } prepared(*this);
+        ~PreparedScene() {
+            renderer.world_scene_prepared = false;
+            renderer.world_shadow_scene = nullptr;
+            renderer.world_shadow_inputs_ready = false;
+            renderer.world_shadow_recorded = false;
+            renderer.world_shadow_frame = {};
+            renderer.world_fixture_lights = {};
+        }
+    } prepared(*this, scene);
     Scene batch{};
     batch.detail_time = scene.detail_time;
     batch.world_frame = scene.world_frame;
@@ -51,6 +68,11 @@ void render_reconstructed_world(Scene &scene) {
     batch.height = scene.height;
     batch.has_depth = scene.has_depth;
     batch.model_warmup = scene.model_warmup;
+    // Load every model before shadow preparation so later batches can cast into
+    // the same full-scene maps as the first batch.
+    for (const auto &draw : scene.draws)
+        if (draw.model)
+            batch.model_warmup.push_back(draw.model->geometry);
     // Geometry, immutable texture inputs and emission indices have one owner.
     // Move their containers for batching, then restore them even on exceptions.
     struct ResidentInputs {
