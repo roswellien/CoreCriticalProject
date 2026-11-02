@@ -113,7 +113,7 @@ def compose(roots, host, verification=None, chassis_records=None):
             CAPABILITY as SURFACE_CAPABILITY,
             FORMAT as SURFACE_FORMAT,
             mesh_uv_identity,
-            read_surface_materials,
+            read_surface_materials_file,
             texture_batch_materials,
         )
         require(host, payload, ident)
@@ -213,8 +213,8 @@ def compose(roots, host, verification=None, chassis_records=None):
                 mesh_key = ("MW34_BUSHWACKER_TEST" if ident == "bushwacker" and not suffix
                             else "MW34_" + ident.upper() + suffix + "_MESH")
                 tex_key = "MW34_" + ident.upper() + suffix + "_TEXTURES"
-                read_surface_materials(
-                    Path(resolved[surf_key]).read_bytes(),
+                read_surface_materials_file(
+                    Path(resolved[surf_key]),
                     expected_asset_id=f"{ident}:{lod}",
                     expected_mesh_uv_hash=mesh_uv_identity(Path(resolved[mesh_key]).read_bytes()),
                     expected_batch_materials=texture_batch_materials(Path(resolved[tex_key]).read_bytes()),

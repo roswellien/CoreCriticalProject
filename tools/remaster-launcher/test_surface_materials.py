@@ -1,4 +1,5 @@
 import struct
+from unittest.mock import mock_open, patch
 import unittest
 
 import surface_materials
@@ -100,6 +101,13 @@ class SurfaceMaterialsTest(unittest.TestCase):
             surface_materials.texture_batch_materials(_make_bwtex1()),
             ["armor_hull", "canopy_glass"],
         )
+
+    def test_file_reader_limits_read_and_probes_for_overflow(self) -> None:
+        stream = mock_open(read_data=b"x" * 32).return_value
+        with patch.object(surface_materials.Path, "open", return_value=stream):
+            with self.assertRaisesRegex(ValueError, "exceeds size budget"):
+                surface_materials.read_surface_materials_file("sidecar.bin", max_bytes=16)
+        stream.read.assert_called_once_with(17)
 
     def test_independent_byte_level_wire_oracle_and_round_trip(self) -> None:
         mesh_hash = 1335280070564434920

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import math
+from pathlib import Path
 import re
 import struct
 
@@ -713,3 +714,25 @@ def read_surface_materials(
         "records": raw_records,
         "images": images,
     }
+
+
+def read_surface_materials_file(
+    path: Path,
+    *,
+    expected_asset_id: str | None = None,
+    expected_mesh_uv_hash: int | None = None,
+    expected_batch_materials: list[str] | None = None,
+    max_bytes: int = MAX_SIDECAR_BYTES,
+) -> dict:
+    """Read at most the sidecar budget plus one byte before parsing."""
+    if type(max_bytes) is not int or not 0 < max_bytes <= MAX_SIDECAR_BYTES:
+        raise ValueError("Invalid surface material budget")
+    with Path(path).open("rb") as stream:
+        data = stream.read(max_bytes + 1)
+    return read_surface_materials(
+        data,
+        expected_asset_id=expected_asset_id,
+        expected_mesh_uv_hash=expected_mesh_uv_hash,
+        expected_batch_materials=expected_batch_materials,
+        max_bytes=max_bytes,
+    )
