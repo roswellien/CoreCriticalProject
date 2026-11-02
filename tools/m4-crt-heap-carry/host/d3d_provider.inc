@@ -220,12 +220,13 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
        at=end+1;++n;}}}
     it=tex_index.emplace(tex,int(sc.textures.size())).first;sc.textures.push_back(std::move(r));}dr.texture=it->second;}
   int bind_normal_idx=-1;
+  bool primary_ground=false;
   if(c.override_normal_texture>=0&&override_enabled()){
    bind_normal_idx=c.override_normal_texture;
   }else if((c.sun_tl||(c.model&&c.model->world))&&tex&&override_enabled()){
    const auto&o=override_state();
+   auto*t=vsurface(tex);
    if(o.ground_normal_texture>=0){
-    auto*t=vsurface(tex);
     static std::set<unsigned> seen_tl_tex;
     if(t && seen_tl_tex.insert(tex).second){
      unsigned d0 = t->bytes>=4 ? surface_word(*t,0) : 0;
@@ -262,23 +263,24 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
       }
      }
     }
-    const bool is_ground = t && (
+   }
+   const bool is_ground = t && (
      (t->width == 1024 && t->height == 1024 && t->bytes>=8 && surface_word(*t,0) == 0x7a457a65 && surface_word(*t,4) == 0x7a457a45) ||
      (t->width == 2048 && t->height == 2048 && t->bytes>=8 && surface_word(*t,0) == 0x59c459e5 && surface_word(*t,4) == 0x59c459c4) ||
      (t->width == 2048 && t->height == 2048 && t->bytes>=8 && surface_word(*t,0) == 0x20c120c1 && surface_word(*t,4) == 0x20c120c1)
-    );
-    if(!is_ground&&t&&t->bytes>=8){const unsigned s0=surface_word(*t,0),s1=surface_word(*t,4);
-     for(const auto& g:o.ground_normal_bindings)if(g[0]==t->width&&g[1]==t->height&&g[2]==s0&&g[3]==s1){bind_normal_idx=int(g[4]);break;}}
-    if(is_ground){
-     bind_normal_idx=o.ground_normal_texture;
-     static int ground_draw_logs = 0;
-     if(ground_draw_logs < 5 && c.vertices.size() >= 32){
-      const float* vf = reinterpret_cast<const float*>(c.vertices.data());
-      fprintf(stderr, "[GROUND_BOUND] draw vertices=%zu u0=%.4f v0=%.4f normal_idx=%d\n",
-              c.vertices.size()/32, vf[6], vf[7], bind_normal_idx);
-      fflush(stderr);
-      ground_draw_logs++;
-     }
+   );
+   if(!is_ground&&t&&t->bytes>=8){const unsigned s0=surface_word(*t,0),s1=surface_word(*t,4);
+    for(const auto& g:o.ground_normal_bindings)if(g[0]==t->width&&g[1]==t->height&&g[2]==s0&&g[3]==s1){bind_normal_idx=int(g[4]);break;}}
+   if(is_ground){
+    primary_ground=true;
+    bind_normal_idx=o.ground_normal_texture;
+    static int ground_draw_logs = 0;
+    if(ground_draw_logs < 5 && c.vertices.size() >= 32){
+     const float* vf = reinterpret_cast<const float*>(c.vertices.data());
+     fprintf(stderr, "[GROUND_BOUND] draw vertices=%zu u0=%.4f v0=%.4f normal_idx=%d\n",
+             c.vertices.size()/32, vf[6], vf[7], bind_normal_idx);
+     fflush(stderr);
+     ground_draw_logs++;
     }
    }
   }
@@ -308,8 +310,10 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
    }
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.surface_material=c.surface_material;
-  if(!dr.surface_material&&bind_normal_idx>=0&&!dr.detail_role){const auto&o=override_state();
-   if(size_t(bind_normal_idx)<o.normal_textures.size()){const auto&t=o.normal_textures[bind_normal_idx];auto found=o.ground_surface_material_by_name.find(t.name);if(found!=o.ground_surface_material_by_name.end())dr.surface_material=found->second;else if(bind_normal_idx==o.ground_normal_texture&&o.ground_surface_material)dr.surface_material=o.ground_surface_material;}}
+  // Normal image labels are page-local and may represent multiple source SurfaceKeys.
+  // Only the recognized primary ground source has an unambiguous BWSFM1 batch binding.
+  if(!dr.surface_material&&primary_ground&&bind_normal_idx>=0&&!dr.detail_role)
+   dr.surface_material=override_state().ground_surface_material;
   if(mw34::sun::settings().enabled&&mw34::sun::settings().pom_enabled&&mw34::materials::normal_maps_enabled()&&dr.normal_texture>=0&&dr.surface_material&&dr.surface_material->host_height_texture>=0&&!dr.key.blend&&!(dr.push.mode[0]&32U)&&!dr.sky_view&&!dr.condition_schematic&&!dr.detail_role){
    const auto&o=override_state();const int height_idx=dr.surface_material->host_height_texture;
    if(size_t(height_idx)<o.surface_material_textures.size()){const auto&t=o.surface_material_textures[size_t(height_idx)];
@@ -337,5 +341,4 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
  rows_out(*zb,sc.depth);zb->version=++host.surface_versions;}
  if(host.sren->scenes==1)apis.back()+="(Vulkan scene renderer on "+host.sren->device_name+")";
  d.commands.clear();}
-
 

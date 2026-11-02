@@ -78,11 +78,11 @@ def build(project_path, output):
                     raise ValueError('Chassis project resource exceeds size limit')
                 row[role][lod] = add(path.read_bytes(), fmt)
         if 'surface_materials' in entry:
-            from surface_materials import FORMAT as SURFACE_FORMAT
+            from surface_materials import FORMAT as SURFACE_FORMAT, MAX_SIDECAR_BYTES
             row['surface_materials'] = {}
             for lod in ('close', 'distance'):
                 path = resolve(project_path.parent, entry['surface_materials'][lod])
-                if path.stat().st_size > 64 * 1024**2:
+                if path.stat().st_size > MAX_SIDECAR_BYTES:
                     raise ValueError('Chassis surface-material resource exceeds size limit')
                 row['surface_materials'][lod] = add(path.read_bytes(), SURFACE_FORMAT)
         records.append(row)

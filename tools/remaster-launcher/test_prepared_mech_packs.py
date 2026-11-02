@@ -195,7 +195,18 @@ class PreparedPackTests(unittest.TestCase):
 
         host = copy.deepcopy(self.host)
         host["content_capabilities"]["surface-materials"] = [1]
-        models, env = packs.compose([str(root)], host)
+        with (
+            patch.object(surface_materials, "read_surface_materials_file",
+                         wraps=surface_materials.read_surface_materials_file) as sidecar_reader,
+            patch.object(surface_materials, "mesh_uv_identity_file",
+                         wraps=surface_materials.mesh_uv_identity_file) as mesh_reader,
+            patch.object(surface_materials, "texture_batch_materials_file",
+                         wraps=surface_materials.texture_batch_materials_file) as texture_reader,
+        ):
+            models, env = packs.compose([str(root)], host)
+        self.assertEqual(sidecar_reader.call_count, 2)
+        self.assertEqual(mesh_reader.call_count, 2)
+        self.assertEqual(texture_reader.call_count, 2)
         self.assertEqual(len(models), 1)
         self.assertIn("MW34_ORION_SURFACE_MATERIALS", env)
         self.assertIn("MW34_ORION_LOD1_SURFACE_MATERIALS", env)

@@ -16,6 +16,14 @@ from normal_materials import (
     pack_surface_bindings,
     read_surface_bindings,
 )
+from surface_materials import (
+    MAX_IMAGES as MAX_SURFACE_IMAGES,
+    MAX_RECORDS as MAX_SURFACE_RECORDS,
+    MAX_SIDECAR_BYTES,
+    NO_SURFACE_IMAGE,
+    NO_SURFACE_MATERIAL,
+    read_surface_materials_file,
+)
 
 PROFILE = 'prepared-environment-v1'
 REGISTRY = 'environment/environment.json'
@@ -223,7 +231,6 @@ def select(roots, host, verification=None):
         from surface_materials import (
             CAPABILITY as SURFACE_CAPABILITY,
             FORMAT as SURFACE_FORMAT,
-            read_surface_materials,
         )
         require(host, payload, ident)
         formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1',SURFACE_FORMAT}
@@ -275,7 +282,7 @@ def select(roots, host, verification=None):
                 if (not uses_surface_materials or not isinstance(surf_name, str) or
                         surf_name not in paths or files[surf_name].get('format') != SURFACE_FORMAT):
                     raise ValueError('Undeclared or mislabeled shared mech surface materials')
-                read_surface_materials(Path(paths[surf_name]).read_bytes(), expected_asset_id=region)
+                read_surface_materials_file(Path(paths[surf_name]), expected_asset_id=region)
                 references.add(surf_name)
             if references!=set(paths) or any(files[p].get('format')!='ZBD-texture-v1' for p in banks.values()):
                 raise ValueError('Invalid shared mech resource closure')
@@ -304,7 +311,7 @@ def select(roots, host, verification=None):
                 if (not uses_surface_materials or not isinstance(surf_name, str) or
                         surf_name not in paths or files[surf_name].get('format') != SURFACE_FORMAT):
                     raise ValueError('Undeclared or mislabeled environment surface materials')
-                read_surface_materials(Path(paths[surf_name]).read_bytes(), expected_asset_id=region)
+                read_surface_materials_file(Path(paths[surf_name]), expected_asset_id=region)
                 references.add(surf_name)
         for role in ['authored','world']:
             pages=registry.get(role,[])
@@ -373,9 +380,12 @@ def profile_bindings(selected, host):
     ordered=[pack for _region,pack in sorted(selected.items(),key=lambda item:(REGION_PRIORITY.get(item[0],99),item[0]))]
     for surf_role,env_key in (('ground_surface_materials','MW34_GROUND_SURFACE_MATERIALS'),
                               ('surface_materials','MW34_SURFACE_MATERIALS')):
-        chosen_pack=next((p for p in ordered if surf_role in p['registry']),None)
-        if chosen_pack is not None:
-            environment[env_key]=chosen_pack['paths'][chosen_pack['registry'][surf_role]]
+        sources = [p for p in ordered if surf_role in p['registry']]
+        # Multiple sources need the prepared catalog; a single source is safe
+        # to expose during preflight before prepare() writes launch resources.
+        if len(sources) == 1:
+            pack = sources[0]
+            environment[env_key] = pack['paths'][pack['registry'][surf_role]]
     return presentation_environment(host, selected, environment)
 
 
@@ -387,6 +397,97 @@ def detail_metadata(selected):
                       sha256=first['files'][name]['sha256'],
                       bytes=first['files'][name]['bytes'])
             for role,name in first['registry']['detail'].items()}
+
+
+def write_merged_surface_materials(selected, role, output):
+    """Keep every distinct selected material; the first region owns name conflicts.
+
+    Preserve the first source's batch bindings for the primary ground surface.
+    Without a stable source-key mapping, names are the only available conflict
+    identity: later regions contribute only previously unseen material names.
+    """
+    ordered = sorted(selected.items(), key=lambda item: (REGION_PRIORITY.get(item[0], 99), item[0]))
+    records_by_name = {}
+    images = []
+    image_bytes = 0
+    first_mesh_hash = None
+    first_binding_names = None
+    for region, pack in ordered:
+        name = pack['registry'].get(role)
+        if name is None:
+            continue
+        source = read_surface_materials_file(Path(pack['paths'][name]), expected_asset_id=region)
+        if first_mesh_hash is None:
+            first_mesh_hash = source['mesh_uv_hash']
+            first_binding_names = [
+                None if index == NO_SURFACE_MATERIAL else source['records'][index]['material_name']
+                for index in source['bindings']
+            ]
+        source_image_indices = {}
+        for record in source['records']:
+            material_name = record['material_name']
+            if material_name in records_by_name:
+                continue
+            updated = record.copy()
+            for field in ('height_image', 'thickness_image'):
+                index = record[field]
+                if index != NO_SURFACE_IMAGE:
+                    if index not in source_image_indices:
+                        image = source['images'][index]
+                        if image_bytes + len(image['pixels']) > MAX_SIDECAR_BYTES:
+                            raise ValueError('Merged surface materials exceed native image byte budget')
+                        image_bytes += len(image['pixels'])
+                        image_name = f'merged_{len(images):04d}'
+                        source_image_indices[index] = len(images)
+                        images.append((image_name, image))
+                    updated[field] = source_image_indices[index]
+            if len(records_by_name) >= MAX_SURFACE_RECORDS or len(images) > MAX_SURFACE_IMAGES:
+                raise ValueError('Merged surface materials exceed native record/image budget')
+            records_by_name[material_name] = updated
+    if first_mesh_hash is None:
+        return None
+
+    records = sorted(records_by_name.values(), key=lambda rec: (
+        rec['asset_id'].encode('utf-8'), rec['material_name'].encode('ascii')))
+    record_indices = {record['material_name']: index for index, record in enumerate(records)}
+    bindings = [NO_SURFACE_MATERIAL if name is None else record_indices[name]
+                for name in first_binding_names]
+    record_bytes = []
+    for record in records:
+        encoded_record = bytearray()
+        for field in ('asset_id', 'material_name'):
+            encoded = record[field].encode('utf-8')
+            encoded_record.extend(struct.pack('<I', len(encoded)))
+            encoded_record.extend(encoded)
+        encoded_record.extend(struct.pack(
+            '<IIfffIffffIIfffffffffffff',
+            record['height_image'], record['thickness_image'], record['height_reference'],
+            record['height_amplitude'], record['max_displacement'], record['tessellation_cap'],
+            *record['uv_scale'], *record['uv_offset'], record['address_mode_u'],
+            record['address_mode_v'], *record['atlas_rect'], record['sss_participation'],
+            *record['sss_tint'], record['sss_radius'], record['thickness_scale'],
+            record['roughness'], record['reflectivity'], record['metallic'],
+        ))
+        record_bytes.append(encoded_record)
+    header_bytes = 32 + 4 * len(bindings)
+    image_headers_bytes = sum(4 + len(name.encode('ascii')) + 20 for name, _ in images)
+    total_bytes = header_bytes + sum(map(len, record_bytes)) + image_headers_bytes + image_bytes
+    if total_bytes > MAX_SIDECAR_BYTES:
+        raise ValueError('Merged surface materials exceed native sidecar byte budget')
+    path = output / (role + '.bin')
+    with path.open('wb') as stream:
+        stream.write(b'BWSFM1\0\0')
+        stream.write(struct.pack('<IIIIQ', 1, len(bindings), len(records), len(images), first_mesh_hash))
+        stream.write(struct.pack('<' + 'I' * len(bindings), *bindings))
+        for encoded_record in record_bytes:
+            stream.write(encoded_record)
+        for name, image in images:
+            encoded = name.encode('ascii')
+            stream.write(struct.pack('<I', len(encoded)))
+            stream.write(encoded)
+            stream.write(struct.pack('<IIIQ', image['role'], image['width'], image['height'], image['hash']))
+            stream.write(image['pixels'])
+    return str(path.resolve())
 
 
 def prepare(selected, host, output):
@@ -409,6 +510,11 @@ def prepare(selected, host, output):
         if not names: continue
         path=output/(role+'.txt');path.write_text(('MW34SNA1' if role=='authored' else 'MW34SNP1')+'\n'+'\n'.join(names)+'\n')
         environment['MW34_SURFACE_NORMALS' if role=='authored' else 'MW34_WORLD_NORMALS']=str(path.resolve())
+    for role, env_key in (('ground_surface_materials', 'MW34_GROUND_SURFACE_MATERIALS'),
+                          ('surface_materials', 'MW34_SURFACE_MATERIALS')):
+        merged = write_merged_surface_materials(selected, role, output)
+        if merged is not None:
+            environment[env_key] = merged
     from mission_lighting import prepare as prepare_lighting
     environment.update(prepare_lighting(selected, output))
     from presentation_policy import environment as presentation_environment

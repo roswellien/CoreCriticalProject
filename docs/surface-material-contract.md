@@ -69,6 +69,25 @@ silently inherit incompatible surface relief or thickness maps:
    metadata). Every bound record's `material_name` must match the batch's
    albedo material name in `BWTEX1`.
 
+For installed environment packs, preparation writes separate merged ground and
+surface sidecars from all selected regions. Until a stable source-key mapping
+exists, material names are the conflict identity, so a name shared by multiple
+regions has one winner:
+`operation1`, `operation2`, `operation3`, `operation4`, `training`, then
+`shared-mechs`, regardless of installation order. Distinct names from later
+regions remain in the catalog; the first selected sidecar for each role supplies
+the batch table and primary ground binding. The prepared sidecar retains each
+winning record's source `asset_id`, remaps its image indices, and must still fit
+the limits below. Native rendering currently uses only the recognized primary
+ground binding; non-ground environment relief stays neutral until a stable
+source-key-to-record mapping is prepared. Regions that need different relief for
+the same material name must use distinct names until that mapping exists.
+The native environment reader permits records from multiple `asset_id` values
+in a prepared catalog; mech and chassis readers still require the one expected
+asset and mesh/UV identity for their own sidecars. Until preparation finishes,
+preflight exposes a source sidecar only when it is the sole selected source for
+that role; mixed-role previews do not bind an incomplete first sidecar.
+
 ## Binary layout (`BWSFM1`)
 
 All multi-byte integers and IEEE-754 `binary32` floats are little-endian.
@@ -81,7 +100,7 @@ All multi-byte integers and IEEE-754 `binary32` floats are little-endian.
 | `8` | `uint32` | `version` | Must be `1` |
 | `12` | `uint32` | `batch_count` | `1..4096`; must match mesh/albedo batch count |
 | `16` | `uint32` | `record_count` | `0..4096` |
-| `20` | `uint32` | `image_count` | `0..64` |
+| `20` | `uint32` | `image_count` | `0..512` |
 | `24` | `uint64` | `mesh_uv_hash` | 64-bit FNV-1a compatibility digest of the bound mesh/UV payload |
 
 ### 2. Batch binding table (`batch_count * 4` bytes)
@@ -92,7 +111,7 @@ All multi-byte integers and IEEE-754 `binary32` floats are little-endian.
 ### 3. Material records (`record_count` entries)
 
 Records must appear in strictly ascending `(asset_id, material_name)` order.
-Each record consists of two length-prefixed identifiers followed by an 88-byte
+Each record consists of two length-prefixed identifiers followed by a 100-byte
 fixed numeric payload:
 
 | Field | Type | Constraints & Semantics |
@@ -116,6 +135,9 @@ fixed numeric payload:
 | `sss_tint` | `float32[3]` | `(r, g, b)` finite in `[0.0, 1.0]` (default `(0.0, 0.0, 0.0)`) |
 | `sss_radius` | `float32` | Finite in `[0.0, 16.0]` host world units (`0.0` when `sss_participation == 0.0`) |
 | `thickness_scale` | `float32` | Finite in `[0.0, 16.0]` host world units (`0.0` when `sss_participation == 0.0`) |
+| `roughness` | `float32` | Finite in `[0.0, 1.0]` (default `0.7`) |
+| `reflectivity` | `float32` | Finite in `[0.0, 1.0]` (default `0.04`) |
+| `metallic` | `float32` | Finite in `[0.0, 1.0]` (default `0.0`) |
 
 ### 4. Image table (`image_count` entries)
 
@@ -143,10 +165,10 @@ with `role == 2` (`THICKNESS`).
 
 - Maximum material records per sidecar: `4096`
 - Maximum batch bindings per sidecar: `4096`
-- Maximum images per sidecar: `64`
+- Maximum images per sidecar: `512`
 - Maximum UTF-8 bytes per identifier: `4096`
 - Maximum total sidecar size and decoded image byte budget per sidecar:
-  `64 MiB` (`67,108,864` bytes). Both the Python and C++ readers check all
+  `256 MiB` (`268,435,456` bytes). Both the Python and C++ readers check all
   length products (`width * height * 4` and cumulative bytes) before allocating
   buffers.
 - Truncated streams, trailing bytes after the last image, duplicate `(asset_id,
