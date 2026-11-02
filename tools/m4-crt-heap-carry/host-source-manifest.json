@@ -49,8 +49,8 @@
       "classification": "authored-host-source"
     },
     "body_dispatch.hpp": {
-      "sha256": "483c3daa2693ce52b0dfcd1d11fde1c4eab71620123f83d694db3fda4ddb8cb9",
-      "bytes": 1836,
+      "sha256": "83a8b76f941e3e10ae4d9f6501dc6acd79dec9bc2b3fdafce254ff680e476ede",
+      "bytes": 2056,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -91,8 +91,8 @@
       "classification": "authored-host-source"
     },
     "campaign_lighting.hpp": {
-      "sha256": "d9e170f9e3021485b123762e6d402054d2a37ca186b704e8037d38d6ab91916e",
-      "bytes": 25309,
+      "sha256": "4491eff56da113839e05991eb631e212a74ed9916dc20299d8b957fb77ef8c23",
+      "bytes": 25812,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -199,8 +199,8 @@
       "classification": "authored-host-source"
     },
     "d3d_provider.inc": {
-      "sha256": "cfc2f8fb2f9c23243c0e3fd5d6011e43989559f7a0d22ce6d7cc35ea245ec258",
-      "bytes": 45225,
+      "sha256": "7a09b1350d81d3e4321f393e0ed97b66201221f124227a3f579364565ad1a610",
+      "bytes": 45301,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -385,8 +385,8 @@
       "classification": "authored-host-source"
     },
     "frontend_stage.inc": {
-      "sha256": "cfce7a50392880fd46a52e6f84430220b2c9dcef62c24ba731339bb899a7ee72",
-      "bytes": 1812,
+      "sha256": "b842ab403ad038526628fe8990d8b2b62583a3c7814c2938d5285848fd5ba845",
+      "bytes": 1858,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -409,8 +409,8 @@
       "classification": "authored-host-source"
     },
     "gpu_hud.inc": {
-      "sha256": "d18f4104dd6bce1f3056f48d3412ca4b54ee37569e97974284cdf53337b567c2",
-      "bytes": 48010,
+      "sha256": "c9a2379a4806613d2f38940554ea1f8c3936bdb5f66272d6a9c302ed4370b7af",
+      "bytes": 48255,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -559,8 +559,8 @@
       "classification": "authored-host-source"
     },
     "mfc_stage.hpp": {
-      "sha256": "1cbe7a3ba94cdeeebb6052aa2dd9c945b06c68499f132691918be00955b62615",
-      "bytes": 314927,
+      "sha256": "7713c127c29c1265ad9392834e36545facc626bf744baa1d11e5a05c09d84b8f",
+      "bytes": 315132,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -793,8 +793,8 @@
       "classification": "authored-host-source"
     },
     "sun_lighting_stage.inc": {
-      "sha256": "efb399a166c4f2341353ce955ca1b56053d624aab1ff89e23deef7631c945bad",
-      "bytes": 3998,
+      "sha256": "3853ca19c122331078533d89ffc877528e8225d4a594e162f60e16d93d9b65a6",
+      "bytes": 4025,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -849,6 +849,12 @@
     "surface_detail.hpp": {
       "sha256": "bfe885bfd4691a518f861911faf657bcfcdd1dde9f78e263d412c5e796e3944d",
       "bytes": 3403,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "surface_access.hpp": {
+      "sha256": "07dfd2366015488d0d4a25153f1b00fd16a3309c80cfbb628bfb37201a727531",
+      "bytes": 948,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -937,8 +943,8 @@
       "classification": "authored-host-source"
     },
     "vdd.inc": {
-      "sha256": "fd527ffc822909e5c5028d6a5ca629cd7791a13a2f768a2659c4825d0fc260fa",
-      "bytes": 62193,
+      "sha256": "67eac2fd03d726d13ce38929bd01dd683a2d72a908387e781c5d7443a3fdc1d0",
+      "bytes": 62641,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -949,20 +955,20 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "84b0e1980acc2c895082db969774e9ca2c4372528c4024a50ff48e19a419f116",
-      "bytes": 207778,
+      "sha256": "c777f5eda3e1709ee167d4573de50521247ffd83f1b0d0cdd5d93e525e587530",
+      "bytes": 211706,
       "decision": "commit",
       "classification": "authored-host-source"
     },
     "widescreen_stage.inc": {
-      "sha256": "621ce2d81f8ba484fdd866a348b76754aba60a376105a1fd079574e408f1793a",
-      "bytes": 11588,
+      "sha256": "11f2ad3d4cf2df5e5079ab361572fd344267e749c1935d9630a8df6e8dac8063",
+      "bytes": 11991,
       "decision": "commit",
       "classification": "authored-host-source"
     },
     "win_bridge.inc": {
-      "sha256": "e344170eaee6a214d175e2c6991959c8ee404f2051f0648edde65b5be3760965",
-      "bytes": 11153,
+      "sha256": "cb8bf15aec22f20fcbb98d91584b662110dd3eacc35aa40fe55cd736d656ae82",
+      "bytes": 11289,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1025,6 +1031,18 @@
       "bytes": 3465,
       "decision": "commit",
       "classification": "authored-host-source"
+    },
+    "camera_history.hpp": {
+      "decision": "commit",
+      "classification": "authored-host-source",
+      "bytes": 8716,
+      "sha256": "bef9f941d9b028a39fca964ec576917b577d9e142b778d4fd5a39b3f96baddb4"
+    },
+    "camera_capture_stage.inc": {
+      "decision": "commit",
+      "classification": "authored-host-source",
+      "bytes": 14438,
+      "sha256": "c7c69a53e6bd81431d9208c5aebf5c4291eb252d9eb0aec5b6312b08d07342a9"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."

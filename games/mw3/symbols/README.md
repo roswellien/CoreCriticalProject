@@ -35,8 +35,11 @@ checks every rule above.
 
 Longer evidence goes in a record here or a dossier under [`../docs/`](../docs/).
 Record entries with binary SHA-256, RVA, original label (`sub_XXXXXXXX` for
-unknown functions), evidence, confidence and any supported alias. No function
-has been assigned a gameplay role yet. Do not copy executable bytes here.
+unknown functions), evidence, confidence and any supported alias. Bounded
+camera/controller dataflow is recorded in the
+[camera history evidence](../../../docs/fidelityfx-camera-history.md). Original
+function names remain `sub_XXXXXXXX`; these records do not establish whole-game
+fidelity or original/native equivalence. Do not copy executable bytes here.
 
 [`sub_00409ED0`](sub_00409ed0.json) has a reviewed static
 [contract](../docs/first-function.md), exact image/slice digests and an extraction
