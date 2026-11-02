@@ -233,6 +233,25 @@ static void temporal_gpu_check(Renderer& renderer,Scene scene){
     result=renderer.capture_temporal(main_view);
     require(result.history_valid&&result.validity[at(23,23)]==255,
             "Diagnostic-only raw geometry did not produce valid static coverage");
+    // Object movement has no temporal motion contract in this static-only stage.
+    // Keep its camera pair valid so camera rejection cannot conceal bad admission.
+    for(unsigned frame:{30U,31U}){
+        independent.frame=frame;diagnostic.temporal_frame=frame;
+        auto& d=diagnostic.draws.front();
+        d.camera_view=std::make_shared<const Snapshot>(independent);
+        auto moving=std::make_shared<ModelInstance>(*d.temporal_model);
+        moving->camera[3]+=.2f;d.temporal_model=moving;
+        if(frame==30){
+            auto changed=std::make_shared<StaticSource>(*d.temporal_source);
+            changed->frame=frame;changed->previous_static=false;
+            changed->world[3]+=.2f;d.temporal_source=changed;
+        }else d.temporal_source.reset();
+        renderer.render(diagnostic,true,true);renderer.complete_camera_history(frame,7);
+        result=renderer.capture_temporal(main_view);
+        require(result.history_valid,"Moving-source check lost its independent camera pair");
+        require(std::none_of(result.validity.begin(),result.validity.end(),[](auto v){return v!=0;}),
+                "Moving or unproved diagnostic geometry inherited static motion");
+    }
     diagnostic.draws.front().count=6;
     bool mismatched_attributes=false;
     try{renderer.render(diagnostic,true,true);}catch(const std::runtime_error& error){

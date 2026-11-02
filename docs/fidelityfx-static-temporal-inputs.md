@@ -224,7 +224,17 @@ Private broken variants for motion sign, output-pixel units, jitter leakage,
 older history, source mutation and resource invalidation fail their respective
 checks. Ordinary sources remain intact.
 
-Same-source native temporal-Off/jitter-Off color comparisons, lighting/stock
-configurations and camera/zoom/pause/reload coverage remain required. Independent
+Same-source native temporal-Off and jitter-Off runs now also complete 2,200
+presentations at both 100% and 50%. All four 801/999/1801/2101 color captures
+match their corresponding jitter-On references exactly; all four additional runs
+report zero Vulkan validation errors. Off produces no temporal images.
+
+The moving-source GPU regression keeps a valid camera pair while an object moves
+or loses its source proof. All six scale/jitter cases remain invalid for that
+object; a private variant omitting the static-source condition fails the assertion.
+Alpha, unknown occlusion, color/guest-depth isolation, source-lifetime and
+per-submission-completion controls also fail their respective checks.
+
+Lighting/stock configurations and camera/zoom/pause/reload coverage remain required. Independent
 review and a draft PR also remain open. No upscaler or frame generation is
-dispatched, and these checks do not establish Stage 2 acceptance.
+dispatched, and these checks do not establish P2 (Stage 3) acceptance.
