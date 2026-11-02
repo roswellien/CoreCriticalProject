@@ -34,4 +34,20 @@ inline void readback(std::uint16_t *destination, const unsigned char *source,
         destination[i] = std::uint16_t(std::lround(std::clamp(value, 0.f, 1.f) * 65535.f));
     }
 }
+// Copy full-resolution D32 first: some presenting adapters return stale values
+// from scaled depth blits. Sample texel centers explicitly at the guest boundary.
+inline void readback_scaled(std::uint16_t *destination, const unsigned char *source,
+                            unsigned width, unsigned height, unsigned raster_width,
+                            unsigned raster_height) {
+    if (!width || !height || !raster_width || !raster_height)
+        throw std::runtime_error("Depth readback dimensions must be positive");
+    for (unsigned y = 0; y < height; ++y) {
+        const auto source_y = (std::uint64_t(2) * y + 1) * raster_height / (2ULL * height);
+        for (unsigned x = 0; x < width; ++x) {
+            const auto source_x = (std::uint64_t(2) * x + 1) * raster_width / (2ULL * width);
+            readback(destination + std::size_t(y) * width + x,
+                     source + (source_y * raster_width + source_x) * sizeof(float), 1);
+        }
+    }
+}
 } // namespace mw34::depth

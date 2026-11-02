@@ -61,6 +61,7 @@
 #include "d3d_scene_frag.h"
 #include "fxaa_vert.h"
 #include "fxaa_frag.h"
+#include "world_coverage_frag.h"
 #include "frontend_canvas.hpp"
 #include "launcher_display.hpp"
 
@@ -180,6 +181,7 @@ struct Scene {
     bool has_depth;
     bool frontend_canvas{};
     bool hud{}; // Host HUD/overlay draws keep their original sampling and follow world AA.
+    bool guest_surface_write{}; // DirectDraw surface operation outside the 3D command stream.
     std::vector<unsigned char> vertices; // 32-byte TL vertices, triangle list
     std::vector<TextureRef> textures;
     std::vector<Draw> draws;
@@ -194,6 +196,12 @@ struct Scene {
 // Scene and presentation submissions use separate command pools and fences on one queue.
 class Renderer {
   public:
+    enum class ColorTarget { device_default, rgba8 };
+    // An explicit format preference lets format-sensitive callers exercise the
+    // RGBA fallback without changing device capabilities or process settings.
+    explicit Renderer(ColorTarget color_target = ColorTarget::device_default)
+        : require_rgba8(color_target == ColorTarget::rgba8) {}
+    bool alpha_target() const { return rgba; }
     std::string device_name;
     std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{}, combined_draws{};
     using PerfOverlay = mw34::performance::Overlay;
@@ -318,14 +326,16 @@ class Renderer {
         VkImageBlit blit{};
         blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {int(w), int(h), 1};
-        blit.dstOffsets[1] = {int(swapExtent.width), int(swapExtent.height), 1};
         // Original menu/movie rasters retain their proportions in the centre.
-        // A guest-resolution readback of the corrected world spans the wide view.
-        if (!wide_world) {
-            const double fit =
-                std::min(double(swapExtent.width) / w, double(swapExtent.height) / h);
-            const int dw = int(std::lround(w * fit)), dh = int(std::lround(h * fit)),
-                      dx = (int(swapExtent.width) - dw) / 2, dy = (int(swapExtent.height) - dh) / 2;
+        // A world readback must use the resident output's aspect ratio, rather
+        // than stretching to the window on frames that need a guest upload.
+        const auto destination = mw34::display::upload_presentation_rect(
+            w, h, remaster_width(), remaster_height(), swapExtent.width, swapExtent.height,
+            wide_world);
+        blit.dstOffsets[0] = {destination.left, destination.top, 0};
+        blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
+        if (destination.left || destination.top || destination.right != LONG(swapExtent.width) ||
+            destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -333,8 +343,6 @@ class Renderer {
             bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT);
-            blit.dstOffsets[0] = {dx, dy, 0};
-            blit.dstOffsets[1] = {dx + dw, dy + dh, 1};
         }
         if (dxgi.active() && wide_world && remaster_width()) {
             const auto fit = mw34::frontend::CanvasFit::fit(remaster_width(), remaster_height(),
@@ -399,6 +407,7 @@ class Renderer {
     // true also covers hidden/minimized windows, where no image needs to be presented.
     bool present_resident(HWND hwnd, unsigned w, unsigned h) {
         HostFpEnvironment fp;
+        finish_world();
         if (!::IsWindowVisible(hwnd))
             return true;
         if (hwnd != presentParent || !child || !presentable || (!windowSurface && !dxgi.active()) ||
@@ -468,10 +477,12 @@ class Renderer {
         // differs).
         const auto ss = mw34::display::samples(std::getenv("MW34_REMASTER_AA"));
         const double ow = double(rw) / ss.x, oh = double(rh) / ss.y;
-        const double fit = std::min(double(swapExtent.width) / ow, double(swapExtent.height) / oh);
-        const int dw = int(std::lround(ow * fit)), dh = int(std::lround(oh * fit)),
-                  dx = (int(swapExtent.width) - dw) / 2, dy = (int(swapExtent.height) - dh) / 2;
-        if (dx > 0 || dy > 0) {
+        const auto destination = mw34::display::presentation_rect(ow, oh, swapExtent.width,
+                                                                 swapExtent.height);
+        const int dw = destination.right - destination.left;
+        const int dh = destination.bottom - destination.top;
+        if (destination.left || destination.top || destination.right != LONG(swapExtent.width) ||
+            destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -484,8 +495,8 @@ class Renderer {
         VkImageBlit blit{};
         blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {int(rw), int(rh), 1};
-        blit.dstOffsets[0] = {dx, dy, 0};
-        blit.dstOffsets[1] = {dx + dw, dy + dh, 1};
+        blit.dstOffsets[0] = {destination.left, destination.top, 0};
+        blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
         f.vkCmdBlitImage(presentCmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                          (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
@@ -831,6 +842,7 @@ class Renderer {
     // Called before the performance overlay/presentation if no HUD followed the world.
     void finish_world() {
         HostFpEnvironment fp;
+        select_world_target(false, false);
         if (!fxaa_enabled() || !quality_world_dirty || !colorImage.image)
             return;
         settle();
@@ -853,10 +865,24 @@ class Renderer {
     std::uint64_t emission_draw_records{}, emission_payloads{};
     // Query the actual scene/presenter device, avoiding a throwaway render device
     // when enhanced texture banks need dimensions beyond the original 256 cap.
-    unsigned max_texture_dimension(HWND) {
+    unsigned max_texture_dimension(HWND window) {
         HostFpEnvironment fp;
-        if (!device)
+        // The explicit bridge selects by adapter identity and needs no WSI window.
+        if (!device && DxgiPresent::requested())
             init();
+        if (!device) {
+            // Capability queries can precede the first Flip. Select against the
+            // actual window now, before texture banks bind us to an adapter.
+            if (::IsWindow(window)) {
+                child = makeChild(window);
+                if (!child)
+                    throw std::runtime_error("Cannot create Vulkan capability-query window");
+                presentParent = window;
+                init(child);
+            } else {
+                return unbound_texture_dimension();
+            }
+        }
         if (!device)
             throw std::runtime_error("Vulkan device unavailable for enhanced texture capabilities");
         VkPhysicalDeviceProperties p{};
@@ -891,6 +917,9 @@ class Renderer {
     float current_scale() const { return scale; }
     void request_scale(float s) { scale_req = s; }
     std::uint64_t readbacks{}, target_uploads{};
+    std::uint64_t reduced_world_scenes{}, world_promotions{}, coverage_scenes{}, coverage_draws{};
+    unsigned raster_width() const { return rw; }
+    unsigned raster_height() const { return rh; }
     // A scene without copy-back is not waited for; the next scene or copy-back waits before reusing
     // the command pool, upload, vertex and descriptor resources, so the game computes the next
     // scene while the GPU renders this one.
@@ -912,6 +941,43 @@ class Renderer {
         if (s.width != width || s.height != height || scale_req != scale ||
             s.frontend_canvas != target_frontend)
             target(s.width, s.height, s.frontend_canvas);
+        if (can_reconstruct_world(s, upload_in, readback_out))
+            render_reconstructed_world(s);
+        else
+            render_scene(s, upload_in, readback_out);
+    }
+  private:
+    void render_scene(Scene &s, bool upload_in, bool readback_out) {
+        HostFpEnvironment fp;
+        settle();
+        if (!device)
+            init();
+        if (s.width != width || s.height != height || scale_req != scale ||
+            s.frontend_canvas != target_frontend)
+            target(s.width, s.height, s.frontend_canvas);
+        if (worldColor.image && reconstruction_stage == ReconstructionStage::normal) {
+            // A depth-only frame may retain full-resolution HUD color. Reduce
+            // only when a full color clear replaces every retained pixel.
+            const auto cleared = leading_full_clear(s);
+            if (!s.hud && !reduced_world_active && !s.draws.empty() &&
+                fxaa_enabled() && !retained_color_warning) {
+                std::fprintf(stderr, "World resolution: non-reconstructed submissions retain output resolution; "
+                                     "world FXAA applies separately to reconstructed opaque batches\n");
+                retained_color_warning = true;
+            }
+            const bool restart = !s.hud && !s.frontend_canvas &&
+                (cleared & 1);
+            if (restart) quality_world_dirty = false;
+            // An imported guest image can contain UI or software-rendered
+            // pixels. Preserve its full output resolution unless this same
+            // submission proves a complete color replacement with a clear.
+            if (s.hud || s.guest_surface_write || readback_out || s.frontend_canvas ||
+                (upload_in && !restart))
+                select_world_target(false, false);
+            else if (restart)
+                select_world_target(true, upload_in);
+            settle();
+        }
         if (upload_in)
             quality_world_dirty = false;
         const VkDeviceSize pixels = VkDeviceSize(width) * height;
@@ -923,7 +989,8 @@ class Renderer {
                            depthOffset = mw34::depth::offset(size_t(colorBytes)),
                            depthBytes = pixels * sizeof(float);
         ensure(upload, depthOffset + depthBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        ensure(readback, depthOffset + depthBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        ensure(readback, depthOffset + VkDeviceSize(rw) * rh * sizeof(float),
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         ensure(vertexBuffer, std::max<VkDeviceSize>(s.vertices.size(), 32),
                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         auto *up = static_cast<unsigned char *>(upload.mapped);
@@ -945,7 +1012,8 @@ class Renderer {
         const auto environment = (s.hud || s.frontend_canvas)
                                      ? mw34::sun::settings()
                                      : mw34::sun::current_settings(s.detail_time);
-        apply_atmosphere(s, environment);
+        if (!world_scene_prepared)
+            apply_atmosphere(s, environment);
         if (!s.vertices.empty())
             std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
         // Collect each immutable geometry upload once even if several instances use it.
@@ -1036,8 +1104,26 @@ class Renderer {
                 tp += VkDeviceSize(t->width) * t->height * 4;
             }
         }
-        const ShadowFrame shadowFrame = prepare_shadow(s, environment);
-        const auto fixtureLights = prepare_fixture_shadows(s, bound);
+        ShadowFrame localShadowFrame;
+        const ShadowFrame *shadowFrame = &localShadowFrame;
+        mw34::effects::Uniform localFixtureLights{};
+        const mw34::effects::Uniform *fixtureLights = &localFixtureLights;
+        if (world_scene_prepared) {
+            if (!world_shadow_scene)
+                throw std::runtime_error("Reconstructed scene is missing its shadow source");
+            if (!world_shadow_inputs_ready) {
+                world_shadow_frame = prepare_shadow(*world_shadow_scene, environment);
+                // Batching owns the full captured vertex buffer while the source
+                // scene retains every draw needed to prepare shared shadow maps.
+                world_fixture_lights = prepare_fixture_shadows(*world_shadow_scene, bound, s.vertices);
+                world_shadow_inputs_ready = true;
+            }
+            shadowFrame = &world_shadow_frame;
+            fixtureLights = &world_fixture_lights;
+        } else {
+            localShadowFrame = prepare_shadow(s, environment);
+            localFixtureLights = prepare_fixture_shadows(s, bound, s.vertices);
+        }
         // Upload memory can be write-combined: never read it for CPU comparisons.
         mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
         std::vector<unsigned> sunUniformIds(s.draws.size());
@@ -1051,7 +1137,7 @@ class Renderer {
             ensure(effectBuffer, sizeof(mw34::effects::Uniform),
                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
             const mw34::effects::Uniform noEffects{};
-            const auto &fx = s.hud || s.frontend_canvas ? noEffects : fixtureLights;
+            const auto &fx = s.hud || s.frontend_canvas ? noEffects : *fixtureLights;
             std::memcpy(effectBuffer.mapped, &fx, sizeof(fx));
             effect_light_peak = std::max(effect_light_peak, std::uint64_t(fx.params[0]));
             fixture_light_peak = std::max(fixture_light_peak, std::uint64_t(fx.params[2]));
@@ -1104,12 +1190,12 @@ class Renderer {
                                                                      : 0)
                             : *dbg == '2' ? 2.f
                                           : 1.f + float(at % 13) / 13.f;
-                    if (shadowFrame.active) {
+                    if (shadowFrame->active) {
                         const auto &sun = environment;
                         for (unsigned i = 0; i < 12; ++i)
-                            u.shadow[i] = float(shadowFrame.view.rows[i]);
-                        u.shadow_params = {1.f, float(shadowFrame.view.texel),
-                                           float(sun.shadow_bias * shadowFrame.view.depth_scale),
+                            u.shadow[i] = float(shadowFrame->view.rows[i]);
+                        u.shadow_params = {1.f, float(shadowFrame->view.texel),
+                                           float(sun.shadow_bias * shadowFrame->view.depth_scale),
                                            sun.shadow_darkness};
                     }
                     if (!mw34::materials::normal_maps_enabled() || draw.normal_texture < 0)
@@ -1155,6 +1241,13 @@ class Renderer {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &info;
                 f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+                if (reconstruction_stage == ReconstructionStage::coverage) {
+                    VkDescriptorImageInfo reconstructed{sampler(3U | (3U << 4) | (3U << 8)),
+                        reconstructedColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    w.dstBinding = 1;
+                    w.pImageInfo = &reconstructed;
+                    f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+                }
                 it = sets.emplace(std::make_pair(t, d.sampler), set).first;
             }
             drawSets[i] = it->second;
@@ -1329,11 +1422,16 @@ class Renderer {
         }
         in_attachment_layout = true;
         // Apply world AA before the first HUD pass so text and overlays stay sharp.
-        if (s.hud && quality_world_dirty && fxaa_enabled())
+        if ((s.hud || (s.guest_surface_write && worldColor.image)) &&
+            quality_world_dirty && fxaa_enabled())
             record_fxaa();
-        if (shadowFrame.active && !shadowFrame.reused)
-            record_shadow(shadowFrame);
-        record_fixture_shadows(fixtureLights);
+        if (!world_scene_prepared || !world_shadow_recorded) {
+            if (shadowFrame->active && !shadowFrame->reused)
+                record_shadow(*shadowFrame);
+            record_fixture_shadows(*fixtureLights);
+            if (world_scene_prepared)
+                world_shadow_recorded = true;
+        }
         VkRenderPassBeginInfo rb{};
         rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rb.renderPass = renderPass;
@@ -1474,13 +1572,18 @@ class Renderer {
                                      sizeof(Push), &d.push);
             }
             f.vkCmdDraw(cmd, vertexCount, 1, d.model && d.model->world ? 0 : d.first, 0);
-            draws += logicalDraws;
-            ++submitted_draws;
-            combined_draws += logicalDraws - 1;
+            if (reconstruction_stage == ReconstructionStage::coverage)
+                coverage_draws += logicalDraws;
+            else {
+                draws += logicalDraws;
+                ++submitted_draws;
+                combined_draws += logicalDraws - 1;
+            }
         }
         f.vkCmdEndRenderPass(cmd);
-        if (!s.hud && !s.draws.empty())
+        if (!s.hud && !s.draws.empty() && (!worldColor.image || reduced_world_active))
             quality_world_dirty = true;
+        if (reduced_world_active) ++reduced_world_scenes;
         if (readback_out) {
             barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1508,13 +1611,15 @@ class Renderer {
         si.pCommandBuffers = &cmd;
         check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
         fixture_atlas_submitted();
-        ++scenes;
+        if (reconstruction_stage != ReconstructionStage::coverage)
+            ++scenes;
         if (readback_out) {
             check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait");
             copy_back(s);
         } else
             scene_pending = true;
     }
+  public:
     // Copies the resident target images into s.color/s.depth (s sized to the target).
     void fetch_resident(Scene &s) {
         HostFpEnvironment fp;
@@ -1529,6 +1634,9 @@ class Renderer {
         check(f.vkBeginCommandBuffer(cmd, &bi), "begin readback");
         const VkDeviceSize pixels = VkDeviceSize(width) * height,
                            colorBytes = pixels * (rgba ? 4 : 2);
+        ensure(readback, mw34::depth::offset(size_t(colorBytes)) +
+                             VkDeviceSize(rw) * rh * sizeof(float),
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         if (in_attachment_layout) {
             barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1560,7 +1668,8 @@ class Renderer {
         copy_back(s);
     }
     // The caller has waited for GPU writes and sized both output vectors. The
-    // readback buffer packs all color bytes first, followed by guest-resolution D16.
+    // readback buffer packs guest color bytes first, then full-raster D32 depth.
+    // Depth is sampled and quantized only at the guest boundary.
     // RGB565 quantization deliberately uses integer rounding; preserve this arithmetic.
     void copy_back(Scene &s) {
         const VkDeviceSize pixels = VkDeviceSize(width) * height,
@@ -1574,11 +1683,66 @@ class Renderer {
             }
         } else
             std::memcpy(s.color.data(), rd, colorBytes);
-        mw34::depth::readback(s.depth.data(), rd + mw34::depth::offset(size_t(colorBytes)),
-                              size_t(pixels));
+        mw34::depth::readback_scaled(s.depth.data(), rd + mw34::depth::offset(size_t(colorBytes)),
+                                     width, height, rw, rh);
     }
 
   private:
+    // Enumeration may precede window creation. Advertise a limit every graphics
+    // adapter supports, without creating a device before presentation can choose.
+    static unsigned unbound_texture_dimension() {
+        struct Probe {
+            HMODULE library{};
+            VkInstance instance{};
+            PFN_vkDestroyInstance destroy{};
+            ~Probe() {
+                if (instance && destroy) destroy(instance, nullptr);
+                if (library) ::FreeLibrary(library);
+            }
+        } probe;
+        probe.library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!probe.library)
+            throw std::runtime_error("Vulkan capability loader unavailable");
+        const auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+            ::GetProcAddress(probe.library, "vkGetInstanceProcAddr"));
+        if (!get) throw std::runtime_error("Vulkan capability entry point unavailable");
+        const auto create = reinterpret_cast<PFN_vkCreateInstance>(get(nullptr, "vkCreateInstance"));
+        if (!create) throw std::runtime_error("Vulkan capability instance entry point unavailable");
+        VkInstanceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        check(create(&info, nullptr, &probe.instance), "create capability instance");
+        probe.destroy = reinterpret_cast<PFN_vkDestroyInstance>(get(probe.instance, "vkDestroyInstance"));
+        const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+            get(probe.instance, "vkEnumeratePhysicalDevices"));
+        const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+            get(probe.instance, "vkGetPhysicalDeviceProperties"));
+        const auto queues = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
+            get(probe.instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+        if (!probe.destroy || !enumerate || !properties || !queues)
+            throw std::runtime_error("Vulkan capability functions unavailable");
+        unsigned count{};
+        check(enumerate(probe.instance, &count, nullptr), "enumerate capability adapters");
+        std::vector<VkPhysicalDevice> adapters(count);
+        check(enumerate(probe.instance, &count, adapters.data()), "read capability adapters");
+        unsigned limit{};
+        for (unsigned index = 0; index < count; ++index) {
+            unsigned queue_count{};
+            queues(adapters[index], &queue_count, nullptr);
+            std::vector<VkQueueFamilyProperties> families(queue_count);
+            queues(adapters[index], &queue_count, families.data());
+            const bool graphics = std::any_of(families.begin(), families.end(), [](const auto &family) {
+                return family.queueCount && (family.queueFlags & VK_QUEUE_GRAPHICS_BIT);
+            });
+            if (!graphics) continue;
+            VkPhysicalDeviceProperties device_properties{};
+            properties(adapters[index], &device_properties);
+            const auto supported = device_properties.limits.maxImageDimension2D;
+            limit = limit ? std::min(limit, supported) : supported;
+        }
+        if (!limit) throw std::runtime_error("No graphics adapter supplies Vulkan texture limits");
+        return limit;
+    }
+    const bool require_rgba8;
     DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
@@ -2330,7 +2494,7 @@ class Renderer {
         f.vkGetPhysicalDeviceFormatProperties(gpu, VK_FORMAT_R5G6B5_UNORM_PACK16, &cp);
         const VkFormatFeatureFlags need =
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT;
-        rgba = (cp.optimalTilingFeatures & need) != need;
+        rgba = require_rgba8 || (cp.optimalTilingFeatures & need) != need;
         float priority = 1;
         VkDeviceQueueCreateInfo q{};
         q.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -2518,12 +2682,13 @@ class Renderer {
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         check(f.vkCreateFence(device, &fci, nullptr, &fence), "fence");
-        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        const VkDescriptorSetLayoutBinding bindings[2]{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 1;
-        li.pBindings = &b;
+        li.bindingCount = world_scale_percent() < 100 ? 2 : 1;
+        li.pBindings = bindings;
         check(f.vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout),
               "descriptor set layout");
         VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -2602,6 +2767,8 @@ class Renderer {
         };
         vert = module(d3d_scene_vert_spv, sizeof(d3d_scene_vert_spv));
         frag = module(d3d_scene_frag_spv, sizeof(d3d_scene_frag_spv));
+        if (world_scale_percent() < 100)
+            coverageFrag = module(world_coverage_frag_spv, sizeof(world_coverage_frag_spv));
         if (gpu_models()) {
             modelVert = module(model_scene_vert_spv, sizeof(model_scene_vert_spv));
             worldVert = module(world_scene_vert_spv, sizeof(world_scene_vert_spv));
@@ -2925,6 +3092,7 @@ class Renderer {
     void target(unsigned w, unsigned h, bool frontend) {
         target_frontend = frontend;
         f.vkDeviceWaitIdle(device);
+        destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
@@ -2981,7 +3149,7 @@ class Renderer {
                      remaster_width(), remaster_height(), rw, rh, samples.x, samples.y,
                      unsigned(target_frontend));
         scale_x = float(rw) / float(w);
-        if (rw != w || rh != h) {
+        if (rw != w || rh != h || world_scale_percent() != 100) {
             image(colorLo.image, colorLo.memory, colorLo.view, w, h,
                   rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -3027,12 +3195,13 @@ class Renderer {
         }
         width = w;
         height = h;
+        create_world_target();
     }
     void pool(unsigned n) {
         if (descriptorPool)
             f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
         const std::array<VkDescriptorPoolSize, 3> ps{
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 2 + 2},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 3 + 2},
              {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
              {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}}};
         VkDescriptorPoolCreateInfo pi{};
@@ -3079,7 +3248,8 @@ class Renderer {
                         bool lit = false) {
         // points uses bit56 (0/1); bit57 distinguishes this private model pipeline.
         const std::uint64_t key = k.packed() | (model ? (1ULL << 57) : 0ULL) |
-                                  (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL);
+                                  (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL) |
+                                  (reconstruction_stage == ReconstructionStage::coverage ? (1ULL << 60) : 0ULL);
         auto it = pipelines.find(key);
         if (it != pipelines.end())
             return it->second;
@@ -3090,6 +3260,8 @@ class Renderer {
             st[i].module =
                 lit ? (i ? sunFrag : (world ? sunWorldVert : (model ? sunModelVert : sunTlVert)))
                     : (i ? frag : (world ? worldVert : (model ? modelVert : vert)));
+            if (i && reconstruction_stage == ReconstructionStage::coverage)
+                st[i].module = coverageFrag;
             st[i].pName = "main";
         }
         VkVertexInputBindingDescription vb{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
@@ -3195,7 +3367,8 @@ class Renderer {
         VkPipeline p{};
         check(f.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &p),
               "graphics pipeline");
-        pipelineWarmup.record(key);
+        if (reconstruction_stage != ReconstructionStage::coverage)
+            pipelineWarmup.record(key);
         return pipelines[key] = p;
     }
     void barrier(VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags src,
@@ -3260,32 +3433,24 @@ class Renderer {
         blit_img(depthLo.image, width, height, depthImage.image, rw, rh, VK_IMAGE_ASPECT_DEPTH_BIT,
                  VK_FILTER_NEAREST);
     }
-    // Guest-resolution copy of the target images (which are in transfer-source layout) into the
-    // readback buffer.
+    // Guest color plus full-raster D32 copy. Keep depth resampling out of the
+    // driver's image-blit path; copy_back samples it at the guest boundary.
     void copy_out_scaled(VkDeviceSize depthOffset) {
         if (rw == width && rh == height) {
             copyOut(colorImage.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
             copyOut(depthImage.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT);
             return;
         }
-        for (auto [img, aspect] :
-             {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)},
-              {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
-            barrier(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        barrier(colorLo.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         blit_img(colorImage.image, rw, rh, colorLo.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT,
                  VK_FILTER_LINEAR);
-        blit_img(depthImage.image, rw, rh, depthLo.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT,
-                 VK_FILTER_NEAREST);
-        for (auto [img, aspect] :
-             {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)},
-              {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
-            barrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        barrier(colorLo.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         copyOut(colorLo.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
-        copyOut(depthLo.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT);
+        copyOut(depthImage.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT, rw, rh);
     }
     void copyIn(VkBuffer buf, VkDeviceSize off, VkImage img, unsigned w, unsigned h,
                 VkImageAspectFlags aspect) {
@@ -3295,11 +3460,12 @@ class Renderer {
         c.imageExtent = {w, h, 1};
         f.vkCmdCopyBufferToImage(cmd, buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
     }
-    void copyOut(VkImage img, VkBuffer buf, VkDeviceSize off, VkImageAspectFlags aspect) {
+    void copyOut(VkImage img, VkBuffer buf, VkDeviceSize off, VkImageAspectFlags aspect,
+                 unsigned copy_width = 0, unsigned copy_height = 0) {
         VkBufferImageCopy c{};
         c.bufferOffset = off;
         c.imageSubresource = {aspect, 0, 0, 1};
-        c.imageExtent = {width, height, 1};
+        c.imageExtent = {copy_width ? copy_width : width, copy_height ? copy_height : height, 1};
         f.vkCmdCopyImageToBuffer(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
     }
     // The child owns presentation pixels while input remains with the game window.
@@ -3552,6 +3718,9 @@ class Renderer {
         }
         f.vkDeviceWaitIdle(device);
         pipelineWarmup.save();
+        if (coverage_scenes)
+            std::fprintf(stderr, "World reconstruction: %llu opaque scenes, %llu coverage draws\n",
+                         (unsigned long long)coverage_scenes, (unsigned long long)coverage_draws);
         std::fprintf(stderr, "Submission: %llu logical draws, %llu GPU draws, %llu adjacent TL draws combined\n",
             (unsigned long long)draws, (unsigned long long)submitted_draws,
             (unsigned long long)combined_draws);
@@ -3565,6 +3734,8 @@ class Renderer {
             f.vkDestroyShaderModule(device, qualityVert, nullptr);
         if (qualityFrag)
             f.vkDestroyShaderModule(device, qualityFrag, nullptr);
+        if (coverageFrag)
+            f.vkDestroyShaderModule(device, coverageFrag, nullptr);
         for (auto &[key, b] : model_buffers)
             for (Buffer *p : {&b.local, &b.staging}) {
                 if (p->buffer)
@@ -3607,6 +3778,12 @@ class Renderer {
                 f.vkDestroyBuffer(device, b->buffer, nullptr);
                 f.vkFreeMemory(device, b->memory, nullptr);
             }
+        if (worldColor.image) {
+            std::fprintf(stderr, "World resolution: reduced scenes %llu, promotions %llu\n",
+                         (unsigned long long)reduced_world_scenes,
+                         (unsigned long long)world_promotions);
+        }
+        destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
@@ -3667,6 +3844,7 @@ class Renderer {
         ::FreeLibrary(static_cast<HMODULE>(library));
         device = {};
     }
+#include "world_resolution_stage.inc"
 #include "quality_stage.inc"
 };
 } // namespace mw34::vkscene
