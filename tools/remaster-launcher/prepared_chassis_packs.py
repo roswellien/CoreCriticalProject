@@ -205,6 +205,8 @@ def select(metadata, host, verification=None, appearance_mode=None):
                     selected['legacy'], pages, coverage = choose(legacy, upgraded, appearance_mode)
                     if pages and 2 not in host.get('normal_map_formats', []):
                         raise ValueError('Selected appearance requires normal map format 2')
+                    if pages and 1 not in host.get('authored_normal_catalog_versions', []):
+                        raise ValueError('Selected appearance requires authored normal catalog version 1')
                     selected.update(appearance_normal_pages=pages, appearance=coverage)
                 result.append(selected)
                 if appearance_mode == 'new' and owned is not None:
