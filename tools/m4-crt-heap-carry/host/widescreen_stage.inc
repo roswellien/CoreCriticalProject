@@ -113,8 +113,16 @@ void wide_adapt_tl(mw34::vkscene::Scene&sc,mw34::vkscene::Draw&d,unsigned role,c
   if(d.sun_tl){auto light=std::make_shared<mw34::sun::Tl>(*d.sun_tl);light->projection[1]/=k;light->projection[3]=a+(light->projection[3]+.5f-a)/k-.5f;d.sun_tl=std::move(light);}
   if(d.sky_view){auto view=std::make_shared<mw34::sun::Tl>(*d.sky_view);view->projection[1]/=k;view->projection[3]=a+(view->projection[3]+.5f-a)/k-.5f;d.sky_view=std::move(view);}
   for(unsigned i=d.first;i<d.first+d.count;++i){float x;auto*p=sc.vertices.data()+size_t(i)*32;std::memcpy(&x,p,4);x=role==WideReticle?a+(x-a)/k:a+(x+.5f-a)/k-.5f;std::memcpy(p,&x,4);}}
+ if(d.temporal_model){
+  auto model=std::make_shared<mw34::vkscene::ModelInstance>(*d.temporal_model);
+  const float anchor=wide_anchor(role,role==WideZoom?zoom_a:model->projection[3],sc.width);
+  model->projection[1]/=k;
+  model->projection[3]=anchor+(model->projection[3]+.5f-anchor)/k-.5f;
+  d.temporal_model=std::move(model);
+ }
  if(d.camera_view){auto view=std::make_shared<mw34::temporal::Snapshot>(*d.camera_view);
-  if(d.model)view->projection=d.model->projection;
+  if(d.temporal_model)view->projection=d.temporal_model->projection;
+  else if(d.model)view->projection=d.model->projection;
   else if(d.sun_tl)view->projection=d.sun_tl->projection;
   else if(d.sky_view)view->projection=d.sky_view->projection;
   else{d.camera_view.reset();view.reset();} // Unproven adapted TL projection is not temporal input.

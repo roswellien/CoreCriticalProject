@@ -151,8 +151,10 @@ class History {
         pairs_.clear();
         // Keep this frame poisoned even if a later submission has valid data.
         pending_.clear();
-        pending_reset_ = reason;
-        next_reset_ = reason;
+        // Preserve the first rejection; later cleanup must not hide its cause.
+        if (pending_reset_ == Reset::none)
+            pending_reset_ = reason;
+        next_reset_ = pending_reset_;
     }
     void observe(std::shared_ptr<const Snapshot> snapshot) {
         if (pending_reset_ != Reset::none)

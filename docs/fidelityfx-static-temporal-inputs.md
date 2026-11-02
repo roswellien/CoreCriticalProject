@@ -151,3 +151,48 @@ still reject history; the first is 2042. Captured temporal images at
 temporal image. Thus the power-up defect is narrowed, while native visibility
 coverage and remaining history rejection still block P2 acceptance. No FSR or
 frame-generation dispatch is enabled, and no release is produced.
+
+## Visible source and color isolation
+
+A private offscreen prefix replay isolated the earlier all-invalid result: the
+72 inspected `healthy` draws produce 184 valid pixels alone, all occluded by earlier
+native geometry. That replay is diagnostic evidence, not live native acceptance.
+The visible occluder was `g29`, an ordinary 39-polygon, 54-vertex mesh in an existing
+cell placement, excluded by the candidate-name filter. No new original hook is
+needed. It is now an opt-in diagnostic candidate, still subject to the existing
+cell/placement/descendant ownership, source-byte/lifetime, texture-version and
+projection checks. The name itself never establishes static validity.
+
+Its geometry travels in a separate immutable diagnostic model. The original TL
+vertices, color commands and guest depth remain authoritative. Only candidates
+whose captured vertex bytes remain identical qualify; reconstructed/clipped changes
+are rejected. Diagnostic geometry shares the existing immutable upload queue and
+has an independently adapted widescreen projection. The ordinary color path does
+not consume it. A native experiment that used the ordinary raw-world color bridge
+changed the reference image and was rejected.
+
+The corrected native run completed 2,200 RX 9070 Vulkan/DXGI presentations with the
+published 1.0.46 translated module, all 13 verified published packs, 100% scale,
+jitter On and lighting Off. Four color captures at 801/999/1801/2101 match the prior
+reference byte-for-byte. Valid static coverage is sparse: 57,015 pixels at 801,
+56,999 at 999, 57,015 at 1801, 56,725 at 2031, 53,684 at 2071 and 49,031 at 2101.
+All valid pixels at 2071 and 2101 have finite motion exceeding 0.01 render pixels
+during W-key movement; median vectors are (1.36084,-0.86129) and
+(3.47107,-0.26893). Vulkan validation reports zero errors. This demonstrates live
+native moving inputs for the inspected surface, not full-scene coverage or FSR.
+
+The first movement rejection at 2042 is a tracked 32-byte source-storage release.
+The lifetime guard remains intact. History now retains the first rejection so a
+later depth clear cannot replace a transition with a misleading guest-write label.
+The regression fails the old behavior and verifies both rejection and recovery.
+Eight transitions remain among frames 1401..2200; other post-power frames retain
+history. This interval differs from the earlier 3,300-frame test.
+
+An authored GPU case places diagnostic geometry separately from original TL color
+and requires unchanged color/guest depth plus valid diagnostic coverage. All six
+50/67/100% jitter Off/On cases pass; a private color-alias control fails the new
+assertion. The 70-case renderer regression matrix and launcher .NET checks pass.
+The initial .NET run lacked SDL3; the existing SHA-256-pinned 3.4.18 archive supplied
+the ignored test dependency before the successful rerun. Remaining native modes,
+current-develop integration, final source matching and independent review are still
+required before P2 acceptance. FSR dispatch and frame generation remain Off.

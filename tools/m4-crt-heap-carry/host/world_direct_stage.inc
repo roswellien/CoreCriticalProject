@@ -45,7 +45,7 @@ std::shared_ptr<WorldScope> world_begin(unsigned node,unsigned frame_base){
   for(size_t i=0;i<decoded->polygons->size();++i){const auto address=(*decoded->polygons)[i].source;if(address<polygons||(address-polygons)%36||(address-polygons)/36>=count)throw std::runtime_error("World decoded polygon ownership mismatch");(*decoded->polygon_lookup)[(address-polygons)/36]=int(i);}
   world_meshes.put(mesh,std::move(bytes),decoded);found=std::move(decoded);++world_mesh_misses;
  }else ++world_mesh_hits;
- auto result=std::make_shared<WorldScope>(*found);if(mw34::temporal::enabled())result->source_bytes=world_meshes.source(mesh);result->node=node;result->name=name;result->frame_base=frame_base;return result;
+ auto result=std::make_shared<WorldScope>(*found);if(mw34::temporal::enabled())result->source_bytes=world_meshes.source(mesh);result->node=node;result->name=name;result->temporal_only=mw34::temporal::enabled()&&name=="g29";result->frame_base=frame_base;return result;
 }
 bool world_edge_enabled(){static const bool on=[]{const char*p=std::getenv("MW34_WORLD_EDGE_ADMIT");return p&&*p=='1';}();return on;}
 std::uint64_t world_edge_admits{},world_edge_rejects{};

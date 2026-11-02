@@ -204,6 +204,41 @@ static void temporal_gpu_check(Renderer& renderer,Scene scene){
     renderer.complete_camera_history(26,0);
     require(renderer.capture_temporal(main_view).width==0&&renderer.temporal_bytes()==0,
             "Non-Flip publication retained stale diagnostic images");
+    // Diagnostic raw geometry must never substitute for the original color draw.
+    Renderer color_reference;
+    Scene diagnostic{};diagnostic.width=diagnostic.height=64;diagnostic.has_depth=true;
+    diagnostic.color.assign(4096,0);diagnostic.depth.assign(4096,0);
+    diagnostic.clears={clear};diagnostic.order={{true,0},{false,0}};diagnostic.temporal_target=7;
+    for(const auto& xy:std::array<std::array<float,2>,3>{{{45,45},{55,45},{45,55}}})
+        add(diagnostic,{xy[0],xy[1],.5f,.5f,0xff2478c0,0,0,0});
+    auto separate=draw(0,3);separate.key.zenable=separate.key.zwrite=1;separate.key.zfunc=7;
+    separate.temporal_model=world(9186,-1);
+    diagnostic.draws={separate};
+    Snapshot independent{};independent.view=main_view;independent.target=7;independent.attachment=8;
+    independent.viewport=9;independent.viewport_rect={0,0,64,64};
+    independent.camera[0]=independent.camera[4]=independent.camera[8]=std::bit_cast<unsigned>(1.f);
+    independent.inverse=independent.camera;independent.projection={1,20,20,32,32,.1f};independent.far_clip=100;
+    for(unsigned frame=27;frame<=29;++frame){
+        independent.frame=frame;diagnostic.temporal_frame=frame;
+        auto& d=diagnostic.draws.front();d.camera_view=std::make_shared<const Snapshot>(independent);
+        auto proof=std::make_shared<StaticSource>();proof->frame=frame;proof->previous_static=frame>27;
+        proof->node=proof->polygon=9186;proof->mesh_bytes=proof->node_bytes=sources.source(1);
+        proof->world={1,0,0,0,0,1,0,0,0,0,1,0};d.temporal_source=proof;
+        Scene reference=diagnostic;reference.draws.front().temporal_model.reset();
+        color_reference.render(reference,true,true);renderer.render(diagnostic,true,true);
+        require(diagnostic.color==reference.color&&diagnostic.depth==reference.depth,
+                "Diagnostic-only geometry changed authoritative color or guest depth");
+        renderer.complete_camera_history(frame,7);
+    }
+    result=renderer.capture_temporal(main_view);
+    require(result.history_valid&&result.validity[at(23,23)]==255,
+            "Diagnostic-only raw geometry did not produce valid static coverage");
+    diagnostic.draws.front().count=6;
+    bool mismatched_attributes=false;
+    try{renderer.render(diagnostic,true,true);}catch(const std::runtime_error& error){
+        mismatched_attributes=std::string(error.what()).find("original attribute count")!=std::string::npos;
+    }
+    require(mismatched_attributes,"Mismatched diagnostic geometry reached vertex attribute fetch");
     std::cout<<"Temporal GPU: signed pixel motion, sampled depth, phase, opaque/alpha validity on "
              <<renderer.device_name<<" at "<<result.width<<"x"<<result.height<<" pass\n";
 }

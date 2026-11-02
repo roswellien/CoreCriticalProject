@@ -339,17 +339,22 @@ bool temporal_ordered_depth_clear(const Scene &scene) const {
     }
     return false;
 }
+const std::shared_ptr<const ModelInstance> &temporal_geometry(const Draw &draw) const {
+    return draw.temporal_model ? draw.temporal_model : draw.model;
+}
 void temporal_append(const Scene &scene) {
     if (!mw34::temporal::enabled() || !scene.temporal_frame || scene.hud || scene.frontend_canvas)
         return;
     std::map<mw34::temporal::View, std::shared_ptr<const mw34::temporal::Snapshot>> views;
-    for (const auto &draw : scene.draws)
-        if (draw.camera_view && draw.model && draw.model->world) {
+    for (const auto &draw : scene.draws) {
+        const auto &model = temporal_geometry(draw);
+        if (draw.camera_view && model && model->world) {
             auto pending = camera_history.pending_view(draw.camera_view->view);
             if (pending && pending->frame == scene.temporal_frame &&
                 pending->target == scene.temporal_target)
                 views.emplace(pending->view, pending);
         }
+    }
     for (auto &[view, slot] : temporal_slots)
         if (slot.frame == scene.temporal_frame && slot.target == scene.temporal_target &&
             slot.camera)
@@ -436,6 +441,7 @@ void temporal_append(const Scene &scene) {
         settle();
         for (std::size_t i = 0; i < count; ++i) {
             const auto &draw = scene.draws[i];
+            const auto &model = temporal_geometry(draw);
             TemporalUniform uniform{};
             uniform.projection = {camera->projection[1], camera->projection[2],
                                   camera->projection[3], camera->projection[4]};
@@ -445,10 +451,10 @@ void temporal_append(const Scene &scene) {
             uniform.jitter = {slot.jitter[0], slot.jitter[1], 0, 0};
             uniform.flags[2] = draw.key.blend && draw.key.src == 5 &&
                                draw.key.dst == 6 && !draw.key.zwrite;
-            if (draw.model) {
-                uniform.camera = draw.model->camera;
-                uniform.flags[0] = draw.model->world ? 1 : 2;
-                const auto &projection = draw.model->projection;
+            if (model) {
+                uniform.camera = model->camera;
+                uniform.flags[0] = model->world ? 1 : 2;
+                const auto &projection = model->projection;
                 uniform.projection = {projection[1], projection[2], projection[3], projection[4]};
                 uniform.depth[0] = projection[0];
                 uniform.depth[1] = projection[5];
@@ -463,7 +469,7 @@ void temporal_append(const Scene &scene) {
                 uniform.depth[3] = previous->projection[5];
             }
             if (draw.temporal_source && draw.camera_view && draw.camera_view->view == view &&
-                draw.model && draw.model->world) {
+                model && model->world) {
                 const auto &source = *draw.temporal_source;
                 const TemporalSlot::SourceKey key{source.cell_owner, source.cell,    source.record,
                                                   source.node,       source.polygon, source.offset};
@@ -478,7 +484,7 @@ void temporal_append(const Scene &scene) {
                                    draw.key.zenable && draw.key.zwrite;
 
             }
-            if (draw.model && !draw.model->world && (draw.push.mode[0] & 32))
+            if (model && !model->world && (draw.push.mode[0] & 32))
                 slot.poisoned = true;
             std::memcpy(static_cast<unsigned char *>(temporal_uniforms.mapped) +
                             i * temporal_stride,
@@ -579,12 +585,13 @@ void temporal_append(const Scene &scene) {
             }
             const auto index = command.index;
             const auto &draw = scene.draws.at(index);
+            const auto &model = temporal_geometry(draw);
             if (!draw.count || !draw.scissor.extent.width || !draw.scissor.extent.height ||
                 draw.temporal_output_only)
                 continue;
             f.vkCmdBindPipeline(
                 cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                temporal_pipeline(draw.key, bool(draw.model), draw.model && draw.model->world));
+                temporal_pipeline(draw.key, bool(model), model && model->world));
             const std::uint32_t offset = std::uint32_t(index * temporal_stride);
             const VkDescriptorSet sets[]{texture_sets[index], uniform_set};
             f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, temporal_layout, 0, 2,
@@ -606,14 +613,14 @@ void temporal_append(const Scene &scene) {
             const VkRect2D scissor{{x0, y0}, {unsigned(x1 - x0), unsigned(y1 - y0)}};
             f.vkCmdSetScissor(cmd, 0, 1, &scissor);
             Push push = draw.push;
-            if (draw.model) {
-                const auto &geometry = model_buffers.at(draw.model->geometry->key);
-                const VkBuffer buffers[]{geometry.local.buffer, draw.model->world
+            if (model) {
+                const auto &geometry = model_buffers.at(model->geometry->key);
+                const VkBuffer buffers[]{geometry.local.buffer, model->world
                                                                     ? temporal_vertices.buffer
                                                                     : geometry.local.buffer};
                 const VkDeviceSize offsets[]{0,
-                                             draw.model->world ? VkDeviceSize(draw.first) * 32 : 0};
-                f.vkCmdBindVertexBuffers(cmd, 0, draw.model->world ? 2 : 1, buffers, offsets);
+                                             model->world ? VkDeviceSize(draw.first) * 32 : 0};
+                f.vkCmdBindVertexBuffers(cmd, 0, model->world ? 2 : 1, buffers, offsets);
             } else {
                 const VkDeviceSize offset = 0;
                 f.vkCmdBindVertexBuffers(cmd, 0, 1, &temporal_vertices.buffer, &offset);
@@ -621,7 +628,7 @@ void temporal_append(const Scene &scene) {
             f.vkCmdPushConstants(cmd, temporal_layout,
                                  VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                  sizeof(push), &push);
-            f.vkCmdDraw(cmd, draw.count, 1, draw.model ? 0 : draw.first, 0);
+            f.vkCmdDraw(cmd, draw.count, 1, model ? 0 : draw.first, 0);
         }
         f.vkCmdEndRenderPass(cmd);
         for (unsigned i = 0; i < 3; ++i)

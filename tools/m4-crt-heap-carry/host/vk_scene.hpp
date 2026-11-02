@@ -150,6 +150,7 @@ struct Draw {
     Push push;
     VkRect2D scissor;
     std::shared_ptr<const ModelInstance> model{};
+    std::shared_ptr<const ModelInstance> temporal_model{};
     std::shared_ptr<const mw34::sun::Tl> sun_tl{};
     unsigned char sky{};
     std::shared_ptr<const mw34::sun::Tl> sky_view{};
@@ -990,8 +991,9 @@ class Renderer {
             for (const auto &draw : s.draws) {
                 // P2 history belongs to admitted static scenery. Cockpit/effect
                 // projections sharing a camera address are not that world view.
-                if (!draw.camera_view || !draw.model || !draw.model->world) continue;
-                if (draw.camera_view->projection != draw.model->projection) {
+                const auto &model = temporal_geometry(draw);
+                if (!draw.camera_view || !model || !model->world) continue;
+                if (draw.camera_view->projection != model->projection) {
                     camera_history.invalidate(mw34::temporal::Reset::invalid);
                     continue;
                 }
@@ -1081,15 +1083,26 @@ class Renderer {
         // Collect each immutable geometry upload once even if several instances use it.
         // std::map keeps pointers stable while additional model entries are inserted.
         std::vector<ModelBuffer *> model_pending;
-        for (const auto &d : s.draws)
-            if (d.model) {
-                if (!gpu_models() || !d.model->geometry)
-                    throw std::runtime_error("GPU model draw without the enabled model path");
-                auto &b = model_buffer(*d.model->geometry);
-                if (!b.uploaded && std::find(model_pending.begin(), model_pending.end(), &b) ==
-                                       model_pending.end())
-                    model_pending.push_back(&b);
+        auto queue_model = [&](const std::shared_ptr<const ModelInstance> &model) {
+            if (!model)
+                return;
+            if (!gpu_models() || !model->geometry)
+                throw std::runtime_error("GPU model draw without the enabled model path");
+            auto &buffer = model_buffer(*model->geometry);
+            if (!buffer.uploaded && std::find(model_pending.begin(), model_pending.end(), &buffer) ==
+                                        model_pending.end())
+                model_pending.push_back(&buffer);
+        };
+        for (const auto &draw : s.draws) {
+            queue_model(draw.model);
+            if (mw34::temporal::enabled() && draw.temporal_model) {
+                if (draw.model || !draw.temporal_model->world || !draw.temporal_model->geometry)
+                    throw std::runtime_error("Diagnostic geometry must be a separate static world source");
+                if (draw.count != draw.temporal_model->geometry->vertices.size())
+                    throw std::runtime_error("Diagnostic geometry does not match the original attribute count");
+                queue_model(draw.temporal_model);
             }
+        }
         // Warmup shares the original immutable upload and completion path.
         // It adds no draw and retains exact geometry identity checks.
         for (const auto &geometry : s.model_warmup) {

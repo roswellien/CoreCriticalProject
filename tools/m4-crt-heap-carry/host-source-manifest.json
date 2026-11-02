@@ -199,8 +199,8 @@
       "classification": "authored-host-source"
     },
     "d3d_provider.inc": {
-      "sha256": "43d183631a70bb81f359246196ba2f9f9f3f021c7a5965c1c690afcfc624b2f8",
-      "bytes": 45461,
+      "sha256": "27957a739dc94bf9b7c2e1517d046639a7048c335cdcc8a0bc9666c9228d0777",
+      "bytes": 46300,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -547,8 +547,8 @@
       "classification": "interoperability-metadata"
     },
     "mfc_stage.hpp": {
-      "sha256": "c6478b1f540eb4278c6277122e147a80e112285b958f9e21039d2b26ff2939c8",
-      "bytes": 314586,
+      "sha256": "bb81894ced4349c067d85eafc612433b60316e27a997281ab1de98fb68d25ea5",
+      "bytes": 314603,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -937,14 +937,14 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "dc1e95653f8c29d20fc356fcdfcc79ff153c96011458feb5e5d532768c70cb0d",
-      "bytes": 210517,
+      "sha256": "564cbdeb7b0abf1977bcc70112202fb110a8eb3cecaeeaa73981f6e817dd51ac",
+      "bytes": 211318,
       "decision": "commit",
       "classification": "authored-host-source"
     },
     "widescreen_stage.inc": {
-      "sha256": "11f2ad3d4cf2df5e5079ab361572fd344267e749c1935d9630a8df6e8dac8063",
-      "bytes": 11991,
+      "sha256": "92a5c3c4a3a59594cf98679703de6dd028f0bba582f3181c24bb90e8b7478aeb",
+      "bytes": 12398,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -973,8 +973,8 @@
       "classification": "authored-host-source"
     },
     "world_direct_stage.inc": {
-      "sha256": "9669b394c7647f57d0fc4a7ed24f48dafc68aff6feea3787c6debc6f303f5abf",
-      "bytes": 12174,
+      "sha256": "418ac047a8e6e584eaaae4ab03c4ce67679a22e4e34b471bcb1eee69cf71bd8c",
+      "bytes": 12235,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -985,8 +985,8 @@
       "classification": "authored-host-source"
     },
     "world_geometry_stage.inc": {
-      "sha256": "91c305f3441a512ae963dd82b6bb3b85a2dfe68686dd0429ebbc2398f7065f0d",
-      "bytes": 11102,
+      "sha256": "a4085bbee63cab6fc37767d631652a3dc7803ee3f79f4c89c47fc0741ef49743",
+      "bytes": 11180,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1017,8 +1017,8 @@
     "camera_history.hpp": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 9315,
-      "sha256": "2625d8899494778689589a5e8ada4ec9b3d63df9393410d9f521c543be5e467b"
+      "bytes": 9450,
+      "sha256": "d999bd9328cb335b49a053ac568b80c75dc66884a6d0a6c86c8793ba3eb71eca"
     },
     "camera_capture_stage.inc": {
       "decision": "commit",
@@ -1065,8 +1065,8 @@
     "temporal_inputs_stage.inc": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 39030,
-      "sha256": "ac16b3632d4d279ccb88b3e157503463bdf00c35407f779003bc9cf33f1097fc"
+      "bytes": 39274,
+      "sha256": "481fb8acb4f06261040dcdfc0078569ae63a8f162f8570ba71a13995b5a65106"
     },
     "temporal_inputs_vert.h": {
       "decision": "commit",
