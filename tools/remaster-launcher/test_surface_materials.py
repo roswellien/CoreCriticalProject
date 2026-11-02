@@ -212,7 +212,7 @@ class SurfaceMaterialsTest(unittest.TestCase):
         oracle.extend(struct.pack("<I", 10) + b"armor_hull")
         oracle.extend(
             struct.pack(
-                "<IIfffIffffIIffffffffff",
+                "<IIfffIffffIIfffffffffffff",
                 0,  # height_armor is sorted image 0
                 0xFFFFFFFF,
                 0.5,
@@ -235,6 +235,9 @@ class SurfaceMaterialsTest(unittest.TestCase):
                 0.0,
                 0.0,
                 0.0,
+                0.7,
+                0.04,
+                0.0,
             )
         )
         # Record 1: ("bushwacker:close", "canopy_glass")
@@ -242,7 +245,7 @@ class SurfaceMaterialsTest(unittest.TestCase):
         oracle.extend(struct.pack("<I", 12) + b"canopy_glass")
         oracle.extend(
             struct.pack(
-                "<IIfffIffffIIffffffffff",
+                "<IIfffIffffIIfffffffffffff",
                 0xFFFFFFFF,
                 1,  # thick_canopy is sorted image 1
                 0.0,
@@ -265,6 +268,9 @@ class SurfaceMaterialsTest(unittest.TestCase):
                 0.75,
                 0.125,
                 0.375,
+                0.7,
+                0.04,
+                0.0,
             )
         )
         # Image 0: height_armor

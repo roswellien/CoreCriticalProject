@@ -235,6 +235,9 @@ def normalize_record(record: dict, image_roles: dict[str, int]) -> dict:
         "sss_tint",
         "sss_radius",
         "thickness_scale",
+        "roughness",
+        "reflectivity",
+        "metallic",
     }
     if not {"asset_id", "material_name"} <= set(record) or set(record) - allowed_keys:
         raise ValueError("Invalid surface material record fields")
@@ -325,6 +328,10 @@ def normalize_record(record: dict, image_roles: dict[str, int]) -> dict:
     ):
         raise ValueError("Non-zero SSS radius, thickness scale, or thickness image requires sss_participation > 0")
 
+    roughness = _f32(record.get("roughness", 0.7), "roughness", 0.0, 1.0)
+    reflectivity = _f32(record.get("reflectivity", 0.04), "reflectivity", 0.0, 1.0)
+    metallic = _f32(record.get("metallic", 0.0), "metallic", 0.0, 1.0)
+
     return {
         "asset_id": record["asset_id"],
         "material_name": record["material_name"],
@@ -343,6 +350,9 @@ def normalize_record(record: dict, image_roles: dict[str, int]) -> dict:
         "sss_tint": sss_tint,
         "sss_radius": sss_radius,
         "thickness_scale": thickness_scale,
+        "roughness": roughness,
+        "reflectivity": reflectivity,
+        "metallic": metallic,
     }
 
 
@@ -457,7 +467,7 @@ def pack_surface_materials(
         out.extend(struct.pack("<I", len(mat_bytes)) + mat_bytes)
         out.extend(
             struct.pack(
-                "<IIfffIffffIIffffffffff",
+                "<IIfffIffffIIfffffffffffff",
                 h_idx,
                 t_idx,
                 rec["height_reference"],
@@ -480,6 +490,9 @@ def pack_surface_materials(
                 rec["sss_tint"][2],
                 rec["sss_radius"],
                 rec["thickness_scale"],
+                rec["roughness"],
+                rec["reflectivity"],
+                rec["metallic"],
             )
         )
 
@@ -585,7 +598,7 @@ def read_surface_materials(
             raise ValueError("Duplicate or unsorted surface material record")
         previous_key = sort_key
 
-        fields = struct.unpack("<IIfffIffffIIffffffffff", take(88))
+        fields = struct.unpack("<IIfffIffffIIfffffffffffff", take(100))
         (
             h_idx,
             t_idx,
@@ -609,6 +622,9 @@ def read_surface_materials(
             tint_b,
             sss_radius,
             thickness_scale,
+            roughness,
+            reflectivity,
+            metallic,
         ) = fields
 
         if h_idx != NO_SURFACE_IMAGE and h_idx >= image_count:
@@ -654,6 +670,10 @@ def read_surface_materials(
         ):
             raise ValueError("SSS parameters set while sss_participation is zero")
 
+        _f32(roughness, "roughness", 0.0, 1.0)
+        _f32(reflectivity, "reflectivity", 0.0, 1.0)
+        _f32(metallic, "metallic", 0.0, 1.0)
+
         raw_records.append(
             {
                 "asset_id": rec_asset,
@@ -673,6 +693,9 @@ def read_surface_materials(
                 "sss_tint": (tint_r, tint_g, tint_b),
                 "sss_radius": sss_radius,
                 "thickness_scale": thickness_scale,
+                "roughness": roughness,
+                "reflectivity": reflectivity,
+                "metallic": metallic,
             }
         )
 

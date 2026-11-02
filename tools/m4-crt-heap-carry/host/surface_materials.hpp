@@ -64,6 +64,9 @@ struct SurfaceMaterialRecord {
     std::array<float, 3> sss_tint{0.0f, 0.0f, 0.0f};
     float sss_radius{0.0f};
     float thickness_scale{0.0f};
+    float roughness{0.7f};
+    float reflectivity{0.04f};
+    float metallic{0.0f};
     // Resolved host-wide image table indices (-1 when absent).
     int host_height_texture{-1};
     int host_thickness_texture{-1};
@@ -261,6 +264,10 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
             (record->sss_radius != 0.0f || record->thickness_scale != 0.0f ||
              record->thickness_image != no_surface_image))
             fail();
+
+        record->roughness = f32(0.0f, 1.0f);
+        record->reflectivity = f32(0.0f, 1.0f);
+        record->metallic = f32(0.0f, 1.0f);
 
         pack.records.push_back(std::move(record));
     }
