@@ -326,21 +326,42 @@ def build_region_terrain_sidecar(
                 if key_filter is not None and key not in key_filter:
                     continue
                 nw, nh, normal_bytes = normal
-                w_col, h_col, fmt, dig = key
-                mat_name = f"tex_{w_col}x{h_col}_{dig:016x}"
-                discovered_materials[mat_name] = (nw, nh, normal_bytes)
+                discovered_materials[key] = (nw, nh, normal_bytes)
 
     records = []
     images = {}
     batch_materials = []
     quality_summary = {}
     visual_entries = []
+    used_names = set()
 
     total_image_bytes = 0
     image_idx = 0
-    for mat_name, (w, h, normal_bytes) in sorted(discovered_materials.items()):
+    for key, (w, h, normal_bytes) in sorted(discovered_materials.items(), key=lambda x: x[0]):
         if len(images) >= MAX_IMAGES:
             break
+
+        # Resolve material name & color bytes
+        w_col, h_col, fmt_col, dig = key
+        mat_name = f"tex_{w_col}x{h_col}_{dig:016x}"
+        color_bytes = None
+        color_w, color_h = w_col, h_col
+        if color_lookup and key in color_lookup:
+            val = color_lookup[key]
+            if isinstance(val, tuple):
+                mat_name = val[0]
+                color_bytes = val[1]
+                if len(val) >= 4:
+                    color_w, color_h = val[2], val[3]
+            else:
+                color_bytes = val
+
+        base_name = mat_name
+        suffix = 2
+        while mat_name in used_names:
+            mat_name = f"{base_name}_{suffix}"
+            suffix += 1
+        used_names.add(mat_name)
 
         # Downsample oversized normals if requested
         if max_dimension > 0 and (w > max_dimension or h > max_dimension):
@@ -350,6 +371,15 @@ def build_region_terrain_sidecar(
                 arr = arr[::stride, ::stride].copy()
                 h, w = arr.shape[:2]
                 normal_bytes = arr.tobytes()
+
+        # Downsample oversized color if requested
+        if color_bytes and max_dimension > 0 and (color_w > max_dimension or color_h > max_dimension):
+            c_stride = max(color_w // max_dimension, color_h // max_dimension)
+            if c_stride > 1:
+                arr_c = np.frombuffer(color_bytes, dtype=np.uint8).reshape(color_h, color_w, 4)
+                arr_c = arr_c[::c_stride, ::c_stride].copy()
+                color_h, color_w = arr_c.shape[:2]
+                color_bytes = arr_c.tobytes()
 
         img_bytes_len = w * h * 4
         if total_image_bytes + img_bytes_len > max_sidecar_bytes - 1048576:
@@ -361,13 +391,12 @@ def build_region_terrain_sidecar(
             prof.update(overrides[mat_name])
 
         height_img_name = f"h_{mat_name}"
-        color_bytes = color_lookup.get((w, h, 1, 0)) if color_lookup else None
 
         h_bytes, h_ref, _ = derive_height_map(
             normal_bytes,
             w,
             h,
-            color_bytes=color_bytes,
+            color_bytes=color_bytes if (color_w, color_h) == (w, h) else None,
             color_weight=prof.get("color_weight", 0.0),
         )
 
@@ -405,8 +434,19 @@ def build_region_terrain_sidecar(
             if contact_sheets_dir:
                 cs_dir = Path(contact_sheets_dir)
                 cs_dir.mkdir(parents=True, exist_ok=True)
+                if color_bytes:
+                    if (color_w, color_h) != (w, h):
+                        stride_y = max(1, color_h // h)
+                        stride_x = max(1, color_w // w)
+                        arr_c = np.frombuffer(color_bytes, dtype=np.uint8).reshape(color_h, color_w, 4)
+                        c_for_cs = arr_c[::stride_y, ::stride_x][:h, :w].copy().tobytes()
+                    else:
+                        c_for_cs = color_bytes
+                else:
+                    c_for_cs = normal_bytes
+
                 cs_bytes = generate_contact_sheet_png(
-                    color_bytes or normal_bytes,
+                    c_for_cs,
                     normal_bytes,
                     h_bytes,
                     renorm_bytes,
@@ -417,7 +457,7 @@ def build_region_terrain_sidecar(
                 (cs_dir / f"{mat_name}_contact_sheet.png").write_bytes(cs_bytes)
 
             if html_report_path:
-                def to_b64(raw: bytes, iw: int, ih: int, max_thumb: int = 256) -> str:
+                def to_b64(raw: bytes, iw: int, ih: int, max_thumb: int = 512) -> str:
                     thumb_w, thumb_h = iw, ih
                     if max_thumb > 0 and (iw > max_thumb or ih > max_thumb):
                         stride = max(iw // max_thumb, ih // max_thumb)
@@ -439,7 +479,7 @@ def build_region_terrain_sidecar(
                     "roughness": float(prof.get("roughness", 0.70)),
                     "reflectivity": float(prof.get("reflectivity", 0.04)),
                     "metallic": float(prof.get("metallic", 0.0)),
-                    "color_data": to_b64(color_bytes, w, h) if color_bytes else None,
+                    "color_data": to_b64(color_bytes, color_w, color_h) if color_bytes else None,
                     "normal_data": to_b64(normal_bytes, w, h),
                     "height_data": to_b64(h_bytes, w, h),
                     "renorm_data": to_b64(renorm_bytes, w, h),

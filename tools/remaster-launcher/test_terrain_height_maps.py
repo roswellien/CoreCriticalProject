@@ -32,6 +32,11 @@ from visualize_terrain_heights import (
     generate_contact_sheet_png,
     generate_html_inspection_report,
 )
+from launch_terrain_inspector import (
+    rgb565_to_rgba8,
+    compute_fast_hash,
+)
+from normal_materials import uncached_pixel_hash
 
 
 @unittest.skipIf(np is None, "Terrain height-map derivation requires NumPy")
@@ -202,6 +207,59 @@ class TerrainHeightMapsTests(unittest.TestCase):
             contact_files = list(cs_dir.glob("*.png"))
             self.assertEqual(len(contact_files), 1)
             self.assertTrue(contact_files[0].read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_rgb565_to_rgba8_conversion(self):
+        # 0x0000 -> black
+        # 0xFFFF -> white
+        # (31 << 11) -> pure red
+        # (63 << 5)  -> pure green
+        # 31         -> pure blue
+        test_words = np.array([0x0000, 0xFFFF, (31 << 11), (63 << 5), 31], dtype=np.uint16)
+        rgba = rgb565_to_rgba8(test_words.tobytes())
+        arr = np.frombuffer(rgba, dtype=np.uint8).reshape(-1, 4)
+
+        np.testing.assert_array_equal(arr[0], [0, 0, 0, 255])
+        np.testing.assert_array_equal(arr[1], [255, 255, 255, 255])
+        np.testing.assert_array_equal(arr[2], [255, 0, 0, 255])
+        np.testing.assert_array_equal(arr[3], [0, 255, 0, 255])
+        np.testing.assert_array_equal(arr[4], [0, 0, 255, 255])
+
+    def test_compute_fast_hash_matches_uncached_pixel_hash(self):
+        data = b"Testing fast FNV-1a hash matching with uncached_pixel_hash 123456789!"
+        h_fast = compute_fast_hash(data)
+        h_py = uncached_pixel_hash(data)
+        self.assertEqual(h_fast, h_py)
+
+    def test_color_lookup_integration_and_albedo_report(self):
+        w, h = 16, 16
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            n_bytes = bytes([128, 128, 255, 255] * (w * h))
+            c_bytes = bytes([200, 150, 100, 255] * (w * h))
+            key = (w, h, 1, 0x9988776655443322)
+            entries = [(key, (w, h, n_bytes))]
+            page_file = temp_path / "normals-000.bin"
+            page_file.write_bytes(pack_surface_bindings(entries))
+
+            color_lookup = {
+                key: ("groad02_test", c_bytes)
+            }
+
+            html_out = temp_path / "report_with_color.html"
+            sidecar_bytes, report = build_region_terrain_sidecar(
+                "training",
+                [page_file],
+                color_lookup=color_lookup,
+                html_report_path=html_out,
+            )
+
+            verified = read_surface_materials(sidecar_bytes, expected_asset_id="training")
+            self.assertEqual(len(verified["records"]), 1)
+            self.assertEqual(verified["records"][0]["material_name"], "groad02_test")
+
+            html_content = html_out.read_text(encoding="utf-8")
+            self.assertIn("groad02_test", html_content)
+            self.assertIn("data:image/png;base64,", html_content)
 
 
 if __name__ == "__main__":
