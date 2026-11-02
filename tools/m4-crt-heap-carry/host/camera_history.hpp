@@ -131,6 +131,19 @@ class History {
     const auto &pairs() const { return pairs_; }
     std::uint64_t completed_frame() const { return last_frame_; }
     bool pending() const { return !pending_.empty(); }
+    std::shared_ptr<const Snapshot> pending_view(const View& view) const {
+        if(pending_reset_!=Reset::none)return {};
+        const auto found=pending_.find(view);
+        return found==pending_.end()?nullptr:found->second;
+    }
+    std::shared_ptr<const Snapshot> previous_for(const Snapshot& current) const {
+        if(pending_reset_!=Reset::none)return {};
+        const auto found=completed_.find(current.view);
+        if(found==completed_.end() || found->second->frame+1!=current.frame ||
+           !current.compatible(*found->second))return {};
+        return found->second;
+    }
+
     Reset last_reset() const { return last_reset_; }
     const char *disagreement() const { return disagreement_; }
     void invalidate(Reset reason) {

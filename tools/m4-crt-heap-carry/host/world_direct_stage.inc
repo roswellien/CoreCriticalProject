@@ -34,7 +34,7 @@ std::shared_ptr<WorldScope> world_begin(unsigned node,unsigned frame_base){
  // Exact fresh byte snapshots, rather than pointer identity, guard mutation and
  // allocator reuse. Dynamic RGB/material state still travels through TL data.
  std::vector<unsigned char> bytes;
- auto span=[&](unsigned address,unsigned length){if(!length)return;if(bytes.size()+length>16*1024*1024||!readable(address,length))throw std::runtime_error("World direct snapshot outside contract");const auto at=bytes.size();bytes.resize(at+length);get_bytes(address,bytes.data()+at,length);};
+ auto span=[&](unsigned address,unsigned length){if(!length)return;if(bytes.size()+length>16*1024*1024||!readable(address,length))throw std::runtime_error("World direct snapshot outside contract");const auto at=bytes.size();bytes.resize(at+length);get_bytes(address,bytes.data()+at,length);if(mw34::temporal::enabled())temporal_track_source(address);};
  span(mesh,0x48);span(load(mesh+0x38),vertices*12);span(load(mesh+0x3c),normals*12);span(polygons,count*36);
  for(unsigned p=0;p<count;++p){const unsigned poly=polygons+p*36,flags=load(poly),n=flags&255;if(n<3||n>128)throw std::runtime_error("World direct corner count outside contract");span(load(poly+8),n*4);if(flags&0x200)span(load(poly+12),n*4);if(load(poly+16))span(load(poly+16),n*8);}
  auto found=world_meshes.find(mesh,bytes);
@@ -45,7 +45,7 @@ std::shared_ptr<WorldScope> world_begin(unsigned node,unsigned frame_base){
   for(size_t i=0;i<decoded->polygons->size();++i){const auto address=(*decoded->polygons)[i].source;if(address<polygons||(address-polygons)%36||(address-polygons)/36>=count)throw std::runtime_error("World decoded polygon ownership mismatch");(*decoded->polygon_lookup)[(address-polygons)/36]=int(i);}
   world_meshes.put(mesh,std::move(bytes),decoded);found=std::move(decoded);++world_mesh_misses;
  }else ++world_mesh_hits;
- auto result=std::make_shared<WorldScope>(*found);result->node=node;result->name=name;result->frame_base=frame_base;return result;
+ auto result=std::make_shared<WorldScope>(*found);if(mw34::temporal::enabled())result->source_bytes=world_meshes.source(mesh);result->node=node;result->name=name;result->frame_base=frame_base;return result;
 }
 bool world_edge_enabled(){static const bool on=[]{const char*p=std::getenv("MW34_WORLD_EDGE_ADMIT");return p&&*p=='1';}();return on;}
 std::uint64_t world_edge_admits{},world_edge_rejects{};
@@ -86,7 +86,7 @@ bool world_edge_admit(D3DCmd& draw,const WorldPolygon& polygon,const OverrideMat
 void world_capture(D3DCmd&draw){
  if(!world_scope||!world_cell_depth||override_suppress_draw()||draw.flags!=D3DPT_TRIANGLEFAN||!draw.indices.empty()||draw.hud_role!=WideWorld||frontend_on())return;
  if(!draw.state_snapshot||draw.state_snapshot->size()<256)throw std::runtime_error("World direct draw state unavailable");
- if((*draw.state_snapshot)[D3DRENDERSTATE_ALPHABLENDENABLE]||(*draw.state_snapshot)[D3DRENDERSTATE_ALPHATESTENABLE])return;
+ if((*draw.state_snapshot)[D3DRENDERSTATE_ALPHATESTENABLE]||(*draw.state_snapshot)[D3DRENDERSTATE_ALPHABLENDENABLE])return;
  WorldTicks timer(world_binding_ticks);
  const auto&scope=*world_scope;const unsigned count=unsigned(draw.vertices.size()/32);
  const unsigned frame=scope.frame_base;
@@ -103,7 +103,7 @@ void world_capture(D3DCmd&draw){
  const double near_scale=world_float(0x73fb80),sx=world_float(0x73fc30),sy=world_float(0x73fb98),cx=world_float(0x73fb88),cy=world_float(0x73fb8c),near_clip=world_float(0x740304);
  if(near_scale<=0||near_clip<=0||sx==0||sy==0)throw std::runtime_error("World direct projection outside contract");
  struct Tl {float x,y,z,rhw;unsigned color,spec;float u,v;};static_assert(sizeof(Tl)==32);
- const bool fast=world_fast_enabled()&&load(frame-0x44)==polygon.material&&readable(polygon.material,4)&&(load(polygon.material)&0x100)&&mw34::world::unchanged_polygon(load(frame-0x74),polygon.flags,load(address+4),load(0x7489a8),load(frame-0x54));
+ const bool fast=world_fast_enabled()&&!mw34::temporal::enabled()&&load(frame-0x44)==polygon.material&&readable(polygon.material,4)&&(load(polygon.material)&0x100)&&mw34::world::unchanged_polygon(load(frame-0x74),polygon.flags,load(address+4),load(0x7489a8),load(frame-0x54));
  // The original producer reverses polygon corners before submission. No search
  // by projected position is used, so coincident normals keep their own corner.
  // Retain a linear projection audit until all downstream clipping is owned.

@@ -64,6 +64,9 @@
 #include "frontend_canvas.hpp"
 #include "launcher_display.hpp"
 #include "camera_history.hpp"
+#include "temporal_inputs.hpp"
+#include "temporal_inputs_vert.h"
+#include "temporal_inputs_frag.h"
 
 namespace mw34::vkscene {
 // The stage mirrors the guest's x87 control word and MXCSR into the host while guest code runs;
@@ -154,6 +157,8 @@ struct Draw {
     unsigned detail_role{};
     std::uint64_t shadow_source{};
     std::function<bool()> shadow_valid;
+    std::shared_ptr<const mw34::temporal::StaticSource> temporal_source;
+    bool temporal_output_only{};
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
 };
@@ -170,6 +175,8 @@ struct Command {
     unsigned index;
 };
 struct Scene {
+    std::uint64_t temporal_frame{};
+    unsigned temporal_target{};
     double detail_time{};
     std::uint64_t world_frame{}, world_generation{}, world_context{};
     std::array<float, 3> world_eye{};
@@ -199,7 +206,7 @@ class Renderer {
     // An explicit format preference lets format-sensitive callers exercise the
     // RGBA fallback without changing device capabilities or process settings.
     explicit Renderer(ColorTarget color_target = ColorTarget::device_default)
-        : require_rgba8(color_target == ColorTarget::rgba8) {}
+        : require_rgba8(color_target == ColorTarget::rgba8) {(void)mw34::temporal::jitter_enabled();}
     bool alpha_target() const { return rgba; }
     std::string device_name;
     mw34::temporal::History camera_history;
@@ -209,6 +216,7 @@ class Renderer {
     void complete_camera_history(std::uint64_t frame, unsigned target, const char *admission = "none") {
         if (!mw34::temporal::enabled()) return;
         camera_history.complete(frame, target);
+        temporal_complete(frame);
         unsigned valid = 0, mode_mask = 0;
         for (const auto &[view, pair] : camera_history.pairs()) {
             valid += pair.valid();
@@ -987,14 +995,9 @@ class Renderer {
                     continue;
                 }
                 auto snapshot = std::make_shared<mw34::temporal::Snapshot>(*draw.camera_view);
-                const unsigned output_width = reduced_world_active ? alternate_width : rw;
-                const unsigned output_height = reduced_world_active ? alternate_height : rh;
-                const unsigned world_width = worldColor.image ?
-                    (reduced_world_active ? rw : alternate_width) : rw;
-                const unsigned world_height = worldColor.image ?
-                    (reduced_world_active ? rh : alternate_height) : rh;
-                snapshot->sizes = {s.width, s.height, output_width, output_height,
-                                   world_width, world_height};
+                const auto dimensions = configured_world_dimensions();
+                snapshot->sizes = {s.width, s.height, dimensions[0], dimensions[1],
+                                   dimensions[2], dimensions[3]};
                 camera_history.observe(std::move(snapshot));
             }
         }
@@ -1002,6 +1005,7 @@ class Renderer {
             render_reconstructed_world(s);
         else
             render_scene(s, upload_in, readback_out);
+        temporal_append(s);
     }
   private:
     void render_scene(Scene &s, bool upload_in, bool readback_out) {
@@ -1797,7 +1801,7 @@ class Renderer {
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
     X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
-    X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences)
+    X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences) X(vkCmdClearDepthStencilImage)
 #define MW34_VK_DECL(n) PFN_##n n{};
         MW34_VK_FNS(MW34_VK_DECL) MW34_VK_DEV_FNS(MW34_VK_DECL) MW34_VK_WSI_FNS(MW34_VK_DECL) MW34_VK_SWAP_FNS(MW34_VK_DECL)
     } f;
@@ -2341,6 +2345,7 @@ class Renderer {
     };
     std::map<std::uint64_t, ModelBuffer> model_buffers;
 #include "fixture_shadow_stage.inc"
+#include "temporal_inputs_stage.inc"
     Image colorImage, depthImage;
     Image qualitySource;
     VkDescriptorPool qualityPool{};
@@ -3128,6 +3133,7 @@ class Renderer {
         invalidate_camera_history(mw34::temporal::Reset::transition);
         target_frontend = frontend;
         f.vkDeviceWaitIdle(device);
+        temporal_drop_slots();
         destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
@@ -3753,6 +3759,7 @@ class Renderer {
             return;
         }
         f.vkDeviceWaitIdle(device);
+        temporal_shutdown();
         pipelineWarmup.save();
         if (coverage_scenes)
             std::fprintf(stderr, "World reconstruction: %llu opaque scenes, %llu coverage draws\n",

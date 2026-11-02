@@ -2,7 +2,7 @@
 // clipped/unmatched polygons explicitly keep the established TL draw path.
 struct WorldCorner { mw34::vkscene::ModelVertex vertex{}; unsigned index{}; };
 struct WorldPolygon { std::vector<WorldCorner> corners; unsigned material{},flags{},source{};std::shared_ptr<const mw34::vkscene::ModelGeometry> resident; };
-struct WorldScope { unsigned node{},mesh{},frame_base{},polygon_base{};std::string name;std::shared_ptr<std::vector<WorldPolygon>> polygons=std::make_shared<std::vector<WorldPolygon>>();std::shared_ptr<std::vector<int>> polygon_lookup; };
+struct WorldScope { unsigned node{},mesh{},frame_base{},polygon_base{};std::shared_ptr<const mw34::world::SourceBytes> source_bytes;std::string name;std::shared_ptr<std::vector<WorldPolygon>> polygons=std::make_shared<std::vector<WorldPolygon>>();std::shared_ptr<std::vector<int>> polygon_lookup; };
 std::shared_ptr<WorldScope> world_scope;
 std::map<std::uint64_t,std::shared_ptr<const mw34::vkscene::ModelGeometry>> world_geometry;
 std::ofstream world_log;

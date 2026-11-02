@@ -75,7 +75,7 @@ void*d3d_call(const Import&imp,unsigned token,const std::function<unsigned(unsig
    if(vcount>65535||!readable(verts,32*vcount))deny(n+" vertices outside the memory contract",verts);D3DCmd c{D3DCmd::Draw,type,0,0.f,{},{},0};draw_vertex_scratch.prepare(c.vertices,32*size_t(vcount));get_bytes(verts,c.vertices.data(),32*vcount);
    if(n=="DrawIndexedPrimitive"){const unsigned idx=arg(5),icount=arg(6);if(icount>196605||!readable(idx,2*icount))deny("Indices outside the memory contract",idx);c.indices.resize(icount);for(unsigned i=0;i<icount;++i)c.indices[i]=runtime.memory().load<unsigned short>({idx+2*i});}
    if(host.draw_log&&host.draw_detail_frame==host.frames+1){std::uint64_t h=0xcbf29ce484222325ULL;for(unsigned char b:c.vertices){h^=b;h*=0x100000001b3ULL;}float v0[8]{};if(c.vertices.size()>=32)std::memcpy(v0,c.vertices.data(),32);std::fprintf(host.draw_log,"  draw %u type %u n %u idx %zu v0 %.2f %.2f %.4f tex %08x %016llx\n",host.draw_calls,type,vcount,c.indices.size(),v0[0],v0[1],v0[2],dev->textures[0],(unsigned long long)h);}if(host.draw_log){++host.draw_calls;host.draw_fold(&type,4);host.draw_fold(&vcount,4);host.draw_fold(c.vertices.data(),c.vertices.size());if(!c.indices.empty())host.draw_fold(c.indices.data(),2*c.indices.size());}
-   if(!dev->snap||dev->snap_epoch!=dev->epoch){dev->snap=std::make_shared<const std::vector<unsigned>>(snapshot(*dev));dev->snap_epoch=dev->epoch;}c.state_snapshot=dev->snap;c.texture=dev->textures[0];c.hud_role=hud_deferred_role(type,verts,vcount,wide_hud_role());c.condition_schematic=override_status_preview();zoom_capture_command(c);divergence_trace(c);world_capture(c);camera_capture(c,dev->target);sun_capture_tl(c);sun_capture_sky(c);effect_observe(c);if(c.condition_schematic)override_emit(&c);if(!override_suppress_draw()&&!photo_replay_suppress_d3d_draw(c.hud_role)){
+   if(!dev->snap||dev->snap_epoch!=dev->epoch){dev->snap=std::make_shared<const std::vector<unsigned>>(snapshot(*dev));dev->snap_epoch=dev->epoch;}c.state_snapshot=dev->snap;c.texture=dev->textures[0];c.hud_role=hud_deferred_role(type,verts,vcount,wide_hud_role());c.condition_schematic=override_status_preview();zoom_capture_command(c);divergence_trace(c);world_capture(c);camera_capture(c,dev->target);temporal_source_capture(c);sun_capture_tl(c);sun_capture_sky(c);effect_observe(c);if(c.condition_schematic)override_emit(&c);if(!override_suppress_draw()&&!photo_replay_suppress_d3d_draw(c.hud_role)){
     static const bool early=[] {
      const char* value=std::getenv("MW34_EARLY_TRIANGLE_COMMANDS");
      if(!value||!*value||!std::strcmp(value,"0"))return false;
@@ -168,7 +168,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   d.commands.clear();return;}
  if(!host.scene_t0)host.scene_t0=host.vclock()?std::max<std::uint64_t>(host.vclock_us/1000,1): ::GetTickCount64();
  if(override_enabled())override_load();
- namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=frontend_on();{SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.detail_time=mw34::detail::presentation_time(host.frames);}sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
+ namespace vs=mw34::vkscene;vs::Scene sc{};sc.temporal_frame=camera_flip_serial+1;sc.temporal_target=d.target;sc.frontend_canvas=frontend_on();{SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.detail_time=mw34::detail::presentation_time(host.frames);}sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
  auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){surface_read(v,y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
  const bool lazy=lazy_rt();if(lazy&&host.res_dirty&&(host.res_rt!=rt->guest||host.res_zb!=(zb?zb->guest:0U)))gpu_sync(0);
  bool rescale=false;if(lazy){auto*sr=scene_renderer();if(sr==host.presenter.get()){const float want=render_scale(rt->height);
@@ -307,7 +307,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
     dr.shadow_valid=[this,proof]{SunCaptureFp preserve;return fixture_proof_valid(*proof);};
    }
   }
-  dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;
+  dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.temporal_output_only=c.hud_role!=WideWorld&&c.hud_role!=WideZoom;dr.temporal_source=c.temporal_source;
   if(c.model&&c.model->world)dr.model=c.model;
   if(c.model&&!c.model->world){if(!mw34::vkscene::Renderer::gpu_models()||!c.model->geometry)deny("Optional GPU model draw is not enabled",0);
    dr.model=c.model;dr.first=0;dr.count=unsigned(c.model->geometry->vertices.size());wide_adapt_tl(sc,dr,c.hud_role,c.zoom_anchor_known?&c.zoom_anchor:nullptr);sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(std::move(dr));continue;}
