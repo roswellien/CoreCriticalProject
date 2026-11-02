@@ -21,8 +21,12 @@ from mech_height_maps import (
     unpack_bwnrm2,
     unpack_bwtex1,
     extract_mech_geometry,
+    get_mech_material_profile,
     MECH_MATERIAL_PROFILES,
+    ALL_MECHS,
     HERO_MECHS,
+    REPLACEMENT_MECHS,
+    DETAILED_MW3_MECHS,
 )
 from visualize_terrain_heights import generate_html_inspection_report
 from mech_inspector_html import generate_mech_html_report
@@ -198,6 +202,106 @@ class MechHeightMapsTests(unittest.TestCase):
             self.assertIn("btnMode3D", content)
             self.assertIn("MESH_DATA", content)
             self.assertIn("glCanvas", content)
+
+    def test_roster_chassis_counts(self):
+        self.assertEqual(len(ALL_MECHS), 18)
+        self.assertEqual(len(REPLACEMENT_MECHS), 14)
+        self.assertEqual(len(DETAILED_MW3_MECHS), 4)
+        self.assertEqual(HERO_MECHS, ("bushwacker", "madcat"))
+        for mech in HERO_MECHS:
+            self.assertIn(mech, ALL_MECHS)
+            self.assertIn(mech, REPLACEMENT_MECHS)
+
+    def test_material_profile_resolution(self):
+        # Canopy glass (MW5 and detailed MW3)
+        for name in ("window", "Window", "glazing0", "glazing1", "optical0", "optical1"):
+            prof = get_mech_material_profile(name)
+            self.assertEqual(prof["height_amplitude"], 0.0)
+            self.assertGreaterEqual(prof["reflectivity"], 0.8)
+            self.assertLessEqual(prof["roughness"], 0.1)
+
+        # Weapons / mechanical
+        for name in ("weapons", "Weapons", "weap_hole", "constant0", "constant1"):
+            prof = get_mech_material_profile(name)
+            self.assertGreaterEqual(prof["metallic"], 0.5)
+
+        # Armor plates across chassis
+        for name in ("Body", "Variant", "strider01", "avatar16", "owens08", "firefly02"):
+            prof = get_mech_material_profile(name)
+            self.assertGreater(prof["height_amplitude"], 0.0)
+            self.assertLessEqual(prof["metallic"], 0.3)
+
+    def test_extract_mech_geometry_across_bwmesh_formats(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tex_path = temp_path / "test.bwtex1"
+            # Write minimal valid BWTEX1 with 1 batch and 1 material
+            tex_data = bytearray(b"BWTEX1\0\0" + struct.pack("<II", 1, 1))
+            tex_data.extend(struct.pack("<I", 0))  # batch binding 0
+            tex_data.extend(b"Body".ljust(32, b"\0"))
+            tex_data.extend(struct.pack("<IIQ", 4, 4, 0))
+            tex_data.extend(bytes(4 * 4 * 2))
+            tex_path.write_bytes(tex_data)
+
+            # 3 vertices (32 bytes each: float3 xyz + float3 n + float2 uv)
+            v3 = bytearray()
+            for _ in range(3):
+                v3.extend(struct.pack("<ffffff", 0.0, 1.0, 2.0, 0.0, 1.0, 0.0))
+                v3.extend(struct.pack("<ff", 0.0, 0.0))
+
+            # Test BWMESH2 (visibility)
+            m2 = bytearray(b"BWMESH2\0" + struct.pack("<I", 1))
+            m2.extend(b"owner".ljust(32, b"\0"))
+            m2.extend(b"visib".ljust(32, b"\0"))
+            m2.extend(struct.pack("<II", 3, 0))
+            m2.extend(v3)
+            p2 = temp_path / "m2.bin"
+            p2.write_bytes(m2)
+            geo2 = extract_mech_geometry(p2, tex_path)
+            self.assertEqual(geo2["total_vertices"], 3)
+            self.assertIn("Body", geo2["materials"])
+
+            # Test BWMESH3 (visibility + placement)
+            m3 = bytearray(b"BWMESH3\0" + struct.pack("<I", 1))
+            m3.extend(b"owner".ljust(32, b"\0"))
+            m3.extend(b"visib".ljust(32, b"\0"))
+            m3.extend(bytes(44))  # placement
+            m3.extend(struct.pack("<II", 3, 0))
+            m3.extend(v3)
+            p3 = temp_path / "m3.bin"
+            p3.write_bytes(m3)
+            geo3 = extract_mech_geometry(p3, tex_path)
+            self.assertEqual(geo3["total_vertices"], 3)
+
+            # Test BWMESH4 (donor rig header)
+            m4 = bytearray(b"BWMESH4\0" + struct.pack("<I", 1))
+            m4.extend(struct.pack("<III", 1, 1, 0))  # 1 bone, 1 ref, 0 flags
+            m4.extend(bytes(40))  # gait
+            m4.extend(bytes(32 + 32 + 4 + 128))  # 1 bone
+            m4.extend(bytes(32 + 128))  # 1 ref
+            m4.extend(b"owner".ljust(32, b"\0"))
+            m4.extend(b"visib".ljust(32, b"\0"))
+            m4.extend(struct.pack("<I", 0))  # donor_bone
+            m4.extend(struct.pack("<II", 3, 0))
+            m4.extend(v3)
+            p4 = temp_path / "m4.bin"
+            p4.write_bytes(m4)
+            geo4 = extract_mech_geometry(p4, tex_path)
+            self.assertEqual(geo4["total_vertices"], 3)
+
+            # Test BWMESH6 (visibility + placement + layered + anchored)
+            m6 = bytearray(b"BWMESH6\0" + struct.pack("<I", 1))
+            m6.extend(b"owner".ljust(32, b"\0"))
+            m6.extend(b"visib".ljust(32, b"\0"))
+            m6.extend(bytes(44))  # placement
+            m6.extend(bytes(44))  # layered
+            m6.extend(bytes(44))  # anchored
+            m6.extend(struct.pack("<II", 3, 0))
+            m6.extend(v3)
+            p6 = temp_path / "m6.bin"
+            p6.write_bytes(m6)
+            geo6 = extract_mech_geometry(p6, tex_path)
+            self.assertEqual(geo6["total_vertices"], 3)
 
 
 if __name__ == "__main__":

@@ -2,8 +2,8 @@
 setlocal
 cd /d "%~dp0"
 echo ======================================================================
-echo   MECHWARRIOR 3 - HERO MECH MATERIAL ^& HEIGHT MAP INSPECTOR
-echo   Interactive 3D WebGL preview and quality audit (Bushwacker / MadCat)
+echo   MECHWARRIOR 3 - FULL ROSTER MECH MATERIAL ^& HEIGHT MAP INSPECTOR
+echo   Interactive 3D WebGL preview and quality audit (All 18 Chassis)
 echo ======================================================================
 echo.
 

@@ -53,6 +53,32 @@ if not (ROOT / "local").exists():
 
 HERO_MECHS = ("bushwacker", "madcat")
 
+REPLACEMENT_MECHS = (
+    "bushwacker",
+    "madcat",
+    "vulture",
+    "thor",
+    "orion",
+    "daishi",
+    "shadowcat",
+    "puma",
+    "annihilator",
+    "cauldron",
+    "sunder",
+    "supernova",
+    "blackhawk",
+    "champion",
+)
+
+DETAILED_MW3_MECHS = (
+    "strider",
+    "avatar",
+    "owens",
+    "firefly",
+)
+
+ALL_MECHS = REPLACEMENT_MECHS + DETAILED_MW3_MECHS
+
 MECH_MATERIAL_PROFILES: dict[str, dict[str, float]] = {
     "body": {
         "height_amplitude": 0.05,
@@ -94,6 +120,22 @@ MECH_MATERIAL_PROFILES: dict[str, dict[str, float]] = {
         "reflectivity": 0.08,
         "metallic": 0.30,
     },
+    "footpad": {
+        "height_amplitude": 0.06,
+        "max_displacement": 0.06,
+        "height_reference": 0.5,
+        "roughness": 0.80,
+        "reflectivity": 0.04,
+        "metallic": 0.05,
+    },
+    "collar": {
+        "height_amplitude": 0.05,
+        "max_displacement": 0.05,
+        "height_reference": 0.5,
+        "roughness": 0.50,
+        "reflectivity": 0.10,
+        "metallic": 0.40,
+    },
     "default": {
         "height_amplitude": 0.05,
         "max_displacement": 0.05,
@@ -103,6 +145,24 @@ MECH_MATERIAL_PROFILES: dict[str, dict[str, float]] = {
         "metallic": 0.20,
     },
 }
+
+
+def get_mech_material_profile(mat_name: str) -> dict[str, float]:
+    """Resolve calibrated PBR parameters for a mech material name."""
+    clean_key = mat_name.lower()
+    if clean_key in MECH_MATERIAL_PROFILES:
+        return MECH_MATERIAL_PROFILES[clean_key].copy()
+    if any(k in clean_key for k in ("window", "glazing", "optical", "glass")):
+        return MECH_MATERIAL_PROFILES["window"].copy()
+    if any(k in clean_key for k in ("weapon", "weap", "constant", "gun")):
+        return MECH_MATERIAL_PROFILES["weapons"].copy()
+    if "missile" in clean_key:
+        return MECH_MATERIAL_PROFILES["missilehead"].copy()
+    if "footpad" in clean_key:
+        return MECH_MATERIAL_PROFILES["footpad"].copy()
+    if "collar" in clean_key:
+        return MECH_MATERIAL_PROFILES["collar"].copy()
+    return MECH_MATERIAL_PROFILES["default"].copy()
 
 
 def unpack_bwnrm2(data: bytes) -> tuple[list[int], dict[str, tuple[int, int, int, bytes]]]:
@@ -160,7 +220,7 @@ def unpack_bwtex1(data: bytes) -> tuple[list[str], list[str], dict[str, tuple[in
 
 
 def find_mech_payloads(mech_id: str) -> dict[str, Path]:
-    """Locate the mesh, normals, and textures payload files for a replacement mech."""
+    """Locate the mesh, normals, and textures payload files for any mech."""
     candidate_roots = []
     localappdata = os.environ.get("LOCALAPPDATA")
     if localappdata:
@@ -170,6 +230,20 @@ def find_mech_payloads(mech_id: str) -> dict[str, Path]:
         )
     candidate_roots.append(ROOT / "local/work-ahead/combined-model-pack-20261024-r1")
     candidate_roots.append(ROOT / "local/remaster")
+
+    def resolve_path(p_str: str | None, base: Path) -> Path | None:
+        if not p_str:
+            return None
+        p = Path(p_str)
+        if p.is_absolute() and p.exists():
+            return p
+        if (base / p_str).exists():
+            return base / p_str
+        if (base.parent / p_str).exists():
+            return base.parent / p_str
+        if (ROOT / p_str).exists():
+            return ROOT / p_str
+        return None
 
     for root in candidate_roots:
         models_json_path = root / "models/models.json"
@@ -195,18 +269,17 @@ def find_mech_payloads(mech_id: str) -> dict[str, Path]:
                 ]
                 mesh_key = next((k for k in mesh_candidates if k in env), None)
 
-                if norm_key in env and tex_key in env:
-                    norm_path = root / env[norm_key]
-                    tex_path = root / env[tex_key]
-                    mesh_path = (root / env[mesh_key]) if mesh_key else None
+                norm_path = resolve_path(env.get(norm_key), root)
+                tex_path = resolve_path(env.get(tex_key), root)
+                mesh_path = resolve_path(env.get(mesh_key), root) if mesh_key else None
 
-                    if norm_path.exists() and tex_path.exists():
-                        return {
-                            "normals": norm_path,
-                            "textures": tex_path,
-                            "mesh": mesh_path,
-                            "root": root,
-                        }
+                if norm_path and norm_path.exists() and tex_path and tex_path.exists():
+                    return {
+                        "normals": norm_path,
+                        "textures": tex_path,
+                        "mesh": mesh_path,
+                        "root": root,
+                    }
 
     raise FileNotFoundError(f"Could not locate payload files for mech '{mech_id}'.")
 
@@ -216,20 +289,43 @@ def extract_mech_geometry(mesh_path: Path, texture_path: Path) -> dict:
     mats = texture_batch_materials_file(texture_path)
     stream = io.BytesIO(mesh_path.read_bytes())
     magic = stream.read(8)
+    donor = magic == b"BWMESH4\0"
+    anchored = magic == b"BWMESH6\0"
+    layered = anchored or magic == b"BWMESH5\0"
+    placement = layered or magic == b"BWMESH3\0"
+    visibility = donor or placement or magic == b"BWMESH2\0"
+    if not visibility and magic != b"BWMESH1\0":
+        raise ValueError(f"Unsupported mesh payload format {magic!r}")
+
     count = struct.unpack("<I", stream.read(4))[0]
+    if donor:
+        bones, refs, _flags = struct.unpack("<III", stream.read(12))
+        stream.read(40)  # 5 float64 gait parameters
+        for _ in range(bones):
+            stream.read(32 + 32 + 4 + 128)
+        for _ in range(refs):
+            stream.read(32 + 128)
+
     mat_verts: dict[str, bytearray] = {}
     all_xyz: list[tuple[float, float, float]] = []
     for i in range(count):
         stream.read(32)  # owner
-        stream.read(32)  # visibility
-        if magic in (b"BWMESH3\0", b"BWMESH5\0", b"BWMESH6\0"):
+        if visibility:
+            stream.read(32)  # visibility
+        if placement:
             stream.read(44)  # placement
-        if magic in (b"BWMESH5\0", b"BWMESH6\0"):
+        if layered:
             stream.read(44)  # layered
-        if magic in (b"BWMESH6\0",):
+        if anchored:
             stream.read(44)  # anchored
+        donor_bone = 0
+        if donor:
+            donor_bone = struct.unpack("<I", stream.read(4))[0]
         vc, _col = struct.unpack("<II", stream.read(8))
         vbytes = stream.read(vc * 32)
+        if donor and donor_bone == 0xFFFFFFFF:
+            stream.read(vc * 4)
+
         mat = mats[i]
         if mat not in mat_verts:
             mat_verts[mat] = bytearray()
@@ -237,6 +333,9 @@ def extract_mech_geometry(mesh_path: Path, texture_path: Path) -> dict:
         stride = max(1, vc // 20)
         for j in range(0, vc, stride):
             all_xyz.append(struct.unpack("<fff", vbytes[j * 32 : j * 32 + 12]))
+
+    if not all_xyz:
+        all_xyz = [(0.0, 0.0, 0.0)]
 
     xs = [c[0] for c in all_xyz]
     ys = [c[1] for c in all_xyz]
@@ -290,7 +389,7 @@ def build_mech_surface_materials(
 
     for mat_name in unique_materials:
         clean_key = mat_name.lower()
-        prof = MECH_MATERIAL_PROFILES.get(clean_key, MECH_MATERIAL_PROFILES["default"]).copy()
+        prof = get_mech_material_profile(mat_name)
         if mat_name in overrides:
             prof.update(overrides[mat_name])
 
@@ -467,7 +566,11 @@ def build_mech_surface_materials(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mech", required=True, choices=list(HERO_MECHS) + ["all"])
+    parser.add_argument(
+        "--mech",
+        required=True,
+        choices=list(ALL_MECHS) + ["all", "heroes", "replacements", "detailed"],
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--html-report", type=Path)
     parser.add_argument("--contact-sheets-dir", type=Path)
@@ -475,12 +578,23 @@ def main():
 
     args = parser.parse_args()
 
-    targets = list(HERO_MECHS) if args.mech == "all" else [args.mech]
+    if args.mech == "all":
+        targets = list(ALL_MECHS)
+    elif args.mech == "heroes":
+        targets = list(HERO_MECHS)
+    elif args.mech == "replacements":
+        targets = list(REPLACEMENT_MECHS)
+    elif args.mech == "detailed":
+        targets = list(DETAILED_MW3_MECHS)
+    else:
+        targets = [args.mech]
+
+    multi = len(targets) > 1
 
     for mech_id in targets:
-        print(f"Building surface materials for {mech_id.capitalize()}...")
+        print(f"\n[{mech_id.upper()}] Building surface materials...")
         html_out = args.html_report
-        if html_out and args.mech == "all":
+        if html_out and multi:
             html_out = html_out.parent / f"{mech_id}_{html_out.name}"
 
         sidecar_bytes, summary = build_mech_surface_materials(
@@ -492,13 +606,16 @@ def main():
 
         out_path = args.output
         if out_path:
-            if args.mech == "all":
+            if multi:
                 out_path = out_path.parent / f"{mech_id}_{out_path.name}"
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(sidecar_bytes)
             print(f"Wrote {len(sidecar_bytes):,} bytes BWSFM1 to {out_path}")
 
-        print(f"Processed {summary['records_count']} materials across {summary['batches_count']} batches.")
+        print(
+            f"Processed {summary['records_count']} materials across "
+            f"{summary['batches_count']} batches. UV Hash: {summary['mesh_uv_hash']}"
+        )
         if html_out:
             print(f"Generated HTML inspection report: {html_out}")
 
