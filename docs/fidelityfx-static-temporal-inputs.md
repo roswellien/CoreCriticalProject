@@ -245,3 +245,52 @@ so this comparison exercises an active rendered lighting path.
 Stock configurations and camera/zoom/pause/reload coverage remain required. Independent
 review and a draft PR also remain open. No upscaler or frame generation is
 dispatched, and these checks do not establish P2 (Stage 3) acceptance.
+
+## Stock camera and pause checks
+
+A fresh stock run completed 4,600 RX 9070 Vulkan/DXGI presentations with no
+replacement-pack paths, optional lighting or effects, and zero Vulkan validation
+errors. It retained 58,212 valid static pixels at 801/1801 and 49,186 at 2101.
+During the D-key turn at 3001, all 44,222 valid pixels have finite, nonzero motion
+(median horizontal motion 34.160 pixels). These are live original camera/input
+transitions, not saved-scene replay.
+
+V cycles demonstrate mode-zero/one history and mode-two rejection. Switching
+controllers invalidates first; mode one has 55,725 valid pixels at 3901. Unsupported
+mode two has no admitted temporal image at 4051. Returning to mode zero recovers
+29,051 valid pixels at 4151. Escape produces one actual pause entry and exit:
+history is invalid during pause, no image is exported at 4251, and 29,186 valid
+pixels recover at 4401. The deliberate frame-budget exit is not normal shutdown.
+
+Middle-button input executes the original zoom drawing route while main coverage
+remains valid (29,696 pixels at 3601), but no independent zoom temporal view is
+admitted in this run. This does not establish native positive zoom coverage;
+main/zoom positive isolation remains fixture evidence. Same-Training reload,
+native near-plane acceptance and menu/Lab checks remain open.
+
+## Instrumentation and preliminary timing
+
+The validation runs above are not representative gameplay performance tests.
+With all published packs, their live 800–2200 interval is about 12.8 FPS even with
+temporal diagnostics Off. A separate minimally instrumented run removes Vulkan
+validation, scheduled captures and optional logs; it retains the world bridge's
+required log and frame timing. The DXGI bridge defaults to VSync, yielding about
+60 FPS. The existing development VSync-Off option removes that ceiling.
+
+Single 800–2200 interval measurements at 3440×1440, FXAA, AF16, 1200/1100 distance,
+all published packs and lighting On are:
+
+| Host / temporal diagnostics | VSync | Mean presentation FPS |
+| --- | --- | ---: |
+| Current topic / Off | On | 59.97 |
+| Current topic / Off | Off | 80.39 |
+| Current topic / On, jitter On | Off | 61.53 |
+| Published runtime 1.0.46 / Off | Off | 83.08 |
+
+Each run completes 2,200 presentations and 7,689 guest scenes. These are single
+scripted virtual-clock throughput samples, not repeated or real-clock benchmarks;
+no regression percentage is established. Diagnostic depth/motion rendering has a
+measurable cost here and supplies no upscaling or frame-generation benefit yet.
+The historical roughly 100 FPS RX 9070 result used another scene/asset setup;
+its difference from these numbers remains unisolated. User installation, driver
+and persistent graphics settings are unchanged.
