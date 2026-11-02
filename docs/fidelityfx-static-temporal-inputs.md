@@ -462,3 +462,50 @@ partial and must stay draft. Native near-plane positive acceptance remains open;
 supported positive zoom is fixture-only. No Stage 3 closure, release, SDK/pack
 format change, public setting, FSR/P3/FG enablement or original-producer bypass
 follows from this result.
+
+
+## Total CPU and GPU utilization during live Training
+
+At the owner's request, a separate pair records one-second Windows PDH samples
+alongside presentation timing. CPU is total system busy time across all 16
+logical processors of the Ryzen 7 9700X. GPU is total RX 9070 engine activity
+across all processes: aggregate process instances per physical engine, then use
+the busiest engine as the overall percentage, following
+[Windows Task Manager's definition](https://devblogs.microsoft.com/directx/gpus-in-the-task-manager/).
+DXGI enumeration verifies the RX 9070 LUID (0:0x12E10); the iGPU is a separate
+adapter and is excluded from this GPU figure. This is not game-only CPU usage,
+shader occupancy, GPU clock/power or VRAM usage.
+
+The same final candidate and exact guard-only control, published full-pack
+profile and uncapped virtual-clock Training route are used. Only samples whose
+latest presented frame is 800–2199 are summarized, excluding menus/loading and
+teardown. Both runs finish 2,200 presentations / 7,689 scenes without competing
+games/compilers or timeouts. All 23 before / 20 after live samples have valid
+CPU and GPU data. Peaks are sampled one-second peaks, not instantaneous maxima.
+
+| Measurement | Guard-only control | Candidate |
+| --- | ---: | ---: |
+| Total CPU, average | 18.28% | 18.16% |
+| Total CPU, sampled peak | 23.54% | 24.61% |
+| RX 9070 overall GPU, average | 12.78% | 11.53% |
+| RX 9070 overall GPU, sampled peak | 14.53% | 12.07% |
+| Presentation throughput in this monitored pair | 61.60 FPS | 70.27 FPS |
+
+A logical CPU reaches approximately 98.44% in both runs; low total CPU usage
+alone cannot rule out a single-thread limit. This counter is system-wide and
+does not establish which process owns that busy CPU. Similar total CPU load
+with different throughput is not a game-only CPU-cycle measurement.
+
+This is one monitored sample per build, separate from the repeated ABBA result
+above. Percentages include other processes and monitoring overhead; PDH query
+and parsing average about 7.2 ms per one-second sample. The original sampler
+attempt exited on a transient PDH_CSTATUS_INVALID_DATA at startup and supplied
+no utilization result. The revised sampler primes the counters and retains
+invalid samples as missing rather than filling them with zero. The completed
+pair has no missing GPU samples.
+
+Raw private CSVs are `local/p2b/usage-before-control-r2.csv` and
+`usage-after-candidate-r2.csv`; method, adapter identity and numerical summaries
+are in `total-utilization-summary.json` and `utilization-adapters.json`. Each
+run also retains its source hash, frame times and contention checks. Monitoring
+is a development diagnostic; no runtime, launcher setting or driver was changed.
