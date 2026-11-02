@@ -15,6 +15,16 @@ behavior, fidelity/compatibility coverage, known defects and release checks.
 The paused initializer audit does not measure current project progress or gate
 routine development/releases.
 
+## Optional FidelityFX integration plan: 2026-10-29
+
+The [FidelityFX implementation plan](fidelityfx-implementation-plan.md) defines
+staged FSR SDK 2.4.0 integration into the maintained native Vulkan host: establish
+device and temporal-input feasibility, separate world/output resolutions, validate
+camera/object motion and HUD composition, then add optional upscaling. Frame
+generation follows as a separate presentation and timing change. This is proposed
+work with explicit validation gates; no FSR runtime behavior or performance gain
+has been demonstrated by the plan.
+
 ## Model activation: 2026-10-16
 
 [All prepared models](archive/all-models-native-integration-2026-10-16.md) now have native
