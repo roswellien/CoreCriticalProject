@@ -449,8 +449,17 @@ public:
             else c = (char)std::tolower((unsigned char)c);
         }
 
-        // Check for non-campaign modes first (Training, Instant Action, Multiplayer)
+        // Training missions use packed lighting when available; legacy packs retain their baseline.
         if (lower.find("/t1/readerm") != std::string::npos && lower.ends_with(".zbd")) {
+            for (unsigned mission = 1; mission <= 4; ++mission) {
+                const auto reader = "/t1/readerm" + std::to_string(mission) + ".zbd";
+                if (lower.ends_with(reader)) {
+                    const auto id = "t1m" + std::to_string(mission);
+                    if (find_environment(id)) set_active_mission(id);
+                    else reset("t1");
+                    return;
+                }
+            }
             reset("t1");
             return;
         }

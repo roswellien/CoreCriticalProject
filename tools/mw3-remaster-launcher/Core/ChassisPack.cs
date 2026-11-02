@@ -17,11 +17,65 @@ public static class ChassisPack
         "supernova", "thor", "vulture"
     };
 
+    private static void ValidateHeadlights(JsonElement row, NativePackPayload payload)
+    {
+        if (!row.TryGetProperty("headlights", out var lights)) return;
+        if (lights.ValueKind != JsonValueKind.Array || lights.GetArrayLength() > 8)
+            throw new InvalidDataException("Expected zero through eight headlights.");
+        if (lights.GetArrayLength() > 0 &&
+            (!payload.RequiredCapabilities.TryGetValue("mech-headlights", out var version) || version != 1 ||
+             !payload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var chassisVersion) || chassisVersion < 2))
+            throw new InvalidDataException("Headlights require mech-headlights version 1 and chassis version 2 or newer.");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var fields = new HashSet<string>(new[] { "id", "space", "attachment", "position", "direction", "color",
+            "intensity", "range", "inner_angle", "outer_angle" });
+        double Number(JsonElement value, double low, double high)
+        {
+            if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var number) ||
+                !double.IsFinite(number) || number < low || number > high)
+                throw new InvalidDataException("Invalid headlight number.");
+            return number;
+        }
+        foreach (var light in lights.EnumerateArray())
+        {
+            if (light.ValueKind != JsonValueKind.Object || !fields.SetEquals(light.EnumerateObject().Select(p => p.Name)))
+                throw new InvalidDataException("Invalid headlight fields.");
+            string Text(string field) => light.GetProperty(field).ValueKind == JsonValueKind.String
+                ? light.GetProperty(field).GetString()! : "";
+            var space = Text("space");
+            if (!Regex.IsMatch(Text("id"), @"\A[a-z0-9_-]{1,31}\z") || !ids.Add(Text("id")) ||
+                !Regex.IsMatch(Text("attachment"), @"\A[A-Za-z0-9_.-]{1,31}\z") ||
+                (space != "guest_node" && space != "donor_bone") ||
+                (space == "donor_bone" && row.TryGetProperty("legacy", out _)))
+                throw new InvalidDataException("Invalid headlight identity or attachment.");
+            double[] Vector(string field, double low, double high)
+            {
+                var value = light.GetProperty(field);
+                if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != 3)
+                    throw new InvalidDataException("Invalid headlight vector.");
+                return value.EnumerateArray().Select(v => Number(v, low, high)).ToArray();
+            }
+            Vector("position", -100, 100);
+            Vector("color", 0, 1);
+            var direction = Vector("direction", -1e30, 1e30);
+            if (direction.All(v => v == 0)) throw new InvalidDataException("Headlight direction cannot be zero.");
+            Number(light.GetProperty("intensity"), 0, 8);
+            Number(light.GetProperty("range"), 1, 256);
+            if ((float)Number(light.GetProperty("inner_angle"), 0, 89) >= (float)Number(light.GetProperty("outer_angle"), 0, 89))
+                throw new InvalidDataException("Invalid headlight cone.");
+        }
+    }
+
     public static List<Chassis> Read(string root, PackManifest manifest)
     {
         if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
             !(manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" })) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "BWSFM1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1", "BWSFM1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" })) ||
+            (manifest.NativePayload.RequiredFormats.Contains("BWSFM1") &&
+             (!manifest.NativePayload.RequiredCapabilities.TryGetValue("surface-materials", out var surfaceVersion) || surfaceVersion != 1)) ||
             manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||
             manifest.Files == null || manifest.Files.Count is < 1 or > 1025 ||
             manifest.Files.Values.Sum(p => p.Bytes) > 4L * 1024 * 1024 * 1024)
@@ -65,8 +119,61 @@ public static class ChassisPack
         var fields = new HashSet<string>(new[] { "id", "name", "controller", "metadata_template", "definition", "meshes", "textures" });
         foreach (var row in rows.EnumerateArray())
         {
+            ValidateHeadlights(row, manifest.NativePayload);
+            if (manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }))
+            {
+                if (!manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var version) || version != 3 ||
+                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name).Where(name => name != "headlights")))
+                    throw new InvalidDataException("Legacy chassis resources require version 3 and exact fields.");
+                var legacyId = row.GetProperty("id").GetString() ?? "";
+                var legacyName = row.GetProperty("name").GetString() ?? "";
+                if (!legacyId.StartsWith(manifest.Id + ":", StringComparison.Ordinal) ||
+                    !Regex.IsMatch(legacyId, @"\A[a-z0-9][a-z0-9._-]{0,127}:[a-z0-9][a-z0-9._-]{0,63}\z") || !ids.Add(legacyId) ||
+                    legacyName.Length is < 1 or > 64 || legacyName.Any(c => c < 32 || c > 126) ||
+                    !Templates.Contains(row.GetProperty("metadata_template").GetString() ?? ""))
+                    throw new InvalidDataException("Invalid legacy chassis identity or metadata template.");
+                var resourcePath = Verify(row.GetProperty("legacy").GetString() ?? "");
+                if (new FileInfo(resourcePath).Length > PackStorage.MaxJsonBytes)
+                    throw new InvalidDataException("Legacy chassis descriptor exceeds size limit.");
+                using var resourceDocument = JsonDocument.Parse(File.ReadAllText(resourcePath));
+                var descriptor = resourceDocument.RootElement;
+                PackStorage.ValidateUniqueProperties(descriptor);
+                var descriptorFields = new HashSet<string>(new[] { "schema_version", "resource", "definition", "materials", "silhouette", "models", "motions", "animations", "textures" });
+                if (LegacyChassisSkins.Validate(descriptor, manifest.NativePayload) == 2)
+                    descriptorFields.Add("skins");
+                if (!descriptorFields.SetEquals(descriptor.EnumerateObject().Select(p => p.Name)) ||
+                    !Regex.IsMatch(descriptor.GetProperty("resource").GetString() ?? "", @"\A[a-z][a-z0-9_]{0,15}\z"))
+                    throw new InvalidDataException("Invalid legacy chassis descriptor.");
+                void VerifyResource(string path)
+                {
+                    var resolved = Verify(path);
+                    if (new FileInfo(resolved).Length > 16 * 1024 * 1024)
+                        throw new InvalidDataException("Legacy chassis resource exceeds size limit.");
+                }
+                foreach (var field in new[] { "definition", "materials", "silhouette" })
+                    VerifyResource(descriptor.GetProperty(field).GetString() ?? "");
+                foreach (var (role, limit) in new[] { ("models", 3), ("motions", 64), ("animations", 16), ("textures", 512) })
+                {
+                    var table = descriptor.GetProperty(role);
+                    if (table.ValueKind != JsonValueKind.Object)
+                        throw new InvalidDataException("Invalid legacy chassis resource table.");
+                    var entries = table.EnumerateObject().ToArray();
+                    if (entries.Length < 1 || entries.Length > limit ||
+                        entries.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != entries.Length ||
+                        (role == "models" && !new HashSet<string>(new[] { "close", "distance", "cockpit" }).SetEquals(entries.Select(p => p.Name))))
+                        throw new InvalidDataException("Invalid legacy chassis resource count or LODs.");
+                    foreach (var entry in entries)
+                    {
+                        if (!Regex.IsMatch(entry.Name, @"\A[a-zA-Z0-9_.-]{1,31}\z"))
+                            throw new InvalidDataException("Invalid legacy chassis member name.");
+                        VerifyResource(entry.Value.GetString() ?? "");
+                    }
+                }
+                result.Add(new(legacyId, legacyName));
+                continue;
+            }
             var rowFields = row.EnumerateObject().Select(p => p.Name).ToHashSet();
-            if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets"))
+            if (!fields.IsSubsetOf(rowFields) || rowFields.Except(fields).Any(p => p != "silhouette" && p != "base_skin_name" && p != "sockets" && p != "headlights" && p != "surface_materials"))
                 throw new InvalidDataException("Unknown chassis registration field.");
             if (row.TryGetProperty("sockets", out var sockets))
             {
@@ -134,6 +241,31 @@ public static class ChassisPack
                 if (bytes.Length != 2066 || BitConverter.ToUInt32(bytes, 8) != 41 ||
                     BitConverter.ToUInt32(bytes, 12) != 50 || !bytes.Skip(16).Any(b => b != 0))
                     throw new InvalidDataException("Chassis silhouette must be a nonempty 41x50 MW3ICON1 mask.");
+            }
+            if (row.TryGetProperty("surface_materials", out var surfaceMaterials))
+            {
+                if (!manifest.NativePayload.RequiredFormats.Contains("BWSFM1") ||
+                    !manifest.NativePayload.RequiredCapabilities.TryGetValue("surface-materials", out var surfVer) || surfVer != 1 ||
+                    surfaceMaterials.ValueKind != JsonValueKind.Object ||
+                    !new HashSet<string>(new[] { "close", "distance" }).SetEquals(surfaceMaterials.EnumerateObject().Select(p => p.Name)))
+                    throw new InvalidDataException("Chassis surface_materials require BWSFM1 and surface-materials version 1.");
+                foreach (var lod in new[] { "close", "distance" })
+                {
+                    var surfPath = Verify(surfaceMaterials.GetProperty(lod).GetString() ?? "", "BWSFM1");
+                    var surfLen = new FileInfo(surfPath).Length;
+                    if (surfLen is < 36 or > 256L * 1024 * 1024)
+                        throw new InvalidDataException("Chassis surface-material sidecar size is out of bounds.");
+                    using var surfStream = File.OpenRead(surfPath);
+                    using var surfReader = new BinaryReader(surfStream);
+                    surfStream.Position = 8;
+                    var version = surfReader.ReadUInt32();
+                    var batches = surfReader.ReadUInt32();
+                    var records = surfReader.ReadUInt32();
+                    var images = surfReader.ReadUInt32();
+                    if (version != 1 || batches is < 1 or > 4096 || records > 4096 || images > 512 ||
+                        surfLen < 32L + batches * 4L)
+                        throw new InvalidDataException("Invalid BWSFM1 header in chassis pack.");
+                }
             }
             result.Add(new(id, name));
         }

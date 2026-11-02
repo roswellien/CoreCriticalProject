@@ -92,6 +92,13 @@ for its dated research users. The wrapper selects `MW34_HOST_ONLY=ON`, whose
 
 ## Source decisions and maintenance
 
+An experimental runtime option, `MW34_DXGI_PRESENT=1`, transports Vulkan frames
+through a shared GPU texture to a DXGI swapchain on the same physical adapter.
+The installed Windows SDK supplies its `dxgi` / `d3d11` link dependencies. See
+[presentation compatibility](../../docs/dxgi-presentation-bridge.md) for required
+sharing capabilities, supported window modes, ownership and validation limits.
+The option requires a host built with this change; it is absent from launcher UI.
+
 `host-source-manifest.json` records every canonical file, its size, SHA-256,
 classification and decision. `host-dependencies.json` pins consumed external
 headers. The owner approved committing the reviewed interoperability metadata
@@ -160,3 +167,7 @@ does not complete that release acceptance criterion.
 The fingerprints establish the source used by a build. Authenticode timestamps,
 compiler/SDK versions and debug paths can change executable bytes; this work
 does not promise byte-identical signed EXEs across machines.
+
+For the existing scripted-input, capture and log facilities and the remaining
+work for unattended regression runs, see the
+[scripted playtest driver investigation](../../docs/scripted-playtest-driver.md).

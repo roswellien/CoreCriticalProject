@@ -47,6 +47,54 @@ Use a fresh worktree directory. Do not reset, clean, mass-stash or commit other
 contributors' work to obtain a clean tree. Existing local experiments remain
 uncommitted until deliberately separated into their own task branches/PRs.
 
+## Plan and review
+
+Every change follows this flow before its PR leaves draft, whoever or whatever
+does the work. The requester (whoever asked for the work) approves each move to
+the next stage; an agent never starts the next stage on its own. Each stage
+except Implement has a shared skill in `.agents/skills/` (copied to
+`.claude/skills/`); a tool that can't load skills opens the `SKILL.md` at the
+path given and follows it.
+
+1. **Grill:** interview the requester one question at a time until they confirm
+   a shared understanding of the issue. Their "yes" starts the spec.
+   Skill: `.agents/skills/core-critical-grill/SKILL.md`.
+2. **Spec:** write the spec, run the spec review, then walk the requester
+   through what it leaves. Stop until the requester approves the spec.
+   Skill: `.agents/skills/core-critical-spec-review/SKILL.md`.
+3. **Plan:** write the plan, run the plan review, then the code review on the
+   plan, then one walkthrough of what both leave. Stop until the requester
+   approves implementing. Skills: `.agents/skills/core-critical-plan-review/SKILL.md`
+   and `.agents/skills/core-critical-code-review/SKILL.md`.
+4. **Implement:** carry out the plan through its own checks, then hand over to a
+   fresh session for stage 5 without waiting for approval.
+5. **Review:** run the code review on the branch in a fresh session that didn't
+   write the change; it ends by rerunning the change's checks. Then walk the
+   requester through what is left. The PR stays a draft until the requester
+   says it's ready. Skill: `.agents/skills/core-critical-code-review/SKILL.md`.
+
+`.agents/skills/core-critical-workflow/SKILL.md` ties the stages together and
+holds the spec and plan sections. Each review loops: fix only major findings,
+re-read and review again, and stop on a clean pass, after five passes, or when
+the same major findings come back. The full loop is in
+`.agents/skills/core-critical-workflow/references/review-loop.md`.
+
+Each stage's reviews end with one walkthrough of what they leave, run as
+"Walkthroughs" in the workflow skill says.
+
+Short path: a change that can be described in one sentence and is already
+covered by tests skips the grill, spec and plan when the requester agrees. It
+still gets stage 5. Release promotions (`develop` -> `main`) and branch syncs
+carry no new change and are exempt. Cloud agents (Copilot cloud agent, Codex
+cloud) take only short-path tasks, since they can't hold the interview or keep
+a local spec.
+
+Specs and plans are working files, never committed. Keep them outside every
+checkout, in `MW3Recomp-Private-specs/` beside the main checkout, named
+`<issue>-<slug>-spec.md` and `<issue>-<slug>-plan.md`. The folder is named
+after the repository so that the spec, plan and review of one task, each
+possibly in a different worktree, find the same files.
+
 ## Implement, validate and open a PR
 
 Implement and validate the task, commit only its authored source and relevant
@@ -283,6 +331,18 @@ enough to choose from.
 
 ## Promote and publish a release
 
+GitHub Releases are the canonical home for release notes. When preparing a
+release, generate notes from the previous release tag to the new tag using
+`.github/release.yml`, then lightly edit them to clarify the shipped products,
+versions and player impact without changing the generated PR groups. The
+playtest site should link to the corresponding GitHub Release rather than
+maintaining a second copy; GitHub Release access follows this private
+repository's access settings. Do not duplicate the notes in a changelog or a
+dated preparation document. Before generating the first release, the maintainer
+must create a baseline tag at the source commit of the latest already-published
+release, verified from its release receipt; do not infer that commit from a
+preparation document.
+
 When the integration branch is ready for a release, open a separate PR from
 `develop` to `main` summarizing the included changes and release validation.
 After that PR is merged, compile the release from the resulting `main` commit
@@ -297,12 +357,13 @@ signed feed promotion and Cloudflare Pages deployment. It names the maintainer-
 supplied credentials and the externally generated runtime input without storing
 them in Git.
 
-Include release/version edits and release notes in reviewed source changes
-before the release build; do not silently modify source or version values after
-checking out the release commit. Record the merged SHA, relevant build/tool
-identities and artifact hashes. Verify signing, installation/update/rollback and
-the applicable playtest path before publishing the requested release. Preserve
-historical artifacts and compatibility URLs. Optional pack publication still
+Include release/version edits in reviewed source changes before the release
+build; draft and review release notes in the GitHub Release before publishing.
+Do not silently modify source or version values after checking out the release
+commit. Record the merged SHA, relevant build/tool identities and artifact
+hashes. Verify signing, installation/update/rollback and the applicable
+playtest path before publishing the requested release. Preserve historical
+artifacts and compatibility URLs. Optional pack publication still
 obeys the distribution policy; large local assets do not belong in a PR.
 
 Native host releases use the maintained [host-only build](../tools/m4-crt-heap-carry/HOST_BUILD.md)

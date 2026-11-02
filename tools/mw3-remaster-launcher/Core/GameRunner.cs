@@ -157,6 +157,7 @@ namespace MW3RemasterLauncher.Core
             profile["native"]!["launch_session_directory"] = Path.GetFullPath(runDir);
             new ControlProfiles(_dataRoot).PrepareLaunch(profile, _dataRoot, validation.GameDirectory);
             new ControllerProfiles(_dataRoot).PrepareLaunch(profile, runDir);
+            new HeadlightBindings(_dataRoot).PrepareLaunch(profile, runDir, settings.Headlights && settings.DynamicLighting);
             var launchProfile = Path.Combine(runDir, "profile.json");
             File.WriteAllText(launchProfile, SerializeLaunchProfile(profile));
             var logPath = Path.Combine(runDir, "launcher.log");
@@ -169,6 +170,8 @@ namespace MW3RemasterLauncher.Core
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
                 CreateNoWindow = true
             };
             foreach (var argument in new[] { "-u", installed?.Coordinator ?? Path.Combine(rootDir, @"tools\remaster-launcher\play_remaster.py"),
@@ -287,12 +290,18 @@ namespace MW3RemasterLauncher.Core
             graphics["fog_distance"] = settings.FogDistance;
             graphics["window_mode"] = settings.WindowMode;
             profile["native"]!["local_cd_audio"] = settings.LocalCdAudio;
-            profile["native"]!["presentation"] = new JsonObject
+            var headlightSupport = profile["native"]!["stock_presentation_versions"] is JsonArray presentationVersions &&
+                presentationVersions.Any(v => v?.GetValue<int>() == 2);
+            if (settings.Headlights && settings.DynamicLighting && !headlightSupport)
+                throw new InvalidOperationException("Install the headlights game runtime update, or turn off Headlights in Display.");
+            var presentation = new JsonObject
             {
-                ["schema_version"] = 1,
+                ["schema_version"] = headlightSupport ? 2 : 1,
                 ["dynamic_lighting"] = settings.DynamicLighting,
                 ["shadows"] = settings.Shadows
             };
+            if (headlightSupport) presentation["headlights"] = settings.Headlights;
+            profile["native"]!["presentation"] = presentation;
             if (settings.PerformanceMonitor && profile["native"]!["performance_monitor_version"]?.GetValue<int>() != 1)
                 throw new InvalidOperationException("This runtime needs the performance monitor update. Install it through Game Updates, or turn off the monitor to use this version.");
             // An explicit saved choice overrides both old profiles and inherited diagnostics.

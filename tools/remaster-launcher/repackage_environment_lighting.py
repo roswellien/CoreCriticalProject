@@ -36,7 +36,7 @@ def build(roots, profile_path, output):
         registry=copy.deepcopy(pack['registry']);previous_lighting=registry.get('lighting');registry['lighting']='environment/lighting.json'
         generated={REGISTRY:(json.dumps(registry,indent=2)+'\n').encode(),
                    'environment/lighting.json':(json.dumps(data,indent=2)+'\n').encode()}
-        manifest=json.loads((Path(pack['root'])/'pack.json').read_bytes());manifest['version']='1.1.1' if operation=='training' else '1.1.0'
+        manifest=json.loads((Path(pack['root'])/'pack.json').read_bytes());manifest['version']='1.2.0' if operation=='training' else '1.1.0'
         if previous_lighting and previous_lighting!='environment/lighting.json':manifest['files'].pop(previous_lighting)
         manifest['native_payload']['reference_host_sha256']=host['executable_sha256']
         manifest['native_payload']['required_formats']=sorted(set(manifest['native_payload']['required_formats'])|{'MW34-lighting-v1'})

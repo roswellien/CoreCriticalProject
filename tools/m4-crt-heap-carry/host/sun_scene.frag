@@ -29,6 +29,7 @@ layout(set=1,binding=2,std140) uniform EffectLighting {
  vec4 params;
  EffectLight lights[64];
  vec4 shadowMeta[64];
+ vec4 cones[64];
 } effects;
 layout(set=1,binding=3) uniform sampler2D fixtureShadowAtlas;
 float fixtureVisibility(int index,vec3 p,vec3 n){
@@ -69,7 +70,11 @@ vec3 effectIllumination(vec3 p,vec3 n){
    delta=l.start.xyz-p;
    vec3 dirToSurface=-delta*inversesqrt(max(dot(delta,delta),1e-8));
    float cosAngle=dot(dirToSurface,l.end.xyz);
-   spotFactor=clamp((cosAngle-0.2)*2.0,0.0,1.0);
+   if(effects.cones[i].z>0.5){
+    // Tiny authored angles may have equal binary32 cosines: use their hard edge.
+    float inner=effects.cones[i].x,outer=effects.cones[i].y;
+    spotFactor=inner>outer?smoothstep(outer,inner,cosAngle):step(outer,cosAngle);
+   }else spotFactor=clamp((cosAngle-0.2)*2.0,0.0,1.0);
   }else{
    vec3 segment=l.end.xyz-l.start.xyz;
    float den=dot(segment,segment);

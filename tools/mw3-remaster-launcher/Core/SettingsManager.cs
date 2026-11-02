@@ -23,6 +23,7 @@ namespace MW3RemasterLauncher.Core
         public int CdAudioVolume { get; set; } = 80;
         public bool InstantReplay { get; set; } = false;
         public bool PerformanceMonitor { get; set; } = false;
+        public bool Headlights { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
         public string DirectInputJoystickInstanceGuid { get; set; } = string.Empty;
@@ -30,6 +31,7 @@ namespace MW3RemasterLauncher.Core
         public bool DirectInputJoystickNone { get; set; }
         public bool InitialSetupCompleted { get; set; } = false;
         public bool AutomaticUpdateChecks { get; set; } = false;
+        public bool AutomaticCrashReports { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();
         public bool PackSelectionInitialized { get; set; } = false;
