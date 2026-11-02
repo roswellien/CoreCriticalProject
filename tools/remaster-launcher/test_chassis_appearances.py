@@ -12,6 +12,10 @@ from chassis_appearances import choose, compose_normals, inherited_pages, mode, 
 from legacy_chassis_resources import image_members
 from normal_materials import pack_surface_bindings, pixel_hash, read_surface_bindings
 from prepared_chassis_packs import _banks, prepare, select
+from play_remaster import (
+    _chassis_preparation_environment,
+    _prepared_profile_bindings,
+)
 from zrd_document import encode
 
 
@@ -42,6 +46,7 @@ class AppearanceTests(unittest.TestCase):
         self.host = {
             "content_capabilities": {"additional-mech-chassis": [1, 2, 3], "mech-appearances": [1]},
             "normal_map_formats": [2],
+            "authored_normal_catalog_versions": [1],
         }
 
     def validated(self, appearances=None):
@@ -142,6 +147,10 @@ class AppearanceTests(unittest.TestCase):
         select([(root, manifest)], no_normals, appearance_mode="original")
         with self.assertRaisesRegex(ValueError, "normal map format"):
             select([(root, manifest)], no_normals, appearance_mode="upgraded")
+        no_catalog_version = copy.deepcopy(self.host)
+        no_catalog_version.pop("authored_normal_catalog_versions")
+        with self.assertRaisesRegex(ValueError, "authored normal catalog version 1"):
+            select([(root, manifest)], no_catalog_version, appearance_mode="upgraded")
         no_feature = copy.deepcopy(self.host)
         no_feature["content_capabilities"].pop("mech-appearances")
         with self.assertRaisesRegex(ValueError, "Update the game runtime"):
@@ -225,6 +234,54 @@ class AppearanceTests(unittest.TestCase):
             compose_normals(
                 [{"appearance_normal_pages": [self.page]}], environment, self.root / "conflict"
             )
+
+    def test_composer_repackages_sixteen_inherited_pages_with_appearance_page(self):
+        world_pages = []
+        world_keys = [(1, 1, 1, 0x100000 + index) for index in range(16)]
+        for index, key in enumerate(world_keys):
+            page = self.root / f"world-{index}.bin"
+            page.write_bytes(pack_surface_bindings([(key, self.normal)]))
+            world_pages.append(page.name)
+        index = self.root / "world.txt"
+        index.write_text("MW34SNA1\n" + "\n".join(world_pages) + "\n")
+        result = compose_normals(
+            [{"appearance_normal_pages": [self.page]}],
+            {"MW34_SURFACE_NORMALS": str(index)},
+            self.root / "combined",
+        )
+        pages = inherited_pages(result["MW34_SURFACE_NORMALS"])
+        self.assertLessEqual(len(pages), 16)
+        bindings = {}
+        for page in pages:
+            bindings.update(read_surface_bindings(page.read_bytes()))
+        self.assertEqual(set(bindings), {*world_keys, self.key})
+
+    def test_chassis_preparation_environment_preserves_and_resolves_profile_catalog(self):
+        profile_environment = {"MW34_SURFACE_NORMALS": "world/surface-normals.txt"}
+        prepared_environment = {"MW34_REMASTER_BANKS": "/prepared/banks.bin"}
+        with patch("play_remaster.ROOT", self.root):
+            effective = _chassis_preparation_environment(
+                profile_environment, prepared_environment
+            )
+        self.assertEqual(
+            effective["MW34_SURFACE_NORMALS"],
+            str((self.root / "world/surface-normals.txt").resolve()),
+        )
+        self.assertEqual(effective["MW34_REMASTER_BANKS"], "/prepared/banks.bin")
+        self.assertEqual(
+            _prepared_profile_bindings(profile_environment, prepared_environment),
+            {
+                "MW34_SURFACE_NORMALS": "world/surface-normals.txt",
+                "MW34_REMASTER_BANKS": "/prepared/banks.bin",
+            },
+        )
+        fresh_catalog = {"MW34_SURFACE_NORMALS": "/prepared/fresh.txt"}
+        self.assertEqual(
+            _chassis_preparation_environment(profile_environment, fresh_catalog)[
+                "MW34_SURFACE_NORMALS"
+            ],
+            "/prepared/fresh.txt",
+        )
 
     def test_native_bank_preparation_contains_upgrade_and_normal_catalog(self):
         root, manifest = self.pack()

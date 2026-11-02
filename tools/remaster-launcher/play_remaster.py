@@ -45,6 +45,25 @@ def graphics_limitations(graphics, profile):
     return errors
 
 
+def _prepared_profile_bindings(profile_environment, prepared_bindings):
+    """Keep the profile's authored catalog unless preparation supplies a fresh one."""
+    bindings = dict(prepared_bindings)
+    profile_catalog = profile_environment.get("MW34_SURFACE_NORMALS")
+    if profile_catalog and "MW34_SURFACE_NORMALS" not in bindings:
+        bindings["MW34_SURFACE_NORMALS"] = profile_catalog
+    return bindings
+
+
+def _chassis_preparation_environment(profile_environment, prepared_environment):
+    """Combine profile catalogs with fresh resources, preferring fresh bindings."""
+    environment = dict(profile_environment)
+    catalog = environment.get("MW34_SURFACE_NORMALS")
+    if catalog and not Path(catalog).is_absolute():
+        environment["MW34_SURFACE_NORMALS"] = str((ROOT / catalog).resolve())
+    environment.update(prepared_environment)
+    return environment
+
+
 def plan(backend=None, original_models=False, *, config_path=None, registry_path=None, verification=None):
     """Resolve registered models, capabilities and command arguments without launching.
 
@@ -56,6 +75,7 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
     selected_config = (Path(config_path) if config_path is not None else CONFIG).resolve()
     config = read_json(selected_config)
     backend = backend or config["backend"]
+    profile_environment = config.get("native", {}).get("runtime_environment", {})
     from presentation_policy import choice, apply as apply_presentation
     if choice(config.get('native', {})) is not None:
         # Normal sessions never inherit optional developer registries/presets.
@@ -75,7 +95,9 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
         if not isinstance(roots, list) or len(roots) > 128 or any(not isinstance(p, str) for p in roots):
             raise RuntimeError("Invalid installed pack roots")
         ready, bindings = compose(roots, config["native"], verification, chassis_records)
-        config["native"]["runtime_environment"] = bindings
+        config["native"]["runtime_environment"] = _prepared_profile_bindings(
+            profile_environment, bindings
+        )
         prepared_profile = config
         offline = []
     else:
@@ -590,8 +612,17 @@ def main():
                 native['runtime_environment'].update(skin_bindings)
             from prepared_chassis_packs import prepare as prepare_chassis, CATALOG_KEY as CHASSIS_KEY
             environment.pop(CHASSIS_KEY, None)
+            profile_environment = (
+                p["prepared_profile"]["native"].get("runtime_environment", {})
+                if p.get("prepared_profile") is not None
+                else {}
+            )
+            chassis_environment = _chassis_preparation_environment(
+                profile_environment, environment
+            )
             chassis_bindings = prepare_chassis(p.get('chassis_records', []), args.game_exe or ROOT / 'MW3/Mech3.exe',
-                                               args.asset_output or p['asset_output'] or ROOT / 'local/remaster/prepared', environment)
+                                               args.asset_output or p['asset_output'] or ROOT / 'local/remaster/prepared',
+                                               chassis_environment)
             environment.update(chassis_bindings)
             if p.get('prepared_profile') is not None:
                 native['runtime_environment'].pop(CHASSIS_KEY, None)
