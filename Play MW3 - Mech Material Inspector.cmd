@@ -8,7 +8,7 @@ echo ======================================================================
 echo.
 
 if "%~1"=="" (
-    set MECH_ARG=--mech bushwacker
+    set MECH_ARG=--mech all
 ) else (
     set MECH_ARG=%*
 )
