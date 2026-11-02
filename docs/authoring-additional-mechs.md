@@ -484,6 +484,8 @@ Authors supply visual batches, original control names and original visibility
 nodes. They do not supply a suppression roster. The coordinator derives exact
 mesh names/counts and ancestry from the pinned original close/distance models,
 and requires each visual visibility node to belong to its original controller.
+Close and distance source mesh name/count signatures must differ; ambiguous LOD
+signatures fail during validation before a native session starts.
 The original cockpit signature is derived separately and remains outside the
 exterior replacement. The private MWCHAS6 session catalog carries those derived
 rosters, paths and authoritative namespaced original skin lookup names. Existing

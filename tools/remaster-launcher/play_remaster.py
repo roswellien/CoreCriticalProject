@@ -627,6 +627,9 @@ def main():
             if p.get('prepared_profile') is not None:
                 native['runtime_environment'].pop(CHASSIS_KEY, None)
                 native['runtime_environment'].update(chassis_bindings)
+                from presentation_policy import apply as apply_presentation
+                apply_presentation(native, p.get('environment_packs') or {})
+                environment.update(native['runtime_environment'])
         if p.get("prepared_profile") is not None:
             # PowerShell applies runtime_environment after preparation. Give it the
             # composed session profile so stale developer mech paths cannot return.

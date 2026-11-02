@@ -259,6 +259,12 @@ def validate(value, legacy, read):
         if any(owner_by_node.get(visible) != owner for owner, visible in metadata["bindings"]):
             raise ValueError("Owned visual visibility is outside controller ancestry")
         result["rosters"][lod] = roster
+    signatures = [
+        {(row["name"], row["vertices"]) for row in result["rosters"][lod]}
+        for lod in ("close", "distance")
+    ]
+    if signatures[0] == signatures[1]:
+        raise ValueError("Owned source LOD signatures must be distinguishable")
     cockpit = source_nodes(legacy["models"]["cockpit"], count)
     if sum(map(len, pages)) > 512 * 1024**2:
         raise ValueError("Owned normal resident budget exceeded")

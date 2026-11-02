@@ -114,7 +114,7 @@ static OverrideMatrix override_inverse(OverrideMatrix a){auto inverse=override_i
 
 #include "donor_runtime.inc"
 void override_load_textures(const OverrideModel&model,size_t first,size_t end,const char*alternate_env=nullptr,unsigned skin=0,const char*direct_path=nullptr){
- const char*path=direct_path?direct_path:model.direct_texture?model.direct_texture:std::getenv(alternate_env?alternate_env:model.texture_env);if(!path)return;
+ const char*path=mw34::skins::replacement_texture_path(direct_path,model.direct_texture,skin,std::getenv(alternate_env?alternate_env:model.texture_env));if(!path)return;
  auto&o=override_state();std::ifstream file(std::filesystem::path(additional_skin_wide(path)),std::ios::binary);
  auto bytes=[&](void*p,size_t n){if(!file.read(static_cast<char*>(p),std::streamsize(n)))throw std::runtime_error("Replacement textures: incomplete sidecar");};
  char magic[8];bytes(magic,8);if(std::memcmp(magic,"BWTEX1\0\0",8))throw std::runtime_error("Replacement textures: wrong format");

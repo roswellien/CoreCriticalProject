@@ -345,23 +345,38 @@ class ChassisPackTests(unittest.TestCase):
         from native_assets import write_atomic
         game = self.game()
         game.write_bytes(b'fixture only')
-        planned = dict(backend='native', graphics=dict(width=1280,height=720,aa=1,af=1), supported=True,
-                       texture_banks=0, models=[], offline_models=[], limitations=[],
-                       command=['powershell.exe','-Profile','old.json'], music=None,
-                       asset_output=str(self.root/'output'), prepared_profile=dict(native=dict(runtime_environment={})),
-                       chassis_records=self.selected())
+        from normal_materials import pack_surface_bindings
+        effect = self.root / 'effect.bin'; effect.write_bytes(bytes(12))
         assets = types.SimpleNamespace(prepare=lambda *a,**kw: {}, write_atomic=write_atomic)
-        with (patch('sys.argv',['play_remaster','--game-exe',str(game)]),
-              patch.object(play_remaster,'plan',return_value=planned),
-              patch.object(play_remaster,'read_json',return_value={'native':{'executable':'fixture.exe'}}),
-              patch.dict('sys.modules',{'native_assets':assets}),
-              patch.object(play_remaster.subprocess,'run',return_value=types.SimpleNamespace(returncode=0)),
-              patch.object(play_remaster.subprocess,'call',return_value=0) as child):
-            self.assertEqual(play_remaster.main(),0)
-        command = child.call_args.args[0]
-        environment = json.loads(Path(command[command.index('-Profile')+1]).read_text())['native']['runtime_environment']
-        self.assertTrue(Path(environment[CATALOG_KEY]).is_file())
-        self.assertEqual(len(_banks(environment['MW34_REMASTER_BANKS'])),2)
+        for enabled in (True, False):
+            with self.subTest(dynamic_lighting=enabled):
+                records = self.selected()
+                records[0]['appearance_normal_pages'] = [
+                    pack_surface_bindings([((1, 1, 1, 123), (1, 1, bytes([128, 128, 255, 255])))])
+                ]
+                native = dict(runtime_environment={'MW34_NORMAL_MAPS': '0'},
+                              presentation=dict(schema_version=1, dynamic_lighting=enabled),
+                              stock_presentation_versions=[1],
+                              stock_effect_lighting=dict(catalog=str(effect), bytes=12,
+                                  sha256=hashlib.sha256(effect.read_bytes()).hexdigest()))
+                planned = dict(backend='native', graphics=dict(width=1280,height=720,aa=1,af=1), supported=True,
+                               texture_banks=0, models=[], offline_models=[], limitations=[],
+                               command=['powershell.exe','-Profile','old.json'], music=None,
+                               asset_output=str(self.root/('output-on' if enabled else 'output-off')),
+                               prepared_profile=dict(native=native), chassis_records=records)
+                with (patch('sys.argv',['play_remaster','--game-exe',str(game)]),
+                      patch.object(play_remaster,'plan',return_value=planned),
+                      patch.object(play_remaster,'read_json',return_value={'native':{'executable':'fixture.exe'}}),
+                      patch.dict('sys.modules',{'native_assets':assets}),
+                      patch.object(play_remaster.subprocess,'run',return_value=types.SimpleNamespace(returncode=0)),
+                      patch.object(play_remaster.subprocess,'call',return_value=0) as child):
+                    self.assertEqual(play_remaster.main(),0)
+                command = child.call_args.args[0]
+                environment = json.loads(Path(command[command.index('-Profile')+1]).read_text())['native']['runtime_environment']
+                self.assertTrue(Path(environment[CATALOG_KEY]).is_file())
+                self.assertEqual(environment['MW34_NORMAL_MAPS'], '1' if enabled else '0')
+                self.assertEqual(child.call_args.kwargs['env']['MW34_NORMAL_MAPS'], '1' if enabled else '0')
+                self.assertEqual(len(_banks(environment['MW34_REMASTER_BANKS'])),2)
 
     def test_additional_chassis_surface_materials_build_select_prepare_and_invalidation(self):
         import surface_materials

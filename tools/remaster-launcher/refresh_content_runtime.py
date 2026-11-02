@@ -48,7 +48,6 @@ def stage(source, output, version):
     for name in ('play_remaster.py', 'prepared_mech_packs.py', 'prepared_environment_packs.py',
                  'prepared_skin_packs.py', 'prepared_chassis_packs.py', 'chassis_appearances.py', 'owned_chassis_visuals.py', 'surface_catalog_composition.py', 'legacy_chassis_resources.py', 'legacy_chassis_skins.py', 'chassis_catalog.py', 'chassis_icons.py',
                  'reader_archive.py', 'zrd_document.py', 'normal_materials.py', 'normal_codec.py',
-                 'presentation_policy.py', 'content_capabilities.py', 'legacy_content_capabilities.json'):
                  'surface_materials.py', 'presentation_policy.py', 'content_capabilities.py',
                  'legacy_content_capabilities.json'):
         shutil.copyfile(Path(__file__).with_name(name), output / 'coordinator' / name)

@@ -55,7 +55,7 @@ def geometry(batches=(("hip", "hip"),)):
     return bytes(data)
 
 
-def tree():
+def tree(vertices=3):
     data = bytearray()
     for index, control in enumerate(CONTROLS):
         node = bytearray(352)
@@ -66,11 +66,11 @@ def tree():
         struct.pack_into("<I", node, 84, int(index != 0))
         struct.pack_into("<I", node, 92, 11 if index == 0 else 0)
         mesh = bytearray(92)
-        struct.pack_into("<5I", mesh, 16, 1, 3, 0, 0, 0)
+        struct.pack_into("<5I", mesh, 16, 1, vertices, 0, 0, 0)
         data += (
             node
             + mesh
-            + bytes(36)
+            + bytes(vertices * 12)
             + struct.pack("<9I", 3, 0, 0, 0, 0, 0, 0, 0, 0)
             + struct.pack("<3I", 0, 1, 2)
             + bytes(36)
@@ -98,7 +98,7 @@ class OwnedVisualTests(unittest.TestCase):
         struct.pack_into("<I", cockpit, 52, 5)
         self.legacy = {
             "materials": struct.pack("<I", 1) + bytes(40),
-            "models": {"close": tree(), "distance": tree(), "cockpit": bytes(cockpit)},
+            "models": {"close": tree(), "distance": tree(6), "cockpit": bytes(cockpit)},
         }
 
     def read(self, value=None):
@@ -117,6 +117,8 @@ class OwnedVisualTests(unittest.TestCase):
         project, descriptor, _ = fixture.legacy_project()
         root = fixture.root
         (root / "node.bin").write_bytes(tree())
+        (root / "distance.bin").write_bytes(tree(6))
+        descriptor["models"]["distance"] = "distance.bin"
         (root / "cockpit.bin").write_bytes(self.legacy["models"]["cockpit"])
         descriptor["models"]["cockpit"] = "cockpit.bin"
         (root / "legacy.json").write_text(json.dumps(descriptor))
@@ -178,6 +180,9 @@ class OwnedVisualTests(unittest.TestCase):
         self.assertEqual({r["owner"] for r in result["rosters"]["distance"]}, {"hip"})
         self.assertEqual(result["cockpit"], [])
         self.assertEqual(before, (self.value, self.legacy, self.resources))
+        self.legacy["models"]["distance"] = self.legacy["models"]["close"]
+        with self.assertRaisesRegex(ValueError, "LOD signatures"):
+            self.read()
 
     def test_visibility_and_tree_ancestry_fail_closed(self):
         for batches in (
