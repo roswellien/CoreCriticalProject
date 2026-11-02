@@ -160,7 +160,7 @@ const state = {
 // Renderer-owned display objects, shared by the event handlers and animation loop.
 // assetObjectMap keys are project asset_id values; mesh children are not project IDs.
 let scene, camera, perspCamera, orthoCamera, renderer, orbitControls, transformControls;
-let terrainMesh, waterMesh, sunLight, ambientLight, ghostPreview, brushCursorRing;
+let terrainMesh, waterMesh, reconMapMesh, sunLight, ambientLight, ghostPreview, brushCursorRing;
 let assetObjectMap = new Map(); // asset_id -> THREE.Group
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
@@ -203,6 +203,13 @@ const OP_ENV_METADATA = {
         palette: { sand: 0xd9c28a, rock: 0x4a7337, peak: 0x5a6975, shoreY: 3.0 },
         preset: "sunset",
         terrainTexture: "/static/assets/textures/terrains/c1_txgter_1.png",
+        reconMap: {
+            texture: "/static/assets/maps/c1m1.png",
+            mpp: 3.476,
+            offset: [-1114.434, 0.0, -659.279],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     c2: {
         name: "Op 2: Desert Canyons",
@@ -215,6 +222,13 @@ const OP_ENV_METADATA = {
         palette: { sand: 0xd9a76a, rock: 0x9e5b32, peak: 0xc47e45, shoreY: -50.0 },
         preset: "noon",
         terrainTexture: "/static/assets/textures/terrains/c2_ggter_1.png",
+        reconMap: {
+            texture: "/static/assets/maps/c2m1.png",
+            mpp: 4.273,
+            offset: [1930.0, 0.0, -41.6],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     c3: {
         name: "Op 3: Volcanic Badlands",
@@ -227,6 +241,13 @@ const OP_ENV_METADATA = {
         palette: { sand: 0x242426, rock: 0x473232, peak: 0x822a2a, shoreY: -20.0 },
         preset: "storm",
         terrainTexture: "/static/assets/textures/terrains/c3_gter_1.png",
+        reconMap: {
+            texture: "/static/assets/maps/c3m1.png",
+            mpp: -5.175,
+            offset: [-1255.0, 0.0, -224.0],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     c4: {
         name: "Op 4: Highland Mountains",
@@ -239,6 +260,13 @@ const OP_ENV_METADATA = {
         palette: { sand: 0x526b48, rock: 0x545b63, peak: 0xd9e5eb, shoreY: -10.0 },
         preset: "noon",
         terrainTexture: "/static/assets/textures/terrains/c4_gter_1.png",
+        reconMap: {
+            texture: "/static/assets/maps/c4m1.png",
+            mpp: -7.100,
+            offset: [-2365.0, 0.0, 1629.0],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     t1: {
         name: "Training Grounds",
@@ -251,6 +279,13 @@ const OP_ENV_METADATA = {
         palette: { sand: 0x73695b, rock: 0x4a4744, peak: 0x8a847e, shoreY: -30.0 },
         preset: "noon",
         terrainTexture: "/static/assets/textures/terrains/t1_ggter1.png",
+        reconMap: {
+            texture: "/static/assets/maps/t1m1.png",
+            mpp: 5.144,
+            offset: [3382.0, 0.0, -2.0],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
 };
 OP_ENV_METADATA.coastal = OP_ENV_METADATA.c1;
@@ -551,6 +586,28 @@ async function buildTerrain() {
         terrainMesh.name = "terrain";
         scene.add(terrainMesh);
         state.sculpt.originalPositions = new Float32Array(geom.attributes.position.array);
+
+        // Apply saved terrain sculpt height modifications if present
+        if (state.project.terrain && state.project.terrain.height_modifications) {
+            const hmods = state.project.terrain.height_modifications;
+            const pos = geom.attributes.position;
+            let appliedCount = 0;
+            for (let i = 0; i < pos.count; i++) {
+                const vx = Math.round(pos.getX(i) * 10) / 10;
+                const vz = Math.round(pos.getZ(i) * 10) / 10;
+                const k = `${vx},${vz}`;
+                if (hmods[k] !== undefined) {
+                    pos.setY(i, hmods[k]);
+                    appliedCount++;
+                }
+            }
+            if (appliedCount > 0) {
+                pos.needsUpdate = true;
+                geom.computeVertexNormals();
+                console.log(`[Map Studio] Applied ${appliedCount} saved terrain height modifications`);
+            }
+        }
+
         console.log(
             `[Map Studio] Loaded authentic ${meta.name} terrain mesh (${tData.vertices.length} vertices, ${tData.faces.length} faces) with in-game texture ${meta.terrainTexture}`,
         );
@@ -571,6 +628,38 @@ async function buildTerrain() {
         waterMesh.position.set(meta.waterCenter[0], meta.waterLevel, meta.waterCenter[1]);
         waterMesh.receiveShadow = true;
         scene.add(waterMesh);
+    }
+
+    // 2b. Calibrated Authentic 2D Satellite Recon Map Overlay
+    if (reconMapMesh) {
+        scene.remove(reconMapMesh);
+        if (reconMapMesh.geometry) reconMapMesh.geometry.dispose();
+        reconMapMesh = null;
+    }
+    if (meta.reconMap) {
+        const rm = meta.reconMap;
+        const worldW = Math.abs(rm.widthPx * rm.mpp);
+        const worldH = Math.abs(rm.heightPx * rm.mpp);
+        const rmGeom = new THREE.PlaneGeometry(worldW, worldH);
+        rmGeom.rotateX(-Math.PI / 2);
+        const rmTex = new THREE.TextureLoader().load(rm.texture);
+        const rmMat = new THREE.MeshBasicMaterial({
+            map: rmTex,
+            transparent: true,
+            opacity: 0.88,
+            depthWrite: false,
+        });
+        reconMapMesh = new THREE.Mesh(rmGeom, rmMat);
+        reconMapMesh.position.set(rm.offset[0], -1.2, rm.offset[2]);
+        if (rm.mpp < 0) {
+            reconMapMesh.scale.set(-1, 1, -1);
+        }
+        reconMapMesh.name = "reconMapOverlay";
+        reconMapMesh.visible = (state.viewMode === "topdown" || !!state.showReconOverlay);
+        scene.add(reconMapMesh);
+        console.log(
+            `[Map Studio] Calibrated 2D satellite recon map loaded: ${rm.texture} (${worldW.toFixed(1)}m x ${worldH.toFixed(1)}m) at [${rm.offset[0]}, ${rm.offset[2]}]`,
+        );
     }
 
     // 3. Center orbit controls around operation center
@@ -1897,6 +1986,11 @@ function setViewMode(mode) {
 
         if (modeToggleBtn) modeToggleBtn.innerHTML = "🗺️ Mode: 3D Studio (Click for 2D)";
     }
+
+    if (reconMapMesh) {
+        reconMapMesh.visible = (mode === "topdown" || !!state.showReconOverlay);
+    }
+
     orbitControls.update();
 }
 
@@ -1906,6 +2000,20 @@ function toggleViewMode() {
     } else {
         setViewMode("topdown");
     }
+}
+
+function toggleReconOverlay() {
+    state.showReconOverlay = !state.showReconOverlay;
+    if (reconMapMesh) {
+        reconMapMesh.visible = (state.viewMode === "topdown" || !!state.showReconOverlay);
+    }
+    const btn = document.getElementById("btn-recon-overlay");
+    if (btn) {
+        if (state.showReconOverlay) btn.classList.add("active");
+        else btn.classList.remove("active");
+    }
+    showToast(`Satellite Recon Overlay: ${state.showReconOverlay ? "ON" : "OFF"}`);
+    playBeep(520, "sine", 0.05);
 }
 
 // Environment Presets
@@ -2372,6 +2480,10 @@ function resetSculptedTerrain() {
     posAttr.needsUpdate = true;
     terrainMesh.geometry.computeVertexNormals();
 
+    if (state.project.terrain) {
+        state.project.terrain.height_modifications = {};
+    }
+
     for (const asset of state.project.assets) {
         const groundY = getTerrainHeight(asset.x, asset.z);
         asset.y = Math.round((groundY + (asset.height_offset || 0.0)) * 10) / 10;
@@ -2439,6 +2551,12 @@ function applyTerrainSculpt(hitPoint) {
             if (newY !== curY) {
                 posAttr.setY(i, newY);
                 modified = true;
+
+                if (!state.project.terrain.height_modifications) {
+                    state.project.terrain.height_modifications = {};
+                }
+                const coordKey = `${Math.round(vx * 10) / 10},${Math.round(vz * 10) / 10}`;
+                state.project.terrain.height_modifications[coordKey] = Math.round(newY * 10) / 10;
 
                 if (colAttr) {
                     const opCode = state.project.base_operation || "c1";
@@ -2668,6 +2786,8 @@ function onKeyDown(e) {
         setViewMode("orbit");
     } else if (e.key === "i" || e.key === "I") {
         setViewMode("iso");
+    } else if (e.key === "m" || e.key === "M") {
+        toggleReconOverlay();
     }
 }
 

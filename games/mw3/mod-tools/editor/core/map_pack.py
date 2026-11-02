@@ -254,6 +254,314 @@ class MapPackProject:
         )
 
 
+def bake_terrain_heights(temp_gamez: Path, height_modifications: Dict[str, float]) -> int:
+    """Bake sculpted terrain elevations into GameZ model vertices and bounding boxes.
+
+    Returns the count of vertices modified.
+    """
+    if not height_modifications:
+        return 0
+
+    models_path = temp_gamez / "models.json"
+    nodes_path = temp_gamez / "nodes.json"
+    if not models_path.is_file() or not nodes_path.is_file():
+        return 0
+
+    models = json.loads(models_path.read_text(encoding="utf-8"))
+    nodes = json.loads(nodes_path.read_text(encoding="utf-8"))
+
+    mod_lookup: Dict[Tuple[float, float], float] = {}
+    for k, v in height_modifications.items():
+        try:
+            parts = k.split(",")
+            kx = round(float(parts[0]), 1)
+            kz = round(float(parts[1]), 1)
+            mod_lookup[(kx, kz)] = float(v)
+        except Exception:
+            continue
+
+    if not mod_lookup:
+        return 0
+
+    modified_count = 0
+    models_modified = set()
+
+    for node in nodes:
+        flags = node.get("flags", {})
+        if not flags.get("terrain"):
+            continue
+        mi = node.get("model_index")
+        if mi is None or mi < 0 or mi >= len(models):
+            continue
+
+        m = models[mi]
+        verts = m.get("vertices", [])
+        if not verts:
+            continue
+
+        tr = node.get("data", {}).get("Object3d", {}).get("transform")
+        tx, ty, tz = 0.0, 0.0, 0.0
+        if isinstance(tr, dict) and "RotateTranslateScale" in tr:
+            trans = tr["RotateTranslateScale"].get("translate", {})
+            tx = float(trans.get("x", 0.0))
+            ty = float(trans.get("y", 0.0))
+            tz = float(trans.get("z", 0.0))
+
+        node_modified = False
+        min_y = float("inf")
+        max_y = float("-inf")
+
+        for v in verts:
+            gx = round(v["x"] + tx, 1)
+            gz = round(v["z"] + tz, 1)
+
+            new_gy = mod_lookup.get((gx, gz))
+            if new_gy is None:
+                # Tolerance check for small precision differences
+                for dx in (-0.1, 0.1):
+                    for dz in (-0.1, 0.1):
+                        alt_k = (round(gx + dx, 1), round(gz + dz, 1))
+                        if alt_k in mod_lookup:
+                            new_gy = mod_lookup[alt_k]
+                            break
+                    if new_gy is not None:
+                        break
+
+            if new_gy is not None:
+                new_vy = new_gy - ty
+                if abs(v["y"] - new_vy) > 1e-4:
+                    v["y"] = new_vy
+                    modified_count += 1
+                    node_modified = True
+                    models_modified.add(mi)
+
+            if v["y"] < min_y:
+                min_y = v["y"]
+            if v["y"] > max_y:
+                max_y = v["y"]
+
+        if node_modified:
+            for bbox_key in ("node_bbox", "model_bbox", "active_bbox"):
+                bbox = node.get(bbox_key)
+                if isinstance(bbox, dict):
+                    if "min" in bbox and isinstance(bbox["min"], dict):
+                        if min_y + ty < bbox["min"].get("y", 0.0):
+                            bbox["min"]["y"] = min_y + ty
+                    if "max" in bbox and isinstance(bbox["max"], dict):
+                        if max_y + ty > bbox["max"].get("y", 0.0):
+                            bbox["max"]["y"] = max_y + ty
+
+    if modified_count > 0:
+        models_path.write_text(json.dumps(models), encoding="utf-8")
+        nodes_path.write_text(json.dumps(nodes, indent=2), encoding="utf-8")
+
+    return modified_count
+
+
+# Canonical Weapon Registry for MW3 Native Engine
+WPN_NAME_TO_GAME_ID: Dict[str, str] = {
+    "er ppc": "ERPPC",
+    "clan er ppc": "ERPPC",
+    "erppc": "ERPPC",
+    "ppc": "ERPPC",
+    "clan lrm-20": "LRM20",
+    "lrm-20": "LRM20",
+    "lrm 20": "LRM20",
+    "clan lrm-15": "LRM15",
+    "lrm-15": "LRM15",
+    "clan lrm-10": "LRM10",
+    "lrm-10": "LRM10",
+    "clan lrm-5": "LRM5",
+    "lrm-5": "LRM5",
+    "streak srm-6": "StreakSRM6",
+    "srm-6": "StreakSRM6",
+    "srm-4": "SRM4",
+    "medium pulse laser": "PulseLaser_Medium",
+    "large pulse laser": "PulseLaser_Large",
+    "small pulse laser": "PulseLaser_Small",
+    "er large laser": "ERLaser_Large",
+    "er medium laser": "ERLaser_Medium",
+    "er small laser": "ERLaser_Small",
+    "large laser": "ERLaser_Large",
+    "medium laser": "ERLaser_Medium",
+    "small laser": "ERLaser_Small",
+    "gauss rifle": "GaussRifle",
+    "ultra ac/5": "UltraAC5",
+    "autocannon/10": "AC10",
+    "ac/10": "AC10",
+    "machine gun": "MGUN",
+}
+
+DEFAULT_AMMO_TABLE: Dict[str, int] = {
+    "LRM20": 120,
+    "LRM15": 90,
+    "LRM10": 60,
+    "LRM5": 40,
+    "StreakSRM6": 60,
+    "SRM4": 50,
+    "AC10": 40,
+    "UltraAC5": 50,
+    "GaussRifle": 32,
+    "MGUN": 400,
+}
+
+PART_TO_GAME_PART: Dict[str, str] = {
+    "left_arm": "larm",
+    "right_arm": "rarm",
+    "left_torso": "ltorso",
+    "right_torso": "rtorso",
+    "center_torso": "torso",
+}
+
+
+def compile_mech_loadout(
+    reader_dir: Path,
+    drop_config: Dict[str, Any],
+) -> Optional[str]:
+    """Compile player mech drop configuration into dfn_<mech>.zrd.json in reader directory."""
+    if not drop_config or not isinstance(drop_config, dict):
+        return None
+
+    raw_mech = drop_config.get("player_mech", "mech_madcat")
+    mech_name = raw_mech.replace("mech_", "").strip().lower()
+    dfn_filename = f"dfn_{mech_name}.zrd.json"
+    dfn_path = reader_dir / dfn_filename
+
+    if not dfn_path.is_file():
+        global_cache = cache_directory() / "global_reader" / dfn_filename
+        if global_cache.is_file():
+            shutil.copyfile(global_cache, dfn_path)
+
+    if not dfn_path.is_file():
+        return None
+
+    try:
+        data = json.loads(dfn_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    lst = data[0] if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list) else data
+    if not isinstance(lst, list):
+        return None
+
+    # Discover firepoints for each mech body part
+    firepoints_by_part: Dict[str, List[str]] = {
+        "larm": [],
+        "rarm": [],
+        "ltorso": [],
+        "rtorso": [],
+        "torso": [],
+        "head": [],
+    }
+    for i in range(0, len(lst), 2):
+        if lst[i] == "firepoints" and isinstance(lst[i + 1], list):
+            fps = lst[i + 1]
+            for j in range(0, len(fps), 2):
+                fpid = fps[j]
+                fp_info = fps[j + 1]
+                if isinstance(fp_info, list):
+                    for k in range(0, len(fp_info), 2):
+                        if fp_info[k] == "part" and isinstance(fp_info[k + 1], list):
+                            part_name = fp_info[k + 1][0]
+                            if part_name in firepoints_by_part:
+                                firepoints_by_part[part_name].append(fpid)
+
+    # Build weapons configuration from drop_config
+    weapons_config = drop_config.get("weapons", {})
+    weapons_arr = []
+    used_fps = set()
+    group_idx = 1
+    placed_wpn_names = []
+
+    for loc_key, wpn_display in weapons_config.items():
+        if not wpn_display or not isinstance(wpn_display, str):
+            continue
+        cleaned_wpn = wpn_display.strip().lower()
+        if not cleaned_wpn or cleaned_wpn == "none":
+            continue
+        game_wpn = WPN_NAME_TO_GAME_ID.get(cleaned_wpn, "ERLaser_Medium")
+        part = PART_TO_GAME_PART.get(loc_key, "torso")
+        candidates = firepoints_by_part.get(part, [])
+        fpid = next((fp for fp in candidates if fp not in used_fps), None)
+        if not fpid:
+            fpid = candidates[0] if candidates else "firepoint01"
+        used_fps.add(fpid)
+
+        entry = [game_wpn, fpid, "group", [group_idx]]
+        if game_wpn in DEFAULT_AMMO_TABLE:
+            ammo_cnt = DEFAULT_AMMO_TABLE[game_wpn]
+            entry.extend(["ammo", [ammo_cnt, "part", [part]]])
+        weapons_arr.append(entry)
+        placed_wpn_names.append(game_wpn)
+        group_idx = (group_idx % 5) + 1
+
+    # Build heatsinks and jumpjets equipment
+    num_hs = int(drop_config.get("heatsinks", 16))
+    equipment_arr = []
+    hs_parts = ["rarm", "larm", "rtorso", "ltorso", "rleg", "lleg"]
+    for h in range(max(10, num_hs)):
+        part = hs_parts[h % len(hs_parts)]
+        equipment_arr.append(["dsink", part])
+
+    num_jj = int(drop_config.get("jump_jets", 0))
+    for j in range(num_jj):
+        part = "rleg" if j % 2 == 0 else "lleg"
+        equipment_arr.append(["jumpjet", part])
+
+    armor_tons = float(drop_config.get("armor_tons", 14.0))
+
+    # Apply into configurations -> MSG_CONFIG_PRIMARY
+    for i in range(0, len(lst), 2):
+        if lst[i] == "configurations" and isinstance(lst[i + 1], list):
+            configs = lst[i + 1]
+            for c_idx in range(1, len(configs), 2):
+                c = configs[c_idx]
+                if not isinstance(c, list):
+                    continue
+                for f_idx in range(0, len(c), 2):
+                    field_name = c[f_idx]
+                    if field_name == "weapons" and weapons_arr:
+                        c[f_idx + 1] = weapons_arr
+                    elif field_name == "equipment" and equipment_arr:
+                        c[f_idx + 1] = equipment_arr
+                    elif field_name == "armor":
+                        armor_block = c[f_idx + 1]
+                        if isinstance(armor_block, list):
+                            for a_idx in range(0, len(armor_block), 2):
+                                if armor_block[a_idx] == "mass":
+                                    armor_block[a_idx + 1] = [armor_tons]
+
+    dfn_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # Update manifest.json in reader_dir to include dfn_<mech>.zrd if not already listed
+    manifest_p = reader_dir / "manifest.json"
+    if manifest_p.is_file():
+        try:
+            m_data = json.loads(manifest_p.read_text(encoding="utf-8"))
+            if isinstance(m_data, list):
+                doc_name = f"dfn_{mech_name}.zrd"
+                if not any(entry.get("name") == doc_name for entry in m_data):
+                    m_data.append({
+                        "name": doc_name,
+                        "flags": 25647,
+                        "info": {
+                            "Valid": {
+                                "comment": f"Custom MechLab {mech_name} configuration",
+                                "datetime": "2026-11-02T12:00:00Z",
+                            }
+                        },
+                    })
+                    manifest_p.write_text(json.dumps(m_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    summary = (
+        f"{mech_name.title()} loadout: {', '.join(placed_wpn_names) if placed_wpn_names else 'stock'}, "
+        f"{armor_tons}T armor, {num_hs} HS, {num_jj} JJ"
+    )
+    return summary
+
+
 class MapPackBuilder:
     """Write prototype archive overrides under one owned pack directory.
 
@@ -380,17 +688,27 @@ class MapPackBuilder:
                         placed_count += 1
 
             nodes_path.write_text(json.dumps(nodes, indent=2), encoding="utf-8")
+
+            baked_terrain_count = 0
+            if project.terrain.height_modifications:
+                baked_terrain_count = bake_terrain_heights(
+                    temp_gamez, project.terrain.height_modifications
+                )
+
             out_gamez = zbd_folder / "gamez.zbd"
             pack_gamez_zbd(temp_gamez, out_gamez)
 
             rel_gamez = f"zbd/{op}/gamez.zbd"
             redirects[rel_gamez] = out_gamez
+            gamez_summary = f"{placed_count} custom visual entities placed"
+            if baked_terrain_count > 0:
+                gamez_summary += f", {baked_terrain_count} sculpted terrain vertices baked"
             modified_records.append(
                 {
                     "target": rel_gamez,
                     "size_bytes": out_gamez.stat().st_size,
                     "sha256": compute_sha256(out_gamez),
-                    "summary": f"{placed_count} custom visual entities placed",
+                    "summary": gamez_summary,
                 }
             )
 
@@ -475,19 +793,49 @@ class MapPackBuilder:
 
                 waynet_path.write_text(json.dumps(waynet_data, indent=2), encoding="utf-8")
 
+            # Compile MechLab drop loadout into op reader
+            drop_summary = compile_mech_loadout(temp_reader, project.drop_config)
+
             out_reader = zbd_folder / "reader.zbd"
             pack_reader_zbd(temp_reader, out_reader)
 
             rel_reader = f"zbd/{op}/reader.zbd"
             redirects[rel_reader] = out_reader
+            reader_summary = "Custom player spawn, waypoints, and objective markers"
+            if drop_summary:
+                reader_summary += f"; {drop_summary}"
             modified_records.append(
                 {
                     "target": rel_reader,
                     "size_bytes": out_reader.stat().st_size,
                     "sha256": compute_sha256(out_reader),
-                    "summary": "Custom player spawn, waypoints, and objective markers",
+                    "summary": reader_summary,
                 }
             )
+
+        # 2b. Also compile global reader.zbd if drop_config is present
+        global_reader_cache = cache_dir / "global_reader"
+        if global_reader_cache.is_dir() and project.drop_config:
+            with tempfile.TemporaryDirectory() as td_global:
+                temp_global = Path(td_global) / "global_reader"
+                shutil.copytree(global_reader_cache, temp_global)
+                compile_mech_loadout(temp_global, project.drop_config)
+
+                global_zbd_folder = pack_folder / "zbd"
+                global_zbd_folder.mkdir(parents=True, exist_ok=True)
+                out_global_reader = global_zbd_folder / "reader.zbd"
+                pack_reader_zbd(temp_global, out_global_reader)
+
+                rel_global = "zbd/reader.zbd"
+                redirects[rel_global] = out_global_reader
+                modified_records.append(
+                    {
+                        "target": rel_global,
+                        "size_bytes": out_global_reader.stat().st_size,
+                        "sha256": compute_sha256(out_global_reader),
+                        "summary": f"Global mech definitions ({drop_summary or 'MechLab drop loadout'})",
+                    }
+                )
 
         # 3. Write Map Pack Manifest
         manifest_file = pack_folder / "manifest.json"
@@ -518,6 +866,7 @@ class MapPackBuilder:
                 "biome": project.terrain.biome,
                 "bounds": f"{project.terrain.width}m x {project.terrain.depth}m",
                 "water_level": project.terrain.water_level,
+                "sculpted_vertices_count": len(project.terrain.height_modifications),
             },
             "lighting_summary": {
                 "preset": project.lighting.preset_name,

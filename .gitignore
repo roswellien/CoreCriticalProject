@@ -55,6 +55,7 @@ __pycache__/
 # Terrain previews extracted from the user's original game installation.
 /games/mw3/mod-tools/editor/web/static/assets/terrains/
 /games/mw3/mod-tools/editor/web/static/assets/textures/terrains/
+/games/mw3/mod-tools/editor/web/static/assets/maps/
 # Local deployment account cache, rendered reports, and diagnostic output.
 .wrangler/
 /output/
