@@ -4,6 +4,7 @@ bool frontend_lab{};
 bool frontend_on() const { return frontend_lab&&mw34::vkscene::Renderer::remaster_width()!=0; }
 void frontend_switch(bool active){
  if(frontend_lab==active)return;
+ if(mw34::temporal::enabled())camera_reset();
  if(hud_gpu_active){hud_flush();hud_gpu_active=false;}
  gpu_sync(0);gpu_protect(false);
  // Finish the previous composition domain before invalidating residency.

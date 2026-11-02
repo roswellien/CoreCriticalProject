@@ -8,8 +8,14 @@ or reads an owner's host folder, saved compile command, lift report or object li
 
 ## Inputs
 
-- Windows x64, Python 3.11 or newer, Visual Studio C++ Build Tools and a Windows
-  SDK. The wrapper imports the installed x64 compiler environment using `vswhere`.
+- Windows x64, Python 3.11 or newer, Visual Studio C++ Build Tools with **MSVC
+  14.51 or newer**, and a Windows SDK. The wrapper imports the x64 compiler
+  environment from the installation selected by `vswhere -latest`; it does not
+  select a particular MSVC version. Check that installation's C++ toolset.
+  MSVC 14.44 fails on the 16-byte-aligned `std::stable_sort` element in
+  `effect_lighting.hpp` with an `_ENABLE_EXTENDED_ALIGNED_STORAGE` assertion.
+  The second-PC report worked around it with `CL=/D_ENABLE_EXTENDED_ALIGNED_STORAGE`,
+  but the supported build requires 14.51 without that override.
 - LLVM **21.1.8**, including `clang-cl.exe`, `lld-link.exe`, `llvm-lib.exe` and
   `llvm-readobj.exe`. CMake 3.24+ and Ninja are included with Visual Studio's CMake
   component; `-CMake` and `-Ninja` select independent installations.
@@ -20,6 +26,10 @@ or reads an owner's host folder, saved compile command, lift report or object li
   library, lifter, Vulkan SDK tools or shader compilation is needed. All 25
   consumed third-party headers are hash-checked before compilation. The Remill
   CMake patch in this repository does not change those headers.
+  Both sets use `sha256-crlf-to-lf`: replace CRLF byte pairs with LF before
+  SHA-256 hashing. Source archives and Git checkouts with either LF or CRLF
+  therefore work without changing `core.autocrlf`. No other bytes, whitespace,
+  BOM or final newline are normalized, and dependency files are never rewritten.
 - An original supported MW3 U.S. retail 1.2 installation. Its `Mech3.exe` identity
   is verified before building; original files are read-only inputs.
 - A locally available, previously generated native runtime containing
@@ -36,8 +46,15 @@ is copied unchanged; no translated `.obj` files are needed or regenerated.
 
 The first local build used clang-cl 21.1.8, MSVC headers/libraries 14.51.36231
 and the installed Windows SDK. Build receipts record actual tool fingerprints.
-An independent physical-PC build remains an acceptance check, not a claim made
-by having these files available.
+The [independent second-PC report](https://github.com/roswellien/MW3Recomp-Private/issues/25#issuecomment-6459478920)
+passed a clean `-Release` build of `develop` at `cf5defc` in a path with spaces:
+all 163 host pins matched the manifest, seven host objects were built, no
+translated objects were inputs, and the translated DLL was unchanged with no
+generation required. It used Windows 11, a Ryzen 7 9800X3D and RTX 5070, clang-cl
+21.1.8, MSVC 14.51.36231 (Visual Studio 2026 Build Tools 18.10.2), Windows SDK
+10.0.26100 and runtime 1.0.44's translated DLL, with the header versions above.
+That build's startup was not tested. The reported main-menu startup with a
+force-feedback wheel used #14's change on top and is separate evidence.
 
 ## One build command
 
@@ -60,6 +77,14 @@ The output contains `entry_commandline.exe`, the unchanged DLL/support files,
 seven newly compiled host objects, logs, regenerated import/export definitions
 and `source-snapshot.json`. No signing credential is needed for a developer build.
 Release Windows signing is a separate existing release step.
+The receipt's `dependency_header_pins` records the normalized hash algorithm and
+expected hashes; `dependency_header_raw_pins` records the actual bytes consumed.
+The build also checks Ninja's recorded compiler dependency paths against those
+pinned files and records the exact paths in `dependency_header_consumed_paths`;
+shadowed or missing pinned headers fail the build.
+Raw dependency hashes may differ across LF/CRLF checkouts. Host and repository
+source pins remain exact byte hashes, and historical receipts retain their
+original hash semantics.
 
 The historical object-based build in `native/CMakeLists.txt` remains available
 for its dated research users. The wrapper selects `MW34_HOST_ONLY=ON`, whose
@@ -119,9 +144,10 @@ and per-file coverage checks. A real build must additionally:
 4. Validate startup/menu and the changed host behavior in an isolated launcher
    runtime, preserving the player's installation. A successful compile is not
    a force-feedback hardware test or a complete gameplay fidelity claim.
-5. Repeat on a second physical Windows machine. Retain its tool versions,
-   logs, source fingerprints and result; this remains required before closing
-   the independent-machine acceptance criterion.
+5. Repeat on a second physical Windows machine for independent build coverage.
+   Retain its tool versions, logs, source fingerprints and result. The report
+   linked above satisfies this check for `cf5defc`; it does not validate later
+   changes or establish startup/gameplay coverage for that build.
 
 For the next native release, build the host from merged `main` using this command
 and retain its receipt. Copy the built host into runtime staging, sign it, refresh
@@ -132,6 +158,11 @@ record pre/post-signing executable hashes separately. Compare staged metadata to
 the build receipt and fail publication on a mismatch. Keep the existing native
 DLL unchanged for host-only fixes. Never reconstruct a release from a local
 patched host folder or silently include unrelated working-tree edits.
+
+Issue #25 remains open until a repository-built host's source fingerprints are
+compared with `host_source_pins` in the next **published** runtime's
+`metadata/source-snapshot.json`. A manifest match in a development build alone
+does not complete that release acceptance criterion.
 
 The fingerprints establish the source used by a build. Authenticode timestamps,
 compiler/SDK versions and debug paths can change executable bytes; this work
