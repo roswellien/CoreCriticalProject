@@ -317,3 +317,73 @@ presentations and 7,922 guest scenes with zero Vulkan validation errors, using
 ordinary pause, Quit, Pilot Accept and Training launch controls. It exports no
 mission temporal image during loading, then recovers 57,015 valid pixels at 2001.
 That run predates this precision correction and is not its final native validation.
+
+
+## Remove discarded temporal polygon reconstruction
+
+The November2 performance investigation found that temporal-only capture could
+rebuild a polygon and compute its lighting before discarding it at the caller's
+byte-identity check. The production shortcut is restricted to different corner
+counts: reconstruction emits one vertex per original corner, so its payload
+length cannot equal the submitted TL payload. Equal-count reconstruction and
+projection admission remain unchanged. The submitted TL draw continues to
+provide ordinary color and unknown diagnostic occlusion; no source/lifetime
+check or original game producer is bypassed.
+
+The production adapter now lives in `world_polygon_capture_stage.inc`, included
+by the existing direct binding and an authored fixture in the existing world
+geometry executable. The fixture proves exact source identity, early rejection
+of different counts, preserved authoritative reconstruction and preserved
+same-count reconstruction. Removing the guard in a private control fails the
+rejection assertion. Six RX9070 scale/jitter GPU cases pass with zero validation
+errors; current CTest is30/30, with style and format checks passing.
+
+Matched minimally instrumented Training runs use all13 current published packs,
+runtime/support1.0.46, unchanged RX9070 driver, 3440×1440, FXAA/AF16, distances
+1200/1100, lighting On, world100%, jitter On, virtual16.666667 and VSync Off.
+Optional logs/captures/validation are disabled equally; required world logging
+and frame timing remain. Each run completes2200 presentations/7689 guest scenes.
+The interval is800–2200,1400 presentation intervals per run. The harness checks
+for competing games and compilers and stops only its owned test if one appears.
+No competing game/compiler or timeout occurred in these four runs.
+
+| Run order | Before/after | Mean FPS | Mean ms |
+| --- | --- | ---: | ---: |
+| A1 | Before |62.354|16.038|
+| B1 | After |70.689|14.147|
+| B2 | After |70.628|14.159|
+| A2 | Before |62.774|15.930|
+
+Across2800 intervals per build, before is62.563FPS/15.984ms and after is
+70.658FPS/14.153ms:11.457% less frame time and12.939% more presentation throughput.
+Combined p95 improves20.795→18.358ms. These are bounded scripted Training
+measurements, not real-clock gameplay, GPU timestamp measurements or a whole-game
+performance claim. They do not establish a100FPS target or FSR/FG benefit.
+
+The prechange source is4fb4222324152973bb4e186c93684e6e3cdcb828, executable SHA256
+`fb5d63245c6c783712b7aa0265a9dd913db530127d80cf96633c94b02c2f66cc`.
+The changed source is9b21565d98b07a8a276bb9bf62d6764af9ca4184, executable SHA256
+`efebfef4effd06909d0f96dfd6e1def41b367ac96c5ba3bc0fbdcdfa48c21c87`.
+Its clean maintained build records183 host files/197 repository dependencies;
+the translated DLL is unchanged. Timing receipts and raw intervals remain
+private under `local/p2b/count-perf-*` and `count-reject-performance.json`.
+A fresh authorized R2 readback confirms the published runtime envelope and pack
+catalog are byte-identical to the previously signature/archive-verified inputs.
+
+Separate validation-enabled full-pack runs complete3200 presentations/13889 guest
+scenes each, with no validation, synchronization or host-exception messages.
+All30 captured files at801/1801/2101/2102/2801/3001 match byte-for-byte, including
+authoritative color and temporal depth/motion/validity/metadata. Stationary
+coverage801/1801 has57015 finite valid pixels with maximum0.0001221px motion,
+within the unchanged0.02px budget. W movement2101 has49031 valid pixels;
+turning2801/3001 has51265/43548 valid pixels, all finite and nonzero. These
+are positive native static-source comparisons, not all-invalid output credit.
+See private `count-reject-native-validation.json` and both validation run receipts.
+
+This change advances repeated CPU diagnostic preparation → equivalent inputs
+with less discarded work. The original recompiled geometry producers still
+execute. Their broader migration is tracked in issue177: original transform
+scratch also feeds culling/lighting, while projected scratch feeds clipping and
+material queues. Those consumers and required effects must be owned before an
+earlier GPU producer replaces CPU work. The historical narrow loop bypass had
+no net performance win and is not restored by this change.
