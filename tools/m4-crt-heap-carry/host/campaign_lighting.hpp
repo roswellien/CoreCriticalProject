@@ -449,8 +449,9 @@ public:
             else c = (char)std::tolower((unsigned char)c);
         }
 
-        // Training missions use packed lighting when available; legacy packs retain their baseline.
+        // Exact Training reader names advance load identity before lighting selection.
         if (lower.find("/t1/readerm") != std::string::npos && lower.ends_with(".zbd")) {
+            if (lower.ends_with("/t1/readerm.zbd")) ++reader_epoch_;
             for (unsigned mission = 1; mission <= 4; ++mission) {
                 const auto reader = "/t1/readerm" + std::to_string(mission) + ".zbd";
                 if (lower.ends_with(reader)) {
@@ -461,7 +462,6 @@ public:
                     return;
                 }
             }
-            if (lower.ends_with("/t1/readerm.zbd")) ++reader_epoch_;
             reset("t1");
             return;
         }

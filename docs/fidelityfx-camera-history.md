@@ -167,11 +167,33 @@ jitter, depth validity and complete world-only temporal composition require P2b;
 object/part motion and effects require P3. No performance or whole-game fidelity
 claim follows from a camera pair or fixture.
 
-Enforced web style has
-two inherited failures in `website/functions/api/crash-reports.js` and
-`website/tests/crash-reports.test.mjs`, already under [PR #110](https://github.com/roswellien/MW3Recomp-Private/pull/110).
-Unrelated formatting edits are excluded from this renderer task.
+The earlier review recorded two inherited web-style failures in the crash-report
+files. Their fixes from [PR #110](https://github.com/roswellien/MW3Recomp-Private/pull/110)
+are now included through `develop`; current CI still determines style acceptance.
 
 No SDK binary, pack format, installer/update/version or public graphics setting
-changes. P1/#100 and its presentation dependency remain separate unmerged work;
-raw RX 9070 Vulkan WSI remains outside this fix. No merge or release is implied.
+changes. P1/#100 remains an unmerged dependency; its presentation bridge dependency
+from #105 is already in `develop`. Raw RX 9070 Vulkan WSI remains outside this fix. No merge or release is implied.
+
+
+## Refreshed integration review, 2026-11-02
+
+This branch now includes the reviewed #100 source and its captured-vertex
+fixture-shadow repair, together with current `develop`. Conflict resolution
+preserves headlight dispatch, surface-material records, and Training time-of-day
+selection. Exact Training readers 1 through 4 advance camera load identity;
+the existing mission-reader regression table covers each name.
+
+A fresh Windows asset-free build exposed a C4996 warning treated as an error in
+the new surface-access history target: `camera_history.hpp` uses `std::getenv`.
+The target now applies the existing repository CRT-warning definition; production
+camera behavior and warning policy for other targets are unchanged.
+
+The refreshed RX 9070 checks passed 60 presentation/persistence/ordered-write
+cases with temporal inputs Off/On, six depth modes, and both 25-presentation
+DXGI bridge cases. Camera history/reset checks, lighting-independent camera
+capture with FP/LastError preservation, world-camera integration, dispatch
+membership, mission-reader epochs, sunlight and the inherited fixture-shadow
+regression passed. No synchronization-validation diagnostics were observed.
+These are authored fixtures, not a new native campaign, same-mission reload,
+physical-PC or original-game fidelity acceptance run.

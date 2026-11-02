@@ -663,3 +663,26 @@ physical PC remain open. Opaque runs after HUD can use
 coverage reconstruction; the full-resolution guarantees and full-clear exceptions
 are scoped above.
 No build, asset, release or version was published or merged by these checks.
+
+## Independent integration review, 2026-11-02
+
+Refreshing this branch against current `develop` exposed a retained-world
+fixture-shadow failure: batching moves the captured vertex buffer to the active
+batch, while full-scene shadow metadata still points to the original scene.
+Authenticated TL casters then stopped with `Fixture shadow TL source outside
+captured vertices`. Shadow preparation now receives the active captured vertex
+buffer explicitly, preserving the full-scene caster list without copying it.
+
+The existing display fixture adds `--world-fixture-shadows`. With `MW34_SUN=1`,
+`MW34_GPU_MODELS=1`, `MW34_EFFECT_LIGHTS=1`, `MW34_FIXTURE_SHADOWS=1`, and
+`MW34_FIXTURE_SHADOW_SIZE=128`, it passes at 50, 67 and 100 percent. Restoring the
+moved-from source-buffer reference makes the regression fail with the original
+exception; restoring the repair passes. These are authored Vulkan fixtures,
+not new campaign or original-game equivalence evidence.
+
+The refreshed RX 9070 checks passed 30 presentation/persistence/ordered-write
+cases (50/67/100 percent, AA Off/FXAA, including explicit RGBA ordered writes),
+five depth modes including odd sizes and SSAA, and the three fixture-shadow
+cases. No synchronization-validation diagnostics were observed. Existing native
+Training/menu/Lab evidence above remains historical; the integration review did
+not launch the game or claim broader gameplay acceptance.
