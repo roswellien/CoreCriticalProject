@@ -226,6 +226,54 @@ required model produces a compatibility error.
 This separate-skin route is not yet supported for Atlas's legacy-resource
 prototype. See the worked example's current limits before adding appearances.
 
+### Include original skins in an owned legacy chassis pack
+
+For a converted MW3/PM chassis, use `prepare_legacy_chassis.py --skins all`
+to retain the supported original skin block and its textures in the same pack.
+The default `--skins primary` preserves the previous single-skin workflow.
+This route uses the original Mech Lab skin rows, not prepared-visual skin
+overrides or additional chassis entries. Keep the primary configuration and
+existing chassis identity when updating a project.
+
+The legacy descriptor uses `schema_version: 2` and adds ordered metadata:
+
+```json
+"skins": [
+  {"id": "primary", "message": "MSG_SKIN_PRIMARY", "suffix": ""},
+  {"id": "variantb", "message": "MSG_SKIN_VARIANTB", "suffix": "_b"}
+]
+```
+
+The supported grammar has one primary and up to seven consecutive alternatives
+(`MSG_SKIN_VARIANTB` through `H`), followed by optional damage bindings. These
+are existing game message keys. IDs must be unique lowercase resource IDs;
+keep them and row order stable across updates. Each alternate supplies one
+unique suffix beginning with `_`, followed by 1–8 lowercase letters or digits.
+Metadata must agree with the embedded definition. Unknown donor grammars fail
+instead of silently losing skins.
+
+Primary entries are texture names or two-name aliases. Supply both alias names
+with every suffix, as well as all material and damage textures. The composer
+preserves these implicit relationships when it namespaces resources. Shared
+textures outside the skin block, such as cockpit glass, are not automatically
+suffixed. The existing limits remain: 512 textures, 31-byte texture names and
+16 MiB per raw resource. Ambiguous families, missing resources, invalid paths
+and collisions fail before launch. Schema-1 packs cannot carry alternate skin
+declarations; rebuild them with schema 2.
+
+The builder adds `legacy-mech-skins: 1` alongside the chassis capability.
+Use a runtime containing the matching reviewed coordinator. Editing an older
+profile's capability strings is not an upgrade. Launcher import checks metadata,
+pins and file closure; the coordinator additionally checks binary resources and
+embedded skin lookups before composing private banks. Original archives remain
+read-only. Keep other required capabilities, including headlights, intact.
+
+Skin choice and original/upgraded appearance mode are independent. This contract
+provides original paints; upgraded colors and normals require the separate
+appearance contract and validation. Back up the previous pack, settings and
+saved selections before testing updates. Retain a separate test library until
+all declared skins, aliases, damage, LODs and save/reload behavior are checked.
+
 ## 7. Test the exact installed pack
 
 Record the pack version/hash, launcher/runtime versions, settings and result
@@ -294,3 +342,60 @@ eligibility; follow the project's [distribution policy](legal.md).
 | Chassis missing from the list | Check selected game, enabled pack, compatibility errors and unlimited-inventory Instant Action stockpile; scroll through the list |
 | Saved mech fails after disabling its pack | Re-enable the required pack with the same stable IDs; capture an error if recovery still fails |
 | PM field/resource appears to have no effect | Verify the runtime implements its consumer and dependencies; track it as an unsupported behavior until demonstrated |
+
+## Optional headlights (development runtime)
+
+This adapter is a development feature, not general PM compatibility. Use a
+runtime that explicitly advertises `mech-headlights: [1]`; never add that claim
+to an older binary. Nonempty lists also require additional-mech-chassis version
+2 for prepared visuals or version 3 for legacy resources. The builder declares
+these requirements automatically. Published runtime profiles remain unchanged.
+
+Add `headlights` alongside `sockets` in each project chassis. Omit it or use `[]`
+for an unequipped mech. This authored two-lamp example demonstrates independent
+offsets; it does not claim that the PM Atlas has two lamps:
+
+```json
+"headlights": [
+  {"id":"left", "space":"guest_node", "attachment":"torso",
+   "position":[-1,2,-2], "direction":[0,0,-1], "color":[1,0.95,0.85],
+   "intensity":2, "range":80, "inner_angle":15, "outer_angle":30},
+  {"id":"right", "space":"guest_node", "attachment":"torso",
+   "position":[1,2,-2], "direction":[0,0,-1], "color":[1,0.95,0.85],
+   "intensity":2, "range":80, "inner_angle":15, "outer_angle":30}
+]
+```
+
+Up to eight lamps may share or use different attachments. Each has a unique
+1–31 character lowercase ASCII ID (letters, digits, underscore or hyphen).
+Attachment names use 1–31 ASCII letters, digits, periods, underscores or hyphens.
+Unknown fields, duplicate IDs, nonfinite numbers and Boolean numbers are rejected.
+Position components are within ±100 game units. Direction must be nonzero and
+is normalized. RGB is 0–1, intensity 0–8, range 1–256 game units, and cone
+half-angles satisfy `0 <= inner_angle < outer_angle <= 89` degrees after conversion
+to runtime float precision.
+
+`guest_node` resolves a live node under the actor's current root. `donor_bone`
+requires prepared visuals and names a donor skeleton bone, using the same axis
+conversion and root-world basis as firepoints. Direction receives rotation/scale
+and normalization, never translation. Missing required mounts fail visibly;
+reconstructed visual bones alone cannot keep a removed component's lamp alive.
+
+Build, import and enable the pack normally. Enable Dynamic Lighting and Headlights
+in Display, then assign a key or enabled-controller button in Controls → Headlight
+controls. Both bindings start unassigned; avoid conflicts with existing actions.
+One press toggles all player lamps; another reverses a fade immediately. The
+roughly 0.8-second fade uses simulation time, so pause/photo mode holds it.
+Disabling Dynamic Lighting keeps the saved Headlights preference. Headlights off
+suppresses the feature on the next launch; bindings and original controls remain.
+
+New actors start off. Shutdown suppresses on requests; destruction discards lamp
+state. Original campaign saves are unchanged. Host replay v4 carries lamp state;
+v3 remains readable with lamps off. Stock MW3 missions have no imported PM AI
+headlight policy and leave AI lamps off. Each lamp consumes one shared light slot
+and respects weapon reservation. Scenery fixtures can be off independently.
+This adds cone illumination, not PM's lamp facade or volumetric beams.
+
+The coordinator emits MWCHAS5 only for nonempty lists and retains MWCHAS1–4
+compatibility. Presentation-policy v2 must ship with its matching host; copying
+the coordinator alone does not upgrade an older runtime.

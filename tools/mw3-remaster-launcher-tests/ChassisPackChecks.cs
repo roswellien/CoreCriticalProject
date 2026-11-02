@@ -19,6 +19,7 @@ static class ChassisPackChecks
 
     public static void Run()
     {
+        LegacyChassisSkinChecks.Run();
         var root = Path.Combine(Path.GetTempPath(), "CC chassis checks " + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -54,6 +55,27 @@ static class ChassisPackChecks
             catch(InvalidDataException) {}
             var host=JsonNode.Parse("""{"content_capabilities":{"additional-mech-chassis":[1]}}""")!.AsObject();
             RuntimeContentCapabilities.Require(host,installed.NativePayload!,installed.Id);
+            var headlightRegistry=JsonNode.Parse(resources[ChassisPack.Registry])!;
+            var light=JsonNode.Parse("""{"id":"left","space":"guest_node","attachment":"torso","position":[1,2,3],"direction":[0,0,-1],"color":[1,1,1],"intensity":2,"range":50,"inner_angle":15,"outer_angle":30}""")!;
+            headlightRegistry["chassis"]![0]!["headlights"]=new JsonArray(light);
+            void PutLights()
+            {
+                var bytes=JsonSerializer.SerializeToUtf8Bytes(headlightRegistry);
+                File.WriteAllBytes(Path.Combine(installed.DirectoryPath,ChassisPack.Registry),bytes);
+                installed.Files![ChassisPack.Registry]=new PackFile {Bytes=bytes.Length,Sha256=Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()};
+            }
+            PutLights();
+            try{ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Ungated headlights accepted");}catch(InvalidDataException){}
+            installed.NativePayload!.RequiredCapabilities["additional-mech-chassis"]=2;
+            installed.NativePayload.RequiredCapabilities["mech-headlights"]=1;
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            foreach(var invalid in new JsonNode[]{JsonValue.Create(true)!,JsonValue.Create(-1)!,JsonValue.Create(257)!})
+            {
+                light["range"]=invalid.DeepClone();PutLights();
+                try{ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Invalid lamp accepted");}catch(InvalidDataException){}
+            }
+            installed.NativePayload.RequiredCapabilities.Remove("mech-headlights");
+            installed.NativePayload.RequiredCapabilities["additional-mech-chassis"]=1;
             var icon = new byte[2066]; "MW3ICON1"u8.CopyTo(icon);
             BitConverter.GetBytes(41u).CopyTo(icon,8); BitConverter.GetBytes(50u).CopyTo(icon,12); icon[100]=255;
             var registry = JsonNode.Parse(resources[ChassisPack.Registry])!;
@@ -87,6 +109,30 @@ static class ChassisPackChecks
             try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Truncated silhouette accepted.");}
             catch(InvalidDataException) {}
             SetResource("icon.bin",icon,"MW3ICON1");
+            var sfm = new byte[36]; "BWSFM1\0\0"u8.CopyTo(sfm);
+            BitConverter.GetBytes(1u).CopyTo(sfm,8); BitConverter.GetBytes(1u).CopyTo(sfm,12);
+            BitConverter.GetBytes(0xffffffffu).CopyTo(sfm,32);
+            registry["chassis"]![0]!["surface_materials"]=JsonNode.Parse("""{"close":"sfm.bin","distance":"sfm.bin"}""");
+            SetResource(ChassisPack.Registry,JsonSerializer.SerializeToUtf8Bytes(registry));
+            SetResource("sfm.bin",sfm,"BWSFM1");
+            try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Ungated surface_materials accepted.");}
+            catch(InvalidDataException) {}
+            installed.NativePayload.RequiredFormats.Add("BWSFM1");
+            installed.NativePayload.RequiredCapabilities["surface-materials"]=1;
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            var builderBoundary = (byte[])sfm.Clone();
+            BitConverter.GetBytes(65u).CopyTo(builderBoundary,20);
+            SetResource("sfm.bin",builderBoundary,"BWSFM1");
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            var hostWithIconOnly=JsonNode.Parse("""{"content_capabilities":{"additional-mech-chassis":[1,2]}}""")!.AsObject();
+            try {RuntimeContentCapabilities.Require(hostWithIconOnly,installed.NativePayload,installed.Id);throw new Exception("Old host accepted surface-materials pack.");}
+            catch(InvalidDataException) {}
+            var hostWithSurface=JsonNode.Parse("""{"content_capabilities":{"additional-mech-chassis":[1,2],"surface-materials":[1]}}""")!.AsObject();
+            RuntimeContentCapabilities.Require(hostWithSurface,installed.NativePayload,installed.Id);
+            SetResource("sfm.bin",sfm[..35],"BWSFM1");
+            try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Truncated BWSFM1 accepted.");}
+            catch(InvalidDataException) {}
+            SetResource("sfm.bin",sfm,"BWSFM1");
             File.WriteAllBytes(Path.Combine(installed.DirectoryPath,"mesh.bin"),new byte[8]);
             try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Corrupt chassis accepted.");}
             catch(InvalidDataException) {}

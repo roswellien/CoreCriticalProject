@@ -49,6 +49,8 @@ void controller_dispatch() {
     controller_in_callback=false;
 }
 template<class Next>void*controller_body(State*s,unsigned target,void*p,Next&&next) {
+    if(target==0x51b360&&headlight_enabled()&&
+       (frontend_on()||photo_replay_consume_input()||headlight_world_frame==~0U||host.frames-headlight_world_frame>1))headlight_input(false);
     if(!controller_requested()||controller_in_callback)return next();
     if(target==0x51b360){controller_poll();void* r=next();controller_dispatch();return r;}
     if(target==0x51c370){

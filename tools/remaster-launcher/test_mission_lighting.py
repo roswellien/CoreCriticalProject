@@ -41,7 +41,10 @@ class MissionLightingTests(unittest.TestCase):
         self.assertTrue(AUTHORED['c2m4']['is_interior'])
         self.assertTrue(AUTHORED['c1m3']['has_lightning'])
         raw=encode(AUTHORED)
-        self.assertEqual(raw[:12], b'MW34ENV1'+struct.pack('<I',20))
+        self.assertEqual(raw[:12], b'MW34ENV1'+struct.pack('<I',24))
+        self.assertEqual([AUTHORED[f't1m{mission}']['elevation'] for mission in range(1, 5)], [6, 18, 58, 8])
+        self.assertGreater(AUTHORED['t1m3']['rain_intensity'], .5)
+        self.assertEqual([AUTHORED[f't1m{mission}']['rain_intensity'] for mission in (1, 2, 4)], [0, 0, 0])
 
     def test_priority_relocation_disable_and_capability(self):
         fixture=fixtures.EnvironmentPackTests()
