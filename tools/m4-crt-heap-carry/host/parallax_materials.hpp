@@ -250,7 +250,7 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
     const float view_v = pom_dot(V, tangent_v);
     const PomVec2 view_uv_per_world{(view_u * metric_vv - view_v * metric_uv) / metric_det,
                                     (view_v * metric_uu - view_u * metric_uv) / metric_det};
-    const float scale_factor = -effective_amp / std::max(ndotv, 0.08f);
+    const float scale_factor = effective_amp / std::max(ndotv, 0.08f);
     PomVec2 full_delta_uv{view_uv_per_world.x * scale_factor, view_uv_per_world.y * scale_factor};
     constexpr float max_uv_span = 0.125f;
     const float delta_len = pom_length(full_delta_uv);
@@ -266,19 +266,19 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
     const float step_size = 1.0f / static_cast<float>(num_steps);
 
     const float h_ref = std::clamp(sun.pom_params[1], 0.0f, 1.0f);
-    const float t_start = -h_ref;
-    const float t_end = 1.0f - h_ref;
-    const float t_span = t_end - t_start;
+    // Signed amplitudes change which normalized height is nearest the eye.
+    const float ray_start = effective_amp >= 0.0f ? 1.0f : 0.0f;
+    const float ray_direction = effective_amp >= 0.0f ? -1.0f : 1.0f;
 
     float prev_t = 0.0f;
     const PomVec2 prev_raw_uv{
-        base_uv.x + full_delta_uv.x * (t_end - prev_t * t_span),
-        base_uv.y + full_delta_uv.y * (t_end - prev_t * t_span),
+        base_uv.x + full_delta_uv.x * (ray_start - h_ref + prev_t * ray_direction),
+        base_uv.y + full_delta_uv.y * (ray_start - h_ref + prev_t * ray_direction),
     };
     const PomVec2 prev_sample_uv = pom_resolve_sample_uv(
         prev_raw_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u, addr_v, inv_tex_size);
     const float prev_tex_h = sample_height(prev_sample_uv);
-    float prev_diff = 1.0f - prev_tex_h;
+    float prev_diff = (ray_start - prev_tex_h) * -ray_direction;
 
     float curr_t = 0.0f;
     float curr_diff = prev_diff;
@@ -291,14 +291,14 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
             steps_taken = s;
             curr_t = static_cast<float>(s) * step_size;
             const PomVec2 raw_uv{
-                base_uv.x + full_delta_uv.x * (t_end - curr_t * t_span),
-                base_uv.y + full_delta_uv.y * (t_end - curr_t * t_span),
+                base_uv.x + full_delta_uv.x * (ray_start - h_ref + curr_t * ray_direction),
+                base_uv.y + full_delta_uv.y * (ray_start - h_ref + curr_t * ray_direction),
             };
             const PomVec2 sample_uv = pom_resolve_sample_uv(
                 raw_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u, addr_v, inv_tex_size);
-            const float ray_h = 1.0f - curr_t;
+            const float ray_h = ray_start + curr_t * ray_direction;
             const float tex_h = sample_height(sample_uv);
-            curr_diff = ray_h - tex_h;
+            curr_diff = (ray_h - tex_h) * -ray_direction;
             if (curr_diff <= 0.0f)
                 break;
             prev_t = curr_t;
@@ -318,14 +318,14 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
                                  ? std::clamp(t0 + d0 * (t1 - t0) / denom, t0, t1)
                                  : 0.5f * (t0 + t1);
             const PomVec2 raw_uv{
-                base_uv.x + full_delta_uv.x * (t_end - tm * t_span),
-                base_uv.y + full_delta_uv.y * (t_end - tm * t_span),
+                base_uv.x + full_delta_uv.x * (ray_start - h_ref + tm * ray_direction),
+                base_uv.y + full_delta_uv.y * (ray_start - h_ref + tm * ray_direction),
             };
             const PomVec2 sample_uv = pom_resolve_sample_uv(
                 raw_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u, addr_v, inv_tex_size);
-            const float ray_h = 1.0f - tm;
+            const float ray_h = ray_start + tm * ray_direction;
             const float tex_h = sample_height(sample_uv);
-            const float dm = ray_h - tex_h;
+            const float dm = (ray_h - tex_h) * -ray_direction;
             if (dm > 0.0f) {
                 t0 = tm;
                 d0 = dm;
@@ -338,8 +338,8 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
     }
 
     const PomVec2 final_raw_uv{
-        base_uv.x + full_delta_uv.x * (t_end - best_t * t_span),
-        base_uv.y + full_delta_uv.y * (t_end - best_t * t_span),
+        base_uv.x + full_delta_uv.x * (ray_start - h_ref + best_t * ray_direction),
+        base_uv.y + full_delta_uv.y * (ray_start - h_ref + best_t * ray_direction),
     };
     res.applied = true;
     res.steps_taken = steps_taken;

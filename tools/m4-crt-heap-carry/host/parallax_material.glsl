@@ -127,7 +127,7 @@ bool pomEvaluate(
     float view_v = dot(V, tangent_v);
     vec2 view_uv_per_world = vec2((view_u * metric_vv - view_v * metric_uv) / metric_det,
                                   (view_v * metric_uu - view_u * metric_uv) / metric_det);
-    vec2 full_delta_uv = -view_uv_per_world * (effective_amp / max(ndotv, 0.08));
+    vec2 full_delta_uv = view_uv_per_world * (effective_amp / max(ndotv, 0.08));
     float max_uv_span = 0.125;
     float delta_len = length(full_delta_uv);
     if (delta_len > max_uv_span) {
@@ -139,16 +139,16 @@ bool pomEvaluate(
     float step_size = 1.0 / float(num_steps);
 
     float h_ref = clamp(sun.pomParams.y, 0.0, 1.0);
-    float t_start = -h_ref;
-    float t_end = 1.0 - h_ref;
-    float t_span = t_end - t_start; // 1.0 normalized height range
+    // March from the highest physical layer, including inverted relief.
+    float ray_start = effective_amp >= 0.0 ? 1.0 : 0.0;
+    float ray_direction = effective_amp >= 0.0 ? -1.0 : 1.0;
 
     float prev_t = 0.0;
-    vec2 prev_raw_uv = base_uv + full_delta_uv * (t_end - prev_t * t_span);
+    vec2 prev_raw_uv = base_uv + full_delta_uv * (ray_start - h_ref + prev_t * ray_direction);
     vec2 prev_sample_uv = pomResolveSampleUv(prev_raw_uv, sun.pomUvTransform, sun.pomAtlasRect, addr_u, addr_v, inv_tex_size);
-    float prev_ray_h = 1.0;
+    float prev_ray_h = ray_start;
     float prev_tex_h = textureGrad(heightMap, prev_sample_uv, ddx_scaled, ddy_scaled).r;
-    float prev_diff = prev_ray_h - prev_tex_h;
+    float prev_diff = (prev_ray_h - prev_tex_h) * -ray_direction;
 
     float curr_t = 0.0;
     float curr_diff = prev_diff;
@@ -161,11 +161,11 @@ bool pomEvaluate(
             }
             steps_taken = s;
             curr_t = float(s) * step_size;
-            vec2 raw_uv = base_uv + full_delta_uv * (t_end - curr_t * t_span);
+            vec2 raw_uv = base_uv + full_delta_uv * (ray_start - h_ref + curr_t * ray_direction);
             vec2 sample_uv = pomResolveSampleUv(raw_uv, sun.pomUvTransform, sun.pomAtlasRect, addr_u, addr_v, inv_tex_size);
-            float ray_h = 1.0 - curr_t;
+            float ray_h = ray_start + curr_t * ray_direction;
             float tex_h = textureGrad(heightMap, sample_uv, ddx_scaled, ddy_scaled).r;
-            curr_diff = ray_h - tex_h;
+            curr_diff = (ray_h - tex_h) * -ray_direction;
             if (curr_diff <= 0.0) {
                 break;
             }
@@ -183,11 +183,11 @@ bool pomEvaluate(
         for (int r = 0; r < 3; ++r) {
             float denom = d0 - d1;
             float tm = abs(denom) > 1e-6 ? clamp(t0 + d0 * (t1 - t0) / denom, t0, t1) : 0.5 * (t0 + t1);
-            vec2 raw_uv = base_uv + full_delta_uv * (t_end - tm * t_span);
+            vec2 raw_uv = base_uv + full_delta_uv * (ray_start - h_ref + tm * ray_direction);
             vec2 sample_uv = pomResolveSampleUv(raw_uv, sun.pomUvTransform, sun.pomAtlasRect, addr_u, addr_v, inv_tex_size);
-            float ray_h = 1.0 - tm;
+            float ray_h = ray_start + tm * ray_direction;
             float tex_h = textureGrad(heightMap, sample_uv, ddx_scaled, ddy_scaled).r;
-            float dm = ray_h - tex_h;
+            float dm = (ray_h - tex_h) * -ray_direction;
             if (dm > 0.0) {
                 t0 = tm;
                 d0 = dm;
@@ -199,7 +199,7 @@ bool pomEvaluate(
         }
     }
 
-    vec2 final_raw_uv = base_uv + full_delta_uv * (t_end - best_t * t_span);
+    vec2 final_raw_uv = base_uv + full_delta_uv * (ray_start - h_ref + best_t * ray_direction);
     // Base and normal textures use raw draw UVs; only heightMap uses the resolved UV.
     out_uv = final_raw_uv;
     if (debug_on) {

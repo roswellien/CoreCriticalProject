@@ -289,8 +289,8 @@
       "classification": "authored-host-source"
     },
     "effect_scene_frag.h": {
-      "sha256": "90a15fed95d81547b25bc5d2307c9ccd949e93ca78dd398b5b88296153e7eca9",
-      "bytes": 259522,
+      "sha256": "02238505fb908c07e2946f7bbd5bdffa29a336203bb42ff67c928178568fa659",
+      "bytes": 260693,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -693,14 +693,14 @@
     "parallax_material.glsl": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "sha256": "d424cdf5ee83dd70fe2a916e137c47ba1e3e88148bf441dc94c6b75d9aa64726",
-      "bytes": 7726
+      "sha256": "e009571a091d9f1312310df2fea59e7b80797a14f82148398bbe66ef3388442c",
+      "bytes": 7972
     },
     "parallax_materials.hpp": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "sha256": "6b550c9d7ad71c12c5abfc6a0325fcf026b6f90f38164ca5beb22b11a2a6096a",
-      "bytes": 14204
+      "sha256": "a2a5f2ebc1e1c7d98ec3632c3d16f31b2cc2d05b79947deec57c114131694668",
+      "bytes": 14556
     },
     "parser_stage.hpp": {
       "sha256": "207f0076b2ce0508b18d8489aba8a0accbb7c3fe8e5e283cb5162ab0cb63a955",
@@ -823,8 +823,8 @@
       "classification": "authored-host-source"
     },
     "sun_scene_frag.h": {
-      "sha256": "70e8ed03be486545b2a015689125e27a9b086b12a1ca883f9ff6082da6e06fb4",
-      "bytes": 214622,
+      "sha256": "23e75214576cad062891e05a8be720bc74207481ee8858581e19898c4c494770",
+      "bytes": 215798,
       "decision": "commit",
       "classification": "authored-host-source"
     },

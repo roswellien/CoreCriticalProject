@@ -49,6 +49,30 @@ PomUniformInput make_default_pom_uniform() {
     return u;
 }
 
+void test_signed_height_geometry() {
+    auto u = make_default_pom_uniform();
+    u.pom_eye = {-3.f, 0.f, 6.f, 1.f};
+    // A flat layer intersects the eye ray at P + V * height / dot(N,V).
+    // dP/du = (10,0,0); these values come from geometry, not the marcher.
+    for (float amplitude : {0.5f, -0.5f}) {
+        u.pom_params = {1.f, 0.f, amplitude, 32.f};
+        std::vector<float> sampled_u;
+        const auto result = evaluate_pom(
+            {0.5f, 0.5f}, {0.f, 0.f, 0.f}, {0.f, 0.f, 1.f},
+            {0.01f, 0.f, 0.f}, {0.f, 0.01f, 0.f}, {0.001f, 0.f},
+            {0.f, 0.001f}, u, 256U, 256U, [&](PomVec2 uv) {
+                sampled_u.push_back(uv.x);
+                return 0.75f;
+            });
+        const float expected_u = 0.5f + (-3.f / 6.f) * amplitude * 0.75f / 10.f;
+        require(result.applied && std::abs(result.uv.x - expected_u) < 1e-6f,
+                "Signed relief does not intersect the physical eye ray");
+        const float first_u = amplitude > 0.f ? 0.475f : 0.5f;
+        require(!sampled_u.empty() && std::abs(sampled_u.front() - first_u) < 1e-6f,
+                "Relief marching did not start at the physically nearest layer");
+    }
+}
+
 void test_zero_amplitude_equivalence() {
     auto u = make_default_pom_uniform();
     u.pom_params[2] = 0.0f; // zero height_amplitude
@@ -75,11 +99,8 @@ void test_analytic_ramp_intersection() {
     // Planar quad in XY plane (Z=0, N=(0,0,1)), dP/du = (10,0,0), dP/dv = (0,10,0).
     // Height field h(u, v) = u (linear ramp in [0, 1]), reference = 0.0, amplitude = 0.5 world units.
     // At base_uv = (0.5, 0.5), world_pos = (0, 0, 0), eye = (-3, 0, 6) -> V = normalize(-1, 0, 2).
-    // V_u / V_z = -0.5, du_world = 10 -> full_delta_uv.x = -(-0.5 / 10) * 0.5 = +0.025.
-    // Ray in (u, h): u(t) = 0.5 + 0.025 * (1 - t), ray_h(t) = 1 - t.
-    // Intersection with h(u) = u:
-    // 1 - t* = 0.5 + 0.025 * (1 - t*)  =>  (1 - t*) * (1 - 0.025) = 0.5  =>  1 - t* = 0.5 / 0.975
-    // Analytic intersection u* = 0.5 / 0.975 = 0.5128205128f.
+    // The eye ray at normalized height h has u = 0.5 - 0.025*h.
+    // Solving h=u gives u=0.5/1.025, toward the eye for positive relief.
     auto u = make_default_pom_uniform();
     u.pom_params = {1.0f, 0.0f, 0.5f, 32.0f};
     const std::uint32_t addr = surface_address_clamp | (surface_address_clamp << 4U);
@@ -97,7 +118,7 @@ void test_analytic_ramp_intersection() {
     const auto res = evaluate_pom(base_uv, world_pos, N, dp1, dp2, duv1, duv2, u, 1024U, 1024U,
                                   [](PomVec2 sample_uv) { return sample_uv.x; });
     require(res.applied, "Analytic ramp POM evaluation was not applied");
-    const float expected_u = 0.5f / 0.975f;
+    const float expected_u = 0.5f / 1.025f;
     const float uv_err = std::max(std::abs(res.uv.x - expected_u), std::abs(res.uv.y - 0.5f));
     require(uv_err <= 1.5e-3f, "Analytic ramp POM intersection exceeded 1.5e-3 UV tolerance");
 }
@@ -176,7 +197,7 @@ void test_skewed_uv_chart() {
         {0.01f, 0.0f, 0.0f}, {0.005f, 0.01f, 0.0f}, {0.001f, 0.0f},
         {0.0f, 0.001f}, u, 1024U, 1024U,
         [](PomVec2 sample_uv) { return sample_uv.x; });
-    require(result.applied && std::abs(result.uv.x - 0.5f / 0.975f) < 1.5e-3f &&
+    require(result.applied && std::abs(result.uv.x - 0.5f / 1.025f) < 1.5e-3f &&
                 std::abs(result.uv.y - 0.5f) < 1e-6f,
             "Skewed UV chart sheared the ray across V");
 }
@@ -191,7 +212,7 @@ void test_atlas_footprint() {
         {0.1f, 0.0f, 0.0f}, {0.0f, 0.01f, 0.0f}, {0.01f, 0.0f},
         {0.0f, 0.001f}, u, 1024U, 1024U,
         [](PomVec2) { return 0.25f; });
-    require(result.applied && result.uv.x > 0.5f,
+    require(result.applied && result.uv.x < 0.5f,
             "Atlas tile span was omitted from height-map footprint fade");
 }
 
@@ -320,6 +341,7 @@ void test_environment_surface_materials_loader() {
 
 int main() {
     try {
+        test_signed_height_geometry();
         test_zero_amplitude_equivalence();
         test_analytic_ramp_intersection();
         test_mirrored_uv_parity_and_degenerate_guards();
