@@ -67,12 +67,27 @@ static void temporal_gpu_check(Renderer& renderer,Scene scene){
     auto first=renderer.capture_temporal(camera.view);
     require(first.width>0&&!first.history_valid,"First temporal frame inherited history");
     capture(3,.1f);renderer.render(scene,true,false);renderer.render(scene,false,false);
+    // A bounded DirectDraw depth fill after world rendering must retain the
+    // color-associated metadata and clear visibility for subsequent geometry.
+    Scene surface_clear{};surface_clear.width=surface_clear.height=64;surface_clear.has_depth=true;
+    surface_clear.guest_surface_write=true;surface_clear.temporal_frame=3;surface_clear.temporal_target=7;
+    Clear surface_depth{};surface_depth.flags=2;surface_depth.rects={{{20,20},{10,10}}};
+    surface_clear.clears={surface_depth};surface_clear.order={{true,0}};
+    renderer.render(surface_clear,false,false);
+    Scene after_clear{};after_clear.width=after_clear.height=64;after_clear.has_depth=true;
+    after_clear.temporal_frame=3;after_clear.temporal_target=7;
+    for(const auto& xy:std::array<std::array<float,2>,6>{{{26,20},{29,20},{26,23},{29,20},{29,23},{26,23}}})
+        add(after_clear,{xy[0],xy[1],.25f,1,0xffffffffu,0,0,0});
+    auto behind=draw(0,6);behind.key.zenable=behind.key.zwrite=1;behind.key.zfunc=7;
+    after_clear.draws={behind};after_clear.order={{false,0}};
+    renderer.render(after_clear,false,false);
     renderer.complete_camera_history(3,7);
     auto result=renderer.capture_temporal(camera.view);
     require(result.history_valid&&result.width&&result.height,"No completed temporal input frame");
     const auto at=[&](unsigned x,unsigned y){return std::size_t(y*result.height/64)*result.width+x*result.width/64;};
     const auto pixel=at(22,22);
     require(result.validity[pixel]==255,"Static world coverage is all-invalid");
+    require(result.validity[at(27,21)]==0,"DirectDraw depth fill did not clear diagnostic visibility");
     require(std::abs(result.depth[pixel]-.05f)<=2e-6,"Sampled reversed infinite depth is incorrect");
     const float expected=result.width/64.f;
     require(std::abs(result.motion[pixel*2]-expected)<=.02f&&std::abs(result.motion[pixel*2+1])<=.02f,

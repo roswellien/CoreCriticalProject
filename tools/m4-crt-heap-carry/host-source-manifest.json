@@ -925,8 +925,8 @@
       "classification": "authored-host-source"
     },
     "vdd.inc": {
-      "sha256": "e431f876b343d476afd73ce25a9cd96a0bc98540633b4f99ceabba8cee35f3b0",
-      "bytes": 62619,
+      "sha256": "29700f6626734583456408f0700380ddb949094c0a6ef9682b12d24e3a3ec430",
+      "bytes": 62730,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -937,8 +937,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "78e4de936c171a44617fa28d26302581fd1684a1271cd7d28f9c1c80aecd1958",
-      "bytes": 210443,
+      "sha256": "dc1e95653f8c29d20fc356fcdfcc79ff153c96011458feb5e5d532768c70cb0d",
+      "bytes": 210517,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1065,8 +1065,8 @@
     "temporal_inputs_stage.inc": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 37417,
-      "sha256": "bf03031c8329d18da4678b43b76ec6c2bcce6456cf9182c5b6c152e486345c48"
+      "bytes": 39030,
+      "sha256": "ac16b3632d4d279ccb88b3e157503463bdf00c35407f779003bc9cf33f1097fc"
     },
     "temporal_inputs_vert.h": {
       "decision": "commit",

@@ -114,9 +114,40 @@ replace the missing native acceptance. The newer P2a surface-access dependency
 (c998419) is integrated locally. Its comparison completed 2,200 presentations with
 zero Vulkan validation errors; the same write resets begin at frame 1401 after
 power-up at frame 1400. Authoritative color captures at 801/999/1801/2101 match the
-pre-dependency run byte-for-byte. The actual writing producer remains unknown;
+pre-dependency run byte-for-byte. At that checkpoint the actual writing producer was unknown;
 view-state in the last-draw log alone does not identify a main-camera failure.
 The write guard remains enabled. All 27 CTest cases passed across the initial run
 and a targeted source-pin recheck. Native acceptance, final regression checks and
 independent review remain pending.
 No normal playtest release is produced by this development branch.
+
+## Powered-up depth-clear correction
+
+The subsequent bounded trace identified a DirectDraw z-buffer fill after power-up:
+rectangle (962,658)-(1005,758), clear value zero, original return site 005777AB.
+A full z-buffer clear at return 0057788F precedes it. No CPU surface-write or HUD
+fallback trace fired at the first reset. These are observations from the same
+verified executable; no new original-function hook is introduced.
+
+GPU depth fills now carry their real frame and target into the diagnostic pass.
+A depth-only, clear-only submission is accepted only with bounded rectangles and
+a matching current pending view/diagnostic slot. It clears private visibility in
+order while retaining color-associated depth/motion/validity. Untagged, stale or
+wrong-target writes, color fills and CPU writes retain conservative rejection.
+
+Six RX 9070 temporal GPU cases pass at 50/67/100%, jitter Off/On. The regression
+preserves underlying metadata and proves that geometry previously hidden behind
+the old depth can cover the cleared rectangle. Omitting the diagnostic depth clear
+in a private negative control fails that assertion. The earlier whole-view guest
+write regression still passes. All 27 CTest cases and enforced web style pass;
+other style categories remain report-only under the repository policy.
+
+The corrected native run completed 3,300 RX 9070 presentations with zero Vulkan
+validation errors. Frames 801/999/1801/2101/3001 match the pre-fix authoritative
+color captures byte-for-byte. Power-up no longer causes a continuous reset:
+1,574 of the 1,900 post-power frames report reset=none. The remaining 326 frames
+still reject history; the first is 2042. Captured temporal images at
+801/999/1801/2101 still contain zero valid static pixels, and 3001 has no accepted
+temporal image. Thus the power-up defect is narrowed, while native visibility
+coverage and remaining history rejection still block P2 acceptance. No FSR or
+frame-generation dispatch is enabled, and no release is produced.

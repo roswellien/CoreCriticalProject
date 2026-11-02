@@ -311,6 +311,34 @@ void temporal_submit() {
     scene_pending = true;
     ++temporal_submissions;
 }
+// DirectDraw depth fills carry their exact target, real frame and ordered
+// rectangle. They replace visibility, not the retained color surface metadata.
+bool temporal_ordered_depth_clear(const Scene &scene) const {
+    if (!scene.guest_surface_write || !scene.has_depth || scene.hud || scene.frontend_canvas ||
+        !scene.temporal_frame || !scene.temporal_target || !scene.draws.empty() ||
+        scene.clears.empty() || scene.order.size() != scene.clears.size())
+        return false;
+    for (std::size_t i = 0; i < scene.clears.size(); ++i) {
+        const auto &clear = scene.clears[i];
+        if (!scene.order[i].clear || scene.order[i].index != i || clear.flags != 2 ||
+            !std::isfinite(clear.z) || clear.z < 0 || clear.z > 1 || clear.rects.empty())
+            return false;
+        for (const auto &r : clear.rects)
+            if (r.offset.x < 0 || r.offset.y < 0 ||
+                std::uint64_t(r.offset.x) + r.extent.width > scene.width ||
+                std::uint64_t(r.offset.y) + r.extent.height > scene.height)
+                return false;
+    }
+    for (const auto &[view, slot] : temporal_slots) {
+        const auto pending = camera_history.pending_view(view);
+        if (slot.frame == scene.temporal_frame && slot.target == scene.temporal_target &&
+            pending && pending->frame == scene.temporal_frame &&
+            pending->target == scene.temporal_target && pending->sizes[0] == scene.width &&
+            pending->sizes[1] == scene.height)
+            return true;
+    }
+    return false;
+}
 void temporal_append(const Scene &scene) {
     if (!mw34::temporal::enabled() || !scene.temporal_frame || scene.hud || scene.frontend_canvas)
         return;
@@ -401,7 +429,7 @@ void temporal_append(const Scene &scene) {
             slot.published = false;
         }
         slot.camera = camera;
-        if (scene.guest_surface_write &&
+        if (scene.guest_surface_write && !temporal_ordered_depth_clear(scene) &&
             (camera_history.pending() || !(leading_full_clear(scene) & 1)))
             slot.poisoned = true;
         // Each view has distinct uniforms. Finish earlier view use before rewriting them.

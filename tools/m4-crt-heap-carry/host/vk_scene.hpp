@@ -971,8 +971,8 @@ class Renderer {
                 camera_history.invalidate(mw34::temporal::Reset::external_write);
             if (s.guest_surface_write) {
                 // A complete clear before this frame's first world draw is
-                // normal frame initialization. Partial/interleaved fills are
-                // unsupported temporal writes and poison this frame.
+                // normal frame initialization. An authenticated ordered depth
+                // clear updates visibility; other interleaved writes poison history.
                 bool initial_clear = !camera_history.pending() && s.draws.empty() && !s.clears.empty();
                 for (const auto &clear : s.clears) {
                     initial_clear &= clear.flags && !(clear.flags & ~3U) && clear.rects.size() == 1;
@@ -982,7 +982,8 @@ class Renderer {
                             rectangle.extent.width == s.width && rectangle.extent.height == s.height;
                     }
                 }
-                if (!initial_clear) camera_history.invalidate(mw34::temporal::Reset::external_write);
+                if (!initial_clear && !temporal_ordered_depth_clear(s))
+                    camera_history.invalidate(mw34::temporal::Reset::external_write);
             }
             // Observe only this original submission. Internal shading/coverage
             // replays never pass through this entry point.
