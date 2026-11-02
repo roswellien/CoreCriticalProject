@@ -25,11 +25,11 @@ inline constexpr std::uint32_t surface_address_clamp = 3U;
 
 inline constexpr std::size_t max_surface_batches = 4096U;
 inline constexpr std::size_t max_surface_records = 4096U;
-inline constexpr std::size_t max_surface_images = 64U;
+inline constexpr std::size_t max_surface_images = 512U;
 inline constexpr std::size_t max_surface_identifier_bytes = 4096U;
 inline constexpr std::size_t max_surface_material_name_bytes = 31U;
 inline constexpr std::uint32_t max_surface_dimension = 4096U;
-inline constexpr std::uint64_t max_surface_sidecar_bytes = 64ULL * 1024ULL * 1024ULL;
+inline constexpr std::uint64_t max_surface_sidecar_bytes = 256ULL * 1024ULL * 1024ULL;
 inline constexpr float max_surface_world_amplitude = 16.0f;
 inline constexpr float max_surface_uv_transform = 1024.0f;
 
