@@ -31,12 +31,12 @@ int main(int argc,char**){try{
  for(unsigned limit=1;limit<=mw34::effects::capacity;++limit)for(unsigned weapons=0;weapons<=limit;++weapons)for(unsigned reserve=0;reserve<=32;++reserve){
   const auto slots=mw34::effects::fixture_slots(weapons,limit,reserve);require(weapons+slots<=limit,"Combined budget never exceeds requested limit");
   require(slots<=limit-std::min(reserve,limit),"Weapon reservation preserved");}
- const auto& def=mw34::fixtures::fixture_catalog().front();
+ const mw34::fixtures::FixtureDef def{"authored spotlight",1,1,0,1,30,2,{1,1,1},.35f,true};
  const std::vector<mw34::fixtures::Point> a{{0,0,0},{0,0,1},{1,0,0}},b{{10,0,0},{10,0,1},{11,0,0}};
  fixtures.observe_polygon(def,a,1,17);fixtures.observe_polygon(def,b,2,17);require(fixtures.active_count()==1,"Stable source updates rather than leaving old position");
  fixtures.begin_frame(100);require(fixtures.active_count()==1,"Verified off-camera sources do not expire by frame age");
  auto lights=fixtures.select_lights({10,0,0},1);require(lights.size()==1&&lights[0].start[0]>10&&lights[0].end[3]==2,"Updated location and distinct spotlight type");
- fixtures.observe_polygon(def,a,100);require(fixtures.active_count()==2,"Separate anonymous fixture");fixtures.begin_frame(101);require(fixtures.active_count()==1,"Anonymous source does not survive missing submission");
+ fixtures.observe_polygon(def,a,100);require(fixtures.active_count()==2,"Separate anonymous fixture");fixtures.begin_frame(101);fixtures.select_lights({100000,0,0},1);require(fixtures.active_count()==1,"Anonymous source expires outside retention distance");
  fixtures.remove_source(17);require(!fixtures.active_count(),"Invalidated/destroyed source removed");
  fixtures.observe_polygon(def,a,102,18);manager.observe_file("D:/isolated/zbd/t1/readerm1.zbd");require(!manager.is_campaign_active()&&!fixtures.active_count(),"Training clears campaign and fixture state");
  fixtures.observe_polygon(def,a,103,19);manager.observe_file("D:/isolated/zbd/c1/readeria1.zbd");require(!fixtures.active_count(),"Instant Action transition clears fixtures");
