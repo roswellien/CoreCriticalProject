@@ -124,7 +124,8 @@ def _environment_resources(selected, host, cache_root, progress=None):
     source = Path(__file__).parent
     producers = {name: hashlib.sha256((source / name).read_bytes()).hexdigest()
                  for name in ('startup_cache.py', 'prepared_environment_packs.py',
-                              'normal_materials.py', 'normal_codec.py', 'mission_lighting.py')}
+                              'normal_materials.py', 'normal_codec.py', 'mission_lighting.py',
+                              'surface_materials.py')}
     # Only resource-generation inputs belong in this identity. The full host
     # includes fresh session/log paths and player controls on every launch.
     # Those bindings must remain current without rebuilding identical images.

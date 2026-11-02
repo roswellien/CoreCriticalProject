@@ -273,8 +273,6 @@ coverage, original save/load, controller hotplug, replay restoration or crowded
 scene performance. These remain [playtest requirements](https://github.com/roswellien/MW3Recomp-Private/issues/115)
 before capability promotion. Released runtime profiles and original game save formats remain
 unchanged; no update or installer is published by this work.
-
-
 ## New geometry on an owned legacy controller (development)
 
 A legacy chassis can retain its original definition, collision meshes, hierarchy,

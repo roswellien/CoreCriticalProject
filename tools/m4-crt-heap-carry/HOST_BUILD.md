@@ -136,3 +136,7 @@ patched host folder or silently include unrelated working-tree edits.
 The fingerprints establish the source used by a build. Authenticode timestamps,
 compiler/SDK versions and debug paths can change executable bytes; this work
 does not promise byte-identical signed EXEs across machines.
+
+For the existing scripted-input, capture and log facilities and the remaining
+work for unattended regression runs, see the
+[scripted playtest driver investigation](../../docs/scripted-playtest-driver.md).

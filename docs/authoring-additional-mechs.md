@@ -451,8 +451,6 @@ This adds cone illumination, not PM's lamp facade or volumetric beams.
 The coordinator emits MWCHAS5 only for nonempty lists and retains MWCHAS1–4
 compatibility. Presentation-policy v2 must ship with its matching host; copying
 the coordinator alone does not upgrade an older runtime.
-
-
 ## New geometry on an owned legacy controller (development)
 
 A legacy chassis can retain its original definition, collision meshes, hierarchy,

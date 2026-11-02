@@ -8,6 +8,7 @@ import unittest
 
 from build_chassis_pack import build
 from prepared_chassis_packs import CAPABILITY, CATALOG_KEY, REGISTRY, definition, prepare, select, _banks
+from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
 from reader_archive import _directory
 from zrd_document import decode, encode
 
@@ -53,6 +54,8 @@ class ChassisPackTests(unittest.TestCase):
                 manifest = json.loads((output/'pack/pack.json').read_text())
                 self.assertEqual(manifest['native_payload']['required_capabilities']['mech-headlights'], 1)
                 host = dict(content_capabilities={CAPABILITY:[1,2,3]})
+                if legacy:
+                    host['content_capabilities'][SKIN_CAPABILITY] = [1]
                 with self.assertRaisesRegex(ValueError, 'mech-headlights'):
                     select([(output/'pack',manifest)],host)
                 host['content_capabilities']['mech-headlights'] = [1]
@@ -359,6 +362,72 @@ class ChassisPackTests(unittest.TestCase):
         environment = json.loads(Path(command[command.index('-Profile')+1]).read_text())['native']['runtime_environment']
         self.assertTrue(Path(environment[CATALOG_KEY]).is_file())
         self.assertEqual(len(_banks(environment['MW34_REMASTER_BANKS'])),2)
+
+    def test_additional_chassis_surface_materials_build_select_prepare_and_invalidation(self):
+        import surface_materials
+        mesh_out = bytearray(b'BWMESH4\0' + struct.pack('<IIII', 1, 1, 1, 0))
+        mesh_out.extend(struct.pack('<5d', 1.0, 2.0, 3.0, 0.25, 0.5))
+        mesh_out.extend(b'root'.ljust(32, b'\0') + b''.ljust(32, b'\0') + struct.pack('<i', -1))
+        mesh_out.extend(struct.pack('<16f', 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) * 2)
+        mesh_out.extend(b'torso'.ljust(32, b'\0'))
+        mesh_out.extend(struct.pack('<16f', 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) * 2)
+        mesh_out.extend(b'torso'.ljust(32, b'\0') + b'torso'.ljust(32, b'\0'))
+        mesh_out.extend(struct.pack('<III', 0, 3, 0xFFFFFFFF))
+        for idx in range(3):
+            mesh_out.extend(struct.pack('<8f', float(idx), 0.0, 0.0, 0.0, 0.0, 1.0, 0.25 * idx, 0.5 * idx))
+        tex_out = bytearray(b'BWTEX1\0\0' + struct.pack('<III', 1, 1, 0))
+        tex_out.extend(b'armor_hull'.ljust(32, b'\0') + struct.pack('<IIQ', 1, 1, 0) + b'\x00\x7c')
+        mesh_hash = surface_materials.mesh_uv_identity(bytes(mesh_out))
+        sfm_close = surface_materials.pack_surface_materials(
+            asset_id='community.surface:mech:close',
+            mesh_uv_hash=mesh_hash,
+            batch_materials=['armor_hull'],
+            records=[{'asset_id': 'community.surface:mech:close', 'material_name': 'armor_hull'}],
+        )
+        sfm_dist = surface_materials.pack_surface_materials(
+            asset_id='community.surface:mech:distance',
+            mesh_uv_hash=mesh_hash,
+            batch_materials=['armor_hull'],
+            records=[{'asset_id': 'community.surface:mech:distance', 'material_name': 'armor_hull'}],
+        )
+        (self.root / 'sfm-mesh.bin').write_bytes(bytes(mesh_out))
+        (self.root / 'sfm-tex.bin').write_bytes(bytes(tex_out))
+        (self.root / 'sfm-close.bin').write_bytes(sfm_close)
+        (self.root / 'sfm-dist.bin').write_bytes(sfm_dist)
+        project = dict(
+            pack_id='community.surface',
+            name='Surface chassis',
+            version='1.0.0',
+            chassis=[dict(
+                id='mech',
+                name='Surface Mech',
+                metadata_template='orion',
+                controller='madcat',
+                definition='definition.json',
+                meshes=dict(close='sfm-mesh.bin', distance='sfm-mesh.bin'),
+                textures=dict(close='sfm-tex.bin', distance='sfm-tex.bin'),
+                surface_materials=dict(close='sfm-close.bin', distance='sfm-dist.bin'),
+            )],
+        )
+        project_path = self.root / 'surface-project.json'
+        project_path.write_text(json.dumps(project))
+        build(project_path, self.root / 'surface-built')
+        pack = self.root / 'surface-built/pack'
+        manifest = json.loads((pack / 'pack.json').read_text())
+        self.assertEqual(manifest['native_payload']['required_capabilities']['surface-materials'], 1)
+        self.assertIn('BWSFM1', manifest['native_payload']['required_formats'])
+
+        with self.assertRaisesRegex(ValueError, 'surface-materials'):
+            select([(pack, manifest)], self.host)
+
+        host = dict(content_capabilities={CAPABILITY: [1], 'surface-materials': [1]}, runtime_environment={})
+        records = select([(pack, manifest)], host)
+        self.assertIn('surface_materials', records[0])
+        game = self.game()
+        bindings = prepare(records, game, self.root / 'surface-prepared', {})
+        resource_upper = records[0]['registration']['resource'].upper()
+        self.assertTrue(Path(bindings[f'MW34_CHASSIS_{resource_upper}_SURFACE_MATERIALS']).is_file())
+        self.assertTrue(Path(bindings[f'MW34_CHASSIS_{resource_upper}_LOD1_SURFACE_MATERIALS']).is_file())
 
 
 if __name__ == '__main__':
