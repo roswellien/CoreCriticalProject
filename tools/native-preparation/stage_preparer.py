@@ -48,6 +48,7 @@ def stage(root, trial, tools, template, bootstrap, original_root, output, *, hos
             copy(source,Path('RuntimeBase/coordinator')/file.name)
     # Added after the original runtime template; required by current coordinator.
     copy(root/'tools/remaster-launcher/startup_cache.py','RuntimeBase/coordinator/startup_cache.py')
+    copy(root/'tools/remaster-launcher/surface_materials.py','RuntimeBase/coordinator/surface_materials.py')
     profile = json.loads((template/'profile.json').read_text())
     native = profile['native']
     host_sha = sha(host)

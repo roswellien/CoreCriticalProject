@@ -99,7 +99,8 @@ def build(profile_path,output):
             for i,data in enumerate(encode_normal_pages(items,world=role=='world')):
                 name=f'environment/{role}-{i:03}.bin';path=stage/name;path.parent.mkdir(parents=True,exist_ok=True)
                 path.write_bytes(data)
-                pages.append(add(name,path,'BWSNR2'))
+                page_format='BWSNR3' if data[:8]==b'BWSNR3\0\0' else 'BWSNR2'
+                pages.append(add(name,path,page_format))
             registry[role]=pages
             path=stage/'environment'/(role+'.txt');path.write_text(('MW34SNA1' if role=='authored' else 'MW34SNP1')+'\n'+'\n'.join(str(Path(p).relative_to('environment')).replace('\\','/') for p in pages)+'\n')
             registry[role+'_manifest']=add('environment/'+path.name,path,'MW34SNA1' if role=='authored' else 'MW34SNP1')
@@ -121,7 +122,7 @@ def build(profile_path,output):
         registry_path=stage/REGISTRY;write_json(registry_path,registry);add(REGISTRY,registry_path)
         title='Training' if operation=='training' else 'Operation '+operation[-1]
         version='1.1.1' if operation=='training' else '1.1.0'
-        manifest=dict(schema_version=2, game_id="mw3",id='com.mw3remaster.textures.'+operation,name=title+' Textures and Lighting',version=version,author='MW3 Remaster Project',category='Textures',description='Prepared textures, normals, mission day/night, atmosphere and dynamic-light settings. Local playtest candidate.',provides=dict(textures=True,normal_maps=True),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',required_capabilities={'environment-resources':1}, reference_host_sha256=host['executable_sha256'],required_formats=['ZBD-texture-v1','BWSNR2','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1']),files=filetable)
+        manifest=dict(schema_version=2, game_id="mw3",id='com.mw3remaster.textures.'+operation,name=title+' Textures and Lighting',version=version,author='MW3 Remaster Project',category='Textures',description='Prepared textures, normals, mission day/night, atmosphere and dynamic-light settings. Local playtest candidate.',provides=dict(textures=True,normal_maps=True),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',required_capabilities={'environment-resources':1}, reference_host_sha256=host['executable_sha256'],required_formats=['ZBD-texture-v1','BWSNR2','BWSNR3','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1']),files=filetable)
         if sum(p['bytes'] for p in filetable.values())>16*1024**3:raise ValueError('Pack exceeds installer budget')
         write_json(stage/'pack.json',manifest);prepared.append((operation,stage,sources,manifest))
     def package(item):

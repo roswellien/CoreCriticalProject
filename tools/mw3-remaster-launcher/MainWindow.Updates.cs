@@ -42,6 +42,18 @@ public partial class MainWindow
         _settingsMgr.Save();
     }
 
+    private void CrashReportDisclosure_Click(object sender, RoutedEventArgs e)
+    {
+        const string disclosure =
+            "Crash reports include:\n\n" +
+            "Hardware: processor manufacturer and model, physical and logical core counts, installed memory total, and each memory module's capacity, type and configured speed. For graphics adapters, reports include the adapter name, dedicated video memory (VRAM), shared system memory and Windows-reported driver version and date.\n\n" +
+            "System and session: report ID and UTC timestamp, Windows version, process architecture, .NET runtime, launcher and game runtime versions, engine mode, exit code, and a short failure summary.\n\n" +
+            "Settings and packs: selected graphics settings and pack IDs, versions, schema versions, enabled status and priorities.\n\n" +
+            "Logs: up to the last 64 KiB each from the launcher log, native standard error and native standard output, when those files exist. Local and network file paths are redacted.\n\n" +
+            "The hardware inventory does not request memory serial numbers or device identifiers. Reports do not include saves, original game media, screenshots or memory dumps. Recent log text may contain diagnostic identifiers already written by the launcher or native host. Some hardware values may be unavailable or incomplete if Windows or a driver does not report them.";
+        MessageBox.Show(this, disclosure, "Crash report contents", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private void ApplyUpdateNotificationPreference()
     {
         if (_settingsMgr.Current.AutomaticUpdateChecks) StartUpdateNotifications();

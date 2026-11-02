@@ -158,11 +158,12 @@ native-game acceptance credit (still 131/144).
 Training also exposed an incompatible current authored-normal catalog: its
 pages use absolute local paths and total 351,867,596 bytes. The reader now accepts
 explicit absolute page registrations, rejects duplicate file aliases, and retains
-filename-only relative entries. The enhanced host aggregate and resident budget
-is explicitly 512 MiB, matching existing automatic world-normal budgeting;
-per-page 256 MiB and guest resource limits are retained. Added material checks
-cover the new supported size, aggregate rejection, aliases and traversal. Failed
-attempts remain in their original run directories.
+filename-only relative entries. The enhanced authored-normal catalog is bounded
+at 1536 MiB. The separate lazy world-normal resident cache remains 512 MiB; its
+encoded catalog may be up to 4096 MiB, with a 16 MiB page limit and 256 pages.
+Authored pages remain limited to 256 MiB; guest resource limits are unchanged.
+Material checks cover supported sizes, aggregate rejection, aliases and traversal.
+Failed attempts remain in their original run directories.
 
 October 19 surface-lifetime repair: after composing a compatible private host,
 `apply_surface_page_pool.py HOST_SOURCE` installs checked reuse of retired
@@ -478,8 +479,14 @@ A compatible native host accepts either a single `BWSNR2` authored sidecar or an
 page filenames, at most 16 pages and 256 MiB in aggregate. Each page retains the
 64-image/256-binding format limits. Duplicate identities fail; authored bindings
 retain precedence over lazy world pages. Launcher profiles and matching snapshots
-must advertise `authored_normal_catalog_versions: [1]`. World page/resident limits
-remain unchanged. See the Campaign 1 report for the selected preview and evidence.
+must advertise `authored_normal_catalog_versions: [1]`. World pages are limited
+to 16 MiB each and 256 pages, the encoded catalog to 4096 MiB, and decoded
+resident world normals to 512 MiB with lazy eviction. See the Campaign 1 report
+for the selected preview and evidence.
+
+When selected campaign packs register the same exact source key with different
+normal pixels, merged catalogs keep the first mapping in fixed Operation 1–4
+order. Authored mappings continue to take precedence over world mappings.
 
 ### Native draw and buffer allocation reuse (2026-10-23)
 

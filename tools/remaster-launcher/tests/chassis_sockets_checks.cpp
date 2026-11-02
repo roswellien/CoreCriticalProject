@@ -1,5 +1,5 @@
 // Authored guest-memory/callback fixture: no original code or assets.
-#include "../donor_retarget.hpp"
+#include "../../m4-crt-heap-carry/host/donor_retarget.hpp"
 #include <optional>
 #include <cstring>
 #include <set>
@@ -44,7 +44,7 @@ std::vector<Registration>records{{"author:added","added","madcat",{{"firepoint02
 const auto& configured_catalog(){return records;}
 }
 struct{std::map<unsigned,unsigned>actor_roots;}additional_chassis;
-#include "../native-overrides/chassis_sockets_stage.inc"
+#include "../../m4-crt-heap-carry/host/chassis_sockets_stage.inc"
 constexpr unsigned root=0x1000,node=0x2000,data=0x3000,rootdata=0x4000,weapon=0x5000,stack=0x6000,origin=0x7000,direction=0x7100,mount=0x8000,profile=0xa000,profile_name=0xb000;
 void matrix(unsigned at,float x,float y,float z){for(unsigned i=0;i<12;++i)put(at+i*4,(i==0||i==4||i==8)?1.f:0.f);put(at+36,x);put(at+40,y);put(at+44,z);}
 bool success=true;

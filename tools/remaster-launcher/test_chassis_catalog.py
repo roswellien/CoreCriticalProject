@@ -18,6 +18,29 @@ class ChassisCatalogTests(unittest.TestCase):
                          + struct.pack('<I', 3) + b'a:b' + struct.pack('<I', 1) + b'B'
                          + struct.pack('<I', 1) + b'b' + struct.pack('<I', 10))
 
+    def test_headlight_wire_validation_and_legacy_output(self):
+        from chassis_catalog import validate_headlights
+        light = dict(id='left', space='guest_node', attachment='torso', position=[1, 2, -2],
+                     direction=[0, 0, -2], color=[1, .9, .8], intensity=2, range=50,
+                     inner_angle=15, outer_angle=30)
+        row = self.record()
+        self.assertEqual(encode_catalog([row]), encode_catalog([dict(row, headlights=[])]))
+        data = encode_catalog([dict(row, headlights=[light])])
+        self.assertEqual(data[:8], b'MWCHAS5\0')
+        self.assertEqual(struct.unpack('<13f', data[-52:])[3:6], (0, 0, -1))
+        self.assertEqual(light['direction'], [0, 0, -2])
+        maximum = [dict(light, id=str(i)) for i in range(8)]
+        self.assertEqual(len(validate_headlights(maximum)), 8)
+        invalid = [[light, light], maximum + [dict(light, id='extra')],
+                   [dict(light, unknown=1)], [dict(light, space='donor_bone')]]
+        for field, value in [('position', [101, 0, 0]), ('direction', [0, 0, 0]),
+                             ('color', [1, -1, 0]), ('range', True), ('intensity', float('nan')),
+                             ('outer_angle', 15), ('range', 10 ** 400), ('id', 'A'), ('attachment', '../torso/')]:
+            invalid.append([dict(light, **{field: value})])
+        for lights in invalid:
+            with self.subTest(lights=lights), self.assertRaises(ValueError):
+                encode_catalog([dict(row, headlights=lights)])
+
     def test_authored_socket_wire_and_invalid_bindings(self):
         from chassis_catalog import validate_sockets
         visual=dict(controller='madcat',close=dict(mesh='a',textures='b'),distance=dict(mesh='c',textures='d'))
