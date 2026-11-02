@@ -20,10 +20,12 @@ from normal_materials import pack_normals
 from mech_height_maps import (
     unpack_bwnrm2,
     unpack_bwtex1,
+    extract_mech_geometry,
     MECH_MATERIAL_PROFILES,
     HERO_MECHS,
 )
 from visualize_terrain_heights import generate_html_inspection_report
+from mech_inspector_html import generate_mech_html_report
 
 
 @unittest.skipIf(np is None, "Mech height-map tests require NumPy")
@@ -157,6 +159,44 @@ class MechHeightMapsTests(unittest.TestCase):
             self.assertTrue(html_out.exists())
             content = html_out.read_text(encoding="utf-8")
             self.assertIn("Bushwacker Inspector", content)
+            self.assertIn("glCanvas", content)
+
+    def test_mech_3d_html_report_generation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            html_out = temp_path / "mech_3d_test.html"
+            visual_entries = [
+                {
+                    "name": "Body",
+                    "family": "body",
+                    "width": 64,
+                    "height": 64,
+                    "median_error_deg": 1.5,
+                    "correlation": 0.99,
+                    "height_amplitude": 0.05,
+                    "roughness": 0.45,
+                    "reflectivity": 0.35,
+                    "metallic": 0.20,
+                    "color_data": "data:image/png;base64,dummy",
+                    "normal_data": "data:image/png;base64,dummy",
+                    "height_data": "data:image/png;base64,dummy",
+                    "renorm_data": "data:image/png;base64,dummy",
+                    "heatmap_data": "data:image/png;base64,dummy",
+                }
+            ]
+            dummy_mesh_data = {
+                "materials": {"Body": "AAAA"},
+                "material_vert_counts": {"Body": 3},
+                "center": [0.0, 1.0, 0.0],
+                "radius": 4.5,
+                "total_vertices": 3,
+            }
+            generate_mech_html_report("MadCat 3D Inspector", visual_entries, dummy_mesh_data, html_out)
+            self.assertTrue(html_out.exists())
+            content = html_out.read_text(encoding="utf-8")
+            self.assertIn("MadCat 3D Inspector", content)
+            self.assertIn("btnMode3D", content)
+            self.assertIn("MESH_DATA", content)
             self.assertIn("glCanvas", content)
 
 

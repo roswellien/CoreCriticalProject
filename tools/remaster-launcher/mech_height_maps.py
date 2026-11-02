@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ from surface_materials import (
     pack_surface_materials,
     read_surface_materials,
     mesh_uv_identity_file,
+    texture_batch_materials_file,
     ROLE_HEIGHT,
     ADDRESS_WRAP,
     MAX_IMAGES,
@@ -40,6 +42,7 @@ from visualize_terrain_heights import (
     generate_contact_sheet_png,
     generate_html_inspection_report,
 )
+from mech_inspector_html import generate_mech_html_report
 from launch_terrain_inspector import rgb565_to_rgba8
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -206,6 +209,54 @@ def find_mech_payloads(mech_id: str) -> dict[str, Path]:
                         }
 
     raise FileNotFoundError(f"Could not locate payload files for mech '{mech_id}'.")
+
+
+def extract_mech_geometry(mesh_path: Path, texture_path: Path) -> dict:
+    """Extract and group mech vertices by material for real-time 3D WebGL rendering."""
+    mats = texture_batch_materials_file(texture_path)
+    stream = io.BytesIO(mesh_path.read_bytes())
+    magic = stream.read(8)
+    count = struct.unpack("<I", stream.read(4))[0]
+    mat_verts: dict[str, bytearray] = {}
+    all_xyz: list[tuple[float, float, float]] = []
+    for i in range(count):
+        stream.read(32)  # owner
+        stream.read(32)  # visibility
+        if magic in (b"BWMESH3\0", b"BWMESH5\0", b"BWMESH6\0"):
+            stream.read(44)  # placement
+        if magic in (b"BWMESH5\0", b"BWMESH6\0"):
+            stream.read(44)  # layered
+        if magic in (b"BWMESH6\0",):
+            stream.read(44)  # anchored
+        vc, _col = struct.unpack("<II", stream.read(8))
+        vbytes = stream.read(vc * 32)
+        mat = mats[i]
+        if mat not in mat_verts:
+            mat_verts[mat] = bytearray()
+        mat_verts[mat].extend(vbytes)
+        stride = max(1, vc // 20)
+        for j in range(0, vc, stride):
+            all_xyz.append(struct.unpack("<fff", vbytes[j * 32 : j * 32 + 12]))
+
+    xs = [c[0] for c in all_xyz]
+    ys = [c[1] for c in all_xyz]
+    zs = [c[2] for c in all_xyz]
+    cx = (min(xs) + max(xs)) / 2.0
+    cy = (min(ys) + max(ys)) / 2.0
+    cz = (min(zs) + max(zs)) / 2.0
+    radius = max(((c[0] - cx) ** 2 + (c[1] - cy) ** 2 + (c[2] - cz) ** 2) ** 0.5 for c in all_xyz)
+
+    encoded_mats = {
+        mat: base64.b64encode(bytes(buf)).decode("ascii")
+        for mat, buf in mat_verts.items()
+    }
+    return {
+        "materials": encoded_mats,
+        "material_vert_counts": {mat: len(buf) // 32 for mat, buf in mat_verts.items()},
+        "center": [round(cx, 3), round(cy, 3), round(cz, 3)],
+        "radius": round(radius, 3),
+        "total_vertices": sum(len(buf) // 32 for buf in mat_verts.values()),
+    }
 
 
 def build_mech_surface_materials(
@@ -395,7 +446,12 @@ def build_mech_surface_materials(
 
     if html_report_path and visual_entries:
         report_title = f"{mech_id.capitalize()} Surface Material & Height Map Inspector"
-        generate_html_inspection_report(report_title, visual_entries, Path(html_report_path))
+        mesh_path = resources.get("mesh")
+        if mesh_path and mesh_path.exists():
+            mesh_data = extract_mech_geometry(mesh_path, resources["textures"])
+            generate_mech_html_report(report_title, visual_entries, mesh_data, Path(html_report_path))
+        else:
+            generate_html_inspection_report(report_title, visual_entries, Path(html_report_path))
 
     report = {
         "mech": mech_id,
