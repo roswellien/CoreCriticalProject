@@ -243,7 +243,7 @@ static void presentation_bounds_check() {
 }
 static void world_resolution_check(bool persistent_hud = false, bool visible = false,
                                    bool partial_world = false, bool rgba_target = false,
-                                   bool ordered_writes = false) {
+                                   bool ordered_writes = false, bool fixture_shadows = false) {
     using namespace mw34::vkscene;
     auto require = [](bool ok, const char *message) {
         if (!ok)
@@ -326,6 +326,32 @@ static void world_resolution_check(bool persistent_hud = false, bool visible = f
     require(renderer.raster_width() == output_width * percent / 100 &&
                 renderer.raster_height() == output_height * percent / 100,
             "World did not use independent raster resolution");
+    if (fixture_shadows) {
+        require(mw34::sun::settings().enabled && mw34::effects::settings().fixture_shadows,
+                "Shadow regression requires sunlight and fixture shadows");
+        Scene retained = world;
+        retained.clears.clear();
+        retained.order = {{false, 0}};
+        auto light = std::make_shared<mw34::sun::Tl>();
+        light->projection = {1, 400, 400, 320, 240, .1f};
+        light->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        retained.draws[0].sun_tl = light;
+        retained.effect_lights.params[0] = 1;
+        retained.effect_lights.lights[0].start = {0, 0, 2, 5};
+        retained.effect_lights.lights[0].color = {1, 1, 1, 1};
+        const auto captured_vertices = retained.vertices;
+        const auto before_coverage = renderer.coverage_scenes;
+        renderer.render(retained, false, false);
+        renderer.finish_world();
+        require(retained.vertices == captured_vertices,
+                "Reconstruction must restore captured vertices after shadow preparation");
+        require(renderer.sun_tl_draws > 0, "Shadow regression did not render authenticated TL geometry");
+        if (percent < 100)
+            require(renderer.coverage_scenes == before_coverage + 1,
+                    "Shadow regression did not exercise retained reconstruction");
+        std::cout << "PASS retained TL fixture shadows use captured vertices at " << percent << "%\n";
+        return;
+    }
     if (ordered_writes) {
         // The same upload into a fresh full-resolution target is an independent
         // oracle: it never enters the reduced world target before this write.
@@ -839,6 +865,7 @@ int main(int argc, char **argv) {
         }
     }
     if (argc > 1 && (std::string(argv[1]) == "--world-resolution" ||
+                     std::string(argv[1]) == "--world-fixture-shadows" ||
                      std::string(argv[1]) == "--world-persistence" ||
                      std::string(argv[1]) == "--world-persistence-partial" ||
                      std::string(argv[1]) == "--world-present" ||
@@ -850,7 +877,8 @@ int main(int argc, char **argv) {
                                    std::string(argv[1]) == "--world-present",
                                    std::string(argv[1]).starts_with("--world-persistence-partial"),
                                    std::string(argv[1]).ends_with("-rgba"),
-                                   std::string(argv[1]).starts_with("--world-ordered-writes"));
+                                   std::string(argv[1]).starts_with("--world-ordered-writes"),
+                                   std::string(argv[1]) == "--world-fixture-shadows");
             return 0;
         } catch (const std::exception &error) {
             std::cerr << error.what() << '\n';

@@ -13,7 +13,12 @@ if(args.Length==4 && args[0]=="--add-steam-shortcut")
 }
 
 if(args.Length==1 && args[0]=="--online-updates-only") { OnlineUpdateChecks.Run(); await UpdateDownloadChecks.Run(); return; }
-if(args.Length==1 && args[0]=="--playtest-support-only") { PlaytestSupportChecks.Run(); return; }
+if(args.Length==1 && args[0]=="--playtest-support-only")
+{
+    PlaytestSupportChecks.Run();
+    await CrashReportServiceChecks.RunAsync();
+    return;
+}
 
 if(args.Length==1 && args[0]=="--chassis-only") { ChassisPackChecks.Run(); return; }
 if(args.Length==3 && args[0]=="--install-chassis-pack") { ChassisPackChecks.Install(args[1],args[2]); return; }
@@ -25,6 +30,8 @@ if(args.Length==3&&args[0]=="--check-loading-indicator")
 {
     LoadingIndicatorUiChecks.Run(args[1],args[2]);return;
 }
+
+if(args.Length==2&&args[0]=="--check-headlight-controls") { GraphicsSetupUiChecks.RunHeadlights(args[1]);return; }
 
 if(args.Length==3&&args[0]=="--check-graphics-setup")
 {
@@ -442,6 +449,19 @@ Check(GameRunner.CreateLaunchProfile(serializedProfile, settings)["native"]!["pr
 settings.DynamicLighting = false;
 Check(!GameRunner.CreateLaunchProfile(serializedProfile, settings)["native"]!["presentation"]!["dynamic_lighting"]!.GetValue<bool>(), "Lighting off choice lost");
 Check(GameRunner.CreateLaunchProfile(serializedProfile, settings)["native"]!["presentation"]!["shadows"]!.GetValue<bool>(), "Lighting off erased saved shadow choice");
+settings.Headlights=true;settings.DynamicLighting=true;
+try {GameRunner.CreateLaunchProfile(serializedProfile,settings);throw new Exception("Old runtime accepted enabled headlights");}
+catch(InvalidOperationException){}
+var headlightProfile=JsonNode.Parse(serializedProfile)!.AsObject();
+headlightProfile["native"]!["stock_presentation_versions"]=new JsonArray(1,2);
+var withHeadlights=GameRunner.CreateLaunchProfile(headlightProfile.ToJsonString(),settings);
+Check(withHeadlights["native"]!["presentation"]!["schema_version"]!.GetValue<int>()==2 &&
+    withHeadlights["native"]!["presentation"]!["headlights"]!.GetValue<bool>(),"Headlight policy v2 missing");
+settings.DynamicLighting=false;
+var olderOff=GameRunner.CreateLaunchProfile(serializedProfile,settings);
+Check(olderOff["native"]!["presentation"]!["schema_version"]!.GetValue<int>()==1,"Disabled lighting broke old runtime");
+settings.Headlights=false;
+
 settings.Shadows = false;
 var pipelineCache = Path.Combine(Path.GetTempPath(), "authored pipeline warmup cache");
 var cacheProfile = GameRunner.CreateLaunchProfile(serializedProfile, settings, pipelineCache);

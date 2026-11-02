@@ -52,7 +52,7 @@ int main(int argc,char**){try{
  for(const char* path:{"D:/notes/readeria.txt","D:/notes/readermp.txt","D:/readeria/config.ini","D:/readermp/config.ini","D:/isolated/zbd/t1/readerm-notes.zbd"})
   manager.observe_file(path,true);
  require(manager.reader_epoch()==loaded_reader,"Failed or unrelated file open advanced reader epoch");
- for(const char* path:{"D:/isolated/zbd/t1/readerm1.zbd","D:/isolated/zbd/c1/readeria1.zbd","D:/isolated/zbd/c1/readeria2.zbd","D:/isolated/zbd/c1/readeria3.zbd","D:/isolated/zbd/c1/readermp1.zbd","D:/isolated/zbd/c1/readermp2.zbd"}){
+ for(const char* path:{"D:/isolated/zbd/t1/readerm1.zbd","D:/isolated/zbd/t1/readerm2.zbd","D:/isolated/zbd/t1/readerm3.zbd","D:/isolated/zbd/t1/readerm4.zbd","D:/isolated/zbd/c1/readeria1.zbd","D:/isolated/zbd/c1/readeria2.zbd","D:/isolated/zbd/c1/readeria3.zbd","D:/isolated/zbd/c1/readermp1.zbd","D:/isolated/zbd/c1/readermp2.zbd"}){
   const auto before=manager.reader_epoch();manager.observe_file(path,true);
   require(manager.reader_epoch()==before+1,"Recognized mode reader did not advance reader epoch");}
  manager.frontend();

@@ -2,6 +2,7 @@ using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace MW3RemasterLauncher.Core;
@@ -31,9 +32,25 @@ public sealed class CrashReportService
     public async Task<CrashReportResult> SubmitAsync(object report, CancellationToken cancellationToken = default)
     {
         using var response = await _client.PostAsJsonAsync(Endpoint, report, cancellationToken);
-        var result = await response.Content.ReadFromJsonAsync<Response>(cancellationToken: cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        Response? result;
+        try
+        {
+            result = JsonSerializer.Deserialize<Response>(body, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        }
+        catch (JsonException) when (!response.IsSuccessStatusCode)
+        {
+            // A proxy or access gateway may return plain text or HTML instead of the API's JSON error.
+            result = null;
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException("The crash report service returned invalid JSON.", error);
+        }
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(result?.Error ?? "The crash report service is unavailable.", null, response.StatusCode);
+            throw new HttpRequestException(
+                (result?.Error ?? "The crash report service is unavailable.") +
+                " HTTP " + (int)response.StatusCode + ".", null, response.StatusCode);
         if (result?.ReportId == null || result.ReportId.Length is < 1 or > 16 ||
             result.ReportId.Any(character => !Uri.IsHexDigit(character)))
             throw new InvalidDataException("The crash report service returned an invalid report ID.");

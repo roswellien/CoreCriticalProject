@@ -15,9 +15,9 @@ inline bool sealed_mission(const char* id) {
 inline SkySource mission_sky_source(const char* id, bool interior) {
     const std::string_view key = id ? id : "";
     if (interior || sealed_mission(id)) return SkySource::Interior;
-    if (key == "c2m1" || key == "c3m1" || key == "c3m2" || key == "c4m6")
+    if (key == "t1m2" || key == "c2m1" || key == "c3m1" || key == "c3m2" || key == "c4m6")
         return SkySource::ClearDay;
-    if (key == "c1m1" || key == "c3m3" || key == "c3m4" ||
+    if (key == "t1m1" || key == "t1m4" || key == "c1m1" || key == "c3m3" || key == "c3m4" ||
         key == "c4m3" || key == "c4m4" || key == "c4m5")
         return SkySource::Twilight;
     if (key == "c3m6") return SkySource::ClearNight;

@@ -15,6 +15,18 @@ from functools import lru_cache
 NO_NORMAL = 0xFFFFFFFF
 
 
+class DecodedSurfaceBudgetExceeded(ValueError):
+    """Raised before a surface page decodes beyond its caller's memory budget."""
+
+
+def uncached_pixel_hash(data):
+    """Return the renderer's 64-bit FNV-1a identity without retaining pixel bytes."""
+    value = 0xCBF29CE484222325
+    for byte in data:
+        value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return value
+
+
 @lru_cache(maxsize=8)
 def pixel_hash(data):
     """Return the renderer's 64-bit FNV-1a identity over every supplied pixel byte.
@@ -22,10 +34,7 @@ def pixel_hash(data):
     This format key is not a cryptographic authenticity check. The small cache
     retains byte strings during preparation; native_assets clears it before play.
     """
-    value = 0xCBF29CE484222325
-    for byte in data:
-        value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    return value
+    return uncached_pixel_hash(data)
 
 
 def normal_environment(texture_environment):
@@ -35,7 +44,7 @@ def normal_environment(texture_environment):
     return texture_environment[:-9] + "_NORMALS"
 
 
-def pack_normals(batch_materials, images, *, compressed=False):
+def pack_normals(batch_materials, images, *, compressed=False, cache_hashes=True):
     """Encode BWNRM2 batch bindings and explicitly supplied linear normal pixels.
 
     ``images`` maps names to (width, height, raw RGBA bytes), or None. None writes
@@ -53,6 +62,7 @@ def pack_normals(batch_materials, images, *, compressed=False):
         raise ValueError("Invalid normal image count")
     indices = {name: i for i, name in enumerate(names)}
     bindings = [indices.get(name, NO_NORMAL) for name in batch_materials]
+    hash_pixels = pixel_hash if cache_hashes else uncached_pixel_hash
     out = bytearray((b"BWNRM3\0\0" if compressed else b"BWNRM2\0\0") + struct.pack("<II", len(bindings), len(names)))
     out.extend(struct.pack("<" + "I" * len(bindings), *bindings))
     total = 0
@@ -70,7 +80,7 @@ def pack_normals(batch_materials, images, *, compressed=False):
         ):
             raise ValueError("Invalid normal image size")
         out.extend(encoded.ljust(32, b"\0"))
-        out.extend(struct.pack("<IIQ", width, height, pixel_hash(pixels)))
+        out.extend(struct.pack("<IIQ", width, height, hash_pixels(pixels)))
         if compressed:
             from normal_codec import encode
             encoded_pixels = encode(pixels)
@@ -120,7 +130,7 @@ def pack_surface_normals(entries):
     return pack_surface_bindings(keys)
 
 
-def pack_surface_bindings(entries, *, compressed=False):
+def pack_surface_bindings(entries, *, compressed=False, cache_hashes=True):
     """Pack validated full-content keys, sharing byte-identical normal images.
 
     Up to 256 original surfaces can reference up to 64 images. A key supplied
@@ -155,11 +165,31 @@ def pack_surface_bindings(entries, *, compressed=False):
         names.append(name)
         header.extend(struct.pack("<IIIQ", *key))
         header.extend(name.encode().ljust(32, b"\0"))
-    return bytes(header) + pack_normals(names, images, compressed=compressed)
+    return bytes(header) + pack_normals(
+        names, images, compressed=compressed, cache_hashes=cache_hashes
+    )
 
 
-def read_surface_bindings(data):
+def read_surface_bindings(
+    data,
+    *,
+    max_decoded_bytes=256 * 1024 * 1024,
+    max_working_bytes=None,
+    retained_decoded_bytes=0,
+    cache_hashes=True,
+):
     """Read an existing BWSNR2 catalog for a validated, lossless extension."""
+    if type(max_decoded_bytes) is not int or not 0 <= max_decoded_bytes <= 256 * 1024 * 1024:
+        raise ValueError("Invalid decoded surface budget")
+    invalid_working_budget = max_working_bytes is not None and (
+        type(max_working_bytes) is not int or max_working_bytes < 0
+    )
+    invalid_retained_budget = (
+        type(retained_decoded_bytes) is not int or retained_decoded_bytes < 0
+    )
+    if invalid_working_budget or invalid_retained_budget:
+        raise ValueError("Invalid decoded working memory budget")
+    hash_pixels = pixel_hash if cache_hashes else uncached_pixel_hash
     stream = io.BytesIO(data)
 
     def read(size):
@@ -206,9 +236,22 @@ def read_surface_bindings(data):
     for _ in range(image_count):
         material = name()
         w, h, hash_ = struct.unpack("<IIQ", read(16))
-        total += w * h * 4
-        if material in names or not 0 < w <= 4096 or not 0 < h <= 4096 or total > 256 * 1024 * 1024:
+        image_bytes = w * h * 4
+        if material in names or not 0 < w <= 4096 or not 0 < h <= 4096:
             raise ValueError("Invalid normal image")
+        if total + image_bytes > max_decoded_bytes:
+            raise DecodedSurfaceBudgetExceeded("Surface page exceeds decoded memory budget")
+        if max_working_bytes is not None:
+            # The compressed decoder holds its delta buffer, output buffer and
+            # returned bytes together at peak.
+            decoder_peak_bytes = image_bytes * (
+                3 if normal_magic == b"BWNRM3\0\0" else 1
+            )
+            if retained_decoded_bytes + total + decoder_peak_bytes > max_working_bytes:
+                raise DecodedSurfaceBudgetExceeded(
+                    "Surface page exceeds decoded working memory budget"
+                )
+        total += image_bytes
         names.add(material)
         if normal_magic == b"BWNRM3\0\0":
             from normal_codec import decode
@@ -218,7 +261,7 @@ def read_surface_bindings(data):
             pixels = decode(read(encoded_size), w * h * 4)
         else:
             pixels = read(w * h * 4)
-        if pixel_hash(pixels) != hash_:
+        if hash_pixels(pixels) != hash_:
             raise ValueError("Normal image hash mismatch")
         images.append((material, (w, h, pixels)))
     if stream.read(1):

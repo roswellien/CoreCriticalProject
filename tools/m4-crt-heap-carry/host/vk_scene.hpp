@@ -44,6 +44,7 @@
 #include <functional>
 #include "surface_detail.hpp"
 #include "material_normals.hpp"
+#include "surface_materials.hpp"
 #include "sun_world_vert.h"
 #include "sun_model_vert.h"
 #include "effect_scene_frag.h"
@@ -130,6 +131,7 @@ struct ModelInstance {
     std::array<float, 12> sun_normal{}, sun_world{};
     bool sun_eligible{};
     std::uint64_t shadow_source{};
+    std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
 };
 struct ModelPush {
     Push base;
@@ -153,6 +155,7 @@ struct Draw {
     std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
     unsigned detail_role{};
     std::uint64_t shadow_source{};
+    std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
     std::function<bool()> shadow_valid;
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
@@ -1161,8 +1164,26 @@ class Renderer {
                 tp += VkDeviceSize(t->width) * t->height * 4;
             }
         }
-        const ShadowFrame shadowFrame = prepare_shadow(s, environment);
-        const auto fixtureLights = prepare_fixture_shadows(s, bound);
+        ShadowFrame localShadowFrame;
+        const ShadowFrame *shadowFrame = &localShadowFrame;
+        mw34::effects::Uniform localFixtureLights{};
+        const mw34::effects::Uniform *fixtureLights = &localFixtureLights;
+        if (world_scene_prepared) {
+            if (!world_shadow_scene)
+                throw std::runtime_error("Reconstructed scene is missing its shadow source");
+            if (!world_shadow_inputs_ready) {
+                world_shadow_frame = prepare_shadow(*world_shadow_scene, environment);
+                // Batching owns the full captured vertex buffer while the source
+                // scene retains every draw needed to prepare shared shadow maps.
+                world_fixture_lights = prepare_fixture_shadows(*world_shadow_scene, bound, s.vertices);
+                world_shadow_inputs_ready = true;
+            }
+            shadowFrame = &world_shadow_frame;
+            fixtureLights = &world_fixture_lights;
+        } else {
+            localShadowFrame = prepare_shadow(s, environment);
+            localFixtureLights = prepare_fixture_shadows(s, bound, s.vertices);
+        }
         // Upload memory can be write-combined: never read it for CPU comparisons.
         mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
         std::vector<unsigned> sunUniformIds(s.draws.size());
@@ -1176,7 +1197,7 @@ class Renderer {
             ensure(effectBuffer, sizeof(mw34::effects::Uniform),
                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
             const mw34::effects::Uniform noEffects{};
-            const auto &fx = s.hud || s.frontend_canvas ? noEffects : fixtureLights;
+            const auto &fx = s.hud || s.frontend_canvas ? noEffects : *fixtureLights;
             std::memcpy(effectBuffer.mapped, &fx, sizeof(fx));
             effect_light_peak = std::max(effect_light_peak, std::uint64_t(fx.params[0]));
             fixture_light_peak = std::max(fixture_light_peak, std::uint64_t(fx.params[2]));
@@ -1229,12 +1250,12 @@ class Renderer {
                                                                      : 0)
                             : *dbg == '2' ? 2.f
                                           : 1.f + float(at % 13) / 13.f;
-                    if (shadowFrame.active) {
+                    if (shadowFrame->active) {
                         const auto &sun = environment;
                         for (unsigned i = 0; i < 12; ++i)
-                            u.shadow[i] = float(shadowFrame.view.rows[i]);
-                        u.shadow_params = {1.f, float(shadowFrame.view.texel),
-                                           float(sun.shadow_bias * shadowFrame.view.depth_scale),
+                            u.shadow[i] = float(shadowFrame->view.rows[i]);
+                        u.shadow_params = {1.f, float(shadowFrame->view.texel),
+                                           float(sun.shadow_bias * shadowFrame->view.depth_scale),
                                            sun.shadow_darkness};
                     }
                     if (!mw34::materials::normal_maps_enabled() || draw.normal_texture < 0)
@@ -1464,9 +1485,13 @@ class Renderer {
         if ((s.hud || (s.guest_surface_write && worldColor.image)) &&
             quality_world_dirty && fxaa_enabled())
             record_fxaa();
-        if (shadowFrame.active && !shadowFrame.reused)
-            record_shadow(shadowFrame);
-        record_fixture_shadows(fixtureLights);
+        if (!world_scene_prepared || !world_shadow_recorded) {
+            if (shadowFrame->active && !shadowFrame->reused)
+                record_shadow(*shadowFrame);
+            record_fixture_shadows(*fixtureLights);
+            if (world_scene_prepared)
+                world_shadow_recorded = true;
+        }
         VkRenderPassBeginInfo rb{};
         rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rb.renderPass = renderPass;

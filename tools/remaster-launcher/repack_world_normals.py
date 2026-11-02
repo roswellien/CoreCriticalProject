@@ -12,7 +12,7 @@ import json
 import normal_materials as catalog
 
 PAGE_BYTES = 16 * 1024 * 1024
-PACKAGE_BYTES = 512 * 1024 * 1024
+PACKAGE_BYTES = 4096 * 1024 * 1024
 
 
 def pages_for(entries):

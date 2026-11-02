@@ -154,7 +154,7 @@ def stage(profile_path, output, python_home):
     profile["native"]["surface_detail"] = {"packs": profile["native"].get("surface_detail", {}).get("packs", {})}
     (target.root / "profile.json").write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
     for name in ("play_remaster.py", "play_native.ps1", "resolve_sun_preset.ps1", "prepared_mech_packs.py",
-                 "prepared_environment_packs.py", "prepared_skin_packs.py", "prepared_chassis_packs.py", "chassis_catalog.py", "chassis_icons.py", "reader_archive.py", "zrd_document.py", "content_capabilities.py", "legacy_content_capabilities.json", "mission_lighting.py", "normal_materials.py", "native_assets.py", "local_music.py", "presentation_policy.py"):
+                 "prepared_environment_packs.py", "prepared_skin_packs.py", "prepared_chassis_packs.py", "legacy_chassis_resources.py", "legacy_chassis_skins.py", "chassis_catalog.py", "chassis_icons.py", "reader_archive.py", "zrd_document.py", "content_capabilities.py", "legacy_content_capabilities.json", "mission_lighting.py", "normal_materials.py", "surface_materials.py", "native_assets.py", "local_music.py", "presentation_policy.py"):
         target.copy(Path(__file__).with_name(name), Path("coordinator") / name)
     python_home = Path(python_home)
     for file in python_home.iterdir():
