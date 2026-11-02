@@ -216,6 +216,8 @@ def select(metadata, host, verification=None, appearance_mode=None):
                         raise ValueError('Selected new appearance requires owned-chassis-visuals version 1')
                     if owned['normal_pages'] and (2 not in host.get('normal_map_formats', []) or 'BWSNR2' not in payload['required_formats']):
                         raise ValueError('Selected owned normals require format 2')
+                    if owned['normal_pages'] and 1 not in host.get('authored_normal_catalog_versions', []):
+                        raise ValueError('Selected owned normals require authored normal catalog version 1')
                     selected.update(owned_visuals=owned, appearance_normal_pages=owned['normal_pages'],
                                     appearance=dict(requested='new', selected='new', reason=None))
                     selected['legacy'] = legacy

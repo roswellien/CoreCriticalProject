@@ -149,6 +149,22 @@ class OwnedVisualTests(unittest.TestCase):
         self.assertEqual(rows[0]["appearance_normal_pages"], [])
         with self.assertRaisesRegex(ValueError, "normal map"):
             select([(pack, manifest)], host, appearance_mode="upgraded")
+        # Exercise the selected owned normal path independently of the upgraded one.
+        owned_normal = pack_surface_bindings(
+            [((1, 1, 1, pixel_hash(self.texture[-2:])), (1, 1, bytes([128, 128, 255, 255])))]
+        )
+        (root / "owned-normal").write_bytes(owned_normal)
+        document["chassis"][0]["appearances"]["new"]["normals"] = ["owned-normal"]
+        project.write_text(json.dumps(document))
+        build(project, root / "owned-normals-built")
+        normal_pack = root / "owned-normals-built/pack"
+        normal_manifest = json.loads((normal_pack / "pack.json").read_text())
+        host["normal_map_formats"] = [2]
+        with self.assertRaisesRegex(ValueError, "authored normal catalog"):
+            select([(normal_pack, normal_manifest)], host, appearance_mode="new")
+        host["authored_normal_catalog_versions"] = [1]
+        selected = select([(normal_pack, normal_manifest)], host, appearance_mode="new")
+        self.assertEqual(selected[0]["appearance_normal_pages"], [owned_normal])
         for fmt in ("BWMESH4", "BWTEX1", "BWSNR2"):
             invalid = copy.deepcopy(manifest)
             invalid["native_payload"]["required_formats"].remove(fmt)
