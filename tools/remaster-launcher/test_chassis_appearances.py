@@ -1,7 +1,9 @@
 import copy
+import hashlib
 import json
 import struct
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -260,9 +262,7 @@ class AppearanceTests(unittest.TestCase):
         profile_environment = {"MW34_SURFACE_NORMALS": "world/surface-normals.txt"}
         prepared_environment = {"MW34_REMASTER_BANKS": "/prepared/banks.bin"}
         with patch("play_remaster.ROOT", self.root):
-            effective = _chassis_preparation_environment(
-                profile_environment, prepared_environment
-            )
+            effective = _chassis_preparation_environment(profile_environment, prepared_environment)
         self.assertEqual(
             effective["MW34_SURFACE_NORMALS"],
             str((self.root / "world/surface-normals.txt").resolve()),
@@ -325,6 +325,88 @@ class AppearanceTests(unittest.TestCase):
         )
         for name, data in stock.items():
             self.assertEqual((directory / name).read_bytes(), data)
+
+        # Exercise the coordinator boundary where chassis preparation supplies
+        # the first normal catalog, after environment policy was already applied.
+        import play_remaster
+
+        effects = self.root / "effects.bin"
+        effects.write_bytes(b"MWFX1\0\0\0" + struct.pack("<I", 0))
+        for requested in ("original", "upgraded"):
+            for enabled in (False, True):
+                with self.subTest(requested=requested, dynamic_lighting=enabled):
+                    output = self.root / f"launch-{requested}-{enabled}"
+                    native = dict(
+                        runtime_environment={},
+                        stock_presentation_versions=[1],
+                        presentation=dict(schema_version=1, dynamic_lighting=enabled),
+                        stock_effect_lighting=dict(
+                            catalog=str(effects),
+                            bytes=effects.stat().st_size,
+                            sha256=hashlib.sha256(effects.read_bytes()).hexdigest(),
+                        ),
+                    )
+                    planned = dict(
+                        backend="native",
+                        graphics=dict(width=1280, height=720, aa=1, af=1),
+                        supported=True,
+                        texture_banks=0,
+                        models=[],
+                        offline_models=[],
+                        limitations=[],
+                        command=["powershell.exe", "-Profile", "old.json"],
+                        music=None,
+                        asset_output=str(output),
+                        prepared_profile=dict(native=native),
+                        environment_packs={},
+                        chassis_records=select(
+                            [(root, manifest)], self.host, appearance_mode=requested
+                        ),
+                    )
+                    with (
+                        patch("sys.argv", ["play_remaster", "--game-exe", str(Path(__file__))]),
+                        patch.object(play_remaster, "plan", return_value=planned),
+                        patch.object(
+                            play_remaster,
+                            "read_json",
+                            return_value={"native": {"executable": "fixture.exe"}},
+                        ),
+                        patch("startup_cache.environment_resources", return_value={}),
+                        patch(
+                            "prepared_chassis_packs.prepare",
+                            side_effect=lambda rows, game, destination, env: prepare(
+                                rows, directory.parent / "Mech3.exe", destination, env
+                            ),
+                        ),
+                        patch("native_assets.prepare", return_value={}),
+                        patch.object(
+                            play_remaster.subprocess,
+                            "run",
+                            return_value=types.SimpleNamespace(returncode=0),
+                        ),
+                        patch.object(play_remaster.subprocess, "call", return_value=0) as child,
+                    ):
+                        self.assertEqual(play_remaster.main(), 0)
+                    command = child.call_args.args[0]
+                    profile = json.loads(Path(command[command.index("-Profile") + 1]).read_text())
+                    environments = (
+                        child.call_args.kwargs["env"],
+                        profile["native"]["runtime_environment"],
+                    )
+                    for environment in environments:
+                        self.assertEqual(
+                            environment["MW34_NORMAL_MAPS"],
+                            str(int(enabled and requested == "upgraded")),
+                        )
+                        self.assertEqual(
+                            "MW34_SURFACE_NORMALS" in environment, requested == "upgraded"
+                        )
+                    if requested == "upgraded":
+                        pages = inherited_pages(environments[0]["MW34_SURFACE_NORMALS"])
+                        self.assertEqual(
+                            dict(read_surface_bindings(pages[0].read_bytes())),
+                            {self.key: self.normal},
+                        )
 
     def test_builder_validates_headlights_instead_of_dropping_them(self):
         project, _, _ = fixtures.ChassisPackTests.legacy_project(self)
