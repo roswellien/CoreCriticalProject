@@ -5,6 +5,11 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
+# The SDK loader searches beside the probe before its own signedbin directory.
+# Reusing an output folder could therefore load an unchecked effect DLL.
+if (Test-Path -LiteralPath $OutputDirectory) {
+    throw 'Use a fresh output directory without pre-existing FSR DLLs'
+}
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dependencies.json') -Raw | ConvertFrom-Json
 foreach ($group in @(@{Root=$SdkDirectory; Pins=$manifest.sdk_files}, @{Root=$VulkanInclude; Pins=$manifest.vulkan_files})) {
     foreach ($pin in $group.Pins.PSObject.Properties) {
@@ -30,7 +35,7 @@ if ($LASTEXITCODE) { throw 'Could not initialize compiler environment' }
 foreach ($line in $environmentLines) {
     if ($line -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
 }
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $arguments = @('/nologo', '/std:c++17', '/EHsc', '/MD', '/W4', '/WX',
     "/I$VulkanInclude", "/I$SdkDirectory/api/include", "/I$SdkDirectory/upscalers/include",

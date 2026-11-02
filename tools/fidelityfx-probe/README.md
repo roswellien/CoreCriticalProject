@@ -29,7 +29,8 @@ C:/Dev/fsr-probe/probe.exe C:/Dev/FSR/Kits/FidelityFX/signedbin 0
 
 The builder checks file pins and DLL signatures before compiling. Run from a
 fresh output directory with no other FSR DLLs next to the executable: the upstream
-loader searches the executable directory before its own directory. Keep the DLLs
+loader searches the executable directory before its own directory. The builder
+rejects an existing output directory rather than reusing its contents. Keep the DLLs
 unchanged between build verification and execution. No SDK import library is
 needed; the probe dynamically loads three exported entry points.
 
