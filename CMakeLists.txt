@@ -101,6 +101,9 @@ if(BUILD_TESTING)
     add_test(NAME surface_materials_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_surface_materials.py -v)
     set_tests_properties(surface_materials_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME terrain_height_maps_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_terrain_height_maps.py -v)
+    set_tests_properties(terrain_height_maps_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
     set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
