@@ -111,6 +111,9 @@ std::string build_oracle_sidecar(std::uint64_t mesh_hash) {
     write_f32(out, 0.0f);
     write_f32(out, 0.0f); // sss_radius
     write_f32(out, 0.0f); // thickness_scale
+    write_f32(out, 0.7f); // roughness
+    write_f32(out, 0.04f); // reflectivity
+    write_f32(out, 0.0f); // metallic
 
     // Record 1: ("bushwacker:close", "canopy_glass")
     write_str(out, "bushwacker:close");
@@ -137,6 +140,9 @@ std::string build_oracle_sidecar(std::uint64_t mesh_hash) {
     write_f32(out, 0.75f);
     write_f32(out, 0.125f); // sss_radius
     write_f32(out, 0.375f); // thickness_scale
+    write_f32(out, 0.7f); // roughness
+    write_f32(out, 0.04f); // reflectivity
+    write_f32(out, 0.0f); // metallic
 
     // Image 0: height_armor
     write_str(out, "height_armor");
@@ -210,14 +216,16 @@ int main() {
                         armor.address_mode_v == surface_address_clamp,
                     "Record 0 UV transform/addressing mismatch");
             require(armor.sss_participation == 0.0f && armor.sss_radius == 0.0f &&
-                        armor.thickness_scale == 0.0f,
-                    "Opaque armor record did not keep zero SSS participation");
+                        armor.thickness_scale == 0.0f && armor.roughness == 0.7f &&
+                        armor.reflectivity == 0.04f && armor.metallic == 0.0f,
+                    "Opaque armor record reflectivity fields mismatch");
 
             const auto &canopy = *pack.records[1];
             require(canopy.material_name == "canopy_glass" && canopy.thickness_image == 1U &&
                         canopy.sss_participation == 0.5f && canopy.sss_radius == 0.125f &&
-                        canopy.thickness_scale == 0.375f,
-                    "Record 1 SSS fields mismatch");
+                        canopy.thickness_scale == 0.375f && canopy.roughness == 0.7f &&
+                        canopy.reflectivity == 0.04f && canopy.metallic == 0.0f,
+                    "Record 1 SSS and reflectivity fields mismatch");
 
             require(pack.images[0].name == "height_armor" &&
                         pack.images[0].role == surface_role_height &&

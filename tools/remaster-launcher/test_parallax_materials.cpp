@@ -228,6 +228,9 @@ void test_environment_surface_materials_loader() {
     write_f32(raw, 0.0f);
     write_f32(raw, 0.0f);
     write_f32(raw, 0.0f);
+    write_f32(raw, 0.7f);
+    write_f32(raw, 0.04f);
+    write_f32(raw, 0.0f);
 
     write_str(raw, "ground_sand_h");
     write_u32(raw, surface_role_height);
