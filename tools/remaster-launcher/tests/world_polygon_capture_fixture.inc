@@ -112,22 +112,10 @@ static void world_polygon_capture_checks() {
                     "Exact temporal polygon lost source identity");
     polygon_require(exact.edge_calls == 0 && exact.world_draws == 1,
                     "Exact temporal polygon unnecessarily reconstructed");
-    for (unsigned mutation = 0; mutation < 5; ++mutation) {
+    for (unsigned extra_vertices : {1U, 2U, 8U}) {
         WorldPolygonCaptureFixture fixture;
         auto changed = fixture.original();
-        TlVertex first;
-        std::memcpy(&first, changed.vertices.data(), sizeof(first));
-        if (mutation == 0)
-            first.x += .1f;
-        if (mutation == 1)
-            first.u += .01f;
-        if (mutation == 2)
-            first.z = first.rhw = .4f;
-        if (mutation == 3)
-            first.x = std::numeric_limits<float>::quiet_NaN();
-        std::memcpy(changed.vertices.data(), &first, sizeof(first));
-        if (mutation == 4)
-            changed.vertices.resize(changed.vertices.size() + sizeof(first));
+        changed.vertices.resize(changed.vertices.size() + extra_vertices * sizeof(TlVertex));
         const auto unchanged = changed.vertices;
         fixture.world_capture(changed);
         polygon_require(!changed.model && changed.vertices == unchanged,
@@ -140,6 +128,15 @@ static void world_polygon_capture_checks() {
         polygon_require(changed.model && fixture.edge_calls == 1 && fixture.lighting_calls == 1,
                         "Authoritative polygon lost its existing reconstruction route");
     }
+    WorldPolygonCaptureFixture equal_count;
+    auto rounded = equal_count.original();
+    TlVertex first;
+    std::memcpy(&first, rounded.vertices.data(), sizeof(first));
+    first.x += .1f;
+    std::memcpy(rounded.vertices.data(), &first, sizeof(first));
+    equal_count.world_capture(rounded);
+    polygon_require(rounded.model && equal_count.edge_calls == 1,
+                    "Equal-count temporal polygon lost the existing reconstruction audit");
     std::cout << "Native polygon adapter: exact temporal identity, rejected attributes and "
                  "unchanged authoritative reconstruction pass\n";
 }

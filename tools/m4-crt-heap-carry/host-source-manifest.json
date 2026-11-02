@@ -1101,8 +1101,8 @@
     "world_polygon_capture_stage.inc": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 5681,
-      "sha256": "459deef7b2a6b3ae2fdcedd1de264b41b057ac8d8cbf8df902a444e5bd1ba345"
+      "bytes": 5590,
+      "sha256": "124f5055ac9c4dd019d8c829ae7df9f8635c020bd76fa0f530db597534752ac6"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."

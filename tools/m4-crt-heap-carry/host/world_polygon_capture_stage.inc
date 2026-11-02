@@ -35,6 +35,13 @@ void world_capture(D3DCmd &draw) {
         return;
     }
     bool exact = polygon.corners.size() == count;
+    // Reconstruction emits one vertex per original corner. A different count
+    // can never pass the temporal caller's byte-identity check. Preserve the
+    // submitted TL draw as an unknown occluder without rebuilding its polygon.
+    if (!exact && scope.temporal_only) {
+        ++world_misses;
+        return;
+    }
     mw34::vkscene::HostFpEnvironment fp;
     const auto matrix = override_matrix(load(load(0x5eda90)));
     const double near_scale = world_float(0x73fb80), sx = world_float(0x73fc30),
@@ -94,14 +101,6 @@ void world_capture(D3DCmd &draw) {
                 break;
             }
         }
-    // Temporal-only capture retains the original TL draw and requires byte-identical
-    // attributes. Rebuilding a rejected polygon cannot satisfy that contract:
-    // reconstruction changes the rejected UV/projection values or corner count.
-    // Leave its original TL coverage available as an unproved occluder instead.
-    if (!exact && scope.temporal_only) {
-        ++world_misses;
-        return;
-    }
     if (!exact && !world_edge_admit(draw, polygon, matrix, near_scale, sx, sy, cx, cy, near_clip)) {
         ++world_misses;
         return;
