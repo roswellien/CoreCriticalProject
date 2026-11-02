@@ -196,3 +196,35 @@ The initial .NET run lacked SDL3; the existing SHA-256-pinned 3.4.18 archive sup
 the ignored test dependency before the successful rerun. Remaining native modes,
 current-develop integration, final source matching and independent review are still
 required before P2 acceptance. FSR dispatch and frame generation remain Off.
+
+## Current-develop integration checks
+
+The topic now includes develop through e8129d3, retaining the newer material,
+headlight and controller changes alongside temporal metadata. Training readers
+1–4 retain their load-epoch invalidation; failed and unrelated opens do not
+advance that epoch. Default and manual campaign-lighting fixtures pass.
+
+The integrated host completed two 2,200-presentation RX 9070 Vulkan/DXGI runs at
+100% and 50%, with jitter On, lighting Off and all 13 verified published packs
+from runtime 1.0.46. Both stopped at the configured budget and reported zero
+Vulkan validation errors. The 100% color captures at 801/999/1801/2101 match the
+pre-integration reference byte-for-byte. At 50%, the diagnostic target is
+1720×720 for the 3440×1440 output: 14,250 valid pixels at 801, 14,240 at 1801,
+13,413 at 2071 and 12,252 at 2101. Every valid moving pixel at 2071/2101 has
+finite, nonzero motion; median vectors are (0.68048,-0.43210) and
+(1.73544,-0.13282) render pixels. This remains sparse static-surface coverage.
+
+All 182 host-source and 196 repository-dependency hashes match the integrated
+build receipt; its commit field records the pre-merge checkpoint because the
+build started during local integration. The merged files were checked against
+the receipt afterward. All 30 CTest checks, the 70-case renderer matrix, six
+50/67/100% jitter Off/On temporal GPU cases, source lifecycle checks and launcher
+.NET suite pass. Shader compilation reproduces the prior canonical binaries.
+Private broken variants for motion sign, output-pixel units, jitter leakage,
+older history, source mutation and resource invalidation fail their respective
+checks. Ordinary sources remain intact.
+
+Same-source native temporal-Off/jitter-Off color comparisons, lighting/stock
+configurations and camera/zoom/pause/reload coverage remain required. Independent
+review and a draft PR also remain open. No upscaler or frame generation is
+dispatched, and these checks do not establish Stage 2 acceptance.
