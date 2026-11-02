@@ -871,8 +871,8 @@
       "classification": "authored-host-source"
     },
     "surface_materials.hpp": {
-      "sha256": "c25c1e1225767563f339dd770bd29df59ae916c22bb6941aabff251ef9ea6754",
-      "bytes": 14419,
+      "sha256": "b1ff2395827326353cdeacd6321f581e246e159a0e142eb826173a95c1151189",
+      "bytes": 14421,
       "decision": "commit",
       "classification": "authored-host-source"
     },
