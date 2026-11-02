@@ -8,6 +8,7 @@ Packs validated BWSFM1 environment surface-material sidecars for runtime POM.
 from __future__ import annotations
 
 import argparse
+import base64
 import io
 import json
 import math
@@ -31,6 +32,13 @@ try:
     )
     from normal_materials import read_surface_bindings
     from prepared_environment_packs import REGIONS, sha
+    from visualize_terrain_heights import (
+        encode_png,
+        compute_angular_error_heatmap,
+        derive_normal_map_rgba,
+        generate_contact_sheet_png,
+        generate_html_inspection_report,
+    )
 except ImportError:
     launcher_dir = Path(__file__).resolve().parent
     sys.path.insert(0, str(launcher_dir))
@@ -43,6 +51,13 @@ except ImportError:
     )
     from normal_materials import read_surface_bindings
     from prepared_environment_packs import REGIONS, sha
+    from visualize_terrain_heights import (
+        encode_png,
+        compute_angular_error_heatmap,
+        derive_normal_map_rgba,
+        generate_contact_sheet_png,
+        generate_html_inspection_report,
+    )
 
 
 FAMILY_PROFILES = {
@@ -286,6 +301,8 @@ def build_region_terrain_sidecar(
     key_filter: set[tuple[int, int, int, int]] | None = None,
     max_dimension: int = 512,
     max_sidecar_bytes: int = 256 * 1024 * 1024,
+    html_report_path: Path | None = None,
+    contact_sheets_dir: Path | None = None,
 ) -> tuple[bytes, dict]:
     """Generate a valid BWSFM1 surface-material sidecar bytes and audit summary."""
     if np is None:
@@ -317,6 +334,7 @@ def build_region_terrain_sidecar(
     images = {}
     batch_materials = []
     quality_summary = {}
+    visual_entries = []
 
     total_image_bytes = 0
     image_idx = 0
@@ -377,6 +395,57 @@ def build_region_terrain_sidecar(
             "metallic": float(prof.get("metallic", 0.0)),
         }
         records.append(rec)
+
+        if html_report_path or contact_sheets_dir:
+            heatmap_bytes, median_err, corr = compute_angular_error_heatmap(
+                normal_bytes, h_bytes, w, h
+            )
+            renorm_bytes = derive_normal_map_rgba(h_bytes, w, h)
+
+            if contact_sheets_dir:
+                cs_dir = Path(contact_sheets_dir)
+                cs_dir.mkdir(parents=True, exist_ok=True)
+                cs_bytes = generate_contact_sheet_png(
+                    color_bytes or normal_bytes,
+                    normal_bytes,
+                    h_bytes,
+                    renorm_bytes,
+                    heatmap_bytes,
+                    w,
+                    h,
+                )
+                (cs_dir / f"{mat_name}_contact_sheet.png").write_bytes(cs_bytes)
+
+            if html_report_path:
+                def to_b64(raw: bytes, iw: int, ih: int, max_thumb: int = 256) -> str:
+                    thumb_w, thumb_h = iw, ih
+                    if max_thumb > 0 and (iw > max_thumb or ih > max_thumb):
+                        stride = max(iw // max_thumb, ih // max_thumb)
+                        if stride > 1:
+                            arr = np.frombuffer(raw, dtype=np.uint8).reshape(ih, iw, 4)[::stride, ::stride].copy()
+                            thumb_h, thumb_w = arr.shape[:2]
+                            raw = arr.tobytes()
+                    png = encode_png(thumb_w, thumb_h, raw)
+                    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+                visual_entries.append({
+                    "name": mat_name,
+                    "family": family,
+                    "width": w,
+                    "height": h,
+                    "median_error_deg": float(quality.get("median_angular_error_deg", median_err)),
+                    "correlation": float(quality.get("correlation_x", corr)),
+                    "height_amplitude": float(prof["height_amplitude"]),
+                    "roughness": float(prof.get("roughness", 0.70)),
+                    "reflectivity": float(prof.get("reflectivity", 0.04)),
+                    "metallic": float(prof.get("metallic", 0.0)),
+                    "color_data": to_b64(color_bytes, w, h) if color_bytes else None,
+                    "normal_data": to_b64(normal_bytes, w, h),
+                    "height_data": to_b64(h_bytes, w, h),
+                    "renorm_data": to_b64(renorm_bytes, w, h),
+                    "heatmap_data": to_b64(heatmap_bytes, w, h),
+                })
+
         image_idx += 1
 
     if not records:
@@ -411,6 +480,9 @@ def build_region_terrain_sidecar(
     # Round-trip verification
     verified = read_surface_materials(sidecar_bytes, expected_asset_id=region)
 
+    if html_report_path and visual_entries:
+        generate_html_inspection_report(region, visual_entries, Path(html_report_path))
+
     report = {
         "region": region,
         "records_count": len(verified["records"]),
@@ -434,6 +506,15 @@ def main():
     gen.add_argument("--output", type=Path, required=True)
     gen.add_argument("--overrides", type=Path)
     gen.add_argument("--report", type=Path)
+    gen.add_argument("--html-report", type=Path, help="Export interactive HTML inspection report")
+    gen.add_argument("--contact-sheets-dir", type=Path, help="Export 5-panel PNG contact sheets")
+
+    vis = subparsers.add_parser("visualize", help="Generate interactive HTML visual report")
+    vis.add_argument("--region", required=True, choices=list(REGIONS.keys()))
+    vis.add_argument("--normals-manifest", type=Path, required=True)
+    vis.add_argument("--output", type=Path, required=True, help="Output HTML inspection report path")
+    vis.add_argument("--contact-sheets-dir", type=Path, help="Export 5-panel PNG contact sheets")
+    vis.add_argument("--overrides", type=Path)
 
     args = parser.parse_args()
 
@@ -452,22 +533,32 @@ def main():
                         print(f"Key: {key} Dim: {normal[0]}x{normal[1]}")
         print(f"Total active terrain normals in {args.region}: {count}")
 
-    elif args.command == "generate":
+    elif args.command in ("generate", "visualize"):
         pages = [
             args.normals_manifest.parent / p
             for p in args.normals_manifest.read_text().splitlines()[1:]
             if p
         ]
+        html_out = args.output if args.command == "visualize" else args.html_report
         sidecar_bytes, summary = build_region_terrain_sidecar(
-            args.region, pages, overrides_dir=args.overrides
+            args.region,
+            pages,
+            overrides_dir=args.overrides,
+            html_report_path=html_out,
+            contact_sheets_dir=args.contact_sheets_dir,
         )
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_bytes(sidecar_bytes)
-        print(f"Wrote {len(sidecar_bytes)} bytes BWSFM1 to {args.output}")
-        if args.report:
-            args.report.parent.mkdir(parents=True, exist_ok=True)
-            args.report.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-            print(f"Wrote report to {args.report}")
+        if args.command == "generate":
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(sidecar_bytes)
+            print(f"Wrote {len(sidecar_bytes)} bytes BWSFM1 to {args.output}")
+            if args.report:
+                args.report.parent.mkdir(parents=True, exist_ok=True)
+                args.report.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+                print(f"Wrote report to {args.report}")
+        if html_out:
+            print(f"Wrote interactive HTML visual report to {html_out}")
+        if args.contact_sheets_dir:
+            print(f"Wrote contact sheets to {args.contact_sheets_dir}")
 
 
 if __name__ == "__main__":

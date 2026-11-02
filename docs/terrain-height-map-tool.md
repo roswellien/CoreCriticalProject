@@ -47,8 +47,28 @@ python tools/remaster-launcher/terrain_height_maps.py generate `
     --region training `
     --normals-manifest local/remaster/environment/authored.txt `
     --output local/remaster/environment/ground_surface_materials.bin `
-    --report local/remaster/environment/height_quality_report.json
+    --report local/remaster/environment/height_quality_report.json `
+    --html-report local/remaster/environment/terrain_inspection.html `
+    --contact-sheets-dir local/remaster/environment/contact_sheets
 ```
+
+### 3. Interactive visual review and contact sheets
+
+A standalone interactive HTML5/WebGL reviewer and 5-panel PNG contact sheet generator is available via the `visualize` subcommand or [`visualize_terrain_heights.py`](file:///tools/remaster-launcher/visualize_terrain_heights.py):
+
+```powershell
+python tools/remaster-launcher/terrain_height_maps.py visualize `
+    --region training `
+    --normals-manifest local/remaster/environment/authored.txt `
+    --output local/remaster/environment/terrain_inspector.html `
+    --contact-sheets-dir local/remaster/environment/contact_sheets
+```
+
+The generated HTML report is completely self-contained (zero server or internet required):
+- **Interactive 3D WebGL Viewport**: Real-time POM parallax raymarching and physical specularity shader. Drag mouse to steer the directional sunlight across the surface to audit micro-relief and shadow response.
+- **Live Parameter Tuning**: Real-time sliders for Height Amplitude, Roughness, Reflectivity, and Light Angle.
+- **5-Channel Texture Strip**: Side-by-side inspection cards for Colour (Albedo), Authored Normal, Derived Height, Re-derived Normal, and Angular Error Heatmap (Green <5°, Yellow 15°, Red >35°).
+- **Searchable Gallery**: Filter by material family (`cliff`, `rock`, `road`, `asphalt`, `sand`, `beach`, `terrain`) or search by texture identifier.
 
 ## Material families & parameters
 

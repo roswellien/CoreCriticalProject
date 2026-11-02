@@ -26,6 +26,12 @@ from terrain_height_maps import (
     build_region_terrain_sidecar,
     FAMILY_PROFILES,
 )
+from visualize_terrain_heights import (
+    encode_png,
+    compute_angular_error_heatmap,
+    generate_contact_sheet_png,
+    generate_html_inspection_report,
+)
 
 
 @unittest.skipIf(np is None, "Terrain height-map derivation requires NumPy")
@@ -141,6 +147,61 @@ class TerrainHeightMapsTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             derive_height_map(b"truncated", 32, 32)
+
+    def test_visual_png_encoding_and_contact_sheet(self):
+        w, h = 8, 8
+        rgba = bytes([128, 128, 255, 255] * (w * h))
+        png = encode_png(w, h, rgba)
+
+        # PNG Signature
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        # IHDR width/height at offset 16, 20
+        ihdr_w, ihdr_h = struct.unpack_from(">II", png, 16)
+        self.assertEqual(ihdr_w, w)
+        self.assertEqual(ihdr_h, h)
+
+        # Contact sheet: 5 panels side by side
+        sheet_png = generate_contact_sheet_png(rgba, rgba, rgba, rgba, rgba, w, h)
+        self.assertTrue(sheet_png.startswith(b"\x89PNG\r\n\x1a\n"))
+        sheet_w, sheet_h = struct.unpack_from(">II", sheet_png, 16)
+        self.assertEqual(sheet_w, w * 5)
+        self.assertEqual(sheet_h, h)
+
+    def test_visual_html_report_generation(self):
+        w, h = 16, 16
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            n_bytes = bytes([128, 128, 255, 255] * (w * h))
+            entries = [((w, h, 1, 0x123456789abcdef0), (w, h, n_bytes))]
+            page_file = temp_path / "normals-000.bin"
+            page_file.write_bytes(pack_surface_bindings(entries))
+
+            html_out = temp_path / "report.html"
+            cs_dir = temp_path / "sheets"
+
+            sidecar_bytes, report = build_region_terrain_sidecar(
+                "training",
+                [page_file],
+                html_report_path=html_out,
+                contact_sheets_dir=cs_dir,
+            )
+
+            # Sidecar check
+            self.assertTrue(sidecar_bytes.startswith(b"BWSFM1\0\0"))
+            self.assertEqual(report["region"], "training")
+
+            # HTML report check
+            self.assertTrue(html_out.exists())
+            html_content = html_out.read_text(encoding="utf-8")
+            self.assertIn("MW3 Remaster Terrain Surface Inspector", html_content)
+            self.assertIn("glCanvas", html_content)
+            self.assertIn("data:image/png;base64,", html_content)
+            self.assertIn("uEnablePOM", html_content)
+
+            # Contact sheet check
+            contact_files = list(cs_dir.glob("*.png"))
+            self.assertEqual(len(contact_files), 1)
+            self.assertTrue(contact_files[0].read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
 
 
 if __name__ == "__main__":
