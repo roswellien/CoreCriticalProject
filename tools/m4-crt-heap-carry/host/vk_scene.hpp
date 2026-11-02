@@ -1238,7 +1238,7 @@ class Renderer {
                 const bool height_active = pomActive[i] != 0;
                 Tex *ht = height_active ? bound[size_t(d.height_texture)] : &zeroHeight;
                 const unsigned height_sampler =
-                    height_active ? (0x10003U | ((d.surface_material->address_mode_u & 15U) << 4U) |
+                    height_active ? (0x00003U | ((d.surface_material->address_mode_u & 15U) << 4U) |
                                      ((d.surface_material->address_mode_v & 15U) << 8U))
                                   : normal_sampler;
                 const NormalSetKey key{t, normal_sampler, ht, height_sampler};

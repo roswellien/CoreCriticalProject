@@ -120,6 +120,15 @@ static class ChassisPackChecks
             installed.NativePayload.RequiredFormats.Add("BWSFM1");
             installed.NativePayload.RequiredCapabilities["surface-materials"]=1;
             ChassisPack.Read(installed.DirectoryPath,installed);
+            BitConverter.GetBytes(65u).CopyTo(sfm,20);
+            SetResource("sfm.bin",sfm,"BWSFM1");
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            BitConverter.GetBytes(513u).CopyTo(sfm,20);
+            SetResource("sfm.bin",sfm,"BWSFM1");
+            try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Oversized BWSFM1 image count accepted.");}
+            catch(InvalidDataException) {}
+            BitConverter.GetBytes(0u).CopyTo(sfm,20);
+            SetResource("sfm.bin",sfm,"BWSFM1");
             var hostWithIconOnly=JsonNode.Parse("""{"content_capabilities":{"additional-mech-chassis":[1,2]}}""")!.AsObject();
             try {RuntimeContentCapabilities.Require(hostWithIconOnly,installed.NativePayload,installed.Id);throw new Exception("Old host accepted surface-materials pack.");}
             catch(InvalidDataException) {}

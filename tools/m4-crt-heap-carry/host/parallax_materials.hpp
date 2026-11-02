@@ -192,8 +192,12 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
     const float tw = static_cast<float>(std::max(tex_width, 1U));
     const float th = static_cast<float>(std::max(tex_height, 1U));
     const PomVec2 inv_tex_size{1.0f / tw, 1.0f / th};
-    const PomVec2 ddx_scaled{duv1.x * sun.pom_uv_transform[0], duv1.y * sun.pom_uv_transform[1]};
-    const PomVec2 ddy_scaled{duv2.x * sun.pom_uv_transform[0], duv2.y * sun.pom_uv_transform[1]};
+    const PomVec2 atlas_span{sun.pom_atlas_rect[2] - sun.pom_atlas_rect[0],
+                             sun.pom_atlas_rect[3] - sun.pom_atlas_rect[1]};
+    const PomVec2 ddx_scaled{duv1.x * sun.pom_uv_transform[0] * atlas_span.x,
+                             duv1.y * sun.pom_uv_transform[1] * atlas_span.y};
+    const PomVec2 ddy_scaled{duv2.x * sun.pom_uv_transform[0] * atlas_span.x,
+                             duv2.y * sun.pom_uv_transform[1] * atlas_span.y};
 
     const float footprint = std::max(pom_length(PomVec2{ddx_scaled.x * tw, ddx_scaled.y * th}),
                                      pom_length(PomVec2{ddy_scaled.x * tw, ddy_scaled.y * th}));
@@ -206,8 +210,6 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
     const std::uint32_t addr_v = (packed_addr >> 4U) & 15U;
 
     if (std::abs(effective_amp) <= 1e-6f) {
-        res.uv = pom_resolve_sample_uv(base_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u,
-                                       addr_v, inv_tex_size);
         if (debug_on) {
             res.applied = true;
             res.debug_color = {0.1f, 0.85f, 0.2f};
@@ -225,24 +227,30 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
         (dp2.y * duv1.x - dp1.y * duv2.x) / uv_det,
         (dp2.z * duv1.x - dp1.z * duv2.x) / uv_det,
     };
-    const float du_world = std::max(pom_length(dPdu), 1e-4f);
-    const float dv_world = std::max(pom_length(dPdv), 1e-4f);
-    const float handedness = uv_det < 0.0f ? -1.0f : 1.0f;
-
     const float ndotpdu = pom_dot(N, dPdu);
-    const PomVec3 T_unit =
-        pom_normalize({dPdu.x - N.x * ndotpdu, dPdu.y - N.y * ndotpdu, dPdu.z - N.z * ndotpdu});
-    const PomVec3 B_cross = pom_cross(N, T_unit);
-    const PomVec3 B_ortho{B_cross.x * handedness, B_cross.y * handedness, B_cross.z * handedness};
     const float ndotpdv = pom_dot(N, dPdv);
-    const PomVec3 B_proj{dPdv.x - N.x * ndotpdv, dPdv.y - N.y * ndotpdv, dPdv.z - N.z * ndotpdv};
-    PomVec3 B_unit = pom_dot(B_proj, B_proj) > 1e-12f ? pom_normalize(B_proj) : B_ortho;
-    if (pom_dot(pom_cross(T_unit, B_unit), N) * handedness < 0.0f) {
-        B_unit = {-B_unit.x, -B_unit.y, -B_unit.z};
+    const PomVec3 tangent_u{dPdu.x - N.x * ndotpdu, dPdu.y - N.y * ndotpdu,
+                            dPdu.z - N.z * ndotpdu};
+    const PomVec3 tangent_v{dPdv.x - N.x * ndotpdv, dPdv.y - N.y * ndotpdv,
+                            dPdv.z - N.z * ndotpdv};
+    const float metric_uu = pom_dot(tangent_u, tangent_u);
+    const float metric_uv = pom_dot(tangent_u, tangent_v);
+    const float metric_vv = pom_dot(tangent_v, tangent_v);
+    const float metric_det = metric_uu * metric_vv - metric_uv * metric_uv;
+    if (metric_det <= 1e-12f * metric_uu * metric_vv) {
+        if (debug_on) {
+            res.applied = true;
+            res.debug_color = {1.0f, 0.2f, 0.1f};
+        }
+        return res;
     }
 
-    const PomVec2 view_uv_per_world{pom_dot(V, T_unit) / du_world, pom_dot(V, B_unit) / dv_world};
-    const float scale_factor = -effective_amp / std::max(ndotv, 0.08f);
+    // Solve the reciprocal tangent basis, not independent projections (which shear skewed UVs).
+    const float view_u = pom_dot(V, tangent_u);
+    const float view_v = pom_dot(V, tangent_v);
+    const PomVec2 view_uv_per_world{(view_u * metric_vv - view_v * metric_uv) / metric_det,
+                                    (view_v * metric_uu - view_u * metric_uv) / metric_det};
+    const float scale_factor = effective_amp / std::max(ndotv, 0.08f);
     PomVec2 full_delta_uv{view_uv_per_world.x * scale_factor, view_uv_per_world.y * scale_factor};
     constexpr float max_uv_span = 0.125f;
     const float delta_len = pom_length(full_delta_uv);
@@ -258,19 +266,19 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
     const float step_size = 1.0f / static_cast<float>(num_steps);
 
     const float h_ref = std::clamp(sun.pom_params[1], 0.0f, 1.0f);
-    const float t_start = -h_ref;
-    const float t_end = 1.0f - h_ref;
-    const float t_span = t_end - t_start;
+    // Signed amplitudes change which normalized height is nearest the eye.
+    const float ray_start = effective_amp >= 0.0f ? 1.0f : 0.0f;
+    const float ray_direction = effective_amp >= 0.0f ? -1.0f : 1.0f;
 
     float prev_t = 0.0f;
     const PomVec2 prev_raw_uv{
-        base_uv.x + full_delta_uv.x * (t_end - prev_t * t_span),
-        base_uv.y + full_delta_uv.y * (t_end - prev_t * t_span),
+        base_uv.x + full_delta_uv.x * (ray_start - h_ref + prev_t * ray_direction),
+        base_uv.y + full_delta_uv.y * (ray_start - h_ref + prev_t * ray_direction),
     };
     const PomVec2 prev_sample_uv = pom_resolve_sample_uv(
         prev_raw_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u, addr_v, inv_tex_size);
     const float prev_tex_h = sample_height(prev_sample_uv);
-    float prev_diff = 1.0f - prev_tex_h;
+    float prev_diff = (ray_start - prev_tex_h) * -ray_direction;
 
     float curr_t = 0.0f;
     float curr_diff = prev_diff;
@@ -283,14 +291,14 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
             steps_taken = s;
             curr_t = static_cast<float>(s) * step_size;
             const PomVec2 raw_uv{
-                base_uv.x + full_delta_uv.x * (t_end - curr_t * t_span),
-                base_uv.y + full_delta_uv.y * (t_end - curr_t * t_span),
+                base_uv.x + full_delta_uv.x * (ray_start - h_ref + curr_t * ray_direction),
+                base_uv.y + full_delta_uv.y * (ray_start - h_ref + curr_t * ray_direction),
             };
             const PomVec2 sample_uv = pom_resolve_sample_uv(
                 raw_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u, addr_v, inv_tex_size);
-            const float ray_h = 1.0f - curr_t;
+            const float ray_h = ray_start + curr_t * ray_direction;
             const float tex_h = sample_height(sample_uv);
-            curr_diff = ray_h - tex_h;
+            curr_diff = (ray_h - tex_h) * -ray_direction;
             if (curr_diff <= 0.0f)
                 break;
             prev_t = curr_t;
@@ -310,14 +318,14 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
                                  ? std::clamp(t0 + d0 * (t1 - t0) / denom, t0, t1)
                                  : 0.5f * (t0 + t1);
             const PomVec2 raw_uv{
-                base_uv.x + full_delta_uv.x * (t_end - tm * t_span),
-                base_uv.y + full_delta_uv.y * (t_end - tm * t_span),
+                base_uv.x + full_delta_uv.x * (ray_start - h_ref + tm * ray_direction),
+                base_uv.y + full_delta_uv.y * (ray_start - h_ref + tm * ray_direction),
             };
             const PomVec2 sample_uv = pom_resolve_sample_uv(
                 raw_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u, addr_v, inv_tex_size);
-            const float ray_h = 1.0f - tm;
+            const float ray_h = ray_start + tm * ray_direction;
             const float tex_h = sample_height(sample_uv);
-            const float dm = ray_h - tex_h;
+            const float dm = (ray_h - tex_h) * -ray_direction;
             if (dm > 0.0f) {
                 t0 = tm;
                 d0 = dm;
@@ -330,14 +338,13 @@ inline PomEvalResult evaluate_pom(PomVec2 base_uv, PomVec3 world_pos, PomVec3 N,
     }
 
     const PomVec2 final_raw_uv{
-        base_uv.x + full_delta_uv.x * (t_end - best_t * t_span),
-        base_uv.y + full_delta_uv.y * (t_end - best_t * t_span),
+        base_uv.x + full_delta_uv.x * (ray_start - h_ref + best_t * ray_direction),
+        base_uv.y + full_delta_uv.y * (ray_start - h_ref + best_t * ray_direction),
     };
     res.applied = true;
     res.steps_taken = steps_taken;
     res.best_t = best_t;
-    res.uv = pom_resolve_sample_uv(final_raw_uv, sun.pom_uv_transform, sun.pom_atlas_rect, addr_u,
-                                   addr_v, inv_tex_size);
+    res.uv = final_raw_uv;
     if (debug_on) {
         const float step_ratio =
             static_cast<float>(steps_taken) / static_cast<float>(std::max(num_steps, 1));
