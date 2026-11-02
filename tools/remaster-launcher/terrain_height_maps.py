@@ -188,7 +188,7 @@ def derive_height_map(
     # Decoded tangent space normals: R=nx, G=ny, B=nz
     nx = (arr[..., 0].astype(np.float32) / 255.0) * 2.0 - 1.0
     ny = (arr[..., 1].astype(np.float32) / 255.0) * 2.0 - 1.0
-    nz = arr[..., 2].astype(np.float32) / 255.0
+    nz = (arr[..., 2].astype(np.float32) / 255.0) * 2.0 - 1.0
 
     length = np.sqrt(nx**2 + ny**2 + nz**2)
     length = np.maximum(length, 1e-6)
@@ -247,7 +247,7 @@ def evaluate_height_quality(
     n_arr = np.frombuffer(normal_rgba_bytes[: width * height * 4], dtype=np.uint8).reshape(height, width, 4)
     nx_orig = (n_arr[..., 0].astype(np.float32) / 255.0) * 2.0 - 1.0
     ny_orig = (n_arr[..., 1].astype(np.float32) / 255.0) * 2.0 - 1.0
-    nz_orig = n_arr[..., 2].astype(np.float32) / 255.0
+    nz_orig = (n_arr[..., 2].astype(np.float32) / 255.0) * 2.0 - 1.0
     len_orig = np.maximum(np.sqrt(nx_orig**2 + ny_orig**2 + nz_orig**2), 1e-6)
     nx_orig /= len_orig
     ny_orig /= len_orig
@@ -318,8 +318,6 @@ def build_region_terrain_sidecar(
 
     discovered_materials: dict[str, tuple[int, int, bytes]] = {}
     for page_path in normal_pages_paths:
-        if not page_path.exists():
-            continue
         bindings = read_surface_bindings(page_path.read_bytes())
         for key, normal in bindings:
             if normal is not None:
@@ -339,7 +337,7 @@ def build_region_terrain_sidecar(
     image_idx = 0
     for key, (w, h, normal_bytes) in sorted(discovered_materials.items(), key=lambda x: x[0]):
         if len(images) >= MAX_IMAGES:
-            break
+            raise ValueError("Terrain material count exceeds the sidecar image limit")
 
         # Resolve material name & color bytes
         w_col, h_col, fmt_col, dig = key
@@ -365,7 +363,7 @@ def build_region_terrain_sidecar(
 
         # Downsample oversized normals if requested
         if max_dimension > 0 and (w > max_dimension or h > max_dimension):
-            stride = max(w // max_dimension, h // max_dimension)
+            stride = max(math.ceil(w / max_dimension), math.ceil(h / max_dimension))
             if stride > 1:
                 arr = np.frombuffer(normal_bytes, dtype=np.uint8).reshape(h, w, 4)
                 arr = arr[::stride, ::stride].copy()
@@ -374,7 +372,7 @@ def build_region_terrain_sidecar(
 
         # Downsample oversized color if requested
         if color_bytes and max_dimension > 0 and (color_w > max_dimension or color_h > max_dimension):
-            c_stride = max(color_w // max_dimension, color_h // max_dimension)
+            c_stride = max(math.ceil(color_w / max_dimension), math.ceil(color_h / max_dimension))
             if c_stride > 1:
                 arr_c = np.frombuffer(color_bytes, dtype=np.uint8).reshape(color_h, color_w, 4)
                 arr_c = arr_c[::c_stride, ::c_stride].copy()
@@ -383,7 +381,7 @@ def build_region_terrain_sidecar(
 
         img_bytes_len = w * h * 4
         if total_image_bytes + img_bytes_len > max_sidecar_bytes - 1048576:
-            break
+            raise ValueError("Terrain materials exceed the requested sidecar byte budget")
 
         family = classify_material_family(mat_name)
         prof = FAMILY_PROFILES.get(family, FAMILY_PROFILES["default"]).copy()
@@ -489,25 +487,7 @@ def build_region_terrain_sidecar(
         image_idx += 1
 
     if not records:
-        # Generate at least one default record so the sidecar is valid
-        dummy_name = f"terrain_default_{region}"
-        batch_materials.append(dummy_name)
-        dummy_h = bytes([128, 128, 128, 255] * 16)
-        dummy_img = f"h_{dummy_name}"
-        images[dummy_img] = (ROLE_HEIGHT, 4, 4, dummy_h)
-        records.append({
-            "asset_id": region,
-            "material_name": dummy_name,
-            "height_image": dummy_img,
-            "height_reference": 0.5,
-            "height_amplitude": 0.35,
-            "max_displacement": 0.35,
-            "address_mode_u": ADDRESS_WRAP,
-            "address_mode_v": ADDRESS_WRAP,
-            "roughness": 0.75,
-            "reflectivity": 0.04,
-            "metallic": 0.0,
-        })
+        raise ValueError("No terrain normal materials were available for height derivation")
 
     sidecar_bytes = pack_surface_materials(
         asset_id=region,

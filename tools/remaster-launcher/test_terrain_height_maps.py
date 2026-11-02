@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
 try:
     import numpy as np
@@ -41,6 +42,42 @@ from normal_materials import uncached_pixel_hash
 
 @unittest.skipIf(np is None, "Terrain height-map derivation requires NumPy")
 class TerrainHeightMapsTests(unittest.TestCase):
+    def test_runtime_normal_decode(self):
+        rgba = bytes([192, 96, 160, 255] * 16)
+        with patch("terrain_height_maps.frankot_chellappa", return_value=np.zeros((4, 4))) as integrate:
+            derive_height_map(rgba, 4, 4)
+        nx, ny, nz = integrate.call_args.args
+        self.assertAlmostEqual(float(nx[0, 0] / nz[0, 0]), (192 * 2 - 255) / (160 * 2 - 255), places=5)
+        self.assertAlmostEqual(float(ny[0, 0] / nz[0, 0]), (96 * 2 - 255) / (160 * 2 - 255), places=5)
+
+    def test_missing_or_empty_normal_sources_fail(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(FileNotFoundError):
+                build_region_terrain_sidecar("training", [Path(temp_dir) / "missing.bin"])
+            with self.assertRaisesRegex(ValueError, "No terrain normal"):
+                build_region_terrain_sidecar("training", [])
+
+    def test_budget_does_not_silently_drop_materials(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            page = Path(temp_dir) / "normals.bin"
+            normal = (16, 16, bytes([128, 128, 255, 255] * 256))
+            page.write_bytes(pack_surface_bindings([
+                ((16, 16, 1, 123), normal), ((16, 16, 1, 124), normal)
+            ]))
+            with self.assertRaisesRegex(ValueError, "byte budget"):
+                build_region_terrain_sidecar("training", [page], max_sidecar_bytes=1048576 + 1024)
+
+    def test_nonmultiple_dimensions_are_capped(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            page = Path(temp_dir) / "normals.bin"
+            page.write_bytes(pack_surface_bindings([
+                ((24, 24, 1, 123), (24, 24, bytes([128, 128, 255, 255] * 24 * 24)))
+            ]))
+            sidecar, _ = build_region_terrain_sidecar("training", [page], max_dimension=16)
+            image = read_surface_materials(sidecar)["images"][0]
+            self.assertLessEqual(image["width"], 16)
+            self.assertLessEqual(image["height"], 16)
+
     def test_frankot_chellappa_synthetic_reconstruction(self):
         w, h = 64, 64
         x = np.arange(w)
