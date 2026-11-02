@@ -1,5 +1,5 @@
 import struct
-from unittest.mock import mock_open, patch
+from unittest.mock import call, mock_open, patch
 import unittest
 
 import surface_materials
@@ -102,12 +102,64 @@ class SurfaceMaterialsTest(unittest.TestCase):
             ["armor_hull", "canopy_glass"],
         )
 
+    def test_file_extractors_stream_payloads(self) -> None:
+        for extractor, payload in (
+            (surface_materials.mesh_uv_identity_file, _make_bwmesh1()),
+            (surface_materials.texture_batch_materials_file, _make_bwtex1()),
+        ):
+            with self.subTest(extractor=extractor.__name__):
+                stream = mock_open(read_data=payload).return_value
+                with patch.object(surface_materials.Path, "open", return_value=stream):
+                    extractor("payload.bin")
+                self.assertNotIn(call(), stream.read.call_args_list)
+                self.assertNotIn(call(-1), stream.read.call_args_list)
+
     def test_file_reader_limits_read_and_probes_for_overflow(self) -> None:
         stream = mock_open(read_data=b"x" * 32).return_value
         with patch.object(surface_materials.Path, "open", return_value=stream):
             with self.assertRaisesRegex(ValueError, "exceeds size budget"):
                 surface_materials.read_surface_materials_file("sidecar.bin", max_bytes=16)
         stream.read.assert_called_once_with(17)
+
+    def test_writer_accepts_more_than_legacy_image_limit(self) -> None:
+        materials = [f"material_{index:02d}" for index in range(33)]
+        images = {
+            f"height_{index:02d}": (surface_materials.ROLE_HEIGHT, 1, 1, b"\0\0\0\xff")
+            for index in range(33)
+        }
+        images.update(
+            {
+                f"thickness_{index:02d}": (
+                    surface_materials.ROLE_THICKNESS,
+                    1,
+                    1,
+                    b"\0\0\0\xff",
+                )
+                for index in range(32)
+            }
+        )
+        records = []
+        for index, material in enumerate(materials):
+            record = {
+                "asset_id": "community.test:mech:close",
+                "material_name": material,
+                "height_image": f"height_{index:02d}",
+            }
+            if index < 32:
+                record.update(
+                    thickness_image=f"thickness_{index:02d}",
+                    sss_participation=1.0,
+                )
+            records.append(record)
+        packed = surface_materials.pack_surface_materials(
+            asset_id="community.test:mech:close",
+            mesh_uv_hash=1,
+            batch_materials=materials,
+            records=records,
+            images=images,
+        )
+        self.assertEqual(struct.unpack_from("<I", packed, 20)[0], 65)
+        self.assertEqual(len(surface_materials.read_surface_materials(packed)["images"]), 65)
 
     def test_independent_byte_level_wire_oracle_and_round_trip(self) -> None:
         mesh_hash = 1335280070564434920

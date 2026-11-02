@@ -81,7 +81,7 @@ All multi-byte integers and IEEE-754 `binary32` floats are little-endian.
 | `8` | `uint32` | `version` | Must be `1` |
 | `12` | `uint32` | `batch_count` | `1..4096`; must match mesh/albedo batch count |
 | `16` | `uint32` | `record_count` | `0..4096` |
-| `20` | `uint32` | `image_count` | `0..64` |
+| `20` | `uint32` | `image_count` | `0..512` |
 | `24` | `uint64` | `mesh_uv_hash` | 64-bit FNV-1a compatibility digest of the bound mesh/UV payload |
 
 ### 2. Batch binding table (`batch_count * 4` bytes)
@@ -143,10 +143,10 @@ with `role == 2` (`THICKNESS`).
 
 - Maximum material records per sidecar: `4096`
 - Maximum batch bindings per sidecar: `4096`
-- Maximum images per sidecar: `64`
+- Maximum images per sidecar: `512`
 - Maximum UTF-8 bytes per identifier: `4096`
 - Maximum total sidecar size and decoded image byte budget per sidecar:
-  `64 MiB` (`67,108,864` bytes). Both the Python and C++ readers check all
+  `256 MiB` (`268,435,456` bytes). Both the Python and C++ readers check all
   length products (`width * height * 4` and cumulative bytes) before allocating
   buffers.
 - Truncated streams, trailing bytes after the last image, duplicate `(asset_id,

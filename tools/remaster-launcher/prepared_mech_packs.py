@@ -112,9 +112,9 @@ def compose(roots, host, verification=None, chassis_records=None):
         from surface_materials import (
             CAPABILITY as SURFACE_CAPABILITY,
             FORMAT as SURFACE_FORMAT,
-            mesh_uv_identity,
+            mesh_uv_identity_file,
             read_surface_materials_file,
-            texture_batch_materials,
+            texture_batch_materials_file,
         )
         require(host, payload, ident)
         formats = {"BWTEX1"}
@@ -216,8 +216,8 @@ def compose(roots, host, verification=None, chassis_records=None):
                 read_surface_materials_file(
                     Path(resolved[surf_key]),
                     expected_asset_id=f"{ident}:{lod}",
-                    expected_mesh_uv_hash=mesh_uv_identity(Path(resolved[mesh_key]).read_bytes()),
-                    expected_batch_materials=texture_batch_materials(Path(resolved[tex_key]).read_bytes()),
+                    expected_mesh_uv_hash=mesh_uv_identity_file(Path(resolved[mesh_key])),
+                    expected_batch_materials=texture_batch_materials_file(Path(resolved[tex_key])),
                 )
             if ident not in selected:
                 selected[ident] = dict(id=ident, name=model["name"], status=model["status"], backend="native",

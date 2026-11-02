@@ -92,7 +92,16 @@ def mesh_uv_identity(mesh_bytes: bytes) -> int:
     """
     if not isinstance(mesh_bytes, (bytes, bytearray)) or len(mesh_bytes) < 12:
         raise ValueError("Invalid mesh payload for UV identity")
-    stream = io.BytesIO(mesh_bytes)
+    return _mesh_uv_identity(io.BytesIO(mesh_bytes))
+
+
+def mesh_uv_identity_file(path: Path) -> int:
+    """Compute a mesh/UV identity without loading the complete payload."""
+    with Path(path).open("rb") as stream:
+        return _mesh_uv_identity(stream)
+
+
+def _mesh_uv_identity(stream) -> int:
 
     def take(size: int) -> bytes:
         chunk = stream.read(size)
@@ -158,7 +167,16 @@ def texture_batch_materials(texture_bytes: bytes) -> list[str]:
     """Extract the ordered per-batch material names from a validated BWTEX1 payload."""
     if not isinstance(texture_bytes, (bytes, bytearray)) or len(texture_bytes) < 16:
         raise ValueError("Invalid BWTEX1 payload")
-    stream = io.BytesIO(texture_bytes)
+    return _texture_batch_materials(io.BytesIO(texture_bytes))
+
+
+def texture_batch_materials_file(path: Path) -> list[str]:
+    """Extract material names without loading the complete texture payload."""
+    with Path(path).open("rb") as stream:
+        return _texture_batch_materials(stream)
+
+
+def _texture_batch_materials(stream) -> list[str]:
 
     def take(size: int) -> bytes:
         chunk = stream.read(size)
@@ -185,7 +203,10 @@ def texture_batch_materials(texture_bytes: bytes) -> list[str]:
         width, height, _hash = struct.unpack("<IIQ", take(16))
         if not 1 <= width <= MAX_DIMENSION or not 1 <= height <= MAX_DIMENSION:
             raise ValueError("Invalid BWTEX1 dimensions")
-        take(width * height * 2)
+        remaining = width * height * 2
+        while remaining:
+            chunk = take(min(remaining, 1024 * 1024))
+            remaining -= len(chunk)
         names.append(name)
     if stream.read(1):
         raise ValueError("Trailing BWTEX1 data")
@@ -474,7 +495,7 @@ def pack_surface_materials(
         out.extend(raw_pixels)
 
     if len(out) > MAX_SIDECAR_BYTES:
-        raise ValueError("Surface material sidecar exceeds 64 MiB limit")
+        raise ValueError("Surface material sidecar exceeds 256 MiB limit")
     return bytes(out)
 
 

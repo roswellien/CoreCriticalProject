@@ -85,9 +85,9 @@ def select(metadata, host, verification=None):
     from surface_materials import (
         CAPABILITY as SURFACE_CAPABILITY,
         FORMAT as SURFACE_FORMAT,
-        mesh_uv_identity,
+        mesh_uv_identity_file,
         read_surface_materials_file,
-        texture_batch_materials,
+        texture_batch_materials_file,
     )
     allowed_format_lists = (
         ['BWMESH4', 'BWTEX1'],
@@ -242,8 +242,8 @@ def select(metadata, host, verification=None):
                     read_surface_materials_file(
                         Path(verified[name]),
                         expected_asset_id=f'{ident}:{lod}',
-                        expected_mesh_uv_hash=mesh_uv_identity(Path(visual[lod]['mesh']).read_bytes()),
-                        expected_batch_materials=texture_batch_materials(Path(visual[lod]['textures']).read_bytes()),
+                        expected_mesh_uv_hash=mesh_uv_identity_file(Path(visual[lod]['mesh'])),
+                        expected_batch_materials=texture_batch_materials_file(Path(visual[lod]['textures'])),
                     )
                     selected['surface_materials'][lod] = verified[name]
                     used.add(name)

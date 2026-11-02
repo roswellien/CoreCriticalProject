@@ -253,7 +253,7 @@ public static class ChassisPack
                 {
                     var surfPath = Verify(surfaceMaterials.GetProperty(lod).GetString() ?? "", "BWSFM1");
                     var surfLen = new FileInfo(surfPath).Length;
-                    if (surfLen is < 36 or > 64L * 1024 * 1024)
+                    if (surfLen is < 36 or > 256L * 1024 * 1024)
                         throw new InvalidDataException("Chassis surface-material sidecar size is out of bounds.");
                     using var surfStream = File.OpenRead(surfPath);
                     using var surfReader = new BinaryReader(surfStream);
@@ -262,7 +262,7 @@ public static class ChassisPack
                     var batches = surfReader.ReadUInt32();
                     var records = surfReader.ReadUInt32();
                     var images = surfReader.ReadUInt32();
-                    if (version != 1 || batches is < 1 or > 4096 || records > 4096 || images > 64 ||
+                    if (version != 1 || batches is < 1 or > 4096 || records > 4096 || images > 512 ||
                         surfLen < 32L + batches * 4L)
                         throw new InvalidDataException("Invalid BWSFM1 header in chassis pack.");
                 }
