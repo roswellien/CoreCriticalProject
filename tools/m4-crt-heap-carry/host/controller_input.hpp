@@ -41,7 +41,7 @@ class Input {
     const char* (*serial)(void*){}; const char* (*path)(void*){}; Guid (*guid)(unsigned){};
     static std::string string(const char* p){return p?p:"";}
 public:
-    Config config; State state;
+    Config config; State state; Sample sample;
     std::unique_ptr<VirtualTest> diagnostic;
     Input(const std::wstring& config_path,const std::wstring& library_path) {
         const auto cp=std::filesystem::path(config_path),lp=std::filesystem::path(library_path);
@@ -90,7 +90,7 @@ public:
             } catch(...) {free_memory(ids);throw;}
             free_memory(ids);
         }
-        Sample sample;sample.connected=pad&&attached(pad);sample.focused=focused;
+        sample={};sample.connected=pad&&attached(pad);sample.focused=focused;
         if(sample.connected){for(int i=0;i<6;++i)sample.axes[i]=axis(pad,i);for(int i=0;i<26;++i)sample.buttons[i]=button(pad,i);}
         state.update(config,sample);
     }

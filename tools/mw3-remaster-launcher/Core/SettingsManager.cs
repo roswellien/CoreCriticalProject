@@ -23,6 +23,7 @@ namespace MW3RemasterLauncher.Core
         public int CdAudioVolume { get; set; } = 80;
         public bool InstantReplay { get; set; } = false;
         public bool PerformanceMonitor { get; set; } = false;
+        public bool Headlights { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
         public string DirectInputJoystickInstanceGuid { get; set; } = string.Empty;

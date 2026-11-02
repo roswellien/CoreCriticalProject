@@ -8,6 +8,7 @@ import unittest
 
 from build_chassis_pack import build
 from prepared_chassis_packs import CAPABILITY, CATALOG_KEY, REGISTRY, definition, prepare, select, _banks
+from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
 from reader_archive import _directory
 from zrd_document import decode, encode
 
@@ -38,6 +39,30 @@ class ChassisPackTests(unittest.TestCase):
         self.pack = self.root / 'built/pack'
         self.manifest = json.loads((self.pack / 'pack.json').read_text())
 
+    def test_headlight_project_build_select_and_capability(self):
+        lamp = dict(id='torso', space='guest_node', attachment='torso', position=[1,2,3],
+                    direction=[0,0,-2], color=[1,1,1], intensity=2, range=50,
+                    inner_angle=15, outer_angle=30)
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                project = self.legacy_project()[0] if legacy else self.root / 'project.json'
+                data = json.loads(project.read_text())
+                data['chassis'][0]['headlights'] = [lamp]
+                project.write_text(json.dumps(data))
+                output = self.root / ('lamp-legacy' if legacy else 'lamp-prepared')
+                build(project, output)
+                manifest = json.loads((output/'pack/pack.json').read_text())
+                self.assertEqual(manifest['native_payload']['required_capabilities']['mech-headlights'], 1)
+                host = dict(content_capabilities={CAPABILITY:[1,2,3]})
+                if legacy:
+                    host['content_capabilities'][SKIN_CAPABILITY] = [1]
+                with self.assertRaisesRegex(ValueError, 'mech-headlights'):
+                    select([(output/'pack',manifest)],host)
+                host['content_capabilities']['mech-headlights'] = [1]
+                records = select([(output/'pack',manifest)],host)
+                actual = records[0]['registration']['headlights'][0]
+                self.assertEqual(actual, dict(lamp, direction=[0,0,-1]))
+
     def selected(self):
         return select([(self.pack, self.manifest)], self.host)
 
@@ -58,6 +83,137 @@ class ChassisPackTests(unittest.TestCase):
         self.assertTrue(selected[0]['registration']['resource'].startswith('c'))
         self.assertEqual(self.selected(), selected)
         self.assertNotIn('signature', self.manifest)
+
+    def legacy_project(self):
+        """Small authored resources; no original game bytes in these fixtures."""
+        from chassis_icons import MAGIC, image
+        node = bytearray(352)
+        node[:36] = b'mech_example.flt'.ljust(36, b'\0')
+        struct.pack_into('<I', node, 36, 0x200)
+        struct.pack_into('<I', node, 52, 5)
+        struct.pack_into('<I', node, 60, 1)
+        mesh = bytearray(92)
+        struct.pack_into('<5I', mesh, 16, 1, 3, 0, 0, 0)
+        polygon = struct.pack('<9I', 3, 0, 0, 0, 0, 0, 0, 0, 0)
+        geometry = bytes(node + mesh) + bytes(36) + polygon + struct.pack('<3I', 0, 1, 2) + bytes(36)
+        definition = [['max_mass', [100.0], 'weight_class', ['assault'], 'clan', ['false'],
+                       'effect', ['exampleConcrete']]]
+        files = {
+            'node.bin': geometry,
+            'material.bin': struct.pack('<I', 1) + bytes(40),
+            'legacy-definition.zrd': encode(definition),
+            'animation.zrd': encode([['ANIMATION', ['exampleConcrete']]]),
+            'motion.bin': (struct.pack('<IfIIffI', 4, 1.0, 1, 1, -1.0, 1.0, 3)
+                           + b'hip' + struct.pack('<I14f', 12, *([0.0] * 14))),
+            'image.bin': image(bytes([255]) * 2050, (0, 255, 0)),
+            'icon.bin': MAGIC + struct.pack('<II', 41, 50) + bytes([255]) * 2050,
+        }
+        for name, data in files.items():
+            (self.root / name).write_bytes(data)
+        descriptor = dict(schema_version=1, resource='example',
+                          definition='legacy-definition.zrd', materials='material.bin',
+                          silhouette='icon.bin', models=dict.fromkeys(('close', 'distance', 'cockpit'), 'node.bin'),
+                          motions={'example_walk': 'motion.bin'},
+                          animations={'example_prints.zrd': 'animation.zrd'},
+                          textures={'example_skin': 'image.bin'})
+        (self.root / 'legacy.json').write_text(json.dumps(descriptor))
+        project = dict(pack_id='community.legacy', name='Legacy', version='1.0.0', chassis=[dict(
+            id='mech', name='Example', metadata_template='annihilator', legacy='legacy.json')])
+        path = self.root / 'legacy-project.json'
+        path.write_text(json.dumps(project))
+        return path, descriptor, definition
+
+    def test_legacy_pack_requires_capability_and_preserves_stock_resources(self):
+        from legacy_chassis_resources import image_members, members
+        from prepared_mech_packs import compose
+        project, descriptor, definition = self.legacy_project()
+        build(project, self.root / 'legacy-built')
+        pack = self.root / 'legacy-built/pack'
+        manifest = json.loads((pack / 'pack.json').read_text())
+        with self.assertRaisesRegex(ValueError, 'Update the game runtime'):
+            select([(pack, manifest)], self.host)
+        records = []
+        models, environment = compose([str(pack)], dict(content_capabilities={CAPABILITY: [1, 2, 3]}),
+                                      chassis_records=records)
+        self.assertEqual(models, [])
+        self.assertNotIn('visuals', records[0]['registration'])
+        directory = self.root / 'legacy-game/zbd'
+        directory.mkdir(parents=True)
+        common = encode([['ANIMATION_DEFINITIONS', ['ANIMATION_LIST', ['ANIMATION_DEFINITION_FILE', ['stock.zrd']]]]])
+        stock = {'reader.zbd': archive({'dfn_annihilator.zrd': encode(definition), 'commonAnim.zrd': common}),
+                 'mechlib.zbd': archive({'materials': (self.root / 'material.bin').read_bytes(), 'stock.flt': b'unchanged'}),
+                 'motion.zbd': archive({'stock_walk': b'unchanged motion'})}
+        pixels = (self.root / 'image.bin').read_bytes()
+        image_bank = struct.pack('<6I', 0, 1, 0, 1, 0, 0) + struct.pack('<32sII', b'stock', 64, 0xffffffff) + pixels
+        stock.update({'rmechtex.zbd': image_bank, 'rimage.zbd': image_bank})
+        for name, data in stock.items():
+            (directory / name).write_bytes(data)
+        bindings = prepare(records, directory.parent / 'Mech3.exe', self.root / 'legacy-out', environment)
+        banks = _banks(bindings['MW34_REMASTER_BANKS'])
+        generated = records[0]['registration']['resource']
+        for name, data in stock.items():
+            self.assertEqual((directory / name).read_bytes(), data)
+            after = Path(banks['zbd/' + name]).read_bytes()
+            if name in ('rimage.zbd', 'rmechtex.zbd'):
+                self.assertEqual(image_members(after)['stock'], image_members(data)['stock'])
+            else:
+                for key, content in members(data).items():
+                    if key not in ('materials', 'commonanim.zrd'):
+                        self.assertEqual(members(after)[key], content)
+        reader = members(Path(banks['zbd/reader.zbd']).read_bytes())
+        motions = members(Path(banks['zbd/motion.zbd']).read_bytes())
+        self.assertEqual(motions[generated + '_walk'], (self.root / 'motion.bin').read_bytes())
+        library = members(Path(banks['zbd/mechlib.zbd']).read_bytes())
+        model = library['mech_' + generated + '.flt']
+        self.assertEqual(struct.unpack_from('<I', model, 352 + 92 + 36 + 28)[0], 1)
+        self.assertIn('commonanim.zrd', reader)
+        self.assertIn(generated + 'Concrete', str(decode(reader['dfn_' + generated + '.zrd'])))
+        self.assertIn(('icon_' + generated + '_green'), image_members(Path(banks['zbd/rimage.zbd']).read_bytes()))
+
+    def test_legacy_parser_rejects_malformed_payloads_and_undeclared_files(self):
+        from legacy_chassis_resources import load, model, rewrite_archive
+        _, descriptor, _ = self.legacy_project()
+        originals = {path: (self.root / path).read_bytes()
+                     for path in ('node.bin', 'material.bin', 'motion.bin', 'image.bin', 'icon.bin')}
+        for path in originals:
+            with self.subTest(payload=path):
+                (self.root / path).write_bytes(originals[path][:-1])
+                with self.assertRaises((ValueError, struct.error)):
+                    load(descriptor, lambda name: (self.root / name).read_bytes())
+                (self.root / path).write_bytes(originals[path])
+        node = bytearray(originals['node.bin'][:352])
+        struct.pack_into('<I', node, 36, 0x200)
+        struct.pack_into('<I', node, 60, 1)
+        mesh = bytearray(92)
+        struct.pack_into('<I', mesh, 20, 100)
+        with self.assertRaisesRegex(ValueError, 'mesh vectors'):
+            model(bytes(node + mesh), 1)
+        bad_normals = bytearray(originals['node.bin'])
+        polygon_offset = 352 + 92 + 36
+        struct.pack_into('<I', bad_normals, polygon_offset, 0x203)
+        indices_end = polygon_offset + 36 + 12
+        bad_normals[indices_end:indices_end] = struct.pack('<3I', *([0xffffffff] * 3))
+        with self.assertRaisesRegex(ValueError, 'normal index'):
+            model(bytes(bad_normals), 1)
+        with self.assertRaisesRegex(ValueError, 'Colliding'):
+            rewrite_archive(archive({'Stock': b'x'}), {'stock': b'y'})
+        from prepare_legacy_chassis import source_members
+        bank = bytearray(archive({'Stock': b'x'}))
+        struct.pack_into('<I', bank, len(bank) - 12, 2)
+        source = self.root / 'source.zbd'
+        source.write_bytes(bank)
+        self.assertEqual(source_members(source, 'mw'), {'stock': b'x'})
+        source.write_bytes(bank[:-8] + struct.pack('<III', 2, 1, 0))
+        self.assertEqual(source_members(source, 'pm'), {'stock': b'x'})
+        for collision in ('example', 'example_walk', 'EXAMPLE_WALK'):
+            duplicate = copy.deepcopy(descriptor)
+            duplicate['textures'][collision] = 'image.bin'
+            with self.assertRaisesRegex(ValueError, 'Colliding'):
+                load(duplicate, lambda name: (self.root / name).read_bytes())
+        descriptor['models']['close'] = '../escape.bin'
+        (self.root / 'legacy.json').write_text(json.dumps(descriptor))
+        with self.assertRaises(ValueError):
+            build(self.root / 'legacy-project.json', self.root / 'unsafe-legacy')
 
     def test_silhouette_pack_requires_new_host_and_composes_named_images(self):
         from chassis_icons import MAGIC, image
@@ -206,6 +362,72 @@ class ChassisPackTests(unittest.TestCase):
         environment = json.loads(Path(command[command.index('-Profile')+1]).read_text())['native']['runtime_environment']
         self.assertTrue(Path(environment[CATALOG_KEY]).is_file())
         self.assertEqual(len(_banks(environment['MW34_REMASTER_BANKS'])),2)
+
+    def test_additional_chassis_surface_materials_build_select_prepare_and_invalidation(self):
+        import surface_materials
+        mesh_out = bytearray(b'BWMESH4\0' + struct.pack('<IIII', 1, 1, 1, 0))
+        mesh_out.extend(struct.pack('<5d', 1.0, 2.0, 3.0, 0.25, 0.5))
+        mesh_out.extend(b'root'.ljust(32, b'\0') + b''.ljust(32, b'\0') + struct.pack('<i', -1))
+        mesh_out.extend(struct.pack('<16f', 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) * 2)
+        mesh_out.extend(b'torso'.ljust(32, b'\0'))
+        mesh_out.extend(struct.pack('<16f', 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) * 2)
+        mesh_out.extend(b'torso'.ljust(32, b'\0') + b'torso'.ljust(32, b'\0'))
+        mesh_out.extend(struct.pack('<III', 0, 3, 0xFFFFFFFF))
+        for idx in range(3):
+            mesh_out.extend(struct.pack('<8f', float(idx), 0.0, 0.0, 0.0, 0.0, 1.0, 0.25 * idx, 0.5 * idx))
+        tex_out = bytearray(b'BWTEX1\0\0' + struct.pack('<III', 1, 1, 0))
+        tex_out.extend(b'armor_hull'.ljust(32, b'\0') + struct.pack('<IIQ', 1, 1, 0) + b'\x00\x7c')
+        mesh_hash = surface_materials.mesh_uv_identity(bytes(mesh_out))
+        sfm_close = surface_materials.pack_surface_materials(
+            asset_id='community.surface:mech:close',
+            mesh_uv_hash=mesh_hash,
+            batch_materials=['armor_hull'],
+            records=[{'asset_id': 'community.surface:mech:close', 'material_name': 'armor_hull'}],
+        )
+        sfm_dist = surface_materials.pack_surface_materials(
+            asset_id='community.surface:mech:distance',
+            mesh_uv_hash=mesh_hash,
+            batch_materials=['armor_hull'],
+            records=[{'asset_id': 'community.surface:mech:distance', 'material_name': 'armor_hull'}],
+        )
+        (self.root / 'sfm-mesh.bin').write_bytes(bytes(mesh_out))
+        (self.root / 'sfm-tex.bin').write_bytes(bytes(tex_out))
+        (self.root / 'sfm-close.bin').write_bytes(sfm_close)
+        (self.root / 'sfm-dist.bin').write_bytes(sfm_dist)
+        project = dict(
+            pack_id='community.surface',
+            name='Surface chassis',
+            version='1.0.0',
+            chassis=[dict(
+                id='mech',
+                name='Surface Mech',
+                metadata_template='orion',
+                controller='madcat',
+                definition='definition.json',
+                meshes=dict(close='sfm-mesh.bin', distance='sfm-mesh.bin'),
+                textures=dict(close='sfm-tex.bin', distance='sfm-tex.bin'),
+                surface_materials=dict(close='sfm-close.bin', distance='sfm-dist.bin'),
+            )],
+        )
+        project_path = self.root / 'surface-project.json'
+        project_path.write_text(json.dumps(project))
+        build(project_path, self.root / 'surface-built')
+        pack = self.root / 'surface-built/pack'
+        manifest = json.loads((pack / 'pack.json').read_text())
+        self.assertEqual(manifest['native_payload']['required_capabilities']['surface-materials'], 1)
+        self.assertIn('BWSFM1', manifest['native_payload']['required_formats'])
+
+        with self.assertRaisesRegex(ValueError, 'surface-materials'):
+            select([(pack, manifest)], self.host)
+
+        host = dict(content_capabilities={CAPABILITY: [1], 'surface-materials': [1]}, runtime_environment={})
+        records = select([(pack, manifest)], host)
+        self.assertIn('surface_materials', records[0])
+        game = self.game()
+        bindings = prepare(records, game, self.root / 'surface-prepared', {})
+        resource_upper = records[0]['registration']['resource'].upper()
+        self.assertTrue(Path(bindings[f'MW34_CHASSIS_{resource_upper}_SURFACE_MATERIALS']).is_file())
+        self.assertTrue(Path(bindings[f'MW34_CHASSIS_{resource_upper}_LOD1_SURFACE_MATERIALS']).is_file())
 
 
 if __name__ == '__main__':

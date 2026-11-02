@@ -82,6 +82,20 @@ def definition(document, original):
 def select(metadata, host, verification=None):
     from prepared_mech_packs import read_json, resolve
     from content_capabilities import require
+    from surface_materials import (
+        CAPABILITY as SURFACE_CAPABILITY,
+        FORMAT as SURFACE_FORMAT,
+        mesh_uv_identity_file,
+        read_surface_materials_file,
+        texture_batch_materials_file,
+    )
+    allowed_format_lists = (
+        ['BWMESH4', 'BWTEX1'],
+        ['BWMESH4', 'BWTEX1', 'MW3ICON1'],
+        ['BWMESH4', 'BWTEX1', SURFACE_FORMAT],
+        ['BWMESH4', 'BWTEX1', 'MW3ICON1', SURFACE_FORMAT],
+        ['MW3LEGACY'],
+    )
     result, ids = [], set()
     for root, manifest in metadata:
         payload = manifest.get('native_payload', {})
@@ -90,9 +104,12 @@ def select(metadata, host, verification=None):
         require(host, payload, manifest['id'])
         if (manifest.get('schema_version') != 2 or manifest.get('game_id') != 'mw3'
                 or payload.get('registry') != REGISTRY or payload.get('path_base') != 'pack-root'
-                or payload.get('required_formats') not in (['BWMESH4', 'BWTEX1'], ['BWMESH4', 'BWTEX1', 'MW3ICON1'])
+                or payload.get('required_formats') not in allowed_format_lists
                 or manifest.get('dependencies') or manifest.get('conflicts')):
             raise ValueError('Unsupported additional chassis pack contract')
+        if (SURFACE_FORMAT in payload.get('required_formats', [])
+                and payload.get('required_capabilities', {}).get(SURFACE_CAPABILITY) != 1):
+            raise ValueError('Surface material format requires surface-materials capability version 1')
         files = manifest.get('files')
         if not isinstance(files, dict) or not 1 <= len(files) <= 1025:
             raise ValueError('Missing or excessive chassis file table')
@@ -118,7 +135,7 @@ def select(metadata, host, verification=None):
                 raise ValueError('Chassis integrity failure: ' + name)
             fmt = pin.get('format')
             if fmt is not None:
-                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1'):
+                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1', SURFACE_FORMAT):
                     raise ValueError('Unsupported chassis payload format')
                 with path.open('rb') as stream:
                     if stream.read(8) != fmt.encode().ljust(8, b'\0'):
@@ -133,7 +150,34 @@ def select(metadata, host, verification=None):
             raise ValueError('Unsupported chassis registry')
         used = {REGISTRY}
         for row in records:
-            if not isinstance(row, dict) or not FIELDS <= set(row) or set(row) - FIELDS - {'silhouette', 'base_skin_name', 'sockets'}:
+            if payload.get('required_formats') == ['MW3LEGACY']:
+                from legacy_chassis_resources import load
+                if (not isinstance(row, dict) or set(row) - {'headlights'} != {'id', 'name', 'metadata_template', 'legacy'}
+                        or payload.get('required_capabilities', {}).get(CAPABILITY) != 3):
+                    raise ValueError('Legacy chassis resources require version 3 and exact fields')
+                ident = row['id']
+                if not isinstance(ident, str) or not ident.startswith(manifest['id'] + ':') or ident in ids:
+                    raise ValueError('Duplicate or unowned legacy chassis identity')
+                record = dict(id=ident, name=row['name'], metadata_template=row['metadata_template'],
+                              resource='c' + hashlib.sha256(ident.encode()).hexdigest()[:12])
+                _headlights(row, record, payload)
+                encode_catalog([record])
+                def legacy_read(name):
+                    if not isinstance(name, str) or name not in verified or files[name].get('format') is not None:
+                        raise ValueError('Undeclared legacy chassis resource')
+                    used.add(name)
+                    return Path(verified[name]).read_bytes()
+                legacy_read(row['legacy'])
+                document = read_json(Path(verified[row['legacy']]))
+                from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
+                if (document.get('schema_version') == 2
+                        and payload.get('required_capabilities', {}).get(SKIN_CAPABILITY) != 1):
+                    raise ValueError('Legacy skin descriptor requires legacy-mech-skins version 1')
+                result.append(dict(registration=record, legacy=load(document, legacy_read)))
+                ids.add(ident)
+                continue
+            if (not isinstance(row, dict) or not FIELDS <= set(row)
+                    or set(row) - FIELDS - {'silhouette', 'base_skin_name', 'sockets', 'headlights', 'surface_materials'}):
                 raise ValueError('Invalid chassis registry fields')
             ident = row['id']
             if not isinstance(ident, str) or not ident.startswith(manifest['id'] + ':') or ident in ids:
@@ -172,6 +216,7 @@ def select(metadata, host, verification=None):
                 if payload.get('required_capabilities', {}).get(CAPABILITY, 0) < 2:
                     raise ValueError('Chassis sockets require chassis version 2')
                 record['sockets'] = row['sockets']
+            _headlights(row, record, payload)
             encode_catalog([record])  # Shared wire validation; pack cannot supply runtime IDs or commands.
             selected = dict(registration=record, definition=document)
             if 'silhouette' in row:
@@ -183,6 +228,25 @@ def select(metadata, host, verification=None):
                     raise ValueError('Undeclared silhouette or missing chassis version 2 requirement')
                 mask(Path(verified[name]).read_bytes())
                 selected['silhouette'] = verified[name]; used.add(name)
+            if 'surface_materials' in row:
+                surfaces = row['surface_materials']
+                if (not isinstance(surfaces, dict) or set(surfaces) != {'close', 'distance'}
+                        or payload.get('required_capabilities', {}).get(SURFACE_CAPABILITY) != 1
+                        or SURFACE_FORMAT not in payload['required_formats']):
+                    raise ValueError('Undeclared surface materials or missing surface-materials version 1 requirement')
+                selected['surface_materials'] = {}
+                for lod in ('close', 'distance'):
+                    name = surfaces[lod]
+                    if not isinstance(name, str) or name not in verified or files[name].get('format') != SURFACE_FORMAT:
+                        raise ValueError('Undeclared chassis surface-material resource')
+                    read_surface_materials_file(
+                        Path(verified[name]),
+                        expected_asset_id=f'{ident}:{lod}',
+                        expected_mesh_uv_hash=mesh_uv_identity_file(Path(visual[lod]['mesh'])),
+                        expected_batch_materials=texture_batch_materials_file(Path(visual[lod]['textures'])),
+                    )
+                    selected['surface_materials'][lod] = verified[name]
+                    used.add(name)
             result.append(selected)
             ids.add(ident)
         if used != set(files) or set(manifest.get('provides', {}).get('mechs', [])) != {r['id'] for r in records}:
@@ -231,7 +295,12 @@ def prepare(records, game_exe, output, environment):
         blob = path.read_bytes(); _, directory = _directory(blob)
         sources[archive] = (blob, {name: blob[offset:offset + size] for name, offset, size, _ in directory})
     definitions, models, registrations = {}, {}, []
+    legacy_records = []
     for item in records:
+        if 'legacy' in item:
+            legacy_records.append(item)
+            registrations.append(item['registration'])
+            continue
         record, document = item['registration'], item['definition']
         controller, resource = document['template'], record['resource']
         original = sources['reader.zbd'][1]['dfn_' + controller + '.zrd']
@@ -258,11 +327,20 @@ def prepare(records, game_exe, output, environment):
             models[new] = (bytes(data), old)
         registrations.append(record)
     for archive, additions in [('reader.zbd', definitions), ('mechlib.zbd', models)]:
+        if not additions:
+            continue
         path = output / archive
         path.write_bytes(add_members(sources[archive][0], additions))
         banks['zbd/' + archive] = str(path.resolve())
+    if legacy_records:
+        from legacy_chassis_resources import compose
+        legacy_output = output / 'legacy'
+        legacy_output.mkdir()
+        banks = compose(legacy_records, banks, Path(game_exe).resolve().parent, legacy_output)
     silhouettes = {item['registration']['resource']: Path(item['silhouette']).read_bytes()
                    for item in records if 'silhouette' in item}
+    silhouettes.update({item['registration']['resource']: item['legacy']['silhouette']
+                        for item in legacy_records})
     if silhouettes:
         from chassis_icons import append_icons
         source = Path(banks.get('zbd/rimage.zbd', Path(game_exe).resolve().parent / 'zbd/rimage.zbd'))
@@ -275,4 +353,23 @@ def prepare(records, game_exe, output, environment):
     for key, value in sorted(banks.items()):
         a, b = key.encode(), value.encode(); data += struct.pack('<II', len(a), len(b)) + a + b
     mapping = output / 'banks.bin'; mapping.write_bytes(data)
-    return {CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())}
+    bindings = {CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())}
+    for item in records:
+        if 'surface_materials' not in item:
+            continue
+        record = item['registration']
+        prefix = 'MW34_CHASSIS_' + record['resource'].upper()
+        for lod, suffix in (('close', '_SURFACE_MATERIALS'), ('distance', '_LOD1_SURFACE_MATERIALS')):
+            bindings[prefix + suffix] = str(Path(item['surface_materials'][lod]).resolve())
+    return bindings
+
+
+def _headlights(row, record, payload):
+    if 'headlights' not in row:
+        return
+    from chassis_catalog import validate_headlights
+    lights = validate_headlights(row['headlights'], 'visuals' in record)
+    if lights and (payload.get('required_capabilities', {}).get('mech-headlights') != 1
+                   or payload.get('required_capabilities', {}).get(CAPABILITY, 0) < 2):
+        raise ValueError('Headlights require mech-headlights version 1 and chassis version 2 or newer')
+    record['headlights'] = lights

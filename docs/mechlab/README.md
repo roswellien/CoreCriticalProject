@@ -19,7 +19,7 @@ Format:
 
 Supported formatting: a single # title, plain paragraphs, ## and ### headings, and - bullet lists. Raw HTML is displayed as text. Inline Markdown links, emphasis, images, and tables are not interpreted; use plain prose and bullets.
 
-Push the note to main. The Publish MechLab updates workflow copies only dated files from this directory into the website's public summary dataset. The website builds the latest three summaries into the homepage and all summaries into /news and /updates/YYYY-MM-DD. Corrections to a dated note update the same page. A source link identifies the most recent main-branch commit that changed the note.
+Submit each dated note in a task branch pull request to develop. After review, it reaches the live website through a separate develop-to-main release pull request; merging into main triggers the Cloudflare Pages build, which reads the notes from this directory. The website builds the latest three summaries into the homepage and all summaries into /news and /updates/YYYY-MM-DD. Corrections to a dated note update the same page. A source link identifies the most recent main-branch commit that changed the note.
 
 Ordinary game commits do not create website entries. Other session summaries, private evidence, game files, and commit bodies are not scanned or published. Keep secrets, private paths, original media, and unreviewed claims out of these notes. Read the repository's distribution policy before adding public material.
 

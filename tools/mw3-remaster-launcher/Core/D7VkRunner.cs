@@ -237,8 +237,11 @@ namespace MW3RemasterLauncher.Core
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
                 CreateNoWindow = true
             };
+            psi.Environment["PYTHONIOENCODING"] = "utf-8";
 
             var session = Path.Combine(_dataRoot, "sessions", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(session);

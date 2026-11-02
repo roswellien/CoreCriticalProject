@@ -27,6 +27,8 @@ class PreparedPackTests(unittest.TestCase):
         files = {}
         bindings = {}
         for key in packs.MODEL_KEYS["orion"]:
+            if key in packs.SURFACE_KEYS["orion"]:
+                continue
             if key in packs.SKIN_KEYS['orion'] and not any('_SKIN_'+s.upper()+'_' in key for s in skins):continue
             fmt = "BWNRM2" if key.endswith("_NORMALS") else "BWTEX1" if key.endswith("_TEXTURES") else "BWMESH2"
             relative = "payload/" + key + ".bin"
@@ -140,6 +142,115 @@ class PreparedPackTests(unittest.TestCase):
         self.assertEqual(planned["models"], [])
         self.assertEqual(planned["texture_banks"], 0)
         self.assertNotIn("MW34_ORION_MESH", planned["prepared_profile"]["native"]["runtime_environment"])
+
+    def test_optional_surface_materials_validate_compatibility_and_capability(self):
+        import struct
+        import surface_materials
+        root = self.build("surface")
+        mesh_bytes = bytearray(b"BWMESH2\0" + struct.pack("<I", 1))
+        mesh_bytes.extend(b"torso".ljust(32, b"\0") + b"torso".ljust(32, b"\0"))
+        mesh_bytes.extend(struct.pack("<II", 3, 0xFFFFFFFF))
+        for idx in range(3):
+            mesh_bytes.extend(struct.pack("<8f", float(idx), 0.0, 0.0, 0.0, 0.0, 1.0, 0.25 * idx, 0.5 * idx))
+        tex_bytes = bytearray(b"BWTEX1\0\0" + struct.pack("<III", 1, 1, 0))
+        tex_bytes.extend(b"armor_hull".ljust(32, b"\0") + struct.pack("<IIQ", 1, 1, 0) + b"\x00\x7c")
+        mesh_hash = surface_materials.mesh_uv_identity(bytes(mesh_bytes))
+        sfm_close = surface_materials.pack_surface_materials(
+            asset_id="orion:close",
+            mesh_uv_hash=mesh_hash,
+            batch_materials=["armor_hull"],
+            records=[{"asset_id": "orion:close", "material_name": "armor_hull"}],
+        )
+        sfm_dist = surface_materials.pack_surface_materials(
+            asset_id="orion:distance",
+            mesh_uv_hash=mesh_hash,
+            batch_materials=["armor_hull"],
+            records=[{"asset_id": "orion:distance", "material_name": "armor_hull"}],
+        )
+        manifest = json.loads((root / "pack.json").read_text())
+        registry = json.loads((root / "models/models.json").read_text())
+        for key, raw, fmt in [
+            ("MW34_ORION_MESH", bytes(mesh_bytes), "BWMESH2"),
+            ("MW34_ORION_LOD1_MESH", bytes(mesh_bytes), "BWMESH2"),
+            ("MW34_ORION_TEXTURES", bytes(tex_bytes), "BWTEX1"),
+            ("MW34_ORION_LOD1_TEXTURES", bytes(tex_bytes), "BWTEX1"),
+            ("MW34_ORION_SURFACE_MATERIALS", sfm_close, "BWSFM1"),
+            ("MW34_ORION_LOD1_SURFACE_MATERIALS", sfm_dist, "BWSFM1"),
+        ]:
+            rel = "payload/" + key + ".bin"
+            (root / rel).write_bytes(raw)
+            manifest["files"][rel] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), format=fmt)
+            registry["models"][0]["environment"][key] = rel
+        registry["models"][0]["required_formats"] = ["BWMESH2", "BWTEX1", "BWNRM2", "BWSFM1"]
+        reg_bytes = json.dumps(registry).encode()
+        (root / "models/models.json").write_bytes(reg_bytes)
+        manifest["files"]["models/models.json"] = dict(bytes=len(reg_bytes), sha256=hashlib.sha256(reg_bytes).hexdigest())
+        manifest["native_payload"]["required_formats"] = ["BWMESH2", "BWTEX1", "BWNRM2", "BWSFM1"]
+        manifest["native_payload"]["required_capabilities"] = {"surface-materials": 1}
+        (root / "pack.json").write_text(json.dumps(manifest))
+
+        # Old host without surface-materials capability must reject the pack.
+        with self.assertRaises(ValueError):
+            packs.compose([str(root)], self.host)
+
+        host = copy.deepcopy(self.host)
+        host["content_capabilities"]["surface-materials"] = [1]
+        models, env = packs.compose([str(root)], host)
+        self.assertEqual(len(models), 1)
+        self.assertIn("MW34_ORION_SURFACE_MATERIALS", env)
+        self.assertIn("MW34_ORION_LOD1_SURFACE_MATERIALS", env)
+
+        # Appearance switch: a higher-precedence pack without surface materials
+        # replaces Orion's appearance without inheriting earlier surface bindings.
+        plain_root = self.build("plain-override")
+        models_switch, env_switch = packs.compose([str(plain_root), str(root)], host)
+        self.assertEqual(len(models_switch), 1)
+        self.assertTrue(Path(env_switch["MW34_ORION_MESH"]).is_relative_to(plain_root))
+        self.assertNotIn("MW34_ORION_SURFACE_MATERIALS", env_switch)
+        self.assertNotIn("MW34_ORION_LOD1_SURFACE_MATERIALS", env_switch)
+
+        # Startup cache invalidation: VerificationCache reuses unchanged BWSFM1
+        # sidecars and re-hashes immediately when BWSFM1 bytes change.
+        import startup_cache
+        cache_dir = self.root / "cache-out"
+        cache1 = startup_cache.VerificationCache(cache_dir)
+        packs.compose([str(root)], host, verification=cache1)
+        cache1.save()
+        self.assertGreater(cache1.hashed, 0)
+        cache2 = startup_cache.VerificationCache(cache_dir)
+        packs.compose([str(root)], host, verification=cache2)
+        self.assertEqual(cache2.hashed, 0)
+        self.assertGreater(cache2.reused, 0)
+
+        sfm_alt = surface_materials.pack_surface_materials(
+            asset_id="orion:close",
+            mesh_uv_hash=mesh_hash,
+            batch_materials=["armor_hull"],
+            records=[{"asset_id": "orion:close", "material_name": "armor_hull", "height_reference": 0.25}],
+        )
+        (root / "payload/MW34_ORION_SURFACE_MATERIALS.bin").write_bytes(sfm_alt)
+        manifest["files"]["payload/MW34_ORION_SURFACE_MATERIALS.bin"] = dict(
+            bytes=len(sfm_alt),
+            sha256=hashlib.sha256(sfm_alt).hexdigest(),
+            format="BWSFM1",
+        )
+        (root / "pack.json").write_text(json.dumps(manifest))
+        cache3 = startup_cache.VerificationCache(cache_dir)
+        packs.compose([str(root)], host, verification=cache3)
+        self.assertEqual(cache3.hashed, 1)
+
+        # Changing the close mesh UV layout invalidates the surface-material binding.
+        altered_mesh = bytearray(mesh_bytes)
+        altered_mesh[-4:] = struct.pack("<f", 0.875)
+        (root / "payload/MW34_ORION_MESH.bin").write_bytes(bytes(altered_mesh))
+        manifest["files"]["payload/MW34_ORION_MESH.bin"] = dict(
+            bytes=len(altered_mesh),
+            sha256=hashlib.sha256(bytes(altered_mesh)).hexdigest(),
+            format="BWMESH2",
+        )
+        (root / "pack.json").write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, "hash mismatch"):
+            packs.compose([str(root)], host)
 
 
 if __name__ == "__main__":

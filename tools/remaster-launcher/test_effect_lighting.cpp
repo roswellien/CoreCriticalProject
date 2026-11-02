@@ -59,12 +59,14 @@ int main(){try{
  contracts();_putenv_s("MW34_GPU_MODELS","1");_putenv_s("MW34_SUN","1");_putenv_s("MW34_SUN_STRENGTH","0");_putenv_s("MW34_SUN_AMBIENT","0.05");_putenv_s("MW34_SKY_AUTO","0");
  _putenv_s("MW34_REMASTER_WIDTH","");_putenv_s("MW34_REMASTER_HEIGHT","");_putenv_s("MW34_REMASTER_AA","");_putenv_s("MW34_REMASTER_AF","");
  Renderer renderer;
- auto render=[&](Point location,bool hud=false,bool normal=false,bool beam=false,int spot=0){
+ auto render=[&](Point location,bool hud=false,bool normal=false,bool beam=false,int spot=0,bool authored=false){
   auto s=receiver();s.hud=hud;
   if(normal){TextureRef texture{};texture.key=2;texture.hash=2;texture.width=texture.height=1;texture.format=TexFormat::rgba8888;texture.pixels32={0xff8080ff};s.textures.push_back(texture);s.draws[0].normal_texture=0;}
   s.effect_lights.params[0]=1;auto&l=s.effect_lights.lights[0];l.start={location[0],location[1],location[2],5};l.end={location[0],location[1],location[2],0};l.color={1,0,0,2};
   if(beam){l.start[0]=-8;l.end[0]=8;l.end[3]=1;}
   if(spot)l.end={0,0,spot>0?-1.f:1.f,2};
+  if(authored){s.effect_lights.cones[0]={.98f,.94f,1,0};if(spot==2)l.end={.70710678f,0,-.70710678f,2};}
+  if(spot==3)s.effect_lights.cones[0]={.94f,.94f,1,0};
   renderer.render(s);return s.color[32*64+32];
  };
  auto dark=render({0,0,100}),red=render({0,0,4}),back=render({0,0,0});
@@ -74,6 +76,10 @@ int main(){try{
  require((render({0,0,4},false,false,true)>>11)>(dark>>11)+8,"Capsule illuminates beam midpoint beyond endpoint radii");
  require((render({0,0,4},false,false,false,1)>>11)>(dark>>11)+8,"Spotlight illuminates receiver inside its cone");
  require(render({0,0,4},false,false,false,-1)==dark,"Spotlight rejects receiver behind its cone");
+ require((render({0,0,4},false,false,false,1,true)>>11)>(dark>>11)+8,"Authored headlight cone lights receiver");
+ require((render({0,0,4},false,false,false,3,true)>>11)>(dark>>11)+8,"Equal cone cosines use a defined hard cutoff");
+ require(render({0,0,4},false,false,false,2,true)==dark,"Authored headlight excludes outside cone");
+ require(render({0,0,100},false,false,false,1,true)==dark,"Authored headlight range cutoff");
  require(render({0,0,4},true)==render({0,0,100},true),"HUD excluded from local illumination");
  require(render({0,0,4},false,true)!=red,"Normal-map relief changes local-light response");
  require(render({0,0,100})==dark,"Light list replacement leaves no stale light");

@@ -43,11 +43,12 @@ are in `tools/style/.venv/bin`.
 ## Running it
 
 ```powershell
-python tools/style/check_style.py                      # counts for every language
-python tools/style/check_style.py --language python    # one language
-python tools/style/check_style.py --verbose            # also list each file or finding
-python tools/style/check_style.py --list               # which files each language checks
-python tools/style/check_style.py --fix                # format languages that are switched on
+python tools/style/check_style.py                                # counts for every language
+python tools/style/check_style.py --language python              # one language
+python tools/style/check_style.py --preflight --language python  # pre-cleanup safety checks
+python tools/style/check_style.py --verbose                      # also list each file or finding
+python tools/style/check_style.py --list                         # which files each language checks
+python tools/style/check_style.py --fix                          # format languages that are switched on
 ```
 
 Exit codes: 0 when nothing switched on has findings, 1 when a switched-on check has
@@ -58,14 +59,22 @@ findings, 2 when a checker is missing, the wrong version or crashed.
 Each language gets one cleanup PR for layout and, for Python and PowerShell, a later one
 for lint findings. Never mix a cleanup with other changes. Steps:
 
-1. List scripts in that language that record their own SHA-256 and are checked against a
-   stored copy (search for `__file__` next to `sha256`). Leave them out of the cleanup,
-   or update the stored hash in the same PR with the owner's OK.
+1. Run the pre-cleanup safety checks and handle every hit:
+   `python tools/style/check_style.py --preflight --language <language>`.
+   Digest-only hits are candidates, not proof of a path-specific pin; verify the
+   associated path before changing a stored hash. Dynamic inventories may report
+   every target, or every target with a matching suffix, for manual review. An
+   unreadable input makes preflight exit with an error instead of reporting an
+   incomplete scan.
+   For stored-hash hits, leave those files out of the cleanup by adding them to
+   `exclude.txt`, or update the stored hashes and duplicate files in the same PR with
+   the owner's approval. For text-read hits, check whether the callers depend on exact
+   bytes or templates and exclude or adapt them.
 2. Add the check to `ENFORCED` in `check_style.py`, for example `"python": {"format"}`.
    That is the only switch; the CI workflow needs no edit.
 3. Run `python tools/style/check_style.py --fix --language <language>`.
-4. Prove nothing but layout changed (CONTRIBUTING.md asks for AST or token equivalence),
-   then build and run every test the changed files touch.
+4. Prove nothing but layout changed (cleanups require AST or token equivalence between
+   the original and formatted files), then build and run every test the changed files touch.
 5. Commit, then add that commit's hash to `.git-blame-ignore-revs` in a second commit so
    GitHub's blame view skips it.
 

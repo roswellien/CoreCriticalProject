@@ -11,7 +11,11 @@ import struct
 from pathlib import Path
 
 from prepared_mech_packs import canonical_pack_root, read_json, resolve
-from normal_materials import read_surface_bindings, pack_surface_bindings
+from normal_materials import (
+    DecodedSurfaceBudgetExceeded,
+    pack_surface_bindings,
+    read_surface_bindings,
+)
 
 PROFILE = 'prepared-environment-v1'
 REGISTRY = 'environment/environment.json'
@@ -21,6 +25,12 @@ RESOURCE_KEYS = {'MW34_REMASTER_BANKS', 'MW34_WORLD_NORMALS', 'MW34_SURFACE_NORM
                  'MW34_EFFECT_LIGHT_CATALOG', 'MW34_WATER_NORMALS',
                  'MW34_SURF_NORMALS', 'MW34_CLOUD_NORMALS', 'MW34_MISSION_ENVIRONMENTS'}
 MAX_BYTES = 16 * 1024**3
+AUTHORED_CATALOG_BYTES = 1536 * 1024**2
+WORLD_CATALOG_BYTES = 4096 * 1024**2
+WORLD_PAGE_BYTES = 16 * 1024**2
+MERGED_NORMAL_DECODED_BYTES = 240 * 1024**2
+REGION_PRIORITY = {'operation1': 0, 'operation2': 1, 'operation3': 2,
+                   'operation4': 3, 'training': 4, 'shared-mechs': 5}
 
 
 def sha(path):
@@ -33,24 +43,163 @@ def encode_normal_pages(entries, *, world=False):
     groups={}
     for key,value in entries: groups.setdefault(value,[]).append(key)
     batch=[]; images=set(); size=0; count=0; total=0
-    limit=8*1024**2 if world else 128*1024**2
+    limit=128*1024**2
+
+    def emit(page):
+        nonlocal count,total
+        data=pack_surface_bindings(page,compressed=world)
+        if world and len(data)>WORLD_PAGE_BYTES:
+            if len(page)<=1: raise ValueError('One normal binding exceeds native page byte budget')
+            middle=len(page)//2
+            yield from emit(page[:middle]);yield from emit(page[middle:])
+            return
+        if dict(read_surface_bindings(data))!=dict(page):raise ValueError('Normal round-trip mismatch')
+        count+=1;total+=len(data)
+        yield data
     for value,keys in groups.items():
         image_bytes=0 if value is None else len(value[2])
         if image_bytes>limit: raise ValueError('Normal image exceeds page budget')
         for key in sorted(keys):
             extra=0 if value in images else image_bytes
             if batch and (len(batch)>=256 or len(images | {value})>64 or size+extra>limit):
-                data=pack_surface_bindings(batch);count+=1;total+=len(data)
-                if dict(read_surface_bindings(data))!=dict(batch):raise ValueError('Normal round-trip mismatch')
-                yield data
+                yield from emit(batch)
                 batch=[];images=set();size=0;extra=image_bytes
             batch.append((key,value));images.add(value);size+=extra
     if batch:
-        data=pack_surface_bindings(batch);count+=1;total+=len(data)
-        if dict(read_surface_bindings(data))!=dict(batch):raise ValueError('Normal round-trip mismatch')
-        yield data
-    if count>(256 if world else 16) or total>512*1024**2:
+        yield from emit(batch)
+    if count>(256 if world else 16) or total>(WORLD_CATALOG_BYTES if world else AUTHORED_CATALOG_BYTES):
         raise ValueError('Normal catalog exceeds native count/byte budget')
+
+
+def write_merged_normal_catalog(selected, role, output):
+    """Merge installed pages with bounded decoded memory, writing each page immediately."""
+    world=role=='world'; page_limit=WORLD_PAGE_BYTES if world else 256*1024**2
+    catalog_limit=WORLD_CATALOG_BYTES if world else AUTHORED_CATALOG_BYTES
+    decoded_limit=MERGED_NORMAL_DECODED_BYTES
+    from normal_codec import encode as encode_normal
+    seen_keys={}; batch=[]; images={}; encoded_sizes={}; page_encoded=0
+    decoded=0; total=0; names=[]; conflicts=0; pending_checks=[]
+
+    def signatures(entries):
+        return [
+            (key,None if value is None else
+             (value[0],value[1],hashlib.sha256(value[2]).digest()))
+            for key,value in entries
+        ]
+
+    def page_bytes(entries):
+        data=pack_surface_bindings(entries,compressed=world,cache_hashes=False)
+        unique_images={value for _,value in entries if value is not None}
+        decoded_bytes=sum(len(value[2]) for value in unique_images)
+        largest_image=max((len(value[2]) for value in unique_images),default=0)
+        decoder_peak=decoded_bytes+2*largest_image if world else decoded_bytes
+        if len(data)>page_limit or decoder_peak>decoded_limit:
+            if len(entries)<=1:
+                raise ValueError('One normal binding exceeds native page or decoded working budget')
+            middle=len(entries)//2
+            yield from page_bytes(entries[:middle]);yield from page_bytes(entries[middle:])
+            return
+        yield data,signatures(entries)
+
+    def emit(entries):
+        nonlocal total
+        for data,expected in page_bytes(entries):
+            total+=len(data)
+            if total>catalog_limit or len(names)>=(256 if world else 16):
+                raise ValueError('Normal catalog exceeds native count/byte budget')
+            name=f'{role}-{len(names)}.bin'
+            (output/name).write_bytes(data); names.append(name)
+            pending_checks.append((output/name,expected))
+
+    def verify_pending():
+        while pending_checks:
+            path,expected=pending_checks.pop(0)
+            actual=read_surface_bindings(
+                path.read_bytes(),
+                max_decoded_bytes=decoded_limit,
+                max_working_bytes=decoded_limit,
+                cache_hashes=False,
+            )
+            actual_signatures=signatures(actual)
+            del actual
+            if actual_signatures!=expected:
+                raise ValueError('Normal page full-pixel roundtrip failed')
+
+    ordered=sorted(selected.items(),key=lambda item:(REGION_PRIORITY.get(item[0],99),item[0]))
+    for _region,pack in ordered:
+        registry=pack['registry']; paths=pack['paths']
+        for name in registry.get(role,[]):
+            source_data=Path(paths[name]).read_bytes()
+            try:
+                entries=read_surface_bindings(
+                    source_data,
+                    max_decoded_bytes=decoded_limit-decoded,
+                    max_working_bytes=decoded_limit,
+                    retained_decoded_bytes=decoded,
+                    cache_hashes=False,
+                )
+            except DecodedSurfaceBudgetExceeded:
+                if not batch:
+                    raise
+                emit(batch);batch=[];images={};page_encoded=0;decoded=0
+                verify_pending()
+                entries=read_surface_bindings(
+                    source_data,
+                    max_decoded_bytes=decoded_limit,
+                    max_working_bytes=decoded_limit,
+                    cache_hashes=False,
+                )
+            page_signatures={}
+            for key,value in entries:
+                value_id=id(value)
+                if value_id not in page_signatures:
+                    page_signatures[value_id]=(None if value is None else
+                                               (value[0],value[1],hashlib.sha256(value[2]).digest()))
+                signature=page_signatures[value_id]
+                previous=seen_keys.get(key)
+                if key in seen_keys:
+                    if previous!=signature:
+                        # One exact source identity can be referenced by several
+                        # campaigns. Keep the first map in fixed campaign order.
+                        conflicts+=1
+                    continue
+                seen_keys[key]=signature
+                image_id=signature
+                image_bytes=0 if value is None else len(value[2])
+                new_image=value is not None and image_id not in images
+                encoded_bytes=0
+                if world and new_image:
+                    if image_id not in encoded_sizes:
+                        encoded_sizes[image_id]=len(encode_normal(value[2]))
+                    encoded_bytes=encoded_sizes[image_id]
+                projected=(28+56*(len(batch)+1)+56*(len(images)+int(new_image))+
+                           page_encoded+encoded_bytes)
+                if batch and (
+                    len(batch)>=256 or (value is not None and len(images)>=64) or
+                    decoded+image_bytes>decoded_limit or
+                    (world and projected>page_limit)
+                ):
+                    emit(batch);batch=[];images={};page_encoded=0;decoded=0
+                    new_image=value is not None
+                    encoded_bytes=encoded_sizes.get(image_id,0) if world else 0
+                    projected=28+56+56*int(new_image)+encoded_bytes
+                if world and projected>page_limit:
+                    raise ValueError('One normal binding exceeds native page byte budget')
+                if new_image:
+                    images[image_id]=value;decoded+=image_bytes;page_encoded+=encoded_bytes
+                elif value is not None:
+                    value=images[image_id]
+                batch.append((key,value))
+                if len(batch)>=256:
+                    emit(batch);batch=[];images={};page_encoded=0;decoded=0
+            del value
+            del entries
+            if not batch:
+                verify_pending()
+    if batch:
+        emit(batch);batch=[];images={};decoded=0
+    verify_pending()
+    return names,total,conflicts
 
 
 def select(roots, host, verification=None):
@@ -71,7 +220,7 @@ def select(roots, host, verification=None):
             raise ValueError('Environment pack dependencies/conflicts are unsupported')
         from content_capabilities import require
         require(host, payload, ident)
-        formats = {'ZBD-texture-v1','BWSNR2','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1'}
+        formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1'}
         if not set(payload.get('required_formats',[])).issubset(formats):
             raise ValueError('Unsupported environment resource format')
         files = manifest.get('files',{}); total = 0; seen = {'pack.json'}
@@ -90,7 +239,7 @@ def select(roots, host, verification=None):
             fmt=pin.get('format')
             if fmt:
                 with path.open('rb') as stream: magic=stream.read(24)
-                expected={'BWSNR2':b'BWSNR2\0\0','MWFX1':b'MWFX1\0\0\0','MW34SNA1':b'MW34SNA1','MW34SNP1':b'MW34SNP1'}
+                expected={'BWSNR2':b'BWSNR2\0\0','BWSNR3':b'BWSNR3\0\0','MWFX1':b'MWFX1\0\0\0','MW34SNA1':b'MW34SNA1','MW34SNP1':b'MW34SNP1'}
                 if fmt=='ZBD-texture-v1':
                     if len(magic)!=24 or struct.unpack('<3I',magic[:12])!=(0,1,0): raise ValueError('Invalid texture bank')
                 elif fmt != 'MW34-lighting-v1' and (fmt not in expected or not magic.startswith(expected[fmt])): raise ValueError('Mislabeled environment payload')
@@ -132,6 +281,11 @@ def select(roots, host, verification=None):
         for role in ['authored','world']:
             pages=registry.get(role,[])
             if not isinstance(pages,list) or not 0<len(pages)<=(16 if role=='authored' else 256): raise ValueError('Invalid normal page list')
+            page_bytes=sum(files[p]['bytes'] for p in pages if p in files)
+            if page_bytes>(AUTHORED_CATALOG_BYTES if role=='authored' else WORLD_CATALOG_BYTES):
+                raise ValueError('Normal catalog exceeds native byte budget')
+            if role=='world' and any(files[p]['bytes']>WORLD_PAGE_BYTES for p in pages if p in files):
+                raise ValueError('World normal page exceeds native byte budget')
             references.update(pages)
         for role in ['effects','authored_manifest','world_manifest']:
             references.add(registry.get(role,''))
@@ -150,7 +304,8 @@ def select(roots, host, verification=None):
             page_names=registry[role]
             if text!=[magic,*[str(Path(p).relative_to('environment')).replace('\\','/') for p in page_names]]:
                 raise ValueError('Normal manifest differs from declared pages')
-            if any(files[p].get('format')!='BWSNR2' for p in page_names): raise ValueError('Invalid normal page declaration')
+            allowed_page_formats={'BWSNR2','BWSNR3'} if role=='world' else {'BWSNR2'}
+            if any(files[p].get('format') not in allowed_page_formats for p in page_names): raise ValueError('Invalid normal page declaration')
         selected.setdefault(region,dict(root=str(root),registry=registry,paths=paths,files=files,lighting=lighting))
     common={}
     for pack in selected.values():
@@ -201,27 +356,19 @@ def detail_metadata(selected):
 def prepare(selected, host, output):
     """Write fresh per-launch bank and merged normal indices; never edit packs."""
     output=Path(output); output.mkdir(parents=True,exist_ok=False)
-    environment=profile_bindings(selected,host); bankmap={}; catalogs={'authored':{},'world':{}}
+    environment=profile_bindings(selected,host); bankmap={}
     for pack in selected.values():
         registry=pack['registry'];paths=pack['paths']
         for key,name in registry['banks'].items(): bankmap[key]=paths[name]
-        for role in catalogs:
-            for name in registry.get(role,[]):
-                for key,value in read_surface_bindings(Path(paths[name]).read_bytes()):
-                    if key in catalogs[role] and catalogs[role][key]!=value:
-                        raise ValueError('Conflicting installed normal images')
-                    catalogs[role][key]=value
     data=bytearray(b'MWBANK1\0'+struct.pack('<I',len(bankmap)))
     for key,path in sorted(bankmap.items()):
         a=key.encode();b=path.encode();data+=struct.pack('<II',len(a),len(b))+a+b
     if bankmap:
         (output/'texture-banks.bin').write_bytes(data)
         environment['MW34_REMASTER_BANKS']=str((output/'texture-banks.bin').resolve())
-    for role,entries in catalogs.items():
-        names=[];items=sorted(entries.items());total=0
-        for index,data in enumerate(encode_normal_pages(items,world=role=='world')):
-            path=output/f'{role}-{index}.bin';total+=len(data);path.write_bytes(data);names.append(path.name)
-        if role=='authored' and total>host.get('authored_normal_catalog_budget_bytes',536870912):
+    for role in ('authored','world'):
+        names,total,_conflicts=write_merged_normal_catalog(selected,role,output)
+        if role=='authored' and total>host.get('authored_normal_catalog_budget_bytes',AUTHORED_CATALOG_BYTES):
             raise ValueError('Installed authored normal catalog exceeds native budget')
         if not names: continue
         path=output/(role+'.txt');path.write_text(('MW34SNA1' if role=='authored' else 'MW34SNP1')+'\n'+'\n'.join(names)+'\n')

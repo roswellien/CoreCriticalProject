@@ -52,6 +52,7 @@ unsigned chassis_call(unsigned target, unsigned object, std::initializer_list<un
     } catch (...) { state = saved; throw; }
 }
 void chassis_cleanup() {
+    headlight_clear();
     additional_chassis.actor_roots.clear();
     for (auto& r : additional_chassis.records) {
         if (r.definition) {

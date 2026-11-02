@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 
 #include <algorithm>
 #include <array>
@@ -482,7 +483,15 @@ struct ReplayViewportState {
     std::array<std::uint32_t, 11> words{};
 };
 
+// Bounded host presentation metadata, never native pointers or graphics handles.
+struct ReplayHeadlightState {
+    std::uint32_t actor{}, root{}, chassis{}, desired{};
+    std::uint64_t generation{};
+    float intensity{};
+    std::uint32_t retired_mask{};
+};
 struct ReplayFrameRecord {
+    std::vector<ReplayHeadlightState> headlights;
     std::uint32_t frame_index{};
     std::uint32_t guest_tick_ms{};
     float mission_time_sec{};
@@ -710,7 +719,7 @@ public:
         auto wr_u64 = [&](std::uint64_t v) { wr(&v, 8); };
         auto wr_f32 = [&](float v) { wr(&v, 4); };
 
-        const char magic[8] = {'M', 'W', '3', 'R', 'P', 'L', 'Y', '3'};
+        const char magic[8] = {'M', 'W', '3', 'R', 'P', 'L', 'Y', '4'};
         wr(magic, 8);
         wr_u32(static_cast<std::uint32_t>(tracked_pages_.size()));
         wr_u32(static_cast<std::uint32_t>(frames_.size()));
@@ -779,6 +788,12 @@ public:
 
             wr_u32(static_cast<std::uint32_t>(f.orbit_targets.size()));
             if (!f.orbit_targets.empty()) wr(f.orbit_targets.data(), f.orbit_targets.size() * sizeof(OrbitTargetSample));
+            if (f.headlights.size() > 1024) return false;
+            wr_u32(static_cast<std::uint32_t>(f.headlights.size()));
+            for (const auto& lamp : f.headlights) {
+                wr_u32(lamp.actor); wr_u32(lamp.root); wr_u32(lamp.chassis); wr_u32(lamp.desired);
+                wr_u64(lamp.generation); wr_f32(lamp.intensity); wr_u32(lamp.retired_mask);
+            }
         }
 
         return static_cast<bool>(out);
@@ -796,7 +811,9 @@ public:
         auto rd_f32 = [&](float& v) { return rd(&v, 4); };
 
         char magic[8]{};
-        if (!rd(magic, 8) || std::memcmp(magic, "MW3RPLY3", 8) != 0) return false;
+        if (!rd(magic, 8)) return false;
+        const bool headlights = std::memcmp(magic, "MW3RPLY4", 8) == 0;
+        if (!headlights && std::memcmp(magic, "MW3RPLY3", 8) != 0) return false;
 
         std::uint32_t num_pages = 0, num_frames = 0, num_cps = 0;
         if (!rd_u32(num_pages) || !rd_u32(num_frames) || !rd_u32(num_cps)) return false;
@@ -903,6 +920,20 @@ public:
             if (n_ot > 0 && !rd(f.orbit_targets.data(), std::size_t(n_ot) * sizeof(OrbitTargetSample))) {
                 clear();
                 return false;
+            }
+            if (headlights) {
+                std::uint32_t count{};
+                if (!rd_u32(count) || count > 1024) { clear(); return false; }
+                f.headlights.resize(count);
+                std::set<std::uint32_t> actors;
+                for (auto& lamp : f.headlights) {
+                    if (!rd_u32(lamp.actor) || !rd_u32(lamp.root) || !rd_u32(lamp.chassis) ||
+                        !rd_u32(lamp.desired) || !rd_u64(lamp.generation) || !rd_f32(lamp.intensity) ||
+                        !rd_u32(lamp.retired_mask) || lamp.retired_mask > 255 ||
+                        !lamp.actor || !lamp.root || !lamp.generation || lamp.chassis >= 128 || lamp.desired > 1 ||
+                        !std::isfinite(lamp.intensity) || lamp.intensity < 0 || lamp.intensity > 1 ||
+                        !actors.insert(lamp.actor).second) { clear(); return false; }
+                }
             }
         }
 

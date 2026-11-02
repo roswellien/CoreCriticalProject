@@ -22,6 +22,12 @@ games/mw3/mod-tools/editor/web/static/js/three.min.js
 games/mw3/mod-tools/editor/web/static/js/OrbitControls.js
 games/mw3/mod-tools/editor/web/static/js/TransformControls.js
 
+# Pages whose build scripts find their data placeholders by exact text, so formatting
+# breaks them. Remove these lines when issue #44 lands.
+tools/weapon-effects-lab/preview.html
+tools/weapon-effects-lab/comparison.html
+tools/weapon-effects-lab/sprite_lighting.html
+
 # Generated files.
 recomp/generated/
 *_vert.h

@@ -13,7 +13,8 @@ public static class PlaytestDiagnostics
     public const int MaxLogBytes = 64 * 1024;
 
     public static object CreateCrashReport(LauncherSettings settings, IEnumerable<PackManifest> packs,
-        string? launchLog, string applicationRoot, string? runtimeVersion = null, int? exitCode = null)
+        string? launchLog, string applicationRoot, string? runtimeVersion = null, int? exitCode = null,
+        HardwareInventoryData? hardwareInventory = null)
     {
         var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
@@ -41,6 +42,7 @@ public static class PlaytestDiagnostics
             os = RuntimeInformation.OSDescription,
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             dotnet_runtime = RuntimeInformation.FrameworkDescription,
+            hardware = hardwareInventory ?? HardwareInventory.Capture(),
             failure_summary = failureSummary,
             settings = settings.EngineMode == "d7vk"
                 ? (object)new { settings.D7VkResolution, settings.D7VkAntiAliasing,
@@ -92,19 +94,20 @@ public static class PlaytestDiagnostics
 
     public static string Redact(string text, params string[] privateRoots)
     {
+        // Replace complete path tokens before substituting known roots, or a
+        // replaced root prefix could leave the remainder of a path visible.
+        text = Regex.Replace(text, @"\b[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
+        text = Regex.Replace(text, @"\\\\[^\r\n\t""<>|]+", "<network-path>");
         foreach (var root in privateRoots.Where(root => !string.IsNullOrWhiteSpace(root)).OrderByDescending(root => root.Length))
         {
             text = text.Replace(root, "<local-path>", StringComparison.OrdinalIgnoreCase);
             text = text.Replace(root.Replace('\\', '/'), "<local-path>", StringComparison.OrdinalIgnoreCase);
         }
-        // Source/runtime paths can point outside the known user and project roots.
-        text = Regex.Replace(text, @"\b[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
-        text = Regex.Replace(text, @"\\\\[^\s\""<>|]+", "<network-path>");
         return text;
     }
 
     public static void Export(string destination, LauncherSettings settings, IEnumerable<PackManifest> packs,
-        string? launchLog, string applicationRoot)
+        string? launchLog, string applicationRoot, HardwareInventoryData? hardwareInventory = null)
     {
         // No profiles, settings files, saves, archives, media, dumps or recursive directory walks.
         var report = new
@@ -115,11 +118,12 @@ public static class PlaytestDiagnostics
             os = RuntimeInformation.OSDescription,
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             dotnet_runtime = RuntimeInformation.FrameworkDescription,
+            hardware = hardwareInventory ?? HardwareInventory.Capture(),
             settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
                 settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
                 settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor },
             packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
-            note = "Review this local report before sharing. Includes selected settings, pack metadata and redacted log tails only."
+            note = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory and redacted log tails."
         };
         var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };

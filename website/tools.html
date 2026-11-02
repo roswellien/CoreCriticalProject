@@ -1,11 +1,170 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Core Critical’s launcher and tools bring graphics settings, local profiles, and launch controls together for the MW3 modernization project."><meta name="theme-color" content="#141717"><title>Launcher &amp; Tools — Core Critical</title><link rel="icon" href="assets/plates/brand-mark.png"><link rel="stylesheet" href="styles.css"><script src="site.js" defer></script></head>
-<body class="interior overview"><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><a class="brand" href="index.html" aria-label="Core Critical home"><img src="assets/plates/brand-mark.png" alt="" width="32" height="32"><span>CORE CRITICAL</span></a><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="primary-nav">Menu <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button><nav class="primary-nav" id="primary-nav" aria-label="Main navigation"><a href="index.html">Home</a><a href="native.html">Native Recompilation</a><a href="vulkan.html">Vulkan Graphics</a><a href="tools.html" aria-current="page">Launcher &amp; Tools</a><a href="about.html">About</a><a href="https://discord.gg/HK7pgngkD" target="_blank" rel="noopener noreferrer">Discord</a><a href="https://github.com/roswellien/MW3Recomp">GitHub</a></nav></header>
-<main id="main"><section class="overview-banner" aria-labelledby="page-title"><div class="overview-intro"><h1 id="page-title">Launcher<br>&amp; Tools</h1><p>Bring your local setup together. Configure the graphics path, manage a development profile, and launch from one place.</p><a class="button" href="#launcher">Explore the launcher <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15m-6-6 6 6 6-6"/></svg></a></div><img class="overview-art" src="assets/plates/tools-art.png" alt="" width="2048" height="768"><p class="illustration-caption">Illustrative artwork, not a launcher screenshot</p></section>
-<div class="overview-layout section-shell"><aside class="page-index" aria-label="On this page"><h2>Launcher &amp; Tools</h2><a href="#launcher">The launcher</a><a href="#profiles">Local profiles</a><a href="#progress">Current progress</a><a href="#contribute">Tools for contributors</a></aside><div class="overview-body">
-<section class="content-section" id="launcher"><h2>Configuration, before the cockpit.</h2><p>The current launcher supports the original-executable Vulkan wrapper track. A graphical interface and command-line mode bring resolution, aspect ratio, anti-aliasing, and texture filtering settings together for the prepared local development setup.</p><p>The launcher withdraws its window while the game runs and restores it afterward. This supports the original game’s fullscreen and focus behavior.</p><p>Read <a href="vulkan.html">Vulkan Graphics</a> for the rendering options behind these controls.</p></section>
-<section class="content-section" id="profiles"><h2>A separate space to experiment.</h2><p>The documented workflow uses an isolated game profile, keeping the original installation’s files intact. It stages wrapper configuration and camera settings for a launch, backs up the registry values it changes, and restores those values when the game exits.</p><p>Local texture-bank switching is also part of the development workflow. Enhanced textures remain local experiments under the project’s content policy; this website does not offer a texture pack download.</p></section>
-<section class="content-section" id="progress"><h2>A development tool, becoming easier to use.</h2><p class="progress-date">Development snapshot · 13 October 2026</p><p>GUI and command-line launch are documented in the working local wrapper profile. The current setup requires prepared files and a fixed development checkout path.</p><div class="progress-note"><h3>Before a portable release.</h3><p>The next work includes a repeatable setup procedure, more launch and restoration checks, configuration regression testing, and a complete third-party license and notice inventory. There is no general-purpose installer offered here yet.</p></div></section>
-<section class="content-section" id="contribute"><h2>Tools that support the whole project.</h2><p>Core Critical also develops research and interoperability tooling for investigating original behavior and validating the native host. Contributors can help with reproducible reports, configuration checks, documentation, and focused improvements.</p><p>Start with the repository’s contribution guidance. Public contributions must leave original game files, private research inputs, and generated game translations out of the submission.</p><a class="button" href="https://github.com/roswellien/MW3Recomp">Explore on GitHub <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></a><p class="related-reading">Explore <a href="native.html">Native Recompilation</a> or read <a href="about.html#faq">the project FAQ</a>.</p></section>
-</div></div></main><footer class="site-footer section-shell"><a class="brand" href="index.html"><img src="assets/plates/brand-mark.png" alt="" width="28" height="28"><span>CORE CRITICAL</span></a><div><p>Independent. Open source. Built to endure.</p><p>Original game files required. <a href="about.html#faq">Read the FAQ</a></p><p class="art-note">Website artwork is illustrative, not gameplay footage.</p></div><a href="https://github.com/roswellien/MW3Recomp">GitHub</a></footer></body></html>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+            name="description"
+            content="Core Critical’s launcher and tools bring graphics settings, local profiles, and launch controls together for the MW3 modernization project."
+        />
+        <meta name="theme-color" content="#141717" />
+        <title>Launcher &amp; Tools — Core Critical</title>
+        <link rel="icon" href="assets/plates/brand-mark.png" />
+        <link rel="stylesheet" href="styles.css" />
+        <script src="site.js" defer></script>
+    </head>
+    <body class="interior overview">
+        <a class="skip-link" href="#main">Skip to content</a>
+        <header class="site-header">
+            <a class="brand" href="index.html" aria-label="Core Critical home"
+                ><img src="assets/plates/brand-mark.png" alt="" width="32" height="32" /><span
+                    >CORE CRITICAL</span
+                ></a
+            ><button
+                class="menu-toggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="primary-nav"
+            >
+                Menu
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 7h16M4 12h16M4 17h16" />
+                </svg>
+            </button>
+            <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
+                <a href="index.html">Home</a><a href="native.html">Native Recompilation</a
+                ><a href="vulkan.html">Vulkan Graphics</a
+                ><a href="tools.html" aria-current="page">Launcher &amp; Tools</a
+                ><a href="about.html">About</a
+                ><a href="https://discord.gg/HK7pgngkD" target="_blank" rel="noopener noreferrer"
+                    >Discord</a
+                ><a href="https://github.com/roswellien/MW3Recomp">GitHub</a>
+            </nav>
+        </header>
+        <main id="main">
+            <section class="overview-banner" aria-labelledby="page-title">
+                <div class="overview-intro">
+                    <h1 id="page-title">Launcher<br />&amp; Tools</h1>
+                    <p>
+                        Bring your local setup together. Configure the graphics path, manage a
+                        development profile, and launch from one place.
+                    </p>
+                    <a class="button" href="#launcher"
+                        >Explore the launcher
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 4v15m-6-6 6 6 6-6" /></svg
+                    ></a>
+                </div>
+                <img
+                    class="overview-art launcher-screenshot"
+                    src="assets/plates/launcher-dashboard.png"
+                    alt=""
+                    width="1080"
+                    height="720"
+                />
+                <p class="illustration-caption">
+                    Screenshot of the Core Critical Launcher dashboard.
+                </p>
+            </section>
+            <div class="overview-layout section-shell">
+                <aside class="page-index" aria-label="On this page">
+                    <h2>Launcher &amp; Tools</h2>
+                    <a href="#launcher">The launcher</a><a href="#profiles">Local profiles</a
+                    ><a href="#progress">Current progress</a
+                    ><a href="#contribute">Tools for contributors</a>
+                </aside>
+                <div class="overview-body">
+                    <section class="content-section" id="launcher">
+                        <h2>Configuration, before the cockpit.</h2>
+                        <p>
+                            The current launcher supports the original-executable Vulkan wrapper
+                            track. A graphical interface and command-line mode bring resolution,
+                            aspect ratio, anti-aliasing, and texture filtering settings together for
+                            the prepared local development setup.
+                        </p>
+                        <p>
+                            The launcher withdraws its window while the game runs and restores it
+                            afterward. This supports the original game’s fullscreen and focus
+                            behavior.
+                        </p>
+                        <p>
+                            Read <a href="vulkan.html">Vulkan Graphics</a> for the rendering options
+                            behind these controls.
+                        </p>
+                    </section>
+                    <section class="content-section" id="profiles">
+                        <h2>A separate space to experiment.</h2>
+                        <p>
+                            The documented workflow uses an isolated game profile, keeping the
+                            original installation’s files intact. It stages wrapper configuration
+                            and camera settings for a launch, backs up the registry values it
+                            changes, and restores those values when the game exits.
+                        </p>
+                        <p>
+                            Local texture-bank switching is also part of the development workflow.
+                            Enhanced textures remain local experiments under the project’s content
+                            policy; this website does not offer a texture pack download.
+                        </p>
+                    </section>
+                    <section class="content-section" id="progress">
+                        <h2>A development tool, becoming easier to use.</h2>
+                        <p class="progress-date">Development snapshot · 13 October 2026</p>
+                        <p>
+                            GUI and command-line launch are documented in the working local wrapper
+                            profile. The current setup requires prepared files and a fixed
+                            development checkout path.
+                        </p>
+                        <div class="progress-note">
+                            <h3>Before a portable release.</h3>
+                            <p>
+                                The next work includes a repeatable setup procedure, more launch and
+                                restoration checks, configuration regression testing, and a complete
+                                third-party license and notice inventory. There is no
+                                general-purpose installer offered here yet.
+                            </p>
+                        </div>
+                    </section>
+                    <section class="content-section" id="contribute">
+                        <h2>Tools that support the whole project.</h2>
+                        <p>
+                            Core Critical also develops research and interoperability tooling for
+                            investigating original behavior and validating the native host.
+                            Contributors can help with reproducible reports, configuration checks,
+                            documentation, and focused improvements.
+                        </p>
+                        <p>
+                            Start with the repository’s contribution guidance. Public contributions
+                            must leave original game files, private research inputs, and generated
+                            game translations out of the submission.
+                        </p>
+                        <a class="button" href="https://github.com/roswellien/MW3Recomp"
+                            >Explore on GitHub
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M4 12h15m-6-6 6 6-6 6" /></svg
+                        ></a>
+                        <p class="related-reading">
+                            Explore <a href="native.html">Native Recompilation</a> or read
+                            <a href="about.html#faq">the project FAQ</a>.
+                        </p>
+                    </section>
+                </div>
+            </div>
+        </main>
+        <footer class="site-footer section-shell">
+            <a class="brand" href="index.html"
+                ><img src="assets/plates/brand-mark.png" alt="" width="28" height="28" /><span
+                    >CORE CRITICAL</span
+                ></a
+            >
+            <div>
+                <p>Independent. Open source. Built to endure.</p>
+                <p>Original game files required. <a href="about.html#faq">Read the FAQ</a></p>
+                <p class="art-note">
+                    Vulkan Graphics and Launcher &amp; Tools use development screenshots; other site
+                    artwork is illustrative.
+                </p>
+            </div>
+            <a href="https://github.com/roswellien/MW3Recomp">GitHub</a>
+        </footer>
+    </body>
+</html>
