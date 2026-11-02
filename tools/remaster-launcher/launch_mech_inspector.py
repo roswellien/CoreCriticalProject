@@ -8,6 +8,8 @@ reports, and opens them in the default browser.
 from __future__ import annotations
 
 import argparse
+import os
+import html
 from pathlib import Path
 import sys
 import webbrowser
@@ -64,7 +66,8 @@ def build_mech_roster_index(
         batches = rep.get("batches_count", "-")
         records = rep.get("records_count", "-")
         uv_hash = rep.get("mesh_uv_hash", "-")
-        report_href = f"{mech_id}_materials_inspector.html"
+        report_path = Path(rep.get("html_path", output_html.parent / f"{mech_id}_materials_inspector.html"))
+        report_href = html.escape(os.path.relpath(report_path, output_html.parent).replace("\\", "/"), quote=True)
 
         cat_pill = (
             '<span class="badge cat-new">MW5 Replacement</span>'
@@ -90,8 +93,8 @@ def build_mech_roster_index(
         </div>
         """
 
-    new_cards = "\n".join(render_card(m, "new") for m in REPLACEMENT_MECHS)
-    mw3_cards = "\n".join(render_card(m, "mw3") for m in DETAILED_MW3_MECHS)
+    new_cards = "\n".join(render_card(m, "new") for m in REPLACEMENT_MECHS if m in report_map)
+    mw3_cards = "\n".join(render_card(m, "mw3") for m in DETAILED_MW3_MECHS if m in report_map)
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -268,12 +271,12 @@ def build_mech_roster_index(
         </div>
         <div class="header-stats">
             <div class="stat-box">
-                <div class="stat-value">18</div>
+                <div class="stat-value">{len(report_map)}</div>
                 <div class="stat-label">Total Mechs</div>
             </div>
             <div class="stat-box">
-                <div class="stat-value" style="color:var(--accent-green);">100%</div>
-                <div class="stat-label">BWSFM1 Verified</div>
+                <div class="stat-value" style="color:var(--accent-green);">{len(report_map)}</div>
+                <div class="stat-label">Generated Sidecars</div>
             </div>
             <div class="stat-box">
                 <div class="stat-value">24-Step</div>
@@ -283,12 +286,12 @@ def build_mech_roster_index(
     </div>
 
     <div class="container">
-        <h2 class="section-title">MW5 High-Poly Replacement Models (14 Chassis)</h2>
+        <h2 class="section-title">MW5 High-Poly Replacement Models ({sum(m in report_map for m in REPLACEMENT_MECHS)} Chassis)</h2>
         <div class="grid">
             {new_cards}
         </div>
 
-        <h2 class="section-title">Detailed MW3 Models with Modern PBR Textures (4 Chassis)</h2>
+        <h2 class="section-title">Detailed MW3 Models with Modern PBR Textures ({sum(m in report_map for m in DETAILED_MW3_MECHS)} Chassis)</h2>
         <div class="grid">
             {mw3_cards}
         </div>
@@ -317,27 +320,21 @@ def launch_mech_inspector(
     output_html.parent.mkdir(parents=True, exist_ok=True)
     output_sidecar.parent.mkdir(parents=True, exist_ok=True)
 
-    if output_html.exists() and output_sidecar.exists() and not force:
-        print(f"[{mech_id.upper()}] Using existing sidecar and inspection report.")
-        report = {
-            "mech": mech_id,
-            "batches_count": "-",
-            "records_count": "-",
-            "mesh_uv_hash": "-",
-        }
-    else:
-        print(f"[{mech_id.upper()}] Preparing surface materials...")
-        sidecar_bytes, report = build_mech_surface_materials(
-            mech_id=mech_id,
-            html_report_path=output_html,
-        )
-        output_sidecar.write_bytes(sidecar_bytes)
-        print(f"Wrote BWSFM1 sidecar ({len(sidecar_bytes):,} bytes): {output_sidecar}")
-        print(f"Inspection report generated successfully: {output_html}")
-        print(
-            f"Processed {report['records_count']} materials across "
-            f"{report['batches_count']} batches. UV Hash: {report['mesh_uv_hash']}"
-        )
+    # Existence cannot establish compatibility with current meshes, normals or tooling.
+    # Rebuild until the cache has a receipt pinning all those inputs.
+    print(f"[{mech_id.upper()}] Preparing surface materials...")
+    sidecar_bytes, report = build_mech_surface_materials(
+        mech_id=mech_id,
+        html_report_path=output_html,
+    )
+    output_sidecar.write_bytes(sidecar_bytes)
+    report["html_path"] = str(output_html.resolve())
+    print(f"Wrote BWSFM1 sidecar ({len(sidecar_bytes):,} bytes): {output_sidecar}")
+    print(f"Inspection report generated successfully: {output_html}")
+    print(
+        f"Processed {report['records_count']} materials across "
+        f"{report['batches_count']} batches. UV Hash: {report['mesh_uv_hash']}"
+    )
 
     if open_browser:
         print("Launching default web browser...")

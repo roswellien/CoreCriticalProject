@@ -12,6 +12,7 @@ import argparse
 import base64
 import io
 import json
+import math
 import os
 from pathlib import Path
 import struct
@@ -44,6 +45,8 @@ from visualize_terrain_heights import (
 )
 from mech_inspector_html import generate_mech_html_report
 from launch_terrain_inspector import rgb565_to_rgba8
+from normal_materials import uncached_pixel_hash
+from normal_codec import decode as decode_normals
 
 ROOT = Path(__file__).resolve().parents[2]
 if not (ROOT / "local").exists():
@@ -170,27 +173,46 @@ def unpack_bwnrm2(data: bytes) -> tuple[list[int], dict[str, tuple[int, int, int
     if not (data.startswith(b"BWNRM2\0\0") or data.startswith(b"BWNRM3\0\0")):
         raise ValueError("Invalid normal map sidecar magic")
     compressed = data.startswith(b"BWNRM3\0\0")
-    batch_count, image_count = struct.unpack("<II", data[8:16])
-    offset = 16
-    batches = list(struct.unpack(f"<{batch_count}I", data[offset:offset + batch_count * 4]))
-    offset += batch_count * 4
-    images: dict[str, tuple[int, int, int, bytes]] = {}
+    stream = io.BytesIO(data[8:])
+
+    def take(size):
+        raw = stream.read(size)
+        if len(raw) != size:
+            raise ValueError("Truncated normal map sidecar")
+        return raw
+
+    batch_count, image_count = struct.unpack("<II", take(8))
+    if not 1 <= batch_count <= 256 or image_count > 64:
+        raise ValueError("Invalid normal map counts")
+    batches = list(struct.unpack(f"<{batch_count}I", take(batch_count * 4)))
+    images = {}
+    decoded_bytes = 0
     for _ in range(image_count):
-        raw_name = data[offset:offset + 32]
+        raw_name = take(32)
+        if not raw_name[0] or raw_name[-1]:
+            raise ValueError("Invalid normal map name")
         name = raw_name.split(b"\0")[0].decode("ascii")
-        offset += 32
-        w, h, phash = struct.unpack("<IIQ", data[offset:offset + 16])
-        offset += 16
+        if name in images:
+            raise ValueError("Duplicate normal map name")
+        w, h, phash = struct.unpack("<IIQ", take(16))
+        span = w * h * 4
+        decoded_bytes += span
+        if not 1 <= w <= 4096 or not 1 <= h <= 4096 or decoded_bytes > 256 * 1024**2:
+            raise ValueError("Invalid normal map dimensions or byte budget")
         if compressed:
-            c_len = struct.unpack("<Q", data[offset:offset + 8])[0]
-            offset += 8
-            pixels = data[offset:offset + c_len]
-            offset += c_len
+            encoded_size = struct.unpack("<Q", take(8))[0]
+            if not 0 < encoded_size <= w * h * 8:
+                raise ValueError("Invalid compressed normal map size")
+            pixels = decode_normals(take(encoded_size), span)
         else:
-            span = w * h * 4
-            pixels = data[offset:offset + span]
-            offset += span
+            pixels = take(span)
+        if uncached_pixel_hash(pixels) != phash:
+            raise ValueError("Normal map pixel hash mismatch")
         images[name] = (w, h, phash, pixels)
+    if any(index != 0xFFFFFFFF and index >= image_count for index in batches):
+        raise ValueError("Invalid normal map batch binding")
+    if stream.read(1):
+        raise ValueError("Trailing normal map data")
     return batches, images
 
 
@@ -375,9 +397,16 @@ def build_mech_surface_materials(
     _n_batches, n_images = unpack_bwnrm2(normals_data)
     _mat_names, batch_materials, t_images = unpack_bwtex1(textures_data)
 
-    mesh_uv_hash = 0
-    if resources.get("mesh") and resources["mesh"].exists():
-        mesh_uv_hash = mesh_uv_identity_file(resources["mesh"])
+    if not resources.get("mesh") or not resources["mesh"].is_file():
+        raise ValueError("A mesh payload is required for verified surface-material compatibility")
+    mesh_uv_hash = mesh_uv_identity_file(resources["mesh"])
+
+    normal_names = list(n_images)
+    if len(_n_batches) != len(batch_materials):
+        raise ValueError("Normal and albedo batch counts differ")
+    for material, index in zip(batch_materials, _n_batches):
+        if index != 0xFFFFFFFF and normal_names[index] != material:
+            raise ValueError("Normal and albedo material bindings differ")
 
     records = []
     images = {}
@@ -420,14 +449,14 @@ def build_mech_surface_materials(
         else:
             # Downsample oversized normals if requested
             if max_dimension > 0 and (nw > max_dimension or nh > max_dimension):
-                stride = max(nw // max_dimension, nh // max_dimension)
+                stride = max(math.ceil(nw / max_dimension), math.ceil(nh / max_dimension))
                 if stride > 1:
                     arr = np.frombuffer(normal_bytes, dtype=np.uint8).reshape(nh, nw, 4)
                     arr = arr[::stride, ::stride].copy()
                     nh, nw = arr.shape[:2]
                     normal_bytes = arr.tobytes()
 
-            if prof["height_amplitude"] <= 0.0:
+            if prof["height_amplitude"] == 0.0:
                 h_bytes = bytes([128, 128, 128, 255] * (nw * nh))
                 h_ref = 0.5
                 quality = {"median_angular_error_deg": 0.0, "correlation_x": 1.0}
@@ -443,7 +472,7 @@ def build_mech_surface_materials(
 
         # Downsample oversized color if needed
         if color_bytes and max_dimension > 0 and (color_w > max_dimension or color_h > max_dimension):
-            c_stride = max(color_w // max_dimension, color_h // max_dimension)
+            c_stride = max(math.ceil(color_w / max_dimension), math.ceil(color_h / max_dimension))
             if c_stride > 1:
                 arr_c = np.frombuffer(color_bytes, dtype=np.uint8).reshape(color_h, color_w, 4)
                 arr_c = arr_c[::c_stride, ::c_stride].copy()

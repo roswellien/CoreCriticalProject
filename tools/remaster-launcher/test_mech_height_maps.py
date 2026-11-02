@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
 try:
     import numpy as np
@@ -17,7 +18,9 @@ from surface_materials import (
     ADDRESS_WRAP,
 )
 from normal_materials import pack_normals
+from launch_mech_inspector import build_mech_roster_index, launch_mech_inspector
 from mech_height_maps import (
+    build_mech_surface_materials,
     unpack_bwnrm2,
     unpack_bwtex1,
     extract_mech_geometry,
@@ -52,6 +55,61 @@ class MechHeightMapsTests(unittest.TestCase):
         self.assertEqual(unpacked_images["Body"][0], w)
         self.assertEqual(unpacked_images["Body"][1], h)
         self.assertEqual(len(unpacked_images["Body"][3]), w * h * 4)
+
+    def test_roster_links_only_built_reports(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = root / "roster.html"
+            report = {"mech": "bushwacker", "html_path": str(root / "custom.html")}
+            build_mech_roster_index(output, [report])
+            content = output.read_text(encoding="utf-8")
+            self.assertIn('href="custom.html"', content)
+            self.assertNotIn('href="madcat_materials_inspector.html"', content)
+            self.assertNotIn('100%', content.replace('width: 100%', ''))
+
+    def test_existing_output_is_not_treated_as_verified_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = root / "old.html"
+            sidecar = root / "old.bin"
+            output.write_text("stale")
+            sidecar.write_bytes(b"invalid")
+            result = {"mech": "bushwacker", "records_count": 1, "batches_count": 1, "mesh_uv_hash": "0x123"}
+            with patch("launch_mech_inspector.build_mech_surface_materials", return_value=(b"fresh", result)) as build:
+                launch_mech_inspector("bushwacker", output, sidecar, open_browser=False)
+            build.assert_called_once()
+            self.assertEqual(sidecar.read_bytes(), b"fresh")
+
+    def test_builder_requires_mesh_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            normal = root / "normal.bin"
+            texture = root / "texture.bin"
+            normal.write_bytes(pack_normals(["Body"], {"Body": (4, 4, bytes([128, 128, 255, 255] * 16))}))
+            texture.write_bytes(
+                b"BWTEX1\0\0" + struct.pack("<III", 1, 1, 0)
+                + b"Body".ljust(32, b"\0") + struct.pack("<IIQ", 4, 4, 0) + bytes(32)
+            )
+            with patch("mech_height_maps.find_mech_payloads", return_value={
+                "normals": normal, "textures": texture, "mesh": None
+            }):
+                with self.assertRaisesRegex(ValueError, "mesh payload is required"):
+                    build_mech_surface_materials("bushwacker")
+
+    def test_compressed_normals_match_raw_pixels(self):
+        raw = bytes([192, 96, 220, 255] * 256)
+        packed = pack_normals(["Body"], {"Body": (16, 16, raw)}, compressed=True)
+        _, images = unpack_bwnrm2(packed)
+        self.assertEqual(images["Body"][3], raw)
+
+    def test_normal_integrity_and_truncation_fail(self):
+        packed = pack_normals(["Body"], {"Body": (4, 4, bytes([128, 128, 255, 255] * 16))})
+        with self.assertRaises(ValueError):
+            unpack_bwnrm2(packed[:-1])
+        changed = bytearray(packed)
+        changed[-1] ^= 1
+        with self.assertRaises(ValueError):
+            unpack_bwnrm2(bytes(changed))
 
     def test_unpack_bwtex1_parsing(self):
         # Construct valid BWTEX1 header: magic(8), batches_count(4), names_len(4)
