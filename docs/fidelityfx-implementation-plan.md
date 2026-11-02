@@ -67,6 +67,14 @@ motion-vector coverage. The maintained renderer already has D32 depth and applie
 world FXAA before HUD scenes. Its Vulkan instance currently requests API 1.0;
 FSR feature/extension and queue requirements must be negotiated explicitly.
 
+Since the dated baseline above, the optional
+[Vulkan/DXGI presentation bridge](dxgi-presentation-bridge.md) requests Vulkan 1.1
+when enabled; the default Vulkan presentation path still requests 1.0. Validate
+upscaling and frame generation against the actual selected presentation transport.
+SDK Vulkan swapchain replacement alone does not establish compatibility with the
+DXGI bridge. Keep unvalidated transport/effect combinations unavailable rather
+than advertising them as supported.
+
 Launcher integration belongs in
 `tools/mw3-remaster-launcher/GraphicsPreferencesPanel.xaml[.cs]` and its existing
 settings/launch argument path. Trace that path before changing serialization.
