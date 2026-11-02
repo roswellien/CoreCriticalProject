@@ -294,3 +294,26 @@ measurable cost here and supplies no upscaling or frame-generation benefit yet.
 The historical roughly 100 FPS RX 9070 result used another scene/asset setup;
 its difference from these numbers remains unisolated. User installation, driver
 and persistent graphics settings are unchanged.
+
+## Large-origin near-plane precision correction
+
+A new authored GPU oracle places a stationary triangle just beyond the near plane
+at map-sized world offsets, with the camera and placement sharing the same stored
+float origin. Independent double-precision subtraction gives identity and zero
+motion. The old absolute-world shader path exceeds the 0.02-pixel motion budget.
+An initial fixture-ordering attempt also inherited a rejected submission; that
+setup was corrected before establishing the failure against the old shaders.
+
+Motion now transforms the interpolated current-camera point directly into the
+previous camera. The CPU subtracts camera origins in double precision before
+forming the relative transform; the GPU never adds and cancels the absolute map
+origin for motion. Static-source placement/lifetime admission remains mandatory.
+The unused GPU world-point varying and uniform rows are removed. All six
+50/67/100% jitter Off/On oracle cases pass without validation errors. Final native
+and broader regression checks for this shader correction are still pending.
+
+The corrected full-pack same-Training reload sequence also completes 3,000
+presentations and 7,922 guest scenes with zero Vulkan validation errors, using
+ordinary pause, Quit, Pilot Accept and Training launch controls. It exports no
+mission temporal image during loading, then recovers 57,015 valid pixels at 2001.
+That run predates this precision correction and is not its final native validation.

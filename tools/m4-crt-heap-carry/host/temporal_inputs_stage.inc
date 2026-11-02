@@ -1,12 +1,12 @@
 // Optional diagnostic attachments. Guest images, descriptor pools and projection
 // constants remain authoritative and are never replaced with these resources.
 struct alignas(16) TemporalUniform {
-    std::array<float, 12> camera{}, world{}, previous_view{};
+    std::array<float, 12> camera{}, previous_from_current{};
     std::array<float, 4> projection{}, previous_projection{}, dimensions{}, depth{}, previous{},
         jitter{};
     std::array<unsigned, 4> flags{};
 };
-static_assert(sizeof(TemporalUniform) == 256);
+static_assert(sizeof(TemporalUniform) == 208);
 struct TemporalSlot {
     std::array<Image, 4> images{};
     VkFramebuffer framebuffer{};
@@ -420,6 +420,9 @@ void temporal_append(const Scene &scene) {
         auto &slot = temporal_slot(*camera);
         const bool fresh = slot.frame != scene.temporal_frame;
         const auto previous = camera_history.previous_for(*camera);
+        const auto previous_camera_transform = previous
+            ? mw34::temporal::previous_from_current(*camera, *previous)
+            : mw34::temporal::Matrix{};
         if (fresh) {
             slot.history_valid = previous && slot.published_frame + 1 == scene.temporal_frame;
             slot.phase = slot.history_valid ? slot.phase + 1 : 0;
@@ -460,8 +463,7 @@ void temporal_append(const Scene &scene) {
                 uniform.depth[1] = projection[5];
             }
             if (previous) {
-                uniform.previous_view =
-                    mw34::temporal::inverse_affine(mw34::temporal::camera_world(*previous));
+                uniform.previous_from_current = previous_camera_transform;
                 uniform.previous_projection = {previous->projection[1], previous->projection[2],
                                                previous->projection[3], previous->projection[4]};
                 uniform.previous = {previous->projection[0], float(previous->sizes[0]),
@@ -477,7 +479,6 @@ void temporal_append(const Scene &scene) {
                 if (found != slot.sources.end() && !source.unchanged(*found->second))
                     slot.poisoned = true;
                 slot.sources.insert_or_assign(key, draw.temporal_source);
-                uniform.world = source.world;
                 uniform.flags[1] = previous && slot.history_valid && source.previous_static &&
                                    source.frame == slot.frame &&
                                    source.load_epoch == camera->load_epoch && !draw.key.blend &&

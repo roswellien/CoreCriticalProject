@@ -252,6 +252,46 @@ static void temporal_gpu_check(Renderer& renderer,Scene scene){
         require(std::none_of(result.validity.begin(),result.validity.end(),[](auto v){return v!=0;}),
                 "Moving or unproved diagnostic geometry inherited static motion");
     }
+    // Static surfaces close to the near plane must remain precise at world
+    // offsets comparable to native maps. The camera and placement share the
+    // same stored float origin, so an independent double-precision subtraction
+    // gives identity and exactly zero stationary motion.
+    diagnostic.draws.front().count=3;
+    const std::array<float,3> large_origin{1536.125f,24.625f,-896.375f};
+    for(unsigned axis=0;axis<3;++axis){
+        independent.camera[9+axis]=std::bit_cast<unsigned>(large_origin[axis]);
+        independent.inverse[9+axis]=std::bit_cast<unsigned>(-large_origin[axis]);
+    }
+    for(unsigned sample=0;sample<2;++sample){
+        const float close_z=sample==0?.10001f:.1001f;
+        auto close=world(9200+sample,0);
+        auto geometry=std::make_shared<ModelGeometry>(*close->geometry);
+        geometry->vertices={{-.03f,-.03f,close_z,0,0,1,0,0},
+                            {.03f,-.03f,close_z,0,0,1,0,0},
+                            {-.03f,.03f,close_z,0,0,1,0,0}};
+        close->geometry=geometry;close->projection={.03f,2000.f/3,2000.f/3,32,32,.1f};
+        independent.projection=close->projection;
+        for(unsigned frame=32+sample*2;frame<=33+sample*2;++frame){
+            independent.frame=frame;diagnostic.temporal_frame=frame;
+            auto& d=diagnostic.draws.front();d.temporal_model=close;
+            d.camera_view=std::make_shared<const Snapshot>(independent);
+            auto proof=std::make_shared<StaticSource>();proof->frame=frame;
+            proof->previous_static=frame%2!=0;proof->node=proof->polygon=9200+sample;
+            proof->mesh_bytes=proof->node_bytes=sources.source(1);
+            proof->world={1,0,0,large_origin[0],0,1,0,large_origin[1],0,0,1,large_origin[2]};
+            d.temporal_source=proof;renderer.render(diagnostic,true,true);
+            renderer.complete_camera_history(frame,7);
+        }
+        result=renderer.capture_temporal(main_view);unsigned valid_samples=0;float error=0;
+        for(std::size_t i=0;i<result.validity.size();++i)if(result.validity[i]){
+            ++valid_samples;
+            require(std::abs(double(result.depth[i])-.1/double(close_z))<=2e-6,
+                    "Large-origin near-plane sampled depth exceeds its precision budget");
+            error=std::max({error,std::abs(result.motion[i*2]),std::abs(result.motion[i*2+1])});
+        }
+        require(valid_samples>10,"Large-origin near-plane static coverage was falsely rejected");
+        require(error<=.02f,"Large-origin near-plane stationary motion exceeds 0.02 pixels");
+    }
     diagnostic.draws.front().count=6;
     bool mismatched_attributes=false;
     try{renderer.render(diagnostic,true,true);}catch(const std::runtime_error& error){

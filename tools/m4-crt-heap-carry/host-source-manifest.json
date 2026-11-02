@@ -1047,8 +1047,8 @@
     "temporal_inputs.hpp": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 4013,
-      "sha256": "350eb23f3c01caa33e4c540fdb412794e74997484bd65008db702976656b0680"
+      "bytes": 5438,
+      "sha256": "d2b88986ed8066658f104fc2b39523d026e99a5dbb9ef49b2b26c82a7125719b"
     },
     "temporal_source_stage.inc": {
       "decision": "commit",
@@ -1065,38 +1065,38 @@
     "temporal_inputs.frag": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 2537,
-      "sha256": "303300ef3388cf5212c2735952efae26dfdbd68f2a3948260ebe6c1f1abffc44"
+      "bytes": 2507,
+      "sha256": "4278b05e5cf49a1daf3f864096c598d7dd09473b0b48d93df0528aae95f5322d"
     },
     "temporal_inputs.vert": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 1752,
-      "sha256": "a51622740f8d69644db06ce501cb80247627ca1274978487394d77828428d15e"
+      "bytes": 1586,
+      "sha256": "c19ddb34c89442dc6286eb7b3be577d8445e20f5d61d34bad37834105855b233"
     },
     "temporal_inputs_frag.h": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 46152,
-      "sha256": "0949fefaf70a4f2816ef3fb41a2cdbab5d582d59f349b62747bf500359f3a80a"
+      "bytes": 45510,
+      "sha256": "dde84c74d378a6d2972043fd6e0407681c27140776c7ca4b8d928f1410db439a"
     },
     "temporal_inputs_stage.inc": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 39274,
-      "sha256": "481fb8acb4f06261040dcdfc0078569ae63a8f162f8570ba71a13995b5a65106"
+      "bytes": 39338,
+      "sha256": "05c83a423734afb449d0e25d2a36c6b2d74b42465e0dcfb18b985aa4594f229b"
     },
     "temporal_inputs_vert.h": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 20017,
-      "sha256": "f20ee804fbff0dc345a42baefe6e5f84f6eef12f0f9ed079495524108e835b01"
+      "bytes": 18389,
+      "sha256": "85b04f24ced7f0587382f8d0763b5609709df8a1b61d82aaebbea3de67db8ec7"
     },
     "temporal_uniform.glsl": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 312,
-      "sha256": "00944390ecc47a61119b9814f8c7d7839ea6530fc975ac869b1f5aa7a9bd520c"
+      "bytes": 271,
+      "sha256": "61b7f844baf82d274090b660c2de8c96968b2a061d27e19f4e9fe73a313c9f1e"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."

@@ -84,4 +84,33 @@ inline Matrix inverse_affine(const Matrix &matrix) {
     }
     return result;
 }
+inline Matrix previous_from_current(const Snapshot &current, const Snapshot &previous) {
+    const auto current_world = camera_world(current);
+    auto previous_linear = camera_world(previous);
+    std::array<double, 3> displacement{};
+    for (unsigned axis = 0; axis < 3; ++axis) {
+        // Subtract the stored origins before reducing to GPU float precision.
+        // Adding an absolute map origin to each fragment can move a visible
+        // point behind the previous near plane through cancellation alone.
+        displacement[axis] = double(current_world[axis * 4 + 3]) -
+                             double(previous_linear[axis * 4 + 3]);
+        previous_linear[axis * 4 + 3] = 0;
+    }
+    const auto inverse_linear = inverse_affine(previous_linear);
+    Matrix result{};
+    for (unsigned row = 0; row < 3; ++row) {
+        for (unsigned col = 0; col < 3; ++col) {
+            double coefficient = 0;
+            for (unsigned axis = 0; axis < 3; ++axis)
+                coefficient += double(inverse_linear[row * 4 + axis]) *
+                               double(current_world[axis * 4 + col]);
+            result[row * 4 + col] = float(coefficient);
+        }
+        double translation = 0;
+        for (unsigned axis = 0; axis < 3; ++axis)
+            translation += double(inverse_linear[row * 4 + axis]) * displacement[axis];
+        result[row * 4 + 3] = float(translation);
+    }
+    return result;
+}
 } // namespace mw34::temporal

@@ -8,7 +8,6 @@ layout(location=3) flat in vec4 colorFlat;
 layout(location=4) noperspective in vec4 specularSmooth;
 layout(location=5) flat in vec4 specularFlat;
 layout(location=6) in vec3 cameraPoint;
-layout(location=7) in vec3 worldPoint;
 layout(set=0,binding=0) uniform sampler2D image;
 layout(push_constant) uniform Push {vec4 target;vec4 fogColor;vec4 factor;uvec4 mode;} draw;
 layout(location=0) out float depthOutput;
@@ -31,8 +30,8 @@ void main(){
     if(cameraPoint.z<=temporal.depth.y || cameraPoint.z>temporal.depth.z)return;
     depthOutput=temporal.depth.y/cameraPoint.z;
     if(temporal.flags.y==0u)return;
-    vec4 world=vec4(worldPoint,1.0);
-    vec3 before=vec3(dot(temporal.previous0,world),dot(temporal.previous1,world),dot(temporal.previous2,world));
+    vec4 current=vec4(cameraPoint,1.0);
+    vec3 before=vec3(dot(temporal.previous0,current),dot(temporal.previous1,current),dot(temporal.previous2,current));
     if(before.z<=temporal.depth.w || before.z>temporal.previous.w)return;
     vec2 currentScreen=cameraPoint.xy*temporal.projection.xy*(temporal.depth.x/cameraPoint.z)+temporal.projection.zw;
     vec2 previousScreen=before.xy*temporal.previousProjection.xy*(temporal.previous.x/before.z)+temporal.previousProjection.zw;

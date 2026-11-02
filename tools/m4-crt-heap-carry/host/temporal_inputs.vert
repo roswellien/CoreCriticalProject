@@ -12,7 +12,6 @@ layout(location=3) flat out vec4 colorFlat;
 layout(location=4) noperspective out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
 layout(location=6) out vec3 cameraPoint;
-layout(location=7) out vec3 worldPoint;
 layout(push_constant) uniform Push {vec4 target;vec4 fogColor;vec4 factor;uvec4 mode;} draw;
 vec4 unpack(uint c){return vec4((c>>16)&255u,(c>>8)&255u,c&255u,c>>24)/255.0;}
 void main(){
@@ -23,10 +22,9 @@ void main(){
         reciprocal=temporal.depth.x/cameraPoint.z;
         screen=cameraPoint.xy*temporal.projection.xy*reciprocal+temporal.projection.zw;
         w=1.0/reciprocal;
-        worldPoint=vec3(dot(temporal.world0,local),dot(temporal.world1,local),dot(temporal.world2,local));
     }else{
         screen=position.xy;reciprocal=position.z;w=position.w!=0.0?1.0/position.w:1.0;
-        cameraPoint=vec3(0);worldPoint=vec3(0);
+        cameraPoint=vec3(0);
     }
     vec2 pixel=(screen+0.5)*temporal.dimensions.zw/temporal.dimensions.xy+temporal.jitter.xy;
     gl_Position=vec4((pixel/temporal.dimensions.zw*2.0-1.0)*w,reciprocal*w,w);
