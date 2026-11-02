@@ -1113,14 +1113,16 @@ class Renderer {
                 throw std::runtime_error("Reconstructed scene is missing its shadow source");
             if (!world_shadow_inputs_ready) {
                 world_shadow_frame = prepare_shadow(*world_shadow_scene, environment);
-                world_fixture_lights = prepare_fixture_shadows(*world_shadow_scene, bound);
+                // Batching owns the full captured vertex buffer while the source
+                // scene retains every draw needed to prepare shared shadow maps.
+                world_fixture_lights = prepare_fixture_shadows(*world_shadow_scene, bound, s.vertices);
                 world_shadow_inputs_ready = true;
             }
             shadowFrame = &world_shadow_frame;
             fixtureLights = &world_fixture_lights;
         } else {
             localShadowFrame = prepare_shadow(s, environment);
-            localFixtureLights = prepare_fixture_shadows(s, bound);
+            localFixtureLights = prepare_fixture_shadows(s, bound, s.vertices);
         }
         // Upload memory can be write-combined: never read it for CPU comparisons.
         mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;

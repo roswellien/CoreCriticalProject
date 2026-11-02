@@ -367,8 +367,8 @@
       "classification": "authored-host-source"
     },
     "fixture_shadow_stage.inc": {
-      "sha256": "1e4fd14302ffdf32e0b63db68c9b12ce3dc8dd6641b1a2fa1ac20a6d19709afc",
-      "bytes": 23127,
+      "sha256": "2e0d2d7412e70e371b46a62494f065384a1b1753dccf0ee7f2f771781d80bd58",
+      "bytes": 23211,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -949,8 +949,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "dda3db062e0ae4014d6aff9ca82e94716778b17f7b37ece7eef476e7dffa63fa",
-      "bytes": 207588,
+      "sha256": "84b0e1980acc2c895082db969774e9ca2c4372528c4024a50ff48e19a419f116",
+      "bytes": 207778,
       "decision": "commit",
       "classification": "authored-host-source"
     },

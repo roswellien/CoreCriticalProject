@@ -80,7 +80,8 @@
         std::fprintf(stderr,"Fixture shadows: %u lights, six %ux%u views each, %ux%u atlas; original world and model casters, alpha-tested cutouts\n",mw34::effects::capacity,fixtureTile,fixtureTile,fixtureAtlasWidth,fixtureAtlasHeight);
     }
 
-    mw34::effects::Uniform prepare_fixture_shadows(const Scene& scene,const std::vector<Tex*>& bound) {
+    mw34::effects::Uniform prepare_fixture_shadows(const Scene& scene,const std::vector<Tex*>& bound,
+                                                   const std::vector<unsigned char>& vertices) {
         auto lights=scene.effect_lights;for(auto& meta:lights.shadow)meta={};fixtureFrameCasters.clear();
         fixtureAtlasFrame=scene.world_frame;fixtureAtlasRecorded=false;
         if(!fixtureTile||scene.hud||scene.frontend_canvas)return lights;
@@ -110,7 +111,7 @@
                 else key={instance.shadow_source?instance.shadow_source:instance.geometry->key,instance.geometry->key};
             }else if(draw.sun_tl){
                 std::uint64_t hash=0xcbf29ce484222325ULL;
-                for(unsigned i=0;i<draw.count;++i){TlVertex v;const size_t offset=size_t(draw.first+i)*sizeof(TlVertex);if(offset+sizeof(v)>scene.vertices.size())throw std::runtime_error("Fixture shadow TL source outside captured vertices");std::memcpy(&v,scene.vertices.data()+offset,sizeof(v));
+                for(unsigned i=0;i<draw.count;++i){TlVertex v;const size_t offset=size_t(draw.first+i)*sizeof(TlVertex);if(offset+sizeof(v)>vertices.size())throw std::runtime_error("Fixture shadow TL source outside captured vertices");std::memcpy(&v,vertices.data()+offset,sizeof(v));
                     const auto p=mw34::effects::reconstruct(v.x,v.y,v.z,draw.sun_tl->projection,draw.sun_tl->camera_world);caster.bounds.add(p);caster.tl.push_back({p[0],p[1],p[2],0,0,0,v.u,v.v});
                     for(float x:p){std::uint32_t bits;std::memcpy(&bits,&x,4);hash^=bits;hash*=0x100000001b3ULL;}}
                 caster.count=unsigned(caster.tl.size());key={0,hash};
