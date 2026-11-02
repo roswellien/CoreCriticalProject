@@ -632,7 +632,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
   const unsigned menu=state.gpr.rcx.dword;
   const auto block=host.gheap.live.find(menu);
   if(block==host.gheap.live.end()||block->second!=0x17730U||
-     host.gheap.owner_of(menu)!=hs::token||!writable(menu+0x16f9cU,9))
+     host.gheap.owner_of(menu)!=hs::token||!writable(menu+0x16f9cU,12))
    deny("Menu construction outside its new CRT allocation",menu);
   // Original 0x48a718 calls this constructor before 0x48a838 assigns these
   // fields. Its callback reads them at 0x489d19; reused CRT bytes can be stale.
