@@ -44,6 +44,7 @@
 #include <functional>
 #include "surface_detail.hpp"
 #include "material_normals.hpp"
+#include "surface_materials.hpp"
 #include "sun_world_vert.h"
 #include "sun_model_vert.h"
 #include "effect_scene_frag.h"
@@ -129,6 +130,7 @@ struct ModelInstance {
     std::array<float, 12> sun_normal{}, sun_world{};
     bool sun_eligible{};
     std::uint64_t shadow_source{};
+    std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
 };
 struct ModelPush {
     Push base;
@@ -151,6 +153,7 @@ struct Draw {
     std::shared_ptr<const mw34::sun::Tl> sky_view{};
     unsigned detail_role{};
     std::uint64_t shadow_source{};
+    std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
     std::function<bool()> shadow_valid;
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};

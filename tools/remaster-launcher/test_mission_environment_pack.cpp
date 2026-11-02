@@ -54,6 +54,18 @@ int main(int argc,char** argv){
  }
  mw34::packs::load_mission_environments(argv[2],values);
  if(mode=="roundtrip")return same(values,baseline)?0:5;
+ if(mode=="training"){
+  if(values.size()!=24)return 12;
+  _putenv_s("MW34_MISSION_ENVIRONMENTS",argv[2]);
+  auto& campaign=mw34::campaign::CampaignManager::instance();
+  for(unsigned mission=1;mission<=4;++mission){
+   campaign.observe_file("zbd/t1/readerm"+std::to_string(mission)+".zbd");
+   if(campaign.active_mission_id()!="t1m"+std::to_string(mission))return 13;
+   if(!campaign.active_environment() || campaign.active_environment()->elevation<=0)return 14;
+   if((campaign.evaluate_weather(0).rain_intensity>.5f)!=(mission==3))return 15;
+  }
+  return 0;
+ }
  if(mode!="changed")return 6;
  _putenv_s("MW34_MISSION_ENVIRONMENTS",argv[2]);
  auto& campaign=mw34::campaign::CampaignManager::instance();

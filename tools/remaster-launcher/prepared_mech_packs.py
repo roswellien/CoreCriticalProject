@@ -11,6 +11,7 @@ import re
 CHASSIS = "bushwacker madcat vulture thor orion daishi shadowcat puma annihilator cauldron sunder supernova blackhawk champion strider avatar owens firefly".split()
 MODEL_KEYS = {}
 SKIN_KEYS = {}
+SURFACE_KEYS = {}
 for chassis in CHASSIS:
     prefix = "MW34_" + chassis.upper()
     keys = {prefix + suffix for suffix in ("_MESH", "_LOD1_MESH", "_TEXTURES", "_LOD1_TEXTURES", "_NORMALS", "_LOD1_NORMALS")}
@@ -19,7 +20,9 @@ for chassis in CHASSIS:
         keys.add(prefix + "_TEST")
     SKIN_KEYS[chassis] = {prefix + lod + "_SKIN_" + skin + "_TEXTURES"
                           for lod in ("", "_LOD1") for skin in "BCDEFGH"}
+    SURFACE_KEYS[chassis] = {prefix + "_SURFACE_MATERIALS", prefix + "_LOD1_SURFACE_MATERIALS"}
     keys.update(SKIN_KEYS[chassis])
+    keys.update(SURFACE_KEYS[chassis])
     MODEL_KEYS[chassis] = keys
 ALL_MODEL_KEYS = set().union(*MODEL_KEYS.values())
 MAX_BYTES = 16 * 1024**3
@@ -76,7 +79,9 @@ def canonical_pack_root(directory):
 def compose(roots, host, verification=None, chassis_records=None):
     """Return selected records and a clean runtime environment; first chassis wins."""
     environment = {k: v for k, v in host.get("runtime_environment", {}).items()
-                   if k not in ALL_MODEL_KEYS and k not in ('MW34_ADDITIONAL_SKINS', 'MW34_ADDITIONAL_CHASSIS')}
+                   if k not in ALL_MODEL_KEYS
+                   and k not in ('MW34_ADDITIONAL_SKINS', 'MW34_ADDITIONAL_CHASSIS')
+                   and not (k.startswith("MW34_CHASSIS_") and k.endswith("_SURFACE_MATERIALS"))}
     selected = {}
     metadata = []
     enabled_ids = set()
@@ -103,13 +108,25 @@ def compose(roots, host, verification=None, chassis_records=None):
         if (manifest.get("schema_version") != 2 or payload.get("profile") != "prepared-native-v1" or
                 payload.get("path_base") != "pack-root" or payload.get("registry") != "models/models.json"):
             raise ValueError("Unsupported installed pack schema/profile")
-        from content_capabilities import require
+        from content_capabilities import advertised, require
+        from surface_materials import (
+            CAPABILITY as SURFACE_CAPABILITY,
+            FORMAT as SURFACE_FORMAT,
+            mesh_uv_identity_file,
+            read_surface_materials_file,
+            texture_batch_materials_file,
+        )
         require(host, payload, ident)
         formats = {"BWTEX1"}
         formats.update("BWMESH" + str(v) for v in host.get("mesh_payload_versions", []))
         formats.update("BWNRM" + str(v) for v in host.get("normal_map_formats", []))
+        if 1 in advertised(host).get(SURFACE_CAPABILITY, []):
+            formats.add(SURFACE_FORMAT)
         if not set(payload.get("required_formats", [])).issubset(formats):
             raise ValueError("Native host lacks required pack formats")
+        if (SURFACE_FORMAT in payload.get("required_formats", [])
+                and payload.get("required_capabilities", {}).get(SURFACE_CAPABILITY) != 1):
+            raise ValueError("Surface material format requires surface-materials capability version 1")
         files = manifest.get("files", {})
         if not files or len(files) > 10000:
             raise ValueError("Missing or excessive pack file table")
@@ -164,7 +181,7 @@ def compose(roots, host, verification=None, chassis_records=None):
             if model["status"] == "runtime-candidate" and not host.get("include_runtime_candidates", False):
                 raise ValueError("Enable runtime candidates explicitly to use this mech pack")
             bindings = model.get("environment", {})
-            required = MODEL_KEYS[ident] - SKIN_KEYS[ident]
+            required = MODEL_KEYS[ident] - SKIN_KEYS[ident] - SURFACE_KEYS[ident]
             skin_keys = {"MW34_"+ident.upper()+lod+"_SKIN_"+skin.upper()+"_TEXTURES"
                          for skin in skins for lod in ('','_LOD1')}
             if set(bindings) & SKIN_KEYS[ident] != skin_keys:
@@ -176,12 +193,32 @@ def compose(roots, host, verification=None, chassis_records=None):
                 if name not in verified:
                     raise ValueError("Undeclared model payload")
                 fmt = files[name].get("format", "")
-                expected = "BWNRM2" if key.endswith("_NORMALS") else "BWTEX1" if key.endswith("_TEXTURES") else None
+                expected = (
+                    SURFACE_FORMAT if key.endswith("_SURFACE_MATERIALS")
+                    else "BWNRM2" if key.endswith("_NORMALS")
+                    else "BWTEX1" if key.endswith("_TEXTURES")
+                    else None
+                )
                 if (expected and fmt != expected) or (not expected and not fmt.startswith("BWMESH")):
                     raise ValueError("Incorrect model binding format")
                 if fmt not in model.get("required_formats", []) or fmt not in payload.get("required_formats", []):
                     raise ValueError("Undeclared model format")
                 resolved[key] = verified[name]
+            for lod, suffix in (("close", ""), ("distance", "_LOD1")):
+                surf_key = "MW34_" + ident.upper() + suffix + "_SURFACE_MATERIALS"
+                if surf_key not in resolved:
+                    continue
+                if payload.get("required_capabilities", {}).get(SURFACE_CAPABILITY) != 1:
+                    raise ValueError("Surface material bindings require surface-materials capability version 1")
+                mesh_key = ("MW34_BUSHWACKER_TEST" if ident == "bushwacker" and not suffix
+                            else "MW34_" + ident.upper() + suffix + "_MESH")
+                tex_key = "MW34_" + ident.upper() + suffix + "_TEXTURES"
+                read_surface_materials_file(
+                    Path(resolved[surf_key]),
+                    expected_asset_id=f"{ident}:{lod}",
+                    expected_mesh_uv_hash=mesh_uv_identity_file(Path(resolved[mesh_key])),
+                    expected_batch_materials=texture_batch_materials_file(Path(resolved[tex_key])),
+                )
             if ident not in selected:
                 selected[ident] = dict(id=ident, name=model["name"], status=model["status"], backend="native",
                     environment=resolved, required_files=list(resolved.values()),
@@ -197,9 +234,10 @@ def compose(roots, host, verification=None, chassis_records=None):
         added = select_chassis(metadata, host, verification)
         chassis_records.extend(added)
     from prepared_skin_packs import select
-    views = [dict(id=r['registration']['id'], visuals=r['registration']['visuals']) for r in added]
+    visual_records = [record for record in added if 'visuals' in record['registration']]
+    views = [dict(id=r['registration']['id'], visuals=r['registration']['visuals']) for r in visual_records]
     select(metadata, host, list(selected.values()) + views, verification)
-    for record, view in zip(added, views):
+    for record, view in zip(visual_records, views):
         if 'additional_skins' in view:
             record['additional_skins'] = view['additional_skins']
     return list(selected.values()), environment

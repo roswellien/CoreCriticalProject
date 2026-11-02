@@ -104,8 +104,10 @@ struct alignas(16) Uniform {
     std::array<float, 4> params{};
     std::array<Light, capacity> lights{};
     std::array<std::array<float, 4>, capacity> shadow{};
+    // Appended to preserve the original light/shadow prefix. z=0 retains legacy spots.
+    std::array<std::array<float, 4>, capacity> cones{};
 };
-static_assert(sizeof(Light) == 48 && sizeof(Uniform) == 16 + 64 * capacity);
+static_assert(sizeof(Light) == 48 && sizeof(Uniform) == 16 + 80 * capacity);
 inline unsigned fixture_slots(unsigned occupied, unsigned limit, unsigned weapon_reserve) {
     if (!limit || limit > capacity || occupied > limit)
         throw std::runtime_error("Invalid combined light budget");

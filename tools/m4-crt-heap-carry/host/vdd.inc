@@ -249,13 +249,14 @@ bool menu_dl_present(const VSurface&v,const std::vector<unsigned char>&px){
  RECT rc{};::GetClientRect(host.display.window,&rc);if(rc.right<=0||rc.bottom<=0)return false;
  const double fit=std::min({double(rc.right)/640.0,double(rc.bottom)/480.0,2880.0/640.0});
  const unsigned ow=unsigned(std::lround(640*fit)),oh=unsigned(std::lround(480*fit));if(ow<640||oh<480)return false;
- struct Src{const std::uint32_t*px{};unsigned w{},h{};float u0{},v0{},u1{},v1{};};  // straight-alpha RGBA texture and the [u0,u1]x[v0,v1] range for the full image
+ struct Src{const std::uint32_t*px{};unsigned w{},h{};float u0{},v0{},u1{},v1{};std::shared_ptr<const TextTex>text_owner{};};  // straight-alpha RGBA texture and the [u0,u1]x[v0,v1] range for the full image
  std::vector<Src>srcs(menu_dl.size());std::vector<std::vector<std::uint32_t>>wave_pixels(menu_dl.size());
  for(size_t n=0;n<menu_dl.size();++n){const auto&b=menu_dl[n];
   auto tit=b.text?text_images.find(b.text_img):text_images.end();
-  if(b.text&&hud_text_on()&&tit!=text_images.end()&&tit->second.hash==b.text_hash){const auto&ti=tit->second;const std::uint64_t key=ti.hash^std::uint64_t(std::lround(fit*256));auto it=text_cache.find(key);
-   if(it==text_cache.end()){if(text_cache.size()>512)text_cache.clear();TextTex tt{};tt.px=text_render(ti,float(fit),tt.w,tt.h,tt.u0,tt.u1);it=text_cache.emplace(key,std::move(tt)).first;}
-   if(it->second.w&&it->second.h){const float fh=float(b.ih)*float(fit)/float(it->second.h);srcs[n]={it->second.px.data(),it->second.w,it->second.h,it->second.u0,0.f,it->second.u1,fh};}}
+  if(b.text&&hud_text_on()&&tit!=text_images.end()&&tit->second.hash==b.text_hash){const auto&ti=tit->second;const std::uint64_t key=ti.hash^std::uint64_t(std::lround(fit*256));auto texture=text_cache.get(key,[&]{TextTex tt{};tt.px=text_render(ti,float(fit),tt.w,tt.h,tt.u0,tt.u1);return tt;});
+   if(texture->w&&texture->h){const float fh=float(b.ih)*float(fit)/float(texture->h);
+    // Hold this frame's texture even when a later recipe evicts its cache entry.
+    srcs[n]={texture->px.data(),texture->w,texture->h,texture->u0,0.f,texture->u1,fh,texture};}}
   else if(b.hires){const auto&ht=hires.at(b.id);srcs[n]={ht.px.data(),ht.w,ht.h,ht.u0,ht.v0,ht.u1,ht.v1};}}
  static std::vector<std::uint32_t>out;out.assign(size_t(ow)*oh,0xff000000u);
  const double S=double(hd.w)/double(hd.sw);const unsigned hw=hd.w,hh=hd.h;const unsigned char*H=hd.rgb.data();

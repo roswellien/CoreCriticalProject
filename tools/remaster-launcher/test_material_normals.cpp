@@ -600,19 +600,26 @@ int main(int argc, char **argv) {
         try { surface_normal_catalog_paths(manifest.path); }
         catch (const std::exception &) { refused = true; }
         require(refused, "Authored aggregate byte budget exceeded");
-        Temporary budget_a, budget_b, budget_c;
-        for (const auto &page : {budget_a.path, budget_b.path, budget_c.path}) {
-            std::ofstream output(page, std::ios::binary); output.close();
-            std::filesystem::resize_file(page, 180ULL * 1024 * 1024);
+        std::vector<Temporary> budget_pages(9);
+        for (const auto &page : budget_pages) {
+            std::ofstream output(page.path, std::ios::binary); output.close();
+            std::filesystem::resize_file(page.path, 180ULL * 1024 * 1024);
         }
-        write_manifest(budget_a.path.string() + "\n" + budget_b.path.string() + "\n");
+        write_manifest(budget_pages[0].path.string() + "\n" + budget_pages[1].path.string() + "\n");
         require(surface_normal_catalog_paths(manifest.path).size() == 2,
                 "Current enhanced material catalog size was rejected");
-        write_manifest(budget_a.path.string() + "\n" + budget_b.path.string() + "\n" + budget_c.path.string() + "\n");
+        write_manifest(budget_pages[0].path.string() + "\n" + budget_pages[1].path.string() + "\n" +
+                       budget_pages[2].path.string() + "\n");
+        require(surface_normal_catalog_paths(manifest.path).size() == 3,
+                "Authored catalogs above 512 MiB were rejected");
+        std::string over_budget;
+        for (const auto &page : budget_pages)
+            over_budget += page.path.string() + "\n";
+        write_manifest(over_budget);
         refused = false;
         try { surface_normal_catalog_paths(manifest.path); }
         catch (const std::exception &) { refused = true; }
-        require(refused, "Enhanced catalog aggregate budget was not enforced");
+        require(refused, "Enhanced 1536 MiB catalog budget was not enforced");
         std::cout << "Material normals: truncation, bounds, identity, explicit exclusions, legacy "
                      "glass and channel checks pass\n";
     } catch (const std::exception &error) {

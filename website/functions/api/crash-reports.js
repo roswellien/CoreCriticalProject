@@ -1,5 +1,6 @@
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ISSUE_BODY_CHARS = 48_000;
+const MAX_ISSUE_REPORT_CHARS = 20_000;
 const MAX_FULL_LOG_REPEATS = 3;
 const DEFAULT_DAILY_ISSUE_LIMIT = 20;
 const GENERIC_FAILURES = [
@@ -10,7 +11,12 @@ const GENERIC_FAILURES = [
 function redactPaths(value) {
     return value
         .replace(/\b[A-Za-z]:[\\/][^\r\n\t"<>|]*/g, "<local-path>")
-        .replace(/\\\\[^\s"<>|]+/g, "<network-path>");
+        .replace(/\\\\[^\r\n\t"<>|]+/g, "<network-path>");
+}
+
+function hardwareField(source, name) {
+    const camelName = name[0].toLowerCase() + name.slice(1);
+    return source?.[camelName] ?? source?.[name];
 }
 
 function json(body, status = 200) {
@@ -18,6 +24,66 @@ function json(body, status = 200) {
         status,
         headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
     });
+}
+
+function boundedText(value, maxLength) {
+    return typeof value === "string" ? redactPaths(value.slice(0, maxLength)) : null;
+}
+
+function boundedCount(value) {
+    return Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000 ? value : null;
+}
+
+function boundedBytes(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function validateHardware(hardware) {
+    const source =
+        hardware && typeof hardware === "object" && !Array.isArray(hardware) ? hardware : {};
+    const sourceProcessors = hardwareField(source, "Processors");
+    const processors = Array.isArray(sourceProcessors)
+        ? sourceProcessors.slice(0, 8).map((processor) => ({
+              Manufacturer: boundedText(hardwareField(processor, "Manufacturer"), 120),
+              Model: boundedText(hardwareField(processor, "Model"), 200),
+              PhysicalCores: boundedCount(hardwareField(processor, "PhysicalCores")),
+              LogicalProcessors: boundedCount(hardwareField(processor, "LogicalProcessors")),
+          }))
+        : [];
+    const memory = hardwareField(source, "Memory");
+    const sourceMemory =
+        memory && typeof memory === "object" && !Array.isArray(memory) ? memory : {};
+    const sourceModules = hardwareField(sourceMemory, "Modules");
+    const modules = Array.isArray(sourceModules)
+        ? sourceModules.slice(0, 32).map((module) => ({
+              CapacityBytes: boundedBytes(hardwareField(module, "CapacityBytes")),
+              Type: boundedText(hardwareField(module, "Type"), 80),
+              ConfiguredSpeedMhz: boundedCount(hardwareField(module, "ConfiguredSpeedMhz")),
+          }))
+        : [];
+    const sourceGraphicsAdapters = hardwareField(source, "GraphicsAdapters");
+    const graphicsAdapters = Array.isArray(sourceGraphicsAdapters)
+        ? sourceGraphicsAdapters.slice(0, 8).map((adapter) => ({
+              Name: boundedText(hardwareField(adapter, "Name"), 200) ?? "Unknown graphics adapter",
+              DedicatedVideoMemoryBytes: boundedBytes(
+                  hardwareField(adapter, "DedicatedVideoMemoryBytes"),
+              ),
+              SharedSystemMemoryBytes: boundedBytes(
+                  hardwareField(adapter, "SharedSystemMemoryBytes"),
+              ),
+              DriverVersion: boundedText(hardwareField(adapter, "DriverVersion"), 120),
+              DriverDate: boundedText(hardwareField(adapter, "DriverDate"), 40),
+          }))
+        : [];
+
+    return {
+        Processors: processors,
+        Memory: {
+            TotalBytes: boundedBytes(hardwareField(sourceMemory, "TotalBytes")),
+            Modules: modules,
+        },
+        GraphicsAdapters: graphicsAdapters,
+    };
 }
 
 function archivedOnlyResponse(reportId) {
@@ -130,6 +196,7 @@ function validateReport(report) {
             typeof report.architecture === "string" ? report.architecture.slice(0, 80) : "",
         dotnet_runtime:
             typeof report.dotnet_runtime === "string" ? report.dotnet_runtime.slice(0, 120) : "",
+        hardware: validateHardware(report.hardware),
         failure_summary: redactPaths(report.failure_summary.slice(0, 2000)),
         settings,
         packs,
@@ -185,17 +252,90 @@ async function github(token, query, variables) {
 
 function issueBody(report, crashFingerprint, { includeLogs = true, overflow = false } = {}) {
     const marker = crashFingerprint ? `<!-- crash-fingerprint:${crashFingerprint} -->\n\n` : "";
-    const safeReport = includeLogs ? report : { ...report, logs: {} };
-    const reportText = JSON.stringify(safeReport, null, 2).replace(/```/g, "\\u0060\\u0060\\u0060");
-    const boundedReport =
-        reportText.length > MAX_ISSUE_BODY_CHARS
-            ? reportText.slice(0, MAX_ISSUE_BODY_CHARS) +
-              "\n[Report truncated to fit GitHub issue limits.]"
-            : reportText;
+    const reportLogs = includeLogs ? report.logs : {};
+    const safeReport = { ...report };
+    safeReport.packs = [...report.packs];
+    delete safeReport.logs;
+    const serializeReport = (value) =>
+        JSON.stringify(value, null, 2).replace(/```/g, "\\u0060\\u0060\\u0060");
+    let reportText = serializeReport(safeReport);
+    let reportDetailsOmitted = false;
+    while (reportText.length > MAX_ISSUE_REPORT_CHARS && safeReport.packs.length > 0) {
+        safeReport.packs.pop();
+        reportDetailsOmitted = true;
+        reportText = serializeReport(safeReport);
+    }
+    if (reportText.length > MAX_ISSUE_REPORT_CHARS) {
+        reportDetailsOmitted = true;
+        reportText = serializeReport({
+            format_version: safeReport.format_version,
+            report_id: safeReport.report_id,
+            mode: safeReport.mode,
+            exit_code: safeReport.exit_code,
+            failure_summary: safeReport.failure_summary,
+            metadata_omitted: true,
+        });
+    }
     const note = overflow
         ? "Daily new-issue limit reached. This report is in the overflow queue."
         : "Crash report sent with the player's report setting or one-time approval.";
-    return `${marker}${note}\nReport ID: ${report.report_id}\n\n\`\`\`json\n${boundedReport}\n\`\`\``;
+    const omittedMetadataNote = reportDetailsOmitted
+        ? "\n\nSome report details were omitted to fit GitHub's issue size limit."
+        : "";
+    const header = `${marker}${note}\nReport ID: ${report.report_id}\n\n### Report details\n\n\`\`\`json\n${reportText}\n\`\`\`${omittedMetadataNote}`;
+    if (!includeLogs)
+        return boundIssueBody(
+            `${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`,
+        );
+
+    const logNames = {
+        launcher: "Launcher log",
+        native_stderr: "Native standard error",
+        native_stdout: "Native standard output",
+    };
+    const entries = Object.entries(reportLogs).filter(
+        ([, content]) => typeof content === "string" && content.length > 0,
+    );
+    if (entries.length === 0)
+        return boundIssueBody(
+            `${header}\n\n### Recent log excerpts\n\nNo log files were available in this report.`,
+        );
+    let body = `${header}\n\n### Recent log excerpts\n\n`;
+    for (let index = 0; index < entries.length; index++) {
+        const [name, content] = entries[index];
+        const remainingEntries = entries.length - index;
+        const heading = `#### ${logNames[name] ?? name}\n\n`;
+        const maxFenceRun = Math.max(
+            0,
+            ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
+        );
+        const fence = "`".repeat(Math.max(3, maxFenceRun + 1));
+        const remaining =
+            MAX_ISSUE_BODY_CHARS - body.length - heading.length - fence.length * 2 - 10;
+        const perLogBudget = Math.floor(remaining / remainingEntries);
+        if (perLogBudget < 128) {
+            body += "Additional log excerpts omitted to fit GitHub's issue size limit.\n";
+            break;
+        }
+
+        const truncationNote =
+            content.length > perLogBudget
+                ? "[Earlier log lines omitted to fit GitHub's issue size limit.]\n"
+                : "";
+        const available = Math.max(0, perLogBudget - truncationNote.length);
+        let excerpt = content;
+        if (excerpt.length > available) {
+            excerpt = excerpt.slice(-available);
+            const firstNewline = excerpt.indexOf("\n");
+            if (firstNewline >= 0) excerpt = excerpt.slice(firstNewline + 1);
+        }
+        body += `${heading}${fence}text\n${truncationNote}${excerpt.trimEnd()}\n${fence}\n\n`;
+    }
+    return boundIssueBody(body);
+}
+
+function boundIssueBody(body) {
+    return body.length > MAX_ISSUE_BODY_CHARS ? body.slice(0, MAX_ISSUE_BODY_CHARS) : body;
 }
 
 async function reopenIfClosed(token, issue) {

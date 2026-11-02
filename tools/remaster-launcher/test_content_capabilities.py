@@ -8,6 +8,15 @@ import test_prepared_environment_packs as environment_fixtures
 
 
 class ContentCapabilityTests(unittest.TestCase):
+    def test_legacy_skins_need_the_independent_coordinator_capability(self):
+        payload = {'profile': 'additional-chassis-v1', 'required_capabilities': {
+            'additional-mech-chassis': 3, 'legacy-mech-skins': 1}}
+        host = {'content_capabilities': {'additional-mech-chassis': [1, 2, 3]}}
+        with self.assertRaisesRegex(ValueError, 'legacy-mech-skins'):
+            require(host, payload, 'community.legacy')
+        host['content_capabilities']['legacy-mech-skins'] = [1]
+        require(host, payload, 'community.legacy')
+
     def test_no_publisher_or_executable_identity_requirement(self):
         host = {'executable_sha256': 'b' * 64, 'content_capabilities': {'ui-artwork': [1]}}
         for payload in ({'profile': 'prepared-ui-v1'},
