@@ -61,6 +61,7 @@ if(BUILD_TESTING)
 
     add_executable(mw34_surface_access_history_tests
         tools/remaster-launcher/test_surface_access_history.cpp)
+    target_compile_definitions(mw34_surface_access_history_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
     mw34_warnings(mw34_surface_access_history_tests)
     add_test(NAME surface_access_history COMMAND mw34_surface_access_history_tests)
 
