@@ -110,6 +110,13 @@ After temporary per-draw tracing was removed, the cell/source CPU fixture, world
 binding fixture, seven function-table tests, two host-builder tests and nine RX 9070
 temporal GPU cases passed. The GPU cases cover world motion/validity at 50/67/100%
 with jitter Off/On, plus three depth precision runs. These authored fixtures do not
-replace the missing native acceptance. The newer P2a surface-access dependency,
-final regression checks and independent review remain pending.
+replace the missing native acceptance. The newer P2a surface-access dependency
+(c998419) is integrated locally. Its comparison completed 2,200 presentations with
+zero Vulkan validation errors; the same write resets begin at frame 1401 after
+power-up at frame 1400. Authoritative color captures at 801/999/1801/2101 match the
+pre-dependency run byte-for-byte. The actual writing producer remains unknown;
+view-state in the last-draw log alone does not identify a main-camera failure.
+The write guard remains enabled. All 27 CTest cases passed across the initial run
+and a targeted source-pin recheck. Native acceptance, final regression checks and
+independent review remain pending.
 No normal playtest release is produced by this development branch.
