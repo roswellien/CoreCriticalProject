@@ -157,7 +157,7 @@ def stage(profile_path, output, python_home):
                  "prepared_environment_packs.py", "prepared_skin_packs.py", "prepared_chassis_packs.py",
                  "chassis_appearances.py", "surface_catalog_composition.py", "legacy_chassis_resources.py",
                  "legacy_chassis_skins.py", "chassis_catalog.py", "chassis_icons.py", "reader_archive.py",
-                 "zrd_document.py", "content_capabilities.py", "legacy_content_capabilities.json",
+                 "zrd_document.py", "content_capabilities.py", "surface_materials.py", "legacy_content_capabilities.json",
                  "mission_lighting.py", "normal_materials.py", "normal_codec.py", "native_assets.py",
                  "local_music.py", "presentation_policy.py"):
         target.copy(Path(__file__).with_name(name), Path("coordinator") / name)

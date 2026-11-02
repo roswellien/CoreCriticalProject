@@ -51,8 +51,8 @@ unsigned headlight_player() {
     return context && readable(context, 0x18) ? load(context + 0x14) : 0;
 }
 bool headlight_shutdown(unsigned actor) {
-    if (!readable(actor, 0x579))
-        return true;
+    if (!readable(actor, 0x579))
+        return true;
     return runtime.memory().load<unsigned char>({actor + 0xde}) != 0 || load(actor + 0x578) == 10;
 }
 bool headlight_actor_root_matches(unsigned actor, unsigned root) {

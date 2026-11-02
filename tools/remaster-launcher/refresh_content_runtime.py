@@ -50,7 +50,7 @@ def stage(source, output, version):
                  'surface_catalog_composition.py', 'legacy_chassis_resources.py', 'legacy_chassis_skins.py',
                  'chassis_catalog.py', 'chassis_icons.py', 'reader_archive.py', 'zrd_document.py',
                  'normal_materials.py', 'normal_codec.py', 'presentation_policy.py',
-                 'content_capabilities.py', 'legacy_content_capabilities.json'):
+                 'content_capabilities.py', 'surface_materials.py', 'legacy_content_capabilities.json'):
         shutil.copyfile(Path(__file__).with_name(name), output / 'coordinator' / name)
     manifest['version'] = version
     manifest['files'] = {p.relative_to(output).as_posix(): pin(p) for p in output.rglob('*')
