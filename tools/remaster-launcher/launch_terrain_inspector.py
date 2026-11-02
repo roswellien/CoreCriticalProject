@@ -251,7 +251,7 @@ def launch_inspector(
         print(f"Extracted {len(color_lookup)} / {len(catalog_keys)} albedo textures from remaster banks.")
 
     output_html.parent.mkdir(parents=True, exist_ok=True)
-    _sidecar_bytes, report = build_region_terrain_sidecar(
+    sidecar_bytes, report = build_region_terrain_sidecar(
         region,
         pages,
         color_lookup=color_lookup,
@@ -259,7 +259,11 @@ def launch_inspector(
         contact_sheets_dir=contact_sheets_dir,
     )
 
+    sidecar_path = output_html.parent / f"{region}_materials.bwsfm1"
+    sidecar_path.write_bytes(sidecar_bytes)
+
     print(f"Inspection report generated successfully: {output_html}")
+    print(f"Wrote BWSFM1 binary sidecar ({len(sidecar_bytes):,} bytes): {sidecar_path}")
     print(f"Processed {report.get('records_count', 0)} materials.")
 
     if open_browser:
