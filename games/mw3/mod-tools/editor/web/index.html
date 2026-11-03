@@ -11,6 +11,18 @@
         <script src="/static/js/TransformControls.js"></script>
     </head>
     <body>
+        <!-- Game Directory Setup Warning Banner -->
+        <div id="game-dir-banner" style="display: none; background: #3b1818; border-bottom: 2px solid #e05555; color: #ffcccc; padding: 10px 16px; font-size: 13px; align-items: center; justify-content: space-between; gap: 12px; z-index: 10000; position: relative;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 18px;">⚠️</span>
+                <span><strong>MechWarrior 3 Not Detected:</strong> Please specify your MechWarrior 3 game folder to enable authentic asset extraction and game launching.</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <input id="setup-game-path-input" type="text" placeholder="e.g. C:\Games\MechWarrior 3" style="width: 280px; padding: 5px 8px; background: #1a1a1a; border: 1px solid #666; color: #fff; border-radius: 3px; font-size: 12px;" />
+                <button class="btn btn-primary" style="padding: 5px 12px; font-size: 12px;" onclick="submitGameDirectory()">Set Directory</button>
+            </div>
+        </div>
+
         <!-- App Header -->
         <header>
             <div class="brand-section">
@@ -101,6 +113,14 @@
                     title="Compile and export standalone mod pack"
                 >
                     ⚡ Export Map Pack
+                </button>
+                <button
+                    id="btn-package-zip"
+                    class="btn"
+                    title="Package map pack into portable ZIP for other players"
+                    onclick="packageCurrentMapZip()"
+                >
+                    📦 Package ZIP
                 </button>
                 <button
                     id="btn-launch-game"
@@ -1168,6 +1188,9 @@
                 </div>
                 <div class="modal-actions">
                     <button id="btn-modal-close" class="btn">Close</button>
+                    <button onclick="packageCurrentMapZip()" class="btn" title="Create a portable zip file for other players">
+                        📦 Package ZIP for Other PCs
+                    </button>
                     <button onclick="launchGameEngine()" class="btn btn-accent">
                         ▶️ Launch Game Now
                     </button>
@@ -1404,6 +1427,7 @@
                 <div class="modal-actions" style="margin-top: 14px;">
                     <button class="btn" onclick="closeCampaignModal()">Cancel</button>
                     <button class="btn btn-primary" id="btn-export-campaign" onclick="exportCampaignProject()">⚡ Compile Campaign Pack</button>
+                    <button class="btn" id="btn-package-campaign" onclick="packageCampaignZip()" title="Create a portable zip file of the full campaign for other players">📦 Package Campaign ZIP</button>
                     <button class="btn btn-accent" id="btn-launch-campaign" onclick="launchCampaignProject()">▶️ Play Campaign</button>
                 </div>
             </div>

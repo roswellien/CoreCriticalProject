@@ -30,6 +30,15 @@ def test_studio_api():
             assert "Visual 3D Map Studio" in html
             print("[OK] GET / returned 200 with Studio HTML")
 
+        # 1b. Test GET /api/status
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status") as resp:
+            assert resp.status == 200
+            status_data = json.loads(resp.read().decode("utf-8"))
+            assert status_data["status"] == "ok"
+            assert "game_installed" in status_data
+            assert "tools_available" in status_data
+            print(f"[OK] GET /api/status returned ok (game_installed={status_data['game_installed']})")
+
         # 2. Test GET /api/list-packs
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/list-packs") as resp:
             assert resp.status == 200
@@ -92,12 +101,29 @@ def test_studio_api():
             assert res_data["pack_id"] == "test_api_pack"
             print("[OK] POST /api/export-pack compiled and returned ok")
 
+        # 3b. Test POST /api/package-pack
+        req_pkg = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/package-pack",
+            data=json.dumps({"pack_id": "test_api_pack"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req_pkg) as resp:
+            assert resp.status == 200
+            res_pkg = json.loads(resp.read().decode("utf-8"))
+            assert res_pkg["status"] == "ok"
+            assert "zip_name" in res_pkg
+            assert (ROOT / "dist" / res_pkg["zip_name"]).is_file()
+            print(f"[OK] POST /api/package-pack produced {res_pkg['zip_name']}")
+
         # Cleanup test pack
         import shutil
 
         test_folder = ROOT / "mods/map-packs/test_api_pack"
         if test_folder.is_dir():
             shutil.rmtree(test_folder)
+        test_zip = ROOT / "dist/test_api_pack.zip"
+        if test_zip.is_file():
+            test_zip.unlink()
 
         # 4. Test POST /api/export-campaign
         sample_campaign = {

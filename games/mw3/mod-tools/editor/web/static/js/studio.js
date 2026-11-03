@@ -3035,6 +3035,102 @@ window.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btn-add-lancemate").addEventListener("click", addLancemate);
 
     // Load authentic in-game 3D models and initial demo
+    checkSystemStatus();
     loadGameAssets();
     loadDemoMap();
 });
+
+// System Status and Game Directory Setup
+async function checkSystemStatus() {
+    try {
+        const res = await fetch("/api/status");
+        if (res.ok) {
+            const data = await res.json();
+            const banner = document.getElementById("game-dir-banner");
+            if (banner) {
+                if (!data.game_installed) {
+                    banner.style.display = "flex";
+                } else {
+                    banner.style.display = "none";
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("Could not check system status", e);
+    }
+}
+
+async function submitGameDirectory() {
+    const input = document.getElementById("setup-game-path-input");
+    if (!input || !input.value.trim()) {
+        alert("Please enter a valid path to your MechWarrior 3 folder.");
+        return;
+    }
+    const pathStr = input.value.trim();
+    try {
+        const res = await fetch("/api/set-game-directory", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_path: pathStr }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert("Game directory set successfully! Reloading studio...");
+            location.reload();
+        } else {
+            alert("Error setting game directory: " + data.message);
+        }
+    } catch (e) {
+        alert("Failed to set game directory: " + e);
+    }
+}
+
+async function packageCurrentMapZip() {
+    const packId = state.project.pack_id;
+    if (!packId) {
+        alert("Please export the map pack first before packaging.");
+        return;
+    }
+    try {
+        showToast("Compressing map package for distribution...");
+        const res = await fetch("/api/package-pack", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pack_id: packId }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert(`📦 Map Pack Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and double-click the launcher to play!`);
+            playBeep(880, "sine", 0.15);
+        } else {
+            alert("Packaging failed: " + data.message);
+        }
+    } catch (e) {
+        alert("Packaging error: " + e);
+    }
+}
+
+async function packageCampaignZip() {
+    const campId = document.getElementById("camp-id").value || state.campaign.campaign_id;
+    if (!campId) {
+        alert("Please enter a campaign ID.");
+        return;
+    }
+    try {
+        showToast("Compressing campaign package for distribution...");
+        const res = await fetch("/api/package-campaign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ campaign_id: campId }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert(`📦 Campaign Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and play the multi-mission campaign with 1 click!`);
+            playBeep(880, "sine", 0.15);
+        } else {
+            alert("Campaign packaging failed: " + data.message);
+        }
+    } catch (e) {
+        alert("Campaign packaging error: " + e);
+    }
+}

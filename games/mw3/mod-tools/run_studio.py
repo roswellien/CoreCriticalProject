@@ -26,9 +26,17 @@ WEB_ROOT = TOOLS_ROOT / "editor/web"
 if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
+import zipfile
+
 from editor.core.map_pack import MapPackProject, MapPackBuilder, pack_directory
 from editor.core.campaign import CampaignProject, CampaignBuilder, campaign_directory
-from editor.config import game_directory
+from editor.config import (
+    game_directory,
+    is_game_installed,
+    set_game_directory,
+    tool_directory,
+    cache_directory,
+)
 
 
 class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -40,7 +48,9 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if not self.check_local_request():
             return
-        if self.path == "/api/list-packs":
+        if self.path == "/api/status":
+            self.handle_status()
+        elif self.path == "/api/list-packs":
             self.handle_list_packs()
         elif self.path == "/api/list-campaigns":
             self.handle_list_campaigns()
@@ -56,16 +66,162 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
         ):
             self.send_error(415, "Use application/json")
             return
-        if self.path == "/api/export-pack":
+        if self.path == "/api/set-game-directory":
+            self.handle_set_game_directory()
+        elif self.path == "/api/export-pack":
             self.handle_export_pack()
+        elif self.path == "/api/package-pack":
+            self.handle_package_pack()
         elif self.path == "/api/launch-map":
             self.handle_launch_map()
         elif self.path == "/api/export-campaign":
             self.handle_export_campaign()
+        elif self.path == "/api/package-campaign":
+            self.handle_package_campaign()
         elif self.path == "/api/launch-campaign":
             self.handle_launch_campaign()
         else:
             self.send_error(404, "Endpoint not found")
+
+    def handle_status(self):
+        try:
+            installed = is_game_installed()
+            gdir = str(game_directory()) if installed else ""
+            tdir = tool_directory()
+            tools_ok = (tdir / "unzbd.exe").is_file() and (tdir / "rezbd.exe").is_file()
+
+            packs_root = PROJECT_ROOT / "mods/map-packs"
+            pack_count = (
+                len([p for p in packs_root.iterdir() if p.is_dir()]) if packs_root.is_dir() else 0
+            )
+
+            camp_root = PROJECT_ROOT / "mods/campaign-packs"
+            camp_count = (
+                len([p for p in camp_root.iterdir() if p.is_dir()]) if camp_root.is_dir() else 0
+            )
+
+            self.send_json_response(
+                200,
+                {
+                    "status": "ok",
+                    "game_installed": installed,
+                    "game_directory": gdir,
+                    "tools_available": tools_ok,
+                    "tools_directory": str(tdir),
+                    "packs_count": pack_count,
+                    "campaigns_count": camp_count,
+                },
+            )
+        except Exception as e:
+            self.send_json_response(500, {"status": "error", "message": str(e)})
+
+    def handle_set_game_directory(self):
+        try:
+            data = self.read_json_request()
+            path_str = data.get("game_path", "").strip()
+            if not path_str:
+                self.send_json_response(
+                    400, {"status": "error", "message": "No game path provided."}
+                )
+                return
+            target_path = Path(path_str)
+            set_game_directory(target_path)
+            self.send_json_response(
+                200,
+                {
+                    "status": "ok",
+                    "game_directory": str(game_directory()),
+                    "message": f"Game directory successfully set to {game_directory()}",
+                },
+            )
+        except (ValueError, TypeError) as e:
+            self.send_json_response(400, {"status": "error", "message": str(e)})
+        except Exception as e:
+            self.send_json_response(500, {"status": "error", "message": str(e)})
+
+    def handle_package_pack(self):
+        try:
+            data = self.read_json_request()
+            pack_id = data.get("pack_id", "")
+            if not pack_id:
+                self.send_json_response(400, {"status": "error", "message": "Missing pack_id."})
+                return
+            packs_root = PROJECT_ROOT / "mods/map-packs"
+            pack_dir = pack_directory(packs_root, pack_id)
+            if not pack_dir.is_dir():
+                self.send_json_response(
+                    404, {"status": "error", "message": f"Pack folder not found: {pack_id}"}
+                )
+                return
+
+            dist_dir = PROJECT_ROOT / "dist"
+            dist_dir.mkdir(parents=True, exist_ok=True)
+            zip_out = dist_dir / f"{pack_id}.zip"
+
+            with zipfile.ZipFile(zip_out, "w", zipfile.ZIP_DEFLATED) as z:
+                for file_path in pack_dir.rglob("*"):
+                    if file_path.is_file():
+                        rel = file_path.relative_to(pack_dir)
+                        z.write(file_path, arcname=str(rel))
+
+            self.send_json_response(
+                200,
+                {
+                    "status": "ok",
+                    "pack_id": pack_id,
+                    "zip_path": str(zip_out),
+                    "zip_name": zip_out.name,
+                    "size_bytes": zip_out.stat().st_size,
+                    "message": f"Successfully packaged {pack_id} ({zip_out.stat().st_size:,} bytes)",
+                },
+            )
+        except (ValueError, TypeError) as e:
+            self.send_json_response(400, {"status": "error", "message": str(e)})
+        except Exception as e:
+            self.send_json_response(500, {"status": "error", "message": str(e)})
+
+    def handle_package_campaign(self):
+        try:
+            data = self.read_json_request()
+            camp_id = data.get("campaign_id", "")
+            if not camp_id:
+                self.send_json_response(
+                    400, {"status": "error", "message": "Missing campaign_id."}
+                )
+                return
+            camp_root = PROJECT_ROOT / "mods/campaign-packs"
+            camp_dir = campaign_directory(camp_root, camp_id)
+            if not camp_dir.is_dir():
+                self.send_json_response(
+                    404, {"status": "error", "message": f"Campaign folder not found: {camp_id}"}
+                )
+                return
+
+            dist_dir = PROJECT_ROOT / "dist"
+            dist_dir.mkdir(parents=True, exist_ok=True)
+            zip_out = dist_dir / f"{camp_id}.zip"
+
+            with zipfile.ZipFile(zip_out, "w", zipfile.ZIP_DEFLATED) as z:
+                for file_path in camp_dir.rglob("*"):
+                    if file_path.is_file():
+                        rel = file_path.relative_to(camp_dir)
+                        z.write(file_path, arcname=str(rel))
+
+            self.send_json_response(
+                200,
+                {
+                    "status": "ok",
+                    "campaign_id": camp_id,
+                    "zip_path": str(zip_out),
+                    "zip_name": zip_out.name,
+                    "size_bytes": zip_out.stat().st_size,
+                    "message": f"Successfully packaged campaign {camp_id} ({zip_out.stat().st_size:,} bytes)",
+                },
+            )
+        except (ValueError, TypeError) as e:
+            self.send_json_response(400, {"status": "error", "message": str(e)})
+        except Exception as e:
+            self.send_json_response(500, {"status": "error", "message": str(e)})
 
     def handle_export_pack(self):
         try:
