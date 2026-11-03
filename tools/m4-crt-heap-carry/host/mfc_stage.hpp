@@ -631,7 +631,21 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
 
   return headlight_body(s,target,p,[&]{return controller_body(s,target,p,[&]{return controller_next_body(s,target,p,body);});});
  }
+ void initialize_menu_construction(unsigned target){
+  if(target!=0x488bc0)return;
+  const unsigned menu=state.gpr.rcx.dword;
+  const auto block=host.gheap.live.find(menu);
+  if(block==host.gheap.live.end()||block->second!=0x17730U||
+     host.gheap.owner_of(menu)!=hs::token||!writable(menu+0x16f9cU,12))
+   deny("Menu construction outside its new CRT allocation",menu);
+  // Original 0x48a718 calls this constructor before 0x48a838 assigns these
+  // fields. Its callback reads them at 0x489d19; reused CRT bytes can be stale.
+  runtime.memory().store<unsigned char>({menu+0x16f9cU},0);
+  store(menu+0x16fa0U,0);
+  store(menu+0x16fa4U,0);
+ }
  void*enter(State*s,unsigned target,void*p,Body body){if(depth>=returns.size())deny("MFC42-stage call depth bound",target);if(hud_log)hud_capture(target);{void*r{};if(hud_intercept(target,p,r))return r;}
+  initialize_menu_construction(target);
   if(kind==Kind::initterm&&depth==0)for(unsigned i=0;i<145;++i)if(load(0x5e0000+4*i)==target&&load(state.gpr.rsp.dword)>=msvcrt_base){root_index=i;root_addr=target;break;}{const unsigned sp=state.gpr.rsp.dword,w=load(sp);
    /* A direct tail JMP to a function entry is lifted as a tail call through the CALL router: it enters with
       ESP at the slot of the active return word (a real CALL always enters strictly deeper) and binds nothing new. */
