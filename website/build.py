@@ -8,7 +8,7 @@ from tools.sync_mechlab import read_notes
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "dist"
 OUT.mkdir(exist_ok=True)
-for name in ("index.html", "styles.css", "site.js", "news.html", "media.html", "about.html", "native.html", "vulkan.html", "tools.html", "404.html"):
+for name in ("index.html", "styles.css", "site.js", "news.html", "media.html", "about.html", "native.html", "vulkan.html", "tools.html", "studio-tour.html", "404.html"):
     source = ROOT / name
     if source.is_file():
         shutil.copy2(source, OUT / name)
@@ -17,7 +17,10 @@ repository_root = ROOT.parent
 notes = read_notes(repository_root / "docs" / "mechlab", repository_root)
 render_site(ROOT, OUT, notes)
 render_media(ROOT, OUT)
-studio_source = repository_root / "games" / "mw3" / "mod-tools" / "editor" / "web"
-if studio_source.is_dir():
-    shutil.copytree(studio_source, OUT / "studio", dirs_exist_ok=True)
+# Alias /studio/ to studio-tour.html as well for direct access
+studio_dir = OUT / "studio"
+studio_dir.mkdir(exist_ok=True)
+tour_file = OUT / "studio-tour.html"
+if tour_file.is_file():
+    shutil.copy2(tour_file, studio_dir / "index.html")
 print(f"Static preview ready: {OUT}")

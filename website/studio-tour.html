@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+            name="description"
+            content="Visual tour and walkthrough of the MechWarrior 3 Visual 3D Mod Studio redesigned interface, featuring the Scene Outliner, CSS Grid Inspector, Terrain Sculptor, Atmosphere studio, and MechLab."
+        />
+        <meta name="theme-color" content="#141717" />
+        <title>Mod Studio Interface Tour — Core Critical</title>
+        <link rel="icon" href="assets/plates/brand-mark.png" />
+        <link rel="stylesheet" href="styles.css" />
+        <script src="site.js" defer></script>
+        <style>
+            .tour-hero {
+                padding: 4rem 1.5rem 2rem;
+                max-width: 1200px;
+                margin: 0 auto;
+                text-align: center;
+            }
+            .tour-pill {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                background: rgba(0, 240, 255, 0.1);
+                border: 1px solid rgba(0, 240, 255, 0.3);
+                color: #00f0ff;
+                padding: 4px 14px;
+                border-radius: 999px;
+                font-size: 0.82rem;
+                font-weight: 600;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                margin-bottom: 1.5rem;
+            }
+            .tour-title {
+                font-size: clamp(2.2rem, 5vw, 3.8rem);
+                font-weight: 700;
+                line-height: 1.1;
+                margin-bottom: 1rem;
+                color: #f0f4f8;
+            }
+            .tour-subtitle {
+                font-size: clamp(1rem, 2vw, 1.25rem);
+                color: #9ba1a6;
+                max-width: 780px;
+                margin: 0 auto 2rem;
+                line-height: 1.6;
+            }
+            .tour-nav-chips {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 8px;
+                max-width: 960px;
+                margin: 0 auto 3rem;
+            }
+            .tour-chip {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                color: #d1d5db;
+                padding: 6px 14px;
+                border-radius: 6px;
+                font-size: 0.85rem;
+                text-decoration: none;
+                transition: all 0.2s ease;
+            }
+            .tour-chip:hover {
+                background: rgba(0, 240, 255, 0.15);
+                border-color: #00f0ff;
+                color: #ffffff;
+                transform: translateY(-1px);
+            }
+            .tour-grid {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 0 1.5rem 4rem;
+                display: flex;
+                flex-direction: column;
+                gap: 4rem;
+            }
+            .tour-card {
+                background: #111417;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+                transition: border-color 0.25s ease;
+            }
+            .tour-card:hover {
+                border-color: rgba(0, 240, 255, 0.4);
+            }
+            .tour-card-header {
+                padding: 1.5rem 2rem 1rem;
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: space-between;
+                gap: 1rem;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+                background: rgba(255, 255, 255, 0.02);
+            }
+            .tour-card-header h2 {
+                font-size: 1.45rem;
+                color: #ffffff;
+                margin: 0;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .tour-tag {
+                background: rgba(0, 240, 255, 0.12);
+                color: #00f0ff;
+                font-size: 0.75rem;
+                font-weight: 600;
+                padding: 3px 10px;
+                border-radius: 4px;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+            }
+            .tour-card-img-wrap {
+                position: relative;
+                background: #080a0c;
+                display: block;
+                overflow: hidden;
+            }
+            .tour-card-img-wrap img {
+                width: 100%;
+                height: auto;
+                display: block;
+                transition: transform 0.3s ease;
+            }
+            .tour-card-img-wrap:hover img {
+                transform: scale(1.01);
+            }
+            .tour-card-body {
+                padding: 1.75rem 2rem;
+                background: #111417;
+            }
+            .tour-card-body p {
+                color: #b0b7be;
+                font-size: 1rem;
+                line-height: 1.65;
+                margin-bottom: 1.25rem;
+            }
+            .tour-features-list {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                gap: 12px;
+                list-style: none;
+                padding: 0;
+                margin: 0;
+            }
+            .tour-features-list li {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 10px 14px;
+                color: #d1d5db;
+                font-size: 0.9rem;
+                line-height: 1.4;
+                display: flex;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .tour-features-list li svg {
+                flex-shrink: 0;
+                width: 16px;
+                height: 16px;
+                stroke: #00f0ff;
+                margin-top: 2px;
+            }
+            .tour-footer-box {
+                max-width: 800px;
+                margin: 0 auto 5rem;
+                padding: 2.5rem;
+                background: linear-gradient(180deg, rgba(17, 20, 23, 0.9) 0%, rgba(13, 16, 18, 0.95) 100%);
+                border: 1px solid rgba(0, 240, 255, 0.25);
+                border-radius: 12px;
+                text-align: center;
+                box-shadow: 0 8px 30px rgba(0, 240, 255, 0.05);
+            }
+            .tour-footer-box h3 {
+                font-size: 1.6rem;
+                color: #ffffff;
+                margin-bottom: 0.75rem;
+            }
+            .tour-footer-box p {
+                color: #9ba1a6;
+                font-size: 1rem;
+                line-height: 1.6;
+                margin-bottom: 1.5rem;
+            }
+            .tour-action-btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                background: #00f0ff;
+                color: #0b1114;
+                font-weight: 700;
+                padding: 12px 24px;
+                border-radius: 6px;
+                text-decoration: none;
+                transition: background 0.2s ease, transform 0.2s ease;
+            }
+            .tour-action-btn:hover {
+                background: #33f3ff;
+                transform: translateY(-2px);
+            }
+        </style>
+    </head>
+    <body class="interior overview">
+        <a class="skip-link" href="#main">Skip to content</a>
+        <header class="site-header">
+            <a class="brand" href="index.html" aria-label="Core Critical home">
+                <img src="assets/plates/brand-mark.png" alt="" width="32" height="32" />
+                <span>CORE CRITICAL</span>
+            </a>
+            <button
+                class="menu-toggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="primary-nav"
+            >
+                Menu
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 7h16M4 12h16M4 17h16" />
+                </svg>
+            </button>
+            <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
+                <a href="index.html">Home</a>
+                <a href="native.html">Native Recompilation</a>
+                <a href="vulkan.html">Vulkan Graphics</a>
+                <a href="tools.html">Launcher &amp; Tools</a>
+                <a href="about.html">About</a>
+                <a href="https://discord.gg/HK7pgngkD" target="_blank" rel="noopener noreferrer">Discord</a>
+                <a href="https://github.com/roswellien/MW3Recomp">GitHub</a>
+            </nav>
+        </header>
+
+        <main id="main">
+            <section class="tour-hero">
+                <div class="tour-pill">Development Preview • Live Engine Screenshots</div>
+                <h1 class="tour-title">MechWarrior 3 Mod Studio<br /><span style="color: #00f0ff">Interface Tour &amp; Walkthrough</span></h1>
+                <p class="tour-subtitle">
+                    A comprehensive visual walkthrough of the overhauled user interface for the visual 3D mission and map studio, featuring the newly integrated Scene Outliner, non-overlapping CSS Grid Property Inspector, real-time Terrain Sculpting brushes, dynamic Atmosphere studio, MechLab, and Mission Objectives authoring suites.
+                </p>
+
+                <nav class="tour-nav-chips" aria-label="Quick jump">
+                    <a class="tour-chip" href="#view-map">🗺️ Map Editor</a>
+                    <a class="tour-chip" href="#view-outliner">📋 Scene Outliner</a>
+                    <a class="tour-chip" href="#view-inspector">🔍 CSS Grid Inspector</a>
+                    <a class="tour-chip" href="#view-sculptor">🏔️ Terrain Sculptor</a>
+                    <a class="tour-chip" href="#view-atmosphere">🌤️ Atmosphere Studio</a>
+                    <a class="tour-chip" href="#view-mechlab">🦾 MechLab Loadout</a>
+                    <a class="tour-chip" href="#view-objectives">🎯 Mission Objectives</a>
+                    <a class="tour-chip" href="#view-shortcuts">⌨️ Keyboard Shortcuts</a>
+                </nav>
+            </section>
+
+            <div class="tour-grid">
+                <!-- Section 1: Map Editor Overview -->
+                <article class="tour-card" id="view-map">
+                    <div class="tour-card-header">
+                        <h2>🗺️ Map Editor &amp; 3D Viewport Overview</h2>
+                        <span class="tour-tag">Primary Workspace</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/01_map_editor_main.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/01_map_editor_main.png" alt="MechWarrior 3 Mod Studio Map Editor Workspace" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            The primary editing workspace combines a two-tier application bar with a floating camera HUD and a full 18-Mech roster palette. The top bar houses mode switchers (Map Editor, Terrain Sculptor, Atmosphere & Weather, MechLab, Objectives, Campaign) and engine triggers, while the sub-bar provides quick access to mission metadata, biome selection, undo/redo, and calibrated recon overlays.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Two-Tier Header</strong>: Prevents layout clutter by isolating workspace modes from map-specific context controls.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Full 18-Mech Roster</strong>: BattleMechs categorized by weight class and faction with custom chassis badges.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Floating Glassmorphic HUD</strong>: Quick-toggle between 3D Orbit, 2D Tactical, Isometric, Selection Focus, and Sculpting.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Live Coordinates Status Bar</strong>: Instant world coordinate tracking (X, Y, Z) and placed entity tally.</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+
+                <!-- Section 2: Scene Outliner -->
+                <article class="tour-card" id="view-outliner">
+                    <div class="tour-card-header">
+                        <h2>📋 Hierarchical Scene Outliner</h2>
+                        <span class="tour-tag">New Feature</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/02_scene_outliner_inspector.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/02_scene_outliner_inspector.png" alt="Scene Outliner tab with placed entities hierarchy" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            The dedicated <strong>Scene Outliner</strong> tab replaces guesswork with an interactive hierarchy of all entities placed on the map. Users can instantly locate, inspect, focus, or delete any asset without needing to hunt through the 3D viewport.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Real-Time Search Filter</strong>: Instantly narrow down placed entities by name, archetype, or faction.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Color-Coded Faction Pills</strong>: Distinct visual badges for Player ([PLAY] green), Enemy ([ENEM] red), and Neutral ([NEUT] gray).</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>World Coordinates Preview</strong>: Displays instant (X, Z) placement coordinates for every entity item.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Camera Focus &amp; Deletion</strong>: One-click Focus Entity (F) snaps the 3D camera to target with interactive 3D gizmo attached.</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+
+                <!-- Section 3: Property Inspector -->
+                <article class="tour-card" id="view-inspector">
+                    <div class="tour-card-header">
+                        <h2>🔍 Non-Overlapping CSS Grid Property Inspector</h2>
+                        <span class="tour-tag">Layout Redesign</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/02b_property_inspector.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/02b_property_inspector.png" alt="Property Inspector with strict CSS grid layout" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            The Property Inspector has been completely refactored with a strict two-column CSS Grid layout (<code>105px 1fr</code>). Labels, inputs, and sliders are cleanly aligned with no overlapping fields, clipped text, or squished elements.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Strict CSS Grid Structure</strong>: Eliminates text collisions across high-DPI displays and variable sidebar widths.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Custom Styled Sliders</strong>: High-contrast cyan thumb range sliders with real-time degree/meter numeric feedback.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Combat &amp; Faction Parameters</strong>: Direct controls for Armor/HP, Faction affiliation, Primary Objective targeting, and custom Goal Labels.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Entity Duplication &amp; Removal</strong>: Dedicated quick-action buttons for duplicating or deleting selected objects.</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+
+                <!-- Section 4: Terrain Sculptor -->
+                <article class="tour-card" id="view-sculptor">
+                    <div class="tour-card-header">
+                        <h2>🏔️ Real-Time Terrain Sculpting Suite</h2>
+                        <span class="tour-tag">Heightfield Tools</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/03_terrain_sculptor.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/03_terrain_sculptor.png" alt="Terrain sculpting brushes and parameters" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            The <strong>Terrain Sculptor</strong> mode lets authors sculpt authentic MechWarrior 3 heightfield terrain directly in the 3D viewport. Selecting the workspace automatically switches the left sidebar to sculpting brushes and enables raycast mesh deformation.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>5 Sculpting Operation Modes</strong>: Raise, Lower, Flatten, Smooth, and Perlin Noise brushes.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Configurable Brush Falloff</strong>: Customize brush radius (up to 120m), deformation intensity, and falloff profiles (Smooth Bell, Linear, Sharp).</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Floating Brush Indicator</strong>: Clear visual badge showing active brush state and hotkey guidance.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Elevation Reset</strong>: One-click restore back to authentic campaign base heightfield data.</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+
+                <!-- Section 5: Atmosphere & Weather -->
+                <article class="tour-card" id="view-atmosphere">
+                    <div class="tour-card-header">
+                        <h2>🌤️ Solar Trajectory, Lighting &amp; Atmosphere</h2>
+                        <span class="tour-tag">Environment Controls</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/04_atmosphere_weather.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/04_atmosphere_weather.png" alt="Atmosphere and weather configuration panel" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            The <strong>Atmosphere &amp; Weather</strong> workspace provides comprehensive lighting and volumetric atmospheric controls, giving mission creators full authority over planetary mood, time of day, and environmental hazards.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>24-Hour Solar Trajectory</strong>: Continuous time-of-day slider with quick presets for Dawn, Noon, Sunset, and Night.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Sun &amp; Ambient Lighting</strong>: Precision controls for heading (0-360°), altitude angle, ambient sky fill, and shadow mapping.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Volumetric Fog Density</strong>: Interactive fog distance and color pickers matching authentic MW3 renderer limits.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Dynamic Weather Effects</strong>: Atmospheric rain downpour, puddle sheen, lightning flashes, dust storms, industrial smog, and volcanic ash.</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+
+                <!-- Section 6: MechLab -->
+                <article class="tour-card" id="view-mechlab">
+                    <div class="tour-card-header">
+                        <h2>🦾 MechLab &amp; Combat Drop Configurator</h2>
+                        <span class="tour-tag">Drop Configuration</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/05_mechlab_configurator.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/05_mechlab_configurator.png" alt="MechLab chassis and loadout configurator modal" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            Configure the player drop conditions and support lance composition. Authors can define insertion deployment types, chassis selection, customized hardpoint weapon assignments, armor distribution, and heat sink management.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Chassis &amp; Deployment Type</strong>: Choose player BattleMech and drop method (Orbital Drop Pod, Dropship, Forward Base).</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Hardpoint Weapon Loadouts</strong>: Assign Clan/IS lasers, PPCs, ballistic cannons, and missile racks per chassis component.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Real-Time Tonnage Validation</strong>: Live weight counter ensuring custom loadouts adhere to chassis tonnage limits.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Support Lance Roster</strong>: Manage lancemate chassis assignments and default combat orders (Escort, Free Fire).</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+
+                <!-- Section 7: Mission Objectives -->
+                <article class="tour-card" id="view-objectives">
+                    <div class="tour-card-header">
+                        <h2>🎯 Mission Objectives &amp; Tactical Intel Dossier</h2>
+                        <span class="tour-tag">Campaign Authoring</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/06_mission_objectives.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/06_mission_objectives.png" alt="Mission objectives authoring modal" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            Craft custom victory conditions and mission briefings. The authoring modal supports primary and secondary mission goals with real-time target association, intel briefing text, and authentic combat soundtrack selection.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Intel Briefing Dossier</strong>: Full text editor for writing in-game pilot briefing notes and tactical situation updates.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Primary &amp; Secondary Goals</strong>: Add and organize multiple mission objectives with one-click goal removal.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Combat Audio Profile</strong>: Assign specific MechWarrior 3 orchestral/industrial combat music themes.</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Target Entity Binding</strong>: Link objectives directly to placed enemy structures, radar dishes, or patrol lances.</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+
+                <!-- Section 8: Keyboard Shortcuts -->
+                <article class="tour-card" id="view-shortcuts">
+                    <div class="tour-card-header">
+                        <h2>⌨️ Interactive Keyboard Shortcuts HUD</h2>
+                        <span class="tour-tag">Productivity HUD</span>
+                    </div>
+                    <a class="tour-card-img-wrap" href="assets/plates/studio/07_keyboard_shortcuts.png" target="_blank" rel="noopener" title="Click to view full resolution">
+                        <img src="assets/plates/studio/07_keyboard_shortcuts.png" alt="Interactive keyboard shortcuts reference dialog" loading="lazy" />
+                    </a>
+                    <div class="tour-card-body">
+                        <p>
+                            Built-in hotkey reference dialog accessible at any time via the keyboard button or by pressing <code>?</code>. Covers camera navigation, 3D/2D projection toggles, object duplication, deletion, undo/redo, and tool cancellation.
+                        </p>
+                        <ul class="tour-features-list">
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Camera Controls</strong>: <code>Tab</code> (Toggle 2D/3D), <code>O</code> (Perspective Orbit), <code>T</code> (2D Tactical), <code>I</code> (Isometric).</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Entity Navigation</strong>: <code>F</code> (Focus Camera on Selection), <code>M</code> (Satellite Recon Overlay).</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>Editing Actions</strong>: <code>S</code> (Toggle Terrain Sculpting), <code>Del</code> (Delete Object), <code>Ctrl+D</code> (Duplicate Object).</span>
+                            </li>
+                            <li>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <span><strong>History &amp; Deselect</strong>: <code>Ctrl+Z</code> (Undo), <code>Ctrl+Y</code> (Redo), <code>Escape</code> (Cancel / Deselect).</span>
+                            </li>
+                        </ul>
+                    </div>
+                </article>
+            </div>
+
+            <!-- Footer Download Box -->
+            <div class="tour-footer-box">
+                <h3>Ready to Create Your Own Maps?</h3>
+                <p>
+                    The Mod Studio is distributed in both Standalone (embedded runtime) and Lightweight editions for testing on Windows 10/11. Approved playtesters can download packages directly from the private playtest portal.
+                </p>
+                <a class="tour-action-btn" href="https://playtest.corecritical.dev/" target="_blank" rel="noopener">
+                    Access Playtest Portal
+                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
+                </a>
+            </div>
+        </main>
+
+        <footer class="site-footer">
+            <p>&copy; 2026 Core Critical Modernization Project. All MechWarrior assets and names are trademarks of their respective owners.</p>
+        </footer>
+    </body>
+</html>
