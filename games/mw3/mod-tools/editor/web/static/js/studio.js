@@ -1486,6 +1486,7 @@ function syncSceneAssets() {
     }
 
     document.getElementById("stat-entities").innerText = state.project.assets.length;
+    if (typeof renderSceneOutliner === "function") renderSceneOutliner();
 }
 
 /** Convert viewport pixels to a ray hit on the preview terrain, or null. */
@@ -1638,6 +1639,18 @@ function getDefaultName(type) {
         mech_shadowcat: "Shadow Cat",
         mech_vulture: "Mad Dog / Vulture",
         mech_daishi: "Dire Wolf / Daishi",
+        mech_annihilator: "Annihilator ANH-1A",
+        mech_avatar: "Avatar AV1-O",
+        mech_blackhawk: "Black Hawk / Nova",
+        mech_cauldron: "Cauldron-Born / Ebon Jag",
+        mech_champion: "Champion 1N",
+        mech_dragonfly: "Dragonfly / Viper",
+        mech_firefly: "Firefly FFL-4A",
+        mech_orion: "Orion ON1-K",
+        mech_strider: "Strider SR1-O",
+        mech_sunder: "Sunder SD1-O",
+        mech_supernova: "Supernova",
+        mech_marauder: "Marauder MAD-3R",
         spawn: "Player Orbital Drop Zone",
         nav: "Nav Point Able",
         patrol: "OpFor Patrol Lance",
@@ -2767,6 +2780,26 @@ function onKeyDown(e) {
         state.selectedAssetId = null;
         syncSceneAssets();
         updateInspector();
+    } else if (e.key === "f" || e.key === "F") {
+        if (typeof focusSelectedEntity === "function") focusSelectedEntity();
+    } else if (e.key === "[") {
+        if (typeof toggleLeftSidebar === "function") toggleLeftSidebar();
+    } else if (e.key === "]") {
+        if (typeof toggleRightSidebar === "function") toggleRightSidebar();
+    } else if (e.key === "?") {
+        if (typeof openShortcutsModal === "function") openShortcutsModal();
+    } else if (e.key === "1") {
+        switchWorkspaceMode("world");
+    } else if (e.key === "2") {
+        switchWorkspaceMode("sculpt");
+    } else if (e.key === "3") {
+        switchWorkspaceMode("atmosphere");
+    } else if (e.key === "4") {
+        switchWorkspaceMode("mechlab");
+    } else if (e.key === "5") {
+        switchWorkspaceMode("objectives");
+    } else if (e.key === "6") {
+        switchWorkspaceMode("campaign");
     } else if (e.key === "Delete" || e.key === "Backspace") {
         if (state.selectedAssetId) {
             document.getElementById("btn-insp-delete").click();
@@ -3047,12 +3080,25 @@ async function checkSystemStatus() {
         if (res.ok) {
             const data = await res.json();
             const banner = document.getElementById("game-dir-banner");
-            if (banner) {
-                if (!data.game_installed) {
-                    banner.style.display = "flex";
-                } else {
-                    banner.style.display = "none";
-                }
+            const pill = document.getElementById("status-game-pill");
+            const dot = document.getElementById("status-game-dot");
+            const text = document.getElementById("status-game-text");
+            const modalInput = document.getElementById("modal-game-path-input");
+
+            if (modalInput && data.game_directory) {
+                modalInput.value = data.game_directory;
+            }
+
+            if (!data.game_installed) {
+                if (banner) banner.style.display = "flex";
+                if (dot) { dot.className = "status-dot warning"; }
+                if (text) { text.innerText = "Game Unset"; }
+                if (pill) { pill.title = "Click to set MechWarrior 3 directory"; }
+            } else {
+                if (banner) banner.style.display = "none";
+                if (dot) { dot.className = "status-dot"; }
+                if (text) { text.innerText = "MW3 Connected"; }
+                if (pill) { pill.title = `Connected: ${data.game_directory}`; }
             }
         }
     } catch (e) {
@@ -3133,4 +3179,316 @@ async function packageCampaignZip() {
     } catch (e) {
         alert("Campaign packaging error: " + e);
     }
+}
+
+
+// ============================================================================
+// ENHANCED UI: SCENE OUTLINER, WORKSPACES & COLLAPSIBLE SIDEBARS
+// ============================================================================
+
+function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function renderSceneOutliner() {
+    const listEl = document.getElementById("outliner-list");
+    const countEl = document.getElementById("outliner-count");
+    if (!listEl) return;
+
+    const searchInput = document.getElementById("outliner-search-input");
+    const query = (searchInput?.value || "").toLowerCase().trim();
+    const assets = state.project.assets || [];
+
+    if (countEl) countEl.innerText = `${assets.length} items`;
+
+    const iconMap = {
+        mech: "🦾",
+        turret: "🚀",
+        bunker: "🏢",
+        comm: "📡",
+        repair: "🔧",
+        factory: "🏭",
+        fuel: "🛢️",
+        city: "🏬",
+        bridge: "🌉",
+        ramp: "📐",
+        dock: "⚓",
+        wall: "🧱",
+        gate: "🚧",
+        pole: "⚡",
+        spawn: "🪂",
+        nav: "🚩",
+        trig_evac: "🚁",
+        trig_ambush: "⚠️",
+        trig_sensor: "📡",
+        trig_minefield: "💥",
+    };
+
+    function getIcon(type) {
+        for (const [k, v] of Object.entries(iconMap)) {
+            if (type.includes(k)) return v;
+        }
+        return "📦";
+    }
+
+    const filtered = assets.filter((a) => {
+        if (!query) return true;
+        return (
+            (a.name || "").toLowerCase().includes(query) ||
+            (a.asset_type || "").toLowerCase().includes(query) ||
+            (a.faction || "").toLowerCase().includes(query)
+        );
+    });
+
+    if (filtered.length === 0) {
+        listEl.innerHTML = `<div style="padding: 18px; text-align: center; color: var(--text-muted); font-size: 11px;">
+            ${assets.length === 0 ? "No entities in map.<br>Click any asset in the palette to place." : "No matching entities found."}
+        </div>`;
+        return;
+    }
+
+    listEl.innerHTML = filtered
+        .map((a) => {
+            const isSelected = a.asset_id === state.selectedAssetId;
+            const icon = getIcon(a.asset_type || "");
+            const factionClass = `faction-${a.faction || "neutral"}`;
+            const factionLabel = (a.faction || "neutral").slice(0, 4).toUpperCase();
+            return `
+            <div class="outliner-item ${isSelected ? "active" : ""}" 
+                 onclick="selectAssetById('${a.asset_id}')"
+                 ondblclick="focusEntity('${a.asset_id}')"
+                 title="Click to inspect, double-click to focus camera">
+                <div class="outliner-item-left">
+                    <span class="outliner-item-icon">${icon}</span>
+                    <span class="outliner-item-name">${escapeHtml(a.name || a.asset_type)}</span>
+                    <span class="outliner-faction-badge ${factionClass}">${factionLabel}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">${Math.round(a.x)},${Math.round(a.z)}</span>
+                    <button class="outliner-item-del" onclick="event.stopPropagation(); deleteAssetById('${a.asset_id}')" title="Delete">🗑️</button>
+                </div>
+            </div>`;
+        })
+        .join("");
+}
+
+function selectAssetById(assetId) {
+    state.selectedAssetId = assetId;
+    playBeep(720, "sine", 0.05);
+    syncSceneAssets();
+    updateInspector();
+    renderSceneOutliner();
+}
+
+function focusEntity(assetId) {
+    const asset = state.project.assets.find((a) => a.asset_id === assetId);
+    if (!asset) return;
+    selectAssetById(assetId);
+    if (orbitControls) {
+        orbitControls.target.set(asset.x, asset.y, asset.z);
+        if (state.viewMode === "topdown") {
+            camera.position.set(asset.x, 600, asset.z);
+        } else {
+            camera.position.set(asset.x - 70, asset.y + 45, asset.z + 70);
+        }
+        orbitControls.update();
+        playBeep(520, "sine", 0.05);
+    }
+}
+
+function focusSelectedEntity() {
+    if (state.selectedAssetId) {
+        focusEntity(state.selectedAssetId);
+    } else if (state.project.assets && state.project.assets.length > 0) {
+        focusEntity(state.project.assets[0].asset_id);
+    }
+}
+
+function deleteAssetById(assetId) {
+    state.project.assets = state.project.assets.filter((a) => a.asset_id !== assetId);
+    if (state.selectedAssetId === assetId) {
+        state.selectedAssetId = null;
+    }
+    playBeep(320, "sawtooth", 0.08);
+    syncSceneAssets();
+    updateInspector();
+    renderSceneOutliner();
+}
+
+function deleteSelectedAssetFromUI() {
+    if (state.selectedAssetId) {
+        deleteAssetById(state.selectedAssetId);
+    }
+}
+
+// Sidebar Tab Switching
+function switchLeftTab(tabName) {
+    const paletteBtn = document.getElementById("tab-palette-btn");
+    const sculptBtn = document.getElementById("tab-sculpt-btn");
+    const paletteView = document.getElementById("left-palette-view");
+    const sculptView = document.getElementById("left-sculpt-view");
+
+    if (paletteBtn) paletteBtn.classList.toggle("active", tabName === "palette");
+    if (sculptBtn) sculptBtn.classList.toggle("active", tabName === "sculpt");
+    if (paletteView) paletteView.style.display = tabName === "palette" ? "flex" : "none";
+    if (sculptView) sculptView.style.display = tabName === "sculpt" ? "flex" : "none";
+
+    if (tabName === "sculpt" && (!state.sculpt || !state.sculpt.enabled)) {
+        toggleSculptMode();
+    } else if (tabName === "palette" && state.sculpt && state.sculpt.enabled) {
+        toggleSculptMode();
+    }
+}
+
+function switchRightTab(tabName) {
+    const inspBtn = document.getElementById("tab-inspector-btn");
+    const outlinerBtn = document.getElementById("tab-outliner-btn");
+    const atmoBtn = document.getElementById("tab-atmosphere-btn");
+    const inspView = document.getElementById("right-inspector-view");
+    const outlinerView = document.getElementById("right-outliner-view");
+    const atmoView = document.getElementById("right-atmosphere-view");
+
+    if (inspBtn) inspBtn.classList.toggle("active", tabName === "inspector");
+    if (outlinerBtn) outlinerBtn.classList.toggle("active", tabName === "outliner");
+    if (atmoBtn) atmoBtn.classList.toggle("active", tabName === "atmosphere");
+
+    if (inspView) inspView.style.display = tabName === "inspector" ? "flex" : "none";
+    if (outlinerView) outlinerView.style.display = tabName === "outliner" ? "flex" : "none";
+    if (atmoView) atmoView.style.display = tabName === "atmosphere" ? "flex" : "none";
+
+    if (tabName === "outliner") {
+        renderSceneOutliner();
+    } else if (tabName === "atmosphere") {
+        syncAtmosphereUIFromState();
+    }
+}
+
+// Workspace Mode Switching
+function switchWorkspaceMode(mode) {
+    const tabs = ["world", "sculpt", "atmosphere", "mechlab", "objectives", "campaign"];
+    tabs.forEach((t) => {
+        const el = document.getElementById(`nav-mode-${t}`);
+        if (el) el.classList.toggle("active", t === mode);
+    });
+
+    if (mode === "world") {
+        switchLeftTab("palette");
+        switchRightTab("inspector");
+        if (state.sidebarLeftCollapsed) toggleLeftSidebar();
+        if (state.sidebarRightCollapsed) toggleRightSidebar();
+    } else if (mode === "sculpt") {
+        switchLeftTab("sculpt");
+        if (state.sidebarLeftCollapsed) toggleLeftSidebar();
+    } else if (mode === "atmosphere") {
+        switchRightTab("atmosphere");
+        if (state.sidebarRightCollapsed) toggleRightSidebar();
+    } else if (mode === "mechlab") {
+        openMechLabModal();
+    } else if (mode === "objectives") {
+        openObjectivesModal();
+    } else if (mode === "campaign") {
+        openCampaignModal();
+    }
+    playBeep(600, "sine", 0.04);
+}
+
+// Sidebar Collapse / Expand
+state.sidebarLeftCollapsed = false;
+state.sidebarRightCollapsed = false;
+
+function toggleLeftSidebar() {
+    const el = document.getElementById("sidebar-left");
+    const pin = document.getElementById("btn-toggle-left-sidebar");
+    if (!el) return;
+    state.sidebarLeftCollapsed = !state.sidebarLeftCollapsed;
+    el.classList.toggle("collapsed", state.sidebarLeftCollapsed);
+    if (pin) pin.innerText = state.sidebarLeftCollapsed ? "▶" : "◀";
+    setTimeout(onWindowResize, 260);
+}
+
+function toggleRightSidebar() {
+    const el = document.getElementById("sidebar-right");
+    const pin = document.getElementById("btn-toggle-right-sidebar");
+    if (!el) return;
+    state.sidebarRightCollapsed = !state.sidebarRightCollapsed;
+    el.classList.toggle("collapsed", state.sidebarRightCollapsed);
+    if (pin) pin.innerText = state.sidebarRightCollapsed ? "◀" : "▶";
+    setTimeout(onWindowResize, 260);
+}
+
+// Modals
+function openShortcutsModal() {
+    const m = document.getElementById("shortcuts-modal");
+    if (m) m.style.display = "flex";
+}
+
+function closeShortcutsModal() {
+    const m = document.getElementById("shortcuts-modal");
+    if (m) m.style.display = "none";
+}
+
+function openGameDirModal() {
+    const m = document.getElementById("gamedir-modal");
+    if (m) m.style.display = "flex";
+}
+
+function closeGameDirModal() {
+    const m = document.getElementById("gamedir-modal");
+    if (m) m.style.display = "none";
+}
+
+async function submitModalGameDirectory() {
+    const input = document.getElementById("modal-game-path-input");
+    const statusEl = document.getElementById("gamedir-modal-status");
+    if (!input || !input.value.trim()) {
+        if (statusEl) {
+            statusEl.style.color = "var(--accent-red)";
+            statusEl.innerText = "Please specify a folder path.";
+        }
+        return;
+    }
+    try {
+        if (statusEl) {
+            statusEl.style.color = "var(--accent-cyan)";
+            statusEl.innerText = "Connecting to game directory...";
+        }
+        const res = await fetch("/api/set-game-directory", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_path: input.value.trim() }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert("MechWarrior 3 folder verified & connected! Reloading studio...");
+            location.reload();
+        } else {
+            if (statusEl) {
+                statusEl.style.color = "var(--accent-red)";
+                statusEl.innerText = data.message;
+            }
+        }
+    } catch (e) {
+        if (statusEl) {
+            statusEl.style.color = "var(--accent-red)";
+            statusEl.innerText = String(e);
+        }
+    }
+}
+
+function closeObjectivesModal() {
+    const m = document.getElementById("objectives-modal");
+    if (m) m.style.display = "none";
+    switchWorkspaceMode("world");
+}
+
+function closeMechLabModal() {
+    const m = document.getElementById("mechlab-modal");
+    if (m) m.style.display = "none";
+    switchWorkspaceMode("world");
 }
