@@ -559,8 +559,8 @@
       "classification": "authored-host-source"
     },
     "mfc_stage.hpp": {
-      "sha256": "7713c127c29c1265ad9392834e36545facc626bf744baa1d11e5a05c09d84b8f",
-      "bytes": 315132,
+      "sha256": "95d319171557675111f0f0e0f7cb98fc56c71ea12049ad982f19cea40d61fcb2",
+      "bytes": 315830,
       "decision": "commit",
       "classification": "authored-host-source"
     },
