@@ -94,6 +94,7 @@ def compose(roots, host, verification=None, chassis_records=None):
         enabled_ids.add(ident)
         metadata.append((root, manifest))
     for root, manifest in metadata:
+        pack_id = manifest.get("id", "")
         if manifest.get('native_payload', {}).get('profile') == 'additional-chassis-v1':
             if chassis_records is None:
                 raise ValueError('Additional chassis packs require the current launcher coordinator')
@@ -116,7 +117,7 @@ def compose(roots, host, verification=None, chassis_records=None):
             read_surface_materials_file,
             texture_batch_materials_file,
         )
-        require(host, payload, ident)
+        require(host, payload, pack_id)
         formats = {"BWTEX1"}
         formats.update("BWMESH" + str(v) for v in host.get("mesh_payload_versions", []))
         formats.update("BWNRM" + str(v) for v in host.get("normal_map_formats", []))
