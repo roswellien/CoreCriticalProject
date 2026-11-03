@@ -202,9 +202,9 @@ const OP_ENV_METADATA = {
         waterCenter: [-1408, 0],
         palette: { sand: 0xd9c28a, rock: 0x4a7337, peak: 0x5a6975, shoreY: 3.0 },
         preset: "sunset",
-        terrainTexture: "/static/assets/textures/terrains/c1_txgter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c1_txgter_1.png",
         reconMap: {
-            texture: "/static/assets/maps/c1m1.png",
+            texture: "static/assets/maps/c1m1.png",
             mpp: 3.476,
             offset: [-1114.434, 0.0, -659.279],
             widthPx: 640,
@@ -221,9 +221,9 @@ const OP_ENV_METADATA = {
         waterCenter: [-512, -1152],
         palette: { sand: 0xd9a76a, rock: 0x9e5b32, peak: 0xc47e45, shoreY: -50.0 },
         preset: "noon",
-        terrainTexture: "/static/assets/textures/terrains/c2_ggter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c2_ggter_1.png",
         reconMap: {
-            texture: "/static/assets/maps/c2m1.png",
+            texture: "static/assets/maps/c2m1.png",
             mpp: 4.273,
             offset: [1930.0, 0.0, -41.6],
             widthPx: 640,
@@ -240,9 +240,9 @@ const OP_ENV_METADATA = {
         waterCenter: [256, -3200],
         palette: { sand: 0x242426, rock: 0x473232, peak: 0x822a2a, shoreY: -20.0 },
         preset: "storm",
-        terrainTexture: "/static/assets/textures/terrains/c3_gter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c3_gter_1.png",
         reconMap: {
-            texture: "/static/assets/maps/c3m1.png",
+            texture: "static/assets/maps/c3m1.png",
             mpp: -5.175,
             offset: [-1255.0, 0.0, -224.0],
             widthPx: 640,
@@ -259,9 +259,9 @@ const OP_ENV_METADATA = {
         waterCenter: [128, 1280],
         palette: { sand: 0x526b48, rock: 0x545b63, peak: 0xd9e5eb, shoreY: -10.0 },
         preset: "noon",
-        terrainTexture: "/static/assets/textures/terrains/c4_gter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c4_gter_1.png",
         reconMap: {
-            texture: "/static/assets/maps/c4m1.png",
+            texture: "static/assets/maps/c4m1.png",
             mpp: -7.100,
             offset: [-2365.0, 0.0, 1629.0],
             widthPx: 640,
@@ -278,9 +278,9 @@ const OP_ENV_METADATA = {
         waterCenter: [1792, -1408],
         palette: { sand: 0x73695b, rock: 0x4a4744, peak: 0x8a847e, shoreY: -30.0 },
         preset: "noon",
-        terrainTexture: "/static/assets/textures/terrains/t1_ggter1.png",
+        terrainTexture: "static/assets/textures/terrains/t1_ggter1.png",
         reconMap: {
-            texture: "/static/assets/maps/t1m1.png",
+            texture: "static/assets/maps/t1m1.png",
             mpp: 5.144,
             offset: [3382.0, 0.0, -2.0],
             widthPx: 640,
@@ -556,7 +556,7 @@ async function buildTerrain() {
     let tData = terrainCache[opCode];
     if (!tData) {
         try {
-            const res = await fetch(`/static/assets/terrains/${opCode}.json`);
+            const res = await fetch(`static/assets/terrains/${opCode}.json`);
             if (res.ok) {
                 tData = await res.json();
                 terrainCache[opCode] = tData;
@@ -1099,7 +1099,7 @@ function buildGeometryFromData(assetData) {
  */
 async function loadGameAssets() {
     try {
-        const res = await fetch("/static/assets/game_assets_3d.json");
+        const res = await fetch("static/assets/game_assets_3d.json");
         if (res.ok) {
             gameAssetsData = await res.json();
             console.log(
@@ -2343,19 +2343,41 @@ async function exportMapPack() {
             body: JSON.stringify(state.project),
         });
 
-        const data = await res.json();
-        if (data.status === "ok") {
-            playBeep(980, "sine", 0.15);
-            showExportSuccessModal(data);
-        } else {
-            alert("Export failed: " + (data.message || "Unknown error"));
+        if (res.ok) {
+            const data = await res.json();
+            if (data.status === "ok") {
+                playBeep(980, "sine", 0.15);
+                showExportSuccessModal(data);
+                return;
+            }
         }
+        exportClientSideProject();
     } catch (err) {
-        alert("Export connection error: " + err);
+        exportClientSideProject();
     } finally {
         btn.innerText = "⚡ EXPORT MAP PACK";
         btn.disabled = false;
     }
+}
+
+function exportClientSideProject() {
+    playBeep(980, "sine", 0.15);
+    const blob = new Blob([JSON.stringify(state.project, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${state.project.pack_id || "custom_map"}.mw3pack.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showExportSuccessModal({
+        pack_id: state.project.pack_id,
+        pack_folder: "Downloaded directly to browser as .mw3pack.json",
+        total_placed_assets: (state.project.assets || []).length,
+        launcher_script: "Import into local Mod Studio or Core Critical Launcher to play",
+    });
 }
 
 // Show Export Success Modal
@@ -3099,16 +3121,16 @@ function applyRouteFromHash() {
 
 // System Status and Game Directory Setup
 async function checkSystemStatus() {
+    const banner = document.getElementById("game-dir-banner");
+    const pill = document.getElementById("status-game-pill");
+    const dot = document.getElementById("status-game-dot");
+    const text = document.getElementById("status-game-text");
+    const modalInput = document.getElementById("modal-game-path-input");
+
     try {
         const res = await fetch("/api/status");
         if (res.ok) {
             const data = await res.json();
-            const banner = document.getElementById("game-dir-banner");
-            const pill = document.getElementById("status-game-pill");
-            const dot = document.getElementById("status-game-dot");
-            const text = document.getElementById("status-game-text");
-            const modalInput = document.getElementById("modal-game-path-input");
-
             if (modalInput && data.game_directory) {
                 modalInput.value = data.game_directory;
             }
@@ -3124,10 +3146,17 @@ async function checkSystemStatus() {
                 if (text) { text.innerText = "MW3 Connected"; }
                 if (pill) { pill.title = `Connected: ${data.game_directory}`; }
             }
+            return;
         }
     } catch (e) {
-        console.warn("Could not check system status", e);
+        // Fall through to cloud/web static mode
     }
+
+    // Static web hosting mode (e.g. corecritical.dev/studio)
+    if (banner) banner.style.display = "none";
+    if (dot) { dot.className = "status-dot"; }
+    if (text) { text.innerText = "Web Cloud Studio"; }
+    if (pill) { pill.title = "Running in cloud web mode on corecritical.dev. Export downloads .mw3pack.json directly."; }
 }
 
 async function submitGameDirectory() {

@@ -17,4 +17,7 @@ repository_root = ROOT.parent
 notes = read_notes(repository_root / "docs" / "mechlab", repository_root)
 render_site(ROOT, OUT, notes)
 render_media(ROOT, OUT)
+studio_source = repository_root / "games" / "mw3" / "mod-tools" / "editor" / "web"
+if studio_source.is_dir():
+    shutil.copytree(studio_source, OUT / "studio", dirs_exist_ok=True)
 print(f"Static preview ready: {OUT}")
