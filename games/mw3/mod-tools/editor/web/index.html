@@ -45,6 +45,9 @@
 
             <!-- Top Action Controls -->
             <div class="header-actions">
+                <button id="btn-new-mission" class="btn btn-sm btn-accent" onclick="openNewMissionModal()" title="Create a new custom map or mission from scratch (Ctrl+N)">✨ New Mission</button>
+                <button id="btn-open-mission" class="btn btn-sm" onclick="triggerImportMapFile()" title="Open / Import existing map project (Ctrl+O)">📂 Open</button>
+                <input type="file" id="input-import-map-file" accept=".json,.mw3pack" style="display:none;" onchange="handleImportMapFile(event)" />
                 <button id="btn-load-demo" class="btn btn-sm" title="Load sample Iron Ridge base layout">📥 Load Demo</button>
                 <button id="btn-export" class="btn btn-sm btn-primary" title="Compile standalone map pack">⚡ Export Pack</button>
                 <button id="btn-package-zip" class="btn btn-sm" onclick="packageCurrentMapZip()" title="Package into portable ZIP for other players">📦 Package ZIP</button>
@@ -1035,6 +1038,63 @@
         </div>
 
         <!-- Keyboard Shortcuts Help Modal (NEW!) -->
+        
+        <!-- Create New Mission Wizard Modal -->
+        <div id="new-mission-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" style="width: 580px;">
+                <div class="modal-header">
+                    <div class="modal-title"><span>✨ CREATE NEW MISSION / MAP</span></div>
+                    <button class="modal-close-btn" onclick="closeNewMissionModal()">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 13px;">
+                        Configure the operational sector, planetary terrain biome, starting template, and player deployment for your custom MechWarrior 3 mission.
+                    </p>
+                    <div style="display: grid; grid-template-columns: 140px 1fr; gap: 12px; align-items: center; margin-bottom: 8px;">
+                        <span class="meta-label">MISSION TITLE:</span>
+                        <input type="text" id="new-mission-title" class="text-input" value="Sector 7 Infiltration" oninput="autoSlugNewMissionId()" style="padding: 6px 10px; font-size: 13px;" />
+
+                        <span class="meta-label">PACK / MAP ID:</span>
+                        <input type="text" id="new-mission-id" class="text-input" value="sector_7_infiltration" style="padding: 6px 10px; font-size: 13px; font-family: var(--font-mono);" />
+
+                        <span class="meta-label">PLANETARY BIOME:</span>
+                        <select id="new-mission-biome" class="select-input" style="padding: 6px 10px; font-size: 13px;">
+                            <option value="c1">Operation 1: Coastal Basin / Beachhead (c1)</option>
+                            <option value="c2">Operation 2: Highlands / Rolling Hills (c2)</option>
+                            <option value="c3">Operation 3: Caldera / Volcanic Plains (c3)</option>
+                            <option value="c4">Operation 4: Glacial Canyons / Ice Shelf (c4)</option>
+                            <option value="t1">Training Facility / Salt Flats (t1)</option>
+                        </select>
+
+                        <span class="meta-label">START TEMPLATE:</span>
+                        <select id="new-mission-template" class="select-input" style="padding: 6px 10px; font-size: 13px;">
+                            <option value="blank">Blank Slate (Player Drop Zone Only)</option>
+                            <option value="outpost">Defensive Outpost (Drop Zone + Base Perimeter + Tower)</option>
+                            <option value="skirmish">Combat Skirmish (Drop Zone + Enemy Patrol Lance)</option>
+                        </select>
+
+                        <span class="meta-label">PLAYER MECH:</span>
+                        <select id="new-mission-mech" class="select-input" style="padding: 6px 10px; font-size: 13px;">
+                            <option value="Mad Cat / Timber Wolf">Mad Cat / Timber Wolf (75T Clan Omni)</option>
+                            <option value="Bushwacker BSW-X1">Bushwacker BSW-X1 (55T IS Medium)</option>
+                            <option value="Thor / Summoner">Thor / Summoner (70T Clan Omni)</option>
+                            <option value="Shadow Cat">Shadow Cat (45T Clan Omni)</option>
+                            <option value="Vulture / Mad Dog">Vulture / Mad Dog (60T Clan Omni)</option>
+                            <option value="Daishi / Dire Wolf">Daishi / Dire Wolf (100T Clan Assault)</option>
+                            <option value="Avatar AV1-O">Avatar AV1-O (70T IS Omni)</option>
+                            <option value="Cauldron-Born">Cauldron-Born (65T Clan Omni)</option>
+                            <option value="Black Hawk / Nova">Black Hawk / Nova (50T Clan Omni)</option>
+                            <option value="Annihilator ANH-1A">Annihilator ANH-1A (100T IS Assault)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" onclick="closeNewMissionModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="confirmCreateNewMission()">✨ Create Mission</button>
+                </div>
+            </div>
+        </div>
+
         <div id="shortcuts-modal" class="modal-overlay">
             <div class="modal-card" style="width: 580px;">
                 <div class="modal-header">
@@ -1052,6 +1112,8 @@
                         <div class="shortcut-row"><span>Toggle Terrain Sculpting</span><kbd>S</kbd></div>
                         <div class="shortcut-row"><span>Delete Selected Object</span><kbd>Del / Backspace</kbd></div>
                         <div class="shortcut-row"><span>Duplicate Selected</span><kbd>Ctrl + D</kbd></div>
+                        <div class="shortcut-row"><span>Create New Mission</span><kbd>Ctrl + N</kbd></div>
+                        <div class="shortcut-row"><span>Open / Import Map</span><kbd>Ctrl + O</kbd></div>
                         <div class="shortcut-row"><span>Undo Last Action</span><kbd>Ctrl + Z</kbd></div>
                         <div class="shortcut-row"><span>Redo Action</span><kbd>Ctrl + Y</kbd></div>
                         <div class="shortcut-row"><span>Cancel Placement / Deselect</span><kbd>Escape</kbd></div>

@@ -2794,6 +2794,16 @@ function onKeyDown(e) {
     )
         return;
 
+    if ((e.ctrlKey || e.metaKey) && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        openNewMissionModal();
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === "o" || e.key === "O")) {
+        e.preventDefault();
+        triggerImportMapFile();
+        return;
+    }
     if (e.key === "Escape") {
         if (state.sculpt && state.sculpt.enabled) {
             toggleSculptMode();
@@ -3107,6 +3117,9 @@ function applyRouteFromHash() {
     if (params.get("select")) {
         const id = params.get("select");
         if (typeof selectAssetById === "function") selectAssetById(id);
+    }
+    if (params.get("new") === "1") {
+        if (typeof openNewMissionModal === "function") openNewMissionModal();
     }
     if (params.get("shortcuts") === "1") {
         if (typeof openShortcutsModal === "function") openShortcutsModal();
@@ -3544,4 +3557,243 @@ function closeMechLabModal() {
     const m = document.getElementById("mechlab-modal");
     if (m) m.style.display = "none";
     switchWorkspaceMode("world");
+}
+
+
+// ============================================================================
+// NEW MISSION CREATION WIZARD & IMPORT CONTROLS
+// ============================================================================
+
+function openNewMissionModal() {
+    const m = document.getElementById("new-mission-modal");
+    if (m) {
+        m.style.display = "flex";
+        const titleEl = document.getElementById("new-mission-title");
+        if (titleEl) {
+            titleEl.focus();
+            titleEl.select();
+        }
+    }
+}
+
+function closeNewMissionModal() {
+    const m = document.getElementById("new-mission-modal");
+    if (m) m.style.display = "none";
+}
+
+function autoSlugNewMissionId() {
+    const titleEl = document.getElementById("new-mission-title");
+    const idEl = document.getElementById("new-mission-id");
+    if (titleEl && idEl) {
+        idEl.value = titleEl.value.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    }
+}
+
+function confirmCreateNewMission() {
+    const title = (document.getElementById("new-mission-title")?.value || "Custom Mission").trim();
+    const packId = (document.getElementById("new-mission-id")?.value || "custom_mission").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    const biome = document.getElementById("new-mission-biome")?.value || "c1";
+    const template = document.getElementById("new-mission-template")?.value || "blank";
+    const playerMech = document.getElementById("new-mission-mech")?.value || "Mad Cat / Timber Wolf";
+
+    let assets = [];
+    if (template === "blank") {
+        assets = [
+            {
+                asset_id: "p_spawn",
+                asset_type: "spawn",
+                name: "Player Orbital Drop Zone",
+                x: 0,
+                y: 0,
+                z: 0,
+                yaw_deg: 0,
+                faction: "player",
+                health: 100,
+            }
+        ];
+    } else if (template === "outpost") {
+        assets = [
+            {
+                asset_id: "p_spawn",
+                asset_type: "spawn",
+                name: "Player Orbital Drop Zone",
+                x: -300,
+                y: 0,
+                z: -300,
+                yaw_deg: 45,
+                faction: "player",
+                health: 100,
+            },
+            {
+                asset_id: "base_bunker",
+                asset_type: "bunker",
+                name: "Perimeter Bunker",
+                x: 0,
+                y: 0,
+                z: 0,
+                yaw_deg: 180,
+                faction: "enemy",
+                health: 200,
+                is_objective: true,
+            },
+            {
+                asset_id: "base_radar",
+                asset_type: "comm_center",
+                name: "Sensor Array Dish",
+                x: 60,
+                y: 0,
+                z: -40,
+                yaw_deg: 210,
+                faction: "enemy",
+                health: 150,
+                is_objective: true,
+            },
+            {
+                asset_id: "tur_defense",
+                asset_type: "turret_laser",
+                name: "Perimeter Laser Tower",
+                x: -60,
+                y: 0,
+                z: 80,
+                yaw_deg: 0,
+                faction: "enemy",
+                health: 120,
+            }
+        ];
+    } else if (template === "skirmish") {
+        assets = [
+            {
+                asset_id: "p_spawn",
+                asset_type: "spawn",
+                name: "Player Orbital Drop Zone",
+                x: -400,
+                y: 0,
+                z: -400,
+                yaw_deg: 45,
+                faction: "player",
+                health: 100,
+            },
+            {
+                asset_id: "enemy_patrol_1",
+                asset_type: "mech_bushwacker",
+                name: "Hostile Bushwacker BSW-X1",
+                x: 100,
+                y: 0,
+                z: 100,
+                yaw_deg: 225,
+                faction: "enemy",
+                health: 220,
+                is_objective: true,
+            },
+            {
+                asset_id: "enemy_patrol_2",
+                asset_type: "mech_shadowcat",
+                name: "Hostile Shadow Cat",
+                x: 160,
+                y: 0,
+                z: 180,
+                yaw_deg: 225,
+                faction: "enemy",
+                health: 180,
+                is_objective: true,
+            }
+        ];
+    }
+
+    // Reset project state cleanly
+    state.project.pack_id = packId;
+    state.project.pack_title = title;
+    state.project.description = `Custom MechWarrior 3 mission: ${title}`;
+    state.project.base_operation = biome;
+    state.project.terrain.biome = biome;
+    state.project.terrain.water_level = biome === "c1" ? 3.0 : 0.0;
+    state.project.terrain.height_modifications = {};
+    state.project.assets = assets;
+    state.project.objectives = {
+        primary: [
+            { id: "obj_1", description: "Neutralize hostile forces in sector" }
+        ],
+        secondary: [],
+        briefing_text: `Tactical briefing for ${title}. Eliminate enemy presence and secure the area.`,
+        audio_track: "theme1",
+    };
+    state.project.drop_config = {
+        player_mech: playerMech,
+        drop_type: "pod",
+        weapons: {
+            left_arm: "Clan ER PPC",
+            center_torso: "Medium Pulse Laser",
+            right_arm: "Clan ER PPC",
+            left_torso: "Clan LRM-20 Rack",
+            right_torso: "Clan LRM-20 Rack",
+        },
+        armor_tons: 14.0,
+        heatsinks: 16,
+        jump_jets: 0,
+        lancemates: [],
+    };
+
+    // Update form inputs in sub-bar
+    const titleInput = document.getElementById("project-title");
+    const idInput = document.getElementById("project-id");
+    const biomeSelect = document.getElementById("biome-select");
+    if (titleInput) titleInput.value = title;
+    if (idInput) idInput.value = packId;
+    if (biomeSelect) biomeSelect.value = biome;
+
+    // Deselect active object and detach gizmos
+    state.selectedAssetId = null;
+    if (transformControls) transformControls.detach();
+
+    closeNewMissionModal();
+
+    buildTerrain().then(() => {
+        syncSceneAssets();
+        updateInspector();
+        renderSceneOutliner();
+        playBeep(1040, "sine", 0.15);
+    });
+}
+
+function triggerImportMapFile() {
+    const input = document.getElementById("input-import-map-file");
+    if (input) input.click();
+}
+
+function handleImportMapFile(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (!data.pack_id && !data.assets) {
+                alert("Invalid map file format. Expected a .mw3pack.json or project file.");
+                return;
+            }
+            state.project = Object.assign(state.project, data);
+
+            const titleInput = document.getElementById("project-title");
+            const idInput = document.getElementById("project-id");
+            const biomeSelect = document.getElementById("biome-select");
+            if (titleInput && state.project.pack_title) titleInput.value = state.project.pack_title;
+            if (idInput && state.project.pack_id) idInput.value = state.project.pack_id;
+            if (biomeSelect && state.project.base_operation) biomeSelect.value = state.project.base_operation;
+
+            state.selectedAssetId = null;
+            if (transformControls) transformControls.detach();
+
+            buildTerrain().then(() => {
+                syncSceneAssets();
+                updateInspector();
+                renderSceneOutliner();
+                playBeep(980, "sine", 0.15);
+                alert(`Successfully loaded "${state.project.pack_title || state.project.pack_id}" (${(state.project.assets || []).length} entities)`);
+            });
+        } catch (err) {
+            alert("Could not parse map file: " + err);
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = "";
 }
