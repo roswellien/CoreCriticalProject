@@ -68,9 +68,12 @@ run replaces 5,828 mesh calls and submits 104,967 polygons through the new path.
 Same-executable off/on ABBA uses two runs per setting, frames 801 through 2200,
 on the RX 9070 with its unchanged driver, DXGI, 3440x1440, FXAA/AF16, world100%,
 lighting and temporal jitter, VSync off, the same scripted virtual clock and
-prepared runtime1.0.46 with all13 published packs. Validation, captures and
-optional logs are off during timing; the required bridge log and total CPU/GPU
-monitor remain. Each timing run completes 2,200 presentations and 7,689 scenes
+prepared runtime1.0.46 with all13 published packs. A later audit in issue #183 found that the lean harness removed the explicit
+`MW34_FRAME_DUMP=0`, re-enabling the host default dump every 30 frames. These
+historical timing runs therefore include periodic readbacks/dumps and are not
+capture-free production benchmarks. Their recorded comparison and lack of a
+meaningful gain apply to that route; clean reruns are tracked in #183. The
+required bridge log and total CPU/GPU monitor were retained. Each timing run completes 2,200 presentations and 7,689 scenes
 without a competing game/compiler or timeout. Each enabled measured interval
 replaces 5,528 mesh calls involving 176,896 source vertices.
 
