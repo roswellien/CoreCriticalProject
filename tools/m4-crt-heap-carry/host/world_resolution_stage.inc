@@ -208,6 +208,13 @@ void reconstruct_world_color() {
     check(f.vkQueueSubmit(queue, 1, &submit, fence), "submit reconstruction");
     scene_pending = true;
 }
+std::array<unsigned, 4> configured_world_dimensions() const {
+    const unsigned output_width = reduced_world_active ? alternate_width : rw;
+    const unsigned output_height = reduced_world_active ? alternate_height : rh;
+    const unsigned world_width = worldColor.image ? (reduced_world_active ? rw : alternate_width) : rw;
+    const unsigned world_height = worldColor.image ? (reduced_world_active ? rh : alternate_height) : rh;
+    return {output_width, output_height, world_width, world_height};
+}
 static unsigned world_scale_percent() {
     static const unsigned percent = [] {
         const char* value = std::getenv("MW34_WORLD_SCALE_PERCENT");

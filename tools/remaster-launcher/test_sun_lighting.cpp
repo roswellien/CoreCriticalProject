@@ -3,6 +3,7 @@
 #include "vk_scene.hpp"
 #include "material_normals.hpp"
 #include "sun_camera_binding.hpp"
+#include "campaign_lighting.hpp"
 #include <iostream>
 #include <set>
 
@@ -105,7 +106,9 @@ static Draw quad(Scene& s,bool world,bool rotate,bool faceSun,bool fog=false){
         const auto*p=reinterpret_cast<const unsigned char*>(&v);s.vertices.insert(s.vertices.end(),p,p+sizeof(v));}
     s.draws.push_back(d);s.order.push_back({false,0});return d;
 }
+#include "tests/temporal_source_fixture.inc"
 int main(int argc,char**argv){try{
+    if(argc>1&&std::string(argv[1])=="--temporal-source"){temporal_source_checks();return 0;}
     if(argc>1&&std::string(argv[1])=="--capture-only"){
         CaptureFixture{}.camera_only();std::cout<<"Independent camera authentication and FP preservation pass\n";return 0;
     }

@@ -168,7 +168,7 @@ using GuestHeap=mw34::heap_partitions::GuestHeap;
 struct SoundLock{unsigned buffer;void*p1;DWORD b1;void*p2;DWORD b2;unsigned g1,g2;};
 // Direct3D provider records: per-device state and the commands of the current scene.
 unsigned fixture_mesh_node{},fixture_mesh_frame{};
-struct D3DCmd{enum Kind{Clear,Draw}kind;unsigned flags,a;float z;std::vector<RECT>rects;std::vector<unsigned char>vertices;unsigned prim{};std::vector<unsigned short>indices;std::shared_ptr<const std::vector<unsigned>>state_snapshot;unsigned texture{};unsigned fixture_node{},fixture_polygon{};int override_texture{-1};int override_normal_texture{-1};std::shared_ptr<const mw34::vkscene::ModelInstance>model{};std::shared_ptr<const mw34::sun::Tl>sun_tl{};std::shared_ptr<const mw34::sun::Tl>sky_view{};std::shared_ptr<const mw34::temporal::Snapshot>camera_view{};bool missile_exhaust{};bool condition_schematic{};unsigned hud_role{};float zoom_anchor{};bool zoom_anchor_known{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};};
+struct D3DCmd{enum Kind{Clear,Draw}kind;unsigned flags,a;float z;std::vector<RECT>rects;std::vector<unsigned char>vertices;unsigned prim{};std::vector<unsigned short>indices;std::shared_ptr<const std::vector<unsigned>>state_snapshot;unsigned texture{};unsigned fixture_node{},fixture_polygon{};int override_texture{-1};int override_normal_texture{-1};std::shared_ptr<const mw34::vkscene::ModelInstance>model{},temporal_model{};std::shared_ptr<const mw34::sun::Tl>sun_tl{};std::shared_ptr<const mw34::sun::Tl>sky_view{};std::shared_ptr<const mw34::temporal::Snapshot>camera_view{};std::shared_ptr<const mw34::temporal::StaticSource>temporal_source{};bool missile_exhaust{};bool condition_schematic{};unsigned hud_role{};float zoom_anchor{};bool zoom_anchor_known{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};};
 struct D3DDev{unsigned guest,target,zbuffer,d3d;std::array<unsigned,256>rs{};std::array<std::array<unsigned,32>,8>tss{};std::array<unsigned,8>textures{};std::vector<unsigned>viewports;unsigned current{};bool in_scene{};std::vector<D3DCmd>commands;
  /* draws share one state snapshot until a state setter advances the epoch (the stage-0 texture is per draw) */
  std::uint64_t epoch{1},snap_epoch{};std::shared_ptr<const std::vector<unsigned>>snap;};
@@ -502,6 +502,7 @@ std::string pose_name(unsigned address,unsigned limit){std::string result;
  #include "world_direct_stage.inc"
  #include "sun_lighting_stage.inc"
  #include "camera_capture_stage.inc"
+ #include "temporal_source_stage.inc"
  #include "surface_normals_stage.inc"
 bool render_reuse_enabled(){
  static const bool enabled=[] {
@@ -612,7 +613,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
    try{result=body(s,target,p);}catch(...){missile_end();override_restore(previous);throw;}missile_end();override_restore(previous);
   }else result=body(s,target,p);if(target==0x51fb30){override_emit();missile_emit();}return result;}
  void*controller_next_body(State*s,unsigned target,void*p,Body body){
-  return camera_body(s,target,p,[&]{return photo_replay_body(s,target,p,[&]{return turret_aim_body(s,target,p,[&]{return lighting_body(s,target,p,body);});});});
+  return camera_body(s,target,p,[&]{return temporal_cell_body(target,[&]{return photo_replay_body(s,target,p,[&]{return turret_aim_body(s,target,p,[&]{return lighting_body(s,target,p,body);});});});});
  }
  #include "controller_stage.inc"
  void*remaster_body(State*s,unsigned target,void*p,Body body){
@@ -829,7 +830,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    [&](unsigned at,unsigned size,unsigned limit){return runtime.memory().find_unmapped_range(at,size,limit);});
   if(!allocated){host.failed_heap_bytes=bytes;host.failed_heap_owner=owner;++host.heap_failures;}
   return allocated;}
- void gheap_free(unsigned at){if(!host.gheap.live.count(at))deny("HeapFree of a pointer that is not a live guest heap block",at);host.gheap.release(at);}
+ void gheap_free(unsigned at){if(!host.gheap.live.count(at))deny("HeapFree of a pointer that is not a live guest heap block",at);temporal_source_freed(at,host.gheap.live.at(at));host.gheap.release(at);}
  unsigned handle_token(void*h){if(!h)return 0;for(unsigned i=0;i<host.handle_tokens.size();++i)if(host.handle_tokens[i]==h)return 0x3d000000U+16U*i;host.handle_tokens.push_back(h);return 0x3d000000U+16U*unsigned(host.handle_tokens.size()-1);}
  void*token_handle(unsigned g){if(g<0x3d000000||(g-0x3d000000)%16||(g-0x3d000000)/16>=host.handle_tokens.size())return nullptr;return host.handle_tokens[(g-0x3d000000)/16];}
  // A mixer-object argument is a handle token or a small device id (MIXER_OBJECTF_* selects which).

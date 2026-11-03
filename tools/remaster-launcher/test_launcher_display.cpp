@@ -70,6 +70,23 @@ static void camera_history_check() {
     source.camera[0] = 0x7fc00000; submit(); renderer.complete_camera_history(13, 7);
     require(history.pairs().empty() && history.last_reset() == Reset::invalid,
             "Nonfinite camera history accepted");
+    source.frame = 14;
+    source.camera[0] = std::bit_cast<unsigned>(1.f);
+    submit();
+    renderer.invalidate_camera_history(Reset::transition);
+    renderer.invalidate_camera_history(Reset::external_write);
+    submit();
+    renderer.complete_camera_history(14, 7);
+    require(history.pairs().empty() && history.last_reset() == Reset::transition,
+            "A later write hid the first camera-history rejection");
+    source.frame = 15;
+    submit();
+    renderer.complete_camera_history(15, 7);
+    require(!history.pairs().at(source.view).valid(), "Rejected frame supplied recovery history");
+    source.frame = 16;
+    submit();
+    renderer.complete_camera_history(16, 7);
+    require(history.pairs().at(source.view).valid(), "History did not recover after multiple rejections");
     std::cout << "Camera history: immutable pairs, movement, real-frame completion, reset and view bounds pass\n";
 }
 static void dxgi_presentation_check() {

@@ -65,6 +65,9 @@
 #include "frontend_canvas.hpp"
 #include "launcher_display.hpp"
 #include "camera_history.hpp"
+#include "temporal_inputs.hpp"
+#include "temporal_inputs_vert.h"
+#include "temporal_inputs_frag.h"
 
 namespace mw34::vkscene {
 // The stage mirrors the guest's x87 control word and MXCSR into the host while guest code runs;
@@ -149,6 +152,7 @@ struct Draw {
     Push push;
     VkRect2D scissor;
     std::shared_ptr<const ModelInstance> model{};
+    std::shared_ptr<const ModelInstance> temporal_model{};
     std::shared_ptr<const mw34::sun::Tl> sun_tl{};
     unsigned char sky{};
     std::shared_ptr<const mw34::sun::Tl> sky_view{};
@@ -157,6 +161,8 @@ struct Draw {
     std::uint64_t shadow_source{};
     std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
     std::function<bool()> shadow_valid;
+    std::shared_ptr<const mw34::temporal::StaticSource> temporal_source;
+    bool temporal_output_only{};
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
 };
@@ -173,6 +179,8 @@ struct Command {
     unsigned index;
 };
 struct Scene {
+    std::uint64_t temporal_frame{};
+    unsigned temporal_target{};
     double detail_time{};
     std::uint64_t world_frame{}, world_generation{}, world_context{};
     std::array<float, 3> world_eye{};
@@ -202,7 +210,7 @@ class Renderer {
     // An explicit format preference lets format-sensitive callers exercise the
     // RGBA fallback without changing device capabilities or process settings.
     explicit Renderer(ColorTarget color_target = ColorTarget::device_default)
-        : require_rgba8(color_target == ColorTarget::rgba8) {}
+        : require_rgba8(color_target == ColorTarget::rgba8) {(void)mw34::temporal::jitter_enabled();}
     bool alpha_target() const { return rgba; }
     std::string device_name;
     mw34::temporal::History camera_history;
@@ -212,6 +220,7 @@ class Renderer {
     void complete_camera_history(std::uint64_t frame, unsigned target, const char *admission = "none") {
         if (!mw34::temporal::enabled()) return;
         camera_history.complete(frame, target);
+        temporal_complete(frame);
         unsigned valid = 0, mode_mask = 0;
         for (const auto &[view, pair] : camera_history.pairs()) {
             valid += pair.valid();
@@ -966,8 +975,8 @@ class Renderer {
                 camera_history.invalidate(mw34::temporal::Reset::external_write);
             if (s.guest_surface_write) {
                 // A complete clear before this frame's first world draw is
-                // normal frame initialization. Partial/interleaved fills are
-                // unsupported temporal writes and poison this frame.
+                // normal frame initialization. An authenticated ordered depth
+                // clear updates visibility; other interleaved writes poison history.
                 bool initial_clear = !camera_history.pending() && s.draws.empty() && !s.clears.empty();
                 for (const auto &clear : s.clears) {
                     initial_clear &= clear.flags && !(clear.flags & ~3U) && clear.rects.size() == 1;
@@ -977,27 +986,24 @@ class Renderer {
                             rectangle.extent.width == s.width && rectangle.extent.height == s.height;
                     }
                 }
-                if (!initial_clear) camera_history.invalidate(mw34::temporal::Reset::external_write);
+                if (!initial_clear && !temporal_ordered_depth_clear(s))
+                    camera_history.invalidate(mw34::temporal::Reset::external_write);
             }
             // Observe only this original submission. Internal shading/coverage
             // replays never pass through this entry point.
             for (const auto &draw : s.draws) {
                 // P2 history belongs to admitted static scenery. Cockpit/effect
                 // projections sharing a camera address are not that world view.
-                if (!draw.camera_view || !draw.model || !draw.model->world) continue;
-                if (draw.camera_view->projection != draw.model->projection) {
+                const auto &model = temporal_geometry(draw);
+                if (!draw.camera_view || !model || !model->world) continue;
+                if (draw.camera_view->projection != model->projection) {
                     camera_history.invalidate(mw34::temporal::Reset::invalid);
                     continue;
                 }
                 auto snapshot = std::make_shared<mw34::temporal::Snapshot>(*draw.camera_view);
-                const unsigned output_width = reduced_world_active ? alternate_width : rw;
-                const unsigned output_height = reduced_world_active ? alternate_height : rh;
-                const unsigned world_width = worldColor.image ?
-                    (reduced_world_active ? rw : alternate_width) : rw;
-                const unsigned world_height = worldColor.image ?
-                    (reduced_world_active ? rh : alternate_height) : rh;
-                snapshot->sizes = {s.width, s.height, output_width, output_height,
-                                   world_width, world_height};
+                const auto dimensions = configured_world_dimensions();
+                snapshot->sizes = {s.width, s.height, dimensions[0], dimensions[1],
+                                   dimensions[2], dimensions[3]};
                 camera_history.observe(std::move(snapshot));
             }
         }
@@ -1005,6 +1011,7 @@ class Renderer {
             render_reconstructed_world(s);
         else
             render_scene(s, upload_in, readback_out);
+        temporal_append(s);
     }
   private:
     void render_scene(Scene &s, bool upload_in, bool readback_out) {
@@ -1079,15 +1086,26 @@ class Renderer {
         // Collect each immutable geometry upload once even if several instances use it.
         // std::map keeps pointers stable while additional model entries are inserted.
         std::vector<ModelBuffer *> model_pending;
-        for (const auto &d : s.draws)
-            if (d.model) {
-                if (!gpu_models() || !d.model->geometry)
-                    throw std::runtime_error("GPU model draw without the enabled model path");
-                auto &b = model_buffer(*d.model->geometry);
-                if (!b.uploaded && std::find(model_pending.begin(), model_pending.end(), &b) ==
-                                       model_pending.end())
-                    model_pending.push_back(&b);
+        auto queue_model = [&](const std::shared_ptr<const ModelInstance> &model) {
+            if (!model)
+                return;
+            if (!gpu_models() || !model->geometry)
+                throw std::runtime_error("GPU model draw without the enabled model path");
+            auto &buffer = model_buffer(*model->geometry);
+            if (!buffer.uploaded && std::find(model_pending.begin(), model_pending.end(), &buffer) ==
+                                        model_pending.end())
+                model_pending.push_back(&buffer);
+        };
+        for (const auto &draw : s.draws) {
+            queue_model(draw.model);
+            if (mw34::temporal::enabled() && draw.temporal_model) {
+                if (draw.model || !draw.temporal_model->world || !draw.temporal_model->geometry)
+                    throw std::runtime_error("Diagnostic geometry must be a separate static world source");
+                if (draw.count != draw.temporal_model->geometry->vertices.size())
+                    throw std::runtime_error("Diagnostic geometry does not match the original attribute count");
+                queue_model(draw.temporal_model);
             }
+        }
         // Warmup shares the original immutable upload and completion path.
         // It adds no draw and retains exact geometry identity checks.
         for (const auto &geometry : s.model_warmup) {
@@ -1822,7 +1840,7 @@ class Renderer {
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
     X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
-    X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences)
+    X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences) X(vkCmdClearDepthStencilImage)
 #define MW34_VK_DECL(n) PFN_##n n{};
         MW34_VK_FNS(MW34_VK_DECL) MW34_VK_DEV_FNS(MW34_VK_DECL) MW34_VK_WSI_FNS(MW34_VK_DECL) MW34_VK_SWAP_FNS(MW34_VK_DECL)
     } f;
@@ -2366,6 +2384,7 @@ class Renderer {
     };
     std::map<std::uint64_t, ModelBuffer> model_buffers;
 #include "fixture_shadow_stage.inc"
+#include "temporal_inputs_stage.inc"
     Image colorImage, depthImage;
     Image qualitySource;
     VkDescriptorPool qualityPool{};
@@ -3153,6 +3172,7 @@ class Renderer {
         invalidate_camera_history(mw34::temporal::Reset::transition);
         target_frontend = frontend;
         f.vkDeviceWaitIdle(device);
+        temporal_drop_slots();
         destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
@@ -3778,6 +3798,7 @@ class Renderer {
             return;
         }
         f.vkDeviceWaitIdle(device);
+        temporal_shutdown();
         pipelineWarmup.save();
         if (coverage_scenes)
             std::fprintf(stderr, "World reconstruction: %llu opaque scenes, %llu coverage draws\n",

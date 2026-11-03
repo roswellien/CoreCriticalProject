@@ -37,7 +37,7 @@ int main(int argc,char**){try{
  fixtures.observe_polygon(def,a,1,17);fixtures.observe_polygon(def,b,2,17);require(fixtures.active_count()==1,"Stable source updates rather than leaving old position");
  fixtures.begin_frame(100);require(fixtures.active_count()==1,"Verified off-camera sources do not expire by frame age");
  auto lights=fixtures.select_lights({10,0,0},1);require(lights.size()==1&&lights[0].start[0]>10&&lights[0].end[3]==2,"Updated location and distinct spotlight type");
- fixtures.observe_polygon(def,a,100);require(fixtures.active_count()==2,"Separate anonymous fixture");fixtures.begin_frame(101);require(fixtures.active_count()==2,"Nearby anonymous source retains its distance lifetime");fixtures.select_lights({1000,0,0},1);require(fixtures.active_count()==1,"Distant anonymous source expires after missing submission");
+ fixtures.observe_polygon(def,a,100);require(fixtures.active_count()==2,"Separate anonymous fixture");fixtures.begin_frame(101);require(fixtures.active_count()==2,"Nearby anonymous source retains its distance lifetime");fixtures.select_lights({100000,0,0},1);require(fixtures.active_count()==1,"Distant anonymous source expires after missing submission");
  fixtures.remove_source(17);require(!fixtures.active_count(),"Invalidated/destroyed source removed");
  fixtures.observe_polygon(def,a,102,18);manager.observe_file("D:/isolated/zbd/t1/readerm1.zbd");require(!manager.is_campaign_active()&&!fixtures.active_count(),"Training clears campaign and fixture state");
  fixtures.observe_polygon(def,a,103,19);manager.observe_file("D:/isolated/zbd/c1/readeria1.zbd");require(!fixtures.active_count(),"Instant Action transition clears fixtures");
@@ -49,7 +49,7 @@ int main(int argc,char**){try{
  const auto loaded_reader=manager.reader_epoch();
  manager.observe_file("D:/isolated/zbd/t1/readerm.zbd",false);
  manager.observe_file("D:/isolated/games/pilot0101.mw3",true);
- for(const char* path:{"D:/notes/readeria.txt","D:/notes/readermp.txt","D:/readeria/config.ini","D:/readermp/config.ini","D:/isolated/zbd/t1/readerm-notes.zbd"})
+ for(const char* path:{"D:/notes/readeria.txt","D:/notes/readermp.txt","D:/readeria/config.ini","D:/readermp/config.ini","D:/isolated/zbd/t1/readerm-notes.zbd","D:/isolated/zbd/t1/readerm4.zbd.bak"})
   manager.observe_file(path,true);
  require(manager.reader_epoch()==loaded_reader,"Failed or unrelated file open advanced reader epoch");
  for(const char* path:{"D:/isolated/zbd/t1/readerm1.zbd","D:/isolated/zbd/t1/readerm2.zbd","D:/isolated/zbd/t1/readerm3.zbd","D:/isolated/zbd/t1/readerm4.zbd","D:/isolated/zbd/c1/readeria1.zbd","D:/isolated/zbd/c1/readeria2.zbd","D:/isolated/zbd/c1/readeria3.zbd","D:/isolated/zbd/c1/readermp1.zbd","D:/isolated/zbd/c1/readermp2.zbd"}){

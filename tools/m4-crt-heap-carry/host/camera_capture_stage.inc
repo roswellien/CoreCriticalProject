@@ -168,6 +168,44 @@ void camera_capture(D3DCmd &draw, unsigned target) {
         camera_last_snapshot = std::make_shared<const mw34::temporal::Snapshot>(snapshot);
     draw.camera_view = camera_last_snapshot;
 }
+// Use the existing selected-frame capture request, only after the real Flip.
+// Binary outputs are private diagnostics; no guest memory is read here.
+void temporal_dump_completed() {
+    const char *list = std::getenv("MW34_HIRES_DUMP_FRAMES");
+    const char *directory = std::getenv("MW34_HIRES_DUMP_DIR");
+    if (!host.sren || !list || !directory)
+        return;
+    const auto frame = host.frames + 1;
+    if (("," + std::string(list) + ",").find("," + std::to_string(frame) + ",") == std::string::npos)
+        return;
+    for (const auto &[view, pair] : host.sren->camera_history.pairs()) {
+        const auto pixels = host.sren->capture_temporal(view);
+        if (!pixels.width)
+            continue;
+        const auto prefix = std::filesystem::path(directory) /
+                            ("temporal-" + std::to_string(frame) + "-" +
+                             std::to_string(view.node) + "-" + std::to_string(view.role));
+        auto write = [&](const char *suffix, const auto &values) {
+            std::ofstream output(prefix.string() + suffix, std::ios::binary);
+            output.exceptions(std::ios::badbit | std::ios::failbit);
+            output.write(reinterpret_cast<const char *>(values.data()),
+                         std::streamsize(values.size() * sizeof(values[0])));
+        };
+        write("-depth.f32", pixels.depth);
+        write("-motion.f32", pixels.motion);
+        write("-validity.u8", pixels.validity);
+        std::ofstream metadata(prefix.string() + ".json");
+        metadata.exceptions(std::ios::badbit | std::ios::failbit);
+        metadata << "{\"frame\":" << pixels.frame << ",\"width\":" << pixels.width
+                 << ",\"height\":" << pixels.height << ",\"history_valid\":"
+                 << (pixels.history_valid ? "true" : "false") << ",\"jitter\":["
+                 << pixels.jitter[0] << ',' << pixels.jitter[1] << "],\"previous_jitter\":["
+                 << pixels.previous_jitter[0] << ',' << pixels.previous_jitter[1]
+                 << "],\"depth_format\":\"R32_SFLOAT\",\"motion_format\":\"R32G32_SFLOAT\","
+                    "\"validity_format\":\"R8_UNORM\",\"depth\":\"near_clip/camera_z\","
+                    "\"motion\":\"previous-current unjittered render pixels; X right Y down\"}\n";
+    }
+}
 void camera_present(unsigned flipped_target) {
     if (!mw34::temporal::enabled())
         return;
@@ -183,13 +221,19 @@ void camera_present(unsigned flipped_target) {
         host.sren->invalidate_camera_history(mw34::temporal::Reset::transition);
     std::array<char, 384> diagnostic{};
     std::snprintf(diagnostic.data(), diagnostic.size(),
-                  "%s signal=%s epoch=%llu pause=%llu/%llu relocations=%llu presets=%llu",
+                  "%s signal=%s epoch=%llu pause=%llu/%llu relocations=%llu presets=%llu static=%llu/%llu/%llu types=%x cell=%llu/%llu/%llu source-reject=%s",
                   camera_rejection, camera_reset_signal, (unsigned long long)camera_reset_epoch,
                   (unsigned long long)camera_pause_entries, (unsigned long long)camera_pause_exits,
-                  (unsigned long long)camera_relocations, (unsigned long long)camera_presets);
+                  (unsigned long long)camera_relocations, (unsigned long long)camera_presets,
+                  (unsigned long long)temporal_source_draws,(unsigned long long)temporal_source_admitted,
+                  (unsigned long long)temporal_source_pairs,temporal_source_types,
+                  (unsigned long long)temporal_cell_calls,(unsigned long long)temporal_placement_calls,
+                  (unsigned long long)temporal_record_matches,temporal_source_rejection);
     if (host.sren)
         host.sren->complete_camera_history(camera_flip_serial, flipped_target, diagnostic.data());
+    temporal_dump_completed();
     camera_rejection = "none";
+    temporal_source_rejection="none";
 }
 void camera_surface_written(unsigned surface) {
     if (!mw34::temporal::enabled() || !host.sren || !camera_last_snapshot)
@@ -258,6 +302,7 @@ template <class Next> void *camera_body(State *, unsigned target, void *, Next &
     {
         SunCaptureFp preserve;
         const unsigned context = camera_context(), object = state.gpr.rcx.dword;
+        if(target==0x4eb050 || target==0x4eaf90)temporal_source_retire(object);
         if ((target == 0x40adf0 || target == 0x40ae70) && object == context)
             camera_reset("controller-switch");
         if ((target == 0x418f30 || target == 0x418e90) && context &&

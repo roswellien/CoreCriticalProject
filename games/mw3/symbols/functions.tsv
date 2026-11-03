@@ -24,4 +24,11 @@ address	name	confidence	evidence	purpose
 004F36B0	sub_004F36B0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes camera rotation and selects its ordinary pose storage
 004F3870	sub_004F3870	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes absolute camera translation into the selected pose storage
 004F3920	sub_004F3920	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Adds relative translation to the selected camera pose storage
+004F4170	sub_004F4170	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Delegates camera setup with a zero optional offset
+004F41B0	sub_004F41B0	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Forwards optional camera offset and refreshes projection and clipping state
+004F4370	sub_004F4370	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Sets up camera matrix and records the selected cell or tile offset
+004F4AB0	sub_004F4AB0	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Renders a type-five transform subtree through the matrix stack
+004F5910	sub_004F5910	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Dispatches rendering by original scene-node type
+004F6720	sub_004F6720	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Renders bounded selected cells and dispatches their object and placement subtrees
+0051E930	sub_0051E930	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Pushes matrix-stack storage and copies the previous camera-dependent matrix
 00520B00	sub_00520B00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Activates the renderer camera basis and prepares its inverse view

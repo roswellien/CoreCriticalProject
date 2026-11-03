@@ -43,23 +43,10 @@ void fixture_frame(){
 bool fixture_capture_proof(const D3DCmd& draw,const VSurfaceRec& surface,FixtureSourceProof& proof){
  if(!draw.fixture_node||!draw.fixture_polygon)return false;
  proof={};proof.surface=surface.guest;proof.version=surface.version;
- auto snapshot=[&](unsigned address,unsigned bytes){if(!readable(address,bytes))return false;
-  std::vector<unsigned char> data(bytes);get_bytes(address,data.data(),bytes);proof.ranges.push_back({address,std::move(data)});return true;};
- const unsigned context=load(0x5f4c8c),root=context&&readable(context,4)?load(context):0;
- if(!root||!snapshot(draw.fixture_polygon,36))return false;
- unsigned node=draw.fixture_node;
- for(unsigned depth=0;node!=root&&depth<32;++depth){
-  // Names, type/data/mesh identity and child ownership are stable.
-  // +0x24 visibility/render flags are deliberately not source lifetime.
-  if(!snapshot(node,36)||!snapshot(node+0x34,12)||!snapshot(node+0x5c,8))return false;
-  if(load(node+0x34)==5&&!snapshot(load(node+0x38),96))return false;
-  const unsigned parent=override_parent(node);if(!parent||!readable(parent,100))return false;
-  const unsigned count=load(parent+0x5c),children=load(parent+0x60);
-  if(count>65536||!count||!readable(children,count*4))return false;
-  bool member=false;for(unsigned i=0;i<count;++i)if(load(children+i*4)==node){member=snapshot(parent+0x5c,8)&&snapshot(children+i*4,4);break;}
-  if(!member)return false;node=parent;
- }
- if(node!=root)return false;
+ if(!readable(draw.fixture_polygon,36))return false;
+ std::vector<unsigned char> polygon(36);get_bytes(draw.fixture_polygon,polygon.data(),36);
+ proof.ranges.push_back({draw.fixture_polygon,std::move(polygon)});
+ if(!capture_node_ranges(draw.fixture_node,proof.ranges))return false;
  return true;
 }
 std::uint64_t fixture_source(const D3DCmd& draw,const VSurfaceRec& surface){
