@@ -1,5 +1,6 @@
 """Tests for replacement mech height-map derivation and BWSFM1 generation."""
 
+import base64
 from pathlib import Path
 import struct
 import tempfile
@@ -319,47 +320,102 @@ class MechHeightMapsTests(unittest.TestCase):
             self.assertEqual(geo2["total_vertices"], 3)
             self.assertIn("Body", geo2["materials"])
 
-            # Test BWMESH3 (visibility + placement)
+            # Test BWMESH3 (visibility + placement offset)
             m3 = bytearray(b"BWMESH3\0" + struct.pack("<I", 1))
             m3.extend(b"owner".ljust(32, b"\0"))
             m3.extend(b"visib".ljust(32, b"\0"))
-            m3.extend(bytes(44))  # placement
+            m3.extend(b"frame".ljust(32, b"\0"))
+            m3.extend(struct.pack("<3f", 1.5, 2.5, 3.5))  # placement offset
             m3.extend(struct.pack("<II", 3, 0))
             m3.extend(v3)
             p3 = temp_path / "m3.bin"
             p3.write_bytes(m3)
             geo3 = extract_mech_geometry(p3, tex_path)
             self.assertEqual(geo3["total_vertices"], 3)
+            raw3 = base64.b64decode(geo3["materials"]["Body"])
+            p_v0 = struct.unpack_from("<3f", raw3, 0)
+            self.assertAlmostEqual(p_v0[0], 1.5, places=5)
+            self.assertAlmostEqual(p_v0[1], 3.5, places=5)
+            self.assertAlmostEqual(p_v0[2], 5.5, places=5)
 
-            # Test BWMESH4 (donor rig header)
+            # Test BWMESH4 (donor rig bone transform: translation + rotation)
             m4 = bytearray(b"BWMESH4\0" + struct.pack("<I", 1))
             m4.extend(struct.pack("<III", 1, 1, 0))  # 1 bone, 1 ref, 0 flags
             m4.extend(bytes(40))  # gait
-            m4.extend(bytes(32 + 32 + 4 + 128))  # 1 bone
+            # Bone with translation (10, 20, 30) and 90-degree Z rotation
+            # R = [[0, -1, 0], [1, 0, 0], [0, 0, 1]], T = [10, 20, 30]
+            mat_bone0 = [
+                0.0, -1.0, 0.0, 10.0,
+                1.0, 0.0, 0.0, 20.0,
+                0.0, 0.0, 1.0, 30.0,
+                0.0, 0.0, 0.0, 1.0,
+            ]
+            bone_data = b"bone0".ljust(32, b"\0") + b"ctrl0".ljust(32, b"\0") + struct.pack("<i", -1)
+            bone_data += struct.pack("<16d", *mat_bone0)
+            m4.extend(bone_data)
             m4.extend(bytes(32 + 128))  # 1 ref
             m4.extend(b"owner".ljust(32, b"\0"))
             m4.extend(b"visib".ljust(32, b"\0"))
-            m4.extend(struct.pack("<I", 0))  # donor_bone
+            m4.extend(struct.pack("<I", 0))  # donor_bone = 0
             m4.extend(struct.pack("<II", 3, 0))
             m4.extend(v3)
             p4 = temp_path / "m4.bin"
             p4.write_bytes(m4)
             geo4 = extract_mech_geometry(p4, tex_path)
             self.assertEqual(geo4["total_vertices"], 3)
+            raw4 = base64.b64decode(geo4["materials"]["Body"])
+            p4_v0 = struct.unpack_from("<3f", raw4, 0)
+            n4_v0 = struct.unpack_from("<3f", raw4, 12)
+            # v0 was (0, 1, 2) -> (0*0 - 1*1 + 0*2 + 10, 1*0 + 0*1 + 0*2 + 20, 0 + 0 + 1*2 + 30) = (9, 20, 32)
+            self.assertAlmostEqual(p4_v0[0], 9.0, places=5)
+            self.assertAlmostEqual(p4_v0[1], 20.0, places=5)
+            self.assertAlmostEqual(p4_v0[2], 32.0, places=5)
+            # n0 was (0, 1, 0) rotated by 90-deg Z -> (-1, 0, 0)
+            self.assertAlmostEqual(n4_v0[0], -1.0, places=5)
+            self.assertAlmostEqual(n4_v0[1], 0.0, places=5)
+            self.assertAlmostEqual(n4_v0[2], 0.0, places=5)
 
-            # Test BWMESH6 (visibility + placement + layered + anchored)
+            # Test BWMESH4 with seam bones (donor_bone == 0xFFFFFFFF)
+            m4_seam = bytearray(b"BWMESH4\0" + struct.pack("<I", 1))
+            m4_seam.extend(struct.pack("<III", 1, 1, 0))  # 1 bone, 1 ref, 0 flags
+            m4_seam.extend(bytes(40))  # gait
+            m4_seam.extend(bone_data)
+            m4_seam.extend(bytes(32 + 128))  # 1 ref
+            m4_seam.extend(b"owner".ljust(32, b"\0"))
+            m4_seam.extend(b"visib".ljust(32, b"\0"))
+            m4_seam.extend(struct.pack("<I", 0xFFFFFFFF))  # seam bones
+            m4_seam.extend(struct.pack("<II", 3, 0))
+            m4_seam.extend(v3)
+            m4_seam.extend(struct.pack("<3I", 0, 0, 0))  # per-vertex bone indices: all 0
+            p4_seam = temp_path / "m4_seam.bin"
+            p4_seam.write_bytes(m4_seam)
+            geo4_seam = extract_mech_geometry(p4_seam, tex_path)
+            self.assertEqual(geo4_seam["total_vertices"], 3)
+            raw4_seam = base64.b64decode(geo4_seam["materials"]["Body"])
+            p4_seam_v0 = struct.unpack_from("<3f", raw4_seam, 0)
+            self.assertAlmostEqual(p4_seam_v0[0], 9.0, places=5)
+            self.assertAlmostEqual(p4_seam_v0[1], 20.0, places=5)
+            self.assertAlmostEqual(p4_seam_v0[2], 32.0, places=5)
+
+            # Test BWMESH6 (placement + layered joint offset)
             m6 = bytearray(b"BWMESH6\0" + struct.pack("<I", 1))
             m6.extend(b"owner".ljust(32, b"\0"))
             m6.extend(b"visib".ljust(32, b"\0"))
-            m6.extend(bytes(44))  # placement
-            m6.extend(bytes(44))  # layered
-            m6.extend(bytes(44))  # anchored
+            m6.extend(b"pframe".ljust(32, b"\0") + struct.pack("<3f", 1.0, 2.0, 3.0))  # placement
+            m6.extend(b"jframe".ljust(32, b"\0") + struct.pack("<3f", 0.5, 0.5, 0.5))  # joint
+            m6.extend(b"aframe".ljust(32, b"\0") + struct.pack("<3f", 0.0, 0.0, 0.0))  # anchor
             m6.extend(struct.pack("<II", 3, 0))
             m6.extend(v3)
             p6 = temp_path / "m6.bin"
             p6.write_bytes(m6)
             geo6 = extract_mech_geometry(p6, tex_path)
             self.assertEqual(geo6["total_vertices"], 3)
+            raw6 = base64.b64decode(geo6["materials"]["Body"])
+            p6_v0 = struct.unpack_from("<3f", raw6, 0)
+            # v0 was (0, 1, 2) + (1.5, 2.5, 3.5) = (1.5, 3.5, 5.5)
+            self.assertAlmostEqual(p6_v0[0], 1.5, places=5)
+            self.assertAlmostEqual(p6_v0[1], 3.5, places=5)
+            self.assertAlmostEqual(p6_v0[2], 5.5, places=5)
 
 
 if __name__ == "__main__":

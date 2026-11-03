@@ -320,11 +320,13 @@ def extract_mech_geometry(mesh_path: Path, texture_path: Path) -> dict:
         raise ValueError(f"Unsupported mesh payload format {magic!r}")
 
     count = struct.unpack("<I", stream.read(4))[0]
+    matrices: list[tuple[float, ...]] = []
     if donor:
         bones, refs, _flags = struct.unpack("<III", stream.read(12))
         stream.read(40)  # 5 float64 gait parameters
         for _ in range(bones):
-            stream.read(32 + 32 + 4 + 128)
+            bone_bytes = stream.read(32 + 32 + 4 + 128)
+            matrices.append(struct.unpack_from("<16d", bone_bytes, 68))
         for _ in range(refs):
             stream.read(32 + 128)
 
@@ -334,27 +336,98 @@ def extract_mech_geometry(mesh_path: Path, texture_path: Path) -> dict:
         stream.read(32)  # owner
         if visibility:
             stream.read(32)  # visibility
+        p_off = (0.0, 0.0, 0.0)
         if placement:
-            stream.read(44)  # placement
+            stream.read(32)
+            p_off = struct.unpack("<3f", stream.read(12))
+        j_off = (0.0, 0.0, 0.0)
         if layered:
-            stream.read(44)  # layered
+            stream.read(32)
+            j_off = struct.unpack("<3f", stream.read(12))
         if anchored:
-            stream.read(44)  # anchored
+            stream.read(44)  # 32 bytes anchor_name + 12 bytes anchor_position
         donor_bone = 0
         if donor:
             donor_bone = struct.unpack("<I", stream.read(4))[0]
         vc, _col = struct.unpack("<II", stream.read(8))
         vbytes = stream.read(vc * 32)
+        vertex_bones = None
         if donor and donor_bone == 0xFFFFFFFF:
-            stream.read(vc * 4)
+            vertex_bones = struct.unpack(f"<{vc}I", stream.read(vc * 4))
+
+        if donor and matrices:
+            if np is not None:
+                arr = np.frombuffer(vbytes, dtype=np.float32).reshape(-1, 8).copy()
+                if donor_bone != 0xFFFFFFFF:
+                    m = np.array(matrices[donor_bone], dtype=np.float64).reshape(4, 4)
+                    r_mat = m[:3, :3].astype(np.float32)
+                    t_vec = m[:3, 3].astype(np.float32)
+                    arr[:, :3] = arr[:, :3] @ r_mat.T + t_vec
+                    norm = arr[:, 3:6] @ r_mat.T
+                    lens = np.linalg.norm(norm, axis=1, keepdims=True)
+                    lens[lens < 1e-6] = 1.0
+                    arr[:, 3:6] = norm / lens
+                elif vertex_bones is not None:
+                    b_indices = np.array(vertex_bones, dtype=np.uint32)
+                    for b_idx in np.unique(b_indices):
+                        m = np.array(matrices[b_idx], dtype=np.float64).reshape(4, 4)
+                        r_mat = m[:3, :3].astype(np.float32)
+                        t_vec = m[:3, 3].astype(np.float32)
+                        mask = (b_indices == b_idx)
+                        arr[mask, :3] = arr[mask, :3] @ r_mat.T + t_vec
+                        norm = arr[mask, 3:6] @ r_mat.T
+                        lens = np.linalg.norm(norm, axis=1, keepdims=True)
+                        lens[lens < 1e-6] = 1.0
+                        arr[mask, 3:6] = norm / lens
+                transformed_bytes = arr.tobytes()
+            else:
+                out = bytearray()
+                for v_idx in range(vc):
+                    b_idx = donor_bone if donor_bone != 0xFFFFFFFF else vertex_bones[v_idx]
+                    m = matrices[b_idx]
+                    vx, vy, vz, nx, ny, nz, u, v = struct.unpack_from("<8f", vbytes, v_idx * 32)
+                    tx = m[0] * vx + m[1] * vy + m[2] * vz + m[3]
+                    ty = m[4] * vx + m[5] * vy + m[6] * vz + m[7]
+                    tz = m[8] * vx + m[9] * vy + m[10] * vz + m[11]
+                    r_nx = m[0] * nx + m[1] * ny + m[2] * nz
+                    r_ny = m[4] * nx + m[5] * ny + m[6] * nz
+                    r_nz = m[8] * nx + m[9] * ny + m[10] * nz
+                    length = (r_nx * r_nx + r_ny * r_ny + r_nz * r_nz) ** 0.5
+                    if length > 1e-6:
+                        r_nx /= length
+                        r_ny /= length
+                        r_nz /= length
+                    out.extend(struct.pack("<8f", tx, ty, tz, r_nx, r_ny, r_nz, u, v))
+                transformed_bytes = bytes(out)
+        elif placement:
+            dx = p_off[0] + j_off[0]
+            dy = p_off[1] + j_off[1]
+            dz = p_off[2] + j_off[2]
+            if dx != 0.0 or dy != 0.0 or dz != 0.0:
+                if np is not None:
+                    arr = np.frombuffer(vbytes, dtype=np.float32).reshape(-1, 8).copy()
+                    arr[:, 0] += dx
+                    arr[:, 1] += dy
+                    arr[:, 2] += dz
+                    transformed_bytes = arr.tobytes()
+                else:
+                    out = bytearray()
+                    for v_idx in range(vc):
+                        vx, vy, vz, nx, ny, nz, u, v = struct.unpack_from("<8f", vbytes, v_idx * 32)
+                        out.extend(struct.pack("<8f", vx + dx, vy + dy, vz + dz, nx, ny, nz, u, v))
+                    transformed_bytes = bytes(out)
+            else:
+                transformed_bytes = vbytes
+        else:
+            transformed_bytes = vbytes
 
         mat = mats[i]
         if mat not in mat_verts:
             mat_verts[mat] = bytearray()
-        mat_verts[mat].extend(vbytes)
+        mat_verts[mat].extend(transformed_bytes)
         stride = max(1, vc // 20)
         for j in range(0, vc, stride):
-            all_xyz.append(struct.unpack("<fff", vbytes[j * 32 : j * 32 + 12]))
+            all_xyz.append(struct.unpack("<fff", transformed_bytes[j * 32 : j * 32 + 12]))
 
     if not all_xyz:
         all_xyz = [(0.0, 0.0, 0.0)]

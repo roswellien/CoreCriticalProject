@@ -447,6 +447,19 @@ def write_merged_surface_materials(selected, role, output):
     if first_mesh_hash is None:
         return None
 
+    if role == 'ground_surface_materials' and first_binding_names:
+        def _is_ground(n):
+            if not n:
+                return False
+            low = n.lower()
+            return any(k in low for k in ('ggter1', 'ground', 'ter', 'sand', 'dirt', 'grass', 'snow'))
+        if not _is_ground(first_binding_names[0]):
+            ground_cand = next((n for n in first_binding_names if _is_ground(n)), None)
+            if not ground_cand:
+                ground_cand = next((n for n in records_by_name if _is_ground(n)), None)
+            if ground_cand:
+                first_binding_names = [ground_cand] + [n for n in first_binding_names if n != ground_cand]
+
     records = sorted(records_by_name.values(), key=lambda rec: (
         rec['asset_id'].encode('utf-8'), rec['material_name'].encode('ascii')))
     record_indices = {record['material_name']: index for index, record in enumerate(records)}

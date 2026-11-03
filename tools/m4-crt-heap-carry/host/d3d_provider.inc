@@ -310,10 +310,19 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
    }
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.surface_material=c.surface_material;
-  // Normal image labels are page-local and may represent multiple source SurfaceKeys.
-  // Only the recognized primary ground source has an unambiguous BWSFM1 batch binding.
-  if(!dr.surface_material&&primary_ground&&bind_normal_idx>=0&&!dr.detail_role)
-   dr.surface_material=override_state().ground_surface_material;
+  // Authenticated SurfaceKey to environment relief mapping:
+  // Primary ground uses the authenticated ground surface material.
+  // Other environment draws match by normal texture name; unauthenticated surfaces stay neutral.
+  if(!dr.surface_material&&!dr.detail_role){
+   if(primary_ground&&override_state().ground_surface_material){
+    dr.surface_material=override_state().ground_surface_material;
+   }else if(bind_normal_idx>=0&&size_t(bind_normal_idx)<override_state().normal_textures.size()){
+    const auto&norm_tex=override_state().normal_textures[size_t(bind_normal_idx)];
+    auto it=override_state().environment_surface_materials.find(norm_tex.name);
+    if(it!=override_state().environment_surface_materials.end())
+     dr.surface_material=it->second;
+   }
+  }
   if(mw34::sun::settings().enabled&&mw34::sun::settings().pom_enabled&&mw34::materials::normal_maps_enabled()&&dr.normal_texture>=0&&dr.surface_material&&dr.surface_material->host_height_texture>=0&&!dr.key.blend&&!(dr.push.mode[0]&32U)&&!dr.sky_view&&!dr.condition_schematic&&!dr.detail_role){
    const auto&o=override_state();const int height_idx=dr.surface_material->host_height_texture;
    if(size_t(height_idx)<o.surface_material_textures.size()){const auto&t=o.surface_material_textures[size_t(height_idx)];

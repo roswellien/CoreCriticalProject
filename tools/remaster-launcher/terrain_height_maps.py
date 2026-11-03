@@ -489,6 +489,19 @@ def build_region_terrain_sidecar(
     if not records:
         raise ValueError("No terrain normal materials were available for height derivation")
 
+    def _ground_priority_score(m_name: str) -> int:
+        low = m_name.lower()
+        if "ggter1" in low or "ground_sand" in low:
+            return 0
+        fam = classify_material_family(m_name)
+        if fam in ("terrain", "sand", "beach"):
+            return 1
+        if fam in ("cliff", "rock", "road", "asphalt"):
+            return 2
+        return 3
+
+    batch_materials.sort(key=lambda m: (_ground_priority_score(m), m))
+
     sidecar_bytes = pack_surface_materials(
         asset_id=region,
         mesh_uv_hash=0,

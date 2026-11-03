@@ -84,7 +84,7 @@ struct OverrideScope{unsigned node{};std::string owner;OverrideMatrix owner_to_n
 struct OverrideMxcsr{unsigned value=_mm_getcsr();~OverrideMxcsr(){_mm_setcsr(value);}};
 struct OverrideTexture{std::string name;unsigned width,height;std::uint64_t hash;std::vector<std::uint16_t>pixels;std::vector<std::uint32_t>pixels32;};
 struct OverrideDonorInstance{std::map<std::string,OverrideMatrix>raw;mw34::donor::Pose pose;double gait{};};
-struct OverrideState{std::map<unsigned,std::pair<size_t,size_t>> model_ranges;std::set<std::pair<unsigned,unsigned>> skin_attempts;std::set<std::pair<unsigned,std::string>>attached_cockpit_nodes;std::map<unsigned,mw34::donor::Rig>donor_rigs;std::map<std::pair<unsigned,unsigned>,OverrideDonorInstance>donor_poses;std::set<std::pair<unsigned,unsigned>>retarget_clamp_roots;std::vector<OverrideTexture>textures,normal_textures,surface_material_textures;int ground_normal_texture{-1};std::vector<std::array<unsigned,5>> ground_normal_bindings;std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>ground_surface_material{};bool loaded{};std::vector<OverrideBatch>batches;OverrideScope scope;std::map<unsigned,int>validated_roots;std::map<unsigned,unsigned>source_skins;std::map<std::pair<unsigned,std::string>,bool>active_nodes;std::set<std::pair<unsigned,unsigned>>announced_roots;std::set<std::pair<unsigned,unsigned>>damage_announced;bool preview_active{},preview_has_bounds{},preview_fit_applied{};unsigned preview_role{};size_t preview_begin{};std::array<RECT,4>preview_boxes{};std::array<double,4>preview_bounds{};std::set<unsigned>preview_emitted;std::set<std::pair<unsigned,std::string>>emitted;std::ofstream log;unsigned emitted_frames{},last_frame{~0U};};
+struct OverrideState{std::map<unsigned,std::pair<size_t,size_t>> model_ranges;std::set<std::pair<unsigned,unsigned>> skin_attempts;std::set<std::pair<unsigned,std::string>>attached_cockpit_nodes;std::map<unsigned,mw34::donor::Rig>donor_rigs;std::map<std::pair<unsigned,unsigned>,OverrideDonorInstance>donor_poses;std::set<std::pair<unsigned,unsigned>>retarget_clamp_roots;std::vector<OverrideTexture>textures,normal_textures,surface_material_textures;int ground_normal_texture{-1};std::vector<std::array<unsigned,5>> ground_normal_bindings;std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>ground_surface_material{};std::map<std::string,std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>>environment_surface_materials;bool loaded{};std::vector<OverrideBatch>batches;OverrideScope scope;std::map<unsigned,int>validated_roots;std::map<unsigned,unsigned>source_skins;std::map<std::pair<unsigned,std::string>,bool>active_nodes;std::set<std::pair<unsigned,unsigned>>announced_roots;std::set<std::pair<unsigned,unsigned>>damage_announced;bool preview_active{},preview_has_bounds{},preview_fit_applied{};unsigned preview_role{};size_t preview_begin{};std::array<RECT,4>preview_boxes{};std::array<double,4>preview_bounds{};std::set<unsigned>preview_emitted;std::set<std::pair<unsigned,std::string>>emitted;std::ofstream log;unsigned emitted_frames{},last_frame{~0U};};
 static OverrideState&override_state(){static OverrideState state;return state;}
 static bool override_enabled(){static const bool enabled=[](){for(const auto&m:override_models())if(override_mesh_env(m))return true;if(std::getenv("MW34_GROUND_NORMALS")||std::getenv("MW34_SURFACE_NORMALS")||std::getenv("MW34_WORLD_NORMALS")||std::getenv("MW34_GROUND_SURFACE_MATERIALS")||std::getenv("MW34_SURFACE_MATERIALS"))return true;return false;}();return enabled;}
 static OverrideMatrix override_identity(){return {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};}
@@ -191,6 +191,7 @@ void override_load_ground_normals(){
 void override_load_ground_surface_materials(){
  auto&o=override_state();
  o.ground_surface_material.reset();
+ o.environment_surface_materials.clear();
  auto load_env=[&](const char*env_name,bool set_primary){
   const char*path=std::getenv(env_name);
   if(!path||!*path)return;
@@ -206,9 +207,23 @@ void override_load_ground_surface_materials(){
   for(auto&record:pack.records){
    if(record->height_image!=mw34::materials::no_surface_image)record->host_height_texture=indices[record->height_image];
    if(record->thickness_image!=mw34::materials::no_surface_image)record->host_thickness_texture=indices[record->thickness_image];
+   o.environment_surface_materials[record->material_name]=record;
   }
   if(set_primary&&!o.ground_surface_material){
-   if(!pack.bindings.empty()&&pack.bindings[0]!=mw34::materials::no_surface_material)o.ground_surface_material=pack.records[pack.bindings[0]];
+   auto is_ground=[&](const std::string&n){
+    if(o.ground_normal_texture>=0&&size_t(o.ground_normal_texture)<o.normal_textures.size()){
+     if(n==o.normal_textures[size_t(o.ground_normal_texture)].name)return true;
+    }
+    static const char*const keys[]={"ground","ter","sand","dirt","rock","snow","grass"};
+    for(const char*k:keys)if(n.find(k)!=std::string::npos)return true;
+    return false;
+   };
+   for(const auto&rec:pack.records){
+    if(is_ground(rec->material_name)){o.ground_surface_material=rec;break;}
+   }
+   if(!o.ground_surface_material&&!pack.bindings.empty()&&pack.bindings[0]!=mw34::materials::no_surface_material){
+    o.ground_surface_material=pack.records[pack.bindings[0]];
+   }
   }
   if(o.log.is_open())o.log<<"{\"event\":\"ground_surface_materials_loaded\",\"env\":\""<<env_name<<"\",\"records\":"<<pack.records.size()<<",\"images\":"<<pack.images.size()<<",\"format\":\"BWSFM1\"}\n";
  };
