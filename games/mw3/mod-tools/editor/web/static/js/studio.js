@@ -3071,7 +3071,31 @@ window.addEventListener("DOMContentLoaded", () => {
     checkSystemStatus();
     loadGameAssets();
     loadDemoMap();
+    applyRouteFromHash();
+    window.addEventListener("hashchange", applyRouteFromHash);
 });
+
+function applyRouteFromHash() {
+    const raw = window.location.hash.replace(/^#/, "");
+    if (!raw) return;
+    const params = new URLSearchParams(raw);
+    if (params.get("mode")) switchWorkspaceMode(params.get("mode"));
+    if (params.get("left")) switchLeftTab(params.get("left"));
+    if (params.get("right")) switchRightTab(params.get("right"));
+    if (params.get("select")) {
+        const id = params.get("select");
+        if (typeof selectAssetById === "function") selectAssetById(id);
+    }
+    if (params.get("shortcuts") === "1") {
+        if (typeof openShortcutsModal === "function") openShortcutsModal();
+    }
+    if (params.get("mechlab") === "1") {
+        if (typeof openMechLabModal === "function") openMechLabModal();
+    }
+    if (params.get("objectives") === "1") {
+        if (typeof openObjectivesModal === "function") openObjectivesModal();
+    }
+}
 
 // System Status and Game Directory Setup
 async function checkSystemStatus() {
