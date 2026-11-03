@@ -14,13 +14,13 @@
         <!-- Game Directory Setup Warning Banner (Hidden by default, shown if game missing) -->
         <div id="game-dir-banner" style="display: none; background: #2a1111; border-bottom: 1px solid #ff4444; color: #ffcccc; padding: 6px 16px; font-size: 12px; display: none; align-items: center; justify-content: space-between; gap: 12px; z-index: 200;">
             <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-size: 15px;">⚠️</span>
+                
                 <span><strong>MechWarrior 3 Not Detected:</strong> Specify your retail game folder to enable authentic asset extraction and playtesting.</span>
             </div>
             <div style="display: flex; gap: 8px; align-items: center;">
                 <input id="setup-game-path-input" type="text" placeholder="e.g. C:\Games\MechWarrior 3" class="text-input" style="width: 260px; padding: 3px 8px; font-size: 11px;" />
                 <button class="btn btn-primary btn-sm" onclick="submitGameDirectory()">Set Directory</button>
-                <button class="btn btn-sm" onclick="document.getElementById('game-dir-banner').style.display='none'">✕</button>
+                <button class="btn btn-sm" onclick="document.getElementById('game-dir-banner').style.display='none'">&times;</button>
             </div>
         </div>
 
@@ -28,31 +28,31 @@
         <header class="top-nav-bar">
             <div class="brand-section">
                 <div class="brand-logo">
-                    <span>⚔️ MECHWARRIOR 3</span>
+                    <span>MECHWARRIOR 3</span>
                     <span class="brand-badge">MOD STUDIO</span>
                 </div>
             </div>
 
             <!-- Workspace Mode Selector Tabs -->
             <div class="workspace-tabs" role="tablist">
-                <button id="nav-mode-world" class="workspace-tab active" onclick="switchWorkspaceMode('world')" title="World & Entity Placement Editor (1)">🗺️ Map Editor</button>
-                <button id="nav-mode-sculpt" class="workspace-tab" onclick="switchWorkspaceMode('sculpt')" title="Real-Time Terrain Brush Sculpting (2)">⛰️ Terrain Sculptor</button>
-                <button id="nav-mode-atmosphere" class="workspace-tab" onclick="switchWorkspaceMode('atmosphere')" title="Lighting, Solar Cycle & Dynamic Weather (3)">⛅ Atmosphere & Weather</button>
-                <button id="nav-mode-mechlab" class="workspace-tab" onclick="switchWorkspaceMode('mechlab')" title="Player Mech Loadout & Support Lance (4)">🦾 MechLab</button>
-                <button id="nav-mode-objectives" class="workspace-tab" onclick="switchWorkspaceMode('objectives')" title="Mission Objectives & Tactical Intel (5)">🎯 Objectives</button>
-                <button id="nav-mode-campaign" class="workspace-tab" onclick="switchWorkspaceMode('campaign')" title="Multi-Mission Campaign Sequencer (6)">📜 Campaign Creator</button>
+                <button id="nav-mode-world" class="workspace-tab active" onclick="switchWorkspaceMode('world')" title="World & Entity Placement Editor (1)">Map Editor</button>
+                <button id="nav-mode-sculpt" class="workspace-tab" onclick="switchWorkspaceMode('sculpt')" title="Real-Time Terrain Brush Sculpting (2)"> Terrain Sculptor</button>
+                <button id="nav-mode-atmosphere" class="workspace-tab" onclick="switchWorkspaceMode('atmosphere')" title="Lighting, Solar Cycle & Dynamic Weather (3)">Atmosphere & Weather</button>
+                <button id="nav-mode-mechlab" class="workspace-tab" onclick="switchWorkspaceMode('mechlab')" title="Player Mech Loadout & Support Lance (4)">MechLab</button>
+                <button id="nav-mode-objectives" class="workspace-tab" onclick="switchWorkspaceMode('objectives')" title="Mission Objectives & Tactical Intel (5)">Objectives</button>
+                <button id="nav-mode-campaign" class="workspace-tab" onclick="switchWorkspaceMode('campaign')" title="Multi-Mission Campaign Sequencer (6)">Campaign Creator</button>
             </div>
 
             <!-- Top Action Controls -->
             <div class="header-actions">
-                <button id="btn-new-mission" class="btn btn-sm btn-accent" onclick="openNewMissionModal()" title="Create a new custom map or mission from scratch (Ctrl+N)">✨ New Mission</button>
-                <button id="btn-open-mission" class="btn btn-sm" onclick="triggerImportMapFile()" title="Open / Import existing map project (Ctrl+O)">📂 Open</button>
+                <button id="btn-new-mission" class="btn btn-sm btn-accent" onclick="openNewMissionModal()" title="Create a new custom map or mission from scratch (Ctrl+N)">New Mission</button>
+                <button id="btn-open-mission" class="btn btn-sm" onclick="triggerImportMapFile()" title="Open / Import existing map project (Ctrl+O)">Open</button>
                 <input type="file" id="input-import-map-file" accept=".json,.mw3pack" style="display:none;" onchange="handleImportMapFile(event)" />
-                <button id="btn-load-demo" class="btn btn-sm" title="Load sample Iron Ridge base layout">📥 Load Demo</button>
-                <button id="btn-export" class="btn btn-sm btn-primary" title="Compile standalone map pack">⚡ Export Pack</button>
-                <button id="btn-package-zip" class="btn btn-sm" onclick="packageCurrentMapZip()" title="Package into portable ZIP for other players">📦 Package ZIP</button>
-                <button id="btn-launch-game" class="btn btn-sm btn-accent" title="Play custom map in native Vulkan engine">▶️ Play in Engine</button>
-                <button id="btn-shortcuts" class="btn btn-sm btn-icon" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)">⌨️</button>
+                <button id="btn-load-demo" class="btn btn-sm" title="Load sample Iron Ridge base layout">Load Demo</button>
+                <button id="btn-export" class="btn btn-sm btn-primary" title="Compile standalone map pack">Export Pack</button>
+                <button id="btn-package-zip" class="btn btn-sm" onclick="packageCurrentMapZip()" title="Package into portable ZIP for other players">Package ZIP</button>
+                <button id="btn-launch-game" class="btn btn-sm btn-accent" title="Play custom map in native Vulkan engine">Play in Engine</button>
+                <button id="btn-shortcuts" class="btn btn-sm btn-icon" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)">Shortcuts</button>
                 <div id="status-game-pill" class="status-pill" onclick="openGameDirModal()" title="Game Directory Status">
                     <span id="status-game-dot" class="status-dot"></span>
                     <span id="status-game-text">MW3 Detected</span>
@@ -84,10 +84,10 @@
             </div>
 
             <div class="sub-bar-right">
-                <button class="btn btn-sm btn-icon" onclick="undo()" title="Undo (Ctrl+Z)">↩️</button>
-                <button class="btn btn-sm btn-icon" onclick="redo()" title="Redo (Ctrl+Y)">↪️</button>
-                <button id="btn-recon-overlay" class="btn btn-sm" onclick="toggleReconOverlay()" title="Toggle Satellite Recon Map Overlay (M)">🛰️ Recon Map</button>
-                <button id="btn-mode-toggle" class="btn btn-sm" onclick="toggleViewMode()" title="Toggle 2D Tactical / 3D Perspective (Tab)">🗺️ 3D View</button>
+                <button class="btn btn-sm btn-icon" onclick="undo()" title="Undo (Ctrl+Z)">Undo</button>
+                <button class="btn btn-sm btn-icon" onclick="redo()" title="Redo (Ctrl+Y)">Redo</button>
+                <button id="btn-recon-overlay" class="btn btn-sm" onclick="toggleReconOverlay()" title="Toggle Satellite Recon Map Overlay (M)">Recon Map</button>
+                <button id="btn-mode-toggle" class="btn btn-sm" onclick="toggleViewMode()" title="Toggle 2D Tactical / 3D Perspective (Tab)"> 3D View</button>
                 <!-- Hidden compatibility buttons bound in JS -->
                 <button id="btn-atmosphere" style="display:none;" onclick="openAtmosphereModal()"></button>
                 <button id="btn-campaign" style="display:none;" onclick="openCampaignModal()"></button>
@@ -103,8 +103,8 @@
                 <button class="sidebar-toggle-pin left-pin" id="btn-toggle-left-sidebar" onclick="toggleLeftSidebar()" title="Toggle Asset Palette (Left Bracket)">◀</button>
                 
                 <div class="sidebar-tabs">
-                    <button class="tab-btn active" id="tab-palette-btn" onclick="switchLeftTab('palette')">🎨 Asset Palette</button>
-                    <button class="tab-btn" id="tab-sculpt-btn" onclick="switchLeftTab('sculpt')">⛰️ Sculpt Tools</button>
+                    <button class="tab-btn active" id="tab-palette-btn" onclick="switchLeftTab('palette')">Asset Palette</button>
+                    <button class="tab-btn" id="tab-sculpt-btn" onclick="switchLeftTab('sculpt')">Sculpt Tools</button>
                 </div>
 
                 <!-- Palette Content View -->
@@ -114,7 +114,7 @@
                             type="text"
                             id="asset-search-input"
                             class="text-input"
-                            placeholder="🔍 Search assets (Mad Cat, Turret, Bunker)..."
+                            placeholder="Search assets (Mad Cat, Turret, Bunker)..."
                             style="width: 100%; margin-bottom: 8px; font-size: 11px;"
                             oninput="filterAssetPalette(this.value)"
                         />
@@ -130,220 +130,182 @@
                     </div>
 
                     <!-- BattleMechs Section (Complete MW3 Roster) -->
-                    <div class="section-title" data-category="combat">🦾 BattleMechs</div>
+                    <div class="section-title" data-category="combat">BattleMechs</div>
                     <div class="asset-grid" data-category="combat">
                         <div class="asset-card" data-type="mech_madcat" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Mad Cat / Timber Wolf</div>
                             <div class="asset-badge">75T Clan Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_bushwacker" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Bushwacker BSW-X1</div>
                             <div class="asset-badge">55T IS Medium</div>
                         </div>
                         <div class="asset-card" data-type="mech_thor" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Thor / Summoner</div>
                             <div class="asset-badge">70T Clan Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_shadowcat" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Shadow Cat</div>
                             <div class="asset-badge">45T Clan Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_vulture" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Vulture / Mad Dog</div>
                             <div class="asset-badge">60T Clan Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_daishi" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Daishi / Dire Wolf</div>
                             <div class="asset-badge">100T Clan Assault</div>
                         </div>
                         <div class="asset-card" data-type="mech_annihilator" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Annihilator ANH-1A</div>
                             <div class="asset-badge">100T IS Assault</div>
                         </div>
                         <div class="asset-card" data-type="mech_avatar" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Avatar AV1-O</div>
                             <div class="asset-badge">70T IS Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_blackhawk" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Black Hawk / Nova</div>
                             <div class="asset-badge">50T Clan Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_cauldron" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Cauldron-Born / Ebon</div>
                             <div class="asset-badge">65T Clan Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_champion" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Champion 1N</div>
                             <div class="asset-badge">60T IS Heavy</div>
                         </div>
                         <div class="asset-card" data-type="mech_dragonfly" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Dragonfly / Viper</div>
                             <div class="asset-badge">40T Clan Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_firefly" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Firefly FFL-4A</div>
                             <div class="asset-badge">30T IS Light</div>
                         </div>
                         <div class="asset-card" data-type="mech_orion" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Orion ON1-K</div>
                             <div class="asset-badge">75T IS Heavy</div>
                         </div>
                         <div class="asset-card" data-type="mech_strider" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Strider SR1-O</div>
                             <div class="asset-badge">40T IS Omni</div>
                         </div>
                         <div class="asset-card" data-type="mech_sunder" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Sunder SD1-O</div>
                             <div class="asset-badge">90T IS Assault</div>
                         </div>
                         <div class="asset-card" data-type="mech_supernova" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Supernova</div>
                             <div class="asset-badge">90T Clan Assault</div>
                         </div>
                         <div class="asset-card" data-type="mech_marauder" data-category="combat">
-                            <div class="asset-icon">🦾</div>
                             <div class="asset-name">Marauder MAD-3R</div>
                             <div class="asset-badge">75T Classic</div>
                         </div>
                     </div>
 
                     <!-- Defenses Section -->
-                    <div class="section-title" data-category="defense">🛡️ Defenses</div>
+                    <div class="section-title" data-category="defense">Defenses</div>
                     <div class="asset-grid" data-category="defense">
                         <div class="asset-card" data-type="turret_srm" data-category="defense">
-                            <div class="asset-icon">🚀</div>
                             <div class="asset-name">SRM Turret</div>
                             <div class="asset-badge">Missile Defense</div>
                         </div>
                         <div class="asset-card" data-type="turret_laser" data-category="defense">
-                            <div class="asset-icon">⚡</div>
                             <div class="asset-name">Laser Tower</div>
                             <div class="asset-badge">Pulse Beam</div>
                         </div>
                     </div>
 
                     <!-- Base Facilities -->
-                    <div class="section-title" data-category="facility">🏛️ Base Facilities</div>
+                    <div class="section-title" data-category="facility">Base Facilities</div>
                     <div class="asset-grid" data-category="facility">
                         <div class="asset-card" data-type="bunker" data-category="facility">
-                            <div class="asset-icon">🏢</div>
                             <div class="asset-name">Command Bunker</div>
                             <div class="asset-badge">HQ Citadel</div>
                         </div>
                         <div class="asset-card" data-type="comm_center" data-category="facility">
-                            <div class="asset-icon">📡</div>
                             <div class="asset-name">Radar Dish</div>
                             <div class="asset-badge">Sensors</div>
                         </div>
                         <div class="asset-card" data-type="fuel_tank" data-category="facility">
-                            <div class="asset-icon">🛢️</div>
                             <div class="asset-name">Coolant Silo</div>
                             <div class="asset-badge">Explosive</div>
                         </div>
                         <div class="asset-card" data-type="city_building" data-category="facility">
-                            <div class="asset-icon">🏬</div>
                             <div class="asset-name">City Garrison</div>
                             <div class="asset-badge">Structure</div>
                         </div>
                         <div class="asset-card" data-type="repair_station" data-category="facility">
-                            <div class="asset-icon">🔧</div>
                             <div class="asset-name">MFB Gantry</div>
                             <div class="asset-badge">Mech Service</div>
                         </div>
                         <div class="asset-card" data-type="factory" data-category="facility">
-                            <div class="asset-icon">🏭</div>
                             <div class="asset-name">Mech Factory</div>
                             <div class="asset-badge">Industrial</div>
                         </div>
                     </div>
 
                     <!-- Environment & Props -->
-                    <div class="section-title" data-category="props">🌲 Environment & Props</div>
+                    <div class="section-title" data-category="props">Environment & Props</div>
                     <div class="asset-grid" data-category="props">
                         <div class="asset-card" data-type="bridge_span" data-category="props">
-                            <div class="asset-icon">🌉</div>
                             <div class="asset-name">Bridge Span</div>
                             <div class="asset-badge">Crossing</div>
                         </div>
                         <div class="asset-card" data-type="ramp" data-category="props">
-                            <div class="asset-icon">📐</div>
                             <div class="asset-name">Vehicle Ramp</div>
                             <div class="asset-badge">Incline</div>
                         </div>
                         <div class="asset-card" data-type="dock" data-category="props">
-                            <div class="asset-icon">⚓</div>
                             <div class="asset-name">Shoreline Dock</div>
                             <div class="asset-badge">Harbor</div>
                         </div>
                         <div class="asset-card" data-type="defense_wall" data-category="props">
-                            <div class="asset-icon">🧱</div>
                             <div class="asset-name">Defense Wall</div>
                             <div class="asset-badge">Perimeter</div>
                         </div>
                         <div class="asset-card" data-type="security_gate" data-category="props">
-                            <div class="asset-icon">🚧</div>
                             <div class="asset-name">Security Gate</div>
                             <div class="asset-badge">Access</div>
                         </div>
                         <div class="asset-card" data-type="powerline_pole" data-category="props">
-                            <div class="asset-icon">⚡</div>
                             <div class="asset-name">Power Pole</div>
                             <div class="asset-badge">Utility</div>
                         </div>
                     </div>
 
                     <!-- Tactical Spawns & Navs -->
-                    <div class="section-title" data-category="tactical">🎯 Tactical Spawns & Navs</div>
+                    <div class="section-title" data-category="tactical">Tactical Spawns & Navs</div>
                     <div class="asset-grid" data-category="tactical">
                         <div class="asset-card" data-type="spawn" data-category="tactical">
-                            <div class="asset-icon">🪂</div>
                             <div class="asset-name">Drop Zone</div>
                             <div class="asset-badge">Player Spawn</div>
                         </div>
                         <div class="asset-card" data-type="nav" data-category="tactical">
-                            <div class="asset-icon">🚩</div>
                             <div class="asset-name">Nav Point</div>
                             <div class="asset-badge">Objective Nav</div>
                         </div>
                     </div>
 
                     <!-- Mission Triggers & Volumes -->
-                    <div class="section-title" data-category="trigger">⚡ Triggers & Volumes</div>
+                    <div class="section-title" data-category="trigger">Triggers & Volumes</div>
                     <div class="asset-grid" data-category="trigger">
                         <div class="asset-card" data-type="trig_evac" data-category="trigger">
-                            <div class="asset-icon">🚁</div>
                             <div class="asset-name">Evac Zone</div>
                             <div class="asset-badge">Mission Goal</div>
                         </div>
                         <div class="asset-card" data-type="trig_ambush" data-category="trigger">
-                            <div class="asset-icon">⚠️</div>
                             <div class="asset-name">Ambush Trigger</div>
                             <div class="asset-badge">Reinforcements</div>
                         </div>
                         <div class="asset-card" data-type="trig_sensor" data-category="trigger">
-                            <div class="asset-icon">📡</div>
                             <div class="asset-name">Sensor Grid</div>
                             <div class="asset-badge">Perimeter Alert</div>
                         </div>
                         <div class="asset-card" data-type="trig_minefield" data-category="trigger">
-                            <div class="asset-icon">💥</div>
                             <div class="asset-name">Minefield</div>
                             <div class="asset-badge">Hazard Zone</div>
                         </div>
@@ -352,16 +314,16 @@
 
                 <!-- Sculpt Tools View (in Left Sidebar) -->
                 <div class="sidebar-content" id="left-sculpt-view" style="display: none;">
-                    <div class="section-title">⛰️ Brush Operation Mode</div>
+                    <div class="section-title"> Brush Operation Mode</div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
-                        <button class="sculpt-mode-btn active" id="sculpt-btn-raise" onclick="setSculptBrushMode('raise')">⬆️ Raise</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-lower" onclick="setSculptBrushMode('lower')">⬇️ Lower</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-flatten" onclick="setSculptBrushMode('flatten')">➖ Flatten</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-smooth" onclick="setSculptBrushMode('smooth')">〰️ Smooth</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-noise" onclick="setSculptBrushMode('noise')">✨ Noise</button>
+                        <button class="sculpt-mode-btn active" id="sculpt-btn-raise" onclick="setSculptBrushMode('raise')">Raise</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-lower" onclick="setSculptBrushMode('lower')">Lower</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-flatten" onclick="setSculptBrushMode('flatten')">Flatten</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-smooth" onclick="setSculptBrushMode('smooth')">Smooth</button>
+                        <button class="sculpt-mode-btn" id="sculpt-btn-noise" onclick="setSculptBrushMode('noise')">Noise</button>
                     </div>
 
-                    <div class="section-title">🎛️ Brush Parameters</div>
+                    <div class="section-title"> Brush Parameters</div>
                     <div class="inspector-card">
                         <div class="prop-row">
                             <span class="prop-name">Radius</span>
@@ -388,11 +350,11 @@
                     </div>
 
                     <div style="margin-top: 10px;">
-                        <button class="btn btn-danger" style="width: 100%;" onclick="resetSculptedTerrain()">🔄 Reset to Base Elevation</button>
+                        <button class="btn btn-danger" style="width: 100%;" onclick="resetSculptedTerrain()">Reset to Base Elevation</button>
                     </div>
 
                     <div style="margin-top: 16px; padding: 10px; background: rgba(0, 240, 255, 0.05); border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-                        <b style="color: var(--accent-cyan)">💡 Sculpting Tip:</b> Click and drag directly on the 3D terrain to shape hills, valleys, and ramps in real-time.
+                        <b style="color: var(--accent-cyan)"> Sculpting Tip:</b> Click and drag directly on the 3D terrain to shape hills, valleys, and ramps in real-time.
                     </div>
                 </div>
             </div>
@@ -401,17 +363,17 @@
             <div class="viewport-container" id="viewport">
                 <!-- Top Floating HUD Controls -->
                 <div class="viewport-hud-top">
-                    <button id="btn-view-orbit" class="hud-btn active" onclick="setViewMode('orbit')" title="3D Perspective Studio (O)">🌐 3D View</button>
-                    <button id="btn-view-topdown" class="hud-btn" onclick="setViewMode('topdown')" title="2D Top-Down Tactical Map (T)">🗺️ 2D Tactical</button>
-                    <button id="btn-view-iso" class="hud-btn" onclick="setViewMode('iso')" title="Isometric 3D Angle (I)">📐 Isometric</button>
-                    <button id="btn-focus-selection" class="hud-btn" onclick="focusSelectedEntity()" title="Focus Camera on Selection (F)">🎯 Focus (F)</button>
-                    <button id="btn-sculpt-mode" class="hud-btn" onclick="toggleSculptMode()" title="Toggle Terrain Sculpting (S)">⛰️ Sculpt (S)</button>
+                    <button id="btn-view-orbit" class="hud-btn active" onclick="setViewMode('orbit')" title="3D Perspective Studio (O)">3D View</button>
+                    <button id="btn-view-topdown" class="hud-btn" onclick="setViewMode('topdown')" title="2D Top-Down Tactical Map (T)"> 2D Tactical</button>
+                    <button id="btn-view-iso" class="hud-btn" onclick="setViewMode('iso')" title="Isometric 3D Angle (I)">Isometric</button>
+                    <button id="btn-focus-selection" class="hud-btn" onclick="focusSelectedEntity()" title="Focus Camera on Selection (F)">Focus (F)</button>
+                    <button id="btn-sculpt-mode" class="hud-btn" onclick="toggleSculptMode()" title="Toggle Terrain Sculpting (S)">Sculpt (S)</button>
                 </div>
 
                 <!-- Floating Sculpt Toolbar (Kept for compatibility, hidden by default) -->
                 <div id="sculpt-toolbar" class="sculpt-toolbar" style="display: none;">
                     <div style="font-size: 11px; font-weight: 800; color: var(--accent-cyan); text-transform: uppercase;">
-                        ⛰️ Brush Active
+                        Brush Active
                     </div>
                 </div>
 
@@ -435,9 +397,9 @@
                 <button class="sidebar-toggle-pin right-pin" id="btn-toggle-right-sidebar" onclick="toggleRightSidebar()" title="Toggle Inspector / Outliner (Right Bracket)">▶</button>
 
                 <div class="sidebar-tabs">
-                    <button class="tab-btn active" id="tab-inspector-btn" onclick="switchRightTab('inspector')">🔍 Inspector</button>
-                    <button class="tab-btn" id="tab-outliner-btn" onclick="switchRightTab('outliner')">📋 Outliner</button>
-                    <button class="tab-btn" id="tab-atmosphere-btn" onclick="switchRightTab('atmosphere')">☀️ Atmosphere</button>
+                    <button class="tab-btn active" id="tab-inspector-btn" onclick="switchRightTab('inspector')">Inspector</button>
+                    <button class="tab-btn" id="tab-outliner-btn" onclick="switchRightTab('outliner')">Outliner</button>
+                    <button class="tab-btn" id="tab-atmosphere-btn" onclick="switchRightTab('atmosphere')">Atmosphere</button>
                 </div>
 
                 <!-- View 1: Inspector -->
@@ -448,7 +410,7 @@
 
                     <div id="inspector-content" style="display: none;">
                         <!-- Section: Transform -->
-                        <div class="section-title">📐 Transform & Coordinates</div>
+                        <div class="section-title">Transform & Coordinates</div>
                         <div class="inspector-card">
                             <div class="prop-row">
                                 <span class="prop-name">Name</span>
@@ -483,7 +445,7 @@
                         </div>
 
                         <!-- Section: Combat & Faction -->
-                        <div class="section-title">🛡️ Combat & Faction</div>
+                        <div class="section-title">Combat & Faction</div>
                         <div class="inspector-card">
                             <div class="prop-row">
                                 <span class="prop-name">Faction</span>
@@ -513,7 +475,7 @@
 
                         <!-- Section: Multi-Tier AI Orders -->
                         <div id="insp-ai-section">
-                            <div class="section-title">🤖 Multi-Tier AI Combat Orders</div>
+                            <div class="section-title">AI Combat Orders</div>
                             <div class="inspector-card">
                                 <div class="prop-row">
                                     <span class="prop-name">Pilot Skill</span>
@@ -553,7 +515,7 @@
 
                         <!-- Section: Event Triggers -->
                         <div id="insp-trigger-section" style="display: none;">
-                            <div class="section-title">⚡ Event Scripting & Volumes</div>
+                            <div class="section-title">Event Scripting & Volumes</div>
                             <div class="inspector-card">
                                 <div class="prop-row">
                                     <span class="prop-name">Trigger Radius</span>
@@ -591,8 +553,8 @@
 
                         <!-- Inspector Actions -->
                         <div style="display: flex; gap: 8px; margin-top: 12px;">
-                            <button id="btn-insp-dup" class="btn" style="flex: 1;">📋 Duplicate</button>
-                            <button id="btn-insp-delete" class="btn btn-danger" style="flex: 1;">🗑️ Delete</button>
+                            <button id="btn-insp-dup" class="btn" style="flex: 1;">Duplicate</button>
+                            <button id="btn-insp-delete" class="btn btn-danger" style="flex: 1;">Delete</button>
                         </div>
                     </div>
                 </div>
@@ -605,28 +567,28 @@
                                 type="text"
                                 id="outliner-search-input"
                                 class="text-input"
-                                placeholder="🔍 Filter placed entities..."
+                                placeholder="Filter placed entities..."
                                 style="width: 100%; font-size: 11px;"
                                 oninput="renderSceneOutliner()"
                             />
                         </div>
                         <div class="section-title">
-                            <span>📋 Placed Entities</span>
+                            <span>Placed Entities</span>
                             <span id="outliner-count" style="font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan);">0</span>
                         </div>
                         <div class="outliner-list" id="outliner-list">
                             <!-- Populated dynamically by JS -->
                         </div>
                         <div style="display: flex; gap: 8px; margin-top: 6px;">
-                            <button class="btn btn-sm" onclick="focusSelectedEntity()" style="flex: 1;">🎯 Focus Entity</button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteSelectedAssetFromUI()" style="flex: 1;">🗑️ Delete Selected</button>
+                            <button class="btn btn-sm" onclick="focusSelectedEntity()" style="flex: 1;">Focus Entity</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteSelectedAssetFromUI()" style="flex: 1;">Delete Selected</button>
                         </div>
                     </div>
                 </div>
 
                 <!-- View 3: Atmosphere & Lighting (Live in Sidebar!) -->
                 <div class="sidebar-content" id="right-atmosphere-view" style="display: none;">
-                    <div class="section-title">☀️ Solar Trajectory & Time of Day</div>
+                    <div class="section-title">Solar Trajectory & Time of Day</div>
                     <div class="inspector-card">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                             <span class="prop-name">Hour of Day</span>
@@ -635,14 +597,14 @@
                         <input type="range" id="atmo-tod-slider" class="range-slider" min="0" max="24" step="0.1" value="18" oninput="onTimeOfDaySliderChange(this.value)" />
                         
                         <div class="env-control-grid" style="margin-top: 8px;">
-                            <div class="preset-chip" onclick="applyTimeOfDayPreset('dawn')">🌅 Dawn</div>
-                            <div class="preset-chip" onclick="applyTimeOfDayPreset('noon')">☀️ Noon</div>
-                            <div class="preset-chip active" id="chip-sunset" onclick="applyTimeOfDayPreset('sunset')">🌇 Sunset</div>
-                            <div class="preset-chip" onclick="applyTimeOfDayPreset('night')">🌙 Night</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('dawn')">Dawn</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('noon')">Noon</div>
+                            <div class="preset-chip active" id="chip-sunset" onclick="applyTimeOfDayPreset('sunset')">Sunset</div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('night')">Night</div>
                         </div>
                     </div>
 
-                    <div class="section-title">🔆 Directional Sun & Ambient</div>
+                    <div class="section-title">Directional Sun & Ambient</div>
                     <div class="inspector-card">
                         <div class="prop-row">
                             <span class="prop-name">Sun Heading</span>
@@ -685,12 +647,12 @@
                         </div>
                     </div>
 
-                    <div class="section-title">⛈️ Dynamic Weather Effects</div>
+                    <div class="section-title">Dynamic Weather Effects</div>
                     <div class="inspector-card">
                         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px;">
                             <div class="preset-chip" onclick="applyWeatherPreset('clear')">Clear</div>
                             <div class="preset-chip" onclick="applyWeatherPreset('rain')">Rain</div>
-                            <div class="preset-chip" onclick="applyWeatherPreset('storm')">Storm ⚡</div>
+                            <div class="preset-chip" onclick="applyWeatherPreset('storm')">Storm</div>
                             <div class="preset-chip" onclick="applyWeatherPreset('dust')">Dust</div>
                         </div>
                         <div class="prop-row">
@@ -711,7 +673,7 @@
                             <span class="prop-name">Lightning</span>
                             <div style="display: flex; align-items: center; gap: 8px;">
                                 <input type="checkbox" id="weather-lightning-check" onchange="onAtmosphereDirectInput()" style="accent-color: var(--accent-amber);" />
-                                <button class="btn btn-sm" onclick="triggerLightningFlash()" style="padding: 1px 6px; font-size: 10px;">⚡ Test</button>
+                                <button class="btn btn-sm" onclick="triggerLightningFlash()" style="padding: 1px 6px; font-size: 10px;">Test</button>
                             </div>
                         </div>
                         <div class="prop-row">
@@ -767,8 +729,8 @@
         <div id="objectives-modal" class="modal-overlay">
             <div class="modal-card" style="width: 700px;">
                 <div class="modal-header">
-                    <div class="modal-title"><span>🎯 MISSION OBJECTIVES & TACTICAL INTEL</span></div>
-                    <button class="modal-close-btn" onclick="closeObjectivesModal()">✕</button>
+                    <div class="modal-title"><span>MISSION OBJECTIVES & TACTICAL INTEL</span></div>
+                    <button class="modal-close-btn" onclick="closeObjectivesModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div style="margin-bottom: 12px;">
@@ -813,8 +775,8 @@
         <div id="mechlab-modal" class="modal-overlay">
             <div class="modal-card" style="width: 740px;">
                 <div class="modal-header">
-                    <div class="modal-title"><span>🦾 MECHLAB & COMBAT DROP CONFIGURATION</span></div>
-                    <button class="modal-close-btn" onclick="closeMechLabModal()">✕</button>
+                    <div class="modal-title"><span>MECHLAB & COMBAT DROP CONFIGURATION</span></div>
+                    <button class="modal-close-btn" onclick="closeMechLabModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px;">
@@ -944,11 +906,11 @@
         <div id="atmosphere-modal" class="modal-overlay">
             <div class="modal-card" style="width: 780px;">
                 <div class="modal-header">
-                    <div class="modal-title"><span>⛅ ATMOSPHERE & LIGHTING STUDIO</span></div>
-                    <button class="modal-close-btn" onclick="closeAtmosphereModal()">✕</button>
+                    <div class="modal-title"><span>ATMOSPHERE & LIGHTING STUDIO</span></div>
+                    <button class="modal-close-btn" onclick="closeAtmosphereModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <p style="margin-bottom: 12px;">Atmosphere, solar trajectory, and dynamic weather are also docked directly in the <strong>☀️ Atmosphere</strong> sidebar tab for live 3D feedback without blocking the viewport.</p>
+                    <p style="margin-bottom: 12px;">Atmosphere, solar trajectory, and dynamic weather are also docked directly in the <strong>Atmosphere</strong> sidebar tab for live 3D feedback without blocking the viewport.</p>
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-primary" onclick="closeAtmosphereModal()">Close</button>
@@ -960,8 +922,8 @@
         <div id="campaign-modal" class="modal-overlay">
             <div class="modal-card" style="width: 820px; max-height: 90vh;">
                 <div class="modal-header">
-                    <div class="modal-title"><span>📜 CAMPAIGN CREATOR & SEQUENCER</span></div>
-                    <button class="modal-close-btn" onclick="closeCampaignModal()">✕</button>
+                    <div class="modal-title"><span>CAMPAIGN CREATOR & SEQUENCER</span></div>
+                    <button class="modal-close-btn" onclick="closeCampaignModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; margin-bottom: 12px;">
@@ -999,7 +961,7 @@
 
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                         <span style="font-size: 11px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase;">
-                            🎯 Mission Progression & Branching Graph
+                            Mission Progression & Branching Graph
                         </span>
                         <button class="btn btn-primary btn-sm" onclick="addCampaignMission()">+ Add Mission Stage</button>
                     </div>
@@ -1011,9 +973,9 @@
 
                 <div class="modal-actions">
                     <button class="btn" onclick="closeCampaignModal()">Cancel</button>
-                    <button class="btn btn-primary" id="btn-export-campaign" onclick="exportCampaignProject()">⚡ Compile Campaign Pack</button>
-                    <button class="btn" id="btn-package-campaign" onclick="packageCampaignZip()">📦 Package Campaign ZIP</button>
-                    <button class="btn btn-accent" id="btn-launch-campaign" onclick="launchCampaignProject()">▶️ Play Campaign</button>
+                    <button class="btn btn-primary" id="btn-export-campaign" onclick="exportCampaignProject()">Compile Campaign Pack</button>
+                    <button class="btn" id="btn-package-campaign" onclick="packageCampaignZip()">Package Campaign ZIP</button>
+                    <button class="btn btn-accent" id="btn-launch-campaign" onclick="launchCampaignProject()">Play Campaign</button>
                 </div>
             </div>
         </div>
@@ -1022,8 +984,8 @@
         <div id="export-modal" class="modal-overlay">
             <div class="modal-card">
                 <div class="modal-header">
-                    <div class="modal-title"><span>⚡ MAP PACK COMPILED SUCCESSFULLY!</span></div>
-                    <button class="modal-close-btn" onclick="document.getElementById('export-modal').style.display='none'">✕</button>
+                    <div class="modal-title"><span>MAP PACK COMPILED SUCCESSFULLY</span></div>
+                    <button class="modal-close-btn" onclick="document.getElementById('export-modal').style.display='none'">&times;</button>
                 </div>
                 <div class="modal-body">
                     Your standalone custom map pack has been built and packaged cleanly into the isolated <code>mods/map-packs/</code> folder without altering base game files.
@@ -1031,8 +993,8 @@
                 </div>
                 <div class="modal-actions">
                     <button id="btn-modal-close" class="btn">Close</button>
-                    <button onclick="packageCurrentMapZip()" class="btn">📦 Package ZIP for Other PCs</button>
-                    <button onclick="launchGameEngine()" class="btn btn-accent">▶️ Launch Game Now</button>
+                    <button onclick="packageCurrentMapZip()" class="btn">Package ZIP for Other PCs</button>
+                    <button onclick="launchGameEngine()" class="btn btn-accent">Launch Game Now</button>
                 </div>
             </div>
         </div>
@@ -1043,8 +1005,8 @@
         <div id="new-mission-modal" class="modal-overlay" style="display: none;">
             <div class="modal-card" style="width: 580px;">
                 <div class="modal-header">
-                    <div class="modal-title"><span>✨ CREATE NEW MISSION / MAP</span></div>
-                    <button class="modal-close-btn" onclick="closeNewMissionModal()">✕</button>
+                    <div class="modal-title"><span>CREATE NEW MISSION / MAP</span></div>
+                    <button class="modal-close-btn" onclick="closeNewMissionModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 13px;">
@@ -1090,7 +1052,7 @@
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="closeNewMissionModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="confirmCreateNewMission()">✨ Create Mission</button>
+                    <button class="btn btn-primary" onclick="confirmCreateNewMission()">Create Mission</button>
                 </div>
             </div>
         </div>
@@ -1098,8 +1060,8 @@
         <div id="shortcuts-modal" class="modal-overlay">
             <div class="modal-card" style="width: 580px;">
                 <div class="modal-header">
-                    <div class="modal-title"><span>⌨️ KEYBOARD SHORTCUTS REFERENCE</span></div>
-                    <button class="modal-close-btn" onclick="closeShortcutsModal()">✕</button>
+                    <div class="modal-title"><span>KEYBOARD SHORTCUTS REFERENCE</span></div>
+                    <button class="modal-close-btn" onclick="closeShortcutsModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="shortcuts-grid">
@@ -1129,8 +1091,8 @@
         <div id="gamedir-modal" class="modal-overlay">
             <div class="modal-card" style="width: 540px;">
                 <div class="modal-header">
-                    <div class="modal-title"><span>⚙️ MECHWARRIOR 3 GAME DIRECTORY</span></div>
-                    <button class="modal-close-btn" onclick="closeGameDirModal()">✕</button>
+                    <div class="modal-title"><span>MECHWARRIOR 3 GAME DIRECTORY</span></div>
+                    <button class="modal-close-btn" onclick="closeGameDirModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <p style="margin-bottom: 12px;">Mod Studio integrates directly with your MechWarrior 3 retail installation to extract authentic models, textures, audio, and launch custom missions.</p>

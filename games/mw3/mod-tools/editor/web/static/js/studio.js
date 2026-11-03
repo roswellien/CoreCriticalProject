@@ -1975,7 +1975,7 @@ function setViewMode(mode) {
         orbitControls.target.set(cx, 0, cz);
         transformControls.camera = orthoCamera;
 
-        if (modeToggleBtn) modeToggleBtn.innerHTML = "🌐 Mode: 2D Tactical (Click for 3D)";
+        if (modeToggleBtn) modeToggleBtn.innerHTML = "Mode: 2D Tactical (Click for 3D)";
     } else if (mode === "iso") {
         // 3D Isometric View
         camera = perspCamera;
@@ -1986,7 +1986,7 @@ function setViewMode(mode) {
         orbitControls.target.set(cx, 0, cz);
         transformControls.camera = perspCamera;
 
-        if (modeToggleBtn) modeToggleBtn.innerHTML = "🗺️ Mode: Isometric (Click for 2D)";
+        if (modeToggleBtn) modeToggleBtn.innerHTML = "Mode: Isometric (Click for 2D)";
     } else {
         // Full 3D Perspective Studio Mode
         camera = perspCamera;
@@ -1997,7 +1997,7 @@ function setViewMode(mode) {
         orbitControls.target.set(cx, 0, cz);
         transformControls.camera = perspCamera;
 
-        if (modeToggleBtn) modeToggleBtn.innerHTML = "🗺️ Mode: 3D Studio (Click for 2D)";
+        if (modeToggleBtn) modeToggleBtn.innerHTML = "Mode: 3D Studio (Click for 2D)";
     }
 
     if (reconMapMesh) {
@@ -2355,7 +2355,7 @@ async function exportMapPack() {
     } catch (err) {
         exportClientSideProject();
     } finally {
-        btn.innerText = "⚡ EXPORT MAP PACK";
+        btn.innerText = "EXPORT MAP PACK";
         btn.disabled = false;
     }
 }
@@ -2421,7 +2421,7 @@ async function launchGameEngine() {
     } catch (e) {
         alert("Launch failed: " + e);
     } finally {
-        btn.innerText = "▶️ LAUNCH NATIVE ENGINE";
+        btn.innerText = "LAUNCH NATIVE ENGINE";
         btn.disabled = false;
     }
 }
@@ -2754,7 +2754,7 @@ async function exportCampaignProject() {
     } catch (err) {
         alert("Campaign export error: " + err);
     } finally {
-        btn.innerText = "⚡ Compile Campaign Pack";
+        btn.innerText = "Compile Campaign Pack";
         btn.disabled = false;
     }
 }
@@ -2780,7 +2780,7 @@ async function launchCampaignProject() {
     } catch (e) {
         alert("Launch failed: " + e);
     } finally {
-        btn.innerText = "▶️ Play Campaign";
+        btn.innerText = "Play Campaign";
         btn.disabled = false;
     }
 }
@@ -3212,7 +3212,7 @@ async function packageCurrentMapZip() {
         });
         const data = await res.json();
         if (data.status === "ok") {
-            alert(`📦 Map Pack Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and double-click the launcher to play!`);
+            alert(`Map Pack Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and double-click the launcher to play!`);
             playBeep(880, "sine", 0.15);
         } else {
             alert("Packaging failed: " + data.message);
@@ -3237,7 +3237,7 @@ async function packageCampaignZip() {
         });
         const data = await res.json();
         if (data.status === "ok") {
-            alert(`📦 Campaign Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and play the multi-mission campaign with 1 click!`);
+            alert(`Campaign Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and play the multi-mission campaign with 1 click!`);
             playBeep(880, "sine", 0.15);
         } else {
             alert("Campaign packaging failed: " + data.message);
@@ -3274,33 +3274,33 @@ function renderSceneOutliner() {
     if (countEl) countEl.innerText = `${assets.length} items`;
 
     const iconMap = {
-        mech: "🦾",
-        turret: "🚀",
-        bunker: "🏢",
-        comm: "📡",
-        repair: "🔧",
-        factory: "🏭",
-        fuel: "🛢️",
-        city: "🏬",
-        bridge: "🌉",
-        ramp: "📐",
-        dock: "⚓",
-        wall: "🧱",
-        gate: "🚧",
-        pole: "⚡",
-        spawn: "🪂",
-        nav: "🚩",
-        trig_evac: "🚁",
-        trig_ambush: "⚠️",
-        trig_sensor: "📡",
-        trig_minefield: "💥",
+        mech: "[MECH]",
+        turret: "[TURRET]",
+        bunker: "[BUNKER]",
+        comm: "[COMMS]",
+        repair: "[REPAIR]",
+        factory: "[FACTORY]",
+        fuel: "[FUEL]",
+        city: "[BUILDING]",
+        bridge: "[BRIDGE]",
+        ramp: "[RAMP]",
+        dock: "[DOCK]",
+        wall: "[WALL]",
+        gate: "[GATE]",
+        pole: "[UTILITY]",
+        spawn: "[SPAWN]",
+        nav: "[NAV]",
+        trig_evac: "[EVAC]",
+        trig_ambush: "[AMBUSH]",
+        trig_sensor: "[SENSOR]",
+        trig_minefield: "[MINES]",
     };
 
     function getIcon(type) {
         for (const [k, v] of Object.entries(iconMap)) {
             if (type.includes(k)) return v;
         }
-        return "📦";
+        return "[ITEM]";
     }
 
     const filtered = assets.filter((a) => {
@@ -3337,7 +3337,7 @@ function renderSceneOutliner() {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">${Math.round(a.x)},${Math.round(a.z)}</span>
-                    <button class="outliner-item-del" onclick="event.stopPropagation(); deleteAssetById('${a.asset_id}')" title="Delete">🗑️</button>
+                    <button class="outliner-item-del" onclick="event.stopPropagation(); deleteAssetById('${a.asset_id}')" title="Delete">&times;</button>
                 </div>
             </div>`;
         })
@@ -3474,7 +3474,7 @@ function toggleLeftSidebar() {
     if (!el) return;
     state.sidebarLeftCollapsed = !state.sidebarLeftCollapsed;
     el.classList.toggle("collapsed", state.sidebarLeftCollapsed);
-    if (pin) pin.innerText = state.sidebarLeftCollapsed ? "▶" : "◀";
+    if (pin) pin.innerText = state.sidebarLeftCollapsed ? "›" : "‹";
     setTimeout(onWindowResize, 260);
 }
 
@@ -3484,7 +3484,7 @@ function toggleRightSidebar() {
     if (!el) return;
     state.sidebarRightCollapsed = !state.sidebarRightCollapsed;
     el.classList.toggle("collapsed", state.sidebarRightCollapsed);
-    if (pin) pin.innerText = state.sidebarRightCollapsed ? "◀" : "▶";
+    if (pin) pin.innerText = state.sidebarRightCollapsed ? "‹" : "›";
     setTimeout(onWindowResize, 260);
 }
 
