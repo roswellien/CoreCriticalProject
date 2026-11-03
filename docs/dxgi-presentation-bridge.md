@@ -28,7 +28,9 @@ The execution boundary advanced is completed native Vulkan frame -> GPU sharing
 -> visible DXGI presentation. This does not change game logic, guest surface
 dimensions or world shaders. The FidelityFX work in
 [PR #100](https://github.com/roswellien/MW3Recomp-Private/pull/100) remains separate;
-combined integration and retained-color reconstruction need their own validation.
+bounded combined integration checks are recorded in the
+[Stage 2 evidence](fidelityfx-world-resolution.md#combined-rx-9070-integration).
+Retained-color reconstruction remains incomplete.
 SDK integrations that wrap a Vulkan swapchain, including frame-generation pacing,
 are not covered by this transport check.
 

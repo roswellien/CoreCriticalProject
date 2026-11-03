@@ -31,7 +31,7 @@ static std::shared_ptr<ModelInstance> world(std::uint64_t key,float origin) {
     result->projection={1,20,20,32,32,.1f};
     return result;
 }
-int main() {
+int main(int argc, char **) {
     try {
         _putenv_s("MW34_GPU_MODELS","1");
         _putenv_s("MW34_REMASTER_WIDTH","");_putenv_s("MW34_REMASTER_HEIGHT","");
@@ -59,6 +59,38 @@ int main() {
         renderer.render(scene);
         if(renderer.world_gpu_draws!=4||renderer.model_uploads!=2)throw std::runtime_error("World GPU fixture cache not reused");
         check(22,22,0xf800);check(10,10,0x07e0);check(36,36,0x001f);
+        if(argc>1){
+            using namespace mw34::temporal;
+            if(!enabled())throw std::runtime_error("Camera GPU fixture requires temporal diagnostics");
+            Snapshot snapshot{};snapshot.view={1,2,3,0};snapshot.target=7;
+            snapshot.attachment=8;snapshot.viewport=9;snapshot.far_clip=100;
+            snapshot.camera[0]=snapshot.camera[4]=snapshot.camera[8]=std::bit_cast<unsigned>(1.f);
+            snapshot.inverse=snapshot.camera;snapshot.projection={1,20,20,32,32,.1f};
+            snapshot.viewport_rect={0,0,64,64};
+            renderer.complete_camera_history(1,7);
+            auto capture=[&](unsigned frame){snapshot.frame=frame;for(auto&d:scene.draws)
+                if(d.model&&d.model->world)d.camera_view=std::make_shared<const Snapshot>(snapshot);};
+            for(unsigned frame=2;frame<=3;++frame){capture(frame);renderer.render(scene,false,false);
+                renderer.render(scene,false,false);renderer.complete_camera_history(frame,7);}
+            if(!renderer.camera_history.pairs().at(snapshot.view).valid())
+                throw std::runtime_error("Original world submissions did not retain one real-frame camera pair");
+            Scene fill{};fill.width=fill.height=64;fill.has_depth=true;fill.guest_surface_write=true;
+            Clear clear{};clear.flags=2;clear.rects={{{0,0},{64,64}}};
+            fill.clears={clear};fill.order={{true,0}};
+            renderer.render(fill,false,false);capture(4);renderer.render(scene,false,false);
+            renderer.complete_camera_history(4,7);
+            if(!renderer.camera_history.pairs().at(snapshot.view).valid())
+                throw std::runtime_error("Normal frame initialization erased camera history");
+            capture(5);renderer.render(scene,false,false);fill.clears[0].rects={{{10,10},{1,1}}};
+            renderer.render(fill,false,false);renderer.complete_camera_history(5,7);
+            if(!renderer.camera_history.pairs().empty())
+                throw std::runtime_error("Interleaved guest fill committed camera history");
+            snapshot.projection[1]=21;capture(6);renderer.render(scene,false,false);
+            renderer.complete_camera_history(6,7);
+            if(!renderer.camera_history.pairs().empty())
+                throw std::runtime_error("Captured projection disagrees with actual world draw");
+            std::cout<<"Camera GPU integration: original submissions, initialization, guest writes and projection validation pass\n";
+        }
         std::cout<<"World GPU fixture: raw projection, attribute offsets, TL restoration and cache reuse pass on "<<renderer.device_name<<"\n";
     } catch(const std::exception& error) { std::cerr<<error.what()<<"\n";return 1; }
 }

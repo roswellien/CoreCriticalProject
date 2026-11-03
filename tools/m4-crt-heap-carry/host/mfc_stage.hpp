@@ -19,6 +19,7 @@
 #include "controller_input.hpp"
 #include "mech_headlights.hpp"
 #include "surface_page_pool.hpp"
+#include "surface_access.hpp"
 #include "texture_backing.hpp"
 #include "menu_wave.hpp"
 #include "sun_camera_binding.hpp"
@@ -151,7 +152,7 @@ inline Body find(unsigned a){struct Slot{unsigned addr;bool valid;Body body;};th
  auto&s=cache[(a>>2)&4095];if(s.valid&&s.addr==a)return s.body;const Body b=find_uncached(a);s={a,true,b};return b;}
 
 struct Import{unsigned cell,bound;std::string dll,name;mutable const void*iface_cache{};mutable bool iface_resolved{};mutable const std::string*label[3]{};/* service-log text by prefix (none, MSVCRT>, GAME>), built once */mutable signed char op=-1;/* IDirect3DDevice3 hot-method selector, resolved once from the name */};
-struct VSurfaceRec{unsigned guest,width,height,pitch,bpp,caps,mem,bytes,attached,clipper,palette;DDCOLORKEY src_key{},dst_key{};bool has_src_key{},has_dst_key{};unsigned locks{};bool primary{};std::array<unsigned,4>tex_masks{0xf800,0x07e0,0x001f,0};unsigned zbuffer{};
+struct VSurfaceRec{unsigned guest,width,height,pitch,bpp,caps,mem,bytes,attached,clipper,palette;DDCOLORKEY src_key{},dst_key{};bool has_src_key{},has_dst_key{};unsigned locks{};mw34::surface::LockAccess lock_access;bool primary{};std::array<unsigned,4>tex_masks{0xf800,0x07e0,0x001f,0};unsigned zbuffer{};
  /* content version, unique across surfaces: advanced by every API path that writes the surface (Unlock,
     Blt/BltFast/colour fills as destination, Texture2::Load, Flip, scene write-back) */
  mutable std::uint64_t version{};mutable mw34::textures::Backing pixels;};
@@ -167,7 +168,7 @@ using GuestHeap=mw34::heap_partitions::GuestHeap;
 struct SoundLock{unsigned buffer;void*p1;DWORD b1;void*p2;DWORD b2;unsigned g1,g2;};
 // Direct3D provider records: per-device state and the commands of the current scene.
 unsigned fixture_mesh_node{},fixture_mesh_frame{};
-struct D3DCmd{enum Kind{Clear,Draw}kind;unsigned flags,a;float z;std::vector<RECT>rects;std::vector<unsigned char>vertices;unsigned prim{};std::vector<unsigned short>indices;std::shared_ptr<const std::vector<unsigned>>state_snapshot;unsigned texture{};unsigned fixture_node{},fixture_polygon{};int override_texture{-1};int override_normal_texture{-1};std::shared_ptr<const mw34::vkscene::ModelInstance>model{};std::shared_ptr<const mw34::sun::Tl>sun_tl{};std::shared_ptr<const mw34::sun::Tl>sky_view{};bool missile_exhaust{};bool condition_schematic{};unsigned hud_role{};float zoom_anchor{};bool zoom_anchor_known{};};
+struct D3DCmd{enum Kind{Clear,Draw}kind;unsigned flags,a;float z;std::vector<RECT>rects;std::vector<unsigned char>vertices;unsigned prim{};std::vector<unsigned short>indices;std::shared_ptr<const std::vector<unsigned>>state_snapshot;unsigned texture{};unsigned fixture_node{},fixture_polygon{};int override_texture{-1};int override_normal_texture{-1};std::shared_ptr<const mw34::vkscene::ModelInstance>model{};std::shared_ptr<const mw34::sun::Tl>sun_tl{};std::shared_ptr<const mw34::sun::Tl>sky_view{};std::shared_ptr<const mw34::temporal::Snapshot>camera_view{};bool missile_exhaust{};bool condition_schematic{};unsigned hud_role{};float zoom_anchor{};bool zoom_anchor_known{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};};
 struct D3DDev{unsigned guest,target,zbuffer,d3d;std::array<unsigned,256>rs{};std::array<std::array<unsigned,32>,8>tss{};std::array<unsigned,8>textures{};std::vector<unsigned>viewports;unsigned current{};bool in_scene{};std::vector<D3DCmd>commands;
  /* draws share one state snapshot until a state setter advances the epoch (the stage-0 texture is per draw) */
  std::uint64_t epoch{1},snap_epoch{};std::shared_ptr<const std::vector<unsigned>>snap;};
@@ -500,6 +501,7 @@ std::string pose_name(unsigned address,unsigned limit){std::string result;
  // on every host exception, including a guest non-local return.
  #include "world_direct_stage.inc"
  #include "sun_lighting_stage.inc"
+ #include "camera_capture_stage.inc"
  #include "surface_normals_stage.inc"
 bool render_reuse_enabled(){
  static const bool enabled=[] {
@@ -610,7 +612,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
    try{result=body(s,target,p);}catch(...){missile_end();override_restore(previous);throw;}missile_end();override_restore(previous);
   }else result=body(s,target,p);if(target==0x51fb30){override_emit();missile_emit();}return result;}
  void*controller_next_body(State*s,unsigned target,void*p,Body body){
-  return photo_replay_body(s,target,p,[&]{return turret_aim_body(s,target,p,[&]{return lighting_body(s,target,p,body);});});
+  return camera_body(s,target,p,[&]{return photo_replay_body(s,target,p,[&]{return turret_aim_body(s,target,p,[&]{return lighting_body(s,target,p,body);});});});
  }
  #include "controller_stage.inc"
  void*remaster_body(State*s,unsigned target,void*p,Body body){
@@ -627,7 +629,21 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
 
   return headlight_body(s,target,p,[&]{return controller_body(s,target,p,[&]{return controller_next_body(s,target,p,body);});});
  }
+ void initialize_menu_construction(unsigned target){
+  if(target!=0x488bc0)return;
+  const unsigned menu=state.gpr.rcx.dword;
+  const auto block=host.gheap.live.find(menu);
+  if(block==host.gheap.live.end()||block->second!=0x17730U||
+     host.gheap.owner_of(menu)!=hs::token||!writable(menu+0x16f9cU,12))
+   deny("Menu construction outside its new CRT allocation",menu);
+  // Original 0x48a718 calls this constructor before 0x48a838 assigns these
+  // fields. Its callback reads them at 0x489d19; reused CRT bytes can be stale.
+  runtime.memory().store<unsigned char>({menu+0x16f9cU},0);
+  store(menu+0x16fa0U,0);
+  store(menu+0x16fa4U,0);
+ }
  void*enter(State*s,unsigned target,void*p,Body body){if(depth>=returns.size())deny("MFC42-stage call depth bound",target);if(hud_log)hud_capture(target);{void*r{};if(hud_intercept(target,p,r))return r;}
+  initialize_menu_construction(target);
   if(kind==Kind::initterm&&depth==0)for(unsigned i=0;i<145;++i)if(load(0x5e0000+4*i)==target&&load(state.gpr.rsp.dword)>=msvcrt_base){root_index=i;root_addr=target;break;}{const unsigned sp=state.gpr.rsp.dword,w=load(sp);
    /* A direct tail JMP to a function entry is lifted as a tail call through the CALL router: it enters with
       ESP at the slot of the active return word (a real CALL always enters strictly deeper) and binds nothing new. */

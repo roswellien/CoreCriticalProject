@@ -30,6 +30,7 @@ unsigned put_createstruct(unsigned&at,const CREATESTRUCTA&cs){const unsigned nam
  for(unsigned i=0;i<12;++i)store(at+4*i,v[i]);return at;}
 // Marshal host (w,l) to guest values; returns the frame (copy = guest structure address, 0 if none).
 MsgFrame marshal(HWND h,UINT m,WPARAM w,LPARAM l,unsigned&at){MsgFrame f{h,m,w,l,unsigned(w),unsigned(l),0,0};
+ if(mw34::temporal::enabled()&&h==host.display.window&&(m==WM_SETFOCUS||m==WM_KILLFOCUS||m==WM_ACTIVATEAPP||m==WM_SIZE))camera_reset();
  // A host lParam that does not fit a guest word (undocumented system messages such as the UAH menu
  // messages carry host pointers the application never interprets) becomes an opaque guest token; the
  // frame maps it back to the host pointer when the guest forwards the message to a host procedure.

@@ -1,2 +1,27 @@
 address	name	confidence	evidence	purpose
 00409ED0	sub_00409ED0	confirmed	games/mw3/docs/first-function.md	Returns ECX + 188 * n + 312, where n is its one stack argument; gameplay role unknown
+0040ADF0	sub_0040ADF0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Replaces the context target and controller with teardown and initialization
+0040AE70	sub_0040AE70	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Selects and initializes a context controller while preserving its previous mode
+0040AF30	sub_0040AF30	likely	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Adjusts the active camera against terrain and collision geometry
+00418E90	sub_00418E90	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Repositions a Mech actor, resets velocity/physics fields and refreshes its scene
+00418F30	sub_00418F30	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Updates actor orientation then delegates absolute repositioning
+00421760	sub_00421760	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Updates the mode-zero camera pose through the original camera transform setters
+00421900	sub_00421900	likely	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Configures controller pose parameters and initializes camera pose
+00421C00	sub_00421C00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Applies a discrete look preset to controller quaternion state
+00421D40	sub_00421D40	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Forwards controller pose configuration to sub_00421900
+00421D50	sub_00421D50	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Switches the mode-one camera attachment and initializes its pose
+00421E40	sub_00421E40	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Updates the mode-one camera from the selected actor and cockpit camera state
+00493040	sub_00493040	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Enters the original Pause State and creates its pause dialog
+004931E0	sub_004931E0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Tears down the original Pause State and releases its dialog resources
+004D2A70	sub_004D2A70	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Returns the receiver pointer without modification
+004EAF90	sub_004EAF90	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Frees a node data block and clears its type and data identity
+004EB050	sub_004EB050	likely	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Requests or performs generic node retirement
+004ED280	sub_004ED280	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Composes a node transform through its original ancestry traversal
+004F32E0	sub_004F32E0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Constructs a type-one camera node and its camera data
+004F3390	sub_004F3390	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Delegates camera node retirement to sub_004EB050
+004F3560	sub_004F3560	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Assigns a validated type-two world node to camera data
+004F3620	sub_004F3620	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Assigns the viewport reference in camera data
+004F36B0	sub_004F36B0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes camera rotation and selects its ordinary pose storage
+004F3870	sub_004F3870	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes absolute camera translation into the selected pose storage
+004F3920	sub_004F3920	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Adds relative translation to the selected camera pose storage
+00520B00	sub_00520B00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Activates the renderer camera basis and prepares its inverse view

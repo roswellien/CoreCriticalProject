@@ -30,7 +30,7 @@ public static class RuntimeContentCapabilities
             throw new InvalidDataException("Invalid content capability requirements.");
         foreach (var (name, version) in payload.RequiredCapabilities)
             if ((!Profiles.ContainsValue(name) && name != "mech-headlights" &&
-                 name != LegacyChassisSkins.Capability) || version < 1)
+                 name != LegacyChassisSkins.Capability && name != "surface-materials") || version < 1)
                 throw new InvalidDataException("Unsupported content capability requirement: " + name);
     }
 
