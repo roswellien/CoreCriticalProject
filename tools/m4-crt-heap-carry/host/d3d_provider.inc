@@ -198,7 +198,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
  // lighting/material records repeatedly as the vectors grow.
  sc.draws.reserve(d.commands.size());sc.order.reserve(d.commands.size());
  size_t vertexBytes=0;
- for(const auto& command:d.commands)if(command.kind==D3DCmd::Draw&&!(command.model&&!command.model->world)){
+ for(const auto& command:d.commands)if(command.kind==D3DCmd::Draw&&!(command.model&&(!command.model->world||command.model->native_fog))){
   const size_t n=command.indices.empty()?command.vertices.size()/32:command.indices.size();
   const size_t count=command.flags==D3DPT_POINTLIST?n:command.flags==D3DPT_TRIANGLELIST?(n/3)*3:n>=3?(n-2)*3:0;
   if(count>(sc.vertices.max_size()-vertexBytes)/32)deny("Scene vertex reservation exceeds host bounds",0);
@@ -328,7 +328,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.surface_material=c.surface_material;dr.camera_view=c.camera_view;dr.temporal_output_only=c.hud_role!=WideWorld&&c.hud_role!=WideZoom;dr.temporal_source=c.temporal_source;dr.temporal_model=c.temporal_model;
   if(c.model&&c.model->world)dr.model=c.model;
-  if(c.model&&!c.model->world){if(!mw34::vkscene::Renderer::gpu_models()||!c.model->geometry)deny("Optional GPU model draw is not enabled",0);
+  if(c.model&&(!c.model->world||c.model->native_fog)){if(!mw34::vkscene::Renderer::gpu_models()||!c.model->geometry)deny("Optional GPU model draw is not enabled",0);
    dr.model=c.model;dr.first=0;dr.count=unsigned(c.model->geometry->vertices.size());wide_adapt_tl(sc,dr,c.hud_role,c.zoom_anchor_known?&c.zoom_anchor:nullptr);sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(std::move(dr));continue;}
   // Primitives become a triangle list in Direct3D order with the first vertex of each triangle first
   // (the flat-shading colour source), preserving each triangle's winding.

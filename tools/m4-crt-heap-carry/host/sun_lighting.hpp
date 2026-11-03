@@ -275,8 +275,10 @@ struct alignas(16) Uniform {
     std::array<float,4> weather{},weather_fog{}; // wetness, heat haze, dust, lava; density, altitude, reserved
     std::array<float,4> emission_params{};
     std::array<std::array<float,4>,32> emission_regions{};
+    // Appended vertex-stage inputs; established fragment/lighting offsets stay fixed.
+    std::array<float,4> native_fog_distance{},native_fog_height{},native_fog_row{};
 };
-static_assert(sizeof(Uniform)==912);
+static_assert(sizeof(Uniform)==960);
 struct Tl {
     std::array<float,12> camera_world{};
     std::array<float,6> projection{};

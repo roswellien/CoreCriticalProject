@@ -31,4 +31,10 @@ address	name	confidence	evidence	purpose
 004F5910	sub_004F5910	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Dispatches rendering by original scene-node type
 004F6720	sub_004F6720	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Renders bounded selected cells and dispatches their object and placement subtrees
 0051E930	sub_0051E930	confirmed	docs/fidelityfx-static-temporal-inputs.md#original-static-source-producers	Pushes matrix-stack storage and copies the previous camera-dependent matrix
+0051E9D0	sub_0051E9D0	confirmed	docs/native-static-producer.md#original-helper-evidence	Advances the matrix stack and installs the caller scratch matrix
+0051EA00	sub_0051EA00	confirmed	docs/native-static-producer.md#original-helper-evidence	Pops the matrix stack
+0051FB30	sub_0051FB30	confirmed	docs/native-static-producer.md#original-helper-evidence	Composes view and prior stack transforms into the current matrix
 00520B00	sub_00520B00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Activates the renderer camera basis and prepares its inverse view
+0053DAA0	sub_0053DAA0	confirmed	docs/native-static-producer.md#original-helper-evidence	Selects mesh fog and lighting contributions and initializes dependent state
+00543D90	sub_00543D90	confirmed	docs/native-static-producer.md#original-helper-evidence	Selects mesh light contributions and clears inactive point-light entries
+00555A70	sub_00555A70	confirmed	docs/native-static-producer.md#original-helper-evidence	Computes radial and height vertex fog and updates the fog-colour callback state

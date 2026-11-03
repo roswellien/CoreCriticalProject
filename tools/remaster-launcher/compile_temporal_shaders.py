@@ -1,4 +1,4 @@
-"""Compile canonical authored temporal-input and shared coverage shaders."""
+"""Compile authored temporal, native static and shared coverage shaders."""
 import argparse
 from pathlib import Path
 import struct
@@ -8,7 +8,8 @@ def compile_shaders(host, compiler, output):
     output.mkdir(parents=True, exist_ok=True)
     for source, name in (("temporal_inputs.vert", "temporal_inputs_vert"),
                          ("temporal_inputs.frag", "temporal_inputs_frag"),
-                         ("world_coverage.frag", "world_coverage_frag")):
+                         ("world_coverage.frag", "world_coverage_frag"),
+                         ("native_static.vert", "native_static_vert")):
         binary = output / (name + ".spv")
         subprocess.run([str(compiler), "-V", "--target-env", "vulkan1.0", "-I" + str(host),
                         str(host / source), "-o", str(binary)], check=True)

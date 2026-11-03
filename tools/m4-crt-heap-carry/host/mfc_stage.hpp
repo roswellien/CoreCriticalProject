@@ -502,6 +502,7 @@ std::string pose_name(unsigned address,unsigned limit){std::string result;
  #include "world_direct_stage.inc"
  #include "sun_lighting_stage.inc"
  #include "camera_capture_stage.inc"
+ #include "native_static_stage.inc"
  #include "temporal_source_stage.inc"
  #include "surface_normals_stage.inc"
 bool render_reuse_enabled(){
@@ -564,7 +565,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
    const auto previous_fixture_node=fixture_mesh_node,previous_fixture_frame=fixture_mesh_frame;
    fixture_mesh_node=state.gpr.rcx.dword;fixture_mesh_frame=state.gpr.rsp.dword-4;
    world_scope=world_begin(fixture_mesh_node,fixture_mesh_frame);
-   try{void*r=remaster_body_inner(s,target,p,body);world_scope=std::move(previous);fixture_mesh_node=previous_fixture_node;fixture_mesh_frame=previous_fixture_frame;return r;}
+   try{void*r{};if(!native_static_produce(r))r=remaster_body_inner(s,target,p,body);world_scope=std::move(previous);fixture_mesh_node=previous_fixture_node;fixture_mesh_frame=previous_fixture_frame;return r;}
    catch(...){world_scope=std::move(previous);fixture_mesh_node=previous_fixture_node;fixture_mesh_frame=previous_fixture_frame;throw;}}
   return remaster_body_inner(s,target,p,body);
  }

@@ -55,6 +55,8 @@
 #include "world_fast_binding.hpp"
 #include "geometry_profile.hpp"
 #include "world_scene_vert.h"
+#include "native_static_inputs.hpp"
+#include "native_static_vert.h"
 #include "status_model_fit.hpp"
 #include "model_scene_vert.h"
 #include "d3d_scene_vert.h"
@@ -131,6 +133,7 @@ struct ModelInstance {
     std::uint32_t color{};
     float diagnostic_fog_factor{1.f};
     bool world{};
+    std::shared_ptr<const mw34::native_static::Fog> native_fog;
     std::array<float, 12> sun_normal{}, sun_world{};
     bool sun_eligible{};
     std::uint64_t shadow_source{};
@@ -1285,6 +1288,11 @@ class Renderer {
                         mw34::detail::uniform(u, draw.detail_role, s.detail_time);
                     u.detail_motion[3] = draw.key.blend ? -1.f : environment.night_world_gain;
                     s.emissions.apply(draw.emission_index, u);
+                    if (draw.model && draw.model->native_fog) {
+                        u.native_fog_distance = draw.model->native_fog->distance;
+                        u.native_fog_height = draw.model->native_fog->height;
+                        u.native_fog_row = draw.model->native_fog->height_row;
+                    }
                     sunUniformIds[at] = uniformRuns.identify(u);
                     std::memcpy(static_cast<unsigned char *>(sunBuffer.mapped) + at * sunStride, &u,
                                 sizeof(u));
@@ -1587,7 +1595,8 @@ class Renderer {
             const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
             const VkPipelineLayout layout = (model || lit) ? modelLayout : pipelineLayout;
             f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline(d.key, model, d.model && d.model->world, lit));
+                                pipeline(d.key, model, d.model && d.model->world, lit,
+                                         d.model && bool(d.model->native_fog)));
             f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
                                       &drawSets[o.index], 0, nullptr);
             if (lit) {
@@ -1612,7 +1621,7 @@ class Renderer {
                 const auto &b = model_buffers.at(i.geometry->key);
                 if (!b.uploaded || (!i.world && d.first) || d.count != b.count)
                     throw std::runtime_error("GPU model draw range mismatch");
-                if (i.world) {
+                if (i.world && !i.native_fog) {
                     const VkBuffer buffers[2]{b.local.buffer, vertexBuffer.buffer};
                     const VkDeviceSize offsets[2]{0, VkDeviceSize(d.first) * 32};
                     f.vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
@@ -1878,7 +1887,7 @@ class Renderer {
     Buffer upload, readback, vertexBuffer, texUpload, sunBuffer, effectBuffer;
     VkDeviceSize sunStride{};
     VkDescriptorSetLayout sunSetLayout{}, normalSetLayout{};
-    VkShaderModule sunWorldVert{}, sunModelVert{}, sunTlVert{}, sunFrag{};
+    VkShaderModule sunWorldVert{}, sunModelVert{}, sunTlVert{}, sunFrag{}, nativeStaticVert{};
     // Optional sun shadow map. Casters are GPU replacement models only.
     struct ShadowCaster {
         VkBuffer buffer{};
@@ -2585,6 +2594,14 @@ class Renderer {
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &q;
         VkPhysicalDeviceFeatures enabled{};
+        if (mw34::native_static::enabled()) {
+            VkPhysicalDeviceFeatures supported{};
+            f.vkGetPhysicalDeviceFeatures(gpu, &supported);
+            if (!supported.shaderFloat64)
+                throw std::runtime_error("Native static producer requires shaderFloat64");
+            enabled.shaderFloat64 = VK_TRUE;
+            dci.pEnabledFeatures = &enabled;
+        }
         if (anisotropy() > 1) {
             VkPhysicalDeviceFeatures supported{};
             f.vkGetPhysicalDeviceFeatures(gpu, &supported);
@@ -2859,6 +2876,8 @@ class Renderer {
             sunModelVert = module(sun_model_vert_spv, sizeof(sun_model_vert_spv));
             sunTlVert = module(sun_tl_vert_spv, sizeof(sun_tl_vert_spv));
             sunFrag = module(effect_scene_frag_spv, sizeof(effect_scene_frag_spv));
+            if (mw34::native_static::enabled())
+                nativeStaticVert = module(native_static_vert_spv, sizeof(native_static_vert_spv));
             if (mw34::sun::settings().shadows)
                 shadowVert = module(sun_shadow_vert_spv, sizeof(sun_shadow_vert_spv));
         }
@@ -3326,11 +3345,14 @@ class Renderer {
         return samplers[key] = s;
     }
     VkPipeline pipeline(const PipelineKey &k, bool model = false, bool world = false,
-                        bool lit = false) {
+                        bool lit = false, bool native = false) {
+        if (native && (!model || !world || !lit || !nativeStaticVert))
+            throw std::runtime_error("Native static draw lacks its lit resident pipeline");
         // points uses bit56 (0/1); bit57 distinguishes this private model pipeline.
         const std::uint64_t key = k.packed() | (model ? (1ULL << 57) : 0ULL) |
                                   (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL) |
-                                  (reconstruction_stage == ReconstructionStage::coverage ? (1ULL << 60) : 0ULL);
+                                  (reconstruction_stage == ReconstructionStage::coverage ? (1ULL << 60) : 0ULL) |
+                                  (native ? (1ULL << 61) : 0ULL);
         auto it = pipelines.find(key);
         if (it != pipelines.end())
             return it->second;
@@ -3339,7 +3361,7 @@ class Renderer {
             st[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             st[i].stage = i ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
             st[i].module =
-                lit ? (i ? sunFrag : (world ? sunWorldVert : (model ? sunModelVert : sunTlVert)))
+                lit ? (i ? sunFrag : (native ? nativeStaticVert : (world ? sunWorldVert : (model ? sunModelVert : sunTlVert))))
                     : (i ? frag : (world ? worldVert : (model ? modelVert : vert)));
             if (i && reconstruction_stage == ReconstructionStage::coverage)
                 st[i].module = coverageFrag;
@@ -3365,10 +3387,10 @@ class Renderer {
              {2, 1, VK_FORMAT_R32_UINT, 20},
              {3, 1, VK_FORMAT_R32G32_SFLOAT, 24},
              {4, 0, VK_FORMAT_R32G32B32_SFLOAT, 12}}};
-        vi.vertexBindingDescriptionCount = world ? 2 : 1;
-        vi.pVertexBindingDescriptions = world ? wb.data() : &vb;
-        vi.vertexAttributeDescriptionCount = world ? (lit ? 5 : 4) : (model ? 3 : 4);
-        vi.pVertexAttributeDescriptions = world ? wa.data() : (model ? ma.data() : va.data());
+        vi.vertexBindingDescriptionCount = world && !native ? 2 : 1;
+        vi.pVertexBindingDescriptions = world && !native ? wb.data() : &vb;
+        vi.vertexAttributeDescriptionCount = world && !native ? (lit ? 5 : 4) : (model ? 3 : 4);
+        vi.pVertexAttributeDescriptions = world && !native ? wa.data() : (model ? ma.data() : va.data());
         VkPipelineInputAssemblyStateCreateInfo ia{};
         ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         ia.topology =
@@ -3907,6 +3929,8 @@ class Renderer {
             f.vkDestroyDescriptorSetLayout(device, normalSetLayout, nullptr);
         if (sunWorldVert)
             f.vkDestroyShaderModule(device, sunWorldVert, nullptr);
+        if (nativeStaticVert)
+            f.vkDestroyShaderModule(device, nativeStaticVert, nullptr);
         if (sunModelVert)
             f.vkDestroyShaderModule(device, sunModelVert, nullptr);
         if (sunTlVert)
