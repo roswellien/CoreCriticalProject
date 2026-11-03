@@ -26,6 +26,12 @@
 #include "heap_partitions.hpp"
 #include "service_history.hpp"
 #include "body_dispatch.hpp"
+#include "adaptive_ground_math.hpp"
+#include "adaptive_ground_capture.hpp"
+#include "adaptive_ground_jobs.hpp"
+#include "adaptive_ground_commit.hpp"
+#include <exception>
+#include <optional>
 #include "exact_shared_value.hpp"
 #include "large_texture_seek.hpp"
 #include "texture_read_diagnostics.hpp"
@@ -502,6 +508,8 @@ std::string pose_name(unsigned address,unsigned limit){std::string result;
  #include "world_direct_stage.inc"
  #include "sun_lighting_stage.inc"
  #include "camera_capture_stage.inc"
+ #include "adaptive_ground_stage.inc"
+ #include "adaptive_ground_context_stage.inc"
  #include "native_static_stage.inc"
  #include "temporal_source_stage.inc"
  #include "surface_normals_stage.inc"
@@ -624,12 +632,12 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
    throw std::runtime_error("MW34_BODY_DISPATCH must be 0 or 1");}();
   // The first ordinary call still traverses every adapter, retaining lazy
   // launch-setting initialization and its original validation failures.
-  if(fast&&!mw34::body_dispatch::handled(target)){
+  if(fast&&!mw34::body_dispatch::handled(target)&&!adaptive_ground_adapter(target)){
    if(body_dispatch_warmed)return body(s,target,p);
    body_dispatch_warmed=true;
   }
 
-  return headlight_body(s,target,p,[&]{return controller_body(s,target,p,[&]{return controller_next_body(s,target,p,body);});});
+  return adaptive_ground_body(target,p,[&]{return headlight_body(s,target,p,[&]{return controller_body(s,target,p,[&]{return controller_next_body(s,target,p,body);});});});
  }
  void initialize_menu_construction(unsigned target){
   if(target!=0x488bc0)return;

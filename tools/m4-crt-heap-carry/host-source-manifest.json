@@ -6,6 +6,18 @@
     "control_context.hpp uses repository-relative include"
   ],
   "files": {
+    "adaptive_ground_inputs.hpp": {
+      "sha256": "9f7bd62e251d7bbe63d74bec17d0978e58757239ba6b2ef5086c64753e75c339",
+      "bytes": 3047,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_math.hpp": {
+      "sha256": "f21586085c4bc8a94746dc006662041ad73b795ef93eb7b009dbf9b1935525b5",
+      "bytes": 20718,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
     "additional_chassis.hpp": {
       "sha256": "fe43690dff58f4e0d6eee5d1b58d43e1c5440259195ba04897573e355a1efe2f",
       "bytes": 8085,
@@ -49,8 +61,8 @@
       "classification": "authored-host-source"
     },
     "body_dispatch.hpp": {
-      "sha256": "83a8b76f941e3e10ae4d9f6501dc6acd79dec9bc2b3fdafce254ff680e476ede",
-      "bytes": 2056,
+      "sha256": "a226b420127948687141ffc3476c280b7b2d841a1b18f6f8767978fa2d0f64a5",
+      "bytes": 2239,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -559,8 +571,8 @@
       "classification": "authored-host-source"
     },
     "mfc_stage.hpp": {
-      "sha256": "f9f0dde9de2cdfdbe0827622a9a3027db51df18c6c9e97c1eab0c27679eeee36",
-      "bytes": 316114,
+      "sha256": "38f2e8a40b1272adf3e4d4f69fb5a811fa9991ddb8ae648560f0af5cb5e5ea4f",
+      "bytes": 316474,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -955,8 +967,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "bdc1e50bdcf5f8d3dd021e4545f3c9f88a8e19ab57bdcb7bdcfea925e4e89524",
-      "bytes": 214267,
+      "sha256": "6bcec89da172a7e2c22574a238a35a7d8a3cbf5c5e835af2d7da09d6deea0797",
+      "bytes": 214834,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1125,6 +1137,54 @@
     "native_static_vert.h": {
       "sha256": "e3149c7db0e38901f3b4708aa71851bea22817dbecde9347e307ffc0e2913b90",
       "bytes": 36993,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_stage.inc": {
+      "sha256": "06c804afd5950e3f49e77cf4ee8bc6fad24c71023f065e4b0ad0d1c40bb1ecc0",
+      "bytes": 25860,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_capture.hpp": {
+      "sha256": "e7f883a974ff764eb29269bb4ae2ce097cc05f99551beaaf19deaece77755db8",
+      "bytes": 7634,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_jobs.hpp": {
+      "sha256": "521d9133be43d393aaafe6acc91c9bc1f54cd519675f3ae32b2475ea2733e812",
+      "bytes": 6644,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_context_stage.inc": {
+      "sha256": "04dd0f9c8eda931e78a40be0388b464e3f428f739c91e2f4f83632fdd8ba37c4",
+      "bytes": 4235,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "render_target_dimensions.hpp": {
+      "sha256": "9f3c9c8ddb45a7adb76e56fa94982751d0f01aa41383b6198d1291ca738abcb6",
+      "bytes": 1026,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_lookahead_stage.inc": {
+      "sha256": "a05823cd5561f938445a46b03d64d5c70c4024f5a3558287c48e964ecf468786",
+      "bytes": 13761,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_commit.hpp": {
+      "sha256": "857efb95d1574df7bf2d875f2019de7511e83f84d62d444330227da57209638a",
+      "bytes": 2764,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "adaptive_ground_worker_environment.hpp": {
+      "sha256": "fa31a8ef4e95f6b507ab3f8b1d44b3745fc885ad24dc75553295bd87cc848567",
+      "bytes": 1783,
       "decision": "commit",
       "classification": "authored-host-source"
     }

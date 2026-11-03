@@ -21,6 +21,7 @@
 #include "draw_emissions.hpp"
 #include "texture_staging.hpp"
 #include "buffer_reserve.hpp"
+#include "render_target_dimensions.hpp"
 #include <vulkan/vulkan_win32.h>
 #include "dxgi_present.hpp"
 #include <algorithm>
@@ -951,6 +952,14 @@ class Renderer {
     std::uint64_t reduced_world_scenes{}, world_promotions{}, coverage_scenes{}, coverage_draws{};
     unsigned raster_width() const { return rw; }
     unsigned raster_height() const { return rh; }
+    // CPU geometry jobs may observe a configured target, never a predicted one.
+    // This query does not initialize the renderer, wait or retain GPU resources.
+    std::optional<std::array<unsigned, 6>>
+    geometry_dimensions(unsigned guest_width, unsigned guest_height) const {
+        return mw34::render_target::current_dimensions(
+            {width, height}, {guest_width, guest_height}, configured_world_dimensions(),
+            scale, scale_req, colorImage.image != VK_NULL_HANDLE, target_frontend);
+    }
     // A scene without copy-back is not waited for; the next scene or copy-back waits before reusing
     // the command pool, upload, vertex and descriptor resources, so the game computes the next
     // scene while the GPU renders this one.
