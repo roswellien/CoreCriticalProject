@@ -72,6 +72,12 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_menu_wave_tests)
     add_test(NAME menu_wave COMMAND mw34_menu_wave_tests)
 
+    add_executable(mw34_surface_access_history_tests
+        tools/remaster-launcher/test_surface_access_history.cpp)
+    target_compile_definitions(mw34_surface_access_history_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_surface_access_history_tests)
+    add_test(NAME surface_access_history COMMAND mw34_surface_access_history_tests)
+
     if(WIN32)
         add_executable(mw34_local_cd_audio_tests tests/local_cd_audio_tests.cpp)
         target_include_directories(mw34_local_cd_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
@@ -87,6 +93,9 @@ if(BUILD_TESTING)
     endif()
 
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME surface_access_host_wiring
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${PROJECT_SOURCE_DIR}/tools/remaster-launcher/test_surface_access_history.py")
     add_test(NAME native_host_build_metadata
         COMMAND "${Python3_EXECUTABLE}" -B
             "${PROJECT_SOURCE_DIR}/tools/m4-crt-heap-carry/test_host_build.py")

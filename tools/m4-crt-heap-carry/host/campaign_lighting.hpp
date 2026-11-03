@@ -449,11 +449,13 @@ public:
             else c = (char)std::tolower((unsigned char)c);
         }
 
-        // Training missions use packed lighting when available; legacy packs retain their baseline.
+        // Exact Training reader names advance load identity before lighting selection.
         if (lower.find("/t1/readerm") != std::string::npos && lower.ends_with(".zbd")) {
+            if (lower.ends_with("/t1/readerm.zbd")) ++reader_epoch_;
             for (unsigned mission = 1; mission <= 4; ++mission) {
                 const auto reader = "/t1/readerm" + std::to_string(mission) + ".zbd";
                 if (lower.ends_with(reader)) {
+                    ++reader_epoch_;
                     const auto id = "t1m" + std::to_string(mission);
                     if (find_environment(id)) set_active_mission(id);
                     else reset("t1");
@@ -464,10 +466,15 @@ public:
             return;
         }
         if (lower.find("readeria") != std::string::npos) {
+            if (lower.ends_with("/readeria1.zbd") || lower.ends_with("/readeria2.zbd") ||
+                lower.ends_with("/readeria3.zbd"))
+                ++reader_epoch_;
             reset("ia");
             return;
         }
         if (lower.find("readermp") != std::string::npos) {
+            if (lower.ends_with("/readermp1.zbd") || lower.ends_with("/readermp2.zbd"))
+                ++reader_epoch_;
             reset("mp");
             return;
         }
@@ -502,6 +509,7 @@ public:
 
         for (size_t i = 0; i < sizeof(campaign_patterns) / sizeof(campaign_patterns[0]); i += 2) {
             if (lower.ends_with(campaign_patterns[i])) {
+                ++reader_epoch_;
                 set_active_mission(campaign_patterns[i + 1]);
                 return;
             }
@@ -533,6 +541,7 @@ public:
     void frontend() { if(!pending_world_) reset(); }
     void enter_world() { pending_world_=false; }
     std::uint64_t generation() const { return generation_; }
+    std::uint64_t reader_epoch() const { return reader_epoch_; }
 
     bool is_campaign_active() const {
         return campaign_active_ && current_env_ != nullptr;
@@ -615,7 +624,7 @@ public:
 private:
     CampaignManager() = default;
     bool campaign_active_{false},pending_world_{false};
-    std::uint64_t generation_{};
+    std::uint64_t generation_{}, reader_epoch_{};
     std::string active_mission_id_{};
     const MissionEnvironment* current_env_{nullptr};
 };
