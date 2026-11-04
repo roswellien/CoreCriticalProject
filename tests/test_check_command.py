@@ -53,6 +53,10 @@ class SummaryLineTests(unittest.TestCase):
             (check.Result("build", PASS), "build: pass"),
             (check.Result("ctest", FAIL), "ctest: fail"),
             (
+                check.Result("ctest", FAIL, "skipped because the build failed"),
+                "ctest: fail (skipped because the build failed)",
+            ),
+            (
                 check.Result("style", NOT_RUN, "ruff missing; run setup"),
                 "style: not run (ruff missing; run setup)",
             ),
@@ -73,19 +77,28 @@ class SelectionTests(unittest.TestCase):
     def test_only_keeps_table_order(self):
         self.assertEqual(self.names(only=["style", "build"]), ["build", "style"])
 
-    def test_launcher_area_per_os(self):
-        cases = [
-            (True, ["build", "ctest", "format-check", "style", "launcher-wpf", "launcher-dispatch"]),
-            (False, ["build", "ctest", "format-check", "style", "launcher-dispatch"]),
-        ]
-        for windows, expected in cases:
-            with self.subTest(windows=windows):
-                self.assertEqual(self.names(areas=["launcher"], windows=windows), expected)
+    def test_launcher_area_adds_both_launcher_checks(self):
+        expected = ["build", "ctest", "format-check", "style", "launcher-wpf", "launcher-dispatch"]
+        self.assertEqual(self.names(areas=["launcher"]), expected)
+
+    def test_windows_only_check_elsewhere_is_not_run_and_exits_2(self):
+        with (
+            patch.object(check, "is_windows", return_value=False),
+            patch.object(check, "run_command", return_value=0) as runner,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            exit_code = check.main(["--only", "launcher-wpf"])
+        self.assertEqual(exit_code, check.EXIT_NOT_RUN)
+        self.assertIn("launcher-wpf: not run (Windows only", output.getvalue())
+        runner.assert_not_called()
 
     def test_unknown_only_name_is_an_argument_error(self):
-        with redirect_stdout(io.StringIO()), patch("sys.stderr", io.StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                check.parse_arguments(["--only", "lint"])
+        with (
+            redirect_stdout(io.StringIO()),
+            patch("sys.stderr", io.StringIO()),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            check.parse_arguments(["--only", "lint"])
         self.assertEqual(raised.exception.code, 2)
 
     def test_setup_installs_only_what_the_selected_checks_need(self):
@@ -105,11 +118,34 @@ class SelectionTests(unittest.TestCase):
 class NotRunTests(unittest.TestCase):
     """A check whose tool or input is missing reports not run and never runs or passes."""
 
-    def run_quietly(self, function):
-        with patch.object(check, "run_command", return_value=0) as runner:
-            with redirect_stdout(io.StringIO()):
-                result = function()
+    def run_quietly(self, function, earlier=None):
+        with (
+            patch.object(check, "run_command", return_value=0) as runner,
+            redirect_stdout(io.StringIO()),
+        ):
+            result = function(earlier or {})
         return result, runner
+
+    def test_ctest_follows_the_build_in_the_same_run(self):
+        cases = [(FAIL, FAIL), (NOT_RUN, NOT_RUN)]
+        for build_status, expected in cases:
+            with self.subTest(build_status=build_status):
+                earlier = {"build": check.Result("build", build_status, "why")}
+                result, runner = self.run_quietly(check.check_ctest, earlier)
+                self.assertEqual(result.status, expected)
+                runner.assert_not_called()
+
+    def test_format_check_reuses_a_passing_build_configure(self):
+        earlier = {"build": check.Result("build", PASS)}
+        with (
+            patch.object(check, "pinned_clang_format", return_value="/venv/clang-format"),
+            patch.object(check, "configure_problem", return_value=""),
+        ):
+            result, runner = self.run_quietly(check.check_format, earlier)
+        self.assertEqual(result.status, PASS)
+        commands = [call.args[0] for call in runner.call_args_list]
+        format_target = ["cmake", "--build", str(check.BUILD_DIR), "--target", "format-check"]
+        self.assertEqual(commands, [format_target])
 
     def test_format_check_ignores_a_clang_format_on_path(self):
         with (
@@ -153,10 +189,12 @@ class NotRunTests(unittest.TestCase):
     def test_style_exit_codes(self):
         cases = [(0, PASS), (1, FAIL), (2, NOT_RUN)]
         for exit_code, expected in cases:
-            with self.subTest(exit_code=exit_code):
-                with patch.object(check, "run_command", return_value=exit_code):
-                    with redirect_stdout(io.StringIO()):
-                        self.assertEqual(check.check_style().status, expected)
+            with (
+                self.subTest(exit_code=exit_code),
+                patch.object(check, "run_command", return_value=exit_code),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(check.check_style({}).status, expected)
 
 
 class ConfigureTests(unittest.TestCase):
@@ -176,9 +214,11 @@ class ConfigureTests(unittest.TestCase):
             ),
         ]
         for windows, clang_format, expected in cases:
-            with self.subTest(windows=windows):
-                with patch.object(check, "is_windows", return_value=windows):
-                    self.assertEqual(check.configure_command(clang_format), expected)
+            with (
+                self.subTest(windows=windows),
+                patch.object(check, "is_windows", return_value=windows),
+            ):
+                self.assertEqual(check.configure_command(clang_format), expected)
 
 
 if __name__ == "__main__":

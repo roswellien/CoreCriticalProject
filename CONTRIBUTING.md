@@ -58,8 +58,9 @@ Run every check a PR must pass with `python tools/check.py` (once per checkout,
 `python tools/check.py --setup` first): it builds, runs CTest, the C++ format
 check and the style check, the same way CI does. Tests use only project-authored
 fixtures. Cover malformed PE data and boundary conditions for memory changes.
-Do not add game files to CI. Run `cmake --build build/default --target format`
-when clang-format is installed; `format-check` verifies formatting. Enable
+Do not add game files to CI. To fix C++ layout, run
+`cmake --build build/default --target format` after `python tools/check.py`
+has configured the build with the pinned clang-format. Enable
 `MW34_ENABLE_CLANG_TIDY` with a Ninja or Makefiles generator for optional
 compiler-integrated static analysis. CMake's Visual Studio generator does not
 run clang-tidy; on Windows, use Ninja from a developer command prompt.

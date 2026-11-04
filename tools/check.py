@@ -67,8 +67,8 @@ class Result:
     detail: str = ""
 
     def summary_line(self) -> str:
-        if self.status == NOT_RUN:
-            return f"{self.name}: {NOT_RUN} ({self.detail})"
+        if self.detail:
+            return f"{self.name}: {self.status} ({self.detail})"
         return f"{self.name}: {self.status}"
 
 
@@ -160,7 +160,12 @@ def pass_or_fail(name: str, exit_code: int) -> Result:
 # ---------------------------------------------------------------------------------------
 
 
-def check_build() -> Result:
+# Each check gets the results of the checks already run, so ctest and format-check can
+# follow what the build check did in the same run.
+EarlierResults = dict[str, Result]
+
+
+def check_build(earlier: EarlierResults) -> Result:
     problem = configure_problem()
     if problem:
         return Result("build", NOT_RUN, problem)
@@ -169,7 +174,13 @@ def check_build() -> Result:
     return pass_or_fail("build", run_command(["cmake", "--build", "--preset", "default"]))
 
 
-def check_ctest() -> Result:
+def check_ctest(earlier: EarlierResults) -> Result:
+    build = earlier.get("build")
+    # After a failed build, CTest would run the binaries of an older build.
+    if build is not None and build.status == FAIL:
+        return Result("ctest", FAIL, "skipped because the build failed")
+    if build is not None and build.status == NOT_RUN:
+        return Result("ctest", NOT_RUN, "the build didn't run; fix the build line first")
     if find_on_path("ctest") is None:
         return Result("ctest", NOT_RUN, missing("cmake"))
     if not (BUILD_DIR / "CTestTestfile.cmake").is_file():
@@ -177,20 +188,22 @@ def check_ctest() -> Result:
     return pass_or_fail("ctest", run_command(["ctest", "--preset", "default"]))
 
 
-def check_format() -> Result:
+def check_format(earlier: EarlierResults) -> Result:
     clang_format = pinned_clang_format()
     if clang_format is None:
         return Result("format-check", NOT_RUN, f"pinned clang-format not installed; {SETUP_FIX}")
     problem = configure_problem()
     if problem:
         return Result("format-check", NOT_RUN, problem)
-    if run_command(configure_command(clang_format)) != 0:
+    # A passing build check already configured with this same pinned clang-format.
+    build_configured = "build" in earlier and earlier["build"].status == PASS
+    if not build_configured and run_command(configure_command(clang_format)) != 0:
         return Result("format-check", FAIL)
     target = ["cmake", "--build", str(BUILD_DIR), "--target", "format-check"]
     return pass_or_fail("format-check", run_command(target))
 
 
-def check_style() -> Result:
+def check_style(earlier: EarlierResults) -> Result:
     exit_code = run_command([sys.executable, "tools/style/check_style.py"])
     if exit_code in (0, 1):
         return pass_or_fail("style", exit_code)
@@ -198,7 +211,7 @@ def check_style() -> Result:
     return Result("style", NOT_RUN, f"a style checker is missing or failed; {SETUP_FIX}")
 
 
-def check_launcher_wpf() -> Result:
+def check_launcher_wpf(earlier: EarlierResults) -> Result:
     if find_on_path("dotnet") is None:
         return Result("launcher-wpf", NOT_RUN, missing("dotnet"))
     if not sdl3_runtime_found():
@@ -208,7 +221,7 @@ def check_launcher_wpf() -> Result:
     return pass_or_fail("launcher-wpf", run_command(command))
 
 
-def check_launcher_dispatch() -> Result:
+def check_launcher_dispatch(earlier: EarlierResults) -> Result:
     command = [sys.executable, "-m", "unittest", "discover", "-s", "tools/remaster-launcher"]
     command += ["-p", "test_launcher_dispatch.py"]
     return pass_or_fail("launcher-dispatch", run_command(command))
@@ -217,7 +230,7 @@ def check_launcher_dispatch() -> Result:
 @dataclass(frozen=True)
 class Check:
     name: str
-    run: Callable[[], Result]
+    run: Callable[[EarlierResults], Result]
     # What --setup installs for this check: "venv", "npm", "psscriptanalyzer", "sdl3".
     needs: tuple[str, ...] = ()
     windows_only: bool = False
@@ -236,15 +249,17 @@ AREAS = {"launcher": ("launcher-wpf", "launcher-dispatch")}
 
 
 def selected_checks(only: list[str] | None, areas: list[str] | None) -> list[Check]:
-    """The checks to run, in table order, without Windows-only ones elsewhere."""
+    """The checks to run, in table order. Windows-only ones stay, so they report not run."""
     names = set(only or DEFAULT_CHECKS)
     for area in areas or []:
         names.update(AREAS[area])
-    return [
-        check
-        for check in CHECKS
-        if check.name in names and (is_windows() or not check.windows_only)
-    ]
+    return [check for check in CHECKS if check.name in names]
+
+
+def run_check(check: Check, earlier: EarlierResults) -> Result:
+    if check.windows_only and not is_windows():
+        return Result(check.name, NOT_RUN, "Windows only; run it on Windows")
+    return check.run(earlier)
 
 
 def overall_exit_code(results: list[Result]) -> int:
@@ -306,7 +321,8 @@ SETUP_STEPS: dict[str, Callable[[], Result]] = {
 
 
 def setup_steps_for(checks: list[Check]) -> list[str]:
-    needed = {need for check in checks for need in check.needs}
+    runnable = [check for check in checks if is_windows() or not check.windows_only]
+    needed = {need for check in runnable for need in check.needs}
     return [step for step in SETUP_STEPS if step in needed]
 
 
@@ -332,14 +348,18 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_and_summarize(steps: list[Callable[[], Result]]) -> int:
-    results = []
-    for step in steps:
-        results.append(step())
+def print_summary(results: list[Result]) -> int:
     print("\nSummary:")
     for result in results:
         print(result.summary_line())
     return overall_exit_code(results)
+
+
+def run_checks(checks: list[Check]) -> list[Result]:
+    earlier: EarlierResults = {}
+    for check in checks:
+        earlier[check.name] = run_check(check, earlier)
+    return list(earlier.values())
 
 
 def main(argv: list[str]) -> int:
@@ -350,8 +370,8 @@ def main(argv: list[str]) -> int:
         if not steps:
             print("Nothing to install for the selected checks.")
             return EXIT_CLEAN
-        return run_and_summarize(steps)
-    return run_and_summarize([check.run for check in checks])
+        return print_summary([step() for step in steps])
+    return print_summary(run_checks(checks))
 
 
 if __name__ == "__main__":

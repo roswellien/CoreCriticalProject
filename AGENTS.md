@@ -97,7 +97,7 @@ tools into ignored folders once per checkout; `--area launcher` adds the WPF
 launcher and launcher dispatch checks (authored fixtures, no game install).
 On Windows it uses Visual Studio's C++ x64 tools; no developer shell needed.
 It ends with a pass, fail or not run line per check for the PR's Validation
-section. The exact commands it runs are in `tools/check.py`.
+section.
 
 ```sh
 python tools/check.py --setup
