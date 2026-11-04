@@ -109,10 +109,17 @@ class SelectionTests(unittest.TestCase):
             (["launcher-wpf"], ["sdl3"]),
         ]
         for only, expected in cases:
-            with self.subTest(only=only):
-                with patch.object(check, "is_windows", return_value=True):
-                    selected = check.selected_checks(only, None)
+            with (
+                self.subTest(only=only),
+                patch.object(check, "is_windows", return_value=True),
+            ):
+                selected = check.selected_checks(only, None)
                 self.assertEqual(check.setup_steps_for(selected), expected)
+
+    def test_setup_skips_windows_only_installs_elsewhere(self):
+        with patch.object(check, "is_windows", return_value=False):
+            selected = check.selected_checks(["launcher-wpf"], None)
+            self.assertEqual(check.setup_steps_for(selected), [])
 
 
 class NotRunTests(unittest.TestCase):
