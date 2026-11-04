@@ -3,6 +3,7 @@
 Usage, from the repository root:
     python tools/style/check_style.py           report every language and check
     python tools/style/check_style.py --fix     format the languages whose cleanup has landed
+    python tools/style/check_style.py --fix --files a.js b.css  format only those files
     python tools/style/check_style.py --list    show which files each language checks
     python tools/style/check_style.py --preflight --language python  run pre-cleanup safety checks
 
@@ -807,6 +808,9 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--language", action="append", choices=sorted(LANGUAGES))
     parser.add_argument("--check", choices=["format", "lint"])
     parser.add_argument("--fix", action="store_true", help="format enforced languages in place")
+    parser.add_argument(
+        "--files", nargs="+", help="with --fix, format only these files (paths from the root)"
+    )
     parser.add_argument("--list", action="store_true", help="print the files each language checks")
     parser.add_argument(
         "--preflight", action="store_true", help="run pre-cleanup safety checks for one language"
@@ -824,22 +828,35 @@ def selected_checks(arguments: argparse.Namespace) -> Iterator[tuple[str, str, C
 
 
 def fix_enforced(arguments: argparse.Namespace, exclude_patterns: list[str]) -> int:
-    """Rewrite files for enforced formatters only; never apply lint fixes."""
+    """Rewrite files for enforced formatters only; never apply lint fixes.
+
+    With --files, only the given files are formatted, and only those a full run would
+    format (same suffixes and exclusions). A language with none of them is skipped
+    without a word, so the git hook never reports a formatter the commit doesn't need.
+    """
     pins = read_pinned_versions()
+    wanted_files = None
+    if arguments.files:
+        wanted_files = {normalize_repo_path(path) for path in arguments.files}
     exit_code = EXIT_CLEAN
     for language, check_name, check in selected_checks(arguments):
         if not check.can_fix:
             continue
         if not is_enforced(language, check_name):
-            print(f"{language} {check_name}: skipped, its cleanup has not landed yet")
+            if wanted_files is None:
+                print(f"{language} {check_name}: skipped, its cleanup has not landed yet")
             continue
+        paths = list_files(LANGUAGES[language].suffixes, exclude_patterns)
+        if wanted_files is not None:
+            paths = [path for path in paths if path in wanted_files]
+            if not paths:
+                continue
         # A different formatter version would lay files out differently from CI.
         version_error = version_error_for(language, pins)
         if version_error:
             print(f"{language} {check_name}: error: {version_error}")
             exit_code = EXIT_TOOL_ERROR
             continue
-        paths = list_files(LANGUAGES[language].suffixes, exclude_patterns)
         failed_run = None
         for batch in in_batches(paths):
             tool_run = check.run(batch, True)
@@ -860,6 +877,10 @@ def main(argv: list[str]) -> int:
     if drift:
         for problem in drift:
             print(f"exclusions: error: {problem}")
+        return EXIT_TOOL_ERROR
+
+    if arguments.files and not arguments.fix:
+        print("files: error: --files only works with --fix")
         return EXIT_TOOL_ERROR
 
     if arguments.preflight:
