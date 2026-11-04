@@ -110,8 +110,8 @@ ctest --preset default
 ```
 That job does not run `format-check`. In PowerShell 7, install the pinned
 formatter, reconfigure `build/default`, then run the target. Fetch the pinned
-SDL3 controller runtime into ignored `local/` once per checkout; the WPF launcher
-checks (authored fixtures, no game install) and publish need it.
+SDL3 controller runtime into ignored `local/` once per checkout and SDL version;
+the WPF launcher checks (authored fixtures, no game install) and publish need it.
 
 ```powershell
 python -m venv tools/style/.venv

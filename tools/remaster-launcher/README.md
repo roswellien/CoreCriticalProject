@@ -136,7 +136,7 @@ changing the selected host.
 
 Narrow checks: after
 `pwsh -NoProfile -File tools/mw3-remaster-launcher/fetch_controller_runtime.ps1`
-(once per checkout; the controller check needs its SDL3 runtime),
+(once per checkout and SDL version; the controller check needs its SDL3 runtime),
 `dotnet run --project tools/mw3-remaster-launcher-tests -c Release`
 uses authored profile/pack fixtures; `python -m unittest discover -s
 tools/remaster-launcher -p test_launcher_dispatch.py` checks prepared model and
