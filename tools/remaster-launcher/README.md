@@ -134,7 +134,10 @@ and labels are retained. A backup of the previous profile is kept in that local
 directory. Preserve other writers by checking the current profile identity before
 changing the selected host.
 
-Narrow checks: `dotnet run --project tools/mw3-remaster-launcher-tests -c Release`
+Narrow checks: after
+`pwsh -NoProfile -File tools/mw3-remaster-launcher/fetch_controller_runtime.ps1`
+(once per checkout; the controller check needs its SDL3 runtime),
+`dotnet run --project tools/mw3-remaster-launcher-tests -c Release`
 uses authored profile/pack fixtures; `python -m unittest discover -s
 tools/remaster-launcher -p test_launcher_dispatch.py` checks prepared model and
 resolution bindings, explicit replay/game-path arguments and inherited-state
