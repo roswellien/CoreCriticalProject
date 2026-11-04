@@ -94,7 +94,8 @@ Each stage's reviews end with one walkthrough of what they leave, run as
 "Walkthroughs" in the workflow skill says.
 
 Short path: a change that can be described in one sentence and is already
-covered by tests skips the grill, spec and plan when the requester agrees. It
+covered by tests skips the grill (both before filing and at pickup), spec and
+plan when the requester agrees. It
 still gets stage 5. Release promotions (`develop` -> `main`) and branch syncs
 carry no new change and are exempt. Cloud agents (Copilot cloud agent, Codex
 cloud) take only short-path tasks, since they can't hold the interview or keep
