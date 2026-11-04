@@ -851,13 +851,14 @@ def run_preflight(language: str, exclude_patterns: list[str], check_name: str = 
     if result.error:
         print(f"preflight: {language} {check_name}: error: {result.error}")
         return EXIT_TOOL_ERROR
+    # The files the coming cleanup will change: reformatted ones, or ones with lint findings.
     if check_name == "lint":
-        changed_paths = [lint_finding_path(finding) for finding in result.findings]
+        target_paths = [lint_finding_path(finding) for finding in result.findings]
     else:
-        changed_paths = result.findings
-    changed_files = sorted({normalize_repo_path(path) for path in changed_paths})
+        target_paths = result.findings
+    scan_targets = sorted({normalize_repo_path(path) for path in target_paths})
     try:
-        hash_hits = run_stored_hash_scan(changed_files, all_tracked, REPO_ROOT)
+        hash_hits = run_stored_hash_scan(scan_targets, all_tracked, REPO_ROOT)
     except PreflightReadError as error:
         print(f"preflight: {language}: stored-hash scan: error: {error}")
         return EXIT_TOOL_ERROR
@@ -866,7 +867,7 @@ def run_preflight(language: str, exclude_patterns: list[str], check_name: str = 
         print(f"  {hit.describe()}")
 
     try:
-        text_hits = run_text_read_search(changed_files, all_tracked, REPO_ROOT)
+        text_hits = run_text_read_search(scan_targets, all_tracked, REPO_ROOT)
     except PreflightReadError as error:
         print(f"preflight: {language}: text-read search: error: {error}")
         return EXIT_TOOL_ERROR

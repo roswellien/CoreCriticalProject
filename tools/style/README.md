@@ -73,7 +73,8 @@ for lint findings. Never mix a cleanup with other changes. Steps:
      only a file name, so check which of those files it means.
    - `tools/a.py:12: lists files (.py)`: the line lists a folder (`glob`, `walk`,
      `Get-ChildItem` and so on), so it may read any changed file of those types, or of
-     any type when the script names none.
+     any type when the script names none. The types come from anywhere in the script,
+     not just that line, so a script that names only other types (`*.txt`) is left out.
    Folder listings inside `tools/m4-*/` and `tools/x87-*/` are not reported. Those
    folders hold frozen evidence scripts that can't change, and the stored-hash scan
    still finds any of them that keeps a changed file's hash in the repository. A
