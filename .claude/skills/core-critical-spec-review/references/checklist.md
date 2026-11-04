@@ -36,8 +36,8 @@ wrong and what that would cost; "consider adding more detail" is not a finding.
    a point after which it can't be undone, and does the spec say where? How
    would anyone notice that the change went wrong?
 7. **Measurable criteria:** can each acceptance criterion be checked against
-   the diff or a command's output, with no judgment call? Could every criterion
-   pass while the change is still broken? What does the change do that no
+   the diff or a command's output, with no judgment call? Could the change
+   meet all of them and still not work? What does the change do that no
    criterion measures?
 8. **Dependencies:** which issues, PRs or people does it wait on, and does it
    say what happens if they change or don't land?
@@ -65,9 +65,9 @@ wrong and what that would cost; "consider adding more detail" is not a finding.
     or watch them (the maintainer, the requester, a playtester)? Does the spec
     quietly assume a step runs unattended that shouldn't?
 
-A known, built-in behaviour of a tool or format the requester already chose is
-not a finding that reopens the choice. Note it in one line under open
-questions, unless it defeats the issue's goal.
+When the requester already chose a tool or format, a known, built-in behaviour
+of it doesn't reopen that decision. List it in one line under open questions
+instead, unless it defeats the issue's goal.
 
 Then write down the sharp questions a hostile reviewer would ask that the spec
 can't answer yet. They often find gaps the areas above miss; turn any that

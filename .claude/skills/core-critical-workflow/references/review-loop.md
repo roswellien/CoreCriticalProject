@@ -30,10 +30,10 @@ findings from every pass. Then repeat:
 
    If any is true, go to the report.
 
-   - **Same kind:** the major findings this pass and the last are the same kind
-     of problem reached by a new route (a new way around the same guard, for
-     example). Stop fixing and ask the requester how much of that risk they
-     accept; more fixes of that kind rarely converge. Continue with their
+   - **Same kind:** this pass and the last both found a major problem of one
+     kind, each by a different route (two different ways past one guard, for
+     example). Stop fixing and ask the requester what level of that risk is
+     acceptable; more fixes of that kind rarely converge. Continue with their
      answer.
 3. **Fix major findings only**, by editing the target. Leave minor findings
    for the report. On a spec or plan, keep step numbers, file lists and check
