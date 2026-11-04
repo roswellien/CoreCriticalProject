@@ -2486,10 +2486,17 @@ async function launchGameEngine() {
     btn.disabled = true;
 
     try {
+        const payload = {
+            pack_id: state.project.pack_id,
+            project: state.project,
+        };
+        if (payload.project && payload.project.base_operation === "flat") {
+            payload.project.base_operation = "t1";
+        }
         const res = await fetch("/api/launch-map", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ pack_id: state.project.pack_id }),
+            body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (data.status === "ok") {

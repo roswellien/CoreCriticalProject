@@ -994,26 +994,35 @@ DROP FORCE & COMBAT CONFIGURATION:
         cmd_content = f"""@echo off
 setlocal
 set "MAP_DIR=%~dp0"
-cd /d "%MAP_DIR%..\\..\\.."
+title MechWarrior 3 - Launching %~n0
+
 echo ======================================================================
 echo   MECHWARRIOR 3 - CUSTOM MISSION LAUNCH
 echo   Map Title: {project.pack_title} [{project.pack_id}]
-echo   Operation: {project.base_operation.upper()} | Biome: {project.terrain.biome}
-echo   Atmosphere: {project.lighting.preset_name.upper()} | Time: {project.lighting.time_of_day:.1f}h
+echo   Operation: {project.base_operation.upper()} - Biome: {project.terrain.biome}
+echo   Atmosphere: {project.lighting.preset_name.upper()} - Time: {project.lighting.time_of_day:.1f}h
 echo ======================================================================
 echo.
-type "%MAP_DIR%briefing.txt"
+if exist "%MAP_DIR%briefing.txt" type "%MAP_DIR%briefing.txt"
 echo.
-echo Initializing native Vulkan engine redirect banks and atmosphere...
-set "MW34_REMASTER_BANKS=%MAP_DIR%map-banks.bin"
-set "MW34_MISSION_ENVIRONMENTS=%MAP_DIR%mission-lighting.bin"
-set "MW34_WEATHER=1"
-set "MW34_SUN_AZIMUTH={project.lighting.azimuth}"
-set "MW34_SUN_ELEVATION={project.lighting.elevation}"
-set "MW34_SUN_STRENGTH={project.lighting.sun_strength}"
-set "MW34_SUN_AMBIENT={project.lighting.ambient_strength}"
 
-call "launchers\\Play MW3Remaster.cmd" --profile "local\\effect-lighting-r1\\launcher.json" --registry "local\\material-authoring-r1\\normal-registry.json" %*
+set "PY_EXE=python"
+if exist "%MAP_DIR%..\\..\\python\\python.exe" set "PY_EXE=%MAP_DIR%..\\..\\python\\python.exe"
+if exist "%MAP_DIR%..\\..\\..\\python\\python.exe" set "PY_EXE=%MAP_DIR%..\\..\\..\\python\\python.exe"
+if exist "C:\\Python314\\python.exe" set "PY_EXE=C:\\Python314\\python.exe"
+
+set "RUNNER_SCRIPT="
+if exist "%MAP_DIR%..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py"
+if exist "%MAP_DIR%..\\..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\\..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py"
+if exist "%MAP_DIR%..\\..\\editor\\core\\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\\..\\editor\\core\\play_map.py"
+
+if defined RUNNER_SCRIPT (
+    "%PY_EXE%" "%RUNNER_SCRIPT%" "%MAP_DIR%" %*
+) else (
+    echo Error: Could not locate play_map.py runner script.
+    pause
+    exit /b 1
+)
 if errorlevel 1 (
     echo.
     echo Map launch exited with code %errorlevel%.

@@ -252,8 +252,19 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
         try:
             data = self.read_json_request()
             pack_id = data.get("pack_id", "")
+            project_data = data.get("project")
 
-            pack_folder = pack_directory(PROJECT_ROOT / "mods/map-packs", pack_id)
+            if project_data:
+                # Auto-compile current project state before launching
+                project = MapPackProject.from_dict(project_data)
+                builder = MapPackBuilder(
+                    packs_root=PROJECT_ROOT / "mods/map-packs",
+                    game_root=game_directory(),
+                )
+                pack_folder = builder.build(project)
+            else:
+                pack_folder = pack_directory(PROJECT_ROOT / "mods/map-packs", pack_id)
+
             if not pack_folder.is_dir():
                 self.send_json_response(
                     400, {"status": "error", "message": f"Pack folder not found: {pack_id}"}
@@ -274,7 +285,7 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
             CREATE_NEW_CONSOLE = 0x00000010
             subprocess.Popen(
                 ["cmd.exe", "/c", str(cmd_file.resolve())],
-                cwd=str(PROJECT_ROOT),
+                cwd=str(pack_folder),
                 creationflags=CREATE_NEW_CONSOLE,
             )
 
