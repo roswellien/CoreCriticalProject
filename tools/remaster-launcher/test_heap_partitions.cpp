@@ -1,4 +1,4 @@
-#include "native-overrides/heap_partitions.hpp"
+#include "../m4-crt-heap-carry/host/heap_partitions.hpp"
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -36,6 +36,56 @@ int main() {
         return heap.allocate(bytes, zero, owner, commit, clear);
     };
     constexpr unsigned crt = 0x31415920, codec = 0x3f400010, services = 0;
+
+    check(!heap.contains(GuestHeap::lo, 0));
+    check(!heap.contains(GuestHeap::lo, 1));
+    GuestHeap boundaries;
+    constexpr unsigned first = GuestHeap::lo, second = first + 0x20000;
+    boundaries.regions = {
+        {first, first + 0x10000}, {second, second + 0x10000}, {second + 0x10000, second + 0x20000}};
+    boundaries.region_owners = {{first, crt}, {second, codec}, {second + 0x10000, services}};
+    struct RangeCase {
+        unsigned address, bytes;
+        bool expected;
+    };
+    const RangeCase ranges[] = {
+        {0, 0, false},
+        {first - 1, 1, false},
+        {first, 0, true},
+        {first, 0x10000, true},
+        {first, 0x10001, false},
+        {first + 0xffff, 0, true},
+        {first + 0xffff, 1, true},
+        {first + 0xffff, 2, false},
+        {first + 0x10000, 0, false},
+        {first + 0x10000, 1, false},
+        {second - 1, 1, false},
+        {second, 0, true},
+        {second, 0x10000, true},
+        {second, 0x10001, false},
+        {second + 0xffff, 2, false},
+        {second + 0x10000, 0, true},
+        {second + 0x10000, 0x10000, true},
+        {second + 0x20000, 0, false},
+        {second + 0x20000, 1, false},
+        {first, std::numeric_limits<unsigned>::max(), false},
+        {std::numeric_limits<unsigned>::max(), 0, false},
+        {std::numeric_limits<unsigned>::max(), 1, false},
+    };
+    for (const auto &range : ranges)
+        check(boundaries.contains(range.address, range.bytes) == range.expected);
+    check(boundaries.owner_of(first) == crt && boundaries.owner_of(second) == codec);
+    // A lookup must reflect region edits immediately, without retaining an iterator.
+    boundaries.regions.erase(second);
+    check(!boundaries.contains(second, 1));
+    boundaries.regions.emplace(second, second + 16);
+    check(boundaries.contains(second, 16) && !boundaries.contains(second, 17));
+    boundaries.regions.at(second) = second + 8;
+    check(boundaries.contains(second, 8) && !boundaries.contains(second, 9));
+    boundaries.regions.clear();
+    check(!boundaries.contains(first, 1));
+    boundaries.regions.emplace(0, 16);
+    check(!boundaries.contains(1, 1)); // Zero remains the missing-region sentinel.
 
     const auto video = allocate(0x1d1e8, false, codec);
     std::fill(memory.at(video).begin(), memory.at(video).end(), static_cast<unsigned char>(0xab));
