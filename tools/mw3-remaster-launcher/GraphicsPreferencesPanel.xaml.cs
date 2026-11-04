@@ -26,6 +26,8 @@ public partial class GraphicsPreferencesPanel : UserControl
             Select(ComboDrawDist, settings.DrawDistance.ToString());
             Select(ComboFog, settings.FogDistance.ToString());
             ChkDynamicLighting.IsChecked = settings.DynamicLighting;
+            ChkHeadlights.IsChecked = settings.Headlights;
+            ChkHeadlights.IsEnabled = settings.DynamicLighting;
             ChkShadows.IsChecked = settings.Shadows;
             ChkShadows.IsEnabled = settings.DynamicLighting;
         }
@@ -39,7 +41,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             throw new InvalidOperationException("Choose a display resolution.");
         var result = new GraphicsPreferences(width, height, Value(ComboWindowMode), Value(ComboAA),
             int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)), int.Parse(Value(ComboFog)),
-            ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true);
+            ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true, ChkHeadlights.IsChecked == true);
         result.Validate();
         return result;
     }
@@ -52,6 +54,8 @@ public partial class GraphicsPreferencesPanel : UserControl
     {
         if (ChkShadows != null && ChkDynamicLighting != null)
             ChkShadows.IsEnabled = ChkDynamicLighting.IsChecked == true;
+        if (ChkHeadlights != null && ChkDynamicLighting != null)
+            ChkHeadlights.IsEnabled = ChkDynamicLighting.IsChecked == true;
         if (!_loading) Changed?.Invoke(this, new RoutedEventArgs());
     }
 }

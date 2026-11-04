@@ -34,7 +34,8 @@ void surface_normals_load_world() {
         page.path = manifest.parent_path() / line;
         const auto size = std::filesystem::file_size(page.path);
         package_bytes += size;
-        if (size > 16 * 1024 * 1024 || package_bytes > 512 * 1024 * 1024)
+        if (size > 16 * 1024 * 1024 ||
+            package_bytes > mw34::materials::world_normal_catalog_budget)
             throw std::runtime_error("World-normal package exceeds byte budget");
         std::ifstream input(page.path, std::ios::binary);
         if (!input)

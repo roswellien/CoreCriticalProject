@@ -63,7 +63,7 @@ std::uint64_t hud_identity(unsigned pix,unsigned mask,unsigned mode,unsigned key
 struct TextRecipe{std::string text;RECT rect{};unsigned flags{};LOGFONTA font{};COLORREF color{};};
 struct TextImage{std::vector<TextRecipe>recipes;int w{},h{};std::uint64_t hash{};};
 bool text_rec_active{};unsigned text_rec_image{};std::vector<TextRecipe>text_recs;std::map<unsigned,TextImage>text_images;
-struct TextTex{unsigned w{},h{};float u0{},u1{};std::vector<std::uint32_t>px;};std::map<std::uint64_t,TextTex>text_cache;  // recipe hash x scale -> texture
+struct TextTex{unsigned w{},h{};float u0{},u1{};std::vector<std::uint32_t>px;};mw34::graphics::RetainedTextureCache<TextTex>text_cache;  // recipe hash x scale -> texture
 std::uint64_t text_hits{};
 static bool hud_text_on(){static const bool on=[]{const char*e=std::getenv("MW34_HUD_TEXT");return !(e&&*e=='0');}();return on;}
 void text_record(HDC dc,const std::string&t,const RECT&r,unsigned flags){if(!text_rec_active||(flags&DT_CALCRECT))return;TextRecipe x{};x.text=t;x.rect=r;x.flags=flags;
@@ -99,12 +99,12 @@ std::vector<std::uint32_t> text_render(const TextImage&ti,float k,unsigned&tw,un
 // Draws a text image at output density; false when it is not a recorded text image or the scale is 1.
 bool text_blit(unsigned img,int w,int h,int x,int y,int sx0,int sy0,int sx1,int sy1){auto it=text_images.find(img);if(it==text_images.end()||it->second.w!=w||it->second.h!=h)return false;
  const float k=host.sren?host.sren->current_scale():1.f;if(k<=1.01f)return false;const auto&ti=it->second;namespace vs=mw34::vkscene;
- const std::uint64_t key=ti.hash^std::uint64_t(std::lround(k*256));auto c=text_cache.find(key);if(c==text_cache.end()){if(text_cache.size()>512)text_cache.clear();TextTex tt{};tt.px=text_render(ti,k,tt.w,tt.h,tt.u0,tt.u1);{static FILE*dbg=[]{const char*e=std::getenv("MW34_HUD_TEXT_LOG");return e&&*e?std::fopen(e,"w"):nullptr;}();if(dbg){std::fprintf(dbg,"img %ux%u k %.2f tex %ux%u u %.3f-%.3f\n",unsigned(ti.w),unsigned(ti.h),k,tt.w,tt.h,tt.u0,tt.u1);for(const auto&r:ti.recipes)std::fprintf(dbg,"  [%s] rect %ld,%ld,%ld,%ld flags %x font %s h%ld w%ld wt%ld\n",r.text.c_str(),r.rect.left,r.rect.top,r.rect.right,r.rect.bottom,r.flags,r.font.lfFaceName,r.font.lfHeight,r.font.lfWidth,r.font.lfWeight);std::fflush(dbg);}}c=text_cache.emplace(key,std::move(tt)).first;}
- const unsigned tw=c->second.w,th=c->second.h;if(!tw||!th)return false;
+ const std::uint64_t key=ti.hash^std::uint64_t(std::lround(k*256));auto c=text_cache.get(key,[&]{TextTex tt{};tt.px=text_render(ti,k,tt.w,tt.h,tt.u0,tt.u1);{static FILE*dbg=[]{const char*e=std::getenv("MW34_HUD_TEXT_LOG");return e&&*e?std::fopen(e,"w"):nullptr;}();if(dbg){std::fprintf(dbg,"img %ux%u k %.2f tex %ux%u u %.3f-%.3f\n",unsigned(ti.w),unsigned(ti.h),k,tt.w,tt.h,tt.u0,tt.u1);for(const auto&r:ti.recipes)std::fprintf(dbg,"  [%s] rect %ld,%ld,%ld,%ld flags %x font %s h%ld w%ld wt%ld\n",r.text.c_str(),r.rect.left,r.rect.top,r.rect.right,r.rect.bottom,r.flags,r.font.lfFaceName,r.font.lfHeight,r.font.lfWidth,r.font.lfWeight);std::fflush(dbg);}}return tt;});
+ const unsigned tw=c->w,th=c->h;if(!tw||!th)return false;
  const std::uint64_t tkey=0x5445585400000000ULL^key;int ti2;auto hit=hud_tex_index.find(tkey);
- if(hit!=hud_tex_index.end())ti2=hit->second;else{vs::TextureRef r{};r.key=tkey;r.hash=key;r.width=tw;r.height=th;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->current(tkey,key,tw,th))r.pixels32=c->second.px;
+ if(hit!=hud_tex_index.end())ti2=hit->second;else{vs::TextureRef r{};r.key=tkey;r.hash=key;r.width=tw;r.height=th;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->current(tkey,key,tw,th))r.pixels32=c->px;
   ti2=int(hud_sc.textures.size());hud_tex_index[tkey]=ti2;hud_sc.textures.push_back(std::move(r));}
- const float du=c->second.u1-c->second.u0,fh=float(h)*k/float(th);const float a0=c->second.u0+du*float(sx0)/float(w),a1=c->second.u0+du*float(sx1)/float(w),b0=fh*float(sy0)/float(h),b1=fh*float(sy1)/float(h);
+ const float du=c->u1-c->u0,fh=float(h)*k/float(th);const float a0=c->u0+du*float(sx0)/float(w),a1=c->u0+du*float(sx1)/float(w),b0=fh*float(sy0)/float(h),b1=fh*float(sy1)/float(h);
  const unsigned first=unsigned(hud_sc.vertices.size()/32);const float x0=float(x)-0.5f,y0=float(y)-0.5f,x1=x0+float(sx1-sx0),y1=y0+float(sy1-sy0);
  hud_vertex(x0,y0,0xffffffffu,a0,b0);hud_vertex(x1,y0,0xffffffffu,a1,b0);hud_vertex(x1,y1,0xffffffffu,a1,b1);hud_vertex(x0,y0,0xffffffffu,a0,b0);hud_vertex(x1,y1,0xffffffffu,a1,b1);hud_vertex(x0,y1,0xffffffffu,a0,b1);
  hud_draw(ti2,false,first);hud_sc.draws.back().sampler=1U|2U|(D3DTADDRESS_CLAMP<<4)|(D3DTADDRESS_CLAMP<<8);++text_hits;return true;}
@@ -338,7 +338,7 @@ void*hud_jitter_body(State*s,unsigned target,void*p,Body body,bool line=false){H
 void hud_flush(){if(hud_sc.draws.empty())return;if(photo_replay_hide_hud()){hud_begin(*vsurface(host.res_rt));return;}
  try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_begin(*vsurface(host.res_rt));}
 // The lock reverts to the CPU: draws so far reach the target, guest memory is synchronized and unprotected.
-void hud_fallback(){hud_flush();hud_gpu_active=false;++hud_fallbacks;gpu_sync(host.res_rt);}
+void hud_fallback(){mw34::surface::run_cpu_fallback([&]{if(auto*rt=vsurface(host.res_rt);rt&&rt->locks&&rt->lock_access.writable())camera_surface_written(host.res_rt);},[&]{hud_flush();},[&]{if(auto*rt=vsurface(host.res_rt);rt&&rt->locks)rt->lock_access.expose_cpu_access();hud_gpu_active=false;++hud_fallbacks;gpu_sync(host.res_rt);});}
 // Entry interception (enter()): true when the primitive was recorded and the call returned to its caller.
 bool hud_intercept(unsigned target,void*p,void*&result){if(target==0x577ba0||target==0x577bd0){text_hooks(target);return false;}if(!hud_gpu_active)return false;unsigned args;
  if(target==0x55b3c0)args=12;else if(target==0x563b80)args=16;else if(target==0x563db0)args=20;else if(target==0x5630a0)args=4;else if(target==0x5641f0)args=8;else if(target==0x5630c0)args=12;else if(target==0x564080)args=0;else return false;

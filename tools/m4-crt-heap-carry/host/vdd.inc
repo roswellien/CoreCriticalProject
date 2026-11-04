@@ -249,13 +249,14 @@ bool menu_dl_present(const VSurface&v,const std::vector<unsigned char>&px){
  RECT rc{};::GetClientRect(host.display.window,&rc);if(rc.right<=0||rc.bottom<=0)return false;
  const double fit=std::min({double(rc.right)/640.0,double(rc.bottom)/480.0,2880.0/640.0});
  const unsigned ow=unsigned(std::lround(640*fit)),oh=unsigned(std::lround(480*fit));if(ow<640||oh<480)return false;
- struct Src{const std::uint32_t*px{};unsigned w{},h{};float u0{},v0{},u1{},v1{};};  // straight-alpha RGBA texture and the [u0,u1]x[v0,v1] range for the full image
+ struct Src{const std::uint32_t*px{};unsigned w{},h{};float u0{},v0{},u1{},v1{};std::shared_ptr<const TextTex>text_owner{};};  // straight-alpha RGBA texture and the [u0,u1]x[v0,v1] range for the full image
  std::vector<Src>srcs(menu_dl.size());std::vector<std::vector<std::uint32_t>>wave_pixels(menu_dl.size());
  for(size_t n=0;n<menu_dl.size();++n){const auto&b=menu_dl[n];
   auto tit=b.text?text_images.find(b.text_img):text_images.end();
-  if(b.text&&hud_text_on()&&tit!=text_images.end()&&tit->second.hash==b.text_hash){const auto&ti=tit->second;const std::uint64_t key=ti.hash^std::uint64_t(std::lround(fit*256));auto it=text_cache.find(key);
-   if(it==text_cache.end()){if(text_cache.size()>512)text_cache.clear();TextTex tt{};tt.px=text_render(ti,float(fit),tt.w,tt.h,tt.u0,tt.u1);it=text_cache.emplace(key,std::move(tt)).first;}
-   if(it->second.w&&it->second.h){const float fh=float(b.ih)*float(fit)/float(it->second.h);srcs[n]={it->second.px.data(),it->second.w,it->second.h,it->second.u0,0.f,it->second.u1,fh};}}
+  if(b.text&&hud_text_on()&&tit!=text_images.end()&&tit->second.hash==b.text_hash){const auto&ti=tit->second;const std::uint64_t key=ti.hash^std::uint64_t(std::lround(fit*256));auto texture=text_cache.get(key,[&]{TextTex tt{};tt.px=text_render(ti,float(fit),tt.w,tt.h,tt.u0,tt.u1);return tt;});
+   if(texture->w&&texture->h){const float fh=float(b.ih)*float(fit)/float(texture->h);
+    // Hold this frame's texture even when a later recipe evicts its cache entry.
+    srcs[n]={texture->px.data(),texture->w,texture->h,texture->u0,0.f,texture->u1,fh,texture};}}
   else if(b.hires){const auto&ht=hires.at(b.id);srcs[n]={ht.px.data(),ht.w,ht.h,ht.u0,ht.v0,ht.u1,ht.v1};}}
  static std::vector<std::uint32_t>out;out.assign(size_t(ow)*oh,0xff000000u);
  const double S=double(hd.w)/double(hd.sw);const unsigned hw=hd.w,hh=hd.h;const unsigned char*H=hd.rgb.data();
@@ -295,7 +296,7 @@ bool menu_dl_present(const VSurface&v,const std::vector<unsigned char>&px){
  if(shown)++menu_dl_frames;
  return shown;
 }
-void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.display.window)deny("Presentation without a cooperative window",v.guest);const unsigned w=v.width,h=v.height;
+void present(const VSurface&v,unsigned flipped_target=0){if(!present_direct)gpu_sync(v.guest);if(!host.display.window)deny("Presentation without a cooperative window",v.guest);const unsigned w=v.width,h=v.height;
  std::vector<unsigned char>px;if(!present_direct){px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));if(v.bpp==16){mw34::vkscene::HostFpEnvironment fp;menu_version::paint_footer(px.data(),w,h,v.pitch);}}
  struct{BITMAPINFOHEADER h;DWORD masks[256];}bi{};bi.h.biSize=sizeof(BITMAPINFOHEADER);bi.h.biWidth=LONG(v.pitch/(v.bpp/8));bi.h.biHeight=-LONG(h);bi.h.biPlanes=1;bi.h.biBitCount=WORD(v.bpp);
  if(v.bpp==16){bi.h.biCompression=BI_BITFIELDS;bi.masks[0]=0xf800;bi.masks[1]=0x07e0;bi.masks[2]=0x001f;}else if(v.bpp==8){const auto*pal=vpalette(v.palette);if(!pal)deny("8-bit presentation without a palette",v.guest);
@@ -323,6 +324,7 @@ void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.dis
     last.QuadPart=due;
    }else last=now;
   }}
+ camera_present(flipped_target);
  ++host.frames;mw34_frames_presented.store(host.frames,std::memory_order_relaxed);hud_present();{static const unsigned df=[]{const char*e=std::getenv("MW34_MEM_DUMP_FRAME");return e&&*e?unsigned(std::stoul(e)):0U;}();static const char*dp=std::getenv("MW34_MEM_DUMP");  /* diagnostic: game .data/.bss image at that frame */
  {static const std::string frames_list=[]{const char*e=std::getenv("MW34_MEM_DUMP_FRAMES");return std::string(e?e:"");}();
   if(dp&&!frames_list.empty()&&(","+frames_list+",").find(","+std::to_string(host.frames)+",")!=std::string::npos){
@@ -345,7 +347,7 @@ void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.dis
   if(gameplay!=measured_gameplay)host.presenter->overlay.reset();measured_gameplay=gameplay;}
  world_present();geometry_profile.present(host.frames);
  if(host.frame_dump&&(host.frames==1||host.frames%host.frame_dump==0))dump_frame(v,px);
- if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.presenter?host.presenter->presents:0)+" through the Vulkan swapchain"+(host.presenter&&host.presenter->presents?" on "+host.presenter->device_name:std::string())+")",host.frames);}
+ if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.presenter?host.presenter->presents:0)+(host.presenter&&host.presenter->dxgi_presenting()?" through the Vulkan/DXGI bridge":" through the Vulkan swapchain")+(host.presenter&&host.presenter->presents?" on "+host.presenter->device_name:std::string())+")",host.frames);}
 // Evidence: the presented frame as a binary PPM (converted from RGB565) under the run's frame directory.
 void dump_frame(const VSurface&v,const std::vector<unsigned char>&px){if(host.frame_dir.empty()||v.bpp!=16)return;std::ofstream f(host.frame_dir+"/frame-"+std::to_string(host.frames)+".ppm",std::ios::binary);
  f<<"P6\n"<<v.width<<" "<<v.height<<"\n255\n";for(unsigned y=0;y<v.height;++y)for(unsigned x=0;x<v.width;++x){const unsigned p=unsigned(px[size_t(y)*v.pitch+2*x])|unsigned(px[size_t(y)*v.pitch+2*x+1])<<8;
@@ -361,18 +363,20 @@ RECT surf_rect(unsigned a,const VSurface&v){if(!a)return RECT{0,0,LONG(v.width),
 bool inside(const VSurface&v,const RECT&r){return r.left>=0&&r.top>=0&&r.right<=LONG(v.width)&&r.bottom<=LONG(v.height);}
 void blit(const VSurface&d,RECT dr,const VSurface&s,RECT sr,bool key,unsigned klo,unsigned khi){d.version=++host.surface_versions;if(d.bpp!=s.bpp)deny("Blt between surfaces of different depths is not modelled",d.bpp);
  const LONG dw=dr.right-dr.left,dh=dr.bottom-dr.top,sw=sr.right-sr.left,sh=sr.bottom-sr.top;if(dw<=0||dh<=0||sw<=0||sh<=0)return;
- gpu_sync(d.guest);gpu_sync(s.guest);if(!inside(d,dr)||!inside(s,sr))deny("Blt rectangle outside its surface",unsigned(dr.left));const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Blt depth not modelled",d.bpp);
+ gpu_sync(d.guest);gpu_sync(s.guest);if(!inside(d,dr)||!inside(s,sr))deny("Blt rectangle outside its surface",unsigned(dr.left));const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Blt depth not modelled",d.bpp);camera_surface_written(d.guest);
  std::vector<unsigned char>src(size_t(sw)*sh*b),row(size_t(dw)*b);for(LONG y=0;y<sh;++y)surface_read(s,unsigned(sr.top+y)*s.pitch+unsigned(sr.left)*b,src.data()+size_t(y)*sw*b,unsigned(sw)*b);
  for(LONG y=0;y<dh;++y){const LONG sy=y*sh/dh;const unsigned da=unsigned(dr.top+y)*d.pitch+unsigned(dr.left)*b;if(key)surface_read(d,da,row.data(),unsigned(dw)*b);
   for(LONG x=0;x<dw;++x){const unsigned char*p=src.data()+(size_t(sy)*sw+size_t(x*sw/dw))*b;unsigned c=0;std::memcpy(&c,p,b);if(key&&c>=klo&&c<=khi)continue;std::memcpy(row.data()+size_t(x)*b,p,b);}
   surface_write(d,da,row.data(),unsigned(dw)*b);}}
 bool resident_current(){auto*rt=vsurface(host.res_rt);auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;return rt&&rt->version==host.res_ver_rt&&(!host.res_zb||(zb&&zb->version==host.res_ver_zb));}
 void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=host.sren->frontend_canvas();sc.width=rt->width;sc.height=rt->height;
+ // DirectDraw fills use guest surface coordinates, not a preceding world raster scale.
+ sc.guest_surface_write=true;
  sc.has_depth=host.res_zb!=0;vs::Clear k{};const bool depth=d.guest==host.res_zb;k.flags=depth?2U:1U;k.color[0]=float((c>>11)&31)/31.f;k.color[1]=float((c>>5)&63)/63.f;k.color[2]=float(c&31)/31.f;k.color[3]=1.f;k.z=float(c&0xffff)/65535.f;
  k.rects.push_back({{r.left,r.top},{unsigned(r.right-r.left),unsigned(r.bottom-r.top)}});sc.order.push_back({true,0});sc.clears.push_back(std::move(k));
  try{HostInternal hi(*this);host.sren->render(sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}
  d.version=++host.surface_versions;if(depth)host.res_ver_zb=d.version;else host.res_ver_rt=d.version;host.res_dirty=true;gpu_protect(true);}
-void fill(const VSurface&d,RECT r,unsigned c){if(lazy_rt()&&host.sren&&d.bpp==16&&r.right>r.left&&r.bottom>r.top&&inside(d,r)&&(d.guest==host.res_rt||(host.res_zb&&d.guest==host.res_zb))&&(host.res_dirty||resident_current())){gpu_fill(d,r,c);return;}gpu_sync(d.guest);d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));
+void fill(const VSurface&d,RECT r,unsigned c){if(lazy_rt()&&host.sren&&d.bpp==16&&r.right>r.left&&r.bottom>r.top&&inside(d,r)&&(d.guest==host.res_rt||(host.res_zb&&d.guest==host.res_zb))&&(host.res_dirty||resident_current())){gpu_fill(d,r,c);return;}gpu_sync(d.guest);d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));camera_surface_written(d.guest);
  const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Fill depth not modelled",d.bpp);std::vector<unsigned char>row(size_t(r.right-r.left)*b);for(size_t x=0;x<row.size()/b;++x)std::memcpy(row.data()+x*b,&c,b);
  for(LONG y=r.top;y<r.bottom;++y)surface_write(d,unsigned(y)*d.pitch+unsigned(r.left)*b,row.data(),unsigned(row.size()));}
 
@@ -412,14 +416,15 @@ void*vdd_surface(const Import&imp,unsigned token,const std::function<unsigned(un
   if(!(want&DDSCAPS_BACKBUFFER)||!v->attached){store(out,0);return done(unsigned(DDERR_NOTFOUND),3);}++host.com_object(v->attached)->refs;store(out,v->attached);return done(DD_OK,3);}
  if(n=="Lock"){const unsigned rect=arg(1),desc=arg(2),flags=arg(3);if(arg(4))deny("Lock event handle is not modelled",arg(4));if(!readable(desc,4)||load(desc)!=dsize)deny("Lock descriptor with a wrong dwSize",desc);
   if(gpu_hud()&&lazy_rt()&&host.sren&&host.res_dirty&&v->guest==host.res_rt&&!hud_gpu_active)hud_begin(*v);else gpu_sync(v->guest);
-  const RECT r=surf_rect(rect,*v);texture_lock_pages(*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);++v->locks;(void)flags;
+  const bool gpu_hud_lock=hud_gpu_active&&v->guest==host.res_rt;if(!(flags&DDLOCK_READONLY)&&!gpu_hud_lock)camera_surface_written(v->guest);
+  const RECT r=surf_rect(rect,*v);texture_lock_pages(*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);v->lock_access.acquire((flags&DDLOCK_READONLY)!=0,gpu_hud_lock);++v->locks;(void)flags;
   {static const bool watch=[]{const char*e=std::getenv("MW34_HUD_WATCH");return e&&*e;}();if(watch&&v->width>=640&&v->height>=480&&v->bpp==16&&!hud_watch_hi){auto*b=reinterpret_cast<std::byte*>(runtime.memory().flat_base());if(b){hud_watch_lo=reinterpret_cast<std::uintptr_t>(b+v->mem);hud_watch_hi=hud_watch_lo+std::uintptr_t(v->pitch)*v->height;DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READONLY,&old);}}}
   return done(DD_OK,5);}
- if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);if(hud_gpu_active&&v->guest==host.res_rt){hud_flush();hud_gpu_active=false;--v->locks;return done(DD_OK,2);}if(hud_watch_hi){DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READWRITE,&old);hud_watch_lo=hud_watch_hi=0;if(host.frames%25==0)hud_watch_save();}--v->locks;if(!v->locks)texture_unlock_pages(*v);v->version=++host.surface_versions;return done(DD_OK,2);}
+ if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);if(hud_gpu_active&&v->guest==host.res_rt){hud_flush();hud_gpu_active=false;--v->locks;if(v->lock_access.release(!v->locks))v->version=++host.surface_versions;return done(DD_OK,2);}if(hud_watch_hi){DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READWRITE,&old);hud_watch_lo=hud_watch_hi=0;if(host.frames%25==0)hud_watch_save();}--v->locks;if(!v->locks)texture_unlock_pages(*v);if(v->lock_access.release(!v->locks))v->version=++host.surface_versions;return done(DD_OK,2);}
  if(n=="Flip"){if(!v->primary||!v->attached)deny("Flip on a surface without a flip chain",v->guest);if(arg(1))deny("Flip with an explicit target is not modelled",arg(1));auto*b=vsurface(v->attached);{const unsigned next=host.frames+1;const bool dump_due=host.frame_dump&&(next==1||next%host.frame_dump==0);
   present_direct=lazy_rt()&&host.res_dirty&&b->guest==host.res_rt&&host.sren&&host.presenter&&host.sren==host.presenter.get()&&!dump_due;}
   /* the guest memories swap: the protection follows the resident surface (b keeps the GPU image as its content) */
-  if(!present_direct){gpu_sync(b->guest);gpu_sync(v->guest);}else gpu_protect(false);std::swap(v->mem,b->mem);if(present_direct)gpu_protect(true);v->version=++host.surface_versions;b->version=++host.surface_versions;present(*v);present_direct=false;return done(DD_OK,3);}
+  if(!present_direct){gpu_sync(b->guest);gpu_sync(v->guest);}else gpu_protect(false);std::swap(v->mem,b->mem);if(present_direct)gpu_protect(true);v->version=++host.surface_versions;b->version=++host.surface_versions;present(*v,b->guest);present_direct=false;return done(DD_OK,3);}
  if(n=="Blt"){const unsigned dr=arg(1),src=arg(2),sr=arg(3),flags=arg(4),fx=arg(5);const RECT dst=surf_rect(dr,*v);
   if(flags&DDBLT_DEPTHFILL){if(!(v->caps&DDSCAPS_ZBUFFER))deny("Depth fill on a non-z-buffer surface",v->guest);if(!readable(fx,100))deny("Blt depth fill without its DDBLTFX",fx);fill(*v,status_preview_depth_rect(dst,v->width,v->height),load(fx+80)&0xffff);return done(DD_OK,6);}
   if(flags&DDBLT_COLORFILL){if(!readable(fx,100))deny("Blt colour fill without its DDBLTFX",fx);fill(*v,dst,load(fx+80));if(v->primary&&!v->attached)present(*v);return done(DD_OK,6);}
