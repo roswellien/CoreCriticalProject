@@ -24,6 +24,8 @@ address	name	confidence	evidence	purpose
 004F36B0	sub_004F36B0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes camera rotation and selects its ordinary pose storage
 004F3870	sub_004F3870	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes absolute camera translation into the selected pose storage
 004F3920	sub_004F3920	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Adds relative translation to the selected camera pose storage
+00517DF0	Texture_ReadData	confirmed	games/mw3/docs/functions/textures.md#sub_00517df0	Reads a texture's pixels, optional extra block and palette from an open bank file, converting 16-bit colors from 5-6-5 to 5-5-5 when a global format setting is 5
+00518DB0	TextureBank_LoadByName	confirmed	games/mw3/docs/functions/textures.md#sub_00518db0	Finds a texture by name in a bank's archive table, seeks to it, builds it and attaches its shared palette
 00520B00	sub_00520B00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Activates the renderer camera basis and prepares its inverse view
 005AC3A0	WinMainCRTStartup	confirmed	games/mw3/docs/functions/startup.md#sub_005ac3a0	C runtime startup for a GUI program: sets up the runtime, runs initializers, calls WinMain and exits with its result
 005AC598	_initterm	confirmed	games/mw3/docs/functions/startup.md#sub_005ac598	Import thunk to MSVCRT _initterm, which calls each function pointer in a table
