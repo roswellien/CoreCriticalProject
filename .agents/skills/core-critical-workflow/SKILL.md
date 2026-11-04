@@ -18,8 +18,12 @@ hands straight over to a fresh session for the review.
 Open each skill at its path and follow it, whether or not your tool can call
 one skill from another.
 
-1. **Grill:** `.agents/skills/core-critical-grill/SKILL.md`. Ends when the
-   requester confirms a shared understanding; that "yes" starts the spec.
+1. **Grill:** `.agents/skills/core-critical-grill/SKILL.md`. Runs before the
+   issue is filed, and the issue is written from it. When you pick up an
+   issue, decide whether a second grill on what's still open is needed and
+   tell the requester which; an issue filed without a grill gets the full one.
+   Ends when the requester confirms a shared understanding; at pickup, that
+   "yes" starts the spec.
 2. **Spec:** write it to the spec sections in
    [references/spec-and-plan-sections.md](references/spec-and-plan-sections.md),
    then run `.agents/skills/core-critical-spec-review/SKILL.md`, then walk the
