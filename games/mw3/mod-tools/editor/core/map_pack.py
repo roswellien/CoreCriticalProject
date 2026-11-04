@@ -577,6 +577,8 @@ class MapPackBuilder:
 
     def build(self, project: MapPackProject) -> Path:
         """Compile project assets and data into an isolated map pack folder."""
+        if project.base_operation == "flat":
+            project.base_operation = "t1"
         pack_folder = pack_directory(self.packs_root, project.pack_id)
         if project.base_operation not in {"c1", "c2", "c3", "c4", "c4b", "t1"}:
             raise ValueError("Unsupported base operation; select an installed MW3 operation.")

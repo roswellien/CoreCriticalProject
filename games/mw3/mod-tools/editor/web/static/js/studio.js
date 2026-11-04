@@ -192,6 +192,19 @@ function playBeep(freq = 440, type = "sine", duration = 0.08) {
 
 // Authentic MechWarrior 3 Operation & Biome Environmental Metadata
 const OP_ENV_METADATA = {
+    flat: {
+        name: "Flat Plain / Blank Canvas",
+        center: [0, 0],
+        waterLevel: -100.0,
+        hasWater: false,
+        waterColor: 0x145266,
+        waterSize: [3000, 3000],
+        waterCenter: [0, 0],
+        palette: { sand: 0x5a6350, rock: 0x475240, peak: 0x3d4737, shoreY: -50.0 },
+        preset: "noon",
+        terrainTexture: "static/assets/textures/terrains/c1_txgter_1.png",
+        reconMap: null,
+    },
     c1: {
         name: "Op 1: Coastal Basin / Big Lake",
         center: [-1408, 0],
@@ -566,7 +579,69 @@ async function buildTerrain() {
         }
     }
 
-    if (tData) {
+    if (opCode === "flat") {
+        // Build authentic flat level plain (3000m x 3000m, 80x80 segments)
+        const size = 3000;
+        const segments = 80;
+        const geom = new THREE.PlaneGeometry(size, size, segments, segments);
+        geom.rotateX(-Math.PI / 2);
+
+        const count = geom.attributes.position.count;
+        const colors = new Float32Array(count * 3);
+        const uvs = geom.attributes.uv.array;
+        for (let i = 0; i < uvs.length; i++) {
+            uvs[i] *= 30.0;
+        }
+        geom.attributes.uv.needsUpdate = true;
+
+        const baseCol = new THREE.Color(0x4f5e48);
+        for (let i = 0; i < count; i++) {
+            colors[i * 3] = baseCol.r;
+            colors[i * 3 + 1] = baseCol.g;
+            colors[i * 3 + 2] = baseCol.b;
+        }
+        geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        geom.computeVertexNormals();
+
+        let terrainTex = null;
+        if (meta.terrainTexture) {
+            terrainTex = new THREE.TextureLoader().load(meta.terrainTexture);
+            terrainTex.wrapS = THREE.RepeatWrapping;
+            terrainTex.wrapT = THREE.RepeatWrapping;
+        }
+        const mat = new THREE.MeshStandardMaterial({
+            map: terrainTex,
+            vertexColors: true,
+            roughness: 0.88,
+            metalness: 0.1,
+            flatShading: false,
+        });
+        terrainMesh = new THREE.Mesh(geom, mat);
+        terrainMesh.receiveShadow = true;
+        terrainMesh.name = "terrain";
+        scene.add(terrainMesh);
+        state.sculpt.originalPositions = new Float32Array(geom.attributes.position.array);
+
+        if (state.project.terrain && state.project.terrain.height_modifications) {
+            const hmods = state.project.terrain.height_modifications;
+            const pos = geom.attributes.position;
+            let appliedCount = 0;
+            for (let i = 0; i < pos.count; i++) {
+                const vx = Math.round(pos.getX(i) * 10) / 10;
+                const vz = Math.round(pos.getZ(i) * 10) / 10;
+                const k = `${vx},${vz}`;
+                if (hmods[k] !== undefined) {
+                    pos.setY(i, hmods[k]);
+                    appliedCount++;
+                }
+            }
+            if (appliedCount > 0) {
+                pos.needsUpdate = true;
+                geom.computeVertexNormals();
+            }
+        }
+        console.log(`[Map Studio] Loaded flat blank canvas terrain (${count} vertices)`);
+    } else if (tData) {
         const geom = buildTerrainGeometryFromData(tData, opCode);
         let terrainTex = null;
         if (meta.terrainTexture) {
@@ -2337,10 +2412,14 @@ async function exportMapPack() {
     btn.disabled = true;
 
     try {
+        const payload = JSON.parse(JSON.stringify(state.project));
+        if (payload.base_operation === "flat") {
+            payload.base_operation = "t1"; // Map to authentic Training grounds archive for flat canvas
+        }
         const res = await fetch("/api/export-pack", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(state.project),
+            body: JSON.stringify(payload),
         });
 
         if (res.ok) {
@@ -3581,6 +3660,16 @@ function closeNewMissionModal() {
     if (m) m.style.display = "none";
 }
 
+function handleNewMissionTemplateChange(template) {
+    const biomeEl = document.getElementById("new-mission-biome");
+    if (!biomeEl) return;
+    if (template === "blank") {
+        biomeEl.value = "flat";
+    } else {
+        biomeEl.value = "c1";
+    }
+}
+
 function autoSlugNewMissionId() {
     const titleEl = document.getElementById("new-mission-title");
     const idEl = document.getElementById("new-mission-id");
@@ -3592,7 +3681,7 @@ function autoSlugNewMissionId() {
 function confirmCreateNewMission() {
     const title = (document.getElementById("new-mission-title")?.value || "Custom Mission").trim();
     const packId = (document.getElementById("new-mission-id")?.value || "custom_mission").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
-    const biome = document.getElementById("new-mission-biome")?.value || "c1";
+    const biome = document.getElementById("new-mission-biome")?.value || "flat";
     const template = document.getElementById("new-mission-template")?.value || "blank";
     const playerMech = document.getElementById("new-mission-mech")?.value || "Mad Cat / Timber Wolf";
 
@@ -3751,7 +3840,19 @@ function confirmCreateNewMission() {
         syncSceneAssets();
         updateInspector();
         renderSceneOutliner();
+
+        // Re-center camera and controls on player drop zone (0, 0, 0)
+        if (orbitControls) {
+            orbitControls.target.set(0, 0, 0);
+            orbitControls.update();
+        }
+        if (perspCamera) {
+            perspCamera.position.set(0, 80, 160);
+            perspCamera.lookAt(0, 0, 0);
+        }
+
         playBeep(1040, "sine", 0.15);
+        alert(`Created new mission "${title}" (${template === "blank" ? "Blank Slate" : template} on ${OP_ENV_METADATA[biome]?.name || biome})`);
     });
 }
 

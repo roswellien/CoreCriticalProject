@@ -74,6 +74,7 @@
                 <div class="meta-field">
                     <span class="meta-label">Biome</span>
                     <select id="biome-select" class="select-input" style="width: 200px">
+                        <option value="flat">Flat Plain / Blank Canvas</option>
                         <option value="c1" selected>Op 1: Coastal Basin / Big Lake (c1)</option>
                         <option value="c2">Op 2: Desert Canyons (c2)</option>
                         <option value="c3">Op 3: Volcanic Badlands (c3)</option>
@@ -1021,6 +1022,7 @@
 
                         <span class="meta-label">PLANETARY BIOME:</span>
                         <select id="new-mission-biome" class="select-input" style="padding: 6px 10px; font-size: 13px;">
+                            <option value="flat" selected>Flat Plain / Empty Canvas (Level Terrain for Custom Sculpting)</option>
                             <option value="c1">Operation 1: Coastal Basin / Beachhead (c1)</option>
                             <option value="c2">Operation 2: Highlands / Rolling Hills (c2)</option>
                             <option value="c3">Operation 3: Caldera / Volcanic Plains (c3)</option>
@@ -1029,8 +1031,8 @@
                         </select>
 
                         <span class="meta-label">START TEMPLATE:</span>
-                        <select id="new-mission-template" class="select-input" style="padding: 6px 10px; font-size: 13px;">
-                            <option value="blank">Blank Slate (Player Drop Zone Only)</option>
+                        <select id="new-mission-template" class="select-input" onchange="handleNewMissionTemplateChange(this.value)" style="padding: 6px 10px; font-size: 13px;">
+                            <option value="blank" selected>Blank Slate (Flat Plain - Player Drop Zone Only)</option>
                             <option value="outpost">Defensive Outpost (Drop Zone + Base Perimeter + Tower)</option>
                             <option value="skirmish">Combat Skirmish (Drop Zone + Enemy Patrol Lance)</option>
                         </select>
