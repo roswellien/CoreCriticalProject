@@ -29,8 +29,13 @@ struct GuestHeap {
         return address < it->second ? it->first : 0;
     }
     bool contains(unsigned address, unsigned bytes) const {
-        const unsigned region = region_of(address);
-        return region && std::uint64_t(address) + bytes <= regions.at(region);
+        auto region = regions.upper_bound(address);
+        if (region == regions.begin())
+            return false;
+        --region;
+        // Preserve the zero-key sentinel and reject an empty range at a region's end.
+        return region->first != 0 && address < region->second &&
+               std::uint64_t(address) + bytes <= region->second;
     }
     unsigned owner_of(unsigned address) const {
         auto it = region_owners.find(region_of(address));

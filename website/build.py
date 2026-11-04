@@ -8,7 +8,7 @@ from tools.sync_mechlab import read_notes
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "dist"
 OUT.mkdir(exist_ok=True)
-for name in ("index.html", "styles.css", "site.js", "news.html", "media.html", "about.html", "native.html", "vulkan.html", "tools.html", "studio-tour.html", "404.html"):
+for name in ("index.html", "styles.css", "site.js", "news.html", "media.html", "about.html", "native.html", "vulkan.html", "tools.html", "studio-tour.html", "mw3-re.html", "404.html"):
     source = ROOT / name
     if source.is_file():
         shutil.copy2(source, OUT / name)
