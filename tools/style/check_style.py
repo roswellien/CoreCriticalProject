@@ -34,10 +34,11 @@ from pathlib import Path
 STYLE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = STYLE_DIR.parents[1]
 
-# preflight.py sits beside this file; Python only looks there on its own when this file
-# runs as a script, not when a test or another tool loads it.
+# style_preflight.py sits beside this file; Python only looks there on its own when this
+# file runs as a script, not when a test or another tool loads it. The name is specific
+# because frozen tools/m4-* folders have their own preflight.py files.
 sys.path.insert(0, str(STYLE_DIR))
-from preflight import (
+from style_preflight import (
     TEXT_READ_KINDS,
     PreflightReadError,
     lint_finding_path,
@@ -460,7 +461,7 @@ def print_github_warnings(results: list[CheckResult]) -> None:
 
 
 # ---------------------------------------------------------------------------------------
-# Pre-cleanup safety checks (the scans themselves are in preflight.py)
+# Pre-cleanup safety checks (the scans themselves are in style_preflight.py)
 # ---------------------------------------------------------------------------------------
 
 

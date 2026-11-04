@@ -29,8 +29,8 @@ def load_check_style():
 
 
 check_style = load_check_style()
-# check_style.py loads the preflight scans from tools/style/preflight.py.
-preflight = sys.modules["preflight"]
+# check_style.py loads the preflight scans from tools/style/style_preflight.py.
+preflight = sys.modules["style_preflight"]
 
 
 def write_fixtures(root, paths):

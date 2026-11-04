@@ -14,6 +14,7 @@ into a whole-file reformat.
 | File | Purpose |
 | --- | --- |
 | `check_style.py` | Runs every checker on tracked files and prints a count per language and check. Python standard library only. |
+| `style_preflight.py` | The pre-cleanup scans behind `check_style.py --preflight` (stored hashes and text reads). Python standard library only. |
 | `check_powershell.ps1` | Runs PSScriptAnalyzer, which only works inside PowerShell. Holds its pinned version. |
 | `exclude.txt` | Files no checker reads or rewrites: frozen, hash-pinned evidence, third-party and generated code. |
 | `requirements.txt` | Ruff and clang-format, pinned with every published hash. |
