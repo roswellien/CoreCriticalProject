@@ -1,0 +1,167 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c50ddc1..8a390bb 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -806,0 +807,25 @@ endif()
++
++if(CC_MW3_RE_ADAPTER)
++  if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT TARGET mw3)
++    message(FATAL_ERROR "The Core Critical adapter needs Windows x64 and the SDL game target")
++  endif()
++  get_filename_component(cc_root "${CC_MW3_RE_ADAPTER}/../.." ABSOLUTE)
++  add_library(cc_mw3_re_adapter OBJECT "${CC_MW3_RE_ADAPTER}/frame_renderer.cpp")
++  target_compile_features(cc_mw3_re_adapter PRIVATE cxx_std_20)
++  foreach(target cc_mw3_re_adapter mw3core mw3sdl mw3text mw3)
++    target_compile_options(${target} PRIVATE /EHsc)
++  endforeach()
++  target_compile_definitions(cc_mw3_re_adapter PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
++  target_include_directories(cc_mw3_re_adapter PRIVATE src "${CC_VULKAN_HEADERS}"
++      "${cc_root}/tools/m4-crt-heap-carry/host")
++  target_link_libraries(cc_mw3_re_adapter PRIVATE SDL3::SDL3)
++  target_sources(mw3sdl PRIVATE $<TARGET_OBJECTS:cc_mw3_re_adapter>)
++  target_compile_definitions(mw3sdl PRIVATE CC_MW3_RE_ADAPTER=1)
++  target_include_directories(mw3sdl PRIVATE "${CC_MW3_RE_ADAPTER}")
++  target_link_libraries(mw3sdl PUBLIC user32 gdi32 dxgi d3d11)
++  add_executable(cc_mw3_re_adapter_checks "${CC_MW3_RE_ADAPTER}/adapter_checks.cpp")
++  target_compile_options(cc_mw3_re_adapter_checks PRIVATE /EHsc)
++  target_include_directories(cc_mw3_re_adapter_checks PRIVATE src)
++  target_link_libraries(cc_mw3_re_adapter_checks PRIVATE mw3sdl)
++  add_test(NAME cc_mw3_re_adapter COMMAND cc_mw3_re_adapter_checks)
++endif()
+diff --git a/src/frontend/sdl/campaign_chain.h b/src/frontend/sdl/campaign_chain.h
+index a2dbc49..d1f0518 100644
+--- a/src/frontend/sdl/campaign_chain.h
++++ b/src/frontend/sdl/campaign_chain.h
+@@ -26 +26 @@ namespace sdlfe {
+-class SdlRender3D;
++class FrameRenderer;
+@@ -38 +38 @@ class CampaignChain {
+-  CampaignChain(mech3::GameEngine& e, mech3::Mech3App& app, SdlRender3D* render, ChainOptions o)
++  CampaignChain(mech3::GameEngine& e, mech3::Mech3App& app, FrameRenderer* render, ChainOptions o)
+@@ -50 +50 @@ class CampaignChain {
+-  SdlRender3D* render_;
++  FrameRenderer* render_;
+diff --git a/src/frontend/sdl/debug_states.h b/src/frontend/sdl/debug_states.h
+index a9200da..4071093 100644
+--- a/src/frontend/sdl/debug_states.h
++++ b/src/frontend/sdl/debug_states.h
+@@ -18 +18 @@ class SdlInput;
+-class SdlRender3D;
++class FrameRenderer;
+@@ -37 +37 @@ class DebugMissionState : public mech3::State {
+-  DebugMissionState(mech3::GameEngine* engine, SdlInput* input, SdlRender3D* render, DebugMissionOptions o)
++  DebugMissionState(mech3::GameEngine* engine, SdlInput* input, FrameRenderer* render, DebugMissionOptions o)
+@@ -46 +46 @@ class DebugMissionState : public mech3::State {
+-  SdlRender3D* render_;
++  FrameRenderer* render_;
+@@ -56 +56 @@ class DebugDialogState : public mech3::State {
+-  DebugDialogState(mech3::GameEngine* engine, SdlInput* input, SdlRender3D* render, std::string file,
++  DebugDialogState(mech3::GameEngine* engine, SdlInput* input, FrameRenderer* render, std::string file,
+@@ -69 +69 @@ class DebugDialogState : public mech3::State {
+-  SdlRender3D* render_;
++  FrameRenderer* render_;
+@@ -83 +83 @@ class DebugMovieState : public mech3::State {
+-  DebugMovieState(mech3::GameEngine* engine, SdlRender3D* render, std::string name, std::string shot,
++  DebugMovieState(mech3::GameEngine* engine, FrameRenderer* render, std::string name, std::string shot,
+@@ -93 +93 @@ class DebugMovieState : public mech3::State {
+-  SdlRender3D* render_;
++  FrameRenderer* render_;
+diff --git a/src/frontend/sdl/mw3_main.cpp b/src/frontend/sdl/mw3_main.cpp
+index f485164..5bc5791 100644
+--- a/src/frontend/sdl/mw3_main.cpp
++++ b/src/frontend/sdl/mw3_main.cpp
+@@ -133,0 +134 @@ struct Args {
++  bool cc_vulkan = false;
+@@ -342,0 +344 @@ bool parse(int argc, char** argv, Args& a) {
++    else if (s == "--cc-vulkan") a.cc_vulkan = true;
+@@ -827 +829,6 @@ int main(int argc, char** argv) {
+-  const int result = run(a, vfw.get());
++  int result = 1;
++  try {
++    result = run(a, vfw.get());
++  } catch (const std::exception& error) {
++    std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
++  }
+@@ -838 +845,3 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
+-  if (!window.init(a.hidden, a.launcher_window)) return 1;
++  if (a.cc_vulkan && !a.windowed && !a.window_given)
++    return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
++  if (!window.init(a.hidden, a.launcher_window, a.cc_vulkan)) return 1;
+diff --git a/src/frontend/sdl/sdl_platform.cpp b/src/frontend/sdl/sdl_platform.cpp
+index 9862a7a..1cfbc20 100644
+--- a/src/frontend/sdl/sdl_platform.cpp
++++ b/src/frontend/sdl/sdl_platform.cpp
+@@ -2,0 +3,5 @@
++#ifdef CC_MW3_RE_ADAPTER
++#include "frame_renderer.hpp"
++#include <exception>
++#endif
++
+@@ -14 +19 @@ namespace sdlfe {
+-bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt) {
++bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, bool cc_vulkan) {
+@@ -15,0 +21,15 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt) {
++  if (cc_vulkan) {
++#ifdef CC_MW3_RE_ADAPTER
++    window_ = adopt ? adopt : SDL_CreateWindow("MechWarrior 3", 1280, 960, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
++    if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
++    try {
++      render_ = cc_mw3_re::make_renderer(window_);
++      render_->set_shape(&shape_);
++      return render_->ok();
++    } catch (const std::exception& error) {
++      return std::fprintf(stderr, "mw3: Core Critical Vulkan setup: %s\n", error.what()), false;
++    }
++#else
++    return std::fprintf(stderr, "mw3: this build has no Core Critical Vulkan adapter\n"), false;
++#endif
++  }
+diff --git a/src/frontend/sdl/sdl_platform.h b/src/frontend/sdl/sdl_platform.h
+index 5c0661e..009b9d8 100644
+--- a/src/frontend/sdl/sdl_platform.h
++++ b/src/frontend/sdl/sdl_platform.h
+@@ -30 +30 @@ class SdlWindow : public platform::Window {
+-  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr);
++  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr, bool cc_vulkan = false);
+@@ -52 +52 @@ class SdlWindow : public platform::Window {
+-  SdlRender3D* render() const { return render_.get(); }
++  FrameRenderer* render() const { return render_.get(); }
+@@ -58 +58 @@ class SdlWindow : public platform::Window {
+-  std::unique_ptr<SdlRender3D> render_;
++  std::unique_ptr<FrameRenderer> render_;
+@@ -72 +72 @@ class SdlScreen2D : public platform::Screen2D {
+-  explicit SdlScreen2D(SdlRender3D* render) : render_(render) {}
++  explicit SdlScreen2D(FrameRenderer* render) : render_(render) {}
+@@ -86 +86 @@ class SdlScreen2D : public platform::Screen2D {
+-  SdlRender3D* render_;
++  FrameRenderer* render_;
+diff --git a/src/frontend/sdl/sdl_render3d.h b/src/frontend/sdl/sdl_render3d.h
+index d354636..bf019ee 100644
+--- a/src/frontend/sdl/sdl_render3d.h
++++ b/src/frontend/sdl/sdl_render3d.h
+@@ -19 +19,10 @@ namespace sdlfe {
+-class SdlRender3D : public platform::Render3D {
++class FrameRenderer : public platform::Render3D {
++ public:
++  virtual bool ok() const = 0;
++  virtual void capture_next(const char* bmp_path) = 0;
++  virtual void flush() = 0;
++  virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
++  virtual void set_shape(const FrameShape* shape) = 0;
++};
++
++class SdlRender3D : public FrameRenderer {
+diff --git a/src/gamez/zimage/zimg_texture.cpp b/src/gamez/zimage/zimg_texture.cpp
+index 3de07a7..ba45f0f 100644
+--- a/src/gamez/zimage/zimg_texture.cpp
++++ b/src/gamez/zimage/zimg_texture.cpp
+@@ -11,0 +12 @@
++#include "platform/render3d.h"
+@@ -356,0 +358 @@ int32_t textures_free() {
++  if (auto* renderer = zvid::render3d()) renderer->reset_scene_resources();
+diff --git a/src/platform/render3d.h b/src/platform/render3d.h
+index 73ba9b4..e4d10f7 100644
+--- a/src/platform/render3d.h
++++ b/src/platform/render3d.h
+@@ -94,0 +95 @@ class Render3D {
++  virtual void reset_scene_resources() {}
