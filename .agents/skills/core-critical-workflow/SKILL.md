@@ -27,17 +27,20 @@ one skill from another.
 2. **Spec:** write it to the spec sections in
    [references/spec-and-plan-sections.md](references/spec-and-plan-sections.md),
    then run `.agents/skills/core-critical-spec-review/SKILL.md`, then walk the
-   requester through what it leaves. **Stop** until the requester approves the
-   spec.
+   requester through what it leaves. The review runs in the session doing the
+   work, so the requester can follow each pass. **Stop** until the requester
+   approves the spec.
 3. **Plan:** write it to the plan sections in the same file, then run
    `.agents/skills/core-critical-plan-review/SKILL.md`, then
    `.agents/skills/core-critical-code-review/SKILL.md` on the plan file, then
-   one walkthrough of what both leave. **Stop** until the requester approves
-   implementing.
+   one walkthrough of what both leave. Both reviews run in the session doing
+   the work, so the requester can follow each pass. **Stop** until the
+   requester approves implementing.
 4. **Implement:** carry out the whole plan, including its check steps, without
    stopping for a go-ahead and without editing the plan. If the plan turns out
    to be wrong, stop and tell the requester; the plan is fixed before going on.
-5. **Review:** in a fresh session that didn't write the change, run
+5. **Review:** in a fresh session that didn't write the change (what counts
+   as fresh: "On a branch" in the code review skill), run
    `.agents/skills/core-critical-code-review/SKILL.md` on the branch (it ends
    by rerunning the change's checks), then walk the requester through what is
    left. The implementing session stops after its

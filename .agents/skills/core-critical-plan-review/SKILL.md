@@ -18,7 +18,8 @@ checked.
 `.agents/skills/core-critical-workflow/references/review-loop.md`, with the
 plan as the target and [references/checklist.md](references/checklist.md) as
 the checklist. Fixes are edits to the plan only; never carry out a plan step
-during the review.
+during the review. The review runs in the session that wrote the plan, so the
+requester can follow each pass.
 
 The loop ends with one report. Then the workflow runs the code review on the
 plan and one walkthrough of what both reviews leave, and the plan waits for the
