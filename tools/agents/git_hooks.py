@@ -138,7 +138,11 @@ def ignored_staged_files(root: Path, environment: Environment, staged: list[str]
     lines = []
     for start in range(0, len(fields) - 3, 4):
         source, line_number, pattern, path = fields[start : start + 4]
-        lines.append(f"{path} (rule '{pattern}' in {source}:{line_number})")
+        # With -v, git also lists files whose last matching rule is a "!" rule, which
+        # re-includes them (recomp/generated/README.md, .env.example); those aren't ignored.
+        re_included = pattern.startswith("!")
+        if not re_included:
+            lines.append(f"{path} (rule '{pattern}' in {source}:{line_number})")
     return lines
 
 

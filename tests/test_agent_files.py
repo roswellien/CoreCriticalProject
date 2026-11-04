@@ -680,6 +680,15 @@ class GitHookTests(unittest.TestCase):
         self.assertIn("test.zbd (rule '*.zbd'", output)
         self.assertEqual(self.formatter_calls, [])
 
+    def test_file_re_included_by_a_negated_rule_is_not_blocked(self):
+        # Like recomp/generated/README.md: ignored by one rule, re-included by a "!" rule.
+        self.write(".gitignore", "*.zbd\n/generated/*\n!/generated/README.md\n")
+        self.write("generated/README.md", "notes\n")
+        self.git("add", ".gitignore", "generated/README.md")
+        exit_code, output = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("blocked", output)
+
     def test_failing_formatter_lets_the_commit_through_with_install_advice(self):
         self.formatter_exit_code = 2
         self.formatter_output = "web format: error: prettier is not installed\n"
