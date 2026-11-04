@@ -82,4 +82,6 @@ A library routine keeps its official name, written as a C identifier
 (`operator new` becomes `operator_new`; leading underscores stay, as in
 `_initterm`). The game's own code gets an `Area_Action` name, such as
 `GameHeap_Free`. A merged body that no single official name fits gets an
-`Area_Action` name for what it does, such as `Stub_Return`.
+`Area_Action` name for what it does, such as `Stub_Return`. `Area_Action` names
+are plain words that say what the code does; addresses, such as a class's
+vtable, go in the section, not the name.

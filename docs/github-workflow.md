@@ -30,8 +30,9 @@ branch.
 1. Read the project instructions, this guide and the distribution policy.
 2. Inspect `git status`, the current branch, worktrees and running build/game
    processes. Preserve existing work and respect other writers.
-3. Find the task's issue, or file one if it has none, then assign yourself and
-   set its card to In progress (see [Project board](#project-board)).
+3. Find the task's issue, or grill and file one if it has none (see
+   [Plan and review](#plan-and-review)), then assign yourself and set its card
+   to In progress (see [Project board](#project-board)).
 4. Fetch the current remote branches. Start a task-specific branch from
    `origin/develop`; do not start development on either shared branch.
 
@@ -57,7 +58,17 @@ except Implement has a shared skill in `.agents/skills/` (copied to
 path given and follows it.
 
 1. **Grill:** interview the requester one question at a time until they confirm
-   a shared understanding of the issue. Their "yes" starts the spec.
+   a shared understanding of the work. The grill runs before the issue is
+   filed, and the issue is written from what it settled, under the form's
+   usual headings. Whoever picks the issue up decides whether a second, shorter
+   grill is needed on what is still open (implementation details, or anything
+   that changed since filing), runs it if so, and tells the requester which
+   they chose. Issues filed without a grill, including `needs-triage` captures
+   (see [Triage](#triage)), get the full grill when picked up; if you can't
+   tell whether an issue was grilled (it was filed before this rule, or is a
+   sorted capture), treat it as not grilled. Before filing, the requester's
+   "yes" at the end of the grill files the issue; at pickup, it starts the
+   spec.
    Skill: `.agents/skills/core-critical-grill/SKILL.md`.
 2. **Spec:** write the spec, run the spec review, then walk the requester
    through what it leaves. Stop until the requester approves the spec.
@@ -83,7 +94,8 @@ Each stage's reviews end with one walkthrough of what they leave, run as
 "Walkthroughs" in the workflow skill says.
 
 Short path: a change that can be described in one sentence and is already
-covered by tests skips the grill, spec and plan when the requester agrees. It
+covered by tests skips the grill (both before filing and at pickup), spec and
+plan when the requester agrees. It
 still gets stage 5. Release promotions (`develop` -> `main`) and branch syncs
 carry no new change and are exempt. Cloud agents (Copilot cloud agent, Codex
 cloud) take only short-path tasks, since they can't hold the interview or keep

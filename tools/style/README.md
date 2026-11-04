@@ -14,6 +14,7 @@ into a whole-file reformat.
 | File | Purpose |
 | --- | --- |
 | `check_style.py` | Runs every checker on tracked files and prints a count per language and check. Python standard library only. |
+| `style_preflight.py` | The pre-cleanup scans behind `check_style.py --preflight` (stored hashes and text reads). Python standard library only. |
 | `check_powershell.ps1` | Runs PSScriptAnalyzer, which only works inside PowerShell. Holds its pinned version. |
 | `exclude.txt` | Files no checker reads or rewrites: frozen, hash-pinned evidence, third-party and generated code. |
 | `requirements.txt` | Ruff and clang-format, pinned with every published hash. |
@@ -63,8 +64,23 @@ for lint findings. Never mix a cleanup with other changes. Steps:
 1. Run the pre-cleanup safety checks and handle every hit:
    `python tools/style/check_style.py --preflight --language <language>`.
    Digest-only hits are candidates, not proof of a path-specific pin; verify the
-   associated path before changing a stored hash. Dynamic inventories may report
-   every target, or every target with a matching suffix, for manual review. An
+   associated path before changing a stored hash. Both scans look only at the files
+   the formatter would change, since a file whose bytes stay the same can't break
+   whatever reads it. Before a lint cleanup, add `--check lint`: both scans then look
+   at the files with lint findings instead. The text-read search prints one line per
+   place to check, in three kinds:
+   - `tools/a.py:12: reads runtime/b.py`: the line names that file by its path.
+   - `tools/a.py:12: names b.py (could be 2 files: x/b.py, y/b.py)`: the line names
+     only a file name, so check which of those files it means.
+   - `tools/a.py:12: lists files (.py)`: the line lists a folder (`glob`, `walk`,
+     `Get-ChildItem` and so on), so it may read any changed file of those types, or of
+     any type when the script names none. The types come from anywhere in the script,
+     not just that line, so a script that names only other types (`*.txt`) is left out.
+   Folder listings inside `tools/m4-*/` and `tools/x87-*/` are not reported. Those
+   folders hold frozen evidence scripts that can't change, and the stored-hash scan
+   still finds any of them that keeps a changed file's hash in the repository. A
+   frozen script that finds files only by listing a folder and keeps its hashes
+   outside the repository is not reported. An
    unreadable input makes preflight exit with an error instead of reporting an
    incomplete scan. A code file that isn't valid UTF-8 is still searched: the
    text-read search reads it as Latin-1, which keeps every byte.
