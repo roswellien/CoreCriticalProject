@@ -485,6 +485,203 @@ test("refuses to send crash logs to a public repository", async () => {
     assert.equal(archivedReports.length, 1);
 });
 
+// A D1 binding whose archive table is missing, as when migration 0002 was never
+// applied. The daily issue counter (migration 0001) still works unless told otherwise.
+function brokenArchiveEnvironment({ dailySlotAvailable = true } = {}) {
+    return {
+        ...environment,
+        CRASH_REPORT_DB: {
+            prepare(query) {
+                if (query.includes("INSERT OR IGNORE INTO crash_report_archive")) {
+                    return {
+                        bind: () => ({
+                            run: async () => {
+                                throw new Error("D1_ERROR: no such table: crash_report_archive");
+                            },
+                        }),
+                    };
+                }
+                return {
+                    bind: () => ({
+                        first: async () => (dailySlotAvailable ? { issue_count: 1 } : null),
+                    }),
+                };
+            },
+        },
+    };
+}
+
+// Records the issue and comment bodies sent to GitHub, on top of githubResponder.
+function recordSentBodies() {
+    const sentBodies = [];
+    const baseFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+        const body = JSON.parse(options.body);
+        if (typeof body.variables?.body === "string") sentBodies.push(body.variables.body);
+        return baseFetch(url, options);
+    };
+    return sentBodies;
+}
+
+// Collects console.error lines for one request and silences them.
+async function withConsoleErrors(run) {
+    const lines = [];
+    const originalError = console.error;
+    console.error = (...parts) => lines.push(parts.join(" "));
+    try {
+        return { result: await run(), lines };
+    } finally {
+        console.error = originalError;
+    }
+}
+
+function archiveFailureLogLines(lines) {
+    return lines.filter(
+        (line) =>
+            line.includes("table crash_report_archive") &&
+            line.includes("0002_crash_report_archive.sql"),
+    );
+}
+
+async function crashFingerprintFor(mode, exitCode, summary) {
+    const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(JSON.stringify([mode, exitCode, summary])),
+    );
+    return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+test("still creates the GitHub issue when the archive save fails, and says so in the issue", async () => {
+    const calls = githubResponder();
+    const sentBodies = recordSentBodies();
+    const { result: response, lines } = await withConsoleErrors(() =>
+        onRequestPost({ request: crashRequest(), env: brokenArchiveEnvironment() }),
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+        report_id: "abcdef12",
+        duplicate: false,
+        overflow: false,
+    });
+    assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.equal(sentBodies.length, 1);
+    assert.ok(sentBodies[0].includes("Not saved to the admin archive"));
+    assert.equal(archiveFailureLogLines(lines).length, 1);
+});
+
+test("leaves the archive note out of issues when the archive save works", async () => {
+    githubResponder();
+    const sentBodies = recordSentBodies();
+    const response = await onRequestPost({ request: crashRequest(), env: environment });
+    assert.equal(response.status, 200);
+    assert.equal(sentBodies.length, 1);
+    assert.ok(!sentBodies[0].includes("Not saved to the admin archive"));
+});
+
+test("still comments on a matching issue when the archive save fails", async () => {
+    const marker = await crashFingerprintFor("remaster", 7, "error: access violation at <address>");
+    const calls = githubResponder({
+        matches: [
+            {
+                id: "I_issue",
+                state: "OPEN",
+                body: `<!-- crash-fingerprint:${marker} -->`,
+                comments: { totalCount: 0 },
+            },
+        ],
+    });
+    const sentBodies = recordSentBodies();
+    const { result: response, lines } = await withConsoleErrors(() =>
+        onRequestPost({ request: crashRequest(), env: brokenArchiveEnvironment() }),
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+        report_id: "abcdef12",
+        duplicate: true,
+        overflow: false,
+    });
+    assert.ok(calls.some((query) => query.includes("addComment")));
+    assert.ok(!calls.some((query) => query.includes("createIssue")));
+    assert.equal(sentBodies.length, 1);
+    assert.ok(sentBodies[0].includes("Not saved to the admin archive"));
+    assert.equal(archiveFailureLogLines(lines).length, 1);
+});
+
+test("still comments on the overflow issue when the archive save fails and the daily cap is reached", async () => {
+    const calls = githubResponder();
+    const sentBodies = recordSentBodies();
+    const { result: response, lines } = await withConsoleErrors(() =>
+        onRequestPost({
+            request: crashRequest(),
+            env: brokenArchiveEnvironment({ dailySlotAvailable: false }),
+        }),
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+        report_id: "abcdef12",
+        duplicate: true,
+        overflow: true,
+    });
+    assert.ok(calls.some((query) => query.includes("addComment")));
+    assert.equal(sentBodies.length, 1);
+    assert.ok(sentBodies[0].includes("Not saved to the admin archive"));
+    assert.equal(archiveFailureLogLines(lines).length, 1);
+});
+
+test("reports a failure, not archive-only success, when neither the archive nor GitHub works", async () => {
+    globalThis.fetch = async () => {
+        throw new Error("GitHub temporarily unavailable");
+    };
+    const { result: response, lines } = await withConsoleErrors(() =>
+        onRequestPost({ request: crashRequest(), env: brokenArchiveEnvironment() }),
+    );
+    assert.equal(response.status, 502);
+    const result = await response.json();
+    assert.equal(result.archived_only, undefined);
+    assert.ok(result.error.includes("could not save this crash report"));
+    assert.equal(archiveFailureLogLines(lines).length, 1);
+});
+
+test("reports a failure when the archive save fails and the repository is public", async () => {
+    const calls = [];
+    globalThis.fetch = async (_url, options) => {
+        calls.push(JSON.parse(options.body).query);
+        return Response.json({ data: { repository: { id: "R_repo", isPrivate: false } } });
+    };
+    const { result: response, lines } = await withConsoleErrors(() =>
+        onRequestPost({ request: crashRequest(), env: brokenArchiveEnvironment() }),
+    );
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).archived_only, undefined);
+    assert.ok(!calls.some((query) => query.includes("createIssue")));
+    assert.equal(archiveFailureLogLines(lines).length, 1);
+    assert.ok(lines.some((line) => line.includes("not private, and the archive save failed")));
+});
+
+test("reports a failure when the archive save fails, the daily cap is reached and the overflow issue is missing", async () => {
+    globalThis.fetch = async (_url, options) => {
+        const body = JSON.parse(options.body);
+        if (body.query.includes("issue(number:")) {
+            return Response.json({ data: { repository: { issue: null } } });
+        }
+        return Response.json({
+            data: {
+                repository: { id: "R_repo", isPrivate: true },
+                matched: { nodes: [] },
+            },
+        });
+    };
+    const { result: response, lines } = await withConsoleErrors(() =>
+        onRequestPost({
+            request: crashRequest(),
+            env: brokenArchiveEnvironment({ dailySlotAvailable: false }),
+        }),
+    );
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).archived_only, undefined);
+    assert.equal(archiveFailureLogLines(lines).length, 1);
+});
+
 const adminEnvironment = {
     ...environment,
     CRASH_REPORT_ACCESS_ISSUER: "https://corecritical.cloudflareaccess.com",

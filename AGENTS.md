@@ -80,6 +80,8 @@ making the repository public.
 - `.agents/skills/`: shared agent skills. `.claude/skills/` is a generated copy for
   Claude Code; never edit it by hand, and run `python tools/agents/sync_skills.py`
   after changing a skill.
+- `.githooks/`: commit and push checks, including formatting; turn them on once per
+  clone with `git config core.hooksPath .githooks`.
 - `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
 
 Agent rules live only in this file. `CLAUDE.md` and
@@ -108,18 +110,21 @@ cmake --preset default -A x64
 cmake --build --preset default
 ctest --preset default
 ```
-That job does not run `format-check`. Install the pinned formatter, reconfigure
-`build/default`, then run the target and the WPF launcher checks (authored
-fixtures, no game install).
+That job does not run `format-check`. In PowerShell 7, install the pinned
+formatter, reconfigure `build/default`, then run the target. Fetch the pinned
+SDL3 controller runtime into ignored `local/` once per checkout and SDL version;
+the WPF launcher checks (authored fixtures, no game install) and publish need it.
 
 ```powershell
 python -m venv tools/style/.venv
 tools/style/.venv/Scripts/python -m pip install --require-hashes -r tools/style/requirements.txt
 cmake --preset default -A x64 -DMW34_CLANG_FORMAT="$PWD/tools/style/.venv/Scripts/clang-format.exe"
 cmake --build build/default --target format-check
+pwsh -NoProfile -File tools/mw3-remaster-launcher/fetch_controller_runtime.ps1
 dotnet run --project tools/mw3-remaster-launcher-tests -c Release
 ```
-Launcher publish, from the root on Windows (`net8.0-windows`). Ignored `local/` output; not a release.
+Launcher publish, from the root on Windows (`net8.0-windows`), after the SDL3
+fetch above. Ignored `local/` output; not a release.
 
 ```sh
 dotnet publish tools/mw3-remaster-launcher/MW3RemasterLauncher.csproj -c Release -r win-x64 --self-contained true -o local/launcher-publish

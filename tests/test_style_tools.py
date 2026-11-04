@@ -328,6 +328,24 @@ class PreflightTests(unittest.TestCase):
                 [(3, "source.py")],
             )
 
+    def test_text_read_search_reads_code_files_that_are_not_utf8(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "target.py").write_text("print('test')\n", encoding="utf-8")
+            # 0xD7 is a Latin-1 multiplication sign and invalid as UTF-8. The read sits
+            # after it, so the hit proves the whole file was searched.
+            (temp_path / "legacy.py").write_bytes(
+                b"# 2 \xd7 3 table\nopen('target.py').read()\n"
+            )
+
+            hits = check_style.run_text_read_search(
+                ["target.py"], ["target.py", "legacy.py"], repo_root=temp_path
+            )
+            self.assertEqual(
+                [(hit.holding_file, hit.line_number, hit.target_file) for hit in hits],
+                [("legacy.py", 2, "target.py")],
+            )
+
     def test_scans_raise_path_specific_errors_when_files_cannot_be_read(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -443,6 +461,81 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(
             check_style.normalize_repo_path(r"tools\style\..\check.py"),
             "tools/check.py",
+        )
+
+
+class FixFilesTests(unittest.TestCase):
+    """--fix --files formats only the given files, which the git hook relies on."""
+
+    def setUp(self):
+        self.formatted = {"web": [], "python": []}
+        self.version_checked = []
+        languages = {
+            "web": check_style.Language([".js"], {"format": self.recording_check("web")}),
+            "python": check_style.Language([".py"], {"format": self.recording_check("python")}),
+        }
+        # list_files stands in for git ls-files minus exclude.txt.
+        tracked = {"web": ["site/a.js", "site/b.js"], "python": ["tools/c.py"]}
+
+        def list_files(suffixes, exclude_patterns):
+            language = "web" if suffixes == [".js"] else "python"
+            return tracked[language]
+
+        def version_error_for(language, pins):
+            self.version_checked.append(language)
+            return ""
+
+        for patcher in (
+            patch.object(check_style, "LANGUAGES", languages),
+            patch.dict(check_style.ENFORCED, {"web": {"format"}, "python": {"format"}}, clear=True),
+            patch.object(check_style, "list_files", list_files),
+            patch.object(check_style, "version_error_for", version_error_for),
+            patch.object(check_style, "load_exclusions", lambda: ([], [])),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def recording_check(self, language):
+        def run(paths, fix):
+            self.formatted[language].extend(paths)
+            return check_style.ToolRun(0, "")
+
+        return check_style.Check(run=run, parse=lambda output: [], found_exit_code=1, can_fix=True)
+
+    def run_main(self, argv):
+        with redirect_stdout(io.StringIO()) as output:
+            exit_code = check_style.main(argv)
+        return exit_code, output.getvalue()
+
+    def test_only_the_given_files_reach_the_formatter(self):
+        exit_code, _ = self.run_main(["--fix", "--files", "site/b.js", "tools/c.py"])
+        self.assertEqual(exit_code, check_style.EXIT_CLEAN)
+        self.assertEqual(self.formatted, {"web": ["site/b.js"], "python": ["tools/c.py"]})
+
+    def test_windows_separators_are_normalized(self):
+        self.run_main(["--fix", "--files", r"site\a.js"])
+        self.assertEqual(self.formatted["web"], ["site/a.js"])
+
+    def test_untracked_excluded_or_unknown_suffix_files_are_dropped(self):
+        # Not in list_files: an excluded .js file and a file no language covers.
+        self.run_main(["--fix", "--files", "site/excluded.js", "docs/readme.md"])
+        self.assertEqual(self.formatted, {"web": [], "python": []})
+
+    def test_language_without_given_files_is_neither_version_checked_nor_run(self):
+        _, output = self.run_main(["--fix", "--files", "site/a.js"])
+        self.assertEqual(self.version_checked, ["web"])
+        self.assertEqual(self.formatted["python"], [])
+        self.assertNotIn("python", output)
+
+    def test_files_without_fix_is_an_error(self):
+        exit_code, output = self.run_main(["--files", "site/a.js"])
+        self.assertEqual(exit_code, check_style.EXIT_TOOL_ERROR)
+        self.assertIn("--files only works with --fix", output)
+
+    def test_fix_without_files_still_formats_everything(self):
+        self.run_main(["--fix"])
+        self.assertEqual(
+            self.formatted, {"web": ["site/a.js", "site/b.js"], "python": ["tools/c.py"]}
         )
 
 

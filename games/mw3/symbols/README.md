@@ -11,8 +11,8 @@ it is, what it is called, how certain that is, where the proof is, and what it d
 covers one binary, profile `mw3-us-1-2-retail` (image SHA-256
 `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf`, see
 [supported-binaries.json](../config/supported-binaries.json)); another version
-would get its own table. It starts with the one reviewed function and is filled in
-as functions are studied (about 6,500 to 7,000 in all).
+would get its own table. Rows are added as functions are studied (about 6,500 to
+7,000 in all).
 
 The file is UTF-8 text with LF line endings, one tab between columns and no
 quoting, so spreadsheets, `csv` and `awk` read it as is. The first line is the
@@ -34,12 +34,14 @@ checks every rule above.
 ## Evidence records
 
 Longer evidence goes in a record here or a dossier under [`../docs/`](../docs/).
-Record entries with binary SHA-256, RVA, original label (`sub_XXXXXXXX` for
-unknown functions), evidence, confidence and any supported alias. Bounded
-camera/controller dataflow is recorded in the
-[camera history evidence](../../../docs/fidelityfx-camera-history.md). Original
-function names remain `sub_XXXXXXXX`; these records do not establish whole-game
-fidelity or original/native equivalence. Do not copy executable bytes here.
+Per-function write-ups, one section per function grouped by topic, are in
+[`../docs/functions/`](../docs/functions/README.md). Record entries with binary
+SHA-256, RVA, original label (`sub_XXXXXXXX` for unknown functions), evidence,
+confidence and any supported alias. Bounded camera/controller dataflow is
+recorded in the [camera history evidence](../../../docs/fidelityfx-camera-history.md).
+A function keeps its `sub_XXXXXXXX` name until it is confirmed; these records do
+not establish whole-game fidelity or original/native equivalence. Do not copy
+executable bytes here.
 
 [`sub_00409ED0`](sub_00409ed0.json) has a reviewed static
 [contract](../docs/first-function.md), exact image/slice digests and an extraction

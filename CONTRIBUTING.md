@@ -40,6 +40,14 @@ Keep user inputs under ignored `local/` (or outside the checkout), and analysis
 output under ignored `reports/`. Ignore rules are a convenience, not proof that
 a commit is safe: inspect `git diff --cached` before committing.
 
+Turn on the repository's git hooks once per clone with
+`git config core.hooksPath .githooks`. `pre-commit` blocks staged files that
+`.gitignore` covers, formats the staged files with every formatter switched on in
+`tools/style/check_style.py`, and runs the agent-file check; a missing formatter
+never blocks a commit, since CI's `style` check still catches what is left.
+`pre-push` blocks pushes to `main` and `develop` on every remote, a contributor's
+own fork included.
+
 Use C++20 for the runtime and Python 3.11+ standard library for lightweight
 offline analysis. The asset-free bootstrap needs no external runtime libraries;
 the separate Mod Tools preview has its own pinned dependencies and setup guide.
