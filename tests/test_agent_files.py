@@ -1,11 +1,13 @@
-"""Checks for the agent-file tools in tools/agents: the instruction file check and the skill copy."""
+"""Checks for the tools in tools/agents: the instruction file check, the skill copy and the git hooks."""
 
 import importlib.util
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +28,7 @@ def load_tool(name):
 
 checker = load_tool("check_agent_files")
 syncer = load_tool("sync_skills")
+hooks = load_tool("git_hooks")
 
 GOOD_AGENTS = (
     "# Rules\n\nFollow `docs/guide.md` and `CODE_STYLE.md`.\n\n"
@@ -575,6 +578,225 @@ class RepositoryTests(unittest.TestCase):
             self.fail(f"can't list tracked files: {reason}")
         errors = messages(checker.check(ROOT, tracked_paths))
         self.assertEqual(errors, [])
+
+
+class GitHookTests(unittest.TestCase):
+    """The pre-commit and pre-push hooks, on throwaway git repositories.
+
+    A stand-in formatter rewrites each file it is given to FORMATTED, and a stand-in
+    agent check passes unless a test says otherwise, so no real formatter is needed.
+    """
+
+    FORMATTED = "formatted\n"
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+        # Drop git variables from an outer hook or worktree so git only sees this repository.
+        self.environment = {
+            key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+        }
+        self.git("init", "-q")
+        self.git("config", "user.name", "Hook test")
+        self.git("config", "user.email", "hook-test@example.invalid")
+        # Same bytes on the Windows runner as on Linux.
+        self.git("config", "core.autocrlf", "false")
+        self.write(".gitignore", "*.zbd\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "start")
+        self.formatter_calls = []
+        self.formatter_exit_code = 0
+        self.formatter_output = "web format: formatted 1 files\n"
+        self.agent_check_exit_code = 0
+
+    def git(self, *arguments, environment=None):
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=self.root,
+            env=environment or self.environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as file:
+            file.write(text)
+
+    def formatter(self, root, paths, environment):
+        self.formatter_calls.append(list(paths))
+        if self.formatter_exit_code == 0:
+            for path in paths:
+                with open(root / path, "w", encoding="utf-8", newline="\n") as file:
+                    file.write(self.FORMATTED)
+        return subprocess.CompletedProcess([], self.formatter_exit_code, self.formatter_output, "")
+
+    def agent_check(self, root, environment):
+        return subprocess.CompletedProcess([], self.agent_check_exit_code, "error: a problem\n", "")
+
+    def pre_commit(self, environment=None):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exit_code = hooks.pre_commit(
+                self.root, environment or self.environment, self.formatter, self.agent_check
+            )
+        return exit_code, output.getvalue()
+
+    def staged_text(self, name):
+        return self.git("show", f":{name}")
+
+    def test_fully_staged_file_is_formatted_and_staged(self):
+        self.write("site/a.js", "messy\n")
+        self.git("add", "site/a.js")
+        exit_code, _ = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(self.formatter_calls, [["site/a.js"]])
+        self.assertEqual(self.staged_text("site/a.js"), self.FORMATTED)
+        self.assertEqual(self.git("diff", "--name-only"), "")
+
+    def test_partly_staged_file_is_left_alone_with_a_note(self):
+        self.write("a.js", "one\n")
+        self.git("add", "a.js")
+        self.git("commit", "-q", "-m", "a")
+        self.write("a.js", "two\n")
+        self.git("add", "a.js")
+        self.write("a.js", "three\n")
+        exit_code, output = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(self.formatter_calls, [])
+        self.assertIn("only part of its changes are staged: a.js", output)
+        self.assertEqual(self.staged_text("a.js"), "two\n")
+        self.assertEqual(self.git("diff", "--name-only").strip(), "a.js")
+
+    def test_ignored_file_blocks_the_commit(self):
+        self.write("test.zbd", "game data\n")
+        self.git("add", "-f", "test.zbd")
+        exit_code, output = self.pre_commit()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("test.zbd (rule '*.zbd'", output)
+        self.assertEqual(self.formatter_calls, [])
+
+    def test_file_re_included_by_a_negated_rule_is_not_blocked(self):
+        # Like recomp/generated/README.md: ignored by one rule, re-included by a "!" rule.
+        self.write(".gitignore", "*.zbd\n/generated/*\n!/generated/README.md\n")
+        self.write("generated/README.md", "notes\n")
+        self.git("add", ".gitignore", "generated/README.md")
+        exit_code, output = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("blocked", output)
+
+    def test_failing_formatter_lets_the_commit_through_with_install_advice(self):
+        self.formatter_exit_code = 2
+        self.formatter_output = "web format: error: prettier is not installed\n"
+        self.write("a.js", "messy\n")
+        self.git("add", "a.js")
+        exit_code, output = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("the commit goes ahead", output)
+        self.assertIn("npm ci --prefix tools/style", output)
+        self.assertEqual(self.staged_text("a.js"), "messy\n")
+
+    def test_failing_agent_check_blocks_the_commit(self):
+        self.agent_check_exit_code = 1
+        self.write("AGENTS.md", "# Rules\n")
+        self.git("add", "AGENTS.md")
+        exit_code, output = self.pre_commit()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("error: a problem", output)
+
+    def test_deleted_file_is_not_passed_to_the_formatter(self):
+        self.write("b.js", "old\n")
+        self.git("add", "b.js")
+        self.git("commit", "-q", "-m", "b")
+        self.git("rm", "-q", "b.js")
+        self.write("c.js", "new\n")
+        self.git("add", "c.js")
+        self.pre_commit()
+        self.assertEqual(self.formatter_calls, [["c.js"]])
+
+    def test_large_commit_is_formatted_in_batches(self):
+        names = [f"files/f{number:03}.js" for number in range(150)]
+        for name in names:
+            self.write(name, "messy\n")
+        self.git("add", "files")
+        exit_code, _ = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([len(call) for call in self.formatter_calls], [100, 50])
+        self.assertEqual(self.git("diff", "--name-only"), "")
+        self.assertEqual(self.staged_text(names[-1]), self.FORMATTED)
+
+    def index_environment(self, index_name):
+        """Point GIT_INDEX_FILE at a copy of the index, as git does for each kind of commit."""
+        git_folder = Path(self.git("rev-parse", "--absolute-git-dir").strip())
+        index_copy = git_folder / index_name
+        if index_name != "index":
+            index_copy.write_bytes((git_folder / "index").read_bytes())
+            self.addCleanup(index_copy.unlink, missing_ok=True)
+        return {**self.environment, "GIT_INDEX_FILE": str(index_copy)}
+
+    def test_commit_of_named_paths_is_not_formatted(self):
+        self.write("a.js", "messy\n")
+        self.git("add", "a.js")
+        # A copy, so the staged file is still seen; an empty index would pass for the wrong reason.
+        exit_code, output = self.pre_commit(self.index_environment("next-index-1.lock"))
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(self.formatter_calls, [])
+        self.assertIn("temporary index", output)
+
+    def test_plain_commit_and_commit_all_indexes_are_formatted(self):
+        self.write("a.js", "messy\n")
+        self.git("add", "a.js")
+        for index_name in ("index", "index.lock"):
+            with self.subTest(index=index_name):
+                self.formatter_calls = []
+                self.pre_commit(self.index_environment(index_name))
+                self.assertEqual(self.formatter_calls, [["a.js"]])
+
+    def test_relative_index_path_counts_as_the_real_index(self):
+        self.write("a.js", "messy\n")
+        self.git("add", "a.js")
+        self.pre_commit({**self.environment, "GIT_INDEX_FILE": ".git/index"})
+        self.assertEqual(self.formatter_calls, [["a.js"]])
+
+    def test_nothing_staged_passes_without_running_anything(self):
+        self.agent_check_exit_code = 1
+        exit_code, _ = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(self.formatter_calls, [])
+
+    def test_push_to_main_or_develop_is_blocked(self):
+        for branch in ("main", "develop"):
+            with self.subTest(branch=branch):
+                line = f"refs/heads/topic abc123 refs/heads/{branch} def456\n"
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(hooks.pre_push(line), 1)
+
+    def test_push_to_a_topic_branch_passes(self):
+        line = "refs/heads/topic abc123 refs/heads/carson-nr/ci/x def456\n"
+        self.assertEqual(hooks.pre_push(line), 0)
+
+    def test_personal_global_ignore_file_does_not_block(self):
+        self.write("personal-ignore", "*.txt\n")
+        self.git("config", "core.excludesFile", str(self.root / "personal-ignore"))
+        self.write("notes.txt", "kept on purpose\n")
+        # The personal rule makes plain `git add` refuse it, as it would for the contributor.
+        self.git("add", "-f", "notes.txt")
+        exit_code, _ = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+
+    def test_batch_size_matches_the_style_checker(self):
+        # Both stay under the same Windows command-line limit; keep them in step.
+        spec = importlib.util.spec_from_file_location(
+            "check_style_for_hooks", ROOT / "tools/style/check_style.py"
+        )
+        check_style = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = check_style
+        spec.loader.exec_module(check_style)
+        self.assertEqual(hooks.FILES_PER_CALL, check_style.FILES_PER_CALL)
 
 
 if __name__ == "__main__":

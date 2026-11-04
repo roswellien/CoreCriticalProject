@@ -49,6 +49,7 @@ python tools/style/check_style.py --preflight --language python  # pre-cleanup s
 python tools/style/check_style.py --verbose                      # also list each file or finding
 python tools/style/check_style.py --list                         # which files each language checks
 python tools/style/check_style.py --fix                          # format languages that are switched on
+python tools/style/check_style.py --fix --files <path> ...       # format only these files (the git hook uses this)
 ```
 
 Exit codes: 0 when nothing switched on has findings, 1 when a switched-on check has
