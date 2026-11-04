@@ -3,8 +3,20 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <random>
 
-int main() {
+namespace {
+// The region map search contains() used before the slot table, kept as the reference.
+bool reference_contains(const std::map<unsigned, unsigned> &regions, unsigned address,
+                        unsigned bytes) {
+    auto region = regions.upper_bound(address);
+    if (region == regions.begin())
+        return false;
+    --region;
+    return region->first != 0 && address < region->second &&
+           std::uint64_t(address) + bytes <= region->second;
+}
+void run_heap_partition_checks() {
     using mw34::heap_partitions::GuestHeap;
     GuestHeap heap;
     std::map<unsigned, std::vector<unsigned char>> memory;
@@ -41,8 +53,9 @@ int main() {
     check(!heap.contains(GuestHeap::lo, 1));
     GuestHeap boundaries;
     constexpr unsigned first = GuestHeap::lo, second = first + 0x20000;
-    boundaries.regions = {
-        {first, first + 0x10000}, {second, second + 0x10000}, {second + 0x10000, second + 0x20000}};
+    boundaries.add_region(first, first + 0x10000);
+    boundaries.add_region(second, second + 0x10000);
+    boundaries.add_region(second + 0x10000, second + 0x20000);
     boundaries.region_owners = {{first, crt}, {second, codec}, {second + 0x10000, services}};
     struct RangeCase {
         unsigned address, bytes;
@@ -76,16 +89,126 @@ int main() {
         check(boundaries.contains(range.address, range.bytes) == range.expected);
     check(boundaries.owner_of(first) == crt && boundaries.owner_of(second) == codec);
     // A lookup must reflect region edits immediately, without retaining an iterator.
-    boundaries.regions.erase(second);
+    boundaries.erase_region(second);
     check(!boundaries.contains(second, 1));
-    boundaries.regions.emplace(second, second + 16);
-    check(boundaries.contains(second, 16) && !boundaries.contains(second, 17));
-    boundaries.regions.at(second) = second + 8;
-    check(boundaries.contains(second, 8) && !boundaries.contains(second, 9));
-    boundaries.regions.clear();
-    check(!boundaries.contains(first, 1));
-    boundaries.regions.emplace(0, 16);
-    check(!boundaries.contains(1, 1)); // Zero remains the missing-region sentinel.
+    boundaries.add_region(second, second + 0x10000);
+    check(boundaries.contains(second, 0x10000) && !boundaries.contains(second, 0x10001));
+    // A region spanning two slots answers for both; the old neighbor's end is gone.
+    boundaries.erase_region(second + 0x10000);
+    boundaries.erase_region(second);
+    boundaries.add_region(second, second + 0x20000);
+    check(boundaries.contains(second, 0x20000) && boundaries.contains(second + 0x18000, 0x8000));
+    check(!boundaries.contains(second, 0x20001) && !boundaries.contains(second + 0x20000, 0));
+    boundaries.clear_regions();
+    check(!boundaries.contains(first, 1) && !boundaries.contains(second, 1));
+
+    // add_region accepts only regions allocate can make: 64 KiB-aligned, inside
+    // the window, and sharing no byte with another region.
+    GuestHeap rejecting;
+    constexpr unsigned taken = first + 0x100000, taken_end = first + 0x200000;
+    rejecting.add_region(taken, taken_end);
+    struct RejectedRegion {
+        unsigned start, end;
+    };
+    const RejectedRegion rejected_regions[] = {
+        {0, 0x10000},                                       // start 0, the old map sentinel
+        {first + 0x10, first + 0x10000},                    // unaligned start
+        {first, first + 0x10010},                           // unaligned end
+        {first - 0x10000, first},                           // below the window
+        {GuestHeap::hi - 0x10000, GuestHeap::hi + 0x10000}, // past the window
+        {first + 0x20000, first + 0x20000},                 // empty
+        {first + 0x30000, first + 0x20000},                 // reversed
+        {taken, taken + 0x10000},                           // same start
+        {taken - 0x10000, taken + 0x10000},                 // overlaps the start
+        {taken_end - 0x10000, taken_end + 0x10000},         // overlaps the end
+        {taken + 0x10000, taken + 0x20000},                 // inside
+        {first, taken_end + 0x100000},                      // covers it
+    };
+    for (const auto &region : rejected_regions) {
+        bool threw = false;
+        try {
+            rejecting.add_region(region.start, region.end);
+        } catch (const std::runtime_error &) {
+            threw = true;
+        }
+        check(threw);
+    }
+    check(rejecting.regions().size() == 1);
+    // Neighbors that touch without overlapping are accepted.
+    rejecting.add_region(taken - 0x10000, taken);
+    rejecting.add_region(taken_end, taken_end + 0x10000);
+    check(rejecting.regions().size() == 3);
+
+    // The slot table must answer exactly as the map search did, for any set of
+    // regions allocate can make. The seed is fixed so a failure repeats.
+    std::mt19937 random(244);
+    auto random_between = [&](unsigned low, unsigned high) {
+        return std::uniform_int_distribution<unsigned>(low, high)(random);
+    };
+    constexpr unsigned slot = GuestHeap::slot_bytes;
+    for (unsigned set = 0; set < 500; ++set) {
+        GuestHeap random_heap;
+        std::vector<unsigned> region_edges;
+        const unsigned region_count = random_between(1, 200);
+        unsigned next_start = GuestHeap::lo + random_between(0, 16) * slot;
+        while (random_heap.regions().size() < region_count) {
+            const unsigned size = random_between(1, 64) * slot; // 64 KiB to 4 MiB
+            if (std::uint64_t(next_start) + size > GuestHeap::hi)
+                break;
+            random_heap.add_region(next_start, next_start + size);
+            region_edges.push_back(next_start);
+            region_edges.push_back(next_start + size);
+            const unsigned gap = random_between(0, 16) * slot; // 0 to 1 MiB
+            next_start += size + gap;
+        }
+        const unsigned last_edge = unsigned(region_edges.size()) - 1;
+        for (unsigned query = 0; query < 2000; ++query) {
+            const unsigned edge = region_edges[random_between(0, last_edge)];
+            const unsigned slot_start =
+                GuestHeap::lo + random_between(0, GuestHeap::slot_count - 1) * slot;
+            unsigned address = 0;
+            switch (random_between(0, 5)) {
+            case 0:
+                address = edge;
+                break;
+            case 1:
+                address = edge - 1;
+                break;
+            case 2:
+                address = slot_start;
+                break;
+            case 3:
+                address = slot_start + slot - 1;
+                break;
+            case 4:
+                address = random_between(GuestHeap::lo, GuestHeap::hi - 1);
+                break;
+            default:
+                address = random_between(0, std::numeric_limits<unsigned>::max());
+                break;
+            }
+            unsigned bytes = 0;
+            switch (random_between(0, 4)) {
+            case 0:
+                bytes = 0;
+                break;
+            case 1:
+                bytes = 1;
+                break;
+            case 2:
+                bytes = random_between(0, 0x400000);
+                break;
+            case 3:
+                bytes = std::numeric_limits<unsigned>::max();
+                break;
+            default:
+                bytes = edge - address; // reaches a region edge exactly, or wraps
+                break;
+            }
+            check(random_heap.contains(address, bytes) ==
+                  reference_contains(random_heap.regions(), address, bytes));
+        }
+    }
 
     const auto video = allocate(0x1d1e8, false, codec);
     std::fill(memory.at(video).begin(), memory.at(video).end(), static_cast<unsigned char>(0xab));
@@ -147,4 +270,17 @@ int main() {
               1, false, crt, [&](unsigned, unsigned) { touched = true; }, clear) == 0 &&
           !touched);
     std::cout << "heap partitions checks=" << checks << " failures=0\n";
+}
+} // namespace
+
+// Report a failed check as an ordinary test failure. An uncaught exception
+// aborts, and a Debug build then waits on an error dialog instead of exiting.
+int main() {
+    try {
+        run_heap_partition_checks();
+        return 0;
+    } catch (const std::exception &error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

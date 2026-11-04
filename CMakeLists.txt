@@ -45,6 +45,11 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_joystick_selection_tests)
     add_test(NAME joystick_selection COMMAND mw34_joystick_selection_tests)
 
+    add_executable(mw34_heap_partition_tests tools/remaster-launcher/test_heap_partitions.cpp)
+    target_compile_definitions(mw34_heap_partition_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_heap_partition_tests)
+    add_test(NAME heap_partitions COMMAND mw34_heap_partition_tests)
+
     add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
     target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
