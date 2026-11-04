@@ -71,23 +71,30 @@ path given and follows it.
    spec.
    Skill: `.agents/skills/core-critical-grill/SKILL.md`.
 2. **Spec:** write the spec, run the spec review, then walk the requester
-   through what it leaves. Stop until the requester approves the spec.
-   Skill: `.agents/skills/core-critical-spec-review/SKILL.md`.
+   through what it leaves. The review runs in the session doing the work, so
+   the requester can follow each pass. Stop until the requester approves the
+   spec. Skill: `.agents/skills/core-critical-spec-review/SKILL.md`.
 3. **Plan:** write the plan, run the plan review, then the code review on the
-   plan, then one walkthrough of what both leave. Stop until the requester
-   approves implementing. Skills: `.agents/skills/core-critical-plan-review/SKILL.md`
-   and `.agents/skills/core-critical-code-review/SKILL.md`.
+   plan, then one walkthrough of what both leave. Both reviews run in the
+   session doing the work, so the requester can follow each pass. Stop until
+   the requester approves implementing. Skills:
+   `.agents/skills/core-critical-plan-review/SKILL.md` and
+   `.agents/skills/core-critical-code-review/SKILL.md`.
 4. **Implement:** carry out the plan through its own checks, then hand over to a
    fresh session for stage 5 without waiting for approval.
 5. **Review:** run the code review on the branch in a fresh session that didn't
-   write the change; it ends by rerunning the change's checks. Then walk the
-   requester through what is left. The PR stays a draft until the requester
-   says it's ready. Skill: `.agents/skills/core-critical-code-review/SKILL.md`.
+   write the change (what counts as fresh: "On a branch: a fresh session only"
+   in the code review skill); it ends by rerunning the change's checks. Then
+   walk the requester through what is left. The PR stays a draft until the
+   requester says it's ready. Skill:
+   `.agents/skills/core-critical-code-review/SKILL.md`.
 
 `.agents/skills/core-critical-workflow/SKILL.md` ties the stages together and
 holds the spec and plan sections. Each review loops: fix only major findings,
 re-read and review again, and stop on a clean pass, after five passes, or when
-the same major findings come back. The full loop is in
+the same major findings come back. When the same kind of problem keeps
+returning by new routes, the review pauses to ask the requester how much of
+that risk is acceptable. The full loop is in
 `.agents/skills/core-critical-workflow/references/review-loop.md`.
 
 Each stage's reviews end with one walkthrough of what they leave, run as
