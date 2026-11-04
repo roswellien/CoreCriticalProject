@@ -28,12 +28,13 @@ below: `+0` the pixel count, `+9` a flag byte, `+0x0E` the palette entry count,
 
 **Callers:** one function, `00517F80`, from `00517FB7` (return `00517FBC`).
 `00517F80` builds a texture from the bank file's current position: it allocates
-a zeroed 56-byte descriptor, reads the texture's 16-byte header into it through
-`00517D80` (returning 0 if that fails), allocates the pixel buffer at `+0x10`,
-then calls this function with a wanted pixel size of 0, sets flag `0x20` at
-`+9` and returns the descriptor. It ignores this function's result, so the
-texture is returned even after a short read. Its own one caller is
-[`00518DB0`](#sub_00518db0).
+a zeroed 56-byte descriptor, reads the texture's 16-byte header and copies its
+fields into it through `00517D80` (returning 0 only if the file or descriptor
+is null; `00517D80` doesn't check its own `fread`, so a short header read goes
+unnoticed), allocates the pixel buffer at `+0x10`, then calls this function
+with a wanted pixel size of 0, sets flag `0x20` at `+9` and returns the
+descriptor. It ignores this function's result, so the texture is returned
+even after a short read. Its own one caller is [`00518DB0`](#sub_00518db0).
 
 **What it does,** in order. It takes the open file in ECX, the descriptor in
 EDX (kept in ESI throughout) and one stack argument, the wanted pixel size in
@@ -57,7 +58,9 @@ bytes, where 0 means the texture's own.
    `+0x18` and reads the palette into it with `fread`, called at `00517EA1`,
    return `00517EA7`. It then sets flag `0x80` at `+9`; a short read returns
    -1.
-6. A 1-byte texture, or one with flag `0x10`, returns 0 here.
+6. A 1-byte texture, or one with flag `0x10`, returns 0 here. (There is also
+   an exit for a size other than 1 or 2, which can't happen: `00517C20` only
+   returns 1 or 2.)
 7. For a 2-byte texture, it calls `00579260`, which copies the three globals at
    `00802720`, `00802724` and `00802728`. If the second is 5, it rewrites each
    16-bit color from 5-6-5 to 5-5-5 (red and green move down a bit, losing
@@ -112,18 +115,23 @@ controls. None of these bears on the name.
 list of banks (a circular linked list at its object's `+4`, each node holding
 a bank at `+8`) and calls this function on each with the same name until one
 returns a texture, or returns 0. `00518D60` is itself called twice from
-`00518EE0`: once, and if that finds nothing, again after switching the global
-at `0063851C` between 0 and 1. `00518EE0` has 4 callers, among them
+`00518EE0`, which picks one of two bank lists from the two-entry table at
+`005ECC28` by the global at `0063851C`. If that list finds nothing, it switches
+the global between 0 and 1 and tries the other list; the switch stays in
+effect afterwards. `00518EE0` has 4 callers, among them
 `005176B0` and `00519E50`.
 
 **What it does,** in order. It is called on a bank object (ECX) with one stack
 argument, the texture's name.
 
-1. Calls `005187C0` to make sure the bank is open. That succeeds at once if the
-   bank's file at `+0x80` is already open. It fails if the global at
-   `005ECC20` is 0, or if the file isn't open and the flag at `+0xAA` is set.
-   Otherwise it opens the archive file and, if the record table isn't loaded
-   yet, reads its 24-byte header into
+1. Calls `005187C0` to make sure the bank is open. That first fails if the
+   global at `005ECC20` is 0. If the flag at `+0xA8` is set, it then calls
+   `00518A30`, which clears that flag, writes candidate file names for the
+   bank with `sprintf` (slot RVA `0x1BB658`), checks each through
+   `005187A0`, and sets the flag at `+0xAA` if none is found. It then
+   succeeds if the bank's file at `+0x80` is already open, and fails if the
+   flag at `+0xAA` is set. Otherwise it opens the archive file and, if the
+   record table isn't loaded yet, reads its 24-byte header into
    `+0x84` (the record count is at `+0x90` and the palette count at `+0x8C`;
    the word at `+0x88` must be 1), its table of 40-byte records into a buffer
    at `+0x9C`, and the bank's palettes. It adds those palettes to a shared
@@ -161,8 +169,8 @@ diagnostics read the record's address from just below that return and report
 the texture's name and offset. `tools/m4-crt-heap-carry/host/large_texture_seek.hpp`
 matches the `fseek` return `00518E08` to widen the seek for replacement banks
 larger than 2 GiB, whose record offsets don't fit the signed offset `fseek`
-takes; its comment names this function `sub_00518db0`. Copies of both headers
-are in `tools/remaster-launcher/native-overrides/`, and
+takes; its comment names this function `sub_00518db0`. Near-copies of both
+headers are in `tools/remaster-launcher/native-overrides/`, and
 `docs/archive/large-texture-archive-repair-2026-10-22.md` records the seek
 problem. Context only, not proof.
 
@@ -171,7 +179,7 @@ above, and its one caller uses it as a by-name lookup across a list of banks.
 "TextureBank" is the object it runs on; "LoadByName" says it finds a texture
 by name and loads it. The host's own comment calls it "TextureBank::load".
 
-**Still unknown:** what the global at `005ECC20` and the flag at `+0xAA` mean,
+**Still unknown:** what the global at `005ECC20` and the flag at `+0xA8` mean,
 which file `005187C0` opens (it gets the file from `005763B0`, passing the
-address `005EB908`), and what `00518EE0` switches by changing `0063851C`. None of
+address `005EB908`), and what the two bank lists at `005ECC28` hold. None of
 these bears on the name.
