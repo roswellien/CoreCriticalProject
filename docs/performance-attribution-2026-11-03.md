@@ -298,6 +298,24 @@ those costs separately before changing fixture invalidation or the material
 cache. The capture path already reuses state snapshots and merges adjacent
 triangle commands. Receipts are in `local/draw-profile-wall-summary.json`.
 
+## Effect observation attribution
+
+Two further 2,200-frame runs split effect observation on the same pinned
+Training profile. Input hashes and the 1,400 measured camera-history tuples
+matched. The disjoint wall scopes include observer overhead.
+
+| Effect scope, wall ms per sampled frame | Offset 0 | Offset 8 |
+| --- | ---: | ---: |
+| Fixture maintenance | 0.065 | 0.066 |
+| Emitter and fixture material classification | 0.101 | 0.093 |
+| Remaining effect observation | 1.467 | 1.464 |
+
+Fixture maintenance and classification account for about 10% of the measured
+effect scope. The remaining scope includes floating-point state handling,
+camera and view handling, and reconstruction and registration of admitted
+lights. Split those paths before choosing an optimization. The measurements
+are in `local/effect-profile-wall-summary.json`.
+
 ## Fidelity qualification and remaining gates
 
 The separate inline validation run `cpu183-t2-inline-fidelity-r6-resume2`
