@@ -5,8 +5,8 @@ up the runtime, runs the program's initializers and hands over to MFC's
 `WinMain` at `005AE390`, which passes its arguments on to `AfxWinMain` in
 `MFC42.DLL` (ordinal 1576, import slot RVA `0x1BB438`). This is library code
 linked into every Visual C++ 6 GUI program that uses `MSVCRT.dll`, not the
-game's own code, though `005AC5C0`'s one-instruction body is shared with some
-of the game's own empty functions.
+game's own code, though `005AC5C0`'s one-instruction body is most likely
+shared with some of the game's own empty functions.
 
 Profile `mw3-us-1-2-retail`, image SHA-256
 `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf`. Studied
@@ -162,14 +162,18 @@ at this point in startup, right after setting up the math error handler.
 
 **Callers:** Ghidra lists 57 functions that refer to it. 53 reach it
 directly: 48 call it, for example `005AC3A0` (from `005AC415`), `0040E4B0` and
-`00414F40`, and 5 end by jumping to it: `004D4C70` and `004E6240`, which adjust
-the object pointer first, and three exception cleanup blocks the compiler made
-(at `005B5220`, `005B5240` and `005B6C50`). The other 4 use its address:
+`00414F40`, and 5 end by jumping to it: `004D4C70`, which adjusts the object
+pointer first, `004E6240`, which stores a table pointer in the object and then
+adjusts it, and three exception cleanup blocks the compiler made (at
+`005B5220`, `005B5240` and `005B6C50`). The other 4 use its address:
 `004F7630` and `004F7650` set the function pointers at `005EA510` and
 `005EA514` and put it there when given none (both pointers also start out
 holding it), `004F5910` calls through those two pointers, and `00579F50` takes
-its address too. Data tables from `005BCC94` onward also point at it (likely
-empty slots in virtual-function tables).
+its address too. Ghidra also finds 8 call sites in code it hasn't marked as a
+function: 7 calls (at `0044D7E7`, `0044DA75`, `004542DE`, `00454321`,
+`0045726B`, `004737D4` and `004D4765`) and one jump at `004D8D23`, which
+adjusts the object pointer first. Data tables from `005BCC94` onward also point
+at it (likely empty slots in virtual-function tables).
 
 **What it does:** returns at once. Its only instruction is `RET`. There are no
 branches, reads or writes.
@@ -181,9 +185,9 @@ leaf and runs it through its leaf adapter, and its `direct()` checks the call
 from startup at `005AC415`. Context only, not proof.
 
 **Why this name:** the merged-body rule in the [README](README.md): its whole
-behaviour is one instruction, so it is fully described. Startup calls it where `crtexe.c` calls `_setargv`, whose default
-version is empty, so Microsoft's empty `_setargv` is one of the functions merged
-into it. The other callers are unrelated, so the linker most likely folded
+behaviour is one instruction, so it is fully described. Startup calls it where
+`crtexe.c` calls `_setargv`, whose default version is empty, so Microsoft's
+empty `_setargv` is one of the functions merged into it. The other callers are unrelated, so the linker most likely folded
 several identical empty functions into this one body. No single official name
 fits them all, so it gets an `Area_Action` name that says what it does. The
 section gives a few examples instead of all 57 functions, because the one

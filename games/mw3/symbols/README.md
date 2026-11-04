@@ -35,12 +35,13 @@ checks every rule above.
 
 Longer evidence goes in a record here or a dossier under [`../docs/`](../docs/).
 Per-function write-ups, one section per function grouped by topic, are in
-[`../docs/functions/`](../docs/functions/README.md). Record entries with binary SHA-256, RVA, original label (`sub_XXXXXXXX` for
-unknown functions), evidence, confidence and any supported alias. Bounded
-camera/controller dataflow is recorded in the
-[camera history evidence](../../../docs/fidelityfx-camera-history.md). A function
-keeps its `sub_XXXXXXXX` name until it is confirmed; these records do not
-establish whole-game fidelity or original/native equivalence. Do not copy executable bytes here.
+[`../docs/functions/`](../docs/functions/README.md). Record entries with binary
+SHA-256, RVA, original label (`sub_XXXXXXXX` for unknown functions), evidence,
+confidence and any supported alias. Bounded camera/controller dataflow is
+recorded in the [camera history evidence](../../../docs/fidelityfx-camera-history.md).
+A function keeps its `sub_XXXXXXXX` name until it is confirmed; these records do
+not establish whole-game fidelity or original/native equivalence. Do not copy
+executable bytes here.
 
 [`sub_00409ED0`](sub_00409ed0.json) has a reviewed static
 [contract](../docs/first-function.md), exact image/slice digests and an extraction
