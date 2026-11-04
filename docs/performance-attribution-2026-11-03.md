@@ -2,9 +2,8 @@
 
 The inline adaptive-ground producer improved repeated Training throughput by
 4.24%; the worker experiment still has no demonstrated speedup. Follow-up
-attribution identifies substantial draw preparation and existing fence waits.
-These findings do not establish GPU execution duration, complete fidelity, or
-readiness to enable the feature.
+attribution measures draw preparation, fence waits and GPU command intervals
+for the pinned Training workload. Full fidelity and shipping gates remain open.
 
 This continues the ordered tests in [PR 186](https://github.com/roswellien/MW3Recomp-Private/pull/186),
 whose reference document is pinned to commit
@@ -183,15 +182,65 @@ temporal input work adds further submissions. These ownership rules require
 the existing waits before resetting or overwriting reusable resources. Do not
 remove the waits without replacing that protection.
 
-The next measurement should label GPU durations and submission dependencies
-for those stages. The existing `GpuWorkProfile` helper under
-`tools/remaster-launcher/native-overrides/` is not integrated into this host;
-its presence is not a measured GPU result. Use completed existing fences to
-collect timestamp results without adding waits, and validate any diagnostic
-integration separately. Only then choose between recording compatible passes
-together, separate resources per in-flight submission, or reducing duplicated
-draw preparation. Each needs an ordered-rendering and temporal-history
-comparison; this report authorizes no default or synchronization change.
+## GPU stage timings
+
+A private host adapts the existing `GpuWorkProfile` helper under
+`tools/remaster-launcher/native-overrides/`. It brackets 12 command-buffer
+recording paths with Vulkan timestamp pairs and uses separate query banks for
+scene and present resources. Collection follows the existing completed fences
+and checks query availability. The RX 9070 queue reports 64 valid timestamp
+bits and a 10 ns period. The command intervals measure GPU time between the
+recorded stages. [Vulkan timestamp queries](https://docs.vulkan.org/samples/latest/samples/api/timestamp_queries/README.html)
+
+The private build uses source commit `3667fc8a675fcbd1ee6d91ac57f4199910aadd47`,
+seven host objects and the unchanged translated module. Its executable SHA-256
+is `4d572e4c1ecaa3d1ded3a1d4a20c87b965add47bf6512ef12ca2c92205c51e1d`.
+Source checks verified identical wait, submission and resource-reset calls.
+The adapted fixture passed 53 checks covering query-bank reuse, unavailable
+results, FP and LastError preservation, and a separate check confirmed the
+expected 22 ns duration across timestamp wraparound.
+
+`cpu183-gpu-r5-o0` and `cpu183-gpu-r5-o8` each recorded 12,984 intervals across
+all 1,400 measured frames, with matching per-frame stage counts. The four
+frames with zero temporal submissions coincide with camera-history transitions.
+The 100% scale workload exercised the stages below. Reduced-resolution world
+reconstruction requires a separate cohort.
+
+| GPU interval sum per measured frame | Offset 0 | Offset 8 |
+| --- | --- | --- |
+| Scene rendering | 0.773 ms | 0.780 ms |
+| Temporal commands | 0.301 ms | 0.296 ms |
+| HUD scene | 0.255 ms | 0.252 ms |
+| Vulkan resident-present copy | 0.063 ms | 0.063 ms |
+| Total recorded intervals | 1.392 ms | 1.391 ms |
+
+On the exact frames sampled by the CPU observer, the GPU interval sums were
+1.398 and 1.393 ms, while `settle()` took 4.470 and 4.274 ms of host wall time.
+Draw capture and callbacks took another 5.68 and 5.72 ms of disjoint host wall
+time. The GPU spans can overlap and include stalls within the instrumented
+Vulkan commands. The DXGI copy, queue delays outside the timestamp pairs and display scheduling
+require separate measurements. The two clocks and different interval boundaries
+prevent assigning the difference to a specific driver or queue operation.
+
+The same-binary control `cpu183-gpu-r5-control` retained the wall observer and
+disabled GPU queries. All three runs completed 2,200 frames with identical
+inputs, settings apart from the observers, and measured camera-history tuples.
+Measured-window throughput stayed near 59.97 FPS. Main CPU time was 12.30 ms/frame
+in the control and 11.77/12.20 ms in the enabled runs. Display pacing and differing
+system activity limit the comparison to attribution. Receipts are
+`local/r5-gpu-stage-summary.json`, `local/r5-wall-budget-final.json`,
+`local/r5-timing-summary.json` and `local/r5-gpu-provenance.json`.
+
+The separate `cpu183-gpu-r5-fidelity` run enabled the GPU observer and confirmed
+the Khronos validation layer was active. It completed 2,200 frames with all
+15 reference artifacts byte-identical and zero validation VUID or synchronization
+hazard messages. The fixture, logs and raw query output remain local.
+
+The measured priority is host draw preparation and submission sequencing.
+An experiment combining compatible scene and temporal commands should preserve
+their barriers and resource lifetimes, then compare fence counts, main CPU time,
+frame-time tails and the same fidelity artifacts. Measure throughput on an
+uncapped cohort and preserve the existing temporal-history contract.
 
 ## Fidelity qualification and remaining gates
 
