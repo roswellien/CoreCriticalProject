@@ -91,40 +91,22 @@ Agent rules live only in this file. `CLAUDE.md` and
 
 Fresh checkout, from the root unless noted. Presets: `CMakePresets.json`.
 Detail: `docs/code-guide.md`.
-Linux matches the Clang job in `.github/workflows/build.yml` (that image has
-clang-format 18). The last command is the Linux launcher check; authored
-fixtures only.
+One command runs the checks a PR must pass on Windows or Linux: build, CTest,
+the pinned C++ format check and the style check. `--setup` installs the pinned
+tools into ignored folders once per checkout; `--area launcher` adds the WPF
+launcher and launcher dispatch checks (authored fixtures, no game install).
+On Windows it uses Visual Studio's C++ x64 tools; no developer shell needed.
+It ends with a pass, fail or not run line per check for the PR's Validation
+section. The exact commands it runs are in `tools/check.py`.
 
 ```sh
-cmake --preset default -DCMAKE_CXX_COMPILER=clang++
-cmake --build --preset default
-ctest --preset default
-cmake --build build/default --target format-check
-python -m unittest discover -s tools/remaster-launcher -p test_launcher_dispatch.py
+python tools/check.py --setup
+python tools/check.py
+python tools/check.py --setup --area launcher
+python tools/check.py --area launcher
 ```
-Windows, Visual Studio C++ x64 developer shell. These three match the MSVC job
-in `.github/workflows/build.yml`.
-
-```sh
-cmake --preset default -A x64
-cmake --build --preset default
-ctest --preset default
-```
-That job does not run `format-check`. In PowerShell 7, install the pinned
-formatter, reconfigure `build/default`, then run the target. Fetch the pinned
-SDL3 controller runtime into ignored `local/` once per checkout and SDL version;
-the WPF launcher checks (authored fixtures, no game install) and publish need it.
-
-```powershell
-python -m venv tools/style/.venv
-tools/style/.venv/Scripts/python -m pip install --require-hashes -r tools/style/requirements.txt
-cmake --preset default -A x64 -DMW34_CLANG_FORMAT="$PWD/tools/style/.venv/Scripts/clang-format.exe"
-cmake --build build/default --target format-check
-pwsh -NoProfile -File tools/mw3-remaster-launcher/fetch_controller_runtime.ps1
-dotnet run --project tools/mw3-remaster-launcher-tests -c Release
-```
-Launcher publish, from the root on Windows (`net8.0-windows`), after the SDL3
-fetch above. Ignored `local/` output; not a release.
+Launcher publish, from the root on Windows (`net8.0-windows`), after
+`python tools/check.py --setup --area launcher`. Ignored `local/` output; not a release.
 
 ```sh
 dotnet publish tools/mw3-remaster-launcher/MW3RemasterLauncher.csproj -c Release -r win-x64 --self-contained true -o local/launcher-publish

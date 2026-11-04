@@ -54,7 +54,9 @@ the separate Mod Tools preview has its own pinned dependencies and setup guide.
 Proposed dependencies must record license, exact version/commit, integrity
 hash where available, and why an existing dependency cannot do the job.
 
-Build and run CTest as described in the README. Tests use only project-authored
+Run every check a PR must pass with `python tools/check.py` (once per checkout,
+`python tools/check.py --setup` first): it builds, runs CTest, the C++ format
+check and the style check, the same way CI does. Tests use only project-authored
 fixtures. Cover malformed PE data and boundary conditions for memory changes.
 Do not add game files to CI. Run `cmake --build build/default --target format`
 when clang-format is installed; `format-check` verifies formatting. Enable
@@ -150,10 +152,9 @@ Open every PR as a draft. It is ready to leave draft when:
 
 - It lists each acceptance criterion of its issue and where the change meets
   it, or says that it doesn't (not for release or sync PRs).
-- For code changes, the build, CTest and `format-check` pass locally, and the
-  `style` check passes in CI. That check runs `python tools/style/check_style.py`,
-  which also runs locally once its tools from
-  [tools/style/README.md](tools/style/README.md) are installed. Fix C++ layout
+- For code changes, `python tools/check.py` passes locally (build, CTest,
+  `format-check` and `style`), with its summary in the PR's Validation section,
+  and CI passes. Fix C++ layout
   with the `format` CMake target, and other languages with
   `check_style.py --fix` once they are switched on in its `ENFORCED` list.
   Documentation-only changes need link, diff and evidence checks instead.
