@@ -13,9 +13,12 @@ skill gives two things:
 Keep a running change log (each edit and the finding it resolved) and the
 findings from every pass. Then repeat:
 
-1. **Evaluate.** Re-read the target and every file it touches or names; never
-   rely on an earlier read. On a branch, `git fetch origin` and recompute
-   `git diff origin/develop...HEAD`, plus uncommitted changes. Check every item
+1. **Evaluate.** Open the checklist file and read it, on every pass. A
+   skill's reference files load only when they are read, so a pass that didn't
+   open the checklist doesn't count; redo it. Re-read the target and every
+   file it touches or names; never rely on an earlier read. On a branch,
+   `git fetch origin` and recompute `git diff origin/develop...HEAD`, plus
+   uncommitted changes. Check every item
    on the checklist. Rate each finding major or minor by the checklist's rules.
    Only report a finding you have traced to the file and line, or the
    sentence, it is about.
@@ -27,6 +30,13 @@ findings from every pass. Then repeat:
      back to an earlier state.
 
    If any is true, go to the report.
+
+   - **Same kind:** this pass and the last both found a major problem of one
+     kind, each by a different route (two different ways past one guard, for
+     example). Stop fixing and ask the requester what level of that risk is
+     acceptable; more fixes of that kind rarely converge. Continue with their
+     answer. A sub-agent that can't ask ends its run here and puts the
+     question first in its report.
 3. **Fix major findings only**, by editing the target. Leave minor findings
    for the report. On a spec or plan, keep step numbers, file lists and check
    steps consistent after each edit. On a branch, keep the build and tests
@@ -44,14 +54,19 @@ Never commit, push or open a PR from inside the loop.
 One report when the loop stops:
 
 1. **Outcome:** the target, how many passes ran, and the stop reason (clean,
-   cap or repeat). If it stopped on the cap or a repeat with major findings
-   left, say plainly that the target isn't ready, and list those findings
-   first, each with a suggested fix.
+   cap, repeat, or a same-kind question for the requester). If it stopped on
+   the cap or a repeat with major findings left, say plainly that the target
+   isn't ready, and list those findings first, each with a suggested fix.
 2. **What changed:** the change log, one short line per edit.
 3. **Minor findings left:** each with where it is, what it is and a suggested
    action. Leave out any whose suggestion is "do nothing".
 4. **Recommended follow-up issues**, if any.
 5. **Open questions** the target still can't answer.
+6. **Claims checked**, for a spec: each claim checked, whether it held, and
+   the evidence (a file, a command's output, an issue or PR).
+
+For a spec or plan, point to the file instead of reprinting it; the file is
+the record.
 
 The walkthrough in the workflow skill then takes the requester through every
 finding the report leaves: any major findings from item 1 first, then items 3
