@@ -87,11 +87,15 @@ refinements. All 15 sampled color, depth, motion, validity and metadata artifact
 matched the control byte for byte. The sampled numerical check covered 104 calls,
 9,129 triangle packets and 5,283 vertices without a mismatch.
 
-The private boundary comparison covered 2,366 original records. Required captured
-memory, integer registers, flags and FP control/status agree. Discarded software
+The private boundary comparison covered 2,366 original records. Compared numerical
+outputs, integer registers, flags and FP control/status agree. Discarded software
 ST4/ST5 payload bytes can differ while the x87 stack is empty; they are not live
 callback/return arguments. The complete enclosing mesh State agrees byte for
-byte. Captures and original-derived data stay local.
+byte. A subsequent expanded inline audit found differences in callback stack
+snapshots; their liveness remains unresolved. The earlier comparison does not
+establish equality of every captured memory range. See the
+[follow-up attribution and fidelity report](performance-attribution-2026-11-03.md).
+Captures and original-derived data stay local.
 
 The revision with bulk transfers and narrowed dispatch hooks retained all of
 that evidence and recorded 20 interval overlaps among 24 sampled refinements
@@ -119,8 +123,10 @@ a throughput improvement. Earlier per-field transfer and bulk-transfer-only
 revisions also regressed.
 
 Single scaling controls measured inline 82.36 FPS, one worker 77.11 FPS and four
-workers 76.38 FPS. Inline is a promising separate control, not a repeatable
-improvement established by the planned repeated matrix. The measured worker
+workers 76.38 FPS. These were preliminary controls. The subsequent
+[two repeated off/inline ABBA sets](performance-attribution-2026-11-03.md)
+measured a 4.24% inline improvement on the clean post-review host, with fidelity
+limitations still open. The measured worker
 compute is small relative to the remaining main-thread work. The extra lookahead,
 capture and consumption path outweighs its savings in these runs; individual
 phase costs still need attribution before another scheduling design is selected.
@@ -130,9 +136,10 @@ the measurement endpoints. Total CPU includes the system; GPU utilization is
 the RX 9070's strongest aggregated physical engine, including other processes.
 Neither utilization metric is an exclusive game cost or a performance gate.
 
-These figures describe the measured pre-review revision. Subsequent safety
-fixes are not represented as a performance improvement. The full repeated
-off/inline/worker matrix and forced delayed-job, capacity and temporal transition
+The worker table describes the measured pre-review revision. Subsequent safety
+fixes are not represented as a worker performance improvement. Repeated
+off/inline checks are now recorded separately; the remaining worker matrix and
+forced delayed-job, capacity and temporal transition
 coverage remain incomplete. Issue 183 is not complete; keep the PR draft and
 the feature off. Lazy setting validation and the supported inline computation
 after a speculative mismatch also remain deviations from the approved plan's
