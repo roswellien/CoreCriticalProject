@@ -242,6 +242,38 @@ their barriers and resource lifetimes, then compare fence counts, main CPU time,
 frame-time tails and the same fidelity artifacts. Measure throughput on an
 uncapped cohort and preserve the existing temporal-history contract.
 
+## Resident scene pairing experiment
+
+A private prototype recorded an eligible resident scene and its single-view
+temporal replay in one Vulkan command buffer. A GPU barrier orders the replay
+after scene uploads and writes. A separate validation run completed 2,200 frames
+with 3,738 paired submissions, all 15 sampled artifacts byte-identical, and zero
+Vulkan VUID or synchronization hazard messages. An initial attempt exited
+in the menu and a second was interrupted. Both were excluded.
+
+The same executable ran off/on/on/off on the pinned RX 9070 Training profile.
+All four runs completed 2,200 frames and matched measured camera-history tuples
+and input hashes. Timing covers frames 801–2200. Scope counts and waits use
+88 sampled frames per run. Values below average the two runs per mode.
+
+| Measure | Off | Paired |
+| --- | ---: | ---: |
+| Instrumented submissions per sampled frame | 9.23 | 6.69 |
+| Scene-fence waits per sampled frame | 8.24 | 5.70 |
+| Scene-fence wall ms per sampled frame | 4.87 | 4.97 |
+| Main CPU ms per frame | 11.68 | 11.42 |
+| p95 frame ms | 17.44 | 17.93 |
+| p99 frame ms | 18.25 | 18.82 |
+| FPS | 59.96 | 59.97 |
+
+Both paired runs removed 2.53 submissions and waits per sampled frame.
+The main CPU comparison changed direction between the two pairs, and p95
+worsened in both. The display-paced run establishes fewer submissions and
+waits, with an inconclusive CPU benefit and no measured throughput gain.
+Keep this prototype private and prioritize draw preparation for the next
+experiment. Receipts are `local/scene-pair-final.json` and
+`local/cpu183-scene-pair-fidelity-resume-validation.json`.
+
 ## Fidelity qualification and remaining gates
 
 The separate inline validation run `cpu183-t2-inline-fidelity-r6-resume2`
