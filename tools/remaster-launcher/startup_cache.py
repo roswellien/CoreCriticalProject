@@ -167,7 +167,7 @@ def _environment_resources(selected, host, cache_root, progress=None):
     if directory.exists():
         directory.rename(directory.with_name(key + '-incomplete-' + uuid.uuid4().hex))
     progress('Preparing textures and lighting. First startup can take several minutes depending on your PC and storage speed.')
-    environment = prepare(selected, host, directory)
+    environment = prepare(selected, host, directory, progress=progress)
     files = {}
     for path in directory.iterdir():
         if path.is_file():

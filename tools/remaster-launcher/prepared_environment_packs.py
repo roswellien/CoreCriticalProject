@@ -80,8 +80,9 @@ def encode_normal_pages(entries, *, world=False):
         raise ValueError('Normal catalog exceeds native count/byte budget')
 
 
-def write_merged_normal_catalog(selected, role, output):
+def write_merged_normal_catalog(selected, role, output, progress=None):
     """Merge installed pages with bounded decoded memory, writing each page immediately."""
+    progress = progress or (lambda message: None)
     world=role=='world'; page_limit=WORLD_PAGE_BYTES if world else 256*1024**2
     catalog_limit=WORLD_CATALOG_BYTES if world else AUTHORED_CATALOG_BYTES
     decoded_limit=MERGED_NORMAL_DECODED_BYTES
@@ -119,8 +120,11 @@ def write_merged_normal_catalog(selected, role, output):
             name=f'{role}-{len(names)}.bin'
             (output/name).write_bytes(data); names.append(name)
             pending_checks.append((output/name,expected))
+            progress(f'Written {role} normal page {len(names)} ({total // (1024*1024)} MB total)')
 
     def verify_pending():
+        if pending_checks:
+            progress(f'Verifying {len(pending_checks)} pending {role} normal pages...')
         while pending_checks:
             path,expected=pending_checks.pop(0)
             actual=read_surface_bindings(
@@ -503,8 +507,9 @@ def write_merged_surface_materials(selected, role, output):
     return str(path.resolve())
 
 
-def prepare(selected, host, output):
+def prepare(selected, host, output, progress=None):
     """Write fresh per-launch bank and merged normal indices; never edit packs."""
+    progress = progress or (lambda message: None)
     output=Path(output); output.mkdir(parents=True,exist_ok=False)
     environment=profile_bindings(selected,host); bankmap={}
     for pack in selected.values():
@@ -517,7 +522,8 @@ def prepare(selected, host, output):
         (output/'texture-banks.bin').write_bytes(data)
         environment['MW34_REMASTER_BANKS']=str((output/'texture-banks.bin').resolve())
     for role in ('authored','world'):
-        names,total,_conflicts=write_merged_normal_catalog(selected,role,output)
+        progress(f'Processing {role} surface normal catalog...')
+        names,total,_conflicts=write_merged_normal_catalog(selected,role,output,progress=progress)
         if role=='authored' and total>host.get('authored_normal_catalog_budget_bytes',AUTHORED_CATALOG_BYTES):
             raise ValueError('Installed authored normal catalog exceeds native budget')
         if not names: continue
@@ -525,10 +531,12 @@ def prepare(selected, host, output):
         environment['MW34_SURFACE_NORMALS' if role=='authored' else 'MW34_WORLD_NORMALS']=str(path.resolve())
     for role, env_key in (('ground_surface_materials', 'MW34_GROUND_SURFACE_MATERIALS'),
                           ('surface_materials', 'MW34_SURFACE_MATERIALS')):
+        progress(f'Packaging {role.replace("_", " ")}...')
         merged = write_merged_surface_materials(selected, role, output)
         if merged is not None:
             environment[env_key] = merged
     from mission_lighting import prepare as prepare_lighting
+    progress('Preparing mission lighting presets...')
     environment.update(prepare_lighting(selected, output))
     from presentation_policy import environment as presentation_environment
     return presentation_environment(host, selected, environment)
