@@ -13,6 +13,7 @@ new topic file is added only when none fits, and is listed below.
 | Topic file | What it covers |
 | --- | --- |
 | [`startup.md`](startup.md) | The C runtime startup that runs before the game's own code |
+| [`textures.md`](textures.md) | Loading textures from the game's texture banks |
 
 ## Repeating the work
 
