@@ -93,6 +93,9 @@ if(BUILD_TESTING)
     endif()
 
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME installed_runtime_preparation
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${PROJECT_SOURCE_DIR}/tools/remaster-launcher/test_installed_runtime.py")
     add_test(NAME surface_access_host_wiring
         COMMAND "${Python3_EXECUTABLE}" -B
             "${PROJECT_SOURCE_DIR}/tools/remaster-launcher/test_surface_access_history.py")
