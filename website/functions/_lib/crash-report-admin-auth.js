@@ -1,4 +1,4 @@
-const ACCESS_KEY_CACHE_MS = 5 * 60 * 1000;
+const   ACCESS_KEY_CACHE_MS = 5*60*1000
 let accessKeyCache = null;
 
 function decodeBase64Url(value) {
