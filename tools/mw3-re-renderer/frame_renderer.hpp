@@ -6,6 +6,7 @@
 
 namespace cc_mw3_re {
 
-std::unique_ptr<sdlfe::FrameRenderer> make_renderer(SDL_Window *window);
+std::unique_ptr<sdlfe::FrameRenderer> make_renderer(SDL_Window *window,
+                                                    const sdlfe::CoreCriticalOptions &options = {});
 
 } // namespace cc_mw3_re

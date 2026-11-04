@@ -1,4 +1,5 @@
 #include "frame_renderer.hpp"
+#include "training_material.hpp"
 
 #include <cstdio>
 #include <stdexcept>
@@ -56,6 +57,47 @@ void check_scene(SDL_Window *window) {
     require(renderer->restore_frame() && pixel(16, 16) == 0xff00ff00,
             "Restored frame lost its saved pixels");
     renderer->drop_frame();
+    renderer->reset_scene_resources();
+    renderer->clear(true, 0, 0, 0);
+    textured.texture = renderer->create_texture(1, 1, cyan, 1);
+    quad(*renderer, 12, 20, .5f, 0xffffffff, textured);
+    require(pixel(16, 16) == 0xff00ffff && pixel(6, 6) == 0xff000000,
+            "A new scene inherited the previous color or texture");
+    renderer->release_texture(textured.texture);
+}
+
+void check_material_admission() {
+    // The row-vector model-view rotates x into y and y into negative x.
+    const float view[] = {0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 0, 8};
+    const float world[] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 4, 6};
+    const float positions[] = {0, 0, 0, 2, 0, 0, 0, 2, 0};
+    const uint32_t indices[] = {0, 1, 2};
+    const platform::ModelSurface surface{"fixture", nullptr, "fixture", positions, nullptr, indices,
+                                         nullptr,   world,   view,      1,         10,      10,
+                                         16,        16,      100,       3};
+    platform::TLVertex draw[] = {{13.5f, 16, .125f, .125f, 0, 0, 0, 1},
+                                 {16, 18.5f, .125f, .125f, 0, 0, 1, 0},
+                                 {16, 16, .125f, .125f, 0, 0, 0, 0}};
+    const auto admitted = [&] {
+        return bool(cc_mw3_re::model_for_draw(surface, platform::Primitive::kFan, draw, 3,
+                                              {0, 0, 32, 32}, 32, 32));
+    };
+    require(admitted(), "Actual draw no longer matches its rotated source surface");
+    draw[0].sx += .5f;
+    require(!admitted(), "Modified projection incorrectly admitted an enhanced draw");
+
+    sdlfe::CoreCriticalOptions invalid;
+    invalid.lighting = "normal";
+    invalid.node = "fixture";
+    invalid.texture = "fixture";
+    invalid.albedo_hash = "0123456789abcdef";
+    bool rejected = false;
+    try {
+        const cc_mw3_re::TrainingMaterial material(invalid);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected, "Normal lighting accepted a missing sidecar");
 }
 
 } // namespace
@@ -69,6 +111,7 @@ int main() {
     int result = 0;
     try {
         require(window != nullptr, SDL_GetError());
+        check_material_admission();
         check_scene(window);
     } catch (const std::exception &error) {
         std::fprintf(stderr, "%s\n", error.what());

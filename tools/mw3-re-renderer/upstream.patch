@@ -1,15 +1,16 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index c50ddc1..8a390bb 100644
+index c50ddc1..b4f772c 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -806,0 +807,25 @@ endif()
+@@ -806,0 +807,26 @@ endif()
 +
 +if(CC_MW3_RE_ADAPTER)
 +  if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT TARGET mw3)
 +    message(FATAL_ERROR "The Core Critical adapter needs Windows x64 and the SDL game target")
 +  endif()
 +  get_filename_component(cc_root "${CC_MW3_RE_ADAPTER}/../.." ABSOLUTE)
-+  add_library(cc_mw3_re_adapter OBJECT "${CC_MW3_RE_ADAPTER}/frame_renderer.cpp")
++  add_library(cc_mw3_re_adapter OBJECT "${CC_MW3_RE_ADAPTER}/frame_renderer.cpp"
++      "${CC_MW3_RE_ADAPTER}/training_material.cpp")
 +  target_compile_features(cc_mw3_re_adapter PRIVATE cxx_std_20)
 +  foreach(target cc_mw3_re_adapter mw3core mw3sdl mw3text mw3)
 +    target_compile_options(${target} PRIVATE /EHsc)
@@ -67,14 +68,22 @@ index a9200da..4071093 100644
 -  SdlRender3D* render_;
 +  FrameRenderer* render_;
 diff --git a/src/frontend/sdl/mw3_main.cpp b/src/frontend/sdl/mw3_main.cpp
-index f485164..5bc5791 100644
+index f485164..0a9c035 100644
 --- a/src/frontend/sdl/mw3_main.cpp
 +++ b/src/frontend/sdl/mw3_main.cpp
 @@ -133,0 +134 @@ struct Args {
-+  bool cc_vulkan = false;
-@@ -342,0 +344 @@ bool parse(int argc, char** argv, Args& a) {
-+    else if (s == "--cc-vulkan") a.cc_vulkan = true;
-@@ -827 +829,6 @@ int main(int argc, char** argv) {
++  sdlfe::CoreCriticalOptions cc;
+@@ -342,0 +344,9 @@ bool parse(int argc, char** argv, Args& a) {
++    else if (s == "--cc-vulkan") a.cc.vulkan = true;
++    else if (s == "--cc-list-surfaces") a.cc.list_surfaces = true;
++    else if (s == "--cc-lighting" && next(1)) a.cc.lighting = argv[++i];
++    else if (s == "--cc-node" && next(1)) a.cc.node = argv[++i];
++    else if (s == "--cc-texture" && next(1)) a.cc.texture = argv[++i];
++    else if (s == "--cc-albedo-hash" && next(1)) a.cc.albedo_hash = argv[++i];
++    else if (s == "--cc-normal-map" && next(1)) a.cc.normal_map = argv[++i];
++    else if (s.rfind("--cc-", 0) == 0)
++      return std::fprintf(stderr, "mw3: invalid Core Critical option %s\n", s.c_str()), false;
+@@ -827 +837,6 @@ int main(int argc, char** argv) {
 -  const int result = run(a, vfw.get());
 +  int result = 1;
 +  try {
@@ -82,13 +91,25 @@ index f485164..5bc5791 100644
 +  } catch (const std::exception& error) {
 +    std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
 +  }
-@@ -838 +845,3 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
+@@ -838 +853,6 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
 -  if (!window.init(a.hidden, a.launcher_window)) return 1;
-+  if (a.cc_vulkan && !a.windowed && !a.window_given)
++  if (!a.cc.vulkan && (a.cc.list_surfaces || !a.cc.lighting.empty() || !a.cc.node.empty() ||
++                      !a.cc.texture.empty() || !a.cc.albedo_hash.empty() || !a.cc.normal_map.empty()))
++    return std::fprintf(stderr, "mw3: Core Critical material options require --cc-vulkan\n"), 1;
++  if (a.cc.vulkan && !a.windowed && !a.window_given)
 +    return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
-+  if (!window.init(a.hidden, a.launcher_window, a.cc_vulkan)) return 1;
++  if (!window.init(a.hidden, a.launcher_window, a.cc)) return 1;
+@@ -1566 +1586,4 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
+-      pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
++      pump.toggle_fullscreen = [&] {
++        if (a.cc.vulkan) std::fprintf(stderr, "mw3: the Core Critical Vulkan trial stays windowed\n");
++        else window.switch_fullscreen(!window.fullscreen());
++      };
+@@ -1617 +1640 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
+-  return result;
++  return result == 0 && !window.render()->validate_trial() ? 1 : result;
 diff --git a/src/frontend/sdl/sdl_platform.cpp b/src/frontend/sdl/sdl_platform.cpp
-index 9862a7a..1cfbc20 100644
+index 9862a7a..28b1bc1 100644
 --- a/src/frontend/sdl/sdl_platform.cpp
 +++ b/src/frontend/sdl/sdl_platform.cpp
 @@ -2,0 +3,5 @@
@@ -99,14 +120,14 @@ index 9862a7a..1cfbc20 100644
 +
 @@ -14 +19 @@ namespace sdlfe {
 -bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt) {
-+bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, bool cc_vulkan) {
++bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, const CoreCriticalOptions& cc) {
 @@ -15,0 +21,15 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt) {
-+  if (cc_vulkan) {
++  if (cc.vulkan) {
 +#ifdef CC_MW3_RE_ADAPTER
 +    window_ = adopt ? adopt : SDL_CreateWindow("MechWarrior 3", 1280, 960, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
 +    if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
 +    try {
-+      render_ = cc_mw3_re::make_renderer(window_);
++      render_ = cc_mw3_re::make_renderer(window_, cc);
 +      render_->set_shape(&shape_);
 +      return render_->ok();
 +    } catch (const std::exception& error) {
@@ -117,12 +138,12 @@ index 9862a7a..1cfbc20 100644
 +#endif
 +  }
 diff --git a/src/frontend/sdl/sdl_platform.h b/src/frontend/sdl/sdl_platform.h
-index 5c0661e..009b9d8 100644
+index 5c0661e..a2009e8 100644
 --- a/src/frontend/sdl/sdl_platform.h
 +++ b/src/frontend/sdl/sdl_platform.h
 @@ -30 +30 @@ class SdlWindow : public platform::Window {
 -  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr);
-+  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr, bool cc_vulkan = false);
++  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr, const CoreCriticalOptions& cc = {});
 @@ -52 +52 @@ class SdlWindow : public platform::Window {
 -  SdlRender3D* render() const { return render_.get(); }
 +  FrameRenderer* render() const { return render_.get(); }
@@ -136,14 +157,23 @@ index 5c0661e..009b9d8 100644
 -  SdlRender3D* render_;
 +  FrameRenderer* render_;
 diff --git a/src/frontend/sdl/sdl_render3d.h b/src/frontend/sdl/sdl_render3d.h
-index d354636..bf019ee 100644
+index d354636..aa52b75 100644
 --- a/src/frontend/sdl/sdl_render3d.h
 +++ b/src/frontend/sdl/sdl_render3d.h
-@@ -19 +19,10 @@ namespace sdlfe {
+@@ -4,0 +5 @@
++#include <string>
+@@ -19 +20,17 @@ namespace sdlfe {
 -class SdlRender3D : public platform::Render3D {
++struct CoreCriticalOptions {
++  bool vulkan = false;
++  bool list_surfaces = false;
++  std::string lighting, node, texture, albedo_hash, normal_map;
++};
++
 +class FrameRenderer : public platform::Render3D {
 + public:
 +  virtual bool ok() const = 0;
++  virtual bool validate_trial() const { return true; }
 +  virtual void capture_next(const char* bmp_path) = 0;
 +  virtual void flush() = 0;
 +  virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
@@ -159,9 +189,64 @@ index 3de07a7..ba45f0f 100644
 +#include "platform/render3d.h"
 @@ -356,0 +358 @@ int32_t textures_free() {
 +  if (auto* renderer = zvid::render3d()) renderer->reset_scene_resources();
+diff --git a/src/gamez/zmodel/gmod_draw.cpp b/src/gamez/zmodel/gmod_draw.cpp
+index 63fef0e..1224cb0 100644
+--- a/src/gamez/zmodel/gmod_draw.cpp
++++ b/src/gamez/zmodel/gmod_draw.cpp
+@@ -1,0 +2 @@
++#include "platform/render3d.h"
+@@ -565,2 +566,2 @@ void draw_textured(const Polygon& p, bool receiver, bool strip, int32_t count, f
+-void draw_polygon(Model& m, Polygon& p, uint32_t needs, bool receiver, int32_t projected, bool cache,
+-                  float n[3]) {
++void draw_polygon(zcls::Node* node, Model& m, Polygon& p, uint32_t needs, bool receiver, int32_t projected,
++                  bool cache, float n[3]) {
+@@ -626,0 +628,22 @@ void draw_polygon(Model& m, Polygon& p, uint32_t needs, bool receiver, int32_t p
++  struct SurfaceScope {
++    platform::Render3D* renderer = nullptr;
++    ~SurfaceScope() { if (renderer) renderer->stage_model_surface(nullptr); }
++  } scope;
++  platform::ModelSurface surface{};
++  if (auto* renderer = zvid::render3d(); renderer && renderer->wants_model_surface() &&
++      s.default_model && !morphing(m) && !s.overlay && !projected &&
++      s.opacity == 1 && !(mat.flags & 4) && mat.alpha == 255 && mat.texture &&
++      !texture_alpha(mat) && p.priority == 0 && !(p.flags & 0x100)) {
++    const auto& projection = zmth::projection();
++    const auto& stack = zmth::matrix_stack();
++    // The top is model-view and the slot under it is the selected node's model-world.
++    surface = {node->name(), node, mat.texture->name, m.vertices, m.normals, p.vertex_indices,
++               (p.flags & 0x200) ? p.normal_indices : nullptr,
++               zmth::matrix_stack().below().m, zmth::matrix_stack().matrix().m,
++               projection.near_z, projection.fx_near, projection.fy_near,
++               projection.cx, projection.cy, projection.far_z, count};
++    if (stack.top > 0) {
++      scope.renderer = renderer;
++      renderer->stage_model_surface(&surface);
++    }
++  }
+@@ -942 +965 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
+-  for (int32_t i = 0; i < polys; ++i) draw_polygon(m, m.polygons[i], needs, receiver, projected, cache, n);
++  for (int32_t i = 0; i < polys; ++i) draw_polygon(node, m, m.polygons[i], needs, receiver, projected, cache, n);
 diff --git a/src/platform/render3d.h b/src/platform/render3d.h
-index 73ba9b4..e4d10f7 100644
+index 73ba9b4..9fc89d5 100644
 --- a/src/platform/render3d.h
 +++ b/src/platform/render3d.h
-@@ -94,0 +95 @@ class Render3D {
+@@ -44,0 +45,15 @@ struct DrawState {
++// Synchronous view of one opaque model polygon, valid during its ordinary draw.
++struct ModelSurface {
++  const char* node_name;
++  const void* node;
++  const char* texture_name;
++  const float* positions;
++  const float* normals;
++  const uint32_t* vertex_indices;
++  const uint32_t* normal_indices;
++  const float* model_to_world;
++  const float* model_to_camera;
++  float near_z, fx_near, fy_near, cx, cy, far_z;
++  int count;
++};
++
+@@ -94,0 +110,3 @@ class Render3D {
++  virtual bool wants_model_surface() const { return false; }
++  virtual void stage_model_surface(const ModelSurface*) {}
 +  virtual void reset_scene_resources() {}

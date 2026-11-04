@@ -1,6 +1,7 @@
 #include "frame_renderer.hpp"
 
 #include "frontend/sdl/sdl_child.h"
+#include "training_material.hpp"
 #include "vk_scene.hpp"
 
 #undef DrawState // Win32's DrawState macro conflicts with platform::DrawState.
@@ -12,6 +13,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -30,7 +33,7 @@ void set_option(const char *name, const char *value) {
     }
 }
 
-void configure_bridge() {
+void configure_bridge(bool lighting) {
     set_option("MW34_DXGI_PRESENT", "1");
     set_option("MW34_WINDOW_MODE", "windowed");
     set_option("MW34_WORLD_SCALE_PERCENT", "100");
@@ -39,8 +42,21 @@ void configure_bridge() {
     set_option("MW34_REMASTER_AA", "1");
     set_option("MW34_REMASTER_AF", "1");
     set_option("MW34_TEMPORAL_INPUTS", "0");
-    set_option("MW34_SUN", "0");
+    set_option("MW34_GPU_MODELS", lighting ? "1" : "0");
+    set_option("MW34_NORMAL_MAPS", "1");
+    set_option("MW34_SUN", lighting ? "1" : "0");
     set_option("MW34_SUN_SHADOWS", "0");
+    set_option("MW34_MANUAL_LIGHTING", "1");
+    set_option("MW34_SKY_AUTO", "0");
+    set_option("MW34_EFFECT_LIGHTS", "0");
+    set_option("MW34_FIXTURE_SHADOWS", "0");
+    set_option("MW34_NIGHT_WORLD_GAIN", "1");
+    for (const char *option :
+         {"MW34_SKY_TINT", "MW34_HAZE_COLOR", "MW34_SKY_BRIGHTNESS", "MW34_SKY_GLOW",
+          "MW34_SKY_GLOW_FOCUS", "MW34_SKY_GRADIENT", "MW34_SKY_ANTI_SATURATION",
+          "MW34_SKY_ANTI_HAZE", "MW34_SKY_HORIZON", "MW34_SKY_HORIZON_LOW"}) {
+        set_option(option, "");
+    }
 }
 
 constexpr unsigned no_binding = std::numeric_limits<unsigned>::max();
@@ -50,6 +66,7 @@ struct Texture {
     std::uint64_t version{};
     unsigned scene_index = no_binding;
     unsigned sharp_index = no_binding;
+    std::optional<std::uint64_t> albedo_hash;
     std::vector<std::uint32_t> pixels;
 };
 
@@ -101,27 +118,54 @@ std::vector<std::uint32_t> sharp_layer(const Texture &texture, unsigned width, u
 
 class FrameRenderer final : public sdlfe::FrameRenderer {
   public:
-    explicit FrameRenderer(SDL_Window *window)
+    FrameRenderer(SDL_Window *window, const sdlfe::CoreCriticalOptions &options)
         : window_(window),
           hwnd_(static_cast<HWND>(SDL_GetPointerProperty(
-              SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))) {
+              SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))),
+          material_(options) {
         if (!hwnd_) {
             throw std::runtime_error("SDL window has no Win32 handle");
         }
-        configure_bridge();
+        configure_bridge(material_.enabled);
         initialize_renderer();
+        if (!material_.normal_pixels.empty()) {
+            normal_handle_ = create_texture(
+                int(material_.normal_width), int(material_.normal_height),
+                reinterpret_cast<const uint8_t *>(material_.normal_pixels.data()), 1);
+        }
     }
 
     bool ok() const override { return true; }
     const char *driver_name() const override { return "Core Critical Vulkan/DXGI"; }
     void set_shape(const sdlfe::FrameShape *shape) override { shape_ = shape; }
-    void reset_scene_resources() override { reset_pending_ = true; }
+    bool wants_model_surface() const override { return material_.enabled || material_.probe; }
+    void stage_model_surface(const platform::ModelSurface *surface) override {
+        surface_ = surface;
+        surface_consumed_ = false;
+    }
+    void reset_scene_resources() override {
+        reset_pending_ = true;
+        selected_node_ = nullptr;
+    }
+    bool validate_trial() const override {
+        if (material_rejected_) {
+            return false;
+        }
+        if (!material_.enabled || enhanced_draws_ > 0) {
+            return true;
+        }
+        std::fprintf(stderr, "No admitted Training draw for Core Critical material %s/%s\n",
+                     material_.node.c_str(), material_.texture.c_str());
+        return false;
+    }
 
     ~FrameRenderer() override {
         std::fprintf(
-            stderr, "Core Critical Vulkan/DXGI: %llu draws, %llu resident presents\n",
+            stderr,
+            "Core Critical Vulkan/DXGI: %llu draws, %llu resident presents, %llu enhanced draws\n",
             static_cast<unsigned long long>(retired_draws_ + renderer_->draws),
-            static_cast<unsigned long long>(retired_presents_ + renderer_->resident_presents));
+            static_cast<unsigned long long>(retired_presents_ + renderer_->resident_presents),
+            static_cast<unsigned long long>(enhanced_draws_));
     }
 
     void capture_next(const char *path) override { capture_path_ = path; }
@@ -167,6 +211,7 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
         entry.pixels.resize(std::size_t(width) * height);
         std::memcpy(entry.pixels.data(), rgba, entry.pixels.size() * sizeof(std::uint32_t));
         entry.version = ++texture_version_;
+        entry.albedo_hash.reset();
     }
 
     void release_texture(int32_t handle) override {
@@ -267,10 +312,11 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
         draw.push.mode[2] =
             draw.texture < 0 ? 2 | diffuse : (state.alpha_modulate ? 4 : 2) | texture;
         draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
-        if (!scene_.order.empty() && !scene_.order.back().clear) {
+        attach_material(draw, primitive, vertices, count, state);
+        if (!draw.model && !scene_.order.empty() && !scene_.order.back().clear) {
             auto &previous = scene_.draws.back();
-            if (previous.texture == draw.texture && previous.sampler == draw.sampler &&
-                previous.key.packed() == draw.key.packed() &&
+            if (!previous.model && previous.texture == draw.texture &&
+                previous.sampler == draw.sampler && previous.key.packed() == draw.key.packed() &&
                 std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
                 previous.count += drawn;
                 return;
@@ -388,6 +434,68 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
     }
 
   private:
+    void attach_material(vk::Draw &draw, Primitive primitive, const TLVertex *vertices, int count,
+                         const DrawState &state) {
+        if (!surface_ || surface_consumed_ || material_rejected_ || state.texture < 0 ||
+            state.blend || state.multiply || state.sharp || !state.depth_write ||
+            state.depth_always) {
+            return;
+        }
+        const auto node = node_name(*surface_);
+        const auto texture = texture_name(*surface_);
+        const bool selected = material_.enabled && node == material_.node &&
+                              texture == material_.texture &&
+                              (!selected_node_ || selected_node_ == surface_->node);
+        std::optional<std::pair<std::string, std::string>> probe;
+        if (material_.probe && reported_surfaces_.size() < 1024) {
+            auto key = std::pair{std::string(node), std::string(texture)};
+            if (!reported_surfaces_.contains(key)) {
+                probe = std::move(key);
+            }
+        }
+        if (!selected && !probe) {
+            return;
+        }
+        auto model = model_for_draw(*surface_, primitive, vertices, count, viewport_, scene_.width,
+                                    scene_.height);
+        if (!model) {
+            return;
+        }
+        auto &entry = textures_.at(state.texture);
+        if (!entry.albedo_hash) {
+            entry.albedo_hash = mw34::materials::normal_hash(
+                entry.pixels.data(), entry.pixels.size() * sizeof(uint32_t));
+        }
+        const auto hash = *entry.albedo_hash;
+        if (probe) {
+            std::fprintf(stderr, "Core Critical surface: node='%s' texture='%s' rgba=%016llx\n",
+                         probe->first.c_str(), probe->second.c_str(),
+                         static_cast<unsigned long long>(hash));
+            reported_surfaces_.insert(std::move(*probe));
+        }
+        if (!selected) {
+            return;
+        }
+        if (hash != material_.albedo_hash) {
+            // Keep the ordinary draw intact. Unwinding a game draw can skip
+            // cleanup of GameZ state. Reject the trial at its exit boundary.
+            std::fprintf(stderr, "The selected Training surface has a different albedo hash\n");
+            material_rejected_ = true;
+            return;
+        }
+        surface_consumed_ = true;
+        selected_node_ = surface_->node;
+        draw.model = std::move(model);
+        if (normal_handle_ >= 0) {
+            draw.normal_texture = int(bind_texture(normal_handle_, false));
+        }
+        if (!enhanced_draws_++) {
+            std::fprintf(stderr, "Core Critical lit surface: %s/%s (%s)\n", material_.node.c_str(),
+                         material_.texture.c_str(),
+                         normal_handle_ >= 0 ? "normal map" : "flat normal");
+        }
+    }
+
     void initialize_renderer() {
         renderer_ = std::make_unique<vk::Renderer>(vk::Renderer::ColorTarget::rgba8);
         texture_limit_ = renderer_->max_texture_dimension(hwnd_);
@@ -487,6 +595,13 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
     SDL_Window *window_;
     HWND hwnd_;
     std::unique_ptr<vk::Renderer> renderer_;
+    TrainingMaterial material_;
+    const platform::ModelSurface *surface_{};
+    const void *selected_node_{};
+    std::set<std::pair<std::string, std::string>> reported_surfaces_;
+    std::uint64_t enhanced_draws_{};
+    int normal_handle_ = -1;
+    bool surface_consumed_{}, material_rejected_{};
     const sdlfe::FrameShape *shape_{};
     vk::Scene scene_{};
     std::array<int, 4> viewport_{0, 0, 640, 480};
@@ -502,8 +617,9 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
 
 } // namespace
 
-std::unique_ptr<sdlfe::FrameRenderer> make_renderer(SDL_Window *window) {
-    return std::make_unique<FrameRenderer>(window);
+std::unique_ptr<sdlfe::FrameRenderer> make_renderer(SDL_Window *window,
+                                                    const sdlfe::CoreCriticalOptions &options) {
+    return std::make_unique<FrameRenderer>(window, options);
 }
 
 } // namespace cc_mw3_re
