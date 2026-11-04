@@ -187,8 +187,9 @@ from startup at `005AC415`. Context only, not proof.
 **Why this name:** the merged-body rule in the [README](README.md): its whole
 behaviour is one instruction, so it is fully described. Startup calls it where
 `crtexe.c` calls `_setargv`, whose default version is empty, so Microsoft's
-empty `_setargv` is one of the functions merged into it. The other callers are unrelated, so the linker most likely folded
-several identical empty functions into this one body. No single official name
+empty `_setargv` is one of the functions merged into it. The other callers are
+unrelated, so the linker most likely folded several identical empty functions
+into this one body. No single official name
 fits them all, so it gets an `Area_Action` name that says what it does. The
 section gives a few examples instead of all 57 functions, because the one
 instruction already settles what every caller gets.
