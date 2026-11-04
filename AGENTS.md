@@ -80,6 +80,8 @@ making the repository public.
 - `.agents/skills/`: shared agent skills. `.claude/skills/` is a generated copy for
   Claude Code; never edit it by hand, and run `python tools/agents/sync_skills.py`
   after changing a skill.
+- `.githooks/`: commit and push checks, including formatting; turn them on once per
+  clone with `git config core.hooksPath .githooks`.
 - `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
 
 Agent rules live only in this file. `CLAUDE.md` and
