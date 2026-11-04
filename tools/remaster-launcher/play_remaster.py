@@ -408,7 +408,18 @@ def main():
         def startup_progress(message):
             print(f'Startup: {message} ({time.monotonic() - startup_started:.0f}s)', flush=True)
         startup_progress('Checking content…')
-        verification = VerificationCache(Path(args.asset_output) / 'startup' , startup_progress) if args.asset_output and not args.check else None
+        default_asset_output = args.asset_output
+        if not default_asset_output and not args.check:
+            try:
+                selected_config = (Path(args.profile) if args.profile is not None else CONFIG).resolve()
+                if selected_config.is_file():
+                    default_asset_output = read_json(selected_config).get("native", {}).get("prepared_asset_directory")
+            except Exception:
+                pass
+        verification = (
+            VerificationCache(Path(default_asset_output) / 'startup', startup_progress)
+            if default_asset_output and not args.check else None
+        )
         p = plan(
             args.backend,
             args.original_models,
