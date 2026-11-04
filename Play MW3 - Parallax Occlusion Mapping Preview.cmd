@@ -11,7 +11,14 @@ set "MW34_POM_MAX_DISTANCE=80"
 rem Optional debug mode: uncomment below to visualize POM raymarch step counts
 rem set "MW34_POM_DEBUG=1"
 
-call "%~dp0Play MW3Remaster.cmd" %*
+rem Default to midday lighting preset unless explicitly provided by caller
+set "PRESET_ARGS="
+echo %* | findstr /i /c:"--lighting-preset" >nul
+if errorlevel 1 (
+    set "PRESET_ARGS=--lighting-preset midday"
+)
+
+call "%~dp0Play MW3Remaster.cmd" %PRESET_ARGS% %*
 if errorlevel 1 (
     echo.
     echo Parallax Occlusion Mapping preview exited with code %ERRORLEVEL%.
