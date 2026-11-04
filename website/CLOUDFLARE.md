@@ -52,9 +52,10 @@ No repository was made public.
 
 ## Admin crash report archive
 
-The D1 database bound as `CRASH_REPORT_DB` stores each normalized accepted
-crash report for the admin archive, in addition to the existing private GitHub
-issue flow. Apply `migrations/0002_crash_report_archive.sql` to the production
+The D1 database bound as `CRASH_REPORT_DB` stores normalized accepted crash
+reports for the admin archive when the database allows it, in addition to the
+existing private GitHub issue flow. A failed archive save doesn't stop GitHub
+delivery; the issue says the report wasn't archived. Apply `migrations/0002_crash_report_archive.sql` to the production
 D1 database before deploying code that writes or reads the archive.
 
 Protect `corecritical.dev/admin/crash-reports*` with a Cloudflare Access
