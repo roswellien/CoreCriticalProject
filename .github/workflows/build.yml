@@ -16,6 +16,8 @@ permissions:
 jobs:
   build:
     strategy:
+      # Each OS reports its own result; a Linux failure doesn't cancel the Windows job.
+      fail-fast: false
       # tools/check.py picks the compiler from the OS (MSVC on Windows, clang++ on Linux);
       # `compiler` only names the job, so keep each entry matching its OS.
       matrix:
