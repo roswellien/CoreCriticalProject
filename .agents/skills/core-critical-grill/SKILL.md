@@ -22,7 +22,8 @@ by the requester.
   changed since it was filed. If nothing is open, tell the requester in a line
   that you're skipping the grill and why, and go on to the spec. If something
   is, grill only on that. An issue filed without a grill, including a capture,
-  gets the full grill.
+  gets the full grill. If you can't tell whether it was grilled (filed before
+  this rule, or a sorted capture), treat it as not grilled.
 
 ## Before the first question
 

@@ -64,8 +64,11 @@ path given and follows it.
    grill is needed on what is still open (implementation details, or anything
    that changed since filing), runs it if so, and tells the requester which
    they chose. Issues filed without a grill, including `needs-triage` captures
-   (see [Triage](#triage)), get the full grill when picked up. The requester's
-   "yes" at the end of the grill starts the spec.
+   (see [Triage](#triage)), get the full grill when picked up; if you can't
+   tell whether an issue was grilled (it was filed before this rule, or is a
+   sorted capture), treat it as not grilled. Before filing, the requester's
+   "yes" at the end of the grill files the issue; at pickup, it starts the
+   spec.
    Skill: `.agents/skills/core-critical-grill/SKILL.md`.
 2. **Spec:** write the spec, run the spec review, then walk the requester
    through what it leaves. Stop until the requester approves the spec.
