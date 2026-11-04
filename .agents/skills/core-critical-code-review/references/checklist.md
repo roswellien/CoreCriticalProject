@@ -86,8 +86,10 @@ enough when the same behaviour can be had with a clearly cleaner design.
 
 ## Finding order
 
-Report structural regressions and missed simplifications first, then special
-cases, then type and boundary problems, file size and readability. Keep nits
+Correctness findings go by severity, as the walkthrough orders them. Within
+the structure pass, report structural regressions and missed simplifications
+first, then special cases, then type and boundary problems, file size and
+readability. Keep nits
 few and only when they are actionable; a long list of small points buries the
 ones that matter.
 

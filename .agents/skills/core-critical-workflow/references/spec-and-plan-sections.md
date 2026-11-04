@@ -27,9 +27,11 @@ only when the requester says to plan that PR.
 1. **Overview:** what the PR does, and the facts the plan rests on, with when
    they were checked.
 2. **Ordered steps:** each names the files it touches, what done looks like,
-   and how it is checked.
+   and how it is checked. Each step that changes files ends with its own
+   commit.
 3. **Check the work:** the exact build, lint and test commands, and what to run
-   and look at for anything with runtime behaviour.
+   and look at for anything with runtime behaviour, then the hand-over to the
+   stage 5 review.
 4. **Open questions and risks.**
 
 Before writing a plan, check the open PRs for files it touches

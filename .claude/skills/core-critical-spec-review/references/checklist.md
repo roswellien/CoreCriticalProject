@@ -25,10 +25,9 @@ wrong and what that would cost; "consider adding more detail" is not a finding.
    work when an earlier one has already run?
 4. **Failure modes:** what happens if a step fails halfway, a tool is missing,
    or an input is unusual? Walk through the usual ways things fail: a change
-   applied only in part, steps run in a different order, a timeout or rate
-   limit, two runs at once, a cold start with no cache or earlier state, and
-   empty or missing input. Does the spec say what the user, player or
-   contributor sees?
+   applied only in part, a timeout or rate limit, two runs at once, a cold
+   start with no cache or earlier state, and empty or missing input. Does the
+   spec say what the user, player or contributor sees?
 5. **Blast radius:** what else uses the files, formats or behaviour being
    changed: the launcher, the runtime, packs, CI, releases, other docs?
 6. **Rollback:** can the change be undone by reverting its PR? If not (data

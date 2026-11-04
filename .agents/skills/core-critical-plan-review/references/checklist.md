@@ -19,7 +19,8 @@ earlier read misses what the fixes changed.
    `README.md` with rules for its folder) in a folder the plan touches.
 3. **Stack:** confirm the languages and build setup from the project files the
    plan touches (`CMakePresets.json`, `.csproj` files, `requirements` files,
-   `website/build.py`), not from memory.
+   `website/build.py`, `website/package.json`, `website/wrangler.jsonc`), not
+   from memory.
 4. **Files:** read every file the plan creates or changes as it is today, and
    the files those depend on where that matters for correctness.
 5. **Users:** for anything the plan renames, removes or changes (a function,
@@ -37,8 +38,8 @@ earlier read misses what the fixes changed.
 2. **Accuracy:** do the files, functions, headings, commands, presets and
    paths it names exist as written today? Does code the plan proposes match
    the existing includes, imports, types and module layout? Are version
-   numbers, tool names and command options right? Does the overview describe
-   what the steps actually do? Are the branch name and base right? Do its facts
+   numbers, tool names and command options right? Are the branch name and
+   base right? Do its facts
    about other issues and PRs still hold (`gh issue view`, `gh pr view`)?
 3. **Redundancy:** does any step duplicate another, or rebuild something that
    already exists in the repository and should be reused? Could two steps

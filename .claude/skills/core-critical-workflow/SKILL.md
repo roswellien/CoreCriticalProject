@@ -40,7 +40,8 @@ one skill from another.
    stopping for a go-ahead and without editing the plan. If the plan turns out
    to be wrong, stop and tell the requester; the plan is fixed before going on.
 5. **Review:** in a fresh session that didn't write the change (what counts
-   as fresh: "On a branch" in the code review skill), run
+   as fresh: "On a branch: a fresh session only" in the code review skill),
+   run
    `.agents/skills/core-critical-code-review/SKILL.md` on the branch (it ends
    by rerunning the change's checks), then walk the requester through what is
    left. The implementing session stops after its

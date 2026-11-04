@@ -16,8 +16,9 @@ findings from every pass. Then repeat:
 1. **Evaluate.** Open the checklist file and read it, on every pass. A
    skill's reference files load only when they are read, so a pass that didn't
    open the checklist doesn't count; redo it. Re-read the target and every
-   file it touches or names; never rely on an earlier read. On a branch, `git fetch origin` and recompute
-   `git diff origin/develop...HEAD`, plus uncommitted changes. Check every item
+   file it touches or names; never rely on an earlier read. On a branch,
+   `git fetch origin` and recompute `git diff origin/develop...HEAD`, plus
+   uncommitted changes. Check every item
    on the checklist. Rate each finding major or minor by the checklist's rules.
    Only report a finding you have traced to the file and line, or the
    sentence, it is about.
@@ -34,7 +35,8 @@ findings from every pass. Then repeat:
      kind, each by a different route (two different ways past one guard, for
      example). Stop fixing and ask the requester what level of that risk is
      acceptable; more fixes of that kind rarely converge. Continue with their
-     answer.
+     answer. A sub-agent that can't ask ends its run here and puts the
+     question first in its report.
 3. **Fix major findings only**, by editing the target. Leave minor findings
    for the report. On a spec or plan, keep step numbers, file lists and check
    steps consistent after each edit. On a branch, keep the build and tests
