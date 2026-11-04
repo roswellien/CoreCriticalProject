@@ -779,6 +779,25 @@ class GitHookTests(unittest.TestCase):
         line = "refs/heads/topic abc123 refs/heads/carson-nr/ci/x def456\n"
         self.assertEqual(hooks.pre_push(line), 0)
 
+    def test_personal_global_ignore_file_does_not_block(self):
+        self.write("personal-ignore", "*.txt\n")
+        self.git("config", "core.excludesFile", str(self.root / "personal-ignore"))
+        self.write("notes.txt", "kept on purpose\n")
+        # The personal rule makes plain `git add` refuse it, as it would for the contributor.
+        self.git("add", "-f", "notes.txt")
+        exit_code, _ = self.pre_commit()
+        self.assertEqual(exit_code, 0)
+
+    def test_batch_size_matches_the_style_checker(self):
+        # Both stay under the same Windows command-line limit; keep them in step.
+        spec = importlib.util.spec_from_file_location(
+            "check_style_for_hooks", ROOT / "tools/style/check_style.py"
+        )
+        check_style = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = check_style
+        spec.loader.exec_module(check_style)
+        self.assertEqual(hooks.FILES_PER_CALL, check_style.FILES_PER_CALL)
+
 
 if __name__ == "__main__":
     unittest.main()

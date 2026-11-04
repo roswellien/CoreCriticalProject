@@ -45,9 +45,13 @@ jobs:
         with:
           dotnet-version: '8.0.425'
       # The runner has newer SDKs too; global.json makes dotnet use the pin, as in style.yml.
+      # Also written to GITHUB_ENV, so later dotnet format runs from the hook send no telemetry
+      # if Copilot's agent reads it.
       - name: Select the pinned .NET SDK
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-        run: dotnet new globaljson --sdk-version 8.0.425 --roll-forward disable --force && dotnet --version
+        run: |
+          echo "DOTNET_CLI_TELEMETRY_OPTOUT=1" >> "$GITHUB_ENV"
+          dotnet new globaljson --sdk-version 8.0.425 --roll-forward disable --force && dotnet --version
       - name: Install PSScriptAnalyzer (version pinned in check_powershell.ps1)
         run: pwsh -NoProfile -File tools/style/check_powershell.ps1 -Mode Install

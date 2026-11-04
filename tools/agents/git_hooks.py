@@ -120,10 +120,12 @@ def run_agent_check(root: Path, environment: Environment) -> subprocess.Complete
 
 def ignored_staged_files(root: Path, environment: Environment, staged: list[str]) -> list[str]:
     """Return one line per staged file that an ignore rule covers, naming the rule."""
-    # --no-index checks the rules even for files already added; -v names the matching rule,
-    # which may also come from the contributor's own core.excludesFile or .git/info/exclude.
+    # --no-index checks the rules even for files already added; -v names the matching rule.
+    # An empty core.excludesFile leaves out the contributor's own global ignore file, so a
+    # personal rule can't block a file the repository means to track. .git/info/exclude
+    # still counts, since it belongs to this clone.
     result = run(
-        ["git", "check-ignore", "--no-index", "-v", "-z", "--stdin"],
+        ["git", "-c", "core.excludesFile=", "check-ignore", "--no-index", "-v", "-z", "--stdin"],
         root,
         environment,
         stdin_text="\0".join(staged) + "\0",
@@ -271,6 +273,9 @@ def pre_push(stdin_text: str) -> int:
 
 
 def main(argv: list[str]) -> int:
+    # When git's output isn't a console (an IDE, for one), Windows Python writes cp1252, and
+    # printing a file name outside it would crash the hook and block the commit.
+    sys.stdout.reconfigure(errors="replace")
     hook = argv[0] if argv else ""
     try:
         if hook == "pre-commit":
