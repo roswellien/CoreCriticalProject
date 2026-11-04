@@ -54,7 +54,7 @@ command. Use a fresh profile for each run. For the Off control, leave
 
 Use `--cc-lighting normal` with the same selection and
 `--cc-normal-map $normalMap` for the authored normal comparison. The local
-sidecar must contain one bound linear tangent-space image named `mcat04`.
+BWNRM2 sidecar must contain one bound linear tangent-space image named `mcat04`.
 Use `pack_normals` in [normal_materials.py](../remaster-launcher/normal_materials.py)
 to encode it. `--cc-list-surfaces` prints bounded draw identities for
 diagnostics. Invalid sidecars, albedo hashes and selections that never
@@ -64,8 +64,10 @@ direction of the demonstration light for a separate matched run.
 With `--shot <file.bmp> --shot-frame 180` in place of the visible frame
 budget, the trial captures the Vulkan render target locally. The draw
 keeps the original fog coefficient, depth and draw order. Clipped, biased,
-translucent and unrecognized draws stay on the stock path. The stock
-comparison is the reference for differences in raster edges or filtering.
+translucent, multipass and unrecognized draws stay on the stock path. The
+stock comparison is the reference for differences in raster edges and
+filtering. The shared Vulkan shaders also interpolate diffuse color and fog
+linearly in screen space, while the upstream shaders correct for perspective.
 
 The integration patch applies to upstream's own source, licensed under
 [its MIT license](https://github.com/telltaleatheist/mw3-re/blob/abc9dbddf9104e3e5e40e34561fdb7d846611e7e/LICENSE)

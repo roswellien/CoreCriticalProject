@@ -4,6 +4,7 @@
 
 #include <charconv>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -61,6 +62,13 @@ TrainingMaterial::TrainingMaterial(const sdlfe::CoreCriticalOptions &options)
         throw std::runtime_error("--cc-lighting normal requires --cc-normal-map");
     }
     std::ifstream input(std::filesystem::u8path(options.normal_map), std::ios::binary);
+    constexpr std::string_view expected_magic{"BWNRM2\0\0", 8};
+    char magic[expected_magic.size()]{};
+    if (!input.read(magic, sizeof(magic)) ||
+        std::string_view(magic, sizeof(magic)) != expected_magic) {
+        throw std::runtime_error("Expected a BWNRM2 normal-map sidecar");
+    }
+    input.seekg(0);
     auto pack = mw34::materials::read_normals(input, {texture});
     if (pack.images.size() != 1 || pack.bindings[0] != 0) {
         throw std::runtime_error(

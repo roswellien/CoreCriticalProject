@@ -17,6 +17,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cc_mw3_re {
@@ -51,10 +52,10 @@ void configure_bridge(bool lighting) {
     set_option("MW34_EFFECT_LIGHTS", "0");
     set_option("MW34_FIXTURE_SHADOWS", "0");
     set_option("MW34_NIGHT_WORLD_GAIN", "1");
-    for (const char *option :
-         {"MW34_SKY_TINT", "MW34_HAZE_COLOR", "MW34_SKY_BRIGHTNESS", "MW34_SKY_GLOW",
-          "MW34_SKY_GLOW_FOCUS", "MW34_SKY_GRADIENT", "MW34_SKY_ANTI_SATURATION",
-          "MW34_SKY_ANTI_HAZE", "MW34_SKY_HORIZON", "MW34_SKY_HORIZON_LOW"}) {
+    for (const char *option : {"MW34_SKY_TINT", "MW34_HAZE_COLOR", "MW34_SKY_BRIGHTNESS",
+                               "MW34_SKY_GLOW", "MW34_SKY_GLOW_COLOR", "MW34_SKY_GLOW_FOCUS",
+                               "MW34_SKY_GRADIENT", "MW34_SKY_ANTI_SATURATION",
+                               "MW34_SKY_ANTI_HAZE", "MW34_SKY_HORIZON", "MW34_SKY_HORIZON_LOW"}) {
         set_option(option, "");
     }
 }
@@ -232,6 +233,17 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
     }
     void begin_scene() override { ensure_extent(); }
     void end_scene() override { flush(); }
+
+    void draw_multi(Primitive primitive, const uint32_t *vertices, int uv_sets, int count,
+                    const DrawState &state) override {
+        // Even the opaque base pass of a projected shadow stays on the ordinary path.
+        struct RestoreSurface {
+            const platform::ModelSurface *&slot;
+            const platform::ModelSurface *previous;
+            ~RestoreSurface() { slot = previous; }
+        } restore{surface_, std::exchange(surface_, nullptr)};
+        platform::Render3D::draw_multi(primitive, vertices, uv_sets, count, state);
+    }
 
     void draw(Primitive primitive, const TLVertex *vertices, int count,
               const DrawState &state) override {

@@ -1,7 +1,9 @@
 #include "frame_renderer.hpp"
+#include "frontend/sdl/sdl_child.h"
 #include "training_material.hpp"
 
 #include <cstdio>
+#include <filesystem>
 #include <stdexcept>
 
 namespace {
@@ -64,6 +66,25 @@ void check_scene(SDL_Window *window) {
     require(pixel(16, 16) == 0xff00ffff && pixel(6, 6) == 0xff000000,
             "A new scene inherited the previous color or texture");
     renderer->release_texture(textured.texture);
+
+    renderer->clear(true, 0, 0, 255);
+    const uint8_t premultiplied_red[] = {128, 0, 0, 128};
+    platform::DrawState hud{};
+    hud.texture = renderer->create_texture(1, 1, premultiplied_red, 4);
+    hud.address_u = hud.address_v = 3;
+    hud.sharp = hud.blend = hud.depth_always = true;
+    hud.depth_write = false;
+    quad(*renderer, 0, 32, 0, 0xffffffff, hud);
+    renderer->release_texture(hud.texture);
+    require((pixel(16, 16) & 0x00ffffff) == 0x0080007f,
+            "The sharp HUD layer darkened premultiplied color twice");
+
+    const auto ready = "cc-adapter-ready-" + std::to_string(SDL_GetPerformanceCounter());
+    require(!std::filesystem::exists(ready), "Ready marker path already exists");
+    sdlfe::set_ready_file(ready);
+    renderer->present();
+    sdlfe::set_ready_file("");
+    require(!std::filesystem::remove(ready), "A hidden frame signaled first presentation");
 }
 
 void check_material_admission() {
