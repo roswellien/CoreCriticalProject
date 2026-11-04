@@ -33,7 +33,8 @@ ECX. The library templates are compiled the same way, which is why
 **Extent:** `0040BAF0` to `0040BAF2`, 3 bytes.
 
 **Callers:** Ghidra lists 66 functions that call it, with 73 call sites in
-all, and 492 data references, nearly all of them slots in tables of virtual
+all, two of them in code it hasn't marked as a function (`005891A0` and
+`004A82B8`), and 492 data references, nearly all of them slots in tables of virtual
 functions from `005BBCDC` onward (for example `005BBCDC`, `005BBCE8` and
 `005BBD6C`). Among the calls, [`004BF910`](objects.md#sub_004bf910) calls it at
 `004BFA9C` with a vector in ECX and that vector's first and last pointers as

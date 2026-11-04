@@ -46,7 +46,11 @@ the lowercase anchor, `#sub_xxxxxxxx`) and these fields, in this order:
 - **Reads and writes:** memory, globals and import slots it touches.
 - **How the host reaches it:** which native host file runs or checks it. This is
   context only: the host runs a lifted copy of the original code, so it never
-  proves a name.
+  proves a name. "Routes calls to it to the heap stage" is short for the
+  one-line definitions in `tools/m4-crt-heap-carry/host/composition.cpp`,
+  which pass the call to `hs_called`; that hands it to the MFC stage when that
+  stage is active (every such function is also listed in `mfc_entries.inc`)
+  and otherwise to the heap stage (`heap_stage.hpp`).
 - **Why this name:** the proof, under the rules below.
 - **Still unknown:** what the section can't settle.
 

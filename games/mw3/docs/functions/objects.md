@@ -31,18 +31,19 @@ last `+0x10`, buffer end `+0x14`).
 
 **Kind:** the game's own code.
 
-**Extent:** `004BF910` to `004BFB8F`, 640 bytes. Ghidra's listing of the
-function stops at `004BFB41`; the rest, `004BFB43` to the return at
-`004BFB8D`, is reached from inside it and is part of the same body.
+**Extent:** `004BF910` to `004BFB8F`, 640 bytes.
 
-**Callers:** three functions, each a constructor of a class built on this one
-that calls it first, with the new object in ECX: `004C0310` (from `004C0348`)
-and `004C0570` (from `004C05A8`), the constructors of the global objects
-built by [`00410400`](globals.md#sub_00410400) and
-[`00410450`](globals.md#sub_00410450), and `004BE300` (from `004BE3DD`). Each
-passes an ID, a null array pointer and a count; `004C0310` and `004C0570`
-pass the ID they got from [`0058B1C0`](#sub_0058b1c0) and a count of 1. After
-it returns, each stores its own vtable.
+**Callers:** three functions, each calling it with the new object in ECX.
+Two are constructors of classes built on this one, which call it first and
+store their own vtable after it returns: `004C0310` (from `004C0348`) and
+`004C0570` (from `004C05A8`), the constructors of the global objects built by
+[`00410400`](globals.md#sub_00410400) and [`00410450`](globals.md#sub_00410450).
+They pass the ID they got from [`0058B1C0`](#sub_0058b1c0) and a count of 1.
+The third, `004BE300` (from `004BE3DD`), gets a 28-byte block from
+[`operator_new`](heap.md#sub_005abd26), skips the call if that returned null,
+and otherwise builds the object with this function alone, storing no vtable
+of its own; it passes an ID read from its own object and a count from a local
+variable. All three pass a null array pointer.
 
 **What it does,** in order. It takes the object in ECX and three stack
 arguments: an ID, a pointer to an array of 4-byte object pointers, and a
@@ -116,9 +117,12 @@ not proof.
 **Why this name:** the game-code rule. Every step and branch is described
 above, including the shifting path, which can never run; the README's proof
 rule counts a branch as described when the section says why it can't run.
-Every caller uses it as a base constructor: it calls it first on
-a new object and then stores its own vtable. It builds a numbered object that
-also holds a list of pointers to other objects, so it is named for that.
+Every caller uses it as a constructor: `004C0310` and `004C0570`
+call it first on a new object and then store their own vtable, and `004BE300`
+calls it on a freshly allocated block of the class's own size (vtable to the
+flag byte at `+0x18`, 28 bytes) and uses the result as the finished object. It
+builds a numbered object that also holds a list of pointers to other objects,
+so it is named for that.
 
 **Still unknown:** what the class is, what the flag bit at `+0x18` means, and
 why `00604068` is stored in the first slot before the callers store their own
@@ -307,7 +311,8 @@ caller passes an ID and uses the result as the matching object or null.
 `004C0570`, `004C5C00` and `004D5460`. Each gets an ID from it and passes it on
 to build a numbered object: `004BFBB0` and `004BCBA0` to
 [`004D5120`](#sub_004d5120), `004C0310` and `004C0570` to
-[`004BF910`](#sub_004bf910), and `004D5460` to `0047A550`. Most pass the word
+[`004BF910`](#sub_004bf910), `004797C0` and `004C5C00` to `004BCBA0`, and
+`004D5460` to `0047A550`. Most pass the word
 at `005F2A48` as the low bound and the preferred ID; `004BFBB0` passes 300.
 
 **What it does:** takes a low bound in ECX, a high bound in EDX and a

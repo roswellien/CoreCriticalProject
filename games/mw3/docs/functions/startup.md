@@ -202,8 +202,7 @@ end pointers it is given.
 **Reads and writes:** the import slot.
 
 **How the host reaches it:** `composition.cpp` routes calls to it to the heap
-stage; `mfc_entries.inc` also lists it among the MFC stage's entries. Context
-only, not proof.
+stage. Context only, not proof.
 
 **Why this name:** the import-thunk rule. The import CSV lists slot RVA
 `0x1BB530` as `MSVCRT.dll` `__dllonexit`, imported by name.
