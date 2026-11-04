@@ -29,6 +29,8 @@ def load_check_style():
 
 
 check_style = load_check_style()
+# check_style.py loads the preflight scans from tools/style/preflight.py.
+preflight = sys.modules["preflight"]
 
 
 def write_fixtures(root, paths):
@@ -384,11 +386,11 @@ class PreflightTests(unittest.TestCase):
             )
 
     def test_frozen_listing_holders_need_a_folder_name(self):
-        self.assertTrue(check_style.is_frozen_listing_holder("tools/m4-x/seal.py"))
-        self.assertTrue(check_style.is_frozen_listing_holder("tools/x87-y/z/a.py"))
-        self.assertFalse(check_style.is_frozen_listing_holder("tools/m4-check.py"))
-        self.assertFalse(check_style.is_frozen_listing_holder("tools/m4-/a.py"))
-        self.assertFalse(check_style.is_frozen_listing_holder("tools/style/a.py"))
+        self.assertTrue(preflight.is_frozen_listing_holder("tools/m4-x/seal.py"))
+        self.assertTrue(preflight.is_frozen_listing_holder("tools/x87-y/z/a.py"))
+        self.assertFalse(preflight.is_frozen_listing_holder("tools/m4-check.py"))
+        self.assertFalse(preflight.is_frozen_listing_holder("tools/m4-/a.py"))
+        self.assertFalse(preflight.is_frozen_listing_holder("tools/style/a.py"))
 
     def test_text_read_search_ignores_files_that_are_not_targets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
