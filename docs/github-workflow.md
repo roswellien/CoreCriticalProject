@@ -85,8 +85,8 @@ path given and follows it.
 5. **Review:** run the code review on the branch in a fresh session that didn't
    write the change (what counts as fresh: "On a branch: a fresh session only"
    in the code review skill); it ends by rerunning the change's checks. Then
-   walk the requester through what is left. The PR stays a draft until the requester
-   says it's ready. Skill: `.agents/skills/core-critical-code-review/SKILL.md`.
+   walk the requester through what is left. The PR stays a draft until the
+   requester says it's ready. Skill: `.agents/skills/core-critical-code-review/SKILL.md`.
 
 `.agents/skills/core-critical-workflow/SKILL.md` ties the stages together and
 holds the spec and plan sections. Each review loops: fix only major findings,
