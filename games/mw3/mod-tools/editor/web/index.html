@@ -12,15 +12,45 @@
     </head>
     <body>
         <!-- Game Directory Setup Warning Banner (Hidden by default, shown if game missing) -->
-        <div id="game-dir-banner" style="display: none; background: #2a1111; border-bottom: 1px solid #ff4444; color: #ffcccc; padding: 6px 16px; font-size: 12px; display: none; align-items: center; justify-content: space-between; gap: 12px; z-index: 200;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                
-                <span><strong>MechWarrior 3 Not Detected:</strong> Specify your retail game folder to enable authentic asset extraction and playtesting.</span>
+        <div
+            id="game-dir-banner"
+            style="
+                display: none;
+                background: #2a1111;
+                border-bottom: 1px solid #ff4444;
+                color: #ffcccc;
+                padding: 6px 16px;
+                font-size: 12px;
+                display: none;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                z-index: 200;
+            "
+        >
+            <div style="display: flex; align-items: center; gap: 8px">
+                <span
+                    ><strong>MechWarrior 3 Not Detected:</strong> Specify your retail game folder to
+                    enable authentic asset extraction and playtesting.</span
+                >
             </div>
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <input id="setup-game-path-input" type="text" placeholder="e.g. C:\Games\MechWarrior 3" class="text-input" style="width: 260px; padding: 3px 8px; font-size: 11px;" />
-                <button class="btn btn-primary btn-sm" onclick="submitGameDirectory()">Set Directory</button>
-                <button class="btn btn-sm" onclick="document.getElementById('game-dir-banner').style.display='none'">&times;</button>
+            <div style="display: flex; gap: 8px; align-items: center">
+                <input
+                    id="setup-game-path-input"
+                    type="text"
+                    placeholder="e.g. C:\Games\MechWarrior 3"
+                    class="text-input"
+                    style="width: 260px; padding: 3px 8px; font-size: 11px"
+                />
+                <button class="btn btn-primary btn-sm" onclick="submitGameDirectory()">
+                    Set Directory
+                </button>
+                <button
+                    class="btn btn-sm"
+                    onclick="document.getElementById('game-dir-banner').style.display = 'none'"
+                >
+                    &times;
+                </button>
             </div>
         </div>
 
@@ -35,25 +65,124 @@
 
             <!-- Workspace Mode Selector Tabs -->
             <div class="workspace-tabs" role="tablist">
-                <button id="nav-mode-world" class="workspace-tab active" onclick="switchWorkspaceMode('world')" title="World & Entity Placement Editor (1)">Map Editor</button>
-                <button id="nav-mode-sculpt" class="workspace-tab" onclick="switchWorkspaceMode('sculpt')" title="Real-Time Terrain Brush Sculpting (2)"> Terrain Sculptor</button>
-                <button id="nav-mode-atmosphere" class="workspace-tab" onclick="switchWorkspaceMode('atmosphere')" title="Lighting, Solar Cycle & Dynamic Weather (3)">Atmosphere & Weather</button>
-                <button id="nav-mode-mechlab" class="workspace-tab" onclick="switchWorkspaceMode('mechlab')" title="Player Mech Loadout & Support Lance (4)">MechLab</button>
-                <button id="nav-mode-objectives" class="workspace-tab" onclick="switchWorkspaceMode('objectives')" title="Mission Objectives & Tactical Intel (5)">Objectives</button>
-                <button id="nav-mode-campaign" class="workspace-tab" onclick="switchWorkspaceMode('campaign')" title="Multi-Mission Campaign Sequencer (6)">Campaign Creator</button>
+                <button
+                    id="nav-mode-world"
+                    class="workspace-tab active"
+                    onclick="switchWorkspaceMode('world')"
+                    title="World & Entity Placement Editor (1)"
+                >
+                    Map Editor
+                </button>
+                <button
+                    id="nav-mode-sculpt"
+                    class="workspace-tab"
+                    onclick="switchWorkspaceMode('sculpt')"
+                    title="Real-Time Terrain Brush Sculpting (2)"
+                >
+                    Terrain Sculptor
+                </button>
+                <button
+                    id="nav-mode-atmosphere"
+                    class="workspace-tab"
+                    onclick="switchWorkspaceMode('atmosphere')"
+                    title="Lighting, Solar Cycle & Dynamic Weather (3)"
+                >
+                    Atmosphere & Weather
+                </button>
+                <button
+                    id="nav-mode-mechlab"
+                    class="workspace-tab"
+                    onclick="switchWorkspaceMode('mechlab')"
+                    title="Player Mech Loadout & Support Lance (4)"
+                >
+                    MechLab
+                </button>
+                <button
+                    id="nav-mode-objectives"
+                    class="workspace-tab"
+                    onclick="switchWorkspaceMode('objectives')"
+                    title="Mission Objectives & Tactical Intel (5)"
+                >
+                    Objectives
+                </button>
+                <button
+                    id="nav-mode-campaign"
+                    class="workspace-tab"
+                    onclick="switchWorkspaceMode('campaign')"
+                    title="Multi-Mission Campaign Sequencer (6)"
+                >
+                    Campaign Creator
+                </button>
             </div>
 
             <!-- Top Action Controls -->
             <div class="header-actions">
-                <button id="btn-new-mission" class="btn btn-sm btn-accent" onclick="openNewMissionModal()" title="Create a new custom map or mission from scratch (Ctrl+N)">New Mission</button>
-                <button id="btn-open-mission" class="btn btn-sm" onclick="triggerImportMapFile()" title="Open / Import existing map project (Ctrl+O)">Open</button>
-                <input type="file" id="input-import-map-file" accept=".json,.mw3pack" style="display:none;" onchange="handleImportMapFile(event)" />
-                <button id="btn-load-demo" class="btn btn-sm" title="Load sample Iron Ridge base layout">Load Demo</button>
-                <button id="btn-export" class="btn btn-sm btn-primary" title="Compile standalone map pack">Export Pack</button>
-                <button id="btn-package-zip" class="btn btn-sm" onclick="packageCurrentMapZip()" title="Package into portable ZIP for other players">Package ZIP</button>
-                <button id="btn-launch-game" class="btn btn-sm btn-accent" title="Play custom map in native Vulkan engine">Play in Engine</button>
-                <button id="btn-shortcuts" class="btn btn-sm btn-icon" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)">Shortcuts</button>
-                <div id="status-game-pill" class="status-pill" onclick="openGameDirModal()" title="Game Directory Status">
+                <button
+                    id="btn-new-mission"
+                    class="btn btn-sm btn-accent"
+                    onclick="openNewMissionModal()"
+                    title="Create a new custom map or mission from scratch (Ctrl+N)"
+                >
+                    New Mission
+                </button>
+                <button
+                    id="btn-open-mission"
+                    class="btn btn-sm"
+                    onclick="triggerImportMapFile()"
+                    title="Open / Import existing map project (Ctrl+O)"
+                >
+                    Open
+                </button>
+                <input
+                    type="file"
+                    id="input-import-map-file"
+                    accept=".json,.mw3pack"
+                    style="display: none"
+                    onchange="handleImportMapFile(event)"
+                />
+                <button
+                    id="btn-load-demo"
+                    class="btn btn-sm"
+                    title="Load sample Iron Ridge base layout"
+                >
+                    Load Demo
+                </button>
+                <button
+                    id="btn-export"
+                    class="btn btn-sm btn-primary"
+                    title="Compile standalone map pack"
+                >
+                    Export Pack
+                </button>
+                <button
+                    id="btn-package-zip"
+                    class="btn btn-sm"
+                    onclick="packageCurrentMapZip()"
+                    title="Package into portable ZIP for other players"
+                >
+                    Package ZIP
+                </button>
+                <button
+                    id="btn-launch-game"
+                    class="btn btn-sm btn-accent"
+                    title="Play custom map in native Vulkan engine"
+                >
+                    Play in Engine
+                </button>
+                <button
+                    id="btn-shortcuts"
+                    class="btn btn-sm btn-icon"
+                    onclick="openShortcutsModal()"
+                    title="Keyboard Shortcuts (?)"
+                >
+                    Shortcuts
+                </button>
+                <div
+                    id="status-game-pill"
+                    class="status-pill"
+                    onclick="openGameDirModal()"
+                    title="Game Directory Status"
+                >
                     <span id="status-game-dot" class="status-dot"></span>
                     <span id="status-game-text">MW3 Detected</span>
                 </div>
@@ -65,11 +194,23 @@
             <div class="sub-bar-left">
                 <div class="meta-field">
                     <span class="meta-label">Title</span>
-                    <input type="text" id="project-title" class="text-input" value="Iron Ridge Outpost" style="width: 150px" />
+                    <input
+                        type="text"
+                        id="project-title"
+                        class="text-input"
+                        value="Iron Ridge Outpost"
+                        style="width: 150px"
+                    />
                 </div>
                 <div class="meta-field">
                     <span class="meta-label">Pack ID</span>
-                    <input type="text" id="project-id" class="text-input" value="iron_ridge_outpost" style="width: 140px" />
+                    <input
+                        type="text"
+                        id="project-id"
+                        class="text-input"
+                        value="iron_ridge_outpost"
+                        style="width: 140px"
+                    />
                 </div>
                 <div class="meta-field">
                     <span class="meta-label">Biome</span>
@@ -85,15 +226,49 @@
             </div>
 
             <div class="sub-bar-right">
-                <button class="btn btn-sm btn-icon" onclick="undo()" title="Undo (Ctrl+Z)">Undo</button>
-                <button class="btn btn-sm btn-icon" onclick="redo()" title="Redo (Ctrl+Y)">Redo</button>
-                <button id="btn-recon-overlay" class="btn btn-sm" onclick="toggleReconOverlay()" title="Toggle Satellite Recon Map Overlay (M)">Recon Map</button>
-                <button id="btn-mode-toggle" class="btn btn-sm" onclick="toggleViewMode()" title="Toggle 2D Tactical / 3D Perspective (Tab)"> 3D View</button>
+                <button class="btn btn-sm btn-icon" onclick="undo()" title="Undo (Ctrl+Z)">
+                    Undo
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="redo()" title="Redo (Ctrl+Y)">
+                    Redo
+                </button>
+                <button
+                    id="btn-recon-overlay"
+                    class="btn btn-sm"
+                    onclick="toggleReconOverlay()"
+                    title="Toggle Satellite Recon Map Overlay (M)"
+                >
+                    Recon Map
+                </button>
+                <button
+                    id="btn-mode-toggle"
+                    class="btn btn-sm"
+                    onclick="toggleViewMode()"
+                    title="Toggle 2D Tactical / 3D Perspective (Tab)"
+                >
+                    3D View
+                </button>
                 <!-- Hidden compatibility buttons bound in JS -->
-                <button id="btn-atmosphere" style="display:none;" onclick="openAtmosphereModal()"></button>
-                <button id="btn-campaign" style="display:none;" onclick="openCampaignModal()"></button>
-                <button id="btn-objectives" style="display:none;" onclick="openObjectivesModal()"></button>
-                <button id="btn-mechlab" style="display:none;" onclick="openMechLabModal()"></button>
+                <button
+                    id="btn-atmosphere"
+                    style="display: none"
+                    onclick="openAtmosphereModal()"
+                ></button>
+                <button
+                    id="btn-campaign"
+                    style="display: none"
+                    onclick="openCampaignModal()"
+                ></button>
+                <button
+                    id="btn-objectives"
+                    style="display: none"
+                    onclick="openObjectivesModal()"
+                ></button>
+                <button
+                    id="btn-mechlab"
+                    style="display: none"
+                    onclick="openMechLabModal()"
+                ></button>
             </div>
         </div>
 
@@ -101,11 +276,26 @@
         <div class="app-container">
             <!-- Left Sidebar: Asset Palette & Sculpt Tools -->
             <div class="sidebar left" id="sidebar-left">
-                <button class="sidebar-toggle-pin left-pin" id="btn-toggle-left-sidebar" onclick="toggleLeftSidebar()" title="Toggle Asset Palette (Left Bracket)">◀</button>
-                
+                <button
+                    class="sidebar-toggle-pin left-pin"
+                    id="btn-toggle-left-sidebar"
+                    onclick="toggleLeftSidebar()"
+                    title="Toggle Asset Palette (Left Bracket)"
+                >
+                    ◀
+                </button>
+
                 <div class="sidebar-tabs">
-                    <button class="tab-btn active" id="tab-palette-btn" onclick="switchLeftTab('palette')">Asset Palette</button>
-                    <button class="tab-btn" id="tab-sculpt-btn" onclick="switchLeftTab('sculpt')">Sculpt Tools</button>
+                    <button
+                        class="tab-btn active"
+                        id="tab-palette-btn"
+                        onclick="switchLeftTab('palette')"
+                    >
+                        Asset Palette
+                    </button>
+                    <button class="tab-btn" id="tab-sculpt-btn" onclick="switchLeftTab('sculpt')">
+                        Sculpt Tools
+                    </button>
                 </div>
 
                 <!-- Palette Content View -->
@@ -116,17 +306,31 @@
                             id="asset-search-input"
                             class="text-input"
                             placeholder="Search assets (Mad Cat, Turret, Bunker)..."
-                            style="width: 100%; margin-bottom: 8px; font-size: 11px;"
+                            style="width: 100%; margin-bottom: 8px; font-size: 11px"
                             oninput="filterAssetPalette(this.value)"
                         />
                         <div class="palette-pills-row">
-                            <div class="palette-pill active" onclick="setPaletteCategory('all')">All</div>
-                            <div class="palette-pill" onclick="setPaletteCategory('combat')">Mechs</div>
-                            <div class="palette-pill" onclick="setPaletteCategory('defense')">Defenses</div>
-                            <div class="palette-pill" onclick="setPaletteCategory('facility')">Facilities</div>
-                            <div class="palette-pill" onclick="setPaletteCategory('props')">Props</div>
-                            <div class="palette-pill" onclick="setPaletteCategory('tactical')">Tactical</div>
-                            <div class="palette-pill" onclick="setPaletteCategory('trigger')">Triggers</div>
+                            <div class="palette-pill active" onclick="setPaletteCategory('all')">
+                                All
+                            </div>
+                            <div class="palette-pill" onclick="setPaletteCategory('combat')">
+                                Mechs
+                            </div>
+                            <div class="palette-pill" onclick="setPaletteCategory('defense')">
+                                Defenses
+                            </div>
+                            <div class="palette-pill" onclick="setPaletteCategory('facility')">
+                                Facilities
+                            </div>
+                            <div class="palette-pill" onclick="setPaletteCategory('props')">
+                                Props
+                            </div>
+                            <div class="palette-pill" onclick="setPaletteCategory('tactical')">
+                                Tactical
+                            </div>
+                            <div class="palette-pill" onclick="setPaletteCategory('trigger')">
+                                Triggers
+                            </div>
                         </div>
                     </div>
 
@@ -314,35 +518,101 @@
                 </div>
 
                 <!-- Sculpt Tools View (in Left Sidebar) -->
-                <div class="sidebar-content" id="left-sculpt-view" style="display: none;">
-                    <div class="section-title"> Brush Operation Mode</div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
-                        <button class="sculpt-mode-btn active" id="sculpt-btn-raise" onclick="setSculptBrushMode('raise')">Raise</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-lower" onclick="setSculptBrushMode('lower')">Lower</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-flatten" onclick="setSculptBrushMode('flatten')">Flatten</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-smooth" onclick="setSculptBrushMode('smooth')">Smooth</button>
-                        <button class="sculpt-mode-btn" id="sculpt-btn-noise" onclick="setSculptBrushMode('noise')">Noise</button>
+                <div class="sidebar-content" id="left-sculpt-view" style="display: none">
+                    <div class="section-title">Brush Operation Mode</div>
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 1fr 1fr;
+                            gap: 6px;
+                            margin-bottom: 12px;
+                        "
+                    >
+                        <button
+                            class="sculpt-mode-btn active"
+                            id="sculpt-btn-raise"
+                            onclick="setSculptBrushMode('raise')"
+                        >
+                            Raise
+                        </button>
+                        <button
+                            class="sculpt-mode-btn"
+                            id="sculpt-btn-lower"
+                            onclick="setSculptBrushMode('lower')"
+                        >
+                            Lower
+                        </button>
+                        <button
+                            class="sculpt-mode-btn"
+                            id="sculpt-btn-flatten"
+                            onclick="setSculptBrushMode('flatten')"
+                        >
+                            Flatten
+                        </button>
+                        <button
+                            class="sculpt-mode-btn"
+                            id="sculpt-btn-smooth"
+                            onclick="setSculptBrushMode('smooth')"
+                        >
+                            Smooth
+                        </button>
+                        <button
+                            class="sculpt-mode-btn"
+                            id="sculpt-btn-noise"
+                            onclick="setSculptBrushMode('noise')"
+                        >
+                            Noise
+                        </button>
                     </div>
 
-                    <div class="section-title"> Brush Parameters</div>
+                    <div class="section-title">Brush Parameters</div>
                     <div class="inspector-card">
                         <div class="prop-row">
                             <span class="prop-name">Radius</span>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <input type="range" id="sculpt-radius" class="range-slider" min="10" max="250" value="45" oninput="updateSculptParams()" />
-                                <span id="sculpt-radius-val" class="prop-value" style="width: 40px;">45m</span>
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <input
+                                    type="range"
+                                    id="sculpt-radius"
+                                    class="range-slider"
+                                    min="10"
+                                    max="250"
+                                    value="45"
+                                    oninput="updateSculptParams()"
+                                />
+                                <span id="sculpt-radius-val" class="prop-value" style="width: 40px"
+                                    >45m</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Strength</span>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <input type="range" id="sculpt-strength" class="range-slider" min="0.2" max="4.0" step="0.1" value="1.2" oninput="updateSculptParams()" />
-                                <span id="sculpt-strength-val" class="prop-value" style="width: 40px;">1.2</span>
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <input
+                                    type="range"
+                                    id="sculpt-strength"
+                                    class="range-slider"
+                                    min="0.2"
+                                    max="4.0"
+                                    step="0.1"
+                                    value="1.2"
+                                    oninput="updateSculptParams()"
+                                />
+                                <span
+                                    id="sculpt-strength-val"
+                                    class="prop-value"
+                                    style="width: 40px"
+                                    >1.2</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Falloff Curve</span>
-                            <select id="sculpt-falloff" class="select-input" onchange="updateSculptParams()" style="width: 100%;">
+                            <select
+                                id="sculpt-falloff"
+                                class="select-input"
+                                onchange="updateSculptParams()"
+                                style="width: 100%"
+                            >
                                 <option value="smooth">Smooth Bell</option>
                                 <option value="linear">Linear</option>
                                 <option value="sharp">Sharp Cone</option>
@@ -350,12 +620,30 @@
                         </div>
                     </div>
 
-                    <div style="margin-top: 10px;">
-                        <button class="btn btn-danger" style="width: 100%;" onclick="resetSculptedTerrain()">Reset to Base Elevation</button>
+                    <div style="margin-top: 10px">
+                        <button
+                            class="btn btn-danger"
+                            style="width: 100%"
+                            onclick="resetSculptedTerrain()"
+                        >
+                            Reset to Base Elevation
+                        </button>
                     </div>
 
-                    <div style="margin-top: 16px; padding: 10px; background: rgba(0, 240, 255, 0.05); border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-                        <b style="color: var(--accent-cyan)"> Sculpting Tip:</b> Click and drag directly on the 3D terrain to shape hills, valleys, and ramps in real-time.
+                    <div
+                        style="
+                            margin-top: 16px;
+                            padding: 10px;
+                            background: rgba(0, 240, 255, 0.05);
+                            border: 1px solid var(--border-color);
+                            border-radius: 6px;
+                            font-size: 11px;
+                            color: var(--text-muted);
+                            line-height: 1.4;
+                        "
+                    >
+                        <b style="color: var(--accent-cyan)"> Sculpting Tip:</b> Click and drag
+                        directly on the 3D terrain to shape hills, valleys, and ramps in real-time.
                     </div>
                 </div>
             </div>
@@ -364,16 +652,58 @@
             <div class="viewport-container" id="viewport">
                 <!-- Top Floating HUD Controls -->
                 <div class="viewport-hud-top">
-                    <button id="btn-view-orbit" class="hud-btn active" onclick="setViewMode('orbit')" title="3D Perspective Studio (O)">3D View</button>
-                    <button id="btn-view-topdown" class="hud-btn" onclick="setViewMode('topdown')" title="2D Top-Down Tactical Map (T)"> 2D Tactical</button>
-                    <button id="btn-view-iso" class="hud-btn" onclick="setViewMode('iso')" title="Isometric 3D Angle (I)">Isometric</button>
-                    <button id="btn-focus-selection" class="hud-btn" onclick="focusSelectedEntity()" title="Focus Camera on Selection (F)">Focus (F)</button>
-                    <button id="btn-sculpt-mode" class="hud-btn" onclick="toggleSculptMode()" title="Toggle Terrain Sculpting (S)">Sculpt (S)</button>
+                    <button
+                        id="btn-view-orbit"
+                        class="hud-btn active"
+                        onclick="setViewMode('orbit')"
+                        title="3D Perspective Studio (O)"
+                    >
+                        3D View
+                    </button>
+                    <button
+                        id="btn-view-topdown"
+                        class="hud-btn"
+                        onclick="setViewMode('topdown')"
+                        title="2D Top-Down Tactical Map (T)"
+                    >
+                        2D Tactical
+                    </button>
+                    <button
+                        id="btn-view-iso"
+                        class="hud-btn"
+                        onclick="setViewMode('iso')"
+                        title="Isometric 3D Angle (I)"
+                    >
+                        Isometric
+                    </button>
+                    <button
+                        id="btn-focus-selection"
+                        class="hud-btn"
+                        onclick="focusSelectedEntity()"
+                        title="Focus Camera on Selection (F)"
+                    >
+                        Focus (F)
+                    </button>
+                    <button
+                        id="btn-sculpt-mode"
+                        class="hud-btn"
+                        onclick="toggleSculptMode()"
+                        title="Toggle Terrain Sculpting (S)"
+                    >
+                        Sculpt (S)
+                    </button>
                 </div>
 
                 <!-- Floating Sculpt Toolbar (Kept for compatibility, hidden by default) -->
-                <div id="sculpt-toolbar" class="sculpt-toolbar" style="display: none;">
-                    <div style="font-size: 11px; font-weight: 800; color: var(--accent-cyan); text-transform: uppercase;">
+                <div id="sculpt-toolbar" class="sculpt-toolbar" style="display: none">
+                    <div
+                        style="
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: var(--accent-cyan);
+                            text-transform: uppercase;
+                        "
+                    >
                         Brush Active
                     </div>
                 </div>
@@ -383,64 +713,159 @@
                     <div class="hud-status-pill">
                         <div class="status-dot"></div>
                         <span id="stat-coords">X: 0 | Y: 0 | Z: 0</span>
-                        <span>Entities: <b id="stat-entities" style="color: var(--accent-amber)">0</b></span>
+                        <span
+                            >Entities:
+                            <b id="stat-entities" style="color: var(--accent-amber)">0</b></span
+                        >
                     </div>
 
                     <div id="placement-banner" class="placement-banner">
                         <span>PLACING ASSET (Click on terrain to place)</span>
-                        <button class="btn btn-sm btn-danger" onclick="clearActiveTool()" style="padding: 2px 6px;">Cancel (Esc)</button>
+                        <button
+                            class="btn btn-sm btn-danger"
+                            onclick="clearActiveTool()"
+                            style="padding: 2px 6px"
+                        >
+                            Cancel (Esc)
+                        </button>
                     </div>
                 </div>
             </div>
 
             <!-- Right Sidebar: Inspector, Outliner & Atmosphere -->
             <div class="sidebar right" id="sidebar-right">
-                <button class="sidebar-toggle-pin right-pin" id="btn-toggle-right-sidebar" onclick="toggleRightSidebar()" title="Toggle Inspector / Outliner (Right Bracket)">▶</button>
+                <button
+                    class="sidebar-toggle-pin right-pin"
+                    id="btn-toggle-right-sidebar"
+                    onclick="toggleRightSidebar()"
+                    title="Toggle Inspector / Outliner (Right Bracket)"
+                >
+                    ▶
+                </button>
 
                 <div class="sidebar-tabs">
-                    <button class="tab-btn active" id="tab-inspector-btn" onclick="switchRightTab('inspector')">Inspector</button>
-                    <button class="tab-btn" id="tab-outliner-btn" onclick="switchRightTab('outliner')">Outliner</button>
-                    <button class="tab-btn" id="tab-atmosphere-btn" onclick="switchRightTab('atmosphere')">Atmosphere</button>
+                    <button
+                        class="tab-btn active"
+                        id="tab-inspector-btn"
+                        onclick="switchRightTab('inspector')"
+                    >
+                        Inspector
+                    </button>
+                    <button
+                        class="tab-btn"
+                        id="tab-outliner-btn"
+                        onclick="switchRightTab('outliner')"
+                    >
+                        Outliner
+                    </button>
+                    <button
+                        class="tab-btn"
+                        id="tab-atmosphere-btn"
+                        onclick="switchRightTab('atmosphere')"
+                    >
+                        Atmosphere
+                    </button>
                 </div>
 
                 <!-- View 1: Inspector -->
                 <div class="sidebar-content" id="right-inspector-view">
-                    <div id="inspector-empty" style="padding: 24px 16px; text-align: center; color: var(--text-muted); font-size: 12px; border: 1px dashed var(--border-color); border-radius: 6px;">
-                        No entity selected.<br />Click an object in the 3D scene or select from the Outliner to inspect properties.
+                    <div
+                        id="inspector-empty"
+                        style="
+                            padding: 24px 16px;
+                            text-align: center;
+                            color: var(--text-muted);
+                            font-size: 12px;
+                            border: 1px dashed var(--border-color);
+                            border-radius: 6px;
+                        "
+                    >
+                        No entity selected.<br />Click an object in the 3D scene or select from the
+                        Outliner to inspect properties.
                     </div>
 
-                    <div id="inspector-content" style="display: none;">
+                    <div id="inspector-content" style="display: none">
                         <!-- Section: Transform -->
                         <div class="section-title">Transform & Coordinates</div>
                         <div class="inspector-card">
                             <div class="prop-row">
                                 <span class="prop-name">Name</span>
-                                <input type="text" id="insp-name" class="text-input" style="width: 100%;" />
+                                <input
+                                    type="text"
+                                    id="insp-name"
+                                    class="text-input"
+                                    style="width: 100%"
+                                />
                             </div>
                             <div class="prop-row">
                                 <span class="prop-name">Archetype</span>
-                                <span id="insp-type" class="prop-value" style="color: var(--accent-cyan); font-weight: 700;">-</span>
+                                <span
+                                    id="insp-type"
+                                    class="prop-value"
+                                    style="color: var(--accent-cyan); font-weight: 700"
+                                    >-</span
+                                >
                             </div>
                             <div class="prop-row">
                                 <span class="prop-name">Coords (X,Y,Z)</span>
-                                <div style="display: flex; gap: 4px;">
-                                    <input type="text" id="insp-pos-x" class="text-input" style="width: 100%; font-size: 11px;" readonly />
-                                    <input type="text" id="insp-pos-y" class="text-input" style="width: 100%; font-size: 11px;" readonly />
-                                    <input type="text" id="insp-pos-z" class="text-input" style="width: 100%; font-size: 11px;" readonly />
+                                <div style="display: flex; gap: 4px">
+                                    <input
+                                        type="text"
+                                        id="insp-pos-x"
+                                        class="text-input"
+                                        style="width: 100%; font-size: 11px"
+                                        readonly
+                                    />
+                                    <input
+                                        type="text"
+                                        id="insp-pos-y"
+                                        class="text-input"
+                                        style="width: 100%; font-size: 11px"
+                                        readonly
+                                    />
+                                    <input
+                                        type="text"
+                                        id="insp-pos-z"
+                                        class="text-input"
+                                        style="width: 100%; font-size: 11px"
+                                        readonly
+                                    />
                                 </div>
                             </div>
                             <div class="prop-row">
                                 <span class="prop-name">Yaw Angle</span>
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                    <input type="range" id="insp-yaw" class="range-slider" min="0" max="360" value="0" />
-                                    <span id="insp-yaw-label" class="prop-value" style="width: 35px;">0°</span>
+                                <div style="display: flex; align-items: center; gap: 8px">
+                                    <input
+                                        type="range"
+                                        id="insp-yaw"
+                                        class="range-slider"
+                                        min="0"
+                                        max="360"
+                                        value="0"
+                                    />
+                                    <span id="insp-yaw-label" class="prop-value" style="width: 35px"
+                                        >0°</span
+                                    >
                                 </div>
                             </div>
                             <div class="prop-row">
                                 <span class="prop-name">Height Offset</span>
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                    <input type="range" id="insp-height-offset" class="range-slider" min="-20" max="100" step="1" value="0" />
-                                    <span id="insp-height-offset-val" class="prop-value" style="width: 35px;">0m</span>
+                                <div style="display: flex; align-items: center; gap: 8px">
+                                    <input
+                                        type="range"
+                                        id="insp-height-offset"
+                                        class="range-slider"
+                                        min="-20"
+                                        max="100"
+                                        step="1"
+                                        value="0"
+                                    />
+                                    <span
+                                        id="insp-height-offset-val"
+                                        class="prop-value"
+                                        style="width: 35px"
+                                        >0m</span
+                                    >
                                 </div>
                             </div>
                         </div>
@@ -450,7 +875,7 @@
                         <div class="inspector-card">
                             <div class="prop-row">
                                 <span class="prop-name">Faction</span>
-                                <select id="insp-faction" class="select-input" style="width: 100%;">
+                                <select id="insp-faction" class="select-input" style="width: 100%">
                                     <option value="player">Player</option>
                                     <option value="friendly">Friendly (Inner Sphere)</option>
                                     <option value="enemy">Enemy (Clan Smoke Jaguar)</option>
@@ -459,18 +884,45 @@
                             </div>
                             <div class="prop-row">
                                 <span class="prop-name">Armor / HP</span>
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                    <input type="range" id="insp-health" class="range-slider" min="10" max="500" value="100" />
-                                    <span id="insp-health-label" class="prop-value" style="width: 35px;">100</span>
+                                <div style="display: flex; align-items: center; gap: 8px">
+                                    <input
+                                        type="range"
+                                        id="insp-health"
+                                        class="range-slider"
+                                        min="10"
+                                        max="500"
+                                        value="100"
+                                    />
+                                    <span
+                                        id="insp-health-label"
+                                        class="prop-value"
+                                        style="width: 35px"
+                                        >100</span
+                                    >
                                 </div>
                             </div>
                             <div class="prop-row">
                                 <span class="prop-name">Primary Goal</span>
-                                <input type="checkbox" id="insp-objective" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;" />
+                                <input
+                                    type="checkbox"
+                                    id="insp-objective"
+                                    style="
+                                        accent-color: var(--accent-cyan);
+                                        width: 16px;
+                                        height: 16px;
+                                        cursor: pointer;
+                                    "
+                                />
                             </div>
                             <div class="prop-row" id="insp-objective-desc-row">
                                 <span class="prop-name">Goal Label</span>
-                                <input type="text" id="insp-objective-desc" class="text-input" placeholder="e.g. Destroy Radar Dish" style="width: 100%;" />
+                                <input
+                                    type="text"
+                                    id="insp-objective-desc"
+                                    class="text-input"
+                                    placeholder="e.g. Destroy Radar Dish"
+                                    style="width: 100%"
+                                />
                             </div>
                         </div>
 
@@ -480,7 +932,11 @@
                             <div class="inspector-card">
                                 <div class="prop-row">
                                     <span class="prop-name">Pilot Skill</span>
-                                    <select id="insp-ai-skill" class="select-input" style="width: 100%;">
+                                    <select
+                                        id="insp-ai-skill"
+                                        class="select-input"
+                                        style="width: 100%"
+                                    >
                                         <option value="regular">Regular (Standard)</option>
                                         <option value="green">Green (Recruit)</option>
                                         <option value="veteran">Veteran (Tactical)</option>
@@ -489,16 +945,26 @@
                                 </div>
                                 <div class="prop-row">
                                     <span class="prop-name">Combat Stance</span>
-                                    <select id="insp-ai-stance" class="select-input" style="width: 100%;">
+                                    <select
+                                        id="insp-ai-stance"
+                                        class="select-input"
+                                        style="width: 100%"
+                                    >
                                         <option value="guard">Guard (Hold Ground)</option>
                                         <option value="patrol">Patrol (Follow Navs)</option>
                                         <option value="ambush">Ambush (Wait Trigger)</option>
-                                        <option value="free_fire">Free Fire (Seek & Destroy)</option>
+                                        <option value="free_fire">
+                                            Free Fire (Seek & Destroy)
+                                        </option>
                                     </select>
                                 </div>
                                 <div class="prop-row">
                                     <span class="prop-name">Engagement Range</span>
-                                    <select id="insp-ai-range" class="select-input" style="width: 100%;">
+                                    <select
+                                        id="insp-ai-range"
+                                        class="select-input"
+                                        style="width: 100%"
+                                    >
                                         <option value="medium">Medium (200-500m)</option>
                                         <option value="short">Short (0-200m)</option>
                                         <option value="long">Long (500m+ Sniping)</option>
@@ -506,62 +972,111 @@
                                 </div>
                                 <div class="prop-row">
                                     <span class="prop-name">Retreat/Eject At</span>
-                                    <div style="display: flex; align-items: center; gap: 8px;">
-                                        <input type="range" id="insp-ai-retreat" class="range-slider" min="0" max="50" step="5" value="15" />
-                                        <span id="insp-ai-retreat-val" class="prop-value" style="width: 35px;">15%</span>
+                                    <div style="display: flex; align-items: center; gap: 8px">
+                                        <input
+                                            type="range"
+                                            id="insp-ai-retreat"
+                                            class="range-slider"
+                                            min="0"
+                                            max="50"
+                                            step="5"
+                                            value="15"
+                                        />
+                                        <span
+                                            id="insp-ai-retreat-val"
+                                            class="prop-value"
+                                            style="width: 35px"
+                                            >15%</span
+                                        >
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Section: Event Triggers -->
-                        <div id="insp-trigger-section" style="display: none;">
+                        <div id="insp-trigger-section" style="display: none">
                             <div class="section-title">Event Scripting & Volumes</div>
                             <div class="inspector-card">
                                 <div class="prop-row">
                                     <span class="prop-name">Trigger Radius</span>
-                                    <div style="display: flex; align-items: center; gap: 8px;">
-                                        <input type="range" id="insp-trigger-radius" class="range-slider" min="15" max="250" value="40" />
-                                        <span id="insp-trigger-radius-label" class="prop-value" style="width: 40px;">40m</span>
+                                    <div style="display: flex; align-items: center; gap: 8px">
+                                        <input
+                                            type="range"
+                                            id="insp-trigger-radius"
+                                            class="range-slider"
+                                            min="15"
+                                            max="250"
+                                            value="40"
+                                        />
+                                        <span
+                                            id="insp-trigger-radius-label"
+                                            class="prop-value"
+                                            style="width: 40px"
+                                            >40m</span
+                                        >
                                     </div>
                                 </div>
                                 <div class="prop-row">
                                     <span class="prop-name">Action</span>
-                                    <select id="insp-trigger-action" class="select-input" style="width: 100%;">
+                                    <select
+                                        id="insp-trigger-action"
+                                        class="select-input"
+                                        style="width: 100%"
+                                    >
                                         <option value="evac_complete">Complete Evac</option>
                                         <option value="spawn_ambush">Spawn Ambush</option>
                                         <option value="sound_alarm">Perimeter Alarm</option>
                                         <option value="radio_callout">Radio Callout</option>
-                                        <option value="minefield_detonate">Minefield Detonation</option>
+                                        <option value="minefield_detonate">
+                                            Minefield Detonation
+                                        </option>
                                     </select>
                                 </div>
                                 <div class="prop-row">
                                     <span class="prop-name">Audio Callout</span>
-                                    <select id="insp-trigger-audio" class="select-input" style="width: 100%;">
+                                    <select
+                                        id="insp-trigger-audio"
+                                        class="select-input"
+                                        style="width: 100%"
+                                    >
                                         <option value="betty_alarm">Betty: Perimeter Alert</option>
-                                        <option value="radio_clan_incoming">Clan Chatter: Targets Sighted</option>
+                                        <option value="radio_clan_incoming">
+                                            Clan Chatter: Targets Sighted
+                                        </option>
                                         <option value="hq_roger">HQ: Orders Received</option>
-                                        <option value="dropship_inbound">Dropship: Inbound for Dustoff</option>
-                                        <option value="custom_file">Custom Audio File (.wav/.ogg)</option>
+                                        <option value="dropship_inbound">
+                                            Dropship: Inbound for Dustoff
+                                        </option>
+                                        <option value="custom_file">
+                                            Custom Audio File (.wav/.ogg)
+                                        </option>
                                     </select>
                                 </div>
                                 <div class="prop-row">
                                     <span class="prop-name">HUD Prompt</span>
-                                    <input type="text" id="insp-trigger-msg" class="text-input" placeholder="e.g. Warning: Ambush detected!" style="width: 100%;" />
+                                    <input
+                                        type="text"
+                                        id="insp-trigger-msg"
+                                        class="text-input"
+                                        placeholder="e.g. Warning: Ambush detected!"
+                                        style="width: 100%"
+                                    />
                                 </div>
                             </div>
                         </div>
 
                         <!-- Inspector Actions -->
-                        <div style="display: flex; gap: 8px; margin-top: 12px;">
-                            <button id="btn-insp-dup" class="btn" style="flex: 1;">Duplicate</button>
-                            <button id="btn-insp-delete" class="btn btn-danger" style="flex: 1;">Delete</button>
+                        <div style="display: flex; gap: 8px; margin-top: 12px">
+                            <button id="btn-insp-dup" class="btn" style="flex: 1">Duplicate</button>
+                            <button id="btn-insp-delete" class="btn btn-danger" style="flex: 1">
+                                Delete
+                            </button>
                         </div>
                     </div>
                 </div>
 
                 <!-- View 2: Scene Outliner (NEW!) -->
-                <div class="sidebar-content" id="right-outliner-view" style="display: none;">
+                <div class="sidebar-content" id="right-outliner-view" style="display: none">
                     <div class="outliner-container">
                         <div class="outliner-search-box">
                             <input
@@ -569,39 +1084,100 @@
                                 id="outliner-search-input"
                                 class="text-input"
                                 placeholder="Filter placed entities..."
-                                style="width: 100%; font-size: 11px;"
+                                style="width: 100%; font-size: 11px"
                                 oninput="renderSceneOutliner()"
                             />
                         </div>
                         <div class="section-title">
                             <span>Placed Entities</span>
-                            <span id="outliner-count" style="font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan);">0</span>
+                            <span
+                                id="outliner-count"
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 10px;
+                                    color: var(--accent-cyan);
+                                "
+                                >0</span
+                            >
                         </div>
                         <div class="outliner-list" id="outliner-list">
                             <!-- Populated dynamically by JS -->
                         </div>
-                        <div style="display: flex; gap: 8px; margin-top: 6px;">
-                            <button class="btn btn-sm" onclick="focusSelectedEntity()" style="flex: 1;">Focus Entity</button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteSelectedAssetFromUI()" style="flex: 1;">Delete Selected</button>
+                        <div style="display: flex; gap: 8px; margin-top: 6px">
+                            <button
+                                class="btn btn-sm"
+                                onclick="focusSelectedEntity()"
+                                style="flex: 1"
+                            >
+                                Focus Entity
+                            </button>
+                            <button
+                                class="btn btn-sm btn-danger"
+                                onclick="deleteSelectedAssetFromUI()"
+                                style="flex: 1"
+                            >
+                                Delete Selected
+                            </button>
                         </div>
                     </div>
                 </div>
 
                 <!-- View 3: Atmosphere & Lighting (Live in Sidebar!) -->
-                <div class="sidebar-content" id="right-atmosphere-view" style="display: none;">
+                <div class="sidebar-content" id="right-atmosphere-view" style="display: none">
                     <div class="section-title">Solar Trajectory & Time of Day</div>
                     <div class="inspector-card">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div
+                            style="
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                                margin-bottom: 8px;
+                            "
+                        >
                             <span class="prop-name">Hour of Day</span>
-                            <span id="atmo-tod-display" style="font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--accent-amber); background: rgba(255,170,0,0.12); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--accent-amber);">18:00 (Sunset)</span>
+                            <span
+                                id="atmo-tod-display"
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    color: var(--accent-amber);
+                                    background: rgba(255, 170, 0, 0.12);
+                                    padding: 2px 6px;
+                                    border-radius: 4px;
+                                    border: 1px solid var(--accent-amber);
+                                "
+                                >18:00 (Sunset)</span
+                            >
                         </div>
-                        <input type="range" id="atmo-tod-slider" class="range-slider" min="0" max="24" step="0.1" value="18" oninput="onTimeOfDaySliderChange(this.value)" />
-                        
-                        <div class="env-control-grid" style="margin-top: 8px;">
-                            <div class="preset-chip" onclick="applyTimeOfDayPreset('dawn')">Dawn</div>
-                            <div class="preset-chip" onclick="applyTimeOfDayPreset('noon')">Noon</div>
-                            <div class="preset-chip active" id="chip-sunset" onclick="applyTimeOfDayPreset('sunset')">Sunset</div>
-                            <div class="preset-chip" onclick="applyTimeOfDayPreset('night')">Night</div>
+                        <input
+                            type="range"
+                            id="atmo-tod-slider"
+                            class="range-slider"
+                            min="0"
+                            max="24"
+                            step="0.1"
+                            value="18"
+                            oninput="onTimeOfDaySliderChange(this.value)"
+                        />
+
+                        <div class="env-control-grid" style="margin-top: 8px">
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('dawn')">
+                                Dawn
+                            </div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('noon')">
+                                Noon
+                            </div>
+                            <div
+                                class="preset-chip active"
+                                id="chip-sunset"
+                                onclick="applyTimeOfDayPreset('sunset')"
+                            >
+                                Sunset
+                            </div>
+                            <div class="preset-chip" onclick="applyTimeOfDayPreset('night')">
+                                Night
+                            </div>
                         </div>
                     </div>
 
@@ -609,110 +1185,306 @@
                     <div class="inspector-card">
                         <div class="prop-row">
                             <span class="prop-name">Sun Heading</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="atmo-azimuth" class="range-slider" min="0" max="360" value="235" oninput="onAtmosphereDirectInput()" />
-                                <span id="atmo-azimuth-val" class="prop-value" style="width: 35px;">235°</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="atmo-azimuth"
+                                    class="range-slider"
+                                    min="0"
+                                    max="360"
+                                    value="235"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span id="atmo-azimuth-val" class="prop-value" style="width: 35px"
+                                    >235°</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Sun Altitude</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="atmo-elevation" class="range-slider" min="0" max="90" value="28" oninput="onAtmosphereDirectInput()" />
-                                <span id="atmo-elevation-val" class="prop-value" style="width: 35px;">28°</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="atmo-elevation"
+                                    class="range-slider"
+                                    min="0"
+                                    max="90"
+                                    value="28"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span id="atmo-elevation-val" class="prop-value" style="width: 35px"
+                                    >28°</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Sun Color/Power</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="color" id="atmo-sun-color" value="#ffbe80" style="width: 24px; height: 22px; border: 1px solid var(--border-color); background: none; cursor: pointer;" oninput="onAtmosphereDirectInput()" />
-                                <input type="range" id="atmo-sun-strength" class="range-slider" min="0" max="3" step="0.05" value="0.9" oninput="onAtmosphereDirectInput()" />
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="color"
+                                    id="atmo-sun-color"
+                                    value="#ffbe80"
+                                    style="
+                                        width: 24px;
+                                        height: 22px;
+                                        border: 1px solid var(--border-color);
+                                        background: none;
+                                        cursor: pointer;
+                                    "
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <input
+                                    type="range"
+                                    id="atmo-sun-strength"
+                                    class="range-slider"
+                                    min="0"
+                                    max="3"
+                                    step="0.05"
+                                    value="0.9"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Ambient Sky Fill</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="color" id="atmo-ambient-color" value="#615273" style="width: 24px; height: 22px; border: 1px solid var(--border-color); background: none; cursor: pointer;" oninput="onAtmosphereDirectInput()" />
-                                <input type="range" id="atmo-ambient-strength" class="range-slider" min="0.02" max="1.0" step="0.02" value="0.22" oninput="onAtmosphereDirectInput()" />
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="color"
+                                    id="atmo-ambient-color"
+                                    value="#615273"
+                                    style="
+                                        width: 24px;
+                                        height: 22px;
+                                        border: 1px solid var(--border-color);
+                                        background: none;
+                                        cursor: pointer;
+                                    "
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <input
+                                    type="range"
+                                    id="atmo-ambient-strength"
+                                    class="range-slider"
+                                    min="0.02"
+                                    max="1.0"
+                                    step="0.02"
+                                    value="0.22"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Sky Fog Distance</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="color" id="atmo-sky-tint" value="#61477a" style="width: 24px; height: 22px; border: 1px solid var(--border-color); background: none; cursor: pointer;" oninput="onAtmosphereDirectInput()" />
-                                <input type="range" id="atmo-fog-dist" class="range-slider" min="300" max="4000" step="50" value="1200" oninput="onAtmosphereDirectInput()" />
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="color"
+                                    id="atmo-sky-tint"
+                                    value="#61477a"
+                                    style="
+                                        width: 24px;
+                                        height: 22px;
+                                        border: 1px solid var(--border-color);
+                                        background: none;
+                                        cursor: pointer;
+                                    "
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <input
+                                    type="range"
+                                    id="atmo-fog-dist"
+                                    class="range-slider"
+                                    min="300"
+                                    max="4000"
+                                    step="50"
+                                    value="1200"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Sun Shadows</span>
-                            <input type="checkbox" id="atmo-shadows-check" checked onchange="onAtmosphereDirectInput()" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;" />
+                            <input
+                                type="checkbox"
+                                id="atmo-shadows-check"
+                                checked
+                                onchange="onAtmosphereDirectInput()"
+                                style="
+                                    accent-color: var(--accent-cyan);
+                                    width: 16px;
+                                    height: 16px;
+                                    cursor: pointer;
+                                "
+                            />
                         </div>
                     </div>
 
                     <div class="section-title">Dynamic Weather Effects</div>
                     <div class="inspector-card">
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px;">
-                            <div class="preset-chip" onclick="applyWeatherPreset('clear')">Clear</div>
+                        <div
+                            style="
+                                display: grid;
+                                grid-template-columns: repeat(4, 1fr);
+                                gap: 4px;
+                                margin-bottom: 8px;
+                            "
+                        >
+                            <div class="preset-chip" onclick="applyWeatherPreset('clear')">
+                                Clear
+                            </div>
                             <div class="preset-chip" onclick="applyWeatherPreset('rain')">Rain</div>
-                            <div class="preset-chip" onclick="applyWeatherPreset('storm')">Storm</div>
+                            <div class="preset-chip" onclick="applyWeatherPreset('storm')">
+                                Storm
+                            </div>
                             <div class="preset-chip" onclick="applyWeatherPreset('dust')">Dust</div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Rain Downpour</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="weather-rain" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
-                                <span id="weather-rain-val" class="prop-value" style="width: 32px;">0%</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="weather-rain"
+                                    class="range-slider"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value="0"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span id="weather-rain-val" class="prop-value" style="width: 32px"
+                                    >0%</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Puddle Sheen</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="weather-wetness" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
-                                <span id="weather-wetness-val" class="prop-value" style="width: 32px;">0%</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="weather-wetness"
+                                    class="range-slider"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value="0"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span
+                                    id="weather-wetness-val"
+                                    class="prop-value"
+                                    style="width: 32px"
+                                    >0%</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Lightning</span>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <input type="checkbox" id="weather-lightning-check" onchange="onAtmosphereDirectInput()" style="accent-color: var(--accent-amber);" />
-                                <button class="btn btn-sm" onclick="triggerLightningFlash()" style="padding: 1px 6px; font-size: 10px;">Test</button>
+                            <div style="display: flex; align-items: center; gap: 8px">
+                                <input
+                                    type="checkbox"
+                                    id="weather-lightning-check"
+                                    onchange="onAtmosphereDirectInput()"
+                                    style="accent-color: var(--accent-amber)"
+                                />
+                                <button
+                                    class="btn btn-sm"
+                                    onclick="triggerLightningFlash()"
+                                    style="padding: 1px 6px; font-size: 10px"
+                                >
+                                    Test
+                                </button>
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Dust Storm</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="weather-dust" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
-                                <span id="weather-dust-val" class="prop-value" style="width: 32px;">0%</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="weather-dust"
+                                    class="range-slider"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value="0"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span id="weather-dust-val" class="prop-value" style="width: 32px"
+                                    >0%</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Industrial Smog</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="weather-smog" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
-                                <span id="weather-smog-val" class="prop-value" style="width: 32px;">0%</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="weather-smog"
+                                    class="range-slider"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value="0"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span id="weather-smog-val" class="prop-value" style="width: 32px"
+                                    >0%</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Heat Mirage</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="weather-shimmer" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
-                                <span id="weather-shimmer-val" class="prop-value" style="width: 32px;">0%</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="weather-shimmer"
+                                    class="range-slider"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value="0"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span
+                                    id="weather-shimmer-val"
+                                    class="prop-value"
+                                    style="width: 32px"
+                                    >0%</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Volcanic Ash</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="range" id="weather-volcano" class="range-slider" min="0" max="1" step="0.05" value="0" oninput="onAtmosphereDirectInput()" />
-                                <span id="weather-volcano-val" class="prop-value" style="width: 32px;">0%</span>
+                            <div style="display: flex; align-items: center; gap: 6px">
+                                <input
+                                    type="range"
+                                    id="weather-volcano"
+                                    class="range-slider"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value="0"
+                                    oninput="onAtmosphereDirectInput()"
+                                />
+                                <span
+                                    id="weather-volcano-val"
+                                    class="prop-value"
+                                    style="width: 32px"
+                                    >0%</span
+                                >
                             </div>
                         </div>
                         <div class="prop-row">
                             <span class="prop-name">Sealed Facility</span>
-                            <input type="checkbox" id="weather-interior-check" onchange="onAtmosphereDirectInput()" style="accent-color: var(--accent-red);" />
+                            <input
+                                type="checkbox"
+                                id="weather-interior-check"
+                                onchange="onAtmosphereDirectInput()"
+                                style="accent-color: var(--accent-red)"
+                            />
                         </div>
                     </div>
 
                     <!-- Environment Dials Compatibility Presets -->
-                    <div style="display:none;">
+                    <div style="display: none">
                         <input type="range" id="env-azimuth" />
                         <input type="range" id="env-elevation" />
                         <input type="range" id="env-strength" />
@@ -728,37 +1500,117 @@
 
         <!-- Mission Objectives & Briefing Modal -->
         <div id="objectives-modal" class="modal-overlay">
-            <div class="modal-card" style="width: 700px;">
+            <div class="modal-card" style="width: 700px">
                 <div class="modal-header">
                     <div class="modal-title"><span>MISSION OBJECTIVES & TACTICAL INTEL</span></div>
-                    <button class="modal-close-btn" onclick="closeObjectivesModal()">&times;</button>
+                    <button class="modal-close-btn" onclick="closeObjectivesModal()">
+                        &times;
+                    </button>
                 </div>
                 <div class="modal-body">
-                    <div style="margin-bottom: 12px;">
-                        <label style="display: block; font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; font-weight: 700;">Intel Briefing Dossier</label>
-                        <textarea id="briefing-textarea" class="text-input" style="width: 100%; height: 80px; resize: vertical; font-family: var(--font-mono); font-size: 12px; line-height: 1.4; padding: 8px;"></textarea>
+                    <div style="margin-bottom: 12px">
+                        <label
+                            style="
+                                display: block;
+                                font-size: 11px;
+                                text-transform: uppercase;
+                                color: var(--text-secondary);
+                                margin-bottom: 4px;
+                                font-weight: 700;
+                            "
+                            >Intel Briefing Dossier</label
+                        >
+                        <textarea
+                            id="briefing-textarea"
+                            class="text-input"
+                            style="
+                                width: 100%;
+                                height: 80px;
+                                resize: vertical;
+                                font-family: var(--font-mono);
+                                font-size: 12px;
+                                line-height: 1.4;
+                                padding: 8px;
+                            "
+                        ></textarea>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px;">
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 1fr 1fr;
+                            gap: 14px;
+                            margin-bottom: 14px;
+                        "
+                    >
                         <div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                <span style="font-weight: 700; color: var(--accent-cyan); font-size: 11px;">PRIMARY OBJECTIVES</span>
-                                <button id="btn-add-primary-obj" class="btn btn-sm">+ Add Goal</button>
+                            <div
+                                style="
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                    margin-bottom: 6px;
+                                "
+                            >
+                                <span
+                                    style="
+                                        font-weight: 700;
+                                        color: var(--accent-cyan);
+                                        font-size: 11px;
+                                    "
+                                    >PRIMARY OBJECTIVES</span
+                                >
+                                <button id="btn-add-primary-obj" class="btn btn-sm">
+                                    + Add Goal
+                                </button>
                             </div>
                             <div id="primary-objectives-list" class="objectives-list-box"></div>
                         </div>
                         <div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                <span style="font-weight: 700; color: var(--accent-amber); font-size: 11px;">SECONDARY OBJECTIVES</span>
-                                <button id="btn-add-secondary-obj" class="btn btn-sm">+ Add Goal</button>
+                            <div
+                                style="
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                    margin-bottom: 6px;
+                                "
+                            >
+                                <span
+                                    style="
+                                        font-weight: 700;
+                                        color: var(--accent-amber);
+                                        font-size: 11px;
+                                    "
+                                    >SECONDARY OBJECTIVES</span
+                                >
+                                <button id="btn-add-secondary-obj" class="btn btn-sm">
+                                    + Add Goal
+                                </button>
                             </div>
                             <div id="secondary-objectives-list" class="objectives-list-box"></div>
                         </div>
                     </div>
 
-                    <div style="display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-tertiary); border-radius: 6px;">
-                        <span style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); font-weight: 700;">Combat Audio Profile:</span>
-                        <select id="audio-track-select" class="select-input" style="flex: 1;">
+                    <div
+                        style="
+                            display: flex;
+                            align-items: center;
+                            gap: 12px;
+                            padding: 8px 12px;
+                            background: var(--bg-tertiary);
+                            border-radius: 6px;
+                        "
+                    >
+                        <span
+                            style="
+                                font-size: 11px;
+                                text-transform: uppercase;
+                                color: var(--text-secondary);
+                                font-weight: 700;
+                            "
+                            >Combat Audio Profile:</span
+                        >
+                        <select id="audio-track-select" class="select-input" style="flex: 1">
                             <option value="action_theme_1">Theme 1: Combat Engagement</option>
                             <option value="action_theme_2">Theme 2: Heavy Armor Clash</option>
                             <option value="ambient_winds">Ambient: Barren Winds</option>
@@ -767,63 +1619,159 @@
                     </div>
                 </div>
                 <div class="modal-actions">
-                    <button id="btn-close-objectives" class="btn btn-primary" onclick="closeObjectivesModal()">Apply & Close</button>
+                    <button
+                        id="btn-close-objectives"
+                        class="btn btn-primary"
+                        onclick="closeObjectivesModal()"
+                    >
+                        Apply & Close
+                    </button>
                 </div>
             </div>
         </div>
 
         <!-- MechLab & Drop Configuration Modal -->
         <div id="mechlab-modal" class="modal-overlay">
-            <div class="modal-card" style="width: 740px;">
+            <div class="modal-card" style="width: 740px">
                 <div class="modal-header">
                     <div class="modal-title"><span>MECHLAB & COMBAT DROP CONFIGURATION</span></div>
                     <button class="modal-close-btn" onclick="closeMechLabModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px;">
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 1fr 1fr;
+                            gap: 14px;
+                            margin-bottom: 14px;
+                        "
+                    >
                         <div>
-                            <label style="display: block; font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; font-weight: 700;">Player BattleMech Chassis</label>
-                            <select id="mechlab-chassis" class="select-input" style="width: 100%;">
-                                <option value="mech_madcat" selected>Mad Cat / Timber Wolf (75 Tons - Heavy Clan Omni)</option>
-                                <option value="mech_bushwacker">Bushwacker BSW-X1 (55 Tons - Medium IS Mech)</option>
-                                <option value="mech_thor">Thor / Summoner (70 Tons - Heavy Clan Omni)</option>
-                                <option value="mech_shadowcat">Shadow Cat (45 Tons - Medium Clan Omni)</option>
-                                <option value="mech_vulture">Vulture / Mad Dog (60 Tons - Heavy Clan Omni)</option>
-                                <option value="mech_daishi">Daishi / Dire Wolf (100 Tons - Assault Clan Omni)</option>
-                                <option value="mech_annihilator">Annihilator ANH-1A (100 Tons - Assault IS)</option>
-                                <option value="mech_avatar">Avatar AV1-O (70 Tons - Heavy IS Omni)</option>
-                                <option value="mech_blackhawk">Black Hawk / Nova (50 Tons - Medium Clan Omni)</option>
-                                <option value="mech_cauldron">Cauldron-Born (65 Tons - Heavy Clan Omni)</option>
-                                <option value="mech_champion">Champion 1N (60 Tons - Heavy IS Mech)</option>
-                                <option value="mech_dragonfly">Dragonfly / Viper (40 Tons - Medium Clan Omni)</option>
-                                <option value="mech_firefly">Firefly FFL-4A (30 Tons - Light IS Mech)</option>
-                                <option value="mech_orion">Orion ON1-K (75 Tons - Heavy IS Mech)</option>
-                                <option value="mech_strider">Strider SR1-O (40 Tons - Medium IS Omni)</option>
-                                <option value="mech_sunder">Sunder SD1-O (90 Tons - Assault IS Omni)</option>
-                                <option value="mech_supernova">Supernova (90 Tons - Assault Clan Mech)</option>
-                                <option value="mech_marauder">Marauder MAD-3R (75 Tons - Classic Heavy)</option>
+                            <label
+                                style="
+                                    display: block;
+                                    font-size: 11px;
+                                    text-transform: uppercase;
+                                    color: var(--text-secondary);
+                                    margin-bottom: 4px;
+                                    font-weight: 700;
+                                "
+                                >Player BattleMech Chassis</label
+                            >
+                            <select id="mechlab-chassis" class="select-input" style="width: 100%">
+                                <option value="mech_madcat" selected>
+                                    Mad Cat / Timber Wolf (75 Tons - Heavy Clan Omni)
+                                </option>
+                                <option value="mech_bushwacker">
+                                    Bushwacker BSW-X1 (55 Tons - Medium IS Mech)
+                                </option>
+                                <option value="mech_thor">
+                                    Thor / Summoner (70 Tons - Heavy Clan Omni)
+                                </option>
+                                <option value="mech_shadowcat">
+                                    Shadow Cat (45 Tons - Medium Clan Omni)
+                                </option>
+                                <option value="mech_vulture">
+                                    Vulture / Mad Dog (60 Tons - Heavy Clan Omni)
+                                </option>
+                                <option value="mech_daishi">
+                                    Daishi / Dire Wolf (100 Tons - Assault Clan Omni)
+                                </option>
+                                <option value="mech_annihilator">
+                                    Annihilator ANH-1A (100 Tons - Assault IS)
+                                </option>
+                                <option value="mech_avatar">
+                                    Avatar AV1-O (70 Tons - Heavy IS Omni)
+                                </option>
+                                <option value="mech_blackhawk">
+                                    Black Hawk / Nova (50 Tons - Medium Clan Omni)
+                                </option>
+                                <option value="mech_cauldron">
+                                    Cauldron-Born (65 Tons - Heavy Clan Omni)
+                                </option>
+                                <option value="mech_champion">
+                                    Champion 1N (60 Tons - Heavy IS Mech)
+                                </option>
+                                <option value="mech_dragonfly">
+                                    Dragonfly / Viper (40 Tons - Medium Clan Omni)
+                                </option>
+                                <option value="mech_firefly">
+                                    Firefly FFL-4A (30 Tons - Light IS Mech)
+                                </option>
+                                <option value="mech_orion">
+                                    Orion ON1-K (75 Tons - Heavy IS Mech)
+                                </option>
+                                <option value="mech_strider">
+                                    Strider SR1-O (40 Tons - Medium IS Omni)
+                                </option>
+                                <option value="mech_sunder">
+                                    Sunder SD1-O (90 Tons - Assault IS Omni)
+                                </option>
+                                <option value="mech_supernova">
+                                    Supernova (90 Tons - Assault Clan Mech)
+                                </option>
+                                <option value="mech_marauder">
+                                    Marauder MAD-3R (75 Tons - Classic Heavy)
+                                </option>
                             </select>
                         </div>
                         <div>
-                            <label style="display: block; font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; font-weight: 700;">Insertion Deployment Type</label>
-                            <select id="mechlab-drop-type" class="select-input" style="width: 100%;">
-                                <option value="orbital_drop_pod">Orbital Combat Drop Pod (Direct Orbit)</option>
-                                <option value="dropship_insertion">Union-Class Dropship Low Insertion</option>
+                            <label
+                                style="
+                                    display: block;
+                                    font-size: 11px;
+                                    text-transform: uppercase;
+                                    color: var(--text-secondary);
+                                    margin-bottom: 4px;
+                                    font-weight: 700;
+                                "
+                                >Insertion Deployment Type</label
+                            >
+                            <select id="mechlab-drop-type" class="select-input" style="width: 100%">
+                                <option value="orbital_drop_pod">
+                                    Orbital Combat Drop Pod (Direct Orbit)
+                                </option>
+                                <option value="dropship_insertion">
+                                    Union-Class Dropship Low Insertion
+                                </option>
                                 <option value="hot_lz_combat">Hot LZ Perimeter Touchdown</option>
                             </select>
                         </div>
                     </div>
 
                     <!-- Hardpoint Loadout Configuration -->
-                    <div style="margin-bottom: 14px; padding: 12px; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border-color);">
-                        <div style="font-weight: 700; color: var(--accent-cyan); font-size: 11px; margin-bottom: 10px; display: flex; justify-content: space-between;">
+                    <div
+                        style="
+                            margin-bottom: 14px;
+                            padding: 12px;
+                            background: var(--bg-tertiary);
+                            border-radius: 6px;
+                            border: 1px solid var(--border-color);
+                        "
+                    >
+                        <div
+                            style="
+                                font-weight: 700;
+                                color: var(--accent-cyan);
+                                font-size: 11px;
+                                margin-bottom: 10px;
+                                display: flex;
+                                justify-content: space-between;
+                            "
+                        >
                             <span>WEAPON HARDPOINT LOADOUT</span>
-                            <span id="mechlab-tonnage-badge" style="color: var(--accent-green); font-family: var(--font-mono)">75.0 / 75.0 TONS</span>
+                            <span
+                                id="mechlab-tonnage-badge"
+                                style="color: var(--accent-green); font-family: var(--font-mono)"
+                                >75.0 / 75.0 TONS</span
+                            >
                         </div>
-                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                        <div
+                            style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px"
+                        >
                             <div>
-                                <span class="prop-name" style="font-size: 10px;">Left Arm</span>
-                                <select id="wpn-left-arm" class="select-input" style="width: 100%;">
+                                <span class="prop-name" style="font-size: 10px">Left Arm</span>
+                                <select id="wpn-left-arm" class="select-input" style="width: 100%">
                                     <option value="ER PPC">Clan ER PPC</option>
                                     <option value="Large Pulse Laser">Large Pulse Laser</option>
                                     <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
@@ -832,8 +1780,12 @@
                                 </select>
                             </div>
                             <div>
-                                <span class="prop-name" style="font-size: 10px;">Center Torso</span>
-                                <select id="wpn-center-torso" class="select-input" style="width: 100%;">
+                                <span class="prop-name" style="font-size: 10px">Center Torso</span>
+                                <select
+                                    id="wpn-center-torso"
+                                    class="select-input"
+                                    style="width: 100%"
+                                >
                                     <option value="Medium Pulse Laser">Medium Pulse Laser</option>
                                     <option value="ER Medium Laser">Clan ER Medium Laser</option>
                                     <option value="SRM-6 Streak">Streak SRM-6</option>
@@ -841,8 +1793,8 @@
                                 </select>
                             </div>
                             <div>
-                                <span class="prop-name" style="font-size: 10px;">Right Arm</span>
-                                <select id="wpn-right-arm" class="select-input" style="width: 100%;">
+                                <span class="prop-name" style="font-size: 10px">Right Arm</span>
+                                <select id="wpn-right-arm" class="select-input" style="width: 100%">
                                     <option value="ER PPC">Clan ER PPC</option>
                                     <option value="Large Pulse Laser">Large Pulse Laser</option>
                                     <option value="Clan Gauss Rifle">Clan Gauss Rifle</option>
@@ -851,8 +1803,12 @@
                                 </select>
                             </div>
                             <div>
-                                <span class="prop-name" style="font-size: 10px;">Left Torso</span>
-                                <select id="wpn-left-torso" class="select-input" style="width: 100%;">
+                                <span class="prop-name" style="font-size: 10px">Left Torso</span>
+                                <select
+                                    id="wpn-left-torso"
+                                    class="select-input"
+                                    style="width: 100%"
+                                >
                                     <option value="Clan LRM-20">Clan LRM-20 Rack</option>
                                     <option value="Streak SRM-6">Streak SRM-6</option>
                                     <option value="Ultra AC/10">Ultra AC/10</option>
@@ -860,15 +1816,32 @@
                                 </select>
                             </div>
                             <div>
-                                <span class="prop-name" style="font-size: 10px;">Armor Tonnage</span>
-                                <div style="display: flex; align-items: center; gap: 6px;">
-                                    <input type="range" id="mechlab-armor" class="range-slider" min="8" max="22" step="0.5" value="14" />
-                                    <span id="mechlab-armor-val" class="prop-value" style="width: 40px;">14.0T</span>
+                                <span class="prop-name" style="font-size: 10px">Armor Tonnage</span>
+                                <div style="display: flex; align-items: center; gap: 6px">
+                                    <input
+                                        type="range"
+                                        id="mechlab-armor"
+                                        class="range-slider"
+                                        min="8"
+                                        max="22"
+                                        step="0.5"
+                                        value="14"
+                                    />
+                                    <span
+                                        id="mechlab-armor-val"
+                                        class="prop-value"
+                                        style="width: 40px"
+                                        >14.0T</span
+                                    >
                                 </div>
                             </div>
                             <div>
-                                <span class="prop-name" style="font-size: 10px;">Right Torso</span>
-                                <select id="wpn-right-torso" class="select-input" style="width: 100%;">
+                                <span class="prop-name" style="font-size: 10px">Right Torso</span>
+                                <select
+                                    id="wpn-right-torso"
+                                    class="select-input"
+                                    style="width: 100%"
+                                >
                                     <option value="Clan LRM-20">Clan LRM-20 Rack</option>
                                     <option value="Streak SRM-6">Streak SRM-6</option>
                                     <option value="Ultra AC/10">Ultra AC/10</option>
@@ -876,42 +1849,93 @@
                                 </select>
                             </div>
                         </div>
-                        <div style="display: flex; gap: 20px; margin-top: 10px; font-size: 11px;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
+                        <div style="display: flex; gap: 20px; margin-top: 10px; font-size: 11px">
+                            <div style="display: flex; align-items: center; gap: 8px">
                                 <span>Double Heat Sinks:</span>
-                                <input type="number" id="mechlab-heatsinks" class="text-input" value="16" min="10" max="28" style="width: 50px;" />
+                                <input
+                                    type="number"
+                                    id="mechlab-heatsinks"
+                                    class="text-input"
+                                    value="16"
+                                    min="10"
+                                    max="28"
+                                    style="width: 50px"
+                                />
                             </div>
-                            <div style="display: flex; align-items: center; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px">
                                 <span>Jump Jets:</span>
-                                <input type="number" id="mechlab-jumpjets" class="text-input" value="0" min="0" max="6" style="width: 50px;" />
+                                <input
+                                    type="number"
+                                    id="mechlab-jumpjets"
+                                    class="text-input"
+                                    value="0"
+                                    min="0"
+                                    max="6"
+                                    style="width: 50px"
+                                />
                             </div>
                         </div>
                     </div>
 
                     <!-- Lancemate Roster -->
-                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border-color);">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <span style="font-weight: 700; color: var(--accent-amber); font-size: 11px;">SUPPORT LANCE ROSTER</span>
-                            <button id="btn-add-lancemate" class="btn btn-sm">+ Add Lancemate</button>
+                    <div
+                        style="
+                            padding: 10px;
+                            background: var(--bg-tertiary);
+                            border-radius: 6px;
+                            border: 1px solid var(--border-color);
+                        "
+                    >
+                        <div
+                            style="
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                                margin-bottom: 8px;
+                            "
+                        >
+                            <span
+                                style="
+                                    font-weight: 700;
+                                    color: var(--accent-amber);
+                                    font-size: 11px;
+                                "
+                                >SUPPORT LANCE ROSTER</span
+                            >
+                            <button id="btn-add-lancemate" class="btn btn-sm">
+                                + Add Lancemate
+                            </button>
                         </div>
                         <div id="lancemate-list" class="lancemate-list-box"></div>
                     </div>
                 </div>
                 <div class="modal-actions">
-                    <button id="btn-close-mechlab" class="btn btn-primary" onclick="closeMechLabModal()">Apply & Close</button>
+                    <button
+                        id="btn-close-mechlab"
+                        class="btn btn-primary"
+                        onclick="closeMechLabModal()"
+                    >
+                        Apply & Close
+                    </button>
                 </div>
             </div>
         </div>
 
         <!-- Atmosphere Modal (Kept for compatibility) -->
         <div id="atmosphere-modal" class="modal-overlay">
-            <div class="modal-card" style="width: 780px;">
+            <div class="modal-card" style="width: 780px">
                 <div class="modal-header">
                     <div class="modal-title"><span>ATMOSPHERE & LIGHTING STUDIO</span></div>
-                    <button class="modal-close-btn" onclick="closeAtmosphereModal()">&times;</button>
+                    <button class="modal-close-btn" onclick="closeAtmosphereModal()">
+                        &times;
+                    </button>
                 </div>
                 <div class="modal-body">
-                    <p style="margin-bottom: 12px;">Atmosphere, solar trajectory, and dynamic weather are also docked directly in the <strong>Atmosphere</strong> sidebar tab for live 3D feedback without blocking the viewport.</p>
+                    <p style="margin-bottom: 12px">
+                        Atmosphere, solar trajectory, and dynamic weather are also docked directly
+                        in the <strong>Atmosphere</strong> sidebar tab for live 3D feedback without
+                        blocking the viewport.
+                    </p>
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-primary" onclick="closeAtmosphereModal()">Close</button>
@@ -921,62 +1945,150 @@
 
         <!-- Campaign Creator Modal -->
         <div id="campaign-modal" class="modal-overlay">
-            <div class="modal-card" style="width: 820px; max-height: 90vh;">
+            <div class="modal-card" style="width: 820px; max-height: 90vh">
                 <div class="modal-header">
                     <div class="modal-title"><span>CAMPAIGN CREATOR & SEQUENCER</span></div>
                     <button class="modal-close-btn" onclick="closeCampaignModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 2fr 1fr 1fr;
+                            gap: 10px;
+                            margin-bottom: 12px;
+                        "
+                    >
                         <div>
                             <span class="meta-label">Campaign Title</span>
-                            <input type="text" id="camp-title" class="text-input" value="Operation Damocles" style="width: 100%;" />
+                            <input
+                                type="text"
+                                id="camp-title"
+                                class="text-input"
+                                value="Operation Damocles"
+                                style="width: 100%"
+                            />
                         </div>
                         <div>
                             <span class="meta-label">Campaign ID</span>
-                            <input type="text" id="camp-id" class="text-input" value="operation_damocles" style="width: 100%;" />
+                            <input
+                                type="text"
+                                id="camp-id"
+                                class="text-input"
+                                value="operation_damocles"
+                                style="width: 100%"
+                            />
                         </div>
                         <div>
                             <span class="meta-label">Player Faction</span>
-                            <select id="camp-faction" class="select-input" style="width: 100%;">
+                            <select id="camp-faction" class="select-input" style="width: 100%">
                                 <option value="Inner Sphere">Inner Sphere</option>
                                 <option value="Clan Smoke Jaguar">Clan Smoke Jaguar</option>
                                 <option value="Mercenary Corps">Mercenary Corps</option>
                             </select>
                         </div>
                     </div>
-                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 12px;">
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 2fr 1fr;
+                            gap: 10px;
+                            margin-bottom: 12px;
+                        "
+                    >
                         <div>
                             <span class="meta-label">Campaign Lore & Strategic Briefing</span>
-                            <textarea id="camp-desc" class="text-input" style="width: 100%; height: 50px; resize: none; font-size: 11px;">Operation Damocles: Deep strike behind Clan Smoke Jaguar lines on Tranquil to disrupt regional communications and neutralize command garrisons.</textarea>
+                            <textarea
+                                id="camp-desc"
+                                class="text-input"
+                                style="width: 100%; height: 50px; resize: none; font-size: 11px"
+                            >
+Operation Damocles: Deep strike behind Clan Smoke Jaguar lines on Tranquil to disrupt regional communications and neutralize command garrisons.</textarea>
                         </div>
                         <div>
                             <span class="meta-label">Theater of Operations</span>
-                            <input type="text" id="camp-theater" class="text-input" value="Tranquil Coastal Basin" style="width: 100%;" />
-                            <div style="margin-top: 6px; display: flex; align-items: center; gap: 6px;">
-                                <input type="checkbox" id="camp-salvage-enabled" checked style="accent-color: var(--accent-cyan);" />
-                                <span style="font-size: 11px;">Carryover Salvage & Repairs</span>
+                            <input
+                                type="text"
+                                id="camp-theater"
+                                class="text-input"
+                                value="Tranquil Coastal Basin"
+                                style="width: 100%"
+                            />
+                            <div
+                                style="
+                                    margin-top: 6px;
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 6px;
+                                "
+                            >
+                                <input
+                                    type="checkbox"
+                                    id="camp-salvage-enabled"
+                                    checked
+                                    style="accent-color: var(--accent-cyan)"
+                                />
+                                <span style="font-size: 11px">Carryover Salvage & Repairs</span>
                             </div>
                         </div>
                     </div>
 
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <span style="font-size: 11px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase;">
+                    <div
+                        style="
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: center;
+                            margin-bottom: 8px;
+                        "
+                    >
+                        <span
+                            style="
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: var(--accent-cyan);
+                                text-transform: uppercase;
+                            "
+                        >
                             Mission Progression & Branching Graph
                         </span>
-                        <button class="btn btn-primary btn-sm" onclick="addCampaignMission()">+ Add Mission Stage</button>
+                        <button class="btn btn-primary btn-sm" onclick="addCampaignMission()">
+                            + Add Mission Stage
+                        </button>
                     </div>
 
-                    <div id="campaign-missions-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto;">
+                    <div
+                        id="campaign-missions-list"
+                        style="
+                            display: flex;
+                            flex-direction: column;
+                            gap: 8px;
+                            max-height: 260px;
+                            overflow-y: auto;
+                        "
+                    >
                         <!-- Dynamic Campaign Cards rendered by JS -->
                     </div>
                 </div>
 
                 <div class="modal-actions">
                     <button class="btn" onclick="closeCampaignModal()">Cancel</button>
-                    <button class="btn btn-primary" id="btn-export-campaign" onclick="exportCampaignProject()">Compile Campaign Pack</button>
-                    <button class="btn" id="btn-package-campaign" onclick="packageCampaignZip()">Package Campaign ZIP</button>
-                    <button class="btn btn-accent" id="btn-launch-campaign" onclick="launchCampaignProject()">Play Campaign</button>
+                    <button
+                        class="btn btn-primary"
+                        id="btn-export-campaign"
+                        onclick="exportCampaignProject()"
+                    >
+                        Compile Campaign Pack
+                    </button>
+                    <button class="btn" id="btn-package-campaign" onclick="packageCampaignZip()">
+                        Package Campaign ZIP
+                    </button>
+                    <button
+                        class="btn btn-accent"
+                        id="btn-launch-campaign"
+                        onclick="launchCampaignProject()"
+                    >
+                        Play Campaign
+                    </button>
                 </div>
             </div>
         </div>
@@ -986,101 +2098,200 @@
             <div class="modal-card">
                 <div class="modal-header">
                     <div class="modal-title"><span>MAP PACK COMPILED SUCCESSFULLY</span></div>
-                    <button class="modal-close-btn" onclick="document.getElementById('export-modal').style.display='none'">&times;</button>
+                    <button
+                        class="modal-close-btn"
+                        onclick="document.getElementById('export-modal').style.display = 'none'"
+                    >
+                        &times;
+                    </button>
                 </div>
                 <div class="modal-body">
-                    Your standalone custom map pack has been built and packaged cleanly into the isolated <code>mods/map-packs/</code> folder without altering base game files.
-                    <div id="modal-export-details" style="margin-top: 10px;"></div>
+                    Your standalone custom map pack has been built and packaged cleanly into the
+                    isolated <code>mods/map-packs/</code> folder without altering base game files.
+                    <div id="modal-export-details" style="margin-top: 10px"></div>
                 </div>
                 <div class="modal-actions">
                     <button id="btn-modal-close" class="btn">Close</button>
-                    <button onclick="packageCurrentMapZip()" class="btn">Package ZIP for Other PCs</button>
-                    <button onclick="launchGameEngine()" class="btn btn-accent">Launch Game Now</button>
+                    <button onclick="packageCurrentMapZip()" class="btn">
+                        Package ZIP for Other PCs
+                    </button>
+                    <button onclick="launchGameEngine()" class="btn btn-accent">
+                        Launch Game Now
+                    </button>
                 </div>
             </div>
         </div>
 
         <!-- Keyboard Shortcuts Help Modal (NEW!) -->
-        
+
         <!-- Create New Mission Wizard Modal -->
-        <div id="new-mission-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" style="width: 580px;">
+        <div id="new-mission-modal" class="modal-overlay" style="display: none">
+            <div class="modal-card" style="width: 580px">
                 <div class="modal-header">
                     <div class="modal-title"><span>CREATE NEW MISSION / MAP</span></div>
-                    <button class="modal-close-btn" onclick="closeNewMissionModal()">&times;</button>
+                    <button class="modal-close-btn" onclick="closeNewMissionModal()">
+                        &times;
+                    </button>
                 </div>
                 <div class="modal-body">
-                    <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 13px;">
-                        Configure the operational sector, planetary terrain biome, starting template, and player deployment for your custom MechWarrior 3 mission.
+                    <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 13px">
+                        Configure the operational sector, planetary terrain biome, starting
+                        template, and player deployment for your custom MechWarrior 3 mission.
                     </p>
-                    <div style="display: grid; grid-template-columns: 140px 1fr; gap: 12px; align-items: center; margin-bottom: 8px;">
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 140px 1fr;
+                            gap: 12px;
+                            align-items: center;
+                            margin-bottom: 8px;
+                        "
+                    >
                         <span class="meta-label">MISSION TITLE:</span>
-                        <input type="text" id="new-mission-title" class="text-input" value="Sector 7 Infiltration" oninput="autoSlugNewMissionId()" style="padding: 6px 10px; font-size: 13px;" />
+                        <input
+                            type="text"
+                            id="new-mission-title"
+                            class="text-input"
+                            value="Sector 7 Infiltration"
+                            oninput="autoSlugNewMissionId()"
+                            style="padding: 6px 10px; font-size: 13px"
+                        />
 
                         <span class="meta-label">PACK / MAP ID:</span>
-                        <input type="text" id="new-mission-id" class="text-input" value="sector_7_infiltration" style="padding: 6px 10px; font-size: 13px; font-family: var(--font-mono);" />
+                        <input
+                            type="text"
+                            id="new-mission-id"
+                            class="text-input"
+                            value="sector_7_infiltration"
+                            style="
+                                padding: 6px 10px;
+                                font-size: 13px;
+                                font-family: var(--font-mono);
+                            "
+                        />
 
                         <span class="meta-label">PLANETARY BIOME:</span>
-                        <select id="new-mission-biome" class="select-input" style="padding: 6px 10px; font-size: 13px;">
-                            <option value="flat" selected>Flat Plain / Empty Canvas (Level Terrain for Custom Sculpting)</option>
+                        <select
+                            id="new-mission-biome"
+                            class="select-input"
+                            style="padding: 6px 10px; font-size: 13px"
+                        >
+                            <option value="flat" selected>
+                                Flat Plain / Empty Canvas (Level Terrain for Custom Sculpting)
+                            </option>
                             <option value="c1">Operation 1: Coastal Basin / Beachhead (c1)</option>
                             <option value="c2">Operation 2: Highlands / Rolling Hills (c2)</option>
                             <option value="c3">Operation 3: Caldera / Volcanic Plains (c3)</option>
-                            <option value="c4">Operation 4: Glacial Canyons / Ice Shelf (c4)</option>
+                            <option value="c4">
+                                Operation 4: Glacial Canyons / Ice Shelf (c4)
+                            </option>
                             <option value="t1">Training Facility / Salt Flats (t1)</option>
                         </select>
 
                         <span class="meta-label">START TEMPLATE:</span>
-                        <select id="new-mission-template" class="select-input" onchange="handleNewMissionTemplateChange(this.value)" style="padding: 6px 10px; font-size: 13px;">
-                            <option value="blank" selected>Blank Slate (Flat Plain - Player Drop Zone Only)</option>
-                            <option value="outpost">Defensive Outpost (Drop Zone + Base Perimeter + Tower)</option>
-                            <option value="skirmish">Combat Skirmish (Drop Zone + Enemy Patrol Lance)</option>
+                        <select
+                            id="new-mission-template"
+                            class="select-input"
+                            onchange="handleNewMissionTemplateChange(this.value)"
+                            style="padding: 6px 10px; font-size: 13px"
+                        >
+                            <option value="blank" selected>
+                                Blank Slate (Flat Plain - Player Drop Zone Only)
+                            </option>
+                            <option value="outpost">
+                                Defensive Outpost (Drop Zone + Base Perimeter + Tower)
+                            </option>
+                            <option value="skirmish">
+                                Combat Skirmish (Drop Zone + Enemy Patrol Lance)
+                            </option>
                         </select>
 
                         <span class="meta-label">PLAYER MECH:</span>
-                        <select id="new-mission-mech" class="select-input" style="padding: 6px 10px; font-size: 13px;">
-                            <option value="Mad Cat / Timber Wolf">Mad Cat / Timber Wolf (75T Clan Omni)</option>
-                            <option value="Bushwacker BSW-X1">Bushwacker BSW-X1 (55T IS Medium)</option>
+                        <select
+                            id="new-mission-mech"
+                            class="select-input"
+                            style="padding: 6px 10px; font-size: 13px"
+                        >
+                            <option value="Mad Cat / Timber Wolf">
+                                Mad Cat / Timber Wolf (75T Clan Omni)
+                            </option>
+                            <option value="Bushwacker BSW-X1">
+                                Bushwacker BSW-X1 (55T IS Medium)
+                            </option>
                             <option value="Thor / Summoner">Thor / Summoner (70T Clan Omni)</option>
                             <option value="Shadow Cat">Shadow Cat (45T Clan Omni)</option>
-                            <option value="Vulture / Mad Dog">Vulture / Mad Dog (60T Clan Omni)</option>
-                            <option value="Daishi / Dire Wolf">Daishi / Dire Wolf (100T Clan Assault)</option>
+                            <option value="Vulture / Mad Dog">
+                                Vulture / Mad Dog (60T Clan Omni)
+                            </option>
+                            <option value="Daishi / Dire Wolf">
+                                Daishi / Dire Wolf (100T Clan Assault)
+                            </option>
                             <option value="Avatar AV1-O">Avatar AV1-O (70T IS Omni)</option>
                             <option value="Cauldron-Born">Cauldron-Born (65T Clan Omni)</option>
-                            <option value="Black Hawk / Nova">Black Hawk / Nova (50T Clan Omni)</option>
-                            <option value="Annihilator ANH-1A">Annihilator ANH-1A (100T IS Assault)</option>
+                            <option value="Black Hawk / Nova">
+                                Black Hawk / Nova (50T Clan Omni)
+                            </option>
+                            <option value="Annihilator ANH-1A">
+                                Annihilator ANH-1A (100T IS Assault)
+                            </option>
                         </select>
                     </div>
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="closeNewMissionModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="confirmCreateNewMission()">Create Mission</button>
+                    <button class="btn btn-primary" onclick="confirmCreateNewMission()">
+                        Create Mission
+                    </button>
                 </div>
             </div>
         </div>
 
         <div id="shortcuts-modal" class="modal-overlay">
-            <div class="modal-card" style="width: 580px;">
+            <div class="modal-card" style="width: 580px">
                 <div class="modal-header">
                     <div class="modal-title"><span>KEYBOARD SHORTCUTS REFERENCE</span></div>
                     <button class="modal-close-btn" onclick="closeShortcutsModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="shortcuts-grid">
-                        <div class="shortcut-row"><span>Toggle 2D/3D View Mode</span><kbd>Tab</kbd></div>
-                        <div class="shortcut-row"><span>3D Perspective Orbit</span><kbd>O</kbd></div>
-                        <div class="shortcut-row"><span>2D Tactical Map View</span><kbd>T</kbd></div>
+                        <div class="shortcut-row">
+                            <span>Toggle 2D/3D View Mode</span><kbd>Tab</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>3D Perspective Orbit</span><kbd>O</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>2D Tactical Map View</span><kbd>T</kbd>
+                        </div>
                         <div class="shortcut-row"><span>Isometric Angle</span><kbd>I</kbd></div>
-                        <div class="shortcut-row"><span>Focus Camera on Selection</span><kbd>F</kbd></div>
-                        <div class="shortcut-row"><span>Satellite Recon Overlay</span><kbd>M</kbd></div>
-                        <div class="shortcut-row"><span>Toggle Terrain Sculpting</span><kbd>S</kbd></div>
-                        <div class="shortcut-row"><span>Delete Selected Object</span><kbd>Del / Backspace</kbd></div>
-                        <div class="shortcut-row"><span>Duplicate Selected</span><kbd>Ctrl + D</kbd></div>
-                        <div class="shortcut-row"><span>Create New Mission</span><kbd>Ctrl + N</kbd></div>
-                        <div class="shortcut-row"><span>Open / Import Map</span><kbd>Ctrl + O</kbd></div>
-                        <div class="shortcut-row"><span>Undo Last Action</span><kbd>Ctrl + Z</kbd></div>
+                        <div class="shortcut-row">
+                            <span>Focus Camera on Selection</span><kbd>F</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>Satellite Recon Overlay</span><kbd>M</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>Toggle Terrain Sculpting</span><kbd>S</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>Delete Selected Object</span><kbd>Del / Backspace</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>Duplicate Selected</span><kbd>Ctrl + D</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>Create New Mission</span><kbd>Ctrl + N</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>Open / Import Map</span><kbd>Ctrl + O</kbd>
+                        </div>
+                        <div class="shortcut-row">
+                            <span>Undo Last Action</span><kbd>Ctrl + Z</kbd>
+                        </div>
                         <div class="shortcut-row"><span>Redo Action</span><kbd>Ctrl + Y</kbd></div>
-                        <div class="shortcut-row"><span>Cancel Placement / Deselect</span><kbd>Escape</kbd></div>
+                        <div class="shortcut-row">
+                            <span>Cancel Placement / Deselect</span><kbd>Escape</kbd>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-actions">
@@ -1091,22 +2302,36 @@
 
         <!-- Game Directory Setup Modal (NEW!) -->
         <div id="gamedir-modal" class="modal-overlay">
-            <div class="modal-card" style="width: 540px;">
+            <div class="modal-card" style="width: 540px">
                 <div class="modal-header">
                     <div class="modal-title"><span>MECHWARRIOR 3 GAME DIRECTORY</span></div>
                     <button class="modal-close-btn" onclick="closeGameDirModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <p style="margin-bottom: 12px;">Mod Studio integrates directly with your MechWarrior 3 retail installation to extract authentic models, textures, audio, and launch custom missions.</p>
-                    <div class="meta-field" style="margin-bottom: 12px;">
+                    <p style="margin-bottom: 12px">
+                        Mod Studio integrates directly with your MechWarrior 3 retail installation
+                        to extract authentic models, textures, audio, and launch custom missions.
+                    </p>
+                    <div class="meta-field" style="margin-bottom: 12px">
                         <span class="meta-label">Game Directory Path:</span>
                     </div>
-                    <input type="text" id="modal-game-path-input" class="text-input" placeholder="e.g. C:\Games\MechWarrior 3" style="width: 100%; padding: 8px; font-size: 12px;" />
-                    <div id="gamedir-modal-status" style="margin-top: 10px; font-size: 11px; font-family: var(--font-mono);"></div>
+                    <input
+                        type="text"
+                        id="modal-game-path-input"
+                        class="text-input"
+                        placeholder="e.g. C:\Games\MechWarrior 3"
+                        style="width: 100%; padding: 8px; font-size: 12px"
+                    />
+                    <div
+                        id="gamedir-modal-status"
+                        style="margin-top: 10px; font-size: 11px; font-family: var(--font-mono)"
+                    ></div>
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="closeGameDirModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="submitModalGameDirectory()">Save & Connect</button>
+                    <button class="btn btn-primary" onclick="submitModalGameDirectory()">
+                        Save & Connect
+                    </button>
                 </div>
             </div>
         </div>

@@ -175,7 +175,11 @@
                 max-width: 800px;
                 margin: 0 auto 5rem;
                 padding: 2.5rem;
-                background: linear-gradient(180deg, rgba(17, 20, 23, 0.9) 0%, rgba(13, 16, 18, 0.95) 100%);
+                background: linear-gradient(
+                    180deg,
+                    rgba(17, 20, 23, 0.9) 0%,
+                    rgba(13, 16, 18, 0.95) 100%
+                );
                 border: 1px solid rgba(0, 240, 255, 0.25);
                 border-radius: 12px;
                 text-align: center;
@@ -202,7 +206,9 @@
                 padding: 12px 24px;
                 border-radius: 6px;
                 text-decoration: none;
-                transition: background 0.2s ease, transform 0.2s ease;
+                transition:
+                    background 0.2s ease,
+                    transform 0.2s ease;
             }
             .tour-action-btn:hover {
                 background: #33f3ff;
@@ -235,7 +241,9 @@
                 <a href="tools.html">Launcher &amp; Tools</a>
                 <a href="studio-tour.html" aria-current="page">Mod Studio</a>
                 <a href="about.html">About</a>
-                <a href="https://discord.gg/HK7pgngkD" target="_blank" rel="noopener noreferrer">Discord</a>
+                <a href="https://discord.gg/HK7pgngkD" target="_blank" rel="noopener noreferrer"
+                    >Discord</a
+                >
                 <a href="https://github.com/roswellien/MW3Recomp">GitHub</a>
             </nav>
         </header>
@@ -243,9 +251,17 @@
         <main id="main">
             <section class="tour-hero">
                 <div class="tour-pill">Development Preview • Live Engine Screenshots</div>
-                <h1 class="tour-title">MechWarrior 3 Mod Studio<br /><span style="color: #00f0ff">Interface Tour &amp; Walkthrough</span></h1>
+                <h1 class="tour-title">
+                    MechWarrior 3 Mod Studio<br /><span style="color: #00f0ff"
+                        >Interface Tour &amp; Walkthrough</span
+                    >
+                </h1>
                 <p class="tour-subtitle">
-                    A comprehensive visual walkthrough of the overhauled user interface for the visual 3D mission and map studio, featuring the newly integrated Scene Outliner, non-overlapping CSS Grid Property Inspector, real-time Terrain Sculpting brushes, dynamic Atmosphere studio, MechLab, and Mission Objectives authoring suites.
+                    A comprehensive visual walkthrough of the overhauled user interface for the
+                    visual 3D mission and map studio, featuring the newly integrated Scene Outliner,
+                    non-overlapping CSS Grid Property Inspector, real-time Terrain Sculpting
+                    brushes, dynamic Atmosphere studio, MechLab, and Mission Objectives authoring
+                    suites.
                 </p>
 
                 <nav class="tour-nav-chips" aria-label="Quick jump">
@@ -268,29 +284,68 @@
                         <h2>Create New Mission &amp; Project Wizard</h2>
                         <span class="tour-tag">Creation Workflow</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-new-mission-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-new-mission-v2.png?v=20261103" alt="Create New Mission and Project Wizard dialog" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-new-mission-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-new-mission-v2.png?v=20261103"
+                            alt="Create New Mission and Project Wizard dialog"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            Authors can start a new custom mission from scratch via the prominent <strong>New Mission</strong> button or with <code>Ctrl + N</code>. The creation wizard sets up the mission title, auto-slugifies the internal pack ID, establishes the planetary biome/terrain, chooses a starting layout template, and assigns the player starting BattleMech.
+                            Authors can start a new custom mission from scratch via the prominent
+                            <strong>New Mission</strong> button or with <code>Ctrl + N</code>. The
+                            creation wizard sets up the mission title, auto-slugifies the internal
+                            pack ID, establishes the planetary biome/terrain, chooses a starting
+                            layout template, and assigns the player starting BattleMech.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>3 Starting Templates</strong>: Choose between <em>Blank Slate</em> (orbital drop zone only), <em>Defensive Outpost</em> (drop zone + base bunker + radar tower), or <em>Combat Skirmish</em> (drop zone + hostile patrol lance).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>3 Starting Templates</strong>: Choose between
+                                    <em>Blank Slate</em> (orbital drop zone only),
+                                    <em>Defensive Outpost</em> (drop zone + base bunker + radar
+                                    tower), or <em>Combat Skirmish</em> (drop zone + hostile patrol
+                                    lance).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Planetary Biome Setup</strong>: One-click selection across all 5 authentic MW3 environments (Coastal, Highlands, Caldera, Glacial, Training Facility).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Planetary Biome Setup</strong>: One-click selection
+                                    across all 5 authentic MW3 environments (Coastal, Highlands,
+                                    Caldera, Glacial, Training Facility).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Player BattleMech Assignment</strong>: Select starting player chassis from Clan and Inner Sphere rosters.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Player BattleMech Assignment</strong>: Select starting
+                                    player chassis from Clan and Inner Sphere rosters.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Open / Import Support</strong>: Import existing <code>.mw3pack.json</code> or project files at any time via <code>Ctrl + O</code>.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Open / Import Support</strong>: Import existing
+                                    <code>.mw3pack.json</code> or project files at any time via
+                                    <code>Ctrl + O</code>.</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -302,29 +357,66 @@
                         <h2>Map Editor &amp; 3D Viewport Overview</h2>
                         <span class="tour-tag">Primary Workspace</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-editor-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-editor-v2.png?v=20261103" alt="MechWarrior 3 Mod Studio Map Editor Workspace" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-editor-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-editor-v2.png?v=20261103"
+                            alt="MechWarrior 3 Mod Studio Map Editor Workspace"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            The primary editing workspace combines a two-tier application bar with a floating camera HUD and a full 18-Mech roster palette. The top bar houses mode switchers (Map Editor, Terrain Sculptor, Atmosphere & Weather, MechLab, Objectives, Campaign) and engine triggers, while the sub-bar provides quick access to mission metadata, biome selection, undo/redo, and calibrated recon overlays.
+                            The primary editing workspace combines a two-tier application bar with a
+                            floating camera HUD and a full 18-Mech roster palette. The top bar
+                            houses mode switchers (Map Editor, Terrain Sculptor, Atmosphere &
+                            Weather, MechLab, Objectives, Campaign) and engine triggers, while the
+                            sub-bar provides quick access to mission metadata, biome selection,
+                            undo/redo, and calibrated recon overlays.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Two-Tier Header</strong>: Prevents layout clutter by isolating workspace modes from map-specific context controls.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Two-Tier Header</strong>: Prevents layout clutter by
+                                    isolating workspace modes from map-specific context
+                                    controls.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Full 18-Mech Roster</strong>: BattleMechs categorized by weight class and faction with custom chassis badges.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Full 18-Mech Roster</strong>: BattleMechs categorized
+                                    by weight class and faction with custom chassis badges.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Floating Glassmorphic HUD</strong>: Quick-toggle between 3D Orbit, 2D Tactical, Isometric, Selection Focus, and Sculpting.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Floating Glassmorphic HUD</strong>: Quick-toggle
+                                    between 3D Orbit, 2D Tactical, Isometric, Selection Focus, and
+                                    Sculpting.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Live Coordinates Status Bar</strong>: Instant world coordinate tracking (X, Y, Z) and placed entity tally.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Live Coordinates Status Bar</strong>: Instant world
+                                    coordinate tracking (X, Y, Z) and placed entity tally.</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -336,29 +428,64 @@
                         <h2>Hierarchical Scene Outliner</h2>
                         <span class="tour-tag">New Feature</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-outliner-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-outliner-v2.png?v=20261103" alt="Scene Outliner tab with placed entities hierarchy" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-outliner-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-outliner-v2.png?v=20261103"
+                            alt="Scene Outliner tab with placed entities hierarchy"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            The dedicated <strong>Scene Outliner</strong> tab replaces guesswork with an interactive hierarchy of all entities placed on the map. Users can instantly locate, inspect, focus, or delete any asset without needing to hunt through the 3D viewport.
+                            The dedicated <strong>Scene Outliner</strong> tab replaces guesswork
+                            with an interactive hierarchy of all entities placed on the map. Users
+                            can instantly locate, inspect, focus, or delete any asset without
+                            needing to hunt through the 3D viewport.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Real-Time Search Filter</strong>: Instantly narrow down placed entities by name, archetype, or faction.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Real-Time Search Filter</strong>: Instantly narrow down
+                                    placed entities by name, archetype, or faction.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Color-Coded Faction Pills</strong>: Distinct visual badges for Player ([PLAY] green), Enemy ([ENEM] red), and Neutral ([NEUT] gray).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Color-Coded Faction Pills</strong>: Distinct visual
+                                    badges for Player ([PLAY] green), Enemy ([ENEM] red), and
+                                    Neutral ([NEUT] gray).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>World Coordinates Preview</strong>: Displays instant (X, Z) placement coordinates for every entity item.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>World Coordinates Preview</strong>: Displays instant
+                                    (X, Z) placement coordinates for every entity item.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Camera Focus &amp; Deletion</strong>: One-click Focus Entity (F) snaps the 3D camera to target with interactive 3D gizmo attached.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Camera Focus &amp; Deletion</strong>: One-click Focus
+                                    Entity (F) snaps the 3D camera to target with interactive 3D
+                                    gizmo attached.</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -370,29 +497,66 @@
                         <h2>Non-Overlapping CSS Grid Property Inspector</h2>
                         <span class="tour-tag">Layout Redesign</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-inspector-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-inspector-v2.png?v=20261103" alt="Property Inspector with strict CSS grid layout" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-inspector-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-inspector-v2.png?v=20261103"
+                            alt="Property Inspector with strict CSS grid layout"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            The Property Inspector has been completely refactored with a strict two-column CSS Grid layout (<code>105px 1fr</code>). Labels, inputs, and sliders are cleanly aligned with no overlapping fields, clipped text, or squished elements.
+                            The Property Inspector has been completely refactored with a strict
+                            two-column CSS Grid layout (<code>105px 1fr</code>). Labels, inputs, and
+                            sliders are cleanly aligned with no overlapping fields, clipped text, or
+                            squished elements.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Strict CSS Grid Structure</strong>: Eliminates text collisions across high-DPI displays and variable sidebar widths.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Strict CSS Grid Structure</strong>: Eliminates text
+                                    collisions across high-DPI displays and variable sidebar
+                                    widths.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Custom Styled Sliders</strong>: High-contrast cyan thumb range sliders with real-time degree/meter numeric feedback.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Custom Styled Sliders</strong>: High-contrast cyan
+                                    thumb range sliders with real-time degree/meter numeric
+                                    feedback.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Combat &amp; Faction Parameters</strong>: Direct controls for Armor/HP, Faction affiliation, Primary Objective targeting, and custom Goal Labels.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Combat &amp; Faction Parameters</strong>: Direct
+                                    controls for Armor/HP, Faction affiliation, Primary Objective
+                                    targeting, and custom Goal Labels.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Entity Duplication &amp; Removal</strong>: Dedicated quick-action buttons for duplicating or deleting selected objects.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Entity Duplication &amp; Removal</strong>: Dedicated
+                                    quick-action buttons for duplicating or deleting selected
+                                    objects.</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -404,29 +568,63 @@
                         <h2>Real-Time Terrain Sculpting Suite</h2>
                         <span class="tour-tag">Heightfield Tools</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-sculptor-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-sculptor-v2.png?v=20261103" alt="Terrain sculpting brushes and parameters" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-sculptor-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-sculptor-v2.png?v=20261103"
+                            alt="Terrain sculpting brushes and parameters"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            The <strong>Terrain Sculptor</strong> mode lets authors sculpt authentic MechWarrior 3 heightfield terrain directly in the 3D viewport. Selecting the workspace automatically switches the left sidebar to sculpting brushes and enables raycast mesh deformation.
+                            The <strong>Terrain Sculptor</strong> mode lets authors sculpt authentic
+                            MechWarrior 3 heightfield terrain directly in the 3D viewport. Selecting
+                            the workspace automatically switches the left sidebar to sculpting
+                            brushes and enables raycast mesh deformation.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>5 Sculpting Operation Modes</strong>: Raise, Lower, Flatten, Smooth, and Perlin Noise brushes.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>5 Sculpting Operation Modes</strong>: Raise, Lower,
+                                    Flatten, Smooth, and Perlin Noise brushes.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Configurable Brush Falloff</strong>: Customize brush radius (up to 120m), deformation intensity, and falloff profiles (Smooth Bell, Linear, Sharp).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Configurable Brush Falloff</strong>: Customize brush
+                                    radius (up to 120m), deformation intensity, and falloff profiles
+                                    (Smooth Bell, Linear, Sharp).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Floating Brush Indicator</strong>: Clear visual badge showing active brush state and hotkey guidance.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Floating Brush Indicator</strong>: Clear visual badge
+                                    showing active brush state and hotkey guidance.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Elevation Reset</strong>: One-click restore back to authentic campaign base heightfield data.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Elevation Reset</strong>: One-click restore back to
+                                    authentic campaign base heightfield data.</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -438,29 +636,66 @@
                         <h2>Solar Trajectory, Lighting &amp; Atmosphere</h2>
                         <span class="tour-tag">Environment Controls</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-atmosphere-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-atmosphere-v2.png?v=20261103" alt="Atmosphere and weather configuration panel" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-atmosphere-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-atmosphere-v2.png?v=20261103"
+                            alt="Atmosphere and weather configuration panel"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            The <strong>Atmosphere &amp; Weather</strong> workspace provides comprehensive lighting and volumetric atmospheric controls, giving mission creators full authority over planetary mood, time of day, and environmental hazards.
+                            The <strong>Atmosphere &amp; Weather</strong> workspace provides
+                            comprehensive lighting and volumetric atmospheric controls, giving
+                            mission creators full authority over planetary mood, time of day, and
+                            environmental hazards.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>24-Hour Solar Trajectory</strong>: Continuous time-of-day slider with quick presets for Dawn, Noon, Sunset, and Night.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>24-Hour Solar Trajectory</strong>: Continuous
+                                    time-of-day slider with quick presets for Dawn, Noon, Sunset,
+                                    and Night.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Sun &amp; Ambient Lighting</strong>: Precision controls for heading (0-360°), altitude angle, ambient sky fill, and shadow mapping.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Sun &amp; Ambient Lighting</strong>: Precision controls
+                                    for heading (0-360°), altitude angle, ambient sky fill, and
+                                    shadow mapping.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Volumetric Fog Density</strong>: Interactive fog distance and color pickers matching authentic MW3 renderer limits.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Volumetric Fog Density</strong>: Interactive fog
+                                    distance and color pickers matching authentic MW3 renderer
+                                    limits.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Dynamic Weather Effects</strong>: Atmospheric rain downpour, puddle sheen, lightning flashes, dust storms, industrial smog, and volcanic ash.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Dynamic Weather Effects</strong>: Atmospheric rain
+                                    downpour, puddle sheen, lightning flashes, dust storms,
+                                    industrial smog, and volcanic ash.</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -472,29 +707,65 @@
                         <h2>MechLab &amp; Combat Drop Configurator</h2>
                         <span class="tour-tag">Drop Configuration</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-mechlab-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-mechlab-v2.png?v=20261103" alt="MechLab chassis and loadout configurator modal" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-mechlab-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-mechlab-v2.png?v=20261103"
+                            alt="MechLab chassis and loadout configurator modal"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            Configure the player drop conditions and support lance composition. Authors can define insertion deployment types, chassis selection, customized hardpoint weapon assignments, armor distribution, and heat sink management.
+                            Configure the player drop conditions and support lance composition.
+                            Authors can define insertion deployment types, chassis selection,
+                            customized hardpoint weapon assignments, armor distribution, and heat
+                            sink management.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Chassis &amp; Deployment Type</strong>: Choose player BattleMech and drop method (Orbital Drop Pod, Dropship, Forward Base).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Chassis &amp; Deployment Type</strong>: Choose player
+                                    BattleMech and drop method (Orbital Drop Pod, Dropship, Forward
+                                    Base).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Hardpoint Weapon Loadouts</strong>: Assign Clan/IS lasers, PPCs, ballistic cannons, and missile racks per chassis component.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Hardpoint Weapon Loadouts</strong>: Assign Clan/IS
+                                    lasers, PPCs, ballistic cannons, and missile racks per chassis
+                                    component.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Real-Time Tonnage Validation</strong>: Live weight counter ensuring custom loadouts adhere to chassis tonnage limits.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Real-Time Tonnage Validation</strong>: Live weight
+                                    counter ensuring custom loadouts adhere to chassis tonnage
+                                    limits.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Support Lance Roster</strong>: Manage lancemate chassis assignments and default combat orders (Escort, Free Fire).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Support Lance Roster</strong>: Manage lancemate chassis
+                                    assignments and default combat orders (Escort, Free Fire).</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -506,29 +777,65 @@
                         <h2>Mission Objectives &amp; Tactical Intel Dossier</h2>
                         <span class="tour-tag">Campaign Authoring</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-objectives-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-objectives-v2.png?v=20261103" alt="Mission objectives authoring modal" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-objectives-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-objectives-v2.png?v=20261103"
+                            alt="Mission objectives authoring modal"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            Craft custom victory conditions and mission briefings. The authoring modal supports primary and secondary mission goals with real-time target association, intel briefing text, and authentic combat soundtrack selection.
+                            Craft custom victory conditions and mission briefings. The authoring
+                            modal supports primary and secondary mission goals with real-time target
+                            association, intel briefing text, and authentic combat soundtrack
+                            selection.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Intel Briefing Dossier</strong>: Full text editor for writing in-game pilot briefing notes and tactical situation updates.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Intel Briefing Dossier</strong>: Full text editor for
+                                    writing in-game pilot briefing notes and tactical situation
+                                    updates.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Primary &amp; Secondary Goals</strong>: Add and organize multiple mission objectives with one-click goal removal.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Primary &amp; Secondary Goals</strong>: Add and
+                                    organize multiple mission objectives with one-click goal
+                                    removal.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Combat Audio Profile</strong>: Assign specific MechWarrior 3 orchestral/industrial combat music themes.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Combat Audio Profile</strong>: Assign specific
+                                    MechWarrior 3 orchestral/industrial combat music themes.</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Target Entity Binding</strong>: Link objectives directly to placed enemy structures, radar dishes, or patrol lances.</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Target Entity Binding</strong>: Link objectives
+                                    directly to placed enemy structures, radar dishes, or patrol
+                                    lances.</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -540,29 +847,66 @@
                         <h2>Interactive Keyboard Shortcuts HUD</h2>
                         <span class="tour-tag">Productivity HUD</span>
                     </div>
-                    <a class="tour-card-img-wrap" href="assets/plates/studio/mod-studio-shortcuts-v2.png?v=20261103" target="_blank" rel="noopener" title="Click to view full resolution">
-                        <img src="assets/plates/studio/mod-studio-shortcuts-v2.png?v=20261103" alt="Interactive keyboard shortcuts reference dialog" loading="lazy" />
+                    <a
+                        class="tour-card-img-wrap"
+                        href="assets/plates/studio/mod-studio-shortcuts-v2.png?v=20261103"
+                        target="_blank"
+                        rel="noopener"
+                        title="Click to view full resolution"
+                    >
+                        <img
+                            src="assets/plates/studio/mod-studio-shortcuts-v2.png?v=20261103"
+                            alt="Interactive keyboard shortcuts reference dialog"
+                            loading="lazy"
+                        />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            Built-in hotkey reference dialog accessible at any time via the keyboard button or by pressing <code>?</code>. Covers camera navigation, 3D/2D projection toggles, object duplication, deletion, undo/redo, and tool cancellation.
+                            Built-in hotkey reference dialog accessible at any time via the keyboard
+                            button or by pressing <code>?</code>. Covers camera navigation, 3D/2D
+                            projection toggles, object duplication, deletion, undo/redo, and tool
+                            cancellation.
                         </p>
                         <ul class="tour-features-list">
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Camera Controls</strong>: <code>Tab</code> (Toggle 2D/3D), <code>O</code> (Perspective Orbit), <code>T</code> (2D Tactical), <code>I</code> (Isometric).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Camera Controls</strong>: <code>Tab</code> (Toggle
+                                    2D/3D), <code>O</code> (Perspective Orbit), <code>T</code> (2D
+                                    Tactical), <code>I</code> (Isometric).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Entity Navigation</strong>: <code>F</code> (Focus Camera on Selection), <code>M</code> (Satellite Recon Overlay).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Entity Navigation</strong>: <code>F</code> (Focus
+                                    Camera on Selection), <code>M</code> (Satellite Recon
+                                    Overlay).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>Editing Actions</strong>: <code>S</code> (Toggle Terrain Sculpting), <code>Del</code> (Delete Object), <code>Ctrl+D</code> (Duplicate Object).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>Editing Actions</strong>: <code>S</code> (Toggle
+                                    Terrain Sculpting), <code>Del</code> (Delete Object),
+                                    <code>Ctrl+D</code> (Duplicate Object).</span
+                                >
                             </li>
                             <li>
-                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                <span><strong>History &amp; Deselect</strong>: <code>Ctrl+Z</code> (Undo), <code>Ctrl+Y</code> (Redo), <code>Escape</code> (Cancel / Deselect).</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span
+                                    ><strong>History &amp; Deselect</strong>:
+                                    <code>Ctrl+Z</code> (Undo), <code>Ctrl+Y</code> (Redo),
+                                    <code>Escape</code> (Cancel / Deselect).</span
+                                >
                             </li>
                         </ul>
                     </div>
@@ -573,17 +917,36 @@
             <div class="tour-footer-box">
                 <h3>Ready to Create Your Own Maps?</h3>
                 <p>
-                    The Mod Studio is distributed in both Standalone (embedded runtime) and Lightweight editions for testing on Windows 10/11. Approved playtesters can download packages directly from the private playtest portal.
+                    The Mod Studio is distributed in both Standalone (embedded runtime) and
+                    Lightweight editions for testing on Windows 10/11. Approved playtesters can
+                    download packages directly from the private playtest portal.
                 </p>
-                <a class="tour-action-btn" href="https://playtest.corecritical.dev/" target="_blank" rel="noopener">
+                <a
+                    class="tour-action-btn"
+                    href="https://playtest.corecritical.dev/"
+                    target="_blank"
+                    rel="noopener"
+                >
                     Access Playtest Portal
-                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
+                    <svg
+                        viewBox="0 0 24 24"
+                        width="18"
+                        height="18"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                        fill="none"
+                    >
+                        <path d="M5 12h14M12 5l7 7-7 7"></path>
+                    </svg>
                 </a>
             </div>
         </main>
 
         <footer class="site-footer">
-            <p>&copy; 2026 Core Critical Modernization Project. All MechWarrior assets and names are trademarks of their respective owners.</p>
+            <p>
+                &copy; 2026 Core Critical Modernization Project. All MechWarrior assets and names
+                are trademarks of their respective owners.
+            </p>
         </footer>
     </body>
 </html>

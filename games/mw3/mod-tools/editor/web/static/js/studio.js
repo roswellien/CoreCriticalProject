@@ -120,7 +120,8 @@ const state = {
         campaign_title: "Operation Damocles",
         author: "MW3 Modder",
         version: "1.0.0",
-        description: "Deep strike behind Clan Smoke Jaguar lines on Tranquil to disrupt regional communications and neutralize command garrisons.",
+        description:
+            "Deep strike behind Clan Smoke Jaguar lines on Tranquil to disrupt regional communications and neutralize command garrisons.",
         faction: "Inner Sphere",
         theater: "Tranquil Coastal Basin",
         continuity_rules: {
@@ -135,7 +136,8 @@ const state = {
                 pack_id: "iron_ridge_outpost",
                 title: "Mission 1: Recon In Force",
                 theater: "Tranquil Coastal Basin",
-                briefing_text: "Infiltrate the perimeter and destroy the Clan sensor arrays. Maintain visual stealth.",
+                briefing_text:
+                    "Infiltrate the perimeter and destroy the Clan sensor arrays. Maintain visual stealth.",
                 audio_track: "action_theme_1",
                 next_mission_id: "m02_assault",
                 branch_conditions: {
@@ -275,7 +277,7 @@ const OP_ENV_METADATA = {
         terrainTexture: "static/assets/textures/terrains/c4_gter_1.png",
         reconMap: {
             texture: "static/assets/maps/c4m1.png",
-            mpp: -7.100,
+            mpp: -7.1,
             offset: [-2365.0, 0.0, 1629.0],
             widthPx: 640,
             heightPx: 480,
@@ -347,7 +349,7 @@ function initViewport() {
         frustumSize / 2,
         frustumSize / -2,
         1.0,
-        10000
+        10000,
     );
     orthoCamera.position.set(-1408, 1600, 0);
     orthoCamera.lookAt(-1408, 0, 0);
@@ -679,7 +681,9 @@ async function buildTerrain() {
             if (appliedCount > 0) {
                 pos.needsUpdate = true;
                 geom.computeVertexNormals();
-                console.log(`[Map Studio] Applied ${appliedCount} saved terrain height modifications`);
+                console.log(
+                    `[Map Studio] Applied ${appliedCount} saved terrain height modifications`,
+                );
             }
         }
 
@@ -730,7 +734,7 @@ async function buildTerrain() {
             reconMapMesh.scale.set(-1, 1, -1);
         }
         reconMapMesh.name = "reconMapOverlay";
-        reconMapMesh.visible = (state.viewMode === "topdown" || !!state.showReconOverlay);
+        reconMapMesh.visible = state.viewMode === "topdown" || !!state.showReconOverlay;
         scene.add(reconMapMesh);
         console.log(
             `[Map Studio] Calibrated 2D satellite recon map loaded: ${rm.texture} (${worldW.toFixed(1)}m x ${worldH.toFixed(1)}m) at [${rm.offset[0]}, ${rm.offset[2]}]`,
@@ -762,7 +766,15 @@ function rgbToHex(rgb) {
 
 function hexToRgb(hex) {
     const clean = hex.replace("#", "");
-    const num = parseInt(clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean, 16);
+    const num = parseInt(
+        clean.length === 3
+            ? clean
+                  .split("")
+                  .map((c) => c + c)
+                  .join("")
+            : clean,
+        16,
+    );
     return [((num >> 16) & 255) / 255.0, ((num >> 8) & 255) / 255.0, (num & 255) / 255.0];
 }
 
@@ -773,7 +785,10 @@ function updateLighting() {
 
     if (isInterior) {
         sunLight.intensity = 0.0;
-        ambientLight.intensity = Math.max(0.05, (lcfg.ambient_strength || lcfg.ambient || 0.22) * 0.6);
+        ambientLight.intensity = Math.max(
+            0.05,
+            (lcfg.ambient_strength || lcfg.ambient || 0.22) * 0.6,
+        );
         ambientLight.color.setRGB(0.3, 0.32, 0.35);
         scene.background = new THREE.Color(0x050608);
         scene.fog.color = new THREE.Color(0x050608);
@@ -947,12 +962,18 @@ function onAtmosphereDirectInput() {
 
     document.getElementById("atmo-azimuth-val").textContent = `${Math.round(lcfg.azimuth)}°`;
     document.getElementById("atmo-elevation-val").textContent = `${Math.round(lcfg.elevation)}°`;
-    document.getElementById("weather-rain-val").textContent = `${Math.round(lcfg.rain_intensity * 100)}%`;
-    document.getElementById("weather-wetness-val").textContent = `${Math.round(lcfg.wet_reflection * 100)}%`;
-    document.getElementById("weather-dust-val").textContent = `${Math.round(lcfg.dust_intensity * 100)}%`;
-    document.getElementById("weather-smog-val").textContent = `${Math.round(lcfg.smog_intensity * 100)}%`;
-    document.getElementById("weather-shimmer-val").textContent = `${Math.round(lcfg.heat_shimmer * 100)}%`;
-    document.getElementById("weather-volcano-val").textContent = `${Math.round(lcfg.volcanic_ash * 100)}%`;
+    document.getElementById("weather-rain-val").textContent =
+        `${Math.round(lcfg.rain_intensity * 100)}%`;
+    document.getElementById("weather-wetness-val").textContent =
+        `${Math.round(lcfg.wet_reflection * 100)}%`;
+    document.getElementById("weather-dust-val").textContent =
+        `${Math.round(lcfg.dust_intensity * 100)}%`;
+    document.getElementById("weather-smog-val").textContent =
+        `${Math.round(lcfg.smog_intensity * 100)}%`;
+    document.getElementById("weather-shimmer-val").textContent =
+        `${Math.round(lcfg.heat_shimmer * 100)}%`;
+    document.getElementById("weather-volcano-val").textContent =
+        `${Math.round(lcfg.volcanic_ash * 100)}%`;
 
     updateLighting();
 }
@@ -1065,7 +1086,7 @@ function applyWeatherPreset(type) {
         lcfg.preset_name = "clear";
     } else if (type === "rain") {
         lcfg.preset_name = "rain";
-        lcfg.rain_intensity = 0.70;
+        lcfg.rain_intensity = 0.7;
         lcfg.wet_reflection = 0.85;
         lcfg.fog_distance = 900.0;
     } else if (type === "storm") {
@@ -1078,15 +1099,15 @@ function applyWeatherPreset(type) {
     } else if (type === "dust") {
         lcfg.preset_name = "dust";
         lcfg.dust_intensity = 0.85;
-        lcfg.heat_shimmer = 0.50;
+        lcfg.heat_shimmer = 0.5;
         lcfg.fog_distance = 450.0;
-        lcfg.sky_tint = [0.55, 0.45, 0.30];
+        lcfg.sky_tint = [0.55, 0.45, 0.3];
     } else if (type === "smog") {
         lcfg.preset_name = "smog";
-        lcfg.smog_intensity = 0.80;
+        lcfg.smog_intensity = 0.8;
         lcfg.wet_reflection = 0.35;
         lcfg.fog_distance = 550.0;
-        lcfg.sky_tint = [0.35, 0.38, 0.30];
+        lcfg.sky_tint = [0.35, 0.38, 0.3];
     } else if (type === "heat") {
         lcfg.preset_name = "heat";
         lcfg.heat_shimmer = 0.85;
@@ -1094,8 +1115,8 @@ function applyWeatherPreset(type) {
         lcfg.sun_strength = 1.25;
     } else if (type === "volcanic") {
         lcfg.preset_name = "volcanic";
-        lcfg.volcanic_ash = 0.80;
-        lcfg.lava_glow = 0.90;
+        lcfg.volcanic_ash = 0.8;
+        lcfg.lava_glow = 0.9;
         lcfg.fog_distance = 600.0;
         lcfg.sky_tint = [0.25, 0.15, 0.15];
     } else if (type === "interior") {
@@ -1128,7 +1149,9 @@ function triggerLightningFlash() {
             sunLight.color.copy(origColor);
             sunLight.intensity = origIntensity;
             ambientLight.intensity = origAmbient;
-            scene.background = new THREE.Color().fromArray(state.project.lighting.sky_tint || [0.38, 0.28, 0.48]);
+            scene.background = new THREE.Color().fromArray(
+                state.project.lighting.sky_tint || [0.38, 0.28, 0.48],
+            );
         }, 80);
     }, 60);
 }
@@ -1827,11 +1850,14 @@ function updateInspector() {
     const hOffsetEl = document.getElementById("insp-height-offset");
     if (hOffsetEl) {
         hOffsetEl.value = Math.round(asset.height_offset || 0);
-        document.getElementById("insp-height-offset-val").innerText = `${Math.round(asset.height_offset || 0)}m`;
+        document.getElementById("insp-height-offset-val").innerText =
+            `${Math.round(asset.height_offset || 0)}m`;
     }
 
     const aiSec = document.getElementById("insp-ai-section");
-    const isCombat = (asset.asset_type || "").startsWith("mech_") || (asset.asset_type || "").startsWith("turret_");
+    const isCombat =
+        (asset.asset_type || "").startsWith("mech_") ||
+        (asset.asset_type || "").startsWith("turret_");
     if (aiSec) {
         aiSec.style.display = isCombat ? "block" : "none";
         if (isCombat) {
@@ -1839,7 +1865,8 @@ function updateInspector() {
             document.getElementById("insp-ai-stance").value = asset.ai_stance || "guard";
             document.getElementById("insp-ai-range").value = asset.ai_range || "medium";
             document.getElementById("insp-ai-retreat").value = asset.ai_retreat_health ?? 15;
-            document.getElementById("insp-ai-retreat-val").innerText = `${asset.ai_retreat_health ?? 15}%`;
+            document.getElementById("insp-ai-retreat-val").innerText =
+                `${asset.ai_retreat_health ?? 15}%`;
         }
     }
 
@@ -1927,7 +1954,8 @@ function bindInspectorEvents() {
             const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
             if (a) {
                 a.height_offset = parseFloat(e.target.value);
-                document.getElementById("insp-height-offset-val").innerText = `${Math.round(a.height_offset)}m`;
+                document.getElementById("insp-height-offset-val").innerText =
+                    `${Math.round(a.height_offset)}m`;
                 const groundY = getTerrainHeight(a.x, a.z);
                 a.y = Math.round((groundY + a.height_offset) * 10) / 10;
                 syncSceneAssets();
@@ -2076,7 +2104,7 @@ function setViewMode(mode) {
     }
 
     if (reconMapMesh) {
-        reconMapMesh.visible = (mode === "topdown" || !!state.showReconOverlay);
+        reconMapMesh.visible = mode === "topdown" || !!state.showReconOverlay;
     }
 
     orbitControls.update();
@@ -2093,7 +2121,7 @@ function toggleViewMode() {
 function toggleReconOverlay() {
     state.showReconOverlay = !state.showReconOverlay;
     if (reconMapMesh) {
-        reconMapMesh.visible = (state.viewMode === "topdown" || !!state.showReconOverlay);
+        reconMapMesh.visible = state.viewMode === "topdown" || !!state.showReconOverlay;
     }
     const btn = document.getElementById("btn-recon-overlay");
     if (btn) {
@@ -2526,18 +2554,18 @@ function filterAssetPalette(query) {
 function setPaletteCategory(cat) {
     document.querySelectorAll(".palette-pill").forEach((pill) => pill.classList.remove("active"));
     const activePill = Array.from(document.querySelectorAll(".palette-pill")).find(
-        (p) => p.textContent.toLowerCase() === cat.toLowerCase()
+        (p) => p.textContent.toLowerCase() === cat.toLowerCase(),
     );
     if (activePill) activePill.classList.add("active");
 
     document.querySelectorAll(".section-title").forEach((title) => {
         const titleCat = title.dataset.category;
-        title.style.display = (cat === "all" || titleCat === cat) ? "block" : "none";
+        title.style.display = cat === "all" || titleCat === cat ? "block" : "none";
     });
 
     document.querySelectorAll(".asset-grid").forEach((grid) => {
         const gridCat = grid.dataset.category;
-        grid.style.display = (cat === "all" || gridCat === cat) ? "grid" : "none";
+        grid.style.display = cat === "all" || gridCat === cat ? "grid" : "none";
     });
 }
 
@@ -2739,7 +2767,7 @@ function renderCampaignMissions() {
     document.getElementById("camp-theater").value = camp.theater || "Tranquil Coastal Basin";
     document.getElementById("camp-desc").value = camp.description || "";
     document.getElementById("camp-salvage-enabled").checked = Boolean(
-        camp.continuity_rules?.salvage_enabled !== false
+        camp.continuity_rules?.salvage_enabled !== false,
     );
 
     (camp.missions || []).forEach((m, idx) => {
@@ -2822,7 +2850,8 @@ async function exportCampaignProject() {
         state.campaign.faction = document.getElementById("camp-faction").value;
         state.campaign.theater = document.getElementById("camp-theater").value;
         state.campaign.description = document.getElementById("camp-desc").value;
-        state.campaign.continuity_rules.salvage_enabled = document.getElementById("camp-salvage-enabled").checked;
+        state.campaign.continuity_rules.salvage_enabled =
+            document.getElementById("camp-salvage-enabled").checked;
 
         const res = await fetch("/api/export-campaign", {
             method: "POST",
@@ -2833,7 +2862,9 @@ async function exportCampaignProject() {
         const data = await res.json();
         if (data.status === "ok") {
             playBeep(980, "sine", 0.15);
-            alert(`Campaign "${data.campaign_id}" successfully compiled!\nTotal Missions: ${data.total_missions}\nLocation: ${data.campaign_folder}\nLauncher: ${data.launcher_script}`);
+            alert(
+                `Campaign "${data.campaign_id}" successfully compiled!\nTotal Missions: ${data.total_missions}\nLocation: ${data.campaign_folder}\nLauncher: ${data.launcher_script}`,
+            );
         } else {
             alert("Campaign export failed: " + (data.message || "Unknown error"));
         }
@@ -3236,14 +3267,26 @@ async function checkSystemStatus() {
 
             if (!data.game_installed) {
                 if (banner) banner.style.display = "flex";
-                if (dot) { dot.className = "status-dot warning"; }
-                if (text) { text.innerText = "Game Unset"; }
-                if (pill) { pill.title = "Click to set MechWarrior 3 directory"; }
+                if (dot) {
+                    dot.className = "status-dot warning";
+                }
+                if (text) {
+                    text.innerText = "Game Unset";
+                }
+                if (pill) {
+                    pill.title = "Click to set MechWarrior 3 directory";
+                }
             } else {
                 if (banner) banner.style.display = "none";
-                if (dot) { dot.className = "status-dot"; }
-                if (text) { text.innerText = "MW3 Connected"; }
-                if (pill) { pill.title = `Connected: ${data.game_directory}`; }
+                if (dot) {
+                    dot.className = "status-dot";
+                }
+                if (text) {
+                    text.innerText = "MW3 Connected";
+                }
+                if (pill) {
+                    pill.title = `Connected: ${data.game_directory}`;
+                }
             }
             return;
         }
@@ -3253,9 +3296,16 @@ async function checkSystemStatus() {
 
     // Static web hosting mode (e.g. corecritical.dev/studio)
     if (banner) banner.style.display = "none";
-    if (dot) { dot.className = "status-dot"; }
-    if (text) { text.innerText = "Web Cloud Studio"; }
-    if (pill) { pill.title = "Running in cloud web mode on corecritical.dev. Export downloads .mw3pack.json directly."; }
+    if (dot) {
+        dot.className = "status-dot";
+    }
+    if (text) {
+        text.innerText = "Web Cloud Studio";
+    }
+    if (pill) {
+        pill.title =
+            "Running in cloud web mode on corecritical.dev. Export downloads .mw3pack.json directly.";
+    }
 }
 
 async function submitGameDirectory() {
@@ -3298,7 +3348,9 @@ async function packageCurrentMapZip() {
         });
         const data = await res.json();
         if (data.status === "ok") {
-            alert(`Map Pack Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and double-click the launcher to play!`);
+            alert(
+                `Map Pack Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and double-click the launcher to play!`,
+            );
             playBeep(880, "sine", 0.15);
         } else {
             alert("Packaging failed: " + data.message);
@@ -3323,7 +3375,9 @@ async function packageCampaignZip() {
         });
         const data = await res.json();
         if (data.status === "ok") {
-            alert(`Campaign Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and play the multi-mission campaign with 1 click!`);
+            alert(
+                `Campaign Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and play the multi-mission campaign with 1 click!`,
+            );
             playBeep(880, "sine", 0.15);
         } else {
             alert("Campaign packaging failed: " + data.message);
@@ -3332,7 +3386,6 @@ async function packageCampaignZip() {
         alert("Campaign packaging error: " + e);
     }
 }
-
 
 // ============================================================================
 // ENHANCED UI: SCENE OUTLINER, WORKSPACES & COLLAPSIBLE SIDEBARS
@@ -3645,7 +3698,6 @@ function closeMechLabModal() {
     switchWorkspaceMode("world");
 }
 
-
 // ============================================================================
 // NEW MISSION CREATION WIZARD & IMPORT CONTROLS
 // ============================================================================
@@ -3681,16 +3733,23 @@ function autoSlugNewMissionId() {
     const titleEl = document.getElementById("new-mission-title");
     const idEl = document.getElementById("new-mission-id");
     if (titleEl && idEl) {
-        idEl.value = titleEl.value.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+        idEl.value = titleEl.value
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9_]/g, "_");
     }
 }
 
 function confirmCreateNewMission() {
     const title = (document.getElementById("new-mission-title")?.value || "Custom Mission").trim();
-    const packId = (document.getElementById("new-mission-id")?.value || "custom_mission").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    const packId = (document.getElementById("new-mission-id")?.value || "custom_mission")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, "_");
     const biome = document.getElementById("new-mission-biome")?.value || "flat";
     const template = document.getElementById("new-mission-template")?.value || "blank";
-    const playerMech = document.getElementById("new-mission-mech")?.value || "Mad Cat / Timber Wolf";
+    const playerMech =
+        document.getElementById("new-mission-mech")?.value || "Mad Cat / Timber Wolf";
 
     let assets = [];
     if (template === "blank") {
@@ -3705,7 +3764,7 @@ function confirmCreateNewMission() {
                 yaw_deg: 0,
                 faction: "player",
                 health: 100,
-            }
+            },
         ];
     } else if (template === "outpost") {
         assets = [
@@ -3754,7 +3813,7 @@ function confirmCreateNewMission() {
                 yaw_deg: 0,
                 faction: "enemy",
                 health: 120,
-            }
+            },
         ];
     } else if (template === "skirmish") {
         assets = [
@@ -3792,7 +3851,7 @@ function confirmCreateNewMission() {
                 faction: "enemy",
                 health: 180,
                 is_objective: true,
-            }
+            },
         ];
     }
 
@@ -3806,9 +3865,7 @@ function confirmCreateNewMission() {
     state.project.terrain.height_modifications = {};
     state.project.assets = assets;
     state.project.objectives = {
-        primary: [
-            { id: "obj_1", description: "Neutralize hostile forces in sector" }
-        ],
+        primary: [{ id: "obj_1", description: "Neutralize hostile forces in sector" }],
         secondary: [],
         briefing_text: `Tactical briefing for ${title}. Eliminate enemy presence and secure the area.`,
         audio_track: "theme1",
@@ -3859,7 +3916,9 @@ function confirmCreateNewMission() {
         }
 
         playBeep(1040, "sine", 0.15);
-        alert(`Created new mission "${title}" (${template === "blank" ? "Blank Slate" : template} on ${OP_ENV_METADATA[biome]?.name || biome})`);
+        alert(
+            `Created new mission "${title}" (${template === "blank" ? "Blank Slate" : template} on ${OP_ENV_METADATA[biome]?.name || biome})`,
+        );
     });
 }
 
@@ -3886,7 +3945,8 @@ function handleImportMapFile(event) {
             const biomeSelect = document.getElementById("biome-select");
             if (titleInput && state.project.pack_title) titleInput.value = state.project.pack_title;
             if (idInput && state.project.pack_id) idInput.value = state.project.pack_id;
-            if (biomeSelect && state.project.base_operation) biomeSelect.value = state.project.base_operation;
+            if (biomeSelect && state.project.base_operation)
+                biomeSelect.value = state.project.base_operation;
 
             state.selectedAssetId = null;
             if (transformControls) transformControls.detach();
@@ -3896,7 +3956,9 @@ function handleImportMapFile(event) {
                 updateInspector();
                 renderSceneOutliner();
                 playBeep(980, "sine", 0.15);
-                alert(`Successfully loaded "${state.project.pack_title || state.project.pack_id}" (${(state.project.assets || []).length} entities)`);
+                alert(
+                    `Successfully loaded "${state.project.pack_title || state.project.pack_id}" (${(state.project.assets || []).length} entities)`,
+                );
             });
         } catch (err) {
             alert("Could not parse map file: " + err);
