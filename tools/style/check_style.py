@@ -545,6 +545,20 @@ def is_code_file(path: str) -> bool:
     return Path(path).suffix.lower() in CODE_FILE_EXTENSIONS
 
 
+def read_code_text(path: Path) -> str:
+    """Read a code file as UTF-8, or as Latin-1 when it isn't valid UTF-8.
+
+    A few frozen files predate UTF-8 and can't be re-saved (for example the Latin-1
+    multiplication sign in tools/m4-141-consumer-review/named_loader141_v1.py). Latin-1
+    maps every byte to a character, so the whole file is still searched, and the search
+    patterns are plain ASCII, which reads the same in both encodings.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1")
+
+
 def list_all_tracked_files(repo_root: Path = REPO_ROOT) -> list[str]:
     """List all tracked files in the repository."""
     listing = subprocess.run(
@@ -653,8 +667,8 @@ def run_text_read_search(
     for code_file in code_candidates:
         full_code_path = repo_root / code_file
         try:
-            content = full_code_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
+            content = read_code_text(full_code_path)
+        except OSError as error:
             raise PreflightReadError(f"cannot read {code_file}: {error}") from error
 
         read_operation = READ_OPERATION_REGEX.search(content)

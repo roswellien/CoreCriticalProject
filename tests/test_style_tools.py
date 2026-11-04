@@ -328,6 +328,24 @@ class PreflightTests(unittest.TestCase):
                 [(3, "source.py")],
             )
 
+    def test_text_read_search_reads_code_files_that_are_not_utf8(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "target.py").write_text("print('test')\n", encoding="utf-8")
+            # 0xD7 is a Latin-1 multiplication sign and invalid as UTF-8. The read sits
+            # after it, so the hit proves the whole file was searched.
+            (temp_path / "legacy.py").write_bytes(
+                b"# 2 \xd7 3 table\nopen('target.py').read()\n"
+            )
+
+            hits = check_style.run_text_read_search(
+                ["target.py"], ["target.py", "legacy.py"], repo_root=temp_path
+            )
+            self.assertEqual(
+                [(hit.holding_file, hit.line_number, hit.target_file) for hit in hits],
+                [("legacy.py", 2, "target.py")],
+            )
+
     def test_scans_raise_path_specific_errors_when_files_cannot_be_read(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
