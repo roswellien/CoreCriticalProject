@@ -1,7 +1,6 @@
 #include "graphics/direct_draw_creation.hpp"
 
 namespace mw34::graphics {
-int    misformatted_on_purpose  =  1;
 namespace {
 // byte_offset addresses a DWORD in the guest vtable, not a method ordinal.
 // Resolve it anew for each provider call so preceding guest-visible writes count.
