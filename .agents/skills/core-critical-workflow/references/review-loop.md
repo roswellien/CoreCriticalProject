@@ -54,9 +54,9 @@ Never commit, push or open a PR from inside the loop.
 One report when the loop stops:
 
 1. **Outcome:** the target, how many passes ran, and the stop reason (clean,
-   cap or repeat). If it stopped on the cap or a repeat with major findings
-   left, say plainly that the target isn't ready, and list those findings
-   first, each with a suggested fix.
+   cap, repeat, or a same-kind question for the requester). If it stopped on
+   the cap or a repeat with major findings left, say plainly that the target
+   isn't ready, and list those findings first, each with a suggested fix.
 2. **What changed:** the change log, one short line per edit.
 3. **Minor findings left:** each with where it is, what it is and a suggested
    action. Leave out any whose suggestion is "do nothing".
