@@ -57,13 +57,23 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def drain_body_safely(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if 0 < length <= 1024 * 1024:
+                self.rfile.read(length)
+        except Exception:
+            pass
+
     def do_POST(self):
         if not self.check_local_request():
+            self.drain_body_safely()
             return
         if (
             self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
             != "application/json"
         ):
+            self.drain_body_safely()
             self.send_error(415, "Use application/json")
             return
         if self.path == "/api/set-game-directory":
