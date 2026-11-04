@@ -3,9 +3,10 @@
 The Microsoft C runtime startup that Windows runs first in `Mech3.exe`. It sets
 up the runtime, runs the program's initializers and hands over to MFC's
 `WinMain` at `005AE390`, which passes its arguments on to `AfxWinMain` in
-`MFC42.DLL` (ordinal 1576, import slot RVA `0x1BB438`). None of this is the
-game's own code: it is library code linked into every Visual C++ 6 GUI program
-that uses `MSVCRT.dll`.
+`MFC42.DLL` (ordinal 1576, import slot RVA `0x1BB438`). This is library code
+linked into every Visual C++ 6 GUI program that uses `MSVCRT.dll`, not the
+game's own code, though `005AC5C0`'s one-instruction body is shared with some
+of the game's own empty functions.
 
 Profile `mw3-us-1-2-retail`, image SHA-256
 `95bc2c114c9b2e5c5ada8e40ca78cc79470f862e45313ffad0d1e8e6d4d916bf`. Studied
@@ -24,7 +25,7 @@ named here is checked against
 Visual C++ 6's `crtexe.c`, built for programs that use `MSVCRT.dll`.
 
 **Extent:** `005AC3A0` to `005AC54D`, 430 bytes. Ghidra's function body leaves
-out the two exception blocks at `005AC502` to `005AC522`, which sit inside this
+out the two exception blocks at `005AC502` to `005AC523`, which sit inside this
 range; counting them, the routine is one piece.
 
 **Callers:** none. It is the program's entry point: the PE header's
@@ -47,7 +48,10 @@ range; counting them, the routine is one piece.
    [`sub_005AC5C0`](#sub_005ac5c0).
 7. If the word at `009A17E8` is zero, passes the program's `_matherr` at
    `0051E7B0` to `__setusermatherr` (slot `0x1BB50C`). That word is the flag
-   `crtexe.c` uses to say the default math error handler is in use.
+   `crtexe.c` uses to say the default math error handler is in use. Ghidra's
+   default analysis doesn't mark `0051E7B0` as a function, since it is only
+   reached through this pointer; it reads an `_exception` record, as a
+   `_matherr` does.
 8. Calls `005AC5A0` from `005AC431`. See [`sub_005AC5A0`](#sub_005ac5a0).
 9. Runs the C initializer table `005E0248` to `005E024C` through `005AC598`,
    called from `005AC440`.
@@ -58,7 +62,7 @@ range; counting them, the routine is one piece.
     called from `005AC47B`. This runs the constructors of the program's global
     objects.
 12. Reads the command line from `_acmdln` (slot `0x1BB518`) and skips the
-    program name: up to the closing quote if it starts with a quote, otherwise
+    program name: through the closing quote if it starts with a quote, otherwise
     up to the first character at or below a space. It then skips the spaces
     after it.
 13. Calls `GetStartupInfoA` (slot `0x1BB170`). If the `STARTF_USESHOWWINDOW`
@@ -156,28 +160,34 @@ at this point in startup, right after setting up the math error handler.
 
 **Extent:** `005AC5C0`, 1 byte.
 
-**Callers:** 57 functions call it directly, for example `005AC3A0` (from
-`005AC415`), `0040E4B0` and `00414F40`. Data tables from `005BCC94` onward also
-point at it (likely empty slots in virtual-function tables), code at `004F7630`,
-`004F7650` and `00579F50` takes its address, and `004F5910` calls it through a
-pointer.
+**Callers:** Ghidra lists 57 functions that refer to it. 53 reach it
+directly: 48 call it, for example `005AC3A0` (from `005AC415`), `0040E4B0` and
+`00414F40`, and 5 end by jumping to it: `004D4C70` and `004E6240`, which adjust
+the object pointer first, and three exception cleanup blocks the compiler made
+(at `005B5220`, `005B5240` and `005B6C50`). The other 4 use its address:
+`004F7630` and `004F7650` set the function pointers at `005EA510` and
+`005EA514` and put it there when given none (both pointers also start out
+holding it), `004F5910` calls through those two pointers, and `00579F50` takes
+its address too. Data tables from `005BCC94` onward also point at it (likely
+empty slots in virtual-function tables).
 
 **What it does:** returns at once. Its only instruction is `RET`. There are no
 branches, reads or writes.
 
 **Reads and writes:** none.
 
-**How the host reaches it:** `composition.cpp`'s `direct()` checks the call
+**How the host reaches it:** `composition.cpp` registers it as a translated
+leaf and runs it through its leaf adapter, and its `direct()` checks the call
 from startup at `005AC415`. Context only, not proof.
 
-**Why this name:** its whole behaviour is one instruction, so it is fully
-described. Startup calls it where `crtexe.c` calls `_setargv`, whose default
+**Why this name:** the merged-body rule in the [README](README.md): its whole
+behaviour is one instruction, so it is fully described. Startup calls it where `crtexe.c` calls `_setargv`, whose default
 version is empty, so Microsoft's empty `_setargv` is one of the functions merged
 into it. The other callers are unrelated, so the linker most likely folded
 several identical empty functions into this one body. No single official name
 fits them all, so it gets an `Area_Action` name that says what it does. The
-section lists a few callers instead of all 57, because the one instruction
-already settles what every caller gets.
+section gives a few examples instead of all 57 functions, because the one
+instruction already settles what every caller gets.
 
 **Still unknown:** which empty functions, other than `_setargv`, were merged
 into it.

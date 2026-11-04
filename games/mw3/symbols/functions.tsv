@@ -28,4 +28,4 @@ address	name	confidence	evidence	purpose
 005AC3A0	WinMainCRTStartup	confirmed	games/mw3/docs/functions/startup.md#sub_005ac3a0	C runtime startup for a GUI program: sets up the runtime, runs initializers, calls WinMain and exits with its result
 005AC598	_initterm	confirmed	games/mw3/docs/functions/startup.md#sub_005ac598	Import thunk to MSVCRT _initterm, which calls each function pointer in a table
 005AC5A0	_setdefaultprecision	confirmed	games/mw3/docs/functions/startup.md#sub_005ac5a0	Sets the x87 FPU to 53-bit precision through _controlfp
-005AC5C0	Stub_Return	confirmed	games/mw3/docs/functions/startup.md#sub_005ac5c0	Empty function that returns at once; shared by 57 calling functions and data tables, including startup's _setargv call
+005AC5C0	Stub_Return	confirmed	games/mw3/docs/functions/startup.md#sub_005ac5c0	Empty function that returns at once; reached from 57 functions and from data tables, including startup's _setargv call

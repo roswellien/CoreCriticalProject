@@ -57,6 +57,11 @@ the lowercase anchor, `#sub_xxxxxxxx`) and these fields, in this order:
   way.
 - **The game's own code:** every step of its behaviour is described, including
   each branch; its callers are listed and agree with that reading.
+- **Merged body:** one body that the linker shares between several identical
+  functions. Every instruction is described; the section gives the caller count
+  with a few examples instead of listing them all, since the body alone settles
+  what every caller gets. A library name that fits only some callers goes in
+  the section, not the table.
 
 Anything short of that keeps its `sub_` name and is `likely` (a strong reading
 with one gap) or `guess`.
