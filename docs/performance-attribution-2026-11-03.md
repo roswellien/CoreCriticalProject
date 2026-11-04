@@ -274,6 +274,30 @@ Keep this prototype private and prioritize draw preparation for the next
 experiment. Receipts are `local/scene-pair-final.json` and
 `local/cpu183-scene-pair-fidelity-resume-validation.json`.
 
+## Draw preparation attribution
+
+Two private diagnostic runs separated draw preparation into disjoint wall
+scopes. Both completed 2,200 frames on the pinned RX 9070 Training profile
+and matched all 1,400 measured camera-history tuples. The scopes sampled
+one frame in 16 at offsets 0 and 8, with 88 and 87 samples respectively.
+
+| Draw scope, wall ms per sampled frame | Offset 0 | Offset 8 |
+| --- | ---: | ---: |
+| Effect observation | 1.438 | 1.420 |
+| World and temporal capture | 1.024 | 1.023 |
+| Sun and sky capture | 1.022 | 1.012 |
+| Remaining draw capture | 0.711 | 0.719 |
+| Command append and merging | 0.126 | 0.125 |
+| Vertex preparation and copy | 0.117 | 0.117 |
+
+The measured draw scope totaled about 4.4 ms per sampled frame, including
+observer overhead. The top three scopes accounted for about 78% of that
+total. Effect observation runs fixture maintenance and material
+classification before skipping effect work for ordinary non-emitting world draws. Measure
+those costs separately before changing fixture invalidation or the material
+cache. The capture path already reuses state snapshots and merges adjacent
+triangle commands. Receipts are in `local/draw-profile-wall-summary.json`.
+
 ## Fidelity qualification and remaining gates
 
 The separate inline validation run `cpu183-t2-inline-fidelity-r6-resume2`
