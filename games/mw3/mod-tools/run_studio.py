@@ -19,7 +19,10 @@ from urllib.parse import urlsplit
 
 # Setup paths
 TOOLS_ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = TOOLS_ROOT.parents[2]
+if len(TOOLS_ROOT.parents) >= 3 and (TOOLS_ROOT.parents[2] / "games/mw3").is_dir():
+    PROJECT_ROOT = TOOLS_ROOT.parents[2]
+else:
+    PROJECT_ROOT = TOOLS_ROOT
 WEB_ROOT = TOOLS_ROOT / "editor/web"
 
 # Add tools root to sys.path so editor modules can be imported
@@ -237,9 +240,12 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
         try:
             data = self.read_json_request()
 
+            packs_root = PROJECT_ROOT / "mods/map-packs"
+            packs_root.mkdir(parents=True, exist_ok=True)
+
             project = MapPackProject.from_dict(data)
             builder = MapPackBuilder(
-                packs_root=PROJECT_ROOT / "mods/map-packs", game_root=game_directory()
+                packs_root=packs_root, game_root=game_directory()
             )
             out_folder = builder.build(project)
 
@@ -264,16 +270,31 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
             pack_id = data.get("pack_id", "")
             project_data = data.get("project")
 
+            packs_root = PROJECT_ROOT / "mods/map-packs"
+            packs_root.mkdir(parents=True, exist_ok=True)
+
             if project_data:
                 # Auto-compile current project state before launching
                 project = MapPackProject.from_dict(project_data)
                 builder = MapPackBuilder(
-                    packs_root=PROJECT_ROOT / "mods/map-packs",
+                    packs_root=packs_root,
                     game_root=game_directory(),
                 )
                 pack_folder = builder.build(project)
             else:
-                pack_folder = pack_directory(PROJECT_ROOT / "mods/map-packs", pack_id)
+                pack_folder = pack_directory(packs_root, pack_id)
+                if not pack_folder.is_dir() and pack_id == "iron_ridge_outpost":
+                    builder = MapPackBuilder(
+                        packs_root=packs_root,
+                        game_root=game_directory(),
+                    )
+                    project = MapPackProject(
+                        pack_id="iron_ridge_outpost",
+                        pack_title="Iron Ridge Outpost",
+                        author="MW3 Recomp Team",
+                        base_operation="t1",
+                    )
+                    pack_folder = builder.build(project)
 
             if not pack_folder.is_dir():
                 self.send_json_response(
@@ -322,9 +343,15 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
         try:
             data = self.read_json_request()
             campaign = CampaignProject.from_dict(data)
+
+            campaigns_root = PROJECT_ROOT / "mods/campaign-packs"
+            map_packs_root = PROJECT_ROOT / "mods/map-packs"
+            campaigns_root.mkdir(parents=True, exist_ok=True)
+            map_packs_root.mkdir(parents=True, exist_ok=True)
+
             builder = CampaignBuilder(
-                campaigns_root=PROJECT_ROOT / "mods/campaign-packs",
-                map_packs_root=PROJECT_ROOT / "mods/map-packs",
+                campaigns_root=campaigns_root,
+                map_packs_root=map_packs_root,
                 game_root=game_directory(),
             )
             out_folder = builder.build(campaign)

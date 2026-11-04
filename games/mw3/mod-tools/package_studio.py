@@ -179,6 +179,12 @@ def package_studio(mode: str = "standalone", version: str = "1.0.0", output_dir:
     # 2. Copy editor/ package (core, ui, web, config.py)
     clean_copytree(TOOLS_ROOT / "editor", staging_dir / "editor")
 
+    # 2b. Bundle default map packs (e.g. iron_ridge_outpost) into the distribution
+    mods_src = PROJECT_ROOT / "mods/map-packs"
+    if mods_src.is_dir():
+        clean_copytree(mods_src, staging_dir / "mods/map-packs")
+        print(f"[Packaging] Bundled default map packs from {mods_src}")
+
     # 3. Copy binaries (unzbd.exe, rezbd.exe)
     bin_dir = staging_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
