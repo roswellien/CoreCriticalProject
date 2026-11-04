@@ -138,6 +138,10 @@ void run_heap_partition_checks() {
     rejecting.add_region(taken - 0x10000, taken);
     rejecting.add_region(taken_end, taken_end + 0x10000);
     check(rejecting.regions().size() == 3);
+    // A region may end exactly at the window's top, which fills the last slot.
+    rejecting.add_region(GuestHeap::hi - 0x10000, GuestHeap::hi);
+    check(rejecting.contains(GuestHeap::hi - 1, 1) && !rejecting.contains(GuestHeap::hi - 1, 2));
+    check(!rejecting.contains(GuestHeap::hi, 0));
 
     // The slot table must answer exactly as the map search did, for any set of
     // regions allocate can make. The seed is fixed so a failure repeats.
