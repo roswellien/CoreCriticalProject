@@ -3,6 +3,10 @@ const MAX_ISSUE_BODY_CHARS = 48_000;
 const MAX_ISSUE_REPORT_CHARS = 20_000;
 const MAX_FULL_LOG_REPEATS = 3;
 const DEFAULT_DAILY_ISSUE_LIMIT = 20;
+const ARCHIVE_SAVE_FAILED_LOG =
+    "Crash report archive save to table crash_report_archive failed; check that website/migrations/0002_crash_report_archive.sql is applied:";
+const ARCHIVE_FAILED_NOTE =
+    "Not saved to the admin archive: the archive save failed (check migration 0002).";
 const GENERIC_FAILURES = [
     "The launch or game ended unexpectedly. Open Logs for details.",
     "No launch details were recorded.",
@@ -91,6 +95,19 @@ function archivedOnlyResponse(reportId) {
         { report_id: reportId.slice(0, 8), duplicate: false, overflow: false, archived_only: true },
         202,
     );
+}
+
+function deliveryFailedResponse() {
+    return json(
+        { error: "The report service could not save this crash report. Try again later." },
+        502,
+    );
+}
+
+// Used when the report can't reach GitHub. A report is only "accepted" if the
+// archive kept a copy; otherwise the launcher must hear that it was not saved.
+function undeliveredResponse(archivedReportId) {
+    return archivedReportId ? archivedOnlyResponse(archivedReportId) : deliveryFailedResponse();
 }
 
 function validateEnvironment(env) {
@@ -250,7 +267,11 @@ async function github(token, query, variables) {
     return body.data;
 }
 
-function issueBody(report, crashFingerprint, { includeLogs = true, overflow = false } = {}) {
+function issueBody(
+    report,
+    crashFingerprint,
+    { includeLogs = true, overflow = false, archiveFailed = false } = {},
+) {
     const marker = crashFingerprint ? `<!-- crash-fingerprint:${crashFingerprint} -->\n\n` : "";
     const reportLogs = includeLogs ? report.logs : {};
     const safeReport = { ...report };
@@ -282,7 +303,10 @@ function issueBody(report, crashFingerprint, { includeLogs = true, overflow = fa
     const omittedMetadataNote = reportDetailsOmitted
         ? "\n\nSome report details were omitted to fit GitHub's issue size limit."
         : "";
-    const header = `${marker}${note}\nReport ID: ${report.report_id}\n\n### Report details\n\n\`\`\`json\n${reportText}\n\`\`\`${omittedMetadataNote}`;
+    // Pages Functions logs are not stored, so the issue is the only place the
+    // maintainer will reliably see that the archive is failing.
+    const archiveNote = archiveFailed ? `\n${ARCHIVE_FAILED_NOTE}` : "";
+    const header = `${marker}${note}\nReport ID: ${report.report_id}${archiveNote}\n\n### Report details\n\n\`\`\`json\n${reportText}\n\`\`\`${omittedMetadataNote}`;
     if (!includeLogs)
         return boundIssueBody(
             `${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`,
@@ -354,7 +378,7 @@ async function addReportComment(
     issue,
     report,
     crashFingerprint,
-    { includeLogs = true, overflow = false } = {},
+    { includeLogs = true, overflow = false, archiveFailed = false } = {},
 ) {
     await reopenIfClosed(token, issue);
     await github(
@@ -364,7 +388,7 @@ async function addReportComment(
   }`,
         {
             issue: issue.id,
-            body: issueBody(report, crashFingerprint, { includeLogs, overflow }),
+            body: issueBody(report, crashFingerprint, { includeLogs, overflow, archiveFailed }),
         },
     );
 }
@@ -447,12 +471,27 @@ export async function onRequestPost({ request, env }) {
         return json({ error: error.message }, 503);
     }
 
-    let archivedReportId = null;
+    let crashFingerprint;
     try {
         const generic = isGenericFailure(report);
-        const crashFingerprint = generic ? null : await fingerprint(report);
+        crashFingerprint = generic ? null : await fingerprint(report);
+    } catch (error) {
+        console.error("Crash report fingerprint failed:", error.message);
+        return deliveryFailedResponse();
+    }
+
+    // The archive is a convenience copy for the admin page; GitHub is the record.
+    // A failed save (for example, migration 0002 never applied) must not stop delivery.
+    let archivedReportId = null;
+    try {
         await archiveReport(config.database, report, crashFingerprint);
         archivedReportId = report.report_id;
+    } catch (error) {
+        console.error(ARCHIVE_SAVE_FAILED_LOG, error.message);
+    }
+    const archiveFailed = archivedReportId === null;
+
+    try {
         const marker = crashFingerprint ? `crash-fingerprint:${crashFingerprint}` : null;
         const searchQuery = marker
             ? `repo:${config.owner}/${config.name} is:issue in:body "${marker}"`
@@ -475,9 +514,11 @@ export async function onRequestPost({ request, env }) {
         );
         if (!lookup.repository?.isPrivate) {
             console.error(
-                "Crash report archived, but the configured GitHub repository is not private.",
+                archiveFailed
+                    ? "Crash report not sent: the configured GitHub repository is not private, and the archive save failed."
+                    : "Crash report archived, but the configured GitHub repository is not private.",
             );
-            return archivedOnlyResponse(archivedReportId);
+            return undeliveredResponse(archivedReportId);
         }
 
         const existing = marker
@@ -487,6 +528,7 @@ export async function onRequestPost({ request, env }) {
             const includeLogs = (existing.comments?.totalCount ?? 0) < MAX_FULL_LOG_REPEATS;
             await addReportComment(config.token, existing, report, crashFingerprint, {
                 includeLogs,
+                archiveFailed,
             });
             return json({
                 report_id: report.report_id.slice(0, 8),
@@ -502,10 +544,11 @@ export async function onRequestPost({ request, env }) {
                 config.name,
                 config.overflowIssueNumber,
             );
-            if (!overflow) return archivedOnlyResponse(archivedReportId);
+            if (!overflow) return undeliveredResponse(archivedReportId);
             await addReportComment(config.token, overflow, report, null, {
                 includeLogs: false,
                 overflow: true,
+                archiveFailed,
             });
             return json({
                 report_id: report.report_id.slice(0, 8),
@@ -532,16 +575,12 @@ export async function onRequestPost({ request, env }) {
             {
                 repository: lookup.repository.id,
                 title,
-                body: issueBody(report, crashFingerprint),
+                body: issueBody(report, crashFingerprint, { archiveFailed }),
             },
         );
         return json({ report_id: report.report_id.slice(0, 8), duplicate: false, overflow: false });
     } catch (error) {
         console.error("Crash report delivery failed:", error.message);
-        if (archivedReportId) return archivedOnlyResponse(archivedReportId);
-        return json(
-            { error: "The report service could not save this crash report. Try again later." },
-            502,
-        );
+        return undeliveredResponse(archivedReportId);
     }
 }
