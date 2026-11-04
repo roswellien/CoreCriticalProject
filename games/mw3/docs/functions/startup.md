@@ -3,7 +3,9 @@
 The Microsoft C runtime startup that Windows runs first in `Mech3.exe`. It sets
 up the runtime, runs the program's initializers and hands over to MFC's
 `WinMain` at `005AE390`, which passes its arguments on to `AfxWinMain` in
-`MFC42.DLL` (ordinal 1576, import slot RVA `0x1BB438`). This is library code
+`MFC42.DLL` (ordinal 1576, import slot RVA `0x1BB438`). It also covers the
+runtime's `atexit` and `_onexit`, which the program's initializers use to
+register the functions that destroy global objects at exit. This is library code
 linked into every Visual C++ 6 GUI program that uses `MSVCRT.dll`, not the
 game's own code, though `005AC5C0`'s one-instruction body is most likely
 shared with some of the game's own empty functions.
@@ -16,6 +18,91 @@ repeat the work, import that `Mech3.exe` into Ghidra and go to each address; the
 [README](README.md) has the details and the section format. Every import slot
 named here is checked against
 [`../imports-mw3-us-1-2-retail.csv`](../imports-mw3-us-1-2-retail.csv).
+
+## sub_005AC110
+
+**Name and confidence:** `_onexit`, confirmed.
+
+**Kind:** statically linked Microsoft C runtime: `_onexit` from Visual C++ 6's
+`atonexit.c`, built for programs that use `MSVCRT.dll`. Its name is also the
+name of the `MSVCRT.dll` routine it calls; that import has no thunk of its own
+and no row in the table.
+
+**Extent:** `005AC110` to `005AC13F`, 48 bytes.
+
+**Callers:** one function, [`005AC140`](#sub_005ac140), from `005AC145`.
+
+**What it does:** takes one stack argument, a pointer to a function to run at
+exit, and returns a pointer: that function on success, 0 on failure.
+
+1. If the word at `009A17F0` is -1, it calls `MSVCRT.dll`'s `_onexit` through
+   the import slot at RVA `0x1BB52C` with the argument, removes the argument
+   and returns that call's result.
+2. Otherwise it calls [`005AC580`](#sub_005ac580) (`__dllonexit`) with the
+   argument, the address `009A17F0` and the address `009A17EC`, removes the
+   three arguments and returns that call's result.
+
+The caller removes its own argument. `__dllonexit` takes the function, then
+pointers to the table's start and end, so `009A17F0` is the start
+(`__onexitbegin` in `atonexit.c`) and `009A17EC` the end (`__onexitend`).
+[`005AC3A0`](#sub_005ac3a0) sets both to -1 before any initializer runs, so in
+this program step 1 always runs and the second branch is never taken.
+
+**Reads and writes:** reads the word at `009A17F0` and the two import slots;
+the called routine updates whichever exit-function table it uses.
+
+**How the host reaches it:** `tools/m4-crt-heap-carry/host/composition.cpp`
+routes calls to it to the heap stage (`heap_stage.hpp`), whose initializer
+path runs it when a main-table root registers its exit function. The heap-carry
+[README](../../../../tools/m4-crt-heap-carry/README.md) ("Main initializer
+table") describes the same chain: `atexit`, then the game's `_onexit`, then
+`MSVCRT.dll`'s `_onexit`. Context only, not proof.
+
+**Why this name:** the library-code rule. `atonexit.c`'s `_onexit` checks
+whether `__onexitbegin` is -1; if it is, the program uses the runtime DLL's
+exit table and it passes the function to the DLL's `_onexit`; otherwise it
+calls `__dllonexit(func, &__onexitbegin, &__onexitend)`. The two branches
+above match, in order and with the same arguments. Its one caller is `atexit`,
+as in `atonexit.c`.
+
+**Still unknown:** nothing.
+
+## sub_005AC140
+
+**Name and confidence:** `atexit`, confirmed.
+
+**Kind:** statically linked Microsoft C runtime: `atexit` from Visual C++ 6's
+`atonexit.c`.
+
+**Extent:** `005AC140` to `005AC154`, 21 bytes.
+
+**Callers:** Ghidra lists 116 functions that call it, and 125 call sites in
+all, three of them in code it hasn't marked as a function. They include the
+exit-registration stub of every root in the main initializer table (for
+example `00410000` and `00410050`; see [`globals.md`](globals.md)), each of
+which passes it a small function that runs one global object's destructor and
+then removes the argument.
+
+**What it does:** passes its one stack argument, a function pointer, to
+[`005AC110`](#sub_005ac110) (`_onexit`) and removes it. It returns 0 if that
+call returned a non-zero pointer and -1 if it returned 0, using a branch-free
+sequence of negate, subtract-with-borrow, negate and decrement. There are no
+other steps.
+
+**Reads and writes:** only its stack.
+
+**How the host reaches it:** `composition.cpp` routes calls to it to the heap
+stage, whose initializer path runs it for each main-table root; the heap-carry
+[README](../../../../tools/m4-crt-heap-carry/README.md) records the exit-table
+entries those calls leave. Context only, not proof.
+
+**Why this name:** the library-code rule. `atonexit.c`'s `atexit` returns 0
+when `_onexit(func)` succeeds and -1 when it returns null, which is exactly
+the result above. Its callers pass a function and nothing else; the
+initializer roots use it to register their objects' destructors, which is
+how Visual C++ 6 destroys global objects at exit.
+
+**Still unknown:** nothing.
 
 ## sub_005AC3A0
 
@@ -37,9 +124,9 @@ range; counting them, the routine is one piece.
    (thunk `005AC586`, slot RVA `0x1BB528`) and whose scope table at `005D0F78`
    names a filter at `005AC502` and a handler at `005AC517`.
 2. Calls `__set_app_type` (slot `0x1BB5A4`) with 2, which marks a GUI program.
-3. Sets the two words at `009A17EC` and `009A17F0` to -1: the start and end of
+3. Sets the two words at `009A17EC` and `009A17F0` to -1: the end and start of
    the program's own exit-function table, left empty because `MSVCRT.dll` keeps
-   the real one.
+   the real one ([`005AC110`](#sub_005ac110) shows which is which).
 4. Copies the program's `_fmode` (`007365A0`) and `_commode` (`0073659C`) into
    the runtime's copies, through `__p__fmode` (slot `0x1BB57C`) and
    `__p__commode` (slot `0x1BB504`).
@@ -95,6 +182,32 @@ else calls it, as expected for an entry point.
 
 **Still unknown:** nothing about the name. What the two initializer tables run
 is outside this routine.
+
+## sub_005AC580
+
+**Name and confidence:** `__dllonexit`, confirmed.
+
+**Kind:** import thunk.
+
+**Extent:** `005AC580` to `005AC585`, 6 bytes.
+
+**Callers:** one function, [`005AC110`](#sub_005ac110), from `005AC137`, on
+its branch for a program that keeps its own exit-function table. That branch
+never runs in this program.
+
+**What it does:** one jump through the import slot at RVA `0x1BB530`. The
+imported routine adds a function to the exit-function table whose start and
+end pointers it is given.
+
+**Reads and writes:** the import slot.
+
+**How the host reaches it:** `composition.cpp` routes calls to it to the heap
+stage. Context only, not proof.
+
+**Why this name:** the import-thunk rule. The import CSV lists slot RVA
+`0x1BB530` as `MSVCRT.dll` `__dllonexit`, imported by name.
+
+**Still unknown:** nothing.
 
 ## sub_005AC598
 

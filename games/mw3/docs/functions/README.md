@@ -12,6 +12,10 @@ new topic file is added only when none fits, and is listed below.
 
 | Topic file | What it covers |
 | --- | --- |
+| [`containers.md`](containers.md) | Standard-library vector and list helpers the game uses |
+| [`globals.md`](globals.md) | Building the game's global objects at startup |
+| [`heap.md`](heap.md) | Allocating and freeing memory |
+| [`objects.md`](objects.md) | Object constructors and the game's list of numbered objects |
 | [`startup.md`](startup.md) | The C runtime startup that runs before the game's own code |
 | [`textures.md`](textures.md) | Loading textures from the game's texture banks |
 
@@ -42,7 +46,11 @@ the lowercase anchor, `#sub_xxxxxxxx`) and these fields, in this order:
 - **Reads and writes:** memory, globals and import slots it touches.
 - **How the host reaches it:** which native host file runs or checks it. This is
   context only: the host runs a lifted copy of the original code, so it never
-  proves a name.
+  proves a name. "Routes calls to it to the heap stage" is short for the
+  one-line definitions in `tools/m4-crt-heap-carry/host/composition.cpp`,
+  which pass the call to `hs_called`; that hands it to the MFC stage when that
+  stage is active (every such function is also listed in `mfc_entries.inc`)
+  and otherwise to the heap stage (`heap_stage.hpp`).
 - **Why this name:** the proof, under the rules below.
 - **Still unknown:** what the section can't settle.
 
@@ -57,7 +65,8 @@ the lowercase anchor, `#sub_xxxxxxxx`) and these fields, in this order:
   runtime or MFC routine, compared step by step, and its callers use it that
   way.
 - **The game's own code:** every step of its behaviour is described, including
-  each branch; its callers are listed and agree with that reading.
+  each branch; its callers are listed and agree with that reading. A branch
+  that can never run counts as described when the section says why it can't.
 - **Merged body:** one body that the linker shares between several identical
   functions. Every instruction is described; the section gives the caller count
   with a few examples instead of listing them all, since the body alone settles
