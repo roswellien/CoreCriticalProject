@@ -502,6 +502,15 @@ DYNAMIC_INVENTORY_REGEX = re.compile(
     r"\b(?:rglob|glob|walk|Get-ChildItem|EnumerateFiles|GetFiles|scandir)\b", re.IGNORECASE
 )
 SELF_PATH_REGEX = re.compile(r"\b__file__\b|\$PSCommandPath\b", re.IGNORECASE)
+# A file type a script names for a folder listing: "*.py", or a quoted ".py". The first
+# character must be a letter so numbers such as ".5" don't count as file types.
+LISTING_SUFFIX_REGEX = re.compile(r"""\*\.([A-Za-z]\w*)\b|["']\.([A-Za-z]\w*)["']""")
+# Folder listings in these folders are not reported. They hold frozen, hash-pinned
+# evidence scripts that can't change; the stored-hash scan still finds any that keep a
+# changed file's hash in the repository (issue #214).
+FROZEN_LISTING_HOLDERS = ("tools/m4-", "tools/x87-")
+# Hit kinds in the order they print for the same line.
+TEXT_READ_KINDS = ("direct", "name", "listing")
 
 
 class PreflightReadError(Exception):
@@ -529,14 +538,63 @@ class StoredHashHit:
 
 @dataclass
 class TextReadHit:
-    """A code location reading, slicing, or hashing a language file as text."""
+    """A code line that may read, slice, or hash a target file as text.
+
+    kind is "direct" (the line names target_file by its path), "name" (the line names
+    only a file name; details holds that name, then every target it could mean) or
+    "listing" (the line lists a folder; details holds the file types that reach a
+    target, empty when the script names none, so any target may be read).
+    """
 
     holding_file: str
     line_number: int
-    target_file: str
+    kind: str
+    target_file: str = ""
+    details: tuple[str, ...] = ()
+
+    def sort_key(self) -> tuple[str, int, int, str]:
+        first_target = self.target_file or (self.details[0] if self.details else "")
+        return (
+            self.holding_file,
+            self.line_number,
+            TEXT_READ_KINDS.index(self.kind),
+            first_target,
+        )
 
     def describe(self) -> str:
-        return f"{self.holding_file}:{self.line_number}: reads {self.target_file}"
+        location = f"{self.holding_file}:{self.line_number}"
+        if self.kind == "name":
+            name, *candidates = self.details
+            files = "file" if len(candidates) == 1 else "files"
+            listed = ", ".join(candidates)
+            return f"{location}: names {name} (could be {len(candidates)} {files}: {listed})"
+        if self.kind == "listing":
+            file_types = ", ".join(f".{suffix}" for suffix in self.details) or "any type"
+            return f"{location}: lists files ({file_types})"
+        return f"{location}: reads {self.target_file}"
+
+
+def is_frozen_listing_holder(path: str) -> bool:
+    """Say whether path sits inside a tools/m4-<name>/ or tools/x87-<name>/ folder."""
+    for prefix in FROZEN_LISTING_HOLDERS:
+        if not path.startswith(prefix):
+            continue
+        folder_and_rest = path[len(prefix) :].split("/", 1)
+        has_folder_name = len(folder_and_rest) == 2 and folder_and_rest[0] != ""
+        if has_folder_name:
+            return True
+    return False
+
+
+def lint_finding_path(finding: str) -> str:
+    """Return the file path at the start of a Ruff or PSScriptAnalyzer finding line.
+
+    Ruff prints "path:line:col: CODE message" and check_powershell.ps1 prints
+    "path:line Rule message". A drive letter's colon is followed by a slash, not a
+    digit, so it stays part of the path.
+    """
+    path_then_line = re.match(r"(.+?):\d+", finding)
+    return path_then_line.group(1) if path_then_line else finding
 
 
 def is_code_file(path: str) -> bool:
@@ -644,26 +702,29 @@ def run_text_read_search(
     target_names: dict[str, list[str]] = {}
     for path in sorted(normalized_targets):
         target_names.setdefault(PurePosixPath(path).name, []).append(path)
-    target_paths = {path: path for path in normalized_targets}
+    target_paths = normalized_targets
 
-    suffixes = {
-        PurePosixPath(path).suffix.lower().lstrip(".") for path in normalized_targets
-        if PurePosixPath(path).suffix
-    }
-    if not suffixes:
+    target_suffixes = {PurePosixPath(path).suffix.lower().lstrip(".") for path in target_paths}
+    target_suffixes.discard("")
+    if not target_suffixes:
         return []
-    suffix_pattern = "|".join(re.escape(s) for s in sorted(suffixes))
+    suffix_pattern = "|".join(re.escape(s) for s in sorted(target_suffixes))
     token_re = re.compile(r"[\w\-./\\]+\.(?:" + suffix_pattern + r")\b")
     inventory_suffix_re = re.compile(r"\*?\.(?:" + suffix_pattern + r")\b", re.IGNORECASE)
-    targets_by_suffix: dict[str, list[str]] = {}
-    for target in sorted(normalized_targets):
-        suffix = PurePosixPath(target).suffix.lower().lstrip(".")
-        if suffix:
-            targets_by_suffix.setdefault(suffix, []).append(target)
 
     code_candidates = [f for f in all_tracked_files if is_code_file(f)]
     hits: list[TextReadHit] = []
-    seen: set[tuple[str, int, str]] = set()
+    seen: set[tuple[str, int, str, str]] = set()
+
+    def add_hit(hit: TextReadHit) -> None:
+        what = hit.target_file or ",".join(hit.details)
+        key = (hit.holding_file, hit.line_number, hit.kind, what)
+        if key not in seen:
+            seen.add(key)
+            hits.append(hit)
+
+    def reported_directly(code_file: str, line_number: int, target: str) -> bool:
+        return (code_file, line_number, "direct", target) in seen
 
     for code_file in code_candidates:
         full_code_path = repo_root / code_file
@@ -690,30 +751,31 @@ def run_text_read_search(
         if selected_self_references and normalized_code_file in target_paths:
             for self_reference in selected_self_references:
                 line_number = content.count("\n", 0, self_reference.start()) + 1
-                key = (code_file, line_number, normalized_code_file)
-                if key not in seen:
-                    seen.add(key)
-                    hits.append(TextReadHit(code_file, line_number, normalized_code_file))
+                add_hit(TextReadHit(code_file, line_number, "direct", normalized_code_file))
 
-        for inventory_match in DYNAMIC_INVENTORY_REGEX.finditer(content):
-            inventory_line = content.count("\n", 0, inventory_match.start()) + 1
-            suffix_matches = {
+        if not is_frozen_listing_holder(normalized_code_file):
+            # A listing can read any file of the types its script names anywhere, so
+            # report each listing line once with those types rather than once per file.
+            named_suffixes = {
+                (match.group(1) or match.group(2)).lower()
+                for match in LISTING_SUFFIX_REGEX.finditer(content)
+            }
+            # Also count target types named inside a file name ("a.py"), as before #214.
+            named_suffixes |= {
                 match.group(0).lstrip("*").lstrip(".").lower()
                 for match in inventory_suffix_re.finditer(content)
             }
-            if suffix_matches:
-                inventory_targets = {
-                    target
-                    for suffix in suffix_matches
-                    for target in targets_by_suffix.get(suffix, [])
+            reachable_suffixes = tuple(sorted(named_suffixes & target_suffixes))
+            names_no_file_type = not named_suffixes
+            if reachable_suffixes or names_no_file_type:
+                listing_lines = {
+                    content.count("\n", 0, match.start()) + 1
+                    for match in DYNAMIC_INVENTORY_REGEX.finditer(content)
                 }
-            else:
-                inventory_targets = normalized_targets
-            for target_file in sorted(inventory_targets):
-                key = (code_file, inventory_line, target_file)
-                if key not in seen:
-                    seen.add(key)
-                    hits.append(TextReadHit(code_file, inventory_line, target_file))
+                for listing_line in sorted(listing_lines):
+                    add_hit(
+                        TextReadHit(code_file, listing_line, "listing", details=reachable_suffixes)
+                    )
 
         lines = content.splitlines()
         for idx, line in enumerate(lines, 1):
@@ -725,37 +787,55 @@ def run_text_read_search(
             if not tokens:
                 continue
 
-            matched_targets = set()
+            direct_targets = set()
+            candidates_by_name: dict[str, set[str]] = {}
             for tok in tokens:
                 tok_norm = tok.replace("\\", "/").rstrip("\"'")
                 if tok_norm in target_paths:
-                    matched_targets.add(tok_norm)
+                    direct_targets.add(tok_norm)
                     continue
                 sibling_path = normalize_repo_path(
                     (PurePosixPath(code_file).parent / tok_norm).as_posix()
                 )
                 if sibling_path in target_paths:
-                    matched_targets.add(sibling_path)
+                    direct_targets.add(sibling_path)
                     continue
-                matched_targets.update(target_names.get(PurePosixPath(tok_norm).name, []))
+                # Only a file name matched, which several files may share, and an
+                # unchanged file with the same name may be the one meant.
+                name = PurePosixPath(tok_norm).name
+                if name in target_names:
+                    candidates_by_name.setdefault(name, set()).update(target_names[name])
 
-            if not matched_targets:
-                continue
+            for target_file in sorted(direct_targets):
+                add_hit(TextReadHit(code_file, idx, "direct", target_file))
+            for name, candidates in sorted(candidates_by_name.items()):
+                not_yet_reported = [
+                    candidate
+                    for candidate in sorted(candidates)
+                    if not reported_directly(code_file, idx, candidate)
+                ]
+                if not_yet_reported:
+                    add_hit(TextReadHit(code_file, idx, "name", details=(name, *not_yet_reported)))
 
-            for target_file in sorted(matched_targets):
-                key = (code_file, idx, target_file)
-                if key not in seen:
-                    seen.add(key)
-                    hits.append(TextReadHit(code_file, idx, target_file))
-
-    hits.sort(key=lambda h: (h.holding_file, h.line_number, h.target_file))
+    hits.sort(key=TextReadHit.sort_key)
     return hits
 
 
-def run_preflight(language: str, exclude_patterns: list[str]) -> int:
-    """Run pre-cleanup safety checks for one language."""
+def run_preflight(language: str, exclude_patterns: list[str], check_name: str = "format") -> int:
+    """Run pre-cleanup safety checks for one language.
+
+    check_name says which cleanup is coming: "format" scans the files the formatter
+    would change, "lint" the files with lint findings.
+    """
     if language not in LANGUAGES:
         print(f"preflight: error: unknown language {language!r}")
+        return EXIT_TOOL_ERROR
+
+    # Checked before the tool versions, so asking for a check a language lacks fails
+    # the same way on every machine.
+    check = LANGUAGES[language].checks.get(check_name)
+    if check is None:
+        print(f"preflight: {language}: error: no {check_name} check")
         return EXIT_TOOL_ERROR
 
     pins = read_pinned_versions()
@@ -767,16 +847,15 @@ def run_preflight(language: str, exclude_patterns: list[str]) -> int:
     all_tracked = list_all_tracked_files(REPO_ROOT)
     target_files = list_files(LANGUAGES[language].suffixes, exclude_patterns)
 
-    format_check = LANGUAGES[language].checks.get("format")
-    changed_files: list[str] = []
-    if format_check:
-        result = run_check(language, "format", format_check, target_files)
-        if result.error:
-            print(f"preflight: {language} format: error: {result.error}")
-            return EXIT_TOOL_ERROR
-        changed_files = result.findings
-
-    changed_files = [normalize_repo_path(path) for path in changed_files]
+    result = run_check(language, check_name, check, target_files)
+    if result.error:
+        print(f"preflight: {language} {check_name}: error: {result.error}")
+        return EXIT_TOOL_ERROR
+    if check_name == "lint":
+        changed_paths = [lint_finding_path(finding) for finding in result.findings]
+    else:
+        changed_paths = result.findings
+    changed_files = sorted({normalize_repo_path(path) for path in changed_paths})
     try:
         hash_hits = run_stored_hash_scan(changed_files, all_tracked, REPO_ROOT)
     except PreflightReadError as error:
@@ -787,11 +866,17 @@ def run_preflight(language: str, exclude_patterns: list[str]) -> int:
         print(f"  {hit.describe()}")
 
     try:
-        text_hits = run_text_read_search(target_files, all_tracked, REPO_ROOT)
+        text_hits = run_text_read_search(changed_files, all_tracked, REPO_ROOT)
     except PreflightReadError as error:
         print(f"preflight: {language}: text-read search: error: {error}")
         return EXIT_TOOL_ERROR
-    print(f"preflight: {language}: text-read search: {len(text_hits):,} findings")
+    kind_counts = [sum(1 for hit in text_hits if hit.kind == kind) for kind in TEXT_READ_KINDS]
+    direct_count, name_count, listing_count = kind_counts
+    print(
+        f"preflight: {language}: text-read search: {len(text_hits):,} findings "
+        f"({direct_count:,} direct, {name_count:,} name matches, "
+        f"{listing_count:,} folder listings)"
+    )
     for hit in text_hits:
         print(f"  {hit.describe()}")
 
@@ -890,7 +975,7 @@ def main(argv: list[str]) -> int:
         if not arguments.language or len(arguments.language) != 1:
             print("preflight: error: --preflight requires exactly one --language")
             return EXIT_TOOL_ERROR
-        return run_preflight(arguments.language[0], exclude_patterns)
+        return run_preflight(arguments.language[0], exclude_patterns, arguments.check or "format")
 
     if arguments.list:
         for language in arguments.language or sorted(LANGUAGES):
