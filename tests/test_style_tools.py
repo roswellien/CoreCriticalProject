@@ -29,6 +29,16 @@ def load_check_style():
 
 
 check_style = load_check_style()
+# check_style.py loads the preflight scans from tools/style/style_preflight.py.
+preflight = sys.modules["style_preflight"]
+
+
+def write_fixtures(root, paths):
+    """Create each repository path under root as a small placeholder file."""
+    for path in paths:
+        full_path = root / path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text("# fixture\n", encoding="utf-8")
 
 
 class ExclusionPatternTests(unittest.TestCase):
@@ -265,15 +275,12 @@ class PreflightTests(unittest.TestCase):
                 [(1, graphics_verify)],
             )
 
-    def test_text_read_search_reports_all_ambiguous_basename_targets(self):
+    def test_text_read_search_groups_a_shared_name_into_one_hit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            target_files = ["first/verify.py", "second/verify.py"]
+            target_files = ["first/verify.py", "second/verify.py", "third/verify.py"]
             caller = "tools/check.py"
-            for path in target_files + [caller]:
-                full_path = temp_path / path
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text("# fixture\n", encoding="utf-8")
+            write_fixtures(temp_path, target_files + [caller])
             (temp_path / caller).write_text(
                 'filename = "verify.py"\nopen(filename).read()\n', encoding="utf-8"
             )
@@ -282,19 +289,36 @@ class PreflightTests(unittest.TestCase):
                 target_files, target_files + [caller], repo_root=temp_path
             )
             self.assertEqual(
-                [(hit.line_number, hit.target_file) for hit in hits],
-                [(1, "first/verify.py"), (1, "second/verify.py")],
+                [hit.describe() for hit in hits],
+                [
+                    "tools/check.py:1: names verify.py (could be 3 files: "
+                    "first/verify.py, second/verify.py, third/verify.py)"
+                ],
             )
 
-    def test_text_read_search_reports_dynamic_suffix_inventory(self):
+    def test_text_read_search_keeps_a_bare_name_with_one_target_as_a_name_match(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            caller = "tools/check.py"
+            write_fixtures(temp_path, ["first/verify.py", caller])
+            (temp_path / caller).write_text(
+                'filename = "verify.py"\nopen(filename).read()\n', encoding="utf-8"
+            )
+
+            hits = check_style.run_text_read_search(
+                ["first/verify.py"], ["first/verify.py", caller], repo_root=temp_path
+            )
+            self.assertEqual(
+                [hit.describe() for hit in hits],
+                ["tools/check.py:1: names verify.py (could be 1 file: first/verify.py)"],
+            )
+
+    def test_text_read_search_reports_a_listing_without_suffixes_once(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             target_files = ["runtime/first.py", "runtime/second.py"]
             caller = "tools/inventory.py"
-            for path in target_files + [caller]:
-                full_path = temp_path / path
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text("# fixture\n", encoding="utf-8")
+            write_fixtures(temp_path, target_files + [caller])
             (temp_path / caller).write_text(
                 'for path in root.rglob("*"):\n'
                 "    hashlib.sha256(path.read_bytes()).hexdigest()\n",
@@ -305,9 +329,84 @@ class PreflightTests(unittest.TestCase):
                 target_files, target_files + [caller], repo_root=temp_path
             )
             self.assertEqual(
-                [(hit.line_number, hit.target_file) for hit in hits],
-                [(1, "runtime/first.py"), (1, "runtime/second.py")],
+                [hit.describe() for hit in hits],
+                ["tools/inventory.py:1: lists files (any type)"],
             )
+
+    def test_text_read_search_reports_a_listing_with_matching_suffixes_once(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            target_files = ["runtime/a.py", "runtime/b.py", "runtime/c.py"]
+            caller = "tools/inventory.py"
+            write_fixtures(temp_path, target_files + [caller])
+            (temp_path / caller).write_text(
+                'for path in root.rglob("*.py"):\n    path.read_bytes()\n', encoding="utf-8"
+            )
+
+            hits = check_style.run_text_read_search(
+                target_files, target_files + [caller], repo_root=temp_path
+            )
+            self.assertEqual(
+                [hit.describe() for hit in hits],
+                ["tools/inventory.py:1: lists files (.py)"],
+            )
+
+    def test_text_read_search_drops_a_listing_whose_suffixes_reach_no_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            caller = "tools/notes.py"
+            write_fixtures(temp_path, ["runtime/a.py", caller])
+            (temp_path / caller).write_text(
+                'for path in root.glob("*.txt"):\n    path.read_text()\n', encoding="utf-8"
+            )
+
+            hits = check_style.run_text_read_search(
+                ["runtime/a.py"], ["runtime/a.py", caller], repo_root=temp_path
+            )
+            self.assertEqual(hits, [])
+
+    def test_text_read_search_skips_listings_in_frozen_folders_but_not_direct_reads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            caller = "tools/m4-x/seal.py"
+            write_fixtures(temp_path, ["runtime/a.py", caller])
+            (temp_path / caller).write_text(
+                'for path in root.rglob("*.py"):\n'
+                "    path.read_bytes()\n"
+                'open("runtime/a.py").read()\n',
+                encoding="utf-8",
+            )
+
+            hits = check_style.run_text_read_search(
+                ["runtime/a.py"], ["runtime/a.py", caller], repo_root=temp_path
+            )
+            self.assertEqual(
+                [hit.describe() for hit in hits],
+                ["tools/m4-x/seal.py:3: reads runtime/a.py"],
+            )
+
+    def test_frozen_listing_holders_need_a_folder_name(self):
+        self.assertTrue(preflight.is_frozen_listing_holder("tools/m4-x/seal.py"))
+        self.assertTrue(preflight.is_frozen_listing_holder("tools/x87-y/z/a.py"))
+        self.assertFalse(preflight.is_frozen_listing_holder("tools/m4-check.py"))
+        self.assertFalse(preflight.is_frozen_listing_holder("tools/m4-/a.py"))
+        self.assertFalse(preflight.is_frozen_listing_holder("tools/style/a.py"))
+
+    def test_text_read_search_ignores_files_that_are_not_targets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            caller = "tools/build.py"
+            write_fixtures(temp_path, ["runtime/changed.py", "runtime/unchanged.py", caller])
+            (temp_path / caller).write_text(
+                'open("runtime/unchanged.py").read()\n', encoding="utf-8"
+            )
+
+            hits = check_style.run_text_read_search(
+                ["runtime/changed.py"],
+                ["runtime/changed.py", "runtime/unchanged.py", caller],
+                repo_root=temp_path,
+            )
+            self.assertEqual(hits, [])
 
     def test_text_read_search_finds_self_hashes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -456,6 +555,55 @@ class PreflightTests(unittest.TestCase):
                             check_style.EXIT_TOOL_ERROR,
                         )
                     self.assertIn("target.py: access denied", output.getvalue())
+
+    def run_preflight_with_findings(self, check_name, findings):
+        """Run preflight on fake tool output and return the lists both scans received."""
+        check_result = check_style.CheckResult("python", check_name, False, 2, findings=findings)
+        with (
+            patch.object(check_style, "read_pinned_versions", return_value={}),
+            patch.object(check_style, "version_error_for", return_value=None),
+            patch.object(check_style, "list_all_tracked_files", return_value=[]),
+            patch.object(check_style, "list_files", return_value=["a.py", "b.py"]),
+            patch.object(check_style, "run_check", return_value=check_result),
+            patch.object(check_style, "run_stored_hash_scan", return_value=[]) as hash_scan,
+            patch.object(check_style, "run_text_read_search", return_value=[]) as text_search,
+            redirect_stdout(io.StringIO()),
+        ):
+            exit_code = check_style.run_preflight("python", [], check_name)
+        self.assertEqual(exit_code, check_style.EXIT_CLEAN)
+        return hash_scan.call_args.args[0], text_search.call_args.args[0]
+
+    def test_preflight_scans_only_the_files_the_formatter_would_change(self):
+        hash_targets, text_targets = self.run_preflight_with_findings("format", ["b.py"])
+        self.assertEqual(hash_targets, ["b.py"])
+        self.assertEqual(text_targets, ["b.py"])
+
+    def test_preflight_lint_scans_the_files_with_lint_findings(self):
+        findings = [
+            "tools\\b.py:3:1: F401 `os` imported but unused",
+            "tools/b.py:9:5: E711 comparison to None",
+            "scripts/run.ps1:12 PSAvoidUsingCmdletAliases 'gci' is an alias",
+        ]
+        hash_targets, text_targets = self.run_preflight_with_findings("lint", findings)
+        self.assertEqual(hash_targets, ["scripts/run.ps1", "tools/b.py"])
+        self.assertEqual(text_targets, ["scripts/run.ps1", "tools/b.py"])
+
+    def test_lint_finding_path_keeps_drive_letters(self):
+        self.assertEqual(
+            check_style.lint_finding_path("D:/repo/tools/b.py:3:1: F401 unused"),
+            "D:/repo/tools/b.py",
+        )
+        self.assertEqual(
+            check_style.lint_finding_path("scripts/run.ps1:12 PSAvoidUsingCmdletAliases x"),
+            "scripts/run.ps1",
+        )
+
+    def test_preflight_lint_needs_a_language_with_a_lint_check(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exit_code = check_style.main(["--preflight", "--check", "lint", "--language", "web"])
+        self.assertEqual(exit_code, check_style.EXIT_TOOL_ERROR)
+        self.assertIn("no lint check", output.getvalue())
 
     def test_formatter_paths_collapse_relative_segments(self):
         self.assertEqual(
