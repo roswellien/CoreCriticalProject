@@ -103,7 +103,7 @@ to each measured frame and TSC/QPC calibration spread below 0.007%.
 | Renderer work excluding nested scopes | 0.500 |
 | Fixture-shadow preparation | 0.480 |
 | Scene ingest | 0.232 |
-| Queue submission | 0.112 |
+| Instrumented queue submissions | 0.112 |
 | DXGI Present call | 0.070 |
 | DXGI keyed-mutex acquisition | 0.019 |
 
@@ -127,8 +127,71 @@ exactly. This checks sampled rendering fidelity, not every guest-memory access.
 One offset-8 attempt was stopped before Training
 because another compiler started; exclude it from results. Source inspection
 must account for existing buffer/state reuse before proposing draw batching.
-Next isolate the particular fence path and its submission dependency, then
-consider maintained GPU timestamps if actual GPU duration is still missing.
+The queue-submission scope covers calls in `vk_scene.hpp`; submissions in the
+world-resolution and temporal include files remain in their enclosing scopes.
+It is not a complete count or total cost of every queue submission.
+
+## Fence isolation follow-up
+
+A second private host distinguishes the 15 existing fence/idle call sites
+without changing their arguments, order or results. Relative to the previous
+diagnostic source, only the probe header and wait labels in `vk_scene.hpp`
+change. Removing those labels reproduces the prior renderer source exactly.
+The seven-object build retains the unchanged translated module; executable
+SHA-256 is `ff0e92a1209ec0feec64b612b515d7cae3bb4f07ffde3b5ff38330d5e92e429f`.
+A fixture checks scope conservation, nesting, wall-wait attribution, separate
+CPU counters, wait-call arguments/count/result, and FP/LastError preservation.
+
+The disabled control `cpu183-budget-r4-control-retry` and the two enabled runs
+`cpu183-budget-r4-o0`/`cpu183-budget-r4-o8` each completed 2,200 Training frames.
+Their measured 1,400 camera-history tuples, inputs and settings match except
+for diagnostic output/offset. Results stay in the post-restart paced cohort.
+
+| Measurement | Offset 0 | Offset 8 |
+| --- | --- | --- |
+| Sampled frames | 88 | 87 |
+| `Renderer::settle()` wall ms/frame | 4.697 | 4.889 |
+| `settle()` waits/frame | 8.239 | 8.287 |
+| Resident-presentation fence wall ms/frame | 0.000724 | 0.000654 |
+| Measured-window FPS | 59.540 | 59.965 |
+
+All 27 disjoint scopes conserve each sampled frame; clock-calibration spread
+is below 0.006%. The control measured 59.966 FPS. Display pacing and varying
+system CPU activity prevent an uncapped performance or negligible-overhead
+claim. The original control attempt was stopped at frame 1,669 when the release
+compiler started; it is excluded. Full receipts are
+`local/r4-wall-budget-final.json`, `local/r4-timing-summary.json`,
+`local/r4-matched-controls.json` and `local/r4-diagnostic-provenance.json`.
+The separate enabled-observer run `cpu183-budget-r4-fidelity` completed 2,200
+frames and matched all 15 reference color/depth/motion/validity/metadata artifacts.
+Its scope CSV contains all 88 expected sampled frames with 27 valid scopes
+each and exact conservation. This is sampled rendering fidelity, not a waiver
+of the unresolved inline stack-memory contract below.
+
+Almost all measured fence-wait time is at `settle()`, which waits before
+reusing scene command-pool, upload, vertex and descriptor resources. The
+sampled readback, capture, initialization and device-idle wait sites had no
+calls. The resident-presentation fence had one call per sampled frame and
+negligible measured duration. This locates the CPU wait; it does not prove
+that all of the elapsed time is scene GPU execution or rule out indirect
+presentation/queue backpressure.
+
+Source inspection shows that scene rendering, world reconstruction/target
+transfers and temporal commands use the same command pool and scene fence.
+The world path can submit shading, reconstruction and coverage separately;
+temporal input work adds further submissions. These ownership rules require
+the existing waits before resetting or overwriting reusable resources. Do not
+remove the waits without replacing that protection.
+
+The next measurement should label GPU durations and submission dependencies
+for those stages. The existing `GpuWorkProfile` helper under
+`tools/remaster-launcher/native-overrides/` is not integrated into this host;
+its presence is not a measured GPU result. Use completed existing fences to
+collect timestamp results without adding waits, and validate any diagnostic
+integration separately. Only then choose between recording compatible passes
+together, separate resources per in-flight submission, or reducing duplicated
+draw preparation. Each needs an ordered-rendering and temporal-history
+comparison; this report authorizes no default or synchronization change.
 
 ## Fidelity qualification and remaining gates
 
