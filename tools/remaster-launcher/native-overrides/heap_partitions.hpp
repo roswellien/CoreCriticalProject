@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <iterator>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -13,29 +16,57 @@ namespace mw34::heap_partitions {
 struct GuestHeap {
     // Public accounting describes guest addresses, not host pointers. Callers
     // serialize access; callbacks implement actual guest mapping and zero fill.
+    // The region map and its slot table are written and read on the game thread only.
     static constexpr unsigned lo = 0x50000000, hi = 0x70000000, chunk = 0x100000;
+    // Regions start and end on 64 KiB boundaries, so each 64 KiB slot of the
+    // window lies inside at most one region and can record that region's end.
+    static constexpr unsigned slot_shift = 16, slot_bytes = 1U << slot_shift;
+    static constexpr unsigned slot_count = (hi - lo) >> slot_shift;
     unsigned top = lo, mapped = lo, region_end = lo;
     // The translated fast bridge may use only the uninterrupted heap prefix.
     // Allocations beyond a foreign mapping use the Stage's exact region checks.
     unsigned fast_mapped = lo;
-    std::map<unsigned, unsigned> free_blocks, live, regions, region_owners;
+    std::map<unsigned, unsigned> free_blocks, live, region_owners;
     std::uint64_t allocs{}, frees{};
 
+    // Region start -> end. Read-only here; add_region keeps the slot table in step.
+    const std::map<unsigned, unsigned> &regions() const { return regions_; }
+
+    void add_region(unsigned start, unsigned end) {
+        const bool aligned = (start & (slot_bytes - 1)) == 0 && (end & (slot_bytes - 1)) == 0;
+        const bool inside_window = lo <= start && start < end && end <= hi;
+        if (!aligned || !inside_window || overlaps_region(start, end))
+            throw std::runtime_error("Invalid guest heap region");
+        regions_.emplace(start, end);
+        fill_slots(start, end, end);
+    }
+    // Only tests remove regions; the host keeps every reservation until shutdown.
+    void erase_region(unsigned start) {
+        auto region = regions_.find(start);
+        if (region == regions_.end())
+            return;
+        fill_slots(region->first, region->second, 0);
+        regions_.erase(region);
+    }
+    void clear_regions() {
+        regions_.clear();
+        std::fill(region_end_by_slot_.begin(), region_end_by_slot_.end(), 0U);
+    }
+
     unsigned region_of(unsigned address) const {
-        auto it = regions.upper_bound(address);
-        if (it == regions.begin())
+        auto it = regions_.upper_bound(address);
+        if (it == regions_.begin())
             return 0;
         --it;
         return address < it->second ? it->first : 0;
     }
+    // Called for every guest pointer the host checks, so it reads one table slot
+    // instead of searching the region map.
     bool contains(unsigned address, unsigned bytes) const {
-        auto region = regions.upper_bound(address);
-        if (region == regions.begin())
-            return false;
-        --region;
-        // Preserve the zero-key sentinel and reject an empty range at a region's end.
-        return region->first != 0 && address < region->second &&
-               std::uint64_t(address) + bytes <= region->second;
+        const bool inside = contains_by_slot(address, bytes);
+        if (region_table_check_enabled() && inside != contains_by_map(address, bytes))
+            throw std::runtime_error("Guest heap table disagrees with the region map");
+        return inside;
     }
     unsigned owner_of(unsigned address) const {
         auto it = region_owners.find(region_of(address));
@@ -84,7 +115,7 @@ struct GuestHeap {
                 commit(next, size);
                 if (owner_changed)
                     free_blocks.emplace(top, region_end - top);
-                regions.emplace(next, next + size);
+                add_region(next, next + size);
                 region_owners.emplace(next, owner);
                 top = next;
                 mapped = next + size;
@@ -144,6 +175,61 @@ struct GuestHeap {
         for (unsigned allocation_address : blocks)
             release(allocation_address);
         return blocks.size();
+    }
+
+  private:
+    std::map<unsigned, unsigned> regions_;
+    // The end of the region covering each 64 KiB slot of [lo, hi), or 0 for none.
+    std::vector<unsigned> region_end_by_slot_ = std::vector<unsigned>(slot_count, 0U);
+
+    // MW34_HEAP_TABLE_CHECK=1 compares every lookup with the region map search.
+    // It doubles the cost of each check, so it is for test runs only.
+    static bool region_table_check_enabled() {
+        static const bool value = [] {
+            const char *setting = std::getenv("MW34_HEAP_TABLE_CHECK");
+            if (!setting || !*setting || !std::strcmp(setting, "0"))
+                return false;
+            if (!std::strcmp(setting, "1"))
+                return true;
+            throw std::runtime_error("MW34_HEAP_TABLE_CHECK must be 0 or 1");
+        }();
+        return value;
+    }
+    // A new region may not share any byte with an existing one, including the same start.
+    bool overlaps_region(unsigned start, unsigned end) const {
+        auto next_region = regions_.lower_bound(start);
+        if (next_region != regions_.end() && next_region->first < end)
+            return true;
+        if (next_region == regions_.begin())
+            return false;
+        auto previous_region = std::prev(next_region);
+        return previous_region->second > start;
+    }
+    void fill_slots(unsigned start, unsigned end, unsigned value) {
+        const unsigned first_slot = (start - lo) >> slot_shift;
+        const unsigned end_slot = (end - lo) >> slot_shift;
+        std::fill(region_end_by_slot_.begin() + first_slot, region_end_by_slot_.begin() + end_slot,
+                  value);
+    }
+    bool contains_by_slot(unsigned address, unsigned bytes) const {
+        // Every region lies inside the window, so an address outside it is in none.
+        if (address < lo || address >= hi)
+            return false;
+        // Regions are aligned to slots and never overlap, so the slot holds the end
+        // of the only region that can contain this address. Start 0, the old map
+        // search's sentinel, can't occur: add_region rejects anything below lo.
+        const unsigned end = region_end_by_slot_[(address - lo) >> slot_shift];
+        return end != 0 && address < end && std::uint64_t(address) + bytes <= end;
+    }
+    // The previous lookup, kept as the reference for the check mode and the tests.
+    bool contains_by_map(unsigned address, unsigned bytes) const {
+        auto region = regions_.upper_bound(address);
+        if (region == regions_.begin())
+            return false;
+        --region;
+        // Preserve the zero-key sentinel and reject an empty range at a region's end.
+        return region->first != 0 && address < region->second &&
+               std::uint64_t(address) + bytes <= region->second;
     }
 };
 

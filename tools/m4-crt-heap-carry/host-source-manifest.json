@@ -433,8 +433,8 @@
       "classification": "authored-host-source"
     },
     "heap_partitions.hpp": {
-      "sha256": "3c71bd4e84bd4b338147cd6b1a1103c40b3618e842a8a07febf4274c5c9a34de",
-      "bytes": 6829,
+      "sha256": "e2fcea59fc48d1e5a8ca13da46200202d6812aabb4f457f6f5dd6ae40870c7c0",
+      "bytes": 11147,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -709,8 +709,8 @@
       "classification": "authored-host-source"
     },
     "photo_replay_stage.inc": {
-      "sha256": "f32b2d52adcd92151b6162608c81381ab6e21f41d3d457eae7b0b62604559962",
-      "bytes": 82436,
+      "sha256": "060cd67cb6b86866dfa861ba1f1c986eac0a97a39c4d081caa78da1b64b330d3",
+      "bytes": 82680,
       "decision": "commit",
       "classification": "authored-host-source"
     },
