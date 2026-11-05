@@ -108,17 +108,20 @@ void publish_counts(){if(!host.sren)return;auto counts=host.sren->counters();std
 // Copies the renderers' counters for the game thread's logs (vk_scene.hpp RendererCounters). With the render thread
 // on, scenes and presentation share one renderer and the copy is the latest one it published.
 void copy_counters(){if(render_threaded()){std::lock_guard lock(host.counts_mutex);host.scene_counts=host.published_counts;host.present_counts=host.published_counts;return;}
- if(host.sren)host.scene_counts=host.sren->counters();if(host.presenter)host.present_counts=host.presenter->counters();}
+ if(host.sren)host.scene_counts=host.sren->counters();
+ if(host.presenter)host.present_counts=host.presenter.get()==host.sren?host.scene_counts:host.presenter->counters();}
 // Every renderer call goes through one of these, inside its caller's deny block; inline, each just calls fn.
 // render_enqueue queues a command. render_readback runs fn on the render thread once everything queued has run, for
 // results the game thread needs now. render_idle waits until the render thread is idle, then runs fn on the game
 // thread: for calls that create, size or destroy windows, which belong to the game thread.
-template<class F>void render_enqueue(const char*label,F&&fn){if(!render_threaded()){fn();return;}
+// Inline, nothing reads the published counters (copy_counters reads the renderers), so only queued work publishes.
+template<class F>void render_enqueue(const char*label,F&&fn){++host.render_commands;if(!render_threaded()){fn();return;}
  host.rq->enqueue(label,[this,command=std::forward<F>(fn)]()mutable{command();publish_counts();});}
-template<class F>auto render_readback(const char*label,F&&fn)->std::invoke_result_t<F&>{if(!render_threaded())return fn();
+template<class F>auto render_readback(const char*label,F&&fn)->std::invoke_result_t<F&>{++host.render_commands;if(!render_threaded())return fn();
  return host.rq->drain(label,[this,&fn]{if constexpr(std::is_void_v<decltype(fn())>){fn();publish_counts();}else{auto result=fn();publish_counts();return result;}});}
-template<class F>auto render_idle(const char*label,F&&fn)->std::invoke_result_t<F&>{if(render_threaded())host.rq->drain(label,[]{});
- if constexpr(std::is_void_v<decltype(fn())>){fn();publish_counts();}else{auto result=fn();publish_counts();return result;}}
+template<class F>auto render_idle(const char*label,F&&fn)->std::invoke_result_t<F&>{++host.render_commands;const bool threaded=render_threaded();
+ if(threaded)host.rq->drain(label,[]{});
+ if constexpr(std::is_void_v<decltype(fn())>){fn();if(threaded)publish_counts();}else{auto result=fn();if(threaded)publish_counts();return result;}}
 // Waits for the render thread before the game thread changes a window or display mode the renderer presents to.
 void render_settle(const char*label){if(!render_threaded())return;try{HostInternal hi(*this);host.rq->drain(label,[]{});}catch(const std::exception&e){deny(std::string(e.what()),0);}}
 // Stops and joins the render thread at exit or when a fault unwinds the stage. A worker stuck past the queue's timeout
@@ -136,8 +139,12 @@ void submit_scene(mw34::vkscene::Scene&sc,bool upload_in,bool readback_out){auto
   else render_idle("scene",[&]{r->request_scale(scale);r->render(sc,upload_in,readback_out);r->check_sent();});}
  catch(const std::exception&e){deny(std::string(e.what()),0);}copy_counters();}
 // Camera history lives in the scene renderer and changes with each scene, so these queue in order with the scenes.
+// A rejected camera resets the history for every world draw. Resetting again with the same reason and no renderer
+// command between changes nothing (camera_history.hpp invalidate), so only the first is queued.
 void camera_history_invalidate(mw34::temporal::Reset reason){auto*r=host.sren;if(!r)return;
- try{HostInternal hi(*this);render_enqueue("camera history",[r,reason]{r->invalidate_camera_history(reason);});}catch(const std::exception&e){deny(std::string(e.what()),0);}}
+ if(host.camera_reset_queued==reason&&host.camera_reset_command==host.render_commands)return;
+ try{HostInternal hi(*this);render_enqueue("camera history",[r,reason]{r->invalidate_camera_history(reason);});}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ host.camera_reset_queued=reason;host.camera_reset_command=host.render_commands;}
 void camera_history_complete(std::uint64_t serial,unsigned target,std::string admission){auto*r=host.sren;if(!r)return;
  try{HostInternal hi(*this);render_enqueue("camera history",[r,serial,target,text=std::move(admission)]{r->complete_camera_history(serial,target,text);});}catch(const std::exception&e){deny(std::string(e.what()),0);}}
 // Direct presentation of the resident target. With the render thread on, the game thread does the window half

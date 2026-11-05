@@ -246,6 +246,10 @@ struct VmState{static constexpr unsigned lo=0x2a000000U,hi=0x2e000000U;std::map<
 struct GuestThread{unsigned handle,tid,start,param,exit_code,stack_lo,stack_hi;int priority;bool exited;};std::deque<GuestThread>threads;unsigned thread_tid{};
 std::map<unsigned,std::pair<unsigned,unsigned>>mutexes;std::unique_ptr<mw34::vkscene::Renderer>renderer,presenter;  /* scene rendering; window presentation (may be another adapter) */
 mw34::vkscene::RendererCounters scene_counts,present_counts;  /* game-thread copies of host.sren's and host.presenter's counters */
+std::uint64_t shadow_sequence{};  /* D3D scenes built so far (vk_scene.hpp Scene::shadow_sequence) */
+/* Renderer commands issued so far, and the last camera history reset queued after the latest of them
+   (vdd.inc camera_history_invalidate), so a reset repeated with nothing between is not queued again. */
+std::uint64_t render_commands{},camera_reset_command{~0ULL};mw34::temporal::Reset camera_reset_queued{};
 /* Host graphics commands (render_thread.hpp, vdd.inc start_render_queue). Declared after the renderers and the
    counters lock, so it is stopped and joined before they are destroyed. The render thread publishes the scene
    renderer's counters after each command; the game thread copies them under the lock. */

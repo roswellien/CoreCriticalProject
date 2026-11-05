@@ -168,9 +168,8 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   d.commands.clear();return;}
  if(!host.scene_t0)host.scene_t0=host.vclock()?std::max<std::uint64_t>(host.vclock_us/1000,1): ::GetTickCount64();
  if(override_enabled())override_load();
- namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=frontend_on();{SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.detail_time=mw34::detail::presentation_time(host.frames);}sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
+ namespace vs=mw34::vkscene;vs::Scene sc{};sc.shadow_sequence=++host.shadow_sequence;sc.frontend_canvas=frontend_on();{SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.detail_time=mw34::detail::presentation_time(host.frames);}sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
  auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){surface_read(v,y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
- if(mw34::effects::settings().fixture_shadows)sc.valid_shadow_sources=fixture_shadow_sources_valid();  /* proofs from earlier scenes, as retained casters hold them */
  const bool lazy=lazy_rt();if(lazy&&host.res_dirty&&(host.res_rt!=rt->guest||host.res_zb!=(zb?zb->guest:0U)))gpu_sync(0);
  bool rescale=false;if(lazy){auto*sr=scene_renderer();if(sr==host.presenter.get()){const float want=render_scale(rt->height);
   if(want!=sr->sent.scale||sr->sent.frontend_canvas!=frontend_on()){rescale=true;if(host.res_dirty)gpu_sync(0);}sr->sent.scale_req=want;}}  /* a new scale recreates the target: its content moves through guest memory */
@@ -301,11 +300,12 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   pu.mode[1]=ts(0,D3DTSS_COLOROP)|ts(0,D3DTSS_COLORARG1)<<8|ts(0,D3DTSS_COLORARG2)<<16;pu.mode[2]=ts(0,D3DTSS_ALPHAOP)|ts(0,D3DTSS_ALPHAARG1)<<8|ts(0,D3DTSS_ALPHAARG2)<<16;
   pu.mode[3]=(rs(D3DRENDERSTATE_ALPHAFUNC)&255)|(rs(D3DRENDERSTATE_ALPHAREF)&255)<<8;
   {const LONG x=LONG(v[521]),y=LONG(v[522]);const RECT r=clip(RECT{x,y,x+LONG(v[523]),y+LONG(v[524])});dr.scissor={{r.left,r.top},{unsigned(std::max<LONG>(r.right-r.left,0)),unsigned(std::max<LONG>(r.bottom-r.top,0))}};}
-  if(mw34::effects::settings().fixture_shadows&&c.model&&c.model->world&&c.fixture_node&&c.fixture_polygon&&tex){
+  /* Only opaque depth-writing draws can become fixture shadow casters (fixture_shadow_stage.inc). */
+  if(mw34::effects::settings().fixture_shadows&&!dr.key.blend&&dr.key.zenable&&dr.key.zwrite&&c.model&&c.model->world&&c.fixture_node&&c.fixture_polygon&&tex){
    SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
    if(auto*surface=vsurface(tex))if(auto proof=fixture_caster_proof(c,*surface)){
     dr.shadow_source=(std::uint64_t(c.fixture_node)<<32)|c.fixture_polygon;
-    dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]={proof,host.frames};
+    dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]={proof,sc.shadow_sequence};
    }
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.surface_material=c.surface_material;
@@ -321,7 +321,9 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   else if(c.flags==D3DPT_POINTLIST){for(size_t i=0;i<nv;++i)vert(i);dr.key.points=1;}  // one-pixel points (shader point size 1)
   else deny("Primitive type not modelled by the scene renderer",c.flags);
   dr.count=unsigned(sc.vertices.size()/32)-dr.first;wide_adapt_tl(sc,dr,c.hud_role,c.zoom_anchor_known?&c.zoom_anchor:nullptr);sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(std::move(dr));}
- distance_scene_log(sc);camera_scene(sc);effect_scene(sc);surface_texture_prewarm(sc);surface_resident_texture_prewarm(sc);model_geometry_prewarm(sc);
+ distance_scene_log(sc);camera_scene(sc);effect_scene(sc);
+ if(mw34::effects::settings().fixture_shadows)sc.valid_shadow_sources=fixture_shadow_sources_valid(fixture_scene_needs_shadow_sources(sc));  /* after effect_scene sets the fixture lights */
+ surface_texture_prewarm(sc);surface_resident_texture_prewarm(sc);model_geometry_prewarm(sc);
  submit_scene(sc,!keep,!lazy);
  if(lazy){rt->version=++host.surface_versions;if(zb)zb->version=++host.surface_versions;host.res_rt=rt->guest;host.res_zb=zb?zb->guest:0U;host.res_ver_rt=rt->version;host.res_ver_zb=zb?zb->version:0U;
   host.res_dirty=true;gpu_protect(true);if(host.sren->sent.scenes==1)apis.back()+="(Vulkan scene renderer on "+host.scene_counts.device_name+", lazy residency)";d.commands.clear();return;}

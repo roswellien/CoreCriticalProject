@@ -181,6 +181,9 @@ struct Scene {
     // (world scenes only; HUD and canvas scenes use mw34::sun::settings()).
     mw34::sun::Settings environment{};
     std::uint64_t world_frame{}, world_generation{}, world_context{};
+    // Number of the D3D scene, counted by the game thread (d3d_provider.inc); 0 for other scenes.
+    // Fixture shadow reports name the last one the renderer has processed.
+    std::uint64_t shadow_sequence{};
     std::array<float, 3> world_eye{};
     bool world_eye_valid{};
     mw34::effects::Uniform effect_lights{};
@@ -271,10 +274,10 @@ struct RendererCounters {
         sun_shadow_casters{}, sun_shadow_reused{}, sky_draws{}, sky_tinted{}, sky_untinted{},
         haze_draws{}, horizon_draws{}, haze_routed{}, sky_own_view{};
     // Shadow sources of the proof-backed fixture casters the renderer still holds, sorted, after the
-    // scene whose world_frame is retained_shadow_frame (fixture_shadow_stage.inc). Null until the first
-    // fixture shadow pass. The game thread checks only those proofs and newer ones.
+    // scene whose shadow_sequence is retained_shadow_sequence (fixture_shadow_stage.inc). Null until
+    // the first fixture shadow pass. The game thread checks only those proofs and newer ones.
     std::shared_ptr<const std::vector<std::uint64_t>> retained_shadow_sources;
-    std::uint64_t retained_shadow_frame{};
+    std::uint64_t retained_shadow_sequence{};
 };
 
 // Owns the loader, device, caches, render targets and child presentation window.
@@ -1085,7 +1088,7 @@ class Renderer {
         c.haze_routed = haze_routed;
         c.sky_own_view = sky_own_view;
         c.retained_shadow_sources = fixtureRetainedSources;
-        c.retained_shadow_frame = fixtureRetainedFrame;
+        c.retained_shadow_sequence = fixtureRetainedSequence;
         return c;
     }
     // Lazy residency (provider MW34_LAZY_RT): with upload_in false the target images keep the

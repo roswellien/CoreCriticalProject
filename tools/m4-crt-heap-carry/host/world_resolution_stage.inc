@@ -62,6 +62,7 @@ void render_reconstructed_world(Scene &scene) {
     // every batch must shade with the parent scene's results.
     batch.environment = scene.environment;
     batch.valid_shadow_sources = scene.valid_shadow_sources;
+    batch.shadow_sequence = scene.shadow_sequence;
     batch.world_frame = scene.world_frame;
     batch.world_generation = scene.world_generation;
     batch.world_context = scene.world_context;
