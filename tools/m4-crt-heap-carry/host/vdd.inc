@@ -80,9 +80,10 @@ mw34::vkscene::Renderer*scene_renderer(){if(!host.sren){if(lazy_rt()&&host.prese
 // It helps only while frames stay on the GPU: lazy residency with the GPU HUD and scenes on the presenter's device.
 // Otherwise frames are read back every frame and the same commands run inline, as they also do for the copy check
 // and exclusive full screen, whose swapchain calls change the game window.
+// It is off unless MW34_RENDER_THREAD=1 until the RX 9070 benchmark shows the same gain as the RTX 5070 (issue #252).
 // Why commands run inline, or nullptr when the render thread can start.
 const char*render_thread_off_reason(const char*setting){
- if(setting&&!std::strcmp(setting,"0"))return "MW34_RENDER_THREAD=0";
+ if(!setting||std::strcmp(setting,"1"))return "MW34_RENDER_THREAD not 1";
  if(!lazy_rt())return "lazy residency off";
  if(!gpu_hud())return "GPU HUD off";
  if(host.sren!=host.presenter.get())return "scenes not on the presenter";

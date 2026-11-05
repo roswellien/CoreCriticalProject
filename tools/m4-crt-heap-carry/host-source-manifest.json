@@ -949,8 +949,8 @@
       "classification": "authored-host-source"
     },
     "vdd.inc": {
-      "sha256": "7d6a43de5f14e353b35ebb699b4eac8d548b8b682d0612b7049e8f328c873caf",
-      "bytes": 70823,
+      "sha256": "9b14cd1f81f88509db2ea25bed81aeb721f38e7c94bf67c4de7b28bed143b570",
+      "bytes": 70947,
       "decision": "commit",
       "classification": "authored-host-source"
     },

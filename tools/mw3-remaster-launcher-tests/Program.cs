@@ -440,8 +440,8 @@ if (JsonNode.Parse(serializedProfile)!["native"]!["prepared_pack_roots"]![0]!.Ge
     throw new Exception("Serialized installed-pack root changed");
 void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
 Check(profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "0", "Monitor must default off");
-Check(new LauncherSettings().RenderThread, "New installations must default to the render thread");
-Check(profile["native"]!["runtime_environment"]!["MW34_RENDER_THREAD"]!.GetValue<string>() == "1", "Render thread must default on");
+Check(!new LauncherSettings().RenderThread, "New installations must default to the render thread off");
+Check(profile["native"]!["runtime_environment"]!["MW34_RENDER_THREAD"]!.GetValue<string>() == "0", "Render thread must default off");
 Check(!new LauncherSettings().DynamicLighting, "New installations must default to stock lighting");
 Check(!profile["native"]!["presentation"]!["dynamic_lighting"]!.GetValue<bool>(), "Stock lighting choice missing");
 settings.DynamicLighting = true;
