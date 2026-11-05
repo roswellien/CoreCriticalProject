@@ -193,6 +193,76 @@ struct Scene {
     std::vector<Command> order;
 };
 
+// MW34_RENDER_THREAD_CHECK=1 compares every game-side copy of renderer state with
+// the renderer's own and fails the run on a difference. It reads renderer state
+// directly, so it is valid only with the render thread off, for test runs.
+inline bool render_thread_check() {
+    static const bool value = [] {
+        const char *setting = std::getenv("MW34_RENDER_THREAD_CHECK");
+        if (!setting || !*setting || !std::strcmp(setting, "0"))
+            return false;
+        if (!std::strcmp(setting, "1"))
+            return true;
+        throw std::runtime_error("MW34_RENDER_THREAD_CHECK must be 0 or 1");
+    }();
+    return value;
+}
+
+// What the game thread has sent to one Renderer: the texture cache entries its
+// scenes leave behind, the render scale, the canvas kind and the scene count.
+// The game thread answers its own questions from this record, so it never reads
+// renderer state a render thread may be changing. Only the game thread uses it.
+struct SentRecord {
+    struct Texture {
+        std::uint64_t hash{};
+        unsigned width{}, height{};
+        bool valid{};
+    };
+    std::map<std::uint64_t, Texture> textures;
+    float scale = 1.f, scale_req = 1.f;
+    bool frontend_canvas{};
+    std::uint64_t scenes{};
+    // Follows Renderer::render: a new size empties the entry, and every changed or
+    // empty entry holds the scene's hash once the scene's uploads are done. The
+    // cache never evicts, so the record stays exact. render() also replaces the
+    // target whenever the requested scale or the canvas kind differs.
+    void scene(const Scene &s) {
+        std::vector<std::pair<Texture *, std::uint64_t>> changed;
+        for (const auto &t : s.textures) {
+            auto &entry = textures[t.key];
+            if (entry.width != t.width || entry.height != t.height)
+                entry = {0, t.width, t.height, false};
+            if (entry.hash != t.hash || !entry.valid)
+                changed.push_back({&entry, t.hash});
+        }
+        for (auto &[entry, hash] : changed) {
+            entry->hash = hash;
+            entry->valid = true;
+        }
+        scale = scale_req;
+        frontend_canvas = s.frontend_canvas;
+        ++scenes;
+    }
+    bool current(std::uint64_t key, std::uint64_t hash, unsigned w, unsigned h) const {
+        auto it = textures.find(key);
+        return it != textures.end() && it->second.valid && it->second.hash == hash &&
+               it->second.width == w && it->second.height == h;
+    }
+};
+
+// Renderer counters the game thread logs. The game reads a copy taken while the
+// renderer is idle, never the live members.
+struct RendererCounters {
+    std::string device_name;
+    bool dxgi_presenting{};
+    std::uint64_t presents{}, readbacks{}, target_uploads{}, model_uploads{},
+        model_uploaded_bytes{}, model_draws{}, fxaa_passes{}, af_samplers{},
+        mip_levels_uploaded{}, world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{},
+        sun_world_draws{}, sun_model_draws{}, sun_tl_draws{}, sun_shadow_scenes{},
+        sun_shadow_casters{}, sun_shadow_reused{}, sky_draws{}, sky_tinted{}, sky_untinted{},
+        haze_draws{}, horizon_draws{}, haze_routed{}, sky_own_view{};
+};
+
 // Owns the loader, device, caches, render targets and child presentation window.
 // The provider must serialize access; these mutable resources have no internal lock.
 // Scene and presentation submissions use separate command pools and fences on one queue.
@@ -927,6 +997,56 @@ class Renderer {
         auto it = textures.find(key);
         return it != textures.end() && it->second.valid && it->second.hash == hash &&
                it->second.width == w && it->second.height == h;
+    }
+    // Written and read only by the game thread; see SentRecord.
+    SentRecord sent;
+    // The game thread's question "does the cache already hold this texture?".
+    bool sent_current(std::uint64_t key, std::uint64_t hash, unsigned w, unsigned h) const {
+        const bool answer = sent.current(key, hash, w, h);
+        if (render_thread_check() && answer != current(key, hash, w, h))
+            throw std::runtime_error("Render thread copy disagrees: texture " +
+                                     std::to_string(key));
+        return answer;
+    }
+    // Check mode: the scale and canvas kind the game recorded match the target.
+    void check_sent() const {
+        if (!render_thread_check())
+            return;
+        if (sent.scale != scale)
+            throw std::runtime_error("Render thread copy disagrees: render scale");
+        if (sent.frontend_canvas != target_frontend)
+            throw std::runtime_error("Render thread copy disagrees: canvas kind");
+    }
+    RendererCounters counters() const {
+        RendererCounters c;
+        c.device_name = device_name;
+        c.dxgi_presenting = dxgi_presenting();
+        c.presents = presents;
+        c.readbacks = readbacks;
+        c.target_uploads = target_uploads;
+        c.model_uploads = model_uploads;
+        c.model_uploaded_bytes = model_uploaded_bytes;
+        c.model_draws = model_draws;
+        c.fxaa_passes = fxaa_passes;
+        c.af_samplers = af_samplers;
+        c.mip_levels_uploaded = mip_levels_uploaded;
+        c.world_gpu_draws = world_gpu_draws;
+        c.effect_light_peak = effect_light_peak;
+        c.fixture_light_peak = fixture_light_peak;
+        c.sun_world_draws = sun_world_draws;
+        c.sun_model_draws = sun_model_draws;
+        c.sun_tl_draws = sun_tl_draws;
+        c.sun_shadow_scenes = sun_shadow_scenes;
+        c.sun_shadow_casters = sun_shadow_casters;
+        c.sun_shadow_reused = sun_shadow_reused;
+        c.sky_draws = sky_draws;
+        c.sky_tinted = sky_tinted;
+        c.sky_untinted = sky_untinted;
+        c.haze_draws = haze_draws;
+        c.horizon_draws = horizon_draws;
+        c.haze_routed = haze_routed;
+        c.sky_own_view = sky_own_view;
+        return c;
     }
     // Lazy residency (provider MW34_LAZY_RT): with upload_in false the target images keep the
     // content of the previous scene (no guest upload); with readback_out false nothing is copied

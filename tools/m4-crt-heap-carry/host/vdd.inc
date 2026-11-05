@@ -76,6 +76,12 @@ void fill_desc(const VSurface&v,DDSURFACEDESC2&d){d={};d.dwSize=sizeof(d);d.dwFl
 // Lock, Blt/BltFast, fills, Flip/presentation, texture Load and texture uploads. While the guest copy is stale its pages are
 // inaccessible, so guest code touching them outside a service stops typed instead of using old pixels.
 mw34::vkscene::Renderer*scene_renderer(){if(!host.sren){if(lazy_rt()&&host.presenter)host.sren=host.presenter.get();else{if(!host.renderer)host.renderer=std::make_unique<mw34::vkscene::Renderer>();host.sren=host.renderer.get();}}return host.sren;}
+// Copies the renderers' counters for the game thread's logs (vk_scene.hpp RendererCounters).
+void copy_counters(){if(host.sren)host.scene_counts=host.sren->counters();if(host.presenter)host.present_counts=host.presenter->counters();}
+// Sends one scene to the scene renderer. The game-side record (vk_scene.hpp SentRecord) is updated first, the way
+// the renderer updates its own texture cache, render scale and canvas kind; the requested scale travels with the scene.
+void submit_scene(mw34::vkscene::Scene&sc,bool upload_in,bool readback_out){auto*r=scene_renderer();r->sent.scene(sc);
+ try{HostInternal hi(*this);r->request_scale(r->sent.scale_req);r->render(sc,upload_in,readback_out);r->check_sent();}catch(const std::exception&e){deny(std::string(e.what()),0);}copy_counters();}
 // Render scale of the resident target on the presenter device: the window's client height over the game height
 // (1..4), or MW34_RENDER_SCALE. The 3D scenes and the GPU HUD render at that resolution; guest copies stay at the
 // game resolution (blits through staging images).
@@ -306,7 +312,7 @@ void present(const VSurface&v,unsigned flipped_target=0){if(!present_direct)gpu_
  static const bool gdi_only=[]{const char*p=std::getenv("MW34_PRESENT");return p&&std::string(p)=="gdi";}();bool shown=false;
  if(v.bpp==16&&!gdi_only){if(!host.presenter)host.presenter=std::make_unique<mw34::vkscene::Renderer>();try{HostInternal hi(*this);if(present_direct){host.presenter->finish_world();photo_replay_on_present(w,h,true,px,v.pitch);if(host.presenter->overlay.on)overlay_gpu(w,h);{static const char*hp=std::getenv("MW34_HIRES_DUMP_FILE");static const unsigned hf=[]{const char*e=std::getenv("MW34_HIRES_DUMP");return e&&*e?unsigned(std::stoul(e)):0U;}();if(hf&&hp&&host.frames+1==hf)host.presenter->dump_fullres(hp);}{static const char*list=std::getenv("MW34_HIRES_DUMP_FRAMES");static const char*dir=std::getenv("MW34_HIRES_DUMP_DIR");if(list&&dir){std::istringstream frames(list);std::string item;while(std::getline(frames,item,','))if(std::stoul(item)==host.frames+1){const auto file=(std::filesystem::path(dir)/("target-"+std::to_string(host.frames+1)+".ppm")).string();host.presenter->dump_fullres(file.c_str());break;}}}shown=host.presenter->present_resident(host.display.window,w,h);if(!shown){resident_into(v);present_direct=false;px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));}}
   if(!present_direct){photo_replay_on_present(w,h,false,px,v.pitch);shown=menu_dl_present(v,px)||menu_hd_present(v,px)||host.presenter->present(host.display.window,px.data(),w,h,v.pitch,wide_on()&&!frontend_on()&&wide_world_frame==host.frames);}}catch(const std::exception&e){deny(std::string(e.what()),v.guest);}
-  if(shown&&host.presenter->presents==1)apis.back()+="(Vulkan presenter on "+host.presenter->device_name+")";}
+  copy_counters();if(shown&&host.present_counts.presents==1)apis.back()+="(Vulkan presenter on "+host.present_counts.device_name+")";}
  if(!shown){RECT rc{};::GetClientRect(host.display.window,&rc);HDC dc=::GetDC(host.display.window);::SetStretchBltMode(dc,COLORONCOLOR);
  int dx=0,dy=0,dw=rc.right,dh=rc.bottom;
  if(wide_on()&&(frontend_on()||wide_world_frame!=host.frames)){const double fit=std::min(double(dw)/w,double(dh)/h);dw=int(std::lround(w*fit));dh=int(std::lround(h*fit));dx=(rc.right-dw)/2;dy=(rc.bottom-dh)/2;::FillRect(dc,&rc,static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));}
@@ -324,7 +330,7 @@ void present(const VSurface&v,unsigned flipped_target=0){if(!present_direct)gpu_
     last.QuadPart=due;
    }else last=now;
   }}
- camera_present(flipped_target);
+ copy_counters();camera_present(flipped_target);
  ++host.frames;mw34_frames_presented.store(host.frames,std::memory_order_relaxed);hud_present();{static const unsigned df=[]{const char*e=std::getenv("MW34_MEM_DUMP_FRAME");return e&&*e?unsigned(std::stoul(e)):0U;}();static const char*dp=std::getenv("MW34_MEM_DUMP");  /* diagnostic: game .data/.bss image at that frame */
  {static const std::string frames_list=[]{const char*e=std::getenv("MW34_MEM_DUMP_FRAMES");return std::string(e?e:"");}();
   if(dp&&!frames_list.empty()&&(","+frames_list+",").find(","+std::to_string(host.frames)+",")!=std::string::npos){
@@ -335,19 +341,19 @@ void present(const VSurface&v,unsigned flipped_target=0){if(!present_direct)gpu_
    const unsigned hb=GuestHeap::lo,he=host.gheap.mapped;if(he>hb){std::vector<std::byte>h(he-hb);
     for(unsigned at=hb;at<he;at+=0x10000){const unsigned n=std::min(0x10000u,he-at);if(readable(at,n)){std::vector<std::byte>c(n);runtime.memory().read({at},c);std::memcpy(h.data()+(at-hb),c.data(),n);}}
     if(FILE*f=std::fopen((std::string(dp)+"."+std::to_string(host.frames)+".heap").c_str(),"wb")){std::fwrite(h.data(),1,h.size(),f);std::fclose(f);}}}}
- if(df&&dp&&host.frames==df){std::vector<std::byte>b(0x9a2000-0x5e0000);runtime.memory().read({0x5e0000},b);if(FILE*f=std::fopen(dp,"wb")){std::fwrite(b.data(),1,b.size(),f);std::fclose(f);}}}if(host.draw_log){{std::fprintf(host.draw_log,"%u %u %016llx up %llu rb %llu hud %llu fb %llu touch %llu hires %llu text %llu log2 %llu exp2 %llu model_up %llu model_bytes %llu model_draw %llu fxaa %llu af_samplers %llu mip_levels %llu\n",host.frames,host.draw_calls,(unsigned long long)host.draw_hash,host.sren?(unsigned long long)host.sren->target_uploads:0ULL,host.sren?(unsigned long long)host.sren->readbacks:0ULL,(unsigned long long)hud_draws_total,(unsigned long long)hud_fallbacks,(unsigned long long)touch_count,(unsigned long long)hires_hits,(unsigned long long)text_hits,mw34_x87_counts[0],mw34_x87_counts[1],host.sren?(unsigned long long)host.sren->model_uploads:0ULL,host.sren?(unsigned long long)host.sren->model_uploaded_bytes:0ULL,host.sren?(unsigned long long)host.sren->model_draws:0ULL,host.sren?(unsigned long long)host.sren->fxaa_passes:0ULL,host.sren?(unsigned long long)host.sren->af_samplers:0ULL,host.sren?(unsigned long long)host.sren->mip_levels_uploaded:0ULL);}host.draw_hash=0xcbf29ce484222325ULL;host.draw_calls=0;}if(host.vclock())host.vclock_us+=host.vclock_step_us;
+ if(df&&dp&&host.frames==df){std::vector<std::byte>b(0x9a2000-0x5e0000);runtime.memory().read({0x5e0000},b);if(FILE*f=std::fopen(dp,"wb")){std::fwrite(b.data(),1,b.size(),f);std::fclose(f);}}}if(host.draw_log){{std::fprintf(host.draw_log,"%u %u %016llx up %llu rb %llu hud %llu fb %llu touch %llu hires %llu text %llu log2 %llu exp2 %llu model_up %llu model_bytes %llu model_draw %llu fxaa %llu af_samplers %llu mip_levels %llu\n",host.frames,host.draw_calls,(unsigned long long)host.draw_hash,(unsigned long long)host.scene_counts.target_uploads,(unsigned long long)host.scene_counts.readbacks,(unsigned long long)hud_draws_total,(unsigned long long)hud_fallbacks,(unsigned long long)touch_count,(unsigned long long)hires_hits,(unsigned long long)text_hits,mw34_x87_counts[0],mw34_x87_counts[1],(unsigned long long)host.scene_counts.model_uploads,(unsigned long long)host.scene_counts.model_uploaded_bytes,(unsigned long long)host.scene_counts.model_draws,(unsigned long long)host.scene_counts.fxaa_passes,(unsigned long long)host.scene_counts.af_samplers,(unsigned long long)host.scene_counts.mip_levels_uploaded);}host.draw_hash=0xcbf29ce484222325ULL;host.draw_calls=0;}if(host.vclock())host.vclock_us+=host.vclock_step_us;
  platform_present();
  // Opt-in frame timing (MW34_FRAME_TIMES=<file>): one line per presented frame, "frame host_ms 3d_scenes virtual_clock_us".
  static FILE*const frame_times=[]{const char*p=std::getenv("MW34_FRAME_TIMES");return p&&*p?std::fopen(p,"w"):nullptr;}();
  if(frame_times){static const auto t0=std::chrono::steady_clock::now();std::fprintf(frame_times,"%u %.3f %llu %llu\n",host.frames,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(),
-   static_cast<unsigned long long>(host.sren?host.sren->scenes:0),static_cast<unsigned long long>(host.vclock_us));std::fflush(frame_times);}
+   static_cast<unsigned long long>(host.sren?host.sren->sent.scenes:0),static_cast<unsigned long long>(host.vclock_us));std::fflush(frame_times);}
  // Keep loading/menu intervals out of the new gameplay measurement window.
  if(host.presenter&&host.presenter->overlay.on){static bool measured_gameplay=false;
-  const bool gameplay=host.sren&&host.sren->scenes&&!frontend_on();
+  const bool gameplay=host.sren&&host.sren->sent.scenes&&!frontend_on();
   if(gameplay!=measured_gameplay)host.presenter->overlay.reset();measured_gameplay=gameplay;}
  world_present();geometry_profile.present(host.frames);
  if(host.frame_dump&&(host.frames==1||host.frames%host.frame_dump==0))dump_frame(v,px);
- if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.presenter?host.presenter->presents:0)+(host.presenter&&host.presenter->dxgi_presenting()?" through the Vulkan/DXGI bridge":" through the Vulkan swapchain")+(host.presenter&&host.presenter->presents?" on "+host.presenter->device_name:std::string())+")",host.frames);}
+ if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.present_counts.presents)+(host.present_counts.dxgi_presenting?" through the Vulkan/DXGI bridge":" through the Vulkan swapchain")+(host.present_counts.presents?" on "+host.present_counts.device_name:std::string())+")",host.frames);}
 // Evidence: the presented frame as a binary PPM (converted from RGB565) under the run's frame directory.
 void dump_frame(const VSurface&v,const std::vector<unsigned char>&px){if(host.frame_dir.empty()||v.bpp!=16)return;std::ofstream f(host.frame_dir+"/frame-"+std::to_string(host.frames)+".ppm",std::ios::binary);
  f<<"P6\n"<<v.width<<" "<<v.height<<"\n255\n";for(unsigned y=0;y<v.height;++y)for(unsigned x=0;x<v.width;++x){const unsigned p=unsigned(px[size_t(y)*v.pitch+2*x])|unsigned(px[size_t(y)*v.pitch+2*x+1])<<8;
@@ -369,12 +375,12 @@ void blit(const VSurface&d,RECT dr,const VSurface&s,RECT sr,bool key,unsigned kl
   for(LONG x=0;x<dw;++x){const unsigned char*p=src.data()+(size_t(sy)*sw+size_t(x*sw/dw))*b;unsigned c=0;std::memcpy(&c,p,b);if(key&&c>=klo&&c<=khi)continue;std::memcpy(row.data()+size_t(x)*b,p,b);}
   surface_write(d,da,row.data(),unsigned(dw)*b);}}
 bool resident_current(){auto*rt=vsurface(host.res_rt);auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;return rt&&rt->version==host.res_ver_rt&&(!host.res_zb||(zb&&zb->version==host.res_ver_zb));}
-void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=host.sren->frontend_canvas();sc.width=rt->width;sc.height=rt->height;
+void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=host.sren->sent.frontend_canvas;sc.width=rt->width;sc.height=rt->height;
  // DirectDraw fills use guest surface coordinates, not a preceding world raster scale.
  sc.guest_surface_write=true;
  sc.has_depth=host.res_zb!=0;vs::Clear k{};const bool depth=d.guest==host.res_zb;k.flags=depth?2U:1U;k.color[0]=float((c>>11)&31)/31.f;k.color[1]=float((c>>5)&63)/63.f;k.color[2]=float(c&31)/31.f;k.color[3]=1.f;k.z=float(c&0xffff)/65535.f;
  k.rects.push_back({{r.left,r.top},{unsigned(r.right-r.left),unsigned(r.bottom-r.top)}});sc.order.push_back({true,0});sc.clears.push_back(std::move(k));
- try{HostInternal hi(*this);host.sren->render(sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ submit_scene(sc,false,false);
  d.version=++host.surface_versions;if(depth)host.res_ver_zb=d.version;else host.res_ver_rt=d.version;host.res_dirty=true;gpu_protect(true);}
 void fill(const VSurface&d,RECT r,unsigned c){if(lazy_rt()&&host.sren&&d.bpp==16&&r.right>r.left&&r.bottom>r.top&&inside(d,r)&&(d.guest==host.res_rt||(host.res_zb&&d.guest==host.res_zb))&&(host.res_dirty||resident_current())){gpu_fill(d,r,c);return;}gpu_sync(d.guest);d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));camera_surface_written(d.guest);
  const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Fill depth not modelled",d.bpp);std::vector<unsigned char>row(size_t(r.right-r.left)*b);for(size_t x=0;x<row.size()/b;++x)std::memcpy(row.data()+x*b,&c,b);

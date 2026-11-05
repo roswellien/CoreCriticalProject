@@ -244,6 +244,7 @@ struct VmState{static constexpr unsigned lo=0x2a000000U,hi=0x2e000000U;std::map<
    guest threads share one host thread (real mutexes would grant recursive ownership silently). */
 struct GuestThread{unsigned handle,tid,start,param,exit_code,stack_lo,stack_hi;int priority;bool exited;};std::deque<GuestThread>threads;unsigned thread_tid{};
 std::map<unsigned,std::pair<unsigned,unsigned>>mutexes;std::unique_ptr<mw34::vkscene::Renderer>renderer,presenter;  /* scene rendering; window presentation (may be another adapter) */
+mw34::vkscene::RendererCounters scene_counts,present_counts;  /* game-thread copies of host.sren's and host.presenter's counters */
 /* Scripted player input (MW34_INPUT_SCRIPT): stands in for the human at the DirectInput data boundary.
    Device objects, data formats and cooperative levels stay real; only the input data comes from the
    script. Lines: "FRAME mouse DX DY BUTTONS" (relative motion delivered once, at the first read at or after

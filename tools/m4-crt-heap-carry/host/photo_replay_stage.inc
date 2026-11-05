@@ -1479,17 +1479,7 @@ void photo_replay_overlay_gpu(unsigned w, unsigned h) {
     hud_draw(0, false, first, WideWorld);
     hud_sc.color.resize(std::size_t(w) * h);
     hud_sc.depth.resize(hud_sc.color.size());
-    try {
-        struct PhotoInternalScope {
-            Stage& s;
-            bool was;
-            explicit PhotoInternalScope(Stage& x) : s(x), was(x.host_internal) { s.host_internal = true; }
-            ~PhotoInternalScope() { s.host_internal = was; }
-        } hi(*this);
-        host.sren->render(hud_sc, false, false);
-    } catch (const std::exception& e) {
-        deny(std::string(e.what()), 0);
-    }
+    submit_scene(hud_sc, false, false);
     hud_sc = vs::Scene{};
 }
 
