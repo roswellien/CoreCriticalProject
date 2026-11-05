@@ -170,6 +170,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
  if(override_enabled())override_load();
  namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=frontend_on();{SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.detail_time=mw34::detail::presentation_time(host.frames);}sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
  auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){surface_read(v,y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
+ if(mw34::effects::settings().fixture_shadows)sc.valid_shadow_sources=fixture_shadow_sources_valid();  /* proofs from earlier scenes, as retained casters hold them */
  const bool lazy=lazy_rt();if(lazy&&host.res_dirty&&(host.res_rt!=rt->guest||host.res_zb!=(zb?zb->guest:0U)))gpu_sync(0);
  bool rescale=false;if(lazy){auto*sr=scene_renderer();if(sr==host.presenter.get()){const float want=render_scale(rt->height);
   if(want!=sr->sent.scale||sr->sent.frontend_canvas!=frontend_on()){rescale=true;if(host.res_dirty)gpu_sync(0);}sr->sent.scale_req=want;}}  /* a new scale recreates the target: its content moves through guest memory */
@@ -304,7 +305,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
    SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
    if(auto*surface=vsurface(tex))if(auto proof=fixture_caster_proof(c,*surface)){
     dr.shadow_source=(std::uint64_t(c.fixture_node)<<32)|c.fixture_polygon;
-    dr.shadow_valid=[this,proof]{SunCaptureFp preserve;return fixture_proof_valid(*proof);};
+    dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]=proof;
    }
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.surface_material=c.surface_material;

@@ -13,6 +13,7 @@ struct EffectLightingState {
  unsigned observations{},invalid{};
  std::uint64_t dump_bytes{};
  std::map<std::uint64_t,FixtureSourceProof> fixture_proofs;
+ std::map<std::uint64_t,std::shared_ptr<const FixtureSourceProof>> shadow_proofs;  /* latest proof per shadow source (vk_scene.hpp Draw::shadow_proof) */
  unsigned fixture_frame{~0U};std::uint64_t fixture_generation{~0ULL};
 } effect_lighting;
 mw34::vehicle_lighting::State fixture_vehicle(unsigned node){
@@ -35,10 +36,17 @@ void fixture_frame(){
  auto&s=effect_lighting;auto&manager=mw34::fixtures::FixtureManager::instance();
  const auto generation=mw34::campaign::CampaignManager::instance().generation();
  const unsigned context=load(0x5f4c8c);
- if(s.fixture_generation!=generation||s.context!=context){manager.clear();s.fixture_proofs.clear();s.fixture_generation=generation;s.context=context;s.lights.clear();}
+ if(s.fixture_generation!=generation||s.context!=context){manager.clear();s.fixture_proofs.clear();s.shadow_proofs.clear();s.fixture_generation=generation;s.context=context;s.lights.clear();}
  if(s.fixture_frame==host.frames)return;s.fixture_frame=host.frames;manager.begin_frame(host.frames,effect_time());
  for(auto it=s.fixture_proofs.begin();it!=s.fixture_proofs.end();){
   if(fixture_proof_valid(it->second)){++it;continue;}manager.remove_source(it->first);it=s.fixture_proofs.erase(it);}
+}
+// The renderer keeps fixture shadow casters between scenes while their source's latest proof holds. Proofs read
+// guest memory, so the game thread checks them before each scene and sends the sources that still hold, sorted.
+// A failed proof stays in the map: its source can hold again, and only a newer draw replaces it.
+std::vector<std::uint64_t> fixture_shadow_sources_valid(){std::vector<std::uint64_t> valid;SunCaptureFp preserve;
+ for(const auto& [source,proof]:effect_lighting.shadow_proofs)if(fixture_proof_valid(*proof))valid.push_back(source);
+ return valid;
 }
 bool fixture_capture_proof(const D3DCmd& draw,const VSurfaceRec& surface,FixtureSourceProof& proof){
  if(!draw.fixture_node||!draw.fixture_polygon)return false;

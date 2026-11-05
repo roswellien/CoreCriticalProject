@@ -156,7 +156,9 @@ struct Draw {
     unsigned detail_role{};
     std::uint64_t shadow_source{};
     std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
-    std::function<bool()> shadow_valid;
+    // The game thread holds an original source proof for shadow_source; Scene::valid_shadow_sources
+    // says whether it still holds.
+    bool shadow_proof{};
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
 };
@@ -191,6 +193,9 @@ struct Scene {
     mw34::submission::DrawEmissions emissions;
     std::vector<Clear> clears;
     std::vector<Command> order;
+    // Shadow sources whose latest proof the game thread found valid before this scene, sorted.
+    // Retained fixture casters are judged by it, so the renderer never reads guest memory.
+    std::vector<std::uint64_t> valid_shadow_sources;
 };
 
 // MW34_RENDER_THREAD_CHECK=1 compares every game-side copy of renderer state with

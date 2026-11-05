@@ -6,7 +6,7 @@
         mw34::fixture_shadow::Matrix world=mw34::fixture_shadow::identity;
         mw34::fixture_shadow::Bounds bounds;
         std::vector<ModelVertex> tl;
-        std::function<bool()> valid;
+        std::uint64_t proof_source{}; // nonzero: kept while Scene::valid_shadow_sources lists it
         std::uint64_t frame{};
         Tex* texture{};unsigned sampler{};std::array<float,4> alpha{};
         VkDescriptorSet set{};
@@ -96,7 +96,8 @@
         if(scene.world_eye_valid){eye=scene.world_eye;camera=true;}
         const float retention=mw34::effects::settings().fixture_retain_distance;
         for(auto it=fixtureCasters.begin();it!=fixtureCasters.end();){auto& caster=it->second;
-            const bool invalid=caster.valid?!caster.valid():scene.world_frame>caster.frame+1;
+            const auto&valid_sources=scene.valid_shadow_sources;
+            const bool invalid=caster.proof_source?!std::binary_search(valid_sources.begin(),valid_sources.end(),caster.proof_source):scene.world_frame>caster.frame+1;
             if(invalid||(camera&&!caster.bounds.overlaps(eye,retention*2))){fixture_atlas_touch();it=fixtureCasters.erase(it);}else ++it;}
         struct TlVertex{float x,y,z,rhw;unsigned rgb,spec;float u,v;};
         for(const auto& draw:scene.draws){
@@ -107,7 +108,7 @@
             if(draw.model){const auto& instance=*draw.model;auto geometry=model_buffers.find(instance.geometry->key);if(geometry==model_buffers.end())continue;
                 caster.geometry_key=instance.geometry->key;caster.buffer=geometry->second.local.buffer;caster.count=geometry->second.count;caster.world=instance.sun_world;
                 for(const auto& v:instance.geometry->vertices){mw34::fixture_shadow::Point p{};for(unsigned r=0;r<3;++r)p[r]=caster.world[r*4]*v.x+caster.world[r*4+1]*v.y+caster.world[r*4+2]*v.z+caster.world[r*4+3];caster.bounds.add(p);}
-                if(instance.world&&draw.shadow_source&&draw.shadow_valid){key={draw.shadow_source,0};caster.valid=draw.shadow_valid;}
+                if(instance.world&&draw.shadow_source&&draw.shadow_proof){key={draw.shadow_source,0};caster.proof_source=draw.shadow_source;}
                 else key={instance.shadow_source?instance.shadow_source:instance.geometry->key,instance.geometry->key};
             }else if(draw.sun_tl){
                 std::uint64_t hash=0xcbf29ce484222325ULL;
