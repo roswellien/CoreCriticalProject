@@ -184,8 +184,16 @@ class RenderQueue {
             return;
         }
         const auto start = Clock::now();
+        // The timeout counts from the last finished command, so a frame of many slow but
+        // progressing commands (first-use shader and pipeline builds) is not called stuck.
+        auto last_progress = start;
+        auto finished = completed_;
         while (completed_ < ticket) {
-            if (Clock::now() - start >= timeout_) {
+            if (completed_ != finished) {
+                finished = completed_;
+                last_progress = Clock::now();
+            }
+            if (Clock::now() - last_progress >= timeout_) {
                 waits_.ms +=
                     std::chrono::duration<double, std::milli>(Clock::now() - start).count();
                 ++waits_.count;

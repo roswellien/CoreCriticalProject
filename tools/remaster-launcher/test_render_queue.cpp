@@ -115,6 +115,16 @@ void check_timeout() {
     queue.stop();
 }
 
+void check_timeout_counts_progress() {
+    RenderQueue queue(true, 100ms);
+    // Six 40 ms commands take longer than the timeout in total, but each finishes well inside it.
+    for (int i = 0; i < 6; ++i)
+        queue.enqueue("shader build", [] { std::this_thread::sleep_for(40ms); });
+    const auto message = error_from([&] { queue.drain("read", [] {}); });
+    check(message.empty(), "steady progress is not called stuck");
+    queue.stop();
+}
+
 void check_stop(bool threaded) {
     RenderQueue queue(threaded);
     std::atomic<int> ran{0};
@@ -139,6 +149,7 @@ void run_render_queue_checks() {
     }
     check_frame_limit();
     check_timeout();
+    check_timeout_counts_progress();
     std::cout << "render queue checks=" << checks << " failures=0\n";
 }
 } // namespace

@@ -80,12 +80,19 @@ mw34::vkscene::Renderer*scene_renderer(){if(!host.sren){if(lazy_rt()&&host.prese
 // It helps only while frames stay on the GPU: lazy residency with the GPU HUD and scenes on the presenter's device.
 // Otherwise frames are read back every frame and the same commands run inline, as they also do for the copy check
 // and exclusive full screen, whose swapchain calls change the game window.
+// Why commands run inline, or nullptr when the render thread can start.
+const char*render_thread_off_reason(const char*setting){
+ if(setting&&!std::strcmp(setting,"0"))return "MW34_RENDER_THREAD=0";
+ if(!lazy_rt())return "lazy residency off";
+ if(!gpu_hud())return "GPU HUD off";
+ if(host.sren!=host.presenter.get())return "scenes not on the presenter";
+ if(mw34::vkscene::render_thread_check())return "copy check on";
+ const char*window_mode=std::getenv("MW34_WINDOW_MODE");
+ if(window_mode&&!std::strcmp(window_mode,"fullscreen"))return "exclusive full screen";
+ return nullptr;}
 void start_render_queue(){const char*setting=std::getenv("MW34_RENDER_THREAD");
  if(setting&&*setting&&std::strcmp(setting,"0")&&std::strcmp(setting,"1"))deny("MW34_RENDER_THREAD must be 0 or 1",0);
- const char*window_mode=std::getenv("MW34_WINDOW_MODE");
- const char*off=setting&&!std::strcmp(setting,"0")?"MW34_RENDER_THREAD=0":!lazy_rt()?"lazy residency off":!gpu_hud()?"GPU HUD off":
-  host.sren!=host.presenter.get()?"scenes not on the presenter":mw34::vkscene::render_thread_check()?"copy check on":
-  window_mode&&!std::strcmp(window_mode,"fullscreen")?"exclusive full screen":nullptr;
+ const char*off=render_thread_off_reason(setting);
  if(off)std::fprintf(stderr,"render thread off (%s)\n",off);
  else{try{host.rq=std::make_unique<mw34::render_thread::RenderQueue>(true);}catch(const std::system_error&error){std::fprintf(stderr,"render thread off (cannot start: %s)\n",error.what());}}
  if(host.rq){std::fprintf(stderr,"render thread on\n");
@@ -120,7 +127,8 @@ void stop_render_thread(){if(!host.rq)return;try{host.rq->stop();}catch(const st
 // the renderer updates its own texture cache, render scale and canvas kind; the requested scale travels with the scene.
 // Queued, the scene moves into the command; callers start a fresh one afterwards.
 void submit_scene(mw34::vkscene::Scene&sc,bool upload_in,bool readback_out){auto*r=scene_renderer();r->sent.scene(sc);
- {SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.environment=mw34::sun::current_settings(sc.detail_time);}  /* campaign state is the game thread's */
+ /* Campaign state is the game thread's. HUD and canvas scenes ignore it (vk_scene.hpp render_scene). */
+ if(!sc.hud&&!sc.frontend_canvas){SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.environment=mw34::sun::current_settings(sc.detail_time);}
  const float scale=r->sent.scale_req;
  try{HostInternal hi(*this);
   if(render_threaded()&&!readback_out)render_enqueue("scene",[r,scene=std::move(sc),upload_in,scale]()mutable{r->request_scale(scale);r->render(scene,upload_in,false);});

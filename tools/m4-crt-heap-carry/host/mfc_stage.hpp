@@ -246,10 +246,10 @@ struct VmState{static constexpr unsigned lo=0x2a000000U,hi=0x2e000000U;std::map<
 struct GuestThread{unsigned handle,tid,start,param,exit_code,stack_lo,stack_hi;int priority;bool exited;};std::deque<GuestThread>threads;unsigned thread_tid{};
 std::map<unsigned,std::pair<unsigned,unsigned>>mutexes;std::unique_ptr<mw34::vkscene::Renderer>renderer,presenter;  /* scene rendering; window presentation (may be another adapter) */
 mw34::vkscene::RendererCounters scene_counts,present_counts;  /* game-thread copies of host.sren's and host.presenter's counters */
-/* Host graphics commands (render_thread.hpp, vdd.inc start_render_queue). Declared after the renderers, so it is
-   stopped and joined before they are destroyed. The render thread publishes the scene renderer's counters after
-   each command; the game thread copies them under the lock. */
-std::unique_ptr<mw34::render_thread::RenderQueue>rq;std::mutex counts_mutex;mw34::vkscene::RendererCounters published_counts;
+/* Host graphics commands (render_thread.hpp, vdd.inc start_render_queue). Declared after the renderers and the
+   counters lock, so it is stopped and joined before they are destroyed. The render thread publishes the scene
+   renderer's counters after each command; the game thread copies them under the lock. */
+std::mutex counts_mutex;mw34::vkscene::RendererCounters published_counts;std::unique_ptr<mw34::render_thread::RenderQueue>rq;
 /* Direct presentation readiness: the window and size present_resident last accepted, and whether the render
    thread has since refused a queued present (the next frame then presents inline). */
 struct Presentable{HWND window{};unsigned w{},h{};bool ok{};}presentable;std::atomic<bool>present_refused{};
@@ -288,7 +288,7 @@ struct RegOverlay{static constexpr DWORD deleted=0xffffffffU;std::map<std::strin
  audio::LocalCdAudio&music(){if(!local_cd)local_cd=std::make_unique<audio::LocalCdAudio>();return *local_cd;}
  Host()=default;Host(const Host&)=delete;Host&operator=(const Host&)=delete;
  // Children before parents: releasing a real IDirectSound frees its buffers, so creation order would leave them dangling.
- ~Host(){mw34::display::exclusive().release();local_cd.reset();static const bool trace=std::getenv("MW34_TRACE_TEARDOWN")!=nullptr;
+ ~Host(){rq.reset();mw34::display::exclusive().release();local_cd.reset();static const bool trace=std::getenv("MW34_TRACE_TEARDOWN")!=nullptr;
   for(auto it=com_objects.rbegin();it!=com_objects.rend();++it)if(it->alive&&it->native){if(trace)std::fprintf(stderr,"teardown release %s guest %x owner %x refs %u\n",it->iface->name,it->guest,it->owner,it->refs);for(unsigned r=0;r<it->refs;++r)it->native->Release();}if(ddraw.module)::FreeLibrary(ddraw.module);for(auto k:keys)::RegCloseKey(reinterpret_cast<HKEY>(std::intptr_t(std::int32_t(k))));for(auto&k:vkeys)if(k.real)::RegCloseKey(k.real);for(auto t:tls)::TlsFree(t);for(auto&l:locals)if(!l.freed)::LocalFree(l.native);for(auto&g:globals)if(!g.freed){while(g.locks--)::GlobalUnlock(g.native);::GlobalFree(g.native);}}
  Global*global(unsigned handle){for(auto&g:globals)if(!g.freed&&g.handle==handle)return &g;return nullptr;}
  bool in_global(unsigned a,unsigned n)const{for(const auto&g:globals)if(!g.freed&&a>=g.guest&&std::uint64_t(a)+n<=std::uint64_t(g.guest)+g.bytes)return true;return false;}
@@ -1410,6 +1410,8 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="CreateWindowExA"){const unsigned cn=arg(1),tn=arg(2);const std::string cls=class_name(cn),title=tn?guest_string(tn):std::string();HWND w{};
    {LastError l(host);w=::CreateWindowExA(arg(0),cn<0x10000?MAKEINTATOM(cn):cls.c_str(),tn?title.c_str():nullptr,arg(3),int(arg(4)),int(arg(5)),int(arg(6)),int(arg(7)),hwnd_of(arg(8)),reinterpret_cast<HMENU>(std::intptr_t(std::int32_t(arg(9)))),host_instance(arg(10)),reinterpret_cast<void*>(std::uintptr_t(arg(11))));}
    apis.back()+="("+cls+","+title+")";return done(w?gwnd(w):0,12);}
+  // Default WM_CLOSE handling destroys the window, so it waits for the render thread like DestroyWindow does.
+  if(n=="DefWindowProcA"&&arg(1)==WM_CLOSE)render_settle("window close");
   if(n=="DefWindowProcA")return done(unsigned(std::int32_t(to_host(nullptr,arg(0),arg(1),arg(2),arg(3)))),4);
   if(n=="CallWindowProcA"){const unsigned p=as_proc(arg(0));if(auto hp=host_proc(p))return done(unsigned(std::int32_t(to_host(hp,arg(1),arg(2),arg(3),arg(4)))),5);
    if(!find(p))deny("CallWindowProcA target is neither lifted guest code nor a host procedure",p);const unsigned r=call_guest(p,{arg(1),arg(2),arg(3),arg(4)},true,"CallWindowProcA");return done(r,5);}

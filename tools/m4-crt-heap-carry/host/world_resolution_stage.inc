@@ -58,6 +58,10 @@ void render_reconstructed_world(Scene &scene) {
     } prepared(*this, scene);
     Scene batch{};
     batch.detail_time = scene.detail_time;
+    // The game computes the campaign lighting and checks shadow proofs once per scene;
+    // every batch must shade with the parent scene's results.
+    batch.environment = scene.environment;
+    batch.valid_shadow_sources = scene.valid_shadow_sources;
     batch.world_frame = scene.world_frame;
     batch.world_generation = scene.world_generation;
     batch.world_context = scene.world_context;
