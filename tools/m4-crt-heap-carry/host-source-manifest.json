@@ -7,14 +7,14 @@
   ],
   "files": {
     "additional_chassis.hpp": {
-      "sha256": "fe43690dff58f4e0d6eee5d1b58d43e1c5440259195ba04897573e355a1efe2f",
-      "bytes": 8085,
+      "sha256": "35c4e8577742633ff692484e95fa0b563e26ffb1a83651cf49522c492f97e1bf",
+      "bytes": 10464,
       "decision": "commit",
       "classification": "authored-host-source"
     },
     "additional_chassis_stage.inc": {
-      "sha256": "99ee75e721ef02d3be078d80219e0652a2fcae5dc4a5753de22586373df0240e",
-      "bytes": 7863,
+      "sha256": "fd6b553ce5e3a7c0817fe707c0c48362d059387ab8799ffe3dbb6ec5afbc5b94",
+      "bytes": 8054,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -31,8 +31,8 @@
       "classification": "authored-host-source"
     },
     "additional_skins.hpp": {
-      "sha256": "0e0f3546f1caed9617ae9e7fc0a10d91109c4bed448094c7f71a3be922ad1f58",
-      "bytes": 1964,
+      "sha256": "e55f4d4ec9c6462c4e402fc32435707a7b2a6494d92fd544c345783d829e4352",
+      "bytes": 2335,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -199,8 +199,8 @@
       "classification": "authored-host-source"
     },
     "d3d_provider.inc": {
-      "sha256": "a9730fad55c53aa7f224b4e468a4af0e46bcceac2e6be35287c9e5c844baf10f",
-      "bytes": 45662,
+      "sha256": "3d06523a26f056b58d9ff4c7775c761b9915402ee5eb5c5e28b22cf4c7c56435",
+      "bytes": 46056,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -541,8 +541,8 @@
       "classification": "authored-host-source"
     },
     "mesh_override_stage.inc": {
-      "sha256": "cc16307052869120ef6bb187496ee6e07867655880838f64f2ed6f3ca57cb042",
-      "bytes": 57886,
+      "sha256": "a1e4f58329d85c38d4d1dadba588813649f1f54250dd5f7d79d8704682a291aa",
+      "bytes": 59684,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -877,8 +877,8 @@
       "classification": "authored-host-source"
     },
     "surface_normals_stage.inc": {
-      "sha256": "905dd95e01b58003cbba90047168dc3a49f779b88de35b0002836eccd202ed9a",
-      "bytes": 11648,
+      "sha256": "f4a151aebe31cdb799585fc9babf89715817bb95b089e49fd471ce03ce937bbc",
+      "bytes": 12942,
       "decision": "commit",
       "classification": "authored-host-source"
     },

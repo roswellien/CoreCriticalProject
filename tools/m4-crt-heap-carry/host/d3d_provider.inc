@@ -285,6 +285,13 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   if(tex&&(c.sun_tl||c.sky_view||(c.model&&c.model->world)))if(auto*surface=vsurface(tex)){SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
    dr.detail_role=surface_detail_role(*surface);if(bind_normal_idx<0||dr.detail_role)bind_normal_idx=surface_normal_index(*surface);
   }
+  if(bind_normal_idx<0&&c.override_texture>=0&&override_enabled()&&mw34::materials::normal_maps_enabled()){
+   const auto&o=override_state();
+   if(size_t(c.override_texture)<o.textures.size()){
+    const auto&texture=o.textures[c.override_texture];
+    bind_normal_idx=replacement_surface_normal_index(unsigned(c.override_texture),texture.width,texture.height,texture.pixels);
+   }
+  }
   if(bind_normal_idx>=0){const auto&o=override_state();if(size_t(bind_normal_idx)<o.normal_textures.size()){const auto&t=o.normal_textures[bind_normal_idx];
    const std::uint64_t key=0x42574e524d000000ULL+unsigned(bind_normal_idx);auto it=std::find_if(sc.textures.begin(),sc.textures.end(),[&](const vs::TextureRef&r){return r.key==key;});
    if(it==sc.textures.end()){vs::TextureRef r{};r.key=key;r.hash=t.hash;r.width=t.width;r.height=t.height;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->sent_current(key,t.hash,t.width,t.height)){surface_normals_require_image(bind_normal_idx);r.pixels32=t.pixels32;}sc.textures.push_back(std::move(r));dr.normal_texture=int(sc.textures.size()-1);}else dr.normal_texture=int(it-sc.textures.begin());}}

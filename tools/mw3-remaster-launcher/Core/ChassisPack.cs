@@ -73,7 +73,10 @@ public static class ChassisPack
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "BWSFM1" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1", "BWSFM1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" })) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWSNR2" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1" }) ||
+              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1", "BWSNR2" })) ||
             (manifest.NativePayload.RequiredFormats.Contains("BWSFM1") &&
              (!manifest.NativePayload.RequiredCapabilities.TryGetValue("surface-materials", out var surfaceVersion) || surfaceVersion != 1)) ||
             manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||
@@ -120,10 +123,10 @@ public static class ChassisPack
         foreach (var row in rows.EnumerateArray())
         {
             ValidateHeadlights(row, manifest.NativePayload);
-            if (manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }))
+            if (manifest.NativePayload.RequiredFormats.Contains("MW3LEGACY"))
             {
                 if (!manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var version) || version != 3 ||
-                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name).Where(name => name != "headlights")))
+                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name).Where(name => name != "appearances" && name != "headlights")))
                     throw new InvalidDataException("Legacy chassis resources require version 3 and exact fields.");
                 var legacyId = row.GetProperty("id").GetString() ?? "";
                 var legacyName = row.GetProperty("name").GetString() ?? "";
@@ -169,6 +172,8 @@ public static class ChassisPack
                         VerifyResource(entry.Value.GetString() ?? "");
                     }
                 }
+                if (row.TryGetProperty("appearances", out var appearances))
+                    ChassisAppearances.Read(appearances, descriptor.GetProperty("textures"), manifest.NativePayload, Verify);
                 result.Add(new(legacyId, legacyName));
                 continue;
             }

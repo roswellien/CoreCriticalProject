@@ -50,10 +50,29 @@ inline static constexpr std::array<OverrideModel,36> stock_override_models{{
  {"firefly","MW34_FIREFLY_MESH","MW34_FIREFLY_TEXTURES",override_firefly_meshes.data(),override_firefly_meshes.size(),0,nullptr,nullptr,nullptr,nullptr},
  {"firefly","MW34_FIREFLY_LOD1_MESH","MW34_FIREFLY_LOD1_TEXTURES",override_firefly_lod1_meshes.data(),override_firefly_lod1_meshes.size(),1,nullptr,nullptr,nullptr,nullptr}
 }};
+static const std::map<std::pair<std::string,unsigned>,std::vector<OverrideSourceMesh>>& owned_override_rosters() {
+ static const auto rosters=[] {
+  std::map<std::pair<std::string,unsigned>,std::vector<OverrideSourceMesh>> result;
+  for(const auto& r:mw34::chassis::configured_catalog())if(r.owned_visuals)
+   for(unsigned lod=0;lod<2;++lod) {
+    auto& rows=result[{r.id,lod}];
+    for(const auto& mesh:r.owned_rosters[lod])rows.push_back({mesh.name.c_str(),mesh.vertices,mesh.owner.c_str()});
+   }
+  return result;
+ }();return rosters;
+}
 static const std::vector<OverrideModel>& override_models() {
  static const auto models=[] {
   std::vector<OverrideModel> result(stock_override_models.begin(),stock_override_models.end());
   for(const auto& record:mw34::chassis::configured_catalog()) {
+   if(record.owned_visuals) {
+    for(unsigned lod=0;lod<2;++lod) {
+     const auto& roster=owned_override_rosters().at({record.id,lod});
+     result.push_back({record.id.c_str(),"","",roster.data(),roster.size(),lod,
+       record.resource.c_str(),record.meshes[lod].c_str(),record.textures[lod].c_str(),record.resource.c_str()});
+    }
+    continue;
+   }
    if(record.visual_template.empty())continue;
    for(unsigned lod=0;lod<2;++lod) {
     const OverrideModel* original=nullptr;
@@ -95,7 +114,7 @@ static OverrideMatrix override_inverse(OverrideMatrix a){auto inverse=override_i
 
 #include "donor_runtime.inc"
 void override_load_textures(const OverrideModel&model,size_t first,size_t end,const char*alternate_env=nullptr,unsigned skin=0,const char*direct_path=nullptr){
- const char*path=direct_path?direct_path:model.direct_texture?model.direct_texture:std::getenv(alternate_env?alternate_env:model.texture_env);if(!path)return;
+ const char*path=mw34::skins::replacement_texture_path(direct_path,model.direct_texture,skin,std::getenv(alternate_env?alternate_env:model.texture_env));if(!path)return;
  auto&o=override_state();std::ifstream file(std::filesystem::path(additional_skin_wide(path)),std::ios::binary);
  auto bytes=[&](void*p,size_t n){if(!file.read(static_cast<char*>(p),std::streamsize(n)))throw std::runtime_error("Replacement textures: incomplete sidecar");};
  char magic[8];bytes(magic,8);if(std::memcmp(magic,"BWTEX1\0\0",8))throw std::runtime_error("Replacement textures: wrong format");
@@ -276,9 +295,14 @@ int override_validate_root(unsigned root){auto&o=override_state();auto cached=o.
  }
  int result=-1;unsigned damage_mask=0;
  const auto root_name=pose_name(root,36);const char* added_resource=chassis_actor_resource(root);
- for(const auto& registration:mw34::chassis::configured_catalog())if(!added_resource&&!registration.visual_template.empty()) {
+ for(const auto& registration:mw34::chassis::configured_catalog())if(!added_resource&&(!registration.visual_template.empty()||registration.owned_visuals)) {
   const auto& key=registration.resource;
   if(root_name==key||root_name=="mech_"+key+".flt"||root_name=="mech_"+key+"_1.flt")added_resource=key.c_str();
+ }
+ if(added_resource)for(const auto& r:mw34::chassis::configured_catalog())if(r.owned_visuals&&r.resource==added_resource&&!r.cockpit_roster.empty()) {
+  bool complete=true;
+  for(const auto& mesh:r.cockpit_roster){auto found=meshes.find(mesh.name);if(found==meshes.end()||found->second!=mesh.vertices){complete=false;break;}}
+  if(complete)for(const auto& mesh:r.cockpit_roster){o.attached_cockpit_nodes.emplace(root,mesh.name);meshes.erase(mesh.name);}
  }
  for(unsigned id=0;id<override_models().size();++id){const auto&m=override_models()[id];
   if(bool(m.resource)!=bool(added_resource)||(m.resource&&std::strcmp(m.resource,added_resource)))continue;
@@ -307,7 +331,14 @@ int override_validate_root(unsigned root){auto&o=override_state();auto cached=o.
    for(unsigned i=0;i<count;++i){const unsigned mat=load(polys+i*36+28);if(!readable(mat,20))throw std::runtime_error("Mech skin: invalid original material");
     if(!(load(mat)&0x100))continue;const unsigned ref=load(mat+16);if(!ref||!readable(ref,40))throw std::runtime_error("Mech skin: invalid original texture reference");
     const auto name=pose_name(ref+8,32);
-    selection.observe(mw34::skins::texture_skin(model.source_chassis?model.source_chassis:model.id,name));
+    bool owned=false;
+    if(model.resource)for(const auto& registration:mw34::chassis::configured_catalog())
+     if(registration.owned_visuals&&registration.resource==model.resource) {
+      owned=true;const auto found=registration.skin_textures.find(name);
+      if(found!=registration.skin_textures.end())selection.observe(found->second);
+      break;
+     }
+    if(!owned)selection.observe(mw34::skins::texture_skin(model.source_chassis?model.source_chassis:model.id,name));
    }
   }
   const auto selected=selection.result();

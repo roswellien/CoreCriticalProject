@@ -2,8 +2,13 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from normal_materials import pack_surface_bindings, read_surface_bindings
+from normal_materials import (
+    DecodedSurfaceBudgetExceeded,
+    pack_surface_bindings,
+    read_surface_bindings,
+)
 from surface_catalog_composition import compose
 
 
@@ -39,6 +44,44 @@ class SurfaceCatalogCompositionTests(unittest.TestCase):
             self.assertEqual(result["resolved_conflicts"], 1)
             page = Path(result["manifest"]).read_text().splitlines()[1]
             self.assertEqual(read_surface_bindings(Path(page).read_bytes()), [(key, new)])
+
+    def test_decoded_memory_budget_is_aggregated_before_retaining_each_page(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pixels = bytes([128, 128, 255, 255]) * 16
+            other_pixels = bytes([127, 128, 255, 255]) * 16
+            files = [root / "first.bin", root / "second.bin"]
+            files[0].write_bytes(
+                pack_surface_bindings(
+                    [((4, 4, 1, 42), (4, 4, pixels))], compressed=True, cache_hashes=False
+                )
+            )
+            files[1].write_bytes(
+                pack_surface_bindings(
+                    [((4, 4, 1, 43), (4, 4, other_pixels))],
+                    compressed=True,
+                    cache_hashes=False,
+                )
+            )
+            with (
+                patch("surface_catalog_composition.MAX_WORKING_BYTES", 255),
+                self.assertRaises(DecodedSurfaceBudgetExceeded),
+            ):
+                compose(files, root / "out")
+
+    def test_repacking_includes_both_catalog_headers_in_native_page_size(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.bin"
+            page = pack_surface_bindings(
+                [((1, 1, 1, 42), (1, 1, bytes([128, 128, 255, 255])))]
+            )
+            source.write_bytes(page)
+            with (
+                patch("surface_catalog_composition.MAX_NATIVE_PAGE_BYTES", len(page) - 1),
+                self.assertRaisesRegex(ValueError, "native page budget"),
+            ):
+                compose([source], root / "out")
 
 
 if __name__ == "__main__":

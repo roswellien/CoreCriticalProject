@@ -90,6 +90,23 @@ int main(int argc, char** argv) {
     const unsigned angle=std::bit_cast<unsigned>(15.f);
     for(unsigned i=0;i<4;++i)invalid_cone[invalid_cone.size()-4+i]=char(angle>>(8*i));
     rejected(invalid_cone);
+    std::string owned("MWCHAS6\0",8);number(owned,1);
+    owned+=record("community.example:mech","example");
+    number(owned,0);number(owned,0);number(owned,0);number(owned,0);number(owned,1);
+    for(unsigned lod=0;lod<2;++lod) {
+        text(owned,"mesh.bin");text(owned,"texture.bin");number(owned,1);
+        text(owned,"torso_polys");text(owned,"torso");number(owned,3);
+    }
+    number(owned,1);text(owned,"g25");text(owned,"g25");number(owned,4);
+    number(owned,2);text(owned,"example_t0");number(owned,0);text(owned,"example_t0_b");number(owned,1);
+    std::istringstream owned_stream(owned);
+    const auto owned_records=mw34::chassis::read_catalog(owned_stream);
+    check(owned_records[0].owned_visuals&&owned_records[0].visual_template.empty());
+    check(owned_records[0].owned_rosters[1][0].owner=="torso");
+    check(owned_records[0].cockpit_roster[0].name=="g25");
+    check(owned_records[0].skin_textures.at("example_t0_b")==1);
+    for(size_t n=0;n<owned.size();++n)rejected(owned.substr(0,n));
+    rejected(owned+"x");auto invalid_owned_skin=owned;invalid_owned_skin.back()=char(8);rejected(invalid_owned_skin);
     if (argc == 2) {
         std::ifstream file(argv[1], std::ios::binary);
         check(mw34::chassis::read_catalog(file).size() == 2);

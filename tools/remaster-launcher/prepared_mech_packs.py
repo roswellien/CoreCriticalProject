@@ -231,7 +231,7 @@ def compose(roots, host, verification=None, chassis_records=None):
     added = []
     if chassis_records is not None:
         from prepared_chassis_packs import select as select_chassis
-        added = select_chassis(metadata, host, verification)
+        added = select_chassis(metadata, host, verification, host.get('mech_appearance'))
         chassis_records.extend(added)
     from prepared_skin_packs import select
     visual_records = [record for record in added if 'visuals' in record['registration']]
