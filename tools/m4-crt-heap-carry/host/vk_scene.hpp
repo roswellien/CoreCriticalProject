@@ -507,8 +507,38 @@ class Renderer {
     bool present_resident(HWND hwnd, unsigned w, unsigned h) {
         HostFpEnvironment fp;
         finish_world();
-        if (!::IsWindowVisible(hwnd))
+        const auto window = prepare_window(hwnd);
+        if (window == WindowState::hidden)
             return true;
+        if (window == WindowState::unprepared)
+            return false;
+        return present_prepared(hwnd, w, h);
+    }
+    // The window half of present_resident, run on the game thread: it owns the game window and the
+    // presentation child, and SetWindowPos sends messages to that thread. presentParent and child
+    // change only in present() and max_texture_dimension(), which the game thread runs while the
+    // render thread is idle.
+    enum class WindowState { hidden, unprepared, ready };
+    WindowState prepare_window(HWND hwnd) {
+        if (!::IsWindowVisible(hwnd))
+            return WindowState::hidden;
+        if (hwnd != presentParent || !child)
+            return WindowState::unprepared;
+        RECT rc{};
+        ::GetClientRect(hwnd, &rc);
+        RECT cc{};
+        ::GetClientRect(child, &cc);
+        if (cc.right != rc.right || cc.bottom != rc.bottom)
+            ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+        return WindowState::ready;
+    }
+    // The rest of present_resident, after prepare_window returned ready. It calls no window
+    // function that sends messages itself; swapchain creation, resizing, exclusive full screen and
+    // the present may, which the render thread marks for the waiting game thread to handle.
+    bool present_prepared(HWND hwnd, unsigned w, unsigned h) {
+        HostFpEnvironment fp;
+        finish_world();
         if (hwnd != presentParent || !child || !presentable || (!windowSurface && !dxgi.active()) ||
             !colorImage.image || w != width || h != height)
             return false;
@@ -516,15 +546,6 @@ class Renderer {
             check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
                   "wait present");
             presentInFlight = false;
-        }
-        {
-            RECT rc{};
-            ::GetClientRect(hwnd, &rc);
-            RECT cc{};
-            ::GetClientRect(child, &cc);
-            if (cc.right != rc.right || cc.bottom != rc.bottom)
-                ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                               SWP_NOZORDER | SWP_NOACTIVATE);
         }
         if (!swapchainReady())
             return true;

@@ -961,8 +961,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "748e23b1b66445bbd6ac6d1217cae600df9c6aa06b1e841ca6b9576e26f8e4ad",
-      "bytes": 217868,
+      "sha256": "54bd90c424f7b0884a2f1b5791098f06e568b26eeaef91fbfc1363157b0abd8a",
+      "bytes": 219060,
       "decision": "commit",
       "classification": "authored-host-source"
     },
