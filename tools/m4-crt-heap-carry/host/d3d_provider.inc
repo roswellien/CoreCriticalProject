@@ -11,7 +11,7 @@ mw34::submission::DrawVertexScratch draw_vertex_scratch;
 D3DDEVICEDESC hal_desc(){D3DDEVICEDESC d{};d.dwSize=sizeof(d);static_assert(sizeof(D3DDEVICEDESC)==252);
  unsigned max_texture=256;if(std::getenv("MW34_REMASTER_BANKS")||override_enabled()){
   if(!host.presenter)host.presenter=std::make_unique<mw34::vkscene::Renderer>();
-  try{HostInternal hi(*this);max_texture=host.presenter->max_texture_dimension(host.display.window);}catch(const std::exception&e){deny(std::string(e.what()),0);}}
+  try{HostInternal hi(*this);max_texture=render_idle("texture limit",[&]{return host.presenter->max_texture_dimension(host.display.window);});}catch(const std::exception&e){deny(std::string(e.what()),0);}}
  d.dwFlags=D3DDD_COLORMODEL|D3DDD_DEVCAPS|D3DDD_TRANSFORMCAPS|D3DDD_LIGHTINGCAPS|D3DDD_BCLIPPING|D3DDD_LINECAPS|D3DDD_TRICAPS|D3DDD_DEVICERENDERBITDEPTH|D3DDD_DEVICEZBUFFERBITDEPTH|D3DDD_MAXBUFFERSIZE|D3DDD_MAXVERTEXCOUNT;
  d.dcmColorModel=D3DCOLOR_RGB;d.dwDevCaps=D3DDEVCAPS_FLOATTLVERTEX|D3DDEVCAPS_EXECUTESYSTEMMEMORY|D3DDEVCAPS_TLVERTEXSYSTEMMEMORY|D3DDEVCAPS_TEXTUREVIDEOMEMORY|D3DDEVCAPS_DRAWPRIMTLVERTEX|D3DDEVCAPS_CANRENDERAFTERFLIP|D3DDEVCAPS_TEXTURENONLOCALVIDMEM|D3DDEVCAPS_DRAWPRIMITIVES2|D3DDEVCAPS_HWRASTERIZATION;
  d.dtcTransformCaps.dwSize=sizeof(D3DTRANSFORMCAPS);d.dlcLightingCaps.dwSize=sizeof(D3DLIGHTINGCAPS);d.bClipping=TRUE;

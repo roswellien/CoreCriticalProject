@@ -23,6 +23,7 @@
 #include "buffer_reserve.hpp"
 #include <vulkan/vulkan_win32.h>
 #include "dxgi_present.hpp"
+#include "render_thread.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <array>
@@ -547,6 +548,7 @@ class Renderer {
                   "wait present");
             presentInFlight = false;
         }
+        const mw34::render_thread::SendsWindowMessages sends_window_messages;
         if (!swapchainReady())
             return true;
         unsigned index = 0;

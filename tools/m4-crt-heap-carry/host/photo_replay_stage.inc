@@ -1497,7 +1497,8 @@ void photo_replay_on_present(unsigned w, unsigned h, bool is_direct, const std::
             if (photo_replay.screenshot_requested || time_for_video) {
                 std::vector<std::uint8_t> raw_rgba;
                 unsigned cap_w = 0, cap_h = 0;
-                host.presenter->capture_fullres_bgra(raw_rgba, cap_w, cap_h);
+                render_readback("photo capture",
+                                [&] { host.presenter->capture_fullres_bgra(raw_rgba, cap_w, cap_h); });
 
                 if (photo_replay.screenshot_requested) {
                     photo_replay.screenshot_requested = false;

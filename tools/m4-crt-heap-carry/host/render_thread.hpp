@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -18,6 +19,19 @@
 #include <utility>
 
 namespace mw34::render_thread {
+
+// Nonzero while the render thread is inside a call that may send window messages to the game
+// thread, which owns the windows: swapchain creation or resizing, exclusive full screen and the
+// present. A message sent to another thread's window waits until that thread handles it, so the
+// game thread handles sent messages while it waits, but only then; a window procedure never runs
+// at an unrelated wait.
+inline std::atomic<int> window_message_calls{0};
+struct SendsWindowMessages {
+    SendsWindowMessages() { window_message_calls.fetch_add(1); }
+    ~SendsWindowMessages() { window_message_calls.fetch_sub(1); }
+    SendsWindowMessages(const SendsWindowMessages &) = delete;
+    SendsWindowMessages &operator=(const SendsWindowMessages &) = delete;
+};
 
 // Runs host graphics commands in submission order on one worker thread, or at
 // once on the caller's thread in inline mode. Only the game thread submits.
