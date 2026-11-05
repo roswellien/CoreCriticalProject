@@ -288,7 +288,7 @@ void missile_texture(mw34::vkscene::Scene &scene, mw34::vkscene::Draw &draw) {
         texture.width = 64;
         texture.height = 128;
         texture.format = mw34::vkscene::TexFormat::rgba8888;
-        if (!host.sren || !host.sren->current(key, hash, 64, 128)) {
+        if (!host.sren || !host.sren->sent_current(key, hash, 64, 128)) {
             static const auto pixels = mw34::missiles::texture();
             texture.pixels32 = pixels;
         }

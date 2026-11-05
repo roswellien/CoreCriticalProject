@@ -561,6 +561,7 @@ These are executed runs, not acceptance. The accepted count stays 131/144.
   - Scene readback buffers prefer host-cached memory. Uncached readback had cost about 8% of mission time in `memcpy`.
   - Not changed: the per-instruction x87 exception clear/test (about 14%). Some lifted sites branch on the fresh exception result, for example integer-indefinite conversions, so a lazy clear would not be exact.
 - `MW34_FRAME_TIMES=<file>` writes one line per presented frame: frame number, host milliseconds and the 3D scene count.
+  - The full line is `frame host_ms scenes virtual_clock_us render_wait_ms render_waits`. The last two (added 2026-11-04) are the milliseconds and the number of times the game thread waited for the render thread during the frame. Readers that take only the first columns are unaffected.
 - `MW34_VIRTUAL_CLOCK=<ms>` (scripted runs only; refused without `MW34_INPUT_SCRIPT`) makes a scripted run deterministic.
   - Every guest time source (`timeGetTime`, `GetTickCount`, `QueryPerformanceCounter`/`Frequency`, the system/local time and `+MS` script timing) reads one virtual clock.
   - The clock advances by `<ms>` at each presented frame and by 1 us per query, so polling loops progress. `Sleep(n)` advances it by n ms and does not block.
@@ -716,6 +717,14 @@ These are executed runs, not acceptance. The accepted count stays 131/144.
   - Next measured costs, uncapped:
     - Per-scene `vkQueueSubmit`, fence wait and driver GPU-memory frees: about 15%. Each scene, fill and HUD flush shares one command buffer, descriptor pool and vertex buffer, so the CPU waits for the previous scene. A small ring of per-slot resources would remove that wait.
     - Presentation: about 0.35 ms per frame. A prototype removes the x87 stack shuffling (3,242 to 24 80-bit moves), but out-of-line bridge calls still force x87 spills, so that path also needs inline fast paths. This is the next recompiler step.
+- Render thread (2026-11-04, issue #244, off by default until issue #252's RX 9070 benchmark): scene rendering and presentation run on one worker thread (`host/render_thread.hpp`), so the game thread builds the next scene while the GPU work of the last one is recorded and submitted.
+  - `MW34_RENDER_THREAD=1` turns it on; unset or `0` leaves it off; any other value stops the run. The launcher's "Run graphics on a separate thread" box sets it.
+  - It is on only with lazy residency and the GPU HUD (`MW34_LAZY_RT=1`, `MW34_GPU_HUD=1`, as the players' profile sets them) and scenes on the presenter's device. Otherwise every frame reads the target back, so the same commands run inline on the game thread. They also run inline with `MW34_RENDER_THREAD_CHECK=1` and with exclusive full screen (`MW34_WINDOW_MODE=fullscreen`), whose swapchain calls change the game window.
+  - Startup prints `render thread on` or `render thread off (<reason>)` to stderr.
+  - The game thread stays at most one frame ahead. It waits for the render thread before every read-back of the target to guest memory, and before calls that create, size or destroy windows, which stay on the game thread.
+  - A render-thread error stops the run at the game thread's next graphics call, naming the command (`Render thread failed in <command>: ...`). A wait longer than 20 seconds stops it with `Render thread stuck in <command>`.
+  - `MW34_RENDER_THREAD_CHECK=1` (test runs, render thread off) compares every game-side copy of renderer state (texture cache, render scale, canvas kind) with the renderer's own and stops the run on a difference (`Render thread copy disagrees: ...`).
+  - `MW34_PROFILE` samples only the game thread, so render-thread time does not appear in its output.
 - Performance overlay (2026-10-13, off by default): `MW34_PERF_OVERLAY=1`, `play.ps1 -Overlay`, `Play-MW3.cmd -Overlay` or `Play-MW3-Overlay.cmd`.
   - The Vulkan presenter draws presented frames per second, plus the mean and worst time between presents over the last second, refreshed four times a second.
   - It draws in a small built-in font into its host upload copy of each flipped frame. Guest memory and frame dumps are unchanged.

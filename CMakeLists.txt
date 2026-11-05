@@ -50,6 +50,12 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_heap_partition_tests)
     add_test(NAME heap_partitions COMMAND mw34_heap_partition_tests)
 
+    find_package(Threads REQUIRED)
+    add_executable(mw34_render_queue_tests tools/remaster-launcher/test_render_queue.cpp)
+    target_link_libraries(mw34_render_queue_tests PRIVATE Threads::Threads)
+    mw34_warnings(mw34_render_queue_tests)
+    add_test(NAME render_queue COMMAND mw34_render_queue_tests)
+
     add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
     target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
