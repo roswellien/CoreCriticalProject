@@ -176,6 +176,9 @@ struct Command {
 };
 struct Scene {
     double detail_time{};
+    // Lighting for detail_time, computed by the game thread from the campaign state it owns
+    // (world scenes only; HUD and canvas scenes use mw34::sun::settings()).
+    mw34::sun::Settings environment{};
     std::uint64_t world_frame{}, world_generation{}, world_context{};
     std::array<float, 3> world_eye{};
     bool world_eye_valid{};
@@ -284,7 +287,9 @@ class Renderer {
     void invalidate_camera_history(mw34::temporal::Reset reason) {
         if (mw34::temporal::enabled()) camera_history.invalidate(reason);
     }
-    void complete_camera_history(std::uint64_t frame, unsigned target, const char *admission = "none") {
+    // admission is owned, so a queued call keeps its text after the caller's buffer is gone.
+    void complete_camera_history(std::uint64_t frame, unsigned target,
+                                 const std::string &admission = "none") {
         if (!mw34::temporal::enabled()) return;
         camera_history.complete(frame, target);
         unsigned valid = 0, mode_mask = 0;
@@ -294,7 +299,7 @@ class Renderer {
         }
         std::fprintf(stderr, "Camera history frame=%llu views=%zu pairs=%u mode_mask=%x reset=%s rejected=%s mismatch=%s\n",
                      (unsigned long long)frame, camera_history.pairs().size(), valid, mode_mask,
-                     mw34::temporal::name(camera_history.last_reset()), admission,
+                     mw34::temporal::name(camera_history.last_reset()), admission.c_str(),
                      camera_history.disagreement());
     }
     std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{}, combined_draws{};
@@ -1194,9 +1199,8 @@ class Renderer {
             std::memcpy(up, s.color.data(), colorBytes);
         if (upload_in)
             mw34::depth::upload(up + depthOffset, s.depth.data(), size_t(pixels));
-        const auto environment = (s.hud || s.frontend_canvas)
-                                     ? mw34::sun::settings()
-                                     : mw34::sun::current_settings(s.detail_time);
+        const auto environment =
+            (s.hud || s.frontend_canvas) ? mw34::sun::settings() : s.environment;
         if (!world_scene_prepared)
             apply_atmosphere(s, environment);
         if (!s.vertices.empty())

@@ -188,7 +188,8 @@ void camera_present(unsigned flipped_target) {
                   (unsigned long long)camera_pause_entries, (unsigned long long)camera_pause_exits,
                   (unsigned long long)camera_relocations, (unsigned long long)camera_presets);
     if (host.sren)
-        host.sren->complete_camera_history(camera_flip_serial, flipped_target, diagnostic.data());
+        host.sren->complete_camera_history(camera_flip_serial, flipped_target,
+                                           std::string(diagnostic.data()));
     camera_rejection = "none";
 }
 void camera_surface_written(unsigned surface) {

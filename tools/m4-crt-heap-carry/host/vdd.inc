@@ -81,6 +81,7 @@ void copy_counters(){if(host.sren)host.scene_counts=host.sren->counters();if(hos
 // Sends one scene to the scene renderer. The game-side record (vk_scene.hpp SentRecord) is updated first, the way
 // the renderer updates its own texture cache, render scale and canvas kind; the requested scale travels with the scene.
 void submit_scene(mw34::vkscene::Scene&sc,bool upload_in,bool readback_out){auto*r=scene_renderer();r->sent.scene(sc);
+ {SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.environment=mw34::sun::current_settings(sc.detail_time);}  /* campaign state is the game thread's */
  try{HostInternal hi(*this);r->request_scale(r->sent.scale_req);r->render(sc,upload_in,readback_out);r->check_sent();}catch(const std::exception&e){deny(std::string(e.what()),0);}copy_counters();}
 // Render scale of the resident target on the presenter device: the window's client height over the game height
 // (1..4), or MW34_RENDER_SCALE. The 3D scenes and the GPU HUD render at that resolution; guest copies stay at the

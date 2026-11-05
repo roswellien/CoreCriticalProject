@@ -36,7 +36,7 @@ bool can_reconstruct_world(const Scene &scene, bool upload, bool readback) const
 void render_reconstructed_world(Scene &scene) {
     // Sky routing can use a later draw's camera. Prepare the complete original
     // scene once before splitting, then share that prepared state in both passes.
-    apply_atmosphere(scene, mw34::sun::current_settings(scene.detail_time));
+    apply_atmosphere(scene, scene.environment);
     struct PreparedScene {
         Renderer &renderer;
         explicit PreparedScene(Renderer &owner, const Scene &source) : renderer(owner) {

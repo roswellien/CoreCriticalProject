@@ -949,8 +949,8 @@
       "classification": "authored-host-source"
     },
     "vdd.inc": {
-      "sha256": "f8a6f18a5a9f7808bcb7154533bf4b39f9216cb54fe8fa9a9302871c1aab01c0",
-      "bytes": 63294,
+      "sha256": "2049098f0b75b93bd64e946e0d2b673470e08dc96f182074fa1c9ac00b7f2c87",
+      "bytes": 63459,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -961,8 +961,8 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "15d392b44973949b7d776e860d5c50bdefd5c7ecc0614a78c245abd985b38ffa",
-      "bytes": 217604,
+      "sha256": "748e23b1b66445bbd6ac6d1217cae600df9c6aa06b1e841ca6b9576e26f8e4ad",
+      "bytes": 217868,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1021,8 +1021,8 @@
       "classification": "authored-host-source"
     },
     "world_resolution_stage.inc": {
-      "sha256": "66bc84cc450b711297c5c51150e4f0fc1b9385e2510d12ecdf4115cc248c659c",
-      "bytes": 19551,
+      "sha256": "614aefbeec9ec308c094653efec43295ce644fe4a55f1dd87be2e85c948b9052",
+      "bytes": 19522,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1047,8 +1047,8 @@
     "camera_capture_stage.inc": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 14438,
-      "sha256": "c7c69a53e6bd81431d9208c5aebf5c4291eb252d9eb0aec5b6312b08d07342a9"
+      "bytes": 14494,
+      "sha256": "1ea71f62247a2a6d3733227049bc3932a479cdcd3f30bb32755a9218d7342813"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."
