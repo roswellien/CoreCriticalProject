@@ -738,6 +738,12 @@
       "decision": "commit",
       "classification": "authored-host-source"
     },
+    "render_thread.hpp": {
+      "sha256": "275a17ccbf7114d8d5853302b09d98f698fa8f69b8a02b2022021fe201008b2b",
+      "bytes": 8062,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
     "seed.hpp": {
       "sha256": "95f90e47a071dcee7d055b5c7685839de326ca28618fb920afd21727cdfbc4b1",
       "bytes": 5288,
