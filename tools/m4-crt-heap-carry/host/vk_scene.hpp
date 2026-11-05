@@ -270,6 +270,11 @@ struct RendererCounters {
         sun_world_draws{}, sun_model_draws{}, sun_tl_draws{}, sun_shadow_scenes{},
         sun_shadow_casters{}, sun_shadow_reused{}, sky_draws{}, sky_tinted{}, sky_untinted{},
         haze_draws{}, horizon_draws{}, haze_routed{}, sky_own_view{};
+    // Shadow sources of the proof-backed fixture casters the renderer still holds, sorted, after the
+    // scene whose world_frame is retained_shadow_frame (fixture_shadow_stage.inc). Null until the first
+    // fixture shadow pass. The game thread checks only those proofs and newer ones.
+    std::shared_ptr<const std::vector<std::uint64_t>> retained_shadow_sources;
+    std::uint64_t retained_shadow_frame{};
 };
 
 // Owns the loader, device, caches, render targets and child presentation window.
@@ -1079,6 +1084,8 @@ class Renderer {
         c.horizon_draws = horizon_draws;
         c.haze_routed = haze_routed;
         c.sky_own_view = sky_own_view;
+        c.retained_shadow_sources = fixtureRetainedSources;
+        c.retained_shadow_frame = fixtureRetainedFrame;
         return c;
     }
     // Lazy residency (provider MW34_LAZY_RT): with upload_in false the target images keep the

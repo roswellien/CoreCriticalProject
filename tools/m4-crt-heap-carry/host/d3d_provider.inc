@@ -305,7 +305,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
    SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
    if(auto*surface=vsurface(tex))if(auto proof=fixture_caster_proof(c,*surface)){
     dr.shadow_source=(std::uint64_t(c.fixture_node)<<32)|c.fixture_polygon;
-    dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]=proof;
+    dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]={proof,host.frames};
    }
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.surface_material=c.surface_material;

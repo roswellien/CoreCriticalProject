@@ -12,6 +12,17 @@
         VkDescriptorSet set{};
     };
     std::map<std::pair<std::uint64_t,std::uint64_t>,FixtureCaster> fixtureCasters;
+    // fixtureCasters' proof sources for the game thread (RendererCounters::retained_shadow_sources); shared, so
+    // publishing counters after every command copies a pointer, and rebuilt only when the set changes.
+    std::shared_ptr<const std::vector<std::uint64_t>> fixtureRetainedSources;std::uint64_t fixtureRetainedFrame{};
+    // Reported for every world scene, including those without fixture lights, whose draws add no casters.
+    void fixture_report_retained(std::uint64_t world_frame){
+        std::vector<std::uint64_t> retained;
+        for(const auto& [key,caster]:fixtureCasters)if(caster.proof_source)retained.push_back(caster.proof_source);
+        std::sort(retained.begin(),retained.end());
+        if(!fixtureRetainedSources||*fixtureRetainedSources!=retained)fixtureRetainedSources=std::make_shared<const std::vector<std::uint64_t>>(std::move(retained));
+        fixtureRetainedFrame=world_frame;
+    }
     std::vector<FixtureCaster*> fixtureFrameCasters;
     std::uint64_t fixtureGeneration{~0ULL},fixtureContext{~0ULL};
     Buffer fixtureTlBuffer;
@@ -87,7 +98,7 @@
         if(!fixtureTile||scene.hud||scene.frontend_canvas)return lights;
         if(fixtureGeneration!=scene.world_generation||fixtureContext!=scene.world_context){fixture_atlas_touch();fixtureCasters.clear();fixtureGeneration=scene.world_generation;fixtureContext=scene.world_context;}
         const unsigned count=std::min(unsigned(lights.params[0]),mw34::effects::capacity),weapons=std::min(unsigned(lights.params[1]),count);
-        if(count==weapons)return lights;
+        if(count==weapons){fixture_report_retained(scene.world_frame);return lights;}
         mw34::fixture_shadow::Point eye{};bool camera=false;
         for(const auto& draw:scene.draws){if(draw.sky)continue;if(draw.sun_tl){const auto&m=draw.sun_tl->camera_world;eye={m[3],m[7],m[11]};camera=true;break;}
             if(draw.model&&draw.model->sun_eligible){const auto& m=draw.model->camera;eye={m[3],m[7],m[11]};camera=true;}}
@@ -124,6 +135,7 @@
             if(fixture_atlas_capture_changed(inserted,stored->second,caster))fixture_atlas_touch();
             stored->second=std::move(caster);
         }
+        fixture_report_retained(scene.world_frame);
         std::vector<ModelVertex> tl;
         for(auto& [key,caster]:fixtureCasters){bool relevant=false;
             for(unsigned i=weapons;i<count;++i)relevant|=caster.bounds.overlaps({lights.lights[i].start[0],lights.lights[i].start[1],lights.lights[i].start[2]},lights.lights[i].start[3]);

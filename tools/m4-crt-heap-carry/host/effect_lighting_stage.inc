@@ -13,7 +13,8 @@ struct EffectLightingState {
  unsigned observations{},invalid{};
  std::uint64_t dump_bytes{};
  std::map<std::uint64_t,FixtureSourceProof> fixture_proofs;
- std::map<std::uint64_t,std::shared_ptr<const FixtureSourceProof>> shadow_proofs;  /* latest proof per shadow source (vk_scene.hpp Draw::shadow_proof) */
+ struct ShadowProof{std::shared_ptr<const FixtureSourceProof> proof;std::uint64_t frame{};};  /* frame: host.frames when drawn */
+ std::map<std::uint64_t,ShadowProof> shadow_proofs;  /* latest proof per shadow source (vk_scene.hpp Draw::shadow_proof) */
  unsigned fixture_frame{~0U};std::uint64_t fixture_generation{~0ULL};
 } effect_lighting;
 mw34::vehicle_lighting::State fixture_vehicle(unsigned node){
@@ -43,9 +44,18 @@ void fixture_frame(){
 }
 // The renderer keeps fixture shadow casters between scenes while their source's latest proof holds. Proofs read
 // guest memory, so the game thread checks them before each scene and sends the sources that still hold, sorted.
-// A failed proof stays in the map: its source can hold again, and only a newer draw replaces it.
+// Only proofs the renderer can still use are checked: sources it last reported holding, and proofs drawn in or
+// after that report's frame, whose scenes it may not have reached yet. Any other proof's caster is gone and comes
+// back only with a newer draw and proof, so the proof is dropped; the map stays the size of what the renderer holds.
 std::vector<std::uint64_t> fixture_shadow_sources_valid(){std::vector<std::uint64_t> valid;SunCaptureFp preserve;
- for(const auto& [source,proof]:effect_lighting.shadow_proofs)if(fixture_proof_valid(*proof))valid.push_back(source);
+ const auto& reported=host.scene_counts.retained_shadow_sources;
+ for(auto it=effect_lighting.shadow_proofs.begin();it!=effect_lighting.shadow_proofs.end();){
+  const auto& [source,shadow]=*it;
+  const bool held=reported&&std::binary_search(reported->begin(),reported->end(),source);
+  const bool newer=!reported||shadow.frame>=host.scene_counts.retained_shadow_frame;
+  if(!held&&!newer){it=effect_lighting.shadow_proofs.erase(it);continue;}
+  if(fixture_proof_valid(*shadow.proof))valid.push_back(source);
+  ++it;}
  return valid;
 }
 bool fixture_capture_proof(const D3DCmd& draw,const VSurfaceRec& surface,FixtureSourceProof& proof){
