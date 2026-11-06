@@ -91,6 +91,9 @@ inline void validate_arm_rest(const Rig& rig) {
 inline Mat arm_rest_pose(const Rig& rig, const std::map<std::string, Mat>& current,
                          const Pose& output, size_t index) {
     const auto& bone = rig.bones.at(index);
+    // Leaf transforms also need a valid inverse for their rendered normals,
+    // including paths where Sun lighting does not perform that check for us.
+    (void)inverse(current.at(bone.control));
     const auto parent_index = size_t(bound_parent(rig, index));
     const auto& parent = rig.bones.at(parent_index);
     const auto local_rest = product(inverse(parent.rest), bone.rest);

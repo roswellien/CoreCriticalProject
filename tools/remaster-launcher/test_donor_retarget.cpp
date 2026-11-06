@@ -150,6 +150,15 @@ void authored_arm_checks() {
     }
     check(failed, "singular source arm parent fails visibly");
     invalid = source;
+    invalid.at("lhand")[0] = invalid.at("lhand")[1] = invalid.at("lhand")[2] = 0;
+    failed = false;
+    try {
+        retarget(r, invalid, 1);
+    } catch (const std::runtime_error &) {
+        failed = true;
+    }
+    check(failed, "singular source forearm leaf fails visibly");
+    invalid = source;
     invalid.at("lhand")[3] = std::numeric_limits<double>::infinity();
     failed = false;
     try {
