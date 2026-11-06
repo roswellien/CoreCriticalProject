@@ -488,7 +488,7 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
  auto state_=preview?*original->state_snapshot:snapshot(*device);state_[D3DRENDERSTATE_TEXTUREPERSPECTIVE]=1;state_[256+D3DTSS_MAGFILTER]=D3DTFG_LINEAR;state_[256+D3DTSS_MINFILTER]=D3DTFN_LINEAR;state_[D3DRENDERSTATE_ALPHABLENDENABLE]=0;state_[D3DRENDERSTATE_ALPHATESTENABLE]=0;state_[D3DRENDERSTATE_SPECULARENABLE]=0;state_[D3DRENDERSTATE_CULLMODE]=D3DCULL_NONE;state_[D3DRENDERSTATE_SHADEMODE]=D3DSHADE_GOURAUD;state_[256+D3DTSS_COLOROP]=o.textures.empty()?D3DTOP_SELECTARG1:D3DTOP_MODULATE;state_[256+D3DTSS_COLORARG1]=o.textures.empty()?D3DTA_DIFFUSE:D3DTA_TEXTURE;state_[256+D3DTSS_COLORARG2]=D3DTA_DIFFUSE;state_[256+D3DTSS_ALPHAOP]=D3DTOP_SELECTARG1;state_[256+D3DTSS_ALPHAARG1]=D3DTA_DIFFUSE;auto saved_state=std::make_shared<const std::vector<unsigned>>(std::move(state_));
  struct CameraVertex{double x,y,z,u,v,shade;};struct TlVertex{float x,y,z,rhw;unsigned diffuse,specular;float u,v;};static_assert(sizeof(TlVertex)==32);
  std::map<std::string,OverrideMatrix>placement_frames;
- unsigned triangles=0,gpu_batches=0,cpu_near_batches=0;
+ unsigned triangles=0,gpu_batches=0,cpu_near_batches=0,cpu_emission_batches=0;
  for(const auto&batch:o.batches)if(batch.model==o.scope.model&&batch.owner==o.scope.owner){
   if(preview){const auto name=pose_name(o.scope.node,36);if(!batch.visibility_node.empty()?batch.visibility_node!=name:name!=batch.owner)continue;}
   if(!batch.visibility_node.empty()){const auto node=o.active_nodes.find({o.scope.root,batch.visibility_node});if(node==o.active_nodes.end())throw std::runtime_error("Replacement models: missing source visibility node");if(!node->second)continue;}
@@ -536,7 +536,7 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
    auto view=std::make_shared<mw34::sun::Tl>();
    view->camera_world=mw34::sun::world_matrix(camera_world);
    view->projection={float(near_scale),float(scale_x),float(scale_y),float(center_x),float(center_y),float(near_clip)};
-   draw.sun_tl=std::move(view);
+   draw.sun_tl=std::move(view);++cpu_emission_batches;
   }
   for(size_t at=0;at<batch.vertices.size();at+=3){std::array<CameraVertex,3>polygon{};for(unsigned i=0;i<3;++i){const auto&v=batch.vertices[at+i];auto m=batch_to_camera;if(donor&&!batch.vertex_bones.empty())m=override_product(m,donor->pose.world.at(batch.vertex_bones.at(at+i)));double nx=m[0]*v.nx+m[1]*v.ny+m[2]*v.nz,ny=m[4]*v.nx+m[5]*v.ny+m[6]*v.nz,nz=m[8]*v.nx+m[9]*v.ny+m[10]*v.nz;double length=std::sqrt(nx*nx+ny*ny+nz*nz);double shade=.35+.65*std::max(0.,(.3*nx+.6*ny-.74*nz)/length);polygon[i]={m[0]*v.x+m[1]*v.y+m[2]*v.z+m[3],m[4]*v.x+m[5]*v.y+m[6]*v.z+m[7],m[8]*v.x+m[9]*v.y+m[10]*v.z+m[11],v.u,v.v,shade};}
    std::array<CameraVertex,4>clipped{};size_t clipped_count=0;for(size_t i=0;i<polygon.size();++i){const auto&a=polygon[i];const auto&b=polygon[(i+1)%polygon.size()];bool in_a=a.z>=near_clip,in_b=b.z>=near_clip;if(in_a)clipped[clipped_count++]=a;if(in_a!=in_b){double t=(near_clip-a.z)/(b.z-a.z);clipped[clipped_count++]={a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),near_clip,a.u+t*(b.u-a.u),a.v+t*(b.v-a.v),a.shade+t*(b.shade-a.shade)};}}
@@ -545,7 +545,7 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
   }
   if(!draw.vertices.empty())device->commands.push_back(std::move(draw));
  }
- if(preview)o.preview_emitted.insert(o.scope.node);else o.emitted.insert({o.scope.root,o.scope.owner});if(o.last_frame!=host.frames){o.last_frame=host.frames;++o.emitted_frames;}if(o.emitted_frames<4||host.frames%100==0)o.log<<"{\"event\":\"replacement_queued\",\"frame\":"<<host.frames<<",\"node\":"<<o.scope.node<<",\"model\":\""<<override_models()[o.scope.model].id<<"\",\"lod\":"<<override_models()[o.scope.model].lod<<",\"root\":"<<o.scope.root<<",\"skin\":"<<o.scope.skin<<",\"owner\":\""<<o.scope.owner<<"\",\"triangles\":"<<triangles<<",\"preview\":"<<(preview?"true":"false")<<",\"role\":"<<wide_hud_role()<<",\"fog_factor\":"<<(preview_specular>>24)<<",\"gpu_batches\":"<<gpu_batches<<",\"cpu_near_batches\":"<<cpu_near_batches<<"}\n";
+ if(preview)o.preview_emitted.insert(o.scope.node);else o.emitted.insert({o.scope.root,o.scope.owner});if(o.last_frame!=host.frames){o.last_frame=host.frames;++o.emitted_frames;}if(o.emitted_frames<4||host.frames%100==0)o.log<<"{\"event\":\"replacement_queued\",\"frame\":"<<host.frames<<",\"node\":"<<o.scope.node<<",\"model\":\""<<override_models()[o.scope.model].id<<"\",\"lod\":"<<override_models()[o.scope.model].lod<<",\"root\":"<<o.scope.root<<",\"skin\":"<<o.scope.skin<<",\"owner\":\""<<o.scope.owner<<"\",\"triangles\":"<<triangles<<",\"preview\":"<<(preview?"true":"false")<<",\"role\":"<<wide_hud_role()<<",\"fog_factor\":"<<(preview_specular>>24)<<",\"gpu_batches\":"<<gpu_batches<<",\"cpu_near_batches\":"<<cpu_near_batches<<",\"cpu_emission_batches\":"<<cpu_emission_batches<<"}\n";
 }
 
 #include "model_geometry_warmup.inc"
