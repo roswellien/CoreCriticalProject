@@ -122,7 +122,7 @@ public static class OwnedChassisVisuals
         {
             var batches = reader.ReadUInt32(); var bones = reader.ReadUInt32();
             var refs = reader.ReadUInt32(); var flags = reader.ReadUInt32();
-            if (batches is < 1 or > 256 || bones is < 1 or > 256 || refs is < 1 or > 128 || flags > 1)
+            if (batches is < 1 or > 256 || bones is < 1 or > 256 || refs is < 1 or > 128 || flags > 2)
                 throw new InvalidDataException("Invalid owned rig counts.");
             for (var i = 0; i < 5; ++i)
             {

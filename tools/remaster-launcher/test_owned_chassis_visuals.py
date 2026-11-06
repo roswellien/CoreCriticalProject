@@ -55,22 +55,24 @@ def geometry(batches=(("hip", "hip"),)):
     return bytes(data)
 
 
-def tree(vertices=3):
+def tree(vertices=3, extra=()):
     data = bytearray()
-    for index, control in enumerate(CONTROLS):
+    controls = CONTROLS + tuple(extra)
+    for index, control in enumerate(controls):
+        count = vertices.get(control, 3) if isinstance(vertices, dict) else vertices
         node = bytearray(352)
         node[:36] = control.encode().ljust(36, b"\0")
         struct.pack_into("<I", node, 36, 0x200)
         struct.pack_into("<I", node, 52, 5)
         struct.pack_into("<I", node, 60, 1)
         struct.pack_into("<I", node, 84, int(index != 0))
-        struct.pack_into("<I", node, 92, 11 if index == 0 else 0)
+        struct.pack_into("<I", node, 92, len(controls) - 1 if index == 0 else 0)
         mesh = bytearray(92)
-        struct.pack_into("<5I", mesh, 16, 1, vertices, 0, 0, 0)
+        struct.pack_into("<5I", mesh, 16, 1, count, 0, 0, 0)
         data += (
             node
             + mesh
-            + bytes(vertices * 12)
+            + bytes(count * 12)
             + struct.pack("<9I", 3, 0, 0, 0, 0, 0, 0, 0, 0)
             + struct.pack("<3I", 0, 1, 2)
             + bytes(36)
@@ -173,6 +175,31 @@ class OwnedVisualTests(unittest.TestCase):
             with self.subTest(fmt=fmt), self.assertRaises(ValueError):
                 select([(pack, invalid)], host, appearance_mode="original")
 
+        # A full-original-joint mesh is a selected-only version 2 feature.
+        source_mesh = bytearray(self.mesh)
+        struct.pack_into("<I", source_mesh, 20, 2)
+        (root / "mesh").write_bytes(source_mesh)
+        build(project, root / "source-joints-built")
+        source_pack = root / "source-joints-built/pack"
+        source_manifest = json.loads((source_pack / "pack.json").read_text())
+        select([(source_pack, source_manifest)], host, appearance_mode="original")
+        with self.assertRaisesRegex(ValueError, "owned-chassis-visuals version 2"):
+            select([(source_pack, source_manifest)], host, appearance_mode="new")
+        host["content_capabilities"]["owned-chassis-visuals"] = [1, 2]
+        selected = select([(source_pack, source_manifest)], host, appearance_mode="new")
+        self.assertEqual(selected[0]["owned_visuals"]["capability_version"], 2)
+
+    def test_source_joint_mode_and_unknown_flags(self):
+        self.assertEqual(mesh_metadata(self.mesh)["capability_version"], 1)
+        for flags in (1, 2, 3, 0xFFFFFFFF):
+            data = bytearray(self.mesh)
+            struct.pack_into("<I", data, 20, flags)
+            if flags > 2:
+                with self.assertRaises(ValueError):
+                    mesh_metadata(bytes(data))
+            else:
+                self.assertEqual(mesh_metadata(bytes(data))["capability_version"], flags)
+
     def test_rosters_are_derived_and_resources_are_immutable(self):
         before = copy.deepcopy((self.value, self.legacy, self.resources))
         result = self.read()
@@ -182,6 +209,61 @@ class OwnedVisualTests(unittest.TestCase):
         self.assertEqual(before, (self.value, self.legacy, self.resources))
         self.legacy["models"]["distance"] = self.legacy["models"]["close"]
         with self.assertRaisesRegex(ValueError, "LOD signatures"):
+            self.read()
+
+    def test_source_arm_subtrees_and_catalog_bounds(self):
+        mesh = bytearray(self.mesh)
+        struct.pack_into("<I", mesh, 20, 2)
+        self.resources["mesh"] = bytes(mesh)
+        result = self.read()
+        self.assertEqual(result["arm_damage"]["close"], [
+            dict(arm="larm", parent="hip", removed=["larm"]),
+            dict(arm="rarm", parent="hip", removed=["rarm"]),
+        ])
+        visual = dict(rosters=result["rosters"], cockpit=[],
+                      meshes={l: "mesh.bin" for l in ("close", "distance")},
+                      textures={l: "texture.bin" for l in ("close", "distance")},
+                      skin_textures={}, arm_damage=result["arm_damage"])
+        record = dict(id="community.test:mech", name="Test", resource="example",
+                      metadata_template="annihilator", owned_visuals=visual)
+        self.assertEqual(encode_catalog([record])[:8], b"MWCHAS7\0")
+        for plan in (dict(arm="hip", parent="hip", removed=["larm"]),
+                     dict(arm="larm", parent="../hip", removed=["larm"]),
+                     dict(arm="larm", parent="hip", removed=["foreign"]),
+                     dict(arm="larm", parent="hip", removed=["larm", "larm"]),
+                     dict(arm="larm", parent="hip", removed=[])):
+            broken = copy.deepcopy(record)
+            broken["owned_visuals"]["arm_damage"]["close"] = [plan]
+            with self.subTest(plan=plan), self.assertRaises(ValueError):
+                encode_catalog([broken])
+        nested = bytearray(tree())
+        node_size = len(nested) // len(CONTROLS)
+        struct.pack_into("<I", nested, 92, 10)
+        struct.pack_into("<I", nested, CONTROLS.index("larm") * node_size + 92, 1)
+        self.legacy["models"]["close"] = bytes(nested)
+        with self.assertRaisesRegex(ValueError, "Unsupported original arm subtree"):
+            self.read()
+
+    def test_source_joint_lods_remain_distinct_after_arm_loss(self):
+        mesh = bytearray(self.mesh)
+        struct.pack_into("<I", mesh, 20, 2)
+        self.resources["mesh"] = bytes(mesh)
+        self.legacy["models"]["distance"] = tree()
+        for counts in ({"larm": 6}, {"rarm": 6}, {"larm": 6, "rarm": 6}):
+            self.legacy["models"]["close"] = tree(counts)
+            with self.subTest(counts=counts), self.assertRaisesRegex(ValueError, "after arm loss"):
+                self.read()
+        self.legacy["models"]["close"] = tree({"torso": 6})
+        self.read()
+        # A pre-existing stump must not alias a stump introduced by another mask.
+        self.legacy["models"]["close"] = tree({"torso": 6}, extra=("larm_stub01",))
+        with self.assertRaisesRegex(ValueError, "already contains an arm stump"):
+            self.read()
+        # Existing retarget modes retain their prior intact-signature contract.
+        self.legacy["models"]["close"] = tree({"larm": 6})
+        for flags in (0, 1):
+            struct.pack_into("<I", mesh, 20, flags)
+            self.resources["mesh"] = bytes(mesh)
             self.read()
 
     def test_visibility_and_tree_ancestry_fail_closed(self):

@@ -212,8 +212,9 @@ def select(metadata, host, verification=None, appearance_mode=None):
                 if appearance_mode == 'new' and owned is not None:
                     from owned_chassis_visuals import CAPABILITY as OWNED_CAPABILITY
                     from content_capabilities import advertised
-                    if 1 not in advertised(host).get(OWNED_CAPABILITY, []):
-                        raise ValueError('Selected new appearance requires owned-chassis-visuals version 1')
+                    version = owned['capability_version']
+                    if version not in advertised(host).get(OWNED_CAPABILITY, []):
+                        raise ValueError(f'Selected new appearance requires owned-chassis-visuals version {version}')
                     if owned['normal_pages'] and (2 not in host.get('normal_map_formats', []) or 'BWSNR2' not in payload['required_formats']):
                         raise ValueError('Selected owned normals require format 2')
                     if owned['normal_pages'] and 1 not in host.get('authored_normal_catalog_versions', []):
@@ -397,6 +398,8 @@ def prepare(records, game_exe, output, environment):
         if 'owned_visuals' in item:
             owned = item['owned_visuals']
             visual = dict(rosters=owned['rosters'], cockpit=owned['cockpit'], meshes={}, textures={}, skin_textures={})
+            if 'arm_damage' in owned:
+                visual['arm_damage'] = owned['arm_damage']
             from legacy_chassis_skins import definition_skins, texture_names
             legacy = item['legacy']
             if 'skins' in legacy['definition'][0]:

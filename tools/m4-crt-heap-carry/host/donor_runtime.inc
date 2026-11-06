@@ -1,7 +1,7 @@
 // Included in the host adapter. All source hierarchy access is read-only.
 template<class Reader> static mw34::donor::Rig override_read_donor(Reader&bytes){
  using namespace mw34::donor;Rig rig;unsigned bones,refs,flags;bytes(&bones,4);bytes(&refs,4);bytes(&flags,4);
- if(!bones||bones>256||!refs||refs>128||flags>1)throw std::runtime_error("Visual retarget: invalid rig counts/flags");rig.ground_reference=flags!=0;
+ if(!bones||bones>256||!refs||refs>128||flags>2)throw std::runtime_error("Visual retarget: invalid rig counts/flags");rig.ground_reference=flags==1;rig.source_joint_pose=flags==2;
  bytes(&rig.hip_drop,8);bytes(rig.walk_x.data(),16);bytes(rig.walk_z.data(),16);
  for(double v:{rig.hip_drop,rig.walk_x[0],rig.walk_x[1],rig.walk_z[0],rig.walk_z[1]})if(!std::isfinite(v))throw std::runtime_error("Visual retarget: nonfinite gait metadata");
  if(rig.hip_drop<0||rig.hip_drop>10)throw std::runtime_error("Visual retarget: invalid hip offset");

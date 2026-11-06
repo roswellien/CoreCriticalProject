@@ -93,6 +93,11 @@ static class ChassisAppearanceChecks
         installed.NativePayload.RequiredFormats.Insert(1, "BWMESH4");
         installed.NativePayload.RequiredFormats.Insert(2, "BWTEX1");
         Read();
+        var sourceJoints = (byte[])mesh.Clone();
+        BitConverter.GetBytes(2u).CopyTo(sourceJoints, 20);
+        setResource("owned.mesh", sourceJoints, "BWMESH4"); Read();
+        BitConverter.GetBytes(3u).CopyTo(sourceJoints, 20);
+        setResource("owned.mesh", sourceJoints, "BWMESH4"); Reject();
         foreach (var invalid in new[] { mesh[..^1], mesh.Concat(new byte[] { 0 }).ToArray() })
         { setResource("owned.mesh", invalid, "BWMESH4"); Reject(); }
         setResource("owned.mesh", mesh, "BWMESH4");

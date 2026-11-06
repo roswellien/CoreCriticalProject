@@ -68,6 +68,13 @@ struct Owner {
         source_ancestry.clear();
         // A root/LOD change is not a new actor lifetime: damaged mounts stay retired.
     }
+    bool retire_missing_mount(const std::string &id) {
+        if (!source_ancestry.count(id))
+            return false;
+        retired_emitters.insert(id);
+        emitters[id].valid = false;
+        return true;
+    }
     bool retire_node(unsigned node, std::uint64_t expected_generation) {
         if (generation != expected_generation)
             return false;

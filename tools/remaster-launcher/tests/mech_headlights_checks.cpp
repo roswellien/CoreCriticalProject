@@ -72,6 +72,12 @@ int main() {
     require(owner.retire_node(102, 1), "current generation accepts mount retirement");
     require(!owner.emitters.at("left").valid && owner.emitters.at("right").valid,
             "ancestor retirement isolates lamps");
+    auto missing_mount = owner;
+    require(!missing_mount.retire_missing_mount("unknown"),
+            "initial missing mount is not silently retired");
+    require(missing_mount.retire_missing_mount("right") &&
+                !missing_mount.emitters.at("right").valid,
+            "previously authenticated missing mount retires before destruction callback");
     owner.bind_root(200);
     require(owner.emitters.empty() && owner.source_ancestry.empty() && owner.envelope.desired &&
                 owner.retired_emitters.count("left"),

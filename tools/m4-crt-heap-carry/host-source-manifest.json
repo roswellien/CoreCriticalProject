@@ -7,8 +7,8 @@
   ],
   "files": {
     "additional_chassis.hpp": {
-      "sha256": "35c4e8577742633ff692484e95fa0b563e26ffb1a83651cf49522c492f97e1bf",
-      "bytes": 10464,
+      "sha256": "3f89bd571c35ef71081c8ef4195aba6d29d6724b618910c91f73cfba1babc952",
+      "bytes": 11804,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -235,14 +235,14 @@
       "classification": "authored-host-source"
     },
     "donor_retarget.hpp": {
-      "sha256": "4431287ddf541d671578d0ec904f2933f16567b617d06695d280a7f837acb4d5",
-      "bytes": 8520,
+      "sha256": "94eb2e9a7812a8d1dce27b6ec1f31ae5a236ac60323579166efd8f1a08a560e5",
+      "bytes": 9418,
       "decision": "commit",
       "classification": "authored-host-source"
     },
     "donor_runtime.inc": {
-      "sha256": "c78b1f29a7f41d62b252ee86e57095b20821d7937dfe353e087abb6e6f346273",
-      "bytes": 5573,
+      "sha256": "f1d0683a751c473ba18eb3625da811faf99c6e7ce3dfe3c2024b64dee40d84dd",
+      "bytes": 5604,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -505,14 +505,14 @@
       "classification": "authored-host-source"
     },
     "mech_headlights.hpp": {
-      "sha256": "8b81f906b75c4d63a8ace2b645686c2546102bfb50073d35d1d7b88c355c5754",
-      "bytes": 5149,
+      "sha256": "c47fc34527c20dc75fb911d2e0e91606e6026c53c5f1afd1262d2f8738977c45",
+      "bytes": 5377,
       "decision": "commit",
       "classification": "authored-host-source"
     },
     "mech_headlights_stage.inc": {
-      "sha256": "606525579d3af655f381752d87872d3ba3956a165528d7ea21607cd2d530d953",
-      "bytes": 21100,
+      "sha256": "01cce84eefc0098908fd468e826c94f483d6899ebfe9072e51104765e3678114",
+      "bytes": 21355,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -583,8 +583,8 @@
       "classification": "authored-host-source"
     },
     "model_arm_damage.inc": {
-      "sha256": "d561f529af23b2f87a9f7e82cae924949d5f715ba84fdf49981c277a3b39b2c1",
-      "bytes": 2316,
+      "sha256": "aa5f68e81dcbb7206369904e7363778f204c8dfd46d1db9a0527da9c62fd4ee0",
+      "bytes": 3672,
       "decision": "commit",
       "classification": "authored-host-source"
     },

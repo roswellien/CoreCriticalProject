@@ -51,8 +51,10 @@ unsigned headlight_player() {
     return context && readable(context, 0x18) ? load(context + 0x14) : 0;
 }
 bool headlight_shutdown(unsigned actor) {
-    if (!readable(actor, 0x579))
-        return true;
+    if (!readable(actor, 0x579))
+
+        return true;
+
     return runtime.memory().load<unsigned char>({actor + 0xde}) != 0 || load(actor + 0x578) == 10;
 }
 bool headlight_actor_root_matches(unsigned actor, unsigned root) {
@@ -205,8 +207,13 @@ void headlight_refresh(unsigned actor, mw34::headlights::Owner &owner) {
             pose = chassis_socket_pose(root, model);
         }
         const unsigned node = headlight_node(root, control);
-        if (!node || (pose && !pose->raw.count(control)))
+        if (!node || (pose && !pose->raw.count(control))) {
+            // A previously authenticated mount can be unlinked before the
+            // destruction callback. Initial missing bindings still fail visibly.
+            if (owner.retire_missing_mount(lamp.id))
+                continue;
             throw std::runtime_error("Headlights: unresolved required attachment " + control);
+        }
         owner.source_ancestry[lamp.id] = headlight_ancestry(node, root);
         if (pose)
             world = override_product(override_product(chassis_socket_world(root),

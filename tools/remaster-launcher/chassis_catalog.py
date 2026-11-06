@@ -115,12 +115,13 @@ def encode_catalog(records):
         ids.add(ident)
         resources.add(resource)
         validated.append(record)
+    with_damage = any(isinstance(r.get('owned_visuals'), dict) and 'arm_damage' in r['owned_visuals'] for r in validated)
     with_owned = any('owned_visuals' in r for r in validated)
     with_headlights = with_owned or any(r.get('headlights') for r in validated)
     with_sockets = with_headlights or any('sockets' in r for r in validated)
     with_names = with_sockets or any('base_skin_name' in r for r in validated)
     with_visuals = with_names or any('visuals' in r for r in validated)
-    blob = bytearray((b'MWCHAS6\0' if with_owned else b'MWCHAS5\0' if with_headlights else b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
+    blob = bytearray((b'MWCHAS7\0' if with_damage else b'MWCHAS6\0' if with_owned else b'MWCHAS5\0' if with_headlights else b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
     for record in sorted(validated, key=lambda r: r['id']):
         for field in ('id', 'name', 'resource'):
             value = record[field].encode('ascii')
@@ -163,7 +164,7 @@ def encode_catalog(records):
             owned = record.get('owned_visuals')
             blob.extend(struct.pack('<I', int(owned is not None)))
             if owned is not None:
-                if 'visuals' in record or set(owned) != {'rosters', 'cockpit', 'meshes', 'textures', 'skin_textures'}:
+                if 'visuals' in record or set(owned) - {'arm_damage'} != {'rosters', 'cockpit', 'meshes', 'textures', 'skin_textures'}:
                     raise ValueError('Invalid owned visual catalog fields')
                 def text(value):
                     if not isinstance(value, str) or not 0 < len(value.encode('utf-8')) <= 4096 or '\0' in value:
@@ -197,4 +198,28 @@ def encode_catalog(records):
                     if not re.fullmatch('[A-Za-z0-9_.-]{1,31}', name) or type(skin) is not int or not 0 <= skin <= 7:
                         raise ValueError('Invalid owned source skin binding')
                     text(name);blob.extend(struct.pack('<I', skin))
+                if with_damage:
+                    plans = owned.get('arm_damage', {'close': [], 'distance': []})
+                    if not isinstance(plans, dict) or set(plans) != {'close', 'distance'}:
+                        raise ValueError('Invalid owned arm damage LODs')
+                    for lod in ('close', 'distance'):
+                        rows = plans[lod]
+                        if not isinstance(rows, list) or len(rows) > 2:
+                            raise ValueError('Invalid owned arm damage count')
+                        blob.extend(struct.pack('<I', len(rows)))
+                        arms, removed = set(), set()
+                        source = {r['name'] for r in owned['rosters'][lod]}
+                        for plan in rows:
+                            if (not isinstance(plan, dict) or set(plan) != {'arm', 'parent', 'removed'}
+                                    or plan['arm'] not in ('larm', 'rarm') or plan['arm'] in arms
+                                    or not isinstance(plan['parent'], str)
+                                    or not re.fullmatch('[A-Za-z0-9_.-]{1,31}', plan['parent'])
+                                    or not isinstance(plan['removed'], list) or not 1 <= len(plan['removed']) <= 8
+                                    or any(not isinstance(n, str) or n not in source or n in removed for n in plan['removed'])
+                                    or len(set(plan['removed'])) != len(plan['removed'])):
+                                raise ValueError('Invalid owned arm damage plan')
+                            arms.add(plan['arm']);removed.update(plan['removed'])
+                            text(plan['arm']);text(plan['parent'])
+                            blob.extend(struct.pack('<I', len(plan['removed'])))
+                            for name in plan['removed']:text(name)
     return bytes(blob)

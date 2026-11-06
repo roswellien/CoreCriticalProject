@@ -476,8 +476,10 @@ Normals are optional BWSNR2 pages whose full RGB565 keys must belong to the sele
 visual textures. `upgraded` may coexist with `new`; retain each alternative's own
 UVs, color resources and normal bindings. Do not apply PM skin pixels to MW5 UVs.
 Inactive resources still undergo path, hash and format validation. Selecting new
-geometry requires `owned-chassis-visuals: 1` on the runtime; Original mode does not
-acquire this renderer requirement. Existing appearance capability support is still
+geometry with the existing donor solver requires `owned-chassis-visuals: 1`.
+BWMESH4 rig flag `2` uses the complete original joint matrices and requires
+`owned-chassis-visuals: 2`; flags `0` and `1` retain their existing donor solver.
+Original mode does not acquire either renderer requirement. Existing appearance capability support is still
 required by the coordinator.
 
 Authors supply visual batches, original control names and original visibility
@@ -489,8 +491,14 @@ signatures fail during validation before a native session starts.
 The original cockpit signature is derived separately and remains outside the
 exterior replacement. The private MWCHAS6 session catalog carries those derived
 rosters, paths and authoritative namespaced original skin lookup names. Existing
-MWCHAS1 through MWCHAS5 inputs retain their prior layouts; the serialized
-headlight block is unchanged.
+MWCHAS1 through MWCHAS6 inputs retain their prior layouts; the serialized
+headlight block is unchanged. Flag-2 preparation emits MWCHAS7 with original arm
+subtree removal lists and parent names derived by the coordinator. Packs cannot
+supply those plans. The native matcher still requires the exact original shared
+GameZ stump, its live parent topology and every surviving mesh signature.
+Flag-2 sources require both original arm subtrees without overlap or preexisting
+stump meshes. Close and distance signatures must remain distinguishable across
+intact, left-arm, right-arm and both-arm loss combinations.
 
 The development Atlas candidate uses an AS7-K visual weapon assembly to match
 the PM primary configuration, with a neutral test livery and donor body normals.

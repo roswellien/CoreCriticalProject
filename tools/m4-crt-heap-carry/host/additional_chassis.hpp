@@ -30,6 +30,7 @@ struct Headlight {
     float intensity{}, range{}, inner_angle{}, outer_angle{};
 };
 struct SourceMesh { std::string name, owner; unsigned vertices{}; };
+struct ArmDamage { std::string arm, parent; std::vector<std::string> removed; };
 struct Registration {
     std::string id, name, resource;
     unsigned metadata_template{};
@@ -42,6 +43,7 @@ struct Registration {
     std::array<std::vector<SourceMesh>, 2> owned_rosters;
     std::vector<SourceMesh> cockpit_roster;
     std::map<std::string,unsigned> skin_textures;
+    std::array<std::vector<ArmDamage>,2> arm_damage;
 };
 inline bool identifier(const std::string& value, unsigned maximum) {
     if (value.empty() || value.size() > maximum) return false;
@@ -65,7 +67,8 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
         return value;
     };
     char magic[8]; bytes(magic, 8);
-    const bool owned = std::string(magic, 8) == std::string("MWCHAS6\0", 8);
+    const bool damage = std::string(magic, 8) == std::string("MWCHAS7\0", 8);
+    const bool owned = damage || std::string(magic, 8) == std::string("MWCHAS6\0", 8);
     const bool headlights = owned || std::string(magic, 8) == std::string("MWCHAS5\0", 8);
     const bool sockets = headlights || std::string(magic, 8) == std::string("MWCHAS4\0", 8);
     const bool names = sockets || std::string(magic, 8) == std::string("MWCHAS3\0", 8);
@@ -179,6 +182,22 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
                 for (unsigned at = 0; at < skins; ++at) {
                     auto name = text(31); const unsigned skin = number();
                     if (skin > 7 || !identifier(name,31) || !r.skin_textures.emplace(name,skin).second) fail();
+                }
+                if(damage)for(unsigned lod=0;lod<2;++lod){
+                    const unsigned count=number();if(count>2)fail();
+                    std::set<std::string> arms,removed;
+                    for(unsigned at=0;at<count;++at){
+                        ArmDamage plan{text(4),text(31),{}};
+                        if((plan.arm!="larm"&&plan.arm!="rarm")||!arms.insert(plan.arm).second)fail();
+                        for(unsigned char c:plan.parent)if(!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-'))fail();
+                        const unsigned size=number();if(!size||size>8)fail();
+                        for(unsigned i=0;i<size;++i){
+                            auto name=text(31);bool found=false;
+                            for(const auto& mesh:r.owned_rosters[lod])if(mesh.name==name)found=true;
+                            if(!found||!removed.insert(name).second)fail();plan.removed.push_back(std::move(name));
+                        }
+                        r.arm_damage[lod].push_back(std::move(plan));
+                    }
                 }
             }
         }

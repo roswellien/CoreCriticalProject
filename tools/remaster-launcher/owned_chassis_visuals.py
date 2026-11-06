@@ -84,7 +84,7 @@ def mesh_metadata(data):
         raise ValueError("Owned visuals require BWMESH4")
     count = reader.number()
     bones, refs, flags = reader.number(), reader.number(), reader.number()
-    if not 1 <= count <= 256 or not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 1:
+    if not 1 <= count <= 256 or not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 2:
         raise ValueError("Invalid owned visual rig counts")
     gait = struct.unpack("<5d", reader.take(40))
     if not all(math.isfinite(v) for v in gait) or not 0 <= gait[0] <= 10:
@@ -160,6 +160,7 @@ def mesh_metadata(data):
     reader.end()
     return {
         "batches": count,
+        "capability_version": 2 if flags == 2 else 1,
         "owners": owners,
         "visibility": visibility,
         "references": references,
@@ -231,11 +232,12 @@ def validate(value, legacy, read):
             pages.append(page)
         else:
             payloads[role][lod] = read(path, "BWMESH4" if role == "meshes" else "BWTEX1")
-    result = {"payloads": payloads, "rosters": {}}
+    result = {"payloads": payloads, "rosters": {}, "capability_version": 1}
     keys = set()
     count = len(materials(legacy["materials"]))
     for lod in ("close", "distance"):
         metadata = mesh_metadata(payloads["meshes"][lod])
+        result["capability_version"] = max(result["capability_version"], metadata["capability_version"])
         keys.update(texture_metadata(payloads["textures"][lod], metadata["batches"]))
         nodes = source_nodes(legacy["models"][lod], count)
         if (
@@ -259,12 +261,52 @@ def validate(value, legacy, read):
         if any(owner_by_node.get(visible) != owner for owner, visible in metadata["bindings"]):
             raise ValueError("Owned visual visibility is outside controller ancestry")
         result["rosters"][lod] = roster
+        if metadata["capability_version"] >= 2:
+            arms = []
+            removed_names = set()
+            for arm in ("larm", "rarm"):
+                removed = []
+                for row in roster:
+                    ancestor = row["name"]
+                    while ancestor is not None and ancestor != arm:
+                        ancestor = nodes[ancestor]["parent"]
+                    if ancestor == arm:
+                        removed.append(row["name"])
+                if (not 1 <= len(removed) <= 8 or nodes[arm]["parent"] is None
+                        or removed_names.intersection(removed)):
+                    raise ValueError("Unsupported original arm subtree")
+                removed_names.update(removed)
+                arms.append(dict(arm=arm, parent=nodes[arm]["parent"], removed=removed))
+            result.setdefault("arm_damage", {})[lod] = arms
+    if "arm_damage" in result and set(result["arm_damage"]) != {"close", "distance"}:
+        raise ValueError("Both owned LODs must use the same source joint mode")
     signatures = [
         {(row["name"], row["vertices"]) for row in result["rosters"][lod]}
         for lod in ("close", "distance")
     ]
     if signatures[0] == signatures[1]:
         raise ValueError("Owned source LOD signatures must be distinguishable")
+    if "arm_damage" in result:
+        damage_signatures = []
+        for lod in ("close", "distance"):
+            source = {row["name"]: row["vertices"] for row in result["rosters"][lod]}
+            stumps = {plan["arm"] + "_stub01" for plan in result["arm_damage"][lod]}
+            if stumps & source.keys():
+                raise ValueError("Owned source tree already contains an arm stump")
+            states = set()
+            for mask in range(4):
+                remaining = dict(source)
+                for index, plan in enumerate(result["arm_damage"][lod]):
+                    if mask & (1 << index):
+                        for name in plan["removed"]:
+                            del remaining[name]
+                        # The runtime authenticates the same shared stump bytes
+                        # for both LODs; only their presence affects identity here.
+                        remaining[plan["arm"] + "_stub01"] = None
+                states.add(frozenset(remaining.items()))
+            damage_signatures.append(states)
+        if damage_signatures[0] & damage_signatures[1]:
+            raise ValueError("Owned source LOD signatures overlap after arm loss")
     cockpit = source_nodes(legacy["models"]["cockpit"], count)
     if sum(map(len, pages)) > 512 * 1024**2:
         raise ValueError("Owned normal resident budget exceeded")

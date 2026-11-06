@@ -56,6 +56,14 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_render_queue_tests)
     add_test(NAME render_queue COMMAND mw34_render_queue_tests)
 
+    add_executable(mw34_owned_arm_damage_tests tests/owned_arm_damage_tests.cpp)
+    mw34_warnings(mw34_owned_arm_damage_tests)
+    add_test(NAME owned_arm_damage COMMAND mw34_owned_arm_damage_tests)
+
+    add_executable(mw34_donor_retarget_tests tools/remaster-launcher/test_donor_retarget.cpp)
+    mw34_warnings(mw34_donor_retarget_tests)
+    add_test(NAME donor_retarget COMMAND mw34_donor_retarget_tests)
+
     add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
     target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)

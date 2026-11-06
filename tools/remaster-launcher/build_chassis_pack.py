@@ -160,7 +160,7 @@ def build(project_path, output):
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     select([(stage, manifest)], {'content_capabilities': {
         CAPABILITY: [1, 2, 3], 'mech-appearances': [1], SKIN_CAPABILITY: [1],
-        'mech-headlights': [1], 'owned-chassis-visuals': [1], SURFACE_CAPABILITY: [1]},
+        'mech-headlights': [1], 'owned-chassis-visuals': [1, 2], SURFACE_CAPABILITY: [1]},
         'normal_map_formats': [2]})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
