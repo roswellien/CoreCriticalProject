@@ -115,13 +115,14 @@ def encode_catalog(records):
         ids.add(ident)
         resources.add(resource)
         validated.append(record)
-    with_damage = any(isinstance(r.get('owned_visuals'), dict) and 'arm_damage' in r['owned_visuals'] for r in validated)
+    with_weapon_visuals = any(r.get('owned_visuals', {}).get('weapon_attachments') for r in validated)
+    with_damage = with_weapon_visuals or any(isinstance(r.get('owned_visuals'), dict) and 'arm_damage' in r['owned_visuals'] for r in validated)
     with_owned = any('owned_visuals' in r for r in validated)
     with_headlights = with_owned or any(r.get('headlights') for r in validated)
     with_sockets = with_headlights or any('sockets' in r for r in validated)
     with_names = with_sockets or any('base_skin_name' in r for r in validated)
     with_visuals = with_names or any('visuals' in r for r in validated)
-    blob = bytearray((b'MWCHAS7\0' if with_damage else b'MWCHAS6\0' if with_owned else b'MWCHAS5\0' if with_headlights else b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
+    blob = bytearray((b'MWCHAS8\0' if with_weapon_visuals else b'MWCHAS7\0' if with_damage else b'MWCHAS6\0' if with_owned else b'MWCHAS5\0' if with_headlights else b'MWCHAS4\0' if with_sockets else b'MWCHAS3\0' if with_names else b'MWCHAS2\0' if with_visuals else b'MWCHAS1\0') + struct.pack('<I', len(validated)))
     for record in sorted(validated, key=lambda r: r['id']):
         for field in ('id', 'name', 'resource'):
             value = record[field].encode('ascii')
@@ -164,7 +165,7 @@ def encode_catalog(records):
             owned = record.get('owned_visuals')
             blob.extend(struct.pack('<I', int(owned is not None)))
             if owned is not None:
-                if 'visuals' in record or set(owned) - {'arm_damage'} != {'rosters', 'cockpit', 'meshes', 'textures', 'skin_textures'}:
+                if 'visuals' in record or set(owned) - {'arm_damage', 'weapon_attachments'} != {'rosters', 'cockpit', 'meshes', 'textures', 'skin_textures'}:
                     raise ValueError('Invalid owned visual catalog fields')
                 def text(value):
                     if not isinstance(value, str) or not 0 < len(value.encode('utf-8')) <= 4096 or '\0' in value:
@@ -222,4 +223,32 @@ def encode_catalog(records):
                             text(plan['arm']);text(plan['parent'])
                             blob.extend(struct.pack('<I', len(plan['removed'])))
                             for name in plan['removed']:text(name)
+                if with_weapon_visuals:
+                    table = owned.get('weapon_attachments', {})
+                    keys = None
+                    for lod in ('close', 'distance'):
+                        part = table.get(lod, {'mesh_identity': '0000000000000000', 'records': []})
+                        rows = part['records']
+                        if not isinstance(rows, list) or len(rows) > 64:
+                            raise ValueError('Invalid weapon visual catalog count')
+                        identity = int(part['mesh_identity'], 16)
+                        if bool(identity) != bool(rows):
+                            raise ValueError('Invalid empty weapon visual identity')
+                        current_keys = [(r['source_control'], r['weapon']) for r in rows]
+                        if len(set(current_keys)) != len(rows) or keys is not None and keys != current_keys:
+                            raise ValueError('Ambiguous weapon visual catalog keys')
+                        keys = current_keys
+                        blob.extend(struct.pack('<QI', identity, len(rows)))
+                        for row in rows:
+                            for field in ('source_control', 'weapon', 'bone'):
+                                value = row[field]
+                                if not isinstance(value, str) or not re.fullmatch('[A-Za-z0-9_.-]{1,31}', value):
+                                    raise ValueError('Invalid weapon visual catalog name')
+                                text(value)
+                            position = row['position']
+                            if len(position) != 3 or any(type(v) not in (int, float) or not math.isfinite(v) or abs(v)>100 for v in position):
+                                raise ValueError('Invalid weapon visual catalog position')
+                            if row['source_control'] not in ('lhand', 'rhand') or row['bone'] != ('Forearm_Left' if row['source_control']=='lhand' else 'Forearm_Right'):
+                                raise ValueError('Invalid weapon visual catalog control')
+                            blob.extend(struct.pack('<3d', *position))
     return bytes(blob)

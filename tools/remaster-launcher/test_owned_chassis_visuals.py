@@ -5,6 +5,7 @@ import struct
 import unittest
 
 from chassis_catalog import encode_catalog
+from prepared_chassis_packs import select
 from normal_materials import pack_surface_bindings, pixel_hash
 from owned_chassis_visuals import mesh_metadata, references, validate
 
@@ -111,7 +112,6 @@ class OwnedVisualTests(unittest.TestCase):
         import json
 
         from build_chassis_pack import build
-        from prepared_chassis_packs import select
         from test_prepared_chassis_packs import ChassisPackTests
 
         fixture = ChassisPackTests()
@@ -212,7 +212,7 @@ class OwnedVisualTests(unittest.TestCase):
         self.assertEqual(selected[0]["owned_visuals"]["emission_payloads"]["close"], emission)
         from pathlib import Path
         from prepared_chassis_packs import prepare
-        prepared = prepare(selected, fixture.legacy_game(legacy_definition)[0], root / "emission-prepared", {})
+        prepared = prepare(selected, (fixture_game := fixture.legacy_game(legacy_definition)[0]), root / "emission-prepared", {})
         prefix = "MW34_CHASSIS_" + selected[0]["registration"]["resource"].upper()
         self.assertEqual(Path(prepared[prefix + "_EMISSION"]).read_bytes(), emission)
         self.assertEqual(Path(prepared[prefix + "_LOD1_EMISSION"]).read_bytes(), emission)
@@ -236,6 +236,31 @@ class OwnedVisualTests(unittest.TestCase):
         host["content_capabilities"]["owned-chassis-visuals"].append(3)
         self.assertEqual(select([(pack3, manifest3)], host, appearance_mode="new")[0]
                          ["owned_visuals"]["capability_version"], 3)
+
+        # Attachment support is required only when this New appearance is selected.
+        weapon_mesh = bytearray(mesh3)
+        struct.pack_into("<I", weapon_mesh, 64 + 12 * 196 + 12 * 160 + 64, 4)
+        (root / "mesh").write_bytes(weapon_mesh)
+        document["chassis"][0]["appearances"]["new"].pop("emission")
+        table = {"schema_version": 1}
+        for lod in ("close", "distance"):
+            table[lod] = dict(mesh_identity=f"{mesh_uv_identity(bytes(weapon_mesh)):016x}",
+                             records=[dict(source_control="lhand", weapon="ERLargeLaser",
+                                           bone="Forearm_Left", position=[0, 0, 0])])
+        document["chassis"][0]["appearances"]["new"]["weapon_attachments"] = table
+        project.write_text(json.dumps(document))
+        build(project, root / "weapon-visual-built")
+        pack4 = root / "weapon-visual-built/pack"
+        manifest4 = json.loads((pack4 / "pack.json").read_text())
+        select([(pack4, manifest4)], host, appearance_mode="original")
+        with self.assertRaisesRegex(ValueError, "owned-chassis-weapon-visuals version 1"):
+            select([(pack4, manifest4)], host, appearance_mode="new")
+        host["content_capabilities"]["owned-chassis-weapon-visuals"] = [1]
+        selected4 = select([(pack4, manifest4)], host, appearance_mode="new")
+        self.assertTrue(selected4[0]["owned_visuals"]["weapon_attachments"])
+        prepared4 = prepare(selected4, fixture_game, root / "weapon-prepared", {})
+        from prepared_chassis_packs import CATALOG_KEY
+        self.assertEqual(Path(prepared4[CATALOG_KEY]).read_bytes()[:8], b"MWCHAS8\0")
 
     def test_authored_arm_policy_topology(self):
         mesh = geometry(policy=3)
@@ -273,6 +298,45 @@ class OwnedVisualTests(unittest.TestCase):
         self.legacy["models"]["distance"] = self.legacy["models"]["close"]
         with self.assertRaisesRegex(ValueError, "LOD signatures"):
             self.read()
+
+    def test_weapon_visual_attachments_are_mesh_bound_and_selected_only(self):
+        from surface_materials import mesh_uv_identity
+        mesh = bytearray(geometry(tuple((c, c) for c in CONTROLS), policy=3))
+        start = 64 + 12 * 196 + 12 * 160
+        for index in range(12):
+            struct.pack_into("<I", mesh, start + 64, index)
+            start += 76 + 3 * 32
+        self.resources["mesh"] = bytes(mesh)
+        self.resources["texture"] = (b"BWTEX1\0\0" + struct.pack("<2I", 12, 1)
+                                      + bytes(12 * 4) + self.texture[20:])
+        table = {"schema_version": 1}
+        rows = [dict(source_control=c, weapon="ERLargeLaser", bone=b, position=[0, 0, 0])
+                for c, b in (("lhand", "Forearm_Left"), ("rhand", "Forearm_Right"))]
+        for lod in ("close", "distance"):
+            table[lod] = dict(mesh_identity=f"{mesh_uv_identity(bytes(mesh)):016x}", records=copy.deepcopy(rows))
+        self.value["weapon_attachments"] = table
+        result = self.read()
+        self.assertEqual(result["weapon_attachments"]["close"]["records"], rows)
+        visual = dict(rosters=result["rosters"], cockpit=[],
+                      meshes={l: "mesh.bin" for l in ("close", "distance")},
+                      textures={l: "texture.bin" for l in ("close", "distance")},
+                      skin_textures={}, arm_damage=result["arm_damage"],
+                      weapon_attachments=result["weapon_attachments"])
+        record = dict(id="community.test:mech", name="Test", resource="example",
+                      metadata_template="annihilator", owned_visuals=visual)
+        self.assertEqual(encode_catalog([record])[:8], b"MWCHAS8\0")
+        mutations = [lambda t: t["close"].update(mesh_identity="0" * 16),
+                     lambda t: t["distance"]["records"].reverse(),
+                     lambda t: t["close"]["records"].append(copy.deepcopy(rows[0])),
+                     lambda t: t["close"]["records"][0].update(bone="Forearm_Right"),
+                     lambda t: t["close"]["records"][0].update(position=[1, 0, 0]),
+                     lambda t: t["close"]["records"][0].update(position=[float('nan'), 0, 0]),
+                     lambda t: t.update(schema_version=True)]
+        for mutate in mutations:
+            invalid = copy.deepcopy(self.value)
+            mutate(invalid["weapon_attachments"])
+            with self.assertRaises(ValueError):
+                self.read(invalid)
 
     def test_source_arm_subtrees_and_catalog_bounds(self):
         mesh = bytearray(self.mesh)

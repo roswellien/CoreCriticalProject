@@ -18,10 +18,11 @@ public static class OwnedChassisVisuals
     {
         if (value.ValueKind != JsonValueKind.Object ||
             !new HashSet<string>(new[] { "schema_version", "meshes", "textures" })
-                .SetEquals(value.EnumerateObject().Select(p => p.Name).Where(name => name != "normals" && name != "emission")) ||
+                .SetEquals(value.EnumerateObject().Select(p => p.Name).Where(name => name != "normals" && name != "emission" && name != "weapon_attachments")) ||
             value.GetProperty("schema_version").ValueKind != JsonValueKind.Number ||
             !value.GetProperty("schema_version").TryGetInt32(out var version) || version != 1)
             throw new InvalidDataException("Invalid owned visual alternative.");
+        var attachmentMeshes = new Dictionary<string, WeaponVisualAttachments.Mesh>();
         var batchCounts = new Dictionary<string, uint>();
         var emissionMeshes = new Dictionary<string, OwnedEmission.Mesh>();
         var colors = new HashSet<ChassisAppearances.ColorKey>();
@@ -47,7 +48,10 @@ public static class OwnedChassisVisuals
                 if (role == "meshes")
                 {
                     var mesh = new OwnedEmission.Mesh();
-                    batchCounts[lod.Name] = ReadMesh(reader, mesh);
+                    var attachment = new WeaponVisualAttachments.Mesh();
+                    batchCounts[lod.Name] = ReadMesh(reader, mesh, attachment);
+                    attachment.Identity = mesh.Hash;
+                    attachmentMeshes[lod.Name] = attachment;
                     emissionMeshes[lod.Name] = mesh;
                 }
                 if (role == "textures")
@@ -86,6 +90,8 @@ public static class OwnedChassisVisuals
                 }
             }
         }
+        if (value.TryGetProperty("weapon_attachments", out var attachments))
+            WeaponVisualAttachments.Read(attachments, attachmentMeshes);
         if (value.TryGetProperty("emission", out var emission))
         {
             if (emission.ValueKind != JsonValueKind.Object ||
@@ -156,7 +162,7 @@ public static class OwnedChassisVisuals
         }
     }
 
-    private static uint ReadMesh(BinaryReader reader, OwnedEmission.Mesh emissionMesh)
+    private static uint ReadMesh(BinaryReader reader, OwnedEmission.Mesh emissionMesh, WeaponVisualAttachments.Mesh attachments)
     {
         string Name(bool empty = false) => ReadName(reader, empty);
         void Matrix()
@@ -199,6 +205,7 @@ public static class OwnedChassisVisuals
                 if (parent < -1 || parent >= i) throw new InvalidDataException("Invalid owned bone parent.");
                 Matrix();
                 rigBones.Add((name, control, parent));
+                attachments.Controls.Add(name, control);
             }
             if (flags == 3) ValidateArmRest(rigBones);
             var references = new HashSet<string>();
@@ -239,6 +246,17 @@ public static class OwnedChassisVisuals
                 if (bone == uint.MaxValue)
                     for (var vertex = 0; vertex < size; ++vertex)
                         if (reader.ReadUInt32() >= bones) throw new InvalidDataException("Invalid owned vertex bone.");
+                if (bone != uint.MaxValue)
+                {
+                    var name = rigBones[(int)bone].Name;
+                    if (!attachments.Bounds.TryGetValue(name, out var bound))
+                        attachments.Bounds.Add(name, ((float[])binding.Low.Clone(), (float[])binding.High.Clone()));
+                    else for (var axis = 0; axis < 3; ++axis)
+                    {
+                        bound.Low[axis] = Math.Min(bound.Low[axis], binding.Low[axis]);
+                        bound.High[axis] = Math.Max(bound.High[axis], binding.High[axis]);
+                    }
+                }
                 emissionMesh.Batches.Add(binding);
             }
             if (reader.BaseStream.Position != reader.BaseStream.Length)

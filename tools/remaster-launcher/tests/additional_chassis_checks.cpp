@@ -194,6 +194,28 @@ int main(int argc, char **argv) {
     auto foreign_damage = damaged;
     foreign_damage.back() = 'x';
     rejected(foreign_damage);
+    auto weapon_visuals = damaged;
+    weapon_visuals[6] = '8';
+    for (unsigned lod = 0; lod < 2; ++lod) {
+        number(weapon_visuals, 17); number(weapon_visuals, 0); // u64 mesh identity
+        number(weapon_visuals, 1);
+        text(weapon_visuals, "lhand"); text(weapon_visuals, "ERLargeLaser");
+        text(weapon_visuals, "Forearm_Left");
+        weapon_visuals.append(24, char(0));
+    }
+    std::istringstream weapon_stream(weapon_visuals);
+    auto weapon_records = mw34::chassis::read_catalog(weapon_stream);
+    check(weapon_records[0].weapon_visual_identity[1] == 17);
+    check(weapon_records[0].weapon_visuals[0][0].source_control == "lhand");
+    for (size_t n = damaged.size(); n < weapon_visuals.size(); ++n)
+        rejected(weapon_visuals.substr(0, n));
+    rejected(weapon_visuals + "x");
+    auto wrong_weapon = weapon_visuals;
+    wrong_weapon[wrong_weapon.size() - 24 - 1] = 'x'; rejected(wrong_weapon);
+    auto invalid_position = weapon_visuals;
+    const double nonfinite = std::numeric_limits<double>::quiet_NaN();
+    std::memcpy(invalid_position.data() + invalid_position.size() - 24, &nonfinite, 8);
+    rejected(invalid_position);
     if (argc == 2) {
         std::ifstream file(argv[1], std::ios::binary);
         check(mw34::chassis::read_catalog(file).size() == 2);

@@ -222,6 +222,10 @@ def select(metadata, host, verification=None, appearance_mode=None):
                     version = owned['capability_version']
                     if version not in advertised(host).get(OWNED_CAPABILITY, []):
                         raise ValueError(f'Selected new appearance requires owned-chassis-visuals version {version}')
+                    if owned.get('weapon_attachments'):
+                        from weapon_visual_attachments import CAPABILITY as WEAPON_VISUAL_CAPABILITY
+                        if 1 not in advertised(host).get(WEAPON_VISUAL_CAPABILITY, []):
+                            raise ValueError('Selected new appearance requires owned-chassis-weapon-visuals version 1')
                     if owned.get('emission_payloads'):
                         from owned_emission import CAPABILITY as EMISSION_CAPABILITY
                         if 1 not in advertised(host).get(EMISSION_CAPABILITY, []):
@@ -409,6 +413,8 @@ def prepare(records, game_exe, output, environment):
         if 'owned_visuals' in item:
             owned = item['owned_visuals']
             visual = dict(rosters=owned['rosters'], cockpit=owned['cockpit'], meshes={}, textures={}, skin_textures={})
+            if 'weapon_attachments' in owned:
+                visual['weapon_attachments'] = owned['weapon_attachments']
             if 'arm_damage' in owned:
                 visual['arm_damage'] = owned['arm_damage']
             from legacy_chassis_skins import definition_skins, texture_names

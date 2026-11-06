@@ -258,6 +258,18 @@ void override_load_model(unsigned id){
   override_load_textures(model,first,o.batches.size());
   override_load_normals(model,first,o.batches.size());
   override_load_surface_materials(model,first,o.batches.size());
+  if(model.resource)for(const auto& record:mw34::chassis::configured_catalog())if(record.owned_visuals&&record.resource==model.resource&&!record.weapon_visuals.at(model.lod).empty()){
+   if(mw34::materials::compute_mesh_uv_hash(o.batches,first,o.batches.size())!=record.weapon_visual_identity.at(model.lod))throw std::runtime_error("Weapon visuals: selected mesh identity mismatch");
+   const auto& rig=o.donor_rigs.at(id);
+   for(const auto& anchor:record.weapon_visuals.at(model.lod)){
+    auto bone=std::find_if(rig.bones.begin(),rig.bones.end(),[&](const auto& b){return b.name==anchor.bone&&b.control==anchor.source_control;});
+    if(bone==rig.bones.end())throw std::runtime_error("Weapon visuals: missing donor bone");
+    const auto index=unsigned(bone-rig.bones.begin());bool found=false;std::array<double,3>lo{INFINITY,INFINITY,INFINITY},hi{-INFINITY,-INFINITY,-INFINITY};
+    for(size_t at=first;at<o.batches.size();++at){const auto& b=o.batches[at];if(b.donor_bone==index&&b.vertex_bones.empty()){found=true;for(unsigned axis=0;axis<3;++axis){lo[axis]=std::min(lo[axis],double(b.lo[axis]));hi[axis]=std::max(hi[axis],double(b.hi[axis]));}}}
+    if(!found)throw std::runtime_error("Weapon visuals: no rigid donor geometry");
+    for(unsigned axis=0;axis<3;++axis)if(anchor.position[axis]<lo[axis]-.1||anchor.position[axis]>hi[axis]+.1)throw std::runtime_error("Weapon visuals: muzzle outside donor geometry");
+   }
+  }
   override_load_emission(model,first,o.batches.size());
   o.model_ranges.emplace(id,std::pair{first,o.batches.size()});
   std::fprintf(stderr,"Model resource ready: chassis=%s lod=%u batches=%zu elapsed_ms=%llu\n",model.id,model.lod,o.batches.size()-first,(unsigned long long)(::GetTickCount64()-started));

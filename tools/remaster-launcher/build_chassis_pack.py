@@ -91,6 +91,8 @@ def build(project_path, output):
                             new['normals'].append(packed)
                         else:
                             new.setdefault(role, {})[lod] = packed
+                    if 'weapon_attachments' in entry['appearances']['new']:
+                        new['weapon_attachments'] = json.loads(json.dumps(entry['appearances']['new']['weapon_attachments']))
                     row['appearances']['new'] = new
             records.append(row)
             continue
@@ -167,7 +169,7 @@ def build(project_path, output):
     select([(stage, manifest)], {'content_capabilities': {
         CAPABILITY: [1, 2, 3], 'mech-appearances': [1], SKIN_CAPABILITY: [1],
         'mech-headlights': [1], 'owned-chassis-visuals': [1, 2, 3],
-        'owned-chassis-emission': [1], SURFACE_CAPABILITY: [1]},
+        'owned-chassis-emission': [1], 'owned-chassis-weapon-visuals': [1], SURFACE_CAPABILITY: [1]},
         'normal_map_formats': [2]})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:

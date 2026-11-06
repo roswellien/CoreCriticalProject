@@ -31,6 +31,7 @@ struct Headlight {
 };
 struct SourceMesh { std::string name, owner; unsigned vertices{}; };
 struct ArmDamage { std::string arm, parent; std::vector<std::string> removed; };
+struct WeaponVisualAttachment { std::string source_control, weapon, bone; std::array<double,3> position{}; };
 struct Registration {
     std::string id, name, resource;
     unsigned metadata_template{};
@@ -44,6 +45,8 @@ struct Registration {
     std::vector<SourceMesh> cockpit_roster;
     std::map<std::string,unsigned> skin_textures;
     std::array<std::vector<ArmDamage>,2> arm_damage;
+    std::array<std::uint64_t,2> weapon_visual_identity{};
+    std::array<std::vector<WeaponVisualAttachment>,2> weapon_visuals;
 };
 inline bool identifier(const std::string& value, unsigned maximum) {
     if (value.empty() || value.size() > maximum) return false;
@@ -67,7 +70,8 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
         return value;
     };
     char magic[8]; bytes(magic, 8);
-    const bool damage = std::string(magic, 8) == std::string("MWCHAS7\0", 8);
+    const bool weapon_visuals = std::string(magic, 8) == std::string("MWCHAS8\0", 8);
+    const bool damage = weapon_visuals || std::string(magic, 8) == std::string("MWCHAS7\0", 8);
     const bool owned = damage || std::string(magic, 8) == std::string("MWCHAS6\0", 8);
     const bool headlights = owned || std::string(magic, 8) == std::string("MWCHAS5\0", 8);
     const bool sockets = headlights || std::string(magic, 8) == std::string("MWCHAS4\0", 8);
@@ -198,6 +202,22 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
                         }
                         r.arm_damage[lod].push_back(std::move(plan));
                     }
+                }
+                if(weapon_visuals)for(unsigned lod=0;lod<2;++lod){
+                    auto& identity=r.weapon_visual_identity[lod];bytes(reinterpret_cast<char*>(&identity),8);
+                    const unsigned count=number();if(count>64||bool(count)!=bool(identity))fail();
+                    std::set<std::pair<std::string,std::string>> keys;
+                    for(unsigned at=0;at<count;++at){
+                        WeaponVisualAttachment anchor{text(31),text(31),text(31),{}};
+                        if((anchor.source_control!="lhand"&&anchor.source_control!="rhand")||
+                           anchor.bone!=(anchor.source_control=="lhand"?"Forearm_Left":"Forearm_Right")||
+                           !keys.emplace(anchor.source_control,anchor.weapon).second)fail();
+                        for(unsigned char c:anchor.weapon)if(!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-'))fail();
+                        for(double& v:anchor.position){bytes(reinterpret_cast<char*>(&v),8);if(!std::isfinite(v)||std::abs(v)>100)fail();}
+                        if(lod){const auto& previous=r.weapon_visuals[0];if(at>=previous.size()||previous[at].source_control!=anchor.source_control||previous[at].weapon!=anchor.weapon)fail();}
+                        r.weapon_visuals[lod].push_back(std::move(anchor));
+                    }
+                    if(lod&&r.weapon_visuals[0].size()!=count)fail();
                 }
             }
         }

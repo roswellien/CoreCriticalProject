@@ -164,6 +164,24 @@ static class ChassisAppearanceChecks
         setResource("owned.mesh", mesh, "BWMESH4"); Read();
         appearance["new"]!["emission"]!.AsObject().Remove("distance"); Reject();
         appearance["new"]!["emission"]!["distance"] = "owned.emission"; Read();
+        // Retain the authored vertex stream, but rigidly bind it to the left
+        // forearm. The independently authored emission fixture pins its hash.
+        var weaponMesh = (byte[])mesh.Clone();
+        BitConverter.GetBytes(4u).CopyTo(weaponMesh, 64 + 12 * 196 + 12 * 160 + 64);
+        setResource("owned.mesh", weaponMesh, "BWMESH4");
+        var attachment = JsonNode.Parse("""{"schema_version":1,"close":{"mesh_identity":"3404cb95a52d4ed6","records":[{"source_control":"lhand","weapon":"ERLargeLaser","bone":"Forearm_Left","position":[0,0,0]}]},"distance":{"mesh_identity":"3404cb95a52d4ed6","records":[{"source_control":"lhand","weapon":"ERLargeLaser","bone":"Forearm_Left","position":[0,0,0]}]}}""")!;
+        appearance["new"]!["weapon_attachments"] = attachment;
+        Read();
+        attachment["close"]!["mesh_identity"] = "0000000000000000"; Reject();
+        attachment["close"]!["mesh_identity"] = "3404cb95a52d4ed6";
+        attachment["close"]!["records"]![0]!["position"]![0] = 2; Reject();
+        attachment["close"]!["records"]![0]!["position"]![0] = 0;
+        attachment["close"]!["records"]!.AsArray().Add(attachment["close"]!["records"]![0]!.DeepClone()); Reject();
+        attachment["close"]!["records"]!.AsArray().RemoveAt(1);
+        attachment["distance"]!["records"]![0]!["weapon"] = "OtherLaser"; Reject();
+        attachment["distance"]!["records"]![0]!["weapon"] = "ERLargeLaser"; Read();
+        appearance["new"]!.AsObject().Remove("weapon_attachments");
+        setResource("owned.mesh", mesh, "BWMESH4"); Read();
         Console.WriteLine("Appearance checks passed: identity, feature gating, paths, normal validation and authored emission integrity.");
     }
 }

@@ -13,7 +13,7 @@ NAME = re.compile(r"[A-Za-z0-9_.-]{1,31}\Z")
 def references(value):
     if (
         not isinstance(value, dict)
-        or set(value) - {"normals", "emission"} != {"schema_version", "meshes", "textures"}
+        or set(value) - {"normals", "emission", "weapon_attachments"} != {"schema_version", "meshes", "textures"}
         or type(value["schema_version"]) is not int
         or value["schema_version"] != 1
     ):
@@ -175,6 +175,7 @@ def mesh_metadata(data):
     if not required_controls <= references or not required_bones <= names:
         raise ValueError("Missing required owned retarget joint")
     owners, visibility, bindings = set(), set(), []
+    rigid_bounds = {}
     for _ in range(count):
         owner = reader.name()
         owners.add(owner)
@@ -187,6 +188,12 @@ def mesh_metadata(data):
         if bone != 0xFFFFFFFF and bone >= bones or not 0 < size <= 65535 or size % 3:
             raise ValueError("Invalid owned visual batch")
         for row in struct.iter_unpack("<8f", reader.take(size * 32)):
+            if bone != 0xFFFFFFFF:
+                key = rig_bones[bone][0]
+                low, high = rigid_bounds.setdefault(key, ([math.inf] * 3, [-math.inf] * 3))
+                for axis in range(3):
+                    low[axis] = min(low[axis], row[axis])
+                    high[axis] = max(high[axis], row[axis])
             if not all(math.isfinite(v) for v in row) or sum(v * v for v in row[3:6]) < 0.5:
                 raise ValueError("Invalid owned visual vertex")
         if bone == 0xFFFFFFFF and any(
@@ -195,6 +202,8 @@ def mesh_metadata(data):
             raise ValueError("Invalid owned visual vertex bone")
     reader.end()
     return {
+        "attachment_controls": {b[0]: b[1] for b in rig_bones},
+        "attachment_bounds": rigid_bounds,
         "batches": count,
         "capability_version": flags if flags >= 2 else 1,
         "owners": owners,
@@ -273,6 +282,7 @@ def validate(value, legacy, read):
         else:
             payloads[role][lod] = read(path, "BWMESH4" if role == "meshes" else "BWTEX1")
     result = {"payloads": payloads, "rosters": {}, "capability_version": 1}
+    attachment_meshes = {}
     if emission_payloads:
         from owned_emission import read as read_emission, mesh_bindings
         from surface_materials import mesh_uv_identity
@@ -284,6 +294,10 @@ def validate(value, legacy, read):
     count = len(materials(legacy["materials"]))
     for lod in ("close", "distance"):
         metadata = mesh_metadata(payloads["meshes"][lod])
+        from surface_materials import mesh_uv_identity
+        attachment_meshes[lod] = {"identity": mesh_uv_identity(payloads["meshes"][lod]),
+                                  "controls": metadata["attachment_controls"],
+                                  "bounds": metadata["attachment_bounds"]}
         result["capability_version"] = max(result["capability_version"], metadata["capability_version"])
         keys.update(texture_metadata(payloads["textures"][lod], metadata["batches"]))
         nodes = source_nodes(legacy["models"][lod], count)
@@ -373,4 +387,7 @@ def validate(value, legacy, read):
         for n in cockpit.values()
         if n["vertices"]
     ]
+    if "weapon_attachments" in value:
+        from weapon_visual_attachments import validate as validate_attachments
+        result["weapon_attachments"] = validate_attachments(value["weapon_attachments"], attachment_meshes)
     return result
