@@ -43,10 +43,11 @@ def name(value):
     return value.encode().ljust(32, b"\0")
 
 
-def geometry(batches=(("hip", "hip"),)):
-    data = bytearray(b"BWMESH4\0" + struct.pack("<4I5d", len(batches), 12, 12, 0, 0, 0, 0, 0, 0))
+def geometry(batches=(("hip", "hip"),), policy=0):
+    data = bytearray(b"BWMESH4\0" + struct.pack("<4I5d", len(batches), 12, 12, policy, 0, 0, 0, 0, 0))
+    parents = (-1, 0, 1, 1, 2, 3, 0, 0, 6, 7, 8, 9) if policy == 3 else (-1,) + (0,) * 11
     for index, (bone, control) in enumerate(zip(BONES, CONTROLS)):
-        data += name(bone) + name(control) + struct.pack("<i", -1 if index == 0 else 0) + IDENTITY
+        data += name(bone) + name(control) + struct.pack("<i", parents[index]) + IDENTITY
     for control in CONTROLS:
         data += name(control) + IDENTITY
     for owner, visible in batches:
@@ -220,9 +221,40 @@ class OwnedVisualTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Undeclared owned emission"):
             select([(emission_pack, invalid)], host, appearance_mode="original")
 
+        mesh3 = geometry(policy=3)
+        (root / "mesh").write_bytes(mesh3)
+        # Reuse the same authenticated albedo/UV layouts; emission must still bind.
+        data3 = pack_emission(mesh_uv_identity(mesh3), mesh_bindings(mesh3, self.texture),
+                              [dict(id="glass", batch=0, strength=.35, regions=[(0,0,1,1)], anchors=[])])
+        (root / "emission").write_bytes(data3)
+        build(project, root / "arm-policy-built")
+        pack3 = root / "arm-policy-built/pack"
+        manifest3 = json.loads((pack3 / "pack.json").read_text())
+        select([(pack3, manifest3)], host, appearance_mode="original")
+        with self.assertRaisesRegex(ValueError, "owned-chassis-visuals version 3"):
+            select([(pack3, manifest3)], host, appearance_mode="new")
+        host["content_capabilities"]["owned-chassis-visuals"].append(3)
+        self.assertEqual(select([(pack3, manifest3)], host, appearance_mode="new")[0]
+                         ["owned_visuals"]["capability_version"], 3)
+
+    def test_authored_arm_policy_topology(self):
+        mesh = geometry(policy=3)
+        self.assertEqual(mesh_metadata(mesh)["capability_version"], 3)
+        for offset, data in (
+            (128 + 2 * 196, struct.pack("<i", 0)),
+            (128 + 4 * 196, struct.pack("<i", 3)),
+            (64 + 4 * 196 + 32, name("rhand")),
+            (64 + 2 * 196, name("Foreign")),
+            (64 + 6 * 196 + 64, struct.pack("<i", 4)),
+            (64 + 2 * 196 + 68, struct.pack("<d", 0.0)),
+        ):
+            invalid = bytearray(mesh); invalid[offset:offset+len(data)] = data
+            with self.subTest(offset=offset), self.assertRaises(ValueError):
+                mesh_metadata(bytes(invalid))
+
     def test_source_joint_mode_and_unknown_flags(self):
         self.assertEqual(mesh_metadata(self.mesh)["capability_version"], 1)
-        for flags in (1, 2, 3, 0xFFFFFFFF):
+        for flags in (1, 2, 3, 4, 0xFFFFFFFF):
             data = bytearray(self.mesh)
             struct.pack_into("<I", data, 20, flags)
             if flags > 2:

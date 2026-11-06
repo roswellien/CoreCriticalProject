@@ -86,18 +86,43 @@ class Reader:
             raise ValueError("Trailing owned visual data")
 
 
+def validate_arm_rest(bones):
+    """Policy 3 needs a single, connected controller chain for each donor arm."""
+    controls = {}
+    parents = []
+    arm_controls = {"larm", "rarm", "lhand", "rhand"}
+    for index, (name, control, parent) in enumerate(bones):
+        if control and control in controls:
+            raise ValueError("Duplicate arm policy control")
+        if control:
+            controls[control] = index
+        while parent >= 0 and not bones[parent][1]:
+            parent = bones[parent][2]
+        parents.append(parent)
+        if control and control not in arm_controls and parent >= 0 and bones[parent][1] in arm_controls:
+            raise ValueError("Unsupported bound arm descendant")
+    for control, name, expected_parent in (
+        ("larm", "Upperarm_Left", "torso"), ("rarm", "Upperarm_Right", "torso"),
+        ("lhand", "Forearm_Left", "larm"), ("rhand", "Forearm_Right", "rarm"),
+    ):
+        index = controls.get(control)
+        if index is None or bones[index][0] != name or parents[index] < 0 or bones[parents[index]][1] != expected_parent:
+            raise ValueError("Authored arm parent mismatch")
+
+
 def mesh_metadata(data):
     reader = Reader(data)
     if reader.take(8) != b"BWMESH4\0":
         raise ValueError("Owned visuals require BWMESH4")
     count = reader.number()
     bones, refs, flags = reader.number(), reader.number(), reader.number()
-    if not 1 <= count <= 256 or not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 2:
+    if not 1 <= count <= 256 or not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 3:
         raise ValueError("Invalid owned visual rig counts")
     gait = struct.unpack("<5d", reader.take(40))
     if not all(math.isfinite(v) for v in gait) or not 0 <= gait[0] <= 10:
         raise ValueError("Invalid owned visual gait")
     names, controls = set(), set()
+    rig_bones = []
     for index in range(bones):
         name, control = reader.name(), reader.name(empty=True)
         parent = struct.unpack("<i", reader.take(4))[0]
@@ -107,6 +132,9 @@ def mesh_metadata(data):
         if control:
             controls.add(control)
         reader.matrix()
+        rig_bones.append((name, control, parent))
+    if flags == 3:
+        validate_arm_rest(rig_bones)
     references = set()
     for _ in range(refs):
         name = reader.name()
@@ -168,7 +196,7 @@ def mesh_metadata(data):
     reader.end()
     return {
         "batches": count,
-        "capability_version": 2 if flags == 2 else 1,
+        "capability_version": flags if flags >= 2 else 1,
         "owners": owners,
         "visibility": visibility,
         "references": references,

@@ -96,7 +96,23 @@ static class ChassisAppearanceChecks
         var sourceJoints = (byte[])mesh.Clone();
         BitConverter.GetBytes(2u).CopyTo(sourceJoints, 20);
         setResource("owned.mesh", sourceJoints, "BWMESH4"); Read();
-        BitConverter.GetBytes(3u).CopyTo(sourceJoints, 20);
+        var armRest = (byte[])mesh.Clone();
+        BitConverter.GetBytes(3u).CopyTo(armRest, 20);
+        var parents = new[] { -1, 0, 1, 1, 2, 3, 0, 0, 6, 7, 8, 9 };
+        for (var i = 0; i < parents.Length; ++i) BitConverter.GetBytes(parents[i]).CopyTo(armRest, 128 + i * 196);
+        setResource("owned.mesh", armRest, "BWMESH4"); Read();
+        foreach (var (offset, bytes) in new[] {
+            (128 + 2 * 196, BitConverter.GetBytes(0)),
+            (128 + 4 * 196, BitConverter.GetBytes(3)),
+            (64 + 4 * 196 + 32, System.Text.Encoding.ASCII.GetBytes("rhand".PadRight(32, '\0'))),
+            (64 + 2 * 196, System.Text.Encoding.ASCII.GetBytes("Foreign".PadRight(32, '\0'))),
+            (128 + 6 * 196, BitConverter.GetBytes(4)),
+            (64 + 2 * 196 + 68, BitConverter.GetBytes(0.0)) })
+        {
+            var invalid = (byte[])armRest.Clone(); bytes.CopyTo(invalid, offset);
+            setResource("owned.mesh", invalid, "BWMESH4"); Reject();
+        }
+        BitConverter.GetBytes(4u).CopyTo(sourceJoints, 20);
         setResource("owned.mesh", sourceJoints, "BWMESH4"); Reject();
         foreach (var invalid in new[] { mesh[..^1], mesh.Concat(new byte[] { 0 }).ToArray() })
         { setResource("owned.mesh", invalid, "BWMESH4"); Reject(); }

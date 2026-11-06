@@ -130,6 +130,32 @@ public static class OwnedChassisVisuals
             throw new InvalidDataException("Invalid owned mesh name.");
         return System.Text.Encoding.ASCII.GetString(data, 0, end);
     }
+    private static void ValidateArmRest(List<(string Name, string Control, int Parent)> bones)
+    {
+        var controls = new Dictionary<string, int>();
+        var parents = new int[bones.Count];
+        var arms = new HashSet<string>(new[] { "larm", "rarm", "lhand", "rhand" });
+        for (var i = 0; i < bones.Count; ++i)
+        {
+            var bone = bones[i];
+            if (bone.Control != "" && !controls.TryAdd(bone.Control, i))
+                throw new InvalidDataException("Duplicate arm policy control.");
+            var parent = bone.Parent;
+            while (parent >= 0 && bones[parent].Control == "") parent = bones[parent].Parent;
+            parents[i] = parent;
+            if (bone.Control != "" && !arms.Contains(bone.Control) && parent >= 0 && arms.Contains(bones[parent].Control))
+                throw new InvalidDataException("Unsupported bound arm descendant.");
+        }
+        foreach (var (control, name, parent) in new[] {
+            ("larm", "Upperarm_Left", "torso"), ("rarm", "Upperarm_Right", "torso"),
+            ("lhand", "Forearm_Left", "larm"), ("rhand", "Forearm_Right", "rarm") })
+        {
+            if (!controls.TryGetValue(control, out var index) || bones[index].Name != name ||
+                parents[index] < 0 || bones[parents[index]].Control != parent)
+                throw new InvalidDataException("Authored arm parent mismatch.");
+        }
+    }
+
     private static uint ReadMesh(BinaryReader reader, OwnedEmission.Mesh emissionMesh)
     {
         string Name(bool empty = false) => ReadName(reader, empty);
@@ -153,7 +179,7 @@ public static class OwnedChassisVisuals
         {
             var batches = reader.ReadUInt32(); var bones = reader.ReadUInt32();
             var refs = reader.ReadUInt32(); var flags = reader.ReadUInt32();
-            if (batches is < 1 or > 256 || bones is < 1 or > 256 || refs is < 1 or > 128 || flags > 2)
+            if (batches is < 1 or > 256 || bones is < 1 or > 256 || refs is < 1 or > 128 || flags > 3)
                 throw new InvalidDataException("Invalid owned rig counts.");
             emissionMesh.Fold(batches);
             for (var i = 0; i < 5; ++i)
@@ -163,14 +189,18 @@ public static class OwnedChassisVisuals
                     throw new InvalidDataException("Invalid owned gait metadata.");
             }
             var names = new HashSet<string>(); var controls = new HashSet<string>();
+            var rigBones = new List<(string Name, string Control, int Parent)>();
             for (var i = 0; i < bones; ++i)
             {
-                if (!names.Add(Name())) throw new InvalidDataException("Duplicate owned bone.");
+                var name = Name();
+                if (!names.Add(name)) throw new InvalidDataException("Duplicate owned bone.");
                 var control = Name(true); if (control != "") controls.Add(control);
                 var parent = reader.ReadInt32();
                 if (parent < -1 || parent >= i) throw new InvalidDataException("Invalid owned bone parent.");
                 Matrix();
+                rigBones.Add((name, control, parent));
             }
+            if (flags == 3) ValidateArmRest(rigBones);
             var references = new HashSet<string>();
             for (var i = 0; i < refs; ++i)
             {

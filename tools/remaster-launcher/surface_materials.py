@@ -122,7 +122,7 @@ def _mesh_uv_identity(stream) -> int:
         raise ValueError("Invalid mesh batch count for UV identity")
     if donor:
         bones, refs, flags = struct.unpack("<III", take(12))
-        if not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 2:
+        if not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 3:
             raise ValueError("Invalid donor rig header in mesh payload")
         take(40)  # 5 float64 gait parameters
         for _ in range(bones):
