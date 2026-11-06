@@ -98,7 +98,8 @@ Immediate source suppression therefore missed this later draw. Tracking just
 one material enqueue backend was insufficient: several sibling backends write
 the shared queue. The maintained host now retains replacement display policy
 for every descriptor appended by the authenticated source mesh producer, then
-applies it at the exact deferred provider call (`57E2ED`). Descriptor identity,
+applies it at the deferred provider call identified by return address `57E2ED`.
+Descriptor identity,
 frame, material reference and vertex range are checked. Original/fallback
 appearances and previews without an emitted replacement remain eligible.
 Original calls, queue contents, sort order, vertices and guest return values
@@ -126,10 +127,14 @@ Local evidence is under `local/atlas-evolution-20261106/`:
   The translated DLL remains the exact hash recorded above. The private
   `capture-host-r5/capture-build.json` pins this source and adds only camera,
   hotkey and recording automation; it is not a distributed runtime.
+  The same fix was then rebuilt from clean commit
+  `7bee5cb559b17c946245c5b4f39ddfc607a8cb94` in `local/host-build-r9`;
+  executable SHA-256:
+  `0351f3a6dd22c05687df012d7807a8cb577dd47058b9fcadcdb5c45a7ae5e4a3`.
 - The asset-free `deferred_source_provenance` fixture exercises the actual
   producer wrapper and late lookup, multiple material descriptors, sorted
   consumption, HUD metadata merging, Original/fallback/no-emission behavior,
-  4:3 and widescreen operation, identity failures and exception cleanup.
+  widescreen on/off behavior, identity failures and exception cleanup.
   Mutations removing source capture or late suppression each fail the fixture;
   receipts are in `mutation-tests/result.json`.
 - Fresh independent review ended clean. Its checks passed: build, CTest 37/37,
