@@ -510,7 +510,7 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
   const auto active_surface_material=(batch.surface_material&&active_tex>=0&&size_t(active_tex)<o.textures.size()&&o.textures[active_tex].name==batch.surface_material->material_name)?batch.surface_material:nullptr;
   D3DCmd draw{D3DCmd::Draw,D3DPT_TRIANGLELIST,0,0.f,{},{},0};draw.state_snapshot=saved_state;draw.texture=0;draw.override_texture=active_tex;draw.override_normal_texture=batch.normal_texture;draw.surface_material=active_surface_material;if(active_tex==batch.emission_texture)draw.owned_emission=batch.emission;draw.hud_role=wide_hud_role();draw.condition_schematic=preview;zoom_capture_command(draw);
   // Snapshot the exact rendered rigid pose before the CPU/GPU paths diverge.
-  if(draw.owned_emission&&!preview&&!frontend_on()&&mw34::effects::settings().fixtures){
+  if(draw.owned_emission&&!preview&&!frontend_on()){
    OverrideMatrix camera_world;
    if(sun_camera_world(camera_world)){
     auto emission=std::make_shared<mw34::emission::Instance>();
@@ -528,6 +528,16 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
     instance->projection={float(near_scale),float(scale_x),float(scale_y),float(center_x),float(center_y),float(near_clip)};for(float p:instance->projection)if(!std::isfinite(p))throw std::runtime_error("Replacement GPU projection is not representable");instance->color=batch.color;instance->diagnostic_fog_factor=float(preview_specular>>24)/255.f;sun_capture_model(*instance,o.scope.node,node_to_camera,batch_to_camera);draw.model=std::move(instance);
     if(preview)for(unsigned corner=0;corner<8;++corner){double p[3];for(unsigned a=0;a<3;++a)p[a]=(corner&(1U<<a))?batch.hi[a]:batch.lo[a];double camera[3];for(unsigned row=0;row<3;++row){camera[row]=batch_to_camera[row*4+3];for(unsigned a=0;a<3;++a)camera[row]+=batch_to_camera[row*4+a]*p[a];}const double rhw=near_scale/camera[2];override_preview_point(camera[0]*scale_x*rhw+center_x,camera[1]*scale_y*rhw+center_y);}device->commands.push_back(std::move(draw));triangles+=unsigned(batch.vertices.size()/3);++gpu_batches;if(geometry_profile.file){++geometry_profile.gpu_batches;geometry_profile.gpu_vertices+=batch.vertices.size();}continue;}++cpu_near_batches;if(geometry_profile.file)++geometry_profile.near_batches;
   }if(geometry_profile.file)geometry_profile.cpu_vertices+=batch.vertices.size();draw.vertices.reserve(batch.vertices.size()*sizeof(TlVertex));
+  // Clipped replacements still need a world receiver, even without a GPU model.
+  // Capture directly: the original-draw observer intentionally suppresses replacements.
+  if(draw.owned_emission_instance){
+   OverrideMatrix camera_world;
+   if(!sun_camera_world(camera_world))throw std::runtime_error("Owned emission lost its draw camera");
+   auto view=std::make_shared<mw34::sun::Tl>();
+   view->camera_world=mw34::sun::world_matrix(camera_world);
+   view->projection={float(near_scale),float(scale_x),float(scale_y),float(center_x),float(center_y),float(near_clip)};
+   draw.sun_tl=std::move(view);
+  }
   for(size_t at=0;at<batch.vertices.size();at+=3){std::array<CameraVertex,3>polygon{};for(unsigned i=0;i<3;++i){const auto&v=batch.vertices[at+i];auto m=batch_to_camera;if(donor&&!batch.vertex_bones.empty())m=override_product(m,donor->pose.world.at(batch.vertex_bones.at(at+i)));double nx=m[0]*v.nx+m[1]*v.ny+m[2]*v.nz,ny=m[4]*v.nx+m[5]*v.ny+m[6]*v.nz,nz=m[8]*v.nx+m[9]*v.ny+m[10]*v.nz;double length=std::sqrt(nx*nx+ny*ny+nz*nz);double shade=.35+.65*std::max(0.,(.3*nx+.6*ny-.74*nz)/length);polygon[i]={m[0]*v.x+m[1]*v.y+m[2]*v.z+m[3],m[4]*v.x+m[5]*v.y+m[6]*v.z+m[7],m[8]*v.x+m[9]*v.y+m[10]*v.z+m[11],v.u,v.v,shade};}
    std::array<CameraVertex,4>clipped{};size_t clipped_count=0;for(size_t i=0;i<polygon.size();++i){const auto&a=polygon[i];const auto&b=polygon[(i+1)%polygon.size()];bool in_a=a.z>=near_clip,in_b=b.z>=near_clip;if(in_a)clipped[clipped_count++]=a;if(in_a!=in_b){double t=(near_clip-a.z)/(b.z-a.z);clipped[clipped_count++]={a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),near_clip,a.u+t*(b.u-a.u),a.v+t*(b.v-a.v),a.shade+t*(b.shade-a.shade)};}}
    auto add=[&](const CameraVertex&v){double rhw=near_scale/v.z;unsigned color=0xff000000U;for(unsigned shift:{0U,8U,16U})color|=unsigned(std::clamp(double((batch.color>>shift)&255)*v.shade,0.,255.))<<shift;TlVertex vertex{float(v.x*scale_x*rhw+center_x),float(v.y*scale_y*rhw+center_y),float(rhw),float(rhw),color,preview_specular,float(v.u),float(v.v)};if(!std::isfinite(vertex.x)||!std::isfinite(vertex.y)||!std::isfinite(vertex.z))throw std::runtime_error("Bushwacker test: nonfinite projected vertex");const auto*p=reinterpret_cast<const unsigned char*>(&vertex);draw.vertices.insert(draw.vertices.end(),p,p+sizeof vertex);};
