@@ -3,7 +3,9 @@
 `BWMEM1` is a bounded material descriptor for owned replacement meshes. It is
 generic: authors can describe eyes, cockpit glass, engine details or other
 luminous regions without a model-name branch or guessed bright-pixel admission.
-This initial contract/import change does not yet implement native glow.
+The maintained native renderer consumes these descriptors through its existing
+emissive-region shader and shared point-light budget. This is development
+support; released runtime profiles are not retroactively granted the capability.
 
 An optional `emission` object in a New owned appearance supplies `close` and
 `distance` sidecar paths. Both are validated even when Original is selected.
@@ -43,5 +45,55 @@ importer and maintained C++ reader enforce the same binding/limit contract.
 Tests use authored fixtures, including a Python-written descriptor read by the
 actual C# importer. Selected capability gating, byte corruption, wrong mesh or
 color identity, malformed regions, anchors and zero controls are covered.
-Native draw-uniform and moving-light integration follows this contract before
-any real runtime advertises the capability or native glow is claimed.
+The coordinator stages this reader for both initial installs and refreshed
+updates. Composition publishes validated selected files through
+`MW34_CHASSIS_<RESOURCE>_EMISSION` and `_LOD1_EMISSION`.
+
+## Reusing it on another mech
+
+Add `emission: {close: "visuals/close.emission", distance:
+"visuals/distance.emission"}` beside the New appearance's meshes and textures.
+Use `owned_emission.mesh_bindings(mesh_bytes, texture_bytes)` and
+`surface_materials.mesh_uv_identity(mesh_bytes)` to obtain each LOD's identities,
+then pass records to `owned_emission.pack(mesh_hash, bindings, records)`.
+For example, a record can describe two mirrored eye regions with two distinct
+local anchors:
+
+```python
+record = {
+    "id": "cockpit-eyes", "batch": glass_batch, "strength": 0.35,
+    "regions": [(0.1, 0.2, 0.4, 0.5)],
+    "anchors": [
+        {"id": name, "position": position, "color": (1, 0.015, 0.01),
+         "radius": 1.2, "intensity": 0.10}
+        for name, position in eye_positions
+    ],
+}
+```
+
+The positions and UV bounds must come from that mech's mesh; the example is
+not a set of shared coordinates. Use stable IDs in both LODs and regenerate
+descriptors after changing geometry, UVs or color pixels. Author gradients and
+surface detail in the color texture; emission multiplies the textured color.
+No new normal image or texture sampler is required.
+
+Each submitted world draw owns its rigid local-to-world snapshot. Its anchors
+join the existing light selection without entering the scenery retention cache.
+Duplicate passes within one scene are suppressed by root, owner, material ID
+and anchor ID; another actor remains distinct. At most4096 nearest candidates
+are retained deterministically before the existing overall light budget applies.
+A scene with no emitting draw has no retained owned light. CPU-clipped and GPU
+model draws carry the same descriptor and camera receiver metadata.
+
+The existing enhanced sun/effect renderer must be enabled. Normal mapping can
+be disabled independently, and glass without a normal sidecar uses the existing
+flat-normal fallback. Both self-emission and spill follow the effect/fixture
+preferences. They do not use the L key or change authored headlights. The CPU
+lighting receiver stays the same when fixtures toggle, so turning glow off does
+not replace the material's base lighting path. Frontend/schematic draws do not
+create world anchors.
+
+Native evidence and current Atlas limits are recorded in
+[Atlas port validation](atlas-mw5-port-validation-2026-11-05.md). Other mechs
+require their own authored descriptors and visual validation; the runtime has
+no Atlas-specific material or coordinate branch.
