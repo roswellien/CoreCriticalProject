@@ -365,8 +365,9 @@ foreign surfaces and conflicting existing normal bindings are rejected.
 
 For explicit development profiles, `native.mech_appearance` accepts `original`,
 `upgraded` or `new`. Absent/null keeps the original selection. Upgraded without
-an alternative falls back to original with `upgrade-unavailable`; new selects
-upgraded when available, otherwise original, with `new-model-unavailable`.
+an alternative falls back to original with `upgrade-unavailable`. New selects
+provided owned geometry; without it, New falls back to upgraded when available,
+otherwise original, with `new-model-unavailable`.
 The coordinator returns and prints per-chassis coverage. New geometry additionally requires the
 owned-controller visual contract below. The global launcher selector, stock-pack filtering and
 old-setting migration are subsequent work, not delivered by this contract.
