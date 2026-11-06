@@ -74,7 +74,7 @@ public static class ChassisPack
             (formats.Count(format => format == OwnedEmission.Format) != 1 ||
              !new[] { "MW3LEGACY", "BWMESH4", "BWTEX1" }.All(formats.Contains)))
             throw new InvalidDataException("Invalid owned emission format declaration.");
-        if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
+        if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry || baselineFormats == null ||
             !(baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
               baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
               baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "BWSFM1" }) ||

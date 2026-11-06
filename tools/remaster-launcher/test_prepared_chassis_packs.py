@@ -123,6 +123,20 @@ class ChassisPackTests(unittest.TestCase):
         path.write_text(json.dumps(project))
         return path, descriptor, definition
 
+    def legacy_game(self, definition):
+        directory = self.root / 'legacy-game/zbd'
+        directory.mkdir(parents=True)
+        common = encode([['ANIMATION_DEFINITIONS', ['ANIMATION_LIST', ['ANIMATION_DEFINITION_FILE', ['stock.zrd']]]]])
+        stock = {'reader.zbd': archive({'dfn_annihilator.zrd': encode(definition), 'commonAnim.zrd': common}),
+                 'mechlib.zbd': archive({'materials': (self.root / 'material.bin').read_bytes(), 'stock.flt': b'unchanged'}),
+                 'motion.zbd': archive({'stock_walk': b'unchanged motion'})}
+        pixels = (self.root / 'image.bin').read_bytes()
+        image_bank = struct.pack('<6I', 0, 1, 0, 1, 0, 0) + struct.pack('<32sII', b'stock', 64, 0xffffffff) + pixels
+        stock.update({'rmechtex.zbd': image_bank, 'rimage.zbd': image_bank})
+        for name, data in stock.items():
+            (directory / name).write_bytes(data)
+        return directory.parent / 'Mech3.exe', stock
+
     def test_legacy_pack_requires_capability_and_preserves_stock_resources(self):
         from legacy_chassis_resources import image_members, members
         from prepared_mech_packs import compose
@@ -137,17 +151,8 @@ class ChassisPackTests(unittest.TestCase):
                                       chassis_records=records)
         self.assertEqual(models, [])
         self.assertNotIn('visuals', records[0]['registration'])
-        directory = self.root / 'legacy-game/zbd'
-        directory.mkdir(parents=True)
-        common = encode([['ANIMATION_DEFINITIONS', ['ANIMATION_LIST', ['ANIMATION_DEFINITION_FILE', ['stock.zrd']]]]])
-        stock = {'reader.zbd': archive({'dfn_annihilator.zrd': encode(definition), 'commonAnim.zrd': common}),
-                 'mechlib.zbd': archive({'materials': (self.root / 'material.bin').read_bytes(), 'stock.flt': b'unchanged'}),
-                 'motion.zbd': archive({'stock_walk': b'unchanged motion'})}
-        pixels = (self.root / 'image.bin').read_bytes()
-        image_bank = struct.pack('<6I', 0, 1, 0, 1, 0, 0) + struct.pack('<32sII', b'stock', 64, 0xffffffff) + pixels
-        stock.update({'rmechtex.zbd': image_bank, 'rimage.zbd': image_bank})
-        for name, data in stock.items():
-            (directory / name).write_bytes(data)
+        game, stock = self.legacy_game(definition)
+        directory = game.parent / 'zbd'
         bindings = prepare(records, directory.parent / 'Mech3.exe', self.root / 'legacy-out', environment)
         banks = _banks(bindings['MW34_REMASTER_BANKS'])
         generated = records[0]['registration']['resource']

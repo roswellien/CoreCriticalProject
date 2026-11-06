@@ -46,6 +46,7 @@
 #include "surface_detail.hpp"
 #include "material_normals.hpp"
 #include "surface_materials.hpp"
+#include "owned_emission.hpp"
 #include "sun_world_vert.h"
 #include "sun_model_vert.h"
 #include "effect_scene_frag.h"
@@ -162,6 +163,8 @@ struct Draw {
     bool shadow_proof{};
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
+    std::shared_ptr<const mw34::emission::Record> owned_emission{};
+    std::shared_ptr<const mw34::emission::Instance> owned_emission_instance{};
 };
 struct Clear {
     unsigned flags;

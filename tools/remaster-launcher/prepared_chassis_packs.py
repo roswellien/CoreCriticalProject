@@ -440,6 +440,16 @@ def prepare(records, game_exe, output, environment):
     from chassis_appearances import compose_normals
     bindings.update(compose_normals(records, environment, output / 'appearance-normals'))
     for item in records:
+        emissions = item.get('owned_visuals', {}).get('emission_payloads', {})
+        if not emissions:
+            continue
+        record = item['registration']
+        prefix = 'MW34_CHASSIS_' + record['resource'].upper()
+        for lod, suffix in (('close', '_EMISSION'), ('distance', '_LOD1_EMISSION')):
+            path = output / ('emission-' + record['resource'] + '-' + lod + '.bin')
+            path.write_bytes(emissions[lod])
+            bindings[prefix + suffix] = str(path.resolve())
+    for item in records:
         if 'surface_materials' not in item:
             continue
         record = item['registration']

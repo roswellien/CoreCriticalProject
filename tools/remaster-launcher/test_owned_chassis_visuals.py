@@ -116,7 +116,7 @@ class OwnedVisualTests(unittest.TestCase):
         fixture = ChassisPackTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        project, descriptor, _ = fixture.legacy_project()
+        project, descriptor, legacy_definition = fixture.legacy_project()
         root = fixture.root
         (root / "node.bin").write_bytes(tree())
         (root / "distance.bin").write_bytes(tree(6))
@@ -209,6 +209,12 @@ class OwnedVisualTests(unittest.TestCase):
         host["content_capabilities"]["owned-chassis-emission"] = [1]
         selected = select([(emission_pack, emission_manifest)], host, appearance_mode="new")
         self.assertEqual(selected[0]["owned_visuals"]["emission_payloads"]["close"], emission)
+        from pathlib import Path
+        from prepared_chassis_packs import prepare
+        prepared = prepare(selected, fixture.legacy_game(legacy_definition)[0], root / "emission-prepared", {})
+        prefix = "MW34_CHASSIS_" + selected[0]["registration"]["resource"].upper()
+        self.assertEqual(Path(prepared[prefix + "_EMISSION"]).read_bytes(), emission)
+        self.assertEqual(Path(prepared[prefix + "_LOD1_EMISSION"]).read_bytes(), emission)
         invalid = copy.deepcopy(emission_manifest)
         invalid["native_payload"]["required_formats"].remove("BWMEM1")
         with self.assertRaisesRegex(ValueError, "Undeclared owned emission"):

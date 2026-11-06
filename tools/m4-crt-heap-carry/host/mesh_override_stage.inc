@@ -97,7 +97,7 @@ static bool override_candidate_name(const std::string&name){
  return names.count(name)!=0;}
 #include "override_arm_damage_plans.inc"
 using OverrideVertex=mw34::vkscene::ModelVertex;
-struct OverrideBatch{std::string owner;std::string visibility_node;unsigned color;std::vector<OverrideVertex>vertices;int texture{-1};int normal_texture{-1};unsigned model{};std::shared_ptr<const mw34::vkscene::ModelGeometry>geometry;std::array<float,3>lo{},hi{};std::string placement_frame;std::array<float,3>placement_offset{};unsigned donor_bone{~0U};std::vector<unsigned>vertex_bones;std::vector<int> skin_textures=std::vector<int>(8,-1);std::string joint_frame;std::array<float,3>joint_offset{};std::string anchor_control;std::array<float,3>anchor_position{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};};
+struct OverrideBatch{std::string owner;std::string visibility_node;unsigned color;std::vector<OverrideVertex>vertices;int texture{-1};int normal_texture{-1};unsigned model{};std::shared_ptr<const mw34::vkscene::ModelGeometry>geometry;std::array<float,3>lo{},hi{};std::string placement_frame;std::array<float,3>placement_offset{};unsigned donor_bone{~0U};std::vector<unsigned>vertex_bones;std::vector<int> skin_textures=std::vector<int>(8,-1);std::string joint_frame;std::array<float,3>joint_offset{};std::string anchor_control;std::array<float,3>anchor_position{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};std::shared_ptr<const mw34::emission::Record>emission{};int emission_texture{-1};};
 using OverrideMatrix=std::array<double,16>;
 struct OverrideScope{unsigned node{};std::string owner;OverrideMatrix owner_to_node{};unsigned root{},model{};unsigned skin{};bool attached_cockpit{};bool preview{};OverrideMatrix preview_camera{};};
 struct OverrideMxcsr{unsigned value=_mm_getcsr();~OverrideMxcsr(){_mm_setcsr(value);}};
@@ -182,6 +182,8 @@ void override_load_surface_materials(const OverrideModel&model,size_t first,size
  for(size_t at=first;at<end;++at){const auto rec_index=pack.bindings[at-first];o.batches[at].surface_material=rec_index==mw34::materials::no_surface_material?nullptr:pack.records[rec_index];}
  o.log<<"{\"event\":\"surface_materials_loaded\",\"model\":\""<<model.id<<"\",\"lod\":"<<model.lod<<",\"records\":"<<pack.records.size()<<",\"images\":"<<pack.images.size()<<",\"format\":\"BWSFM1\"}\n";
 }
+#include "owned_emission_stage.inc"
+
 void override_load_ground_normals(){
  auto& o=override_state();
  o.ground_normal_texture=-1;
@@ -256,6 +258,7 @@ void override_load_model(unsigned id){
   override_load_textures(model,first,o.batches.size());
   override_load_normals(model,first,o.batches.size());
   override_load_surface_materials(model,first,o.batches.size());
+  override_load_emission(model,first,o.batches.size());
   o.model_ranges.emplace(id,std::pair{first,o.batches.size()});
   std::fprintf(stderr,"Model resource ready: chassis=%s lod=%u batches=%zu elapsed_ms=%llu\n",model.id,model.lod,o.batches.size()-first,(unsigned long long)(::GetTickCount64()-started));
   o.log<<"{\"event\":\"enabled\",\"model\":\""<<model.id<<"\",\"lod\":"<<model.lod<<",\"batches\":"<<count<<",\"scope\":\"optional visual replacement; source gameplay preserved\"}\n";
@@ -505,7 +508,7 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
   }
   const int active_tex=o.scope.skin?batch.skin_textures.at(o.scope.skin):batch.texture;
   const auto active_surface_material=(batch.surface_material&&active_tex>=0&&size_t(active_tex)<o.textures.size()&&o.textures[active_tex].name==batch.surface_material->material_name)?batch.surface_material:nullptr;
-  D3DCmd draw{D3DCmd::Draw,D3DPT_TRIANGLELIST,0,0.f,{},{},0};draw.state_snapshot=saved_state;draw.texture=0;draw.override_texture=active_tex;draw.override_normal_texture=batch.normal_texture;draw.surface_material=active_surface_material;draw.hud_role=wide_hud_role();draw.condition_schematic=preview;zoom_capture_command(draw);
+  D3DCmd draw{D3DCmd::Draw,D3DPT_TRIANGLELIST,0,0.f,{},{},0};draw.state_snapshot=saved_state;draw.texture=0;draw.override_texture=active_tex;draw.override_normal_texture=batch.normal_texture;draw.surface_material=active_surface_material;if(active_tex==batch.emission_texture)draw.owned_emission=batch.emission;draw.hud_role=wide_hud_role();draw.condition_schematic=preview;zoom_capture_command(draw);
   if(mw34::vkscene::Renderer::gpu_models()&&batch.vertex_bones.empty()){if(!batch.geometry)throw std::runtime_error("Replacement GPU geometry was not prepared");
    double zlo=batch_to_camera[11],zhi=zlo;for(unsigned i=0;i<3;++i){const double a=batch_to_camera[8+i]*batch.lo[i],b=batch_to_camera[8+i]*batch.hi[i];zlo+=std::min(a,b);zhi+=std::max(a,b);}
    // Conservative AABB: batches touching the near plane retain the current CPU

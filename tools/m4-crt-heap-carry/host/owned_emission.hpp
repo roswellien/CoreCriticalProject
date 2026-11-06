@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <istream>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -33,6 +34,15 @@ struct Record {
     float strength{};
     std::vector<Region> regions;
     std::vector<Anchor> anchors;
+};
+
+// A draw owns a value snapshot of its source pose. No guest pointers or light
+// observations survive into another scene or frame.
+struct Instance {
+    std::shared_ptr<const Record> material;
+    std::uint32_t root{};
+    std::string owner;
+    std::array<float, 12> world{};
 };
 
 // Files contain no image payloads. Bound the input before allocating records;

@@ -315,7 +315,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
     dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]={proof,sc.shadow_sequence};
    }
   }
-  dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.surface_material=c.surface_material;
+  dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.surface_material=c.surface_material;dr.owned_emission=c.owned_emission;dr.owned_emission_instance=c.owned_emission_instance;
   if(c.model&&c.model->world)dr.model=c.model;
   if(c.model&&!c.model->world){if(!mw34::vkscene::Renderer::gpu_models()||!c.model->geometry)deny("Optional GPU model draw is not enabled",0);
    dr.model=c.model;dr.first=0;dr.count=unsigned(c.model->geometry->vertices.size());wide_adapt_tl(sc,dr,c.hud_role,c.zoom_anchor_known?&c.zoom_anchor:nullptr);sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(std::move(dr));continue;}

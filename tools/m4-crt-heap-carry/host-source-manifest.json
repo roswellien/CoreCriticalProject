@@ -199,10 +199,10 @@
       "classification": "authored-host-source"
     },
     "d3d_provider.inc": {
-      "sha256": "d9a809bcad7a71bb478c8ad9ff164b5528677fd434a0f51eaec3a9e77fe7fc5c",
-      "bytes": 46108,
       "decision": "commit",
-      "classification": "authored-host-source"
+      "classification": "authored-host-source",
+      "bytes": 46196,
+      "sha256": "67b0d2d60bd71191faf543eeb9f4e2697137e04b4413368bd5f5b9bd44206ea0"
     },
     "d3d_scene_frag.h": {
       "sha256": "7b416e54999db332efb6cb98760862a44bed724fc7d3e96ec221dca25fb15776",
@@ -541,10 +541,10 @@
       "classification": "authored-host-source"
     },
     "mesh_override_stage.inc": {
-      "sha256": "a1e4f58329d85c38d4d1dadba588813649f1f54250dd5f7d79d8704682a291aa",
-      "bytes": 59684,
       "decision": "commit",
-      "classification": "authored-host-source"
+      "classification": "authored-host-source",
+      "bytes": 59970,
+      "sha256": "e154e570bb35880daae6f0d1f53124f06fc103cd33a6c6016e144218fe6fe6f1"
     },
     "mfc_entries.inc": {
       "sha256": "2bd21b7a358390f9c427106db7683520befe5a714ad429721e154789dadeb475",
@@ -559,10 +559,10 @@
       "classification": "authored-host-source"
     },
     "mfc_stage.hpp": {
-      "sha256": "6a229a61cbf310e0bcef66de7f048912df78ce6418f9fd51ed6ff29d1d92f19d",
-      "bytes": 317619,
       "decision": "commit",
-      "classification": "authored-host-source"
+      "classification": "authored-host-source",
+      "bytes": 317754,
+      "sha256": "fcd43afb0b946144dd8a5e1c8993fa57b2dbc8fdba1a5aba7ff2af97d90e7e08"
     },
     "missile_exhaust.hpp": {
       "sha256": "c993a8bc3ef65023697b10271ea812d0e93e8522eb0d0c18b20e6433de062cb4",
@@ -961,10 +961,10 @@
       "classification": "authored-host-source"
     },
     "vk_scene.hpp": {
-      "sha256": "c51583229b56697774d499293a9fc3affe7300d873a201f5362a89e991019631",
-      "bytes": 219937,
       "decision": "commit",
-      "classification": "authored-host-source"
+      "classification": "authored-host-source",
+      "bytes": 220117,
+      "sha256": "e82797156df92fe1720a4868cfc739c0660d3ef298ea550c42c9d11e257a44f2"
     },
     "widescreen_stage.inc": {
       "sha256": "11f2ad3d4cf2df5e5079ab361572fd344267e749c1935d9630a8df6e8dac8063",
@@ -1053,8 +1053,14 @@
     "owned_emission.hpp": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 6594,
-      "sha256": "7dae5a220fd7c7ed927d28c0f55d81381b0e68a1059fc4465d629c5df8869349"
+      "bytes": 6894,
+      "sha256": "f1b8dd5b0e9b41770c592cbc15ab135b2d59e734894621a865bae4c2ca60203b"
+    },
+    "owned_emission_stage.inc": {
+      "decision": "commit",
+      "classification": "authored-host-source",
+      "bytes": 2373,
+      "sha256": "07e802e40a6199d79bb81e81d9d6f978c3087d7f9e18168dbf1c177e4f3fafce"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."
