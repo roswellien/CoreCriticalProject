@@ -46,7 +46,7 @@
 #include "surface_detail.hpp"
 #include "material_normals.hpp"
 #include "surface_materials.hpp"
-#include "owned_emission.hpp"
+#include "owned_emission_lighting.hpp"
 #include "sun_world_vert.h"
 #include "sun_model_vert.h"
 #include "effect_scene_frag.h"

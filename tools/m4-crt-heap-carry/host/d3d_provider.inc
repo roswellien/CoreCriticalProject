@@ -303,6 +303,11 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   pu.fog[0]=float((fc>>16)&255)/255.f;pu.fog[1]=float((fc>>8)&255)/255.f;pu.fog[2]=float(fc&255)/255.f;pu.fog[3]=1;pu.factor[0]=float((tf>>16)&255)/255.f;pu.factor[1]=float((tf>>8)&255)/255.f;pu.factor[2]=float(tf&255)/255.f;pu.factor[3]=float(tf>>24)/255.f;
   if(tex&&effect_enabled()&&mw34::effects::settings().fixtures){if(auto*surface=vsurface(tex)){if(const auto*fixture=fixture_of(*surface)){pu.fog[3]=1.0f+fixture->intensity;
     if(!fixture->emission_regions.empty()){const auto count=std::min(size_t(32),fixture->emission_regions.size());dr.emission_index=sc.emissions.capture({float(count),fixture->intensity,0,0},std::span<const mw34::submission::DrawEmissions::Float4>(fixture->emission_regions.data(),count));}}}}
+  // Owned descriptors are authenticated against the selected batch and color pixels.
+  if(c.owned_emission&&effect_enabled()&&mw34::effects::settings().fixtures){
+   const auto& emission=*c.owned_emission;
+   dr.emission_index=mw34::emission::capture(emission,pu.fog,sc.emissions,true);
+  }
   pu.mode[0]=(rs(D3DRENDERSTATE_SHADEMODE)==D3DSHADE_FLAT?1U:0U)|(rs(D3DRENDERSTATE_TEXTUREPERSPECTIVE)?2U:0U)|((tex||c.override_texture>=0||c.missile_exhaust)?4U:0U)|(rs(D3DRENDERSTATE_SPECULARENABLE)?8U:0U)|(rs(D3DRENDERSTATE_FOGENABLE)?16U:0U)|(rs(D3DRENDERSTATE_ALPHATESTENABLE)?32U:0U);
   pu.mode[1]=ts(0,D3DTSS_COLOROP)|ts(0,D3DTSS_COLORARG1)<<8|ts(0,D3DTSS_COLORARG2)<<16;pu.mode[2]=ts(0,D3DTSS_ALPHAOP)|ts(0,D3DTSS_ALPHAARG1)<<8|ts(0,D3DTSS_ALPHAARG2)<<16;
   pu.mode[3]=(rs(D3DRENDERSTATE_ALPHAFUNC)&255)|(rs(D3DRENDERSTATE_ALPHAREF)&255)<<8;

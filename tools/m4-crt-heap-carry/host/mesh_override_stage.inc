@@ -509,6 +509,16 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
   const int active_tex=o.scope.skin?batch.skin_textures.at(o.scope.skin):batch.texture;
   const auto active_surface_material=(batch.surface_material&&active_tex>=0&&size_t(active_tex)<o.textures.size()&&o.textures[active_tex].name==batch.surface_material->material_name)?batch.surface_material:nullptr;
   D3DCmd draw{D3DCmd::Draw,D3DPT_TRIANGLELIST,0,0.f,{},{},0};draw.state_snapshot=saved_state;draw.texture=0;draw.override_texture=active_tex;draw.override_normal_texture=batch.normal_texture;draw.surface_material=active_surface_material;if(active_tex==batch.emission_texture)draw.owned_emission=batch.emission;draw.hud_role=wide_hud_role();draw.condition_schematic=preview;zoom_capture_command(draw);
+  // Snapshot the exact rendered rigid pose before the CPU/GPU paths diverge.
+  if(draw.owned_emission&&!preview&&!frontend_on()&&mw34::effects::settings().fixtures){
+   OverrideMatrix camera_world;
+   if(sun_camera_world(camera_world)){
+    auto emission=std::make_shared<mw34::emission::Instance>();
+    emission->material=draw.owned_emission;emission->root=o.scope.root;emission->owner=batch.owner;
+    emission->world=mw34::sun::world_matrix(override_product(camera_world,batch_to_camera));
+    draw.owned_emission_instance=std::move(emission);
+   }
+  }
   if(mw34::vkscene::Renderer::gpu_models()&&batch.vertex_bones.empty()){if(!batch.geometry)throw std::runtime_error("Replacement GPU geometry was not prepared");
    double zlo=batch_to_camera[11],zhi=zlo;for(unsigned i=0;i<3;++i){const double a=batch_to_camera[8+i]*batch.lo[i],b=batch_to_camera[8+i]*batch.hi[i];zlo+=std::min(a,b);zhi+=std::max(a,b);}
    // Conservative AABB: batches touching the near plane retain the current CPU

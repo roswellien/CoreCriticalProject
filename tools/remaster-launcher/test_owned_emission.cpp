@@ -1,5 +1,12 @@
 // Authored material data exercises the production reader without game assets.
-#include "../m4-crt-heap-carry/host/owned_emission.hpp"
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4324) // Existing lighting uniforms require explicit alignment.
+#endif
+#include "../m4-crt-heap-carry/host/owned_emission_lighting.hpp"
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -63,6 +70,59 @@ void rejected(const std::string &bytes, const std::vector<Binding> &expected = b
     }
     require(failed, "Corrupt emission descriptor was accepted");
 }
+void rendering(const Record &record) {
+    struct Uniform {
+        Region emission_params{};
+        std::array<Region, 32> emission_regions{};
+    } uniform;
+    mw34::submission::DrawEmissions emissions;
+    float fog[4]{0, 0, 0, 1};
+    const auto index = capture(record, fog, emissions, true);
+    emissions.apply(index, uniform);
+    require(fog[3] == 1.35f && uniform.emission_params[0] == 1 &&
+                uniform.emission_params[1] == .35f &&
+                uniform.emission_regions[0] == record.regions[0],
+            "Owned emission did not reach shader uniforms");
+    require(capture(record, fog, emissions, false) == mw34::submission::DrawEmissions::none,
+            "Disabled emission admitted uniforms");
+    struct Draw {
+        std::shared_ptr<const Instance> owned_emission_instance;
+    };
+    auto source = std::make_shared<Instance>();
+    source->root = 7;
+    source->owner = "torso";
+    source->material = std::make_shared<Record>(record);
+    source->world = {0, -1, 0, 10, 1, 0, 0, 20, 0, 0, 1, 30};
+    std::vector<Draw> draws{{source}, {source}};
+    auto lights = moving_lights(draws, Point{}, 1, true);
+    require(lights.size() == 2 && lights[0].light.start[0] == 10 &&
+                lights[0].light.start[1] == 19.7f && lights[0].light.start[2] == 30.2f,
+            "Draw pose or duplicate suppression failed");
+    auto other = std::make_shared<Instance>(*source);
+    other->root = 8;
+    other->world[3] = 11;
+    draws.push_back({other});
+    require(moving_lights(draws, Point{}, 1, true).size() == 4, "Distinct actor lost its anchors");
+    require(moving_lights(draws, Point{}, 1, false).empty(), "Fixture preference ignored");
+    require(moving_lights(std::vector<Draw>{}, Point{}, 1, true).empty(),
+            "Previous scene retained lights");
+    auto zero = std::make_shared<Record>(record);
+    for (auto &anchor : zero->anchors)
+        anchor.intensity = 0;
+    other->material = zero;
+    require(moving_lights(std::vector<Draw>{{other}}, Point{}, 1, true).empty(),
+            "Zero control emits spill");
+    std::vector<Draw> crowded;
+    for (unsigned root = 0; root < 2100; ++root) {
+        auto instance = std::make_shared<Instance>(*source);
+        instance->root = root;
+        instance->world[3] = float(root);
+        crowded.push_back({instance});
+    }
+    auto nearest = moving_lights(crowded, Point{}, 1, true);
+    require(nearest.size() == 4096 && nearest.back().light.start[0] == 2047,
+            "Candidate bound lost nearest lights");
+}
 void changed_word(const std::string &source, std::size_t offset, std::uint32_t value) {
     auto changed = source;
     std::string word;
@@ -86,6 +146,7 @@ int main(int argc, char **argv) {
         }
         const auto bytes = fixture();
         const auto records = parse(bytes);
+        rendering(records[0]);
         auto weighted = bindings();
         weighted[0].rigid = false;
         rejected(bytes, weighted);
