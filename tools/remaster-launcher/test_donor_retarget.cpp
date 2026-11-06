@@ -47,8 +47,121 @@ void lengths(const Rig &r, const Pose &p) {
               "fixed donor limb length");
     }
 }
+void authored_arm_checks() {
+    auto r = fixture();
+    r.source_joint_pose = true;
+    r.authored_arm_rest = true;
+    r.bones[2].rest = translate(identity(), {-1, 4, 5});
+    r.bones[3].rest = translate(identity(), {-1, 5, 2});
+    r.bones[4].rest = translate(identity(), {-1, -4, 5});
+    r.bones[5].rest = translate(identity(), {-1, -5, 2});
+    const auto original = r.reference;
+    auto p = retarget(r, original, 0);
+    for (size_t i = 0; i < r.bones.size(); ++i)
+        check(error(p.world[i], r.bones[i].rest) < 1e-9, "authored rest preserved");
+    auto source = original;
+    const auto torso_turn = swing({1, 0, 0}, {0, 1, 0});
+    const auto shoulder_turn = swing({0, 0, -1}, {1, 0, 0});
+    const auto elbow_turn = swing({1, 0, 0}, {0, 0, -1});
+    source["torso"] = translate(torso_turn, {5, 6, 10});
+    source["larm"] = product(source.at("torso"), translate(shoulder_turn, {8, 9, 11}));
+    source["lhand"] = product(source.at("larm"), translate(elbow_turn, {-3, 7, 2}));
+    source["rarm"] = product(source.at("torso"), translate(identity(), {2, -8, 4}));
+    source["rhand"] = product(source.at("rarm"), translate(elbow_turn, {5, -9, 3}));
+    const auto saved = source;
+    p = retarget(r, source, 1);
+    check(length(sub(position(p.world[2]), point(source.at("torso"), {-1, 4, 0}))) < 1e-9,
+          "shoulder source translations cannot pull donor inward");
+    check(length(sub(position(p.world[3]), point(p.world[2], {0, 1, -3}))) < 1e-9,
+          "elbow source translations cannot separate donor seam");
+    check(error(rotation(p.world[3]), product(product(torso_turn, shoulder_turn), elbow_turn)) <
+              1e-9,
+          "original relative arm rotations retained");
+    for (size_t i : {0U, 1U, 6U, 7U, 8U, 9U, 10U, 11U})
+        check(error(p.world[i], source.at(r.bones[i].control)) < 1e-9, "body and legs unchanged");
+    const auto q = retarget(r, source, 0);
+    check(p.world == q.world && !p.reach_clamps, "arm rest independent of gait and IK");
+    check(source == saved && r.reference == original, "arm inputs remain immutable");
+    auto moved = source;
+    for (auto &[name, matrix] : moved)
+        matrix = translate(matrix, add(position(matrix), {10, -3, 7}));
+    auto next = retarget(r, moved, 1);
+    for (size_t i = 0; i < p.world.size(); ++i)
+        check(length(sub(position(next.world[i]), add(position(p.world[i]), {10, -3, 7}))) < 1e-9,
+              "separate actor root motion retained");
+    r.bones.insert(r.bones.begin() + 3, {"ArmPivot", "", 2, translate(identity(), {-1, 4, 4})});
+    for (size_t i = 4; i < r.bones.size(); ++i)
+        if (r.bones[i].parent >= 3)
+            ++r.bones[i].parent;
+    r.bones[4].parent = 3;
+    next = retarget(r, source, 1);
+    check(error(next.world[4], p.world[3]) < 1e-9,
+          "unbound intermediate helper does not duplicate motion");
+    auto rejects = [&](Rig changed) {
+        bool failed = false;
+        try {
+            validate_arm_rest(changed);
+        } catch (const std::runtime_error &) {
+            failed = true;
+        }
+        check(failed, "invalid authored arm topology rejected");
+    };
+    auto bad = r;
+    bad.bones[4].parent = 0;
+    rejects(bad);
+    bad = r;
+    bad.bones[4].control = "rhand";
+    rejects(bad);
+    bad = r;
+    bad.bones[2].name = "Foreign";
+    rejects(bad);
+    bad = r;
+    bad.bones.push_back({"Extra", "foreign", 4, identity()});
+    rejects(bad);
+    bad = r;
+    bad.bones[2].parent = 99;
+    rejects(bad);
+    auto nonidentity = r;
+    for (auto &bone : nonidentity.bones)
+        bone.rest = product(translate(torso_turn, {2, 3, 4}), bone.rest);
+    for (auto &[name, matrix] : nonidentity.reference)
+        matrix = product(translate(torso_turn, {2, 3, 4}), matrix);
+    next = retarget(nonidentity, nonidentity.reference, 0);
+    for (size_t i = 0; i < next.world.size(); ++i)
+        check(error(next.world[i], nonidentity.bones[i].rest) < 1e-9,
+              "nonidentity rest bases retained");
+    auto scaled = source;
+    for (auto &[name, matrix] : scaled) {
+        matrix[0] *= 2;
+        matrix[1] *= 2;
+        matrix[2] *= 2;
+        matrix[3] *= 2;
+    }
+    next = retarget(r, scaled, 1);
+    check(length(sub(position(next.world[4]), point(next.world[2], {0, 1, -3}))) < 1e-9,
+          "scaled parent keeps shared seam");
+    auto invalid = source;
+    invalid.at("torso")[0] = invalid.at("torso")[1] = invalid.at("torso")[2] = 0;
+    bool failed = false;
+    try {
+        retarget(r, invalid, 1);
+    } catch (const std::runtime_error &) {
+        failed = true;
+    }
+    check(failed, "singular source arm parent fails visibly");
+    invalid = source;
+    invalid.at("lhand")[3] = std::numeric_limits<double>::infinity();
+    failed = false;
+    try {
+        retarget(r, invalid, 1);
+    } catch (const std::runtime_error &) {
+        failed = true;
+    }
+    check(failed, "nonfinite source translation cannot be hidden by arm policy");
+}
 int main() {
     try {
+        authored_arm_checks();
         auto r = fixture();
         const auto original = r.reference;
         auto p = retarget(r, original, 0);

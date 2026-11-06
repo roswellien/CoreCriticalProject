@@ -42,8 +42,69 @@ inline Mat swing(Vec a,Vec b){
 }
 inline Mat axis(){return {0,0,-1,0,-1,0,0,0,0,1,0,0,0,0,0,1};}
 struct Bone{std::string name,control;int parent{-1};Mat rest=identity();};
-struct Rig{std::vector<Bone>bones;std::map<std::string,Mat>reference;std::array<double,2>walk_x{},walk_z{};double hip_drop{};bool ground_reference=true;bool source_joint_pose=false;};
+struct Rig{std::vector<Bone>bones;std::map<std::string,Mat>reference;std::array<double,2>walk_x{},walk_z{};double hip_drop{};bool ground_reference=true;bool source_joint_pose=false;bool authored_arm_rest=false;};
 struct Pose{std::vector<Mat>world;unsigned reach_clamps{};};
+inline bool arm_control(const std::string& control) {
+    return control == "larm" || control == "rarm" || control == "lhand" || control == "rhand";
+}
+inline int bound_parent(const Rig& rig, size_t index) {
+    int parent = rig.bones.at(index).parent;
+    while (parent >= 0) {
+        if (size_t(parent) >= index)
+            throw std::runtime_error("Visual retarget: invalid bound ancestry");
+        if (!rig.bones.at(size_t(parent)).control.empty()) return parent;
+        index = size_t(parent);
+        parent = rig.bones[index].parent;
+    }
+    return -1;
+}
+inline void validate_arm_rest(const Rig& rig) {
+    if (!rig.authored_arm_rest) return;
+    if (!rig.source_joint_pose)
+        throw std::runtime_error("Visual retarget: arm rest requires original joint motion");
+    std::map<std::string, size_t> controls;
+    for (size_t i = 0; i < rig.bones.size(); ++i) {
+        const auto& bone = rig.bones[i];
+        if (bone.parent < -1 || bone.parent >= int(i))
+            throw std::runtime_error("Visual retarget: invalid arm hierarchy");
+        if (!bone.control.empty() && !controls.emplace(bone.control, i).second)
+            throw std::runtime_error("Visual retarget: duplicate arm policy control");
+        const int parent = bound_parent(rig, i);
+        if (!bone.control.empty() && !arm_control(bone.control) && parent >= 0 &&
+            arm_control(rig.bones[size_t(parent)].control))
+            throw std::runtime_error("Visual retarget: unsupported bound arm descendant");
+    }
+    for (const auto& [control, name, parent] :
+         std::array<std::array<std::string, 3>, 4>{{
+             {"larm", "Upperarm_Left", "torso"}, {"rarm", "Upperarm_Right", "torso"},
+             {"lhand", "Forearm_Left", "larm"}, {"rhand", "Forearm_Right", "rarm"}}}) {
+        const auto found = controls.find(control);
+        if (found == controls.end())
+            throw std::runtime_error("Visual retarget: missing authored arm control");
+        const auto index = found->second;
+        const int ancestor = bound_parent(rig, index);
+        if (rig.bones[index].name != name || ancestor < 0 ||
+            rig.bones[size_t(ancestor)].control != parent)
+            throw std::runtime_error("Visual retarget: authored arm parent mismatch");
+    }
+}
+inline Mat arm_rest_pose(const Rig& rig, const std::map<std::string, Mat>& current,
+                         const Pose& output, size_t index) {
+    const auto& bone = rig.bones.at(index);
+    const auto parent_index = size_t(bound_parent(rig, index));
+    const auto& parent = rig.bones.at(parent_index);
+    const auto local_rest = product(inverse(parent.rest), bone.rest);
+    const auto local_reference = product(inverse(rig.reference.at(parent.control)),
+                                         rig.reference.at(bone.control));
+    const auto local_current = product(inverse(current.at(parent.control)), current.at(bone.control));
+    for (double value : local_current)
+        if (!std::isfinite(value))
+            throw std::runtime_error("Visual retarget: nonfinite original arm pose");
+    // Original animations translate their elbows. Those offsets belong to the
+    // original mesh: copying them would separate a differently proportioned arm.
+    const auto articulation = translate(product(inverse(local_reference), local_current), {0, 0, 0});
+    return product(product(output.world.at(parent_index), local_rest), articulation);
+}
 inline double locomotion(const Rig&r,const std::map<std::string,Mat>&current){
  const auto h=position(current.at("hip")),h0=position(r.reference.at("hip"));double change=0;
  for(const char*name:{"lfoot","rfoot","lthigh","rthigh"}){const auto it=current.find(name);if(it==current.end())continue;
@@ -57,10 +118,12 @@ inline Pose retarget(const Rig&r,std::map<std::string,Mat>current,double gait){
  // A fitted replacement may use the complete original joint pose. This is
  // forward kinematics: no foot goal, gait correction or knee pole is inferred.
  if(r.source_joint_pose){
+  validate_arm_rest(r);
   Pose output;
   for(size_t i=0;i<r.bones.size();++i){const auto&b=r.bones[i];
    if(b.parent>=int(i)||b.parent< -1)throw std::runtime_error("Visual retarget: invalid bone order");
-   const auto m=!b.control.empty()?product(product(current.at(b.control),inverse(r.reference.at(b.control))),b.rest):
+   const auto m=r.authored_arm_rest&&arm_control(b.control)?arm_rest_pose(r,current,output,i):
+    !b.control.empty()?product(product(current.at(b.control),inverse(r.reference.at(b.control))),b.rest):
     (b.parent>=0?product(product(output.world.at(size_t(b.parent)),inverse(r.bones[size_t(b.parent)].rest)),b.rest):b.rest);
    for(double value:m)if(!std::isfinite(value))throw std::runtime_error("Visual retarget: nonfinite source pose");
    output.world.push_back(m);
