@@ -322,6 +322,90 @@ master using the actual native screenshot; its prompt and receipt are saved.
 The video and screenshot A/B are native evidence, not generated visuals. No
 media upload or release publication has occurred.
 
+## Corrected donor arm placement, November 6
+
+The owner rejected the tucked-in arms in 0.4.7. The r2 weapon-endpoint fit and r3
+world-pivot fit had pulled the donor shoulders inward about 1.7m each and raised
+arm muzzles about 1.5m. Private candidate `0.4.8-mw5-arm-placement-preview`
+restores the pre-weapon-fit arm geometry and rest spacing. Its pack SHA256 is
+`f6ae2fce0282f08b1ec4133c7300c0949567c83e52456615e8c12e54ee50f052`.
+
+BWMESH4 policy 3 / selected `owned-chassis-visuals:3` uses original relative 3x3
+arm articulation with fixed donor local offsets. Original arm translation
+animation is intentionally excluded from replacement geometry; body/legs keep
+the prior complete original world-joint behavior. Earlier policy values do not
+change. Original gameplay, weapon firing coordinates, collision and cockpit
+remain untouched. Both LODs change only eight arm batches; the other 19 batches
+are byte-identical to 0.4.7. Color and normal files are unchanged. Both eye
+sidecars are rebound against the changed meshes with identical Window regions,
+anchors and strengths. 223 other project files are byte-identical.
+
+The actual C# importer installs into isolated `atlas-library-r8`. Python New
+selection requires version 3. Actual Original composition succeeds on the same
+pack with an older owned-native declaration `[1]`. No historical released
+profile, installed user library, update or installer is modified.
+
+Clean maintained `host-build-atlas-arm-placement-r2` is pinned to
+`e4f984aa96ebcb5e73adcdce58f267ad4289a804`; translated DLL remains
+`6d6e3c25fef68727113a6d52859253883dbb554958ddaa5a091187667aa8bfa5`.
+The camera-only derivative `capture-host-atlas-arm-r1` records that same base.
+Native matched `atlas-arms-before-r1` (0.4.7) and `atlas-arms-corrected-r1`
+(0.4.8) each present 2,205 frames at 3440x1440 via live menu -> Atlas -> mission,
+then controlled front/45-degree/side/rear Photo views. The new views show clear
+upper arms, lower forearms/hands and elbows outside the torso. Full enhanced
+world/sky, paint, normals, red eyes and rack placement are retained. Native
+normal binding verification confirms two normal images across five materials.
+The technical before/after contact sheets are in
+`local/atlas-arm-placement-r1/Native-Arms-*-Before-After.jpg`; native source
+pixels are cropped/resized only, not retouched or generated.
+
+The production solver is exercised on 666 original source-motion samples:
+maximum skeletal elbow-anchor separation `3.9968e-15m`, maximum unchanged body/leg matrix
+error `7.1054e-15`, zero clamps. A separate exported-mesh check reconstructs
+joint anchors from fixed affine weights of four nearby authoring mesh vertices,
+then reads their actual BWMESH4 coordinates and transforms them using those
+production pose outputs. Worst separation is `2.836e-9m` across both LODs and
+all 666 samples; a 1cm translated-vertex control fails the 1mm threshold. Authoring
+versus exported vertex placement agrees within `1.193e-7m`. This validates the
+exported bind/anchor placement, not every triangle interface. Receipts are
+`exported-mesh-anchors.json` and `mesh-anchor-motion.json` beside `pose-checks.json`.
+The native near-clip run
+`atlas-arms-cpu-near-r1` also presents2,205frames. At frame 1800, left upper arm
+and forearm admit 499 and 1,016 triangles with zero GPU batches and positive CPU
+near batches. This proves actual V3 pose consumption in CPU-clipped draws; it
+is an extreme camera diagnostic, not visual-quality acceptance of the existing
+CPU material-lighting fallback.
+
+**Firing alignment remains a blocker.** Native `atlas-arms-firing-r1` presents
+2,205frames with original W/L/mouse aim/fire input. L toggles all four lamps and
+the red eyes remain active. The live third-person and frozen Photo screenshots
+show the ER-laser beam originating above the restored arm guns, at the unchanged
+PM firing attachment. Offline comparison against the actual original
+firepoint hierarchy gives reference offsets 2.919/2.926m and motion-sample ranges
+2.919..3.490m (right) / 2.187..3.404m (left). These are offline measurements;
+the native screenshots confirm disconnection, not a precise measured native
+world-space offset. The existing 1.229052m missile-rack offset also remains.
+No source firing coordinate or beam/FX origin was moved to conceal either issue.
+
+Independent review found and fixed acceptance of finite singular forearm leaf
+transforms in V3. The regression fails on the previous code and passes after
+explicit leaf inverse validation. Independent build, 39/39 CTest, format/style,
+launcher dispatch 8/8 and focused C# content checks pass. The donor fixture has
+2,131 checks. Translation-copy, incorrect-parent and removed-V3-gate mutations
+fail. Full WPF still stops at the existing active-Steam guard; Steam is preserved.
+
+The port remains draft/incomplete. The approved plan stops for a scoped
+visual-attachment decision after presenting corrected arms and the firing
+conflict; no unreviewed FX rewrite is implemented. The 0.4.7 channel media is
+preserved as historical evidence and has not been regenerated for 0.4.8.
+The requester reviews native arm placement before any promotional-media update.
+An isolated interactive entry point is `local/atlas-preview-r14/Start-AtlasPreview.ps1`;
+it uses the clean r2 host, prepared 0.4.8 content, full graphics and a private L
+binding. Its launcher syntax is checked; the bounded native runs above are the
+actual playtest evidence.
+Broader live damage, distant LOD switches, mission/skin transitions and multiple
+live Atlas acceptance remain open; asset/fixture checks do not establish them.
+
 ## Earlier fitting checks and remaining acceptance
 
 - `python tools/check.py --area launcher`: build passed; CTest 36/36 passed;

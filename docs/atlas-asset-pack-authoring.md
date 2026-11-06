@@ -301,7 +301,31 @@ Inactive resources still undergo path, hash and format validation. Selecting new
 geometry with the existing donor solver requires `owned-chassis-visuals: 1`.
 BWMESH4 rig flag `2` uses the complete original joint matrices and requires
 `owned-chassis-visuals: 2`; flags `0` and `1` retain their existing donor solver.
-Original mode does not acquire either renderer requirement. Existing appearance capability support is still
+BWMESH4 policy value `3` requires `owned-chassis-visuals: 3`. It retains the
+complete original world-joint path for torso/legs, while canonical arm controls
+(`larm`, `rarm`, `lhand`, `rhand`) use authored donor rest spacing and the original
+parent-relative 3x3 articulation. Original arm translation deltas are excluded
+from replacement geometry so differently proportioned elbows stay connected.
+This changes no source gameplay or weapon origin. Values 0/1/2 keep their prior
+behavior and the binary layout is unchanged; unknown values fail visibly.
+
+Policy 3 requires unique nonempty bone controls. `Upperarm_Left/Right` must bind
+`larm/rarm` beneath the closest controlled ancestor `torso`; `Forearm_Left/Right`
+must bind `lhand/rhand` beneath their same-side upper arm. Uncontrolled helper
+bones may intervene and inherit parent motion once. Other controlled descendants
+under an arm are unsupported. Python, C# and native admission enforce this
+contract; required current arm transforms must be nonsingular. Selected New
+requires version 3, while Original with an updated coordinator remains usable on
+a runtime that advertises only older owned-visual versions. Keep this requirement
+out of whole-pack capabilities. Regenerate mesh-bound emission identities after
+changing geometry; normal/color images need not change with arm placement.
+
+Muzzle/FX alignment is a separate acceptance check. Donor rest spacing does not
+make a relocated visual muzzle coincide with an original gameplay firepoint.
+Do not move simulation origins or claim complete weapon alignment from a static
+pose. The current Atlas validation record documents the measured conflict.
+
+Original mode does not acquire these renderer requirements. Existing appearance capability support is still
 required by the coordinator.
 
 Authors supply visual batches, original control names and original visibility
@@ -312,11 +336,11 @@ The original cockpit signature is derived separately and remains outside the
 exterior replacement. The private MWCHAS6 session catalog carries those derived
 rosters, paths and authoritative namespaced original skin lookup names. Existing
 MWCHAS1 through MWCHAS6 inputs retain their prior layouts; the serialized
-headlight block is unchanged. Flag-2 preparation emits MWCHAS7 with original arm
+headlight block is unchanged. Flag-2/3 preparation emits MWCHAS7 with original arm
 subtree removal lists and parent names derived by the coordinator. Packs cannot
 supply those plans. The native matcher still requires the exact original shared
 GameZ stump, its live parent topology and every surviving mesh signature.
-Flag-2 sources require both original arm subtrees without overlap or preexisting
+Flag-2/3 sources require both original arm subtrees without overlap or preexisting
 stump meshes. Close and distance signatures must remain distinguishable across
 intact, left-arm, right-arm and both-arm loss combinations.
 
