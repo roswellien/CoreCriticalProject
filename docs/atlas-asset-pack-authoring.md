@@ -332,3 +332,7 @@ mission and status-model draw do not establish all of those criteria.
 Use a development runtime implementing this contract before importing/launching
 the candidate. Do not advertise it on a historical runtime profile. Keep the
 prior pack and selections for rollback, and keep donor/derived media local.
+
+The [November 5 native validation record](atlas-mw5-port-validation-2026-11-05.md)
+contains the fitted primary candidate, exact source/pack receipts, observed
+behavior and remaining release acceptance.

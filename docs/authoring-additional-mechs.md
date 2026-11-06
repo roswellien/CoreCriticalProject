@@ -367,8 +367,8 @@ For explicit development profiles, `native.mech_appearance` accepts `original`,
 `upgraded` or `new`. Absent/null keeps the original selection. Upgraded without
 an alternative falls back to original with `upgrade-unavailable`; new selects
 upgraded when available, otherwise original, with `new-model-unavailable`.
-The coordinator returns and prints per-chassis coverage. New geometry is not a
-version 1 appearance. The global launcher selector, stock-pack filtering and
+The coordinator returns and prints per-chassis coverage. New geometry additionally requires the
+owned-controller visual contract below. The global launcher selector, stock-pack filtering and
 old-setting migration are subsequent work, not delivered by this contract.
 
 Selected normal pages require native normal format 2 and are composed into a
