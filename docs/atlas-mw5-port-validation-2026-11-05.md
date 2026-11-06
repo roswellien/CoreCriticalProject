@@ -185,6 +185,30 @@ review confirms preserved rig bytes, four lamps and normal-image pixels,
 correct new diffuse bindings, the expected removed AMS batch and all 164
 archive members matching the isolated installed pack.
 
+### Albedo detail correction after owner clarification
+
+The owner clarified that the flatness report concerns painted texture detail,
+not new material-response rendering. Candidate `0.4.5-mw5-albedo-preview`
+adds broad tonal gradients, medium-scale pigment mottling and fine coating
+grain inside the existing armor panels, brighter silver-toned scuffs, and
+predominantly red missile noses with varied coating. The renderer is unchanged.
+
+Private receipts are under `local/atlas-look-r2/`, including decoded original
+texture references, an unlit albedo detail comparison and four native views.
+Pack SHA-256:
+`49245d5e2a7fa2e0d37dad045f16096098b9d173040497de6068f1fa77bb6879`.
+The normal C# importer installs it into isolated `atlas-library-r5`.
+Compared with the preceding 0.4.4 project, 222 files and both complete mesh
+binaries remain byte-identical; only metadata, the two color sidecars and
+normal binding identities differ. Normal-image pixels, four lamps and all
+original PM resources are preserved. All 164 installed members match the pack.
+
+`atlas-albedo-proof-r2` reaches its 2,205-frame budget at 3440x1440 with the
+full enhanced environment and a closer 20-unit Photo camera. This validates
+native presentation of the albedo revision, not owner aesthetic acceptance.
+The prior channel-video export still depicts 0.4.4 and is not evidence for
+this newer candidate.
+
 ## Checks and remaining acceptance
 
 - `python tools/check.py --area launcher`: build passed; CTest 36/36 passed;
