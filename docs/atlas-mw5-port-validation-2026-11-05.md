@@ -13,7 +13,7 @@ and appearance work in [#126](https://github.com/roswellien/MW3Recomp-Private/is
 remain open. The topic branch includes the unmerged #131/#141 dependencies;
 no merge or release is implied.
 
-## Exact local candidate
+## November 5 local candidate
 
 | Item | Receipt |
 | --- | --- |
@@ -144,6 +144,46 @@ Local evidence is under `local/atlas-evolution-20261106/`:
 This advances the native replacement boundary through deferred translucent
 draws. It is a local development preview, not a merged or published release,
 and does not establish broader live damage, LOD or cockpit-glass acceptance.
+
+## November 6: primary paint and attachment revision
+
+The next private candidate, `0.4.4-mw5-wear-preview`, addresses the owner's
+visual review: darker slate-blue paint, stronger contrast between painted
+armor and exposed panel edges, and source-mask scuffs/recess wear. These are
+edits to the native Blender material graph baked to the existing armor UV layout,
+without directional lighting baked into the paint. The existing two runtime
+normal images retain their exact pixels and are rebound to the new diffuse
+identities. No roughness, emissive or height-map support is claimed here.
+
+The ten warhead meshes use revised axial/circumferential UVs for steel noses
+with narrow, subdued identification bands instead of a solid red fill. The separate donor
+`Clavicle_Left_AH1_antimissilesystem` visual is removed from both exported LODs.
+This removes 942 close-model triangles; close/distance totals are now
+49,097/20,424, with 27 material batches each. The original PM loadout, firing
+origins, rig matrices, cockpit, eight skin resources and four lamps remain.
+
+Evidence under `local/atlas-look-r1/` includes the editable
+`Atlas-look-r1.blend`, `appearance-receipt.json`, `native-export.json`,
+`pack-receipt.json`, `Native-before-after.jpg` and `Cardinal-review.jpg`.
+The pack SHA-256 is
+`d4554c50f70e9d2b29c8e39a489669f823a95c368e244fe9a243903d43e4a79a`.
+Only project metadata and the five MW5 mesh/texture/normal-binding files differ
+from the November 5 project; the other 220 project files are byte-identical.
+The actual C# PackManager imported it into the isolated `atlas-library-r4`.
+
+`local/atlas-evolution-20261106/atlas-wear-proof-r1` reached its 2,205-frame
+budget in the native game at 3440x1440. Four cardinal Photo-mode captures show
+the material revision, removed shoulder AMS and no escaped original quad with
+the complete enhanced environment. `full-profile-wear-r1.json` reuses the
+verified environment and composes the revised Atlas through the normal chassis
+preparer. The maintained R9 host and camera-only capture host are unchanged.
+This demonstrates the optional visual revision in the native mission; it does
+not extend the broader live damage/LOD/alternate-skin acceptance above.
+The subsequent `final-stage-3-wear-r1` media capture reaches 5,005 presented
+frames and records 3,120 frames for the two-turn orbit. Independent evidence
+review confirms preserved rig bytes, four lamps and normal-image pixels,
+correct new diffuse bindings, the expected removed AMS batch and all 164
+archive members matching the isolated installed pack.
 
 ## Checks and remaining acceptance
 
