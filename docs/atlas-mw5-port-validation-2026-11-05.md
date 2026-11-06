@@ -79,9 +79,66 @@ not normal-quit receipts. The tested manual preview launcher also completed a no
 bounded save/reload mission trials; it is not a damaged-save acceptance run. Full intro/codec acceptance is outside these runs.
 
 Original-mode A/B at `atlas-original-lab-r2/target-1000.ppm` also shows the small
-oval above the head. Its cause is not established here; no guessed camera offset
-or hidden-glass substitute is introduced. This does not close the cockpit-glass
+oval above the head. The November 6 investigation below establishes its source
+and removes its unintended draw from the MW5 replacement. Original appearance
+retains its original polygon. This does not close the separate cockpit-glass
 report in #135.
+
+## November 6: deferred original polygon in the MW5 exterior
+
+The floating piece was the original `atlas15` translucent quad in
+`torso_polys`, polygon 41 of the close model (polygon 22 in the distance model).
+Its geometry, UVs and texture match the original PM source. It is not a donor
+part, and the cockpit model contains no `atlas15`. Its semantic purpose is not
+established; this fix does not alter source assets or infer a new attachment.
+
+The original mesh producer at `53F2E0` appends translucent descriptors which
+`57E110` sorts and draws after the producer's replacement scope has returned.
+Immediate source suppression therefore missed this later draw. Tracking just
+one material enqueue backend was insufficient: several sibling backends write
+the shared queue. The maintained host now retains replacement display policy
+for every descriptor appended by the authenticated source mesh producer, then
+applies it at the exact deferred provider call (`57E2ED`). Descriptor identity,
+frame, material reference and vertex range are checked. Original/fallback
+appearances and previews without an emitted replacement remain eligible.
+Original calls, queue contents, sort order, vertices and guest return values
+are preserved; HUD provenance is retained independently of source suppression.
+
+Local evidence is under `local/atlas-evolution-20261106/`:
+
+- `atlas-source-queue-trace/stderr.txt` traces the original torso append and
+  the later four-vertex `atlas15` draw after its source scope has returned.
+- `atlas-alpha-fixed-r7` is the failed single-backend negative control.
+  `atlas-alpha-fixed-r8` uses the final mesh-boundary implementation and visibly
+  removes the floating quad in the same front framing. Four cardinal views
+  were captured with enhanced world textures, authored normal maps, shadows
+  and the complete sky. The bounded native run reaches 2,205 frames.
+  `atlas-alpha-4x3-r8` repeats the four-angle check at 1024x768 and also reaches
+  2,205 frames without the escaped quad. Photo-mode HUD remnants at the right
+  edge remain visible in that 4:3 control; it is not used as video footage.
+- All 2,205 original `(frame, draw count, draw hash)` records match between R7
+  and R8. Whole log bytes differ in renderer cache counters; those counters are
+  not part of this equality claim.
+- R8 maintained host: `local/host-build-r8/source-snapshot.json`, based on
+  `5dda1f863eaf4367e5b3e78afb854051cf19990f` plus the then-uncommitted fix.
+  Executable SHA-256:
+  `bff870091971b3e4ab47e202f3b91591ab25c80d111ddff8da32226b5efc563e`.
+  The translated DLL remains the exact hash recorded above. The private
+  `capture-host-r5/capture-build.json` pins this source and adds only camera,
+  hotkey and recording automation; it is not a distributed runtime.
+- The asset-free `deferred_source_provenance` fixture exercises the actual
+  producer wrapper and late lookup, multiple material descriptors, sorted
+  consumption, HUD metadata merging, Original/fallback/no-emission behavior,
+  4:3 and widescreen operation, identity failures and exception cleanup.
+  Mutations removing source capture or late suppression each fail the fixture;
+  receipts are in `mutation-tests/result.json`.
+- Fresh independent review ended clean. Its checks passed: build, CTest 37/37,
+  formatting, enforced style and launcher dispatch 8/8
+  (`independent-final-checks.log`). The WPF active-Steam limitation below remains.
+
+This advances the native replacement boundary through deferred translucent
+draws. It is a local development preview, not a merged or published release,
+and does not establish broader live damage, LOD or cockpit-glass acceptance.
 
 ## Checks and remaining acceptance
 

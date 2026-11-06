@@ -97,6 +97,10 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_surface_access_history_tests)
     add_test(NAME surface_access_history COMMAND mw34_surface_access_history_tests)
 
+    add_executable(mw34_deferred_source_tests tools/remaster-launcher/test_deferred_source.cpp)
+    mw34_warnings(mw34_deferred_source_tests)
+    add_test(NAME deferred_source_provenance COMMAND mw34_deferred_source_tests)
+
     if(WIN32)
         add_executable(mw34_local_cd_audio_tests tests/local_cd_audio_tests.cpp)
         target_include_directories(mw34_local_cd_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")

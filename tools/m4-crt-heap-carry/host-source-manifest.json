@@ -199,8 +199,8 @@
       "classification": "authored-host-source"
     },
     "d3d_provider.inc": {
-      "sha256": "3d06523a26f056b58d9ff4c7775c761b9915402ee5eb5c5e28b22cf4c7c56435",
-      "bytes": 46056,
+      "sha256": "d9a809bcad7a71bb478c8ad9ff164b5528677fd434a0f51eaec3a9e77fe7fc5c",
+      "bytes": 46108,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -445,8 +445,8 @@
       "classification": "authored-host-source"
     },
     "hud_deferred_stage.inc": {
-      "sha256": "c834ce8b34e23f9026ec7295cdd5f4cd44b9fdc5114dbd04774f02b8320fe226",
-      "bytes": 4042,
+      "sha256": "0619e4704505192e537e883079204a1b214ccb87562a588b6869b9e480bfa05b",
+      "bytes": 6608,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -559,8 +559,8 @@
       "classification": "authored-host-source"
     },
     "mfc_stage.hpp": {
-      "sha256": "37df31ae5b50e5f9239afb4506f669283b535a9f96976a3450773b8fe1573cf3",
-      "bytes": 317605,
+      "sha256": "6a229a61cbf310e0bcef66de7f048912df78ce6418f9fd51ed6ff29d1d92f19d",
+      "bytes": 317619,
       "decision": "commit",
       "classification": "authored-host-source"
     },

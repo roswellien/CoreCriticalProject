@@ -610,7 +610,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
      (target_marker_update_owner&&(target==0x53cf10||target==0x40da30))))return target_marker_body(s,target,p,body);
   if(target==0x442f50&&(wide_on()||distance_requested()>800||distance_fog_requested()))return zoom_scene_body(s,target,p,body);
   if(wide_on()&&target==0x57bf80)return hud_panel_body(s,target,p,body);
-  if(wide_on()&&target==0x57e110){
+  if(target==0x57e110){
    try{result=body(s,target,p);}catch(...){hud_deferred_panels.clear();throw;}
    hud_deferred_panels.clear();return result;
   }
@@ -622,7 +622,7 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
   if((target==0x4f3b90||target==0x4f3d90||target==0x4f4170||target==0x4f41b0)&&wide_on()){if(target==0x4f4170||target==0x4f41b0)wide_prepare(state.gpr.rcx.dword);else wide_restore(state.gpr.rcx.dword);}
   if(target==0x53f2e0&&platform_trace_enabled())platform_visibility("mesh-producer",target,state.gpr.rcx.dword,0);
   if(target==0x53f2e0&&(override_enabled()||photo_replay_detached_cam()||missile_enabled())){const auto previous=override_begin(state.gpr.rcx.dword);missile_begin(state.gpr.rcx.dword);
-   try{result=body(s,target,p);}catch(...){missile_end();override_restore(previous);throw;}missile_end();override_restore(previous);
+   try{result=hud_deferred_source_body(s,target,p,body);}catch(...){missile_end();override_restore(previous);throw;}missile_end();override_restore(previous);
   }else result=body(s,target,p);if(target==0x51fb30){override_emit();missile_emit();}return result;}
  void*controller_next_body(State*s,unsigned target,void*p,Body body){
   return camera_body(s,target,p,[&]{return photo_replay_body(s,target,p,[&]{return turret_aim_body(s,target,p,[&]{return lighting_body(s,target,p,body);});});});
