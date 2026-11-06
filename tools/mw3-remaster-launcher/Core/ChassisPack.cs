@@ -68,15 +68,21 @@ public static class ChassisPack
 
     public static List<Chassis> Read(string root, PackManifest manifest)
     {
+        var formats = manifest.NativePayload?.RequiredFormats;
+        var baselineFormats = formats?.Where(format => format != OwnedEmission.Format).ToList();
+        if (formats != null && formats.Contains(OwnedEmission.Format) &&
+            (formats.Count(format => format == OwnedEmission.Format) != 1 ||
+             !new[] { "MW3LEGACY", "BWMESH4", "BWTEX1" }.All(formats.Contains)))
+            throw new InvalidDataException("Invalid owned emission format declaration.");
         if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
-            !(manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "BWSFM1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1", "BWSFM1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWSNR2" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1" }) ||
-              manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1", "BWSNR2" })) ||
+            !(baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
+              baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
+              baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "BWSFM1" }) ||
+              baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1", "BWSFM1" }) ||
+              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY" }) ||
+              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY", "BWSNR2" }) ||
+              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1" }) ||
+              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1", "BWSNR2" })) ||
             (manifest.NativePayload.RequiredFormats.Contains("BWSFM1") &&
              (!manifest.NativePayload.RequiredCapabilities.TryGetValue("surface-materials", out var surfaceVersion) || surfaceVersion != 1)) ||
             manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||

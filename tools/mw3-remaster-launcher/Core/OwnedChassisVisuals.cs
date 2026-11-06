@@ -18,11 +18,12 @@ public static class OwnedChassisVisuals
     {
         if (value.ValueKind != JsonValueKind.Object ||
             !new HashSet<string>(new[] { "schema_version", "meshes", "textures" })
-                .SetEquals(value.EnumerateObject().Select(p => p.Name).Where(name => name != "normals")) ||
+                .SetEquals(value.EnumerateObject().Select(p => p.Name).Where(name => name != "normals" && name != "emission")) ||
             value.GetProperty("schema_version").ValueKind != JsonValueKind.Number ||
             !value.GetProperty("schema_version").TryGetInt32(out var version) || version != 1)
             throw new InvalidDataException("Invalid owned visual alternative.");
         var batchCounts = new Dictionary<string, uint>();
+        var emissionMeshes = new Dictionary<string, OwnedEmission.Mesh>();
         var colors = new HashSet<ChassisAppearances.ColorKey>();
         foreach (var role in new[] { "meshes", "textures" })
         {
@@ -44,27 +45,57 @@ public static class OwnedChassisVisuals
                 if (!reader.ReadBytes(8).SequenceEqual(expected))
                     throw new InvalidDataException("Mislabeled owned visual resource.");
                 if (role == "meshes")
-                    batchCounts[lod.Name] = ReadMesh(reader);
+                {
+                    var mesh = new OwnedEmission.Mesh();
+                    batchCounts[lod.Name] = ReadMesh(reader, mesh);
+                    emissionMeshes[lod.Name] = mesh;
+                }
                 if (role == "textures")
                 {
                     var batches = reader.ReadUInt32(); var count = reader.ReadUInt32();
                     if (batches is < 1 or > 256 || batches != batchCounts[lod.Name] || count is < 1 or > 64)
                         throw new InvalidDataException("Invalid owned texture counts.");
+                    var indices = new uint[batches];
                     for (var i = 0; i < batches; ++i)
-                        if (reader.ReadUInt32() >= count) throw new InvalidDataException("Invalid material binding.");
+                    {
+                        indices[i] = reader.ReadUInt32();
+                        if (indices[i] >= count) throw new InvalidDataException("Invalid material binding.");
+                    }
+                    var materials = new List<(string Name, uint Width, uint Height, ulong Hash)>();
                     for (var i = 0; i < count; ++i)
                     {
-                        ReadName(reader);
+                        var material = ReadName(reader);
                         var width = reader.ReadUInt32(); var height = reader.ReadUInt32(); reader.ReadUInt64();
                         if (width is < 1 or > 4096 || height is < 1 or > 4096)
                             throw new InvalidDataException("Invalid texture dimensions.");
                         var size = checked((int)(width * height * 2)); var pixels = reader.ReadBytes(size);
                         if (pixels.Length != size) throw new InvalidDataException("Truncated owned texture.");
-                        colors.Add(new(width, height, 1, ChassisAppearances.PixelHash(pixels)));
+                        var identity = ChassisAppearances.PixelHash(pixels);
+                        colors.Add(new(width, height, 1, identity));
+                        materials.Add((material, width, height, identity));
                     }
                     if (reader.BaseStream.Position != reader.BaseStream.Length)
                         throw new InvalidDataException("Trailing owned texture data.");
+                    for (var i = 0; i < batches; ++i)
+                    {
+                        var binding = emissionMeshes[lod.Name].Batches[i];
+                        var material = materials[(int)indices[i]];
+                        binding.Material = material.Name; binding.Width = material.Width;
+                        binding.Height = material.Height; binding.ColorHash = material.Hash;
+                    }
                 }
+            }
+        }
+        if (value.TryGetProperty("emission", out var emission))
+        {
+            if (emission.ValueKind != JsonValueKind.Object ||
+                !new HashSet<string>(new[] { "close", "distance" }).SetEquals(emission.EnumerateObject().Select(p => p.Name)))
+                throw new InvalidDataException("Owned emission requires both LODs.");
+            foreach (var lod in emission.EnumerateObject())
+            {
+                if (lod.Value.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(lod.Value.GetString()))
+                    throw new InvalidDataException("Invalid owned emission path.");
+                OwnedEmission.Read(verify(lod.Value.GetString()!, OwnedEmission.Format), emissionMeshes[lod.Name]);
             }
         }
         if (value.TryGetProperty("normals", out var pages))
@@ -89,7 +120,7 @@ public static class OwnedChassisVisuals
         // The coordinator derives suppression rosters from the pinned legacy models,
         // checks ancestry and parses the complete visual payload before preparing banks.
     }
-    private static string ReadName(BinaryReader reader, bool empty = false)
+    internal static string ReadName(BinaryReader reader, bool empty = false)
     {
         var data = reader.ReadBytes(32);
         if (data.Length != 32) throw new InvalidDataException("Truncated owned name."); var end = Array.IndexOf(data, (byte)0);
@@ -99,7 +130,7 @@ public static class OwnedChassisVisuals
             throw new InvalidDataException("Invalid owned mesh name.");
         return System.Text.Encoding.ASCII.GetString(data, 0, end);
     }
-    private static uint ReadMesh(BinaryReader reader)
+    private static uint ReadMesh(BinaryReader reader, OwnedEmission.Mesh emissionMesh)
     {
         string Name(bool empty = false) => ReadName(reader, empty);
         void Matrix()
@@ -124,6 +155,7 @@ public static class OwnedChassisVisuals
             var refs = reader.ReadUInt32(); var flags = reader.ReadUInt32();
             if (batches is < 1 or > 256 || bones is < 1 or > 256 || refs is < 1 or > 128 || flags > 2)
                 throw new InvalidDataException("Invalid owned rig counts.");
+            emissionMesh.Fold(batches);
             for (var i = 0; i < 5; ++i)
             {
                 var value = reader.ReadDouble();
@@ -151,9 +183,12 @@ public static class OwnedChassisVisuals
                 throw new InvalidDataException("Missing required owned retarget joint.");
             for (var batch = 0; batch < batches; ++batch)
             {
-                Name(); Name(); var bone = reader.ReadUInt32(); var size = reader.ReadUInt32(); reader.ReadUInt32();
+                var binding = new OwnedEmission.Batch { Owner = Name() };
+                Name(); var bone = reader.ReadUInt32(); var size = reader.ReadUInt32(); reader.ReadUInt32();
+                binding.Rigid = bone != uint.MaxValue;
                 if ((bone != uint.MaxValue && bone >= bones) || size is < 1 or > 65535 || size % 3 != 0)
                     throw new InvalidDataException("Invalid owned visual batch.");
+                emissionMesh.Fold(size);
                 for (var vertex = 0; vertex < size; ++vertex)
                 {
                     float normalLength = 0;
@@ -162,12 +197,19 @@ public static class OwnedChassisVisuals
                         var value = reader.ReadSingle();
                         if (!float.IsFinite(value)) throw new InvalidDataException("Nonfinite owned vertex.");
                         if (field >= 3 && field <= 5) normalLength += value * value;
+                        emissionMesh.Fold(BitConverter.SingleToUInt32Bits(value));
+                        if (field < 3)
+                        {
+                            binding.Low[field] = Math.Min(binding.Low[field], value);
+                            binding.High[field] = Math.Max(binding.High[field], value);
+                        }
                     }
                     if (normalLength < .5f) throw new InvalidDataException("Invalid owned vertex normal.");
                 }
                 if (bone == uint.MaxValue)
                     for (var vertex = 0; vertex < size; ++vertex)
                         if (reader.ReadUInt32() >= bones) throw new InvalidDataException("Invalid owned vertex bone.");
+                emissionMesh.Batches.Add(binding);
             }
             if (reader.BaseStream.Position != reader.BaseStream.Length)
                 throw new InvalidDataException("Trailing owned mesh data.");

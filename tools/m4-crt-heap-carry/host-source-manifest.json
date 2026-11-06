@@ -1049,6 +1049,12 @@
       "classification": "authored-host-source",
       "bytes": 14383,
       "sha256": "03ad5ed6ef4b075747dae36f5bc97b413410f98d910273d59ca428785032fa96"
+    },
+    "owned_emission.hpp": {
+      "decision": "commit",
+      "classification": "authored-host-source",
+      "bytes": 6594,
+      "sha256": "7dae5a220fd7c7ed927d28c0f55d81381b0e68a1059fc4465d629c5df8869349"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."

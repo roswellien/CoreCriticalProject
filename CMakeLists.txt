@@ -101,6 +101,10 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_deferred_source_tests)
     add_test(NAME deferred_source_provenance COMMAND mw34_deferred_source_tests)
 
+    add_executable(mw34_owned_emission_tests tools/remaster-launcher/test_owned_emission.cpp)
+    mw34_warnings(mw34_owned_emission_tests)
+    add_test(NAME owned_emission_contract COMMAND mw34_owned_emission_tests)
+
     if(WIN32)
         add_executable(mw34_local_cd_audio_tests tests/local_cd_audio_tests.cpp)
         target_include_directories(mw34_local_cd_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
@@ -128,6 +132,9 @@ if(BUILD_TESTING)
     add_test(NAME surface_materials_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_surface_materials.py -v)
     set_tests_properties(surface_materials_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME owned_visuals_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p "test_owned*.py" -v)
+    set_tests_properties(owned_visuals_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
     set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

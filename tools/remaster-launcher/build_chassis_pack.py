@@ -61,6 +61,9 @@ def build(project_path, output):
                 def read_appearance(name, fmt):
                     path = resolve(project_path.parent, name)
                     limit = MAX_PAGE_BYTES if fmt else 16 * 1024**2
+                    if fmt == 'BWMEM1':
+                        from owned_emission import MAX_BYTES
+                        limit = MAX_BYTES
                     if not 0 < path.stat().st_size <= limit:
                         raise ValueError('Appearance project resource exceeds size limit')
                     return path.read_bytes()
@@ -81,12 +84,13 @@ def build(project_path, output):
                     owned_validate(entry['appearances']['new'], legacy_resources, read_appearance)
                     new = dict(schema_version=1, meshes={}, textures={}, normals=[])
                     for role, lod, relative in owned_references(entry['appearances']['new']):
-                        fmt = 'BWMESH4' if role == 'meshes' else 'BWTEX1' if role == 'textures' else 'BWSNR2'
+                        fmt = {'meshes': 'BWMESH4', 'textures': 'BWTEX1',
+                               'normals': 'BWSNR2', 'emission': 'BWMEM1'}[role]
                         packed = add(read_appearance(relative, fmt), fmt)
                         if role == 'normals':
                             new['normals'].append(packed)
                         else:
-                            new[role][lod] = packed
+                            new.setdefault(role, {})[lod] = packed
                     row['appearances']['new'] = new
             records.append(row)
             continue
@@ -155,12 +159,15 @@ def build(project_path, output):
         if any(any(v.get('normals') for v in row.get('appearances', {}).values()) for row in records):
             if 'BWSNR2' not in manifest['native_payload']['required_formats']:
                 manifest['native_payload']['required_formats'].append('BWSNR2')
+        if any(row.get('appearances', {}).get('new', {}).get('emission') for row in records):
+            manifest['native_payload']['required_formats'].append('BWMEM1')
     if surface_materials:
         manifest['native_payload']['required_capabilities'][SURFACE_CAPABILITY] = 1
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     select([(stage, manifest)], {'content_capabilities': {
         CAPABILITY: [1, 2, 3], 'mech-appearances': [1], SKIN_CAPABILITY: [1],
-        'mech-headlights': [1], 'owned-chassis-visuals': [1, 2], SURFACE_CAPABILITY: [1]},
+        'mech-headlights': [1], 'owned-chassis-visuals': [1, 2],
+        'owned-chassis-emission': [1], SURFACE_CAPABILITY: [1]},
         'normal_map_formats': [2]})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:

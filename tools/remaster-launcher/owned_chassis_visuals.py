@@ -13,7 +13,7 @@ NAME = re.compile(r"[A-Za-z0-9_.-]{1,31}\Z")
 def references(value):
     if (
         not isinstance(value, dict)
-        or set(value) - {"normals"} != {"schema_version", "meshes", "textures"}
+        or set(value) - {"normals", "emission"} != {"schema_version", "meshes", "textures"}
         or type(value["schema_version"]) is not int
         or value["schema_version"] != 1
     ):
@@ -35,6 +35,14 @@ def references(value):
         raise ValueError("Invalid owned visual normal pages")
     for index, path in enumerate(pages):
         yield "normals", index, path
+    if "emission" in value:
+        table = value["emission"]
+        if not isinstance(table, dict) or set(table) != {"close", "distance"}:
+            raise ValueError("Owned emission requires both LODs")
+        for lod, path in table.items():
+            if not isinstance(path, str) or not path:
+                raise ValueError("Invalid owned emission path")
+            yield "emission", lod, path
 
 
 class Reader:
@@ -222,8 +230,12 @@ def source_nodes(data, material_count):
 def validate(value, legacy, read):
     payloads = {role: {} for role in ("meshes", "textures")}
     pages = []
+    emission_payloads = {}
     for role, lod, path in references(value):
-        if role == "normals":
+        if role == "emission":
+            from owned_emission import FORMAT
+            emission_payloads[lod] = read(path, FORMAT)
+        elif role == "normals":
             page = read(path, "BWSNR2")
             if not 0 < len(page) <= 128 * 1024**2:
                 raise ValueError("Invalid owned normal page size")
@@ -233,6 +245,13 @@ def validate(value, legacy, read):
         else:
             payloads[role][lod] = read(path, "BWMESH4" if role == "meshes" else "BWTEX1")
     result = {"payloads": payloads, "rosters": {}, "capability_version": 1}
+    if emission_payloads:
+        from owned_emission import read as read_emission, mesh_bindings
+        from surface_materials import mesh_uv_identity
+        for lod, data in emission_payloads.items():
+            read_emission(data, mesh_uv_identity(payloads["meshes"][lod]),
+                          mesh_bindings(payloads["meshes"][lod], payloads["textures"][lod]))
+        result["emission_payloads"] = emission_payloads
     keys = set()
     count = len(materials(legacy["materials"]))
     for lod in ("close", "distance"):

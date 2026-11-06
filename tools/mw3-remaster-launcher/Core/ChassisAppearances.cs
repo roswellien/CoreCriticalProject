@@ -48,6 +48,8 @@ public static class ChassisAppearances
             if (!payload.RequiredFormats.Contains("BWMESH4") || !payload.RequiredFormats.Contains("BWTEX1"))
                 throw new InvalidDataException("Undeclared owned visual formats.");
             OwnedChassisVisuals.Read(owned, verify);
+            if (owned.TryGetProperty("emission", out _) && !payload.RequiredFormats.Contains(OwnedEmission.Format))
+                throw new InvalidDataException("Undeclared owned emission format.");
             if (owned.TryGetProperty("normals", out var normalPages) && normalPages.ValueKind == JsonValueKind.Array && normalPages.GetArrayLength() > 0 && !payload.RequiredFormats.Contains("BWSNR2"))
                 throw new InvalidDataException("Undeclared owned normal format.");
         }

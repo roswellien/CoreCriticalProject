@@ -189,6 +189,31 @@ class OwnedVisualTests(unittest.TestCase):
         selected = select([(source_pack, source_manifest)], host, appearance_mode="new")
         self.assertEqual(selected[0]["owned_visuals"]["capability_version"], 2)
 
+        # The same pack remains usable as Original without native emission.
+        from owned_emission import pack as pack_emission, mesh_bindings
+        from surface_materials import mesh_uv_identity
+        emission = pack_emission(mesh_uv_identity(bytes(source_mesh)),
+                                 mesh_bindings(bytes(source_mesh), self.texture),
+                                 [dict(id="glass", batch=0, strength=.35,
+                                       regions=[(0, 0, 1, 1)], anchors=[])])
+        (root / "emission").write_bytes(emission)
+        document["chassis"][0]["appearances"]["new"]["emission"] = {
+            "close": "emission", "distance": "emission"}
+        project.write_text(json.dumps(document))
+        build(project, root / "emission-built")
+        emission_pack = root / "emission-built/pack"
+        emission_manifest = json.loads((emission_pack / "pack.json").read_text())
+        select([(emission_pack, emission_manifest)], host, appearance_mode="original")
+        with self.assertRaisesRegex(ValueError, "owned-chassis-emission version 1"):
+            select([(emission_pack, emission_manifest)], host, appearance_mode="new")
+        host["content_capabilities"]["owned-chassis-emission"] = [1]
+        selected = select([(emission_pack, emission_manifest)], host, appearance_mode="new")
+        self.assertEqual(selected[0]["owned_visuals"]["emission_payloads"]["close"], emission)
+        invalid = copy.deepcopy(emission_manifest)
+        invalid["native_payload"]["required_formats"].remove("BWMEM1")
+        with self.assertRaisesRegex(ValueError, "Undeclared owned emission"):
+            select([(emission_pack, invalid)], host, appearance_mode="original")
+
     def test_source_joint_mode_and_unknown_flags(self):
         self.assertEqual(mesh_metadata(self.mesh)["capability_version"], 1)
         for flags in (1, 2, 3, 0xFFFFFFFF):

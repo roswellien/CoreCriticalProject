@@ -122,6 +122,32 @@ static class ChassisAppearanceChecks
         var badName = (byte[])texture.Clone(); badName[20] = (byte)'/';
         setResource("owned.texture", badName, "BWTEX1"); Reject();
         setResource("owned.texture", texture, "BWTEX1"); Read();
-        Console.WriteLine("Appearance checks passed: identity, feature gating, paths, inactive normal validation and full-content keys.");
+        // This descriptor was serialized by the independent Python writer from
+        // the authored mesh/color fixture above, not by this C# reader.
+        var emission = Convert.FromBase64String("QldNRU0xAAABAAAA1k4tpZXLBDRleWVzAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABoaXAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHBhaW50AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAACDyLG0B57uBzMzsz4BAAAAAgAAAAAAAADNzEw+mpmZPjMzMz9sZWZ0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJqZmb4AAAAAzcxMPgAAgD8K1yM8CtcjPJqZmT/NzMw9cmlnaHQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACamZk+AAAAAM3MTD4AAIA/CtcjPArXIzyamZk/zczMPQ==");
+        setResource("owned.emission", emission, "BWMEM1");
+        appearance["new"]!["emission"] = JsonNode.Parse("""{"close":"owned.emission","distance":"owned.emission"}""");
+        Reject(); // A new payload cannot omit its declared format.
+        installed.NativePayload.RequiredFormats.Add("BWMEM1");
+        Read();
+        foreach (var offset in new[] { 0, 12, 52, 56, 120, 128 })
+        {
+            var corrupt = (byte[])emission.Clone(); corrupt[offset] ^= 1;
+            setResource("owned.emission", corrupt, "BWMEM1"); Reject();
+        }
+        foreach (var corrupt in new[] { emission[..^1], emission.Concat(new byte[] { 0 }).ToArray() })
+        { setResource("owned.emission", corrupt, "BWMEM1"); Reject(); }
+        var badStrength = (byte[])emission.Clone(); BitConverter.GetBytes(float.NaN).CopyTo(badStrength, 136);
+        setResource("owned.emission", badStrength, "BWMEM1"); Reject();
+        var badAnchor = (byte[])emission.Clone(); BitConverter.GetBytes(8f).CopyTo(badAnchor, 196);
+        setResource("owned.emission", badAnchor, "BWMEM1"); Reject();
+        setResource("owned.emission", emission, "BWMEM1"); Read();
+        var weightedMesh = mesh.Concat(new byte[12]).ToArray();
+        BitConverter.GetBytes(uint.MaxValue).CopyTo(weightedMesh, 64 + 12 * 196 + 12 * 160 + 64);
+        setResource("owned.mesh", weightedMesh, "BWMESH4"); Reject();
+        setResource("owned.mesh", mesh, "BWMESH4"); Read();
+        appearance["new"]!["emission"]!.AsObject().Remove("distance"); Reject();
+        appearance["new"]!["emission"]!["distance"] = "owned.emission"; Read();
+        Console.WriteLine("Appearance checks passed: identity, feature gating, paths, normal validation and authored emission integrity.");
     }
 }

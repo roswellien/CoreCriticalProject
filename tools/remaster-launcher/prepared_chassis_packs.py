@@ -101,6 +101,9 @@ def select(metadata, host, verification=None, appearance_mode=None):
         ['MW3LEGACY', 'BWMESH4', 'BWTEX1'],
         ['MW3LEGACY', 'BWMESH4', 'BWTEX1', 'BWSNR2'],
     )
+    allowed_format_lists = (*allowed_format_lists,
+                            *(formats + ['BWMEM1'] for formats in allowed_format_lists
+                              if 'BWMESH4' in formats and 'MW3LEGACY' in formats))
     result, ids = [], set()
     for root, manifest in metadata:
         payload = manifest.get('native_payload', {})
@@ -140,8 +143,10 @@ def select(metadata, host, verification=None, appearance_mode=None):
                 raise ValueError('Chassis integrity failure: ' + name)
             fmt = pin.get('format')
             if fmt is not None:
-                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1', 'BWSNR2', SURFACE_FORMAT):
+                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1', 'BWSNR2', 'BWMEM1', SURFACE_FORMAT):
                     raise ValueError('Unsupported chassis payload format')
+                if fmt == 'BWMEM1' and size > 1024 * 1024:
+                    raise ValueError('Owned emission size limit exceeded')
                 with path.open('rb') as stream:
                     if stream.read(8) != fmt.encode().ljust(8, b'\0'):
                         raise ValueError('Mislabeled chassis payload')
@@ -198,6 +203,8 @@ def select(metadata, host, verification=None, appearance_mode=None):
                             raise ValueError('Undeclared owned visual formats')
                         if owned['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
                             raise ValueError('Undeclared owned normal format')
+                        if owned.get('emission_payloads') and 'BWMEM1' not in payload['required_formats']:
+                            raise ValueError('Undeclared owned emission format')
                     if upgraded is not None and upgraded['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
                         raise ValueError('Undeclared appearance normal format')
                 selected = dict(registration=record, legacy=legacy)
@@ -215,6 +222,10 @@ def select(metadata, host, verification=None, appearance_mode=None):
                     version = owned['capability_version']
                     if version not in advertised(host).get(OWNED_CAPABILITY, []):
                         raise ValueError(f'Selected new appearance requires owned-chassis-visuals version {version}')
+                    if owned.get('emission_payloads'):
+                        from owned_emission import CAPABILITY as EMISSION_CAPABILITY
+                        if 1 not in advertised(host).get(EMISSION_CAPABILITY, []):
+                            raise ValueError('Selected new appearance requires owned-chassis-emission version 1')
                     if owned['normal_pages'] and (2 not in host.get('normal_map_formats', []) or 'BWSNR2' not in payload['required_formats']):
                         raise ValueError('Selected owned normals require format 2')
                     if owned['normal_pages'] and 1 not in host.get('authored_normal_catalog_versions', []):
