@@ -233,11 +233,96 @@ The original PM missile firing coordinate remains unchanged. Restoring the
 donor rack leaves a 1.229052-metre visual-mouth offset from that coordinate;
 the six-endpoint alignment criterion is therefore not complete for this
 candidate. No gameplay origin is silently moved to disguise that limit.
-Dim native red eye/cockpit emission and faint spill are requested separately;
-the current red eye albedo does not establish that behavior. The focused glow
-spec is pending owner approval before implementation planning.
+The owner subsequently approved native red eye/cockpit emission and faint spill,
+with a reusable authoring contract for other mechs. The next section records that
+implementation; red eye albedo alone was not counted as glow evidence.
 
-## Checks and remaining acceptance
+## Reusable native eye glow, November 6
+
+Private candidate `0.4.7-mw5-eye-glow-preview` has pack SHA256
+`c8dee2b4792237d3290d37aefc606297d2834c8995f890cf0db7dab7404e7131`
+and installs through the actual C# importer into
+`local/atlas-library-r7`. Meshes, UVs, color/normal images and existing resources
+are byte-identical to 0.4.6. Only the project metadata and two authored `BWMEM1`
+sidecars are added. Two anchors use the current rigid glass batch's exact pose;
+the central non-eye glass strip is excluded from the emissive UV rectangle.
+The four headlight definitions and original gameplay remain unchanged.
+
+The maintained host is built from clean source
+`18e40c11ef86f4c70a729e3c8ee8da7faa010db7` in
+`local/host-build-emission-native-r5`. Its translated module remains
+`6d6e3c25fef68727113a6d52859253883dbb554958ddaa5a091187667aa8bfa5`.
+The generic runtime integration is documented in
+[owned emission materials](owned-emission-materials.md). No Atlas name, image
+hash or eye coordinates are hardcoded in the renderer. The capability is
+advertised only in this source-pinned development profile, not historical
+release profiles.
+
+Native `atlas-glow-positive-r1` and `atlas-glow-zero-r1` each present 2,205 frames
+at 3440x1440 using `capture-host-emission-r1`, based on clean `e73dcd9`
+(`host-build-emission-native-r2`). They follow the existing live-menu -> Atlas
+-> mission path, then use
+controlled Photo views. Both use identical geometry/albedo/world settings;
+the negative control is a valid descriptor with zero surface/spill intensity.
+Front differences are confined to 1,901 pixels around the eyes/nearby face
+(x1644..1799,y162..232); sides change 399/454 pixels and the rear is pixel-identical.
+A separate spill-only versus zero comparison with normal mapping disabled
+uses `capture-host-emission-r2`, based on clean `bdf2f114`
+(`host-build-emission-native-r3`). It changes 1,904 front pixels near the face;
+rear remains identical. The glass has
+no authored normal sidecar. These are native visual checks, not live gameplay,
+performance or full-model acceptance.
+
+Independent source review found and fixed missing CPU receiver metadata and a
+missing installed-coordinator module. Build, 39/39 CTest, formatting, style,
+launcher dispatch 8/8 and focused C# content/import checks passed. Isolated
+installed and refreshed coordinator tests read emission without checkout
+imports. Deliberate identity/gate, shader-uniform and pose-transform mutations
+fail the authored tests. Full WPF checks, retried with no native game running,
+still stop at the pre-existing active-Steam guard; Steam remains untouched.
+The first attempt during a capture stopped at its expected games-closed guard.
+
+Native global GPU-off diagnostics stop before gameplay with the existing
+“Sun prototype requires GPU geometry” restriction. This is not CPU parity proof.
+The dedicated `capture-host-emission-near-r1` derivative of the same clean r5
+source lowers only Photo mode's camera-radius floor from 2.5 to 0.05. Its receipt
+also pins that camera-math change; no emission or renderer code is altered.
+`atlas-glow-near-final-on-r1`, `-zero-r1` and `-fixturesoff-r1` each present
+2,205 frames with normal mapping off. At frame 1800 the actual nonempty clipped
+glass command reports `cpu_emission_batches:1`. Positive/zero controls differ
+in 151,038 pixels in the head-intersecting front view; the other views are
+pixel-identical. Fixture-off positive descriptors match the valid zero control
+pixel-for-pixel in all four views, with the same CPU receiver admitted. This
+checks actual shader admission and stable base lighting under the preference.
+The extreme diagnostic camera is not an aesthetic/model-quality capture.
+Scene-local retirement, distinct-root isolation and 4096 nearest-candidate
+selection also have authored production-helper coverage; broad mission/skin
+transition and multiple-live-Atlas acceptance is not claimed.
+
+`atlas-glow-lamps-walk-r2` uses the clean r5 camera derivative with full normal
+mapping, original W movement, and the original L input before Photo mode.
+The log confirms L at frame 1600, four emitters reaching intensity 1 by frame 1680,
+and 11 selected fixture/moving lights at frame 1780 (five cached scenery sources,
+four headlights and two eye anchors). Native views retain the red eyes. The
+first lamp-input attempt inherited a historical unbound session preference;
+the retry and manual preview use their own isolated L binding without changing
+global user settings. This is a short movement/control check, not broad combat
+or headlight acceptance across every model.
+
+The updated local comparison package is
+`D:/Projects/MW34Recomp/reports/atlas-evolution-20261106-r4`: 1440p60 and 1080p60
+exports, 6,061 frames / 101.016667 seconds, the approved 5-second opening with startup
+SFX, revised thumbnail and description. The final MW5 orbit presents 5,005 frames
+and records 3,120 frames from clean r5 (`final-stage-3-glow-r1`); earlier Original
+and upgraded source passes retain their own build identities in the export
+receipt. Both outputs decode fully; opening audio correlation is 0.999618.
+Normal binding verification confirms two unchanged Atlas normal images across
+five material records. The thumbnail is a built-in imagegen edit of the prior
+master using the actual native screenshot; its prompt and receipt are saved.
+The video and screenshot A/B are native evidence, not generated visuals. No
+media upload or release publication has occurred.
+
+## Earlier fitting checks and remaining acceptance
 
 - `python tools/check.py --area launcher`: build passed; CTest 36/36 passed;
   C++ format, enforced style and launcher dispatch passed. The full launcher WPF
@@ -275,7 +360,7 @@ fixtures do not establish those live results. The normal-map/POM comparison
 video and Mod Studio validation are separate work.
 
 A local manual preview entry point is
-`local/atlas-preview-r5/Start-AtlasPreview.ps1`. It uses an isolated game/profile,
+`local/atlas-preview-r13/Start-AtlasPreview.ps1`. It uses an isolated game/profile,
 the pinned host and prepared content, real input/clock, and a zero frame budget
 (no automatic frame-limit exit). It is a development preview, not an installable
 or published runtime update.
