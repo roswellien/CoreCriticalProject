@@ -35,8 +35,9 @@ remain local. The preview pack version is not a game release version.
 BWMESH4 rig flag 2 applies `current * inverse(reference) * authored_rest` for
 bound parts and the parent delta for unbound attachments. There is no inferred
 knee pole, foot goal or gait offset in this mode. Existing flags 0/1 retain the
-prior donor solver. The static fitting moves elbow/knee seams to the original
-pivots and preserves six recovered primary weapon endpoints; it does not move
+prior donor solver. The initial static fitting moves elbow/knee seams to the original
+pivots and preserves six recovered primary weapon endpoints; the later rack
+correction below supersedes the missile visual alignment. The fit does not move
 the game's firing origins. The original four lamp records and L binding remain.
 
 Selected flag-2 visuals require `owned-chassis-visuals: 2`. Original preparation
@@ -208,6 +209,33 @@ full enhanced environment and a closer 20-unit Photo camera. This validates
 native presentation of the albedo revision, not owner aesthetic acceptance.
 The prior channel-video export still depicts 0.4.4 and is not evidence for
 this newer candidate.
+
+### Missile rack correction from the supplied reference
+
+Owner Photo 1 identifies the tall ten-nose rack beside the skull. The earlier
+weapon-fit translation moved its frame and noses down/forward while leaving
+the surrounding cutout at the original donor location. Candidate
+`0.4.6-mw5-rack-preview` reverses only that assembly translation
+`(-0.642418, +0.422625, +0.958778)` in authoring coordinates. The nose mesh
+receives nondegenerate UV islands and a full-tile red coating bake with tonal
+variation and small exposed-metal scuffs. Existing detailed armor paint,
+normal-image pixels, rig and removed shoulder AMS are retained.
+
+Private evidence is under `local/atlas-look-r3/`: `rack-receipt.json`,
+`nose-visibility.json`, `pack-receipt.json`, native closeup and cardinal views.
+All ten front-facing nose visibility rays hit the nose mesh. Pack SHA-256:
+`466aff22e2cec64855c9d180a1c351574b9fe2f2ab832f92840280425e311933`.
+The actual importer installs it into isolated `atlas-library-r6`.
+`atlas-rack-proof-r3` reaches 2,205 frames at 3440x1440 and shows the rack in
+the reference location, with red noses, in four Photo-mode views.
+
+The original PM missile firing coordinate remains unchanged. Restoring the
+donor rack leaves a 1.229052-metre visual-mouth offset from that coordinate;
+the six-endpoint alignment criterion is therefore not complete for this
+candidate. No gameplay origin is silently moved to disguise that limit.
+Dim native red eye/cockpit emission and faint spill are requested separately;
+the current red eye albedo does not establish that behavior. The focused glow
+spec is pending owner approval before implementation planning.
 
 ## Checks and remaining acceptance
 
