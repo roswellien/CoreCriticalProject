@@ -885,5 +885,57 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(snapshot.issue(9001).status, "Ready")
 
 
+class WorkflowTests(unittest.TestCase):
+    def test_workflow_structure_keeps_trusted_code_and_credentials_closed(self):
+        workflow = automation.strict_json(
+            (ROOT / ".github/workflows/openai-automation.yml").read_bytes()
+        )
+        self.assertEqual(set(workflow["on"]), {"schedule", "workflow_dispatch"})
+        self.assertEqual(workflow["on"]["schedule"], [{"cron": "17 * * * *"}])
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
+        self.assertEqual(set(workflow["jobs"]), {"controller"})
+        self.assertNotIn("secrets.", json.dumps(workflow))
+        job = workflow["jobs"]["controller"]
+        self.assertEqual(job.get("permissions", {"contents": "read"}), {"contents": "read"})
+        self.assertEqual((job["timeout-minutes"], job["environment"]), (5, "openai-automation"))
+        for condition in (
+            "github.ref == 'refs/heads/develop'",
+            "vars.OPENAI_AUTOMATION_ENABLED == 'true'",
+            "vars.OPENAI_AUTOMATION_ROLLOUT_COMPLETE == 'true'",
+            "vars.OPENAI_AUTOMATION_CONTROLLER_SHA != ''",
+        ):
+            self.assertIn(condition, job["if"])
+        steps = job["steps"]
+        self.assertEqual(len(steps), 5)
+        self.assertIn("^[0-9a-f]{40}$", steps[0]["run"])
+        self.assertEqual(
+            steps[1]["uses"], "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+        )
+        self.assertEqual(
+            steps[1]["with"],
+            {
+                "ref": "${{ vars.OPENAI_AUTOMATION_CONTROLLER_SHA }}",
+                "fetch-depth": 0,
+                "persist-credentials": False,
+            },
+        )
+        self.assertIn("git merge-base --is-ancestor", steps[2]["run"])
+        self.assertEqual(
+            steps[3]["uses"], "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+        )
+        self.assertEqual(
+            steps[4]["run"],
+            'python -B tools/github/openai_automation.py "$AUTOMATION_MODE" --issue "$AUTOMATION_ISSUE" --admission-only',
+        )
+        for step in steps:
+            self.assertNotIn("${{", step.get("run", ""))
+            self.assertNotIn("secrets.", json.dumps(step))
+        self.assertNotIn("secrets.", json.dumps(job))
+        with contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(automation.main(["reconcile", "--issue", "0", "--admission-only"]), 2)
+        self.assertIn("foundation_rollout_incomplete", error.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
