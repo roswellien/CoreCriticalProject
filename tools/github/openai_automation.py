@@ -18,12 +18,19 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_board import AREA_LABELS, BOARD_NUMBER, BOARD_OWNER, REPOSITORY, TYPE_LABELS
+import check_board
+
+AREA_LABELS = check_board.AREA_LABELS
+TYPE_LABELS = check_board.TYPE_LABELS
+REPOSITORY = check_board.REPOSITORY
+BOARD_NUMBER = check_board.BOARD_NUMBER
+BOARD_OWNER = check_board.BOARD_OWNER
 
 BOARD_ID = "PVT_kwHODf7y6M4BpC8L"
 PRIORITY_FIELD = "PVTSSF_lAHODf7y6M4BpC8LzhngSb0"
 PRIORITY_OPTIONS = {"P0": "79628723", "P1": "0a877460", "P2": "da944a9c"}
 NEXT_ACTION_FIELD = "PVTF_lAHODf7y6M4BpC8LzhoZL5o"
+STATUS_FIELD = "PVTSSF_lAHODf7y6M4BpC8LzhngSSM"
 STATE_BRANCH = "roswellien/ci/260-automation-state"
 STATE_PATH = "openai-automation/state.json"
 MAX_DOCUMENT_BYTES = 2_000_000
@@ -31,8 +38,15 @@ MAX_ITEMS = 1000
 RUNTIME_CAPABILITIES = frozenset({"foundation"})
 REQUIRED_CAPABILITIES = frozenset({"foundation", "worker", "maintenance"})
 PREREQUISITES = (
-    "credits", "project_cap", "secret_isolation", "platform_no_merge",
-    "app_identity", "projects_identity", "ready_setters", "hosted_data", "canary",
+    "credits",
+    "project_cap",
+    "secret_isolation",
+    "platform_no_merge",
+    "app_identity",
+    "projects_identity",
+    "ready_setters",
+    "hosted_data",
+    "canary",
 )
 
 
@@ -88,8 +102,10 @@ def boolean(value: Any) -> bool:
 
 def text_value(value: Any, maximum: int, *, empty: bool = False) -> str:
     require(type(value) is str, "invalid_text")
-    require((empty or bool(value.strip())) and len(value.encode("utf-8")) <= maximum,
-            "invalid_text_length")
+    require(
+        (empty or bool(value.strip())) and len(value.encode("utf-8")) <= maximum,
+        "invalid_text_length",
+    )
     require(not any(ord(char) < 32 and char not in "\n\t" for char in value), "control_text")
     return value
 
@@ -160,10 +176,14 @@ class Policy:
             identifier(row["controller_sha"], r"[0-9a-f]{40}")
         if row["model"] is not None:
             identifier(row["model"], r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
-        require(row["effort"] in (None, "none", "low", "medium", "high", "xhigh"),
-                "invalid_effort")
-        for name in ("input_price_micro_usd_per_million", "output_price_micro_usd_per_million",
-                     "api_budget_micro_usd", "request_budget_micro_usd", "actions_budget_minutes"):
+        require(row["effort"] in (None, "none", "low", "medium", "high", "xhigh"), "invalid_effort")
+        for name in (
+            "input_price_micro_usd_per_million",
+            "output_price_micro_usd_per_million",
+            "api_budget_micro_usd",
+            "request_budget_micro_usd",
+            "actions_budget_minutes",
+        ):
             if row[name] is not None:
                 integer(row[name], 1)
         require((row["cycle_start"] is None) == (row["cycle_end"] is None), "incomplete_cycle")
@@ -183,16 +203,27 @@ def configuration_blockers(policy: Policy, now: datetime) -> tuple[str, ...]:
         blockers.append("disabled")
     if not policy.rollout_complete:
         blockers.append("rollout_incomplete")
-    for name in ("controller_sha", "model", "effort", "input_price_micro_usd_per_million",
-                 "output_price_micro_usd_per_million", "api_budget_micro_usd",
-                 "request_budget_micro_usd", "actions_budget_minutes", "cycle_start", "cycle_end"):
+    for name in (
+        "controller_sha",
+        "model",
+        "effort",
+        "input_price_micro_usd_per_million",
+        "output_price_micro_usd_per_million",
+        "api_budget_micro_usd",
+        "request_budget_micro_usd",
+        "actions_budget_minutes",
+        "cycle_start",
+        "cycle_end",
+    ):
         if getattr(policy, name) is None:
             blockers.append(f"missing_{name}")
-    if policy.cycle_start is not None and not (instant(policy.cycle_start) <= now
-                                              < instant(policy.cycle_end)):
+    if policy.cycle_start is not None and not (
+        instant(policy.cycle_start) <= now < instant(policy.cycle_end)
+    ):
         blockers.append("credit_cycle_inactive")
-    blockers.extend(f"unverified_{name}" for name in PREREQUISITES
-                    if not policy.prerequisites[name])
+    blockers.extend(
+        f"unverified_{name}" for name in PREREQUISITES if not policy.prerequisites[name]
+    )
     return tuple(blockers)
 
 
@@ -226,8 +257,10 @@ class Issue:
         boolean(row["open"])
         row["labels"] = string_list(row["labels"])
         row["assignees"] = string_list(row["assignees"])
-        require(row["status"] in ("", "Backlog", "Ready", "In progress", "In review", "Done"),
-                "invalid_status")
+        require(
+            row["status"] in ("", "Backlog", "Ready", "In progress", "In review", "Done"),
+            "invalid_status",
+        )
         require(row["priority"] in ("", *PRIORITY_OPTIONS), "invalid_priority")
         text_value(row["next_action"], 2000, empty=True)
         identifier(row["revision"], r"[0-9a-f]{64}")
@@ -245,8 +278,19 @@ class Snapshot:
 
     @classmethod
     def parse(cls, value: Any) -> Snapshot:
-        row = exact_object(value, {"version", "repository", "board_id", "base_sha", "captured_at",
-                                   "complete", "issues", "implementation_issues"})
+        row = exact_object(
+            value,
+            {
+                "version",
+                "repository",
+                "board_id",
+                "base_sha",
+                "captured_at",
+                "complete",
+                "issues",
+                "implementation_issues",
+            },
+        )
         require(row["version"] == 1 and type(row["version"]) is int, "unsupported_snapshot_version")
         require(row["repository"] == REPOSITORY and row["board_id"] == BOARD_ID, "wrong_scope")
         require(row["complete"] is True, "incomplete_snapshot")
@@ -260,8 +304,14 @@ class Snapshot:
         require(type(references) is list and len(references) <= MAX_ITEMS, "invalid_pr_references")
         references = tuple(integer(number, 1, 2**31 - 1) for number in references)
         require(len(set(references)) == len(references), "duplicate_pr_reference")
-        return cls(row["repository"], row["board_id"], row["base_sha"], row["captured_at"],
-                   issues, references)
+        return cls(
+            row["repository"],
+            row["board_id"],
+            row["base_sha"],
+            row["captured_at"],
+            issues,
+            references,
+        )
 
     def issue(self, number: int) -> Issue:
         for issue in self.issues:
@@ -270,15 +320,23 @@ class Snapshot:
         raise AutomationError("unknown_issue")
 
     def eligible_ready(self) -> tuple[int, ...]:
-        return tuple(issue.number for issue in self.issues if issue.open and issue.status == "Ready"
-                     and not issue.assignees and issue.number not in self.implementation_issues)
+        return tuple(
+            issue.number
+            for issue in self.issues
+            if issue.open
+            and issue.status == "Ready"
+            and not issue.assignees
+            and issue.number not in self.implementation_issues
+        )
 
 
 def proposal_text(value: Any, maximum: int) -> str:
     value = text_value(value, maximum)
     # Only plain review text is published. Links are constructed from validated IDs.
-    require(not re.search(r"https?://|www\.|[<>`]|\$\{|\$\(|\x1b", value, re.IGNORECASE),
-            "unsafe_proposal_text")
+    require(
+        not re.search(r"https?://|www\.|[<>`]|\$\{|\$\(|\x1b", value, re.IGNORECASE),
+        "unsafe_proposal_text",
+    )
     return value
 
 
@@ -298,11 +356,19 @@ class TriageProposal:
         require(issue.open, "closed_issue")
         require(row["revision"] == issue.revision, "stale_proposal")
         labels = string_list(row["labels"], TYPE_LABELS + AREA_LABELS)
-        require(sum(label in TYPE_LABELS for label in labels) == 1
-                and any(label in AREA_LABELS for label in labels), "missing_triage_labels")
+        require(
+            sum(label in TYPE_LABELS for label in labels) == 1
+            and any(label in AREA_LABELS for label in labels),
+            "missing_triage_labels",
+        )
         require(row["priority"] in PRIORITY_OPTIONS, "invalid_priority")
-        return cls(expected_issue, issue.revision, labels, row["priority"],
-                   proposal_text(row["next_action"], 500))
+        return cls(
+            expected_issue,
+            issue.revision,
+            labels,
+            row["priority"],
+            proposal_text(row["next_action"], 500),
+        )
 
     def merged_labels(self, issue: Issue) -> tuple[str, ...]:
         # Append only: human labels and captures are never silently removed.
@@ -319,8 +385,9 @@ class SummaryEntry:
 
 def parse_summary(value: Any, snapshot: Snapshot) -> tuple[SummaryEntry, ...]:
     row = exact_object(value, {"entries"})
-    require(type(row["entries"]) is list and len(row["entries"]) <= MAX_ITEMS,
-            "invalid_summary_entries")
+    require(
+        type(row["entries"]) is list and len(row["entries"]) <= MAX_ITEMS, "invalid_summary_entries"
+    )
     entries = []
     seen = set()
     for entry in row["entries"]:
@@ -330,9 +397,14 @@ def parse_summary(value: Any, snapshot: Snapshot) -> tuple[SummaryEntry, ...]:
         require(number not in seen, "duplicate_summary_issue")
         seen.add(number)
         require(entry["suggested_priority"] in PRIORITY_OPTIONS, "invalid_priority")
-        entries.append(SummaryEntry(number, proposal_text(entry["summary"], 1000),
-                                    entry["suggested_priority"],
-                                    proposal_text(entry["next_action"], 500)))
+        entries.append(
+            SummaryEntry(
+                number,
+                proposal_text(entry["summary"], 1000),
+                entry["suggested_priority"],
+                proposal_text(entry["next_action"], 500),
+            )
+        )
     return tuple(entries)
 
 
@@ -380,3 +452,160 @@ class State:
 def state_payload(state: State) -> dict:
     # Dataclasses own this format; adapters serialize no credential-bearing object.
     return asdict(state)
+
+
+def parse_state(value: Any) -> State:
+    row = dict(exact_object(value, {field.name for field in fields(State)}))
+    require(integer(row["version"]) == 1, "unsupported_state_version")
+    require(row["repository"] == REPOSITORY and row["board_id"] == BOARD_ID, "wrong_scope")
+    require(instant(row["cycle_start"]) < instant(row["cycle_end"]), "invalid_cycle")
+    integer(row["generation"])
+    integer(row["actions_minutes"])
+    if row["lease"] is not None:
+        lease = exact_object(row["lease"], {field.name for field in fields(Lease)})
+        identifier(lease["run_id"], r"[A-Za-z0-9_-]{1,64}")
+        require(integer(lease["fence"], 1) == row["generation"], "invalid_fence")
+        instant(lease["expires_at"])
+        row["lease"] = Lease(**lease)
+    require(
+        type(row["allocations"]) is list and len(row["allocations"]) <= MAX_ITEMS,
+        "invalid_allocations",
+    )
+    allocations = []
+    for allocation in row["allocations"]:
+        exact_object(allocation, {field.name for field in fields(Allocation)})
+        identifier(allocation["operation_id"], r"[A-Za-z0-9_-]{1,64}")
+        integer(allocation["reserved_micro_usd"], 1)
+        if allocation["actual_micro_usd"] is not None:
+            integer(allocation["actual_micro_usd"])
+            identifier(allocation["response_id"], r"resp_[A-Za-z0-9_-]{1,120}")
+        else:
+            require(allocation["response_id"] is None, "incomplete_usage")
+        allocations.append(Allocation(**allocation))
+    require(
+        len({item.operation_id for item in allocations}) == len(allocations), "duplicate_allocation"
+    )
+    row["allocations"] = tuple(allocations)
+    require(type(row["intents"]) is list and len(row["intents"]) <= MAX_ITEMS, "invalid_intents")
+    row["intents"] = tuple(parse_intent(intent) for intent in row["intents"])
+    require(
+        len({item.operation_id for item in row["intents"]}) == len(row["intents"]),
+        "duplicate_intent",
+    )
+    return State(**row)
+
+
+def parse_intent(value: Any) -> Intent:
+    row = dict(exact_object(value, {field.name for field in fields(Intent)}))
+    identifier(row["operation_id"], r"[A-Za-z0-9_-]{1,64}")
+    integer(row["issue_number"], 1, 2**31 - 1)
+    identifier(row["item_id"], r"PVTI_[A-Za-z0-9_-]{1,100}")
+    identifier(row["revision"], r"[0-9a-f]{64}")
+    require(row["outcome"] in ("prepared", "publishing", "applied", "conflict"), "invalid_outcome")
+    require(row["field"] in ("labels", "priority", "next_action"), "disallowed_field")
+    if row["field"] == "labels":
+        row["before"] = string_list(
+            list(row["before"]) if type(row["before"]) is tuple else row["before"]
+        )
+        row["desired"] = string_list(
+            list(row["desired"]) if type(row["desired"]) is tuple else row["desired"]
+        )
+        require(set(row["before"]) <= set(row["desired"]), "human_label_removal")
+        require(
+            set(row["desired"]) - set(row["before"]) <= set(TYPE_LABELS + AREA_LABELS),
+            "disallowed_label",
+        )
+    elif row["field"] == "priority":
+        require(
+            row["before"] in ("", *PRIORITY_OPTIONS) and row["desired"] in PRIORITY_OPTIONS,
+            "invalid_priority",
+        )
+    else:
+        text_value(row["before"], 2000, empty=True)
+        proposal_text(row["desired"], 500)
+    return Intent(**row)
+
+
+def acquire_lease(state: State, run_id: str, now: datetime, expires_at: datetime) -> State:
+    """Propose a publisher lease. The caller must persist it with the previous blob SHA."""
+    identifier(run_id, r"[A-Za-z0-9_-]{1,64}")
+    require(
+        now < expires_at and (expires_at - now).total_seconds() <= 300, "invalid_lease_deadline"
+    )
+    if state.lease is not None and instant(state.lease.expires_at) > now:
+        raise Blocked("publisher_busy")
+    if any(intent.outcome in ("publishing", "conflict") for intent in state.intents):
+        raise Blocked("unreconciled_publication")
+    if any(allocation.actual_micro_usd is None for allocation in state.allocations):
+        raise Blocked("unreconciled_usage")
+    generation = state.generation + 1
+    return replace(
+        state, generation=generation, lease=Lease(run_id, generation, utc_text(expires_at))
+    )
+
+
+def assert_fence(state: State, run_id: str, fence: int, now: datetime) -> None:
+    if state.lease is None or state.lease.run_id != run_id or state.lease.fence != fence:
+        raise Blocked("stale_publisher")
+    if not now < instant(state.lease.expires_at):
+        raise Blocked("expired_publisher")
+
+
+def prepare_triage(
+    state: State, snapshot: Snapshot, proposal: TriageProposal, operation_id: str
+) -> State:
+    """Create durable per-field intents; this function performs no publication."""
+    identifier(operation_id, r"[A-Za-z0-9_-]{1,55}")
+    issue = snapshot.issue(proposal.issue_number)
+    require(issue.revision == proposal.revision and issue.open, "stale_proposal")
+    if any(
+        item.issue_number == issue.number and item.outcome != "applied" for item in state.intents
+    ):
+        raise Blocked("issue_has_pending_intent")
+    intents = list(state.intents)
+    for name, desired in (
+        ("labels", proposal.merged_labels(issue)),
+        ("priority", proposal.priority),
+        ("next_action", proposal.next_action),
+    ):
+        before = getattr(issue, name)
+        if before == desired or (name == "labels" and set(before) == set(desired)):
+            continue
+        intent = Intent(
+            f"{operation_id}_{name}",
+            issue.number,
+            issue.item_id,
+            name,
+            before,
+            desired,
+            issue.revision,
+            "prepared",
+        )
+        intents.append(parse_intent(asdict(intent)))
+    require(len({item.operation_id for item in intents}) == len(intents), "duplicate_intent")
+    return replace(state, intents=tuple(intents))
+
+
+def intent_outcome(intent: Intent, issue: Issue) -> str:
+    require(intent.issue_number == issue.number and intent.item_id == issue.item_id, "wrong_issue")
+    current = getattr(issue, intent.field)
+    if intent.field == "labels":
+        current = tuple(sorted(current))
+    desired = tuple(sorted(intent.desired)) if intent.field == "labels" else intent.desired
+    before = tuple(sorted(intent.before)) if intent.field == "labels" else intent.before
+    if current == desired:
+        return "applied"
+    if current == before and issue.revision == intent.revision and issue.open:
+        return "prepared"
+    return "conflict"
+
+
+def update_intent(state: State, operation_id: str, outcome: str) -> State:
+    require(any(item.operation_id == operation_id for item in state.intents), "unknown_intent")
+    updated = tuple(
+        replace(item, outcome=outcome) if item.operation_id == operation_id else item
+        for item in state.intents
+    )
+    for item in updated:
+        parse_intent(asdict(item))
+    return replace(state, intents=updated)
