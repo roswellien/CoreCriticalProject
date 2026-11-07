@@ -360,3 +360,15 @@ prior pack and selections for rollback, and keep donor/derived media local.
 The [November 5 native validation record](atlas-mw5-port-validation-2026-11-05.md)
 contains the fitted primary candidate, exact source/pack receipts, observed
 behavior and remaining release acceptance.
+
+## Level forearms and render-only beam attachments
+
+The current local `0.4.9-mw5-level-forearms-preview` candidate rotates the complete
+forearm assemblies and corresponding rest frames about the accepted elbows.
+Its two `ERLaser_Large` attachment records bind the actual close/distance mesh
+identities and independently exported local muzzle landmarks. The records are
+selected-only; they do not impose the new capability on Original. It declares no
+simulation sockets. See [the attachment contract](atlas-weapon-visual-attachments.md)
+and [native validation](atlas-mw5-port-validation-2026-11-05.md#november-6-level-forearm-development-candidate)
+for the bounded native evidence and remaining acceptance gates. This candidate
+is local and does not replace the previously recorded packs or videos.

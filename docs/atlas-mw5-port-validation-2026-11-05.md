@@ -13,6 +13,57 @@ and appearance work in [#126](https://github.com/roswellien/MW3Recomp-Private/is
 remain open. The topic branch includes the unmerged #131/#141 dependencies;
 no merge or release is implied.
 
+## November 6 level-forearm development candidate
+
+The current local candidate is `0.4.9-mw5-level-forearms-preview`, SHA256
+`168bf8b1472e35aac610afc17b7e4e3220977af3c25ad96b9f840f41628023c8`.
+It levels the complete forearm assemblies while preserving the accepted shoulder
+and elbow positions. Close/distance exports have 27 batches and 49,097/20,424
+triangles. Independent mesh-axis checks measure neutral aim within 0.00604 degrees;
+666 original motion samples preserve the elbow anchors within 6.863e-7 metres.
+Actual C# import and Python preparation use the isolated r9 library and MWCHAS8.
+The prior candidates and their receipts below remain historical evidence.
+
+The clean maintained host is `bc2b1c21f32f04c7fd9a665f40d013e8c8d394e9`,
+`local/host-build-atlas-weapon-final-r1/source-snapshot.json`, executable SHA256
+`49aa67719e42244cbc108c64d1c782c6a3516aa29edc235895cc915e7369645e`.
+Its source pins match the r6 build exercised natively for 2,310 frames: right-arm
+fire at 1692, left-arm fire at 1870, then cached right-beam restart at 2070.
+Both controls authenticate separately despite sharing the original beam resource
+nodes. Original X external rendering works with Sun and effect lights disabled.
+Maximum measured source and original hit-endpoint mapping errors were below
+2.4e-13 metres. This is render-transform evidence, not gameplay-state equivalence.
+
+The private r3 derivative completes 2,690 frames with the enhanced environment,
+normal maps, eye emission and headlights enabled, `MW34_BODY_DISPATCH=0`, original
+X firing from each arm, and subsequent front/three-quarter/side/rear Photo views.
+Its camera automation and validation-counter changes are explicitly pinned in
+`local/atlas-evolution-20261106/capture-host-atlas-weapon-r3/capture-build.json`.
+The unchanged translated module is
+`6d6e3c25fef68727113a6d52859253883dbb554958ddaa5a091187667aa8bfa5`.
+Current front and left-arm firing captures are respectively
+`atlas-weapon-final-front-r3/photo-replay/screenshots/mw3_20261106_181912_929.png`
+and `mw3_20261106_181903_073.png` under that local evolution directory.
+The default enhanced/fogged beam correctly uses the CPU attribute-preserving
+path; this does not prove the restricted GPU path's native equivalence.
+
+Build, all 40 CTest cases, C++ format checks, enforced style checks, C# content
+checks and launcher dispatch pass. The actual host missile clipper retains all
+19,578 checks. Isolated identity, endpoint and retirement mutations each compile
+and fail the weapon-visual tests. Full WPF remains stopped by its existing active-
+Steam guard; Steam was preserved. Four focused fresh nonauthor review passes
+resolved alpha-state parity, temporary probe complexity, host-state preservation
+and shared-resource instance ownership. No original media or generated code is
+included in the commits. See [the visual-attachment contract](atlas-weapon-visual-attachments.md).
+
+This remains a draft development preview. Simultaneous two-arm/two-actor native
+firing, zoom and cockpit transitions, native arm loss/retirement, old-source-cull/
+new-source-visible cases, CPU/GPU conformance and full gameplay-state A/B checks
+remain open. Original global lighting `0x74A270` and the second factory `0x4AF2A0`
+are explicitly unsupported. No published runtime advertises this new capability.
+The remaining missile-mouth and other attachment gates retain their earlier
+status. No new channel video, thumbnail or public release has been generated.
+
 ## November 5 local candidate
 
 | Item | Receipt |
