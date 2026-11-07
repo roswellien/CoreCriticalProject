@@ -162,7 +162,12 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
   if(markers<3||markers>64)throw std::runtime_error("Visual retarget: invalid sole marker count");
   // The original controller supplies lift and rotation. These measured source
   // points compensate the donor's different footprint; no guest state is written.
-  const double plane=rest_lowest+std::max(0.,goal[2]-a0[2]);
+  // The controller's clearance belongs to its own proportions. Bound the
+  // donor's lift by its leg length so short thighs do not march hip-high.
+  const double maximum_lift=.08*(length(sub(k0,h0))+length(sub(a0,k0)));
+  if(maximum_lift<1e-8)throw std::runtime_error("Visual retarget: degenerate leg length");
+  const double lift=maximum_lift*std::tanh(std::max(0.,goal[2]-a0[2])/maximum_lift);
+  const double plane=rest_lowest+lift;
   goal[2]+=plane-lowest;
   bool clamped=false;
   auto solve_leg=[&](){
@@ -203,18 +208,40 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
   };
   // Ankle rotation changes the footprint. Re-solve vertical contact while
   // preserving the knee and ankle axes at every iteration, never the mesh.
-  for(unsigned iteration=0;iteration<32;++iteration){
-   solve_leg();
+  auto contact_error=[&](double height){
+   goal[2]=height;solve_leg();
    double contact=1e300;
    for(const auto&bone:r.bones)if(bone.name.rfind("Sole_"+suffix+"_",0)==0){
     const auto&parent=r.bones[static_cast<std::size_t>(bone.parent)];
     const auto delta=product(want.at(parent.name),inverse(parent.rest));
     contact=std::min(contact,point(delta,position(bone.rest))[2]);
    }
-   const double correction=plane-contact;
-   if(std::abs(correction)<1e-8)break;
-   if(iteration+1==32)throw std::runtime_error("Visual retarget: footprint contact did not converge");
-   goal[2]+=correction;
+   const double error=contact-plane;
+   if(!std::isfinite(error))throw std::runtime_error("Visual retarget: nonfinite contact error");
+   return error;
+  };
+  constexpr double contact_tolerance=1e-8;
+  double first=goal[2],first_error=contact_error(first);
+  if(std::abs(first_error)>=contact_tolerance){
+   const double direction=first_error>0?-1.:1.;
+   double step=maximum_lift,second=first,second_error=first_error;
+   bool solved=false,bracketed=false;
+   for(unsigned expansion=0;expansion<16;++expansion){
+    second=first+direction*step;second_error=contact_error(second);
+    if(std::abs(second_error)<contact_tolerance){solved=true;break;}
+    if((first_error<0)!=(second_error<0)){bracketed=true;break;}
+    first=second;first_error=second_error;step*=2;
+   }
+   if(!solved&&bracketed){
+    for(unsigned iteration=0;iteration<40;++iteration){
+     const double middle=first+(second-first)*.5;
+     const double error=contact_error(middle);
+     if(std::abs(error)<contact_tolerance){solved=true;break;}
+     if((first_error<0)==(error<0)){first=middle;first_error=error;}
+     else{second=middle;second_error=error;}
+    }
+   }
+   if(!solved)throw std::runtime_error("Visual retarget: footprint contact did not converge");
   }
   if(clamped)++output.reach_clamps;
  }

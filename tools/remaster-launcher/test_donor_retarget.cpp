@@ -51,6 +51,16 @@ void hinge_checks(){
   auto moved=pose;for(auto&[name,m]:moved)m=translate(m,add(position(m),{4,-2,0}));const auto q=retarget(r,moved,1);
   for(size_t i=0;i<p.world.size();++i)check(error(q.world[i],translate(p.world[i],add(position(p.world[i]),{4,-2,0})))<1e-9,"hinged root travel remains controller driven");
  }
+ // A tall controller swing must not pull a short donor's knee up to its hip.
+ auto marching=original;marching.at("lfoot")[11]+=3.;marching.at("rfoot")[11]+=3.;
+ const auto low_step=retarget(r,marching,1);
+ for(auto side:std::array<std::array<unsigned,3>,2>{{{6,7,8},{9,10,11}}}){
+  const double leg=length(sub(position(r.bones[side[0]].rest),position(r.bones[side[1]].rest)))+length(sub(position(r.bones[side[1]].rest),position(r.bones[side[2]].rest)));
+  double minimum=1e300;
+  for(size_t i=0;i<r.bones.size();++i)if(r.bones[i].parent==static_cast<int>(side[2])&&r.bones[i].name.rfind("Sole_",0)==0)minimum=std::min(minimum,position(low_step.world[i])[2]);
+  check(minimum>0&&minimum<=.08*leg+1e-8,"controller lift is bounded to donor leg proportions");
+  check(position(low_step.world[side[1]])[2]<position(low_step.world[side[0]])[2]-.5,"walking knee remains below the hip");
+ }
  // An oblique, valid ankle frame exposed an oscillating contact solve. Never
  // silently return that last pose with penetrated soles and no reach warning.
  auto oblique=r;
@@ -58,9 +68,15 @@ void hinge_checks(){
   bone.rest=translate(product(hinge_rotation({1,0,0},.7),hinge_rotation({0,0,1},.7)),position(bone.rest));
  auto adverse=original;
  adverse.at("lfoot")=translate(product(product(hinge_rotation({1,0,0},-1.2604103704185106),hinge_rotation({0,1,0},-.28769548245009124)),hinge_rotation({0,0,1},-.44237892405550272)),{-.18757766967971279,1.65310343749380917,.5});
+ const auto oblique_pose=retarget(oblique,adverse,0);
+ double oblique_floor=1e300;
+ for(size_t i=0;i<oblique.bones.size();++i)if(oblique.bones[i].name.rfind("Sole_Left_",0)==0)
+  oblique_floor=std::min(oblique_floor,position(oblique_pose.world[i])[2]);
+ check(std::abs(oblique_floor)<1e-8,"oblique contact converges instead of oscillating below ground");
+ auto impossible=original;impossible.at("hip")[11]+=100.;
  bool unresolved=false;
- try{retarget(oblique,adverse,0);}catch(const std::runtime_error&e){unresolved=std::string(e.what()).find("contact did not converge")!=std::string::npos;}
- check(unresolved,"unresolved contact is rejected instead of silently penetrating");
+ try{retarget(r,impossible,0);}catch(const std::runtime_error&e){unresolved=std::string(e.what()).find("contact did not converge")!=std::string::npos;}
+ check(unresolved,"impossible contact is rejected instead of silently penetrating");
  check(r.reference==original,"hinged solver does not change original controller inputs");
  for(int kind=0;kind<3;++kind){auto invalid=r;
   if(kind==0)invalid.bones[12].name="MissingAxis";

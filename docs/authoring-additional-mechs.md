@@ -42,11 +42,14 @@ Setting `hinge_axes=True` opts the mesh into measured hinge retargeting:
 
 The solver reads original control transforms, preserves rigid limb lengths
 and measured knee/elbow/ankle axes, projects toe/elbow/ankle rotations onto those axes,
-and compensates ankle height using the measured footprint and original lift.
+and compensates ankle height using the measured footprint. Positive controller
+lift is smoothly limited to 8% of the donor's total leg length, retaining the
+source timing and horizontal foot path while avoiding hip-high marching.
 It does not change simulation, collision, weapon origins or movement timing.
 Unreachable goals remain explicitly logged as visual reach clamps. Foot contact
-uses at most 32 iterations; unresolved contact is rejected with a visible error
-instead of returning an unreported ground penetration.
+uses a bounded height bracket (up to 16 expansions) and up to 40 bisections.
+Unresolved contact is rejected with a visible error instead of returning an
+unreported ground penetration.
 
 The additional-chassis and stock replacement builders detect the flag and require
 `donor-rig-hinges` version 1. Python and C# admission reject a flagged mesh
