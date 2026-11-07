@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from dataclasses import asdict, dataclass, fields, replace
@@ -79,9 +80,19 @@ def strict_json(text: str | bytes) -> Any:
     def reject_constant(value: str) -> None:
         raise AutomationError("non_finite_json_number")
 
+    def finite_float(value: str) -> float:
+        parsed = float(value)
+        require(math.isfinite(parsed), "non_finite_json_number")
+        return parsed
+
     try:
         require(len(text) <= MAX_DOCUMENT_BYTES, "document_too_large")
-        return json.loads(text, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        return json.loads(
+            text,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+            parse_float=finite_float,
+        )
     except (ValueError, UnicodeError, RecursionError) as error:
         raise AutomationError("invalid_json") from error
 

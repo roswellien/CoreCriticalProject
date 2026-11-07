@@ -343,7 +343,14 @@ class ContractTests(unittest.TestCase):
                 automation.Policy.parse(policy_document() | change)
 
     def test_json_rejects_duplicate_keys_non_finite_and_malformed_documents(self):
-        for value in ('{"enabled":false,"enabled":true}', '{"cost":NaN}', '{"cost":Infinity}', "{"):
+        for value in (
+            '{"enabled":false,"enabled":true}',
+            '{"cost":NaN}',
+            '{"cost":Infinity}',
+            '{"cost":1e999}',
+            '{"cost":-1e999}',
+            "{",
+        ):
             with self.subTest(value=value), self.assertRaises(automation.AutomationError):
                 automation.strict_json(value)
 
