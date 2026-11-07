@@ -49,8 +49,8 @@
       "classification": "authored-host-source"
     },
     "body_dispatch.hpp": {
-      "sha256": "83a8b76f941e3e10ae4d9f6501dc6acd79dec9bc2b3fdafce254ff680e476ede",
-      "bytes": 2056,
+      "sha256": "1230cff20d59130bcbd3599ddd405cfd51ee498ef9925a67bb4fce63738c7b9c",
+      "bytes": 2106,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -199,8 +199,8 @@
       "classification": "authored-host-source"
     },
     "d3d_provider.inc": {
-      "sha256": "cbf32dc4f7096afb53195879656e3694c640aff87aa25a51651d1f8330901bd3",
-      "bytes": 46493,
+      "sha256": "c82aff8e930aeb48d4a15bbfa4120fab76b206ca549c0351de33409948180f42",
+      "bytes": 46660,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -541,8 +541,8 @@
       "classification": "authored-host-source"
     },
     "mesh_override_stage.inc": {
-      "sha256": "47ce4bd803f0753ffcbed50178200cb2b32a696d942eb699f8bde5257f76279f",
-      "bytes": 62696,
+      "sha256": "fadafaa8e1518f1fb7b12a145d7fcc6ca0cb8a697ea2d510ad6a6cfa465ab4e5",
+      "bytes": 62835,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -559,14 +559,14 @@
       "classification": "authored-host-source"
     },
     "mfc_stage.hpp": {
+      "sha256": "7719fbf1a18cd2a564aa6e1b2fb5f69683ffc23ea6944ec4f79a3eaee5a54940",
+      "bytes": 318964,
       "decision": "commit",
-      "classification": "authored-host-source",
-      "bytes": 317754,
-      "sha256": "fcd43afb0b946144dd8a5e1c8993fa57b2dbc8fdba1a5aba7ff2af97d90e7e08"
+      "classification": "authored-host-source"
     },
     "missile_exhaust.hpp": {
-      "sha256": "c993a8bc3ef65023697b10271ea812d0e93e8522eb0d0c18b20e6433de062cb4",
-      "bytes": 5746,
+      "sha256": "28f0ab7ea5ddda6381b17789483a6a1797f0633a44973f20a019b7fa7be5d0a8",
+      "bytes": 5742,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1067,6 +1067,24 @@
       "bytes": 3567,
       "decision": "commit",
       "classification": "authored-host-source"
+    },
+    "weapon_visuals_stage.inc": {
+      "sha256": "e819258b2a2ba9126def6cfb57f51df34a58a23611f170dbf94466467886187d",
+      "bytes": 56848,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "weapon_visuals.hpp": {
+      "sha256": "6c450f95f884a282ad56b6911edb468f44b03f672f8a4de3ede38d452ad49713",
+      "bytes": 11754,
+      "decision": "commit",
+      "classification": "authored-host-source"
+    },
+    "visual_clip.hpp": {
+      "decision": "commit",
+      "classification": "authored-host-source",
+      "sha256": "2ab38a8b3e8b2d6c2494549aac43317eacef252fb427856d0b40e29311c706d9",
+      "bytes": 1708
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."
