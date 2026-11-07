@@ -609,3 +609,82 @@ def update_intent(state: State, operation_id: str, outcome: str) -> State:
     for item in updated:
         parse_intent(asdict(item))
     return replace(state, intents=updated)
+
+
+def usage_cost(policy: Policy, input_tokens: int, output_tokens: int) -> int:
+    integer(input_tokens, 0, 10**9)
+    integer(output_tokens, 0, 10**9)
+    require(
+        policy.input_price_micro_usd_per_million is not None
+        and policy.output_price_micro_usd_per_million is not None,
+        "missing_prices",
+    )
+    # Full input price is conservative: do not infer a cache discount from authentication.
+    numerator = input_tokens * policy.input_price_micro_usd_per_million
+    numerator += output_tokens * policy.output_price_micro_usd_per_million
+    return (numerator + 999_999) // 1_000_000
+
+
+def allocate_request(
+    state: State, policy: Policy, operation_id: str, input_bytes: int, now: datetime
+) -> State:
+    """Propose a durable soft allocation before inference, never a vendor reservation."""
+    if configuration_blockers(policy, now):
+        raise Blocked("configuration_incomplete")
+    require(
+        state.cycle_start == policy.cycle_start and state.cycle_end == policy.cycle_end,
+        "ledger_cycle_mismatch",
+    )
+    identifier(operation_id, r"[A-Za-z0-9_-]{1,64}")
+    integer(input_bytes, 1, policy.max_input_bytes)
+    require(
+        not any(item.operation_id == operation_id for item in state.allocations),
+        "duplicate_allocation",
+    )
+    if any(item.actual_micro_usd is None for item in state.allocations):
+        raise Blocked("unreconciled_usage")
+    if any(item.actual_micro_usd > item.reserved_micro_usd for item in state.allocations):
+        raise Blocked("allocation_exceeded")
+    if any(item.outcome != "applied" for item in state.intents):
+        raise Blocked("unreconciled_publication")
+    # UTF-8 bytes plus framing headroom bound tokenized text; no images/tools are sent.
+    estimate = usage_cost(policy, input_bytes, policy.max_output_tokens)
+    reserved = max(1, (estimate * (100 + policy.headroom_percent) + 99) // 100)
+    spent = sum(item.actual_micro_usd for item in state.allocations)
+    if reserved > policy.request_budget_micro_usd or spent + reserved > policy.api_budget_micro_usd:
+        raise Blocked("api_budget_exhausted")
+    # Charge the full five-minute Linux job allowance conservatively for each call.
+    if state.actions_minutes + 5 > policy.actions_budget_minutes:
+        raise Blocked("actions_budget_exhausted")
+    require(len(state.allocations) < MAX_ITEMS, "allocation_limit")
+    return replace(
+        state,
+        allocations=state.allocations + (Allocation(operation_id, reserved, None, None),),
+        actions_minutes=state.actions_minutes + 5,
+    )
+
+
+def settle_usage(state: State, policy: Policy, operation_id: str, response: dict) -> State:
+    matches = [item for item in state.allocations if item.operation_id == operation_id]
+    require(len(matches) == 1 and matches[0].actual_micro_usd is None, "allocation_not_pending")
+    response_id = identifier(response.get("id"), r"resp_[A-Za-z0-9_-]{1,120}")
+    require(
+        not any(item.response_id == response_id for item in state.allocations), "duplicate_response"
+    )
+    require(response.get("model") == policy.model, "unexpected_response_model")
+    usage = response.get("usage")
+    require(type(usage) is dict, "missing_usage")
+    input_tokens = integer(usage.get("input_tokens"), 0, 10**9)
+    output_tokens = integer(usage.get("output_tokens"), 0, 10**9)
+    require(
+        integer(usage.get("total_tokens"), 0, 2 * 10**9) == input_tokens + output_tokens,
+        "invalid_usage_total",
+    )
+    cost = usage_cost(policy, input_tokens, output_tokens)
+    allocations = tuple(
+        replace(item, actual_micro_usd=cost, response_id=response_id)
+        if item.operation_id == operation_id
+        else item
+        for item in state.allocations
+    )
+    return replace(state, allocations=allocations)

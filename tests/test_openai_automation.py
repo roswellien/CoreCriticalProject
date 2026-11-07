@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/github"))
 import openai_automation as automation
 import openai_automation_github as github
+import openai_automation_openai as provider
 
 NOW = datetime(2026, 11, 7, 12, tzinfo=UTC)
 
@@ -57,6 +58,50 @@ def state_document():
         "intents": [],
         "actions_minutes": 0,
     }
+
+
+def enabled_policy():
+    row = policy_document()
+    row.update(
+        enabled=True,
+        rollout_complete=True,
+        controller_sha="1" * 40,
+        model="fixture-model",
+        effort="low",
+        input_price_micro_usd_per_million=1_000_000,
+        output_price_micro_usd_per_million=4_000_000,
+        api_budget_micro_usd=10_000_000,
+        request_budget_micro_usd=500_000,
+        actions_budget_minutes=100,
+        cycle_start="2026-11-01T00:00:00Z",
+        cycle_end="2026-12-01T00:00:00Z",
+        prerequisites=dict.fromkeys(automation.PREREQUISITES, True),
+    )
+    return automation.Policy.parse(row)
+
+
+def response_document(value):
+    return {
+        "id": "resp_fixture",
+        "model": "fixture-model",
+        "status": "completed",
+        "usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140},
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": json.dumps(value)}],
+            }
+        ],
+    }
+
+
+def seed_lease(service):
+    state = automation.acquire_lease(
+        automation.parse_state(service.state), "publisher", NOW, NOW + timedelta(minutes=4)
+    )
+    service.state = json.loads(json.dumps(automation.state_payload(state)))
 
 
 @contextlib.contextmanager
@@ -564,6 +609,216 @@ class GitHubTests(unittest.TestCase):
             self.assertRaisesRegex(automation.AutomationError, "^http_302$"),
         ):
             github.JsonTransport("api.github.com", "fixture-app", opener=opener).request("GET", "/")
+
+
+class ProviderTests(unittest.TestCase):
+    def test_budget_cycle_unknown_usage_and_integer_accounting(self):
+        policy = enabled_policy()
+        state = automation.parse_state(state_document())
+        allocated = automation.allocate_request(state, policy, "request", 100, NOW)
+        self.assertEqual(allocated.allocations[0].reserved_micro_usd, 10_125)
+        self.assertEqual(allocated.actions_minutes, 5)
+        settled = automation.settle_usage(allocated, policy, "request", response_document({}))
+        self.assertEqual(settled.allocations[0].actual_micro_usd, 260)
+        for current, config, op, size, time in (
+            (allocated, policy, "another", 100, NOW),
+            (settled, policy, "request", 100, NOW),
+            (state, replace(policy, api_budget_micro_usd=1), "low", 100, NOW),
+            (state, replace(policy, request_budget_micro_usd=1), "low", 100, NOW),
+            (state, replace(policy, actions_budget_minutes=4), "low", 100, NOW),
+            (state, replace(policy, model=None), "missing", 100, NOW),
+            (state, policy, "large", 128_001, NOW),
+            (state, policy, "expired", 100, NOW + timedelta(days=40)),
+            (replace(state, cycle_start="2026-10-01T00:00:00Z"), policy, "cycle", 100, NOW),
+        ):
+            with self.subTest(op=op), self.assertRaises(automation.AutomationError):
+                automation.allocate_request(current, config, op, size, time)
+        for changed in (
+            {"usage": None},
+            {"model": "another-model"},
+            {"usage": {"input_tokens": True, "output_tokens": 0, "total_tokens": 1}},
+            {"usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 3}},
+        ):
+            with self.subTest(changed=changed), self.assertRaises(automation.AutomationError):
+                automation.settle_usage(
+                    allocated, policy, "request", response_document({}) | changed
+                )
+
+    def test_tool_free_protocol_persists_budget_before_returning_validated_proposals(self):
+        for mode in ("triage", "summary"):
+            service = GitHubService()
+            seed_lease(service)
+            captured = []
+
+            def respond(
+                method, path, payload, headers, service=service, mode=mode, captured=captured
+            ):
+                if path == "/v1/responses":
+                    captured.append(
+                        (payload, copy.deepcopy(service.state), headers.get("Authorization"))
+                    )
+                    issue = json.loads(payload["input"])["issues"][0]
+                    value = triage_document() | {"revision": issue["revision"]}
+                    if mode == "summary":
+                        value = {
+                            "entries": [
+                                {
+                                    "issue_number": 9001,
+                                    "summary": "Fixture validation is pending.",
+                                    "suggested_priority": "P1",
+                                    "next_action": "Run the fixture.",
+                                }
+                            ]
+                        }
+                    return 200, {}, response_document(value)
+                return service.respond(method, path, payload, headers)
+
+            with fixture_http(respond) as opener:
+                client = github_client(opener)
+                snapshot = client.read_snapshot(NOW)
+                api = provider.OpenAI(
+                    enabled_policy(),
+                    client,
+                    github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+                )
+                result = api.propose(
+                    mode,
+                    snapshot,
+                    9001 if mode == "triage" else None,
+                    "proposal",
+                    "publisher",
+                    1,
+                    lambda: NOW,
+                )
+                self.assertEqual(
+                    result.issue_number if mode == "triage" else result[0].issue_number, 9001
+                )
+                request, persisted, auth = captured[0]
+                self.assertEqual(auth, "Bearer fixture-openai")
+                self.assertFalse(request["store"])
+                self.assertNotIn("tools", request)
+                self.assertTrue(request["text"]["format"]["strict"])
+                self.assertNotIn("assignees", json.loads(request["input"])["issues"][0])
+                self.assertIsNone(persisted["allocations"][0]["actual_micro_usd"])
+                self.assertEqual(service.state["allocations"][0]["actual_micro_usd"], 260)
+                self.assertEqual(service.effects, [])
+
+    def test_refusal_truncation_tool_output_and_unknown_cost_never_authorize_writes(self):
+        variants = ("refusal", "incomplete", "tool", "unknown_issue", "malformed", "usage", "model")
+        for variant in variants:
+            service = GitHubService()
+            seed_lease(service)
+
+            def respond(method, path, payload, headers, service=service, variant=variant):
+                if path != "/v1/responses":
+                    return service.respond(method, path, payload, headers)
+                value = triage_document() | {
+                    "revision": json.loads(payload["input"])["issues"][0]["revision"]
+                }
+                response = response_document(value)
+                if variant == "refusal":
+                    response["output"][0]["content"] = [{"type": "refusal", "refusal": "No."}]
+                elif variant == "incomplete":
+                    response["status"] = "incomplete"
+                elif variant == "tool":
+                    response["output"] = [{"type": "function_call", "name": "merge"}]
+                elif variant == "unknown_issue":
+                    response["output"][0]["content"][0]["text"] = json.dumps(
+                        value | {"issue_number": 19}
+                    )
+                elif variant == "malformed":
+                    response["output"][0]["content"][0]["text"] = "not-json"
+                elif variant == "usage":
+                    response["usage"] = None
+                else:
+                    response["model"] = "unapproved"
+                return 200, {}, response
+
+            with fixture_http(respond) as opener:
+                client = github_client(opener)
+                api = provider.OpenAI(
+                    enabled_policy(),
+                    client,
+                    github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+                )
+                with self.subTest(variant=variant), self.assertRaises(automation.AutomationError):
+                    api.propose(
+                        "triage",
+                        client.read_snapshot(NOW),
+                        9001,
+                        "bad",
+                        "publisher",
+                        1,
+                        lambda: NOW,
+                    )
+                allocation = service.state["allocations"][0]
+                self.assertEqual(
+                    allocation["actual_micro_usd"], None if variant in ("usage", "model") else 260
+                )
+                self.assertEqual(service.effects, [])
+
+    def test_timeout_disable_and_changed_source_cannot_duplicate_spending(self):
+        for variant in ("timeout", "disable", "source"):
+            service = GitHubService()
+            seed_lease(service)
+            calls = []
+
+            def respond(
+                method, path, payload, headers, service=service, variant=variant, calls=calls
+            ):
+                if path == "/v1/responses":
+                    calls.append(payload)
+                    return 500, {}, {"message": "secret-fixture"}
+                result = service.respond(method, path, payload, headers)
+                if method == "PUT" and variant == "source":
+                    service.issues[0]["body"] = "Changed by a human."
+                return result
+
+            with fixture_http(respond) as opener:
+                client = github_client(opener)
+                snapshot = client.read_snapshot(NOW)
+                service.disable_after_save = variant == "disable"
+                api = provider.OpenAI(
+                    enabled_policy(),
+                    client,
+                    github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+                )
+                with self.assertRaises(automation.AutomationError):
+                    api.propose("triage", snapshot, 9001, "first", "publisher", 1, lambda: NOW)
+                service.enabled = True
+                with self.assertRaisesRegex(automation.Blocked, "unreconciled_usage"):
+                    api.propose("triage", snapshot, 9001, "retry", "publisher", 1, lambda: NOW)
+                self.assertEqual(len(calls), 1 if variant == "timeout" else 0)
+                self.assertIsNone(service.state["allocations"][0]["actual_micro_usd"])
+
+    def test_actual_usage_overshoot_is_recorded_and_blocks_further_calls(self):
+        service = GitHubService()
+        seed_lease(service)
+
+        def respond(method, path, payload, headers):
+            if path == "/v1/responses":
+                response = response_document(triage_document())
+                response["usage"] = {
+                    "input_tokens": 500_000,
+                    "output_tokens": 0,
+                    "total_tokens": 500_000,
+                }
+                return 200, {}, response
+            return service.respond(method, path, payload, headers)
+
+        with fixture_http(respond) as opener:
+            client = github_client(opener)
+            snapshot = client.read_snapshot(NOW)
+            api = provider.OpenAI(
+                enabled_policy(),
+                client,
+                github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+            )
+            for operation in ("overshoot", "next"):
+                with self.assertRaisesRegex(automation.Blocked, "allocation_exceeded"):
+                    api.propose("triage", snapshot, 9001, operation, "publisher", 1, lambda: NOW)
+            self.assertEqual(service.state["allocations"][0]["actual_micro_usd"], 500_000)
+            self.assertEqual(len(service.state["allocations"]), 1)
 
 
 if __name__ == "__main__":

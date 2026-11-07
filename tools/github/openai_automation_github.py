@@ -299,7 +299,7 @@ class GitHub:
         )
         return domain.identifier(response.body["content"]["sha"], r"[0-9a-f]{40}")
 
-    def _check_publisher(
+    def check_publisher(
         self,
         run_id: str,
         fence: int,
@@ -318,7 +318,7 @@ class GitHub:
         self, operation_id: str, run_id: str, fence: int, clock: Callable[[], datetime]
     ) -> str:
         """Publish one persisted intent, never retry an uncertain external mutation."""
-        state, sha = self._check_publisher(run_id, fence, clock)
+        state, sha = self.check_publisher(run_id, fence, clock)
         matches = [item for item in state.intents if item.operation_id == operation_id]
         domain.require(len(matches) == 1, "unknown_intent")
         intent = matches[0]
@@ -335,11 +335,11 @@ class GitHub:
         elif outcome != "applied":
             publishing = domain.update_intent(state, operation_id, "publishing")
             sha = self.save_state(
-                publishing, sha, lambda: self._check_publisher(run_id, fence, clock, sha)
+                publishing, sha, lambda: self.check_publisher(run_id, fence, clock, sha)
             )
             if self.read_snapshot(clock()).issue(intent.issue_number) != issue:
                 raise domain.Blocked("human_or_source_changed")
-            self._check_publisher(run_id, fence, clock, sha)
+            self.check_publisher(run_id, fence, clock, sha)
             if intent.field == "labels":
                 additions = sorted(set(intent.desired) - set(intent.before))
                 self.app.request(
@@ -385,5 +385,5 @@ class GitHub:
                 ),
             )
         state = domain.update_intent(state, operation_id, "applied")
-        self.save_state(state, sha, lambda: self._check_publisher(run_id, fence, clock, sha))
+        self.save_state(state, sha, lambda: self.check_publisher(run_id, fence, clock, sha))
         return "applied"
