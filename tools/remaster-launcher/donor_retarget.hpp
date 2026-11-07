@@ -166,7 +166,15 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
   // donor's lift by its leg length so short thighs do not march hip-high.
   const double maximum_lift=.08*(length(sub(k0,h0))+length(sub(a0,k0)));
   if(maximum_lift<1e-8)throw std::runtime_error("Visual retarget: degenerate leg length");
-  const double lift=maximum_lift*std::tanh(std::max(0.,goal[2]-a0[2])/maximum_lift);
+  const double original_lift=std::max(0.,goal[2]-a0[2]);
+  const double low_lift=maximum_lift*std::tanh(original_lift/maximum_lift);
+  // Long running strides may need more clearance to keep a rigid leg in reach.
+  // Retain that necessary lift without exceeding the controller's request.
+  const auto hip=point(body,h0);const auto horizontal=sub(goal,hip);
+  const double reach=.97*(length(sub(k0,h0))+length(sub(a0,k0)));
+  const double downward=std::sqrt(std::max(0.,reach*reach-horizontal[0]*horizontal[0]-horizontal[1]*horizontal[1]));
+  const double needed_lift=std::max(0.,hip[2]-downward+(lowest-goal[2])-rest_lowest);
+  const double lift=std::max(low_lift,std::min(original_lift,needed_lift));
   const double plane=rest_lowest+lift;
   goal[2]+=plane-lowest;
   bool clamped=false;

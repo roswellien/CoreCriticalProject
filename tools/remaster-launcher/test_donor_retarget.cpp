@@ -61,6 +61,10 @@ void hinge_checks(){
   check(minimum>0&&minimum<=.08*leg+1e-8,"controller lift is bounded to donor leg proportions");
   check(position(low_step.world[side[1]])[2]<position(low_step.world[side[0]])[2]-.5,"walking knee remains below the hip");
  }
+ // A long stride must retain the clearance needed to avoid a new reach clamp.
+ auto long_stride=marching;long_stride.at("lfoot")[3]=3.;
+ const auto long_step=retarget(r,long_stride,1);lengths(r,long_step);
+ check(!long_step.reach_clamps,"long strides retain necessary controller clearance");
  // An oblique, valid ankle frame exposed an oscillating contact solve. Never
  // silently return that last pose with penetrated soles and no reach warning.
  auto oblique=r;

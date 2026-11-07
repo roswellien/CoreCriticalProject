@@ -44,7 +44,9 @@ The solver reads original control transforms, preserves rigid limb lengths
 and measured knee/elbow/ankle axes, projects toe/elbow/ankle rotations onto those axes,
 and compensates ankle height using the measured footprint. Positive controller
 lift is smoothly limited to 8% of the donor's total leg length, retaining the
-source timing and horizontal foot path while avoiding hip-high marching.
+source timing and horizontal foot path while avoiding hip-high marching. The
+controller's greater clearance is retained where long strides need it to keep
+the rigid leg in reach.
 It does not change simulation, collision, weapon origins or movement timing.
 Unreachable goals remain explicitly logged as visual reach clamps. Foot contact
 uses a bounded height bracket (up to 16 expansions) and up to 40 bisections.
