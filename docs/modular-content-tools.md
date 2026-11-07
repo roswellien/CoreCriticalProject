@@ -92,3 +92,20 @@ python -m unittest discover -s games/mw3/mod-tools/tests -p test_content_authori
 Without `MW3CONTENT`, the Python workspace-containment check runs and the native
 integration case is explicitly skipped. These fixtures do not establish live
 mission completion, campaign fidelity or runtime release readiness.
+
+Interactive development validation on 2026-11-07 used isolated Studio settings
+and the real launcher window hosted with its explicit private data-root
+constructor. Studio authored world, mission and HUD starters, compiled/installed/
+exported the package, saved/inspected an exact profile and entered native play.
+The launcher installed that export, saved its exact package hash and HUD choice,
+activated Play, then selected the authored scenario through native Instant
+Action and entered the new world with a fresh pilot. Both native runs exited
+zero with zero unknown calls. The native standalone briefing inventory defect
+found during this check is fixed in the coordinated runtime PR.
+
+Original media and UI/native receipts remain private. Studio arena pairs,
+optional artwork/appearance choices and negative UI scenarios remain tracked in
+[issue 262](https://github.com/roswellien/MW3Recomp-Private/issues/262). The local
+aggregate WPF suite still encounters its Steam-must-be-closed guard; Steam was
+left running. These limits are separate from the passing focused native-CLI
+integration and source CI.
