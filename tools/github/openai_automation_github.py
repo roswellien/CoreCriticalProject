@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -80,7 +81,7 @@ class JsonTransport:
                 else "application/json",
                 "Content-Type": "application/json",
                 "User-Agent": "MW3-automation-foundation",
-                "X-GitHub-Api-Version": API_VERSION,
+                **({"X-GitHub-Api-Version": API_VERSION} if self.host == "api.github.com" else {}),
             },
         )
         try:
@@ -94,7 +95,7 @@ class JsonTransport:
             if error.code in (409, 422):
                 raise domain.Conflict(f"http_{error.code}") from None
             raise domain.AutomationError(f"http_{error.code}") from None
-        except (OSError, TimeoutError, urllib.error.URLError):
+        except (OSError, TimeoutError, urllib.error.URLError, http.client.HTTPException):
             raise domain.Blocked("unknown_http_outcome") from None
 
 
@@ -220,8 +221,8 @@ class GitHub:
             row = {
                 "number": content["number"],
                 "item_id": item["id"],
-                "title": content["title"],
-                "body": content["body"],
+                "title": domain.github_text(content["title"], 512),
+                "body": domain.github_text(content["body"], 16_000, empty=True),
                 "open": not domain.boolean(content["closed"]),
                 "labels": sorted(label["name"] for label in connection_nodes(content["labels"])),
                 "assignees": sorted(
@@ -229,7 +230,9 @@ class GitHub:
                 ),
                 "status": values.get(domain.STATUS_FIELD, ""),
                 "priority": values.get(domain.PRIORITY_FIELD, ""),
-                "next_action": values.get(domain.NEXT_ACTION_FIELD, ""),
+                "next_action": domain.github_text(
+                    values.get(domain.NEXT_ACTION_FIELD, ""), 2000, empty=True
+                ),
             }
             domain.instant(content["updatedAt"])
             row["revision"] = domain.fingerprint({"issue": row, "updated_at": content["updatedAt"]})
@@ -305,41 +308,64 @@ class GitHub:
         fence: int,
         clock: Callable[[], datetime],
         expected_sha: str | None = None,
+        *,
+        policy: domain.Policy | None = None,
     ) -> tuple[domain.State, str]:
         if not self.enabled():
             raise domain.Blocked("disabled")
         state, sha = self.read_state()
-        domain.assert_fence(state, run_id, fence, clock())
+        # The network reads can cross a lease or budget deadline. Admit the effect
+        # using the clock after those reads, not the time when the check began.
+        now = clock()
+        domain.assert_fence(state, run_id, fence, now)
+        if policy is not None:
+            domain.require(
+                not domain.configuration_blockers(policy, now), "configuration_incomplete"
+            )
         if expected_sha is not None and sha != expected_sha:
             raise domain.Conflict("state_sha_changed")
         return state, sha
 
     def publish_one(
-        self, operation_id: str, run_id: str, fence: int, clock: Callable[[], datetime]
+        self,
+        operation_id: str,
+        run_id: str,
+        fence: int,
+        clock: Callable[[], datetime],
+        *,
+        policy: domain.Policy,
     ) -> str:
         """Publish one persisted intent, never retry an uncertain external mutation."""
-        state, sha = self.check_publisher(run_id, fence, clock)
+
+        def check(expected_sha: str | None = None):
+            return self.check_publisher(run_id, fence, clock, expected_sha, policy=policy)
+
+        state, sha = check()
         matches = [item for item in state.intents if item.operation_id == operation_id]
         domain.require(len(matches) == 1, "unknown_intent")
         intent = matches[0]
-        if intent.outcome == "applied":
-            return "applied"
+        if intent.outcome in domain.TERMINAL_OUTCOMES:
+            return intent.outcome
         issue = self.read_snapshot(clock()).issue(intent.issue_number)
         outcome = domain.intent_outcome(intent, issue)
         if intent.outcome == "publishing":
             # Seeing the old value does not prove a timed-out request never arrived.
             if outcome != "applied":
                 raise domain.Blocked("uncertain_publication")
-        elif intent.outcome != "prepared" or outcome == "conflict":
+        elif intent.outcome == "prepared" and outcome == "conflict":
+            # No external request is possible until publishing is durably saved. Retire
+            # only unsent work; siblings may also be stale and are checked separately.
+            state = domain.update_intent(state, operation_id, "superseded")
+            self.save_state(state, sha, lambda: check(sha))
+            return "superseded"
+        elif intent.outcome != "prepared":
             raise domain.Blocked("human_or_source_changed")
         elif outcome != "applied":
             publishing = domain.update_intent(state, operation_id, "publishing")
-            sha = self.save_state(
-                publishing, sha, lambda: self.check_publisher(run_id, fence, clock, sha)
-            )
+            sha = self.save_state(publishing, sha, lambda: check(sha))
             if self.read_snapshot(clock()).issue(intent.issue_number) != issue:
                 raise domain.Blocked("human_or_source_changed")
-            self.check_publisher(run_id, fence, clock, sha)
+            check(sha)
             if intent.field == "labels":
                 additions = sorted(set(intent.desired) - set(intent.before))
                 self.app.request(
@@ -371,19 +397,22 @@ class GitHub:
                 raise domain.Blocked("publication_not_confirmed")
             # Only our just-verified field changed: advance sibling revision checks.
             expected = replace(issue, **{intent.field: intent.desired}, revision=fresh.revision)
-            if replace(fresh, labels=tuple(sorted(fresh.labels))) != replace(
+            isolated_edit = replace(fresh, labels=tuple(sorted(fresh.labels))) == replace(
                 expected, labels=tuple(sorted(expected.labels))
-            ):
-                raise domain.Blocked("human_or_source_changed")
+            )
+            # A confirmed effect remains applied even if a human changed another field.
+            # Only an isolated edit can advance sibling revisions; stale siblings pause.
             state = replace(
                 publishing,
                 intents=tuple(
                     replace(item, revision=fresh.revision)
-                    if item.issue_number == issue.number and item.outcome == "prepared"
+                    if isolated_edit
+                    and item.issue_number == issue.number
+                    and item.outcome == "prepared"
                     else item
                     for item in publishing.intents
                 ),
             )
         state = domain.update_intent(state, operation_id, "applied")
-        self.save_state(state, sha, lambda: self.check_publisher(run_id, fence, clock, sha))
+        self.save_state(state, sha, lambda: check(sha))
         return "applied"

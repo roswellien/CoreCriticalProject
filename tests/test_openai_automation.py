@@ -3,16 +3,16 @@
 import base64
 import contextlib
 import copy
+import http.client
 import http.server
 import io
 import json
 import subprocess
 import sys
-import threading
+import tempfile
 import unittest
-import urllib.request
 from dataclasses import asdict, replace
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -21,302 +21,19 @@ sys.path.insert(0, str(ROOT / "tools/github"))
 import openai_automation as automation
 import openai_automation_github as github
 import openai_automation_openai as provider
-
-NOW = datetime(2026, 11, 7, 12, tzinfo=UTC)
-
-
-def snapshot_document():
-    return automation.strict_json(
-        (ROOT / "tests/fixtures/openai_automation_snapshot.json").read_bytes()
-    )
-
-
-def policy_document():
-    return automation.strict_json(
-        (ROOT / "tools/github/openai_automation_policy.json").read_bytes()
-    )
-
-
-def triage_document():
-    return {
-        "issue_number": 9001,
-        "revision": "a" * 64,
-        "labels": ["enhancement", "area: ci"],
-        "priority": "P1",
-        "next_action": "Validate the authored example and record the result.",
-    }
-
-
-def state_document():
-    return {
-        "version": 1,
-        "repository": automation.REPOSITORY,
-        "board_id": automation.BOARD_ID,
-        "cycle_start": "2026-11-01T00:00:00Z",
-        "cycle_end": "2026-12-01T00:00:00Z",
-        "generation": 0,
-        "lease": None,
-        "allocations": [],
-        "intents": [],
-        "actions_minutes": 0,
-    }
-
-
-def enabled_policy():
-    row = policy_document()
-    row.update(
-        enabled=True,
-        rollout_complete=True,
-        controller_sha="1" * 40,
-        model="fixture-model",
-        effort="low",
-        input_price_micro_usd_per_million=1_000_000,
-        output_price_micro_usd_per_million=4_000_000,
-        api_budget_micro_usd=10_000_000,
-        request_budget_micro_usd=500_000,
-        actions_budget_minutes=100,
-        cycle_start="2026-11-01T00:00:00Z",
-        cycle_end="2026-12-01T00:00:00Z",
-        prerequisites=dict.fromkeys(automation.PREREQUISITES, True),
-    )
-    return automation.Policy.parse(row)
-
-
-def response_document(value):
-    return {
-        "id": "resp_fixture",
-        "model": "fixture-model",
-        "status": "completed",
-        "usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140},
-        "output": [
-            {
-                "type": "message",
-                "role": "assistant",
-                "status": "completed",
-                "content": [{"type": "output_text", "text": json.dumps(value)}],
-            }
-        ],
-    }
-
-
-def seed_lease(service):
-    state = automation.acquire_lease(
-        automation.parse_state(service.state), "publisher", NOW, NOW + timedelta(minutes=4)
-    )
-    service.state = json.loads(json.dumps(automation.state_payload(state)))
-
-
-@contextlib.contextmanager
-def fixture_http(respond):
-    """Real bounded HTTP parsing, with synthetic credentials and no public network."""
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def do_GET(self):
-            self.answer()
-
-        def do_POST(self):
-            self.answer()
-
-        def do_PUT(self):
-            self.answer()
-
-        def answer(self):
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = automation.strict_json(self.rfile.read(length)) if length else None
-            status, headers, body = respond(self.command, self.path, payload, self.headers)
-            raw = body if isinstance(body, bytes) else json.dumps(body).encode()
-            self.send_response(status)
-            for name, value in headers.items():
-                self.send_header(name, value)
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    def open_local(request):
-        local = urllib.request.Request(
-            f"http://127.0.0.1:{server.server_port}{request.selector}",
-            data=request.data,
-            headers=dict(request.header_items()),
-            method=request.method,
-        )
-        return urllib.request.build_opener(github.NoRedirect()).open(local, timeout=2)
-
-    try:
-        yield open_local
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-class GitHubService:
-    """Small authored API fixture that persists real adapter requests and CAS writes."""
-
-    def __init__(self):
-        self.issues = snapshot_document()["issues"]
-        self.state = state_document()
-        self.sha = "c" * 40
-        self.enabled = True
-        self.requests = []
-        self.effects = []
-        self.fail_after_effect = False
-        self.disable_after_save = False
-        self.nested_incomplete = False
-        self.state_missing = False
-
-    def board_response(self):
-        nodes = []
-        for issue in self.issues:
-            values = [
-                {"field": {"id": automation.STATUS_FIELD}, "name": issue["status"]},
-                {"field": {"id": automation.PRIORITY_FIELD}, "name": issue["priority"]},
-                {"field": {"id": automation.NEXT_ACTION_FIELD}, "text": issue["next_action"]},
-            ]
-            content = {
-                "__typename": "Issue",
-                "repository": {"nameWithOwner": automation.REPOSITORY},
-                "number": issue["number"],
-                "title": issue["title"],
-                "body": issue["body"],
-                "closed": not issue["open"],
-                "updatedAt": "2026-11-07T12:00:00Z",
-                "labels": {
-                    "pageInfo": {"hasNextPage": self.nested_incomplete},
-                    "nodes": [{"name": label} for label in issue["labels"]],
-                },
-                "assignees": {
-                    "pageInfo": {"hasNextPage": False},
-                    "nodes": [{"login": name} for name in issue["assignees"]],
-                },
-            }
-            nodes.append(
-                {
-                    "id": issue["item_id"],
-                    "content": content,
-                    "fieldValues": {"nodes": values, "pageInfo": {"hasNextPage": False}},
-                }
-            )
-        return {
-            "data": {
-                "node": {
-                    "id": automation.BOARD_ID,
-                    "number": 1,
-                    "owner": {"login": "roswellien"},
-                    "items": {
-                        "totalCount": len(nodes),
-                        "nodes": nodes,
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    },
-                }
-            }
-        }
-
-    def respond(self, method, path, payload, headers):
-        self.requests.append((method, path, payload, headers.get("Authorization")))
-        if method == "GET" and path.startswith(github.STATE_ROUTE):
-            if self.state_missing:
-                return 404, {}, {"message": "secret-fixture"}
-            raw = json.dumps(self.state).encode()
-            return (
-                200,
-                {},
-                {
-                    "type": "file",
-                    "encoding": "base64",
-                    "sha": self.sha,
-                    "size": len(raw),
-                    "content": base64.b64encode(raw).decode(),
-                },
-            )
-        if method == "PUT" and path == github.STATE_ROUTE:
-            if payload["sha"] != self.sha:
-                return 409, {}, {"message": "stale"}
-            self.state = automation.strict_json(base64.b64decode(payload["content"]))
-            self.sha = automation.fingerprint(self.state)[:40]
-            if self.disable_after_save:
-                self.enabled = False
-            return 200, {}, {"content": {"sha": self.sha}}
-        if path == f"{github.ROOT}/branches/develop":
-            return 200, {}, {"name": "develop", "commit": {"sha": "1" * 40}}
-        if path.startswith(f"{github.ROOT}/issues?state=open"):
-            return 200, {}, [{"number": issue["number"]} for issue in self.issues if issue["open"]]
-        if path.endswith(f"/actions/variables/{github.ENABLED_VARIABLE}"):
-            return 200, {}, {"name": github.ENABLED_VARIABLE, "value": str(self.enabled).lower()}
-        if path == "/graphql" and "pullRequests" in payload["query"]:
-            return (
-                200,
-                {},
-                {
-                    "data": {
-                        "repository": {
-                            "pullRequests": {
-                                "totalCount": 1,
-                                "pageInfo": {"hasNextPage": False},
-                                "nodes": [
-                                    {
-                                        "closingIssuesReferences": {
-                                            "pageInfo": {"hasNextPage": False},
-                                            "nodes": [
-                                                {
-                                                    "number": 9002,
-                                                    "repository": {
-                                                        "nameWithOwner": automation.REPOSITORY
-                                                    },
-                                                }
-                                            ],
-                                        }
-                                    }
-                                ],
-                            }
-                        }
-                    }
-                },
-            )
-        if path == "/graphql" and "query(" in payload["query"]:
-            return 200, {}, self.board_response()
-        if path == "/graphql" and "mutation(" in payload["query"]:
-            variables = payload["variables"]
-            issue = next(issue for issue in self.issues if issue["item_id"] == variables["item"])
-            if variables["field"] == automation.NEXT_ACTION_FIELD:
-                issue["next_action"] = variables["value"]["text"]
-            else:
-                issue["priority"] = next(
-                    key
-                    for key, value in automation.PRIORITY_OPTIONS.items()
-                    if value == variables["value"]["singleSelectOptionId"]
-                )
-            self.effects.append(variables)
-            if self.fail_after_effect:
-                return 500, {}, {"message": "lost response with secret-fixture"}
-            return (
-                200,
-                {},
-                {
-                    "data": {
-                        "updateProjectV2ItemFieldValue": {"projectV2Item": {"id": issue["item_id"]}}
-                    }
-                },
-            )
-        if method == "POST" and path.endswith("/labels"):
-            issue = next(issue for issue in self.issues if f"/{issue['number']}/" in path)
-            issue["labels"] = sorted(set(issue["labels"]) | set(payload["labels"]))
-            self.effects.append(payload)
-            return 200, {}, []
-        return 400, {}, {"message": "unexpected fixture route"}
-
-
-def github_client(opener):
-    return github.GitHub(
-        github.JsonTransport("api.github.com", "fixture-app", opener=opener),
-        github.JsonTransport("api.github.com", "fixture-projects", opener=opener),
-    )
+from openai_automation_fixtures import (
+    NOW,
+    GitHubService,
+    enabled_policy,
+    fixture_http,
+    github_client,
+    policy_document,
+    response_document,
+    seed_lease,
+    snapshot_document,
+    state_document,
+    triage_document,
+)
 
 
 class ContractTests(unittest.TestCase):
@@ -413,6 +130,45 @@ class ContractTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
+    def test_operation_id_boundaries_and_terminal_intent_transitions(self):
+        snapshot = automation.Snapshot.parse(snapshot_document())
+        proposal = automation.TriageProposal.parse(triage_document(), snapshot, 9001)
+        initial = automation.parse_state(state_document())
+        state = automation.prepare_triage(initial, snapshot, proposal, "x" * 52)
+        self.assertEqual(len(state.intents[-1].operation_id), 64)
+        unchanged = replace(proposal, next_action=snapshot.issue(9001).next_action)
+        self.assertEqual(automation.prepare_triage(initial, snapshot, unchanged, "x" * 52), initial)
+        for current in (proposal, unchanged):
+            for length in (53, 55):
+                with (
+                    self.subTest(length=length, unchanged=current == unchanged),
+                    self.assertRaisesRegex(automation.AutomationError, "invalid_id"),
+                ):
+                    automation.prepare_triage(initial, snapshot, current, "x" * length)
+        operation_id = state.intents[0].operation_id
+        for before, after in (
+            ("publishing", "superseded"),
+            ("applied", "prepared"),
+            ("superseded", "publishing"),
+        ):
+            changed = replace(state, intents=(replace(state.intents[0], outcome=before),))
+            with (
+                self.subTest(before=before),
+                self.assertRaisesRegex(automation.AutomationError, "invalid_intent_transition"),
+            ):
+                automation.update_intent(changed, operation_id, after)
+        labels = asdict(state.intents[0]) | {
+            "field": "labels",
+            "before": ["needs-info"],
+            "desired": ["enhancement", "area: ci"],
+        }
+        for desired, code in (
+            (["enhancement", "area: ci"], "human_label_removal"),
+            (["needs-info", "automation-ready"], "disallowed_label"),
+        ):
+            with self.subTest(code=code), self.assertRaisesRegex(automation.AutomationError, code):
+                automation.parse_intent(labels | {"desired": desired})
+
     def test_roundtrip_lease_contention_expiry_and_fencing(self):
         state = automation.parse_state(state_document())
         leased = automation.acquire_lease(state, "first", NOW, NOW + timedelta(minutes=4))
@@ -457,6 +213,119 @@ class StateTests(unittest.TestCase):
 
 
 class GitHubTests(unittest.TestCase):
+    def test_crlf_is_bounded_normalized_and_fingerprinted_consistently(self):
+        service = GitHubService()
+        service.issues[0].update(
+            title="First\r\nsecond", body="Body\r\nnext", next_action="Next\r\nline"
+        )
+        with fixture_http(service.respond) as opener:
+            client = github_client(opener)
+            first = client.read_snapshot(NOW)
+            for name in ("title", "body", "next_action"):
+                service.issues[0][name] = service.issues[0][name].replace("\r\n", "\n")
+            self.assertEqual(first, client.read_snapshot(NOW))
+            self.assertEqual(first.issue(9001).body, "Body\nnext")
+            for body, code in (
+                ("bare\rreturn", "control_text"),
+                ("bad\x00control", "control_text"),
+                ("\r\n" * 8001, "invalid_text_length"),
+            ):
+                service.issues[0]["body"] = body
+                with (
+                    self.subTest(code=code),
+                    self.assertRaisesRegex(automation.AutomationError, code),
+                ):
+                    client.read_snapshot(NOW)
+
+    def test_label_additions_are_idempotent_and_acknowledge_concurrent_human_labels(self):
+        for concurrent in (False, True):
+            service = GitHubService()
+
+            def respond(method, path, payload, headers, service=service, concurrent=concurrent):
+                result = service.respond(method, path, payload, headers)
+                if method == "POST" and path.endswith("/labels") and concurrent:
+                    service.issues[0]["labels"].append("needs-review")
+                return result
+
+            with fixture_http(respond) as opener:
+                client = github_client(opener)
+                snapshot = client.read_snapshot(NOW)
+                proposal = automation.TriageProposal.parse(
+                    triage_document()
+                    | {
+                        "revision": snapshot.issue(9001).revision,
+                        "labels": ["enhancement", "area: ci", "area: launcher"],
+                        "priority": "P0",
+                    },
+                    snapshot,
+                    9001,
+                )
+                seed_lease(service)
+                state = automation.prepare_triage(
+                    automation.parse_state(service.state), snapshot, proposal, "labels"
+                )
+                service.state = json.loads(json.dumps(automation.state_payload(state)))
+                self.assertEqual(
+                    client.publish_one(
+                        "labels_labels", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                    ),
+                    "applied",
+                )
+                self.assertEqual(
+                    client.publish_one(
+                        "labels_labels", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                    ),
+                    "applied",
+                )
+                posts = [
+                    row
+                    for row in service.requests
+                    if row[0] == "POST" and row[1].endswith("/labels")
+                ]
+                self.assertEqual([row[2] for row in posts], [{"labels": ["area: launcher"]}])
+                self.assertIn("needs-info", service.issues[0]["labels"])
+                sibling = service.state["intents"][1]
+                self.assertEqual(sibling["revision"] == snapshot.issue(9001).revision, concurrent)
+                self.assertEqual(
+                    client.publish_one(
+                        "labels_priority", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                    ),
+                    "superseded" if concurrent else "applied",
+                )
+                self.assertEqual(service.issues[0]["priority"], "P1" if concurrent else "P0")
+                if concurrent:
+                    self.assertIn("needs-review", service.issues[0]["labels"])
+
+    def test_transport_redacts_protocol_errors_and_scopes_version_header(self):
+        for host in ("api.github.com", "api.openai.com"):
+
+            def truncated(request, host=host):
+                self.assertEqual(
+                    request.get_header("X-github-api-version") is not None, host == "api.github.com"
+                )
+                raise http.client.IncompleteRead(b"secret-fixture", 30)
+
+            with (
+                self.subTest(host=host),
+                self.assertRaisesRegex(automation.Blocked, "^unknown_http_outcome$"),
+            ):
+                github.JsonTransport(host, "fixture", opener=truncated).request("GET", "/")
+
+    def test_publication_requires_approved_policy_even_with_a_live_lease(self):
+        service = GitHubService()
+        with fixture_http(service.respond) as opener:
+            client = github_client(opener)
+            self.prepare(service, client)
+            for policy in (
+                automation.Policy.parse(policy_document()),
+                replace(enabled_policy(), cycle_end="2026-11-06T00:00:00Z"),
+            ):
+                with self.assertRaisesRegex(automation.AutomationError, "configuration_incomplete"):
+                    client.publish_one(
+                        "triage_priority", "publisher", 1, lambda: NOW, policy=policy
+                    )
+            self.assertEqual(service.effects, [])
+
     def test_pagination_uses_owned_pages_and_rejects_incomplete_queue(self):
         for incomplete in (False, True):
             service = GitHubService()
@@ -542,13 +411,22 @@ class GitHubTests(unittest.TestCase):
             client = github_client(opener)
             self.prepare(service, client)
             self.assertEqual(
-                client.publish_one("triage_priority", "publisher", 1, lambda: NOW), "applied"
+                client.publish_one(
+                    "triage_priority", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                ),
+                "applied",
             )
             self.assertEqual(
-                client.publish_one("triage_next_action", "publisher", 1, lambda: NOW), "applied"
+                client.publish_one(
+                    "triage_next_action", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                ),
+                "applied",
             )
             self.assertEqual(
-                client.publish_one("triage_priority", "publisher", 1, lambda: NOW), "applied"
+                client.publish_one(
+                    "triage_priority", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                ),
+                "applied",
             )
             self.assertEqual(len(service.effects), 2)
             self.assertIn("needs-info", service.issues[0]["labels"])
@@ -581,8 +459,49 @@ class GitHubTests(unittest.TestCase):
                     service.issues[0]["next_action"] = "Human owns this step."
                 else:
                     service.state["generation"] = service.state["lease"]["fence"] = 2
-                with self.subTest(action=action), self.assertRaises(automation.Blocked):
-                    client.publish_one("triage_priority", "publisher", 1, lambda: NOW)
+                with self.subTest(action=action):
+                    if action == "human":
+                        self.assertEqual(
+                            client.publish_one(
+                                "triage_priority",
+                                "publisher",
+                                1,
+                                lambda: NOW,
+                                policy=enabled_policy(),
+                            ),
+                            "superseded",
+                        )
+                        self.assertEqual(
+                            client.publish_one(
+                                "triage_next_action",
+                                "publisher",
+                                1,
+                                lambda: NOW,
+                                policy=enabled_policy(),
+                            ),
+                            "superseded",
+                        )
+                        self.assertTrue(
+                            all(
+                                item["outcome"] == "superseded" for item in service.state["intents"]
+                            )
+                        )
+                        automation.allocate_request(
+                            automation.parse_state(service.state),
+                            enabled_policy(),
+                            "fresh",
+                            100,
+                            NOW,
+                        )
+                    else:
+                        with self.assertRaises(automation.Blocked):
+                            client.publish_one(
+                                "triage_priority",
+                                "publisher",
+                                1,
+                                lambda: NOW,
+                                policy=enabled_policy(),
+                            )
                 self.assertEqual(service.effects, [])
 
     def test_lost_response_is_reconciled_without_repeating_field_write(self):
@@ -592,15 +511,22 @@ class GitHubTests(unittest.TestCase):
             self.prepare(service, client)
             service.fail_after_effect = True
             with self.assertRaisesRegex(automation.AutomationError, "^http_500$"):
-                client.publish_one("triage_priority", "publisher", 1, lambda: NOW)
+                client.publish_one(
+                    "triage_priority", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                )
             self.assertEqual(service.state["intents"][0]["outcome"], "publishing")
             self.assertEqual(
-                client.publish_one("triage_priority", "publisher", 1, lambda: NOW), "applied"
+                client.publish_one(
+                    "triage_priority", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                ),
+                "applied",
             )
             self.assertEqual(len(service.effects), 1)
             service.state["intents"][1]["outcome"] = "publishing"
             with self.assertRaisesRegex(automation.Blocked, "uncertain_publication"):
-                client.publish_one("triage_next_action", "publisher", 1, lambda: NOW)
+                client.publish_one(
+                    "triage_next_action", "publisher", 1, lambda: NOW, policy=enabled_policy()
+                )
             self.assertEqual(len(service.effects), 1)
 
     def test_production_transport_and_redirects_stay_closed(self):
@@ -622,6 +548,19 @@ class GitHubTests(unittest.TestCase):
 
 
 class ProviderTests(unittest.TestCase):
+    def test_equivalent_utc_cycles_share_accounting_identity(self):
+        state = automation.parse_state(state_document() | {"cycle_start": "2026-11-01T00:00Z"})
+        policy = enabled_policy()
+        canonical = automation.Policy.parse(
+            asdict(policy) | {"cycle_end": "2026-12-01T00:00:00.000000Z"}
+        )
+        self.assertEqual(canonical.cycle_end, state.cycle_end)
+        automation.allocate_request(state, canonical, "equivalent", 100, NOW)
+        decision = automation.reconciliation_decision(
+            canonical, automation.Snapshot.parse(snapshot_document()), state, NOW
+        )
+        self.assertNotIn("ledger_cycle_mismatch", decision.blockers)
+
     def test_budget_cycle_unknown_usage_and_integer_accounting(self):
         policy = enabled_policy()
         state = automation.parse_state(state_document())
@@ -683,13 +622,14 @@ class ProviderTests(unittest.TestCase):
                     return 200, {}, response_document(value)
                 return service.respond(method, path, payload, headers)
 
-            with fixture_http(respond) as opener:
+            with fixture_http(respond) as opener, tempfile.TemporaryDirectory() as receipt_dir:
                 client = github_client(opener)
                 snapshot = client.read_snapshot(NOW)
                 api = provider.OpenAI(
                     enabled_policy(),
                     client,
                     github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+                    provider.CompletionJournal(Path(receipt_dir)),
                 )
                 result = api.propose(
                     mode,
@@ -749,12 +689,13 @@ class ProviderTests(unittest.TestCase):
                     response["model"] = "unapproved"
                 return 200, {}, response
 
-            with fixture_http(respond) as opener:
+            with fixture_http(respond) as opener, tempfile.TemporaryDirectory() as receipt_dir:
                 client = github_client(opener)
                 api = provider.OpenAI(
                     enabled_policy(),
                     client,
                     github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+                    provider.CompletionJournal(Path(receipt_dir)),
                 )
                 with self.subTest(variant=variant), self.assertRaises(automation.AutomationError):
                     api.propose(
@@ -789,7 +730,7 @@ class ProviderTests(unittest.TestCase):
                     service.issues[0]["body"] = "Changed by a human."
                 return result
 
-            with fixture_http(respond) as opener:
+            with fixture_http(respond) as opener, tempfile.TemporaryDirectory() as receipt_dir:
                 client = github_client(opener)
                 snapshot = client.read_snapshot(NOW)
                 service.disable_after_save = variant == "disable"
@@ -797,6 +738,7 @@ class ProviderTests(unittest.TestCase):
                     enabled_policy(),
                     client,
                     github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+                    provider.CompletionJournal(Path(receipt_dir)),
                 )
                 with self.assertRaises(automation.AutomationError):
                     api.propose("triage", snapshot, 9001, "first", "publisher", 1, lambda: NOW)
@@ -805,6 +747,73 @@ class ProviderTests(unittest.TestCase):
                     api.propose("triage", snapshot, 9001, "retry", "publisher", 1, lambda: NOW)
                 self.assertEqual(len(calls), 1 if variant == "timeout" else 0)
                 self.assertIsNone(service.state["allocations"][0]["actual_micro_usd"])
+
+    def test_cycle_expiry_during_authority_reads_blocks_each_provider_effect(self):
+        for phase, expiry_read in (("allocation", 2), ("dispatch", 3), ("settlement", 4)):
+            service = GitHubService()
+            end = automation.utc_text(NOW + timedelta(seconds=1))
+            service.state["cycle_end"] = end
+            seed_lease(service)
+            policy = replace(enabled_policy(), cycle_end=end)
+            time = [NOW]
+            state_reads = []
+            calls = []
+
+            def respond(
+                method,
+                path,
+                payload,
+                headers,
+                service=service,
+                expiry_read=expiry_read,
+                time=time,
+                state_reads=state_reads,
+                calls=calls,
+            ):
+                if path == "/v1/responses":
+                    calls.append(payload)
+                    return 200, {}, response_document({})
+                result = service.respond(method, path, payload, headers)
+                if method == "GET" and path.startswith(github.STATE_ROUTE):
+                    state_reads.append(path)
+                    if len(state_reads) == expiry_read:
+                        time[0] += timedelta(seconds=2)
+                return result
+
+            with fixture_http(respond) as opener, tempfile.TemporaryDirectory() as directory:
+                client = github_client(opener)
+                journal = provider.CompletionJournal(Path(directory))
+                api = provider.OpenAI(
+                    policy,
+                    client,
+                    github.JsonTransport("api.openai.com", "fixture", opener=opener),
+                    journal,
+                )
+                with (
+                    self.subTest(phase=phase),
+                    self.assertRaisesRegex(automation.AutomationError, "configuration_incomplete"),
+                ):
+                    api.propose(
+                        "triage",
+                        client.read_snapshot(NOW),
+                        9001,
+                        "cycle",
+                        "publisher",
+                        1,
+                        lambda time=time: time[0],
+                    )
+                self.assertEqual(len(state_reads), expiry_read)
+                self.assertEqual(len(calls), 1 if phase == "settlement" else 0)
+                allocations = service.state["allocations"]
+                self.assertEqual(len(allocations), 0 if phase == "allocation" else 1)
+                if allocations:
+                    self.assertIsNone(allocations[0]["actual_micro_usd"])
+                self.assertEqual(
+                    len(list(Path(directory).glob("receipt-*.json"))),
+                    1 if phase == "settlement" else 0,
+                )
+                if phase == "settlement":
+                    self.assertEqual(journal.read("cycle")["response_id"], "resp_fixture")
 
     def test_actual_usage_overshoot_is_recorded_and_blocks_further_calls(self):
         service = GitHubService()
@@ -821,13 +830,14 @@ class ProviderTests(unittest.TestCase):
                 return 200, {}, response
             return service.respond(method, path, payload, headers)
 
-        with fixture_http(respond) as opener:
+        with fixture_http(respond) as opener, tempfile.TemporaryDirectory() as receipt_dir:
             client = github_client(opener)
             snapshot = client.read_snapshot(NOW)
             api = provider.OpenAI(
                 enabled_policy(),
                 client,
                 github.JsonTransport("api.openai.com", "fixture-openai", opener=opener),
+                provider.CompletionJournal(Path(receipt_dir)),
             )
             for operation in ("overshoot", "next"):
                 with self.assertRaisesRegex(automation.Blocked, "allocation_exceeded"):

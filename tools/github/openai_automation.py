@@ -37,6 +37,8 @@ STATE_BRANCH = "roswellien/ci/260-automation-state"
 STATE_PATH = "openai-automation/state.json"
 MAX_DOCUMENT_BYTES = 2_000_000
 MAX_ITEMS = 1000
+INTENT_FIELDS = ("labels", "priority", "next_action")
+TERMINAL_OUTCOMES = ("applied", "superseded")
 RUNTIME_CAPABILITIES = frozenset({"foundation"})
 REQUIRED_CAPABILITIES = frozenset({"foundation", "worker", "maintenance"})
 PREREQUISITES = (
@@ -122,6 +124,13 @@ def text_value(value: Any, maximum: int, *, empty: bool = False) -> str:
     return value
 
 
+def github_text(value: Any, maximum: int, *, empty: bool = False) -> str:
+    # Check the received byte limit before CRLF normalization can shrink the input.
+    require(type(value) is str, "invalid_text")
+    require(len(value.encode("utf-8")) <= maximum, "invalid_text_length")
+    return text_value(value.replace("\r\n", "\n"), maximum, empty=empty)
+
+
 def identifier(value: Any, pattern: str) -> str:
     require(type(value) is str and re.fullmatch(pattern, value) is not None, "invalid_id")
     return value
@@ -179,7 +188,7 @@ class Policy:
 
     @classmethod
     def parse(cls, value: Any) -> Policy:
-        row = exact_object(value, {field.name for field in fields(cls)})
+        row = dict(exact_object(value, {field.name for field in fields(cls)}))
         require(integer(row["version"]) == 1, "unsupported_policy_version")
         require(row["repository"] == REPOSITORY and row["board_id"] == BOARD_ID, "wrong_scope")
         for name in ("enabled", "rollout_complete"):
@@ -201,6 +210,8 @@ class Policy:
         require((row["cycle_start"] is None) == (row["cycle_end"] is None), "incomplete_cycle")
         if row["cycle_start"] is not None:
             require(instant(row["cycle_start"]) < instant(row["cycle_end"]), "invalid_cycle")
+            for name in ("cycle_start", "cycle_end"):
+                row[name] = utc_text(instant(row[name]))
         integer(row["max_input_bytes"], 1, 128_000)
         integer(row["max_output_tokens"], 1, 16_000)
         integer(row["headroom_percent"], 10, 100)
@@ -264,8 +275,8 @@ class Issue:
         row = dict(exact_object(value, {field.name for field in fields(cls)}))
         integer(row["number"], 1, 2**31 - 1)
         identifier(row["item_id"], r"PVTI_[A-Za-z0-9_-]{1,100}")
-        text_value(row["title"], 512)
-        text_value(row["body"], 16_000, empty=True)
+        row["title"] = github_text(row["title"], 512)
+        row["body"] = github_text(row["body"], 16_000, empty=True)
         boolean(row["open"])
         row["labels"] = string_list(row["labels"])
         row["assignees"] = string_list(row["assignees"])
@@ -274,7 +285,7 @@ class Issue:
             "invalid_status",
         )
         require(row["priority"] in ("", *PRIORITY_OPTIONS), "invalid_priority")
-        text_value(row["next_action"], 2000, empty=True)
+        row["next_action"] = github_text(row["next_action"], 2000, empty=True)
         identifier(row["revision"], r"[0-9a-f]{64}")
         return cls(**row)
 
@@ -474,6 +485,8 @@ def parse_state(value: Any) -> State:
     require(integer(row["version"]) == 1, "unsupported_state_version")
     require(row["repository"] == REPOSITORY and row["board_id"] == BOARD_ID, "wrong_scope")
     require(instant(row["cycle_start"]) < instant(row["cycle_end"]), "invalid_cycle")
+    for name in ("cycle_start", "cycle_end"):
+        row[name] = utc_text(instant(row[name]))
     integer(row["generation"])
     integer(row["actions_minutes"])
     if row["lease"] is not None:
@@ -516,8 +529,11 @@ def parse_intent(value: Any) -> Intent:
     integer(row["issue_number"], 1, 2**31 - 1)
     identifier(row["item_id"], r"PVTI_[A-Za-z0-9_-]{1,100}")
     identifier(row["revision"], r"[0-9a-f]{64}")
-    require(row["outcome"] in ("prepared", "publishing", "applied", "conflict"), "invalid_outcome")
-    require(row["field"] in ("labels", "priority", "next_action"), "disallowed_field")
+    require(
+        row["outcome"] in ("prepared", "publishing", "conflict", *TERMINAL_OUTCOMES),
+        "invalid_outcome",
+    )
+    require(row["field"] in INTENT_FIELDS, "disallowed_field")
     if row["field"] == "labels":
         row["before"] = string_list(
             list(row["before"]) if type(row["before"]) is tuple else row["before"]
@@ -570,11 +586,13 @@ def prepare_triage(
     state: State, snapshot: Snapshot, proposal: TriageProposal, operation_id: str
 ) -> State:
     """Create durable per-field intents; this function performs no publication."""
-    identifier(operation_id, r"[A-Za-z0-9_-]{1,55}")
+    prefix_limit = 64 - 1 - max(len(name) for name in INTENT_FIELDS)
+    identifier(operation_id, rf"[A-Za-z0-9_-]{{1,{prefix_limit}}}")
     issue = snapshot.issue(proposal.issue_number)
     require(issue.revision == proposal.revision and issue.open, "stale_proposal")
     if any(
-        item.issue_number == issue.number and item.outcome != "applied" for item in state.intents
+        item.issue_number == issue.number and item.outcome not in TERMINAL_OUTCOMES
+        for item in state.intents
     ):
         raise Blocked("issue_has_pending_intent")
     intents = list(state.intents)
@@ -605,6 +623,8 @@ def intent_outcome(intent: Intent, issue: Issue) -> str:
     require(intent.issue_number == issue.number and intent.item_id == issue.item_id, "wrong_issue")
     current = getattr(issue, intent.field)
     if intent.field == "labels":
+        if set(intent.desired) <= set(current):
+            return "applied"
         current = tuple(sorted(current))
     desired = tuple(sorted(intent.desired)) if intent.field == "labels" else intent.desired
     before = tuple(sorted(intent.before)) if intent.field == "labels" else intent.before
@@ -616,7 +636,16 @@ def intent_outcome(intent: Intent, issue: Issue) -> str:
 
 
 def update_intent(state: State, operation_id: str, outcome: str) -> State:
-    require(any(item.operation_id == operation_id for item in state.intents), "unknown_intent")
+    matches = [item for item in state.intents if item.operation_id == operation_id]
+    require(len(matches) == 1, "unknown_intent")
+    transitions = {
+        "prepared": ("prepared", "publishing", "applied", "superseded"),
+        "publishing": ("publishing", "applied", "conflict"),
+        "conflict": ("conflict",),
+        "applied": ("applied",),
+        "superseded": ("superseded",),
+    }
+    require(outcome in transitions[matches[0].outcome], "invalid_intent_transition")
     updated = tuple(
         replace(item, outcome=outcome) if item.operation_id == operation_id else item
         for item in state.intents
@@ -647,7 +676,8 @@ def allocate_request(
     if configuration_blockers(policy, now):
         raise Blocked("configuration_incomplete")
     require(
-        state.cycle_start == policy.cycle_start and state.cycle_end == policy.cycle_end,
+        instant(state.cycle_start) == instant(policy.cycle_start)
+        and instant(state.cycle_end) == instant(policy.cycle_end),
         "ledger_cycle_mismatch",
     )
     identifier(operation_id, r"[A-Za-z0-9_-]{1,64}")
@@ -660,7 +690,7 @@ def allocate_request(
         raise Blocked("unreconciled_usage")
     if any(item.actual_micro_usd > item.reserved_micro_usd for item in state.allocations):
         raise Blocked("allocation_exceeded")
-    if any(item.outcome != "applied" for item in state.intents):
+    if any(item.outcome not in TERMINAL_OUTCOMES for item in state.intents):
         raise Blocked("unreconciled_publication")
     # UTF-8 bytes plus framing headroom bound tokenized text; no images/tools are sent.
     estimate = usage_cost(policy, input_bytes, policy.max_output_tokens)
@@ -679,6 +709,21 @@ def allocate_request(
     )
 
 
+def usage_tokens(value: Any) -> dict:
+    require(type(value) is dict, "missing_usage")
+    input_tokens = integer(value.get("input_tokens"), 0, 10**9)
+    output_tokens = integer(value.get("output_tokens"), 0, 10**9)
+    require(
+        integer(value.get("total_tokens"), 0, 2 * 10**9) == input_tokens + output_tokens,
+        "invalid_usage_total",
+    )
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
 def settle_usage(state: State, policy: Policy, operation_id: str, response: dict) -> State:
     matches = [item for item in state.allocations if item.operation_id == operation_id]
     require(len(matches) == 1 and matches[0].actual_micro_usd is None, "allocation_not_pending")
@@ -687,15 +732,8 @@ def settle_usage(state: State, policy: Policy, operation_id: str, response: dict
         not any(item.response_id == response_id for item in state.allocations), "duplicate_response"
     )
     require(response.get("model") == policy.model, "unexpected_response_model")
-    usage = response.get("usage")
-    require(type(usage) is dict, "missing_usage")
-    input_tokens = integer(usage.get("input_tokens"), 0, 10**9)
-    output_tokens = integer(usage.get("output_tokens"), 0, 10**9)
-    require(
-        integer(usage.get("total_tokens"), 0, 2 * 10**9) == input_tokens + output_tokens,
-        "invalid_usage_total",
-    )
-    cost = usage_cost(policy, input_tokens, output_tokens)
+    usage = usage_tokens(response.get("usage"))
+    cost = usage_cost(policy, usage["input_tokens"], usage["output_tokens"])
     allocations = tuple(
         replace(item, actual_micro_usd=cost, response_id=response_id)
         if item.operation_id == operation_id
@@ -722,12 +760,18 @@ def reconciliation_decision(
     pending = (
         ()
         if state is None
-        else tuple(item.operation_id for item in state.intents if item.outcome != "applied")
+        else tuple(
+            item.operation_id for item in state.intents if item.outcome not in TERMINAL_OUTCOMES
+        )
     )
     if state is None:
         blockers.append("state_not_loaded")
     else:
-        if state.cycle_start != policy.cycle_start or state.cycle_end != policy.cycle_end:
+        if (
+            policy.cycle_start is None
+            or instant(state.cycle_start) != instant(policy.cycle_start)
+            or instant(state.cycle_end) != instant(policy.cycle_end)
+        ):
             blockers.append("ledger_cycle_mismatch")
         if any(item.actual_micro_usd is None for item in state.allocations):
             blockers.append("unreconciled_usage")

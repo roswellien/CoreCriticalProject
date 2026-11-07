@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import openai_automation as domain
 from openai_automation_github import GitHub, JsonTransport
+from openai_automation_receipts import CompletionJournal, completion_receipt, settle_receipt
 
 
 def object_schema(properties: dict) -> dict:
@@ -68,6 +69,11 @@ INSTRUCTIONS = (
 def proposal_request(
     policy: domain.Policy, mode: str, snapshot: domain.Snapshot, issue_number: int | None
 ) -> dict:
+    domain.require(
+        snapshot.repository == policy.repository == domain.REPOSITORY
+        and snapshot.board_id == policy.board_id == domain.BOARD_ID,
+        "wrong_scope",
+    )
     domain.require(mode in ("summary", "triage"), "invalid_proposal_mode")
     if mode == "triage":
         domain.require(type(issue_number) is int, "missing_issue_number")
@@ -141,11 +147,60 @@ def response_value(response: dict) -> dict:
 
 
 class OpenAI:
-    def __init__(self, policy: domain.Policy, ledger: GitHub, transport: JsonTransport):
+    def __init__(
+        self,
+        policy: domain.Policy,
+        ledger: GitHub,
+        transport: JsonTransport,
+        journal: CompletionJournal,
+    ):
         domain.require(transport.host == "api.openai.com", "wrong_port_host")
         self.policy = policy
         self.ledger = ledger
         self.transport = transport
+        self.journal = journal
+
+    def reconcile_receipt(
+        self, operation_id: str, run_id: str, clock: Callable[[], datetime]
+    ) -> None:
+        """Explicit evidence-only recovery; no inference, proposals or board writes.
+
+        Verified usage can unblock a new lease after the old lease expires. This
+        is not permission for an expired publisher to save its old state: settlement
+        is computed from one fresh state/SHA and checked again before a CAS write.
+        """
+        domain.require(
+            not domain.configuration_blockers(self.policy, clock()), "configuration_incomplete"
+        )
+        if not self.ledger.enabled():
+            raise domain.Blocked("disabled")
+        receipt = self.journal.read(operation_id)
+        state, sha = self.ledger.read_state()
+        settled = settle_receipt(state, self.policy, receipt)
+        now = clock()
+        active = state.lease is not None and now < domain.instant(state.lease.expires_at)
+        if active:
+            domain.assert_fence(state, run_id, state.lease.fence, now)
+        else:
+            settled = domain.acquire_lease(settled, run_id, now, now + timedelta(minutes=4))
+
+        def check():
+            if not self.ledger.enabled():
+                raise domain.Blocked("disabled")
+            current, fresh_sha = self.ledger.read_state()
+            checked_at = clock()
+            domain.require(
+                not domain.configuration_blockers(self.policy, checked_at),
+                "configuration_incomplete",
+            )
+            if fresh_sha != sha:
+                raise domain.Conflict("state_sha_changed")
+            if active:
+                domain.assert_fence(current, run_id, state.lease.fence, checked_at)
+            domain.assert_fence(settled, run_id, settled.lease.fence, checked_at)
+
+        if settled != state:
+            self.ledger.save_state(settled, sha, check)
 
     def propose(
         self,
@@ -158,28 +213,34 @@ class OpenAI:
         clock: Callable[[], datetime],
     ):
         request = proposal_request(self.policy, mode, snapshot, issue_number)
+        self.journal.check_available(operation_id)
         now = clock()
         age = (now - domain.instant(snapshot.captured_at)).total_seconds()
         domain.require(0 <= age <= 300, "stale_snapshot")
-        state, sha = self.ledger.check_publisher(run_id, fence, clock)
+        state, sha = self.ledger.check_publisher(run_id, fence, clock, policy=self.policy)
         allocated = domain.allocate_request(
-            state, self.policy, operation_id, len(json.dumps(request).encode("utf-8")), now
+            state, self.policy, operation_id, len(json.dumps(request).encode("utf-8")), clock()
         )
         sha = self.ledger.save_state(
-            allocated, sha, lambda: self.ledger.check_publisher(run_id, fence, clock, sha)
+            allocated,
+            sha,
+            lambda: self.ledger.check_publisher(run_id, fence, clock, sha, policy=self.policy),
         )
         fresh = self.ledger.read_snapshot(clock())
         domain.require(
             fresh.issues == snapshot.issues and fresh.base_sha == snapshot.base_sha,
             "source_changed_before_inference",
         )
-        self.ledger.check_publisher(run_id, fence, clock, sha)
+        self.ledger.check_publisher(run_id, fence, clock, sha, policy=self.policy)
         # Exactly one POST. Failure leaves the allocation pending; no retry or fallback.
         response = self.transport.request("POST", "/v1/responses", request).body
+        self.journal.record(completion_receipt(allocated, self.policy, operation_id, response))
         domain.require(type(response) is dict, "invalid_response")
         settled = domain.settle_usage(allocated, self.policy, operation_id, response)
         self.ledger.save_state(
-            settled, sha, lambda: self.ledger.check_publisher(run_id, fence, clock, sha)
+            settled,
+            sha,
+            lambda: self.ledger.check_publisher(run_id, fence, clock, sha, policy=self.policy),
         )
         allocation = next(item for item in settled.allocations if item.operation_id == operation_id)
         if allocation.actual_micro_usd > allocation.reserved_micro_usd:

@@ -17,7 +17,7 @@ From the repository root, with Python 3.11 or newer:
 
 ```text
 python -B tools/github/openai_automation.py preview --snapshot tests/fixtures/openai_automation_snapshot.json
-python -B -m unittest discover -s tests -p test_openai_automation.py -v
+python -B -m unittest discover -s tests -p "test_openai_automation*.py" -v
 python tools/check.py --setup
 python tools/check.py
 ```
@@ -45,6 +45,8 @@ offers merges, ref updates, arbitrary GraphQL or shell execution. Provider outpu
 choose only allowlisted type/area labels, P0/P1/P2 and plain Next action text for an exact
 issue/revision. Status, assignees, closure and Ready authorization are not model outputs.
 Labels are appended and human/capture labels are retained.
+GitHub CRLF text is normalized before validation/fingerprinting, with received-byte
+limits still enforced; bare carriage returns and other unsafe controls are rejected.
 
 Each write intent contains its operation ID, issue/item, before/desired values and
 source revision. Persist `prepared`, then `publishing`, using the current state blob SHA,
@@ -53,6 +55,14 @@ before publication. Verify the resulting field before recording `applied`. Sibli
 advance only after a confirmed isolated bot edit. Human/source changes pause; no automatic
 rollback overwrites human fields. This is not an atomic compare-and-swap for Projects
 fields: GitHub supplies no such precondition, and a human edit can race an API request.
+
+Provably unsent `prepared` work whose source changed is recorded as terminal
+`superseded` under the current enable/lease/fence/SHA checks. It does not write the
+issue or board and cannot be revived; fresh triage needs a new operation ID. Work
+already `publishing` is never superseded or blindly retried. Confirmed label additions
+can be acknowledged even if a human also added labels; retain those labels and leave
+sibling revisions stale unless the bot edit was isolated. These siblings must pass
+their own source checks (or become superseded) before new inference can start.
 
 A lost response leaves `publishing`. If the current field equals the desired value,
 reconciliation can record completion without another write. If it still equals the old
@@ -98,6 +108,32 @@ POST retry or model fallback. Above-allocation usage is recorded and blocks furt
 dispatch. The ledger is not a vendor credit reservation or a zero-overshoot guarantee.
 Require an enforced API project cap as well; hard caps may have asynchronous overshoot.
 Never buy credits, raise limits or assume purchased credits cannot be charged.
+
+The provider now requires an explicitly supplied `CompletionJournal` in an existing
+private absolute directory, before allocating or making a provider request. A storage
+preflight exercises file flushing and exclusive hard-link publication before
+allocation; unsupported storage blocks the request with a redacted failure. A known
+response is flushed as a separate immutable receipt **before** settlement or another
+authority check. It contains only fixed scope, operation ID, a cycle/model/price/
+reservation binding, validated response/model IDs and token counts, and fixed anomaly
+codes. No input/output text, raw errors or credentials are retained. Conflicting
+receipts are not overwritten; an unknown model/usage keeps its reservation pending.
+No receipt path is inferred from the home directory or an environment variable.
+
+`OpenAI.reconcile_receipt` is an explicit evidence-only operation: reread current state,
+verify the receipt binding and approved prices, then save only settlement (and, if the
+old lease expired, a newly acquired lease) under fresh enable/policy/SHA checks. An
+active different publisher blocks recovery. Disable still prevents every remote state
+or field write; an expired publisher cannot save an old state. Reconciliation never
+calls the provider or returns a proposal. Receipts remain for owner-reviewed retention.
+
+This is a local persistence interface, not a deployed Actions receipt service. Files
+are fsynced and published using a no-replace same-directory hard link; POSIX additionally
+checks owner/private permissions and fsyncs the directory. Windows ACL isolation and
+directory-entry crash guarantees require deployment verification. Before activation,
+provide protected durable storage that survives runner deletion and verify receipt
+retention/recovery on that platform. Ephemeral Actions scratch or an end-of-job upload
+alone does not satisfy this gate. No journal storage or uploader is provisioned here.
 
 ## Trusted workflow and deployment gates
 
