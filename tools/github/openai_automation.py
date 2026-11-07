@@ -8,6 +8,7 @@ All persistent money is integer micro-USD, times are UTC, and revisions are expl
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
@@ -688,3 +689,114 @@ def settle_usage(state: State, policy: Policy, operation_id: str, response: dict
         for item in state.allocations
     )
     return replace(state, allocations=allocations)
+
+
+@dataclass(frozen=True)
+class Decision:
+    kind: str
+    blockers: tuple[str, ...]
+    ready_candidates: tuple[int, ...]
+    pending_intents: tuple[str, ...]
+
+
+def reconciliation_decision(
+    policy: Policy, snapshot: Snapshot, state: State | None, now: datetime
+) -> Decision:
+    blockers = list(configuration_blockers(policy, now))
+    if not REQUIRED_CAPABILITIES <= RUNTIME_CAPABILITIES:
+        blockers.insert(0, "foundation_rollout_incomplete")
+    pending = (
+        ()
+        if state is None
+        else tuple(item.operation_id for item in state.intents if item.outcome != "applied")
+    )
+    if state is None:
+        blockers.append("state_not_loaded")
+    else:
+        if state.cycle_start != policy.cycle_start or state.cycle_end != policy.cycle_end:
+            blockers.append("ledger_cycle_mismatch")
+        if any(item.actual_micro_usd is None for item in state.allocations):
+            blockers.append("unreconciled_usage")
+    kind = "queue_report"
+    if pending:
+        kind = "reconcile_intent"
+    if blockers:
+        kind = "pause"
+    return Decision(
+        kind,
+        tuple(blockers),
+        snapshot.eligible_ready(),
+        pending,
+    )
+
+
+def render_summary(entries: tuple[SummaryEntry, ...]) -> list[dict]:
+    return [
+        {
+            "issue": f"https://github.com/{REPOSITORY}/issues/{entry.issue_number}",
+            "summary": entry.summary,
+            "suggested_priority": entry.suggested_priority,
+            "next_action": entry.next_action,
+        }
+        for entry in entries
+    ]
+
+
+def read_json_file(path: Path) -> Any:
+    with path.open("rb") as source:
+        return strict_json(source.read(MAX_DOCUMENT_BYTES + 1))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("mode", choices=("preview", "reconcile", "summary", "triage"))
+    parser.add_argument("--snapshot", type=Path)
+    parser.add_argument(
+        "--state", type=Path, help="optional authored local state for offline preview"
+    )
+    parser.add_argument(
+        "--policy", type=Path, default=Path(__file__).with_name("openai_automation_policy.json")
+    )
+    parser.add_argument("--issue", type=int, default=0)
+    parser.add_argument("--admission-only", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        if args.mode != "preview":
+            # Check code capability before opening configuration, importing clients,
+            # reading credentials or inspecting ambient workflow inputs.
+            require_runtime_capabilities()
+            raise Blocked("runtime_dispatch_not_implemented")
+        require(
+            args.snapshot is not None and args.issue == 0 and not args.admission_only,
+            "invalid_preview_arguments",
+        )
+        policy = Policy.parse(read_json_file(args.policy))
+        snapshot = Snapshot.parse(read_json_file(args.snapshot))
+        state = parse_state(read_json_file(args.state)) if args.state is not None else None
+        decision = reconciliation_decision(policy, snapshot, state, datetime.now(UTC))
+        print(
+            json.dumps(
+                {
+                    "mode": "offline_preview",
+                    "decision": asdict(decision),
+                    "issue_count": len(snapshot.issues),
+                    "remote_writes": 0,
+                    "provider_calls": 0,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    except Blocked as error:
+        print(f"blocked: {error}", file=sys.stderr)
+        return 2
+    except AutomationError as error:
+        print(f"invalid: {error}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+        print("operation_failed", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -4,7 +4,9 @@ import base64
 import contextlib
 import copy
 import http.server
+import io
 import json
+import subprocess
 import sys
 import threading
 import unittest
@@ -690,6 +692,11 @@ class ProviderTests(unittest.TestCase):
                     1,
                     lambda: NOW,
                 )
+                if mode == "summary":
+                    self.assertEqual(
+                        provider.domain.render_summary(result)[0]["issue"],
+                        f"https://github.com/{automation.REPOSITORY}/issues/9001",
+                    )
                 self.assertEqual(
                     result.issue_number if mode == "triage" else result[0].issue_number, 9001
                 )
@@ -819,6 +826,63 @@ class ProviderTests(unittest.TestCase):
                     api.propose("triage", snapshot, 9001, operation, "publisher", 1, lambda: NOW)
             self.assertEqual(service.state["allocations"][0]["actual_micro_usd"], 500_000)
             self.assertEqual(len(service.state["allocations"]), 1)
+
+
+class EntryPointTests(unittest.TestCase):
+    def test_offline_preview_runs_without_credentials_or_network(self):
+        command = [
+            sys.executable,
+            "-B",
+            str(ROOT / "tools/github/openai_automation.py"),
+            "preview",
+            "--snapshot",
+            str(ROOT / "tests/fixtures/openai_automation_snapshot.json"),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=True, cwd=ROOT)
+        value = json.loads(result.stdout)
+        self.assertEqual(value["decision"]["ready_candidates"], [9001])
+        self.assertEqual((value["remote_writes"], value["provider_calls"]), (0, 0))
+        with (
+            mock.patch("os.getenv", side_effect=AssertionError("credential lookup")),
+            mock.patch(
+                "urllib.request.OpenerDirector.open",
+                side_effect=AssertionError("network attempted"),
+            ),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(automation.main(command[3:]), 0)
+        self.assertEqual(json.loads(output.getvalue())["mode"], "offline_preview")
+
+    def test_live_modes_block_before_config_or_credentials_even_with_ambient_authorization(self):
+        for mode in ("reconcile", "summary", "triage"):
+            with (
+                mock.patch.object(
+                    automation, "read_json_file", side_effect=AssertionError("file read")
+                ),
+                mock.patch("os.getenv", side_effect=AssertionError("credential lookup")),
+                contextlib.redirect_stderr(io.StringIO()) as error,
+            ):
+                self.assertEqual(
+                    automation.main([mode, "--policy", "do-not-read.env", "--issue", "9001"]), 2
+                )
+            self.assertEqual(error.getvalue().strip(), "blocked: foundation_rollout_incomplete")
+
+    def test_reconciliation_reports_pending_intents_without_claiming_ready(self):
+        snapshot = automation.Snapshot.parse(snapshot_document())
+        policy = enabled_policy()
+        state = automation.prepare_triage(
+            automation.parse_state(state_document()),
+            snapshot,
+            automation.TriageProposal.parse(triage_document(), snapshot, 9001),
+            "new",
+        )
+        before = asdict(state)
+        decision = automation.reconciliation_decision(policy, snapshot, state, NOW)
+        self.assertEqual(decision.kind, "pause")
+        self.assertEqual(decision.pending_intents, ("new_next_action",))
+        self.assertIn("foundation_rollout_incomplete", decision.blockers)
+        self.assertEqual(asdict(state), before)
+        self.assertEqual(snapshot.issue(9001).status, "Ready")
 
 
 if __name__ == "__main__":
