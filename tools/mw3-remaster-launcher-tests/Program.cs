@@ -2,6 +2,8 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+if (args.Length == 2 && args[0] == "--modular-content-only") { await ModProfilesChecks.Run(args[1]); return; }
+
 if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
 
 if(args.Length==1 && args[0]=="--steam-only") { SteamShortcutChecks.Run(); return; }

@@ -343,6 +343,7 @@
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button x:Name="BtnInspectConflicts" Content="Inspect Conflicts" Style="{StaticResource SecondaryButton}" Margin="0,0,10,0" Click="BtnInspectConflicts_Click" />
+                                <Button Content="MW3-RE profiles…" Style="{StaticResource SecondaryButton}" Margin="0,0,10,0" Click="OpenModProfiles" />
                                 <Button x:Name="BtnOpenModsFolder" Content="Open Mods Folder" Style="{StaticResource SecondaryButton}" Margin="0,0,10,0" Click="BtnOpenModsFolder_Click" />
                                 <Button x:Name="BtnInstallPack" Content="+ Install New Pack..." Style="{StaticResource PrimaryLaunchButton}" Click="BtnInstallPack_Click" />
                             </StackPanel>

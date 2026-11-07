@@ -79,15 +79,23 @@ namespace MW3RemasterLauncher.Core
 
         private Process LaunchGameCore(LauncherSettings settings, List<string> activeModDirs, string runDir, Action<string>? logCallback)
         {
-            // MSIX AppData redirection can expose a different pack to a child
-            // outside this process's context. Pass physical manifest roots.
-            activeModDirs = activeModDirs.Select(PackStorage.CanonicalPackRoot).ToList();
             // Verify game path
             var validation = GameValidator.Validate(settings.GamePath);
             if (!validation.IsValid)
             {
                 throw new InvalidOperationException($"Cannot launch game: {validation.StatusMessage}");
             }
+
+            if (!string.IsNullOrWhiteSpace(settings.ModularContentProfile))
+                return ModProfiles.Launch(settings, validation.GameDirectory, _dataRoot, line =>
+                {
+                    File.AppendAllText(LastLogPath!, line + Environment.NewLine);
+                    logCallback?.Invoke(line);
+                });
+
+            // MSIX AppData redirection can expose a different pack to a child
+            // outside this process's context. Pass physical manifest roots.
+            activeModDirs = activeModDirs.Select(PackStorage.CanonicalPackRoot).ToList();
 
             // Check if game is already running
             var running = Process.GetProcessesByName("entry_commandline");
