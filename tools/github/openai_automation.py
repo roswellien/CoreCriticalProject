@@ -357,6 +357,9 @@ class TriageProposal:
         require(issue.open, "closed_issue")
         require(row["revision"] == issue.revision, "stale_proposal")
         labels = string_list(row["labels"], TYPE_LABELS + AREA_LABELS)
+        existing_types = set(issue.labels) & set(TYPE_LABELS)
+        proposed_types = set(labels) & set(TYPE_LABELS)
+        require(not existing_types or existing_types == proposed_types, "human_type_label_conflict")
         require(
             sum(label in TYPE_LABELS for label in labels) == 1
             and any(label in AREA_LABELS for label in labels),

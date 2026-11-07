@@ -374,6 +374,7 @@ class ContractTests(unittest.TestCase):
             {"issue_number": 9002},
             {"revision": "b" * 64},
             {"labels": ["enhancement", "area: ci", "automation-ready"]},
+            {"labels": ["bug", "area: ci"]},
             {"priority": "P9"},
             {"next_action": "${{ secrets.OPENAI_API_KEY }}"},
             {"next_action": "$(run-command)"},
