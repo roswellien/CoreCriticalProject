@@ -49,15 +49,26 @@ def require(host, payload, ident):
             raise ValueError(f"Pack '{ident}' requires {name} version {version}. Update the game runtime or choose a compatible pack.")
 
 
-def measured_donor_hinges(path):
-    """Inspect the optional wire flag without loading a large geometry payload."""
+def donor_hinge_version(path):
+    """Inspect opt-in articulation flags without loading the geometry payload."""
     with Path(path).open('rb') as stream:
         header = stream.read(24)
-    return (len(header) == 24 and header[:8] == b'BWMESH4\0'
-            and bool(int.from_bytes(header[20:24], 'little') & 2))
+    if len(header) != 24 or header[:8] != b'BWMESH4\0':
+        return 0
+    flags = int.from_bytes(header[20:24], 'little')
+    if flags & ~7:
+        raise ValueError('Invalid donor rig flags')
+    if (flags & 4) and not (flags & 2):
+        raise ValueError('Shoulder limits require measured hinges')
+    return 2 if flags & 4 else 1 if flags & 2 else 0
+
+
+def measured_donor_hinges(path):
+    """Retain the existing boolean query for any measured-hinge profile."""
+    return donor_hinge_version(path) > 0
 
 
 def require_measured_donor_hinges(path, payload):
-    if (measured_donor_hinges(path)
-            and payload.get('required_capabilities', {}).get('donor-rig-hinges') != 1):
-        raise ValueError('Measured hinge rig requires donor-rig-hinges version 1')
+    version = donor_hinge_version(path)
+    if version and payload.get('required_capabilities', {}).get('donor-rig-hinges') != version:
+        raise ValueError(f'Measured hinge rig requires donor-rig-hinges version {version}')

@@ -70,6 +70,27 @@ static class ChassisPackChecks
             catch(InvalidDataException) {}
             host["content_capabilities"]!["donor-rig-hinges"]=new JsonArray(1);
             RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);
+            // Header-only admission checks; native geometry decoding is tested separately.
+            BitConverter.GetBytes(7u).CopyTo(hingeHeader,20);
+            File.WriteAllBytes(Path.Combine(installed.DirectoryPath,meshName),hingeHeader);
+            installed.Files[meshName]=new PackFile {Bytes=hingeHeader.Length,
+                Sha256=Convert.ToHexString(SHA256.HashData(hingeHeader)).ToLowerInvariant(),Format="BWMESH4"};
+            try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Old manifest accepted shoulder rig.");}
+            catch(InvalidDataException) {}
+            installed.NativePayload.RequiredCapabilities["donor-rig-hinges"]=2;
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            try {RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);throw new Exception("Old host accepted shoulder rig.");}
+            catch(InvalidDataException) {}
+            host["content_capabilities"]!["donor-rig-hinges"]=new JsonArray(1,2);
+            RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);
+            foreach(uint flags in new uint[]{4,11})
+            {
+                BitConverter.GetBytes(flags).CopyTo(hingeHeader,20);
+                File.WriteAllBytes(Path.Combine(installed.DirectoryPath,meshName),hingeHeader);
+                try {RuntimeContentCapabilities.RequireMeasuredDonorHinges(Path.Combine(installed.DirectoryPath,meshName),installed.NativePayload);
+                    throw new Exception("Invalid shoulder flags accepted.");}
+                catch(InvalidDataException) {}
+            }
             File.WriteAllBytes(Path.Combine(installed.DirectoryPath,meshName),resources[meshName]);
             installed.Files[meshName] = files[meshName] = new PackFile {Bytes=resources[meshName].Length,
                 Sha256=Convert.ToHexString(SHA256.HashData(resources[meshName])).ToLowerInvariant(),Format="BWMESH4"};

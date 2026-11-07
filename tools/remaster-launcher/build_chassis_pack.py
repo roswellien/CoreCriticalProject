@@ -7,7 +7,7 @@ import re
 import zipfile
 
 from prepared_mech_packs import read_json, resolve
-from content_capabilities import measured_donor_hinges
+from content_capabilities import donor_hinge_version
 from prepared_chassis_packs import PROFILE, REGISTRY, CAPABILITY, select
 
 
@@ -22,7 +22,7 @@ def build(project_path, output):
     stage = output / 'pack'; stage.mkdir()
     files, records = {}, []
     legacy_skins = False
-    hinge_rigs = False
+    hinge_version = 0
 
     def add(data, fmt=None, extension='.bin'):
         name = 'payload/' + hashlib.sha256(data).hexdigest() + extension
@@ -80,7 +80,7 @@ def build(project_path, output):
                     raise ValueError('Chassis project resource exceeds size limit')
                 data = path.read_bytes()
                 if role == 'meshes':
-                    hinge_rigs = hinge_rigs or measured_donor_hinges(path)
+                    hinge_version = max(hinge_version, donor_hinge_version(path))
                 row[role][lod] = add(data, fmt)
         if 'surface_materials' in entry:
             from surface_materials import FORMAT as SURFACE_FORMAT
@@ -111,8 +111,8 @@ def build(project_path, output):
                     native_payload=dict(profile=PROFILE, registry=REGISTRY, path_base='pack-root',
                                         required_formats=required_formats, required_capabilities={CAPABILITY: 3 if legacy else 2 if version_two else 1}),
                     provides=dict(mechs=[r['id'] for r in records]), files=files)
-    if hinge_rigs:
-        manifest['native_payload']['required_capabilities']['donor-rig-hinges'] = 1
+    if hinge_version:
+        manifest['native_payload']['required_capabilities']['donor-rig-hinges'] = hinge_version
     if headlights:
         manifest['native_payload']['required_capabilities']['mech-headlights'] = 1
     if surface_materials:
@@ -122,7 +122,7 @@ def build(project_path, output):
         manifest['native_payload']['required_capabilities'][SKIN_CAPABILITY] = 1
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     select([(stage, manifest)], {'content_capabilities': {
-        CAPABILITY: [1, 2, 3], 'mech-headlights': [1], SKIN_CAPABILITY: [1], SURFACE_CAPABILITY: [1], 'donor-rig-hinges': [1]}})
+        CAPABILITY: [1, 2, 3], 'mech-headlights': [1], SKIN_CAPABILITY: [1], SURFACE_CAPABILITY: [1], 'donor-rig-hinges': [1, 2]}})
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
         for path in sorted(stage.rglob('*')):

@@ -42,7 +42,7 @@ inline Mat swing(Vec a,Vec b){
 }
 inline Mat axis(){return {0,0,-1,0,-1,0,0,0,0,1,0,0,0,0,0,1};}
 struct Bone{std::string name,control;int parent{-1};Mat rest=identity();};
-struct Rig{std::vector<Bone>bones;std::map<std::string,Mat>reference;std::array<double,2>walk_x{},walk_z{};double hip_drop{};bool ground_reference=true;bool hinge_axes=false;};
+struct Rig{std::vector<Bone>bones;std::map<std::string,Mat>reference;std::array<double,2>walk_x{},walk_z{};double hip_drop{};bool ground_reference=true;bool hinge_axes=false;bool shoulder_limits=false;};
 struct Pose{std::vector<Mat>world;unsigned reach_clamps{};};
 inline double locomotion(const Rig&r,const std::map<std::string,Mat>&current){
  const auto h=position(current.at("hip")),h0=position(r.reference.at("hip"));double change=0;
@@ -74,8 +74,64 @@ inline Mat hinge_constrained(const Mat&rest,const Mat&desired,const Mat&parent_d
  const auto angle=hinge_angle(axis,direction,vector(relative,direction));
  return translate(product(parent_delta,product(hinge_rotation(axis,angle),rest)),origin);
 }
+inline void validate_shoulder_metadata(const Rig&rig) {
+ if(!rig.shoulder_limits)return;
+ if(!rig.hinge_axes)throw std::runtime_error("Visual retarget: shoulder limits require measured hinges");
+ std::map<std::string,const Bone*> bones;
+ for(const auto&bone:rig.bones)if(!bones.emplace(bone.name,&bone).second)
+  throw std::runtime_error("Visual retarget: duplicate shoulder bone");
+ for(const char*side:{"Left","Right"}) {
+  const std::string upper_name="Upperarm_"+std::string(side);
+  const auto&upper=*bones.at(upper_name);
+  const auto&axis_frame=*bones.at("HingeAxis_"+upper_name);
+  const auto&minimum=*bones.at("HingeMin_"+upper_name);
+  const auto&maximum=*bones.at("HingeMax_"+upper_name);
+  if(upper.parent<0||upper.parent>=int(rig.bones.size())||
+     rig.bones[static_cast<std::size_t>(upper.parent)].name!="Torso_Twist")
+   throw std::runtime_error("Visual retarget: invalid shoulder parent");
+  for(double value:upper.rest)if(!std::isfinite(value))
+   throw std::runtime_error("Visual retarget: nonfinite shoulder rest");
+  for(const auto*marker:{&axis_frame,&minimum,&maximum}) {
+   if(!marker->control.empty()||marker->parent<0||marker->parent>=int(rig.bones.size())||
+      rig.bones[static_cast<std::size_t>(marker->parent)].name!="Torso_Twist")
+    throw std::runtime_error("Visual retarget: invalid shoulder marker parent");
+   for(double value:marker->rest)if(!std::isfinite(value))
+    throw std::runtime_error("Visual retarget: nonfinite shoulder marker");
+   if(marker->rest[12]!=0||marker->rest[13]!=0||marker->rest[14]!=0||marker->rest[15]!=1)
+    throw std::runtime_error("Visual retarget: nonaffine shoulder marker");
+   inverse(marker->rest);
+   if(length(sub(position(marker->rest),position(upper.rest)))>1e-7)
+    throw std::runtime_error("Visual retarget: shoulder marker is outside its socket");
+  }
+  const auto axis=hinge_axis(axis_frame.rest);
+  const auto guide=unit({axis_frame.rest[2],axis_frame.rest[6],axis_frame.rest[10]});
+  if(std::abs(dot(axis,guide))>1e-6)
+   throw std::runtime_error("Visual retarget: invalid shoulder guide");
+  for(const auto*marker:{&minimum,&maximum}) {
+   const auto direction=unit({marker->rest[2],marker->rest[6],marker->rest[10]});
+   if(std::abs(dot(axis,direction))>1e-6||dot(axis,hinge_axis(marker->rest))<1.-1e-6)
+    throw std::runtime_error("Visual retarget: inconsistent shoulder limit axis");
+  }
+  const double lower=hinge_angle(axis,guide,{minimum.rest[2],minimum.rest[6],minimum.rest[10]});
+  const double higher=hinge_angle(axis,guide,{maximum.rest[2],maximum.rest[6],maximum.rest[10]});
+  constexpr double pi=3.14159265358979323846;
+  if(lower>=-1e-6||higher<=1e-6||lower<=-pi+1e-4||higher>=pi-1e-4)
+   throw std::runtime_error("Visual retarget: invalid shoulder motion envelope");
+ }
+}
+inline Mat shoulder_constrained(const Mat&rest,const Mat&desired,const Mat&parent_delta,
+                                const Mat&frame,const Mat&minimum,const Mat&maximum,Vec origin) {
+ const auto axis=hinge_axis(frame);
+ const Vec guide{frame[2],frame[6],frame[10]};
+ const auto relative=product(inverse(rotation(parent_delta)),product(rotation(desired),inverse(rotation(rest))));
+ const double requested=hinge_angle(axis,guide,vector(relative,guide));
+ const double lower=hinge_angle(axis,guide,{minimum[2],minimum[6],minimum[10]});
+ const double higher=hinge_angle(axis,guide,{maximum[2],maximum[6],maximum[10]});
+ return translate(product(parent_delta,product(hinge_rotation(axis,std::clamp(requested,lower,higher)),rest)),origin);
+}
 // Metadata frames/points describe existing rigid surfaces; they draw no geometry.
 inline void validate_hinge_metadata(const Rig&r) {
+ validate_shoulder_metadata(r);
  std::map<std::string,const Bone*> bones;
  for(const auto&bone:r.bones)bones.emplace(bone.name,&bone);
  for(const auto&side:std::array<std::string,2>{"Left","Right"}) {
@@ -121,9 +177,18 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
  const auto torso=product(want.at("Torso_Twist"),inverse(rest("Torso_Twist")));
  for(const auto&side:std::array<std::pair<std::string,std::string>,2>{{{"Left","l"},{"Right","r"}}}) {
   const auto upper="Upperarm_"+side.first,lower="Forearm_"+side.first;
-  want[upper]=rotated(upper,side.second+"arm",point(torso,position(rest(upper))));
+  const auto shoulder_origin=point(torso,position(rest(upper)));
+  const auto requested_upper=rotated(upper,side.second+"arm",shoulder_origin);
+  want[upper]=r.shoulder_limits?shoulder_constrained(rest(upper),requested_upper,torso,
+    rest("HingeAxis_"+upper),rest("HingeMin_"+upper),rest("HingeMax_"+upper),shoulder_origin):requested_upper;
   const auto arm=product(want.at(upper),inverse(rest(upper)));
-  const auto raw=current.count(side.second+"hand")?rotated(lower,side.second+"hand",point(arm,position(rest(lower)))):product(arm,rest(lower));
+  auto raw=current.count(side.second+"hand")?rotated(lower,side.second+"hand",point(arm,position(rest(lower)))):product(arm,rest(lower));
+  if(r.shoulder_limits&&current.count(side.second+"hand")) {
+   // A shoulder limit must not turn the rejected shoulder angle into elbow flex.
+   const auto requested_arm=product(requested_upper,inverse(rest(upper)));
+   const auto correction=product(rotation(arm),inverse(rotation(requested_arm)));
+   raw=translate(product(correction,raw),point(arm,position(rest(lower))));
+  }
   want[lower]=hinge_constrained(rest(lower),raw,arm,rest("HingeAxis_"+lower),point(arm,position(rest(lower))));
  }
  if(index.count("Torso_Head")&&r.bones[index.at("Torso_Head")].control=="head"&&current.count("head"))
@@ -266,6 +331,7 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
 }
 inline Pose retarget(const Rig&r,std::map<std::string,Mat>current,double gait){
  if(!std::isfinite(gait)||gait<0||gait>1)throw std::runtime_error("Visual retarget: invalid gait blend");
+ if(r.shoulder_limits&&!r.hinge_axes)throw std::runtime_error("Visual retarget: shoulder limits require measured hinges");
  if(r.hinge_axes)return retarget_hinged(r,std::move(current),gait);
  std::map<std::string,size_t>index;for(size_t i=0;i<r.bones.size();++i)if(!index.emplace(r.bones[i].name,i).second)throw std::runtime_error("Visual retarget: duplicate bone");
  auto rest=[&](const std::string&n)->const Mat&{return r.bones.at(index.at(n)).rest;};

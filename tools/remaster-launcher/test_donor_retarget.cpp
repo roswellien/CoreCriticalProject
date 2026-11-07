@@ -90,8 +90,73 @@ void hinge_checks(){
   check(rejected,"malformed hinge metadata rejected");
  }
 }
+void shoulder_checks(){
+ auto rig=hinged_fixture();rig.shoulder_limits=true;
+ auto find=[](const Rig&r,const std::string&name){
+  for(std::size_t i=0;i<r.bones.size();++i)if(r.bones[i].name==name)return i;
+  throw std::runtime_error("missing test bone: "+name);
+ };
+ for(const std::string side:{"Left","Right"}){
+  const auto upper=find(rig,"Upperarm_"+side);const auto origin=position(rig.bones[upper].rest);
+  for(const auto&limit:std::array<std::pair<std::string,double>,3>{{{"Axis",0},{"Min",-.4},{"Max",.3}}})
+   rig.bones.push_back({"Hinge"+limit.first+"_Upperarm_"+side,"",1,translate(hinge_rotation({0,1,0},limit.second),origin)});
+  rig.bones.push_back({"Guard_"+side,"",1,translate(identity(),origin)});
+ }
+ const auto original=rig.reference;const auto stand=retarget(rig,original,0);
+ for(std::size_t i=0;i<rig.bones.size();++i)check(error(stand.world[i],rig.bones[i].rest)<1e-9,"limited shoulder stand retains rest pose");
+ for(const std::string side:{"Left","Right"})for(double requested:{-1.,-.4,-.1,0.,.2,.3,1.}){
+  auto pose=original;const std::string prefix=side=="Left"?"l":"r";
+  const auto upper=find(rig,"Upperarm_"+side),lower=find(rig,"Forearm_"+side),guard=find(rig,"Guard_"+side);
+  pose.at(prefix+"arm")=translate(hinge_rotation({0,1,0},requested),position(original.at(prefix+"arm")));
+  pose.at(prefix+"hand")=translate(hinge_rotation({0,1,0},requested+.2),position(original.at(prefix+"hand")));
+  const auto out=retarget(rig,pose,0);
+  check(error(rotation(out.world[upper]),hinge_rotation({0,1,0},std::clamp(requested,-.4,.3)))<1e-9,"shoulder respects authored travel limits");
+  check(length(sub(position(out.world[upper]),position(rig.bones[upper].rest)))<1e-9,"limited shoulder stays in socket");
+  check(error(product(inverse(rotation(out.world[upper])),rotation(out.world[lower])),hinge_rotation({0,1,0},.2))<1e-9,"shoulder clamp preserves independent elbow flex");
+  check(error(out.world[guard],rig.bones[guard].rest)<1e-9,"shoulder guard stays with torso");
+ }
+ // The shoulder envelope is relative to a moving torso, including its sockets.
+ for(const std::string side:{"Left","Right"})for(double requested:{-1.,1.}){
+  auto pose=original;const std::string prefix=side=="Left"?"l":"r";
+  const auto torso_rotation=hinge_rotation({0,0,1},.37);
+  pose.at("torso")=translate(torso_rotation,position(original.at("torso")));
+  pose.at(prefix+"arm")=translate(product(torso_rotation,hinge_rotation({0,1,0},requested)),position(original.at(prefix+"arm")));
+  pose.at(prefix+"hand")=translate(product(torso_rotation,hinge_rotation({0,1,0},requested+.2)),position(original.at(prefix+"hand")));
+  const auto out=retarget(rig,pose,0);
+  const auto torso=product(out.world[1],inverse(rig.bones[1].rest));
+  const auto upper=find(rig,"Upperarm_"+side),lower=find(rig,"Forearm_"+side),guard=find(rig,"Guard_"+side);
+  check(length(sub(position(out.world[upper]),point(torso,position(rig.bones[upper].rest))))<1e-9,"rotating torso carries the shoulder socket");
+  check(error(out.world[guard],product(torso,rig.bones[guard].rest))<1e-9,"fixed guard follows rotating torso");
+  check(error(rotation(out.world[upper]),product(torso_rotation,hinge_rotation({0,1,0},std::clamp(requested,-.4,.3))))<1e-9,"shoulder limits remain torso relative");
+  check(error(product(inverse(rotation(out.world[upper])),rotation(out.world[lower])),hinge_rotation({0,1,0},.2))<1e-9,"rotating torso preserves independent elbow flex");
+ }
+ for(int kind=0;kind<10;++kind){
+  auto invalid=rig;const auto axis=find(invalid,"HingeAxis_Upperarm_Left"),minimum=find(invalid,"HingeMin_Upperarm_Left");
+  switch(kind){
+   case 0:invalid.hinge_axes=false;break;
+   case 1:invalid.bones[find(invalid,"HingeMax_Upperarm_Left")].name="MissingMaximum";break;
+   case 2:invalid.bones[axis].parent=2;break;
+   case 3:invalid.bones[axis].rest[3]+=.01;break;
+   case 4:invalid.bones[axis].rest[2]=0;invalid.bones[axis].rest[6]=1;invalid.bones[axis].rest[10]=0;break;
+   case 5:for(auto i:{1,5,9})invalid.bones[minimum].rest[static_cast<std::size_t>(i)]*=-1;break;
+   case 6:invalid.bones[minimum].rest=translate(hinge_rotation({0,1,0},.2),position(invalid.bones[minimum].rest));break;
+   case 7:invalid.bones[axis].rest[0]=std::numeric_limits<double>::quiet_NaN();break;
+   case 8:invalid.bones[axis].control="torso";break;
+   case 9:invalid.bones[find(invalid,"Upperarm_Left")].parent=0;break;
+  }
+  bool rejected=false;try{retarget(invalid,original,0);}catch(const std::exception&){rejected=true;}
+  check(rejected,"malformed shoulder metadata rejected");
+ }
+ auto unlimited=rig;unlimited.shoulder_limits=false;auto pose=original;
+ pose.at("larm")=translate(hinge_rotation({0,1,0},-1.),position(original.at("larm")));
+ pose.at("lhand")=translate(hinge_rotation({0,1,0},-1.),position(original.at("lhand")));
+ const auto legacy=retarget(unlimited,pose,0);
+ check(error(rotation(legacy.world[find(unlimited,"Upperarm_Left")]),hinge_rotation({0,1,0},-1.))<1e-9,"non-opted-in shoulders retain full legacy motion");
+ check(rig.reference==original,"shoulder solver preserves controller references");
+}
 int main(){try{
  hinge_checks();
+ shoulder_checks();
  auto r=fixture();const auto original=r.reference;auto p=retarget(r,original,0);check(!p.reach_clamps,"stand reachable");
  for(size_t i=0;i<r.bones.size();++i)check(error(p.world[i],r.bones[i].rest)<1e-9,"stand matches donor rest");
  check(r.reference==original,"reference transforms unchanged");check(locomotion(r,original)==0,"stand gait blend zero");

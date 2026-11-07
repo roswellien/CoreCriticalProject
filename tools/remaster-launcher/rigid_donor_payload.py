@@ -82,6 +82,27 @@ def _matrix(values):
     return struct.pack("<16d", *values)
 
 
+def validate_shoulder_markers(bones, shoulder_limits, hinge_axes):
+    """Require explicit torso-bound shoulder frames when the feature is enabled."""
+    if type(shoulder_limits) is not bool:
+        raise ValueError("Rig flags must be booleans")
+    if not shoulder_limits:
+        return
+    if not hinge_axes:
+        raise ValueError("Shoulder limits require measured hinge axes")
+    lookup = {bone.name: bone for bone in bones}
+    for side in ("Left", "Right"):
+        for kind in ("Axis", "Min", "Max"):
+            name = f"Hinge{kind}_Upperarm_{side}"
+            if name not in lookup:
+                raise ValueError("Shoulder marker missing")
+            marker = lookup[name]
+            if (marker.control or type(marker.parent) is not int
+                    or not 0 <= marker.parent < len(bones)
+                    or bones[marker.parent].name != "Torso_Twist"):
+                raise ValueError("Invalid shoulder marker parent/control")
+
+
 def encode_mesh(
     bones,
     references,
@@ -92,6 +113,7 @@ def encode_mesh(
     hip_drop=0.0,
     ground_reference=True,
     hinge_axes=False,
+    shoulder_limits=False,
 ):
     """Encode rigid batches without altering their supplied corner bytes."""
     bones, batches = list(bones), list(batches)
@@ -106,6 +128,7 @@ def encode_mesh(
         raise ValueError("Required original controller references are missing")
     if type(ground_reference) is not bool or type(hinge_axes) is not bool:
         raise ValueError("Rig flags must be booleans")
+    validate_shoulder_markers(bones, shoulder_limits, hinge_axes)
     if hinge_axes:
         required_axes = {
             "HingeAxis_" + joint
@@ -148,7 +171,7 @@ def encode_mesh(
         len(batches),
         len(bones),
         len(references),
-        int(ground_reference) | (2 if hinge_axes else 0),
+        int(ground_reference) | (2 if hinge_axes else 0) | (4 if shoulder_limits else 0),
         *gait,
     )
     ancestors = []

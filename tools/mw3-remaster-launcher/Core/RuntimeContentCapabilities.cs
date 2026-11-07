@@ -37,11 +37,17 @@ public static class RuntimeContentCapabilities
     public static void RequireMeasuredDonorHinges(string path, NativePackPayload payload)
     {
         using var stream = File.OpenRead(path);
+        if (stream.Length < 24) return;
         Span<byte> header = new byte[24];
-        if (stream.Read(header) == 24 && header[..8].SequenceEqual("BWMESH4\0"u8) &&
-            (System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(header[20..]) & 2) != 0 &&
-            (!payload.RequiredCapabilities.TryGetValue("donor-rig-hinges", out var version) || version != 1))
-            throw new InvalidDataException("Measured hinge rig requires donor-rig-hinges version 1.");
+        stream.ReadExactly(header);
+        if (!header[..8].SequenceEqual("BWMESH4\0"u8)) return;
+        uint flags = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(header[20..]);
+        if ((flags & ~7u) != 0) throw new InvalidDataException("Invalid donor rig flags.");
+        if ((flags & 4) != 0 && (flags & 2) == 0)
+            throw new InvalidDataException("Shoulder limits require measured hinges.");
+        int required = (flags & 4) != 0 ? 2 : (flags & 2) != 0 ? 1 : 0;
+        if (required > 0 && (!payload.RequiredCapabilities.TryGetValue("donor-rig-hinges", out var version) || version != required))
+            throw new InvalidDataException($"Measured hinge rig requires donor-rig-hinges version {required}.");
     }
 
     public static JsonObject Advertised(JsonObject native)

@@ -57,6 +57,29 @@ class ChassisPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Measured hinge rig requires'):
             select([(output / 'pack', manifest)], host)
 
+    def test_shoulder_limits_require_version_two(self):
+        # These headers test admission contracts, not native geometry decoding.
+        mesh = self.root / 'mesh.bin'
+        mesh.write_bytes(b'BWMESH4\0' + struct.pack('<4I', 1, 12, 12, 7))
+        output = self.root / 'shoulder'
+        build(self.root / 'project.json', output)
+        manifest = json.loads((output / 'pack/pack.json').read_text())
+        requirements = manifest['native_payload']['required_capabilities']
+        self.assertEqual(requirements['donor-rig-hinges'], 2)
+        host = copy.deepcopy(self.host)
+        host['content_capabilities']['donor-rig-hinges'] = [1]
+        with self.assertRaisesRegex(ValueError, 'version 2'):
+            select([(output / 'pack', manifest)], host)
+        host['content_capabilities']['donor-rig-hinges'] = [1, 2]
+        self.assertEqual(len(select([(output / 'pack', manifest)], host)), 1)
+        requirements['donor-rig-hinges'] = 1
+        with self.assertRaisesRegex(ValueError, 'Measured hinge rig requires'):
+            select([(output / 'pack', manifest)], host)
+        for flags, message in [(4, 'Shoulder limits require'), (11, 'Invalid donor rig flags')]:
+            mesh.write_bytes(b'BWMESH4\0' + struct.pack('<4I', 1, 12, 12, flags))
+            with self.subTest(flags=flags), self.assertRaisesRegex(ValueError, message):
+                build(self.root / 'project.json', self.root / ('invalid-' + str(flags)))
+
     def test_headlight_project_build_select_and_capability(self):
         lamp = dict(id='torso', space='guest_node', attachment='torso', position=[1,2,3],
                     direction=[0,0,-2], color=[1,1,1], intensity=2, range=50,

@@ -61,6 +61,26 @@ profiles and the historical capability table are unchanged. Importing a pack
 cannot add runtime support. Both LODs should use the same rig/rest/reference
 metadata; a distance dispatch owner may be an ancestor such as the toe's foot.
 
+Setting `shoulder_limits=True` additionally enables bit 2 of the same flags
+field and requires `donor-rig-hinges` version 2. It requires measured hinges;
+flags 4/5 without bit 1 are invalid. Flags 0/1/2/3 keep their existing behavior.
+Only a development runtime built with this reader may advertise version 2.
+The launcher and both builders require the version implied by the mesh flags;
+changing a manifest cannot grant support to an older executable.
+
+Each shoulder needs `HingeAxis_Upperarm_Left/Right`,
+`HingeMin_Upperarm_Left/Right` and `HingeMax_Upperarm_Left/Right` metadata frames.
+Their empty-control parent is `Torso_Twist`, and their world-rest origins must
+match that upper arm's socket origin. Y is the common, positively aligned
+rotation axis; Z is an orthogonal guide. The minimum and maximum frames rotate
+the axis frame's guide to the authored negative and positive travel endpoints,
+respectively, within (-pi, pi). These are pose frames, not added joint geometry.
+The solver projects the shoulder command onto that axis, clamps to those
+endpoints, and preserves independent elbow flex when the shoulder is clamped.
+Measure the mesh's socket fit and guard clearance across the proposed range;
+a stationary mathematical pivot alone does not prove visible clearance.
+
+
 ## 1. Choose the supported authoring route
 
 | Your goal | Project resources | Required `additional-mech-chassis` capability |

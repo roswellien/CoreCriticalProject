@@ -14,7 +14,7 @@ import shutil
 import tempfile
 import zipfile
 
-from content_capabilities import measured_donor_hinges
+from content_capabilities import donor_hinge_version
 
 ROOT = Path(__file__).resolve().parents[2]
 MW3 = {"strider", "avatar", "owens", "firefly"}
@@ -216,9 +216,10 @@ def build(profile_path, output):
                     required_formats=sorted({f for m in records for f in m["required_formats"]})),
                 files=files,
             )
-            if any(pin.get('format') == 'BWMESH4' and measured_donor_hinges(stage / name)
-                   for name, pin in files.items()):
-                manifest['native_payload']['required_capabilities']['donor-rig-hinges'] = 1
+            hinge_version = max((donor_hinge_version(stage / name)
+                                 for name, pin in files.items() if pin.get('format') == 'BWMESH4'), default=0)
+            if hinge_version:
+                manifest['native_payload']['required_capabilities']['donor-rig-hinges'] = hinge_version
             write_json(stage / "pack.json", manifest)
             archive_path = output / (pack_id + ".mw3pack")
             partial = archive_path.with_suffix(".partial")
