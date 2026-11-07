@@ -24,10 +24,10 @@ Rig hinged_fixture(){
  auto helper=[&](const std::string&name,int parent,Vec p){r.bones.push_back({name,"",parent,translate(identity(),p)});};
  for(const auto&side:std::array<std::string,2>{"Left","Right"}){
   const bool left=side=="Left";const int thigh=left?6:9,calf=left?7:10,foot=left?8:11,arm=left?2:4,forearm=left?3:5;
-  helper("HingeAxis_Calf_"+side,thigh,position(r.bones[calf].rest));
-  helper("HingeAxis_Foot0_"+side,calf,position(r.bones[foot].rest));
-  helper("HingeAxis_Forearm_"+side,arm,position(r.bones[forearm].rest));
-  helper("KneeHousing_"+side,thigh,position(r.bones[calf].rest));
+  helper("HingeAxis_Calf_"+side,thigh,position(r.bones[static_cast<std::size_t>(calf)].rest));
+  helper("HingeAxis_Foot0_"+side,calf,position(r.bones[static_cast<std::size_t>(foot)].rest));
+  helper("HingeAxis_Forearm_"+side,arm,position(r.bones[static_cast<std::size_t>(forearm)].rest));
+  helper("KneeHousing_"+side,thigh,position(r.bones[static_cast<std::size_t>(calf)].rest));
   for(int i=0;i<4;++i)helper("Sole_"+side+"_"+std::to_string(i),foot,{(i&1)?.8:-.8,(left?1.:-1.)+((i&2)?.3:-.3),0});
  }
  return r;

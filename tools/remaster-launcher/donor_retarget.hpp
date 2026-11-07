@@ -12,16 +12,16 @@ namespace mw34::donor {
 using Vec=std::array<double,3>;
 using Mat=std::array<double,16>;
 inline Mat identity(){return {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};}
-inline Vec add(Vec a,Vec b){for(int i=0;i<3;++i)a[i]+=b[i];return a;}
-inline Vec sub(Vec a,Vec b){for(int i=0;i<3;++i)a[i]-=b[i];return a;}
+inline Vec add(Vec a,Vec b){for(std::size_t i=0;i<3;++i)a[i]+=b[i];return a;}
+inline Vec sub(Vec a,Vec b){for(std::size_t i=0;i<3;++i)a[i]-=b[i];return a;}
 inline Vec scale(Vec a,double s){for(auto&v:a)v*=s;return a;}
 inline double dot(Vec a,Vec b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
 inline double length(Vec a){return std::sqrt(dot(a,a));}
 inline Vec unit(Vec a){const auto n=length(a);if(n<1e-10)throw std::runtime_error("Visual retarget: degenerate vector");return scale(a,1/n);}
 inline Vec cross(Vec a,Vec b){return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};}
 inline Vec position(const Mat&m){return {m[3],m[7],m[11]};}
-inline Mat translate(Mat m,Vec p){for(int i=0;i<3;++i)m[4*i+3]=p[i];return m;}
-inline Mat product(const Mat&a,const Mat&b){Mat m{};for(int i=0;i<4;++i)for(int j=0;j<4;++j)for(int k=0;k<4;++k)m[i*4+j]+=a[i*4+k]*b[k*4+j];return m;}
+inline Mat translate(Mat m,Vec p){for(std::size_t i=0;i<3;++i)m[4*i+3]=p[i];return m;}
+inline Mat product(const Mat&a,const Mat&b){Mat m{};for(std::size_t i=0;i<4;++i)for(std::size_t j=0;j<4;++j)for(std::size_t k=0;k<4;++k)m[i*4+j]+=a[i*4+k]*b[k*4+j];return m;}
 inline Vec vector(const Mat&m,Vec p){return {m[0]*p[0]+m[1]*p[1]+m[2]*p[2],m[4]*p[0]+m[5]*p[1]+m[6]*p[2],m[8]*p[0]+m[9]*p[1]+m[10]*p[2]};}
 inline Vec point(const Mat&m,Vec p){return add(vector(m,p),position(m));}
 inline Mat inverse(const Mat&m){
@@ -32,12 +32,12 @@ inline Mat inverse(const Mat&m){
  r[8]=(m[4]*m[9]-m[5]*m[8])/d;r[9]=(m[1]*m[8]-m[0]*m[9])/d;r[10]=(m[0]*m[5]-m[1]*m[4])/d;
  return translate(r,scale(vector(r,position(m)),-1));
 }
-inline Mat rotation(const Mat&m){auto r=identity();for(int c=0;c<3;++c){auto v=unit({m[c],m[4+c],m[8+c]});for(int i=0;i<3;++i)r[4*i+c]=v[i];}return r;}
+inline Mat rotation(const Mat&m){auto r=identity();for(std::size_t c=0;c<3;++c){auto v=unit({m[c],m[4+c],m[8+c]});for(std::size_t i=0;i<3;++i)r[4*i+c]=v[i];}return r;}
 inline Mat swing(Vec a,Vec b){
  a=unit(a);b=unit(b);const double c=std::clamp(dot(a,b),-1.,1.);auto v=cross(a,b);auto r=identity();
- if(c<-.999999){auto axis=unit(cross(a,std::abs(a[0])<.8?Vec{1,0,0}:Vec{0,1,0}));for(int i=0;i<3;++i)for(int j=0;j<3;++j)r[i*4+j]=2*axis[i]*axis[j]-(i==j?1.:0.);return r;}
+ if(c<-.999999){auto axis=unit(cross(a,std::abs(a[0])<.8?Vec{1,0,0}:Vec{0,1,0}));for(std::size_t i=0;i<3;++i)for(std::size_t j=0;j<3;++j)r[i*4+j]=2*axis[i]*axis[j]-(i==j?1.:0.);return r;}
  const double k=1/(1+c);const double vv[3][3]={{0,-v[2],v[1]},{v[2],0,-v[0]},{-v[1],v[0],0}};
- for(int i=0;i<3;++i)for(int j=0;j<3;++j){r[4*i+j]+=vv[i][j];for(int t=0;t<3;++t)r[4*i+j]+=vv[i][t]*vv[t][j]*k;}
+ for(std::size_t i=0;i<3;++i)for(std::size_t j=0;j<3;++j){r[4*i+j]+=vv[i][j];for(std::size_t t=0;t<3;++t)r[4*i+j]+=vv[i][t]*vv[t][j]*k;}
  return r;
 }
 inline Mat axis(){return {0,0,-1,0,-1,0,0,0,0,1,0,0,0,0,0,1};}
@@ -48,14 +48,14 @@ inline double locomotion(const Rig&r,const std::map<std::string,Mat>&current){
  const auto h=position(current.at("hip")),h0=position(r.reference.at("hip"));double change=0;
  for(const char*name:{"lfoot","rfoot","lthigh","rthigh"}){const auto it=current.find(name);if(it==current.end())continue;
   change=std::max(change,length(sub(sub(position(it->second),h),sub(position(r.reference.at(name)),h0))));
-  for(int i:{0,1,2,4,5,6,8,9,10})change=std::max(change,std::abs(it->second[i]-r.reference.at(name)[i]));
+  for(const auto i:std::array<std::size_t,9>{0,1,2,4,5,6,8,9,10})change=std::max(change,std::abs(it->second[i]-r.reference.at(name)[i]));
  }
  const double t=std::clamp((change-.005)/.075,0.,1.);return t*t*(3-2*t);
 }
 inline Mat hinge_rotation(Vec axis, double angle) {
  axis=unit(axis); const double c=std::cos(angle),s=std::sin(angle),v=1-c;
  auto result=identity();
- for(int i=0;i<3;++i)for(int j=0;j<3;++j)result[4*i+j]=v*axis[i]*axis[j]+(i==j?c:0.);
+ for(std::size_t i=0;i<3;++i)for(std::size_t j=0;j<3;++j)result[4*i+j]=v*axis[i]*axis[j]+(i==j?c:0.);
  result[1]-=s*axis[2];result[2]+=s*axis[1];result[4]+=s*axis[2];
  result[6]-=s*axis[0];result[8]-=s*axis[1];result[9]+=s*axis[0];
  return result;
@@ -83,7 +83,7 @@ inline void validate_hinge_metadata(const Rig&r) {
    const auto found=bones.find("HingeAxis_"+joint.first+side);
    if(found==bones.end())throw std::runtime_error("Visual retarget: missing measured hinge axis");
    const auto&bone=*found->second;
-   if(!bone.control.empty()||bone.parent<0||bone.parent>=int(r.bones.size())||r.bones[bone.parent].name!=joint.second+side)
+   if(!bone.control.empty()||bone.parent<0||bone.parent>=int(r.bones.size())||r.bones[static_cast<std::size_t>(bone.parent)].name!=joint.second+side)
     throw std::runtime_error("Visual retarget: invalid hinge frame parent");
    const auto axis=hinge_axis(bone.rest);const Vec guide{bone.rest[2],bone.rest[6],bone.rest[10]};
    if(length(cross(axis,guide))<1e-8)throw std::runtime_error("Visual retarget: degenerate hinge guide");
@@ -92,7 +92,7 @@ inline void validate_hinge_metadata(const Rig&r) {
   for(const auto&bone:r.bones)if(bone.name.rfind("Sole_"+side+"_",0)==0) {
    if(!bone.control.empty()||bone.parent<0||bone.parent>=int(r.bones.size()))
     throw std::runtime_error("Visual retarget: invalid sole parent");
-   const auto&parent=r.bones[bone.parent];
+   const auto&parent=r.bones[static_cast<std::size_t>(bone.parent)];
    if(parent.control!=prefix+"foot"&&parent.control!=prefix+"toe01"&&parent.control!=prefix+"toe02")
     throw std::runtime_error("Visual retarget: sole must bind to its foot or toe");
    ++points;
@@ -153,7 +153,7 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
   double lowest=1e300,rest_lowest=1e300;unsigned markers=0;
   for(const auto&bone:r.bones)if(bone.name.rfind("Sole_"+suffix+"_",0)==0) {
    if(bone.parent<0||bone.parent>=int(r.bones.size()))throw std::runtime_error("Visual retarget: invalid sole parent");
-   const auto&parent=r.bones[bone.parent];
+   const auto&parent=r.bones[static_cast<std::size_t>(bone.parent)];
    if(!want.count(parent.name))throw std::runtime_error("Visual retarget: sole must bind to its foot or toe");
    const auto delta=product(want.at(parent.name),inverse(parent.rest));
    lowest=std::min(lowest,point(delta,position(bone.rest))[2]);
@@ -207,7 +207,7 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
    solve_leg();
    double contact=1e300;
    for(const auto&bone:r.bones)if(bone.name.rfind("Sole_"+suffix+"_",0)==0){
-    const auto&parent=r.bones[bone.parent];
+    const auto&parent=r.bones[static_cast<std::size_t>(bone.parent)];
     const auto delta=product(want.at(parent.name),inverse(parent.rest));
     contact=std::min(contact,point(delta,position(bone.rest))[2]);
    }
@@ -221,7 +221,7 @@ inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double 
  for(size_t i=0;i<r.bones.size();++i) {
   const auto&bone=r.bones[i];
   if(bone.parent>=int(i)||bone.parent< -1)throw std::runtime_error("Visual retarget: invalid bone order");
-  auto matrix=want.count(bone.name)?want.at(bone.name):(bone.parent>=0?product(product(output.world.at(bone.parent),inverse(r.bones[bone.parent].rest)),bone.rest):bone.rest);
+  auto matrix=want.count(bone.name)?want.at(bone.name):(bone.parent>=0?product(product(output.world.at(static_cast<std::size_t>(bone.parent)),inverse(r.bones[static_cast<std::size_t>(bone.parent)].rest)),bone.rest):bone.rest);
   output.world.push_back(matrix);
  }
  for(auto&matrix:output.world)matrix=translate(matrix,add(position(matrix),travel));
@@ -276,7 +276,7 @@ inline Pose retarget(const Rig&r,std::map<std::string,Mat>current,double gait){
   for(const auto&b:r.bones)if(b.control.rfind(prefix+"toe",0)==0&&current.count(b.control))want[b.name]=rotated(b.name,b.control,point(ff,position(b.rest)));
  }
  for(size_t i=0;i<r.bones.size();++i){const auto&b=r.bones[i];if(b.parent>=int(i)||b.parent< -1)throw std::runtime_error("Visual retarget: invalid bone order");
-  auto m=want.count(b.name)?want.at(b.name):(b.parent>=0?product(product(output.world.at(b.parent),inverse(r.bones[b.parent].rest)),b.rest):b.rest);
+  auto m=want.count(b.name)?want.at(b.name):(b.parent>=0?product(product(output.world.at(static_cast<std::size_t>(b.parent)),inverse(r.bones[static_cast<std::size_t>(b.parent)].rest)),b.rest):b.rest);
   // Restore actor-local root travel after the in-place donor solve.
   output.world.push_back(m);
  }

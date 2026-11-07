@@ -17,7 +17,7 @@ class PreparedPackTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="MW3 installed packs ")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.host = dict(content_capabilities={"prepared-mechs": [1]}, executable_sha256="a" * 64, model_ids=["orion"], skin_ids={},
                          mesh_payload_versions=[2], normal_map_formats=[2], include_runtime_candidates=True,
                          runtime_environment={"MW34_ORION_MESH": "stale.bin", "MW34_AVATAR_NORMALS": "disabled.bin", "MW34_GPU_MODELS": "1"})
