@@ -81,7 +81,7 @@ def definition(document, original):
 
 def select(metadata, host, verification=None):
     from prepared_mech_packs import read_json, resolve
-    from content_capabilities import require
+    from content_capabilities import require, require_measured_donor_hinges
     from surface_materials import (
         CAPABILITY as SURFACE_CAPABILITY,
         FORMAT as SURFACE_FORMAT,
@@ -201,6 +201,8 @@ def select(metadata, host, verification=None):
                     name = row[role][lod]
                     if not isinstance(name, str) or name not in verified or files[name].get('format') != fmt:
                         raise ValueError('Undeclared chassis geometry/material resource')
+                    if role == 'meshes':
+                        require_measured_donor_hinges(verified[name], payload)
                     visual[lod]['mesh' if role == 'meshes' else 'textures'] = verified[name]
                     used.add(name)
             record = dict(id=ident, name=row['name'], metadata_template=row['metadata_template'],

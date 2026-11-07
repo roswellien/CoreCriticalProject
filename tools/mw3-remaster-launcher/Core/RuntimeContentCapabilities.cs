@@ -30,8 +30,18 @@ public static class RuntimeContentCapabilities
             throw new InvalidDataException("Invalid content capability requirements.");
         foreach (var (name, version) in payload.RequiredCapabilities)
             if ((!Profiles.ContainsValue(name) && name != "mech-headlights" &&
-                 name != LegacyChassisSkins.Capability && name != "surface-materials") || version < 1)
+                 name != LegacyChassisSkins.Capability && name != "surface-materials" && name != "donor-rig-hinges") || version < 1)
                 throw new InvalidDataException("Unsupported content capability requirement: " + name);
+    }
+
+    public static void RequireMeasuredDonorHinges(string path, NativePackPayload payload)
+    {
+        using var stream = File.OpenRead(path);
+        Span<byte> header = new byte[24];
+        if (stream.Read(header) == 24 && header[..8].SequenceEqual("BWMESH4\0"u8) &&
+            (System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(header[20..]) & 2) != 0 &&
+            (!payload.RequiredCapabilities.TryGetValue("donor-rig-hinges", out var version) || version != 1))
+            throw new InvalidDataException("Measured hinge rig requires donor-rig-hinges version 1.");
     }
 
     public static JsonObject Advertised(JsonObject native)

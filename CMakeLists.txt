@@ -78,6 +78,10 @@ if(BUILD_TESTING)
     target_compile_definitions(mw34_normal_hash PRIVATE _CRT_SECURE_NO_WARNINGS)
     mw34_warnings(mw34_normal_hash)
 
+    add_executable(mw34_donor_retarget_tests tools/remaster-launcher/test_donor_retarget.cpp)
+    mw34_warnings(mw34_donor_retarget_tests)
+    add_test(NAME donor_retarget COMMAND mw34_donor_retarget_tests)
+
     add_executable(mw34_menu_wave_tests tools/remaster-launcher/test_menu_wave.cpp)
     target_include_directories(mw34_menu_wave_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     mw34_warnings(mw34_menu_wave_tests)
@@ -104,6 +108,15 @@ if(BUILD_TESTING)
     endif()
 
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME rigid_donor_payload
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_rigid_donor_payload.py)
+    set_tests_properties(rigid_donor_payload PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME measured_hinge_stock_pack_admission
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_prepared_mech_packs.py)
+    set_tests_properties(measured_hinge_stock_pack_admission PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME measured_hinge_pack_admission
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_prepared_chassis_packs.py)
+    set_tests_properties(measured_hinge_pack_admission PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME installed_runtime_preparation
         COMMAND "${Python3_EXECUTABLE}" -B
             "${PROJECT_SOURCE_DIR}/tools/remaster-launcher/test_installed_runtime.py")

@@ -39,6 +39,24 @@ class ChassisPackTests(unittest.TestCase):
         self.pack = self.root / 'built/pack'
         self.manifest = json.loads((self.pack / 'pack.json').read_text())
 
+    def test_measured_hinge_rig_requires_runtime_and_manifest_capability(self):
+        # A wire header is enough to test capability admission, not mesh loading.
+        data = b'BWMESH4\0' + struct.pack('<4I', 1, 12, 12, 3)
+        (self.root / 'mesh.bin').write_bytes(data)
+        output = self.root / 'hinged'
+        build(self.root / 'project.json', output)
+        manifest = json.loads((output / 'pack/pack.json').read_text())
+        requirements = manifest['native_payload']['required_capabilities']
+        self.assertEqual(requirements['donor-rig-hinges'], 1)
+        with self.assertRaisesRegex(ValueError, 'donor-rig-hinges'):
+            select([(output / 'pack', manifest)], self.host)
+        host = copy.deepcopy(self.host)
+        host['content_capabilities']['donor-rig-hinges'] = [1]
+        self.assertEqual(len(select([(output / 'pack', manifest)], host)), 1)
+        del requirements['donor-rig-hinges']
+        with self.assertRaisesRegex(ValueError, 'Measured hinge rig requires'):
+            select([(output / 'pack', manifest)], host)
+
     def test_headlight_project_build_select_and_capability(self):
         lamp = dict(id='torso', space='guest_node', attachment='torso', position=[1,2,3],
                     direction=[0,0,-2], color=[1,1,1], intensity=2, range=50,

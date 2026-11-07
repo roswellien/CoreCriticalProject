@@ -12,6 +12,50 @@ engine support. This guide explains the reusable workflow; the worked example
 records what Atlas has actually passed. Update both in the same PR when that
 work changes a step, format requirement or compatibility claim.
 
+## Rigid STL bindings with measured hinges (development only)
+
+`tools/remaster-launcher/rigid_donor_payload.py` writes real BWMESH4 rigid
+batches and BWTEX1 constant review materials from supplied triangle corners,
+rest frames and original controller references. It does not split, synthesize
+or deform geometry. Keep licensed source assets and derived model files local.
+The constant materials are inspection colors, not a finished texture pipeline.
+
+A controller can have different joint axes and footprints from the donor.
+Setting `hinge_axes=True` opts the mesh into measured hinge retargeting:
+
+- BWMESH4's existing flags field (little-endian uint32 at byte 20) uses bit 0
+  for ground reference and bit 1 for measured hinges. Flags 0/1 retain the
+  existing solver. Older hosts reject flags 2/3.
+- Six unrendered metadata bones named `HingeAxis_Calf_Left/Right` and
+  `HingeAxis_Forearm_Left/Right` and `HingeAxis_Foot0_Left/Right` describe
+  the original model's axes. Their parents are the respective thigh/upper arm/calf,
+  with empty control names.
+  Each frame's Y column is the hinge axis; its Z column is a nonparallel
+  motion guide. Frames use the donor's world rest space.
+- Optional `HingeAxis_<toe bone name>` frames constrain toe rotation. Bind
+  fixed knee/elbow housings to the upper segment; use distinct housing names,
+  since the older `Knee_Left/Right` convention follows the calf.
+- Each side needs 3–64 unrendered `Sole_Left_*` / `Sole_Right_*` points on
+  existing foot/toe surfaces. Bind them to that side's controlled foot or toe.
+  Include all vertices that can become lowest in the tested motion range;
+  sparse points do not prove clearance for untested rotations or terrain.
+
+The solver reads original control transforms, preserves rigid limb lengths
+and measured knee/elbow/ankle axes, projects toe/elbow/ankle rotations onto those axes,
+and compensates ankle height using the measured footprint and original lift.
+It does not change simulation, collision, weapon origins or movement timing.
+Unreachable goals remain explicitly logged as visual reach clamps. Foot contact
+uses at most 32 iterations; unresolved contact is rejected with a visible error
+instead of returning an unreported ground penetration.
+
+The additional-chassis and stock replacement builders detect the flag and require
+`donor-rig-hinges` version 1. Python and C# admission reject a flagged mesh
+whose manifest omits the requirement. This capability is **unreleased**;
+only a matching development host/profile may advertise it. Existing runtime
+profiles and the historical capability table are unchanged. Importing a pack
+cannot add runtime support. Both LODs should use the same rig/rest/reference
+metadata; a distance dispatch owner may be an ancestor such as the toe's foot.
+
 ## 1. Choose the supported authoring route
 
 | Your goal | Project resources | Required `additional-mech-chassis` capability |

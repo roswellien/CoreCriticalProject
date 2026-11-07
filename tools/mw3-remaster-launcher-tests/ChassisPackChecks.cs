@@ -55,6 +55,25 @@ static class ChassisPackChecks
             catch(InvalidDataException) {}
             var host=JsonNode.Parse("""{"content_capabilities":{"additional-mech-chassis":[1]}}""")!.AsObject();
             RuntimeContentCapabilities.Require(host,installed.NativePayload!,installed.Id);
+            var hingeHeader = new byte[24];
+            "BWMESH4\0"u8.CopyTo(hingeHeader);
+            BitConverter.GetBytes(3u).CopyTo(hingeHeader,20);
+            var meshName = "mesh.bin";
+            File.WriteAllBytes(Path.Combine(installed.DirectoryPath,meshName),hingeHeader);
+            installed.Files![meshName] = new PackFile {Bytes=hingeHeader.Length,
+                Sha256=Convert.ToHexString(SHA256.HashData(hingeHeader)).ToLowerInvariant(),Format="BWMESH4"};
+            try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Ungated hinge rig accepted.");}
+            catch(InvalidDataException) {}
+            installed.NativePayload!.RequiredCapabilities["donor-rig-hinges"]=1;
+            ChassisPack.Read(installed.DirectoryPath,installed);
+            try {RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);throw new Exception("Old host accepted hinge rig.");}
+            catch(InvalidDataException) {}
+            host["content_capabilities"]!["donor-rig-hinges"]=new JsonArray(1);
+            RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);
+            File.WriteAllBytes(Path.Combine(installed.DirectoryPath,meshName),resources[meshName]);
+            installed.Files[meshName] = files[meshName] = new PackFile {Bytes=resources[meshName].Length,
+                Sha256=Convert.ToHexString(SHA256.HashData(resources[meshName])).ToLowerInvariant(),Format="BWMESH4"};
+            installed.NativePayload.RequiredCapabilities.Remove("donor-rig-hinges");
             var headlightRegistry=JsonNode.Parse(resources[ChassisPack.Registry])!;
             var light=JsonNode.Parse("""{"id":"left","space":"guest_node","attachment":"torso","position":[1,2,3],"direction":[0,0,-1],"color":[1,1,1],"intensity":2,"range":50,"inner_angle":15,"outer_angle":30}""")!;
             headlightRegistry["chassis"]![0]!["headlights"]=new JsonArray(light);

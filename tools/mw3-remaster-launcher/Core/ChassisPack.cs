@@ -230,7 +230,11 @@ public static class ChassisPack
                 if (!new HashSet<string>(new[] { "close", "distance" }).SetEquals(bindings.EnumerateObject().Select(p => p.Name)))
                     throw new InvalidDataException("Chassis needs close and distance resources.");
                 foreach (var lod in new[] { "close", "distance" })
-                    Verify(bindings.GetProperty(lod).GetString() ?? "", role == "meshes" ? "BWMESH4" : "BWTEX1");
+                {
+                    var path = Verify(bindings.GetProperty(lod).GetString() ?? "", role == "meshes" ? "BWMESH4" : "BWTEX1");
+                    if (role == "meshes")
+                        RuntimeContentCapabilities.RequireMeasuredDonorHinges(path,manifest.NativePayload);
+                }
             }
             if (row.TryGetProperty("silhouette", out var silhouette))
             {

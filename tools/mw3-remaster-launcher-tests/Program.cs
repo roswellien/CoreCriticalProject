@@ -20,6 +20,8 @@ if(args.Length==1 && args[0]=="--playtest-support-only")
     return;
 }
 
+if(args.Length==1 && args[0]=="--packs-only") { PackStorageChecks.Run(); return; }
+
 if(args.Length==1 && args[0]=="--chassis-only") { ChassisPackChecks.Run(); return; }
 if(args.Length==3 && args[0]=="--install-chassis-pack") { ChassisPackChecks.Install(args[1],args[2]); return; }
 

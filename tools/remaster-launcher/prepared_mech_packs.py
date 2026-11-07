@@ -108,7 +108,7 @@ def compose(roots, host, verification=None, chassis_records=None):
         if (manifest.get("schema_version") != 2 or payload.get("profile") != "prepared-native-v1" or
                 payload.get("path_base") != "pack-root" or payload.get("registry") != "models/models.json"):
             raise ValueError("Unsupported installed pack schema/profile")
-        from content_capabilities import advertised, require
+        from content_capabilities import advertised, require, require_measured_donor_hinges
         from surface_materials import (
             CAPABILITY as SURFACE_CAPABILITY,
             FORMAT as SURFACE_FORMAT,
@@ -203,6 +203,8 @@ def compose(roots, host, verification=None, chassis_records=None):
                     raise ValueError("Incorrect model binding format")
                 if fmt not in model.get("required_formats", []) or fmt not in payload.get("required_formats", []):
                     raise ValueError("Undeclared model format")
+                if fmt == 'BWMESH4':
+                    require_measured_donor_hinges(verified[name], payload)
                 resolved[key] = verified[name]
             for lod, suffix in (("close", ""), ("distance", "_LOD1")):
                 surf_key = "MW34_" + ident.upper() + suffix + "_SURFACE_MATERIALS"

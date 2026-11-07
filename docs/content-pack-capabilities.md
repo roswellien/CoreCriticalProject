@@ -66,6 +66,16 @@ retain the original decoder, AVI contract and existing original movie targets;
 this change creates no new story hooks. Standalone movie-library additions
 continue to use launcher playback and need no in-game replacement capability.
 
+## Measured donor hinges (unreleased)
+
+`donor-rig-hinges` version 1 is an optional BWMESH4 visual retarget contract.
+It is required when an additional-chassis or stock replacement mesh sets the measured-hinge flag
+(bit 1 at byte 20). The builders add the requirement; Python and C# validators
+reject omission as well as unsupported runtime versions. No released profile
+or historical host entry gains this capability from this change. A matching
+new development build must explicitly declare it in its integrity-pinned
+profile. See [rigid binding authoring](authoring-additional-mechs.md#rigid-stl-bindings-with-measured-hinges-development-only).
+
 ## Runtime migration and release
 
 Future installer builds include the complete release version in the executable

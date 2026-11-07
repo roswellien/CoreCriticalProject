@@ -249,6 +249,8 @@ public static class PackStorage
                     }
                     if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("Pack hash mismatch: " + path);
+                    if (declared.Format == "BWMESH4")
+                        RuntimeContentCapabilities.RequireMeasuredDonorHinges(dest,manifest.NativePayload!);
                 }
             }
             if (manifest.SchemaVersion == 2)

@@ -68,6 +68,18 @@ def _make_bwtex1(materials: tuple[str, ...] = ("armor_hull", "canopy_glass")) ->
 
 
 class SurfaceMaterialsTest(unittest.TestCase):
+    def test_hinge_flags_preserve_uv_identity_and_unknown_flags_fail(self):
+        mesh = _make_bwmesh4()
+        expected = surface_materials.mesh_uv_identity(mesh)
+        for flags in [1, 2, 3]:
+            changed = bytearray(mesh)
+            struct.pack_into('<I', changed, 20, flags)
+            self.assertEqual(surface_materials.mesh_uv_identity(bytes(changed)), expected)
+        changed = bytearray(mesh)
+        struct.pack_into('<I', changed, 20, 4)
+        with self.assertRaisesRegex(ValueError, 'donor rig header'):
+            surface_materials.mesh_uv_identity(bytes(changed))
+
     def _height_pixels(self) -> bytes:
         return bytes((32, 0, 0, 255, 96, 0, 0, 255, 160, 0, 0, 255, 224, 0, 0, 255))
 

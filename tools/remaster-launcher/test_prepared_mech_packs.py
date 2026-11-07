@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import struct
 from pathlib import Path
 import tempfile
 import types
@@ -48,6 +49,35 @@ class PreparedPackTests(unittest.TestCase):
                                             reference_host_sha256="a" * 64, required_formats=registry["models"][0]["required_formats"]))
         (root / "pack.json").write_text(json.dumps(manifest))
         return root
+
+    def test_stock_replacement_hinge_flag_cannot_omit_requirement(self):
+        root = self.build()
+        manifest = json.loads((root / 'pack.json').read_text())
+        registry_path = root / 'models/models.json'
+        registry = json.loads(registry_path.read_text())
+        for name, pin in manifest['files'].items():
+            if pin.get('format') != 'BWMESH2':
+                continue
+            # Only the admission header is needed here; native loading is separate.
+            raw = b'BWMESH4\0' + struct.pack('<4I', 1, 12, 12, 3)
+            (root / name).write_bytes(raw)
+            pin.update(format='BWMESH4', bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        formats = ['BWMESH4', 'BWTEX1', 'BWNRM2']
+        registry['models'][0]['required_formats'] = formats
+        raw = json.dumps(registry).encode();registry_path.write_bytes(raw)
+        manifest['files']['models/models.json'].update(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+        payload = manifest['native_payload'];payload['required_formats'] = formats
+        host = copy.deepcopy(self.host);host['mesh_payload_versions'] = [4]
+        def write():
+            (root / 'pack.json').write_text(json.dumps(manifest))
+        write()
+        with self.assertRaisesRegex(ValueError, 'Measured hinge rig requires'):
+            packs.compose([str(root)], host)
+        payload['required_capabilities'] = {'donor-rig-hinges': 1};write()
+        with self.assertRaisesRegex(ValueError, 'requires donor-rig-hinges'):
+            packs.compose([str(root)], host)
+        host['content_capabilities']['donor-rig-hinges'] = [1]
+        self.assertEqual(len(packs.compose([str(root)], host)[0]), 1)
 
     def test_priority_disable_and_relocation(self):
         first, second = self.build(), self.build("second")

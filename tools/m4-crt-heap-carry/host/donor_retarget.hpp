@@ -42,7 +42,7 @@ inline Mat swing(Vec a,Vec b){
 }
 inline Mat axis(){return {0,0,-1,0,-1,0,0,0,0,1,0,0,0,0,0,1};}
 struct Bone{std::string name,control;int parent{-1};Mat rest=identity();};
-struct Rig{std::vector<Bone>bones;std::map<std::string,Mat>reference;std::array<double,2>walk_x{},walk_z{};double hip_drop{};bool ground_reference=true;};
+struct Rig{std::vector<Bone>bones;std::map<std::string,Mat>reference;std::array<double,2>walk_x{},walk_z{};double hip_drop{};bool ground_reference=true;bool hinge_axes=false;};
 struct Pose{std::vector<Mat>world;unsigned reach_clamps{};};
 inline double locomotion(const Rig&r,const std::map<std::string,Mat>&current){
  const auto h=position(current.at("hip")),h0=position(r.reference.at("hip"));double change=0;
@@ -52,8 +52,186 @@ inline double locomotion(const Rig&r,const std::map<std::string,Mat>&current){
  }
  const double t=std::clamp((change-.005)/.075,0.,1.);return t*t*(3-2*t);
 }
+inline Mat hinge_rotation(Vec axis, double angle) {
+ axis=unit(axis); const double c=std::cos(angle),s=std::sin(angle),v=1-c;
+ auto result=identity();
+ for(int i=0;i<3;++i)for(int j=0;j<3;++j)result[4*i+j]=v*axis[i]*axis[j]+(i==j?c:0.);
+ result[1]-=s*axis[2];result[2]+=s*axis[1];result[4]+=s*axis[2];
+ result[6]-=s*axis[0];result[8]-=s*axis[1];result[9]+=s*axis[0];
+ return result;
+}
+inline double hinge_angle(Vec axis,Vec from,Vec to) {
+ axis=unit(axis);from=sub(from,scale(axis,dot(axis,from)));to=sub(to,scale(axis,dot(axis,to)));
+ if(length(from)<1e-10||length(to)<1e-10)return 0.;
+ from=unit(from);to=unit(to);
+ return std::atan2(dot(axis,cross(from,to)),std::clamp(dot(from,to),-1.,1.));
+}
+inline Vec hinge_axis(const Mat&frame) { return unit({frame[1],frame[5],frame[9]}); }
+inline Mat hinge_constrained(const Mat&rest,const Mat&desired,const Mat&parent_delta,
+                             const Mat&frame,Vec origin) {
+ const auto relative=product(inverse(rotation(parent_delta)),product(rotation(desired),inverse(rotation(rest))));
+ const auto axis=hinge_axis(frame);const Vec direction{frame[2],frame[6],frame[10]};
+ const auto angle=hinge_angle(axis,direction,vector(relative,direction));
+ return translate(product(parent_delta,product(hinge_rotation(axis,angle),rest)),origin);
+}
+// Metadata frames/points describe existing rigid surfaces; they draw no geometry.
+inline void validate_hinge_metadata(const Rig&r) {
+ std::map<std::string,const Bone*> bones;
+ for(const auto&bone:r.bones)bones.emplace(bone.name,&bone);
+ for(const auto&side:std::array<std::string,2>{"Left","Right"}) {
+  for(const auto&joint:std::array<std::pair<std::string,std::string>,3>{{{"Calf_","Thigh_"},{"Forearm_","Upperarm_"},{"Foot0_","Calf_"}}}) {
+   const auto found=bones.find("HingeAxis_"+joint.first+side);
+   if(found==bones.end())throw std::runtime_error("Visual retarget: missing measured hinge axis");
+   const auto&bone=*found->second;
+   if(!bone.control.empty()||bone.parent<0||bone.parent>=int(r.bones.size())||r.bones[bone.parent].name!=joint.second+side)
+    throw std::runtime_error("Visual retarget: invalid hinge frame parent");
+   const auto axis=hinge_axis(bone.rest);const Vec guide{bone.rest[2],bone.rest[6],bone.rest[10]};
+   if(length(cross(axis,guide))<1e-8)throw std::runtime_error("Visual retarget: degenerate hinge guide");
+  }
+  unsigned points=0;const std::string prefix=side=="Left"?"l":"r";
+  for(const auto&bone:r.bones)if(bone.name.rfind("Sole_"+side+"_",0)==0) {
+   if(!bone.control.empty()||bone.parent<0||bone.parent>=int(r.bones.size()))
+    throw std::runtime_error("Visual retarget: invalid sole parent");
+   const auto&parent=r.bones[bone.parent];
+   if(parent.control!=prefix+"foot"&&parent.control!=prefix+"toe01"&&parent.control!=prefix+"toe02")
+    throw std::runtime_error("Visual retarget: sole must bind to its foot or toe");
+   ++points;
+  }
+  if(points<3||points>64)throw std::runtime_error("Visual retarget: invalid sole marker count");
+ }
+}
+inline Pose retarget_hinged(const Rig&r,std::map<std::string,Mat>current,double gait) {
+ validate_hinge_metadata(r);
+ std::map<std::string,size_t> index;
+ for(size_t i=0;i<r.bones.size();++i)if(!index.emplace(r.bones[i].name,i).second)
+  throw std::runtime_error("Visual retarget: duplicate bone");
+ auto rest=[&](const std::string&name)->const Mat& {return r.bones.at(index.at(name)).rest;};
+ for(const char*name:{"HingeAxis_Calf_Left","HingeAxis_Calf_Right","HingeAxis_Forearm_Left","HingeAxis_Forearm_Right"})
+  if(!index.count(name))throw std::runtime_error("Visual retarget: missing measured hinge axis");
+ auto travel=sub(position(current.at("hip")),position(r.reference.at("hip")));travel[2]=0;
+ for(auto&[name,matrix]:current)matrix=translate(matrix,sub(position(matrix),travel));
+ auto root_delta=sub(position(current.at("hip")),position(r.reference.at("hip")));root_delta[2]-=gait*r.hip_drop;
+ auto rotated=[&](const std::string&bone,const std::string&control,Vec origin) {
+  return translate(product(product(rotation(current.at(control)),inverse(rotation(r.reference.at(control)))),rest(bone)),origin);
+ };
+ std::map<std::string,Mat>want;
+ want["Pelvis"]=rotated("Pelvis","hip",add(position(rest("Pelvis")),root_delta));
+ const auto body=product(want.at("Pelvis"),inverse(rest("Pelvis")));
+ want["Torso_Twist"]=rotated("Torso_Twist","torso",point(body,position(rest("Torso_Twist"))));
+ const auto torso=product(want.at("Torso_Twist"),inverse(rest("Torso_Twist")));
+ for(const auto&side:std::array<std::pair<std::string,std::string>,2>{{{"Left","l"},{"Right","r"}}}) {
+  const auto upper="Upperarm_"+side.first,lower="Forearm_"+side.first;
+  want[upper]=rotated(upper,side.second+"arm",point(torso,position(rest(upper))));
+  const auto arm=product(want.at(upper),inverse(rest(upper)));
+  const auto raw=current.count(side.second+"hand")?rotated(lower,side.second+"hand",point(arm,position(rest(lower)))):product(arm,rest(lower));
+  want[lower]=hinge_constrained(rest(lower),raw,arm,rest("HingeAxis_"+lower),point(arm,position(rest(lower))));
+ }
+ if(index.count("Torso_Head")&&r.bones[index.at("Torso_Head")].control=="head"&&current.count("head"))
+  want["Torso_Head"]=rotated("Torso_Head","head",point(torso,position(rest("Torso_Head"))));
+ Pose output;
+ for(unsigned side=0;side<2;++side) {
+  const std::string suffix=side==0?"Left":"Right",prefix=side==0?"l":"r";
+  const auto thigh="Thigh_"+suffix,calf="Calf_"+suffix,foot="Foot0_"+suffix;
+  const auto h0=position(rest(thigh)),k0=position(rest(calf)),a0=position(rest(foot));
+  auto reference=position(r.reference.at(prefix+"foot"));
+  reference[0]+=(r.walk_x[side]-reference[0])*gait;
+  if(r.ground_reference)reference[2]+=(r.walk_z[side]-reference[2])*gait;
+  auto goal=add(a0,sub(position(current.at(prefix+"foot")),reference));
+  auto foot_pose=[&](Vec ankle) {
+   const auto raw_foot=rotated(foot,prefix+"foot",ankle);
+   const auto calf_delta=want.count(calf)?product(want.at(calf),inverse(rest(calf))):identity();
+   want[foot]=want.count(calf)?hinge_constrained(rest(foot),raw_foot,calf_delta,rest("HingeAxis_"+foot),ankle):raw_foot;
+   const auto delta=product(want.at(foot),inverse(rest(foot)));
+   for(const auto&bone:r.bones)if(bone.control.rfind(prefix+"toe",0)==0&&current.count(bone.control)) {
+    const auto origin=point(delta,position(bone.rest));
+    const auto raw=rotated(bone.name,bone.control,origin);
+    const auto axis_name="HingeAxis_"+bone.name;
+    want[bone.name]=index.count(axis_name)?hinge_constrained(bone.rest,raw,delta,rest(axis_name),origin):raw;
+   }
+  };
+  foot_pose(goal);
+  double lowest=1e300,rest_lowest=1e300;unsigned markers=0;
+  for(const auto&bone:r.bones)if(bone.name.rfind("Sole_"+suffix+"_",0)==0) {
+   if(bone.parent<0||bone.parent>=int(r.bones.size()))throw std::runtime_error("Visual retarget: invalid sole parent");
+   const auto&parent=r.bones[bone.parent];
+   if(!want.count(parent.name))throw std::runtime_error("Visual retarget: sole must bind to its foot or toe");
+   const auto delta=product(want.at(parent.name),inverse(parent.rest));
+   lowest=std::min(lowest,point(delta,position(bone.rest))[2]);
+   rest_lowest=std::min(rest_lowest,position(bone.rest)[2]);++markers;
+  }
+  if(markers<3||markers>64)throw std::runtime_error("Visual retarget: invalid sole marker count");
+  // The original controller supplies lift and rotation. These measured source
+  // points compensate the donor's different footprint; no guest state is written.
+  const double plane=rest_lowest+std::max(0.,goal[2]-a0[2]);
+  goal[2]+=plane-lowest;
+  bool clamped=false;
+  auto solve_leg=[&](){
+   clamped=false;
+  auto ankle=point(inverse(body),goal);auto direction=sub(ankle,h0);
+  const auto axis=hinge_axis(rest("HingeAxis_"+calf));
+  const auto upper=sub(k0,h0),lower=sub(a0,k0),old_chain=sub(a0,h0);
+  const double aa=dot(upper,lower)-dot(upper,axis)*dot(lower,axis);
+  const double bb=dot(upper,cross(axis,lower));const double radius=std::hypot(aa,bb);
+  if(radius<1e-12)throw std::runtime_error("Visual retarget: degenerate hinge chain");
+  const double baseline=dot(upper,upper)+dot(lower,lower)+2*dot(upper,axis)*dot(lower,axis);
+  const double minimum=std::sqrt(std::max(0.,baseline-2*radius))+1e-6;
+  const double maximum=std::sqrt(std::max(0.,baseline+2*radius))-1e-6;
+  if(minimum>=maximum)throw std::runtime_error("Visual retarget: invalid hinge reach");
+  double distance=length(direction);
+  if(distance<1e-10){direction=scale(unit(old_chain),minimum);distance=minimum;}
+  const double reachable=std::clamp(distance,minimum,maximum);
+  if(reachable!=distance){direction=scale(direction,reachable/distance);distance=reachable;clamped=true;}
+  const double phase=std::atan2(bb,aa);
+  const double offset=std::acos(std::clamp((distance*distance-baseline)/(2*radius),-1.,1.));
+  const double original_bend=dot(axis,cross(upper,lower));
+  double angle=phase+offset;
+  for(double candidate:{phase+offset,phase-offset}) {
+   const auto moved=vector(hinge_rotation(axis,candidate),lower);
+   if(dot(axis,cross(upper,moved))*original_bend>=-1e-12){angle=candidate;break;}
+  }
+  const auto knee_rotation=hinge_rotation(axis,angle);
+  const auto chain=add(upper,vector(knee_rotation,lower));
+  auto hip_rotation=swing(chain,direction);
+  auto pole=sub(upper,scale(old_chain,dot(upper,old_chain)/dot(old_chain,old_chain)));
+  if(length(pole)<1e-8)pole={1,0,0};
+  hip_rotation=product(hinge_rotation(direction,hinge_angle(direction,vector(hip_rotation,upper),pole)),hip_rotation);
+  const auto knee_local=add(h0,vector(hip_rotation,upper));
+  const auto ankle_local=add(h0,vector(hip_rotation,chain));
+  want[thigh]=translate(product(product(rotation(body),hip_rotation),rest(thigh)),point(body,h0));
+  want[calf]=translate(product(product(product(rotation(body),hip_rotation),knee_rotation),rest(calf)),point(body,knee_local));
+  foot_pose(point(body,ankle_local));
+  };
+  // Ankle rotation changes the footprint. Re-solve vertical contact while
+  // preserving the knee and ankle axes at every iteration, never the mesh.
+  for(unsigned iteration=0;iteration<32;++iteration){
+   solve_leg();
+   double contact=1e300;
+   for(const auto&bone:r.bones)if(bone.name.rfind("Sole_"+suffix+"_",0)==0){
+    const auto&parent=r.bones[bone.parent];
+    const auto delta=product(want.at(parent.name),inverse(parent.rest));
+    contact=std::min(contact,point(delta,position(bone.rest))[2]);
+   }
+   const double correction=plane-contact;
+   if(std::abs(correction)<1e-8)break;
+   if(iteration+1==32)throw std::runtime_error("Visual retarget: footprint contact did not converge");
+   goal[2]+=correction;
+  }
+  if(clamped)++output.reach_clamps;
+ }
+ for(size_t i=0;i<r.bones.size();++i) {
+  const auto&bone=r.bones[i];
+  if(bone.parent>=int(i)||bone.parent< -1)throw std::runtime_error("Visual retarget: invalid bone order");
+  auto matrix=want.count(bone.name)?want.at(bone.name):(bone.parent>=0?product(product(output.world.at(bone.parent),inverse(r.bones[bone.parent].rest)),bone.rest):bone.rest);
+  output.world.push_back(matrix);
+ }
+ for(auto&matrix:output.world)matrix=translate(matrix,add(position(matrix),travel));
+ for(const auto&matrix:output.world)for(double value:matrix)if(!std::isfinite(value))
+  throw std::runtime_error("Visual retarget: nonfinite hinge pose");
+ return output;
+}
 inline Pose retarget(const Rig&r,std::map<std::string,Mat>current,double gait){
  if(!std::isfinite(gait)||gait<0||gait>1)throw std::runtime_error("Visual retarget: invalid gait blend");
+ if(r.hinge_axes)return retarget_hinged(r,std::move(current),gait);
  std::map<std::string,size_t>index;for(size_t i=0;i<r.bones.size();++i)if(!index.emplace(r.bones[i].name,i).second)throw std::runtime_error("Visual retarget: duplicate bone");
  auto rest=[&](const std::string&n)->const Mat&{return r.bones.at(index.at(n)).rest;};
  auto travel=sub(position(current.at("hip")),position(r.reference.at("hip")));travel[2]=0;

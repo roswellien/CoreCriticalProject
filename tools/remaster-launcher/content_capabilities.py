@@ -39,7 +39,7 @@ def require(host, payload, ident):
         raise ValueError('Unsupported content profile: ' + str(profile))
     extra = payload.get('required_capabilities', {})
     if (not isinstance(extra, dict) or len(extra) > 32 or any(
-            name not in {*PROFILES.values(), 'mech-headlights', 'legacy-mech-skins', 'surface-materials'}
+            name not in {*PROFILES.values(), 'mech-headlights', 'legacy-mech-skins', 'surface-materials', 'donor-rig-hinges'}
             or type(version) is not int or version < 1
             for name, version in extra.items())):
         raise ValueError('Invalid content capability requirements')
@@ -47,3 +47,17 @@ def require(host, payload, ident):
     for name, version in [(PROFILES[profile], 1), *extra.items()]:
         if version not in table.get(name, []):
             raise ValueError(f"Pack '{ident}' requires {name} version {version}. Update the game runtime or choose a compatible pack.")
+
+
+def measured_donor_hinges(path):
+    """Inspect the optional wire flag without loading a large geometry payload."""
+    with Path(path).open('rb') as stream:
+        header = stream.read(24)
+    return (len(header) == 24 and header[:8] == b'BWMESH4\0'
+            and bool(int.from_bytes(header[20:24], 'little') & 2))
+
+
+def require_measured_donor_hinges(path, payload):
+    if (measured_donor_hinges(path)
+            and payload.get('required_capabilities', {}).get('donor-rig-hinges') != 1):
+        raise ValueError('Measured hinge rig requires donor-rig-hinges version 1')

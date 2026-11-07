@@ -19,16 +19,21 @@ static class PackStorageChecks
         {
             var manager = new PackManager(root);
             var archive = Path.Combine(root, "authored.mw3pack");
-            void Build(string id = "test.mech", string member = "payload/mesh.bin", bool corrupt = false, int schema = 2)
+            void Build(string id = "test.mech", string member = "payload/mesh.bin", bool corrupt = false, int schema = 2, bool hinged = false, bool hingeCapability = false)
             {
                 var content = Encoding.UTF8.GetBytes("authored mesh");
+                if (hinged)
+                {
+                    content = new byte[24]; "BWMESH4\0"u8.CopyTo(content);
+                    BitConverter.GetBytes(3u).CopyTo(content,20);
+                }
                 var registry = Encoding.UTF8.GetBytes("""{"schema_version":2,"payload_profile":"prepared-native-v1","models":[{"environment":{"MW34_ORION_MESH":"payload/mesh.bin"}}]}""");
                 var files = new Dictionary<string, object>();
                 foreach (var (name, bytes) in new[] { (member, content), ("models/models.json", registry) })
-                    files[name] = new { bytes = bytes.Length, sha256 = corrupt && name == member ? new string('0', 64) : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() };
+                    files[name] = new { bytes = bytes.Length, sha256 = corrupt && name == member ? new string('0', 64) : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), format = hinged && name == member ? "BWMESH4" : null };
                 using var zip = ZipFile.Open(archive, ZipArchiveMode.Create);
                 void Write(string name, byte[] bytes) { using var stream = zip.CreateEntry(name).Open(); stream.Write(bytes); }
-                Write("pack.json", JsonSerializer.SerializeToUtf8Bytes(new { schema_version = schema, id, name = "Authored fixture", native_payload = new { profile = "prepared-native-v1", registry = "models/models.json", path_base = "pack-root" }, files }));
+                Write("pack.json", JsonSerializer.SerializeToUtf8Bytes(new { schema_version = schema, id, name = "Authored fixture", native_payload = new { profile = "prepared-native-v1", registry = "models/models.json", path_base = "pack-root", required_capabilities = hingeCapability ? new Dictionary<string,int>{{"donor-rig-hinges",1}} : new Dictionary<string,int>() }, files }));
                 Write(member, content);
                 Write("models/models.json", registry);
             }
@@ -38,6 +43,12 @@ static class PackStorageChecks
                 catch (InvalidDataException) { return; }
                 throw new Exception("Invalid pack was accepted.");
             }
+            Build(hinged:true);
+            Reject(() => manager.InstallPack(archive));
+            File.Delete(archive);
+            Build(hinged:true,hingeCapability:true);
+            manager.InstallPack(archive);
+            File.Delete(archive);
             Build();
             var progress = new List<PackInstallProgress>();
             var installed = manager.InstallPack(archive, progress: new CaptureProgress(value =>
