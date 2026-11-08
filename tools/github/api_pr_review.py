@@ -668,6 +668,8 @@ def build_mistral_payload(model: str, packet_json: str) -> dict:
             {"role": "user", "content": packet_json},
         ],
         "temperature": 0,
+        "top_p": 1,
+        "service_tier": "standard_only",
         "max_tokens": MAX_OUTPUT_TOKENS,
         "response_format": {
             "type": "json_schema",

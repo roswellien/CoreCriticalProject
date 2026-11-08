@@ -306,6 +306,16 @@ class ReviewLifecycleTests(unittest.TestCase):
             if self.change_head:
                 self.pull["head"]["sha"] = "c" * 40
             is_openai = path == "/v1/responses"
+            if is_openai:
+                self.assertEqual(payload["service_tier"], "default")
+            else:
+                self.assertEqual(payload["temperature"], 0)
+                self.assertEqual(payload["top_p"], 1)
+                self.assertEqual(payload["service_tier"], "standard_only")
+                self.assertEqual(payload["response_format"]["type"], "json_schema")
+                self.assertEqual(
+                    payload["response_format"]["json_schema"]["schema"], review.REVIEW_SCHEMA
+                )
             body = _openai_response() if is_openai else _mistral_response()
             status = 503 if is_openai and self.provider_failure else 200
             return (
