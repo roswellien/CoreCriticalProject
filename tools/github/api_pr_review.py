@@ -759,7 +759,23 @@ def _extract_mistral_json(response: dict) -> Any:
         and not message.get("refusal"),
         "mistral_unexpected_message",
     )
-    return domain.strict_json(domain.text_value(message.get("content"), MAX_GH_REQUEST_BYTES))
+    content = message.get("content")
+    if type(content) is str:
+        return domain.strict_json(domain.text_value(content, MAX_GH_REQUEST_BYTES))
+    if type(content) is list:
+        check(len(content) > 0 and len(content) <= 100, "mistral_invalid_content")
+        parts = []
+        for chunk in content:
+            check(type(chunk) is dict, "mistral_invalid_content")
+            if chunk.get("type") == "text":
+                parts.append(domain.text_value(chunk.get("text"), MAX_GH_REQUEST_BYTES))
+            elif chunk.get("type") == "thinking":
+                check(chunk.get("closed", True) is True, "mistral_unfinished_thinking")
+            else:
+                raise domain.AutomationError("mistral_unknown_chunk_type")
+        text = "".join(parts)
+        return domain.strict_json(domain.text_value(text, MAX_GH_REQUEST_BYTES))
+    raise domain.AutomationError("mistral_invalid_content")
 
 
 def _mistral_usage_tokens(value: Any) -> dict:

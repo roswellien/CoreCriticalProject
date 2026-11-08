@@ -64,7 +64,10 @@ def _mistral_response():
         "choices": [
             {
                 "finish_reason": "stop",
-                "message": {"role": "assistant", "content": json.dumps(REVIEW)},
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": json.dumps(REVIEW)}],
+                },
             }
         ],
         "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
@@ -134,6 +137,44 @@ class ApiPrReviewTests(unittest.TestCase):
         valid = [
             ("openai", _openai_response()),
             ("mistral", _mistral_response()),
+            (
+                "mistral",
+                {
+                    **_mistral_response(),
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(REVIEW),
+                            },
+                        }
+                    ],
+                },
+            ),
+            (
+                "mistral",
+                {
+                    **_mistral_response(),
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "thinking",
+                                        "thinking": [{"type": "text", "text": "private reasoning"}],
+                                        "closed": True,
+                                    },
+                                    {"type": "text", "text": json.dumps(REVIEW)[:10]},
+                                    {"type": "text", "text": json.dumps(REVIEW)[10:]},
+                                ],
+                            },
+                        }
+                    ],
+                },
+            ),
         ]
         for provider, response in valid:
             with self.subTest(provider=provider):
@@ -148,8 +189,83 @@ class ApiPrReviewTests(unittest.TestCase):
                 self.assertEqual(model, MODEL)
                 self.assertEqual(rid, "resp-1" if provider == "openai" else "chatcmpl-1")
 
+        malformed = [
+            [{"type": "text", "text": None}],
+            [{"type": "text", "text": 3}],
+            [{"type": "text"}],
+            [
+                {"type": "thinking", "thinking": [], "closed": False},
+                {"type": "text", "text": json.dumps(REVIEW)},
+            ],
+            [
+                {
+                    "type": "thinking",
+                    "thinking": [{"type": "text", "text": "private reasoning"}],
+                    "closed": True,
+                }
+            ],
+        ]
+        for content in malformed:
+            with self.subTest(content=content):
+                resp = _mistral_response()
+                resp["choices"][0]["message"]["content"] = content
+                with self.assertRaises(domain.AutomationError):
+                    parse_provider_response("mistral", MODEL, resp, "rid-1", LINE_MAP)
+
         bad = [
             ("openai", {**_openai_response(), "model": "other"}, "unexpected_provider_model"),
+            (
+                "mistral",
+                {
+                    **_mistral_response(),
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": ["not-a-dict"]},
+                        }
+                    ],
+                },
+                "mistral_invalid_content",
+            ),
+            (
+                "mistral",
+                {
+                    **_mistral_response(),
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": [{"type": "unknown"}]},
+                        }
+                    ],
+                },
+                "mistral_unknown_chunk_type",
+            ),
+            (
+                "mistral",
+                {
+                    **_mistral_response(),
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": None},
+                        }
+                    ],
+                },
+                "mistral_invalid_content",
+            ),
+            (
+                "mistral",
+                {
+                    **_mistral_response(),
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": []},
+                        }
+                    ],
+                },
+                "mistral_invalid_content",
+            ),
             (
                 "openai",
                 {**_openai_response(), "status": "in_progress"},
