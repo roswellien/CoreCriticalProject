@@ -1,6 +1,16 @@
 name: Bootstrap checks
 
 on:
+  workflow_dispatch:
+    inputs:
+      review_pr:
+        description: Pull request number for the owner-invoked API review canary
+        type: string
+        required: true
+      review_head:
+        description: Exact reviewed PR head SHA
+        type: string
+        required: true
   push:
     paths-ignore:
       - "website/**"
@@ -15,6 +25,7 @@ permissions:
 
 jobs:
   build:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     strategy:
       # Each OS reports its own result; a Linux failure doesn't cancel the Windows job.
       fail-fast: false
@@ -38,3 +49,17 @@ jobs:
         run: python tools/check.py --setup --only format-check
       - name: Build, CTest and C++ format check
         run: python tools/check.py --only build --only ctest --only format-check
+
+  api-review-canary:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'roswellien' && github.repository == 'roswellien/MW3Recomp-Private' }}
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    uses: ./.github/workflows/api-pr-review.yml
+    with:
+      review_pr: ${{ inputs.review_pr }}
+      review_head: ${{ inputs.review_head }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}

@@ -1,0 +1,98 @@
+{
+  "name": "Direct API PR reviews",
+  "on": {
+    "workflow_run": {
+      "workflows": [
+        "Bootstrap checks"
+      ],
+      "types": [
+        "completed"
+      ]
+    },
+    "workflow_call": {
+      "inputs": {
+        "review_pr": {
+          "description": "PR number for manual review",
+          "required": false,
+          "type": "string",
+          "default": ""
+        },
+        "review_head": {
+          "description": "Head ref for manual review",
+          "required": false,
+          "type": "string",
+          "default": ""
+        }
+      },
+      "secrets": {
+        "OPENAI_API_KEY": {
+          "required": true
+        },
+        "MISTRAL_API_KEY": {
+          "required": true
+        }
+      }
+    }
+  },
+  "permissions": {
+    "contents": "read",
+    "actions": "read",
+    "pull-requests": "write"
+  },
+  "concurrency": {
+    "group": "direct-api-pr-review",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "review": {
+      "if": "${{ github.repository == 'roswellien/MW3Recomp-Private' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && github.actor == 'roswellien')) }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+      "steps": [
+        {
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "with": {
+            "ref": "${{ github.sha }}",
+            "persist-credentials": false
+          }
+        },
+        {
+          "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "name": "Review with direct APIs",
+          "shell": "bash",
+          "env": {
+            "GITHUB_TOKEN": "${{ github.token }}",
+            "OPENAI_API_KEY": "${{ secrets.OPENAI_API_KEY }}",
+            "MISTRAL_API_KEY": "${{ secrets.MISTRAL_API_KEY }}",
+            "REVIEW_PR": "${{ inputs.review_pr || '' }}",
+            "REVIEW_HEAD": "${{ inputs.review_head || '' }}",
+            "OPENAI_REVIEW_MODEL": "${{ vars.OPENAI_REVIEW_MODEL }}",
+            "MISTRAL_REVIEW_MODEL": "${{ vars.MISTRAL_REVIEW_MODEL }}",
+            "OPENAI_INPUT_MICRO_USD_PER_MILLION": "${{ vars.OPENAI_INPUT_MICRO_USD_PER_MILLION }}",
+            "OPENAI_OUTPUT_MICRO_USD_PER_MILLION": "${{ vars.OPENAI_OUTPUT_MICRO_USD_PER_MILLION }}",
+            "MISTRAL_INPUT_MICRO_USD_PER_MILLION": "${{ vars.MISTRAL_INPUT_MICRO_USD_PER_MILLION }}",
+            "MISTRAL_OUTPUT_MICRO_USD_PER_MILLION": "${{ vars.MISTRAL_OUTPUT_MICRO_USD_PER_MILLION }}",
+            "OPENAI_MAX_REVIEW_MICRO_USD": "${{ vars.OPENAI_MAX_REVIEW_MICRO_USD }}",
+            "MISTRAL_MAX_REVIEW_MICRO_USD": "${{ vars.MISTRAL_MAX_REVIEW_MICRO_USD }}"
+          },
+          "run": "set -eu\nif [ \"$GITHUB_EVENT_NAME\" = \"workflow_dispatch\" ]; then\n  python -B tools/github/api_pr_review.py --pr \"$REVIEW_PR\" --head \"$REVIEW_HEAD\" --allow-draft-canary\nelse\n  python -B tools/github/api_pr_review.py --event-path \"$GITHUB_EVENT_PATH\"\nfi"
+        },
+        {
+          "if": "${{ always() }}",
+          "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "with": {
+            "name": "api-review-receipts",
+            "path": "review-receipts.json",
+            "retention-days": 30,
+            "if-no-files-found": "ignore"
+          }
+        }
+      ]
+    }
+  }
+}

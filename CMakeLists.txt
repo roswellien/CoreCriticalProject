@@ -147,6 +147,9 @@ if(BUILD_TESTING)
     add_test(NAME openai_automation
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p "test_openai_automation*.py" -v)
     set_tests_properties(openai_automation PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME api_pr_review
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_api_pr_review.py -v)
+    set_tests_properties(api_pr_review PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME game_monitor
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_game_monitor.py -v)
     set_tests_properties(game_monitor PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
