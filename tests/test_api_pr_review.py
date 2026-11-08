@@ -451,6 +451,47 @@ class ReviewLifecycleTests(unittest.TestCase):
             for name in review.PROVIDERS
         }
 
+    def test_no_default_dollar_cap_and_bounded_large_packet(self):
+        env = {}
+        for name in review.PROVIDERS:
+            prefix = name.upper()
+            env.update(
+                {
+                    prefix + "_API_KEY": "provider_synthetic",
+                    prefix + "_REVIEW_MODEL": MODEL,
+                    prefix + "_INPUT_MICRO_USD_PER_MILLION": "3000000000",
+                    prefix + "_OUTPUT_MICRO_USD_PER_MILLION": "12000000000",
+                }
+            )
+        self.configs = review.load_provider_configs(env)
+        self.assertTrue(all(cfg.max_review_micro_usd is None for cfg in self.configs.values()))
+        result = self.run_review()
+        for info in result["providers"].values():
+            self.assertEqual(info["outcome"], "completed")
+            self.assertIsNone(info["receipt"]["max_review_micro_usd"])
+            self.assertEqual(info["receipt"]["actual_micro_usd"], 780_000)
+        calls_before_packet_checks = len(self.calls)
+        files = [
+            {
+                "filename": "src/a.py",
+                "status": "added",
+                "patch": "@@ -0,0 +1 @@\n+" + "x" * (48 * 1024),
+            }
+        ]
+        _, _, packet, _ = review.build_review_packet(self.pull, files, 10)
+        self.assertGreater(len(packet), 48 * 1024)
+        self.assertLessEqual(len(packet), review.MAX_PACKET_BYTES)
+        files[0]["patch"] = "@@ -0,0 +1 @@\n+" + "x" * (review.MAX_PACKET_BYTES + 1)
+        with self.assertRaises(domain.AutomationError):
+            review.build_review_packet(self.pull, files, 10)
+        self.assertEqual(len(self.calls), calls_before_packet_checks)
+        for name in review.PROVIDERS:
+            env[name.upper() + "_MAX_REVIEW_MICRO_USD"] = "1"
+        self.configs = review.load_provider_configs(env)
+        with self.assertRaisesRegex(domain.Blocked, "estimated_cost_exceeds_cap"):
+            self.run_review()
+        self.assertEqual(len(self.calls), calls_before_packet_checks)
+
     def run_review(self):
         return review.run_reviews(
             pr_number=9,

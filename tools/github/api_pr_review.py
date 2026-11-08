@@ -38,9 +38,8 @@ MAX_GH_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_PAGES = 5
 PER_PAGE = 100
 MAX_FILES = 100
-MAX_PACKET_BYTES = 48 * 1024
-MAX_OUTPUT_TOKENS = 2000
-HARD_MAX_REVIEW_MICRO_USD = 500_000
+MAX_PACKET_BYTES = 128 * 1024
+MAX_OUTPUT_TOKENS = 8192
 CHECK_WORKFLOW_NAME = "Bootstrap checks"
 CHECK_WORKFLOW_PATH = ".github/workflows/build.yml"
 
@@ -263,7 +262,7 @@ class ProviderConfig:
     model: str
     input_micro_usd_per_million: int
     output_micro_usd_per_million: int
-    max_review_micro_usd: int
+    max_review_micro_usd: int | None = None
 
 
 @dataclass(frozen=True)
@@ -380,8 +379,11 @@ def load_provider_configs(env: Mapping[str, str]) -> dict[str, ProviderConfig]:
         domain.identifier(model, r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
         in_price = _env_positive_int(env, f"{prefix}_INPUT_MICRO_USD_PER_MILLION")
         out_price = _env_positive_int(env, f"{prefix}_OUTPUT_MICRO_USD_PER_MILLION")
-        max_cap = _env_positive_int(env, f"{prefix}_MAX_REVIEW_MICRO_USD")
-        block(max_cap <= HARD_MAX_REVIEW_MICRO_USD, f"{provider}_review_cap_exceeds_hard_limit")
+        max_cap = (
+            _env_positive_int(env, f"{prefix}_MAX_REVIEW_MICRO_USD")
+            if env.get(f"{prefix}_MAX_REVIEW_MICRO_USD")
+            else None
+        )
         configs[provider] = ProviderConfig(
             provider=provider,
             api_key=key,
@@ -895,8 +897,9 @@ def parse_receipt_record(value: Any) -> dict:
     domain.identifier(row["input_sha256"], r"[0-9a-f]{64}")
     domain.identifier(row["requested_model"], r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
     domain.identifier(row["binding"], r"[0-9a-f]{64}")
-    domain.integer(row["reserved_micro_usd"], 1, HARD_MAX_REVIEW_MICRO_USD)
-    domain.integer(row["max_review_micro_usd"], 1, HARD_MAX_REVIEW_MICRO_USD)
+    domain.integer(row["reserved_micro_usd"], 1, 10**12)
+    if row["max_review_micro_usd"] is not None:
+        domain.integer(row["max_review_micro_usd"], 1, 10**12)
     check(row["status"] in ("reserved", "completed"), "invalid_receipt_status")
     if row["status"] == "reserved":
         check(
@@ -927,7 +930,7 @@ def format_review_body(receipt: dict, review: ReviewOutput | None) -> str:
             f"- Status: `reserved` (inference in progress or awaiting reconciliation)\n"
             f"- Head SHA: `{receipt['head_sha']}`\n"
             f"- Requested model: `{receipt['requested_model']}`\n"
-            f"- Reserved cap: `{receipt['reserved_micro_usd']}` micro-USD\n"
+            f"- Admission estimate: `{receipt['reserved_micro_usd']}` micro-USD\n"
         )
     lines = [marker, f"### {label} API Review", "", review.summary, ""]
     if review.findings:
@@ -1087,7 +1090,8 @@ def run_reviews(
     for provider in PROVIDERS:
         cfg = configs[provider]
         est = estimate_cost_micro_usd(cfg, len(packet_bytes), MAX_OUTPUT_TOKENS)
-        block(est <= cfg.max_review_micro_usd, f"{provider}_estimated_cost_exceeds_cap")
+        if cfg.max_review_micro_usd is not None:
+            block(est <= cfg.max_review_micro_usd, f"{provider}_estimated_cost_exceeds_cap")
         estimates[provider] = est
 
     existing_reviews = github.list_pull_reviews(pr_number)
@@ -1179,7 +1183,10 @@ def run_reviews(
                 "finding_count": len(review_out.findings),
             }
             write_receipts_file(receipts_path, summary_out)
-            block(actual_cost <= cfg.max_review_micro_usd, f"{provider}_actual_cost_exceeds_cap")
+            if cfg.max_review_micro_usd is not None:
+                block(
+                    actual_cost <= cfg.max_review_micro_usd, f"{provider}_actual_cost_exceeds_cap"
+                )
 
             verify_pr_metadata(
                 github.get_pull(pr_number), pr_number, head_sha, allow_draft=allow_draft

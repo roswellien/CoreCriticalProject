@@ -1,17 +1,23 @@
 # Direct API PR reviews
 
 Issue20 connects OpenAI Responses and Mistral Chat Completions directly to PR
-review. These calls use provider API allowances, not Copilot or signed-in Codex
-usage. Existing Copilot and the separate inactive coding controller stay intact.
+review using their API allowances. This path does not request, use or require
+Copilot. The separate coding controller stays inactive.
 
-The owner approved `gpt-5.4-2026-03-05` and `mistral-large-4-0`, one request per
-provider/PR-head and a $0.50 per-provider admission ceiling. Required repository
-variables name each model, input/output micro-USD per million tokens and the cap;
-the runner refuses missing/unpriced configuration. Standard uncached rates are
+The configured models are `gpt-5.4-2026-03-05` and `mistral-large-4-0`, with one
+request per provider/PR head. There is no default dollar limit per request. The
+repository's per-request cap variables are unset; an explicitly configured
+positive cap remains optional for compatibility. Model and input/output price
+variables remain required. Standard uncached rates are
 $2.50/$15 per million for GPT-5.4 and $0.70/$2.10 for Large4. Input-byte and output-
 token limits bound the admission estimate; it is not a vendor reservation or an
-invoice. Native credit availability and overages-off settings must be verified.
+invoice. Authored input is bounded to128KiB and100 files, with full current-head
+reviews from both API providers required before an owner-authorized merge.
+Native credit availability and overages-off settings must be verified.
 No purchase, recharge, billing change or fallback is performed by this code.
+Each provider can return8192 tokens within a180-second HTTP timeout; the job has
+10 minutes for both reviews. These bounds allow complete reviews of larger
+patches while retaining finite requests and cost records.
 
 The automatic workflow runs trusted default-branch code after exact-head successful
 Bootstrap checks. It reads bounded authored patches as untrusted text. It never

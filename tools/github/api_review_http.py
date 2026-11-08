@@ -28,7 +28,7 @@ def request(provider: str, key: str, payload: dict, *, opener=None) -> tuple[dic
     if opener is None:
         opener = urllib.request.build_opener(NoRedirect()).open
     try:
-        with opener(req, timeout=60) as resp:
+        with opener(req, timeout=180) as resp:
             domain.require(resp.status == 200, "api_review_http_status")
             ctype = resp.headers.get("Content-Type", "")
             domain.require("application/json" in ctype, "api_review_http_not_json")
