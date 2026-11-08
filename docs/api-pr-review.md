@@ -15,9 +15,10 @@ invoice. Authored input is bounded to128KiB and100 files, with full current-head
 reviews from both API providers required before an owner-authorized merge.
 Native credit availability and overages-off settings must be verified.
 No purchase, recharge, billing change or fallback is performed by this code.
-Each provider can return8192 tokens within a180-second HTTP timeout; the job has
-10 minutes for both reviews. These bounds allow complete reviews of larger
-patches while retaining finite requests and cost records.
+OpenAI can return8192 tokens within180 seconds; Mistral can return32768 tokens
+within480 seconds. The job has15 minutes for both reviews. The larger Mistral
+budget accommodates full-PR reasoning and final JSON without changing its model
+or reasoning settings. Cost estimates use each provider's actual output budget.
 
 The automatic workflow runs trusted default-branch code after exact-head successful
 Bootstrap checks. It reads bounded authored patches as untrusted text. It never
@@ -29,7 +30,11 @@ A durable bot review reservation precedes each inference. Completed reservations
 are reused, and pending/conflicting reservations block replay. Provider output is
 strict JSON, limited to shown patch lines. Receipts retain model/request/token/cost
 evidence before publication; they exclude prompts, source and credentials. An
-unknown outcome needs owner reconciliation, not an automatic retry or deletion
+HTTP response with valid model/usage metadata is recorded before review-content
+validation, including its bounded completion status. An incomplete or malformed
+review therefore retains returned usage/cost while its durable PR reservation
+stays pending; it is never published as a completed review or retried silently.
+An unknown outcome needs owner reconciliation, not an automatic retry or deletion
 of evidence. Actual costs use conservative uncached rates; missing usage cannot
 be assumed free. A stale head prevents publishing the result.
 

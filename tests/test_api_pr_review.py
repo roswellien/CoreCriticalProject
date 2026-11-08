@@ -365,6 +365,8 @@ class ReviewLifecycleTests(unittest.TestCase):
         self.reviews = []
         self.calls = []
         self.provider_failure = False
+        self.provider_incomplete = False
+        self.requested_output_tokens = {}
         self.post_failure = False
         self.change_head = False
 
@@ -422,6 +424,10 @@ class ReviewLifecycleTests(unittest.TestCase):
             if self.change_head:
                 self.pull["head"]["sha"] = "c" * 40
             is_openai = path == "/v1/responses"
+            provider_name = "openai" if is_openai else "mistral"
+            self.requested_output_tokens[provider_name] = payload[
+                "max_output_tokens" if is_openai else "max_tokens"
+            ]
             if is_openai:
                 self.assertEqual(payload["service_tier"], "default")
             else:
@@ -433,6 +439,8 @@ class ReviewLifecycleTests(unittest.TestCase):
                     payload["response_format"]["json_schema"]["schema"], review.REVIEW_SCHEMA
                 )
             body = _openai_response() if is_openai else _mistral_response()
+            if not is_openai and self.provider_incomplete:
+                body["choices"][0]["finish_reason"] = "length"
             status = 503 if is_openai and self.provider_failure else 200
             return (
                 status,
@@ -501,6 +509,34 @@ class ReviewLifecycleTests(unittest.TestCase):
             receipts_path=self.receipts,
             provider_opener=self.provider_open,
         )
+
+    def test_native_output_budget_is_covered_by_reservation(self):
+        result = self.run_review()
+        for name in review.PROVIDERS:
+            config = self.configs[name]
+            output_cost = (
+                self.requested_output_tokens[name] * config.output_micro_usd_per_million + 999_999
+            ) // 1_000_000
+            self.assertGreaterEqual(
+                result["providers"][name]["receipt"]["reserved_micro_usd"], output_cost
+            )
+
+    def test_incomplete_review_retains_native_usage_without_replay(self):
+        self.provider_incomplete = True
+        with self.assertRaisesRegex(domain.AutomationError, "mistral_response_not_completed"):
+            self.run_review()
+        saved = json.loads(self.receipts.read_text())["providers"]["mistral"]
+        self.assertEqual(saved["outcome"], "response_received_unvalidated")
+        self.assertEqual(saved["completion_status"], "length")
+        self.assertEqual(saved["receipt"]["actual_model"], MODEL)
+        self.assertEqual(saved["receipt"]["request_id"], "chatcmpl-1")
+        self.assertEqual(saved["receipt"]["actual_micro_usd"], 260)
+        self.assertEqual(saved["receipt"]["usage"]["total_tokens"], 140)
+        self.assertIn('"status":"reserved"', self.reviews[1]["body"])
+        self.provider_incomplete = False
+        with self.assertRaisesRegex(domain.Blocked, "pending_mistral_reservation"):
+            self.run_review()
+        self.assertEqual(len(self.calls), 2)
 
     def test_durable_reservations_reuse_complete_results_without_another_inference(self):
         result = self.run_review()

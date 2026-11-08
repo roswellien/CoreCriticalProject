@@ -40,6 +40,7 @@ PER_PAGE = 100
 MAX_FILES = 100
 MAX_PACKET_BYTES = 128 * 1024
 MAX_OUTPUT_TOKENS = 8192
+MISTRAL_MAX_OUTPUT_TOKENS = 32768
 CHECK_WORKFLOW_NAME = "Bootstrap checks"
 CHECK_WORKFLOW_PATH = ".github/workflows/build.yml"
 
@@ -342,10 +343,15 @@ def parse_patch_lines(patch: str) -> frozenset[int]:
 
 
 def estimate_cost_micro_usd(
-    config: ProviderConfig, packet_utf8_bytes: int, max_output_tokens: int = MAX_OUTPUT_TOKENS
+    config: ProviderConfig, packet_utf8_bytes: int, max_output_tokens: int | None = None
 ) -> int:
     domain.integer(packet_utf8_bytes, 1, MAX_PACKET_BYTES)
-    domain.integer(max_output_tokens, 1, MAX_OUTPUT_TOKENS)
+    provider_limit = (
+        MISTRAL_MAX_OUTPUT_TOKENS if config.provider == "mistral" else MAX_OUTPUT_TOKENS
+    )
+    if max_output_tokens is None:
+        max_output_tokens = provider_limit
+    domain.integer(max_output_tokens, 1, provider_limit)
     fixed_bytes = len(SYSTEM_INSTRUCTIONS.encode("utf-8")) + len(
         json.dumps(REVIEW_SCHEMA, separators=(",", ":"), allow_nan=False).encode("utf-8")
     )
@@ -672,7 +678,7 @@ def build_mistral_payload(model: str, packet_json: str) -> dict:
         "temperature": 0,
         "top_p": 1,
         "service_tier": "standard_only",
-        "max_tokens": MAX_OUTPUT_TOKENS,
+        "max_tokens": MISTRAL_MAX_OUTPUT_TOKENS,
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": "pr_review", "strict": True, "schema": REVIEW_SCHEMA},
@@ -680,13 +686,12 @@ def build_mistral_payload(model: str, packet_json: str) -> dict:
     }
 
 
-def parse_provider_response(
+def parse_provider_metadata(
     provider: str,
     expected_model: str,
     response: dict,
     x_request_id: str | None,
-    line_map: Mapping[str, frozenset[int]],
-) -> tuple[ReviewOutput, dict, str, str]:
+) -> tuple[dict, str, str]:
     check(type(response) is dict, "invalid_provider_response")
     returned_model = domain.identifier(response.get("model"), r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
     check(
@@ -703,12 +708,27 @@ def parse_provider_response(
     )
     if provider == "openai":
         usage = domain.usage_tokens(response.get("usage"))
-        raw_json = domain.exact_object(_extract_openai_json(response), {"summary", "findings"})
     elif provider == "mistral":
         usage = _mistral_usage_tokens(response.get("usage"))
-        raw_json = domain.exact_object(_extract_mistral_json(response), {"summary", "findings"})
     else:
         raise domain.AutomationError("unknown_provider")
+    return usage, returned_model, request_id
+
+
+def parse_provider_response(
+    provider: str,
+    expected_model: str,
+    response: dict,
+    x_request_id: str | None,
+    line_map: Mapping[str, frozenset[int]],
+) -> tuple[ReviewOutput, dict, str, str]:
+    usage, returned_model, request_id = parse_provider_metadata(
+        provider, expected_model, response, x_request_id
+    )
+    extracted = (
+        _extract_openai_json(response) if provider == "openai" else _extract_mistral_json(response)
+    )
+    raw_json = domain.exact_object(extracted, {"summary", "findings"})
     return validate_review_output(raw_json, line_map), usage, returned_model, request_id
 
 
@@ -1089,7 +1109,7 @@ def run_reviews(
     estimates: dict[str, int] = {}
     for provider in PROVIDERS:
         cfg = configs[provider]
-        est = estimate_cost_micro_usd(cfg, len(packet_bytes), MAX_OUTPUT_TOKENS)
+        est = estimate_cost_micro_usd(cfg, len(packet_bytes))
         if cfg.max_review_micro_usd is not None:
             block(est <= cfg.max_review_micro_usd, f"{provider}_estimated_cost_exceeds_cap")
         estimates[provider] = est
@@ -1158,8 +1178,8 @@ def run_reviews(
             resp_data, xrid = api_review_http.request(
                 provider, cfg.api_key, payload, opener=provider_opener
             )
-            review_out, usage, actual_model, req_id = parse_provider_response(
-                provider, cfg.model, resp_data, xrid, line_map
+            usage, actual_model, req_id = parse_provider_metadata(
+                provider, cfg.model, resp_data, xrid
             )
             actual_cost = actual_cost_micro_usd(cfg, usage["input_tokens"], usage["output_tokens"])
             comp_receipt = build_receipt_record(
@@ -1177,11 +1197,29 @@ def run_reviews(
                 actual_micro_usd=actual_cost,
             )
             summary_out["providers"][provider] = {
-                "outcome": "inference_completed_unpublished",
+                "outcome": "response_received_unvalidated",
                 "review_id": review_id,
                 "receipt": comp_receipt,
-                "finding_count": len(review_out.findings),
             }
+            if provider == "openai":
+                completion_status = resp_data.get("status")
+            else:
+                choices = resp_data.get("choices")
+                completion_status = (
+                    choices[0].get("finish_reason")
+                    if type(choices) is list and len(choices) == 1 and type(choices[0]) is dict
+                    else None
+                )
+            if type(completion_status) is str and re.fullmatch(
+                r"[A-Za-z_]{1,40}", completion_status
+            ):
+                summary_out["providers"][provider]["completion_status"] = completion_status
+            write_receipts_file(receipts_path, summary_out)
+            review_out, _, _, _ = parse_provider_response(
+                provider, cfg.model, resp_data, xrid, line_map
+            )
+            summary_out["providers"][provider]["outcome"] = "inference_completed_unpublished"
+            summary_out["providers"][provider]["finding_count"] = len(review_out.findings)
             write_receipts_file(receipts_path, summary_out)
             if cfg.max_review_micro_usd is not None:
                 block(
