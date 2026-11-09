@@ -57,6 +57,7 @@ void check_retirement() {
     require(!owner.retire_node(42, 8) && owner.retired_emitters.empty() && owner.valid_emitters.at("left"),
             "stale generation retired a current lamp");
     require(!owner.retire_node(0, 9) && owner.retired_emitters.empty(), "zero node changed retirement");
+    require(!owner.retire_node(999, 9) && owner.retired_emitters.empty(), "unrelated node reported retirement");
     require(owner.retire_node(42, 9), "current generation retirement rejected");
     require(!owner.valid_emitters.at("left") && !owner.valid_emitters.at("right") && owner.retired_emitters.size() == 2,
             "saved ancestor did not retire every mounted lamp");

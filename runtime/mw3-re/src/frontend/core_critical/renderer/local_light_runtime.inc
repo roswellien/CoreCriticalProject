@@ -75,7 +75,7 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
                        input.modifiers == (headlight_key_ & 0x700);
   headlight_player_.update(tick.generation, reinterpret_cast<std::uintptr_t>(node),
                            tick.tick, std::max(0.0f, tick.dt), tick.shutdown, pressed,
-                           profile && tick.dt > 0 && input.kbd_ready && !input.char_callback);
+                           profile && tick.dt >= 0 && input.kbd_ready && !input.char_callback);
   const auto intensity = headlight_player_.owner.envelope.current;
   if (!profile || intensity <= 0)
     return;

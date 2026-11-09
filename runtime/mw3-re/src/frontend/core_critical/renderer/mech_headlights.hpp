@@ -117,13 +117,15 @@ struct Owner {
             bind_root(0);
             return true;
         }
+        bool retired = false;
         for (const auto &entry : source_ancestry) {
             if (std::find(entry.second.begin(), entry.second.end(), node) != entry.second.end()) {
                 retired_emitters.insert(entry.first);
                 valid_emitters[entry.first] = false;
+                retired = true;
             }
         }
-        return true;
+        return retired;
     }
 };
 
