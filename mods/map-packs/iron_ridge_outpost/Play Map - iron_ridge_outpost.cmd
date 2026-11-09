@@ -1,23 +1,35 @@
 @echo off
 setlocal
 set "MAP_DIR=%~dp0"
-cd /d "%MAP_DIR%..\..\.."
+title MechWarrior 3 - Launching %~n0
+
 echo ======================================================================
 echo   MECHWARRIOR 3 - CUSTOM MISSION LAUNCH
 echo   Map Title: Iron Ridge Outpost [iron_ridge_outpost]
-echo   Operation: C1 | Biome: coastal
+echo   Operation: C1 - Biome: coastal
+echo   Atmosphere: SUNSET - Time: 18.0h
 echo ======================================================================
 echo.
-type "%MAP_DIR%briefing.txt"
+if exist "%MAP_DIR%briefing.txt" type "%MAP_DIR%briefing.txt"
 echo.
-echo Initializing native Vulkan engine redirect banks...
-set "MW34_REMASTER_BANKS=%MAP_DIR%map-banks.bin"
-set "MW34_SUN_AZIMUTH=225.0"
-set "MW34_SUN_ELEVATION=35.0"
-set "MW34_SUN_STRENGTH=0.85"
-set "MW34_SUN_AMBIENT=0.2"
 
-call "launchers\Play MW3Remaster.cmd" --profile "local\effect-lighting-r1\launcher.json" --registry "local\material-authoring-r1\normal-registry.json" %*
+set "PY_EXE=python"
+if exist "%MAP_DIR%..\..\python\python.exe" set "PY_EXE=%MAP_DIR%..\..\python\python.exe"
+if exist "%MAP_DIR%..\..\..\python\python.exe" set "PY_EXE=%MAP_DIR%..\..\..\python\python.exe"
+if exist "C:\Python314\python.exe" set "PY_EXE=C:\Python314\python.exe"
+
+set "RUNNER_SCRIPT="
+if exist "%MAP_DIR%..\..\games\mw3\mod-tools\editor\core\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\..\games\mw3\mod-tools\editor\core\play_map.py"
+if exist "%MAP_DIR%..\..\..\games\mw3\mod-tools\editor\core\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\..\..\games\mw3\mod-tools\editor\core\play_map.py"
+if exist "%MAP_DIR%..\..\editor\core\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\..\editor\core\play_map.py"
+
+if defined RUNNER_SCRIPT (
+    "%PY_EXE%" "%RUNNER_SCRIPT%" "%MAP_DIR%" %*
+) else (
+    echo Error: Could not locate play_map.py runner script.
+    pause
+    exit /b 1
+)
 if errorlevel 1 (
     echo.
     echo Map launch exited with code %errorlevel%.

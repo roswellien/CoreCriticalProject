@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Optional, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_TOOL_DIR = PROJECT_ROOT / (
@@ -55,11 +56,82 @@ def configured_path(name: str, default: Path) -> Path:
 
 def game_directory() -> Path:
     """Return the read-only installation root selected by setup."""
+    configured = load_settings().get("game_root")
+    if configured:
+        return Path(configured).resolve()
+
+    detected = detect_game_directory()
+    if detected:
+        return detected
+
     return configured_path("game_root", PROJECT_ROOT / "MW3")
+
+
+def is_game_installed() -> bool:
+    """Check if the currently configured or detected game directory contains zbd/."""
+    try:
+        gdir = game_directory()
+        return (gdir / "zbd").is_dir() or (gdir / "ZBD").is_dir()
+    except Exception:
+        return False
+
+
+def detect_game_directory() -> Optional[Path]:
+    """Search for a valid MechWarrior 3 installation directory containing zbd/."""
+    candidates = [
+        PROJECT_ROOT / "MW3",
+        Path.cwd() / "MW3",
+        Path.cwd().parent / "MW3",
+        Path("C:/Games/MechWarrior 3"),
+        Path("C:/Games/MW3"),
+        Path("D:/Games/MechWarrior 3"),
+        Path("D:/Games/MW3"),
+        Path("C:/Program Files (x86)/MicroProse/MechWarrior 3"),
+    ]
+    for c in candidates:
+        if (c / "zbd").is_dir() or (c / "ZBD").is_dir():
+            return c.resolve()
+    return None
+
+
+def set_game_directory(path: Path) -> bool:
+    """Validate and persist the selected game root directory into settings.json."""
+    resolved = path.resolve()
+    if not (resolved / "zbd").is_dir() and not (resolved / "ZBD").is_dir():
+        if resolved.name.lower() == "zbd" and resolved.parent.is_dir():
+            resolved = resolved.parent
+        else:
+            raise ValueError(f"Directory {resolved} does not contain a 'zbd' folder.")
+
+    spath = settings_path()
+    spath.parent.mkdir(parents=True, exist_ok=True)
+    settings = {}
+    if spath.is_file():
+        try:
+            settings = json.loads(spath.read_text(encoding="utf-8"))
+        except Exception:
+            settings = {}
+    settings["schema_version"] = 1
+    settings["game_root"] = str(resolved)
+    spath.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    return True
 
 
 def tool_directory() -> Path:
     """Return the externally supplied Mech3AX executable directory."""
+    configured = load_settings().get("mech3ax_dir")
+    if configured:
+        return Path(configured).resolve()
+
+    # Check for bundled bin directory (e.g. in packaged standalone distribution)
+    package_bin = (Path(__file__).resolve().parents[2] / "bin").resolve()
+    if (package_bin / "unzbd.exe").is_file():
+        return package_bin
+
+    root_bin = (PROJECT_ROOT / "bin").resolve()
+    if (root_bin / "unzbd.exe").is_file():
+        return root_bin
+
     return configured_path("mech3ax_dir", DEFAULT_TOOL_DIR)
 
 

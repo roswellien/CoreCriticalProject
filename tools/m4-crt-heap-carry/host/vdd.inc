@@ -75,7 +75,88 @@ void fill_desc(const VSurface&v,DDSURFACEDESC2&d){d={};d.dwSize=sizeof(d);d.dwFl
 // z-buffer content; guest memory is refreshed (gpu_sync) only before a service reads or writes one of those surfaces:
 // Lock, Blt/BltFast, fills, Flip/presentation, texture Load and texture uploads. While the guest copy is stale its pages are
 // inaccessible, so guest code touching them outside a service stops typed instead of using old pixels.
-mw34::vkscene::Renderer*scene_renderer(){if(!host.sren){if(lazy_rt()&&host.presenter)host.sren=host.presenter.get();else{if(!host.renderer)host.renderer=std::make_unique<mw34::vkscene::Renderer>();host.sren=host.renderer.get();}}return host.sren;}
+mw34::vkscene::Renderer*scene_renderer(){if(!host.sren){if(lazy_rt()&&host.presenter)host.sren=host.presenter.get();else{if(!host.renderer)host.renderer=std::make_unique<mw34::vkscene::Renderer>();host.sren=host.renderer.get();}start_render_queue();}return host.sren;}
+// Chooses once, with the first scene renderer, whether host graphics commands run on a render thread (render_thread.hpp).
+// It helps only while frames stay on the GPU: lazy residency with the GPU HUD and scenes on the presenter's device.
+// Otherwise frames are read back every frame and the same commands run inline, as they also do for the copy check
+// and exclusive full screen, whose swapchain calls change the game window.
+// It is off unless MW34_RENDER_THREAD=1 until the RX 9070 benchmark shows the same gain as the RTX 5070 (issue #252).
+// Why commands run inline, or nullptr when the render thread can start.
+const char*render_thread_off_reason(const char*setting){
+ if(!setting||std::strcmp(setting,"1"))return "MW34_RENDER_THREAD not 1";
+ if(!lazy_rt())return "lazy residency off";
+ if(!gpu_hud())return "GPU HUD off";
+ if(host.sren!=host.presenter.get())return "scenes not on the presenter";
+ if(mw34::vkscene::render_thread_check())return "copy check on";
+ const char*window_mode=std::getenv("MW34_WINDOW_MODE");
+ if(window_mode&&!std::strcmp(window_mode,"fullscreen"))return "exclusive full screen";
+ return nullptr;}
+void start_render_queue(){const char*setting=std::getenv("MW34_RENDER_THREAD");
+ if(setting&&*setting&&std::strcmp(setting,"0")&&std::strcmp(setting,"1"))deny("MW34_RENDER_THREAD must be 0 or 1",0);
+ const char*off=render_thread_off_reason(setting);
+ if(off)std::fprintf(stderr,"render thread off (%s)\n",off);
+ else{try{host.rq=std::make_unique<mw34::render_thread::RenderQueue>(true);}catch(const std::system_error&error){std::fprintf(stderr,"render thread off (cannot start: %s)\n",error.what());}}
+ if(host.rq){std::fprintf(stderr,"render thread on\n");
+  // Only messages other threads send to the game thread's windows, and only while the render thread is in a call
+  // that may send them (render_thread.hpp window_message_calls). Posted messages and input stay queued for the game.
+  host.rq->set_between_waits([]{if(!mw34::render_thread::window_message_calls.load())return;MSG m{};::PeekMessageW(&m,nullptr,0,0,PM_NOREMOVE|PM_QS_SENDMESSAGE);});}
+ else host.rq=std::make_unique<mw34::render_thread::RenderQueue>(false);
+ publish_counts();}
+bool render_threaded()const{return host.rq&&host.rq->threaded();}
+// The scene renderer's counters as the render thread last left them, published after each command it runs.
+void publish_counts(){if(!host.sren)return;auto counts=host.sren->counters();std::lock_guard lock(host.counts_mutex);host.published_counts=std::move(counts);}
+// Copies the renderers' counters for the game thread's logs (vk_scene.hpp RendererCounters). With the render thread
+// on, scenes and presentation share one renderer and the copy is the latest one it published.
+void copy_counters(){if(render_threaded()){std::lock_guard lock(host.counts_mutex);host.scene_counts=host.published_counts;host.present_counts=host.published_counts;return;}
+ if(host.sren)host.scene_counts=host.sren->counters();
+ if(host.presenter)host.present_counts=host.presenter.get()==host.sren?host.scene_counts:host.presenter->counters();}
+// Every renderer call goes through one of these, inside its caller's deny block; inline, each just calls fn.
+// render_enqueue queues a command. render_readback runs fn on the render thread once everything queued has run, for
+// results the game thread needs now. render_idle waits until the render thread is idle, then runs fn on the game
+// thread: for calls that create, size or destroy windows, which belong to the game thread.
+// Inline, nothing reads the published counters (copy_counters reads the renderers), so only queued work publishes.
+template<class F>void render_enqueue(const char*label,F&&fn){++host.render_commands;if(!render_threaded()){fn();return;}
+ host.rq->enqueue(label,[this,command=std::forward<F>(fn)]()mutable{command();publish_counts();});}
+template<class F>auto render_readback(const char*label,F&&fn)->std::invoke_result_t<F&>{++host.render_commands;if(!render_threaded())return fn();
+ return host.rq->drain(label,[this,&fn]{if constexpr(std::is_void_v<decltype(fn())>){fn();publish_counts();}else{auto result=fn();publish_counts();return result;}});}
+template<class F>auto render_idle(const char*label,F&&fn)->std::invoke_result_t<F&>{++host.render_commands;const bool threaded=render_threaded();
+ if(threaded)host.rq->drain(label,[]{});
+ if constexpr(std::is_void_v<decltype(fn())>){fn();if(threaded)publish_counts();}else{auto result=fn();if(threaded)publish_counts();return result;}}
+// Waits for the render thread before the game thread changes a window or display mode the renderer presents to.
+void render_settle(const char*label){if(!render_threaded())return;try{HostInternal hi(*this);host.rq->drain(label,[]{});}catch(const std::exception&e){deny(std::string(e.what()),0);}}
+// Stops and joins the render thread at exit or when a fault unwinds the stage. A worker stuck past the queue's timeout
+// stays running, and the exit watchdog ends the process.
+void stop_render_thread(){if(!host.rq)return;try{host.rq->stop();}catch(const std::exception&e){std::fprintf(stderr,"%s at exit\n",e.what());std::fflush(stderr);arm_exit_watchdog();}}
+// Sends one scene to the scene renderer. The game-side record (vk_scene.hpp SentRecord) is updated first, the way
+// the renderer updates its own texture cache, render scale and canvas kind; the requested scale travels with the scene.
+// Queued, the scene moves into the command; callers start a fresh one afterwards.
+void submit_scene(mw34::vkscene::Scene&sc,bool upload_in,bool readback_out){auto*r=scene_renderer();r->sent.scene(sc);
+ /* Campaign state is the game thread's. HUD and canvas scenes ignore it (vk_scene.hpp render_scene). */
+ if(!sc.hud&&!sc.frontend_canvas){SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.environment=mw34::sun::current_settings(sc.detail_time);}
+ const float scale=r->sent.scale_req;
+ try{HostInternal hi(*this);
+  if(render_threaded()&&!readback_out)render_enqueue("scene",[r,scene=std::move(sc),upload_in,scale]()mutable{r->request_scale(scale);r->render(scene,upload_in,false);});
+  else render_idle("scene",[&]{r->request_scale(scale);r->render(sc,upload_in,readback_out);r->check_sent();});}
+ catch(const std::exception&e){deny(std::string(e.what()),0);}copy_counters();}
+// Camera history lives in the scene renderer and changes with each scene, so these queue in order with the scenes.
+// A rejected camera resets the history for every world draw. Resetting again with the same reason and no renderer
+// command between changes nothing (camera_history.hpp invalidate), so only the first is queued.
+void camera_history_invalidate(mw34::temporal::Reset reason){auto*r=host.sren;if(!r)return;
+ if(host.camera_reset_queued==reason&&host.camera_reset_command==host.render_commands)return;
+ try{HostInternal hi(*this);render_enqueue("camera history",[r,reason]{r->invalidate_camera_history(reason);});}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ host.camera_reset_queued=reason;host.camera_reset_command=host.render_commands;}
+void camera_history_complete(std::uint64_t serial,unsigned target,std::string admission){auto*r=host.sren;if(!r)return;
+ try{HostInternal hi(*this);render_enqueue("camera history",[r,serial,target,text=std::move(admission)]{r->complete_camera_history(serial,target,text);});}catch(const std::exception&e){deny(std::string(e.what()),0);}}
+// Direct presentation of the resident target. With the render thread on, the game thread does the window half
+// (Renderer::prepare_window) and queues the present, and the frame counts as shown. A present the render thread
+// refuses (window changed, target resized) is seen at the next frame, which presents inline, as do the frames until
+// present_resident accepts that window and size again.
+bool present_resident_frame(unsigned w,unsigned h){auto*p=host.presenter.get();const HWND window=host.display.window;auto&ready=host.presentable;
+ if(host.present_refused.exchange(false))ready={};
+ if(render_threaded()&&ready.ok&&ready.window==window&&ready.w==w&&ready.h==h){using State=mw34::vkscene::Renderer::WindowState;
+  const auto state=p->prepare_window(window);if(state==State::hidden)return true;
+  if(state==State::ready){render_enqueue("present",[this,p,window,w,h]{if(!p->present_prepared(window,w,h))host.present_refused=true;});return true;}}
+ const bool shown=render_idle("present",[&]{return p->present_resident(window,w,h);});ready={window,w,h,shown};return shown;}
 // Render scale of the resident target on the presenter device: the window's client height over the game height
 // (1..4), or MW34_RENDER_SCALE. The 3D scenes and the GPU HUD render at that resolution; guest copies stay at the
 // game resolution (blits through staging images).
@@ -88,7 +169,7 @@ void gpu_protect(bool stale){if(stale==host.res_protected)return;host.res_protec
  if(!::VirtualProtect(b+v->mem,v->bytes,stale?PAGE_NOACCESS:PAGE_READWRITE,&old))deny("Resident surface page protection",v->guest);}}
 void gpu_sync(unsigned guest){if(!host.res_dirty||(guest&&guest!=host.res_rt&&guest!=host.res_zb))return;auto*rt=vsurface(host.res_rt);if(!rt||!host.sren)deny("Resident render target is gone",host.res_rt);
  auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;gpu_protect(false);namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;sc.color.resize(size_t(sc.width)*sc.height);sc.depth.resize(sc.color.size());
- try{HostInternal hi(*this);host.sren->fetch_resident(sc);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ try{HostInternal hi(*this);render_readback("read back",[&]{host.sren->fetch_resident(sc);});}catch(const std::exception&e){deny(std::string(e.what()),0);}
  for(unsigned y=0;y<rt->height;++y)write_bytes(rt->mem+y*rt->pitch,sc.color.data()+size_t(y)*rt->width,rt->width*2);
  if(zb)for(unsigned y=0;y<zb->height;++y)write_bytes(zb->mem+y*zb->pitch,sc.depth.data()+size_t(y)*zb->width,zb->width*2);host.res_dirty=false;}
 // Direct presentation (lazy residency on the presenter's device): set by Flip when the back buffer is the resident
@@ -97,7 +178,7 @@ bool present_direct{};
 // Copies the resident image into another surface's memory (direct presentation fallback); the GPU stays authoritative.
 void resident_into(const VSurface&v){auto*rt=vsurface(host.res_rt);if(!rt||rt->width!=v.width||rt->height!=v.height)deny("Resident image does not fit the presented surface",v.guest);
  namespace vs=mw34::vkscene;vs::Scene sc{};sc.width=rt->width;sc.height=rt->height;sc.color.resize(size_t(sc.width)*sc.height);sc.depth.resize(sc.color.size());
- try{HostInternal hi(*this);host.sren->fetch_resident(sc);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ try{HostInternal hi(*this);render_readback("read back",[&]{host.sren->fetch_resident(sc);});}catch(const std::exception&e){deny(std::string(e.what()),0);}
  for(unsigned y=0;y<v.height;++y)write_bytes(v.mem+y*v.pitch,sc.color.data()+size_t(y)*v.width,v.width*2);}
 struct MenuHdImage{std::vector<unsigned char>rgb;unsigned w{},h{},sw{},sh{};bool ok{};};
 const MenuHdImage& menu_hd_image(){static const MenuHdImage image=[]{MenuHdImage m;const char*p=std::getenv("MW34_MENU_HD_BG");if(!p||!*p)return m;
@@ -172,7 +253,7 @@ bool menu_hd_present(const VSurface&v,const std::vector<unsigned char>&px){
   if(!dump.empty()&&(","+at+",").find(","+std::to_string(host.frames)+",")!=std::string::npos)if(FILE*f=std::fopen((dump+"."+std::to_string(host.frames)+".ppm").c_str(),"wb")){
    std::fprintf(f,"P6\n%u %u\n255\n",ow,oh);std::vector<unsigned char>row(size_t(ow)*3);for(unsigned y=0;y<oh;++y){for(unsigned x=0;x<ow;++x){const auto q=out[size_t(y)*ow+x];row[x*3]=q&255;row[x*3+1]=(q>>8)&255;row[x*3+2]=(q>>16)&255;}std::fwrite(row.data(),1,row.size(),f);}std::fclose(f);}}
  bool shown=false;
- try{HostInternal hi(*this);shown=host.presenter->present(host.display.window,reinterpret_cast<const std::uint8_t*>(out.data()),ow,oh,ow*4,false,true);}catch(const std::exception&ex){deny(std::string(ex.what()),v.guest);}
+ try{HostInternal hi(*this);shown=render_idle("present",[&]{return host.presenter->present(host.display.window,reinterpret_cast<const std::uint8_t*>(out.data()),ow,oh,ow*4,false,true);});}catch(const std::exception&ex){deny(std::string(ex.what()),v.guest);}
  if(shown)++menu_hd_frames;
  return shown;
 }
@@ -292,11 +373,11 @@ bool menu_dl_present(const VSurface&v,const std::vector<unsigned char>&px){
   if(!dump.empty()&&(","+at+",").find(","+std::to_string(host.frames)+",")!=std::string::npos)if(FILE*f=std::fopen((dump+".dl."+std::to_string(host.frames)+".ppm").c_str(),"wb")){
    std::fprintf(f,"P6\n%u %u\n255\n",ow,oh);std::vector<unsigned char>row(size_t(ow)*3);for(unsigned y=0;y<oh;++y){for(unsigned x=0;x<ow;++x){const auto q=out[size_t(y)*ow+x];row[x*3]=q&255;row[x*3+1]=(q>>8)&255;row[x*3+2]=(q>>16)&255;}std::fwrite(row.data(),1,row.size(),f);}std::fclose(f);}}
  bool shown=false;
- try{HostInternal hi(*this);shown=host.presenter->present(host.display.window,reinterpret_cast<const std::uint8_t*>(out.data()),ow,oh,ow*4,false,true);}catch(const std::exception&ex){deny(std::string(ex.what()),v.guest);}
+ try{HostInternal hi(*this);shown=render_idle("present",[&]{return host.presenter->present(host.display.window,reinterpret_cast<const std::uint8_t*>(out.data()),ow,oh,ow*4,false,true);});}catch(const std::exception&ex){deny(std::string(ex.what()),v.guest);}
  if(shown)++menu_dl_frames;
  return shown;
 }
-void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.display.window)deny("Presentation without a cooperative window",v.guest);const unsigned w=v.width,h=v.height;
+void present(const VSurface&v,unsigned flipped_target=0){if(!present_direct)gpu_sync(v.guest);if(!host.display.window)deny("Presentation without a cooperative window",v.guest);const unsigned w=v.width,h=v.height;
  std::vector<unsigned char>px;if(!present_direct){px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));if(v.bpp==16){mw34::vkscene::HostFpEnvironment fp;menu_version::paint_footer(px.data(),w,h,v.pitch);}}
  struct{BITMAPINFOHEADER h;DWORD masks[256];}bi{};bi.h.biSize=sizeof(BITMAPINFOHEADER);bi.h.biWidth=LONG(v.pitch/(v.bpp/8));bi.h.biHeight=-LONG(h);bi.h.biPlanes=1;bi.h.biBitCount=WORD(v.bpp);
  if(v.bpp==16){bi.h.biCompression=BI_BITFIELDS;bi.masks[0]=0xf800;bi.masks[1]=0x07e0;bi.masks[2]=0x001f;}else if(v.bpp==8){const auto*pal=vpalette(v.palette);if(!pal)deny("8-bit presentation without a palette",v.guest);
@@ -304,9 +385,10 @@ void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.dis
  // 16-bit frames are presented by the Vulkan swapchain presenter unless MW34_PRESENT=gdi; the GDI presenter
  // serves 8-bit frames and devices without window presentation.
  static const bool gdi_only=[]{const char*p=std::getenv("MW34_PRESENT");return p&&std::string(p)=="gdi";}();bool shown=false;
- if(v.bpp==16&&!gdi_only){if(!host.presenter)host.presenter=std::make_unique<mw34::vkscene::Renderer>();try{HostInternal hi(*this);if(present_direct){host.presenter->finish_world();photo_replay_on_present(w,h,true,px,v.pitch);if(host.presenter->overlay.on)overlay_gpu(w,h);{static const char*hp=std::getenv("MW34_HIRES_DUMP_FILE");static const unsigned hf=[]{const char*e=std::getenv("MW34_HIRES_DUMP");return e&&*e?unsigned(std::stoul(e)):0U;}();if(hf&&hp&&host.frames+1==hf)host.presenter->dump_fullres(hp);}{static const char*list=std::getenv("MW34_HIRES_DUMP_FRAMES");static const char*dir=std::getenv("MW34_HIRES_DUMP_DIR");if(list&&dir){std::istringstream frames(list);std::string item;while(std::getline(frames,item,','))if(std::stoul(item)==host.frames+1){const auto file=(std::filesystem::path(dir)/("target-"+std::to_string(host.frames+1)+".ppm")).string();host.presenter->dump_fullres(file.c_str());break;}}}shown=host.presenter->present_resident(host.display.window,w,h);if(!shown){resident_into(v);present_direct=false;px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));}}
-  if(!present_direct){photo_replay_on_present(w,h,false,px,v.pitch);shown=menu_dl_present(v,px)||menu_hd_present(v,px)||host.presenter->present(host.display.window,px.data(),w,h,v.pitch,wide_on()&&!frontend_on()&&wide_world_frame==host.frames);}}catch(const std::exception&e){deny(std::string(e.what()),v.guest);}
-  if(shown&&host.presenter->presents==1)apis.back()+="(Vulkan presenter on "+host.presenter->device_name+")";}
+ if(v.bpp==16&&!gdi_only){if(!host.presenter)host.presenter=std::make_unique<mw34::vkscene::Renderer>();try{HostInternal hi(*this);if(present_direct){{auto*p=host.presenter.get();render_enqueue("finish world",[p]{p->finish_world();});}photo_replay_on_present(w,h,true,px,v.pitch);if(host.presenter->overlay.on)overlay_gpu(w,h);{static const char*hp=std::getenv("MW34_HIRES_DUMP_FILE");static const unsigned hf=[]{const char*e=std::getenv("MW34_HIRES_DUMP");return e&&*e?unsigned(std::stoul(e)):0U;}();if(hf&&hp&&host.frames+1==hf)render_readback("hi-res dump",[&]{host.presenter->dump_fullres(hp);});}{static const char*list=std::getenv("MW34_HIRES_DUMP_FRAMES");static const char*dir=std::getenv("MW34_HIRES_DUMP_DIR");if(list&&dir){std::istringstream frames(list);std::string item;while(std::getline(frames,item,','))if(std::stoul(item)==host.frames+1){const auto file=(std::filesystem::path(dir)/("target-"+std::to_string(host.frames+1)+".ppm")).string();render_readback("hi-res dump",[&]{host.presenter->dump_fullres(file.c_str());});break;}}}shown=present_resident_frame(w,h);if(!shown){resident_into(v);present_direct=false;px.resize(size_t(v.pitch)*h);get_bytes(v.mem,px.data(),unsigned(px.size()));}}
+  if(!present_direct){photo_replay_on_present(w,h,false,px,v.pitch);shown=menu_dl_present(v,px)||menu_hd_present(v,px)||render_idle("present",[&]{return host.presenter->present(host.display.window,px.data(),w,h,v.pitch,wide_on()&&!frontend_on()&&wide_world_frame==host.frames);});}
+  if(host.rq)host.rq->end_frame();}catch(const std::exception&e){deny(std::string(e.what()),v.guest);}
+  copy_counters();if(shown&&host.present_counts.presents==1)apis.back()+="(Vulkan presenter on "+host.present_counts.device_name+")";}
  if(!shown){RECT rc{};::GetClientRect(host.display.window,&rc);HDC dc=::GetDC(host.display.window);::SetStretchBltMode(dc,COLORONCOLOR);
  int dx=0,dy=0,dw=rc.right,dh=rc.bottom;
  if(wide_on()&&(frontend_on()||wide_world_frame!=host.frames)){const double fit=std::min(double(dw)/w,double(dh)/h);dw=int(std::lround(w*fit));dh=int(std::lround(h*fit));dx=(rc.right-dw)/2;dy=(rc.bottom-dh)/2;::FillRect(dc,&rc,static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));}
@@ -324,6 +406,7 @@ void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.dis
     last.QuadPart=due;
    }else last=now;
   }}
+ copy_counters();camera_present(flipped_target);
  ++host.frames;mw34_frames_presented.store(host.frames,std::memory_order_relaxed);hud_present();{static const unsigned df=[]{const char*e=std::getenv("MW34_MEM_DUMP_FRAME");return e&&*e?unsigned(std::stoul(e)):0U;}();static const char*dp=std::getenv("MW34_MEM_DUMP");  /* diagnostic: game .data/.bss image at that frame */
  {static const std::string frames_list=[]{const char*e=std::getenv("MW34_MEM_DUMP_FRAMES");return std::string(e?e:"");}();
   if(dp&&!frames_list.empty()&&(","+frames_list+",").find(","+std::to_string(host.frames)+",")!=std::string::npos){
@@ -334,19 +417,21 @@ void present(const VSurface&v){if(!present_direct)gpu_sync(v.guest);if(!host.dis
    const unsigned hb=GuestHeap::lo,he=host.gheap.mapped;if(he>hb){std::vector<std::byte>h(he-hb);
     for(unsigned at=hb;at<he;at+=0x10000){const unsigned n=std::min(0x10000u,he-at);if(readable(at,n)){std::vector<std::byte>c(n);runtime.memory().read({at},c);std::memcpy(h.data()+(at-hb),c.data(),n);}}
     if(FILE*f=std::fopen((std::string(dp)+"."+std::to_string(host.frames)+".heap").c_str(),"wb")){std::fwrite(h.data(),1,h.size(),f);std::fclose(f);}}}}
- if(df&&dp&&host.frames==df){std::vector<std::byte>b(0x9a2000-0x5e0000);runtime.memory().read({0x5e0000},b);if(FILE*f=std::fopen(dp,"wb")){std::fwrite(b.data(),1,b.size(),f);std::fclose(f);}}}if(host.draw_log){{std::fprintf(host.draw_log,"%u %u %016llx up %llu rb %llu hud %llu fb %llu touch %llu hires %llu text %llu log2 %llu exp2 %llu model_up %llu model_bytes %llu model_draw %llu fxaa %llu af_samplers %llu mip_levels %llu\n",host.frames,host.draw_calls,(unsigned long long)host.draw_hash,host.sren?(unsigned long long)host.sren->target_uploads:0ULL,host.sren?(unsigned long long)host.sren->readbacks:0ULL,(unsigned long long)hud_draws_total,(unsigned long long)hud_fallbacks,(unsigned long long)touch_count,(unsigned long long)hires_hits,(unsigned long long)text_hits,mw34_x87_counts[0],mw34_x87_counts[1],host.sren?(unsigned long long)host.sren->model_uploads:0ULL,host.sren?(unsigned long long)host.sren->model_uploaded_bytes:0ULL,host.sren?(unsigned long long)host.sren->model_draws:0ULL,host.sren?(unsigned long long)host.sren->fxaa_passes:0ULL,host.sren?(unsigned long long)host.sren->af_samplers:0ULL,host.sren?(unsigned long long)host.sren->mip_levels_uploaded:0ULL);}host.draw_hash=0xcbf29ce484222325ULL;host.draw_calls=0;}if(host.vclock())host.vclock_us+=host.vclock_step_us;
+ if(df&&dp&&host.frames==df){std::vector<std::byte>b(0x9a2000-0x5e0000);runtime.memory().read({0x5e0000},b);if(FILE*f=std::fopen(dp,"wb")){std::fwrite(b.data(),1,b.size(),f);std::fclose(f);}}}if(host.draw_log){{std::fprintf(host.draw_log,"%u %u %016llx up %llu rb %llu hud %llu fb %llu touch %llu hires %llu text %llu log2 %llu exp2 %llu model_up %llu model_bytes %llu model_draw %llu fxaa %llu af_samplers %llu mip_levels %llu\n",host.frames,host.draw_calls,(unsigned long long)host.draw_hash,(unsigned long long)host.scene_counts.target_uploads,(unsigned long long)host.scene_counts.readbacks,(unsigned long long)hud_draws_total,(unsigned long long)hud_fallbacks,(unsigned long long)touch_count,(unsigned long long)hires_hits,(unsigned long long)text_hits,mw34_x87_counts[0],mw34_x87_counts[1],(unsigned long long)host.scene_counts.model_uploads,(unsigned long long)host.scene_counts.model_uploaded_bytes,(unsigned long long)host.scene_counts.model_draws,(unsigned long long)host.scene_counts.fxaa_passes,(unsigned long long)host.scene_counts.af_samplers,(unsigned long long)host.scene_counts.mip_levels_uploaded);}host.draw_hash=0xcbf29ce484222325ULL;host.draw_calls=0;}if(host.vclock())host.vclock_us+=host.vclock_step_us;
  platform_present();
- // Opt-in frame timing (MW34_FRAME_TIMES=<file>): one line per presented frame, "frame host_ms 3d_scenes virtual_clock_us".
+ // Opt-in frame timing (MW34_FRAME_TIMES=<file>): one line per presented frame, "frame host_ms 3d_scenes virtual_clock_us
+ // render_wait_ms render_waits"; the last two are the game thread's waits for the render thread during the frame.
  static FILE*const frame_times=[]{const char*p=std::getenv("MW34_FRAME_TIMES");return p&&*p?std::fopen(p,"w"):nullptr;}();
- if(frame_times){static const auto t0=std::chrono::steady_clock::now();std::fprintf(frame_times,"%u %.3f %llu %llu\n",host.frames,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(),
-   static_cast<unsigned long long>(host.sren?host.sren->scenes:0),static_cast<unsigned long long>(host.vclock_us));std::fflush(frame_times);}
+ if(frame_times){static const auto t0=std::chrono::steady_clock::now();const auto waits=host.rq?host.rq->take_wait_stats():mw34::render_thread::RenderQueue::WaitStats{};
+  std::fprintf(frame_times,"%u %.3f %llu %llu %.3f %u\n",host.frames,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(),
+   static_cast<unsigned long long>(host.sren?host.sren->sent.scenes:0),static_cast<unsigned long long>(host.vclock_us),waits.ms,waits.count);std::fflush(frame_times);}
  // Keep loading/menu intervals out of the new gameplay measurement window.
  if(host.presenter&&host.presenter->overlay.on){static bool measured_gameplay=false;
-  const bool gameplay=host.sren&&host.sren->scenes&&!frontend_on();
+  const bool gameplay=host.sren&&host.sren->sent.scenes&&!frontend_on();
   if(gameplay!=measured_gameplay)host.presenter->overlay.reset();measured_gameplay=gameplay;}
  world_present();geometry_profile.present(host.frames);
  if(host.frame_dump&&(host.frames==1||host.frames%host.frame_dump==0))dump_frame(v,px);
- if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.presenter?host.presenter->presents:0)+(host.presenter&&host.presenter->dxgi_presenting()?" through the Vulkan/DXGI bridge":" through the Vulkan swapchain")+(host.presenter&&host.presenter->presents?" on "+host.presenter->device_name:std::string())+")",host.frames);}
+ if(host.frame_budget&&host.frames>=host.frame_budget)stop(m4_runtime::FaultReason::unresolved_translation,"Presentation frame budget reached: "+std::to_string(host.frames)+" frames presented ("+std::to_string(host.present_counts.presents)+(host.present_counts.dxgi_presenting?" through the Vulkan/DXGI bridge":" through the Vulkan swapchain")+(host.present_counts.presents?" on "+host.present_counts.device_name:std::string())+")",host.frames);}
 // Evidence: the presented frame as a binary PPM (converted from RGB565) under the run's frame directory.
 void dump_frame(const VSurface&v,const std::vector<unsigned char>&px){if(host.frame_dir.empty()||v.bpp!=16)return;std::ofstream f(host.frame_dir+"/frame-"+std::to_string(host.frames)+".ppm",std::ios::binary);
  f<<"P6\n"<<v.width<<" "<<v.height<<"\n255\n";for(unsigned y=0;y<v.height;++y)for(unsigned x=0;x<v.width;++x){const unsigned p=unsigned(px[size_t(y)*v.pitch+2*x])|unsigned(px[size_t(y)*v.pitch+2*x+1])<<8;
@@ -362,18 +447,20 @@ RECT surf_rect(unsigned a,const VSurface&v){if(!a)return RECT{0,0,LONG(v.width),
 bool inside(const VSurface&v,const RECT&r){return r.left>=0&&r.top>=0&&r.right<=LONG(v.width)&&r.bottom<=LONG(v.height);}
 void blit(const VSurface&d,RECT dr,const VSurface&s,RECT sr,bool key,unsigned klo,unsigned khi){d.version=++host.surface_versions;if(d.bpp!=s.bpp)deny("Blt between surfaces of different depths is not modelled",d.bpp);
  const LONG dw=dr.right-dr.left,dh=dr.bottom-dr.top,sw=sr.right-sr.left,sh=sr.bottom-sr.top;if(dw<=0||dh<=0||sw<=0||sh<=0)return;
- gpu_sync(d.guest);gpu_sync(s.guest);if(!inside(d,dr)||!inside(s,sr))deny("Blt rectangle outside its surface",unsigned(dr.left));const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Blt depth not modelled",d.bpp);
+ gpu_sync(d.guest);gpu_sync(s.guest);if(!inside(d,dr)||!inside(s,sr))deny("Blt rectangle outside its surface",unsigned(dr.left));const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Blt depth not modelled",d.bpp);camera_surface_written(d.guest);
  std::vector<unsigned char>src(size_t(sw)*sh*b),row(size_t(dw)*b);for(LONG y=0;y<sh;++y)surface_read(s,unsigned(sr.top+y)*s.pitch+unsigned(sr.left)*b,src.data()+size_t(y)*sw*b,unsigned(sw)*b);
  for(LONG y=0;y<dh;++y){const LONG sy=y*sh/dh;const unsigned da=unsigned(dr.top+y)*d.pitch+unsigned(dr.left)*b;if(key)surface_read(d,da,row.data(),unsigned(dw)*b);
   for(LONG x=0;x<dw;++x){const unsigned char*p=src.data()+(size_t(sy)*sw+size_t(x*sw/dw))*b;unsigned c=0;std::memcpy(&c,p,b);if(key&&c>=klo&&c<=khi)continue;std::memcpy(row.data()+size_t(x)*b,p,b);}
   surface_write(d,da,row.data(),unsigned(dw)*b);}}
 bool resident_current(){auto*rt=vsurface(host.res_rt);auto*zb=host.res_zb?vsurface(host.res_zb):nullptr;return rt&&rt->version==host.res_ver_rt&&(!host.res_zb||(zb&&zb->version==host.res_ver_zb));}
-void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=host.sren->frontend_canvas();sc.width=rt->width;sc.height=rt->height;
+void gpu_fill(const VSurface&d,RECT r,unsigned c){auto*rt=vsurface(host.res_rt);namespace vs=mw34::vkscene;vs::Scene sc{};sc.frontend_canvas=host.sren->sent.frontend_canvas;sc.width=rt->width;sc.height=rt->height;
+ // DirectDraw fills use guest surface coordinates, not a preceding world raster scale.
+ sc.guest_surface_write=true;
  sc.has_depth=host.res_zb!=0;vs::Clear k{};const bool depth=d.guest==host.res_zb;k.flags=depth?2U:1U;k.color[0]=float((c>>11)&31)/31.f;k.color[1]=float((c>>5)&63)/63.f;k.color[2]=float(c&31)/31.f;k.color[3]=1.f;k.z=float(c&0xffff)/65535.f;
  k.rects.push_back({{r.left,r.top},{unsigned(r.right-r.left),unsigned(r.bottom-r.top)}});sc.order.push_back({true,0});sc.clears.push_back(std::move(k));
- try{HostInternal hi(*this);host.sren->render(sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ submit_scene(sc,false,false);
  d.version=++host.surface_versions;if(depth)host.res_ver_zb=d.version;else host.res_ver_rt=d.version;host.res_dirty=true;gpu_protect(true);}
-void fill(const VSurface&d,RECT r,unsigned c){if(lazy_rt()&&host.sren&&d.bpp==16&&r.right>r.left&&r.bottom>r.top&&inside(d,r)&&(d.guest==host.res_rt||(host.res_zb&&d.guest==host.res_zb))&&(host.res_dirty||resident_current())){gpu_fill(d,r,c);return;}gpu_sync(d.guest);d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));
+void fill(const VSurface&d,RECT r,unsigned c){if(lazy_rt()&&host.sren&&d.bpp==16&&r.right>r.left&&r.bottom>r.top&&inside(d,r)&&(d.guest==host.res_rt||(host.res_zb&&d.guest==host.res_zb))&&(host.res_dirty||resident_current())){gpu_fill(d,r,c);return;}gpu_sync(d.guest);d.version=++host.surface_versions;if(r.right<=r.left||r.bottom<=r.top)return;if(!inside(d,r))deny("Fill rectangle outside its surface",unsigned(r.left));camera_surface_written(d.guest);
  const unsigned b=d.bpp/8;if(b!=1&&b!=2&&b!=4)deny("Fill depth not modelled",d.bpp);std::vector<unsigned char>row(size_t(r.right-r.left)*b);for(size_t x=0;x<row.size()/b;++x)std::memcpy(row.data()+x*b,&c,b);
  for(LONG y=r.top;y<r.bottom;++y)surface_write(d,unsigned(y)*d.pitch+unsigned(r.left)*b,row.data(),unsigned(row.size()));}
 
@@ -413,14 +500,15 @@ void*vdd_surface(const Import&imp,unsigned token,const std::function<unsigned(un
   if(!(want&DDSCAPS_BACKBUFFER)||!v->attached){store(out,0);return done(unsigned(DDERR_NOTFOUND),3);}++host.com_object(v->attached)->refs;store(out,v->attached);return done(DD_OK,3);}
  if(n=="Lock"){const unsigned rect=arg(1),desc=arg(2),flags=arg(3);if(arg(4))deny("Lock event handle is not modelled",arg(4));if(!readable(desc,4)||load(desc)!=dsize)deny("Lock descriptor with a wrong dwSize",desc);
   if(gpu_hud()&&lazy_rt()&&host.sren&&host.res_dirty&&v->guest==host.res_rt&&!hud_gpu_active)hud_begin(*v);else gpu_sync(v->guest);
-  const RECT r=surf_rect(rect,*v);texture_lock_pages(*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);++v->locks;(void)flags;
+  const bool gpu_hud_lock=hud_gpu_active&&v->guest==host.res_rt;if(!(flags&DDLOCK_READONLY)&&!gpu_hud_lock)camera_surface_written(v->guest);
+  const RECT r=surf_rect(rect,*v);texture_lock_pages(*v);DDSURFACEDESC2 d{};fill_desc(*v,d);put_desc(desc,d,dsize);store(desc+36,v->mem+unsigned(r.top)*v->pitch+unsigned(r.left)*(v->bpp/8));store(desc+4,load(desc+4)|DDSD_LPSURFACE);v->lock_access.acquire((flags&DDLOCK_READONLY)!=0,gpu_hud_lock);++v->locks;(void)flags;
   {static const bool watch=[]{const char*e=std::getenv("MW34_HUD_WATCH");return e&&*e;}();if(watch&&v->width>=640&&v->height>=480&&v->bpp==16&&!hud_watch_hi){auto*b=reinterpret_cast<std::byte*>(runtime.memory().flat_base());if(b){hud_watch_lo=reinterpret_cast<std::uintptr_t>(b+v->mem);hud_watch_hi=hud_watch_lo+std::uintptr_t(v->pitch)*v->height;DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READONLY,&old);}}}
   return done(DD_OK,5);}
- if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);if(hud_gpu_active&&v->guest==host.res_rt){hud_flush();hud_gpu_active=false;--v->locks;return done(DD_OK,2);}if(hud_watch_hi){DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READWRITE,&old);hud_watch_lo=hud_watch_hi=0;if(host.frames%25==0)hud_watch_save();}--v->locks;if(!v->locks)texture_unlock_pages(*v);v->version=++host.surface_versions;return done(DD_OK,2);}
+ if(n=="Unlock"){if(!v->locks)return done(unsigned(DDERR_NOTLOCKED),2);if(hud_gpu_active&&v->guest==host.res_rt){hud_flush();hud_gpu_active=false;--v->locks;if(v->lock_access.release(!v->locks))v->version=++host.surface_versions;return done(DD_OK,2);}if(hud_watch_hi){DWORD old{};::VirtualProtect(reinterpret_cast<void*>(hud_watch_lo&~std::uintptr_t(4095)),(hud_watch_hi-(hud_watch_lo&~std::uintptr_t(4095))+4095)&~std::uintptr_t(4095),PAGE_READWRITE,&old);hud_watch_lo=hud_watch_hi=0;if(host.frames%25==0)hud_watch_save();}--v->locks;if(!v->locks)texture_unlock_pages(*v);if(v->lock_access.release(!v->locks))v->version=++host.surface_versions;return done(DD_OK,2);}
  if(n=="Flip"){if(!v->primary||!v->attached)deny("Flip on a surface without a flip chain",v->guest);if(arg(1))deny("Flip with an explicit target is not modelled",arg(1));auto*b=vsurface(v->attached);{const unsigned next=host.frames+1;const bool dump_due=host.frame_dump&&(next==1||next%host.frame_dump==0);
   present_direct=lazy_rt()&&host.res_dirty&&b->guest==host.res_rt&&host.sren&&host.presenter&&host.sren==host.presenter.get()&&!dump_due;}
   /* the guest memories swap: the protection follows the resident surface (b keeps the GPU image as its content) */
-  if(!present_direct){gpu_sync(b->guest);gpu_sync(v->guest);}else gpu_protect(false);std::swap(v->mem,b->mem);if(present_direct)gpu_protect(true);v->version=++host.surface_versions;b->version=++host.surface_versions;present(*v);present_direct=false;return done(DD_OK,3);}
+  if(!present_direct){gpu_sync(b->guest);gpu_sync(v->guest);}else gpu_protect(false);std::swap(v->mem,b->mem);if(present_direct)gpu_protect(true);v->version=++host.surface_versions;b->version=++host.surface_versions;present(*v,b->guest);present_direct=false;return done(DD_OK,3);}
  if(n=="Blt"){const unsigned dr=arg(1),src=arg(2),sr=arg(3),flags=arg(4),fx=arg(5);const RECT dst=surf_rect(dr,*v);
   if(flags&DDBLT_DEPTHFILL){if(!(v->caps&DDSCAPS_ZBUFFER))deny("Depth fill on a non-z-buffer surface",v->guest);if(!readable(fx,100))deny("Blt depth fill without its DDBLTFX",fx);fill(*v,status_preview_depth_rect(dst,v->width,v->height),load(fx+80)&0xffff);return done(DD_OK,6);}
   if(flags&DDBLT_COLORFILL){if(!readable(fx,100))deny("Blt colour fill without its DDBLTFX",fx);fill(*v,dst,load(fx+80));if(v->primary&&!v->attached)present(*v);return done(DD_OK,6);}

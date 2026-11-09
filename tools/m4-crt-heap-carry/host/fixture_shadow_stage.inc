@@ -6,12 +6,25 @@
         mw34::fixture_shadow::Matrix world=mw34::fixture_shadow::identity;
         mw34::fixture_shadow::Bounds bounds;
         std::vector<ModelVertex> tl;
-        std::function<bool()> valid;
+        std::uint64_t proof_source{}; // nonzero: kept while Scene::valid_shadow_sources lists it
         std::uint64_t frame{};
         Tex* texture{};unsigned sampler{};std::array<float,4> alpha{};
         VkDescriptorSet set{};
     };
     std::map<std::pair<std::uint64_t,std::uint64_t>,FixtureCaster> fixtureCasters;
+    // fixtureCasters' proof sources for the game thread (RendererCounters::retained_shadow_sources); shared, so
+    // publishing counters after every command copies a pointer, and rebuilt only after casters are added or removed.
+    std::shared_ptr<const std::vector<std::uint64_t>> fixtureRetainedSources;std::uint64_t fixtureRetainedSequence{};
+    bool fixtureRetainedDirty{true};
+    // Reported for every world scene, including those without fixture lights, whose draws add no casters. Scenes
+    // from other paths (fills, clears) have sequence 0 and must not move the report back.
+    void fixture_report_retained(std::uint64_t shadow_sequence){
+        if(fixtureRetainedDirty){std::vector<std::uint64_t> retained;
+            for(const auto& [key,caster]:fixtureCasters)if(caster.proof_source)retained.push_back(caster.proof_source);
+            std::sort(retained.begin(),retained.end());
+            fixtureRetainedSources=std::make_shared<const std::vector<std::uint64_t>>(std::move(retained));fixtureRetainedDirty=false;}
+        fixtureRetainedSequence=std::max(fixtureRetainedSequence,shadow_sequence);
+    }
     std::vector<FixtureCaster*> fixtureFrameCasters;
     std::uint64_t fixtureGeneration{~0ULL},fixtureContext{~0ULL};
     Buffer fixtureTlBuffer;
@@ -80,13 +93,16 @@
         std::fprintf(stderr,"Fixture shadows: %u lights, six %ux%u views each, %ux%u atlas; original world and model casters, alpha-tested cutouts\n",mw34::effects::capacity,fixtureTile,fixtureTile,fixtureAtlasWidth,fixtureAtlasHeight);
     }
 
-    mw34::effects::Uniform prepare_fixture_shadows(const Scene& scene,const std::vector<Tex*>& bound) {
+    mw34::effects::Uniform prepare_fixture_shadows(const Scene& scene,const std::vector<Tex*>& bound,
+                                                   const std::vector<unsigned char>& vertices) {
         auto lights=scene.effect_lights;for(auto& meta:lights.shadow)meta={};fixtureFrameCasters.clear();
         fixtureAtlasFrame=scene.world_frame;fixtureAtlasRecorded=false;
         if(!fixtureTile||scene.hud||scene.frontend_canvas)return lights;
-        if(fixtureGeneration!=scene.world_generation||fixtureContext!=scene.world_context){fixture_atlas_touch();fixtureCasters.clear();fixtureGeneration=scene.world_generation;fixtureContext=scene.world_context;}
+        if(fixtureGeneration!=scene.world_generation||fixtureContext!=scene.world_context){fixture_atlas_touch();fixtureCasters.clear();fixtureRetainedDirty=true;fixtureGeneration=scene.world_generation;fixtureContext=scene.world_context;}
+        // Without fixture lights the casters are kept as they are and valid_shadow_sources is not read; the game
+        // thread skips checking proofs for such scenes (effect_lighting_stage.inc fixture_scene_needs_shadow_sources).
         const unsigned count=std::min(unsigned(lights.params[0]),mw34::effects::capacity),weapons=std::min(unsigned(lights.params[1]),count);
-        if(count==weapons)return lights;
+        if(count==weapons){fixture_report_retained(scene.shadow_sequence);return lights;}
         mw34::fixture_shadow::Point eye{};bool camera=false;
         for(const auto& draw:scene.draws){if(draw.sky)continue;if(draw.sun_tl){const auto&m=draw.sun_tl->camera_world;eye={m[3],m[7],m[11]};camera=true;break;}
             if(draw.model&&draw.model->sun_eligible){const auto& m=draw.model->camera;eye={m[3],m[7],m[11]};camera=true;}}
@@ -95,8 +111,9 @@
         if(scene.world_eye_valid){eye=scene.world_eye;camera=true;}
         const float retention=mw34::effects::settings().fixture_retain_distance;
         for(auto it=fixtureCasters.begin();it!=fixtureCasters.end();){auto& caster=it->second;
-            const bool invalid=caster.valid?!caster.valid():scene.world_frame>caster.frame+1;
-            if(invalid||(camera&&!caster.bounds.overlaps(eye,retention*2))){fixture_atlas_touch();it=fixtureCasters.erase(it);}else ++it;}
+            const auto&valid_sources=scene.valid_shadow_sources;
+            const bool invalid=caster.proof_source?!std::binary_search(valid_sources.begin(),valid_sources.end(),caster.proof_source):scene.world_frame>caster.frame+1;
+            if(invalid||(camera&&!caster.bounds.overlaps(eye,retention*2))){fixture_atlas_touch();fixtureRetainedDirty=true;it=fixtureCasters.erase(it);}else ++it;}
         struct TlVertex{float x,y,z,rhw;unsigned rgb,spec;float u,v;};
         for(const auto& draw:scene.draws){
             if(!draw.count||draw.sky||draw.key.blend||!draw.key.zenable||!draw.key.zwrite||!sun_lit(draw))continue;
@@ -106,11 +123,11 @@
             if(draw.model){const auto& instance=*draw.model;auto geometry=model_buffers.find(instance.geometry->key);if(geometry==model_buffers.end())continue;
                 caster.geometry_key=instance.geometry->key;caster.buffer=geometry->second.local.buffer;caster.count=geometry->second.count;caster.world=instance.sun_world;
                 for(const auto& v:instance.geometry->vertices){mw34::fixture_shadow::Point p{};for(unsigned r=0;r<3;++r)p[r]=caster.world[r*4]*v.x+caster.world[r*4+1]*v.y+caster.world[r*4+2]*v.z+caster.world[r*4+3];caster.bounds.add(p);}
-                if(instance.world&&draw.shadow_source&&draw.shadow_valid){key={draw.shadow_source,0};caster.valid=draw.shadow_valid;}
+                if(instance.world&&draw.shadow_source&&draw.shadow_proof){key={draw.shadow_source,0};caster.proof_source=draw.shadow_source;}
                 else key={instance.shadow_source?instance.shadow_source:instance.geometry->key,instance.geometry->key};
             }else if(draw.sun_tl){
                 std::uint64_t hash=0xcbf29ce484222325ULL;
-                for(unsigned i=0;i<draw.count;++i){TlVertex v;const size_t offset=size_t(draw.first+i)*sizeof(TlVertex);if(offset+sizeof(v)>scene.vertices.size())throw std::runtime_error("Fixture shadow TL source outside captured vertices");std::memcpy(&v,scene.vertices.data()+offset,sizeof(v));
+                for(unsigned i=0;i<draw.count;++i){TlVertex v;const size_t offset=size_t(draw.first+i)*sizeof(TlVertex);if(offset+sizeof(v)>vertices.size())throw std::runtime_error("Fixture shadow TL source outside captured vertices");std::memcpy(&v,vertices.data()+offset,sizeof(v));
                     const auto p=mw34::effects::reconstruct(v.x,v.y,v.z,draw.sun_tl->projection,draw.sun_tl->camera_world);caster.bounds.add(p);caster.tl.push_back({p[0],p[1],p[2],0,0,0,v.u,v.v});
                     for(float x:p){std::uint32_t bits;std::memcpy(&bits,&x,4);hash^=bits;hash*=0x100000001b3ULL;}}
                 caster.count=unsigned(caster.tl.size());key={0,hash};
@@ -120,8 +137,10 @@
             if(fixtureCasters.size()>=32768&&!fixtureCasters.contains(key))throw std::runtime_error("Retained fixture shadow caster capacity exceeded");
             auto [stored,inserted]=fixtureCasters.try_emplace(key);
             if(fixture_atlas_capture_changed(inserted,stored->second,caster))fixture_atlas_touch();
+            if(inserted||stored->second.proof_source!=caster.proof_source)fixtureRetainedDirty=true;
             stored->second=std::move(caster);
         }
+        fixture_report_retained(scene.shadow_sequence);
         std::vector<ModelVertex> tl;
         for(auto& [key,caster]:fixtureCasters){bool relevant=false;
             for(unsigned i=weapons;i<count;++i)relevant|=caster.bounds.overlaps({lights.lights[i].start[0],lights.lights[i].start[1],lights.lights[i].start[2]},lights.lights[i].start[3]);
@@ -203,7 +222,7 @@
         if(fixture_atlas_reuse_enabled())std::fprintf(stderr,"Fixture atlas reuse: %llu unchanged passes reused, %llu changed passes submitted, %llu tracked hits fully audited\n",
             (unsigned long long)fixtureAtlasHits,(unsigned long long)fixtureAtlasBuilds,(unsigned long long)fixtureAtlasAudits);
         fixtureAtlasValid=false;fixtureAtlasRecorded=false;fixtureAtlasIdentity.clear();fixtureAtlasNext.clear();
-        fixtureCasters.clear();fixtureFrameCasters.clear();
+        fixtureCasters.clear();fixtureRetainedDirty=true;fixtureFrameCasters.clear();
         if(fixtureShadowPipeline)f.vkDestroyPipeline(device,fixtureShadowPipeline,nullptr);
         if(fixtureShadowLayout)f.vkDestroyPipelineLayout(device,fixtureShadowLayout,nullptr);
         if(fixtureShadowFramebuffer)f.vkDestroyFramebuffer(device,fixtureShadowFramebuffer,nullptr);

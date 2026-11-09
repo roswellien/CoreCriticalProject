@@ -252,6 +252,7 @@ namespace MW3RemasterLauncher
             ChkAutomaticCrashReports.IsChecked = s.AutomaticCrashReports;
             ChkInstantReplay.IsChecked = s.InstantReplay;
             ChkPerformanceMonitor.IsChecked = s.PerformanceMonitor;
+            ChkRenderThread.IsChecked = s.RenderThread;
 
             // D7VK options
             SelectComboByTag(ComboD7vkResolution, s.D7VkResolution, 0);
@@ -452,6 +453,7 @@ namespace MW3RemasterLauncher
             s.LocalCdAudio = ChkCdAudio.IsChecked == true;
             s.InstantReplay = ChkInstantReplay.IsChecked == true;
             s.PerformanceMonitor = ChkPerformanceMonitor.IsChecked == true;
+            s.RenderThread = ChkRenderThread.IsChecked == true;
 
             _settingsMgr.Save();
             UpdateSummaryDisplay();
@@ -1053,6 +1055,7 @@ namespace MW3RemasterLauncher
                 LocalCdAudio = settings.LocalCdAudio,
                 InstantReplay = settings.InstantReplay,
                 PerformanceMonitor = settings.PerformanceMonitor,
+                RenderThread = settings.RenderThread,
                 D7VkResolution = settings.D7VkResolution,
                 D7VkAntiAliasing = settings.D7VkAntiAliasing,
                 D7VkAnisotropicFiltering = settings.D7VkAnisotropicFiltering,
