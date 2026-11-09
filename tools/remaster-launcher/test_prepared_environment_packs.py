@@ -9,6 +9,36 @@ import prepared_environment_packs
 from prepared_environment_packs import select,prepare,profile_bindings,detail_metadata,encode_normal_pages,PROFILE,REGISTRY,REGIONS,sha
 
 class EnvironmentPackTests(unittest.TestCase):
+    def test_cache_admission_removal_and_duplicate_owner(self):
+        from startup_cache import VerificationCache, environment_resources
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);one=self.fixture(root/'one');host=self.host();cache_root=root/'cache'
+            cold=VerificationCache(cache_root)
+            selected=select([str(one)],host,cold)
+            environment_resources(selected,host,cache_root);cold.save()
+            warm=VerificationCache(cache_root)
+            select([str(one)],host,warm)
+            self.assertGreater(warm.reused,0)
+            two=self.fixture(root/'two')
+            with self.assertRaisesRegex(ValueError,'region ownership'):
+                select([str(one),str(two)],host,warm)
+            (one/'environment/bank.bin').write_bytes(b'corrupt')
+            with self.assertRaises(ValueError):
+                select([str(one)],host,warm)
+            stock=environment_resources({},host,cache_root)
+            self.assertNotIn('MW34_REMASTER_BANKS',stock)
+            self.assertNotIn('MW34_WORLD_NORMALS',stock)
+            self.assertNotIn('MW34_SURFACE_NORMALS',stock)
+
+    def test_duplicate_region_ownership_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            one=self.fixture(Path(folder)/'one')
+            two=self.fixture(Path(folder)/'two')
+            with self.assertRaisesRegex(ValueError, 'region ownership'):
+                select([str(one),str(two)],self.host())
+            with self.assertRaisesRegex(ValueError, 'region ownership'):
+                select([str(two),str(one)],self.host())
+
     def test_detail_pins_follow_selected_pack_revision(self):
         with tempfile.TemporaryDirectory() as t:
             root=self.fixture(Path(t)/'current')

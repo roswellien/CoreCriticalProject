@@ -23,6 +23,7 @@
 #include "buffer_reserve.hpp"
 #include <vulkan/vulkan_win32.h>
 #include "dxgi_present.hpp"
+#include "render_thread.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <array>
@@ -61,8 +62,10 @@
 #include "d3d_scene_frag.h"
 #include "fxaa_vert.h"
 #include "fxaa_frag.h"
+#include "world_coverage_frag.h"
 #include "frontend_canvas.hpp"
 #include "launcher_display.hpp"
+#include "camera_history.hpp"
 
 namespace mw34::vkscene {
 // The stage mirrors the guest's x87 control word and MXCSR into the host while guest code runs;
@@ -153,10 +156,13 @@ struct Draw {
     std::shared_ptr<const mw34::sun::Tl> sun_tl{};
     unsigned char sky{};
     std::shared_ptr<const mw34::sun::Tl> sky_view{};
+    std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
     unsigned detail_role{};
     std::uint64_t shadow_source{};
     std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
-    std::function<bool()> shadow_valid;
+    // The game thread holds an original source proof for shadow_source; Scene::valid_shadow_sources
+    // says whether it still holds.
+    bool shadow_proof{};
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
 };
@@ -174,7 +180,13 @@ struct Command {
 };
 struct Scene {
     double detail_time{};
+    // Lighting for detail_time, computed by the game thread from the campaign state it owns
+    // (world scenes only; HUD and canvas scenes use mw34::sun::settings()).
+    mw34::sun::Settings environment{};
     std::uint64_t world_frame{}, world_generation{}, world_context{};
+    // Number of the D3D scene, counted by the game thread (d3d_provider.inc); 0 for other scenes.
+    // Fixture shadow reports name the last one the renderer has processed.
+    std::uint64_t shadow_sequence{};
     std::array<float, 3> world_eye{};
     bool world_eye_valid{};
     mw34::effects::Uniform effect_lights{};
@@ -183,6 +195,7 @@ struct Scene {
     bool has_depth;
     bool frontend_canvas{};
     bool hud{}; // Host HUD/overlay draws keep their original sampling and follow world AA.
+    bool guest_surface_write{}; // DirectDraw surface operation outside the 3D command stream.
     std::vector<unsigned char> vertices; // 32-byte TL vertices, triangle list
     std::vector<TextureRef> textures;
     std::vector<Draw> draws;
@@ -190,6 +203,84 @@ struct Scene {
     mw34::submission::DrawEmissions emissions;
     std::vector<Clear> clears;
     std::vector<Command> order;
+    // Shadow sources whose latest proof the game thread found valid before this scene, sorted.
+    // Retained fixture casters are judged by it, so the renderer never reads guest memory.
+    std::vector<std::uint64_t> valid_shadow_sources;
+};
+
+// MW34_RENDER_THREAD_CHECK=1 compares every game-side copy of renderer state with
+// the renderer's own and fails the run on a difference. It reads renderer state
+// directly, so it is valid only with the render thread off, for test runs.
+inline bool render_thread_check() {
+    static const bool value = [] {
+        const char *setting = std::getenv("MW34_RENDER_THREAD_CHECK");
+        if (!setting || !*setting || !std::strcmp(setting, "0"))
+            return false;
+        if (!std::strcmp(setting, "1"))
+            return true;
+        throw std::runtime_error("MW34_RENDER_THREAD_CHECK must be 0 or 1");
+    }();
+    return value;
+}
+
+// What the game thread has sent to one Renderer: the texture cache entries its
+// scenes leave behind, the render scale, the canvas kind and the scene count.
+// The game thread answers its own questions from this record, so it never reads
+// renderer state a render thread may be changing. Only the game thread uses it.
+struct SentRecord {
+    struct Texture {
+        std::uint64_t hash{};
+        unsigned width{}, height{};
+        bool valid{};
+    };
+    std::map<std::uint64_t, Texture> textures;
+    float scale = 1.f, scale_req = 1.f;
+    bool frontend_canvas{};
+    std::uint64_t scenes{};
+    // Follows Renderer::render: a new size empties the entry, and every changed or
+    // empty entry holds the scene's hash once the scene's uploads are done. The
+    // cache never evicts, so the record stays exact. render() also replaces the
+    // target whenever the requested scale or the canvas kind differs.
+    void scene(const Scene &s) {
+        std::vector<std::pair<Texture *, std::uint64_t>> changed;
+        for (const auto &t : s.textures) {
+            auto &entry = textures[t.key];
+            if (entry.width != t.width || entry.height != t.height)
+                entry = {0, t.width, t.height, false};
+            if (entry.hash != t.hash || !entry.valid)
+                changed.push_back({&entry, t.hash});
+        }
+        for (auto &[entry, hash] : changed) {
+            entry->hash = hash;
+            entry->valid = true;
+        }
+        scale = scale_req;
+        frontend_canvas = s.frontend_canvas;
+        ++scenes;
+    }
+    bool current(std::uint64_t key, std::uint64_t hash, unsigned w, unsigned h) const {
+        auto it = textures.find(key);
+        return it != textures.end() && it->second.valid && it->second.hash == hash &&
+               it->second.width == w && it->second.height == h;
+    }
+};
+
+// Renderer counters the game thread logs. The game reads a copy taken while the
+// renderer is idle, never the live members.
+struct RendererCounters {
+    std::string device_name;
+    bool dxgi_presenting{};
+    std::uint64_t presents{}, readbacks{}, target_uploads{}, model_uploads{},
+        model_uploaded_bytes{}, model_draws{}, fxaa_passes{}, af_samplers{},
+        mip_levels_uploaded{}, world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{},
+        sun_world_draws{}, sun_model_draws{}, sun_tl_draws{}, sun_shadow_scenes{},
+        sun_shadow_casters{}, sun_shadow_reused{}, sky_draws{}, sky_tinted{}, sky_untinted{},
+        haze_draws{}, horizon_draws{}, haze_routed{}, sky_own_view{};
+    // Shadow sources of the proof-backed fixture casters the renderer still holds, sorted, after the
+    // scene whose shadow_sequence is retained_shadow_sequence (fixture_shadow_stage.inc). Null until
+    // the first fixture shadow pass. The game thread checks only those proofs and newer ones.
+    std::shared_ptr<const std::vector<std::uint64_t>> retained_shadow_sources;
+    std::uint64_t retained_shadow_sequence{};
 };
 
 // Owns the loader, device, caches, render targets and child presentation window.
@@ -197,7 +288,32 @@ struct Scene {
 // Scene and presentation submissions use separate command pools and fences on one queue.
 class Renderer {
   public:
+    enum class ColorTarget { device_default, rgba8 };
+    // An explicit format preference lets format-sensitive callers exercise the
+    // RGBA fallback without changing device capabilities or process settings.
+    explicit Renderer(ColorTarget color_target = ColorTarget::device_default)
+        : require_rgba8(color_target == ColorTarget::rgba8) {}
+    bool alpha_target() const { return rgba; }
     std::string device_name;
+    mw34::temporal::History camera_history;
+    void invalidate_camera_history(mw34::temporal::Reset reason) {
+        if (mw34::temporal::enabled()) camera_history.invalidate(reason);
+    }
+    // admission is owned, so a queued call keeps its text after the caller's buffer is gone.
+    void complete_camera_history(std::uint64_t frame, unsigned target,
+                                 const std::string &admission = "none") {
+        if (!mw34::temporal::enabled()) return;
+        camera_history.complete(frame, target);
+        unsigned valid = 0, mode_mask = 0;
+        for (const auto &[view, pair] : camera_history.pairs()) {
+            valid += pair.valid();
+            if (pair.current && pair.current->mode < 32) mode_mask |= 1U << pair.current->mode;
+        }
+        std::fprintf(stderr, "Camera history frame=%llu views=%zu pairs=%u mode_mask=%x reset=%s rejected=%s mismatch=%s\n",
+                     (unsigned long long)frame, camera_history.pairs().size(), valid, mode_mask,
+                     mw34::temporal::name(camera_history.last_reset()), admission.c_str(),
+                     camera_history.disagreement());
+    }
     std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{}, combined_draws{};
     using PerfOverlay = mw34::performance::Overlay;
     PerfOverlay overlay;
@@ -321,14 +437,16 @@ class Renderer {
         VkImageBlit blit{};
         blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {int(w), int(h), 1};
-        blit.dstOffsets[1] = {int(swapExtent.width), int(swapExtent.height), 1};
         // Original menu/movie rasters retain their proportions in the centre.
-        // A guest-resolution readback of the corrected world spans the wide view.
-        if (!wide_world) {
-            const double fit =
-                std::min(double(swapExtent.width) / w, double(swapExtent.height) / h);
-            const int dw = int(std::lround(w * fit)), dh = int(std::lround(h * fit)),
-                      dx = (int(swapExtent.width) - dw) / 2, dy = (int(swapExtent.height) - dh) / 2;
+        // A world readback must use the resident output's aspect ratio, rather
+        // than stretching to the window on frames that need a guest upload.
+        const auto destination = mw34::display::upload_presentation_rect(
+            w, h, remaster_width(), remaster_height(), swapExtent.width, swapExtent.height,
+            wide_world);
+        blit.dstOffsets[0] = {destination.left, destination.top, 0};
+        blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
+        if (destination.left || destination.top || destination.right != LONG(swapExtent.width) ||
+            destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -336,8 +454,6 @@ class Renderer {
             bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT);
-            blit.dstOffsets[0] = {dx, dy, 0};
-            blit.dstOffsets[1] = {dx + dw, dy + dh, 1};
         }
         if (dxgi.active() && wide_world && remaster_width()) {
             const auto fit = mw34::frontend::CanvasFit::fit(remaster_width(), remaster_height(),
@@ -402,8 +518,39 @@ class Renderer {
     // true also covers hidden/minimized windows, where no image needs to be presented.
     bool present_resident(HWND hwnd, unsigned w, unsigned h) {
         HostFpEnvironment fp;
-        if (!::IsWindowVisible(hwnd))
+        finish_world();
+        const auto window = prepare_window(hwnd);
+        if (window == WindowState::hidden)
             return true;
+        if (window == WindowState::unprepared)
+            return false;
+        return present_prepared(hwnd, w, h);
+    }
+    // The window half of present_resident, run on the game thread: it owns the game window and the
+    // presentation child, and SetWindowPos sends messages to that thread. presentParent and child
+    // change only in present() and max_texture_dimension(), which the game thread runs while the
+    // render thread is idle.
+    enum class WindowState { hidden, unprepared, ready };
+    WindowState prepare_window(HWND hwnd) {
+        if (!::IsWindowVisible(hwnd))
+            return WindowState::hidden;
+        if (hwnd != presentParent || !child)
+            return WindowState::unprepared;
+        RECT rc{};
+        ::GetClientRect(hwnd, &rc);
+        RECT cc{};
+        ::GetClientRect(child, &cc);
+        if (cc.right != rc.right || cc.bottom != rc.bottom)
+            ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+        return WindowState::ready;
+    }
+    // The rest of present_resident, after prepare_window returned ready. It calls no window
+    // function that sends messages itself; swapchain creation, resizing, exclusive full screen and
+    // the present may, which the render thread marks for the waiting game thread to handle.
+    bool present_prepared(HWND hwnd, unsigned w, unsigned h) {
+        HostFpEnvironment fp;
+        finish_world();
         if (hwnd != presentParent || !child || !presentable || (!windowSurface && !dxgi.active()) ||
             !colorImage.image || w != width || h != height)
             return false;
@@ -412,15 +559,7 @@ class Renderer {
                   "wait present");
             presentInFlight = false;
         }
-        {
-            RECT rc{};
-            ::GetClientRect(hwnd, &rc);
-            RECT cc{};
-            ::GetClientRect(child, &cc);
-            if (cc.right != rc.right || cc.bottom != rc.bottom)
-                ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                               SWP_NOZORDER | SWP_NOACTIVATE);
-        }
+        const mw34::render_thread::SendsWindowMessages sends_window_messages;
         if (!swapchainReady())
             return true;
         unsigned index = 0;
@@ -471,10 +610,12 @@ class Renderer {
         // differs).
         const auto ss = mw34::display::samples(std::getenv("MW34_REMASTER_AA"));
         const double ow = double(rw) / ss.x, oh = double(rh) / ss.y;
-        const double fit = std::min(double(swapExtent.width) / ow, double(swapExtent.height) / oh);
-        const int dw = int(std::lround(ow * fit)), dh = int(std::lround(oh * fit)),
-                  dx = (int(swapExtent.width) - dw) / 2, dy = (int(swapExtent.height) - dh) / 2;
-        if (dx > 0 || dy > 0) {
+        const auto destination = mw34::display::presentation_rect(ow, oh, swapExtent.width,
+                                                                 swapExtent.height);
+        const int dw = destination.right - destination.left;
+        const int dh = destination.bottom - destination.top;
+        if (destination.left || destination.top || destination.right != LONG(swapExtent.width) ||
+            destination.bottom != LONG(swapExtent.height)) {
             const VkClearColorValue black{};
             const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -487,8 +628,8 @@ class Renderer {
         VkImageBlit blit{};
         blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {int(rw), int(rh), 1};
-        blit.dstOffsets[0] = {dx, dy, 0};
-        blit.dstOffsets[1] = {dx + dw, dy + dh, 1};
+        blit.dstOffsets[0] = {destination.left, destination.top, 0};
+        blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
         f.vkCmdBlitImage(presentCmd, colorImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                          (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
@@ -834,6 +975,7 @@ class Renderer {
     // Called before the performance overlay/presentation if no HUD followed the world.
     void finish_world() {
         HostFpEnvironment fp;
+        select_world_target(false, false);
         if (!fxaa_enabled() || !quality_world_dirty || !colorImage.image)
             return;
         settle();
@@ -856,10 +998,24 @@ class Renderer {
     std::uint64_t emission_draw_records{}, emission_payloads{};
     // Query the actual scene/presenter device, avoiding a throwaway render device
     // when enhanced texture banks need dimensions beyond the original 256 cap.
-    unsigned max_texture_dimension(HWND) {
+    unsigned max_texture_dimension(HWND window) {
         HostFpEnvironment fp;
-        if (!device)
+        // The explicit bridge selects by adapter identity and needs no WSI window.
+        if (!device && DxgiPresent::requested())
             init();
+        if (!device) {
+            // Capability queries can precede the first Flip. Select against the
+            // actual window now, before texture banks bind us to an adapter.
+            if (::IsWindow(window)) {
+                child = makeChild(window);
+                if (!child)
+                    throw std::runtime_error("Cannot create Vulkan capability-query window");
+                presentParent = window;
+                init(child);
+            } else {
+                return unbound_texture_dimension();
+            }
+        }
         if (!device)
             throw std::runtime_error("Vulkan device unavailable for enhanced texture capabilities");
         VkPhysicalDeviceProperties p{};
@@ -886,6 +1042,58 @@ class Renderer {
         return it != textures.end() && it->second.valid && it->second.hash == hash &&
                it->second.width == w && it->second.height == h;
     }
+    // Written and read only by the game thread; see SentRecord.
+    SentRecord sent;
+    // The game thread's question "does the cache already hold this texture?".
+    bool sent_current(std::uint64_t key, std::uint64_t hash, unsigned w, unsigned h) const {
+        const bool answer = sent.current(key, hash, w, h);
+        if (render_thread_check() && answer != current(key, hash, w, h))
+            throw std::runtime_error("Render thread copy disagrees: texture " +
+                                     std::to_string(key));
+        return answer;
+    }
+    // Check mode: the scale and canvas kind the game recorded match the target.
+    void check_sent() const {
+        if (!render_thread_check())
+            return;
+        if (sent.scale != scale)
+            throw std::runtime_error("Render thread copy disagrees: render scale");
+        if (sent.frontend_canvas != target_frontend)
+            throw std::runtime_error("Render thread copy disagrees: canvas kind");
+    }
+    RendererCounters counters() const {
+        RendererCounters c;
+        c.device_name = device_name;
+        c.dxgi_presenting = dxgi_presenting();
+        c.presents = presents;
+        c.readbacks = readbacks;
+        c.target_uploads = target_uploads;
+        c.model_uploads = model_uploads;
+        c.model_uploaded_bytes = model_uploaded_bytes;
+        c.model_draws = model_draws;
+        c.fxaa_passes = fxaa_passes;
+        c.af_samplers = af_samplers;
+        c.mip_levels_uploaded = mip_levels_uploaded;
+        c.world_gpu_draws = world_gpu_draws;
+        c.effect_light_peak = effect_light_peak;
+        c.fixture_light_peak = fixture_light_peak;
+        c.sun_world_draws = sun_world_draws;
+        c.sun_model_draws = sun_model_draws;
+        c.sun_tl_draws = sun_tl_draws;
+        c.sun_shadow_scenes = sun_shadow_scenes;
+        c.sun_shadow_casters = sun_shadow_casters;
+        c.sun_shadow_reused = sun_shadow_reused;
+        c.sky_draws = sky_draws;
+        c.sky_tinted = sky_tinted;
+        c.sky_untinted = sky_untinted;
+        c.haze_draws = haze_draws;
+        c.horizon_draws = horizon_draws;
+        c.haze_routed = haze_routed;
+        c.sky_own_view = sky_own_view;
+        c.retained_shadow_sources = fixtureRetainedSources;
+        c.retained_shadow_sequence = fixtureRetainedSequence;
+        return c;
+    }
     // Lazy residency (provider MW34_LAZY_RT): with upload_in false the target images keep the
     // content of the previous scene (no guest upload); with readback_out false nothing is copied
     // back and the images stay in attachment layout until readback() copies them out on demand.
@@ -894,6 +1102,9 @@ class Renderer {
     float current_scale() const { return scale; }
     void request_scale(float s) { scale_req = s; }
     std::uint64_t readbacks{}, target_uploads{};
+    std::uint64_t reduced_world_scenes{}, world_promotions{}, coverage_scenes{}, coverage_draws{};
+    unsigned raster_width() const { return rw; }
+    unsigned raster_height() const { return rh; }
     // A scene without copy-back is not waited for; the next scene or copy-back waits before reusing
     // the command pool, upload, vertex and descriptor resources, so the game computes the next
     // scene while the GPU renders this one.
@@ -915,6 +1126,84 @@ class Renderer {
         if (s.width != width || s.height != height || scale_req != scale ||
             s.frontend_canvas != target_frontend)
             target(s.width, s.height, s.frontend_canvas);
+        if (mw34::temporal::enabled()) {
+            if (s.frontend_canvas) camera_history.invalidate(mw34::temporal::Reset::transition);
+            if (upload_in && !(leading_full_clear(s) & 1))
+                camera_history.invalidate(mw34::temporal::Reset::external_write);
+            if (s.guest_surface_write) {
+                // A complete clear before this frame's first world draw is
+                // normal frame initialization. Partial/interleaved fills are
+                // unsupported temporal writes and poison this frame.
+                bool initial_clear = !camera_history.pending() && s.draws.empty() && !s.clears.empty();
+                for (const auto &clear : s.clears) {
+                    initial_clear &= clear.flags && !(clear.flags & ~3U) && clear.rects.size() == 1;
+                    if (clear.rects.size() == 1) {
+                        const auto &rectangle = clear.rects[0];
+                        initial_clear &= rectangle.offset.x == 0 && rectangle.offset.y == 0 &&
+                            rectangle.extent.width == s.width && rectangle.extent.height == s.height;
+                    }
+                }
+                if (!initial_clear) camera_history.invalidate(mw34::temporal::Reset::external_write);
+            }
+            // Observe only this original submission. Internal shading/coverage
+            // replays never pass through this entry point.
+            for (const auto &draw : s.draws) {
+                // P2 history belongs to admitted static scenery. Cockpit/effect
+                // projections sharing a camera address are not that world view.
+                if (!draw.camera_view || !draw.model || !draw.model->world) continue;
+                if (draw.camera_view->projection != draw.model->projection) {
+                    camera_history.invalidate(mw34::temporal::Reset::invalid);
+                    continue;
+                }
+                auto snapshot = std::make_shared<mw34::temporal::Snapshot>(*draw.camera_view);
+                const unsigned output_width = reduced_world_active ? alternate_width : rw;
+                const unsigned output_height = reduced_world_active ? alternate_height : rh;
+                const unsigned world_width = worldColor.image ?
+                    (reduced_world_active ? rw : alternate_width) : rw;
+                const unsigned world_height = worldColor.image ?
+                    (reduced_world_active ? rh : alternate_height) : rh;
+                snapshot->sizes = {s.width, s.height, output_width, output_height,
+                                   world_width, world_height};
+                camera_history.observe(std::move(snapshot));
+            }
+        }
+        if (can_reconstruct_world(s, upload_in, readback_out))
+            render_reconstructed_world(s);
+        else
+            render_scene(s, upload_in, readback_out);
+    }
+  private:
+    void render_scene(Scene &s, bool upload_in, bool readback_out) {
+        HostFpEnvironment fp;
+        settle();
+        if (!device)
+            init();
+        if (s.width != width || s.height != height || scale_req != scale ||
+            s.frontend_canvas != target_frontend)
+            target(s.width, s.height, s.frontend_canvas);
+        if (worldColor.image && reconstruction_stage == ReconstructionStage::normal) {
+            // A depth-only frame may retain full-resolution HUD color. Reduce
+            // only when a full color clear replaces every retained pixel.
+            const auto cleared = leading_full_clear(s);
+            if (!s.hud && !reduced_world_active && !s.draws.empty() &&
+                fxaa_enabled() && !retained_color_warning) {
+                std::fprintf(stderr, "World resolution: non-reconstructed submissions retain output resolution; "
+                                     "world FXAA applies separately to reconstructed opaque batches\n");
+                retained_color_warning = true;
+            }
+            const bool restart = !s.hud && !s.frontend_canvas &&
+                (cleared & 1);
+            if (restart) quality_world_dirty = false;
+            // An imported guest image can contain UI or software-rendered
+            // pixels. Preserve its full output resolution unless this same
+            // submission proves a complete color replacement with a clear.
+            if (s.hud || s.guest_surface_write || readback_out || s.frontend_canvas ||
+                (upload_in && !restart))
+                select_world_target(false, false);
+            else if (restart)
+                select_world_target(true, upload_in);
+            settle();
+        }
         if (upload_in)
             quality_world_dirty = false;
         const VkDeviceSize pixels = VkDeviceSize(width) * height;
@@ -926,7 +1215,8 @@ class Renderer {
                            depthOffset = mw34::depth::offset(size_t(colorBytes)),
                            depthBytes = pixels * sizeof(float);
         ensure(upload, depthOffset + depthBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        ensure(readback, depthOffset + depthBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        ensure(readback, depthOffset + VkDeviceSize(rw) * rh * sizeof(float),
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         ensure(vertexBuffer, std::max<VkDeviceSize>(s.vertices.size(), 32),
                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         auto *up = static_cast<unsigned char *>(upload.mapped);
@@ -945,10 +1235,10 @@ class Renderer {
             std::memcpy(up, s.color.data(), colorBytes);
         if (upload_in)
             mw34::depth::upload(up + depthOffset, s.depth.data(), size_t(pixels));
-        const auto environment = (s.hud || s.frontend_canvas)
-                                     ? mw34::sun::settings()
-                                     : mw34::sun::current_settings(s.detail_time);
-        apply_atmosphere(s, environment);
+        const auto environment =
+            (s.hud || s.frontend_canvas) ? mw34::sun::settings() : s.environment;
+        if (!world_scene_prepared)
+            apply_atmosphere(s, environment);
         if (!s.vertices.empty())
             std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
         // Collect each immutable geometry upload once even if several instances use it.
@@ -1039,8 +1329,26 @@ class Renderer {
                 tp += VkDeviceSize(t->width) * t->height * 4;
             }
         }
-        const ShadowFrame shadowFrame = prepare_shadow(s, environment);
-        const auto fixtureLights = prepare_fixture_shadows(s, bound);
+        ShadowFrame localShadowFrame;
+        const ShadowFrame *shadowFrame = &localShadowFrame;
+        mw34::effects::Uniform localFixtureLights{};
+        const mw34::effects::Uniform *fixtureLights = &localFixtureLights;
+        if (world_scene_prepared) {
+            if (!world_shadow_scene)
+                throw std::runtime_error("Reconstructed scene is missing its shadow source");
+            if (!world_shadow_inputs_ready) {
+                world_shadow_frame = prepare_shadow(*world_shadow_scene, environment);
+                // Batching owns the full captured vertex buffer while the source
+                // scene retains every draw needed to prepare shared shadow maps.
+                world_fixture_lights = prepare_fixture_shadows(*world_shadow_scene, bound, s.vertices);
+                world_shadow_inputs_ready = true;
+            }
+            shadowFrame = &world_shadow_frame;
+            fixtureLights = &world_fixture_lights;
+        } else {
+            localShadowFrame = prepare_shadow(s, environment);
+            localFixtureLights = prepare_fixture_shadows(s, bound, s.vertices);
+        }
         // One POM predicate per draw keeps the uniform and set 2 height binding in agreement.
         std::vector<unsigned char> pomActive(s.draws.size(), 0);
         // Upload memory can be write-combined: never read it for CPU comparisons.
@@ -1056,7 +1364,7 @@ class Renderer {
             ensure(effectBuffer, sizeof(mw34::effects::Uniform),
                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
             const mw34::effects::Uniform noEffects{};
-            const auto &fx = s.hud || s.frontend_canvas ? noEffects : fixtureLights;
+            const auto &fx = s.hud || s.frontend_canvas ? noEffects : *fixtureLights;
             std::memcpy(effectBuffer.mapped, &fx, sizeof(fx));
             effect_light_peak = std::max(effect_light_peak, std::uint64_t(fx.params[0]));
             fixture_light_peak = std::max(fixture_light_peak, std::uint64_t(fx.params[2]));
@@ -1109,12 +1417,12 @@ class Renderer {
                                                                      : 0)
                             : *dbg == '2' ? 2.f
                                           : 1.f + float(at % 13) / 13.f;
-                    if (shadowFrame.active) {
+                    if (shadowFrame->active) {
                         const auto &sun = environment;
                         for (unsigned i = 0; i < 12; ++i)
-                            u.shadow[i] = float(shadowFrame.view.rows[i]);
-                        u.shadow_params = {1.f, float(shadowFrame.view.texel),
-                                           float(sun.shadow_bias * shadowFrame.view.depth_scale),
+                            u.shadow[i] = float(shadowFrame->view.rows[i]);
+                        u.shadow_params = {1.f, float(shadowFrame->view.texel),
+                                           float(sun.shadow_bias * shadowFrame->view.depth_scale),
                                            sun.shadow_darkness};
                     }
                     if (!mw34::materials::normal_maps_enabled() || draw.normal_texture < 0)
@@ -1197,6 +1505,13 @@ class Renderer {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &info;
                 f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+                if (reconstruction_stage == ReconstructionStage::coverage) {
+                    VkDescriptorImageInfo reconstructed{sampler(3U | (3U << 4) | (3U << 8)),
+                        reconstructedColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    w.dstBinding = 1;
+                    w.pImageInfo = &reconstructed;
+                    f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+                }
                 it = sets.emplace(std::make_pair(t, d.sampler), set).first;
             }
             drawSets[i] = it->second;
@@ -1402,11 +1717,16 @@ class Renderer {
         }
         in_attachment_layout = true;
         // Apply world AA before the first HUD pass so text and overlays stay sharp.
-        if (s.hud && quality_world_dirty && fxaa_enabled())
+        if ((s.hud || (s.guest_surface_write && worldColor.image)) &&
+            quality_world_dirty && fxaa_enabled())
             record_fxaa();
-        if (shadowFrame.active && !shadowFrame.reused)
-            record_shadow(shadowFrame);
-        record_fixture_shadows(fixtureLights);
+        if (!world_scene_prepared || !world_shadow_recorded) {
+            if (shadowFrame->active && !shadowFrame->reused)
+                record_shadow(*shadowFrame);
+            record_fixture_shadows(*fixtureLights);
+            if (world_scene_prepared)
+                world_shadow_recorded = true;
+        }
         VkRenderPassBeginInfo rb{};
         rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rb.renderPass = renderPass;
@@ -1547,13 +1867,18 @@ class Renderer {
                                      sizeof(Push), &d.push);
             }
             f.vkCmdDraw(cmd, vertexCount, 1, d.model && d.model->world ? 0 : d.first, 0);
-            draws += logicalDraws;
-            ++submitted_draws;
-            combined_draws += logicalDraws - 1;
+            if (reconstruction_stage == ReconstructionStage::coverage)
+                coverage_draws += logicalDraws;
+            else {
+                draws += logicalDraws;
+                ++submitted_draws;
+                combined_draws += logicalDraws - 1;
+            }
         }
         f.vkCmdEndRenderPass(cmd);
-        if (!s.hud && !s.draws.empty())
+        if (!s.hud && !s.draws.empty() && (!worldColor.image || reduced_world_active))
             quality_world_dirty = true;
+        if (reduced_world_active) ++reduced_world_scenes;
         if (readback_out) {
             barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1581,13 +1906,15 @@ class Renderer {
         si.pCommandBuffers = &cmd;
         check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
         fixture_atlas_submitted();
-        ++scenes;
+        if (reconstruction_stage != ReconstructionStage::coverage)
+            ++scenes;
         if (readback_out) {
             check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait");
             copy_back(s);
         } else
             scene_pending = true;
     }
+  public:
     // Copies the resident target images into s.color/s.depth (s sized to the target).
     void fetch_resident(Scene &s) {
         HostFpEnvironment fp;
@@ -1602,6 +1929,9 @@ class Renderer {
         check(f.vkBeginCommandBuffer(cmd, &bi), "begin readback");
         const VkDeviceSize pixels = VkDeviceSize(width) * height,
                            colorBytes = pixels * (rgba ? 4 : 2);
+        ensure(readback, mw34::depth::offset(size_t(colorBytes)) +
+                             VkDeviceSize(rw) * rh * sizeof(float),
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         if (in_attachment_layout) {
             barrier(colorImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1633,7 +1963,8 @@ class Renderer {
         copy_back(s);
     }
     // The caller has waited for GPU writes and sized both output vectors. The
-    // readback buffer packs all color bytes first, followed by guest-resolution D16.
+    // readback buffer packs guest color bytes first, then full-raster D32 depth.
+    // Depth is sampled and quantized only at the guest boundary.
     // RGB565 quantization deliberately uses integer rounding; preserve this arithmetic.
     void copy_back(Scene &s) {
         const VkDeviceSize pixels = VkDeviceSize(width) * height,
@@ -1647,11 +1978,66 @@ class Renderer {
             }
         } else
             std::memcpy(s.color.data(), rd, colorBytes);
-        mw34::depth::readback(s.depth.data(), rd + mw34::depth::offset(size_t(colorBytes)),
-                              size_t(pixels));
+        mw34::depth::readback_scaled(s.depth.data(), rd + mw34::depth::offset(size_t(colorBytes)),
+                                     width, height, rw, rh);
     }
 
   private:
+    // Enumeration may precede window creation. Advertise a limit every graphics
+    // adapter supports, without creating a device before presentation can choose.
+    static unsigned unbound_texture_dimension() {
+        struct Probe {
+            HMODULE library{};
+            VkInstance instance{};
+            PFN_vkDestroyInstance destroy{};
+            ~Probe() {
+                if (instance && destroy) destroy(instance, nullptr);
+                if (library) ::FreeLibrary(library);
+            }
+        } probe;
+        probe.library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!probe.library)
+            throw std::runtime_error("Vulkan capability loader unavailable");
+        const auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+            ::GetProcAddress(probe.library, "vkGetInstanceProcAddr"));
+        if (!get) throw std::runtime_error("Vulkan capability entry point unavailable");
+        const auto create = reinterpret_cast<PFN_vkCreateInstance>(get(nullptr, "vkCreateInstance"));
+        if (!create) throw std::runtime_error("Vulkan capability instance entry point unavailable");
+        VkInstanceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        check(create(&info, nullptr, &probe.instance), "create capability instance");
+        probe.destroy = reinterpret_cast<PFN_vkDestroyInstance>(get(probe.instance, "vkDestroyInstance"));
+        const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+            get(probe.instance, "vkEnumeratePhysicalDevices"));
+        const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+            get(probe.instance, "vkGetPhysicalDeviceProperties"));
+        const auto queues = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
+            get(probe.instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+        if (!probe.destroy || !enumerate || !properties || !queues)
+            throw std::runtime_error("Vulkan capability functions unavailable");
+        unsigned count{};
+        check(enumerate(probe.instance, &count, nullptr), "enumerate capability adapters");
+        std::vector<VkPhysicalDevice> adapters(count);
+        check(enumerate(probe.instance, &count, adapters.data()), "read capability adapters");
+        unsigned limit{};
+        for (unsigned index = 0; index < count; ++index) {
+            unsigned queue_count{};
+            queues(adapters[index], &queue_count, nullptr);
+            std::vector<VkQueueFamilyProperties> families(queue_count);
+            queues(adapters[index], &queue_count, families.data());
+            const bool graphics = std::any_of(families.begin(), families.end(), [](const auto &family) {
+                return family.queueCount && (family.queueFlags & VK_QUEUE_GRAPHICS_BIT);
+            });
+            if (!graphics) continue;
+            VkPhysicalDeviceProperties device_properties{};
+            properties(adapters[index], &device_properties);
+            const auto supported = device_properties.limits.maxImageDimension2D;
+            limit = limit ? std::min(limit, supported) : supported;
+        }
+        if (!limit) throw std::runtime_error("No graphics adapter supplies Vulkan texture limits");
+        return limit;
+    }
+    const bool require_rgba8;
     DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
@@ -2403,7 +2789,7 @@ class Renderer {
         f.vkGetPhysicalDeviceFormatProperties(gpu, VK_FORMAT_R5G6B5_UNORM_PACK16, &cp);
         const VkFormatFeatureFlags need =
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT;
-        rgba = (cp.optimalTilingFeatures & need) != need;
+        rgba = require_rgba8 || (cp.optimalTilingFeatures & need) != need;
         float priority = 1;
         VkDeviceQueueCreateInfo q{};
         q.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -2591,12 +2977,13 @@ class Renderer {
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         check(f.vkCreateFence(device, &fci, nullptr, &fence), "fence");
-        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        const VkDescriptorSetLayoutBinding bindings[2]{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 1;
-        li.pBindings = &b;
+        li.bindingCount = world_scale_percent() < 100 ? 2 : 1;
+        li.pBindings = bindings;
         check(f.vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout),
               "descriptor set layout");
         VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -2678,6 +3065,8 @@ class Renderer {
         };
         vert = module(d3d_scene_vert_spv, sizeof(d3d_scene_vert_spv));
         frag = module(d3d_scene_frag_spv, sizeof(d3d_scene_frag_spv));
+        if (world_scale_percent() < 100)
+            coverageFrag = module(world_coverage_frag_spv, sizeof(world_coverage_frag_spv));
         if (gpu_models()) {
             modelVert = module(model_scene_vert_spv, sizeof(model_scene_vert_spv));
             worldVert = module(world_scene_vert_spv, sizeof(world_scene_vert_spv));
@@ -3011,8 +3400,10 @@ class Renderer {
     // width/height remain guest dimensions; rw/rh describe physical GPU storage.
     // Guest-sized transfer images bridge the two without resizing guest allocations.
     void target(unsigned w, unsigned h, bool frontend) {
+        invalidate_camera_history(mw34::temporal::Reset::transition);
         target_frontend = frontend;
         f.vkDeviceWaitIdle(device);
+        destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
@@ -3069,7 +3460,7 @@ class Renderer {
                      remaster_width(), remaster_height(), rw, rh, samples.x, samples.y,
                      unsigned(target_frontend));
         scale_x = float(rw) / float(w);
-        if (rw != w || rh != h) {
+        if (rw != w || rh != h || world_scale_percent() != 100) {
             image(colorLo.image, colorLo.memory, colorLo.view, w, h,
                   rgba ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -3115,6 +3506,7 @@ class Renderer {
         }
         width = w;
         height = h;
+        create_world_target();
     }
     void pool(unsigned n) {
         if (descriptorPool)
@@ -3167,7 +3559,8 @@ class Renderer {
                         bool lit = false) {
         // points uses bit56 (0/1); bit57 distinguishes this private model pipeline.
         const std::uint64_t key = k.packed() | (model ? (1ULL << 57) : 0ULL) |
-                                  (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL);
+                                  (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL) |
+                                  (reconstruction_stage == ReconstructionStage::coverage ? (1ULL << 60) : 0ULL);
         auto it = pipelines.find(key);
         if (it != pipelines.end())
             return it->second;
@@ -3178,6 +3571,8 @@ class Renderer {
             st[i].module =
                 lit ? (i ? sunFrag : (world ? sunWorldVert : (model ? sunModelVert : sunTlVert)))
                     : (i ? frag : (world ? worldVert : (model ? modelVert : vert)));
+            if (i && reconstruction_stage == ReconstructionStage::coverage)
+                st[i].module = coverageFrag;
             st[i].pName = "main";
         }
         VkVertexInputBindingDescription vb{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
@@ -3283,7 +3678,8 @@ class Renderer {
         VkPipeline p{};
         check(f.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &p),
               "graphics pipeline");
-        pipelineWarmup.record(key);
+        if (reconstruction_stage != ReconstructionStage::coverage)
+            pipelineWarmup.record(key);
         return pipelines[key] = p;
     }
     void barrier(VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags src,
@@ -3348,32 +3744,24 @@ class Renderer {
         blit_img(depthLo.image, width, height, depthImage.image, rw, rh, VK_IMAGE_ASPECT_DEPTH_BIT,
                  VK_FILTER_NEAREST);
     }
-    // Guest-resolution copy of the target images (which are in transfer-source layout) into the
-    // readback buffer.
+    // Guest color plus full-raster D32 copy. Keep depth resampling out of the
+    // driver's image-blit path; copy_back samples it at the guest boundary.
     void copy_out_scaled(VkDeviceSize depthOffset) {
         if (rw == width && rh == height) {
             copyOut(colorImage.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
             copyOut(depthImage.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT);
             return;
         }
-        for (auto [img, aspect] :
-             {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)},
-              {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
-            barrier(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        barrier(colorLo.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         blit_img(colorImage.image, rw, rh, colorLo.image, width, height, VK_IMAGE_ASPECT_COLOR_BIT,
                  VK_FILTER_LINEAR);
-        blit_img(depthImage.image, rw, rh, depthLo.image, width, height, VK_IMAGE_ASPECT_DEPTH_BIT,
-                 VK_FILTER_NEAREST);
-        for (auto [img, aspect] :
-             {std::pair{colorLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)},
-              {depthLo.image, VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)}})
-            barrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, aspect);
+        barrier(colorLo.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         copyOut(colorLo.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT);
-        copyOut(depthLo.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT);
+        copyOut(depthImage.image, readback.buffer, depthOffset, VK_IMAGE_ASPECT_DEPTH_BIT, rw, rh);
     }
     void copyIn(VkBuffer buf, VkDeviceSize off, VkImage img, unsigned w, unsigned h,
                 VkImageAspectFlags aspect) {
@@ -3383,11 +3771,12 @@ class Renderer {
         c.imageExtent = {w, h, 1};
         f.vkCmdCopyBufferToImage(cmd, buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
     }
-    void copyOut(VkImage img, VkBuffer buf, VkDeviceSize off, VkImageAspectFlags aspect) {
+    void copyOut(VkImage img, VkBuffer buf, VkDeviceSize off, VkImageAspectFlags aspect,
+                 unsigned copy_width = 0, unsigned copy_height = 0) {
         VkBufferImageCopy c{};
         c.bufferOffset = off;
         c.imageSubresource = {aspect, 0, 0, 1};
-        c.imageExtent = {width, height, 1};
+        c.imageExtent = {copy_width ? copy_width : width, copy_height ? copy_height : height, 1};
         f.vkCmdCopyImageToBuffer(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
     }
     // The child owns presentation pixels while input remains with the game window.
@@ -3640,6 +4029,9 @@ class Renderer {
         }
         f.vkDeviceWaitIdle(device);
         pipelineWarmup.save();
+        if (coverage_scenes)
+            std::fprintf(stderr, "World reconstruction: %llu opaque scenes, %llu coverage draws\n",
+                         (unsigned long long)coverage_scenes, (unsigned long long)coverage_draws);
         std::fprintf(stderr, "Submission: %llu logical draws, %llu GPU draws, %llu adjacent TL draws combined\n",
             (unsigned long long)draws, (unsigned long long)submitted_draws,
             (unsigned long long)combined_draws);
@@ -3653,6 +4045,8 @@ class Renderer {
             f.vkDestroyShaderModule(device, qualityVert, nullptr);
         if (qualityFrag)
             f.vkDestroyShaderModule(device, qualityFrag, nullptr);
+        if (coverageFrag)
+            f.vkDestroyShaderModule(device, coverageFrag, nullptr);
         for (auto &[key, b] : model_buffers)
             for (Buffer *p : {&b.local, &b.staging}) {
                 if (p->buffer)
@@ -3696,6 +4090,12 @@ class Renderer {
                 f.vkDestroyBuffer(device, b->buffer, nullptr);
                 f.vkFreeMemory(device, b->memory, nullptr);
             }
+        if (worldColor.image) {
+            std::fprintf(stderr, "World resolution: reduced scenes %llu, promotions %llu\n",
+                         (unsigned long long)reduced_world_scenes,
+                         (unsigned long long)world_promotions);
+        }
+        destroy_world_target();
         if (framebuffer)
             f.vkDestroyFramebuffer(device, framebuffer, nullptr);
         for (Image *i : {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
@@ -3756,6 +4156,7 @@ class Renderer {
         ::FreeLibrary(static_cast<HMODULE>(library));
         device = {};
     }
+#include "world_resolution_stage.inc"
 #include "quality_stage.inc"
 };
 } // namespace mw34::vkscene

@@ -113,5 +113,11 @@ void wide_adapt_tl(mw34::vkscene::Scene&sc,mw34::vkscene::Draw&d,unsigned role,c
   if(d.sun_tl){auto light=std::make_shared<mw34::sun::Tl>(*d.sun_tl);light->projection[1]/=k;light->projection[3]=a+(light->projection[3]+.5f-a)/k-.5f;d.sun_tl=std::move(light);}
   if(d.sky_view){auto view=std::make_shared<mw34::sun::Tl>(*d.sky_view);view->projection[1]/=k;view->projection[3]=a+(view->projection[3]+.5f-a)/k-.5f;d.sky_view=std::move(view);}
   for(unsigned i=d.first;i<d.first+d.count;++i){float x;auto*p=sc.vertices.data()+size_t(i)*32;std::memcpy(&x,p,4);x=role==WideReticle?a+(x-a)/k:a+(x+.5f-a)/k-.5f;std::memcpy(p,&x,4);}}
+ if(d.camera_view){auto view=std::make_shared<mw34::temporal::Snapshot>(*d.camera_view);
+  if(d.model)view->projection=d.model->projection;
+  else if(d.sun_tl)view->projection=d.sun_tl->projection;
+  else if(d.sky_view)view->projection=d.sky_view->projection;
+  else{d.camera_view.reset();view.reset();} // Unproven adapted TL projection is not temporal input.
+  if(view)d.camera_view=std::move(view);}
  if(role==WideLeft||role==WideRight||role==WideCenter||role==WideZoom){const float a=wide_anchor(role,role==WideZoom?zoom_a:0.f,sc.width);const int x0=int(std::floor(a+(float(d.scissor.offset.x)-a)/k)),x1=int(std::ceil(a+(float(d.scissor.offset.x+int(d.scissor.extent.width))-a)/k));d.scissor.offset.x=x0;d.scissor.extent.width=unsigned(std::max(0,x1-x0));}
 }

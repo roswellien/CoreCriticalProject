@@ -16,7 +16,8 @@ meant, ask which.
 spec as the target and [references/checklist.md](references/checklist.md) as
 the checklist. Fixes are edits to the spec only. Checking the spec's claims is
 read-only: read files, run read-only `git` and `gh` commands, and change
-nothing else.
+nothing else. The review runs in the session that wrote the spec, so the
+requester can follow each pass.
 
 The loop ends with one report. Then the workflow's walkthrough takes the
 requester through what it leaves, and the spec waits for their approval before

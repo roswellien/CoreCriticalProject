@@ -113,8 +113,10 @@ visibly when any part is missing. Run endpoint checks from `website/` with
 
 ### Admin crash report archive
 
-Every accepted report is also stored as normalized JSON in the server-only D1
-table `crash_report_archive`. The GitHub issue flow remains active for triage.
+Accepted reports are also stored as normalized JSON in the server-only D1
+table `crash_report_archive` when the database allows it. GitHub delivery
+doesn't depend on it; an issue for a report that couldn't be archived says so.
+The GitHub issue flow remains active for triage.
 Open `https://corecritical.dev/admin/crash-reports` to review the latest 100
 reports and open a report's hardware, settings, pack metadata and separate
 line-preserving log sections. Dynamic report text is HTML-escaped. The page

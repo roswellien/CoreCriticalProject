@@ -17,7 +17,7 @@ mw34::sun::CameraBinding::Words sun_view_words(unsigned address){
  mw34::sun::CameraBinding::Words words{};for(unsigned i=0;i<12;++i)words[i]=load(address+i*4);return words;
 }
 bool sun_view_capture_enabled(){
- static const bool enabled=[]{SunCaptureFp preserve;return mw34::sun::settings().enabled;}();return enabled;
+ static const bool enabled=[]{SunCaptureFp preserve;return mw34::sun::settings().enabled||mw34::temporal::enabled();}();return enabled;
 }
 
 bool sun_camera_world(OverrideMatrix& matrix) {

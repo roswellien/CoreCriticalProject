@@ -307,6 +307,8 @@ namespace MW3RemasterLauncher.Core
             // An explicit saved choice overrides both old profiles and inherited diagnostics.
             profile["native"]!["runtime_environment"] ??= new JsonObject();
             profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"] = settings.PerformanceMonitor ? "1" : "0";
+            // Older hosts ignore it; newer ones run graphics inline when it is "0".
+            profile["native"]!["runtime_environment"]!["MW34_RENDER_THREAD"] = settings.RenderThread ? "1" : "0";
             profile["native"]!["runtime_environment"]!["MW34_CORE_CRITICAL_VERSION"] = typeof(GameRunner).Assembly.GetName().Version!.ToString(3);
             // Emit the existing native register/return-chain diagnostics only
             // when a guest memory fault occurs, including on remote playtest PCs.
