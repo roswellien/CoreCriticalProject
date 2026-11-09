@@ -90,7 +90,7 @@ namespace MW3RemasterLauncher
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            var launcherLabel = "Core Critical " + typeof(GameRunner).Assembly.GetName().Version!.ToString(3);
+            var launcherLabel = "Core Critical " + typeof(GameRunner).Assembly.GetName().Version!.ToString(3) + " Alpha";
             TxtLauncherBuild.Text = TxtHeaderBuild.Text = launcherLabel;
             if (_settingsMgr.LoadWarning != null)
                 MessageBox.Show(_settingsMgr.LoadWarning, "Settings recovered", MessageBoxButton.OK, MessageBoxImage.Warning);

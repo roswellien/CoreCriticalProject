@@ -8,7 +8,7 @@ internal static class Mw3ReAlphaRunner
     internal static ProcessStartInfo CreateStartInfo(string launcherDirectory, string profileDirectory,
         string gameDirectory, string readyFile)
     {
-        var executable = Path.GetFullPath(Path.Combine(launcherDirectory, "Runtime", "MW3-RE-Alpha", "mw3.exe"));
+        var executable = Path.GetFullPath(Path.Combine(launcherDirectory, "MW3-RE-Alpha", "mw3.exe"));
         if (!File.Exists(executable))
             throw new FileNotFoundException("Install the Core Critical MW3-RE Alpha Runtime next to this launcher.", executable);
 
