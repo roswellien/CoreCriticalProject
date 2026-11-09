@@ -2,6 +2,11 @@
 mw34::effects::Catalog local_catalog_;
 mw34::effects::ObservedLights local_observed_;
 std::vector<mw34::effects::Candidate> local_native_;
+std::vector<mw34::headlights::StockProfile> headlight_catalog_;
+std::vector<mw34::effects::Candidate> headlight_candidates_;
+mw34::headlights::PlayerState headlight_player_;
+unsigned headlight_key_{};
+std::size_t headlight_peak_{};
 std::array<float, 6> local_projection_{};
 std::array<float, 12> local_camera_{};
 bool local_active_{};
@@ -9,8 +14,11 @@ double local_time_{};
 std::uint64_t local_observations_{}, local_native_peak_{}, local_packet_peak_{};
 
 void local_lights_load() {
-  if (!bridge_config_.effect_lights)
+  if (!bridge_config_.effect_lights) {
+    if (bridge_config_.mech_headlights)
+      fprintf(stderr, "[HEADLIGHTS] inactive: local lights disabled\n");
     return;
+  }
   VisualFloatScope guard;
   if (!lighting_.enabled || bridge_config_.effect_light_catalog.empty())
     throw std::runtime_error("Local lights require lighting and a catalog");
@@ -20,9 +28,83 @@ void local_lights_load() {
   if (!stream)
     throw std::runtime_error("effect light catalog missing");
   local_catalog_ = mw34::effects::read_catalog(stream);
+  if (!bridge_config_.mech_headlights)
+    return;
+  if (bridge_config_.stock_headlights.empty()) {
+    fprintf(stderr, "[HEADLIGHTS] inactive: no stock catalog selected\n");
+    return;
+  }
+  std::ifstream catalog(std::filesystem::u8path(bridge_config_.stock_headlights),
+                        std::ios::binary);
+  if (!catalog)
+    throw std::runtime_error("Headlights: cannot open stock catalog");
+  headlight_catalog_ = mw34::headlights::read_stock_catalog(catalog);
+  if (bridge_config_.headlight_bindings.empty()) {
+    fprintf(stderr, "[HEADLIGHTS] inactive: no input binding selected\n");
+    return;
+  }
+  std::ifstream bindings(std::filesystem::u8path(bridge_config_.headlight_bindings));
+  std::string magic, extra;
+  int button = -1;
+  if (!(bindings >> magic >> headlight_key_ >> button) ||
+      magic != "CC_MW3_HEADLIGHTS_V1" || headlight_key_ >= zin::kKeys ||
+      (headlight_key_ && !(headlight_key_ & 255)) || button < -1 || button > 25 ||
+      (bindings >> extra))
+    throw std::runtime_error("Headlights: invalid input binding");
+  const auto scan = headlight_key_ & 255;
+  if (scan == 0x43 || scan == 0x44 || scan == 0x57)
+    throw std::runtime_error("Headlights: key reserved for capture/replay");
+  if (!headlight_key_ || headlight_catalog_.empty())
+    fprintf(stderr, "[HEADLIGHTS] inactive: no keyboard binding or stock profile\n");
+}
+
+bool wants_player_headlight_ticks() const override {
+  return headlight_key_ && !headlight_catalog_.empty() && !current_mission_id_.empty();
+}
+
+void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override {
+  VisualFloatScope guard;
+  headlight_candidates_.clear();
+  const auto *node = static_cast<const zcls::Node *>(tick.node);
+  const auto *asset = node && node->source_asset_root ? node->source_asset.get() : nullptr;
+  const auto *profile = asset ? mw34::headlights::match_original(
+      headlight_catalog_, asset->name, asset->member_sha256) : nullptr;
+  const auto &input = zin::state();
+  const auto key = zin::key_state(headlight_key_);
+  const bool pressed = (key & (zin::kPressed | zin::kHeld)) && !(key & zin::kReleased) &&
+                       input.modifiers == (headlight_key_ & 0x700);
+  headlight_player_.update(tick.generation, reinterpret_cast<std::uintptr_t>(node),
+                           tick.tick, std::max(0.0f, tick.dt), tick.shutdown, pressed,
+                           profile && tick.dt >= 0 && input.kbd_ready && !input.char_callback);
+  const auto intensity = headlight_player_.owner.envelope.current;
+  if (!profile || intensity <= 0)
+    return;
+  zmth::Mat34 world;
+  zmth::push(&world);
+  zmth::load_identity();
+  const auto transformed = zcls::node_to_world(const_cast<zcls::Node *>(node), 1);
+  zmth::pop();
+  if (transformed)
+    return;
+  ::platform::ModelDrawContext context{};
+  context.node = node;
+  context.model_to_world = world.m;
+  context.ordinary = true;
+  for (std::size_t i = 0; i < profile->lamps.size(); ++i) {
+    const auto &lamp = profile->lamps[i];
+    const auto pose = original_headlight_socket(context, lamp.attachment);
+    if (!pose)
+      continue;
+    // Native fixture IDs occupy the low range, while weapons have a separate namespace.
+    if (auto candidate = mw34::headlights::spotlight(lamp, *pose, intensity, (1ULL << 63) + i))
+      headlight_candidates_.push_back(*candidate);
+  }
+  headlight_peak_ = std::max(headlight_peak_, headlight_candidates_.size());
 }
 
 void local_lights_clear() {
+  headlight_player_ = {};
+  headlight_candidates_.clear();
   local_observed_.clear();
   local_native_.clear();
   local_active_ = false;
@@ -101,7 +183,11 @@ void local_lights_attach(vk::Scene &target) {
   VisualFloatScope guard;
   std::vector<mw34::effects::Candidate> sources = local_native_;
   auto candidates = local_observed_.candidates(local_time_);
-  sources.insert(sources.end(), candidates.begin(), candidates.end());
+  sources.insert(sources.end(), headlight_candidates_.begin(), headlight_candidates_.end());
+  // Keep within the ranker's 384-source cap without unsigned wraparound.
+  const std::size_t room = sources.size() < 384 ? 384 - sources.size() : 0;
+  const auto observed_count = std::min(candidates.size(), room);
+  sources.insert(sources.end(), candidates.begin(), candidates.begin() + observed_count);
   mw34::effects::Point eye = {local_camera_[3], local_camera_[7],
                               local_camera_[11]};
   target.effect_lights = mw34::effects::rank_frame_lights(sources, eye, 64, 16);
@@ -120,4 +206,6 @@ void local_lights_report() {
       static_cast<unsigned long long>(local_observations_),
       static_cast<unsigned long long>(local_native_peak_),
       static_cast<unsigned long long>(local_packet_peak_));
+  if (bridge_config_.mech_headlights)
+    fprintf(stderr, "[HEADLIGHTS] candidate_peak=%zu\n", headlight_peak_);
 }

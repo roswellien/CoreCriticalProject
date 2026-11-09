@@ -318,6 +318,10 @@ void collider_init(Mech& m) {
 void mech_construct(Mech& m, MechData* data, MechControls* ctl, Config* cfg, const char* name) {
   MechBuildHooks& h = *g_hooks;
   vehicle_base(m);
+  static uint64_t next_headlight_generation = 0;
+  if (++next_headlight_generation == 0)
+    ++next_headlight_generation;
+  m.headlight_generation = next_headlight_generation;
   m.power_down_pending = m.heat_shutdown = m.powered_down = false;
   m.xe8 = nullptr;
   collider_init(m);

@@ -5,7 +5,13 @@
 #include "platform/prepared_visuals.h"
 #include "renderer/surface_materials.hpp"
 
+#include <optional>
+
 namespace cc_mw3_re {
+
+std::optional<::platform::prepared::Matrix>
+original_headlight_socket(const ::platform::ModelDrawContext &context,
+                          const std::string &attachment);
 
 struct PreparedBatchDraw {
     const ::platform::prepared::Batch *batch{};

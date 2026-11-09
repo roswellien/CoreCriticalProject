@@ -336,7 +336,14 @@ struct WiredPlayerHooks : PlayerHooks {
   // The player's tick runs with the action lists (0x004f7d80, the Core
   // state's frame).
   void set_action(Handle node, uint32_t fn) override {
-    if (fn == kPlayerTick) zcls::node_set_action(as<zcls::Node>(node), [](zcls::Node*) { player_tick(); });
+    if (fn == kPlayerTick) zcls::node_set_action(as<zcls::Node>(node), [](zcls::Node*) {
+      player_tick();
+      if (auto* renderer = zvid::render3d(); renderer && renderer->wants_player_headlight_ticks()) {
+        platform::PlayerHeadlightTick tick{nullptr, player_tick_count(), player_dt()};
+        describe_player_headlight_tick(tick);
+        renderer->player_headlight_tick(tick);
+      }
+    });
   }
   Handle reader_load(const char* path) override { return e->handle_of(zrdr::load(path)); }
   Handle reader_find(Handle node, const char* key) override {

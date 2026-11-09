@@ -373,6 +373,17 @@ void check_prepared_models_surface_materials() {
     context.model_to_camera = context.model_to_world = matrix.data();
     context.opacity = 1;
 
+    matrix[9] = 12;
+    const auto socket = cc_mw3_re::original_headlight_socket(context, "control");
+    require(socket && (*socket)[3] == 12, "Headlight socket lost the native world transform");
+    require(!cc_mw3_re::original_headlight_socket(context, "missing"),
+            "Headlight socket accepted an unknown control");
+    panel->source_asset = std::make_shared<zcls::SourceAsset>(*asset);
+    require(!cc_mw3_re::original_headlight_socket(context, "control"),
+            "Headlight socket crossed a source asset boundary");
+    panel->source_asset = asset;
+    matrix[9] = 0;
+
     sdlfe::CoreCriticalAssets options;
     options.models.push_back({"authored", "0", mesh_path.string(), tex_path.string()});
 

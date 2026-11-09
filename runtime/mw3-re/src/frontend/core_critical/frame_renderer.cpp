@@ -1,6 +1,8 @@
 #include "frame_renderer.hpp"
 #include "frontend/sdl/cpu_interval.h"
 #include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/class.h"
+#include "gamez/zinput/zinput.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_fog.h"
@@ -16,6 +18,9 @@
 #include "renderer/effect_light_observations.hpp"
 #include "renderer/effect_lighting_stage.inc"
 #include "renderer/geometry/reference.hpp"
+#include "renderer/headlight_original_binding.hpp"
+#include "renderer/headlight_spotlight.hpp"
+#include "renderer/mech_headlights.hpp"
 #include "renderer/material_normals.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include <filesystem>
