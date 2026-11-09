@@ -143,6 +143,8 @@
                                     </Border>
 
                                     <Button x:Name="BtnLaunchGame" Content="▶  LAUNCH REMASTER" Style="{StaticResource PrimaryLaunchButton}" HorizontalAlignment="Left" Click="BtnLaunchGame_Click" />
+                                    <Button Content="▶  LAUNCH MW3-RE ALPHA" Style="{StaticResource PrimaryLaunchButton}" HorizontalAlignment="Left" Margin="0,8,0,0" IsEnabled="{Binding IsEnabled, ElementName=BtnLaunchGame}" Click="BtnLaunchMw3ReAlpha_Click" />
+                                    <TextBlock Text="Development playtest. Uses a separate MW3-RE runtime, settings and saves." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrushMuted}" Margin="0,4,0,0" />
                                     <TextBlock Text="First startup and launches after changing packs may take several minutes, depending on your PC and storage speed." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrushMuted}" Margin="0,10,0,0" />
                                     <TextBlock x:Name="TxtStartupProgress" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrushAmber}" Margin="0,6,0,0" />
                                 </StackPanel>

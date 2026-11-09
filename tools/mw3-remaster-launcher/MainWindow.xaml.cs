@@ -784,6 +784,51 @@ namespace MW3RemasterLauncher
             }
         }
 
+        private async void BtnLaunchMw3ReAlpha_Click(object sender, RoutedEventArgs e)
+        {
+            if (_assetInstallActive || _nativeSessionActive || _launchPreparing) return;
+            var validation = GameValidator.Validate(_settingsMgr.Current.GamePath);
+            if (!validation.IsValid)
+            {
+                BtnBrowseGamePath_Click(sender, e);
+                return;
+            }
+
+            var profile = Path.Combine(_dataRoot, "MW3-RE-Alpha");
+            var readyFile = Path.Combine(profile, $"ready-{Guid.NewGuid():N}");
+            _nativeSessionActive = true;
+            BtnLaunchGame.IsEnabled = false;
+            try
+            {
+                var startInfo = Mw3ReAlphaRunner.CreateStartInfo(_basePath, profile, validation.GameDirectory, readyFile);
+                using var process = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("The MW3-RE Alpha process could not start.");
+                TxtStartupProgress.Text = "Starting MW3-RE Alpha…";
+                var exited = process.WaitForExitAsync();
+                while (!exited.IsCompleted && !File.Exists(readyFile))
+                    await Task.WhenAny(exited, Task.Delay(200));
+                if (!exited.IsCompleted)
+                    TxtStartupProgress.Text = "MW3-RE Alpha is running.";
+                await exited;
+                if (process.ExitCode != 0 || !File.Exists(readyFile))
+                    throw new InvalidOperationException($"MW3-RE Alpha exited with code {process.ExitCode} ({(File.Exists(readyFile) ? "after" : "before")} first-frame readiness).");
+                TxtStartupProgress.Text = "MW3-RE Alpha exited normally.";
+            }
+            catch (Exception error)
+            {
+                TxtStartupProgress.Text = "MW3-RE Alpha launch failed.";
+                MessageBox.Show($"{error.Message}\n\nAlpha profile: {profile}", "MW3-RE Alpha", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                _nativeSessionActive = false;
+                ValidateGamePath();
+                try { File.Delete(readyFile); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+
         private async void BtnLaunchGame_Click(object sender, RoutedEventArgs e)
         {
             if (_assetInstallActive || _nativeSessionActive || _launchPreparing) return;
