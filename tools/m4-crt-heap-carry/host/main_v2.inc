@@ -126,7 +126,8 @@ int main(int argc,char**argv){::SetUnhandledExceptionFilter(host_crash);if(const
    auto&ls=*reinterpret_cast<State*>(r.remill_state().data());ls.gpr.rsp.dword=frame;ls.gpr.rip.dword=mf::crt_entry;r.memory().store<unsigned>({frame},Runtime::external_return);
    static const int ltoken=0;mf::Stage stage(r,host_heap,mfc_loader,mf::stage_token(r,const_cast<int*>(&ltoken)),mf::Stage::Kind::initterm);
    try{stage.run();}catch(const std::exception&e){std::cerr<<"loader-order entry fault: "<<e.what()<<" pc=0x"<<std::hex<<stage.state.gpr.rip.dword<<std::dec<<" bodies="<<stage.bodies<<" services="<<(stage.apis_dropped+stage.apis.size())<<"\n";throw;}
-   throw std::runtime_error("Loader order: the game CRT entry returned without process exit");}
+   // Queued render commands refer to this stage, so the render thread stops before it goes out of scope.
+   stage.stop_render_thread();throw std::runtime_error("Loader order: the game CRT entry returned without process exit");}
   if(mode==1){require(!fdiv.resolve_data({fd::game_iat}),"File zero cannot become initialized data before actual writer");}
   if(mode==2){reinterpret_cast<State*>(r.remill_state().data())->x87.fxsave.cwd.flat^=0x100;}
   if(mode==3){r.memory().protect({0x78037000},Permissions::read);}

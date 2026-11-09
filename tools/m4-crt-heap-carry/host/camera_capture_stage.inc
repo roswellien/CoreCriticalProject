@@ -26,7 +26,7 @@ void camera_reset(const char *signal = "transition") {
     camera_node_epochs.clear();
     camera_last_snapshot.reset();
     if (host.sren)
-        host.sren->invalidate_camera_history(mw34::temporal::Reset::transition);
+        camera_history_invalidate(mw34::temporal::Reset::transition);
 }
 unsigned camera_context() {
     const unsigned context = load(0x5f4c8c);
@@ -83,7 +83,7 @@ void camera_capture(D3DCmd &draw, unsigned target) {
     auto reject = [&](const char *reason) {
         camera_rejection = reason;
         if (draw.model && draw.model->world && host.sren)
-            host.sren->invalidate_camera_history(mw34::temporal::Reset::invalid);
+            camera_history_invalidate(mw34::temporal::Reset::invalid);
     };
     if (frontend_on() || !camera_pause_instances.empty() ||
         photo_replay.mode != mw34::photo_replay::Mode::Live || photo_replay_detached_cam() ||
@@ -218,7 +218,7 @@ void camera_present(unsigned flipped_target) {
     if (host.sren &&
         (!camera_pause_instances.empty() || photo_replay.mode != mw34::photo_replay::Mode::Live ||
          photo_replay_detached_cam() || ::GetForegroundWindow() != host.display.window))
-        host.sren->invalidate_camera_history(mw34::temporal::Reset::transition);
+        camera_history_invalidate(mw34::temporal::Reset::transition);
     std::array<char, 384> diagnostic{};
     std::snprintf(diagnostic.data(), diagnostic.size(),
                   "%s signal=%s epoch=%llu pause=%llu/%llu relocations=%llu presets=%llu static=%llu/%llu/%llu types=%x cell=%llu/%llu/%llu source-reject=%s",
@@ -230,7 +230,7 @@ void camera_present(unsigned flipped_target) {
                   (unsigned long long)temporal_cell_calls,(unsigned long long)temporal_placement_calls,
                   (unsigned long long)temporal_record_matches,temporal_source_rejection);
     if (host.sren)
-        host.sren->complete_camera_history(camera_flip_serial, flipped_target, diagnostic.data());
+        camera_history_complete(camera_flip_serial, flipped_target, diagnostic.data());
     temporal_dump_completed();
     camera_rejection = "none";
     temporal_source_rejection="none";
@@ -239,7 +239,7 @@ void camera_surface_written(unsigned surface) {
     if (!mw34::temporal::enabled() || !host.sren || !camera_last_snapshot)
         return;
     if (surface == camera_last_snapshot->target || (host.res_zb && surface == host.res_zb))
-        host.sren->invalidate_camera_history(mw34::temporal::Reset::external_write);
+        camera_history_invalidate(mw34::temporal::Reset::external_write);
 }
 void camera_scene(mw34::vkscene::Scene &scene) {
     if (!mw34::temporal::enabled())
