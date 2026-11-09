@@ -431,8 +431,14 @@ to runtime float precision.
 `guest_node` resolves a live node under the actor's current root. `donor_bone`
 requires prepared visuals and names a donor skeleton bone, using the same axis
 conversion and root-world basis as firepoints. Direction receives rotation/scale
-and normalization, never translation. Missing required mounts fail visibly;
-reconstructed visual bones alone cannot keep a removed component's lamp alive.
+and normalization, never translation. A mount that can't be found when the mech
+is built fails visibly. Once the mission is running, a lamp whose mount is lost
+(for example a destroyed limb) switches off and the mission carries on: a lamp
+that worked on the current model stays off for the rest of the mission, and one
+whose mount is missing from the current model (a distance model, say) stays dark
+and is tried again until the mount returns. Each change is logged once to the
+host's `native/stderr.txt`. Reconstructed visual bones alone cannot keep a
+removed component's lamp alive.
 
 Build, import and enable the pack normally. Enable Dynamic Lighting and Headlights
 in Display, then assign a key or enabled-controller button in Controls → Headlight
