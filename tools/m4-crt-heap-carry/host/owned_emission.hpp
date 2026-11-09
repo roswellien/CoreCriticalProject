@@ -79,7 +79,7 @@ class Reader {
         std::string result;
         bool ended{};
         for (unsigned i = 0; i < 32; ++i) {
-            const unsigned char value = bytes_[offset_++];
+            const auto value = static_cast<unsigned char>(bytes_[offset_++]);
             if (!value) {
                 ended = true;
                 continue;
