@@ -426,4 +426,65 @@ bool PreparedModels::has_binding(const platform::ModelDrawContext &context) cons
     return false;
 }
 
+std::optional<Matrix>
+PreparedModels::donor_headlight_socket(const platform::ModelDrawContext &context,
+                                       const std::string &bone_name,
+                                       std::vector<std::uintptr_t> *ancestry) const {
+    if (ancestry)
+        ancestry->clear();
+    const auto *node = static_cast<const Node *>(context.node);
+    if (!node || !node->source_asset || !context.model_to_world || !context.ordinary ||
+        context.morphing || context.overlay || context.opacity != 1 || bone_name.empty())
+        return std::nullopt;
+    const auto *root = source_root(node);
+    if (!root)
+        return std::nullopt;
+    const Model *selected = nullptr;
+    for (const auto &model : models_) {
+        if (model.source_asset == node->source_asset->name) {
+            selected = &model;
+            break;
+        }
+    }
+    if (!selected || selected->mesh.version != 4 || selected->mesh.rig.bones.empty())
+        return std::nullopt;
+    int bone_index = -1;
+    for (std::size_t i = 0; i < selected->mesh.rig.bones.size(); ++i) {
+        const auto &b = selected->mesh.rig.bones[i];
+        if (b.name == bone_name || b.control == bone_name) {
+            bone_index = static_cast<int>(i);
+            break;
+        }
+    }
+    if (bone_index < 0)
+        return std::nullopt;
+    const auto live = hierarchy(root);
+    const auto it_node = live.nodes.find(node);
+    if (it_node == live.nodes.end())
+        return std::nullopt;
+    if (ancestry) {
+        const auto &ctrl = selected->mesh.rig.bones[static_cast<std::size_t>(bone_index)].control;
+        const auto it = live.targets.find(!ctrl.empty() ? ctrl : bone_name);
+        if (it == live.targets.end())
+            return std::nullopt;
+        const Node *curr = it->second;
+        std::set<const Node *> seen;
+        while (curr && seen.insert(curr).second) {
+            ancestry->push_back(reinterpret_cast<std::uintptr_t>(curr));
+            if (curr == root || curr->parent_count() != 1 ||
+                curr->parents[0]->source_asset != root->source_asset)
+                break;
+            curr = curr->parents[0];
+        }
+    }
+    const auto rig = rig_for(selected->mesh.rig);
+    const auto donor = donor_pose(rig, live.poses);
+    if (static_cast<std::size_t>(bone_index) >= donor.world.size())
+        return std::nullopt;
+    const auto root_world =
+        math::product(from_native(context.model_to_world), math::inverse(it_node->second));
+    const auto world = math::product(root_world, math::inverse(math::axis()));
+    return math::product(world, donor.world.at(static_cast<std::size_t>(bone_index)));
+}
+
 } // namespace cc_mw3_re

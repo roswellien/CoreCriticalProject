@@ -8,9 +8,10 @@
 namespace mw34::headlights {
 
 inline std::optional<effects::Candidate> spotlight(const Lamp &lamp,
-                                                  const std::array<double, 16> &world,
-                                                  double envelope, std::uint64_t source) {
-    if (!(envelope > 0 && envelope <= 1) || !source || lamp.space != "guest_node")
+                                                   const std::array<double, 16> &world,
+                                                   double envelope, std::uint64_t source) {
+    if (!(envelope > 0 && envelope <= 1) || !source ||
+        (lamp.space != "guest_node" && lamp.space != "donor_bone"))
         return std::nullopt;
 
     std::array<double, 3> position{}, direction{};
