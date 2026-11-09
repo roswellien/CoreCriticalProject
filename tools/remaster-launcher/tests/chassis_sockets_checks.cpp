@@ -58,11 +58,15 @@ constexpr unsigned root=0x1000,node=0x2000,data=0x3000,rootdata=0x4000,weapon=0x
 void matrix(unsigned at,float x,float y,float z){for(unsigned i=0;i<12;++i)put(at+i*4,(i==0||i==4||i==8)?1.f:0.f);put(at+36,x);put(at+40,y);put(at+44,z);}
 bool success=true,throw_inside{},move_torso{};
 unsigned original_calls{},aim_pointer=aim,seen_aim_pointer{};std::array<float,3>seen_aim{};
+// Guest address 0 as the original saw it: a null aim point must not be shifted in place, even
+// if it would be put back afterwards.
+bool low_memory_zero_during_call{};
 // Stands in for 0x4B36E0: muzzle from the nominal firepoint plus spread, then the shot
 // direction from that muzzle to whatever the caller's aim point holds while it runs.
 void* original(State*,unsigned,void*){
  ++original_calls;
  seen_aim_pointer=load(stack+4);
+ low_memory_zero_during_call=load(0)==0&&load(4)==0&&load(8)==0;
  if(seen_aim_pointer)for(unsigned i=0;i<3;++i)seen_aim[i]=real(seen_aim_pointer+4*i);
  if(throw_inside)throw std::runtime_error("authored original fault");
  // 0x4ED280 brings a changed torso node up to date inside the original call.
@@ -145,8 +149,7 @@ void run_checks(){
  throw_inside=true;bool original_fault=false;try{run();}catch(const std::runtime_error&){original_fault=true;}throw_inside=false;
  check(original_fault&&!saw_aim(500.f,600.f,700.f)&&aim_holds(),"Aim point not restored after an original fault");
  aim_pointer=0;run();aim_pointer=aim;
- bool low_memory_untouched=true;for(unsigned at=0;at<12;++at)low_memory_untouched&=memory[at]==0;
- check(seen_aim_pointer==0&&low_memory_untouched&&load(direction)==0x80000000&&load(direction+4)==0x3f123456,"Null aim point touched");
+ check(seen_aim_pointer==0&&low_memory_zero_during_call&&load(direction)==0x80000000&&load(direction+4)==0x3f123456,"Null aim point touched");
  readonly_begin=aim;readonly_end=aim+12;run();readonly_begin=readonly_end=0;
  check(saw_unshifted_aim()&&aim_holds(),"Read-only aim point shifted");
  const float muzzle_before[3]{real(origin),real(origin+4),real(origin+8)};
