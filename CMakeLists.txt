@@ -175,6 +175,7 @@ if(MW34_CLANG_FORMAT)
     file(GLOB_RECURSE MW34_FORMAT_FILES CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/runtime/*.hpp" "${PROJECT_SOURCE_DIR}/runtime/*.cpp"
         "${PROJECT_SOURCE_DIR}/tests/*.cpp")
+    list(FILTER MW34_FORMAT_FILES EXCLUDE REGEX "/runtime/mw3-re/")
     add_custom_target(format
         COMMAND "${MW34_CLANG_FORMAT}" -i ${MW34_FORMAT_FILES}
         VERBATIM)
