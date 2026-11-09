@@ -92,14 +92,24 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
   context.ordinary = true;
   for (std::size_t i = 0; i < profile->lamps.size(); ++i) {
     const auto &lamp = profile->lamps[i];
-    const auto pose = original_headlight_socket(context, lamp.attachment);
+    if (headlight_player_.owner.retired_emitters.count(lamp.id))
+      continue;
+    std::vector<std::uintptr_t> ancestry;
+    const auto pose = original_headlight_socket(context, lamp.attachment, &ancestry);
     if (!pose)
       continue;
+    if (context.ordinary && !ancestry.empty()) {
+      headlight_player_.owner.source_ancestry[lamp.id] = std::move(ancestry);
+    }
     // Native fixture IDs occupy the low range, while weapons have a separate namespace.
     if (auto candidate = mw34::headlights::spotlight(lamp, *pose, intensity, (1ULL << 63) + i))
       headlight_candidates_.push_back(*candidate);
   }
   headlight_peak_ = std::max(headlight_peak_, headlight_candidates_.size());
+}
+
+void retire_headlight_node(std::uintptr_t node) override {
+  headlight_player_.owner.retire_node(node, headlight_player_.owner.generation);
 }
 
 void local_lights_clear() {

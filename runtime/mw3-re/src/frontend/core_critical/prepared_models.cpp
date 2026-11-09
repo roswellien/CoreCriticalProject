@@ -48,6 +48,7 @@ using Poses = std::map<std::string, Matrix>;
 struct Hierarchy {
     Poses poses;
     std::map<const Node *, Matrix> nodes;
+    std::map<std::string, const Node *> targets;
 };
 
 Hierarchy hierarchy(const Node *root) {
@@ -60,8 +61,10 @@ Hierarchy hierarchy(const Node *root) {
         const auto *node = pending[i];
         const auto current = output.nodes.at(node);
         const auto canonical = root->source_asset->nodes.find(node->name());
-        if (canonical != root->source_asset->nodes.end() && canonical->second == 1)
+        if (canonical != root->source_asset->nodes.end() && canonical->second == 1) {
             output.poses.emplace(node->name(), current);
+            output.targets.emplace(node->name(), node);
+        }
         for (int child = 0; child < node->child_count(); ++child) {
             const auto *next = node->children[child];
             if (next->source_asset != root->source_asset || next->source_asset_root)
@@ -173,7 +176,10 @@ math::Pose donor_pose(const math::Rig &rig, const Poses &poses) {
 } // namespace
 
 std::optional<Matrix> original_headlight_socket(const platform::ModelDrawContext &context,
-                                                const std::string &attachment) {
+                                                const std::string &attachment,
+                                                std::vector<std::uintptr_t> *ancestry) {
+    if (ancestry)
+        ancestry->clear();
     const auto *node = static_cast<const Node *>(context.node);
     if (!node || !node->source_asset || !context.model_to_world || !context.ordinary ||
         context.morphing || context.overlay || context.opacity != 1 || attachment.empty())
@@ -185,8 +191,22 @@ std::optional<Matrix> original_headlight_socket(const platform::ModelDrawContext
     const auto socket = live.poses.find(attachment);
     if (socket == live.poses.end())
         return std::nullopt;
-    const auto root_world = math::product(from_native(context.model_to_world),
-                                          math::inverse(live.nodes.at(node)));
+    if (ancestry) {
+        const auto it = live.targets.find(attachment);
+        if (it != live.targets.end()) {
+            const Node *curr = it->second;
+            std::set<const Node *> seen;
+            while (curr && seen.insert(curr).second) {
+                ancestry->push_back(reinterpret_cast<std::uintptr_t>(curr));
+                if (curr == root || curr->parent_count() != 1 ||
+                    curr->parents[0]->source_asset != root->source_asset)
+                    break;
+                curr = curr->parents[0];
+            }
+        }
+    }
+    const auto root_world =
+        math::product(from_native(context.model_to_world), math::inverse(live.nodes.at(node)));
     return math::product(root_world, socket->second);
 }
 

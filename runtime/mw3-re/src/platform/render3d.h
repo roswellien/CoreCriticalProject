@@ -122,6 +122,7 @@ class Render3D {
   virtual void mission_changed(const MissionIdentity &) {}
   virtual bool wants_player_headlight_ticks() const { return false; }
   virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
+  virtual void retire_headlight_node(std::uintptr_t /*node*/) {}
   virtual bool wants_material_context() const { return false; }
   virtual std::shared_ptr<const DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t) {
