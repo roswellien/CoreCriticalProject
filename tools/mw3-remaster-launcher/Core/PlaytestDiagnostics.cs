@@ -49,7 +49,8 @@ public static class PlaytestDiagnostics
                     settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
                 : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
                     settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
-                    settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor },
+                    settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
+                    settings.RenderThread },
             packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
             logs
         };
@@ -121,7 +122,8 @@ public static class PlaytestDiagnostics
             hardware = hardwareInventory ?? HardwareInventory.Capture(),
             settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
                 settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
-                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor },
+                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
+                settings.RenderThread },
             packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
             note = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory and redacted log tails."
         };

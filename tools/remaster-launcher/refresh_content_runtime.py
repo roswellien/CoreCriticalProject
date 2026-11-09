@@ -11,6 +11,7 @@ import shutil
 import re
 
 from content_capabilities import advertised
+from stage_native_runtime import COORDINATOR_FILES
 
 
 def pin(path):
@@ -45,11 +46,7 @@ def stage(source, output, version):
     shutil.copytree(source, output)
     profile['native']['content_capabilities'] = capabilities
     (output / manifest['profile']).write_text(json.dumps(profile, indent=2) + '\n')
-    for name in ('play_remaster.py', 'prepared_mech_packs.py', 'prepared_environment_packs.py',
-                 'prepared_skin_packs.py', 'prepared_chassis_packs.py', 'chassis_appearances.py', 'owned_chassis_visuals.py', 'surface_catalog_composition.py', 'legacy_chassis_resources.py', 'legacy_chassis_skins.py', 'chassis_catalog.py', 'chassis_icons.py',
-                 'reader_archive.py', 'zrd_document.py', 'normal_materials.py', 'normal_codec.py',
-                 'surface_materials.py', 'presentation_policy.py', 'content_capabilities.py',
-                 'legacy_content_capabilities.json'):
+    for name in COORDINATOR_FILES:
         shutil.copyfile(Path(__file__).with_name(name), output / 'coordinator' / name)
     manifest['version'] = version
     manifest['files'] = {p.relative_to(output).as_posix(): pin(p) for p in output.rglob('*')

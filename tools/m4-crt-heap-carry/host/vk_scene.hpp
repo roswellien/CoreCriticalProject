@@ -23,6 +23,7 @@
 #include "buffer_reserve.hpp"
 #include <vulkan/vulkan_win32.h>
 #include "dxgi_present.hpp"
+#include "render_thread.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <array>
@@ -156,7 +157,9 @@ struct Draw {
     unsigned detail_role{};
     std::uint64_t shadow_source{};
     std::shared_ptr<const mw34::materials::SurfaceMaterialRecord> surface_material{};
-    std::function<bool()> shadow_valid;
+    // The game thread holds an original source proof for shadow_source; Scene::valid_shadow_sources
+    // says whether it still holds.
+    bool shadow_proof{};
     bool condition_schematic{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
 };
@@ -174,7 +177,13 @@ struct Command {
 };
 struct Scene {
     double detail_time{};
+    // Lighting for detail_time, computed by the game thread from the campaign state it owns
+    // (world scenes only; HUD and canvas scenes use mw34::sun::settings()).
+    mw34::sun::Settings environment{};
     std::uint64_t world_frame{}, world_generation{}, world_context{};
+    // Number of the D3D scene, counted by the game thread (d3d_provider.inc); 0 for other scenes.
+    // Fixture shadow reports name the last one the renderer has processed.
+    std::uint64_t shadow_sequence{};
     std::array<float, 3> world_eye{};
     bool world_eye_valid{};
     mw34::effects::Uniform effect_lights{};
@@ -191,6 +200,84 @@ struct Scene {
     mw34::submission::DrawEmissions emissions;
     std::vector<Clear> clears;
     std::vector<Command> order;
+    // Shadow sources whose latest proof the game thread found valid before this scene, sorted.
+    // Retained fixture casters are judged by it, so the renderer never reads guest memory.
+    std::vector<std::uint64_t> valid_shadow_sources;
+};
+
+// MW34_RENDER_THREAD_CHECK=1 compares every game-side copy of renderer state with
+// the renderer's own and fails the run on a difference. It reads renderer state
+// directly, so it is valid only with the render thread off, for test runs.
+inline bool render_thread_check() {
+    static const bool value = [] {
+        const char *setting = std::getenv("MW34_RENDER_THREAD_CHECK");
+        if (!setting || !*setting || !std::strcmp(setting, "0"))
+            return false;
+        if (!std::strcmp(setting, "1"))
+            return true;
+        throw std::runtime_error("MW34_RENDER_THREAD_CHECK must be 0 or 1");
+    }();
+    return value;
+}
+
+// What the game thread has sent to one Renderer: the texture cache entries its
+// scenes leave behind, the render scale, the canvas kind and the scene count.
+// The game thread answers its own questions from this record, so it never reads
+// renderer state a render thread may be changing. Only the game thread uses it.
+struct SentRecord {
+    struct Texture {
+        std::uint64_t hash{};
+        unsigned width{}, height{};
+        bool valid{};
+    };
+    std::map<std::uint64_t, Texture> textures;
+    float scale = 1.f, scale_req = 1.f;
+    bool frontend_canvas{};
+    std::uint64_t scenes{};
+    // Follows Renderer::render: a new size empties the entry, and every changed or
+    // empty entry holds the scene's hash once the scene's uploads are done. The
+    // cache never evicts, so the record stays exact. render() also replaces the
+    // target whenever the requested scale or the canvas kind differs.
+    void scene(const Scene &s) {
+        std::vector<std::pair<Texture *, std::uint64_t>> changed;
+        for (const auto &t : s.textures) {
+            auto &entry = textures[t.key];
+            if (entry.width != t.width || entry.height != t.height)
+                entry = {0, t.width, t.height, false};
+            if (entry.hash != t.hash || !entry.valid)
+                changed.push_back({&entry, t.hash});
+        }
+        for (auto &[entry, hash] : changed) {
+            entry->hash = hash;
+            entry->valid = true;
+        }
+        scale = scale_req;
+        frontend_canvas = s.frontend_canvas;
+        ++scenes;
+    }
+    bool current(std::uint64_t key, std::uint64_t hash, unsigned w, unsigned h) const {
+        auto it = textures.find(key);
+        return it != textures.end() && it->second.valid && it->second.hash == hash &&
+               it->second.width == w && it->second.height == h;
+    }
+};
+
+// Renderer counters the game thread logs. The game reads a copy taken while the
+// renderer is idle, never the live members.
+struct RendererCounters {
+    std::string device_name;
+    bool dxgi_presenting{};
+    std::uint64_t presents{}, readbacks{}, target_uploads{}, model_uploads{},
+        model_uploaded_bytes{}, model_draws{}, fxaa_passes{}, af_samplers{},
+        mip_levels_uploaded{}, world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{},
+        sun_world_draws{}, sun_model_draws{}, sun_tl_draws{}, sun_shadow_scenes{},
+        sun_shadow_casters{}, sun_shadow_reused{}, sky_draws{}, sky_tinted{}, sky_untinted{},
+        haze_draws{}, horizon_draws{}, haze_routed{}, sky_own_view{};
+    // Shadow sources of the proof-backed fixture casters the renderer still holds, sorted, after the
+    // scene whose shadow_sequence is retained_shadow_sequence (fixture_shadow_stage.inc). Null until
+    // the first fixture shadow pass. The game thread checks only those proofs and newer ones.
+    std::shared_ptr<const std::vector<std::uint64_t>> retained_shadow_sources;
+    std::uint64_t retained_shadow_sequence{};
 };
 
 // Owns the loader, device, caches, render targets and child presentation window.
@@ -209,7 +296,9 @@ class Renderer {
     void invalidate_camera_history(mw34::temporal::Reset reason) {
         if (mw34::temporal::enabled()) camera_history.invalidate(reason);
     }
-    void complete_camera_history(std::uint64_t frame, unsigned target, const char *admission = "none") {
+    // admission is owned, so a queued call keeps its text after the caller's buffer is gone.
+    void complete_camera_history(std::uint64_t frame, unsigned target,
+                                 const std::string &admission = "none") {
         if (!mw34::temporal::enabled()) return;
         camera_history.complete(frame, target);
         unsigned valid = 0, mode_mask = 0;
@@ -219,7 +308,7 @@ class Renderer {
         }
         std::fprintf(stderr, "Camera history frame=%llu views=%zu pairs=%u mode_mask=%x reset=%s rejected=%s mismatch=%s\n",
                      (unsigned long long)frame, camera_history.pairs().size(), valid, mode_mask,
-                     mw34::temporal::name(camera_history.last_reset()), admission,
+                     mw34::temporal::name(camera_history.last_reset()), admission.c_str(),
                      camera_history.disagreement());
     }
     std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{}, combined_draws{};
@@ -427,8 +516,38 @@ class Renderer {
     bool present_resident(HWND hwnd, unsigned w, unsigned h) {
         HostFpEnvironment fp;
         finish_world();
-        if (!::IsWindowVisible(hwnd))
+        const auto window = prepare_window(hwnd);
+        if (window == WindowState::hidden)
             return true;
+        if (window == WindowState::unprepared)
+            return false;
+        return present_prepared(hwnd, w, h);
+    }
+    // The window half of present_resident, run on the game thread: it owns the game window and the
+    // presentation child, and SetWindowPos sends messages to that thread. presentParent and child
+    // change only in present() and max_texture_dimension(), which the game thread runs while the
+    // render thread is idle.
+    enum class WindowState { hidden, unprepared, ready };
+    WindowState prepare_window(HWND hwnd) {
+        if (!::IsWindowVisible(hwnd))
+            return WindowState::hidden;
+        if (hwnd != presentParent || !child)
+            return WindowState::unprepared;
+        RECT rc{};
+        ::GetClientRect(hwnd, &rc);
+        RECT cc{};
+        ::GetClientRect(child, &cc);
+        if (cc.right != rc.right || cc.bottom != rc.bottom)
+            ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+        return WindowState::ready;
+    }
+    // The rest of present_resident, after prepare_window returned ready. It calls no window
+    // function that sends messages itself; swapchain creation, resizing, exclusive full screen and
+    // the present may, which the render thread marks for the waiting game thread to handle.
+    bool present_prepared(HWND hwnd, unsigned w, unsigned h) {
+        HostFpEnvironment fp;
+        finish_world();
         if (hwnd != presentParent || !child || !presentable || (!windowSurface && !dxgi.active()) ||
             !colorImage.image || w != width || h != height)
             return false;
@@ -437,15 +556,7 @@ class Renderer {
                   "wait present");
             presentInFlight = false;
         }
-        {
-            RECT rc{};
-            ::GetClientRect(hwnd, &rc);
-            RECT cc{};
-            ::GetClientRect(child, &cc);
-            if (cc.right != rc.right || cc.bottom != rc.bottom)
-                ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                               SWP_NOZORDER | SWP_NOACTIVATE);
-        }
+        const mw34::render_thread::SendsWindowMessages sends_window_messages;
         if (!swapchainReady())
             return true;
         unsigned index = 0;
@@ -928,6 +1039,58 @@ class Renderer {
         return it != textures.end() && it->second.valid && it->second.hash == hash &&
                it->second.width == w && it->second.height == h;
     }
+    // Written and read only by the game thread; see SentRecord.
+    SentRecord sent;
+    // The game thread's question "does the cache already hold this texture?".
+    bool sent_current(std::uint64_t key, std::uint64_t hash, unsigned w, unsigned h) const {
+        const bool answer = sent.current(key, hash, w, h);
+        if (render_thread_check() && answer != current(key, hash, w, h))
+            throw std::runtime_error("Render thread copy disagrees: texture " +
+                                     std::to_string(key));
+        return answer;
+    }
+    // Check mode: the scale and canvas kind the game recorded match the target.
+    void check_sent() const {
+        if (!render_thread_check())
+            return;
+        if (sent.scale != scale)
+            throw std::runtime_error("Render thread copy disagrees: render scale");
+        if (sent.frontend_canvas != target_frontend)
+            throw std::runtime_error("Render thread copy disagrees: canvas kind");
+    }
+    RendererCounters counters() const {
+        RendererCounters c;
+        c.device_name = device_name;
+        c.dxgi_presenting = dxgi_presenting();
+        c.presents = presents;
+        c.readbacks = readbacks;
+        c.target_uploads = target_uploads;
+        c.model_uploads = model_uploads;
+        c.model_uploaded_bytes = model_uploaded_bytes;
+        c.model_draws = model_draws;
+        c.fxaa_passes = fxaa_passes;
+        c.af_samplers = af_samplers;
+        c.mip_levels_uploaded = mip_levels_uploaded;
+        c.world_gpu_draws = world_gpu_draws;
+        c.effect_light_peak = effect_light_peak;
+        c.fixture_light_peak = fixture_light_peak;
+        c.sun_world_draws = sun_world_draws;
+        c.sun_model_draws = sun_model_draws;
+        c.sun_tl_draws = sun_tl_draws;
+        c.sun_shadow_scenes = sun_shadow_scenes;
+        c.sun_shadow_casters = sun_shadow_casters;
+        c.sun_shadow_reused = sun_shadow_reused;
+        c.sky_draws = sky_draws;
+        c.sky_tinted = sky_tinted;
+        c.sky_untinted = sky_untinted;
+        c.haze_draws = haze_draws;
+        c.horizon_draws = horizon_draws;
+        c.haze_routed = haze_routed;
+        c.sky_own_view = sky_own_view;
+        c.retained_shadow_sources = fixtureRetainedSources;
+        c.retained_shadow_sequence = fixtureRetainedSequence;
+        return c;
+    }
     // Lazy residency (provider MW34_LAZY_RT): with upload_in false the target images keep the
     // content of the previous scene (no guest upload); with readback_out false nothing is copied
     // back and the images stay in attachment layout until readback() copies them out on demand.
@@ -1069,9 +1232,8 @@ class Renderer {
             std::memcpy(up, s.color.data(), colorBytes);
         if (upload_in)
             mw34::depth::upload(up + depthOffset, s.depth.data(), size_t(pixels));
-        const auto environment = (s.hud || s.frontend_canvas)
-                                     ? mw34::sun::settings()
-                                     : mw34::sun::current_settings(s.detail_time);
+        const auto environment =
+            (s.hud || s.frontend_canvas) ? mw34::sun::settings() : s.environment;
         if (!world_scene_prepared)
             apply_atmosphere(s, environment);
         if (!s.vertices.empty())
