@@ -105,7 +105,11 @@ if(BUILD_TESTING)
     add_test(NAME deferred_source_provenance COMMAND mw34_deferred_source_tests)
 
     add_executable(mw34_owned_emission_tests tools/remaster-launcher/test_owned_emission.cpp)
-    target_compile_definitions(mw34_owned_emission_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    # effect_lighting.hpp stable-sorts 16-byte-aligned lights. MSVC before 14.51 (the CI
+    # runner has 14.44) rejects that unless the correct extended alignment is confirmed;
+    # see tools/m4-crt-heap-carry/HOST_BUILD.md.
+    target_compile_definitions(mw34_owned_emission_tests PRIVATE _CRT_SECURE_NO_WARNINGS
+                                                                 _ENABLE_EXTENDED_ALIGNED_STORAGE)
     mw34_warnings(mw34_owned_emission_tests)
     add_test(NAME owned_emission_contract COMMAND mw34_owned_emission_tests)
 

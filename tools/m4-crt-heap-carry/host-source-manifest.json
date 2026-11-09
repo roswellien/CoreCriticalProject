@@ -1053,8 +1053,8 @@
     "owned_emission.hpp": {
       "decision": "commit",
       "classification": "authored-host-source",
-      "bytes": 6894,
-      "sha256": "f1b8dd5b0e9b41770c592cbc15ab135b2d59e734894621a865bae4c2ca60203b"
+      "bytes": 6913,
+      "sha256": "7cf1d22ccf61b969a71153408e665c607aa8358ae15e1def66f52776a16cf607"
     },
     "owned_emission_stage.inc": {
       "decision": "commit",
