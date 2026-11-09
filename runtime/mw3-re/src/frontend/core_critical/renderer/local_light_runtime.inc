@@ -184,7 +184,9 @@ void local_lights_attach(vk::Scene &target) {
   std::vector<mw34::effects::Candidate> sources = local_native_;
   auto candidates = local_observed_.candidates(local_time_);
   sources.insert(sources.end(), headlight_candidates_.begin(), headlight_candidates_.end());
-  const auto observed_count = std::min(candidates.size(), 384 - sources.size());
+  // Keep within the ranker's 384-source cap without unsigned wraparound.
+  const std::size_t room = sources.size() < 384 ? 384 - sources.size() : 0;
+  const auto observed_count = std::min(candidates.size(), room);
   sources.insert(sources.end(), candidates.begin(), candidates.begin() + observed_count);
   mw34::effects::Point eye = {local_camera_[3], local_camera_[7],
                               local_camera_[11]};
