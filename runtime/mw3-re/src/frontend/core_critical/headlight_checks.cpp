@@ -199,12 +199,32 @@ void check_catalog() {
 
     const std::string valid_hash(64, 'a');
 
+    require(is_valid_stock_id(0), "stock_id 0 should be valid");
+    require(is_valid_stock_id(18), "stock_id 18 should be valid");
+    require(!is_valid_stock_id(7), "elemental stock_id 7 should be invalid");
+    require(!is_valid_stock_id(19), "stock_id 19 should be invalid");
+
     {
         std::stringstream ss(make_blob(1, 0, 0, valid_hash, 1));
         auto profiles = read_stock_catalog(ss);
         require(profiles.size() == 1, "valid catalog single profile mismatch");
         require(profiles[0].stock_id == 0, "stock_id mismatch");
         require(profiles[0].lamps.size() == 1, "lamps count mismatch");
+    }
+
+    {
+        std::stringstream ss(make_blob(1, 18, 0, valid_hash, 1));
+        auto profiles = read_stock_catalog(ss);
+        require(profiles.size() == 1 && profiles[0].stock_id == 18, "stock_id 18 catalog mismatch");
+        require(match_original(profiles, "mech_vulture.flt", valid_hash) != nullptr,
+                "match_original failed for stock_id 18 vulture");
+    }
+
+    {
+        std::stringstream ss(make_blob(1, 19, 0, valid_hash, 1));
+        bool rejected = false;
+        try { read_stock_catalog(ss); } catch (const std::runtime_error &) { rejected = true; }
+        require(rejected, "catalog accepted stock_id 19");
     }
 
     {

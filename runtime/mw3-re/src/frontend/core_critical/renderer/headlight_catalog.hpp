@@ -13,6 +13,15 @@
 #include <vector>
 
 namespace mw34::headlights {
+
+inline constexpr unsigned stock_profile_limit = 18;
+inline constexpr unsigned stock_id_limit = 19;
+inline constexpr unsigned elemental_stock_id = 7;
+
+inline constexpr bool is_valid_stock_id(unsigned id) noexcept {
+    return id < stock_id_limit && id != elemental_stock_id;
+}
+
 struct Lamp {
     std::string id, space, attachment;
     std::array<float, 3> position{}, direction{}, color{};
@@ -96,13 +105,13 @@ inline std::vector<StockProfile> read_stock_catalog(std::istream &file) {
     bytes(magic, 8);
     if (std::memcmp(magic, "MWHDLT1\0", 8)) fail();
     const auto count = number();
-    if (count > 18) fail();
+    if (count > stock_profile_limit) fail();
     std::vector<StockProfile> result;
     for (unsigned i = 0; i < count; ++i) {
         StockProfile profile;
         profile.stock_id = number();
         const unsigned kind = number();
-        if (profile.stock_id > 18 || profile.stock_id == 7 || kind > 1 ||
+        if (!is_valid_stock_id(profile.stock_id) || kind > 1 ||
             (!result.empty() && profile.stock_id <= result.back().stock_id)) fail();
         profile.replacement = kind != 0;
         profile.original_hash = required_text(64);
