@@ -11,7 +11,8 @@ namespace cc_mw3_re {
 
 std::optional<::platform::prepared::Matrix>
 original_headlight_socket(const ::platform::ModelDrawContext &context,
-                          const std::string &attachment);
+                          const std::string &attachment,
+                          std::vector<std::uintptr_t> *ancestry = nullptr);
 
 struct PreparedBatchDraw {
     const ::platform::prepared::Batch *batch{};

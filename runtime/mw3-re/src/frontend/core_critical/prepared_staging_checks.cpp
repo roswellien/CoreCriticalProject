@@ -374,10 +374,15 @@ void check_prepared_models_surface_materials() {
     context.opacity = 1;
 
     matrix[9] = 12;
-    const auto socket = cc_mw3_re::original_headlight_socket(context, "control");
+    std::vector<std::uintptr_t> ancestry;
+    const auto socket = cc_mw3_re::original_headlight_socket(context, "control", &ancestry);
     require(socket && (*socket)[3] == 12, "Headlight socket lost the native world transform");
-    require(!cc_mw3_re::original_headlight_socket(context, "missing"),
+    require(ancestry.size() == 2 && ancestry[0] == reinterpret_cast<std::uintptr_t>(control) &&
+                ancestry[1] == reinterpret_cast<std::uintptr_t>(root.get()),
+            "Headlight socket ancestry chain mismatch");
+    require(!cc_mw3_re::original_headlight_socket(context, "missing", &ancestry),
             "Headlight socket accepted an unknown control");
+    require(ancestry.empty(), "Unknown control left ancestry non-empty");
     panel->source_asset = std::make_shared<zcls::SourceAsset>(*asset);
     require(!cc_mw3_re::original_headlight_socket(context, "control"),
             "Headlight socket crossed a source asset boundary");

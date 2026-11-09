@@ -16,6 +16,7 @@
 #include "gamez/zclass/sound.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmodel/gmod_const.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 #include "platform/platform.h"
 
 namespace zcls {
@@ -604,6 +605,9 @@ int node_release(Node* node) {
 int node_delete(Node* node) {
   if (!node) return 5;
   if (node->parent_count() >= 1) return 1;
+  if (auto* r = zvid::render3d()) {
+    r->retire_headlight_node(reinterpret_cast<std::uintptr_t>(node));
+  }
   switch (node->cls()) {
     case 1: case 3: case 4: case 5: case 6: case 7: case 11: return node_release(node);
     case 2: return world_delete(node);
