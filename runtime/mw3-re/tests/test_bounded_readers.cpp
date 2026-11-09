@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "check.h"
+#include "gamez/zclass/cls_node.h"
+#include "platform/sha256.hpp"
 #include "gamez/zclass/cls_mechlib.h"
 #include "gamez/zeffect/zeff_anim_init.h"
 #include "gamez/zmodel/gmod_const.h"
@@ -81,7 +83,13 @@ TEST(bounded_mechlib_reads_the_shipped_trees_whole) {
   for (const Entry& e : read_all(path)) {
     if (!is_tree(e.name)) continue;
     ++trees;
-    loaded += zcls::mechlib_load(lib, e.name.c_str()) != nullptr;
+    const auto* root = zcls::mechlib_load(lib, e.name.c_str());
+    if (root) {
+      ++loaded;
+      platform::integrity::Sha256 expected;
+      expected.update(e.data.data(), e.data.size());
+      EXPECT(root->source_asset && root->source_asset->member_sha256 == expected.hex());
+    }
   }
   std::printf("  mechlib: %d of %d trees read whole\n", loaded, trees);
   EXPECT(trees == 57 && loaded == 57);

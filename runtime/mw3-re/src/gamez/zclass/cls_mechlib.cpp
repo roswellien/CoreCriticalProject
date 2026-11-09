@@ -1,5 +1,7 @@
 #include "gamez/zclass/cls_mechlib.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +14,7 @@
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "platform/sha256.hpp"
 
 namespace zcls {
 
@@ -36,6 +39,28 @@ T* read_array(std::FILE* f, uint32_t count, uint32_t size) {
   auto* p = static_cast<T*>(std::malloc(static_cast<size_t>(count) * size));
   std::fread(p, size, count, f);
   return p;
+}
+
+// Digest the archive member, including bytes beyond what the tree parser uses.
+std::string member_sha256(std::FILE* file, long start, uint32_t remaining) {
+  std::fpos_t saved;
+  if (!file || start < 0 || std::ferror(file) || std::feof(file) ||
+      std::fgetpos(file, &saved) != 0) return {};
+
+  platform::integrity::Sha256 hash;
+  std::array<unsigned char, 8192> buffer;
+  bool complete = std::fseek(file, start, SEEK_SET) == 0;
+  while (complete && remaining != 0) {
+    const auto count = std::min<std::size_t>(remaining, buffer.size());
+    complete = std::fread(buffer.data(), 1, count, file) == count;
+    if (complete) {
+      hash.update(buffer.data(), count);
+      remaining -= static_cast<uint32_t>(count);
+    }
+  }
+  const bool restored = std::fsetpos(file, &saved) == 0;
+  std::clearerr(file); // The incoming stream had neither EOF nor a read error.
+  return complete && restored ? hash.hex() : std::string{};
 }
 
 uint32_t u32_at(const uint8_t* p, int off) {
@@ -104,7 +129,9 @@ Node* mechlib_find(MechLib& lib, const char* name) {
 Node* mechlib_load(MechLib& lib, const char* name) {
   if (Node* hit = mechlib_find(lib, name)) return hit;
   uint32_t length = 0;
-  std::FILE* f = zutl_zar::seek(lib.archive, zutl_zar::find(lib.archive, name), &length);
+  const int index = zutl_zar::find(lib.archive, name);
+  std::FILE* f = zutl_zar::seek(lib.archive, index, &length);
+  const long start = f ? std::ftell(f) : -1;
   if (f) g_end = std::ftell(f) + static_cast<long>(length), g_broken = false;
   Node* root = read_tree(lib.reader, f, nullptr);
   g_end = -1;
@@ -121,6 +148,9 @@ Node* mechlib_load(MechLib& lib, const char* name) {
   if (root) {
     auto identity = std::make_shared<SourceAsset>();
     identity->name = name;
+    // A rejected legacy seek can leave the stream at a different entry.
+    if (start >= 0 && static_cast<uint64_t>(start) == lib.archive.entries[index].start)
+      identity->member_sha256 = member_sha256(f, start, length);
     std::vector<Node*> pending{root};
     for (size_t i = 0; i < pending.size(); ++i) {
       Node* node = pending[i];

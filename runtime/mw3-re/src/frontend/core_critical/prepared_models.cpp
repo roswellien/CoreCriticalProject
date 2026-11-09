@@ -17,6 +17,17 @@ using platform::prepared::Batch;
 using platform::prepared::Matrix;
 using zcls::Node;
 
+const Node *source_root(const Node *node) {
+    const Node *root = node;
+    for (unsigned depth = 0; !root->source_asset_root; ++depth) {
+        if (depth >= 64 || root->parent_count() != 1 ||
+            root->parents[0]->source_asset != node->source_asset)
+            return nullptr;
+        root = root->parents[0];
+    }
+    return root;
+}
+
 std::ifstream open(const std::string &path) {
     std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
     if (!input)
@@ -161,6 +172,24 @@ math::Pose donor_pose(const math::Rig &rig, const Poses &poses) {
 
 } // namespace
 
+std::optional<Matrix> original_headlight_socket(const platform::ModelDrawContext &context,
+                                                const std::string &attachment) {
+    const auto *node = static_cast<const Node *>(context.node);
+    if (!node || !node->source_asset || !context.model_to_world || !context.ordinary ||
+        context.morphing || context.overlay || context.opacity != 1 || attachment.empty())
+        return std::nullopt;
+    const auto *root = source_root(node);
+    if (!root)
+        return std::nullopt;
+    const auto live = hierarchy(root);
+    const auto socket = live.poses.find(attachment);
+    if (socket == live.poses.end())
+        return std::nullopt;
+    const auto root_world = math::product(from_native(context.model_to_world),
+                                          math::inverse(live.nodes.at(node)));
+    return math::product(root_world, socket->second);
+}
+
 PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
                                const std::vector<PreparedMaterialBinding> &materials) {
     if (!options.textures.empty()) {
@@ -293,13 +322,9 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         for (const auto &batch : selected->mesh.batches)
             if (!batch.donor_indices.empty())
                 return output;
-    const Node *root = node;
-    for (unsigned depth = 0; !root->source_asset_root; ++depth) {
-        if (depth >= 64 || root->parent_count() != 1 ||
-            root->parents[0]->source_asset != node->source_asset)
-            return output; // a detached part retains the ordinary native geometry
-        root = root->parents[0];
-    }
+    const auto *root = source_root(node);
+    if (!root)
+        return output; // a detached part retains the ordinary native geometry
     for (const auto &batch : selected->mesh.batches) {
         for (const auto *name : {&batch.owner, &batch.visibility, &batch.placement_frame,
                                  &batch.joint_frame, &batch.anchor_control})

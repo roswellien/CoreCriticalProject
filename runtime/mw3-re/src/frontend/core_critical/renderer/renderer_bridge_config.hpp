@@ -49,6 +49,8 @@ struct RendererBridgeConfig {
   // Fixtures / Local Lights / Shadow Atlas
   bool effect_lights{false};
   std::string effect_light_catalog;
+  bool mech_headlights{false};
+  std::string stock_headlights, headlight_bindings;
   bool fixture_lights{false};
   bool fixture_shadows{false};
   bool fixture_atlas_reuse{true};
@@ -98,6 +100,11 @@ struct RendererBridgeConfig {
           std::string("Invalid boolean environment value: ") + name);
     };
     cfg.effect_lights = read_env_bool("MW34_EFFECT_LIGHTS", false);
+    cfg.mech_headlights = read_env_bool("MW34_MECH_HEADLIGHTS", false);
+    if (const char *path = std::getenv("MW34_STOCK_HEADLIGHTS"))
+      cfg.stock_headlights = path;
+    if (const char *path = std::getenv("MW34_HEADLIGHT_BINDINGS"))
+      cfg.headlight_bindings = path;
     cfg.fixture_lights =
         read_env_bool("MW34_FIXTURE_LIGHTS", cfg.effect_lights);
     if (cfg.fixture_lights && !cfg.effect_lights)

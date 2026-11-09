@@ -7,6 +7,8 @@
 
 #include "gamez/zgame/unported.h"
 
+namespace platform { struct PlayerHeadlightTick; }
+
 // The mech build's and the launch's hooks wired to the program (app_mech.cpp,
 // docs/mech-build.md section 9). Not original code. The engine's side comes
 // as plain functions, so this header has neither of the two Handle types
@@ -307,6 +309,7 @@ const UnbindCalls& entity_unbind_calls();  // 0x0040ed00's: a part's mech (0x004
 // weapons), the mech globals cleared.
 bool mech_player_release(void* mech, int32_t* fire_mode);
 void* mission_player_mech();  // for the tests: world().mission_player ([0x0060861c] +0x14's mech)
+void describe_player_headlight_tick(platform::PlayerHeadlightTick& tick);
 int32_t mechs_alive();  // mech_build.cpp: made and not yet deleted
 void program_motions_open();  // motion.zbd opened (0x005a9820), as the mechs' set-up does
 void program_check_cheats();  // app_mission.cpp: Missions::check_cheats (0x00491d20)

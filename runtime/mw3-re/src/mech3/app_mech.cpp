@@ -15,6 +15,7 @@
 #include "mech3/cheats.h"
 #include "mech3/app_turret.h"
 #include "mech3/turret.h"
+#include "platform/render3d.h"
 
 #include <cmath>
 #include <cstdio>
@@ -1979,6 +1980,14 @@ bool mech_player_release(void* mech, int32_t* fire_mode) {
 }
 
 void* mission_player_mech() { return world().mission_player; }
+
+void describe_player_headlight_tick(platform::PlayerHeadlightTick& tick) {
+  const auto* mech = world().mission_player;
+  if (!entity_is_mech(mech)) return;
+  tick.node = mech->node;
+  tick.shutdown = mech->powered_down || mech->anim_state == 10;
+  tick.generation = mech->headlight_generation;
+}
 
 void mech_dead_tick(float dt) { dead_tick(dt); }
 void mech_dead_clear() { dead_mechs().clear(); }

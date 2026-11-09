@@ -349,6 +349,8 @@ struct Mech : Vehicle {
   float tonnage() const;              // 0x00416770
   void mark_narc(bool on);            // 0x0041ac10
   void note_hit();                    // 0x0041d170
+
+  uint64_t headlight_generation{};  // Host identity for this actor lifetime.
 };
 
 // Globals of other modules that the heat and damage code reads.

@@ -91,6 +91,15 @@ inline MissionIdentity make_mission_identity(int32_t game_type,
   return MissionIdentity{world_index, number};
 }
 
+// Borrowed native player actor node, valid only during the tick callback.
+struct PlayerHeadlightTick {
+  const void* node = nullptr;
+  uint32_t tick = 0;
+  float dt = 0;
+  bool shutdown = true;
+  uint64_t generation = 0;
+};
+
 class Render3D {
  public:
   virtual ~Render3D() = default;
@@ -111,6 +120,8 @@ class Render3D {
   // Typed mission-change callback from the native missions object. The
   // default is a no-op so renderers that do not care are unaffected.
   virtual void mission_changed(const MissionIdentity &) {}
+  virtual bool wants_player_headlight_ticks() const { return false; }
+  virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
   virtual bool wants_material_context() const { return false; }
   virtual std::shared_ptr<const DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t) {

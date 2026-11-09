@@ -22,6 +22,7 @@ using NodeAction = void (*)(Node* node);  // +0x48, run by the action lists with
 struct SourceAsset {
   std::string name;
   std::map<std::string, unsigned> nodes;
+  std::string member_sha256; // Empty if the source bytes could not be verified.
 };
 
 struct Node {                      // 0xd4-byte pool slot
