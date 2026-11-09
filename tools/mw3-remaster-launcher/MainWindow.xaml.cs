@@ -800,7 +800,12 @@ namespace MW3RemasterLauncher
             BtnLaunchGame.IsEnabled = false;
             try
             {
-                var startInfo = Mw3ReAlphaRunner.CreateStartInfo(_basePath, profile, validation.GameDirectory, readyFile);
+                var startInfo = Mw3ReAlphaRunner.CreateStartInfo(_basePath, profile, validation.GameDirectory,
+                    readyFile, _settingsMgr.Current, _packMgr.Packs, out var unsupportedPacks);
+                if (unsupportedPacks.Count > 0)
+                    MessageBox.Show(this, "MW3-RE Alpha cannot load these enabled packs:\n\n" +
+                        string.Join("\n", unsupportedPacks), "MW3-RE Alpha pack compatibility",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
                 using var process = Process.Start(startInfo)
                     ?? throw new InvalidOperationException("The MW3-RE Alpha process could not start.");
                 TxtStartupProgress.Text = "Starting MW3-RE Alpha…";
