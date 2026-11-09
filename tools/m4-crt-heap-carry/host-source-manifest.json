@@ -127,8 +127,8 @@
       "classification": "authored-host-source"
     },
     "chassis_sockets_stage.inc": {
-      "sha256": "56618ae42570d2ccc76a3d5fa6b889fd266251e211362919d2f3137acdd358ab",
-      "bytes": 7876,
+      "sha256": "c8805371ed95ab829bf08f31f771886b7a3d938d657e0250074542c538b37aa1",
+      "bytes": 10359,
       "decision": "commit",
       "classification": "authored-host-source"
     },

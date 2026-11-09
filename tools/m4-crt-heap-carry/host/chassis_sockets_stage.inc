@@ -1,5 +1,6 @@
-// Pack-authored donor sockets adapt only the successful original muzzle output.
-// Original firing, random spread, aim direction and guest return ABI stay intact.
+// Pack-authored donor sockets move the original's aim and its successful muzzle output to
+// the socket barrel. Original firing, random spread, the direction step with its torso
+// limit, and the guest return ABI stay the original's.
 OverrideMatrix chassis_socket_world(unsigned node) {
     auto result=override_identity();std::set<unsigned> seen;
     for(unsigned depth=0;node;++depth) {
@@ -100,14 +101,60 @@ std::optional<std::array<double,3>> chassis_socket_delta(unsigned node,unsigned 
     }
     return delta;
 }
+// The caller's aim point is shifted for the length of the original call and put back after
+// it, so it must be guest memory the stage may write, and not one of the original's own
+// outputs, which the original writes during that call.
+bool chassis_socket_aim_point_usable(unsigned aim,unsigned muzzle,unsigned direction) {
+    if(!aim||!readable(aim,12)||!writable(aim,12))return false;
+    const auto overlaps_aim=[aim](unsigned output){
+        return std::uint64_t(aim)<std::uint64_t(output)+12&&std::uint64_t(output)<std::uint64_t(aim)+12;
+    };
+    return !overlaps_aim(muzzle)&&!overlaps_aim(direction);
+}
 void* chassis_socket_body(State* s,unsigned target,void* p,Body body) {
     const unsigned weapon=state.gpr.rcx.dword,stack=state.gpr.rsp.dword;
     if(target!=0x4b36e0||!readable(weapon,0x98)||!readable(stack,20))return body(s,target,p);
-    const unsigned output=load(stack+8);
+    const unsigned aim=load(stack+4),output=load(stack+8),direction=load(stack+12);
     // Match the original 4B36E0->4ED650 node selection, including profile mounts.
     const unsigned mount=load(weapon+0x24),profile=load(weapon+0x80);
     const unsigned node=mount&&profile?(readable(mount,12)?load(mount+8):0):load(weapon+0x20);
-    void* result=body(s,target,p);
+    // 4B36E0 sets the shot direction from its nominal muzzle toward the caller's aim point
+    // and applies its torso limit to that line. Moving the aim point back by the socket
+    // offset for the call makes that line start at the socket barrel. This offset is taken
+    // before 4ED650->4ED280 brings a turning torso up to date, so it can trail the torso by
+    // one frame; the muzzle below uses an offset taken after the call.
+    std::array<unsigned,3> saved_aim{},shifted_aim{};
+    bool aim_shifted=false;
+    if(node) {
+        const State entry=state;
+        try {
+            {
+                OverrideMxcsr fp;
+                const auto aim_offset=chassis_socket_delta(node,weapon,profile,mount!=0);
+                if(aim_offset&&chassis_socket_aim_point_usable(aim,output,direction)) {
+                    bool all_finite=true;
+                    for(unsigned i=0;i<3;++i) {
+                        saved_aim[i]=load(aim+4*i);
+                        float value;std::memcpy(&value,&saved_aim[i],4);
+                        const float shifted=float(double(value)-(*aim_offset)[i]);
+                        all_finite=all_finite&&std::isfinite(value)&&std::isfinite(shifted);
+                        std::memcpy(&shifted_aim[i],&shifted,4);
+                    }
+                    aim_shifted=all_finite;
+                }
+            }
+            state=entry;
+        }catch(...){state=entry;throw;}
+    }
+    const auto write_aim=[&](const std::array<unsigned,3>& bits){
+        if(aim_shifted)for(unsigned i=0;i<3;++i)store(aim+4*i,bits[i]);
+    };
+    void* result;
+    try {
+        write_aim(shifted_aim);
+        result=body(s,target,p);
+    }catch(...){write_aim(saved_aim);throw;}
+    write_aim(saved_aim);
     if(!(state.gpr.rax.dword&255))return result;
     const State returned=state;OverrideMxcsr fp;
     try {
