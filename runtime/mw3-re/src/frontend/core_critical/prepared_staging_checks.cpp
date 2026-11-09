@@ -536,6 +536,12 @@ void check_prepared_models_surface_materials() {
         const auto v4_alias = v4_models.donor_headlight_socket(context, "torso");
         require(v4_alias.has_value() && (*v4_alias)[3] == 12,
                 "donor_headlight_socket failed on bone control alias");
+        std::vector<std::uintptr_t> pelvis_ancestry = {99};
+        const auto pelvis_socket =
+            v4_models.donor_headlight_socket(context, "Pelvis", &pelvis_ancestry);
+        require(pelvis_socket.has_value(),
+                "donor_headlight_socket failed for bone without control target");
+        require(pelvis_ancestry.empty(), "bone without control target should have empty ancestry");
         require(!v4_models.donor_headlight_socket(context, "nonexistent"),
                 "donor_headlight_socket accepted nonexistent bone");
         matrix[9] = 0;

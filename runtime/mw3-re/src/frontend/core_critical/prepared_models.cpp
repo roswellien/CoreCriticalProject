@@ -443,7 +443,6 @@ PreparedModels::donor_headlight_socket(const platform::ModelDrawContext &context
     for (const auto &model : models_) {
         if (model.source_asset == node->source_asset->name) {
             selected = &model;
-            break;
         }
     }
     if (!selected || selected->mesh.version != 4 || selected->mesh.rig.bones.empty())
@@ -465,16 +464,16 @@ PreparedModels::donor_headlight_socket(const platform::ModelDrawContext &context
     if (ancestry) {
         const auto &ctrl = selected->mesh.rig.bones[static_cast<std::size_t>(bone_index)].control;
         const auto it = live.targets.find(!ctrl.empty() ? ctrl : bone_name);
-        if (it == live.targets.end())
-            return std::nullopt;
-        const Node *curr = it->second;
-        std::set<const Node *> seen;
-        while (curr && seen.insert(curr).second) {
-            ancestry->push_back(reinterpret_cast<std::uintptr_t>(curr));
-            if (curr == root || curr->parent_count() != 1 ||
-                curr->parents[0]->source_asset != root->source_asset)
-                break;
-            curr = curr->parents[0];
+        if (it != live.targets.end()) {
+            const Node *curr = it->second;
+            std::set<const Node *> seen;
+            while (curr && seen.insert(curr).second) {
+                ancestry->push_back(reinterpret_cast<std::uintptr_t>(curr));
+                if (curr == root || curr->parent_count() != 1 ||
+                    curr->parents[0]->source_asset != root->source_asset)
+                    break;
+                curr = curr->parents[0];
+            }
         }
     }
     const auto rig = rig_for(selected->mesh.rig);
