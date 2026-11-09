@@ -320,6 +320,8 @@ int main(int argc, char **argv) {
         _putenv_s("MW34_RENDER_SCALE","");
         Scene scene{};scene.width=scene.height=64;scene.has_depth=true;
         scene.color.assign(4096,0);scene.depth.assign(4096,0);
+        // The game computes each scene's lighting before sending it (vdd.inc submit_scene).
+        scene.environment=mw34::sun::current_settings(scene.detail_time);
         // Prefix poison catches accidental binding1 offset0. World TL positions
         // are deliberately offscreen: the raw geometry must supply positions.
         for(unsigned i=0;i<3;++i)add(scene,{5000,5000,.5f,.5f,0xffff00ff,0xff000000,0,0});

@@ -89,7 +89,9 @@ static void math(){
     require(u.ambient[3]==0.f,"Normal mapping must not replace textured colour with normal diagnostics");
 }
 struct Tl {float x,y,z,rhw;unsigned color,spec;float u,v;};
-static Scene scene(){Scene s{};s.width=s.height=64;s.has_depth=true;s.color.assign(4096,0);s.depth.assign(4096,0);return s;}
+// The game computes each scene's lighting before sending it (vdd.inc submit_scene).
+static Scene scene(){Scene s{};s.width=s.height=64;s.has_depth=true;s.color.assign(4096,0);s.depth.assign(4096,0);
+    s.environment=mw34::sun::current_settings(s.detail_time);return s;}
 static Draw quad(Scene& s,bool world,bool rotate,bool faceSun,bool fog=false){
     auto g=std::make_shared<ModelGeometry>();g->key=world?11:12;g->hash=g->key;
     g->vertices={{-1,-1,2,0,1,0,0,0},{1,-1,2,0,1,0,0,0},{1,1,2,0,1,0,0,0},

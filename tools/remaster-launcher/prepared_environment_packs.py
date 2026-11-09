@@ -1,6 +1,6 @@
 """Resolve installed environment packs into private native launch resources.
 
-Operation banks are selected as a whole, first enabled pack wins per region.
+Operation banks are selected as a whole; each region has one explicit owner.
 Content never supplies process flags or commands. Runtime capabilities admit
 the resource contracts; installing a pack cannot add a runtime capability.
 """
@@ -248,6 +248,8 @@ def select(roots, host, verification=None):
         registry = read_json(Path(paths[REGISTRY])); region = registry.get('operation')
         if registry.get('schema_version')!=2 or registry.get('payload_profile')!=PROFILE or region not in REGIONS:
             raise ValueError('Unsupported environment registry')
+        if region in selected:
+            raise ValueError('Conflicting environment region ownership: '+region)
         banks=registry.get('banks',{}); expected={f'zbd/{r}/{n}.zbd' for r in REGIONS[region] for n in ['rtexture','rtexture2','rtexture3','texture','texture1','texture2']}
         if region == 'shared-mechs':
             expected = {'zbd/rmechtex.zbd', 'zbd/rmechtex16.zbd'}
@@ -266,7 +268,7 @@ def select(roots, host, verification=None):
                 raise ValueError('Shared mech normal manifest differs from declared pages')
             if set(registry)!={'schema_version','payload_profile','operation','banks','authored','authored_manifest'}:
                 raise ValueError('Unexpected shared mech registry fields')
-            selected.setdefault(region,dict(root=str(root),registry=registry,paths=paths,files=files,lighting=None))
+            selected[region]=dict(root=str(root),registry=registry,paths=paths,files=files,lighting=None)
             continue
         lighting = None
         if 'lighting' in registry:
@@ -306,7 +308,7 @@ def select(roots, host, verification=None):
                 raise ValueError('Normal manifest differs from declared pages')
             allowed_page_formats={'BWSNR2','BWSNR3'} if role=='world' else {'BWSNR2'}
             if any(files[p].get('format') not in allowed_page_formats for p in page_names): raise ValueError('Invalid normal page declaration')
-        selected.setdefault(region,dict(root=str(root),registry=registry,paths=paths,files=files,lighting=lighting))
+        selected[region]=dict(root=str(root),registry=registry,paths=paths,files=files,lighting=lighting)
     common={}
     for pack in selected.values():
         registry=pack['registry']

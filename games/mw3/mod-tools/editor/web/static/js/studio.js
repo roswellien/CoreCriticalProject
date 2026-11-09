@@ -30,13 +30,27 @@ const state = {
         },
         lighting: {
             preset_name: "sunset",
+            time_of_day: 18.0,
             azimuth: 235.0,
             elevation: 28.0,
             strength: 0.9,
+            sun_strength: 0.9,
             ambient: 0.22,
-            sun_color: [1.0, 0.82, 0.65],
-            sky_tint: [0.35, 0.45, 0.75],
+            ambient_strength: 0.22,
+            sun_color: [1.0, 0.75, 0.5],
+            ambient_color: [0.38, 0.32, 0.45],
+            sky_tint: [0.38, 0.28, 0.48],
             fog_distance: 1200,
+            shadows: true,
+            rain_intensity: 0.0,
+            wet_reflection: 0.0,
+            has_lightning: false,
+            dust_intensity: 0.0,
+            smog_intensity: 0.0,
+            heat_shimmer: 0.0,
+            volcanic_ash: 0.0,
+            lava_glow: 0.0,
+            is_interior: false,
         },
         objectives: {
             primary: [
@@ -91,12 +105,64 @@ const state = {
     history: [],
     historyIndex: -1,
     viewMode: "orbit", // 'orbit', 'topdown', 'iso'
+    sculpt: {
+        enabled: false,
+        mode: "raise",
+        radius: 45.0,
+        strength: 1.2,
+        falloff: "smooth",
+        isMouseDown: false,
+        targetHeight: 0,
+        originalPositions: null,
+    },
+    campaign: {
+        campaign_id: "operation_damocles",
+        campaign_title: "Operation Damocles",
+        author: "MW3 Modder",
+        version: "1.0.0",
+        description:
+            "Deep strike behind Clan Smoke Jaguar lines on Tranquil to disrupt regional communications and neutralize command garrisons.",
+        faction: "Inner Sphere",
+        theater: "Tranquil Coastal Basin",
+        continuity_rules: {
+            salvage_enabled: true,
+            starting_salvage_points: 1000,
+            repair_points: 500,
+            shared_pilots: true,
+        },
+        missions: [
+            {
+                mission_id: "m01_recon",
+                pack_id: "iron_ridge_outpost",
+                title: "Mission 1: Recon In Force",
+                theater: "Tranquil Coastal Basin",
+                briefing_text:
+                    "Infiltrate the perimeter and destroy the Clan sensor arrays. Maintain visual stealth.",
+                audio_track: "action_theme_1",
+                next_mission_id: "m02_assault",
+                branch_conditions: {
+                    on_secondary_complete: "m02_assault",
+                    on_secondary_failed: "m02_flank",
+                },
+            },
+            {
+                mission_id: "m02_assault",
+                pack_id: "iron_ridge_outpost",
+                title: "Mission 2: Fortress Breach",
+                theater: "Tranquil Coastal Basin",
+                briefing_text: "Launch direct assault against the fortified command citadel.",
+                audio_track: "action_theme_2",
+                next_mission_id: null,
+                branch_conditions: {},
+            },
+        ],
+    },
 };
 
 // Renderer-owned display objects, shared by the event handlers and animation loop.
 // assetObjectMap keys are project asset_id values; mesh children are not project IDs.
-let scene, camera, renderer, orbitControls, transformControls;
-let terrainMesh, waterMesh, sunLight, ambientLight, ghostPreview;
+let scene, camera, perspCamera, orthoCamera, renderer, orbitControls, transformControls;
+let terrainMesh, waterMesh, reconMapMesh, sunLight, ambientLight, ghostPreview, brushCursorRing;
 let assetObjectMap = new Map(); // asset_id -> THREE.Group
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
@@ -128,6 +194,19 @@ function playBeep(freq = 440, type = "sine", duration = 0.08) {
 
 // Authentic MechWarrior 3 Operation & Biome Environmental Metadata
 const OP_ENV_METADATA = {
+    flat: {
+        name: "Flat Plain / Blank Canvas",
+        center: [0, 0],
+        waterLevel: -100.0,
+        hasWater: false,
+        waterColor: 0x145266,
+        waterSize: [3000, 3000],
+        waterCenter: [0, 0],
+        palette: { sand: 0x5a6350, rock: 0x475240, peak: 0x3d4737, shoreY: -50.0 },
+        preset: "noon",
+        terrainTexture: "static/assets/textures/terrains/c1_txgter_1.png",
+        reconMap: null,
+    },
     c1: {
         name: "Op 1: Coastal Basin / Big Lake",
         center: [-1408, 0],
@@ -138,7 +217,14 @@ const OP_ENV_METADATA = {
         waterCenter: [-1408, 0],
         palette: { sand: 0xd9c28a, rock: 0x4a7337, peak: 0x5a6975, shoreY: 3.0 },
         preset: "sunset",
-        terrainTexture: "/static/assets/textures/terrains/c1_txgter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c1_txgter_1.png",
+        reconMap: {
+            texture: "static/assets/maps/c1m1.png",
+            mpp: 3.476,
+            offset: [-1114.434, 0.0, -659.279],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     c2: {
         name: "Op 2: Desert Canyons",
@@ -150,7 +236,14 @@ const OP_ENV_METADATA = {
         waterCenter: [-512, -1152],
         palette: { sand: 0xd9a76a, rock: 0x9e5b32, peak: 0xc47e45, shoreY: -50.0 },
         preset: "noon",
-        terrainTexture: "/static/assets/textures/terrains/c2_ggter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c2_ggter_1.png",
+        reconMap: {
+            texture: "static/assets/maps/c2m1.png",
+            mpp: 4.273,
+            offset: [1930.0, 0.0, -41.6],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     c3: {
         name: "Op 3: Volcanic Badlands",
@@ -162,7 +255,14 @@ const OP_ENV_METADATA = {
         waterCenter: [256, -3200],
         palette: { sand: 0x242426, rock: 0x473232, peak: 0x822a2a, shoreY: -20.0 },
         preset: "storm",
-        terrainTexture: "/static/assets/textures/terrains/c3_gter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c3_gter_1.png",
+        reconMap: {
+            texture: "static/assets/maps/c3m1.png",
+            mpp: -5.175,
+            offset: [-1255.0, 0.0, -224.0],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     c4: {
         name: "Op 4: Highland Mountains",
@@ -174,7 +274,14 @@ const OP_ENV_METADATA = {
         waterCenter: [128, 1280],
         palette: { sand: 0x526b48, rock: 0x545b63, peak: 0xd9e5eb, shoreY: -10.0 },
         preset: "noon",
-        terrainTexture: "/static/assets/textures/terrains/c4_gter_1.png",
+        terrainTexture: "static/assets/textures/terrains/c4_gter_1.png",
+        reconMap: {
+            texture: "static/assets/maps/c4m1.png",
+            mpp: -7.1,
+            offset: [-2365.0, 0.0, 1629.0],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
     t1: {
         name: "Training Grounds",
@@ -186,7 +293,14 @@ const OP_ENV_METADATA = {
         waterCenter: [1792, -1408],
         palette: { sand: 0x73695b, rock: 0x4a4744, peak: 0x8a847e, shoreY: -30.0 },
         preset: "noon",
-        terrainTexture: "/static/assets/textures/terrains/t1_ggter1.png",
+        terrainTexture: "static/assets/textures/terrains/t1_ggter1.png",
+        reconMap: {
+            texture: "static/assets/maps/t1m1.png",
+            mpp: 5.144,
+            offset: [3382.0, 0.0, -2.0],
+            widthPx: 640,
+            heightPx: 480,
+        },
     },
 };
 OP_ENV_METADATA.coastal = OP_ENV_METADATA.c1;
@@ -223,9 +337,24 @@ function initViewport() {
     scene.background = new THREE.Color(0x0e141f);
     scene.fog = new THREE.FogExp2(0x0e141f, 0.0006);
 
-    // Camera
-    camera = new THREE.PerspectiveCamera(45, width / height, 2.0, 10000);
-    camera.position.set(-600, 450, 750);
+    // Dual Cameras: 3D Perspective and 2D Orthographic
+    const aspect = width / height;
+    perspCamera = new THREE.PerspectiveCamera(45, aspect, 2.0, 10000);
+    perspCamera.position.set(-600, 450, 750);
+
+    const frustumSize = 1800;
+    orthoCamera = new THREE.OrthographicCamera(
+        (frustumSize * aspect) / -2,
+        (frustumSize * aspect) / 2,
+        frustumSize / 2,
+        frustumSize / -2,
+        1.0,
+        10000,
+    );
+    orthoCamera.position.set(-1408, 1600, 0);
+    orthoCamera.lookAt(-1408, 0, 0);
+
+    camera = perspCamera;
 
     // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -309,9 +438,24 @@ function initViewport() {
     ghostPreview.visible = false;
     scene.add(ghostPreview);
 
+    // Sculpt Cursor Ring
+    const ringGeom = new THREE.RingGeometry(43.5, 45.0, 32);
+    ringGeom.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({
+        color: 0x00f0ff,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.8,
+    });
+    brushCursorRing = new THREE.Mesh(ringGeom, ringMat);
+    brushCursorRing.visible = false;
+    scene.add(brushCursorRing);
+
     // Event Listeners
     window.addEventListener("resize", onWindowResize);
+    container.addEventListener("mousedown", onMouseDown);
     container.addEventListener("mousemove", onMouseMove);
+    container.addEventListener("mouseup", onMouseUp);
     container.addEventListener("click", onCanvasClick);
     window.addEventListener("keydown", onKeyDown);
 
@@ -427,7 +571,7 @@ async function buildTerrain() {
     let tData = terrainCache[opCode];
     if (!tData) {
         try {
-            const res = await fetch(`/static/assets/terrains/${opCode}.json`);
+            const res = await fetch(`static/assets/terrains/${opCode}.json`);
             if (res.ok) {
                 tData = await res.json();
                 terrainCache[opCode] = tData;
@@ -437,7 +581,69 @@ async function buildTerrain() {
         }
     }
 
-    if (tData) {
+    if (opCode === "flat") {
+        // Build authentic flat level plain (3000m x 3000m, 80x80 segments)
+        const size = 3000;
+        const segments = 80;
+        const geom = new THREE.PlaneGeometry(size, size, segments, segments);
+        geom.rotateX(-Math.PI / 2);
+
+        const count = geom.attributes.position.count;
+        const colors = new Float32Array(count * 3);
+        const uvs = geom.attributes.uv.array;
+        for (let i = 0; i < uvs.length; i++) {
+            uvs[i] *= 30.0;
+        }
+        geom.attributes.uv.needsUpdate = true;
+
+        const baseCol = new THREE.Color(0x4f5e48);
+        for (let i = 0; i < count; i++) {
+            colors[i * 3] = baseCol.r;
+            colors[i * 3 + 1] = baseCol.g;
+            colors[i * 3 + 2] = baseCol.b;
+        }
+        geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        geom.computeVertexNormals();
+
+        let terrainTex = null;
+        if (meta.terrainTexture) {
+            terrainTex = new THREE.TextureLoader().load(meta.terrainTexture);
+            terrainTex.wrapS = THREE.RepeatWrapping;
+            terrainTex.wrapT = THREE.RepeatWrapping;
+        }
+        const mat = new THREE.MeshStandardMaterial({
+            map: terrainTex,
+            vertexColors: true,
+            roughness: 0.88,
+            metalness: 0.1,
+            flatShading: false,
+        });
+        terrainMesh = new THREE.Mesh(geom, mat);
+        terrainMesh.receiveShadow = true;
+        terrainMesh.name = "terrain";
+        scene.add(terrainMesh);
+        state.sculpt.originalPositions = new Float32Array(geom.attributes.position.array);
+
+        if (state.project.terrain && state.project.terrain.height_modifications) {
+            const hmods = state.project.terrain.height_modifications;
+            const pos = geom.attributes.position;
+            let appliedCount = 0;
+            for (let i = 0; i < pos.count; i++) {
+                const vx = Math.round(pos.getX(i) * 10) / 10;
+                const vz = Math.round(pos.getZ(i) * 10) / 10;
+                const k = `${vx},${vz}`;
+                if (hmods[k] !== undefined) {
+                    pos.setY(i, hmods[k]);
+                    appliedCount++;
+                }
+            }
+            if (appliedCount > 0) {
+                pos.needsUpdate = true;
+                geom.computeVertexNormals();
+            }
+        }
+        console.log(`[Map Studio] Loaded flat blank canvas terrain (${count} vertices)`);
+    } else if (tData) {
         const geom = buildTerrainGeometryFromData(tData, opCode);
         let terrainTex = null;
         if (meta.terrainTexture) {
@@ -456,6 +662,31 @@ async function buildTerrain() {
         terrainMesh.receiveShadow = true;
         terrainMesh.name = "terrain";
         scene.add(terrainMesh);
+        state.sculpt.originalPositions = new Float32Array(geom.attributes.position.array);
+
+        // Apply saved terrain sculpt height modifications if present
+        if (state.project.terrain && state.project.terrain.height_modifications) {
+            const hmods = state.project.terrain.height_modifications;
+            const pos = geom.attributes.position;
+            let appliedCount = 0;
+            for (let i = 0; i < pos.count; i++) {
+                const vx = Math.round(pos.getX(i) * 10) / 10;
+                const vz = Math.round(pos.getZ(i) * 10) / 10;
+                const k = `${vx},${vz}`;
+                if (hmods[k] !== undefined) {
+                    pos.setY(i, hmods[k]);
+                    appliedCount++;
+                }
+            }
+            if (appliedCount > 0) {
+                pos.needsUpdate = true;
+                geom.computeVertexNormals();
+                console.log(
+                    `[Map Studio] Applied ${appliedCount} saved terrain height modifications`,
+                );
+            }
+        }
+
         console.log(
             `[Map Studio] Loaded authentic ${meta.name} terrain mesh (${tData.vertices.length} vertices, ${tData.faces.length} faces) with in-game texture ${meta.terrainTexture}`,
         );
@@ -478,6 +709,38 @@ async function buildTerrain() {
         scene.add(waterMesh);
     }
 
+    // 2b. Calibrated Authentic 2D Satellite Recon Map Overlay
+    if (reconMapMesh) {
+        scene.remove(reconMapMesh);
+        if (reconMapMesh.geometry) reconMapMesh.geometry.dispose();
+        reconMapMesh = null;
+    }
+    if (meta.reconMap) {
+        const rm = meta.reconMap;
+        const worldW = Math.abs(rm.widthPx * rm.mpp);
+        const worldH = Math.abs(rm.heightPx * rm.mpp);
+        const rmGeom = new THREE.PlaneGeometry(worldW, worldH);
+        rmGeom.rotateX(-Math.PI / 2);
+        const rmTex = new THREE.TextureLoader().load(rm.texture);
+        const rmMat = new THREE.MeshBasicMaterial({
+            map: rmTex,
+            transparent: true,
+            opacity: 0.88,
+            depthWrite: false,
+        });
+        reconMapMesh = new THREE.Mesh(rmGeom, rmMat);
+        reconMapMesh.position.set(rm.offset[0], -1.2, rm.offset[2]);
+        if (rm.mpp < 0) {
+            reconMapMesh.scale.set(-1, 1, -1);
+        }
+        reconMapMesh.name = "reconMapOverlay";
+        reconMapMesh.visible = state.viewMode === "topdown" || !!state.showReconOverlay;
+        scene.add(reconMapMesh);
+        console.log(
+            `[Map Studio] Calibrated 2D satellite recon map loaded: ${rm.texture} (${worldW.toFixed(1)}m x ${worldH.toFixed(1)}m) at [${rm.offset[0]}, ${rm.offset[2]}]`,
+        );
+    }
+
     // 3. Center orbit controls around operation center
     orbitControls.target.set(meta.center[0], 0, meta.center[1]);
     camera.position.set(meta.center[0] - 650, 480, meta.center[1] + 750);
@@ -492,9 +755,47 @@ async function buildTerrain() {
     syncSceneAssets();
 }
 
-// Update Lighting from State
+// Color Conversion Helpers
+function rgbToHex(rgb) {
+    if (!Array.isArray(rgb) || rgb.length < 3) return "#ffffff";
+    const r = Math.round(Math.min(1, Math.max(0, rgb[0])) * 255);
+    const g = Math.round(Math.min(1, Math.max(0, rgb[1])) * 255);
+    const b = Math.round(Math.min(1, Math.max(0, rgb[2])) * 255);
+    return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
+function hexToRgb(hex) {
+    const clean = hex.replace("#", "");
+    const num = parseInt(
+        clean.length === 3
+            ? clean
+                  .split("")
+                  .map((c) => c + c)
+                  .join("")
+            : clean,
+        16,
+    );
+    return [((num >> 16) & 255) / 255.0, ((num >> 8) & 255) / 255.0, (num & 255) / 255.0];
+}
+
+// Update Lighting and Atmospheric Effects from State
 function updateLighting() {
     const lcfg = state.project.lighting;
+    const isInterior = Boolean(lcfg.is_interior);
+
+    if (isInterior) {
+        sunLight.intensity = 0.0;
+        ambientLight.intensity = Math.max(
+            0.05,
+            (lcfg.ambient_strength || lcfg.ambient || 0.22) * 0.6,
+        );
+        ambientLight.color.setRGB(0.3, 0.32, 0.35);
+        scene.background = new THREE.Color(0x050608);
+        scene.fog.color = new THREE.Color(0x050608);
+        scene.fog.density = 1.0 / 600.0;
+        return;
+    }
+
     const azRad = THREE.MathUtils.degToRad(lcfg.azimuth);
     const elRad = THREE.MathUtils.degToRad(lcfg.elevation);
 
@@ -504,15 +805,355 @@ function updateLighting() {
     const sz = Math.cos(azRad) * Math.cos(elRad) * dist;
 
     sunLight.position.set(sx, sy, sz);
-    sunLight.color.setRGB(lcfg.sun_color[0], lcfg.sun_color[1], lcfg.sun_color[2]);
-    sunLight.intensity = lcfg.strength * 1.5;
+    const sunCol = lcfg.sun_color || [1.0, 0.85, 0.7];
+    sunLight.color.setRGB(sunCol[0], sunCol[1], sunCol[2]);
+    sunLight.intensity = (lcfg.sun_strength ?? lcfg.strength ?? 0.9) * 1.5;
+    sunLight.castShadow = Boolean(lcfg.shadows !== false);
 
-    ambientLight.intensity = lcfg.ambient;
+    const ambCol = lcfg.ambient_color || [0.4, 0.4, 0.45];
+    ambientLight.color.setRGB(ambCol[0], ambCol[1], ambCol[2]);
+    ambientLight.intensity = lcfg.ambient_strength ?? lcfg.ambient ?? 0.22;
 
-    const skyCol = new THREE.Color().fromArray(lcfg.sky_tint);
+    const skyCol = new THREE.Color().fromArray(lcfg.sky_tint || [0.38, 0.28, 0.48]);
     scene.background = skyCol;
     scene.fog.color = skyCol;
-    scene.fog.density = 1.0 / (lcfg.fog_distance * 2.2);
+    const fogDist = lcfg.fog_distance || 1200;
+    scene.fog.density = 1.0 / (fogDist * 2.2);
+
+    // Dynamic Weather Ground Wetness Response
+    if (terrainMesh && terrainMesh.material) {
+        const wetness = Number(lcfg.wet_reflection || lcfg.rain_intensity || 0.0);
+        terrainMesh.material.roughness = Math.max(0.15, 0.85 - wetness * 0.65);
+        terrainMesh.material.metalness = Math.min(0.4, wetness * 0.35);
+        terrainMesh.material.needsUpdate = true;
+    }
+}
+
+function openAtmosphereModal() {
+    syncAtmosphereUIFromState();
+    document.getElementById("atmosphere-modal").style.display = "flex";
+}
+
+function closeAtmosphereModal() {
+    document.getElementById("atmosphere-modal").style.display = "none";
+}
+
+function syncAtmosphereUIFromState() {
+    const lcfg = state.project.lighting;
+    const todSlider = document.getElementById("atmo-tod-slider");
+    if (todSlider) todSlider.value = lcfg.time_of_day || 18.0;
+
+    const hr = Math.floor(lcfg.time_of_day || 18.0);
+    const mn = Math.floor(((lcfg.time_of_day || 18.0) - hr) * 60);
+    const todDisp = document.getElementById("atmo-tod-display");
+    if (todDisp) {
+        todDisp.textContent = `${String(hr).padStart(2, "0")}:${String(mn).padStart(2, "0")} (${(lcfg.preset_name || "Custom").toUpperCase()})`;
+    }
+
+    const azSlider = document.getElementById("atmo-azimuth");
+    if (azSlider) {
+        azSlider.value = Math.round(lcfg.azimuth);
+        const azVal = document.getElementById("atmo-azimuth-val");
+        if (azVal) azVal.textContent = `${Math.round(lcfg.azimuth)}°`;
+    }
+
+    const elSlider = document.getElementById("atmo-elevation");
+    if (elSlider) {
+        elSlider.value = Math.round(lcfg.elevation);
+        const elVal = document.getElementById("atmo-elevation-val");
+        if (elVal) elVal.textContent = `${Math.round(lcfg.elevation)}°`;
+    }
+
+    const sunCol = document.getElementById("atmo-sun-color");
+    if (sunCol) sunCol.value = rgbToHex(lcfg.sun_color || [1.0, 0.75, 0.5]);
+
+    const sunStr = document.getElementById("atmo-sun-strength");
+    if (sunStr) sunStr.value = lcfg.sun_strength ?? lcfg.strength ?? 0.9;
+
+    const ambCol = document.getElementById("atmo-ambient-color");
+    if (ambCol) ambCol.value = rgbToHex(lcfg.ambient_color || [0.38, 0.32, 0.45]);
+
+    const ambStr = document.getElementById("atmo-ambient-strength");
+    if (ambStr) ambStr.value = lcfg.ambient_strength ?? lcfg.ambient ?? 0.22;
+
+    const skyCol = document.getElementById("atmo-sky-tint");
+    if (skyCol) skyCol.value = rgbToHex(lcfg.sky_tint || [0.38, 0.28, 0.48]);
+
+    const fogDist = document.getElementById("atmo-fog-dist");
+    if (fogDist) fogDist.value = lcfg.fog_distance || 1200;
+
+    const rainSlider = document.getElementById("weather-rain");
+    if (rainSlider) {
+        rainSlider.value = lcfg.rain_intensity || 0;
+        const rainVal = document.getElementById("weather-rain-val");
+        if (rainVal) rainVal.textContent = `${Math.round((lcfg.rain_intensity || 0) * 100)}%`;
+    }
+
+    const wetSlider = document.getElementById("weather-wetness");
+    if (wetSlider) {
+        wetSlider.value = lcfg.wet_reflection || 0;
+        const wetVal = document.getElementById("weather-wetness-val");
+        if (wetVal) wetVal.textContent = `${Math.round((lcfg.wet_reflection || 0) * 100)}%`;
+    }
+
+    const lightCheck = document.getElementById("weather-lightning-check");
+    if (lightCheck) lightCheck.checked = Boolean(lcfg.has_lightning);
+
+    const dustSlider = document.getElementById("weather-dust");
+    if (dustSlider) {
+        dustSlider.value = lcfg.dust_intensity || 0;
+        const dustVal = document.getElementById("weather-dust-val");
+        if (dustVal) dustVal.textContent = `${Math.round((lcfg.dust_intensity || 0) * 100)}%`;
+    }
+
+    const smogSlider = document.getElementById("weather-smog");
+    if (smogSlider) {
+        smogSlider.value = lcfg.smog_intensity || 0;
+        const smogVal = document.getElementById("weather-smog-val");
+        if (smogVal) smogVal.textContent = `${Math.round((lcfg.smog_intensity || 0) * 100)}%`;
+    }
+
+    const shimSlider = document.getElementById("weather-shimmer");
+    if (shimSlider) {
+        shimSlider.value = lcfg.heat_shimmer || 0;
+        const shimVal = document.getElementById("weather-shimmer-val");
+        if (shimVal) shimVal.textContent = `${Math.round((lcfg.heat_shimmer || 0) * 100)}%`;
+    }
+
+    const volcSlider = document.getElementById("weather-volcano");
+    if (volcSlider) {
+        volcSlider.value = lcfg.volcanic_ash || 0;
+        const volcVal = document.getElementById("weather-volcano-val");
+        if (volcVal) volcVal.textContent = `${Math.round((lcfg.volcanic_ash || 0) * 100)}%`;
+    }
+
+    const intCheck = document.getElementById("weather-interior-check");
+    if (intCheck) intCheck.checked = Boolean(lcfg.is_interior);
+
+    const shadowCheck = document.getElementById("atmo-shadows-check");
+    if (shadowCheck) shadowCheck.checked = Boolean(lcfg.shadows !== false);
+}
+
+function onAtmosphereDirectInput() {
+    const lcfg = state.project.lighting;
+    lcfg.azimuth = parseFloat(document.getElementById("atmo-azimuth").value);
+    lcfg.elevation = parseFloat(document.getElementById("atmo-elevation").value);
+    lcfg.sun_color = hexToRgb(document.getElementById("atmo-sun-color").value);
+    lcfg.sun_strength = parseFloat(document.getElementById("atmo-sun-strength").value);
+    lcfg.strength = lcfg.sun_strength;
+
+    lcfg.ambient_color = hexToRgb(document.getElementById("atmo-ambient-color").value);
+    lcfg.ambient_strength = parseFloat(document.getElementById("atmo-ambient-strength").value);
+    lcfg.ambient = lcfg.ambient_strength;
+
+    lcfg.sky_tint = hexToRgb(document.getElementById("atmo-sky-tint").value);
+    lcfg.fog_distance = parseFloat(document.getElementById("atmo-fog-dist").value);
+
+    lcfg.rain_intensity = parseFloat(document.getElementById("weather-rain").value);
+    lcfg.wet_reflection = parseFloat(document.getElementById("weather-wetness").value);
+    lcfg.has_lightning = document.getElementById("weather-lightning-check").checked;
+    lcfg.dust_intensity = parseFloat(document.getElementById("weather-dust").value);
+    lcfg.smog_intensity = parseFloat(document.getElementById("weather-smog").value);
+    lcfg.heat_shimmer = parseFloat(document.getElementById("weather-shimmer").value);
+    lcfg.volcanic_ash = parseFloat(document.getElementById("weather-volcano").value);
+    lcfg.lava_glow = lcfg.volcanic_ash;
+    lcfg.is_interior = document.getElementById("weather-interior-check").checked;
+    lcfg.shadows = document.getElementById("atmo-shadows-check").checked;
+
+    document.getElementById("atmo-azimuth-val").textContent = `${Math.round(lcfg.azimuth)}°`;
+    document.getElementById("atmo-elevation-val").textContent = `${Math.round(lcfg.elevation)}°`;
+    document.getElementById("weather-rain-val").textContent =
+        `${Math.round(lcfg.rain_intensity * 100)}%`;
+    document.getElementById("weather-wetness-val").textContent =
+        `${Math.round(lcfg.wet_reflection * 100)}%`;
+    document.getElementById("weather-dust-val").textContent =
+        `${Math.round(lcfg.dust_intensity * 100)}%`;
+    document.getElementById("weather-smog-val").textContent =
+        `${Math.round(lcfg.smog_intensity * 100)}%`;
+    document.getElementById("weather-shimmer-val").textContent =
+        `${Math.round(lcfg.heat_shimmer * 100)}%`;
+    document.getElementById("weather-volcano-val").textContent =
+        `${Math.round(lcfg.volcanic_ash * 100)}%`;
+
+    updateLighting();
+}
+
+function onTimeOfDaySliderChange(hour) {
+    const h = parseFloat(hour);
+    state.project.lighting.time_of_day = h;
+
+    const sunProgress = (h - 6.0) / 12.0;
+    let el, az;
+    if (sunProgress >= 0.0 && sunProgress <= 1.0) {
+        el = Math.sin(sunProgress * Math.PI) * 75.0;
+        az = 90.0 + sunProgress * 180.0;
+    } else {
+        const nightProgress = ((h - 18.0 + 24.0) % 24.0) / 12.0;
+        el = Math.sin(nightProgress * Math.PI) * 35.0;
+        az = (270.0 + nightProgress * 180.0) % 360.0;
+    }
+    state.project.lighting.elevation = Math.max(1.0, Math.round(el * 10) / 10);
+    state.project.lighting.azimuth = Math.round(az * 10) / 10;
+
+    let label = "Sunset";
+    if (h >= 5.0 && h < 7.0) {
+        label = "Dawn";
+        state.project.lighting.preset_name = "dawn";
+        state.project.lighting.sun_color = [1.0, 0.65, 0.4];
+        state.project.lighting.sky_tint = [0.4, 0.3, 0.55];
+        state.project.lighting.sun_strength = 0.6;
+        state.project.lighting.ambient = 0.18;
+    } else if (h >= 7.0 && h < 11.0) {
+        label = "Morning";
+        state.project.lighting.preset_name = "morning";
+        state.project.lighting.sun_color = [1.0, 0.92, 0.8];
+        state.project.lighting.sky_tint = [0.42, 0.62, 0.9];
+        state.project.lighting.sun_strength = 0.95;
+        state.project.lighting.ambient = 0.28;
+    } else if (h >= 11.0 && h < 15.0) {
+        label = "High Noon";
+        state.project.lighting.preset_name = "noon";
+        state.project.lighting.sun_color = [1.0, 1.0, 0.95];
+        state.project.lighting.sky_tint = [0.45, 0.65, 0.95];
+        state.project.lighting.sun_strength = 1.15;
+        state.project.lighting.ambient = 0.35;
+    } else if (h >= 15.0 && h < 17.5) {
+        label = "Afternoon";
+        state.project.lighting.preset_name = "afternoon";
+        state.project.lighting.sun_color = [1.0, 0.9, 0.75];
+        state.project.lighting.sky_tint = [0.4, 0.58, 0.88];
+        state.project.lighting.sun_strength = 1.0;
+        state.project.lighting.ambient = 0.3;
+    } else if (h >= 17.5 && h < 19.5) {
+        label = "Sunset";
+        state.project.lighting.preset_name = "sunset";
+        state.project.lighting.sun_color = [1.0, 0.75, 0.5];
+        state.project.lighting.sky_tint = [0.38, 0.28, 0.48];
+        state.project.lighting.sun_strength = 0.85;
+        state.project.lighting.ambient = 0.22;
+    } else if (h >= 19.5 && h < 21.5) {
+        label = "Dusk";
+        state.project.lighting.preset_name = "dusk";
+        state.project.lighting.sun_color = [0.65, 0.35, 0.45];
+        state.project.lighting.sky_tint = [0.18, 0.16, 0.3];
+        state.project.lighting.sun_strength = 0.25;
+        state.project.lighting.ambient = 0.12;
+    } else {
+        label = "Night";
+        state.project.lighting.preset_name = "night";
+        state.project.lighting.sun_color = [0.55, 0.65, 0.85];
+        state.project.lighting.sky_tint = [0.08, 0.1, 0.18];
+        state.project.lighting.sun_strength = 0.18;
+        state.project.lighting.ambient = 0.08;
+    }
+
+    const hr = Math.floor(h);
+    const mn = Math.floor((h - hr) * 60);
+    const todDisp = document.getElementById("atmo-tod-display");
+    if (todDisp) {
+        todDisp.textContent = `${String(hr).padStart(2, "0")}:${String(mn).padStart(2, "0")} (${label})`;
+    }
+
+    syncAtmosphereUIFromState();
+    updateLighting();
+}
+
+function applyTimeOfDayPreset(presetName) {
+    const p = presetName.toLowerCase();
+    if (p === "dawn") onTimeOfDaySliderChange(6.0);
+    else if (p === "morning") onTimeOfDaySliderChange(9.0);
+    else if (p === "noon") onTimeOfDaySliderChange(12.5);
+    else if (p === "afternoon") onTimeOfDaySliderChange(15.5);
+    else if (p === "sunset") onTimeOfDaySliderChange(18.2);
+    else if (p === "dusk") onTimeOfDaySliderChange(20.0);
+    else if (p === "night") onTimeOfDaySliderChange(23.5);
+    else if (p === "stealth") onTimeOfDaySliderChange(1.0);
+}
+
+function applyWeatherPreset(type) {
+    const lcfg = state.project.lighting;
+    lcfg.is_interior = false;
+    lcfg.rain_intensity = 0.0;
+    lcfg.wet_reflection = 0.0;
+    lcfg.has_lightning = false;
+    lcfg.dust_intensity = 0.0;
+    lcfg.smog_intensity = 0.0;
+    lcfg.heat_shimmer = 0.0;
+    lcfg.volcanic_ash = 0.0;
+    lcfg.lava_glow = 0.0;
+
+    if (type === "clear") {
+        lcfg.preset_name = "clear";
+    } else if (type === "rain") {
+        lcfg.preset_name = "rain";
+        lcfg.rain_intensity = 0.7;
+        lcfg.wet_reflection = 0.85;
+        lcfg.fog_distance = 900.0;
+    } else if (type === "storm") {
+        lcfg.preset_name = "storm";
+        lcfg.rain_intensity = 0.95;
+        lcfg.wet_reflection = 1.0;
+        lcfg.has_lightning = true;
+        lcfg.fog_distance = 650.0;
+        lcfg.sky_tint = [0.22, 0.25, 0.35];
+    } else if (type === "dust") {
+        lcfg.preset_name = "dust";
+        lcfg.dust_intensity = 0.85;
+        lcfg.heat_shimmer = 0.5;
+        lcfg.fog_distance = 450.0;
+        lcfg.sky_tint = [0.55, 0.45, 0.3];
+    } else if (type === "smog") {
+        lcfg.preset_name = "smog";
+        lcfg.smog_intensity = 0.8;
+        lcfg.wet_reflection = 0.35;
+        lcfg.fog_distance = 550.0;
+        lcfg.sky_tint = [0.35, 0.38, 0.3];
+    } else if (type === "heat") {
+        lcfg.preset_name = "heat";
+        lcfg.heat_shimmer = 0.85;
+        lcfg.dust_intensity = 0.25;
+        lcfg.sun_strength = 1.25;
+    } else if (type === "volcanic") {
+        lcfg.preset_name = "volcanic";
+        lcfg.volcanic_ash = 0.8;
+        lcfg.lava_glow = 0.9;
+        lcfg.fog_distance = 600.0;
+        lcfg.sky_tint = [0.25, 0.15, 0.15];
+    } else if (type === "interior") {
+        lcfg.preset_name = "interior";
+        lcfg.is_interior = true;
+        lcfg.sun_strength = 0.0;
+        lcfg.ambient_strength = 0.15;
+        lcfg.fog_distance = 300.0;
+    }
+
+    syncAtmosphereUIFromState();
+    updateLighting();
+}
+
+function triggerLightningFlash() {
+    playBeep(180, "sawtooth", 0.15);
+    const origColor = sunLight.color.clone();
+    const origIntensity = sunLight.intensity;
+    const origAmbient = ambientLight.intensity;
+
+    sunLight.color.setRGB(1.0, 1.0, 1.0);
+    sunLight.intensity = 3.5;
+    ambientLight.intensity = 1.8;
+    scene.background = new THREE.Color(0xddeeff);
+
+    setTimeout(() => {
+        sunLight.intensity = 0.4;
+        ambientLight.intensity = 0.25;
+        setTimeout(() => {
+            sunLight.color.copy(origColor);
+            sunLight.intensity = origIntensity;
+            ambientLight.intensity = origAmbient;
+            scene.background = new THREE.Color().fromArray(
+                state.project.lighting.sky_tint || [0.38, 0.28, 0.48],
+            );
+        }, 80);
+    }, 60);
 }
 
 let gameAssetsData = {};
@@ -556,7 +1197,7 @@ function buildGeometryFromData(assetData) {
  */
 async function loadGameAssets() {
     try {
-        const res = await fetch("/static/assets/game_assets_3d.json");
+        const res = await fetch("static/assets/game_assets_3d.json");
         if (res.ok) {
             gameAssetsData = await res.json();
             console.log(
@@ -943,6 +1584,7 @@ function syncSceneAssets() {
     }
 
     document.getElementById("stat-entities").innerText = state.project.assets.length;
+    if (typeof renderSceneOutliner === "function") renderSceneOutliner();
 }
 
 /** Convert viewport pixels to a ray hit on the preview terrain, or null. */
@@ -967,17 +1609,47 @@ function onMouseMove(event) {
         document.getElementById("stat-coords").innerText =
             `X: ${Math.round(pt.x)} | Y: ${Math.round(pt.y)} | Z: ${Math.round(pt.z)}`;
 
+        if (state.sculpt && state.sculpt.enabled && brushCursorRing) {
+            brushCursorRing.position.set(pt.x, pt.y + 0.25, pt.z);
+            brushCursorRing.visible = true;
+            if (state.sculpt.isMouseDown) {
+                applyTerrainSculpt(pt);
+            }
+        }
+
         if (state.activeTool) {
             ghostPreview.position.copy(pt);
             ghostPreview.visible = true;
         }
     } else {
         if (state.activeTool) ghostPreview.visible = false;
+        if (brushCursorRing && (!state.sculpt || !state.sculpt.isMouseDown)) {
+            brushCursorRing.visible = false;
+        }
+    }
+}
+
+function onMouseDown(event) {
+    if (state.sculpt && state.sculpt.enabled && event.button === 0) {
+        const pt = raycastTerrain(event);
+        if (pt) {
+            state.sculpt.isMouseDown = true;
+            state.sculpt.targetHeight = pt.y;
+            applyTerrainSculpt(pt);
+            playBeep(620, "sine", 0.04);
+        }
+    }
+}
+
+function onMouseUp(event) {
+    if (state.sculpt && state.sculpt.isMouseDown) {
+        state.sculpt.isMouseDown = false;
     }
 }
 
 // Canvas Click Handler (Place or Select)
 function onCanvasClick(event) {
+    if (state.sculpt && state.sculpt.enabled) return;
     // If dragging transform controls, ignore
     if (transformControls.dragging) return;
 
@@ -1065,6 +1737,18 @@ function getDefaultName(type) {
         mech_shadowcat: "Shadow Cat",
         mech_vulture: "Mad Dog / Vulture",
         mech_daishi: "Dire Wolf / Daishi",
+        mech_annihilator: "Annihilator ANH-1A",
+        mech_avatar: "Avatar AV1-O",
+        mech_blackhawk: "Black Hawk / Nova",
+        mech_cauldron: "Cauldron-Born / Ebon Jag",
+        mech_champion: "Champion 1N",
+        mech_dragonfly: "Dragonfly / Viper",
+        mech_firefly: "Firefly FFL-4A",
+        mech_orion: "Orion ON1-K",
+        mech_strider: "Strider SR1-O",
+        mech_sunder: "Sunder SD1-O",
+        mech_supernova: "Supernova",
+        mech_marauder: "Marauder MAD-3R",
         spawn: "Player Orbital Drop Zone",
         nav: "Nav Point Able",
         patrol: "OpFor Patrol Lance",
@@ -1163,6 +1847,29 @@ function updateInspector() {
     document.getElementById("insp-health-label").innerText = asset.health;
     document.getElementById("insp-objective").checked = !!asset.is_objective;
 
+    const hOffsetEl = document.getElementById("insp-height-offset");
+    if (hOffsetEl) {
+        hOffsetEl.value = Math.round(asset.height_offset || 0);
+        document.getElementById("insp-height-offset-val").innerText =
+            `${Math.round(asset.height_offset || 0)}m`;
+    }
+
+    const aiSec = document.getElementById("insp-ai-section");
+    const isCombat =
+        (asset.asset_type || "").startsWith("mech_") ||
+        (asset.asset_type || "").startsWith("turret_");
+    if (aiSec) {
+        aiSec.style.display = isCombat ? "block" : "none";
+        if (isCombat) {
+            document.getElementById("insp-ai-skill").value = asset.ai_skill || "regular";
+            document.getElementById("insp-ai-stance").value = asset.ai_stance || "guard";
+            document.getElementById("insp-ai-range").value = asset.ai_range || "medium";
+            document.getElementById("insp-ai-retreat").value = asset.ai_retreat_health ?? 15;
+            document.getElementById("insp-ai-retreat-val").innerText =
+                `${asset.ai_retreat_health ?? 15}%`;
+        }
+    }
+
     const objDescEl = document.getElementById("insp-objective-desc");
     if (objDescEl) objDescEl.value = asset.objective_desc || "";
 
@@ -1178,6 +1885,8 @@ function updateInspector() {
                 asset.trigger_action ||
                 (asset.asset_type === "trig_evac" ? "evac_complete" : "spawn_ambush");
             document.getElementById("insp-trigger-msg").value = asset.trigger_message || "";
+            const trigAudioEl = document.getElementById("insp-trigger-audio");
+            if (trigAudioEl) trigAudioEl.value = asset.trigger_audio || "betty_alarm";
         }
     }
 }
@@ -1237,6 +1946,49 @@ function bindInspectorEvents() {
             document.getElementById("insp-yaw-label").innerText = `${a.yaw_deg}°`;
             syncSceneAssets();
         }
+    });
+
+    const hOffsetInput = document.getElementById("insp-height-offset");
+    if (hOffsetInput) {
+        hOffsetInput.addEventListener("input", (e) => {
+            const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+            if (a) {
+                a.height_offset = parseFloat(e.target.value);
+                document.getElementById("insp-height-offset-val").innerText =
+                    `${Math.round(a.height_offset)}m`;
+                const groundY = getTerrainHeight(a.x, a.z);
+                a.y = Math.round((groundY + a.height_offset) * 10) / 10;
+                syncSceneAssets();
+            }
+        });
+    }
+
+    document.getElementById("insp-ai-skill")?.addEventListener("change", (e) => {
+        const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+        if (a) a.ai_skill = e.target.value;
+    });
+
+    document.getElementById("insp-ai-stance")?.addEventListener("change", (e) => {
+        const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+        if (a) a.ai_stance = e.target.value;
+    });
+
+    document.getElementById("insp-ai-range")?.addEventListener("change", (e) => {
+        const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+        if (a) a.ai_range = e.target.value;
+    });
+
+    document.getElementById("insp-ai-retreat")?.addEventListener("input", (e) => {
+        const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+        if (a) {
+            a.ai_retreat_health = parseInt(e.target.value);
+            document.getElementById("insp-ai-retreat-val").innerText = `${a.ai_retreat_health}%`;
+        }
+    });
+
+    document.getElementById("insp-trigger-audio")?.addEventListener("change", (e) => {
+        const a = state.project.assets.find((x) => x.asset_id === state.selectedAssetId);
+        if (a) a.trigger_audio = e.target.value;
     });
 
     document.getElementById("insp-faction").addEventListener("change", (e) => {
@@ -1300,32 +2052,84 @@ function bindInspectorEvents() {
     });
 }
 
-// Camera View Mode Presets
+// Camera View Mode Presets (True 2D Orthographic Tactical vs 3D Perspective Studio)
 function setViewMode(mode) {
     state.viewMode = mode;
     document.querySelectorAll(".hud-btn").forEach((btn) => btn.classList.remove("active"));
-    document.getElementById(`btn-view-${mode}`).classList.add("active");
+    const activeBtn = document.getElementById(`btn-view-${mode}`);
+    if (activeBtn) activeBtn.classList.add("active");
 
     const opCode = state.project.base_operation || "c1";
     const meta = OP_ENV_METADATA[opCode] || OP_ENV_METADATA.c1;
     const cx = meta.center[0];
     const cz = meta.center[1];
 
-    orbitControls.reset();
-    orbitControls.target.set(cx, 0, cz);
+    const modeToggleBtn = document.getElementById("btn-mode-toggle");
 
     if (mode === "topdown") {
-        camera.position.set(cx, 2400, cz);
-        orbitControls.maxPolarAngle = 0.001; // Lock to top-down
+        // True 2D Orthographic Tactical Map Mode
+        camera = orthoCamera;
+        orthoCamera.position.set(cx, 1800, cz);
+        orthoCamera.lookAt(cx, 0, cz);
+
+        orbitControls.object = orthoCamera;
+        orbitControls.enableRotate = false; // Lock rotation in 2D mode
+        orbitControls.screenSpacePanning = true;
+        orbitControls.target.set(cx, 0, cz);
+        transformControls.camera = orthoCamera;
+
+        if (modeToggleBtn) modeToggleBtn.innerHTML = "Mode: 2D Tactical (Click for 3D)";
     } else if (mode === "iso") {
-        camera.position.set(cx - 1100, 1100, cz + 1100);
+        // 3D Isometric View
+        camera = perspCamera;
+        orbitControls.object = perspCamera;
+        orbitControls.enableRotate = true;
         orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
+        perspCamera.position.set(cx - 1100, 1100, cz + 1100);
+        orbitControls.target.set(cx, 0, cz);
+        transformControls.camera = perspCamera;
+
+        if (modeToggleBtn) modeToggleBtn.innerHTML = "Mode: Isometric (Click for 2D)";
     } else {
-        // orbit
-        camera.position.set(cx - 650, 480, cz + 750);
+        // Full 3D Perspective Studio Mode
+        camera = perspCamera;
+        orbitControls.object = perspCamera;
+        orbitControls.enableRotate = true;
         orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
+        perspCamera.position.set(cx - 650, 480, cz + 750);
+        orbitControls.target.set(cx, 0, cz);
+        transformControls.camera = perspCamera;
+
+        if (modeToggleBtn) modeToggleBtn.innerHTML = "Mode: 3D Studio (Click for 2D)";
     }
+
+    if (reconMapMesh) {
+        reconMapMesh.visible = mode === "topdown" || !!state.showReconOverlay;
+    }
+
     orbitControls.update();
+}
+
+function toggleViewMode() {
+    if (state.viewMode === "topdown") {
+        setViewMode("orbit");
+    } else {
+        setViewMode("topdown");
+    }
+}
+
+function toggleReconOverlay() {
+    state.showReconOverlay = !state.showReconOverlay;
+    if (reconMapMesh) {
+        reconMapMesh.visible = state.viewMode === "topdown" || !!state.showReconOverlay;
+    }
+    const btn = document.getElementById("btn-recon-overlay");
+    if (btn) {
+        if (state.showReconOverlay) btn.classList.add("active");
+        else btn.classList.remove("active");
+    }
+    showToast(`Satellite Recon Overlay: ${state.showReconOverlay ? "ON" : "OFF"}`);
+    playBeep(520, "sine", 0.05);
 }
 
 // Environment Presets
@@ -1636,25 +2440,51 @@ async function exportMapPack() {
     btn.disabled = true;
 
     try {
+        const payload = JSON.parse(JSON.stringify(state.project));
+        if (payload.base_operation === "flat") {
+            payload.base_operation = "t1"; // Map to authentic Training grounds archive for flat canvas
+        }
         const res = await fetch("/api/export-pack", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(state.project),
+            body: JSON.stringify(payload),
         });
 
-        const data = await res.json();
-        if (data.status === "ok") {
-            playBeep(980, "sine", 0.15);
-            showExportSuccessModal(data);
-        } else {
-            alert("Export failed: " + (data.message || "Unknown error"));
+        if (res.ok) {
+            const data = await res.json();
+            if (data.status === "ok") {
+                playBeep(980, "sine", 0.15);
+                showExportSuccessModal(data);
+                return;
+            }
         }
+        exportClientSideProject();
     } catch (err) {
-        alert("Export connection error: " + err);
+        exportClientSideProject();
     } finally {
-        btn.innerText = "⚡ EXPORT MAP PACK";
+        btn.innerText = "EXPORT MAP PACK";
         btn.disabled = false;
     }
+}
+
+function exportClientSideProject() {
+    playBeep(980, "sine", 0.15);
+    const blob = new Blob([JSON.stringify(state.project, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${state.project.pack_id || "custom_map"}.mw3pack.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showExportSuccessModal({
+        pack_id: state.project.pack_id,
+        pack_folder: "Downloaded directly to browser as .mw3pack.json",
+        total_placed_assets: (state.project.assets || []).length,
+        launcher_script: "Import into local Mod Studio or Core Critical Launcher to play",
+    });
 }
 
 // Show Export Success Modal
@@ -1684,10 +2514,17 @@ async function launchGameEngine() {
     btn.disabled = true;
 
     try {
+        const payload = {
+            pack_id: state.project.pack_id,
+            project: state.project,
+        };
+        if (payload.project && payload.project.base_operation === "flat") {
+            payload.project.base_operation = "t1";
+        }
         const res = await fetch("/api/launch-map", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ pack_id: state.project.pack_id }),
+            body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (data.status === "ok") {
@@ -1698,7 +2535,369 @@ async function launchGameEngine() {
     } catch (e) {
         alert("Launch failed: " + e);
     } finally {
-        btn.innerText = "▶️ LAUNCH NATIVE ENGINE";
+        btn.innerText = "LAUNCH NATIVE ENGINE";
+        btn.disabled = false;
+    }
+}
+
+// Palette Search and Category Filtering
+function filterAssetPalette(query) {
+    const q = (query || "").trim().toLowerCase();
+    document.querySelectorAll(".asset-card").forEach((card) => {
+        const name = (card.querySelector(".asset-name")?.textContent || "").toLowerCase();
+        const type = (card.dataset.type || "").toLowerCase();
+        const match = !q || name.includes(q) || type.includes(q);
+        card.style.display = match ? "flex" : "none";
+    });
+}
+
+function setPaletteCategory(cat) {
+    document.querySelectorAll(".palette-pill").forEach((pill) => pill.classList.remove("active"));
+    const activePill = Array.from(document.querySelectorAll(".palette-pill")).find(
+        (p) => p.textContent.toLowerCase() === cat.toLowerCase(),
+    );
+    if (activePill) activePill.classList.add("active");
+
+    document.querySelectorAll(".section-title").forEach((title) => {
+        const titleCat = title.dataset.category;
+        title.style.display = cat === "all" || titleCat === cat ? "block" : "none";
+    });
+
+    document.querySelectorAll(".asset-grid").forEach((grid) => {
+        const gridCat = grid.dataset.category;
+        grid.style.display = cat === "all" || gridCat === cat ? "grid" : "none";
+    });
+}
+
+// Real-Time Terrain Sculpting Engine
+function toggleSculptMode() {
+    state.sculpt.enabled = !state.sculpt.enabled;
+    const btn = document.getElementById("btn-sculpt-mode");
+    const toolbar = document.getElementById("sculpt-toolbar");
+
+    if (state.sculpt.enabled) {
+        if (btn) btn.classList.add("active");
+        if (toolbar) toolbar.style.display = "flex";
+        clearActiveTool();
+        transformControls.detach();
+        orbitControls.enabled = false;
+        if (brushCursorRing) brushCursorRing.visible = true;
+        playBeep(520, "sine", 0.08);
+    } else {
+        if (btn) btn.classList.remove("active");
+        if (toolbar) toolbar.style.display = "none";
+        orbitControls.enabled = true;
+        if (brushCursorRing) brushCursorRing.visible = false;
+        playBeep(420, "sine", 0.08);
+    }
+}
+
+function setSculptBrushMode(mode) {
+    state.sculpt.mode = mode;
+    document.querySelectorAll(".sculpt-mode-btn").forEach((b) => b.classList.remove("active"));
+    const activeBtn = document.getElementById(`sculpt-btn-${mode}`);
+    if (activeBtn) activeBtn.classList.add("active");
+    playBeep(640, "triangle", 0.05);
+}
+
+function updateSculptParams() {
+    const rad = parseFloat(document.getElementById("sculpt-radius").value);
+    const str = parseFloat(document.getElementById("sculpt-strength").value);
+    const falloff = document.getElementById("sculpt-falloff").value;
+
+    state.sculpt.radius = rad;
+    state.sculpt.strength = str;
+    state.sculpt.falloff = falloff;
+
+    document.getElementById("sculpt-radius-val").textContent = `${rad}m`;
+    document.getElementById("sculpt-strength-val").textContent = str.toFixed(1);
+
+    if (brushCursorRing) {
+        brushCursorRing.geometry.dispose();
+        const rInner = Math.max(1, rad - 1.5);
+        const rOuter = rad;
+        const geom = new THREE.RingGeometry(rInner, rOuter, 32);
+        geom.rotateX(-Math.PI / 2);
+        brushCursorRing.geometry = geom;
+    }
+}
+
+function resetSculptedTerrain() {
+    if (!terrainMesh || !state.sculpt.originalPositions) return;
+    const posAttr = terrainMesh.geometry.attributes.position;
+    posAttr.array.set(state.sculpt.originalPositions);
+    posAttr.needsUpdate = true;
+    terrainMesh.geometry.computeVertexNormals();
+
+    if (state.project.terrain) {
+        state.project.terrain.height_modifications = {};
+    }
+
+    for (const asset of state.project.assets) {
+        const groundY = getTerrainHeight(asset.x, asset.z);
+        asset.y = Math.round((groundY + (asset.height_offset || 0.0)) * 10) / 10;
+    }
+    syncSceneAssets();
+    if (state.selectedAssetId) updateInspector();
+    playBeep(330, "sawtooth", 0.15);
+}
+
+function applyTerrainSculpt(hitPoint) {
+    if (!terrainMesh || !terrainMesh.geometry) return;
+    const geom = terrainMesh.geometry;
+    const posAttr = geom.attributes.position;
+    const colAttr = geom.attributes.color;
+    const count = posAttr.count;
+
+    const hx = hitPoint.x;
+    const hz = hitPoint.z;
+    const r = state.sculpt.radius;
+    const rSq = r * r;
+    const str = state.sculpt.strength * 0.45;
+    const mode = state.sculpt.mode;
+    const falloff = state.sculpt.falloff;
+
+    let modified = false;
+
+    for (let i = 0; i < count; i++) {
+        const vx = posAttr.getX(i);
+        const vz = posAttr.getZ(i);
+        const dx = vx - hx;
+        const dz = vz - hz;
+        const dSq = dx * dx + dz * dz;
+
+        if (dSq < rSq) {
+            const d = Math.sqrt(dSq);
+            const normDist = d / r;
+            let w = 1.0;
+            if (falloff === "linear") {
+                w = 1.0 - normDist;
+            } else if (falloff === "sharp") {
+                w = Math.sqrt(Math.max(0, 1.0 - normDist));
+            } else {
+                const t = 1.0 - normDist * normDist;
+                w = t * t;
+            }
+
+            let curY = posAttr.getY(i);
+            let newY = curY;
+
+            if (mode === "raise") {
+                newY = curY + str * w;
+            } else if (mode === "lower") {
+                newY = curY - str * w;
+            } else if (mode === "flatten") {
+                const target = state.sculpt.targetHeight || 0.0;
+                newY = curY + (target - curY) * str * 0.25 * w;
+            } else if (mode === "smooth") {
+                const target = state.sculpt.targetHeight || curY;
+                newY = curY + (target - curY) * str * 0.15 * w;
+            } else if (mode === "noise") {
+                const n = Math.sin(vx * 0.12) * Math.cos(vz * 0.12);
+                newY = curY + n * str * 0.8 * w;
+            }
+
+            if (newY !== curY) {
+                posAttr.setY(i, newY);
+                modified = true;
+
+                if (!state.project.terrain.height_modifications) {
+                    state.project.terrain.height_modifications = {};
+                }
+                const coordKey = `${Math.round(vx * 10) / 10},${Math.round(vz * 10) / 10}`;
+                state.project.terrain.height_modifications[coordKey] = Math.round(newY * 10) / 10;
+
+                if (colAttr) {
+                    const opCode = state.project.base_operation || "c1";
+                    const meta = OP_ENV_METADATA[opCode] || OP_ENV_METADATA.c1;
+                    const pal = meta.palette;
+                    const colSand = new THREE.Color(pal.sand);
+                    const colRock = new THREE.Color(pal.rock);
+                    const colPeak = new THREE.Color(pal.peak);
+                    const tempCol = new THREE.Color();
+
+                    if (newY <= pal.shoreY + 1.5) {
+                        tempCol.copy(colSand);
+                    } else if (newY < pal.shoreY + 28.0) {
+                        const t = (newY - pal.shoreY) / 28.0;
+                        tempCol.lerpColors(colSand, colRock, t);
+                    } else {
+                        const t = Math.min(1.0, (newY - pal.shoreY - 28.0) / 35.0);
+                        tempCol.lerpColors(colRock, colPeak, t);
+                    }
+                    colAttr.setXYZ(i, tempCol.r, tempCol.g, tempCol.b);
+                }
+            }
+        }
+    }
+
+    if (modified) {
+        posAttr.needsUpdate = true;
+        if (colAttr) colAttr.needsUpdate = true;
+        geom.computeVertexNormals();
+
+        for (const asset of state.project.assets) {
+            const groundY = getTerrainHeight(asset.x, asset.z);
+            asset.y = Math.round((groundY + (asset.height_offset || 0.0)) * 10) / 10;
+        }
+        syncSceneAssets();
+        if (state.selectedAssetId) updateInspector();
+    }
+}
+
+// Campaign Creator & Multi-Mission Sequencer
+function openCampaignModal() {
+    renderCampaignMissions();
+    document.getElementById("campaign-modal").style.display = "flex";
+}
+
+function closeCampaignModal() {
+    document.getElementById("campaign-modal").style.display = "none";
+}
+
+function renderCampaignMissions() {
+    const box = document.getElementById("campaign-missions-list");
+    if (!box) return;
+    box.innerHTML = "";
+
+    const camp = state.campaign;
+    document.getElementById("camp-title").value = camp.campaign_title || "Operation Damocles";
+    document.getElementById("camp-id").value = camp.campaign_id || "operation_damocles";
+    document.getElementById("camp-faction").value = camp.faction || "Inner Sphere";
+    document.getElementById("camp-theater").value = camp.theater || "Tranquil Coastal Basin";
+    document.getElementById("camp-desc").value = camp.description || "";
+    document.getElementById("camp-salvage-enabled").checked = Boolean(
+        camp.continuity_rules?.salvage_enabled !== false,
+    );
+
+    (camp.missions || []).forEach((m, idx) => {
+        const card = document.createElement("div");
+        card.className = "campaign-mission-card";
+        card.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="campaign-stage-badge">STAGE ${idx + 1}</span>
+                    <b style="color: var(--accent-cyan); font-size: 13px;">${m.title}</b>
+                    <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">(${m.mission_id})</span>
+                </div>
+                <div style="display: flex; gap: 4px;">
+                    <button class="btn" style="padding: 1px 6px; font-size: 10px;" onclick="moveCampaignMission(${idx}, -1)" ${idx === 0 ? "disabled" : ""}>▲</button>
+                    <button class="btn" style="padding: 1px 6px; font-size: 10px;" onclick="moveCampaignMission(${idx}, 1)" ${idx === camp.missions.length - 1 ? "disabled" : ""}>▼</button>
+                    <button class="btn-tiny-del" onclick="removeCampaignMission(${idx})">&times;</button>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 8px; margin-top: 4px;">
+                <div>
+                    <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Mission Title</span>
+                    <input type="text" class="text-input" style="width: 100%; font-size: 11px;" value="${m.title}" oninput="state.campaign.missions[${idx}].title = this.value;" />
+                </div>
+                <div>
+                    <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Mission ID</span>
+                    <input type="text" class="text-input" style="width: 100%; font-size: 11px;" value="${m.mission_id}" oninput="state.campaign.missions[${idx}].mission_id = this.value.toLowerCase().replace(/[^a-z0-9_]/g, '_');" />
+                </div>
+                <div>
+                    <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Map Pack ID</span>
+                    <input type="text" class="text-input" style="width: 100%; font-size: 11px;" value="${m.pack_id || state.project.pack_id}" oninput="state.campaign.missions[${idx}].pack_id = this.value;" />
+                </div>
+            </div>
+            <div style="margin-top: 4px;">
+                <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Tactical Dossier / Intel Briefing</span>
+                <input type="text" class="text-input" style="width: 100%; font-size: 11px;" value="${m.briefing_text || ""}" oninput="state.campaign.missions[${idx}].briefing_text = this.value;" />
+            </div>
+        `;
+        box.appendChild(card);
+    });
+}
+
+function addCampaignMission() {
+    const nextIdx = (state.campaign.missions || []).length + 1;
+    if (!state.campaign.missions) state.campaign.missions = [];
+    state.campaign.missions.push({
+        mission_id: `m0${nextIdx}_mission`,
+        pack_id: state.project.pack_id,
+        title: `Mission ${nextIdx}: Operational Objective`,
+        briefing_text: "Destroy designated target units and proceed to recovery point.",
+        theater: state.campaign.theater || "Tranquil Coastal Basin",
+        audio_track: "action_theme_1",
+        next_mission_id: null,
+        branch_conditions: {},
+    });
+    renderCampaignMissions();
+    playBeep(720, "sine", 0.06);
+}
+
+function removeCampaignMission(idx) {
+    state.campaign.missions.splice(idx, 1);
+    renderCampaignMissions();
+}
+
+function moveCampaignMission(idx, dir) {
+    const targetIdx = idx + dir;
+    if (targetIdx < 0 || targetIdx >= state.campaign.missions.length) return;
+    const item = state.campaign.missions.splice(idx, 1)[0];
+    state.campaign.missions.splice(targetIdx, 0, item);
+    renderCampaignMissions();
+}
+
+async function exportCampaignProject() {
+    const btn = document.getElementById("btn-export-campaign");
+    btn.innerText = "COMPILING CAMPAIGN...";
+    btn.disabled = true;
+
+    try {
+        state.campaign.campaign_title = document.getElementById("camp-title").value;
+        state.campaign.campaign_id = document.getElementById("camp-id").value;
+        state.campaign.faction = document.getElementById("camp-faction").value;
+        state.campaign.theater = document.getElementById("camp-theater").value;
+        state.campaign.description = document.getElementById("camp-desc").value;
+        state.campaign.continuity_rules.salvage_enabled =
+            document.getElementById("camp-salvage-enabled").checked;
+
+        const res = await fetch("/api/export-campaign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(state.campaign),
+        });
+
+        const data = await res.json();
+        if (data.status === "ok") {
+            playBeep(980, "sine", 0.15);
+            alert(
+                `Campaign "${data.campaign_id}" successfully compiled!\nTotal Missions: ${data.total_missions}\nLocation: ${data.campaign_folder}\nLauncher: ${data.launcher_script}`,
+            );
+        } else {
+            alert("Campaign export failed: " + (data.message || "Unknown error"));
+        }
+    } catch (err) {
+        alert("Campaign export error: " + err);
+    } finally {
+        btn.innerText = "Compile Campaign Pack";
+        btn.disabled = false;
+    }
+}
+
+async function launchCampaignProject() {
+    const btn = document.getElementById("btn-launch-campaign");
+    btn.innerText = "LAUNCHING...";
+    btn.disabled = true;
+
+    try {
+        const campId = document.getElementById("camp-id").value || state.campaign.campaign_id;
+        const res = await fetch("/api/launch-campaign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ campaign_id: campId }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            playBeep(1200, "sine", 0.2);
+        } else {
+            alert("Launch error: " + data.message);
+        }
+    } catch (e) {
+        alert("Launch failed: " + e);
+    } finally {
+        btn.innerText = "Play Campaign";
         btn.disabled = false;
     }
 }
@@ -1712,30 +2911,89 @@ function onKeyDown(e) {
     )
         return;
 
+    if ((e.ctrlKey || e.metaKey) && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        openNewMissionModal();
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === "o" || e.key === "O")) {
+        e.preventDefault();
+        triggerImportMapFile();
+        return;
+    }
     if (e.key === "Escape") {
+        if (state.sculpt && state.sculpt.enabled) {
+            toggleSculptMode();
+        }
         clearActiveTool();
         state.selectedAssetId = null;
         syncSceneAssets();
         updateInspector();
+    } else if (e.key === "f" || e.key === "F") {
+        if (typeof focusSelectedEntity === "function") focusSelectedEntity();
+    } else if (e.key === "[") {
+        if (typeof toggleLeftSidebar === "function") toggleLeftSidebar();
+    } else if (e.key === "]") {
+        if (typeof toggleRightSidebar === "function") toggleRightSidebar();
+    } else if (e.key === "?") {
+        if (typeof openShortcutsModal === "function") openShortcutsModal();
+    } else if (e.key === "1") {
+        switchWorkspaceMode("world");
+    } else if (e.key === "2") {
+        switchWorkspaceMode("sculpt");
+    } else if (e.key === "3") {
+        switchWorkspaceMode("atmosphere");
+    } else if (e.key === "4") {
+        switchWorkspaceMode("mechlab");
+    } else if (e.key === "5") {
+        switchWorkspaceMode("objectives");
+    } else if (e.key === "6") {
+        switchWorkspaceMode("campaign");
     } else if (e.key === "Delete" || e.key === "Backspace") {
         if (state.selectedAssetId) {
             document.getElementById("btn-insp-delete").click();
         }
+    } else if (e.key === "Tab") {
+        e.preventDefault();
+        toggleViewMode();
+    } else if (e.key === "a" || e.key === "A") {
+        openAtmosphereModal();
+    } else if (e.key === "s" || e.key === "S") {
+        toggleSculptMode();
+    } else if (e.key === "c" || e.key === "C") {
+        openCampaignModal();
     } else if (e.key === "t" || e.key === "T") {
         setViewMode("topdown");
     } else if (e.key === "o" || e.key === "O") {
         setViewMode("orbit");
     } else if (e.key === "i" || e.key === "I") {
         setViewMode("iso");
+    } else if (e.key === "m" || e.key === "M") {
+        toggleReconOverlay();
     }
 }
 
 // Window resize
 function onWindowResize() {
     const container = document.getElementById("viewport");
-    camera.aspect = container.clientWidth / container.clientHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(container.clientWidth, container.clientHeight);
+    if (!container || !renderer) return;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const aspect = width / height;
+
+    if (perspCamera) {
+        perspCamera.aspect = aspect;
+        perspCamera.updateProjectionMatrix();
+    }
+    if (orthoCamera) {
+        const frustumSize = 1800;
+        orthoCamera.left = (frustumSize * aspect) / -2;
+        orthoCamera.right = (frustumSize * aspect) / 2;
+        orthoCamera.top = frustumSize / 2;
+        orthoCamera.bottom = frustumSize / -2;
+        orthoCamera.updateProjectionMatrix();
+    }
+    renderer.setSize(width, height);
 }
 
 // Animation loop
@@ -1959,6 +3217,753 @@ window.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btn-add-lancemate").addEventListener("click", addLancemate);
 
     // Load authentic in-game 3D models and initial demo
+    checkSystemStatus();
     loadGameAssets();
     loadDemoMap();
+    applyRouteFromHash();
+    window.addEventListener("hashchange", applyRouteFromHash);
 });
+
+function applyRouteFromHash() {
+    const raw = window.location.hash.replace(/^#/, "");
+    if (!raw) return;
+    const params = new URLSearchParams(raw);
+    if (params.get("mode")) switchWorkspaceMode(params.get("mode"));
+    if (params.get("left")) switchLeftTab(params.get("left"));
+    if (params.get("right")) switchRightTab(params.get("right"));
+    if (params.get("select")) {
+        const id = params.get("select");
+        if (typeof selectAssetById === "function") selectAssetById(id);
+    }
+    if (params.get("new") === "1") {
+        if (typeof openNewMissionModal === "function") openNewMissionModal();
+    }
+    if (params.get("shortcuts") === "1") {
+        if (typeof openShortcutsModal === "function") openShortcutsModal();
+    }
+    if (params.get("mechlab") === "1") {
+        if (typeof openMechLabModal === "function") openMechLabModal();
+    }
+    if (params.get("objectives") === "1") {
+        if (typeof openObjectivesModal === "function") openObjectivesModal();
+    }
+}
+
+// System Status and Game Directory Setup
+async function checkSystemStatus() {
+    const banner = document.getElementById("game-dir-banner");
+    const pill = document.getElementById("status-game-pill");
+    const dot = document.getElementById("status-game-dot");
+    const text = document.getElementById("status-game-text");
+    const modalInput = document.getElementById("modal-game-path-input");
+
+    try {
+        const res = await fetch("/api/status");
+        if (res.ok) {
+            const data = await res.json();
+            if (modalInput && data.game_directory) {
+                modalInput.value = data.game_directory;
+            }
+
+            if (!data.game_installed) {
+                if (banner) banner.style.display = "flex";
+                if (dot) {
+                    dot.className = "status-dot warning";
+                }
+                if (text) {
+                    text.innerText = "Game Unset";
+                }
+                if (pill) {
+                    pill.title = "Click to set MechWarrior 3 directory";
+                }
+            } else {
+                if (banner) banner.style.display = "none";
+                if (dot) {
+                    dot.className = "status-dot";
+                }
+                if (text) {
+                    text.innerText = "MW3 Connected";
+                }
+                if (pill) {
+                    pill.title = `Connected: ${data.game_directory}`;
+                }
+            }
+            return;
+        }
+    } catch (e) {
+        // Fall through to cloud/web static mode
+    }
+
+    // Static web hosting mode (e.g. corecritical.dev/studio)
+    if (banner) banner.style.display = "none";
+    if (dot) {
+        dot.className = "status-dot";
+    }
+    if (text) {
+        text.innerText = "Web Cloud Studio";
+    }
+    if (pill) {
+        pill.title =
+            "Running in cloud web mode on corecritical.dev. Export downloads .mw3pack.json directly.";
+    }
+}
+
+async function submitGameDirectory() {
+    const input = document.getElementById("setup-game-path-input");
+    if (!input || !input.value.trim()) {
+        alert("Please enter a valid path to your MechWarrior 3 folder.");
+        return;
+    }
+    const pathStr = input.value.trim();
+    try {
+        const res = await fetch("/api/set-game-directory", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_path: pathStr }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert("Game directory set successfully! Reloading studio...");
+            location.reload();
+        } else {
+            alert("Error setting game directory: " + data.message);
+        }
+    } catch (e) {
+        alert("Failed to set game directory: " + e);
+    }
+}
+
+async function packageCurrentMapZip() {
+    const packId = state.project.pack_id;
+    if (!packId) {
+        alert("Please export the map pack first before packaging.");
+        return;
+    }
+    try {
+        showToast("Compressing map package for distribution...");
+        const res = await fetch("/api/package-pack", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pack_id: packId }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert(
+                `Map Pack Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and double-click the launcher to play!`,
+            );
+            playBeep(880, "sine", 0.15);
+        } else {
+            alert("Packaging failed: " + data.message);
+        }
+    } catch (e) {
+        alert("Packaging error: " + e);
+    }
+}
+
+async function packageCampaignZip() {
+    const campId = document.getElementById("camp-id").value || state.campaign.campaign_id;
+    if (!campId) {
+        alert("Please enter a campaign ID.");
+        return;
+    }
+    try {
+        showToast("Compressing campaign package for distribution...");
+        const res = await fetch("/api/package-campaign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ campaign_id: campId }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert(
+                `Campaign Packaged Successfully!\n\nArchive: ${data.zip_name} (${(data.size_bytes / 1024).toFixed(1)} KB)\nLocation: ${data.zip_path}\n\nPlayers on other PCs can extract this ZIP into their MW3 directory and play the multi-mission campaign with 1 click!`,
+            );
+            playBeep(880, "sine", 0.15);
+        } else {
+            alert("Campaign packaging failed: " + data.message);
+        }
+    } catch (e) {
+        alert("Campaign packaging error: " + e);
+    }
+}
+
+// ============================================================================
+// ENHANCED UI: SCENE OUTLINER, WORKSPACES & COLLAPSIBLE SIDEBARS
+// ============================================================================
+
+function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function renderSceneOutliner() {
+    const listEl = document.getElementById("outliner-list");
+    const countEl = document.getElementById("outliner-count");
+    if (!listEl) return;
+
+    const searchInput = document.getElementById("outliner-search-input");
+    const query = (searchInput?.value || "").toLowerCase().trim();
+    const assets = state.project.assets || [];
+
+    if (countEl) countEl.innerText = `${assets.length} items`;
+
+    const iconMap = {
+        mech: "[MECH]",
+        turret: "[TURRET]",
+        bunker: "[BUNKER]",
+        comm: "[COMMS]",
+        repair: "[REPAIR]",
+        factory: "[FACTORY]",
+        fuel: "[FUEL]",
+        city: "[BUILDING]",
+        bridge: "[BRIDGE]",
+        ramp: "[RAMP]",
+        dock: "[DOCK]",
+        wall: "[WALL]",
+        gate: "[GATE]",
+        pole: "[UTILITY]",
+        spawn: "[SPAWN]",
+        nav: "[NAV]",
+        trig_evac: "[EVAC]",
+        trig_ambush: "[AMBUSH]",
+        trig_sensor: "[SENSOR]",
+        trig_minefield: "[MINES]",
+    };
+
+    function getIcon(type) {
+        for (const [k, v] of Object.entries(iconMap)) {
+            if (type.includes(k)) return v;
+        }
+        return "[ITEM]";
+    }
+
+    const filtered = assets.filter((a) => {
+        if (!query) return true;
+        return (
+            (a.name || "").toLowerCase().includes(query) ||
+            (a.asset_type || "").toLowerCase().includes(query) ||
+            (a.faction || "").toLowerCase().includes(query)
+        );
+    });
+
+    if (filtered.length === 0) {
+        listEl.innerHTML = `<div style="padding: 18px; text-align: center; color: var(--text-muted); font-size: 11px;">
+            ${assets.length === 0 ? "No entities in map.<br>Click any asset in the palette to place." : "No matching entities found."}
+        </div>`;
+        return;
+    }
+
+    listEl.innerHTML = filtered
+        .map((a) => {
+            const isSelected = a.asset_id === state.selectedAssetId;
+            const icon = getIcon(a.asset_type || "");
+            const factionClass = `faction-${a.faction || "neutral"}`;
+            const factionLabel = (a.faction || "neutral").slice(0, 4).toUpperCase();
+            return `
+            <div class="outliner-item ${isSelected ? "active" : ""}" 
+                 onclick="selectAssetById('${a.asset_id}')"
+                 ondblclick="focusEntity('${a.asset_id}')"
+                 title="Click to inspect, double-click to focus camera">
+                <div class="outliner-item-left">
+                    <span class="outliner-item-icon">${icon}</span>
+                    <span class="outliner-item-name">${escapeHtml(a.name || a.asset_type)}</span>
+                    <span class="outliner-faction-badge ${factionClass}">${factionLabel}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">${Math.round(a.x)},${Math.round(a.z)}</span>
+                    <button class="outliner-item-del" onclick="event.stopPropagation(); deleteAssetById('${a.asset_id}')" title="Delete">&times;</button>
+                </div>
+            </div>`;
+        })
+        .join("");
+}
+
+function selectAssetById(assetId) {
+    state.selectedAssetId = assetId;
+    playBeep(720, "sine", 0.05);
+    syncSceneAssets();
+    updateInspector();
+    renderSceneOutliner();
+}
+
+function focusEntity(assetId) {
+    const asset = state.project.assets.find((a) => a.asset_id === assetId);
+    if (!asset) return;
+    selectAssetById(assetId);
+    if (orbitControls) {
+        orbitControls.target.set(asset.x, asset.y, asset.z);
+        if (state.viewMode === "topdown") {
+            camera.position.set(asset.x, 600, asset.z);
+        } else {
+            camera.position.set(asset.x - 70, asset.y + 45, asset.z + 70);
+        }
+        orbitControls.update();
+        playBeep(520, "sine", 0.05);
+    }
+}
+
+function focusSelectedEntity() {
+    if (state.selectedAssetId) {
+        focusEntity(state.selectedAssetId);
+    } else if (state.project.assets && state.project.assets.length > 0) {
+        focusEntity(state.project.assets[0].asset_id);
+    }
+}
+
+function deleteAssetById(assetId) {
+    state.project.assets = state.project.assets.filter((a) => a.asset_id !== assetId);
+    if (state.selectedAssetId === assetId) {
+        state.selectedAssetId = null;
+    }
+    playBeep(320, "sawtooth", 0.08);
+    syncSceneAssets();
+    updateInspector();
+    renderSceneOutliner();
+}
+
+function deleteSelectedAssetFromUI() {
+    if (state.selectedAssetId) {
+        deleteAssetById(state.selectedAssetId);
+    }
+}
+
+// Sidebar Tab Switching
+function switchLeftTab(tabName) {
+    const paletteBtn = document.getElementById("tab-palette-btn");
+    const sculptBtn = document.getElementById("tab-sculpt-btn");
+    const paletteView = document.getElementById("left-palette-view");
+    const sculptView = document.getElementById("left-sculpt-view");
+
+    if (paletteBtn) paletteBtn.classList.toggle("active", tabName === "palette");
+    if (sculptBtn) sculptBtn.classList.toggle("active", tabName === "sculpt");
+    if (paletteView) paletteView.style.display = tabName === "palette" ? "flex" : "none";
+    if (sculptView) sculptView.style.display = tabName === "sculpt" ? "flex" : "none";
+
+    if (tabName === "sculpt" && (!state.sculpt || !state.sculpt.enabled)) {
+        toggleSculptMode();
+    } else if (tabName === "palette" && state.sculpt && state.sculpt.enabled) {
+        toggleSculptMode();
+    }
+}
+
+function switchRightTab(tabName) {
+    const inspBtn = document.getElementById("tab-inspector-btn");
+    const outlinerBtn = document.getElementById("tab-outliner-btn");
+    const atmoBtn = document.getElementById("tab-atmosphere-btn");
+    const inspView = document.getElementById("right-inspector-view");
+    const outlinerView = document.getElementById("right-outliner-view");
+    const atmoView = document.getElementById("right-atmosphere-view");
+
+    if (inspBtn) inspBtn.classList.toggle("active", tabName === "inspector");
+    if (outlinerBtn) outlinerBtn.classList.toggle("active", tabName === "outliner");
+    if (atmoBtn) atmoBtn.classList.toggle("active", tabName === "atmosphere");
+
+    if (inspView) inspView.style.display = tabName === "inspector" ? "flex" : "none";
+    if (outlinerView) outlinerView.style.display = tabName === "outliner" ? "flex" : "none";
+    if (atmoView) atmoView.style.display = tabName === "atmosphere" ? "flex" : "none";
+
+    if (tabName === "outliner") {
+        renderSceneOutliner();
+    } else if (tabName === "atmosphere") {
+        syncAtmosphereUIFromState();
+    }
+}
+
+// Workspace Mode Switching
+function switchWorkspaceMode(mode) {
+    const tabs = ["world", "sculpt", "atmosphere", "mechlab", "objectives", "campaign"];
+    tabs.forEach((t) => {
+        const el = document.getElementById(`nav-mode-${t}`);
+        if (el) el.classList.toggle("active", t === mode);
+    });
+
+    if (mode === "world") {
+        switchLeftTab("palette");
+        switchRightTab("inspector");
+        if (state.sidebarLeftCollapsed) toggleLeftSidebar();
+        if (state.sidebarRightCollapsed) toggleRightSidebar();
+    } else if (mode === "sculpt") {
+        switchLeftTab("sculpt");
+        if (state.sidebarLeftCollapsed) toggleLeftSidebar();
+    } else if (mode === "atmosphere") {
+        switchRightTab("atmosphere");
+        if (state.sidebarRightCollapsed) toggleRightSidebar();
+    } else if (mode === "mechlab") {
+        openMechLabModal();
+    } else if (mode === "objectives") {
+        openObjectivesModal();
+    } else if (mode === "campaign") {
+        openCampaignModal();
+    }
+    playBeep(600, "sine", 0.04);
+}
+
+// Sidebar Collapse / Expand
+state.sidebarLeftCollapsed = false;
+state.sidebarRightCollapsed = false;
+
+function toggleLeftSidebar() {
+    const el = document.getElementById("sidebar-left");
+    const pin = document.getElementById("btn-toggle-left-sidebar");
+    if (!el) return;
+    state.sidebarLeftCollapsed = !state.sidebarLeftCollapsed;
+    el.classList.toggle("collapsed", state.sidebarLeftCollapsed);
+    if (pin) pin.innerText = state.sidebarLeftCollapsed ? "›" : "‹";
+    setTimeout(onWindowResize, 260);
+}
+
+function toggleRightSidebar() {
+    const el = document.getElementById("sidebar-right");
+    const pin = document.getElementById("btn-toggle-right-sidebar");
+    if (!el) return;
+    state.sidebarRightCollapsed = !state.sidebarRightCollapsed;
+    el.classList.toggle("collapsed", state.sidebarRightCollapsed);
+    if (pin) pin.innerText = state.sidebarRightCollapsed ? "‹" : "›";
+    setTimeout(onWindowResize, 260);
+}
+
+// Modals
+function openShortcutsModal() {
+    const m = document.getElementById("shortcuts-modal");
+    if (m) m.style.display = "flex";
+}
+
+function closeShortcutsModal() {
+    const m = document.getElementById("shortcuts-modal");
+    if (m) m.style.display = "none";
+}
+
+function openGameDirModal() {
+    const m = document.getElementById("gamedir-modal");
+    if (m) m.style.display = "flex";
+}
+
+function closeGameDirModal() {
+    const m = document.getElementById("gamedir-modal");
+    if (m) m.style.display = "none";
+}
+
+async function submitModalGameDirectory() {
+    const input = document.getElementById("modal-game-path-input");
+    const statusEl = document.getElementById("gamedir-modal-status");
+    if (!input || !input.value.trim()) {
+        if (statusEl) {
+            statusEl.style.color = "var(--accent-red)";
+            statusEl.innerText = "Please specify a folder path.";
+        }
+        return;
+    }
+    try {
+        if (statusEl) {
+            statusEl.style.color = "var(--accent-cyan)";
+            statusEl.innerText = "Connecting to game directory...";
+        }
+        const res = await fetch("/api/set-game-directory", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_path: input.value.trim() }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            alert("MechWarrior 3 folder verified & connected! Reloading studio...");
+            location.reload();
+        } else {
+            if (statusEl) {
+                statusEl.style.color = "var(--accent-red)";
+                statusEl.innerText = data.message;
+            }
+        }
+    } catch (e) {
+        if (statusEl) {
+            statusEl.style.color = "var(--accent-red)";
+            statusEl.innerText = String(e);
+        }
+    }
+}
+
+function closeObjectivesModal() {
+    const m = document.getElementById("objectives-modal");
+    if (m) m.style.display = "none";
+    switchWorkspaceMode("world");
+}
+
+function closeMechLabModal() {
+    const m = document.getElementById("mechlab-modal");
+    if (m) m.style.display = "none";
+    switchWorkspaceMode("world");
+}
+
+// ============================================================================
+// NEW MISSION CREATION WIZARD & IMPORT CONTROLS
+// ============================================================================
+
+function openNewMissionModal() {
+    const m = document.getElementById("new-mission-modal");
+    if (m) {
+        m.style.display = "flex";
+        const titleEl = document.getElementById("new-mission-title");
+        if (titleEl) {
+            titleEl.focus();
+            titleEl.select();
+        }
+    }
+}
+
+function closeNewMissionModal() {
+    const m = document.getElementById("new-mission-modal");
+    if (m) m.style.display = "none";
+}
+
+function handleNewMissionTemplateChange(template) {
+    const biomeEl = document.getElementById("new-mission-biome");
+    if (!biomeEl) return;
+    if (template === "blank") {
+        biomeEl.value = "flat";
+    } else {
+        biomeEl.value = "c1";
+    }
+}
+
+function autoSlugNewMissionId() {
+    const titleEl = document.getElementById("new-mission-title");
+    const idEl = document.getElementById("new-mission-id");
+    if (titleEl && idEl) {
+        idEl.value = titleEl.value
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9_]/g, "_");
+    }
+}
+
+function confirmCreateNewMission() {
+    const title = (document.getElementById("new-mission-title")?.value || "Custom Mission").trim();
+    const packId = (document.getElementById("new-mission-id")?.value || "custom_mission")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, "_");
+    const biome = document.getElementById("new-mission-biome")?.value || "flat";
+    const template = document.getElementById("new-mission-template")?.value || "blank";
+    const playerMech =
+        document.getElementById("new-mission-mech")?.value || "Mad Cat / Timber Wolf";
+
+    let assets = [];
+    if (template === "blank") {
+        assets = [
+            {
+                asset_id: "p_spawn",
+                asset_type: "spawn",
+                name: "Player Orbital Drop Zone",
+                x: 0,
+                y: 0,
+                z: 0,
+                yaw_deg: 0,
+                faction: "player",
+                health: 100,
+            },
+        ];
+    } else if (template === "outpost") {
+        assets = [
+            {
+                asset_id: "p_spawn",
+                asset_type: "spawn",
+                name: "Player Orbital Drop Zone",
+                x: -300,
+                y: 0,
+                z: -300,
+                yaw_deg: 45,
+                faction: "player",
+                health: 100,
+            },
+            {
+                asset_id: "base_bunker",
+                asset_type: "bunker",
+                name: "Perimeter Bunker",
+                x: 0,
+                y: 0,
+                z: 0,
+                yaw_deg: 180,
+                faction: "enemy",
+                health: 200,
+                is_objective: true,
+            },
+            {
+                asset_id: "base_radar",
+                asset_type: "comm_center",
+                name: "Sensor Array Dish",
+                x: 60,
+                y: 0,
+                z: -40,
+                yaw_deg: 210,
+                faction: "enemy",
+                health: 150,
+                is_objective: true,
+            },
+            {
+                asset_id: "tur_defense",
+                asset_type: "turret_laser",
+                name: "Perimeter Laser Tower",
+                x: -60,
+                y: 0,
+                z: 80,
+                yaw_deg: 0,
+                faction: "enemy",
+                health: 120,
+            },
+        ];
+    } else if (template === "skirmish") {
+        assets = [
+            {
+                asset_id: "p_spawn",
+                asset_type: "spawn",
+                name: "Player Orbital Drop Zone",
+                x: -400,
+                y: 0,
+                z: -400,
+                yaw_deg: 45,
+                faction: "player",
+                health: 100,
+            },
+            {
+                asset_id: "enemy_patrol_1",
+                asset_type: "mech_bushwacker",
+                name: "Hostile Bushwacker BSW-X1",
+                x: 100,
+                y: 0,
+                z: 100,
+                yaw_deg: 225,
+                faction: "enemy",
+                health: 220,
+                is_objective: true,
+            },
+            {
+                asset_id: "enemy_patrol_2",
+                asset_type: "mech_shadowcat",
+                name: "Hostile Shadow Cat",
+                x: 160,
+                y: 0,
+                z: 180,
+                yaw_deg: 225,
+                faction: "enemy",
+                health: 180,
+                is_objective: true,
+            },
+        ];
+    }
+
+    // Reset project state cleanly
+    state.project.pack_id = packId;
+    state.project.pack_title = title;
+    state.project.description = `Custom MechWarrior 3 mission: ${title}`;
+    state.project.base_operation = biome;
+    state.project.terrain.biome = biome;
+    state.project.terrain.water_level = biome === "c1" ? 3.0 : 0.0;
+    state.project.terrain.height_modifications = {};
+    state.project.assets = assets;
+    state.project.objectives = {
+        primary: [{ id: "obj_1", description: "Neutralize hostile forces in sector" }],
+        secondary: [],
+        briefing_text: `Tactical briefing for ${title}. Eliminate enemy presence and secure the area.`,
+        audio_track: "theme1",
+    };
+    state.project.drop_config = {
+        player_mech: playerMech,
+        drop_type: "pod",
+        weapons: {
+            left_arm: "Clan ER PPC",
+            center_torso: "Medium Pulse Laser",
+            right_arm: "Clan ER PPC",
+            left_torso: "Clan LRM-20 Rack",
+            right_torso: "Clan LRM-20 Rack",
+        },
+        armor_tons: 14.0,
+        heatsinks: 16,
+        jump_jets: 0,
+        lancemates: [],
+    };
+
+    // Update form inputs in sub-bar
+    const titleInput = document.getElementById("project-title");
+    const idInput = document.getElementById("project-id");
+    const biomeSelect = document.getElementById("biome-select");
+    if (titleInput) titleInput.value = title;
+    if (idInput) idInput.value = packId;
+    if (biomeSelect) biomeSelect.value = biome;
+
+    // Deselect active object and detach gizmos
+    state.selectedAssetId = null;
+    if (transformControls) transformControls.detach();
+
+    closeNewMissionModal();
+
+    buildTerrain().then(() => {
+        syncSceneAssets();
+        updateInspector();
+        renderSceneOutliner();
+
+        // Re-center camera and controls on player drop zone (0, 0, 0)
+        if (orbitControls) {
+            orbitControls.target.set(0, 0, 0);
+            orbitControls.update();
+        }
+        if (perspCamera) {
+            perspCamera.position.set(0, 80, 160);
+            perspCamera.lookAt(0, 0, 0);
+        }
+
+        playBeep(1040, "sine", 0.15);
+        alert(
+            `Created new mission "${title}" (${template === "blank" ? "Blank Slate" : template} on ${OP_ENV_METADATA[biome]?.name || biome})`,
+        );
+    });
+}
+
+function triggerImportMapFile() {
+    const input = document.getElementById("input-import-map-file");
+    if (input) input.click();
+}
+
+function handleImportMapFile(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (!data.pack_id && !data.assets) {
+                alert("Invalid map file format. Expected a .mw3pack.json or project file.");
+                return;
+            }
+            state.project = Object.assign(state.project, data);
+
+            const titleInput = document.getElementById("project-title");
+            const idInput = document.getElementById("project-id");
+            const biomeSelect = document.getElementById("biome-select");
+            if (titleInput && state.project.pack_title) titleInput.value = state.project.pack_title;
+            if (idInput && state.project.pack_id) idInput.value = state.project.pack_id;
+            if (biomeSelect && state.project.base_operation)
+                biomeSelect.value = state.project.base_operation;
+
+            state.selectedAssetId = null;
+            if (transformControls) transformControls.detach();
+
+            buildTerrain().then(() => {
+                syncSceneAssets();
+                updateInspector();
+                renderSceneOutliner();
+                playBeep(980, "sine", 0.15);
+                alert(
+                    `Successfully loaded "${state.project.pack_title || state.project.pack_id}" (${(state.project.assets || []).length} entities)`,
+                );
+            });
+        } catch (err) {
+            alert("Could not parse map file: " + err);
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = "";
+}

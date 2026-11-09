@@ -11,7 +11,8 @@ Part of stages 3 and 5 of [the plan-and-review flow](../core-critical-workflow/S
 
 - **A plan file** (stage 3): review the design the plan proposes against the
   real code it will touch. Fixes are edits to the plan; the code is never
-  edited.
+  edited. It runs in the session that wrote the plan, so the requester can
+  follow each pass.
 - **The current branch** (stage 5): review its changes against
   `origin/develop`, plus uncommitted changes. Fixes are edits to the code.
   Confirm first that the branch is the intended topic branch.
@@ -26,6 +27,11 @@ plan. If it did, stop and tell the requester that the review needs a fresh
 session (or a person) that didn't write the change, and that the implementing
 session should hand over. This is the independent review the definition of
 done asks for.
+
+A fresh session is a sub-agent that starts without the implementing
+conversation, where the tool has one, or else a new session the requester
+opens. A fork or side chat that carries the conversation over isn't fresh, even
+though it runs separately.
 
 ## Run
 
