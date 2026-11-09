@@ -153,7 +153,14 @@ void check_spotlight() {
 
     Lamp donor_lamp = lamp;
     donor_lamp.space = "donor_bone";
-    require(!spotlight(donor_lamp, identity_world, 1.0, 1), "spotlight accepted non-guest space");
+    auto donor_cand = spotlight(donor_lamp, identity_world, 1.0, 1);
+    require(donor_cand.has_value(), "valid donor_bone spotlight rejected");
+    require(donor_cand->source == 1, "donor_bone spotlight source mismatch");
+
+    Lamp invalid_space_lamp = lamp;
+    invalid_space_lamp.space = "invalid_space";
+    require(!spotlight(invalid_space_lamp, identity_world, 1.0, 1),
+            "spotlight accepted invalid space");
 
     auto cand = spotlight(lamp, identity_world, 0.5, 42);
     require(cand.has_value(), "valid spotlight rejected");

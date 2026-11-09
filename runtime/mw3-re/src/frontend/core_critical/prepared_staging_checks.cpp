@@ -308,6 +308,90 @@ static std::string build_single_batch_bwsfm1(std::uint64_t mesh_hash, const std:
     return out;
 }
 
+static void write_fixture_matrix(prepared_fixture::Bytes &out, double x = 0, double y = 0,
+                                 double z = 0) {
+    for (int i = 0; i < 16; ++i) {
+        if (i == 3)
+            out.f64(x);
+        else if (i == 7)
+            out.f64(y);
+        else if (i == 11)
+            out.f64(z);
+        else
+            out.f64(i % 5 == 0 ? 1 : 0);
+    }
+}
+
+static std::string build_valid_v4_mesh() {
+    prepared_fixture::Bytes out;
+    out.value = std::string("BWMESH4\0", 8);
+    out.u32(1); // 1 batch
+
+    struct BoneDef {
+        const char *name;
+        const char *control;
+        double x, y, z;
+    };
+    const std::vector<BoneDef> bone_defs = {{"Pelvis", "", 0, 0, 2},
+                                            {"Torso_Twist", "torso", 0, 0, 2},
+                                            {"Upperarm_Left", "larm", -1, 0, 2},
+                                            {"Upperarm_Right", "rarm", 1, 0, 2},
+                                            {"Forearm_Left", "", -1, 0, 1},
+                                            {"Forearm_Right", "", 1, 0, 1},
+                                            {"Thigh_Left", "lthigh", -0.5, 0, 2},
+                                            {"Thigh_Right", "rthigh", 0.5, 0, 2},
+                                            {"Calf_Left", "lcalf", -0.5, 0, 1},
+                                            {"Calf_Right", "rcalf", 0.5, 0, 1},
+                                            {"Foot0_Left", "lfoot", -0.5, 0, 0},
+                                            {"Foot0_Right", "rfoot", 0.5, 0, 0}};
+    struct RefDef {
+        const char *name;
+        double x, y, z;
+    };
+    const std::vector<RefDef> ref_defs = {
+        {"hip", 0, 0, 2},      {"torso", 0, 0, 2},   {"larm", -1, 0, 2},     {"rarm", 1, 0, 2},
+        {"lfoot", -0.5, 0, 0}, {"rfoot", 0.5, 0, 0}, {"lthigh", -0.5, 0, 2}, {"rthigh", 0.5, 0, 2},
+        {"lcalf", -0.5, 0, 1}, {"rcalf", 0.5, 0, 1}};
+
+    out.u32(static_cast<std::uint32_t>(bone_defs.size()));
+    out.u32(static_cast<std::uint32_t>(ref_defs.size()));
+    out.u32(0); // flags
+    out.f64(0); // hip_drop
+    out.f64(0);
+    out.f64(0); // walk_x
+    out.f64(0);
+    out.f64(0); // walk_z
+
+    for (const auto &b : bone_defs) {
+        out.name(b.name);
+        out.name(b.control);
+        out.u32(0xffffffff);
+        write_fixture_matrix(out, b.x, b.y, b.z);
+    }
+
+    for (const auto &r : ref_defs) {
+        out.name(r.name);
+        write_fixture_matrix(out, r.x, r.y, r.z);
+    }
+
+    out.name("control");
+    out.name("panel");
+    out.u32(0);          // donor_bone index 0
+    out.u32(3);          // 3 vertices
+    out.u32(0xffffffff); // color
+    for (int i = 0; i < 3; ++i) {
+        out.f32(0);
+        out.f32(0);
+        out.f32(i == 0 ? 1.0f : 0.0f);
+        out.f32(0);
+        out.f32(0);
+        out.f32(1.0f);
+        out.f32(0);
+        out.f32(0);
+    }
+    return out.value;
+}
+
 void check_prepared_models_surface_materials() {
     const auto temp_dir = make_private_staging_dir("mw34_pm_materials");
     struct Cleanup {
@@ -319,11 +403,13 @@ void check_prepared_models_surface_materials() {
     } cleanup{temp_dir};
 
     const auto mesh_path = temp_dir / "mesh.bin";
+    const auto v4_mesh_path = temp_dir / "mesh_v4.bin";
     const auto tex_path = temp_dir / "textures.bin";
     const auto mat_path = temp_dir / "materials.bin";
 
     {
         std::ofstream(mesh_path, std::ios::binary) << prepared_fixture::mesh(2);
+        std::ofstream(v4_mesh_path, std::ios::binary) << build_valid_v4_mesh();
         std::ofstream(tex_path, std::ios::binary) << prepared_fixture::textures();
     }
 
@@ -342,17 +428,21 @@ void check_prepared_models_surface_materials() {
 
     std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> root(zcls::object3d_create(),
                                                             zcls::tree_destroy);
-    auto *control = zcls::object3d_create(), *panel = zcls::object3d_create();
-    require(root && control && panel && zcls::object3d_add_child(root.get(), control) == 0 &&
-                zcls::object3d_add_child(control, panel) == 0,
+    auto *control = zcls::object3d_create(), *panel = zcls::object3d_create(),
+         *torso = zcls::object3d_create();
+    require(root && control && panel && torso &&
+                zcls::object3d_add_child(root.get(), control) == 0 &&
+                zcls::object3d_add_child(control, panel) == 0 &&
+                zcls::object3d_add_child(root.get(), torso) == 0,
             "Node hierarchy setup failed");
     zcls::node_set_name(root.get(), "actor");
     zcls::node_set_name(control, "control");
     zcls::node_set_name(panel, "panel");
+    zcls::node_set_name(torso, "torso");
     auto asset = std::make_shared<zcls::SourceAsset>();
     asset->name = "mech_authored.flt";
-    asset->nodes = {{"actor", 1}, {"control", 1}, {"panel", 1}};
-    root->source_asset = control->source_asset = panel->source_asset = asset;
+    asset->nodes = {{"actor", 1}, {"control", 1}, {"panel", 1}, {"torso", 1}};
+    root->source_asset = control->source_asset = panel->source_asset = torso->source_asset = asset;
     root->source_asset_root = true;
     zmod::Model model{};
     const std::uint32_t count = 3;
@@ -402,6 +492,16 @@ void check_prepared_models_surface_materials() {
     {
         cc_mw3_re::PreparedModels models(options, mat_binding("authored", "0", mat_path));
         require(models.has_binding(context), "PreparedModels missing binding for authored node");
+        require(!models.donor_headlight_socket(context, "torso"),
+                "donor_headlight_socket accepted non-v4 mesh");
+        require(!models.donor_headlight_socket(context, ""),
+                "donor_headlight_socket accepted empty bone name");
+        require(!models.donor_headlight_socket({}, "torso"),
+                "donor_headlight_socket accepted empty context");
+        std::vector<std::uintptr_t> test_ancestry = {1, 2, 3};
+        require(!models.donor_headlight_socket(context, "torso", &test_ancestry),
+                "donor_headlight_socket accepted non-v4 mesh with ancestry");
+        require(test_ancestry.empty(), "donor_headlight_socket failed to clear ancestry");
         const auto draw = models.draw(context);
         require(draw.batches.size() == 1, "Draw batches count mismatch");
         require(draw.batches[0].surface_material != nullptr,
@@ -416,6 +516,35 @@ void check_prepared_models_surface_materials() {
         require(draw.batches[0].surface_material->metallic == 0.0f, "Default metallic mismatch");
         require(draw.batches[0].surface_material->material_name == "authored",
                 "material_name mismatch");
+    }
+
+    // 1b. Positive test: PreparedModels version 4 mesh donor_headlight_socket with ancestry
+    {
+        matrix[9] = 12;
+        sdlfe::CoreCriticalAssets v4_options;
+        v4_options.models.push_back({"authored", "0", v4_mesh_path.string(), tex_path.string()});
+        cc_mw3_re::PreparedModels v4_models(v4_options);
+        std::vector<std::uintptr_t> v4_ancestry;
+        const auto v4_socket =
+            v4_models.donor_headlight_socket(context, "Torso_Twist", &v4_ancestry);
+        require(v4_socket.has_value(), "donor_headlight_socket failed on valid v4 mesh bone");
+        require(v4_ancestry.size() == 2 &&
+                    v4_ancestry[0] == reinterpret_cast<std::uintptr_t>(torso) &&
+                    v4_ancestry[1] == reinterpret_cast<std::uintptr_t>(root.get()),
+                "donor_headlight_socket ancestry mismatch");
+        require((*v4_socket)[3] == 12, "donor_headlight_socket lost native world transform");
+        const auto v4_alias = v4_models.donor_headlight_socket(context, "torso");
+        require(v4_alias.has_value() && (*v4_alias)[3] == 12,
+                "donor_headlight_socket failed on bone control alias");
+        std::vector<std::uintptr_t> pelvis_ancestry = {99};
+        const auto pelvis_socket =
+            v4_models.donor_headlight_socket(context, "Pelvis", &pelvis_ancestry);
+        require(pelvis_socket.has_value(),
+                "donor_headlight_socket failed for bone without control target");
+        require(pelvis_ancestry.empty(), "bone without control target should have empty ancestry");
+        require(!v4_models.donor_headlight_socket(context, "nonexistent"),
+                "donor_headlight_socket accepted nonexistent bone");
+        matrix[9] = 0;
     }
 
     // 2. Stock / No-Sidecar Control: surface_material must be nullptr

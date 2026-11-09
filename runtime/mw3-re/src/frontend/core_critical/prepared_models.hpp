@@ -45,6 +45,10 @@ class PreparedModels {
     const ::platform::prepared::Image *named_texture(const char *name) const;
     PreparedModelDraw draw(const ::platform::ModelDrawContext &context,
                            bool rigid_only = false) const;
+    std::optional<::platform::prepared::Matrix>
+    donor_headlight_socket(const ::platform::ModelDrawContext &context,
+                           const std::string &bone_name,
+                           std::vector<std::uintptr_t> *ancestry = nullptr) const;
 
   private:
     struct Model {

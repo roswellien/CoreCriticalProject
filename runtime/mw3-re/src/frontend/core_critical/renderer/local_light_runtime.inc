@@ -94,8 +94,13 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
     const auto &lamp = profile->lamps[i];
     if (headlight_player_.owner.retired_emitters.count(lamp.id))
       continue;
+    std::optional<::platform::prepared::Matrix> pose;
     std::vector<std::uintptr_t> ancestry;
-    const auto pose = original_headlight_socket(context, lamp.attachment, &ancestry);
+    if (lamp.space == "donor_bone") {
+      pose = prepared_.donor_headlight_socket(context, lamp.attachment, &ancestry);
+    } else {
+      pose = original_headlight_socket(context, lamp.attachment, &ancestry);
+    }
     if (!pose)
       continue;
     if (context.ordinary && !ancestry.empty()) {
