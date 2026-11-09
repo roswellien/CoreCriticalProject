@@ -1,0 +1,11 @@
+#!/bin/sh
+# Runs tools/agents/git_hooks.py for this hook with the first working Python 3.11 or later.
+# Windows' python3 is often the Microsoft Store stub and Ubuntu may have no python, so try each.
+hook=$(basename "$0")
+for python in python python3 "py -3"; do
+    if $python -c "import sys; sys.exit(sys.version_info < (3, 11))" >/dev/null 2>&1; then
+        exec $python tools/agents/git_hooks.py "$hook" "$@"
+    fi
+done
+echo "$hook: Python 3.11 or later is needed to run this hook; install it, or see CONTRIBUTING.md." >&2
+exit 1

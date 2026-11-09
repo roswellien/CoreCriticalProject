@@ -6,6 +6,16 @@
 #include <limits>
 
 int main() {
+    // These original adapters must reach Stage even with fast dispatch enabled.
+    for (unsigned target : {0x40adf0U, 0x40ae70U, 0x40af30U, 0x418f30U, 0x418e90U,
+                            0x421760U, 0x421900U, 0x421c00U, 0x421d40U, 0x421d50U,
+                            0x421e40U, 0x493040U, 0x4931e0U, 0x4f32e0U, 0x4f3390U,
+                            0x4eb050U, 0x4eaf90U, 0x4f3560U, 0x4f3620U, 0x4f3870U,
+                            0x4f36b0U, 0x4f3920U})
+        if (!mw34::body_dispatch::handled(target)) {
+            std::fprintf(stderr, "Camera adapter %08x bypassed by fast dispatch\n", target);
+            return 3;
+        }
     unsigned checks{};
     const auto check = [&](unsigned target) {
         const bool expected = std::find(std::begin(mw34::body_dispatch::targets),

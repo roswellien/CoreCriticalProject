@@ -1,6 +1,16 @@
 name: Bootstrap checks
 
 on:
+  workflow_dispatch:
+    inputs:
+      review_pr:
+        description: Pull request number for the owner-invoked API review canary
+        type: string
+        required: true
+      review_head:
+        description: Exact reviewed PR head SHA
+        type: string
+        required: true
   push:
     paths-ignore:
       - "website/**"
@@ -15,7 +25,12 @@ permissions:
 
 jobs:
   build:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     strategy:
+      # Each OS reports its own result; a Linux failure doesn't cancel the Windows job.
+      fail-fast: false
+      # tools/check.py picks the compiler from the OS (MSVC on Windows, clang++ on Linux);
+      # `compiler` only names the job, so keep each entry matching its OS.
       matrix:
         include:
           - os: windows-2022
@@ -28,14 +43,23 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
-      - name: Configure (MSVC)
-        if: matrix.compiler == 'msvc'
-        run: cmake --preset default -A x64
-      - name: Configure (Clang)
-        if: matrix.compiler != 'msvc'
-        run: cmake --preset default -DCMAKE_CXX_COMPILER=clang++
-      - run: cmake --build --preset default
-      - run: ctest --preset default
-      - name: Check C++ formatting (Clang)
-        if: matrix.compiler != 'msvc'
-        run: cmake --build build/default --target format-check
+      # tools/check.py owns the configure options per OS (-A x64 with MSVC, clang++ on
+      # Linux) and the pinned clang-format, so CI and local runs can't drift apart.
+      - name: Install the pinned clang-format
+        run: python tools/check.py --setup --only format-check
+      - name: Build, CTest and C++ format check
+        run: python tools/check.py --only build --only ctest --only format-check
+
+  api-review-canary:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'roswellien' && github.repository == 'roswellien/MW3Recomp-Private' }}
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    uses: ./.github/workflows/api-pr-review.yml
+    with:
+      review_pr: ${{ inputs.review_pr }}
+      review_head: ${{ inputs.review_head }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}

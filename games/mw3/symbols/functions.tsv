@@ -1,2 +1,64 @@
 address	name	confidence	evidence	purpose
 00409ED0	sub_00409ED0	confirmed	games/mw3/docs/first-function.md	Returns ECX + 188 * n + 312, where n is its one stack argument; gameplay role unknown
+0040ADF0	sub_0040ADF0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Replaces the context target and controller with teardown and initialization
+0040AE70	sub_0040AE70	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Selects and initializes a context controller while preserving its previous mode
+0040AF30	sub_0040AF30	likely	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Adjusts the active camera against terrain and collision geometry
+0040BAF0	Stub_ReturnTwoArgs	confirmed	games/mw3/docs/functions/containers.md#sub_0040baf0	Empty function that returns at once and drops two stack arguments; shared by 66 functions and many virtual-function slots, including vector::_Destroy
+0040FFF0	GlobalSetup_ObjectList	confirmed	games/mw3/docs/functions/globals.md#sub_0040fff0	Startup initializer that builds the global list of numbered objects at 00603FD8 with constructor 004C7B80
+00410040	GlobalSetup_List1	confirmed	games/mw3/docs/functions/globals.md#sub_00410040	Startup initializer that builds global object 00603FE8 with constructor 004D8540
+00410090	GlobalSetup_List2	confirmed	games/mw3/docs/functions/globals.md#sub_00410090	Startup initializer that builds global object 00603FF8 with constructor 004D8540
+004100E0	GlobalSetup_List3	confirmed	games/mw3/docs/functions/globals.md#sub_004100e0	Startup initializer that builds global object 00604048 with constructor 004D8540
+00410130	GlobalSetup_List4	confirmed	games/mw3/docs/functions/globals.md#sub_00410130	Startup initializer that builds global object 00604078 with constructor 004D8540
+00410180	GlobalSetup_List5	confirmed	games/mw3/docs/functions/globals.md#sub_00410180	Startup initializer that builds global object 00603F90 with constructor 004D8540
+004101D0	GlobalSetup_List6	confirmed	games/mw3/docs/functions/globals.md#sub_004101d0	Startup initializer that builds global object 00604038 with constructor 004D8540
+00410220	GlobalSetup_Simple1	confirmed	games/mw3/docs/functions/globals.md#sub_00410220	Startup initializer that builds global object 00603FA0 with constructor 004105D0
+00410270	GlobalSetup_Simple2	confirmed	games/mw3/docs/functions/globals.md#sub_00410270	Startup initializer that builds global object 00604058 with constructor 00410610
+004102C0	GlobalSetup_Simple3	confirmed	games/mw3/docs/functions/globals.md#sub_004102c0	Startup initializer that builds global object 00604028 with constructor 00410630
+00410310	GlobalSetup_Simple4	confirmed	games/mw3/docs/functions/globals.md#sub_00410310	Startup initializer that builds global object 00604068 with constructor 004C8750
+00410360	GlobalSetup_Simple5	confirmed	games/mw3/docs/functions/globals.md#sub_00410360	Startup initializer that builds global object 00604088 with constructor 00410650
+004103B0	GlobalSetup_Simple6	confirmed	games/mw3/docs/functions/globals.md#sub_004103b0	Startup initializer that builds global object 00604098 with constructor 00410680
+00410400	GlobalSetup_NumberedObject1	confirmed	games/mw3/docs/functions/globals.md#sub_00410400	Startup initializer that builds numbered global object 00604008 with constructor 004C0310
+00410450	GlobalSetup_NumberedObject2	confirmed	games/mw3/docs/functions/globals.md#sub_00410450	Startup initializer that builds numbered global object 00603FB8 with constructor 004C0570
+00418E90	sub_00418E90	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Repositions a Mech actor, resets velocity/physics fields and refreshes its scene
+00418F30	sub_00418F30	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Updates actor orientation then delegates absolute repositioning
+00421760	sub_00421760	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Updates the mode-zero camera pose through the original camera transform setters
+00421900	sub_00421900	likely	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Configures controller pose parameters and initializes camera pose
+00421C00	sub_00421C00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Applies a discrete look preset to controller quaternion state
+00421D40	sub_00421D40	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Forwards controller pose configuration to sub_00421900
+00421D50	sub_00421D50	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Switches the mode-one camera attachment and initializes its pose
+00421E40	sub_00421E40	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Updates the mode-one camera from the selected actor and cockpit camera state
+00475BF0	std_vector__Ucopy	confirmed	games/mw3/docs/functions/containers.md#sub_00475bf0	Library vector helper that copies a range of 4-byte elements to a destination, skipping a null destination, and returns the destination's end
+00475C20	std_vector__Ufill	confirmed	games/mw3/docs/functions/containers.md#sub_00475c20	Library vector helper that stores a count of copies of a 4-byte value at a destination, skipping a null destination
+00493040	sub_00493040	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Enters the original Pause State and creates its pause dialog
+004931E0	sub_004931E0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Tears down the original Pause State and releases its dialog resources
+004BF910	LinkedNumberedObject_Init	confirmed	games/mw3/docs/functions/objects.md#sub_004bf910	Constructor of a numbered object that also holds a vector of object pointers, sized to a count and filled from an optional array
+004C8600	SimpleObject_Init	confirmed	games/mw3/docs/functions/objects.md#sub_004c8600	Base constructor shared by many classes: sets vtable 005CB180 and clears a field and a flag bit
+004D2A70	sub_004D2A70	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Returns the receiver pointer without modification
+004D5110	std__Construct	confirmed	games/mw3/docs/functions/containers.md#sub_004d5110	Library helper that copies a 4-byte value into a destination unless the destination is null
+004D5120	NumberedObjectB_Init	confirmed	games/mw3/docs/functions/objects.md#sub_004d5120	Constructor of a second numbered-object class, built on 0058AEC0's
+004EAF90	sub_004EAF90	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Frees a node data block and clears its type and data identity
+004EB050	sub_004EB050	likely	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Requests or performs generic node retirement
+004ED280	sub_004ED280	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Composes a node transform through its original ancestry traversal
+004F32E0	sub_004F32E0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Constructs a type-one camera node and its camera data
+004F3390	sub_004F3390	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Delegates camera node retirement to sub_004EB050
+004F3560	sub_004F3560	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Assigns a validated type-two world node to camera data
+004F3620	sub_004F3620	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Assigns the viewport reference in camera data
+004F36B0	sub_004F36B0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes camera rotation and selects its ordinary pose storage
+004F3870	sub_004F3870	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes absolute camera translation into the selected pose storage
+004F3920	sub_004F3920	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Adds relative translation to the selected camera pose storage
+004FD1C0	std_vector_size	confirmed	games/mw3/docs/functions/containers.md#sub_004fd1c0	Library vector size: the number of elements in a vector of 4-byte elements
+00517DF0	Texture_ReadData	confirmed	games/mw3/docs/functions/textures.md#sub_00517df0	Reads a texture's pixels, optional extra block and palette from an open bank file, converting 16-bit colors from 5-6-5 to 5-5-5 when a global format setting is 5
+00518DB0	TextureBank_LoadByName	confirmed	games/mw3/docs/functions/textures.md#sub_00518db0	Finds a texture by name in a bank's archive table, seeks to it, builds it and attaches its shared palette
+00520B00	sub_00520B00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Activates the renderer camera basis and prepares its inverse view
+0058AEC0	NumberedObject_Init	confirmed	games/mw3/docs/functions/objects.md#sub_0058aec0	Base constructor of numbered objects: stores the ID and adds the object to the global list at 00603FD8
+0058B160	NumberedObjects_FindByNumber	confirmed	games/mw3/docs/functions/objects.md#sub_0058b160	Finds the object in the global list whose ID matches, or returns 0
+0058B1C0	NumberedObjects_PickFreeNumber	confirmed	games/mw3/docs/functions/objects.md#sub_0058b1c0	Picks an ID in a range that no object in the global list uses, or returns -1
+005ABD1A	operator_delete	confirmed	games/mw3/docs/functions/heap.md#sub_005abd1a	Import thunk to MFC42 operator delete (ordinal 825)
+005ABD26	operator_new	confirmed	games/mw3/docs/functions/heap.md#sub_005abd26	Import thunk to MFC42 operator new (ordinal 823)
+005AC110	_onexit	confirmed	games/mw3/docs/functions/startup.md#sub_005ac110	C runtime _onexit: passes an exit function to MSVCRT's exit table
+005AC140	atexit	confirmed	games/mw3/docs/functions/startup.md#sub_005ac140	C runtime atexit: registers an exit function and returns 0, or -1 on failure
+005AC3A0	WinMainCRTStartup	confirmed	games/mw3/docs/functions/startup.md#sub_005ac3a0	C runtime startup for a GUI program: sets up the runtime, runs initializers, calls WinMain and exits with its result
+005AC580	__dllonexit	confirmed	games/mw3/docs/functions/startup.md#sub_005ac580	Import thunk to MSVCRT __dllonexit, which adds a function to a given exit table
+005AC598	_initterm	confirmed	games/mw3/docs/functions/startup.md#sub_005ac598	Import thunk to MSVCRT _initterm, which calls each function pointer in a table
+005AC5A0	_setdefaultprecision	confirmed	games/mw3/docs/functions/startup.md#sub_005ac5a0	Sets the x87 FPU to 53-bit precision through _controlfp
+005AC5C0	Stub_Return	confirmed	games/mw3/docs/functions/startup.md#sub_005ac5c0	Empty function that returns at once; reached from 57 functions, 8 call sites outside any function and data tables, including startup's _setargv call

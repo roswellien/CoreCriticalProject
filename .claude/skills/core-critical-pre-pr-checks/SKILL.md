@@ -8,24 +8,16 @@ description: Run this repository's build, tests, C++ formatting check and style 
 Run these from the repository root on the PR branch. Each doc named here owns its
 commands; where it and this list disagree, follow the doc.
 
-1. **Build and test**, as in "Build the asset-free runtime" in `README.md`:
-   - `cmake --preset default` (on Windows, from a Visual Studio developer shell,
-     add `-A x64`)
-   - `cmake --build --preset default`
-   - `ctest --preset default`
-2. **C++ formatting:** `cmake --build build/default --target format-check`. The
-   target exists only when CMake found clang-format; if it is missing, configure
-   again with `-DMW34_CLANG_FORMAT=<path to clang-format>`. The pinned version is
-   in `tools/style/requirements.txt`.
-3. **Style:** `python tools/style/check_style.py` (one-time setup in
-   `tools/style/README.md`). Before committing, run it with `--fix`, as
-   `CODE_STYLE.md` says. Languages not yet switched on only report counts; run
-   with `--verbose` to see findings per file, and note any in the files you
-   changed. If it exits 2 because a tool is missing or the wrong version, run the
-   languages you can with `--language <name>` and list the rest as not run.
-4. **Area checks:** if the changed area's own README lists checks (for example the
-   launcher's "Narrow checks" in `tools/remaster-launcher/README.md`), run those
-   too.
+1. **Build, test, C++ formatting and style:** `python tools/check.py` (once per
+   worktree, `python tools/check.py --setup` first). It runs the same checks as CI
+   and ends with one pass, fail or not run line per check; exit 2 means something
+   didn't run, and its line says how to fix that. Add `--area launcher` when the
+   launcher changed. Before committing, run `python tools/style/check_style.py --fix`,
+   as `CODE_STYLE.md` says; style languages not yet switched on only report counts,
+   so run `check_style.py --verbose` and note any findings in the files you changed.
+2. **Other area checks:** if the changed area's own README lists checks that
+   `tools/check.py` doesn't run (for example the launcher's "Narrow checks" in
+   `tools/remaster-launcher/README.md`), run those too.
 
 Then fill in the Validation section of the PR description
 (`.github/pull_request_template.md`), as "Issues and pull requests" in

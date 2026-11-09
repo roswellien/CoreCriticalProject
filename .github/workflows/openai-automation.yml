@@ -1,0 +1,54 @@
+{
+  "name": "Inactive OpenAI automation foundation",
+  "on": {
+    "schedule": [{"cron": "17 * * * *"}],
+    "workflow_dispatch": {
+      "inputs": {
+        "mode": {"description": "Requested operation (foundation blocks all live modes)", "type": "choice", "options": ["reconcile", "summary", "triage"], "default": "reconcile"},
+        "issue": {"description": "Issue number for triage", "type": "string", "default": "0"}
+      }
+    }
+  },
+  "permissions": {"contents": "read"},
+  "concurrency": {"group": "openai-automation-publisher", "cancel-in-progress": false},
+  "jobs": {
+    "controller": {
+      "if": "${{ github.repository == 'roswellien/MW3Recomp-Private' && github.ref == 'refs/heads/develop' && vars.OPENAI_AUTOMATION_ENABLED == 'true' && vars.OPENAI_AUTOMATION_ROLLOUT_COMPLETE == 'true' && vars.OPENAI_AUTOMATION_CONTROLLER_SHA != '' }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+      "environment": "openai-automation",
+      "env": {
+        "CONTROLLER_SHA": "${{ vars.OPENAI_AUTOMATION_CONTROLLER_SHA }}",
+        "AUTOMATION_MODE": "${{ inputs.mode || 'reconcile' }}",
+        "AUTOMATION_ISSUE": "${{ inputs.issue || '0' }}"
+      },
+      "steps": [
+        {
+          "name": "Require an explicit controller commit",
+          "shell": "bash",
+          "run": "set -eu\n[[ \"$CONTROLLER_SHA\" =~ ^[0-9a-f]{40}$ ]]"
+        },
+        {
+          "name": "Read the approved controller revision",
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "with": {"ref": "${{ vars.OPENAI_AUTOMATION_CONTROLLER_SHA }}", "fetch-depth": 0, "persist-credentials": false}
+        },
+        {
+          "name": "Verify the controller belongs to develop",
+          "shell": "bash",
+          "run": "set -eu\ntest \"$(git rev-parse HEAD)\" = \"$CONTROLLER_SHA\"\ngit merge-base --is-ancestor \"$CONTROLLER_SHA\" refs/remotes/origin/develop"
+        },
+        {
+          "name": "Use the existing Python pin",
+          "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+          "with": {"python-version": "3.11"}
+        },
+        {
+          "name": "Check rollout before exposing any automation credentials",
+          "shell": "bash",
+          "run": "python -B tools/github/openai_automation.py \"$AUTOMATION_MODE\" --issue \"$AUTOMATION_ISSUE\" --admission-only"
+        }
+      ]
+    }
+  }
+}

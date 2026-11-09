@@ -45,6 +45,17 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_joystick_selection_tests)
     add_test(NAME joystick_selection COMMAND mw34_joystick_selection_tests)
 
+    add_executable(mw34_heap_partition_tests tools/remaster-launcher/test_heap_partitions.cpp)
+    target_compile_definitions(mw34_heap_partition_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_heap_partition_tests)
+    add_test(NAME heap_partitions COMMAND mw34_heap_partition_tests)
+
+    find_package(Threads REQUIRED)
+    add_executable(mw34_render_queue_tests tools/remaster-launcher/test_render_queue.cpp)
+    target_link_libraries(mw34_render_queue_tests PRIVATE Threads::Threads)
+    mw34_warnings(mw34_render_queue_tests)
+    add_test(NAME render_queue COMMAND mw34_render_queue_tests)
+
     add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
     target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -80,6 +91,12 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_menu_wave_tests)
     add_test(NAME menu_wave COMMAND mw34_menu_wave_tests)
 
+    add_executable(mw34_surface_access_history_tests
+        tools/remaster-launcher/test_surface_access_history.cpp)
+    target_compile_definitions(mw34_surface_access_history_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    mw34_warnings(mw34_surface_access_history_tests)
+    add_test(NAME surface_access_history COMMAND mw34_surface_access_history_tests)
+
     if(WIN32)
         add_executable(mw34_local_cd_audio_tests tests/local_cd_audio_tests.cpp)
         target_include_directories(mw34_local_cd_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
@@ -95,6 +112,12 @@ if(BUILD_TESTING)
     endif()
 
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME installed_runtime_preparation
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${PROJECT_SOURCE_DIR}/tools/remaster-launcher/test_installed_runtime.py")
+    add_test(NAME surface_access_host_wiring
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${PROJECT_SOURCE_DIR}/tools/remaster-launcher/test_surface_access_history.py")
     add_test(NAME native_host_build_metadata
         COMMAND "${Python3_EXECUTABLE}" -B
             "${PROJECT_SOURCE_DIR}/tools/m4-crt-heap-carry/test_host_build.py")
@@ -134,6 +157,13 @@ if(BUILD_TESTING)
     add_test(NAME board_check
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_board_check.py -v)
     set_tests_properties(board_check PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+
+    add_test(NAME openai_automation
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p "test_openai_automation*.py" -v)
+    set_tests_properties(openai_automation PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME api_pr_review
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_api_pr_review.py -v)
+    set_tests_properties(api_pr_review PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME game_monitor
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_game_monitor.py -v)
     set_tests_properties(game_monitor PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
@@ -149,6 +179,9 @@ if(BUILD_TESTING)
     add_test(NAME agent_files
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_agent_files.py -v)
     set_tests_properties(agent_files PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME check_command
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tests -p test_check_command.py -v)
+    set_tests_properties(check_command PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 endif()
 
 find_program(MW34_CLANG_FORMAT clang-format)
