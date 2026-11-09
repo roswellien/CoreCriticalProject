@@ -51,7 +51,7 @@ jobs:
         run: python tools/check.py --only build --only ctest --only format-check
 
   api-review-canary:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'roswellien' && github.repository == 'roswellien/MW3Recomp-Private' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'roswellien' && github.repository == 'roswellien/CoreCriticalProject' }}
     permissions:
       contents: read
       actions: read

@@ -45,7 +45,7 @@
   },
   "jobs": {
     "review": {
-      "if": "${{ github.repository == 'roswellien/MW3Recomp-Private' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && github.actor == 'roswellien')) }}",
+      "if": "${{ github.repository == 'roswellien/CoreCriticalProject' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && github.actor == 'roswellien')) }}",
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 15,
       "steps": [
