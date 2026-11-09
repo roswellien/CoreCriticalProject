@@ -255,6 +255,8 @@
                                     <TextBlock Text="Install soundtrack .mw3pack files through Mods &amp; Packs → Install Pack. The first enabled soundtrack in pack order is used." TextWrapping="Wrap" Margin="0,0,0,12" />
                                     <CheckBox x:Name="ChkPerformanceMonitor" Content="Show performance monitor in game" Margin="0,0,0,6" Checked="SettingControl_Changed" Unchecked="SettingControl_Changed" />
                                     <TextBlock Text="AVG FPS, 1% Low FPS, High FPS and AVG Frame Time over the last 10 seconds. The 1% low uses the average of the slowest 1% of frames; High FPS uses the fastest frame. Applies on the next launch." FontSize="11" Foreground="{StaticResource BrushMuted}" TextWrapping="Wrap" Margin="0,0,0,16" />
+                                    <CheckBox x:Name="ChkRenderThread" Content="Run graphics on a separate thread (faster)" Margin="0,0,0,6" Checked="SettingControl_Changed" Unchecked="SettingControl_Changed" />
+                                    <TextBlock Text="Lets the game prepare the next frame while the graphics card draws this one. Turn it off if you see graphics problems. Applies on the next launch." FontSize="11" Foreground="{StaticResource BrushMuted}" TextWrapping="Wrap" Margin="0,0,0,16" />
                                     <CheckBox x:Name="ChkCdAudio" Content="Enable soundtrack (original tracks or an enabled music pack)" Margin="0,0,0,16" Checked="SettingControl_Changed" Unchecked="SettingControl_Changed" />
                                 </StackPanel>
 

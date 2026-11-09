@@ -20,6 +20,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from .formats import pack_gamez_zbd, pack_reader_zbd
 from .exporter import compute_sha256, build_bank_file
+from .environment import EnvironmentConfig, encode_mw34env1, get_environment_preset
 from ..config import cache_directory, game_directory
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -55,6 +56,12 @@ class MapAsset:
     trigger_radius: float = 40.0
     trigger_action: str = ""
     trigger_message: str = ""
+    trigger_audio: str = "betty_alarm"
+    height_offset: float = 0.0
+    ai_skill: str = "regular"  # green, regular, veteran, elite
+    ai_stance: str = "guard"  # guard, patrol, ambush, free_fire
+    ai_range: str = "medium"  # short, medium, long
+    ai_retreat_health: int = 15
 
 
 @dataclass
@@ -67,20 +74,10 @@ class TerrainConfig:
     height_scale: float = 80.0
     water_level: float = 3.0
     roughness: float = 0.5
+    height_modifications: Dict[str, float] = field(default_factory=dict)
 
 
-@dataclass
-class LightingConfig:
-    """Preview light settings; azimuth/elevation are degrees and colours are RGB gains."""
-
-    preset_name: str = "sunset"
-    azimuth: float = 225.0
-    elevation: float = 35.0
-    strength: float = 0.85
-    ambient: float = 0.20
-    sun_color: List[float] = field(default_factory=lambda: [1.0, 0.85, 0.7])
-    sky_tint: List[float] = field(default_factory=lambda: [0.35, 0.45, 0.75])
-    fog_distance: int = 1100
+LightingConfig = EnvironmentConfig
 
 
 @dataclass
@@ -143,17 +140,9 @@ class MapPackProject:
                 "height_scale": self.terrain.height_scale,
                 "water_level": self.terrain.water_level,
                 "roughness": self.terrain.roughness,
+                "height_modifications": self.terrain.height_modifications,
             },
-            "lighting": {
-                "preset_name": self.lighting.preset_name,
-                "azimuth": self.lighting.azimuth,
-                "elevation": self.lighting.elevation,
-                "strength": self.lighting.strength,
-                "ambient": self.lighting.ambient,
-                "sun_color": self.lighting.sun_color,
-                "sky_tint": self.lighting.sky_tint,
-                "fog_distance": self.lighting.fog_distance,
-            },
+            "lighting": self.lighting.to_dict(),
             "objectives": self.objectives,
             "drop_config": self.drop_config,
             "assets": [
@@ -173,6 +162,12 @@ class MapPackProject:
                     "trigger_radius": a.trigger_radius,
                     "trigger_action": a.trigger_action,
                     "trigger_message": a.trigger_message,
+                    "trigger_audio": a.trigger_audio,
+                    "height_offset": a.height_offset,
+                    "ai_skill": a.ai_skill,
+                    "ai_stance": a.ai_stance,
+                    "ai_range": a.ai_range,
+                    "ai_retreat_health": a.ai_retreat_health,
                 }
                 for a in self.assets
             ],
@@ -199,6 +194,12 @@ class MapPackProject:
                 trigger_radius=float(a.get("trigger_radius", 40.0)),
                 trigger_action=a.get("trigger_action", ""),
                 trigger_message=a.get("trigger_message", ""),
+                trigger_audio=a.get("trigger_audio", "betty_alarm"),
+                height_offset=float(a.get("height_offset", 0.0)),
+                ai_skill=a.get("ai_skill", "regular"),
+                ai_stance=a.get("ai_stance", "guard"),
+                ai_range=a.get("ai_range", "medium"),
+                ai_retreat_health=int(a.get("ai_retreat_health", 15)),
             )
             for a in data.get("assets", [])
         ]
@@ -216,17 +217,9 @@ class MapPackProject:
                 height_scale=float(tc.get("height_scale", 80.0)),
                 water_level=float(tc.get("water_level", 3.0)),
                 roughness=float(tc.get("roughness", 0.5)),
+                height_modifications=tc.get("height_modifications", {}),
             ),
-            lighting=LightingConfig(
-                preset_name=lc.get("preset_name", "sunset"),
-                azimuth=float(lc.get("azimuth", 225.0)),
-                elevation=float(lc.get("elevation", 35.0)),
-                strength=float(lc.get("strength", 0.85)),
-                ambient=float(lc.get("ambient", 0.20)),
-                sun_color=lc.get("sun_color", [1.0, 0.85, 0.7]),
-                sky_tint=lc.get("sky_tint", [0.35, 0.45, 0.75]),
-                fog_distance=int(lc.get("fog_distance", 1100)),
-            ),
+            lighting=EnvironmentConfig.from_dict(lc) if isinstance(lc, dict) else EnvironmentConfig(),
             objectives=data.get("objectives", {
                 "primary": [
                     {"id": "obj_pri_1", "desc": "Neutralize Clan Smoke Jaguar defenders", "target": "any_enemy", "completed": False},
@@ -261,6 +254,314 @@ class MapPackProject:
         )
 
 
+def bake_terrain_heights(temp_gamez: Path, height_modifications: Dict[str, float]) -> int:
+    """Bake sculpted terrain elevations into GameZ model vertices and bounding boxes.
+
+    Returns the count of vertices modified.
+    """
+    if not height_modifications:
+        return 0
+
+    models_path = temp_gamez / "models.json"
+    nodes_path = temp_gamez / "nodes.json"
+    if not models_path.is_file() or not nodes_path.is_file():
+        return 0
+
+    models = json.loads(models_path.read_text(encoding="utf-8"))
+    nodes = json.loads(nodes_path.read_text(encoding="utf-8"))
+
+    mod_lookup: Dict[Tuple[float, float], float] = {}
+    for k, v in height_modifications.items():
+        try:
+            parts = k.split(",")
+            kx = round(float(parts[0]), 1)
+            kz = round(float(parts[1]), 1)
+            mod_lookup[(kx, kz)] = float(v)
+        except Exception:
+            continue
+
+    if not mod_lookup:
+        return 0
+
+    modified_count = 0
+    models_modified = set()
+
+    for node in nodes:
+        flags = node.get("flags", {})
+        if not flags.get("terrain"):
+            continue
+        mi = node.get("model_index")
+        if mi is None or mi < 0 or mi >= len(models):
+            continue
+
+        m = models[mi]
+        verts = m.get("vertices", [])
+        if not verts:
+            continue
+
+        tr = node.get("data", {}).get("Object3d", {}).get("transform")
+        tx, ty, tz = 0.0, 0.0, 0.0
+        if isinstance(tr, dict) and "RotateTranslateScale" in tr:
+            trans = tr["RotateTranslateScale"].get("translate", {})
+            tx = float(trans.get("x", 0.0))
+            ty = float(trans.get("y", 0.0))
+            tz = float(trans.get("z", 0.0))
+
+        node_modified = False
+        min_y = float("inf")
+        max_y = float("-inf")
+
+        for v in verts:
+            gx = round(v["x"] + tx, 1)
+            gz = round(v["z"] + tz, 1)
+
+            new_gy = mod_lookup.get((gx, gz))
+            if new_gy is None:
+                # Tolerance check for small precision differences
+                for dx in (-0.1, 0.1):
+                    for dz in (-0.1, 0.1):
+                        alt_k = (round(gx + dx, 1), round(gz + dz, 1))
+                        if alt_k in mod_lookup:
+                            new_gy = mod_lookup[alt_k]
+                            break
+                    if new_gy is not None:
+                        break
+
+            if new_gy is not None:
+                new_vy = new_gy - ty
+                if abs(v["y"] - new_vy) > 1e-4:
+                    v["y"] = new_vy
+                    modified_count += 1
+                    node_modified = True
+                    models_modified.add(mi)
+
+            if v["y"] < min_y:
+                min_y = v["y"]
+            if v["y"] > max_y:
+                max_y = v["y"]
+
+        if node_modified:
+            for bbox_key in ("node_bbox", "model_bbox", "active_bbox"):
+                bbox = node.get(bbox_key)
+                if isinstance(bbox, dict):
+                    if "min" in bbox and isinstance(bbox["min"], dict):
+                        if min_y + ty < bbox["min"].get("y", 0.0):
+                            bbox["min"]["y"] = min_y + ty
+                    if "max" in bbox and isinstance(bbox["max"], dict):
+                        if max_y + ty > bbox["max"].get("y", 0.0):
+                            bbox["max"]["y"] = max_y + ty
+
+    if modified_count > 0:
+        models_path.write_text(json.dumps(models), encoding="utf-8")
+        nodes_path.write_text(json.dumps(nodes, indent=2), encoding="utf-8")
+
+    return modified_count
+
+
+# Canonical Weapon Registry for MW3 Native Engine
+WPN_NAME_TO_GAME_ID: Dict[str, str] = {
+    "er ppc": "ERPPC",
+    "clan er ppc": "ERPPC",
+    "erppc": "ERPPC",
+    "ppc": "ERPPC",
+    "clan lrm-20": "LRM20",
+    "lrm-20": "LRM20",
+    "lrm 20": "LRM20",
+    "clan lrm-15": "LRM15",
+    "lrm-15": "LRM15",
+    "clan lrm-10": "LRM10",
+    "lrm-10": "LRM10",
+    "clan lrm-5": "LRM5",
+    "lrm-5": "LRM5",
+    "streak srm-6": "StreakSRM6",
+    "srm-6": "StreakSRM6",
+    "srm-4": "SRM4",
+    "medium pulse laser": "PulseLaser_Medium",
+    "large pulse laser": "PulseLaser_Large",
+    "small pulse laser": "PulseLaser_Small",
+    "er large laser": "ERLaser_Large",
+    "er medium laser": "ERLaser_Medium",
+    "er small laser": "ERLaser_Small",
+    "large laser": "ERLaser_Large",
+    "medium laser": "ERLaser_Medium",
+    "small laser": "ERLaser_Small",
+    "gauss rifle": "GaussRifle",
+    "ultra ac/5": "UltraAC5",
+    "autocannon/10": "AC10",
+    "ac/10": "AC10",
+    "machine gun": "MGUN",
+}
+
+DEFAULT_AMMO_TABLE: Dict[str, int] = {
+    "LRM20": 120,
+    "LRM15": 90,
+    "LRM10": 60,
+    "LRM5": 40,
+    "StreakSRM6": 60,
+    "SRM4": 50,
+    "AC10": 40,
+    "UltraAC5": 50,
+    "GaussRifle": 32,
+    "MGUN": 400,
+}
+
+PART_TO_GAME_PART: Dict[str, str] = {
+    "left_arm": "larm",
+    "right_arm": "rarm",
+    "left_torso": "ltorso",
+    "right_torso": "rtorso",
+    "center_torso": "torso",
+}
+
+
+def compile_mech_loadout(
+    reader_dir: Path,
+    drop_config: Dict[str, Any],
+) -> Optional[str]:
+    """Compile player mech drop configuration into dfn_<mech>.zrd.json in reader directory."""
+    if not drop_config or not isinstance(drop_config, dict):
+        return None
+
+    raw_mech = drop_config.get("player_mech", "mech_madcat")
+    mech_name = raw_mech.replace("mech_", "").strip().lower()
+    dfn_filename = f"dfn_{mech_name}.zrd.json"
+    dfn_path = reader_dir / dfn_filename
+
+    if not dfn_path.is_file():
+        global_cache = cache_directory() / "global_reader" / dfn_filename
+        if global_cache.is_file():
+            shutil.copyfile(global_cache, dfn_path)
+
+    if not dfn_path.is_file():
+        return None
+
+    try:
+        data = json.loads(dfn_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    lst = data[0] if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list) else data
+    if not isinstance(lst, list):
+        return None
+
+    # Discover firepoints for each mech body part
+    firepoints_by_part: Dict[str, List[str]] = {
+        "larm": [],
+        "rarm": [],
+        "ltorso": [],
+        "rtorso": [],
+        "torso": [],
+        "head": [],
+    }
+    for i in range(0, len(lst), 2):
+        if lst[i] == "firepoints" and isinstance(lst[i + 1], list):
+            fps = lst[i + 1]
+            for j in range(0, len(fps), 2):
+                fpid = fps[j]
+                fp_info = fps[j + 1]
+                if isinstance(fp_info, list):
+                    for k in range(0, len(fp_info), 2):
+                        if fp_info[k] == "part" and isinstance(fp_info[k + 1], list):
+                            part_name = fp_info[k + 1][0]
+                            if part_name in firepoints_by_part:
+                                firepoints_by_part[part_name].append(fpid)
+
+    # Build weapons configuration from drop_config
+    weapons_config = drop_config.get("weapons", {})
+    weapons_arr = []
+    used_fps = set()
+    group_idx = 1
+    placed_wpn_names = []
+
+    for loc_key, wpn_display in weapons_config.items():
+        if not wpn_display or not isinstance(wpn_display, str):
+            continue
+        cleaned_wpn = wpn_display.strip().lower()
+        if not cleaned_wpn or cleaned_wpn == "none":
+            continue
+        game_wpn = WPN_NAME_TO_GAME_ID.get(cleaned_wpn, "ERLaser_Medium")
+        part = PART_TO_GAME_PART.get(loc_key, "torso")
+        candidates = firepoints_by_part.get(part, [])
+        fpid = next((fp for fp in candidates if fp not in used_fps), None)
+        if not fpid:
+            fpid = candidates[0] if candidates else "firepoint01"
+        used_fps.add(fpid)
+
+        entry = [game_wpn, fpid, "group", [group_idx]]
+        if game_wpn in DEFAULT_AMMO_TABLE:
+            ammo_cnt = DEFAULT_AMMO_TABLE[game_wpn]
+            entry.extend(["ammo", [ammo_cnt, "part", [part]]])
+        weapons_arr.append(entry)
+        placed_wpn_names.append(game_wpn)
+        group_idx = (group_idx % 5) + 1
+
+    # Build heatsinks and jumpjets equipment
+    num_hs = int(drop_config.get("heatsinks", 16))
+    equipment_arr = []
+    hs_parts = ["rarm", "larm", "rtorso", "ltorso", "rleg", "lleg"]
+    for h in range(max(10, num_hs)):
+        part = hs_parts[h % len(hs_parts)]
+        equipment_arr.append(["dsink", part])
+
+    num_jj = int(drop_config.get("jump_jets", 0))
+    for j in range(num_jj):
+        part = "rleg" if j % 2 == 0 else "lleg"
+        equipment_arr.append(["jumpjet", part])
+
+    armor_tons = float(drop_config.get("armor_tons", 14.0))
+
+    # Apply into configurations -> MSG_CONFIG_PRIMARY
+    for i in range(0, len(lst), 2):
+        if lst[i] == "configurations" and isinstance(lst[i + 1], list):
+            configs = lst[i + 1]
+            for c_idx in range(1, len(configs), 2):
+                c = configs[c_idx]
+                if not isinstance(c, list):
+                    continue
+                for f_idx in range(0, len(c), 2):
+                    field_name = c[f_idx]
+                    if field_name == "weapons" and weapons_arr:
+                        c[f_idx + 1] = weapons_arr
+                    elif field_name == "equipment" and equipment_arr:
+                        c[f_idx + 1] = equipment_arr
+                    elif field_name == "armor":
+                        armor_block = c[f_idx + 1]
+                        if isinstance(armor_block, list):
+                            for a_idx in range(0, len(armor_block), 2):
+                                if armor_block[a_idx] == "mass":
+                                    armor_block[a_idx + 1] = [armor_tons]
+
+    dfn_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # Update manifest.json in reader_dir to include dfn_<mech>.zrd if not already listed
+    manifest_p = reader_dir / "manifest.json"
+    if manifest_p.is_file():
+        try:
+            m_data = json.loads(manifest_p.read_text(encoding="utf-8"))
+            if isinstance(m_data, list):
+                doc_name = f"dfn_{mech_name}.zrd"
+                if not any(entry.get("name") == doc_name for entry in m_data):
+                    m_data.append({
+                        "name": doc_name,
+                        "flags": 25647,
+                        "info": {
+                            "Valid": {
+                                "comment": f"Custom MechLab {mech_name} configuration",
+                                "datetime": "2026-11-02T12:00:00Z",
+                            }
+                        },
+                    })
+                    manifest_p.write_text(json.dumps(m_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    summary = (
+        f"{mech_name.title()} loadout: {', '.join(placed_wpn_names) if placed_wpn_names else 'stock'}, "
+        f"{armor_tons}T armor, {num_hs} HS, {num_jj} JJ"
+    )
+    return summary
+
+
 class MapPackBuilder:
     """Write prototype archive overrides under one owned pack directory.
 
@@ -276,6 +577,8 @@ class MapPackBuilder:
 
     def build(self, project: MapPackProject) -> Path:
         """Compile project assets and data into an isolated map pack folder."""
+        if project.base_operation == "flat":
+            project.base_operation = "t1"
         pack_folder = pack_directory(self.packs_root, project.pack_id)
         if project.base_operation not in {"c1", "c2", "c3", "c4", "c4b", "t1"}:
             raise ValueError("Unsupported base operation; select an installed MW3 operation.")
@@ -387,17 +690,27 @@ class MapPackBuilder:
                         placed_count += 1
 
             nodes_path.write_text(json.dumps(nodes, indent=2), encoding="utf-8")
+
+            baked_terrain_count = 0
+            if project.terrain.height_modifications:
+                baked_terrain_count = bake_terrain_heights(
+                    temp_gamez, project.terrain.height_modifications
+                )
+
             out_gamez = zbd_folder / "gamez.zbd"
             pack_gamez_zbd(temp_gamez, out_gamez)
 
             rel_gamez = f"zbd/{op}/gamez.zbd"
             redirects[rel_gamez] = out_gamez
+            gamez_summary = f"{placed_count} custom visual entities placed"
+            if baked_terrain_count > 0:
+                gamez_summary += f", {baked_terrain_count} sculpted terrain vertices baked"
             modified_records.append(
                 {
                     "target": rel_gamez,
                     "size_bytes": out_gamez.stat().st_size,
                     "sha256": compute_sha256(out_gamez),
-                    "summary": f"{placed_count} custom visual entities placed",
+                    "summary": gamez_summary,
                 }
             )
 
@@ -482,19 +795,49 @@ class MapPackBuilder:
 
                 waynet_path.write_text(json.dumps(waynet_data, indent=2), encoding="utf-8")
 
+            # Compile MechLab drop loadout into op reader
+            drop_summary = compile_mech_loadout(temp_reader, project.drop_config)
+
             out_reader = zbd_folder / "reader.zbd"
             pack_reader_zbd(temp_reader, out_reader)
 
             rel_reader = f"zbd/{op}/reader.zbd"
             redirects[rel_reader] = out_reader
+            reader_summary = "Custom player spawn, waypoints, and objective markers"
+            if drop_summary:
+                reader_summary += f"; {drop_summary}"
             modified_records.append(
                 {
                     "target": rel_reader,
                     "size_bytes": out_reader.stat().st_size,
                     "sha256": compute_sha256(out_reader),
-                    "summary": "Custom player spawn, waypoints, and objective markers",
+                    "summary": reader_summary,
                 }
             )
+
+        # 2b. Also compile global reader.zbd if drop_config is present
+        global_reader_cache = cache_dir / "global_reader"
+        if global_reader_cache.is_dir() and project.drop_config:
+            with tempfile.TemporaryDirectory() as td_global:
+                temp_global = Path(td_global) / "global_reader"
+                shutil.copytree(global_reader_cache, temp_global)
+                compile_mech_loadout(temp_global, project.drop_config)
+
+                global_zbd_folder = pack_folder / "zbd"
+                global_zbd_folder.mkdir(parents=True, exist_ok=True)
+                out_global_reader = global_zbd_folder / "reader.zbd"
+                pack_reader_zbd(temp_global, out_global_reader)
+
+                rel_global = "zbd/reader.zbd"
+                redirects[rel_global] = out_global_reader
+                modified_records.append(
+                    {
+                        "target": rel_global,
+                        "size_bytes": out_global_reader.stat().st_size,
+                        "sha256": compute_sha256(out_global_reader),
+                        "summary": f"Global mech definitions ({drop_summary or 'MechLab drop loadout'})",
+                    }
+                )
 
         # 3. Write Map Pack Manifest
         manifest_file = pack_folder / "manifest.json"
@@ -525,11 +868,21 @@ class MapPackBuilder:
                 "biome": project.terrain.biome,
                 "bounds": f"{project.terrain.width}m x {project.terrain.depth}m",
                 "water_level": project.terrain.water_level,
+                "sculpted_vertices_count": len(project.terrain.height_modifications),
             },
             "lighting_summary": {
                 "preset": project.lighting.preset_name,
+                "time_of_day": project.lighting.time_of_day,
                 "sun_azimuth": project.lighting.azimuth,
                 "sun_elevation": project.lighting.elevation,
+                "weather": {
+                    "rain": project.lighting.rain_intensity,
+                    "wetness": project.lighting.wet_reflection,
+                    "lightning": project.lighting.has_lightning,
+                    "dust": project.lighting.dust_intensity,
+                    "smog": project.lighting.smog_intensity,
+                    "is_interior": project.lighting.is_interior,
+                },
             },
             "objectives_summary": {
                 "primary_count": len(project.objectives.get("primary", [])),
@@ -558,7 +911,25 @@ class MapPackBuilder:
         drop_config_file = pack_folder / "drop_config.json"
         drop_config_file.write_text(json.dumps(project.drop_config, indent=2), encoding="utf-8")
 
-        # 5. Generate Tactical Briefing Text Dossier
+        # 5. Compile MW34ENV1 Native Binary Lighting & Weather Catalog
+        env_file = pack_folder / "environment.json"
+        env_file.write_text(json.dumps(project.lighting.to_dict(), indent=2), encoding="utf-8")
+
+        mission_lighting_bin = pack_folder / "mission-lighting.bin"
+        mission_ident = f"{project.base_operation}m1"
+        try:
+            raw_env_bytes = encode_mw34env1(mission_ident, project.lighting)
+            mission_lighting_bin.write_bytes(raw_env_bytes)
+            modified_records.append({
+                "target": "mission-lighting.bin",
+                "size_bytes": len(raw_env_bytes),
+                "sha256": compute_sha256(mission_lighting_bin),
+                "summary": f"MW34ENV1 binary catalog ({project.lighting.preset_name}, ToD {project.lighting.time_of_day:.1f}h)",
+            })
+        except Exception as e:
+            print(f"Warning: could not encode MW34ENV1 catalog: {e}")
+
+        # 6. Generate Tactical Briefing Text Dossier
         briefing_file = pack_folder / "briefing.txt"
         pri_objs = "\n".join(f"  [ ] {i+1}. {o.get('desc', '')}" for i, o in enumerate(project.objectives.get("primary", [])))
         sec_objs = "\n".join(f"  [ ] {i+1}. {o.get('desc', '')}" for i, o in enumerate(project.objectives.get("secondary", [])))
@@ -618,28 +989,40 @@ DROP FORCE & COMBAT CONFIGURATION:
         merged_redirects.update(redirects)
         build_bank_file(merged_redirects, mod_banks_bin)
 
-        # 7. Generate Play Map Runner Command Script
+        # 8. Generate Play Map Runner Command Script
         run_cmd = pack_folder / f"Play Map - {project.pack_id}.cmd"
         cmd_content = f"""@echo off
 setlocal
 set "MAP_DIR=%~dp0"
-cd /d "%MAP_DIR%..\\..\\.."
+title MechWarrior 3 - Launching %~n0
+
 echo ======================================================================
 echo   MECHWARRIOR 3 - CUSTOM MISSION LAUNCH
 echo   Map Title: {project.pack_title} [{project.pack_id}]
-echo   Operation: {project.base_operation.upper()} | Biome: {project.terrain.biome}
+echo   Operation: {project.base_operation.upper()} - Biome: {project.terrain.biome}
+echo   Atmosphere: {project.lighting.preset_name.upper()} - Time: {project.lighting.time_of_day:.1f}h
 echo ======================================================================
 echo.
-type "%MAP_DIR%briefing.txt"
+if exist "%MAP_DIR%briefing.txt" type "%MAP_DIR%briefing.txt"
 echo.
-echo Initializing native Vulkan engine redirect banks...
-set "MW34_REMASTER_BANKS=%MAP_DIR%map-banks.bin"
-set "MW34_SUN_AZIMUTH={project.lighting.azimuth}"
-set "MW34_SUN_ELEVATION={project.lighting.elevation}"
-set "MW34_SUN_STRENGTH={project.lighting.strength}"
-set "MW34_SUN_AMBIENT={project.lighting.ambient}"
 
-call "launchers\\Play MW3Remaster.cmd" --profile "local\\effect-lighting-r1\\launcher.json" --registry "local\\material-authoring-r1\\normal-registry.json" %*
+set "PY_EXE=python"
+if exist "%MAP_DIR%..\\..\\python\\python.exe" set "PY_EXE=%MAP_DIR%..\\..\\python\\python.exe"
+if exist "%MAP_DIR%..\\..\\..\\python\\python.exe" set "PY_EXE=%MAP_DIR%..\\..\\..\\python\\python.exe"
+if exist "C:\\Python314\\python.exe" set "PY_EXE=C:\\Python314\\python.exe"
+
+set "RUNNER_SCRIPT="
+if exist "%MAP_DIR%..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py"
+if exist "%MAP_DIR%..\\..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\\..\\..\\games\\mw3\\mod-tools\\editor\\core\\play_map.py"
+if exist "%MAP_DIR%..\\..\\editor\\core\\play_map.py" set "RUNNER_SCRIPT=%MAP_DIR%..\\..\\editor\\core\\play_map.py"
+
+if defined RUNNER_SCRIPT (
+    "%PY_EXE%" "%RUNNER_SCRIPT%" "%MAP_DIR%" %*
+) else (
+    echo Error: Could not locate play_map.py runner script.
+    pause
+    exit /b 1
+)
 if errorlevel 1 (
     echo.
     echo Map launch exited with code %errorlevel%.

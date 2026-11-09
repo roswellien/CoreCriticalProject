@@ -14,6 +14,7 @@
 // else (an unlifted target, an unimplemented service, an access outside the memory contract, a
 // divide error) stops with a typed unresolved_translation Fault. SEH dispatch is not modelled.
 #include "vk_scene.hpp"
+#include "render_thread.hpp"
 #include "missile_exhaust.hpp"
 #include "early_triangle_commands.hpp"
 #include "controller_input.hpp"
@@ -244,6 +245,18 @@ struct VmState{static constexpr unsigned lo=0x2a000000U,hi=0x2e000000U;std::map<
    guest threads share one host thread (real mutexes would grant recursive ownership silently). */
 struct GuestThread{unsigned handle,tid,start,param,exit_code,stack_lo,stack_hi;int priority;bool exited;};std::deque<GuestThread>threads;unsigned thread_tid{};
 std::map<unsigned,std::pair<unsigned,unsigned>>mutexes;std::unique_ptr<mw34::vkscene::Renderer>renderer,presenter;  /* scene rendering; window presentation (may be another adapter) */
+mw34::vkscene::RendererCounters scene_counts,present_counts;  /* game-thread copies of host.sren's and host.presenter's counters */
+std::uint64_t shadow_sequence{};  /* D3D scenes built so far (vk_scene.hpp Scene::shadow_sequence) */
+/* Renderer commands issued so far, and the last camera history reset queued after the latest of them
+   (vdd.inc camera_history_invalidate), so a reset repeated with nothing between is not queued again. */
+std::uint64_t render_commands{},camera_reset_command{~0ULL};mw34::temporal::Reset camera_reset_queued{};
+/* Host graphics commands (render_thread.hpp, vdd.inc start_render_queue). Declared after the renderers and the
+   counters lock, so it is stopped and joined before they are destroyed. The render thread publishes the scene
+   renderer's counters after each command; the game thread copies them under the lock. */
+std::mutex counts_mutex;mw34::vkscene::RendererCounters published_counts;std::unique_ptr<mw34::render_thread::RenderQueue>rq;
+/* Direct presentation readiness: the window and size present_resident last accepted, and whether the render
+   thread has since refused a queued present (the next frame then presents inline). */
+struct Presentable{HWND window{};unsigned w{},h{};bool ok{};}presentable;std::atomic<bool>present_refused{};
 /* Scripted player input (MW34_INPUT_SCRIPT): stands in for the human at the DirectInput data boundary.
    Device objects, data formats and cooperative levels stay real; only the input data comes from the
    script. Lines: "FRAME mouse DX DY BUTTONS" (relative motion delivered once, at the first read at or after
@@ -279,7 +292,7 @@ struct RegOverlay{static constexpr DWORD deleted=0xffffffffU;std::map<std::strin
  audio::LocalCdAudio&music(){if(!local_cd)local_cd=std::make_unique<audio::LocalCdAudio>();return *local_cd;}
  Host()=default;Host(const Host&)=delete;Host&operator=(const Host&)=delete;
  // Children before parents: releasing a real IDirectSound frees its buffers, so creation order would leave them dangling.
- ~Host(){mw34::display::exclusive().release();local_cd.reset();static const bool trace=std::getenv("MW34_TRACE_TEARDOWN")!=nullptr;
+ ~Host(){rq.reset();mw34::display::exclusive().release();local_cd.reset();static const bool trace=std::getenv("MW34_TRACE_TEARDOWN")!=nullptr;
   for(auto it=com_objects.rbegin();it!=com_objects.rend();++it)if(it->alive&&it->native){if(trace)std::fprintf(stderr,"teardown release %s guest %x owner %x refs %u\n",it->iface->name,it->guest,it->owner,it->refs);for(unsigned r=0;r<it->refs;++r)it->native->Release();}if(ddraw.module)::FreeLibrary(ddraw.module);for(auto k:keys)::RegCloseKey(reinterpret_cast<HKEY>(std::intptr_t(std::int32_t(k))));for(auto&k:vkeys)if(k.real)::RegCloseKey(k.real);for(auto t:tls)::TlsFree(t);for(auto&l:locals)if(!l.freed)::LocalFree(l.native);for(auto&g:globals)if(!g.freed){while(g.locks--)::GlobalUnlock(g.native);::GlobalFree(g.native);}}
  Global*global(unsigned handle){for(auto&g:globals)if(!g.freed&&g.handle==handle)return &g;return nullptr;}
  bool in_global(unsigned a,unsigned n)const{for(const auto&g:globals)if(!g.freed&&a>=g.guest&&std::uint64_t(a)+n<=std::uint64_t(g.guest)+g.bytes)return true;return false;}
@@ -629,7 +642,21 @@ mw34::submission::ExactSharedValue<mw34::sun::Tl> sun_tl_values,sky_view_values;
 
   return headlight_body(s,target,p,[&]{return controller_body(s,target,p,[&]{return controller_next_body(s,target,p,body);});});
  }
+ void initialize_menu_construction(unsigned target){
+  if(target!=0x488bc0)return;
+  const unsigned menu=state.gpr.rcx.dword;
+  const auto block=host.gheap.live.find(menu);
+  if(block==host.gheap.live.end()||block->second!=0x17730U||
+     host.gheap.owner_of(menu)!=hs::token||!writable(menu+0x16f9cU,12))
+   deny("Menu construction outside its new CRT allocation",menu);
+  // Original 0x48a718 calls this constructor before 0x48a838 assigns these
+  // fields. Its callback reads them at 0x489d19; reused CRT bytes can be stale.
+  runtime.memory().store<unsigned char>({menu+0x16f9cU},0);
+  store(menu+0x16fa0U,0);
+  store(menu+0x16fa4U,0);
+ }
  void*enter(State*s,unsigned target,void*p,Body body){if(depth>=returns.size())deny("MFC42-stage call depth bound",target);if(hud_log)hud_capture(target);{void*r{};if(hud_intercept(target,p,r))return r;}
+  initialize_menu_construction(target);
   if(kind==Kind::initterm&&depth==0)for(unsigned i=0;i<145;++i)if(load(0x5e0000+4*i)==target&&load(state.gpr.rsp.dword)>=msvcrt_base){root_index=i;root_addr=target;break;}{const unsigned sp=state.gpr.rsp.dword,w=load(sp);
    /* A direct tail JMP to a function entry is lifted as a tail call through the CALL router: it enters with
       ESP at the slot of the active return word (a real CALL always enters strictly deeper) and binds nothing new. */
@@ -934,7 +961,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="GetCurrentThreadId"){return done(cur_tid(),0);}
   // Normal process termination: DLL_PROCESS_DETACH (lpReserved non-zero) runs natively for every loaded module
   // in reverse initialization order, MSVCRT last; then the host process exits with the game's exit code.
-  if(n=="ExitProcess"){const unsigned code=arg(0);if(host.thread_tid)deny("ExitProcess from a secondary guest thread is not modelled",code);std::string detached;
+  if(n=="ExitProcess"){const unsigned code=arg(0);if(host.thread_tid)deny("ExitProcess from a secondary guest thread is not modelled",code);stop_render_thread();std::string detached;
    for(auto it=host.modules.rbegin();it!=host.modules.rend();++it)if(it->attached&&it->entry!=it->base){if(!find(it->entry))deny("Module entry has no lifted body: "+it->name,it->entry);
     (void)call_guest(it->entry,{it->base,DLL_PROCESS_DETACH,1},true,it->name+" DLL_PROCESS_DETACH");detached+=" "+it->name;}
    if(!find(msvcrt_entry))deny("MSVCRT entry has no lifted body",msvcrt_entry);(void)call_guest(msvcrt_entry,{msvcrt_base,DLL_PROCESS_DETACH,1},true,"MSVCRT DLL_PROCESS_DETACH");detached+=" MSVCRT.DLL";
@@ -1258,13 +1285,13 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
      if(filter&&(((f.dwFlags&DDSD_WIDTH)&&f.dwWidth!=m.dwWidth)||((f.dwFlags&DDSD_HEIGHT)&&f.dwHeight!=m.dwHeight)||((f.dwFlags&DDSD_PIXELFORMAT)&&f.ddpfPixelFormat.dwRGBBitCount!=m.ddpfPixelFormat.dwRGBBitCount)))continue;
      r=enum_mode(this,cb,ctx,dsize,calls,m);if(!callback_fault.empty()||r==DDENUMRET_CANCEL)break;}
     apis.back()+="("+std::to_string(calls)+" virtual modes)";return done(DD_OK,5);}
-   if(is_dd&&n=="RestoreDisplayMode"){mw34::display::exclusive().release();return done(unsigned(reinterpret_cast<IDirectDraw*>(o->native)->RestoreDisplayMode()),1);}
+   if(is_dd&&n=="RestoreDisplayMode"){render_settle("display mode");mw34::display::exclusive().release();return done(unsigned(reinterpret_cast<IDirectDraw*>(o->native)->RestoreDisplayMode()),1);}
    // Virtual display (project presentation provider): exclusive full-screen and display modes are
    // emulated in the game window; the host desktop is never taken over or re-moded. The real object is
    // put in DDSCL_NORMAL on the same window so its queries stay valid; its status is returned.
    if(is_dd&&n=="SetCooperativeLevel"&&(arg(2)&(DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN))){const HRESULT hr=reinterpret_cast<IDirectDraw*>(o->native)->SetCooperativeLevel(hwnd_of(arg(1)),DDSCL_NORMAL);
     if(SUCCEEDED(hr)){host.display.window=hwnd_of(arg(1));host.display.exclusive=true;host.display.flags=arg(2);}apis.back()+="(virtual exclusive "+std::to_string(arg(2))+")="+std::to_string(unsigned(hr));return done(unsigned(hr),3);}
-   if(is_dd&&n=="SetDisplayMode"){const unsigned w=arg(1),h=arg(2),bpp=arg(3);const unsigned extra=imp->dll=="IDirectDraw"?0:2;if(extra&&(arg(4)||arg(5)))deny("SetDisplayMode refresh/flags are not modelled",arg(4)|arg(5));
+   if(is_dd&&n=="SetDisplayMode"){render_settle("display mode");const unsigned w=arg(1),h=arg(2),bpp=arg(3);const unsigned extra=imp->dll=="IDirectDraw"?0:2;if(extra&&(arg(4)||arg(5)))deny("SetDisplayMode refresh/flags are not modelled",arg(4)|arg(5));
     if(!host.display.exclusive)deny("SetDisplayMode without the exclusive cooperative level",w);bool listed=false;
     for(const auto&m:virtual_modes(o->native))if(m.dwWidth==w&&m.dwHeight==h&&m.ddpfPixelFormat.dwRGBBitCount==bpp)listed=true;
     if(!listed){apis.back()+="("+std::to_string(w)+"x"+std::to_string(h)+"x"+std::to_string(bpp)+" not offered)";return done(unsigned(DDERR_INVALIDMODE),4+extra);}
@@ -1387,6 +1414,8 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="CreateWindowExA"){const unsigned cn=arg(1),tn=arg(2);const std::string cls=class_name(cn),title=tn?guest_string(tn):std::string();HWND w{};
    {LastError l(host);w=::CreateWindowExA(arg(0),cn<0x10000?MAKEINTATOM(cn):cls.c_str(),tn?title.c_str():nullptr,arg(3),int(arg(4)),int(arg(5)),int(arg(6)),int(arg(7)),hwnd_of(arg(8)),reinterpret_cast<HMENU>(std::intptr_t(std::int32_t(arg(9)))),host_instance(arg(10)),reinterpret_cast<void*>(std::uintptr_t(arg(11))));}
    apis.back()+="("+cls+","+title+")";return done(w?gwnd(w):0,12);}
+  // Default WM_CLOSE handling destroys the window, so it waits for the render thread like DestroyWindow does.
+  if(n=="DefWindowProcA"&&arg(1)==WM_CLOSE)render_settle("window close");
   if(n=="DefWindowProcA")return done(unsigned(std::int32_t(to_host(nullptr,arg(0),arg(1),arg(2),arg(3)))),4);
   if(n=="CallWindowProcA"){const unsigned p=as_proc(arg(0));if(auto hp=host_proc(p))return done(unsigned(std::int32_t(to_host(hp,arg(1),arg(2),arg(3),arg(4)))),5);
    if(!find(p))deny("CallWindowProcA target is neither lifted guest code nor a host procedure",p);const unsigned r=call_guest(p,{arg(1),arg(2),arg(3),arg(4)},true,"CallWindowProcA");return done(r,5);}
@@ -1611,7 +1640,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
    return done(result?1U:0U,4);
   }
   if(n=="ShowOwnedPopups"){BOOL r{};{LastError l(host);r=::ShowOwnedPopups(W(0),BOOL(arg(1)));}return done(r?1U:0U,2);}  // reached from the game's WM_CLOSE handler
-  if(n=="UpdateWindow"||n=="DestroyWindow"||n=="SetForegroundWindow"||n=="IsWindow"||n=="IsWindowVisible"||n=="IsIconic"||n=="IsZoomed"||n=="IsWindowEnabled"||n=="BringWindowToTop"){BOOL r{};{LastError l(host);const HWND h=W(0);
+  if(n=="UpdateWindow"||n=="DestroyWindow"||n=="SetForegroundWindow"||n=="IsWindow"||n=="IsWindowVisible"||n=="IsIconic"||n=="IsZoomed"||n=="IsWindowEnabled"||n=="BringWindowToTop"){if(n=="DestroyWindow")render_settle("window");BOOL r{};{LastError l(host);const HWND h=W(0);
     r=n=="UpdateWindow"?::UpdateWindow(h):n=="DestroyWindow"?::DestroyWindow(h):n=="SetForegroundWindow"?::SetForegroundWindow(h):n=="IsWindow"?::IsWindow(h):n=="IsWindowVisible"?::IsWindowVisible(h):n=="IsIconic"?::IsIconic(h):n=="IsZoomed"?::IsZoomed(h):n=="IsWindowEnabled"?::IsWindowEnabled(h): ::BringWindowToTop(h);}
    if(n=="DestroyWindow"&&r){if(W(0)==host.display.window)mw34::display::exclusive().release();host.windows.erase(W(0));}return done(r?1U:0U,1);}
   if(n=="SetFocus"||n=="SetActiveWindow"||n=="GetParent"||n=="SetCapture"){HWND r{};{LastError l(host);r=n=="SetFocus"?::SetFocus(W(0)):n=="SetActiveWindow"?::SetActiveWindow(W(0)):n=="GetParent"?::GetParent(W(0)): ::SetCapture(W(0));}return done(r?gwnd(r):0,1);}
@@ -1619,7 +1648,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
   if(n=="ReleaseCapture"){BOOL r=::ReleaseCapture();return done(r?1U:0U,0);}
   if(n=="GetWindow"){HWND r=::GetWindow(W(0),arg(1));return done(r?gwnd(r):0,2);}
   if(n=="MoveWindow"){BOOL r{};{LastError l(host);r=::MoveWindow(W(0),int(arg(1)),int(arg(2)),int(arg(3)),int(arg(4)),BOOL(arg(5)));}return done(r?1U:0U,6);}
-  if(n=="SetWindowPos"){const char*wm=std::getenv("MW34_WINDOW_MODE");if(W(0)==host.display.window&&wm&&mw34::vkscene::Renderer::remaster_width()&&int(arg(4))>0&&int(arg(4))<=800)return done(::SetWindowPos(W(0),nullptr,0,0,0,0,arg(6)|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER)?1U:0U,7);BOOL r{};{LastError l(host);r=::SetWindowPos(W(0),hwnd_of(arg(1)),int(arg(2)),int(arg(3)),int(arg(4)),int(arg(5)),arg(6));}return done(r?1U:0U,7);}
+  if(n=="SetWindowPos"){render_settle("window");const char*wm=std::getenv("MW34_WINDOW_MODE");if(W(0)==host.display.window&&wm&&mw34::vkscene::Renderer::remaster_width()&&int(arg(4))>0&&int(arg(4))<=800)return done(::SetWindowPos(W(0),nullptr,0,0,0,0,arg(6)|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER)?1U:0U,7);BOOL r{};{LastError l(host);r=::SetWindowPos(W(0),hwnd_of(arg(1)),int(arg(2)),int(arg(3)),int(arg(4)),int(arg(5)),arg(6));}return done(r?1U:0U,7);}
   if(n=="InvalidateRect"||n=="ValidateRect"){RECT r{};const bool has=arg(1)!=0;if(has)r=rect_in(arg(1));BOOL ok{};{LastError l(host);ok=n=="InvalidateRect"?::InvalidateRect(W(0),has?&r:nullptr,BOOL(arg(2))): ::ValidateRect(W(0),has?&r:nullptr);}return done(ok?1U:0U,n=="InvalidateRect"?3:2);}
   if(n=="SetWindowTextA"){const std::string t=arg(1)?menu_version::caption(guest_string(arg(1))):std::string();BOOL r{};{LastError l(host);r=::SetWindowTextA(W(0),arg(1)?t.c_str():nullptr);}return done(r?1U:0U,2);}
   if(n=="GetWindowTextA"){const unsigned a=arg(1),z=arg(2);if(!z)return done(0,3);if(!writable(a,z))deny("GetWindowTextA buffer outside the memory contract",a);std::vector<char>b(z);int k{};{LastError l(host);k=::GetWindowTextA(W(0),b.data(),int(z));}
@@ -2145,7 +2174,7 @@ void*error(State*,unsigned pc,void*p){guard(p);stop(m4_runtime::FaultReason::uni
  void touch_sync(){++touch_count;if(hud_gpu_active){if(wide_on()&&hud_fallbacks<8){if(FILE*log=wide_log_file()){std::fprintf(log,"touch frame %u pc %06x rt %08x bt",host.frames,state.gpr.rip.dword,hud_rt_mem);for(unsigned i=depth;i>0&&i+12>depth;--i)std::fprintf(log," %06x",returns[i-1]);std::fprintf(log,"\n");std::fflush(log);}}hud_fallback();}else gpu_sync(0);}
  bool touch_range(std::uintptr_t a)const{if(!host.res_dirty)return false;const auto b=reinterpret_cast<std::uintptr_t>(runtime.memory().flat_base());if(!b)return false;
   for(const unsigned g:{host.res_rt,host.res_zb})if(g)for(const auto&v:host.vsurfaces)if(v.guest==g&&a>=b+v.mem&&a<b+v.mem+v.bytes)return true;return false;}
- static LONG CALLBACK flat_fault_handler(EXCEPTION_POINTERS*e){if(e->ExceptionRecord->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION||e->ExceptionRecord->NumberParameters<2)return EXCEPTION_CONTINUE_SEARCH;if(Stage*ts=owner;ts&&ts->active&&ts->touch_range(std::uintptr_t(e->ExceptionRecord->ExceptionInformation[1]))){touch_ctx=*e->ContextRecord;touch_ctx.ContextFlags=CONTEXT_FULL;auto*c=e->ContextRecord;c->Rsp=((c->Rsp-0x200)&~DWORD64(15))-8;c->Rip=reinterpret_cast<DWORD64>(&touch_thunk);return EXCEPTION_CONTINUE_EXECUTION;}if(hud_watch_hi&&e->ExceptionRecord->ExceptionInformation[0]==1){const auto a=std::uintptr_t(e->ExceptionRecord->ExceptionInformation[1]);if(a>=hud_watch_lo&&a<hud_watch_hi){++hud_watch_hits[e->ContextRecord->Rip-reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr))];DWORD old{};::VirtualProtect(reinterpret_cast<void*>(a&~std::uintptr_t(4095)),4096,PAGE_READWRITE,&old);return EXCEPTION_CONTINUE_EXECUTION;}}
+ static LONG CALLBACK flat_fault_handler(EXCEPTION_POINTERS*e){if(e->ExceptionRecord->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION||e->ExceptionRecord->NumberParameters<2)return EXCEPTION_CONTINUE_SEARCH;if(Stage*ts=owner;ts&&ts->active&&ts->touch_range(std::uintptr_t(e->ExceptionRecord->ExceptionInformation[1]))){touch_ctx=*e->ContextRecord;touch_ctx.ContextFlags=CONTEXT_FULL;auto*c=e->ContextRecord;c->Rsp=((c->Rsp-0x200)&~DWORD64(15))-8;c->Rip=reinterpret_cast<DWORD64>(&touch_thunk);return EXCEPTION_CONTINUE_EXECUTION;}if(hud_watch_hi&&owner&&e->ExceptionRecord->ExceptionInformation[0]==1){  /* game thread only: a render-thread fault reaches host_crash */const auto a=std::uintptr_t(e->ExceptionRecord->ExceptionInformation[1]);if(a>=hud_watch_lo&&a<hud_watch_hi){++hud_watch_hits[e->ContextRecord->Rip-reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr))];DWORD old{};::VirtualProtect(reinterpret_cast<void*>(a&~std::uintptr_t(4095)),4096,PAGE_READWRITE,&old);return EXCEPTION_CONTINUE_EXECUTION;}}
    Stage*s=owner;if(!s||!s->active)return EXCEPTION_CONTINUE_SEARCH;const auto*at=reinterpret_cast<const std::byte*>(e->ExceptionRecord->ExceptionInformation[1]);const auto&m=s->runtime.memory();
    if(!m.owns_host(at))return EXCEPTION_CONTINUE_SEARCH;flat_fault_address=unsigned(at-m.flat_base());flat_fault_write=e->ExceptionRecord->ExceptionInformation[0]==1;
    auto*c=e->ContextRecord;c->Rsp-=8;*reinterpret_cast<DWORD64*>(c->Rsp)=c->Rip;c->Rip=reinterpret_cast<DWORD64>(&flat_fault_throw);return EXCEPTION_CONTINUE_EXECUTION;}
@@ -2161,7 +2190,7 @@ void run(){static const PVOID flat_veh=::AddVectoredExceptionHandler(1,&flat_fau
    else if(kind==Kind::initterm){(void)hs::mw34_attach_g_thunk_initterm_body(&state,initterm_thunk,token_ptr);
     // The main initializer table returned: the entry continues natively (command line, GetStartupInfoA, WinMain).
     if(initterm_returned){const Body b=find(entry_continuation);if(!b)deny("Entry continuation has no lifted body",entry_continuation);++bodies;(void)b(&state,entry_continuation,token_ptr);}}
-    else if(kind==Kind::call){const unsigned pc=state.gpr.rip.dword;const Body b=find(pc);if(!b)deny("In-place provider call has no lifted body",pc);++bodies;(void)b(&state,pc,token_ptr);}else{const Body b=find(mod->entry);if(!b)deny("Provider entry has no lifted body",mod->entry);(void)b(&state,mod->entry,token_ptr);}}catch(...){active=false;owner=nullptr;throw;}
+    else if(kind==Kind::call){const unsigned pc=state.gpr.rip.dword;const Body b=find(pc);if(!b)deny("In-place provider call has no lifted body",pc);++bodies;(void)b(&state,pc,token_ptr);}else{const Body b=find(mod->entry);if(!b)deny("Provider entry has no lifted body",mod->entry);(void)b(&state,mod->entry,token_ptr);}}catch(...){active=false;owner=nullptr;stop_render_thread();throw;}
   active=false;owner=nullptr;if(!complete)deny(kind==Kind::initterm?"Main _initterm body ended without its RET":kind==Kind::call?"In-place provider call ended without its RET":"_DllMainCRTStartup body ended without its DllMain RET");if(kind==Kind::attach){mod->attached=true;host.attached=host.all_attached();}}
  // Game import lookup by IAT word. After binding the IAT cells lie outside the guest's writable contract, so
  // their words cannot change while the stage runs: a raw-word table built on first use answers exactly
