@@ -30,7 +30,7 @@ mw34::submission::DrawVertexScratch draw_vertex_scratch;
 D3DDEVICEDESC hal_desc(){D3DDEVICEDESC d{};d.dwSize=sizeof(d);static_assert(sizeof(D3DDEVICEDESC)==252);
  unsigned max_texture=256;if(std::getenv("MW34_REMASTER_BANKS")||override_enabled()){
   if(!host.presenter)host.presenter=std::make_unique<mw34::vkscene::Renderer>();
-  try{HostInternal hi(*this);max_texture=host.presenter->max_texture_dimension(host.display.window);}catch(const std::exception&e){deny(std::string(e.what()),0);}}
+  try{HostInternal hi(*this);max_texture=render_idle("texture limit",[&]{return host.presenter->max_texture_dimension(host.display.window);});}catch(const std::exception&e){deny(std::string(e.what()),0);}}
  d.dwFlags=D3DDD_COLORMODEL|D3DDD_DEVCAPS|D3DDD_TRANSFORMCAPS|D3DDD_LIGHTINGCAPS|D3DDD_BCLIPPING|D3DDD_LINECAPS|D3DDD_TRICAPS|D3DDD_DEVICERENDERBITDEPTH|D3DDD_DEVICEZBUFFERBITDEPTH|D3DDD_MAXBUFFERSIZE|D3DDD_MAXVERTEXCOUNT;
  d.dcmColorModel=D3DCOLOR_RGB;d.dwDevCaps=D3DDEVCAPS_FLOATTLVERTEX|D3DDEVCAPS_EXECUTESYSTEMMEMORY|D3DDEVCAPS_TLVERTEXSYSTEMMEMORY|D3DDEVCAPS_TEXTUREVIDEOMEMORY|D3DDEVCAPS_DRAWPRIMTLVERTEX|D3DDEVCAPS_CANRENDERAFTERFLIP|D3DDEVCAPS_TEXTURENONLOCALVIDMEM|D3DDEVCAPS_DRAWPRIMITIVES2|D3DDEVCAPS_HWRASTERIZATION;
  d.dtcTransformCaps.dwSize=sizeof(D3DTRANSFORMCAPS);d.dlcLightingCaps.dwSize=sizeof(D3DLIGHTINGCAPS);d.bClipping=TRUE;
@@ -187,11 +187,11 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   d.commands.clear();return;}
  if(!host.scene_t0)host.scene_t0=host.vclock()?std::max<std::uint64_t>(host.vclock_us/1000,1): ::GetTickCount64();
  if(override_enabled())override_load();
- namespace vs=mw34::vkscene;vs::Scene sc{};sc.temporal_frame=camera_flip_serial+1;sc.temporal_target=d.target;sc.frontend_canvas=frontend_on();{SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.detail_time=mw34::detail::presentation_time(host.frames);}sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
+ namespace vs=mw34::vkscene;vs::Scene sc{};sc.shadow_sequence=++host.shadow_sequence;sc.temporal_frame=camera_flip_serial+1;sc.temporal_target=d.target;sc.frontend_canvas=frontend_on();{SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;sc.detail_time=mw34::detail::presentation_time(host.frames);}sc.width=rt->width;sc.height=rt->height;const size_t px=size_t(sc.width)*sc.height;sc.has_depth=zb!=nullptr;
  auto rows_in=[&](const VSurfaceRec&v,std::vector<std::uint16_t>&out){std::vector<unsigned char>row(size_t(v.width)*2);for(unsigned y=0;y<v.height;++y){surface_read(v,y*v.pitch,row.data(),unsigned(row.size()));std::memcpy(out.data()+size_t(y)*v.width,row.data(),row.size());}};
  const bool lazy=lazy_rt();if(lazy&&host.res_dirty&&(host.res_rt!=rt->guest||host.res_zb!=(zb?zb->guest:0U)))gpu_sync(0);
  bool rescale=false;if(lazy){auto*sr=scene_renderer();if(sr==host.presenter.get()){const float want=render_scale(rt->height);
-  if(want!=sr->current_scale()||sr->frontend_canvas()!=frontend_on()){rescale=true;if(host.res_dirty)gpu_sync(0);}sr->request_scale(want);}}  /* a new scale recreates the target: its content moves through guest memory */
+  if(want!=sr->sent.scale||sr->sent.frontend_canvas!=frontend_on()){rescale=true;if(host.res_dirty)gpu_sync(0);}sr->sent.scale_req=want;}}  /* a new scale recreates the target: its content moves through guest memory */
  const bool keep=lazy&&!rescale&&host.sren&&host.res_rt==rt->guest&&host.res_zb==(zb?zb->guest:0U)&&(host.res_dirty||(rt->version==host.res_ver_rt&&(!zb||zb->version==host.res_ver_zb)));
  if(!keep){sc.color.resize(px);sc.depth.assign(px,0);rows_in(*rt,sc.color);if(zb)rows_in(*zb,sc.depth);}  /* a resident scene (keep) uploads nothing and needs no host buffers */
  // One output draw/order record per captured command; avoid copying large
@@ -224,12 +224,12 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   vs::Draw dr{};dr.condition_schematic=c.condition_schematic;dr.first=unsigned(sc.vertices.size()/32);dr.texture=-1;dr.normal_texture=-1;
   const unsigned tex=c.texture;  if(c.missile_exhaust){missile_texture(sc,dr);}else if(c.override_texture>=0){const auto&o=override_state();if(!override_enabled()||size_t(c.override_texture)>=o.textures.size())deny("Invalid host replacement texture",unsigned(c.override_texture));const auto&t=o.textures[c.override_texture];
    const std::uint64_t key=0x4257000000000000ULL+unsigned(c.override_texture);auto it=std::find_if(sc.textures.begin(),sc.textures.end(),[&](const vs::TextureRef&r){return r.key==key;});
-   if(it==sc.textures.end()){vs::TextureRef r{};r.key=key;r.hash=t.hash;r.width=t.width;r.height=t.height;r.format=vs::TexFormat::rgb565;if(!host.sren||!host.sren->current(key,t.hash,t.width,t.height))r.pixels=t.pixels;sc.textures.push_back(std::move(r));dr.texture=int(sc.textures.size()-1);}else dr.texture=int(it-sc.textures.begin());}
+   if(it==sc.textures.end()){vs::TextureRef r{};r.key=key;r.hash=t.hash;r.width=t.width;r.height=t.height;r.format=vs::TexFormat::rgb565;if(!host.sren||!host.sren->sent_current(key,t.hash,t.width,t.height))r.pixels=t.pixels;sc.textures.push_back(std::move(r));dr.texture=int(sc.textures.size()-1);}else dr.texture=int(it-sc.textures.begin());}
   else if(tex){auto*t=vsurface(tex);if(!t)deny("Draw with a texture that is gone",tex);
    if(rs(D3DRENDERSTATE_COLORKEYENABLE)&&t->has_src_key)deny("Texture colour keying is not modelled",tex);
    auto it=tex_index.find(tex);if(it==tex_index.end()){vs::TextureRef r{};r.key=tex;r.width=t->width;r.height=t->height;
     r.format=t->tex_masks[0]==0xf800?vs::TexFormat::rgb565:t->tex_masks[0]==0x7c00?vs::TexFormat::argb1555:t->tex_masks[0]==0x0f00?vs::TexFormat::argb4444:(deny("Texture pixel format not modelled",t->tex_masks[0]),vs::TexFormat::rgb565);
-    if(t->bpp!=16)deny("Texture depth not modelled",t->bpp);r.hash=t->version;if(!host.sren||!host.sren->current(tex,t->version,t->width,t->height)){gpu_sync(t->guest);r.pixels.resize(size_t(t->width)*t->height);rows_in(*t,r.pixels);
+    if(t->bpp!=16)deny("Texture depth not modelled",t->bpp);r.hash=t->version;if(!host.sren||!host.sren->sent_current(tex,t->version,t->width,t->height)){gpu_sync(t->guest);r.pixels.resize(size_t(t->width)*t->height);rows_in(*t,r.pixels);
      if(const char* mark=std::getenv("MW34_TL_TEXTURE_MARK");mark&&*mark&&t->bytes>=8){char sig[20];std::snprintf(sig,sizeof sig,"%08x%08x",surface_word(*t,0),surface_word(*t,4));
       // Comma-separated signatures; the n-th gets the n-th solid colour.
       static const unsigned short colours[]={0xF81F,0x07E0,0x001F,0xFFE0,0x07FF,0xF800,0xFFFF,0x8010,0x0410,0xFC00,0x841F,0x0000};
@@ -306,7 +306,7 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   }
   if(bind_normal_idx>=0){const auto&o=override_state();if(size_t(bind_normal_idx)<o.normal_textures.size()){const auto&t=o.normal_textures[bind_normal_idx];
    const std::uint64_t key=0x42574e524d000000ULL+unsigned(bind_normal_idx);auto it=std::find_if(sc.textures.begin(),sc.textures.end(),[&](const vs::TextureRef&r){return r.key==key;});
-   if(it==sc.textures.end()){vs::TextureRef r{};r.key=key;r.hash=t.hash;r.width=t.width;r.height=t.height;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->current(key,t.hash,t.width,t.height)){surface_normals_require_image(bind_normal_idx);r.pixels32=t.pixels32;}sc.textures.push_back(std::move(r));dr.normal_texture=int(sc.textures.size()-1);}else dr.normal_texture=int(it-sc.textures.begin());}}
+   if(it==sc.textures.end()){vs::TextureRef r{};r.key=key;r.hash=t.hash;r.width=t.width;r.height=t.height;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->sent_current(key,t.hash,t.width,t.height)){surface_normals_require_image(bind_normal_idx);r.pixels32=t.pixels32;}sc.textures.push_back(std::move(r));dr.normal_texture=int(sc.textures.size()-1);}else dr.normal_texture=int(it-sc.textures.begin());}}
   dr.sampler=0x10000U|(ts(0,D3DTSS_MAGFILTER)==D3DTFG_LINEAR?1U:0U)|(ts(0,D3DTSS_MINFILTER)==D3DTFN_LINEAR?2U:0U)|(ts(0,D3DTSS_ADDRESSU)<<4)|(ts(0,D3DTSS_ADDRESSV)<<8);
   dr.key={std::uint8_t(rs(D3DRENDERSTATE_ALPHABLENDENABLE)!=0),std::uint8_t(rs(D3DRENDERSTATE_SRCBLEND)),std::uint8_t(rs(D3DRENDERSTATE_DESTBLEND)),std::uint8_t(zb&&rs(D3DRENDERSTATE_ZENABLE)),
           std::uint8_t(rs(D3DRENDERSTATE_ZFUNC)),std::uint8_t(rs(D3DRENDERSTATE_ZWRITEENABLE)!=0),std::uint8_t(rs(D3DRENDERSTATE_CULLMODE))};
@@ -319,11 +319,12 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   pu.mode[1]=ts(0,D3DTSS_COLOROP)|ts(0,D3DTSS_COLORARG1)<<8|ts(0,D3DTSS_COLORARG2)<<16;pu.mode[2]=ts(0,D3DTSS_ALPHAOP)|ts(0,D3DTSS_ALPHAARG1)<<8|ts(0,D3DTSS_ALPHAARG2)<<16;
   pu.mode[3]=(rs(D3DRENDERSTATE_ALPHAFUNC)&255)|(rs(D3DRENDERSTATE_ALPHAREF)&255)<<8;
   {const LONG x=LONG(v[521]),y=LONG(v[522]);const RECT r=clip(RECT{x,y,x+LONG(v[523]),y+LONG(v[524])});dr.scissor={{r.left,r.top},{unsigned(std::max<LONG>(r.right-r.left,0)),unsigned(std::max<LONG>(r.bottom-r.top,0))}};}
-  if(mw34::effects::settings().fixture_shadows&&c.model&&c.model->world&&c.fixture_node&&c.fixture_polygon&&tex){
+  /* Only opaque depth-writing draws can become fixture shadow casters (fixture_shadow_stage.inc). */
+  if(mw34::effects::settings().fixture_shadows&&!dr.key.blend&&dr.key.zenable&&dr.key.zwrite&&c.model&&c.model->world&&c.fixture_node&&c.fixture_polygon&&tex){
    SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
    if(auto*surface=vsurface(tex))if(auto proof=fixture_caster_proof(c,*surface)){
     dr.shadow_source=(std::uint64_t(c.fixture_node)<<32)|c.fixture_polygon;
-    dr.shadow_valid=[this,proof]{SunCaptureFp preserve;return fixture_proof_valid(*proof);};
+    dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]={proof,sc.shadow_sequence};
    }
   }
   dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.surface_material=c.surface_material;dr.camera_view=c.camera_view;dr.temporal_output_only=c.hud_role!=WideWorld&&c.hud_role!=WideZoom;dr.temporal_source=c.temporal_source;dr.temporal_model=c.temporal_model;
@@ -339,15 +340,17 @@ void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_
   else if(c.flags==D3DPT_POINTLIST){for(size_t i=0;i<nv;++i)vert(i);dr.key.points=1;}  // one-pixel points (shader point size 1)
   else deny("Primitive type not modelled by the scene renderer",c.flags);
   dr.count=unsigned(sc.vertices.size()/32)-dr.first;wide_adapt_tl(sc,dr,c.hud_role,c.zoom_anchor_known?&c.zoom_anchor:nullptr);sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(std::move(dr));}
- distance_scene_log(sc);camera_scene(sc);effect_scene(sc);surface_texture_prewarm(sc);surface_resident_texture_prewarm(sc);model_geometry_prewarm(sc);
- scene_renderer();try{HostInternal hi(*this);host.sren->render(sc,!keep,!lazy);}catch(const std::exception&e){deny(std::string(e.what()),0);}
+ distance_scene_log(sc);camera_scene(sc);effect_scene(sc);
+ if(mw34::effects::settings().fixture_shadows)sc.valid_shadow_sources=fixture_shadow_sources_valid(fixture_scene_needs_shadow_sources(sc));  /* after effect_scene sets the fixture lights */
+ surface_texture_prewarm(sc);surface_resident_texture_prewarm(sc);model_geometry_prewarm(sc);
+ submit_scene(sc,!keep,!lazy);
  if(lazy){rt->version=++host.surface_versions;if(zb)zb->version=++host.surface_versions;host.res_rt=rt->guest;host.res_zb=zb?zb->guest:0U;host.res_ver_rt=rt->version;host.res_ver_zb=zb?zb->version:0U;
-  host.res_dirty=true;gpu_protect(true);if(host.sren->scenes==1)apis.back()+="(Vulkan scene renderer on "+host.sren->device_name+", lazy residency)";d.commands.clear();return;}
+  host.res_dirty=true;gpu_protect(true);if(host.sren->sent.scenes==1)apis.back()+="(Vulkan scene renderer on "+host.scene_counts.device_name+", lazy residency)";d.commands.clear();return;}
  auto rows_out=[&](VSurfaceRec&v,const std::vector<std::uint16_t>&in){for(unsigned y=0;y<v.height;++y)write_bytes(v.mem+y*v.pitch,in.data()+size_t(y)*v.width,v.width*2);};
  {static const bool poison=[]{const char*e=std::getenv("MW34_RT_POISON");return e&&*e=='1';}();if(poison)std::fill(sc.color.begin(),sc.color.end(),std::uint16_t(0xf81f));}  /* MW34_RT_POISON=1 (diagnostic): the copied-back 3D image is magenta, exposing software HUD reads */
  rows_out(*rt,sc.color);rt->version=++host.surface_versions;if(zb){static const bool zp=[]{const char*e=std::getenv("MW34_ZB_PERTURB");return e&&*e=='1';}();if(zp)for(auto&v:sc.depth)if(v)--v;  /* MW34_ZB_PERTURB=1 (diagnostic): depth written back one unit nearer */
  rows_out(*zb,sc.depth);zb->version=++host.surface_versions;}
- if(host.sren->scenes==1)apis.back()+="(Vulkan scene renderer on "+host.sren->device_name+")";
+ if(host.sren->sent.scenes==1)apis.back()+="(Vulkan scene renderer on "+host.scene_counts.device_name+")";
  d.commands.clear();}
 
 

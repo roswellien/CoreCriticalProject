@@ -9,12 +9,22 @@
   "terrain_summary": {
     "biome": "coastal",
     "bounds": "3000.0m x 3000.0m",
-    "water_level": 3.0
+    "water_level": 3.0,
+    "sculpted_vertices_count": 0
   },
   "lighting_summary": {
     "preset": "sunset",
+    "time_of_day": 18.0,
     "sun_azimuth": 225.0,
-    "sun_elevation": 35.0
+    "sun_elevation": 35.0,
+    "weather": {
+      "rain": 0.0,
+      "wetness": 0.0,
+      "lightning": false,
+      "dust": 0.0,
+      "smog": 0.0,
+      "is_interior": false
+    }
   },
   "objectives_summary": {
     "primary_count": 2,
@@ -36,9 +46,15 @@
     },
     {
       "target": "zbd/c1/reader.zbd",
-      "size_bytes": 774352,
-      "sha256": "482501ffbb210ccf516b8655ece2df27e0558d24cc7c9977ef9edf9ea21c4046",
-      "summary": "Custom player spawn, waypoints, and objective markers"
+      "size_bytes": 786951,
+      "sha256": "d332fb759a8c40c7a3b704d83eeed5d809577ff988209cda7cb79e6813417b2d",
+      "summary": "Custom player spawn, waypoints, and objective markers; Madcat loadout: ERPPC, ERPPC, LRM20, LRM20, PulseLaser_Medium, 14.0T armor, 16 HS, 0 JJ"
+    },
+    {
+      "target": "zbd/reader.zbd",
+      "size_bytes": 2146849,
+      "sha256": "21c8095afa7098dc9787baab09c864a9b2fafd2a5a3c7f37b975b312bc787384",
+      "summary": "Global mech definitions (Madcat loadout: ERPPC, ERPPC, LRM20, LRM20, PulseLaser_Medium, 14.0T armor, 16 HS, 0 JJ)"
     }
   ]
 }

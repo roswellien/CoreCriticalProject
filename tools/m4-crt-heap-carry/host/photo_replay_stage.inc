@@ -683,7 +683,7 @@ void photo_replay_record_live_snapshot() {
     rec.gheap_frees = host.gheap.frees;
     rec.gheap_free_blocks.assign(host.gheap.free_blocks.begin(), host.gheap.free_blocks.end());
     rec.gheap_live.assign(host.gheap.live.begin(), host.gheap.live.end());
-    rec.gheap_regions.assign(host.gheap.regions.begin(), host.gheap.regions.end());
+    rec.gheap_regions.assign(host.gheap.regions().begin(), host.gheap.regions().end());
     rec.headlights = headlight_snapshot();
     rec.gheap_region_owners.assign(host.gheap.region_owners.begin(), host.gheap.region_owners.end());
 
@@ -713,7 +713,7 @@ void photo_replay_record_live_snapshot() {
 
     std::vector<std::pair<std::uint32_t, std::uint32_t>> ranges;
     ranges.push_back({game_data, game_data_end});
-    for (const auto& [r_lo, r_hi] : host.gheap.regions) {
+    for (const auto& [r_lo, r_hi] : host.gheap.regions()) {
         const std::uint32_t end_va = std::min<std::uint32_t>(r_hi, std::max<std::uint32_t>(r_lo + 4096U, (host.gheap.top + 4095U) & ~4095U));
         if (end_va > r_lo) ranges.push_back({r_lo, end_va});
     }
@@ -766,11 +766,16 @@ void photo_replay_restore_snapshot(std::size_t frame_idx, float subframe_alpha) 
 
     // Ensure all guest heap regions present in the snapshot are mapped
     for (const auto& [r_lo, r_hi] : rec.gheap_regions) {
-        if (!host.gheap.regions.count(r_lo)) {
+        if (!host.gheap.regions().count(r_lo)) {
+            bool mapped = false;
             try {
                 runtime.memory().map({r_lo}, r_hi - r_lo, Permissions::read | Permissions::write);
-                host.gheap.regions[r_lo] = r_hi;
+                mapped = true;
             } catch (...) {}
+            // Outside the try, so an invalid region reaches the host's error path
+            // instead of being dropped with a failed mapping.
+            if (mapped)
+                host.gheap.add_region(r_lo, r_hi);
         }
     }
 
@@ -1474,17 +1479,7 @@ void photo_replay_overlay_gpu(unsigned w, unsigned h) {
     hud_draw(0, false, first, WideWorld);
     hud_sc.color.resize(std::size_t(w) * h);
     hud_sc.depth.resize(hud_sc.color.size());
-    try {
-        struct PhotoInternalScope {
-            Stage& s;
-            bool was;
-            explicit PhotoInternalScope(Stage& x) : s(x), was(x.host_internal) { s.host_internal = true; }
-            ~PhotoInternalScope() { s.host_internal = was; }
-        } hi(*this);
-        host.sren->render(hud_sc, false, false);
-    } catch (const std::exception& e) {
-        deny(std::string(e.what()), 0);
-    }
+    submit_scene(hud_sc, false, false);
     hud_sc = vs::Scene{};
 }
 
@@ -1502,7 +1497,8 @@ void photo_replay_on_present(unsigned w, unsigned h, bool is_direct, const std::
             if (photo_replay.screenshot_requested || time_for_video) {
                 std::vector<std::uint8_t> raw_rgba;
                 unsigned cap_w = 0, cap_h = 0;
-                host.presenter->capture_fullres_bgra(raw_rgba, cap_w, cap_h);
+                render_readback("photo capture",
+                                [&] { host.presenter->capture_fullres_bgra(raw_rgba, cap_w, cap_h); });
 
                 if (photo_replay.screenshot_requested) {
                     photo_replay.screenshot_requested = false;

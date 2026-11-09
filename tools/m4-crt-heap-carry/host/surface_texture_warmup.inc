@@ -30,7 +30,7 @@ void surface_texture_prewarm(mw34::vkscene::Scene& scene) {
            proof.width!=surface.width || proof.height!=surface.height || proof.pitch!=surface.pitch ||
            proof.memory!=surface.mem || proof.format!=format)continue;
         if(proof.index>=0)normalIndices.insert(proof.index);
-        if(already_bound(surface.guest) || (host.sren&&host.sren->current(surface.guest,surface.version,surface.width,surface.height)))continue;
+        if(already_bound(surface.guest) || (host.sren&&host.sren->sent_current(surface.guest,surface.version,surface.width,surface.height)))continue;
         const auto bytes=cost(surface.width,surface.height);
         if(bytes>remaining){++budgetSkipped;continue;}
         gpu_sync(surface.guest);
@@ -47,7 +47,7 @@ void surface_texture_prewarm(mw34::vkscene::Scene& scene) {
         if(size_t(index)>=overrides.normal_textures.size())throw std::runtime_error("Prepared world normal index outside its catalog");
         const auto& texture=overrides.normal_textures[size_t(index)];
         const std::uint64_t key=0x42574e524d000000ULL+unsigned(index);
-        if(already_bound(key) || (host.sren&&host.sren->current(key,texture.hash,texture.width,texture.height)))continue;
+        if(already_bound(key) || (host.sren&&host.sren->sent_current(key,texture.hash,texture.width,texture.height)))continue;
         const auto bytes=cost(texture.width,texture.height);
         if(bytes>remaining){++budgetSkipped;continue;}
         surface_normals_require_image(index);

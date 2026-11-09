@@ -13,6 +13,8 @@ struct EffectLightingState {
  unsigned observations{},invalid{};
  std::uint64_t dump_bytes{};
  std::map<std::uint64_t,FixtureSourceProof> fixture_proofs;
+ struct ShadowProof{std::shared_ptr<const FixtureSourceProof> proof;std::uint64_t sequence{};};  /* sequence: the drawing scene's Scene::shadow_sequence */
+ std::map<std::uint64_t,ShadowProof> shadow_proofs;  /* latest proof per shadow source (vk_scene.hpp Draw::shadow_proof) */
  unsigned fixture_frame{~0U};std::uint64_t fixture_generation{~0ULL};
 } effect_lighting;
 mw34::vehicle_lighting::State fixture_vehicle(unsigned node){
@@ -35,10 +37,36 @@ void fixture_frame(){
  auto&s=effect_lighting;auto&manager=mw34::fixtures::FixtureManager::instance();
  const auto generation=mw34::campaign::CampaignManager::instance().generation();
  const unsigned context=load(0x5f4c8c);
- if(s.fixture_generation!=generation||s.context!=context){manager.clear();s.fixture_proofs.clear();s.fixture_generation=generation;s.context=context;s.lights.clear();}
+ /* Shadow proofs drawn by the scene being built already belong to the new world: the renderer makes casters from them. */
+ if(s.fixture_generation!=generation||s.context!=context){manager.clear();s.fixture_proofs.clear();
+  std::erase_if(s.shadow_proofs,[current=host.shadow_sequence](const auto& entry){return entry.second.sequence<current;});
+  s.fixture_generation=generation;s.context=context;s.lights.clear();}
  if(s.fixture_frame==host.frames)return;s.fixture_frame=host.frames;manager.begin_frame(host.frames,effect_time());
  for(auto it=s.fixture_proofs.begin();it!=s.fixture_proofs.end();){
   if(fixture_proof_valid(it->second)){++it;continue;}manager.remove_source(it->first);it=s.fixture_proofs.erase(it);}
+}
+// The renderer keeps fixture shadow casters between scenes while their source's latest proof holds. Proofs read
+// guest memory, so the game thread checks them once the scene is built and sends the sources that still hold, sorted.
+// Only proofs the renderer can still use are kept: sources it last reported holding, and proofs from scenes after
+// that report, which it has not processed yet (inline, that is only the scene being built). Any other proof's caster
+// is gone and comes back only with a newer draw and proof, so the proof is dropped; the map stays the size of what
+// the renderer holds. Proofs are checked only for scenes that read the list.
+std::vector<std::uint64_t> fixture_shadow_sources_valid(bool needed){std::vector<std::uint64_t> valid;SunCaptureFp preserve;
+ const auto& reported=host.scene_counts.retained_shadow_sources;
+ for(auto it=effect_lighting.shadow_proofs.begin();it!=effect_lighting.shadow_proofs.end();){
+  const auto& [source,shadow]=*it;
+  const bool held=reported&&std::binary_search(reported->begin(),reported->end(),source);
+  const bool unprocessed=!reported||shadow.sequence>host.scene_counts.retained_shadow_sequence;
+  if(!held&&!unprocessed){it=effect_lighting.shadow_proofs.erase(it);continue;}
+  if(needed&&fixture_proof_valid(*shadow.proof))valid.push_back(source);
+  ++it;}
+ return valid;
+}
+// The renderer reads valid_shadow_sources only for world scenes with fixture lights (fixture_shadow_stage.inc).
+bool fixture_scene_needs_shadow_sources(const mw34::vkscene::Scene& scene){
+ if(scene.hud||scene.frontend_canvas||frontend_on())return false;
+ const unsigned count=std::min(unsigned(scene.effect_lights.params[0]),mw34::effects::capacity);
+ return std::min(unsigned(scene.effect_lights.params[1]),count)!=count;
 }
 bool fixture_capture_proof(const D3DCmd& draw,const VSurfaceRec& surface,FixtureSourceProof& proof){
  if(!draw.fixture_node||!draw.fixture_polygon)return false;
@@ -246,7 +274,7 @@ void effect_observe(const D3DCmd&draw){
 void effect_scene(mw34::vkscene::Scene&scene){
  if(!effect_enabled())return;
  SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
- auto&s=effect_lighting;if(frontend_on()||scene.frontend_canvas){s.view=false;s.lights.clear();mw34::campaign::CampaignManager::instance().frontend();mw34::fixtures::FixtureManager::instance().clear();s.fixture_proofs.clear();return;}
+ auto&s=effect_lighting;if(frontend_on()||scene.frontend_canvas){s.view=false;s.lights.clear();mw34::campaign::CampaignManager::instance().frontend();mw34::fixtures::FixtureManager::instance().clear();s.fixture_proofs.clear();s.shadow_proofs.clear();return;}
  if(scene.hud)return; // HUD passes never erase the world's fading lights.
  effect_load();
  mw34::campaign::CampaignManager::instance().enter_world();fixture_frame();

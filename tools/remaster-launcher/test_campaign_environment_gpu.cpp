@@ -24,7 +24,9 @@ static Scene scene(unsigned pattern,unsigned role,bool hud) {
         Vertex v{p[0],p[1],.00001f,1,0xffffffff,0xff000000,p[0]/128,p[1]/128};
         auto bytes=reinterpret_cast<unsigned char*>(&v);s.vertices.insert(s.vertices.end(),bytes,bytes+sizeof v);
     }
-    s.draws.push_back(d);s.order.push_back({false,0});return s;
+    s.draws.push_back(d);s.order.push_back({false,0});
+    // The game computes each scene's lighting before sending it (vdd.inc submit_scene).
+    s.environment=mw34::sun::current_settings(s.detail_time);return s;
 }
 int main(int argc,char**argv){try{
     if(argc!=2)throw std::runtime_error("Output prefix required");

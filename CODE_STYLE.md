@@ -44,7 +44,9 @@ Assume the next person to change this code is new to the project and to the lang
   (PowerShell), all at 100 columns. Setup and versions: [tools/style/README.md](tools/style/README.md).
 - Before committing, run `python tools/style/check_style.py --fix`. It only formats
   languages whose one-time cleanup has landed, so a small change never becomes a
-  whole-file reformat. Don't mix a formatting pass with other changes.
+  whole-file reformat. Don't mix a formatting pass with other changes. Once the git
+  hooks are on (`git config core.hooksPath .githooks`), the pre-commit hook does this
+  for the staged files.
 - Never reformat, rename or "clean up" anything in
   [tools/style/exclude.txt](tools/style/exclude.txt): frozen, hash-pinned evidence,
   third-party and generated files.
