@@ -63,23 +63,22 @@ float squared_distance(const float a[3], const float b[3]) {
 int g_viewed = -1;
 
 // The view on g_mechs[index]: the godseye camera (3) on it, and the HUD's
-// player pointers with it (as program_pilot_set_mech sets them,
-// app_mech.cpp), never the mission player.
+// player pointer (world().player) with it, never the mission player. The
+// weapons' own player (weapon_world().player) stays null: it changes how the
+// player's weapons fire (a wider beam-snap cone on a wide view, cone_cos; one
+// arm's weapons in a side view, arm_restriction), so a viewed bot would fire
+// differently from the rest.
 void view_mech(int index) {
   Mech* mech = g_mechs[static_cast<size_t>(index)].mech;
   g_viewed = index;
   program_view_attach(*mech);
   program_view_set_camera(3);
   world().player = mech;
-  weapon_world().player = mech;
 }
 
 // The view's bot cleared, so no pointer outlives the match's mechs.
 void view_clear() {
-  if (g_viewed >= 0) {
-    world().player = nullptr;
-    weapon_world().player = nullptr;
-  }
+  if (g_viewed >= 0) world().player = nullptr;
   g_viewed = -1;
 }
 

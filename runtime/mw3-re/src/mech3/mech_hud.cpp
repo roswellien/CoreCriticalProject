@@ -15,6 +15,9 @@ ztwod::Image* g_blips[3];  // [0x00605618]
 
 Hud* viewed_hud(Mech& m) {
   if (!g_calls.is_view_target || !g_calls.is_view_target(m) || !m.pilot) return nullptr;
+  // Ours (#287): a spectator's view never runs an arena bot's HUD, whose
+  // update drives its mech as a player's (the reticle's aim and lock).
+  if (m.arena_bot) return nullptr;
   return pilot_hud(*m.pilot);
 }
 }  // namespace

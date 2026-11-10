@@ -177,7 +177,10 @@ bool update_ams(Mech& m) {
 // Mech3.exe 1.2 @ 0x004192f0. Walkthrough and thresholds: docs/heat.md.
 void update_heat(Mech& m, float dt) {
   World& w = g_world;
-  const bool player = &m == w.player;
+  // Ours (#287): in an arena match w.player is only the bot the spectator
+  // views (for the HUD), so it gets the same heat rules as every other bot.
+  const bool arena_spectating = !w.mission_player && w.arena_side_a_team != 0;
+  const bool player = &m == w.player && !arena_spectating;
   const bool full = w.full_heat_all_mechs || player;
 
   float rate = 1.0f;  // 0x005e1fd4

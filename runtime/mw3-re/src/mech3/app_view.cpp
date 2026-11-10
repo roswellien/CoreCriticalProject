@@ -49,7 +49,16 @@ struct ProgramViewHooks : ViewHooks {
     return g_wired && g_p.unported ? g_p.unported(g_p.ctx, key) : 0;
   }
   void camera_set_position(Node3 cam, float x, float y, float z) override { zcls::camera_set_position(zn(cam), x, y, z); }
+  // Ours (#287): a spectator's camera only watches an arena bot. The stock
+  // cameras drive the viewed mech as a player's: the outside camera's look
+  // ahead re-centers its torso (torso_465a00) and the cockpit sets its torso
+  // and controls modes, which fought the bot's own torso aim. With its HUD
+  // (mech_hud.cpp, viewed_hud) it cost the viewed side about 11 points of
+  // win rate in mirrored bot matches (36% to 47% of decided matches once
+  // both were fixed, 300 matches each). None of the calls below touch an
+  // arena bot.
   void torso_cockpit(Mech& m, int32_t on) override {  // 0x0041ce10 -> 0x00464580 on the torso
+    if (m.arena_bot) return;
     if (m.torso) m.torso->set_cockpit(on != 0);
   }
   void camera_set_rotation(Node3 cam, float x, float y, float z) override { zcls::camera_set_rotation(zn(cam), x, y, z); }
@@ -184,20 +193,28 @@ struct ProgramViewHooks : ViewHooks {
     return s->pitch_in;
   }
   // The free look's and the cockpit's calls on the mech (playtest #14).
-  void mech_41ca30(Mech& t, int32_t on) override { mech_set_hud_fall(&t, on); }  // 0x0041ca30
-  void mech_41ca60(Mech& t, int32_t on) override {                              // 0x0041ca60
+  void mech_41ca30(Mech& t, int32_t on) override {  // 0x0041ca30
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
+    mech_set_hud_fall(&t, on);
+  }
+  void mech_41ca60(Mech& t, int32_t on) override {  // 0x0041ca60
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     t.x634 = on ? t.x634 | 1u : t.x634 & ~1u;
   }
   void torso_464ac0(Mech& t, int32_t on) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.torso) t.torso->set_pitch_lock(on != 0);
   }
   void torso_465a00(Mech& t, int32_t how) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.torso) t.torso->centre(how);
   }
   void torso_466190(Mech& t, int32_t m) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.torso) t.torso->set_mode(m);
   }
   void controls_426780(Mech& t, uint32_t v) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.controls) t.controls->set_view(static_cast<int32_t>(v));
   }
   // 0x00502da0: [0x0073f75c], the animations' "in the cockpit" (anim block +0x3c).

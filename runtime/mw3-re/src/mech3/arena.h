@@ -43,9 +43,10 @@ void arena_start();
 // The spectator's view (#287 step 3b, a minimal follow camera): the godseye
 // camera on one standing bot. When it falls the view moves to the next
 // standing bot in setup order; arena_view_next (the camera-cycle key in a
-// match) moves it on by hand. world().player and weapon_world().player
-// follow the viewed bot for the HUD only; world().mission_player stays null
-// so no player-only rule runs for anyone. The viewed bot, null without one.
+// match) moves it on by hand. world().player follows the viewed bot for the
+// HUD only; weapon_world().player and world().mission_player stay null so no
+// player-only rule (sensor range, beam snap, arm restriction) runs for anyone.
+// The viewed bot, null without one.
 Mech* arena_viewed_mech();
 // The next standing bot after the viewed one; false outside a match.
 bool arena_view_next();
