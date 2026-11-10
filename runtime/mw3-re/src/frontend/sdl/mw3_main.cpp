@@ -95,6 +95,7 @@
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/app.h"
+#include "mech3/arena.h"
 #include "mech3/arena_setup.h"
 #include "mech3/mods.h"
 #include "mech3/app_engine.h"
@@ -970,12 +971,29 @@ int main(int argc, char** argv) {
       };
     }
   }
+  // --arena (ours, #287): a lone host's session on the in-process hub, never
+  // the ENet transport above (refused with --host and --join): no socket is
+  // opened. The hub outlives run(), whose engine is gone before the shutdown.
+  std::unique_ptr<znet::Hub> arena_hub;
+  if (!a.arena_path.empty()) {
+    arena_hub = std::make_unique<znet::Hub>();
+    if (!mech3::arena::arena_open_session(*arena_hub)) {
+      std::fprintf(stderr, "mw3: --arena: the in-process session failed\n");
+      znet::shutdown();
+      SDL_Quit();
+      return 1;
+    }
+  }
   int result = 1;
   try {
     result = run(a, vfw.get());
     std::printf("mw3: closed, result %d\n", result);
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
+  }
+  if (arena_hub) {
+    znet::shutdown();
+    arena_hub.reset();
   }
   g_net_pass = nullptr;
   vfw.reset();
@@ -1207,6 +1225,16 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         multi_game = std::make_unique<mech3::MultiplayerGame>(nullptr);
         multi_game->x70 = 1 << 30;  // the kills to win (+0x70)
         l.type = 3, l.multi = multi_game.get();
+        // --arena (ours, #287): respawn off (+0x8c, net_pilot_respawn's
+        // switch), so a downed host mech stays down like every bot; the host
+        // mech is side A's first bot's chassis. The player's mech is made from
+        // the launch's mech (the game's slot, vt+0x34), its loadout the
+        // chassis' first (no config given); the game's slot says the same.
+        if (!a.arena_path.empty()) {
+          multi_game->b8c = 0;
+          l.mech = a.arena.sides[0].front().mech;
+          multi_game->slot.mech = l.mech;
+        }
         mech3::program_net_debug_lobby();
       } else {
         split_mission(a.mission, dir, variant, l.number);
@@ -1267,7 +1295,9 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         if (l_type3 && app.current() == &mech3::states().core && !net_core) {
           net_core = true;
           s_drive_from = SDL_GetTicks() / 1000.0;
-          if (a.net_minutes > 0) mech3::missions().clock = a.net_minutes * 60.0f, mech3::missions().clock_down = 1;
+          // --arena's clock is the setup's minutes (ours, #287; --net-minutes is refused with it).
+          const int clock_minutes = a.arena_path.empty() ? a.net_minutes : a.arena.minutes;
+          if (clock_minutes > 0) mech3::missions().clock = clock_minutes * 60.0f, mech3::missions().clock_down = 1;
         }
         // --net-drive: a kill staged on the pilot every two minutes, from a
         // minute in, staggered by the seed (the scores' traffic, the respawn).

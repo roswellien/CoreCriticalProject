@@ -7,7 +7,9 @@
 #include <string>
 
 #include "check.h"
+#include "gamez/znetwork/znet_session.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/arena.h"
 #include "mech3/arena_setup.h"
 #include "mech3/mech_names.h"
 #include "mech3/zai_params.h"
@@ -234,4 +236,18 @@ TEST(arena_setup_game_files_refuse_an_unknown_preset) {
   EXPECT(parse_arena_setup(setup_json("c1mp1", no_reader), &s, &error));
   EXPECT(!read_arena_game_files(&s, &error));
   EXPECT(starts_with(error, "sides[0][0].preset: cannot read"));
+}
+
+// Criterion 6: the arena's session runs on the in-process hub. The ENet
+// transport lives in the SDL front end, which this suite does not link, so
+// the check is that zNetwork's transport is the hub's endpoint and nothing else.
+TEST(arena_session_uses_the_hub) {
+  znet::Hub hub;
+  znet::Transport* endpoint = arena_open_session(hub);
+  EXPECT(endpoint != nullptr);
+  EXPECT(znet::session().transport == endpoint);
+  EXPECT(znet::active() && znet::is_host() && znet::local_id() == 1);
+  EXPECT(znet::session().desc.max_players == kArenaPlayers);
+  znet::shutdown();
+  EXPECT(!znet::session().initialised);
 }
