@@ -2448,7 +2448,7 @@ private:
   // replacement draw once with its sun-clip transform.
   ShadowFrame prepare_shadow(const Scene &s, const mw34::sun::Settings &sun) {
     ShadowFrame frame;
-    if (!sun.shadows || s.hud)
+    if (!sun.shadows || s.hud || sun.strength <= 0.0f)
       return frame;
     // MW3 may draw terrain and mechs in separate BeginScene/EndScene
     // batches. A batch without casters (or without a camera reference)

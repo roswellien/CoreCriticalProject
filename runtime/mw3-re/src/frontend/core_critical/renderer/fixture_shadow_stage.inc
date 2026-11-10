@@ -264,7 +264,9 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
   const float retention = effects_settings.fixture_retain_distance;
   for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
     auto &caster = it->second;
-    const bool invalid = scene.world_frame > caster.frame + 1;
+    const bool is_static_caster = caster.geometry_key != 0 && caster.tl.empty();
+    const auto stale_after = is_static_caster ? caster.frame + 1 : caster.frame;
+    const bool invalid = scene.world_frame > stale_after;
     if (invalid || (camera && !caster.bounds.overlaps(eye, retention * 2))) {
       fixture_atlas_touch();
       it = fixtureCasters.erase(it);
@@ -344,8 +346,7 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
     if (!relevant)
       continue;
     if (fixtureCasters.size() >= 32768 && !fixtureCasters.contains(key))
-      throw std::runtime_error(
-          "Retained fixture shadow caster capacity exceeded");
+      continue;
     auto [stored, inserted] = fixtureCasters.try_emplace(key);
     if (fixture_atlas_capture_changed(inserted, stored->second, caster))
       fixture_atlas_touch();

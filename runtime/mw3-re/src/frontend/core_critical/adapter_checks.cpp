@@ -1077,10 +1077,16 @@ void check_sealed_environment(SDL_Window *window,
       auto px = read();
       require(px_at(px, 30, 2) == 0xFF25598F, "outdoor clear");
       renderer->begin_scene();
-      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000);
+      platform::DrawState sky_state;
+      sky_state.native_sky = true;
+      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000, sky_state);
       renderer->end_scene();
       auto px2 = read();
-      require(px_at(px2, 30, 2) == 0xFFFF0000, "outdoor sky");
+      const uint32_t outdoor_sky_expected =
+          (mode[0] == 'f' && id.world_index == 5 && id.number == 1)
+              ? 0xFF6B5261
+              : 0xFFFF0000;
+      require(px_at(px2, 30, 2) == outdoor_sky_expected, "outdoor sky");
     }
     renderer->mission_changed({1, 2});
     renderer->reset_scene_resources();
@@ -1878,6 +1884,16 @@ void check_campaign_lighting_and_policy() {
     require(sealed_res.policy.sky_source == SkySource::Interior,
             "Sealed mission must resolve to SkySource::Interior");
 
+    // Sealed missions must suppress sun shadows and set strength to 0.f
+    mw34::sun::Settings base_sun{};
+    base_sun.enabled = true;
+    base_sun.shadows = true;
+    const auto sealed_sun = mission_sun_settings(
+        base_sun, sealed_res, true, false, nullptr, sealed_id);
+    require(sealed_sun.strength == 0.f, "Sealed mission must zero sun strength");
+    require(sealed_sun.shadows == false,
+            "Sealed mission must suppress sun shadows");
+
     // Independent of contradictory profile input: even if profile_interior ==
     // false
     const auto forced_ext = resolve_environment_policy(sealed_id, false);
@@ -1902,13 +1918,19 @@ void check_campaign_lighting_and_policy() {
   require(unsealed_interior.sky_source == SkySource::Interior,
           "Profile interior flag must set Interior sky");
 
-  // Normal unsealed mission (c1m1)
+  // Normal unsealed mission (c1m1) retains sun shadows
   const auto c1m1_res = resolve_mission_lighting("c1m1");
   require(c1m1_res.policy.inside == false, "c1m1 must not be inside");
   require(c1m1_res.policy.suppress_sun == false, "c1m1 must not suppress sun");
   require(c1m1_res.policy.suppress_sky == false, "c1m1 must not suppress sky");
   require(c1m1_res.policy.sky_source == SkySource::Twilight,
           "c1m1 must have Twilight sky");
+  mw34::sun::Settings c1m1_base{};
+  c1m1_base.enabled = true;
+  c1m1_base.shadows = true;
+  const auto c1m1_sun = mission_sun_settings(
+      c1m1_base, c1m1_res, true, false, nullptr, "c1m1");
+  require(c1m1_sun.shadows == true, "c1m1 must retain sun shadows");
 
   // 4. Expected sky categories
   // ClearDay: t1m2, c2m1, c3m1, c3m2, c4m6
