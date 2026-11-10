@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "check.h"
+#include "gamez/znetwork/znet_object.h"
 #include "gamez/zutil/zfix.h"
 #include "mech3/zai_hunt.h"
 #include "mech3/zai_target.h"
@@ -86,10 +87,45 @@ TEST(arena_hunt_net_allows_the_engage_gate) {
     HuntNet* net = make_hunt_net(fallback);
     EXPECT(net && hunt_net() == net && net->allows_attack());
     EXPECT(net->id >= 500 && net->id < 600);
+
+    // The stock gate lets a bot hunting on this net break in to fight, once
+    // its engage switch (+0x3c) is on, and not before.
+    BuiltinNet start(7, 0);
+    AiParams rec;
+    Brain b(&start, rec);
+    Order& o = b.order;
+    o.owner = &b;
+    o.net.reset(net->make_part(o));
+    o.state.reset(net->step()->make_state(o));
+    b.params.put<int32_t>(0x3c, 0);
+    EXPECT(!b.may_engage(kBot, net, o.state.get()));
+    b.params.put<int32_t>(0x3c, 1);
+    EXPECT(b.may_engage(kBot, net, o.state.get()));
+    o.state.reset();
+    o.net.reset();
     free_hunt_net();
     EXPECT(hunt_net() == nullptr);
   }
   set_brain_hooks(nullptr);
+}
+
+// A mission's end runs znet::clear, which deletes every net under id 10000,
+// ours included: the hunt net must not be freed a second time afterwards, and
+// the next mission must get a fresh one.
+TEST(arena_hunt_net_survives_znet_clear) {
+  const float fallback[3] = {0, 0, 0};
+  make_hunt_net(fallback);
+  znet::clear();
+  EXPECT(hunt_net() == nullptr);
+  free_hunt_net();  // nothing left to free
+  EXPECT(hunt_net() == nullptr);
+
+  make_hunt_net(fallback);
+  znet::clear();
+  HuntNet* next = make_hunt_net(fallback);  // the next mission's
+  EXPECT(next && hunt_net() == next && next->allows_attack());
+  free_hunt_net();
+  EXPECT(hunt_net() == nullptr && znet::find(500) == nullptr);
 }
 
 TEST(arena_hunt_drives_to_the_enemy_then_where_it_was_seen) {
@@ -127,10 +163,11 @@ TEST(arena_hunt_drives_to_the_enemy_then_where_it_was_seen) {
     hunt->run(1.0f / 30);
     EXPECT(hunt->goal.rule == HuntRule::kFallback && !hunt->has_last_seen && c.throttle == 0.0f && c.turn != 0.0f);
 
-    // At the fallback point: stopped.
+    // At the fallback point: stopped, and no longer turning from the last
+    // frame's steering (the controls keep what they were last given).
     set3(hooks.bot, 0, 0, -390);
     hunt->run(1.0f / 30);
-    EXPECT(hunt->goal.rule == HuntRule::kFallback && c.throttle == 0.0f);
+    EXPECT(hunt->goal.rule == HuntRule::kFallback && c.throttle == 0.0f && c.turn == 0.0f);
 
     o.state.reset();
     o.net.reset();

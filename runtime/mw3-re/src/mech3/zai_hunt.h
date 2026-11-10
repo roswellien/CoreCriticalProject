@@ -67,7 +67,9 @@ class HuntNet : public CompiledNet {
   float fallback[3] = {};
 };
 
-// The shared net: made at an arena mission's start, freed at its end.
+// The shared net: made at an arena mission's start. znet owns it, so the
+// mission's end (znet::clear) frees it too: hunt_net() is null from then on,
+// free_hunt_net() is safe either way, and making one frees any still held.
 HuntNet* make_hunt_net(const float fallback[3]);
 HuntNet* hunt_net();
 void free_hunt_net();

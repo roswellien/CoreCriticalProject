@@ -1,7 +1,6 @@
 #include "mech3/zai_hunt.h"
 
 #include <cmath>
-#include <memory>
 
 #include "gamez/znetwork/znet_object.h"
 #include "gamez/zutil/zfix.h"
@@ -38,7 +37,12 @@ HuntGoal pick_hunt_goal(const HuntInput& in) {
 }
 
 namespace {
-std::unique_ptr<HuntNet> g_hunt_net;
+// znet owns the net: a mission's end (znet::clear, mission.cpp) deletes every
+// object under id 10000, this one included. So the net is kept as a pointer
+// with its id, and counts only while znet still holds it, as
+// BrainHooks::formation_net does.
+HuntNet* g_hunt_net = nullptr;
+int32_t g_hunt_id = -1;
 }  // namespace
 
 // Ours (#287).
@@ -49,12 +53,19 @@ HuntNet::HuntNet(const float point[3]) : CompiledNet(znet::alloc_id(500, 500, 60
   elems.assign(1, step);
 }
 
-HuntNet* make_hunt_net(const float fallback[3]) {
-  g_hunt_net = std::make_unique<HuntNet>(fallback);
-  return g_hunt_net.get();
+HuntNet* hunt_net() { return g_hunt_net && znet::find(g_hunt_id) == g_hunt_net ? g_hunt_net : nullptr; }
+
+void free_hunt_net() {
+  delete hunt_net();
+  g_hunt_net = nullptr;
 }
-HuntNet* hunt_net() { return g_hunt_net.get(); }
-void free_hunt_net() { g_hunt_net.reset(); }
+
+HuntNet* make_hunt_net(const float fallback[3]) {
+  free_hunt_net();
+  g_hunt_net = new HuntNet(fallback);
+  g_hunt_id = g_hunt_net->get_id();
+  return g_hunt_net;
+}
 
 // Ours (#287): toward the goal by the grid when the straight way is blocked,
 // else straight at it; stopped once at the fallback point with nothing known.
@@ -90,7 +101,10 @@ void HuntState::run(float dt) {
   const bool resting = goal.rule == HuntRule::kFallback &&
                        std::hypot(goal.at[0] - in.pos[0], goal.at[2] - in.pos[2]) <= kHuntReached;
   if (resting) {
+    // The controls keep their last turn, so a bot that arrives turning would
+    // spin on the spot.
     b.controls->set_throttle(0.0f);
+    b.controls->set_turn(0.0f);
     return;
   }
   const bool toward_enemy = goal.rule == HuntRule::kContact;
