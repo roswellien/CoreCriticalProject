@@ -119,6 +119,9 @@ class GameEngine : public Engine {
     // A network debug start's game (type 3, ours: the lobby is not ported):
     // its rules and totals; the pilot's own when it has one.
     MultiplayerGame* multi = nullptr;
+    // Ours (#287): a network start with no player mech, the arena's
+    // spectator seat (mission_launch.h, set_launch_spectator).
+    bool spectator = false;
   };
   void set_launch(const Launch& l);
   // The launch's mech, loadout and skin read again from the chosen pilot's

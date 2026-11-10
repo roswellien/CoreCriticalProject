@@ -24,8 +24,7 @@ struct LodCalls {
   void (*stop_effect)(Handle effect) = nullptr;                 // 0x00506ca0
   Handle (*jets_effect)(Mech& m) = nullptr;  // 0x00432830(1, 0, zero, zero) on +0x684
   // Ours (#287, docs/arena.md): an arena match's fairness. Set, no mech is cut
-  // down for its distance from the player's mech (the host's, a bot like any
-  // other): every mech keeps its full model, whose parts are what shots hit,
+  // down for its distance from the player's mech or the view: every mech keeps its full model, whose parts are what shots hit,
   // and the mid detail (0x1c). Stock, a mech beyond its range from the player
   // swaps to the low model and past 250 m to the gait only, so a side whose
   // targets stood away from the host landed about half the hits.

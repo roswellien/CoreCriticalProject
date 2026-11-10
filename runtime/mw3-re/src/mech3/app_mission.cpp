@@ -127,6 +127,7 @@ void engine_sounds_clear();  // mech3/veh_basic_object.h: 0x004add10
 void vehicle_markers_create();  // mech3/veh_basic_object.h: 0x004ac3d0
 void vehicle_markers_delete();  // 0x004ac4e0
 bool launch_player();                                        // 0x00491150 (mech3/mission_launch.h)
+void set_launch_spectator(bool spectator);                   // ours (#287, mech3/mission_launch.h)
 void radar_objects_create();                                 // 0x004b4ab0
 void hit_globals_init(bool network);                         // 0x00413e60's first part (mech_parts.h)
 void radar_objects_destroy();                                // 0x004b4ae0
@@ -1591,6 +1592,9 @@ struct WiredMissionHooks : MissionHooks {
   void stations_update(Handle st, float dt, Handle vehicle) override {
     if (program_mcb_waynet() && st == e->handle_of(program_mcb_waynet())) return;
     if (void* w = e->object_of(st); w && program_is_nav_waynet(w)) {  // vt+0x6c 0x00479c50
+      // Ours (#287): a spectator (the arena's seat) has no vehicle to reach
+      // nav points with; the frame reads the vehicle's place.
+      if (!vehicle) return;
       program_nav_waynet_frame(w, e->object_of(vehicle));
       return;
     }
@@ -2380,6 +2384,9 @@ void wire_mission_hooks(GameEngine* e) {
   keys.debug_camera = debug_camera;
   if (e) {
     keys.cycle_camera = [] {  // 0x0040aed0 on [0x005f4c8c]
+      // Ours (#287): in an arena match the key moves the spectator's view to
+      // the next standing bot instead.
+      if (arena::arena_view_next()) return;
       if (PlayerView* v = program_view()) v->cycle_camera();
     };
     keys.message_toggle = [] {  // 0x0040f070
@@ -2508,7 +2515,10 @@ void GameEngine::missions_start(uint32_t list) {
     // (0x0046ceb0, briefing.cpp), then the player's mech (0x00491150).
     if (launch_.type == 3) multiplayer_launch_prep();
     LaunchedMech s;
-    if (!launch_player() || !launched_mech(&s)) {
+    const bool launched = launch_player();
+    if (launched && launch_.spectator) {
+      // Ours (#287): a spectator's seat makes no mech by design.
+    } else if (!launched || !launched_mech(&s)) {
       std::fprintf(stderr, "mw3: the launch made no mech\n");
     } else if (!quiet) {
       std::fprintf(stderr, "mw3: launched the %s: %d parts, %d weapons, %d heat sinks, %.1f m tall, %.1f m/s\n",
@@ -2639,6 +2649,7 @@ void GameEngine::missions_reset(uint32_t list) {
 void GameEngine::set_launch(const Launch& l) {
   launch_ = l;
   launch_.active = true;
+  set_launch_spectator(l.spectator);  // ours (#287)
   g_debug_campaign.reset();
   slot_ = 0;  // made again for this launch's mech: a mission unload frees the last one's types
   // The blocks are made once and reused; the chosen pilot's handle is kept.

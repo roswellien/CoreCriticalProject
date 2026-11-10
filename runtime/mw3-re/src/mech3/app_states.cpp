@@ -9,6 +9,10 @@
 
 namespace mech3 {
 
+// Ours (#287): mech3/mission_launch.h, whose mech headers clash with pilot.h.
+bool launch_spectator();
+void set_launch_spectator(bool spectator);
+
 namespace {
 States* g_states = nullptr;
 }  // namespace
@@ -20,6 +24,7 @@ States& states() {
 void reset_states() {
   delete g_states;
   g_states = new States;
+  set_launch_spectator(false);  // ours (#287): a spectator launch ends with its run
 }
 
 Engine& State::e() { return app().engine(); }
@@ -263,7 +268,10 @@ bool CoreState::enter() {
   if (a().lock_system_keys()) en.lock_system_keys(1);
   en.options_apply_all();
   const Handle pilot = en.pilot();
-  if (pilot == 0 || en.field32(pilot, 0x14) == 0) a().replace(a().state(2), 0);
+  // Ours (#287): a spectator's launch has no vehicle by design (the arena's
+  // seat), so only the pilot's absence sends it back to the menu.
+  const bool no_vehicle = pilot != 0 && en.field32(pilot, 0x14) == 0;
+  if (pilot == 0 || (no_vehicle && !launch_spectator())) a().replace(a().state(2), 0);
   paused_ = 0;
   en.set_screen_mode(en.in_game_vmode());
   pick_renderer();

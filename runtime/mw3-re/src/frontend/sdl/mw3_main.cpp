@@ -985,7 +985,7 @@ int main(int argc, char** argv) {
       SDL_Quit();
       return 1;
     }
-    mech3::arena::set_arena_setup(&a.arena);  // the first Core frame hands the host's mech to the AI
+    mech3::arena::set_arena_setup(&a.arena);  // the first Core frame makes every bot
     mech3::arena::set_arena_log(arena_log.get(), a.seed, a.frame_ms);
     mech3::arena::set_arena_seed(a.seed);  // which ends of the map the sides start at
   }
@@ -1233,14 +1233,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         multi_game->x70 = 1 << 30;  // the kills to win (+0x70)
         l.type = 3, l.multi = multi_game.get();
         // --arena (ours, #287): respawn off (+0x8c, net_pilot_respawn's
-        // switch), so a downed host mech stays down like every bot; the host
-        // mech is side A's first bot's chassis. The player's mech is made from
-        // the launch's mech (the game's slot, vt+0x34), its loadout the
-        // chassis' first (no config given); the game's slot says the same.
+        // switch), so a downed bot stays down; the host is a spectator with
+        // no mech (GameEngine::Launch::spectator), every fighter a bot.
         if (!a.arena_path.empty()) {
           multi_game->b8c = 0;
-          l.mech = a.arena.sides[0].front().mech;
-          multi_game->slot.mech = l.mech;
+          l.spectator = true;
         }
         mech3::program_net_debug_lobby();
       } else {

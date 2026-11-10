@@ -7,11 +7,13 @@
 #include <string>
 
 #include "mech3/app_mech.h"
+#include "mech3/app_view.h"
 #include "mech3/arena_log.h"
 #include "mech3/mech.h"
 #include "mech3/mech_control.h"
 #include "mech3/mech_lod.h"
 #include "mech3/mech_net.h"
+#include "mech3/weapon.h"
 #include "mech3/zai_attack.h"
 #include "mech3/zai_hunt.h"
 #include "mech3/zrdraiv.h"
@@ -57,21 +59,47 @@ float squared_distance(const float a[3], const float b[3]) {
   return sum;
 }
 
-// The host's mech on AI controls over the hunt net.
-bool hand_host_to_ai(const Bot& bot, ai::HuntNet* net, const float pos[3], float yaw) {
-  auto* host = static_cast<Mech*>(mission_player_mech());
-  if (!host || !bot.params_read || !net) return false;
-  ai::AivRecord record;
-  const int side_a = 0;
-  arena_bot_params(bot, side_a, pos, yaw, &record);
-  // The old PlayerControls are left as they are, not freed: the input's
-  // command callback and the mission end still reach them through
-  // player_controls_instance().
-  void* controls = program_make_ai_mech_controls(static_cast<ai::AiNet*>(net), &record);
-  if (!controls) return false;
-  program_mech_set_controls(host, controls);
-  host->set_team(record.team());
-  return true;
+// The bot the spectator's view follows (an index into g_mechs), -1 for none.
+int g_viewed = -1;
+
+// The view on g_mechs[index]: the godseye camera (3) on it, and the HUD's
+// player pointers with it (as program_pilot_set_mech sets them,
+// app_mech.cpp), never the mission player.
+void view_mech(int index) {
+  Mech* mech = g_mechs[static_cast<size_t>(index)].mech;
+  g_viewed = index;
+  program_view_attach(*mech);
+  program_view_set_camera(3);
+  world().player = mech;
+  weapon_world().player = mech;
+}
+
+// The view's bot cleared, so no pointer outlives the match's mechs.
+void view_clear() {
+  if (g_viewed >= 0) {
+    world().player = nullptr;
+    weapon_world().player = nullptr;
+  }
+  g_viewed = -1;
+}
+
+// The first standing bot after `from` in setup order, wrapping round; -1
+// when none stands.
+int next_standing(int from) {
+  const int count = static_cast<int>(g_mechs.size());
+  for (int step = 1; step <= count; ++step) {
+    const int index = (from + step + count) % count;
+    if (g_mechs[static_cast<size_t>(index)].mech->active) return index;
+  }
+  return -1;
+}
+
+// Each frame: a fallen viewed bot hands the view on.
+void view_follow() {
+  const bool viewed_standing = g_viewed >= 0 && g_mechs[static_cast<size_t>(g_viewed)].mech->active;
+  if (viewed_standing) return;
+  const int next = next_standing(g_viewed < 0 ? -1 : g_viewed);
+  if (next >= 0 && next != g_viewed) view_mech(next);
 }
 }  // namespace
 
@@ -95,6 +123,8 @@ void set_arena_setup(const Setup* setup) {
   if (g_started && !g_result.decided) log_match_stop();  // the shot and hit hooks off
   g_setup = setup;
   lod_calls().same_detail_for_all = false;  // stock until a match starts
+  world().arena_side_a_team = 0, world().arena_side_a_enemies = 0;  // the AMS's stock rule
+  view_clear();
   g_mechs.clear();
   g_names.clear();
   g_started = false;
@@ -119,6 +149,7 @@ std::string arena_result_line(const Result& result) {
 // Ours (#287)
 void arena_tick() {
   if (!g_setup || !g_started || g_result.decided || g_mechs.empty()) return;
+  view_follow();
   int standing[kSides] = {};
   int lost[kSides] = {};
   for (const ArenaMech& entry : g_mechs) {
@@ -213,36 +244,21 @@ void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, a
   params->put<int32_t>(0x8c, 0);  // any enemy, not only the player
   // Never the player's lancemate: +0xcd bit 0 makes a pilot one, bit 1 makes
   // it one while it is the player's ally (sensors.cpp, AiTarget +0xbc bit 4).
-  // Side A shares the host mech's team, so a preset with bit 1 would have its
-  // bots fall in behind the host (the stock follow) instead of hunting.
+  // A preset with bit 1 would have a bot fall in behind a player (the stock
+  // follow) instead of hunting.
   params->raw[0xcd] = static_cast<uint8_t>(params->raw[0xcd] & ~0x3u);
 }
 
 // Ours (#287)
-bool arena_hand_host_to_ai(const Bot& bot) {
-  float pos[kSpawnSpots][3], yaw[kSpawnSpots];
-  if (!read_spawn_spots(pos, yaw)) return false;
-  float fallback[3];
-  spawn_spots_mean(pos, fallback);
-  // znet owns the net and the mission's end frees it, so a match never
-  // walks on a net made for the one before.
-  return hand_host_to_ai(bot, ai::make_hunt_net(fallback), pos[kHostSpot], yaw[kHostSpot]);
-}
+Mech* arena_viewed_mech() { return g_viewed >= 0 ? g_mechs[static_cast<size_t>(g_viewed)].mech : nullptr; }
 
-HostState arena_host_state() {
-  HostState state;
-  auto* host = static_cast<Mech*>(mission_player_mech());
-  if (!host) return state;
-  state.team_mask = host->team;
-  auto* controls = dynamic_cast<AiControls*>(host->controls);
-  const ai::Brain* brain = controls ? controls->brain.get() : nullptr;
-  if (!brain) return state;
-  state.on_ai = true;
-  // The brain's own order, then the stack a fight or other order pushes.
-  state.hunting = dynamic_cast<const ai::HuntState*>(brain->order.state.get()) != nullptr;
-  for (const ai::Order& order : brain->orders)
-    if (dynamic_cast<const ai::HuntState*>(order.state.get())) state.hunting = true;
-  return state;
+// Ours (#287)
+bool arena_view_next() {
+  if (!g_started || g_mechs.empty()) return false;
+  const int next = next_standing(g_viewed);
+  if (next < 0) return false;
+  view_mech(next);
+  return true;
 }
 
 bool arena_hunt_net_held() { return ai::hunt_net() != nullptr; }
@@ -258,6 +274,8 @@ const ai::AiParams* arena_brain_params(const Mech* mech) {
 // Ours (#287)
 void arena_start() {
   // What a run before this one in the same process left behind.
+  view_clear();
+  world().arena_side_a_team = 0, world().arena_side_a_enemies = 0;
   g_mechs.clear();
   g_names.clear();
   g_result = Result{};
@@ -278,24 +296,12 @@ void arena_start() {
   const std::vector<Bot>& side_b = g_setup->sides[1];
   const std::vector<int> spots =
       arena_spawn_spots(pos, static_cast<int>(side_a.size()), static_cast<int>(side_b.size()), g_seed);
-  // The launch put the host's mech at its slot's spot (remote_1); it starts
-  // the match at side A's end like the rest of its side.
-  const int host_spot = spots.front();
-  if (void* host_mech = mission_player_mech()) move_mech(host_mech, pos[host_spot], yaw[host_spot]);
-  if (!hand_host_to_ai(side_a.front(), net, pos[host_spot], yaw[host_spot])) {
-    std::fprintf(stderr, "mw3: arena: the host's mech could not be handed to the AI\n");
-    return;
-  }
-  ArenaMech host;
-  host.mech = static_cast<Mech*>(mission_player_mech());
-  host.id = 0, host.side = 0, host.spot = host_spot;
-  g_mechs.push_back(host);
-
+  // Every fighter is an ordinary bot: the host's seat has no mech
+  // (launch_spectator), so no player-only rule runs for anyone.
   for (int side = 0; side < kSides; ++side) {
     const std::vector<Bot>& bots = g_setup->sides[side];
     for (size_t i = 0; i < bots.size(); ++i) {
       const int id = side == 0 ? static_cast<int>(i) : static_cast<int>(side_a.size() + i);
-      if (id == 0) continue;  // the host's mech, made by the launch
       const int spot = spots[static_cast<size_t>(id)];
       ai::AivRecord record;
       arena_bot_params(bots[i], side, pos[spot], yaw[spot], &record);
@@ -308,15 +314,22 @@ void arena_start() {
       }
       mech->arena_bot = true;
       mech->set_team(record.team());
+      // Side A's masks stand in for the missing player's in the AMS and the
+      // shots' hostile tag (World::arena_side_a_team).
+      if (side == 0 && world().arena_side_a_team == 0) {
+        world().arena_side_a_team = mech->team;
+        world().arena_side_a_enemies = mech->enemies;
+      }
       ArenaMech entry;
       entry.mech = mech, entry.id = id, entry.side = side, entry.spot = spot;
       g_mechs.push_back(entry);
     }
   }
-  // Every mech at the same detail, whatever its distance from the host's
+  // Every mech at the same detail, whatever its distance from the view
   // (mech_lod.h, LodCalls::same_detail_for_all).
   lod_calls().same_detail_for_all = true;
   g_started = true;
+  if (!g_mechs.empty()) view_follow();
   log_match_start(*g_setup, g_mechs);
 }
 

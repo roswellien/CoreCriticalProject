@@ -18632,16 +18632,17 @@ TEST(net_pilot_respawns_c1mp1_headless) {
   EXPECT(died && !back && camera == 4);
 }
 
-// #287 step 3 (docs/arena.md): an arena match on c1mp1 as mw3 --arena starts
-// it (the hub's session, respawn off, the host on side A's first bot's
-// chassis): at the first Core frame the host's mech goes on AI controls over
-// the hunt net, and 300 frames later the mission ends with nothing broken.
-TEST(arena_host_mech_runs_on_ai_controls_headless) {
+// #287 step 3b (docs/arena.md): an arena match on c1mp1 as mw3 --arena starts
+// it (the hub's session, respawn off, the host a spectator): the Core state
+// is reached with no player mech at all, every fighter is a bot on AI
+// controls, the view follows one of them, and 300 frames later the mission
+// ends with nothing broken.
+TEST(arena_spectator_launch_has_no_player_mech_headless) {
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
   zutl::mount(MW3_GAME_DIR);
-  zutl::set_write_dir(temp_dir("arena_host_write"));
+  zutl::set_write_dir(temp_dir("arena_spectator_write"));
   mech3::arena::Setup setup;
   std::string error;
   const std::string bot =
@@ -18668,8 +18669,7 @@ TEST(arena_host_mech_runs_on_ai_controls_headless) {
   znet::Hub hub;
   EXPECT(mech3::arena::arena_open_session(hub) != nullptr);
   mech3::arena::set_arena_setup(&setup);
-  int core_frames = 0, hunt_frames = 0;
-  bool on_ai = false, team_one = false, player_controls_kept = false;
+  int core_frames = 0, player_frames = 0, unviewed_frames = 0, mechs = 0, bots_on_ai = 0;
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
     engine.quiet = true;
@@ -18679,22 +18679,22 @@ TEST(arena_host_mech_runs_on_ai_controls_headless) {
     mech3::MultiplayerGame game(nullptr);
     game.x70 = 1 << 30;
     game.b8c = 0;
-    game.slot.mech = setup.sides[0].front().mech;
     mech3::GameEngine::Launch l;
-    l.index = 0, l.number = 1, l.type = 3, l.multi = &game, l.mech = game.slot.mech;
+    l.index = 0, l.number = 1, l.type = 3, l.multi = &game, l.spectator = true;
     engine.set_launch(l);
     mech3::program_net_debug_lobby();
     app.post_intro_ = &mech3::states().load;
     engine.on_present = [&](int) {
       if (app.current() != &mech3::states().core) return;
       ++core_frames;
-      const mech3::arena::HostState host = mech3::arena::arena_host_state();
+      if (mech3::mech_mission_player()) ++player_frames;  // world().mission_player
+      mech3::Mech* viewed = mech3::arena::arena_viewed_mech();
+      if (!viewed || mech3::program_view_mech() != viewed) ++unviewed_frames;
       if (core_frames == 1) {
-        on_ai = host.on_ai;
-        team_one = host.team_mask == 1u << 1;
-        player_controls_kept = mech3::player_controls_instance() != nullptr;
+        mechs = static_cast<int>(mech3::arena::arena_mechs().size());
+        for (const auto& entry : mech3::arena::arena_mechs())
+          if (mech3::arena::arena_brain_params(entry.mech)) ++bots_on_ai;
       }
-      if (host.hunting) ++hunt_frames;
     };
     CountingPump pump;
     pump.limit = 2600;
@@ -18707,11 +18707,14 @@ TEST(arena_host_mech_runs_on_ai_controls_headless) {
   }
   mech3::arena::set_arena_setup(nullptr);
   znet::shutdown();
-  std::printf("  arena host: core frames %d, on AI %d, team 1 %d, player controls kept %d, hunting %d frames\n",
-              core_frames, on_ai, team_one, player_controls_kept, hunt_frames);
+  std::printf("  arena spectator: core frames %d, frames with a player mech %d, frames off a viewed bot %d, "
+              "mechs %d, on AI %d\n",
+              core_frames, player_frames, unviewed_frames, mechs, bots_on_ai);
   EXPECT(core_frames >= 300);
-  EXPECT(on_ai && team_one && player_controls_kept);
-  EXPECT(hunt_frames > 0);
+  EXPECT(player_frames == 0);
+  EXPECT(unviewed_frames == 0);
+  EXPECT(mechs == 2 && bots_on_ai == 2);
+  EXPECT(mech3::arena::arena_viewed_mech() == nullptr);  // cleared with the match
   EXPECT(!mech3::arena::arena_hunt_net_held());  // the mission's end freed it
   zrdr::close_archives(true);
   mech3::reset_states();
@@ -18780,14 +18783,14 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
     mech3::MultiplayerGame game(nullptr);
     game.x70 = 1 << 30;
     game.b8c = 0;
-    game.slot.mech = setup.sides[0].front().mech;
     mech3::GameEngine::Launch l;
+    l.spectator = true;  // the host's seat has no mech (#287 step 3b)
     // The setup's world, as mw3 --arena finds it (mw3_main.cpp: the dir among mission_dir).
     l.index = -1;
     for (int32_t i = 0; i < 9; ++i)
       if (setup.dir == mech3::mission_dir(i)) l.index = i;
     EXPECT(l.index >= 0);
-    l.number = setup.number, l.type = 3, l.multi = &game, l.mech = game.slot.mech;
+    l.number = setup.number, l.type = 3, l.multi = &game;
     engine.set_launch(l);
     mech3::program_net_debug_lobby();
     app.post_intro_ = &mech3::states().load;
@@ -18862,13 +18865,13 @@ TEST(arena_bot_params_match_the_preset_headless) {
       if (live->team() != entry.side + 1 || live->get<int32_t>(0x3c) != 1 || live->get<int32_t>(0x88) != 1 ||
           live->get<int32_t>(0x8c) != 0 || (live->raw[0xcd] & 3) != 0)
         ++wrong_side;
-      if (entry.id != 0 && arena_counts::is_bot(entry.mech)) ++bots_marked;
+      if (arena_counts::is_bot(entry.mech)) ++bots_marked;
     }
   });
   std::printf("  arena params: mechs %d, mismatched bytes %d, wrong overrides %d, bots marked %d\n", mechs_seen,
               mismatched, wrong_side, bots_marked);
   EXPECT(run.setup_read && run.core_frames >= 1);
-  EXPECT(mechs_seen == 4 && mismatched == 0 && wrong_side == 0 && bots_marked == 3);
+  EXPECT(mechs_seen == 4 && mismatched == 0 && wrong_side == 0 && bots_marked == 4);
 }
 
 // #287: a 1v1 on c1mp1 for up to three minutes of game time: the two bots
@@ -18961,6 +18964,40 @@ TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {
     }
   }
   EXPECT(own_side_targets == 0);
+}
+
+// #287 step 3b (Q5): with no player in the arena, each AMS judges hostile by
+// its own mech's side. A 1v1 on c1mp1, both bots' AMS switched on at frame
+// 30; LRM10 salvos fired from 400 m at both, tagged as side B's shots
+// (hostile to side A, as a side B mech's fire is tagged). Side A's AMS
+// engages them (rounds spent); side B's leaves its own side's missiles be.
+// The stock rule (the player's team) is mission_c1m1_ams_shoots_down_incoming_missiles_headless.
+TEST(arena_ams_engages_the_enemy_side_missiles_headless) {
+  if (!have_game()) return;
+  const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
+                           arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
+  int32_t fitted[2] = {}, before[2] = {}, after[2] = {};
+  int fired = 0;
+  const auto run = arena_headless_run(json, 600, [&](int frame) {
+    const auto& mechs = mech3::arena::arena_mechs();
+    if (mechs.size() != 2) return;
+    bool on = false;
+    for (int side = 0; side < 2; ++side) {
+      void* mech = mechs[static_cast<size_t>(side)].mech;
+      if (frame == 30) {
+        mech3::program_mech_ams_set(mech, true);
+        mech3::program_mech_ams(mech, &fitted[side], &on, &before[side]);
+      }
+      if (frame >= 40 && frame <= 400 && frame % 60 == 40) fired += mech3::program_fire_at(mech, "LRM10", 5, 400.0f);
+      if (frame == 600) mech3::program_mech_ams(mech, &fitted[side], &on, &after[side]);
+    }
+  });
+  std::printf("  arena AMS: %d missiles fired, side A rounds %d -> %d, side B rounds %d -> %d\n", fired, before[0],
+              after[0], before[1], after[1]);
+  EXPECT(run.setup_read && run.core_frames >= 600);
+  EXPECT(fired == 70);
+  EXPECT(after[0] < before[0]);   // side A's AMS shot side B's missiles down
+  EXPECT(after[1] == before[1]);  // side B's never fired on its own side's
 }
 
 // #287 criterion 10: a state line's pose fields read back from the log equal

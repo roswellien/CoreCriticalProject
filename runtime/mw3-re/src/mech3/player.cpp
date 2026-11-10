@@ -13,6 +13,8 @@
 // The mission start's vehicles and the player's tick; docs/mission-start.md.
 namespace mech3 {
 
+bool launch_spectator();  // ours (#287): mech3/mission_launch.h
+
 namespace {
 
 // What a front end leaves unwired: the silent reads give nothing.
@@ -555,7 +557,9 @@ void player_tick() {
   PlayerState& s = g_state;
   s.dt = h.frame_dt();
   s.inv_dt = !(s.dt < 0 || s.dt > 0) ? 10000.0f : 1.0f / s.dt;
-  h.vehicle_update(h.pilot_vehicle(), s.dt);
+  // Ours (#287): a spectator (the arena's seat) has no vehicle to update.
+  const bool has_vehicle = !launch_spectator();
+  if (has_vehicle) h.vehicle_update(h.pilot_vehicle(), s.dt);
   const Handle st = h.stealth();
   if (h.view_target(h.view()) == st) h.stealth_update(st, s.dt);
   h.clear_6099c0();
@@ -563,7 +567,7 @@ void player_tick() {
   h.tick_41e3f0(s.dt);
   const int32_t type = h.game_type();
   if (type == 2 || type == 3) h.tick_537f20(s.x5e8118);
-  h.vehicle_41aba0(h.pilot_vehicle(), s.dt);
+  if (has_vehicle) h.vehicle_41aba0(h.pilot_vehicle(), s.dt);
   h.view_tick(h.view(), s.dt);
 }
 

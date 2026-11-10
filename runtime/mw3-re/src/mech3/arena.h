@@ -17,7 +17,7 @@ struct Mech;
 
 namespace mech3::arena {
 
-// Room for every spawn spot: the host plus 15 bots fill 16.
+// Room for every spawn spot: 16 bots fill 16 (the host's seat has no mech).
 constexpr uint32_t kArenaPlayers = 16;
 
 // zNetwork up on a new endpoint of `hub`, and a session hosted on it as
@@ -36,9 +36,19 @@ const Setup* arena_setup();
 void set_arena_log(std::FILE* file, int64_t seed, int32_t frame_ms);
 
 // At the first Core frame (app_states, after nav_prebuild): with a match
-// set, the host's mech handed to the AI as side A's first bot, then every
-// other bot made in its spawn spot. Nothing without one.
+// set, every bot made in its spawn spot (the host is a spectator with no
+// mech: launch_spectator), then the view put on the first. Nothing without one.
 void arena_start();
+
+// The spectator's view (#287 step 3b, a minimal follow camera): the godseye
+// camera on one standing bot. When it falls the view moves to the next
+// standing bot in setup order; arena_view_next (the camera-cycle key in a
+// match) moves it on by hand. world().player and weapon_world().player
+// follow the viewed bot for the HUD only; world().mission_player stays null
+// so no player-only rule runs for anyone. The viewed bot, null without one.
+Mech* arena_viewed_mech();
+// The next standing bot after the viewed one; false outside a match.
+bool arena_view_next();
 
 // Each Core frame (CoreState::update), with a match set and started: the
 // match end. One side with no mech standing (Mech::active) loses, both at
@@ -63,9 +73,6 @@ float arena_match_time();
 // ("winner draw" for a draw).
 std::string arena_result_line(const Result& result);
 
-// The spot the host's mech spawns at (a lone host is player 1, remote_1).
-constexpr int kHostSpot = 1;
-
 // The match's seed (--seed), which picks where the sides start. Set with the
 // setup; 0 until then.
 void set_arena_seed(int64_t seed);
@@ -73,8 +80,7 @@ void set_arena_seed(int64_t seed);
 // How many of the map's most separated spot pairs the seed chooses among.
 constexpr int kAnchorChoices = 3;
 
-// Each bot's spawn spot, in setup order (side A then side B; side A's first
-// is the host's mech, moved there at the first Core frame). The two sides
+// Each bot's spawn spot, in setup order (side A then side B). The two sides
 // start at opposite ends: every pair of spots ranked by distance apart, the
 // seed picks one of the kAnchorChoices farthest pairs (seed % 3) and which
 // end is side A's ((seed / 3) % 2). Each side then takes the free spots
@@ -100,26 +106,11 @@ struct ArenaMech {
   int side = 0;  // 0 side A, 1 side B
   int spot = 0;  // its remote_ spawn spot
 };
-// The match's mechs, the host's first; empty outside a match.
+// The match's mechs in setup order; empty outside a match.
 const std::vector<ArenaMech>& arena_mechs();
 // The AI params a mech's brain runs on; null when it is not on AI controls.
 const ai::AiParams* arena_brain_params(const Mech* mech);
 
-// The host's mech (the mission player's) on AI controls over the hunt net,
-// with `bot`'s preset params, on team 1. Its PlayerControls stay with
-// player_controls_instance(), which the mission end frees as before. False
-// when there is no host mech, no preset or no spawn spots.
-bool arena_hand_host_to_ai(const Bot& bot);
-
-// The host's mech as the tests (and later the match log) see it: on AI
-// controls with a brain, its team, and whether any of its orders is running
-// the hunt.
-struct HostState {
-  bool on_ai = false;
-  uint32_t team_mask = 0;  // AiTarget::team: one bit per team, team 1 is 1 << 1
-  bool hunting = false;
-};
-HostState arena_host_state();
 // Whether the hunt net is still made (the mission's end frees it).
 bool arena_hunt_net_held();
 
