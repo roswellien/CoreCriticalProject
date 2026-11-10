@@ -1,7 +1,7 @@
 // Included in the host adapter. All source hierarchy access is read-only.
 template<class Reader> static mw34::donor::Rig override_read_donor(Reader&bytes){
  using namespace mw34::donor;Rig rig;unsigned bones,refs,flags;bytes(&bones,4);bytes(&refs,4);bytes(&flags,4);
- if(!bones||bones>256||!refs||refs>128||flags>1)throw std::runtime_error("Visual retarget: invalid rig counts/flags");rig.ground_reference=flags!=0;
+ if(!bones||bones>256||!refs||refs>128||flags>3)throw std::runtime_error("Visual retarget: invalid rig counts/flags");rig.ground_reference=flags==1;rig.source_joint_pose=flags>=2;rig.authored_arm_rest=flags==3;
  bytes(&rig.hip_drop,8);bytes(rig.walk_x.data(),16);bytes(rig.walk_z.data(),16);
  for(double v:{rig.hip_drop,rig.walk_x[0],rig.walk_x[1],rig.walk_z[0],rig.walk_z[1]})if(!std::isfinite(v))throw std::runtime_error("Visual retarget: nonfinite gait metadata");
  if(rig.hip_drop<0||rig.hip_drop>10)throw std::runtime_error("Visual retarget: invalid hip offset");
@@ -13,7 +13,7 @@ template<class Reader> static mw34::donor::Rig override_read_donor(Reader&bytes)
  for(const char*n:{"hip","torso","larm","rarm","lfoot","rfoot","lthigh","rthigh","lcalf","rcalf"})if(!rig.reference.count(n))throw std::runtime_error("Visual retarget: missing original reference");
  for(const char*n:{"Pelvis","Torso_Twist","Upperarm_Left","Upperarm_Right","Forearm_Left","Forearm_Right","Thigh_Left","Thigh_Right","Calf_Left","Calf_Right","Foot0_Left","Foot0_Right"})if(!names.count(n))throw std::runtime_error("Visual retarget: missing donor joint");
  for(const auto&b:rig.bones)if(!b.control.empty()&&!rig.reference.count(b.control))throw std::runtime_error("Visual retarget: unknown source binding");
- return rig;
+ validate_arm_rest(rig);return rig;
 }
 OverrideDonorInstance&override_donor_pose(){
  auto&o=override_state();const auto key=std::make_pair(o.scope.root,o.scope.model);auto found=o.donor_poses.find(key);if(found!=o.donor_poses.end())return found->second;
