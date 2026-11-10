@@ -18782,7 +18782,12 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
     game.b8c = 0;
     game.slot.mech = setup.sides[0].front().mech;
     mech3::GameEngine::Launch l;
-    l.index = 0, l.number = setup.number, l.type = 3, l.multi = &game, l.mech = game.slot.mech;
+    // The setup's world, as mw3 --arena finds it (mw3_main.cpp: the dir among mission_dir).
+    l.index = -1;
+    for (int32_t i = 0; i < 9; ++i)
+      if (setup.dir == mech3::mission_dir(i)) l.index = i;
+    EXPECT(l.index >= 0);
+    l.number = setup.number, l.type = 3, l.multi = &game, l.mech = game.slot.mech;
     engine.set_launch(l);
     mech3::program_net_debug_lobby();
     app.post_intro_ = &mech3::states().load;
