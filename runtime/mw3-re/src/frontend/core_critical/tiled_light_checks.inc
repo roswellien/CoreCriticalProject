@@ -146,6 +146,8 @@ void check_fixture_depth_reuse(bool tracked, bool audit) {
   config.fixture_shadows = true;
   config.fixture_atlas_tracked = tracked;
   config.fixture_atlas_audit = audit;
+  if (const char *validation = std::getenv("MW34_VK_VALIDATION"))
+    config.vk_validation = std::strcmp(validation, "1") == 0;
   config.effect_light_catalog = "diagnostic-owned-scene";
   vkscene::Renderer renderer(vkscene::Renderer::ColorTarget::rgba8, {},
                             vkscene::Renderer::Quality{1, 1, 1, false}, true,
