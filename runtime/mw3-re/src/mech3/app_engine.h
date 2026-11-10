@@ -89,6 +89,7 @@ class GameEngine : public Engine {
  public:
   void nav_prebuild() override;  // ours (W58, app_mission.cpp)
   void arena_start() override;   // ours (#287, app_mission.cpp -> mech3/arena)
+  void arena_tick() override;    // ours (#287, app_mission.cpp -> mech3/arena)
   // A mission started from the command line (our addition, docs/program.md):
   // the pilot's game answers these, and the load goes on to the Core state.
   struct Launch {

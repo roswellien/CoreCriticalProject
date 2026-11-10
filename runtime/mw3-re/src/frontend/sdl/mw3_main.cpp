@@ -484,7 +484,8 @@ bool parse(int argc, char** argv, Args& a) {
   }
   // --arena (ours, #287): the options it refuses, then the setup file, each
   // refusal exit 2 before anything starts. The setup's map becomes the
-  // mission, so the start takes the headless path (player_start).
+  // mission, so the start takes the headless path (player_start), and the
+  // sound is off as with --nosound.
   if (!a.arena_path.empty()) {
     mech3::arena::Flags f;
     f.host = a.net_host, f.join = !a.net_join.empty(), f.net_upnp = !a.net_upnp.empty();
@@ -501,6 +502,7 @@ bool parse(int argc, char** argv, Args& a) {
       return false;
     }
     a.mission = a.arena.map;
+    a.nosound = true;  // a match runs unattended: the silent stand-in, never the speakers
   }
   // --lab-mech alone (ours): the lab is reached from c1m2's briefing (MECHLAB,
   // which Op 1 Mission 1 greys), so it takes that route and clicks MECHLAB.
@@ -1297,9 +1299,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         if (l_type3 && app.current() == &mech3::states().core && !net_core) {
           net_core = true;
           s_drive_from = SDL_GetTicks() / 1000.0;
-          // --arena's clock is the setup's minutes (ours, #287; --net-minutes is refused with it).
+          // --arena's clock is the setup's minutes (ours, #287; --net-minutes is refused with it),
+          // plus 10 s: the stock end starts 3 s before its clock runs out, and
+          // the arena's own end (arena_tick) must count the result first.
           const int clock_minutes = a.arena_path.empty() ? a.net_minutes : a.arena.minutes;
-          if (clock_minutes > 0) mech3::missions().clock = clock_minutes * 60.0f, mech3::missions().clock_down = 1;
+          const float arena_margin = a.arena_path.empty() ? 0.0f : 10.0f;
+          if (clock_minutes > 0)
+            mech3::missions().clock = clock_minutes * 60.0f + arena_margin, mech3::missions().clock_down = 1;
         }
         // --net-drive: a kill staged on the pilot every two minutes, from a
         // minute in, staggered by the seed (the scores' traffic, the respawn).
@@ -1328,6 +1334,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
             net_over = launch_done = true;
             std::printf("mw3: soak game over, scores %s\n", mech3::program_net_scores().c_str());
           }
+        }
+        // --arena (ours, #287): the run ends once the match is decided and its
+        // fade has left the mission, as the soak test's does.
+        if (!a.arena_path.empty() && net_core && !net_over && mech3::arena::arena_result().decided) {
+          const zgame::State* st = app.current();
+          if (st != &mech3::states().core && st != &mech3::states().fade && st != &mech3::states().pause)
+            net_over = launch_done = true;
         }
         // --verbose (ours): each state the app moves to, by name, as the menus' driver prints them.
         static const zgame::State* launch_state = nullptr;

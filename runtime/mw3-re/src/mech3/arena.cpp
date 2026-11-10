@@ -21,6 +21,10 @@ const Setup* g_setup = nullptr;
 std::vector<ArenaMech> g_mechs;
 // The bots' names, kept for the match: a mech may hold its name's pointer.
 std::deque<std::string> g_names;
+// The match's clock and result: started at the first Core frame.
+bool g_started = false;
+float g_start_time = 0;
+Result g_result;
 
 // The map's 16 spawn spots (remote_0 .. remote_15): their places and yaws.
 // False when the map lacks one (the setup check refuses such maps, so only a
@@ -88,6 +92,58 @@ void set_arena_setup(const Setup* setup) {
   g_setup = setup;
   g_mechs.clear();
   g_names.clear();
+  g_started = false;
+  // The last match's result stays readable after it is cleared; a new one starts blank.
+  if (setup) g_result = Result{};
+}
+
+const Result& arena_result() { return g_result; }
+
+// Ours (#287)
+std::string arena_result_line(const Result& result) {
+  const char* winner = result.winner == 0 ? "A" : result.winner == 1 ? "B" : "draw";
+  const int whole_seconds = static_cast<int>(result.time);
+  char line[96];
+  std::snprintf(line, sizeof line, "arena: winner %s, time %d:%02d, lost A %d B %d", winner, whole_seconds / 60,
+                whole_seconds % 60, result.lost[0], result.lost[1]);
+  return line;
+}
+
+// Ours (#287)
+void arena_tick() {
+  if (!g_setup || !g_started || g_result.decided || g_mechs.empty()) return;
+  int standing[kSides] = {};
+  int lost[kSides] = {};
+  for (const ArenaMech& entry : g_mechs) {
+    if (entry.mech->active) ++standing[entry.side];
+    else ++lost[entry.side];
+  }
+  const float match_time = world().time - g_start_time;
+  const bool out_of_time = match_time >= static_cast<float>(g_setup->minutes) * 60.0f;
+  const bool side_wiped_out = standing[0] == 0 || standing[1] == 0;
+  if (!side_wiped_out && !out_of_time) return;
+
+  g_result.decided = true;
+  g_result.time = match_time;
+  g_result.lost[0] = lost[0];
+  g_result.lost[1] = lost[1];
+  // Elimination and the time limit both come down to who has more standing:
+  // a wiped-out side has none.
+  if (standing[0] > standing[1]) g_result.winner = 0;
+  else if (standing[1] > standing[0]) g_result.winner = 1;
+  else g_result.winner = -1;
+  std::printf("%s\n", arena_result_line(g_result).c_str());
+  std::fflush(stdout);
+
+  // The stock end (net_mech_tick) would end the match again when its clock
+  // runs out: marked ended already, with its exit time never reached.
+  const NetCalls& calls = net_calls();
+  if (NetGameFields* game = calls.game ? calls.game() : nullptr) {
+    if (game->end_state) *game->end_state = 3;
+    if (game->end_time) *game->end_time = 3.4e38f;
+  }
+  if (calls.game_over) calls.game_over();
+  else net_game_over();
 }
 const Setup* arena_setup() { return g_setup; }
 
@@ -176,8 +232,11 @@ void arena_start() {
   // What a run before this one in the same process left behind.
   g_mechs.clear();
   g_names.clear();
+  g_result = Result{};
+  g_started = false;
   ai::nav_frame_reset();
   if (!g_setup || g_setup->sides[0].empty()) return;
+  g_start_time = world().time;
 
   float pos[kSpawnSpots][3], yaw[kSpawnSpots];
   if (!read_spawn_spots(pos, yaw)) {
@@ -222,6 +281,7 @@ void arena_start() {
       g_mechs.push_back(entry);
     }
   }
+  g_started = true;
 }
 
 }  // namespace mech3::arena

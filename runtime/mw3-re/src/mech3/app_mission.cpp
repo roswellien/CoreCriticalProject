@@ -2844,6 +2844,7 @@ void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* re
 }
 
 void GameEngine::arena_start() { arena::arena_start(); }
+void GameEngine::arena_tick() { arena::arena_tick(); }
 
 // Ours (W58, docs/lancemate-pathing.md): as play starts, the 3 x 3 tiles
 // round the player built when a pilot uses the grid (the lance starts by him).

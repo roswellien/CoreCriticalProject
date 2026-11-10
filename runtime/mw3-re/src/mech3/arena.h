@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "gamez/znetwork/znet_session.h"
@@ -35,6 +36,26 @@ const Setup* arena_setup();
 // other bot made in its spawn spot. Nothing without one.
 void arena_start();
 
+// Each Core frame (CoreState::update), with a match set and started: the
+// match end. One side with no mech standing (Mech::active) loses, both at
+// once is a draw; at the setup's time limit the side with more standing wins,
+// equal is a draw, counted at that frame. Once decided: the result line on
+// stdout, the stock end marked done so its clock can't end the match again,
+// and net_game_over's fade to the exit, once.
+void arena_tick();
+
+// How a match ended; `decided` false while it runs.
+struct Result {
+  bool decided = false;
+  int winner = -1;  // 0 side A, 1 side B, -1 a draw
+  float time = 0;   // seconds of game time from the first Core frame
+  int lost[2] = {};  // mechs destroyed per side
+};
+const Result& arena_result();
+// The result line, as printed: "arena: winner A, time 1:22, lost A 0 B 1"
+// ("winner draw" for a draw).
+std::string arena_result_line(const Result& result);
+
 // The spot the host's mech spawns at (a lone host is player 1, remote_1).
 constexpr int kHostSpot = 1;
 
@@ -46,8 +67,9 @@ std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a
 
 // A bot's AI params: the preset's, placed at `pos` facing `yaw` (the spawn
 // spot's), on team side + 1, with the chassis' first loadout (+0xbc = 0),
-// engaging on (+0x3c = 1) and waking on any enemy, not only the player's
-// lance (+0x88 = 0, +0x8c = 0; zai_brain.cpp's wake-up check).
+// engaging on (+0x3c = 1), always awake (+0x88 = 1: a stock pilot sleeps,
+// frozen, while its nearest enemy is past its sight range) and on any enemy,
+// not only the player (+0x8c = 0; zai_brain.cpp's wake-up check).
 void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, ai::AiParams* params);
 
 // One mech in the match. `id` is its index in setup order, the id the match

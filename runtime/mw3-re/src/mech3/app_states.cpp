@@ -436,6 +436,7 @@ bool CoreState::frame() {
 bool CoreState::update() {
   Engine& en = e();
   if (frame()) a().push(a().state(3), 0);
+  en.arena_tick();  // ours (#287): an arena match's end, after the frame's play
   if (en.vmode() != globals().last_vmode) {
     pick_renderer();
     globals().last_vmode = en.vmode();
