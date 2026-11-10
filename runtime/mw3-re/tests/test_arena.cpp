@@ -415,11 +415,13 @@ TEST(arena_bot_params_change_only_the_arena_fields) {
   EXPECT(params.team() == 2);
   EXPECT(params.get<int32_t>(0xbc) == 0 && params.get<int32_t>(0x3c) == 1);
   EXPECT(params.get<int32_t>(0x88) == 1 && params.get<int32_t>(0x8c) == 0);
+  // Never a lancemate: +0xcd's low two bits off, its other bits kept.
+  EXPECT((params.raw[0xcd] & 3) == 0 && (params.raw[0xcd] & ~3) == (bot.params[0xcd] & ~3));
   const auto changed = [](int off) {
     const int fields[] = {0x08, 0x0c, 0x10, 0x14, 0x18, 0x3c, 0x88, 0x8c, 0xbc};
     for (int field : fields)
       if (off >= field && off < field + 4) return true;
-    return false;
+    return off == 0xcd;
   };
   int other_bytes_differ = 0;
   for (int off = mech3::ai::AiParams::kBegin; off < mech3::ai::AiParams::kEnd; ++off)

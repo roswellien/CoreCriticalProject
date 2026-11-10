@@ -193,6 +193,11 @@ void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, a
   // hunt is what brings a bot within sight, so it must run from the first frame.
   params->put<int32_t>(0x88, 1);
   params->put<int32_t>(0x8c, 0);  // any enemy, not only the player
+  // Never the player's lancemate: +0xcd bit 0 makes a pilot one, bit 1 makes
+  // it one while it is the player's ally (sensors.cpp, AiTarget +0xbc bit 4).
+  // Side A shares the host mech's team, so a preset with bit 1 would have its
+  // bots fall in behind the host (the stock follow) instead of hunting.
+  params->raw[0xcd] = static_cast<uint8_t>(params->raw[0xcd] & ~0x3u);
 }
 
 // Ours (#287)

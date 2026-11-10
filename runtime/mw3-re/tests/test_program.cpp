@@ -18854,7 +18854,7 @@ TEST(arena_bot_params_match_the_preset_headless) {
           ++mismatched;
         }
       if (live->team() != entry.side + 1 || live->get<int32_t>(0x3c) != 1 || live->get<int32_t>(0x88) != 1 ||
-          live->get<int32_t>(0x8c) != 0)
+          live->get<int32_t>(0x8c) != 0 || (live->raw[0xcd] & 3) != 0)
         ++wrong_side;
       if (entry.id != 0 && arena_counts::is_bot(entry.mech)) ++bots_marked;
     }

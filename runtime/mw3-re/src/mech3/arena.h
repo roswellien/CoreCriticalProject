@@ -76,7 +76,9 @@ std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a
 // spot's), on team side + 1, with the chassis' first loadout (+0xbc = 0),
 // engaging on (+0x3c = 1), always awake (+0x88 = 1: a stock pilot sleeps,
 // frozen, while its nearest enemy is past its sight range) and on any enemy,
-// not only the player (+0x8c = 0; zai_brain.cpp's wake-up check).
+// not only the player (+0x8c = 0; zai_brain.cpp's wake-up check), and never
+// the player's lancemate (+0xcd bits 0 and 1 off: side A shares the host
+// mech's team, and a lancemate follows the player instead of hunting).
 void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, ai::AiParams* params);
 
 // One mech in the match. `id` is its index in setup order, the id the match
