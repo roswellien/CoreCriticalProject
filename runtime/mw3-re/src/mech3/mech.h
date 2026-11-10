@@ -379,6 +379,9 @@ struct World {
   // where the stock rules run unchanged.
   uint32_t arena_side_a_team = 0;
   uint32_t arena_side_a_enemies = 0;
+  // Ours (#287): an arena match is running with a spectator, not a player, so
+  // w.player is only the bot the view follows. Set by arena_start.
+  bool arena_spectating = false;
 };
 World& world();
 

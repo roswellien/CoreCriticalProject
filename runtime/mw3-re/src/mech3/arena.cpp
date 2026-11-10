@@ -123,6 +123,7 @@ void set_arena_setup(const Setup* setup) {
   g_setup = setup;
   lod_calls().same_detail_for_all = false;  // stock until a match starts
   world().arena_side_a_team = 0, world().arena_side_a_enemies = 0;  // the AMS's stock rule
+  world().arena_spectating = false;
   view_clear();
   g_mechs.clear();
   g_names.clear();
@@ -249,7 +250,9 @@ void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, a
 }
 
 // Ours (#287)
-Mech* arena_viewed_mech() { return g_viewed >= 0 ? g_mechs[static_cast<size_t>(g_viewed)].mech : nullptr; }
+Mech* arena_viewed_mech() {
+  return g_viewed >= 0 ? g_mechs[static_cast<size_t>(g_viewed)].mech : nullptr;
+}
 
 // Ours (#287)
 bool arena_view_next() {
@@ -275,6 +278,7 @@ void arena_start() {
   // What a run before this one in the same process left behind.
   view_clear();
   world().arena_side_a_team = 0, world().arena_side_a_enemies = 0;
+  world().arena_spectating = !world().mission_player;
   g_mechs.clear();
   g_names.clear();
   g_result = Result{};

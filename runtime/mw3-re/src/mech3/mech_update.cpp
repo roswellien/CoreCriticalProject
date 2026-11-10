@@ -66,7 +66,9 @@ void Mech::update(float dt) {
     if (g_calls.add_dead) g_calls.add_dead(*this);
     return;
   }
-  const bool viewed = this == w.player;
+  // Ours (#287): an arena spectator's view key changes only the camera, never
+  // the watched bot's controls or torso.
+  const bool viewed = this == w.player && !arena_bot;
   if (viewed && g_calls.key && (g_calls.key(kViewKey) == 1 || (g_calls.key(kViewKey) & 4))) {
     const int mode = controls->view == 2 ? 3 : controls->view == 3 ? 2 : 0;
     if (mode) {

@@ -134,7 +134,9 @@ struct ProgramViewHooks : ViewHooks {
     if (!c || !c->data || c->cls() != 1) return;
     const uint8_t* list = static_cast<zcls::Camera*>(c->data)->raw + 0x1e4;
     std::memcpy(zmod::zones().list, list, 4);
-    if (target) {
+    // Ours (#287): an arena spectator's camera leaves the watched bot's zones
+    // as the bot's own, like every other bot's.
+    if (target && !world().arena_spectating) {
       std::memcpy(&target->x64, list, 4);
       zcls::node_set_zone(zn(target->node), list[1]);
     }

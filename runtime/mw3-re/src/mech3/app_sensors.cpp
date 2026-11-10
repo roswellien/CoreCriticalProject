@@ -257,7 +257,7 @@ struct ProgramSensors : ai::SensorHooks {
     // pairs the view's vehicle with everyone like the player (each other
     // vehicle keeps a contact on it at any range), so none in a match.
     const World& w = world();
-    if (!w.mission_player && w.arena_side_a_team != 0) return 0;
+    if (w.arena_spectating) return 0;
     const uint32_t v = g_w.view ? g_w.view(g_w.engine) : 0;
     return v ? g_w.peek32(g_w.engine, v + 0x64) : 0;
   }
