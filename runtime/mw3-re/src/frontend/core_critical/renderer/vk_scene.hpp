@@ -284,6 +284,8 @@ public:
   }
   std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{},
       combined_draws{};
+  std::uint64_t fixture_shadow_builds() const { return fixtureAtlasBuilds; }
+  std::uint64_t fixture_shadow_hits() const { return fixtureAtlasHits; }
   ~Renderer() { shutdown(); }
   // Presents a 16-bit RGB565 frame (rows of `pitch` bytes) to the window. False
   // when this device cannot present to the window (no surface/swapchain

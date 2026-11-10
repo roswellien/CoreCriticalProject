@@ -120,6 +120,8 @@ void check_tiled_view_render() {
           "Tiled light leaked into translated secondary camera");
   const auto expected = on.color;
   std::swap(on.draws[0], on.draws[1]);
+  std::fill(on.color.begin(), on.color.end(), 0);
+  std::fill(on.depth.begin(), on.depth.end(), 0);
   renderer.render(on);
   require(on.color == expected, "Tiled fragment view offset changed with draw order");
   auto near = make_tiled_view_scene(true, true);
@@ -132,6 +134,132 @@ void check_tiled_view_render() {
   require(reused.color == expected,
           "Tiled asynchronous view buffers were reused before fence or retained stale lights");
 }
+void check_fixture_depth_reuse(bool tracked, bool audit) {
+  using namespace mw34;
+  sun::Settings settings{};
+  settings.enabled = true;
+  settings.strength = 0;
+  settings.ambient = .1f;
+  cc_mw3_re::RendererBridgeConfig config{};
+  config.effect_lights = true;
+  config.fixture_lights = true;
+  config.fixture_shadows = true;
+  config.fixture_atlas_tracked = tracked;
+  config.fixture_atlas_audit = audit;
+  config.effect_light_catalog = "diagnostic-owned-scene";
+  vkscene::Renderer renderer(vkscene::Renderer::ColorTarget::rgba8, {},
+                            vkscene::Renderer::Quality{1, 1, 1, false}, true,
+                            settings, false, config);
+  const auto frame = [&](vkscene::Scene &scene) {
+    // Readback quantizes depth to 16 bits. Start each independent frame with
+    // fresh target buffers rather than depth-testing against the last capture.
+    std::fill(scene.color.begin(), scene.color.end(), 0);
+    std::fill(scene.depth.begin(), scene.depth.end(), 0);
+    renderer.render(scene);
+  };
+
+  auto base = make_tiled_view_scene(true);
+  base.draws.resize(1);
+  base.order.resize(1);
+  base.draws[0].shadow_source = 11;
+  base.draws[0].shadow_revision = 1;
+  base.shadow_revisions = {{11, 1}};
+  base.effect_lights.lights[0].start = {-3, 0, 0, 8};
+  base.effect_lights.lights[0].end = {-3, 0, 0, 0};
+  base.world_generation = base.world_context = base.world_frame = 1;
+  frame(base);
+  constexpr unsigned sample = 16 * 64 + 16;
+  const auto baseline_pixel = base.color[sample];
+
+  auto combined = base;
+  const platform::TLVertex occluder_vertices[] = {
+      {-16, 8, 1, 1, 0xffffffff, 0xff000000, 0, 0},
+      {0, 8, 1, 1, 0xffffffff, 0xff000000, 1, 0},
+      {0, 24, 1, 1, 0xffffffff, 0xff000000, 1, 1},
+      {-16, 8, 1, 1, 0xffffffff, 0xff000000, 0, 0},
+      {0, 24, 1, 1, 0xffffffff, 0xff000000, 1, 1},
+      {-16, 24, 1, 1, 0xffffffff, 0xff000000, 0, 1}};
+  const auto offset = combined.vertices.size();
+  combined.vertices.resize(offset + sizeof(occluder_vertices));
+  std::memcpy(combined.vertices.data() + offset, occluder_vertices,
+              sizeof(occluder_vertices));
+  auto occluder = combined.draws[0];
+  occluder.first = unsigned(offset / sizeof(platform::TLVertex));
+  occluder.count = 6;
+  occluder.shadow_source = 22;
+  occluder.shadow_revision = 1;
+  combined.draws.push_back(occluder);
+  combined.shadow_revisions.push_back({22, 1});
+  combined.order = {{false, 1}, {false, 0}};
+  combined.world_frame = 2;
+  frame(combined);
+  const auto shadow_pixel = combined.color[sample];
+
+  require(shadow_pixel != baseline_pixel,
+          "Fixture shadow did not change receiver pixel");
+  const auto builds = renderer.fixture_shadow_builds();
+  const auto hits = renderer.fixture_shadow_hits();
+  for (unsigned i = 0; i < 500; ++i) {
+    ++combined.world_frame;
+    for (unsigned d = 0; d < 2; ++d) {
+      ++combined.draws[d].shadow_revision;
+      ++combined.shadow_revisions[d].second;
+    }
+    frame(combined);
+    require(combined.color[sample] == shadow_pixel,
+            "Repeat frame changed fixture shadow pixel");
+  }
+  require(renderer.fixture_shadow_builds() == builds &&
+              renderer.fixture_shadow_hits() == hits + 500,
+          "Unchanged fixture depth rebuilt across original frames");
+  // A persistent hit is not a new submission receipt. A later batch in this
+  // same frame must still notice changed lights and owner retirement.
+  combined.effect_lights.lights[0].start[0] = 3;
+  combined.effect_lights.lights[0].end[0] = 3;
+  frame(combined);
+  require(renderer.fixture_shadow_builds() == builds + 1 &&
+              combined.color[sample] == baseline_pixel,
+          "Same-frame light mutation after a persistent hit reused stale depth");
+  combined.effect_lights.lights[0].start[0] = -3;
+  combined.effect_lights.lights[0].end[0] = -3;
+  frame(combined);
+  require(renderer.fixture_shadow_builds() == builds + 2 &&
+              combined.color[sample] == shadow_pixel,
+          "Same-frame fixture restoration reused the wrong depth");
+  ++combined.shadow_revisions[1].second; // Tombstone, no replacement draw.
+  frame(combined);
+  require(renderer.fixture_shadow_builds() == builds + 3 &&
+              combined.color[sample] == baseline_pixel,
+          "Same-frame retirement after persistent reuse retained a shadow");
+  combined.draws[1].shadow_revision = combined.shadow_revisions[1].second;
+  frame(combined);
+  require(renderer.fixture_shadow_builds() == builds + 4 &&
+              combined.color[sample] == shadow_pixel,
+          "Replacement caster failed after same-frame retirement");
+  const auto rebuilt = renderer.fixture_shadow_builds();
+  // Generation invalidation is independent of presentation/frame changes.
+  ++combined.world_generation;
+  frame(combined);
+  require(renderer.fixture_shadow_builds() == rebuilt + 1 &&
+              combined.color[sample] == shadow_pixel,
+          "New generation reused old fixture depth or changed valid occlusion");
+  base.world_generation = combined.world_generation;
+  base.shadow_revisions[0].second = combined.shadow_revisions[0].second;
+  base.draws[0].shadow_revision = combined.draws[0].shadow_revision;
+  base.world_frame = combined.world_frame + 1;
+  frame(base);
+  require(base.color[sample] == baseline_pixel,
+          "Stale fixture shadow after receiver-only frame");
+  require(renderer.fixture_shadow_builds() == rebuilt + 2,
+          "Caster removal failed to rebuild fixture depth");
+  ++base.world_frame;
+  base.effect_lights.lights[0].start[0] = -2;
+  base.effect_lights.lights[0].end[0] = -2;
+  frame(base);
+  require(renderer.fixture_shadow_builds() == rebuilt + 3,
+          "Moving fixture reused old depth");
+}
+
 void check_tiled_gpu() {
   using namespace mw34;
   {
@@ -290,4 +418,7 @@ void check_tiled_gpu() {
   std::fprintf(stderr, "Tiled light GPU: exact masks, 64-light ordering, isolated views, maximum "
                        "extent and rejection recovery passed\n");
   check_tiled_view_render();
+  for (const auto mode : {std::pair{false, false}, std::pair{true, false},
+                          std::pair{true, true}})
+    check_fixture_depth_reuse(mode.first, mode.second);
 }

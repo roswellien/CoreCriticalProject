@@ -600,6 +600,8 @@ void drop_fixture_shadow() {
   fixtureAtlasRecorded = false;
   fixtureAtlasIdentity.clear();
   fixtureAtlasNext.clear();
+  fixtureAtlasPersistentIdentity.clear();
+  fixtureAtlasPersistentNext.clear();
   fixtureCasters.clear();
   fixtureFrameCasters.clear();
   if (fixtureShadowPipeline)
