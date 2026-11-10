@@ -2,6 +2,7 @@
 // game-free; reading the map's spawn spots and the presets needs the
 // player's game files and skips itself without them.
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -13,9 +14,13 @@
 #include "check.h"
 #include "gamez/znetwork/znet_session.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/app_mech.h"
 #include "mech3/arena.h"
+#include "mech3/arena_log.h"
 #include "mech3/arena_setup.h"
 #include "mech3/mech.h"
+#include "mech3/mech_anim.h"
+#include "mech3/mech_parts.h"
 #include "mech3/mech_names.h"
 #include "mech3/mech_net.h"
 #include "mech3/weapon.h"
@@ -95,6 +100,35 @@ void end() {
 }
 int shots(int side) { return g_shots[side]; }
 int hits(int side) { return g_hits[side]; }
+nlohmann::json live_pose(int id) {
+  const auto round3 = [](float value) { return std::round(static_cast<double>(value) * 1000.0) / 1000.0; };
+  nlohmann::json pose = {{"t", round3(mech3::arena::arena_match_time())}};
+  for (const auto& entry : mech3::arena::arena_mechs()) {
+    if (entry.id != id) continue;
+    const mech3::Mech& m = *entry.mech;
+    float at[3] = {};
+    mech3::program_vehicle_centre(const_cast<mech3::Mech*>(&m), at);
+    const float yaw = 2.0f * std::atan2(m.orientation[2], m.orientation[0]);
+    nlohmann::json arms = nlohmann::json::array();
+    for (int side = 0; side < 2; ++side)
+      arms.push_back(m.arms[side] ? nlohmann::json{{"yaw", round3(m.arms[side]->aim_yaw)},
+                                                   {"pitch", round3(m.arms[side]->aim_pitch)}}
+                                  : nlohmann::json(nullptr));
+    const mech3::MechAnim* anim = m.anims[m.anim_index];
+    pose["mech"] = {
+        {"pos", {round3(at[0]), round3(at[1]), round3(at[2])}},
+        {"heading", round3(yaw)},
+        {"torso", {{"twist", round3(m.torso->yaw)}, {"pitch", round3(m.torso->pitch)}}},
+        {"arms", arms},
+        {"anim", {{"index", m.anim_index}, {"t", round3(anim ? anim->t : 0.0f)}}},
+        {"jumping", m.airborne()},
+        {"fallen", m.anim_state == 12 || m.anim_state == 13},
+        {"heat", round3(m.heat)},
+    };
+  }
+  return pose;
+}
+
 bool standing(const mech3::Mech* mech) { return mech->active; }
 bool is_bot(const mech3::Mech* mech) { return mech->arena_bot; }
 }  // namespace arena_counts
@@ -346,6 +380,29 @@ TEST(arena_spawn_spots_by_distance) {
 
 // A bot's params are the preset's but for its place, team, loadout and the
 // three switches the arena sets (criterion 11's other half, game-free).
+// #287 criterion 12: a log with no end line reads as incomplete; a line that
+// does not parse is counted and skipped; a field the reader does not know is
+// kept in its record.
+TEST(arena_log_reader_reports_incomplete_logs) {
+  const std::string path = temp_dir("arena_log_reader") + "/match-1.jsonl";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << R"({"type":"start","map":"c1mp1"})" << "\n";
+    out << "{not json\n";
+    out << R"({"type":"state","t":0.1,"mechs":[],"future_field":7})" << "\n";
+  }
+  LogRead read = read_arena_log(path);
+  EXPECT(read.opened && read.records.size() == 2 && read.bad_lines == 1 && !read.complete);
+  EXPECT(read.records.size() == 2 && read.records[1].value("future_field", 0) == 7);
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    out << R"({"type":"end","winner":"A","t":82.1,"lost":[0,1]})" << "\n";
+  }
+  read = read_arena_log(path);
+  EXPECT(read.complete && read.records.size() == 3);
+  EXPECT(!read_arena_log(path + ".missing").opened);
+}
+
 TEST(arena_bot_params_change_only_the_arena_fields) {
   Bot bot;
   for (size_t i = 0; i < bot.params.size(); ++i) bot.params[i] = static_cast<uint8_t>(i * 7 + 1);

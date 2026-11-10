@@ -986,6 +986,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     mech3::arena::set_arena_setup(&a.arena);  // the first Core frame hands the host's mech to the AI
+    mech3::arena::set_arena_log(arena_log.get(), a.seed, a.frame_ms);
   }
   int result = 1;
   try {
@@ -996,6 +997,7 @@ int main(int argc, char** argv) {
   }
   if (arena_hub) {
     mech3::arena::set_arena_setup(nullptr);
+    mech3::arena::set_arena_log(nullptr, -1, 0);
     znet::shutdown();
     arena_hub.reset();
   }

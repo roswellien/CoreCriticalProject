@@ -7,6 +7,7 @@
 #include <string>
 
 #include "mech3/app_mech.h"
+#include "mech3/arena_log.h"
 #include "mech3/mech.h"
 #include "mech3/mech_control.h"
 #include "mech3/mech_net.h"
@@ -89,6 +90,7 @@ znet::Transport* arena_open_session(znet::Hub& hub) {
 // match is set or cleared: nothing reads a mech the last mission freed
 // before arena_start fills the list again at the first Core frame.
 void set_arena_setup(const Setup* setup) {
+  if (g_started && !g_result.decided) log_match_stop();  // the shot and hit hooks off
   g_setup = setup;
   g_mechs.clear();
   g_names.clear();
@@ -98,6 +100,7 @@ void set_arena_setup(const Setup* setup) {
 }
 
 const Result& arena_result() { return g_result; }
+float arena_match_time() { return g_started ? world().time - g_start_time : 0.0f; }
 
 // Ours (#287)
 std::string arena_result_line(const Result& result) {
@@ -119,6 +122,7 @@ void arena_tick() {
     else ++lost[entry.side];
   }
   const float match_time = world().time - g_start_time;
+  log_match_frame(match_time, g_mechs);
   const bool out_of_time = match_time >= static_cast<float>(g_setup->minutes) * 60.0f;
   const bool side_wiped_out = standing[0] == 0 || standing[1] == 0;
   if (!side_wiped_out && !out_of_time) return;
@@ -134,6 +138,7 @@ void arena_tick() {
   else g_result.winner = -1;
   std::printf("%s\n", arena_result_line(g_result).c_str());
   std::fflush(stdout);
+  log_match_end(g_result);
 
   // The stock end (net_mech_tick) would end the match again when its clock
   // runs out: marked ended already, with its exit time never reached.
@@ -282,6 +287,7 @@ void arena_start() {
     }
   }
   g_started = true;
+  log_match_start(*g_setup, g_mechs);
 }
 
 }  // namespace mech3::arena

@@ -30,6 +30,10 @@ znet::Transport* arena_open_session(znet::Hub& hub);
 // arena's hooks do nothing in any other game. Not owned.
 void set_arena_setup(const Setup* setup);
 const Setup* arena_setup();
+// The open match log for this run (create_arena_log's), with its seed and
+// frame time for the start line; not owned. Null (the default, and every
+// non-arena run) writes nothing. The log itself: arena_log.h.
+void set_arena_log(std::FILE* file, int64_t seed, int32_t frame_ms);
 
 // At the first Core frame (app_states, after nav_prebuild): with a match
 // set, the host's mech handed to the AI as side A's first bot, then every
@@ -52,6 +56,9 @@ struct Result {
   int lost[2] = {};  // mechs destroyed per side
 };
 const Result& arena_result();
+// Game seconds since the first Core frame (the log's and the result's clock);
+// 0 before a match starts.
+float arena_match_time();
 // The result line, as printed: "arena: winner A, time 1:22, lost A 0 B 1"
 // ("winner draw" for a draw).
 std::string arena_result_line(const Result& result);

@@ -265,6 +265,7 @@ add_library(mw3core STATIC
   src/mech3/zai_hunt.cpp
   src/mech3/arena_setup.cpp
   src/mech3/arena.cpp
+  src/mech3/arena_log.cpp
   src/mech3/zai_repair.cpp
   src/mech3/zai_node.cpp
   src/mech3/zai_path.cpp
@@ -594,6 +595,7 @@ add_executable(mw3tests
   tests/place_survey.cpp
 )
 target_link_libraries(mw3tests PRIVATE mw3core)
+target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json: the arena log's records (#287)
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"

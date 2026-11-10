@@ -81,6 +81,7 @@
 #include "mech3/app_mech.h"
 #include "arena_counts.h"
 #include "mech3/arena.h"
+#include "mech3/arena_log.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mech_salvage.h"
@@ -18727,6 +18728,7 @@ namespace {
 struct ArenaRunResult {
   int core_frames = 0;
   bool setup_read = false;
+  std::string log_path;  // the run's match log, as mw3 --arena writes it (seed 1, 16 ms)
 };
 ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
                                   const std::function<void(int)>& on_core,
@@ -18760,7 +18762,14 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
   p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
   znet::Hub hub;
   EXPECT(mech3::arena::arena_open_session(hub) != nullptr);
+  // A fresh log each run (the arena never writes over one).
+  static int s_run = 0;
+  setup.out = temp_dir("arena_run_log") + "/" + std::to_string(++s_run);
+  std::filesystem::remove_all(setup.out);
+  mech3::arena::LogFile log = mech3::arena::create_arena_log(setup, 1, &result.log_path, &error);
+  EXPECT(log != nullptr);
   mech3::arena::set_arena_setup(&setup);
+  mech3::arena::set_arena_log(log.get(), 1, 16);
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
     engine.quiet = true;
@@ -18795,6 +18804,8 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
     mech3::set_app(nullptr);
   }
   mech3::arena::set_arena_setup(nullptr);
+  mech3::arena::set_arena_log(nullptr, -1, 0);
+  log.reset();
   znet::shutdown();
   zrdr::close_archives(true);
   mech3::reset_states();
@@ -18906,6 +18917,79 @@ TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {
   EXPECT(result.decided);
   EXPECT(result.winner == (standing[0] > standing[1] ? 0 : standing[1] > standing[0] ? 1 : -1));
   EXPECT(result.lost[0] == 1 - standing[0] && result.lost[1] == 1 - standing[1]);
+
+  // The match log: a start line naming the setup, state lines ten a second,
+  // the shots, hits and the kill, and an end line agreeing with the result.
+  const mech3::arena::LogRead log = mech3::arena::read_arena_log(run.log_path);
+  int states = 0, shot_lines = 0, hit_lines = 0, destroyed_lines = 0;
+  for (const auto& record : log.records) {
+    const std::string type = record.value("type", "");
+    states += type == "state";
+    shot_lines += type == "shot";
+    hit_lines += type == "hit";
+    destroyed_lines += type == "destroyed";
+  }
+  std::printf("  log: %zu lines, %d state, %d shot, %d hit, %d destroyed, complete %d\n", log.records.size(), states,
+              shot_lines, hit_lines, destroyed_lines, log.complete);
+  EXPECT(log.opened && log.bad_lines == 0 && log.complete);
+  EXPECT(!log.records.empty() && log.records.front().value("type", "") == "start");
+  EXPECT(!log.records.empty() && log.records.front().value("map", "") == "c1mp1");
+  EXPECT(shot_lines == arena_counts::shots(0) + arena_counts::shots(1));
+  EXPECT(hit_lines == arena_counts::hits(0) + arena_counts::hits(1));
+  EXPECT(destroyed_lines == result.lost[0] + result.lost[1]);
+  // A state line every 0.1 s of the match, give or take the last.
+  EXPECT(std::abs(states - static_cast<int>(result.time / 0.1f)) <= 2);
+  if (log.complete) {
+    const auto& end = log.records.back();
+    EXPECT(end.value("winner", "") == (result.winner == 0 ? "A" : result.winner == 1 ? "B" : "draw"));
+  }
+  // No mech ever targets its own side (criterion 4).
+  int own_side_targets = 0;
+  for (const auto& record : log.records) {
+    if (record.value("type", "") != "state") continue;
+    for (const auto& mech : record["mechs"]) {
+      const int target = mech.value("target", -1);
+      if (target < 0) continue;
+      for (const auto& other : record["mechs"])
+        if (other.value("id", -2) == target && other.value("side", -1) == mech.value("side", -2)) ++own_side_targets;
+    }
+  }
+  EXPECT(own_side_targets == 0);
+}
+
+// #287 criterion 10: a state line's pose fields read back from the log equal
+// the mech's live values on the frame it was written.
+TEST(arena_log_pose_matches_live_headless) {
+  if (!have_game()) return;
+  const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
+                           arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
+  // Frames 380..400 (about 6 s in at 16 ms): both walking. The live pose of
+  // mech 0 on each, read straight from the mech, is matched with the state
+  // line the log wrote on the same frame (one every 0.1 s).
+  std::vector<nlohmann::json> live;
+  const auto run = arena_headless_run(json, 401, [&](int frame) {
+    if (frame >= 380 && frame <= 400) live.push_back(arena_counts::live_pose(0));
+  });
+  EXPECT(run.setup_read && run.core_frames >= 400);
+  const mech3::arena::LogRead log = mech3::arena::read_arena_log(run.log_path);
+  EXPECT(log.opened && !log.complete);  // stopped mid-match: no end line
+  int compared = 0;
+  for (const auto& record : log.records) {
+    if (record.value("type", "") != "state") continue;
+    for (const auto& pose : live) {
+      if (record.value("t", -1.0) != pose.value("t", -2.0)) continue;
+      const auto& written = record["mechs"][0];
+      for (const char* field : {"pos", "heading", "torso", "arms", "anim", "jumping", "fallen", "heat"}) {
+        if (written[field] != pose["mech"][field])
+          std::printf("  t %.3f %s: log %s, live %s\n", pose.value("t", 0.0), field, written[field].dump().c_str(),
+                      pose["mech"][field].dump().c_str());
+        EXPECT(written[field] == pose["mech"][field]);
+      }
+      ++compared;
+    }
+  }
+  std::printf("  pose: %zu live frames, %d state lines compared\n", live.size(), compared);
+  EXPECT(compared >= 2);
 }
 
 // #287: at the time limit with both mechs standing, the match is a draw.
