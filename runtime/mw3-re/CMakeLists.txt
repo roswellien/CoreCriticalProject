@@ -263,6 +263,7 @@ add_library(mw3core STATIC
   src/mech3/zai_attack.cpp
   src/mech3/zai_nav.cpp
   src/mech3/zai_hunt.cpp
+  src/mech3/arena_setup.cpp
   src/mech3/zai_repair.cpp
   src/mech3/zai_node.cpp
   src/mech3/zai_path.cpp
@@ -572,6 +573,7 @@ add_executable(mw3tests
   tests/test_lance.cpp
   tests/test_nav.cpp
   tests/test_hunt.cpp
+  tests/test_arena.cpp
   tests/test_setup_sources.cpp
   tests/test_data_folder.cpp
   tests/test_patch12.cpp

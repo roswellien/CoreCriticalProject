@@ -1,0 +1,86 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "mech3/zai_params.h"
+
+// Ours, not the exe's (#287, docs/arena.md): the arena run's setup file and
+// every check that refuses a run (exit 2) before the engine starts. The setup
+// is read game-free; the map's spawn spots and the pilot presets are read from
+// the player's own game files once the install is mounted, and the match log
+// is created last, so a refused run loads nothing and writes nothing.
+
+namespace mech3::arena {
+
+// A pilot preset: a shipped aiv record, named by the reader it lives in
+// (zbd\<world>\reader<mission>.zbd, for example world "c1", mission "ia1")
+// and its record name. Only the name is kept in the setup; the values are
+// read from the player's files at run time and never committed.
+struct Preset {
+  std::string world;
+  std::string mission;
+  std::string record;
+};
+
+struct Bot {
+  std::string mech_name;  // as the setup gives it
+  int32_t mech = -1;      // mech_index(mech_name)
+  Preset preset;
+  // The preset record's AI params (AiParams::raw), filled by
+  // read_arena_game_files. Raw bytes so the setup never holds a live record
+  // (an AivRecord keeps a reference on the mission's aiv.zrd).
+  std::array<uint8_t, ai::AiParams::kEnd> params = {};
+  bool params_read = false;
+};
+
+constexpr int kSides = 2;
+constexpr int kMaxBotsPerSide = 8;  // two lances
+constexpr int kSpawnSpots = 16;     // remote_0 .. remote_15, as net_respawn_point walks them
+
+struct Setup {
+  std::string map;      // the lobby map id, e.g. "c1mp1"
+  std::string dir;      // its world folder, "c1"
+  int32_t number = 0;   // its multiplayer map number, 1
+  int32_t minutes = 0;  // the time limit
+  std::string out;      // the match log's folder
+  std::vector<Bot> sides[kSides];
+};
+
+// Reads the setup's JSON text. False with *error naming the field (for
+// example "sides[1][0].mech: unknown mech \"notmech\"") on any bad value.
+bool parse_arena_setup(const std::string& json_text, Setup* out, std::string* error);
+// The same from a file; a file that cannot be read is an error naming it.
+bool read_arena_setup(const std::string& path, Setup* out, std::string* error);
+
+// Which command-line options came with --arena. The arena owns the session,
+// the map, the clock and the run's length, and must repeat, so these refuse.
+struct Flags {
+  bool host = false, join = false, net_upnp = false, original = false, mission = false;
+  bool net_minutes = false, net_soak = false, net_drive = false, frames = false;
+  bool seed = false, frame_ms = false;
+};
+// "" when the run may go on, else the message naming the option.
+std::string arena_refusal(const Flags& f);
+
+// With the install mounted: the map's reader and its 16 remote_ spawn spots,
+// and every bot's preset record, copied into Bot::params. False with *error
+// naming the field.
+bool read_arena_game_files(Setup* setup, std::string* error);
+
+// <out>/match-<seed>.jsonl, created only when it does not exist yet (the
+// folder made first). Null with *error when it exists or cannot be made; an
+// existing file is left as it is.
+struct FileClose {
+  void operator()(std::FILE* f) const {
+    if (f) std::fclose(f);
+  }
+};
+using LogFile = std::unique_ptr<std::FILE, FileClose>;
+LogFile create_arena_log(const Setup& setup, int64_t seed, std::string* path, std::string* error);
+
+}  // namespace mech3::arena

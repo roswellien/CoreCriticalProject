@@ -95,6 +95,7 @@
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/app.h"
+#include "mech3/arena_setup.h"
 #include "mech3/mods.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
@@ -232,6 +233,10 @@ struct Args {
   std::string net_upnp;
   bool net_soak = false;
   bool shot_any = false;
+  // Ours (#287, docs/arena.md): --arena SETUP.json, an AI bot match on the
+  // setup's map, hosted in-process; the setup as read (its map is the mission).
+  std::string arena_path;
+  mech3::arena::Setup arena;
 };
 
 void usage() {
@@ -271,6 +276,7 @@ void usage() {
       "DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] "
       "[--window WxH] "
       "[--nosound] [--hidden] [--verbose]\n"
+      "    [--arena SETUP.json --seed N --frame-ms N]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -324,6 +330,7 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--net-walk" && next(1)) std::sscanf(argv[++i], "%d,%d", &a.net_walk[0], &a.net_walk[1]);
     else if (s == "--net-drive" && next(1)) a.net_drive = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--net-soak") a.net_soak = true;
+    else if (s == "--arena" && next(1)) a.arena_path = argv[++i];
     else if (s == "--net-staged" && next(1)) a.net_staged = std::atoi(argv[++i]) != 0;
     else if (s == "--net-ahead" && next(1)) a.net_ahead = std::strtof(argv[++i], nullptr);
     else if (s == "--net-discovery" && next(1)) a.net_discovery = std::atoi(argv[++i]);
@@ -473,6 +480,26 @@ bool parse(int argc, char** argv, Args& a) {
       std::fprintf(stderr, "mw3: unknown argument %s\n", s.c_str());
       return usage(), false;
     }
+  }
+  // --arena (ours, #287): the options it refuses, then the setup file, each
+  // refusal exit 2 before anything starts. The setup's map becomes the
+  // mission, so the start takes the headless path (player_start).
+  if (!a.arena_path.empty()) {
+    mech3::arena::Flags f;
+    f.host = a.net_host, f.join = !a.net_join.empty(), f.net_upnp = !a.net_upnp.empty();
+    f.original = a.play_original, f.mission = !a.mission.empty();
+    f.net_minutes = a.net_minutes > 0, f.net_soak = a.net_soak, f.net_drive = a.net_drive >= 0;
+    f.frames = a.frames > 0, f.seed = a.seed >= 0, f.frame_ms = a.frame_ms > 0;
+    if (const std::string refused = mech3::arena::arena_refusal(f); !refused.empty()) {
+      std::fprintf(stderr, "mw3: %s\n", refused.c_str());
+      return false;
+    }
+    std::string error;
+    if (!mech3::arena::read_arena_setup(a.arena_path, &a.arena, &error)) {
+      std::fprintf(stderr, "mw3: --arena %s: %s\n", a.arena_path.c_str(), error.c_str());
+      return false;
+    }
+    a.mission = a.arena.map;
   }
   // --lab-mech alone (ours): the lab is reached from c1m2's briefing (MECHLAB,
   // which Op 1 Mission 1 greys), so it takes that route and clicks MECHLAB.
@@ -857,6 +884,21 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::printf("mw3: install %s, write dir %s\n", a.install.c_str(), a.write_dir.c_str());
+  // --arena (ours, #287): with the install mounted, the map's spawn spots and
+  // every pilot preset read from the player's files, then the match log made
+  // (never over an old one). A failure exits 2 before the engine starts.
+  mech3::arena::LogFile arena_log;  // held for the run's life (the match log, #287 step 6)
+  if (!a.arena_path.empty()) {
+    std::string error, log_path;
+    if (mech3::arena::read_arena_game_files(&a.arena, &error))
+      arena_log = mech3::arena::create_arena_log(a.arena, a.seed, &log_path, &error);
+    if (!arena_log) {
+      std::fprintf(stderr, "mw3: --arena %s: %s\n", a.arena_path.c_str(), error.c_str());
+      SDL_Quit();
+      return 2;
+    }
+    std::printf("mw3: arena on %s, the log %s\n", a.arena.map.c_str(), log_path.c_str());
+  }
   const mech3::DataVersion data = mech3::detect_data_version();
   std::printf("mw3: %s\n", data.describe().c_str());  // ours: assets.md, Data versions
   // The movies on a first run (ours, FIX (A): first_run_import.h): on a
