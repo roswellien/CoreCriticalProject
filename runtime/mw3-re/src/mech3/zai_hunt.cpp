@@ -112,8 +112,9 @@ void HuntState::run(float dt) {
   const float reach = b.params.get<float>(0x28);
   // The grid is ours behind bug fixes, as the follow state's (zai_attack.cpp);
   // the arena refuses --original, so in a match it is always on.
-  const bool by_grid = zfix::options().bugs && nav.step(v, in.pos, goal.at, toward_enemy, reach, dt, waypoint);
-  nav_drive(b, v, in.pos, by_grid ? waypoint : goal.at, &turn);
+  by_grid = zfix::options().bugs && nav.step(v, in.pos, goal.at, toward_enemy, reach, dt, waypoint);
+  copy3(steer_to, by_grid ? waypoint : goal.at);
+  nav_drive(b, v, in.pos, steer_to, &turn);
 }
 
 }  // namespace mech3::ai

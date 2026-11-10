@@ -387,6 +387,10 @@ void program_mech_set_controls(void* mech, void* controls);
 // ai::AivRecord), made as player.cpp makes a bot's (make_mech_controls), so
 // the mission frees them with the mech they go on. Null outside a mission.
 void* program_make_ai_mech_controls(void* net, void* rec);
+// Ours (#287): an AI mech of roster `mech` named `name`, on AI controls over
+// `net` (an ai::AiNet) and `rec` (an ai::AivRecord), placed at the record's
+// place, as player.cpp's create_ai_mech makes one. Null when it fails.
+void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* rec);
 // 0x005a85e0: a vehicle's centroid (its node's world position); false without one.
 bool program_vehicle_centre(void* vehicle, float out[3]);
 void* program_launch_campaign();   // app_mission.cpp: the launch's CampaignGame (the menus' or the debug start's)

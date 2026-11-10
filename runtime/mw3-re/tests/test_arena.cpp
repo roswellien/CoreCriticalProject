@@ -1,17 +1,24 @@
 // #287 (docs/arena.md): the arena run. The setup file and every refusal are
 // game-free; reading the map's spawn spots and the presets needs the
 // player's game files and skips itself without them.
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <vector>
 
+#include "arena_counts.h"
 #include "check.h"
 #include "gamez/znetwork/znet_session.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/arena.h"
 #include "mech3/arena_setup.h"
+#include "mech3/mech.h"
 #include "mech3/mech_names.h"
+#include "mech3/mech_net.h"
+#include "mech3/weapon.h"
 #include "mech3/zai_params.h"
 
 namespace {
@@ -49,7 +56,48 @@ struct SavedMounts {
   zutl::Mounts saved = zutl::mounts();
   ~SavedMounts() { zutl::mounts() = saved; }
 };
+
+int g_shots[kSides], g_hits[kSides];
+bool g_counting = false;
+decltype(mech3::WeaponCalls::net_event) g_kept_shot = nullptr;
+decltype(mech3::DamageCalls::controls_hit) g_kept_hit = nullptr;
+
+int side_of(const void* mech) {
+  for (const ArenaMech& entry : arena_mechs())
+    if (entry.mech == mech) return entry.side;
+  return -1;
+}
 }  // namespace
+
+namespace arena_counts {
+void begin() {
+  for (int side = 0; side < kSides; ++side) g_shots[side] = g_hits[side] = 0;
+  g_counting = true;
+  g_kept_shot = mech3::weapon_calls().net_event;
+  mech3::weapon_calls().net_event = [](auto owner, int32_t kind, mech3::Weapon* w) {
+    const int side = side_of(owner);
+    if (side >= 0) ++g_shots[side];
+    if (g_kept_shot) g_kept_shot(owner, kind, w);
+  };
+  g_kept_hit = mech3::damage_calls().controls_hit;
+  mech3::damage_calls().controls_hit = [](mech3::Mech& m, auto* def, auto* coll, float damage, auto attacker) {
+    const int side = side_of(&m);
+    if (side >= 0) ++g_hits[side];
+    if (g_kept_hit) g_kept_hit(m, def, coll, damage, attacker);
+    else if (m.controls) m.controls->on_hit(attacker);
+  };
+}
+void end() {
+  if (!g_counting) return;
+  g_counting = false;
+  mech3::weapon_calls().net_event = g_kept_shot;
+  mech3::damage_calls().controls_hit = g_kept_hit;
+}
+int shots(int side) { return g_shots[side]; }
+int hits(int side) { return g_hits[side]; }
+bool standing(const mech3::Mech* mech) { return mech->active; }
+bool is_bot(const mech3::Mech* mech) { return mech->arena_bot; }
+}  // namespace arena_counts
 
 TEST(arena_setup_reads_a_good_setup) {
   Setup s;
@@ -250,4 +298,74 @@ TEST(arena_session_uses_the_hub) {
   EXPECT(znet::session().desc.max_players == kArenaPlayers);
   znet::shutdown();
   EXPECT(!znet::session().initialised);
+}
+
+// A bot is made as a local mech, so the network would send its state, its
+// shots and its death as the host player's; marked, nothing goes out for it
+// (net_send_event's every kind). An unmarked mech still queues its part
+// damage for the next state, so the session is live.
+TEST(arena_bot_sends_no_net_events) {
+  znet::Hub hub;
+  EXPECT(arena_open_session(hub) != nullptr);
+  mech3::NetCalls kept = mech3::net_calls();
+  mech3::net_calls() = mech3::NetCalls{};
+  mech3::net_start();
+  auto host = std::make_unique<mech3::Mech>();
+  auto bot = std::make_unique<mech3::Mech>();
+  bot->arena_bot = true;
+  const int part = 3;
+  mech3::net_send_event(*host, 0x15, part);
+  mech3::net_send_event(*bot, 0x15, part);
+  EXPECT(host->net_damaged == 1u << part);
+  EXPECT(bot->net_damaged == 0);
+  EXPECT(mech3::net_send_event(*bot, 0xf, 0) == 0);
+  EXPECT(mech3::net_send_event(*bot, 0x13, 0) == 0);
+  mech3::net_end();
+  mech3::net_calls() = kept;
+  znet::shutdown();
+}
+
+// Q3: side A's other bots take the free spots nearest the host's (spot 1),
+// side B's the farthest; equal distances go to the lower spot number.
+TEST(arena_spawn_spots_by_distance) {
+  float spots[kSpawnSpots][3] = {};
+  // Spot n at x = |n - 1| * 10, so spot 0 and 2 tie at 10 m, 3 is 20 m ...
+  // except 15 and 14, put at 1000 m and 1000 m (a tie at the far end).
+  for (int spot = 0; spot < kSpawnSpots; ++spot) spots[spot][0] = static_cast<float>((spot > 1 ? spot - 1 : 1 - spot) * 10);
+  spots[14][0] = spots[15][0] = 1000.0f;
+  const std::vector<int> two_two = arena_spawn_spots(spots, 2, 2);
+  EXPECT((two_two == std::vector<int>{1, 0, 14, 15}));
+  const std::vector<int> three_one = arena_spawn_spots(spots, 3, 1);
+  EXPECT((three_one == std::vector<int>{1, 0, 2, 14}));
+  const std::vector<int> full = arena_spawn_spots(spots, 8, 8);
+  EXPECT(full.size() == 16 && full[0] == 1);
+  std::vector<int> sorted = full;
+  std::sort(sorted.begin(), sorted.end());
+  for (int spot = 0; spot < kSpawnSpots; ++spot) EXPECT(sorted[static_cast<size_t>(spot)] == spot);
+}
+
+// A bot's params are the preset's but for its place, team, loadout and the
+// three switches the arena sets (criterion 11's other half, game-free).
+TEST(arena_bot_params_change_only_the_arena_fields) {
+  Bot bot;
+  for (size_t i = 0; i < bot.params.size(); ++i) bot.params[i] = static_cast<uint8_t>(i * 7 + 1);
+  bot.params_read = true;
+  const float pos[3] = {1.5f, 2.5f, 3.5f};
+  mech3::ai::AiParams params;
+  arena_bot_params(bot, 1, pos, 0.25f, &params);
+  EXPECT(params.get<float>(0x08) == 1.5f && params.get<float>(0x0c) == 2.5f && params.get<float>(0x10) == 3.5f);
+  EXPECT(params.get<float>(0x14) == 0.25f);
+  EXPECT(params.team() == 2);
+  EXPECT(params.get<int32_t>(0xbc) == 0 && params.get<int32_t>(0x3c) == 1);
+  EXPECT(params.get<int32_t>(0x88) == 1 && params.get<int32_t>(0x8c) == 0);
+  const auto changed = [](int off) {
+    const int fields[] = {0x08, 0x0c, 0x10, 0x14, 0x18, 0x3c, 0x88, 0x8c, 0xbc};
+    for (int field : fields)
+      if (off >= field && off < field + 4) return true;
+    return false;
+  };
+  int other_bytes_differ = 0;
+  for (int off = mech3::ai::AiParams::kBegin; off < mech3::ai::AiParams::kEnd; ++off)
+    if (!changed(off) && params.raw[off] != bot.params[static_cast<size_t>(off)]) ++other_bytes_differ;
+  EXPECT(other_bytes_differ == 0);
 }

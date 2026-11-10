@@ -2833,6 +2833,16 @@ void* program_make_ai_mech_controls(void* net, void* rec) {
   return ctl ? e->object_of(ctl) : nullptr;
 }
 
+// Ours (#287): a bot made as player.cpp makes a mission's AI mech
+// (create_ai_mech), on `net` (an ai::AiNet) and `rec` (an ai::AivRecord).
+void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* rec) {
+  GameEngine* e = g_player_hooks.e;
+  if (!e || !net || !rec) return nullptr;
+  const Handle m = create_ai_mech("arena", name, mech, static_cast<ai::AivRecord*>(rec),
+                                  e->handle_of(static_cast<ai::AiNet*>(net)));
+  return m ? e->object_of(m) : nullptr;
+}
+
 void GameEngine::arena_start() { arena::arena_start(); }
 
 // Ours (W58, docs/lancemate-pathing.md): as play starts, the 3 x 3 tiles

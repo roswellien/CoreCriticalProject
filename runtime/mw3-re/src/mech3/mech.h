@@ -202,6 +202,10 @@ struct Mech : Vehicle {
   uint32_t x624 = 0, x628 = 0, x62c = 0;  // +0x624..+0x62c
   int32_t hud_fall = 1;      // +0x638  0x0041ca30: the player's mech 0 while falling, others 1
   bool remote = false;       // vtable +0x5c: the network class's mechs (0x004d2a70), 0x0040bae0 here
+  // Ours (#287): an arena bot (not the host's mech). It is made like a local
+  // mech, so without this the network would send its state, shots and death
+  // as the host player's.
+  bool arena_bot = false;
   bool invincible{};           // +0x630  the Invincible cheat (docs/damage.md)
   uint32_t x634 = 0;         // +0x634
   float x63c = 1.0f;         // +0x63c

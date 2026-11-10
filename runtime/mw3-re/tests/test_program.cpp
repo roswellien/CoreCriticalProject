@@ -79,6 +79,7 @@
 #include "crt/msvc_math.h"
 #include "mech3/message_panel.h"
 #include "mech3/app_mech.h"
+#include "arena_counts.h"
 #include "mech3/arena.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/mech_objective.h"
@@ -18717,6 +18718,187 @@ TEST(arena_host_mech_runs_on_ai_controls_headless) {
   mech3::missions() = mech3::Missions{};
   mech3::mech_types_forget();
   mech3::options() = mech3::Options{};
+}
+
+namespace {
+// #287: an arena match run headless, as mw3 --arena runs it, from a setup's
+// JSON text. `on_core` sees each Core frame (from 1); the run stops after
+// `max_core_frames` of them, when `stop` says so, or when the mission ends.
+struct ArenaRunResult {
+  int core_frames = 0;
+  bool setup_read = false;
+};
+ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
+                                  const std::function<void(int)>& on_core,
+                                  const std::function<bool()>& stop = nullptr) {
+  ArenaRunResult result;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("arena_run_write"));
+  mech3::arena::Setup setup;
+  std::string error;
+  result.setup_read = mech3::arena::parse_arena_setup(json, &setup, &error) &&
+                      mech3::arena::read_arena_game_files(&setup, &error);
+  if (!result.setup_read) {
+    std::printf("  arena: %s\n", error.c_str());
+    return result;
+  }
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::player_controls_instance() = nullptr;
+  mech3::options() = mech3::Options{};
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  znet::Hub hub;
+  EXPECT(mech3::arena::arena_open_session(hub) != nullptr);
+  mech3::arena::set_arena_setup(&setup);
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    mech3::MultiplayerGame game(nullptr);
+    game.x70 = 1 << 30;
+    game.b8c = 0;
+    game.slot.mech = setup.sides[0].front().mech;
+    mech3::GameEngine::Launch l;
+    l.index = 0, l.number = setup.number, l.type = 3, l.multi = &game, l.mech = game.slot.mech;
+    engine.set_launch(l);
+    mech3::program_net_debug_lobby();
+    app.post_intro_ = &mech3::states().load;
+    bool left_core = false;
+    engine.on_present = [&](int) {
+      if (app.current() != &mech3::states().core) {
+        left_core = left_core || result.core_frames > 0;
+        return;
+      }
+      ++result.core_frames;
+      on_core(result.core_frames);
+    };
+    CountingPump pump;
+    pump.limit = max_core_frames + 2600;
+    pump.stop = [&] { return result.core_frames >= max_core_frames || left_core || (stop && stop()); };
+    app.run(pump);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  mech3::arena::set_arena_setup(nullptr);
+  znet::shutdown();
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::options() = mech3::Options{};
+  return result;
+}
+
+std::string arena_bot_json(const char* mech) {
+  return std::string(R"({"mech": ")") + mech +
+         R"(", "preset": {"world": "c1", "mission": "ia1", "record": "Enemy_01"}})";
+}
+}  // namespace
+
+// #287 criterion 11: every bot's brain runs on its preset's params, with only
+// the arena's own changes (place, team, loadout, engaging, any-enemy wake-up).
+TEST(arena_bot_params_match_the_preset_headless) {
+  if (!have_game()) return;
+  const std::string json = R"({"map": "c1mp1", "minutes": 10, "out": "arena-out", "sides": [[)" +
+                           arena_bot_json("madcat") + "," + arena_bot_json("thor") + "], [" +
+                           arena_bot_json("vulture") + "," + arena_bot_json("owens") + "]]}";
+  int mechs_seen = 0, mismatched = 0, wrong_side = 0, bots_marked = 0;
+  const auto run = arena_headless_run(json, 5, [&](int frame) {
+    if (frame != 1) return;
+    // The run's setup, its presets as read from the game files before launch.
+    const mech3::arena::Setup& setup = *mech3::arena::arena_setup();
+    const auto& mechs = mech3::arena::arena_mechs();
+    mechs_seen = static_cast<int>(mechs.size());
+    for (const auto& entry : mechs) {
+      const int index = entry.side == 0 ? entry.id : entry.id - static_cast<int>(setup.sides[0].size());
+      const mech3::ai::AiParams* live = mech3::arena::arena_brain_params(entry.mech);
+      if (!live) {
+        ++mismatched;
+        continue;
+      }
+      mech3::ai::AivRecord expected;
+      const mech3::arena::Bot& bot = setup.sides[entry.side][static_cast<size_t>(index)];
+      const float pos[3] = {live->get<float>(0x08), live->get<float>(0x0c), live->get<float>(0x10)};
+      mech3::arena::arena_bot_params(bot, entry.side, pos, live->get<float>(0x14), &expected);
+      for (int off = mech3::ai::AiParams::kBegin; off < mech3::ai::AiParams::kEnd; ++off)
+        if (live->raw[off] != expected.raw[off]) {
+          std::printf("  arena params: mech %d byte +0x%02x live %02x preset %02x\n", entry.id, off, live->raw[off],
+                      expected.raw[off]);
+          ++mismatched;
+        }
+      if (live->team() != entry.side + 1 || live->get<int32_t>(0x3c) != 1 || live->get<int32_t>(0x88) != 1 ||
+          live->get<int32_t>(0x8c) != 0)
+        ++wrong_side;
+      if (entry.id != 0 && arena_counts::is_bot(entry.mech)) ++bots_marked;
+    }
+  });
+  std::printf("  arena params: mechs %d, mismatched bytes %d, wrong overrides %d, bots marked %d\n", mechs_seen,
+              mismatched, wrong_side, bots_marked);
+  EXPECT(run.setup_read && run.core_frames >= 1);
+  EXPECT(mechs_seen == 4 && mismatched == 0 && wrong_side == 0 && bots_marked == 3);
+}
+
+// #287: a 1v1 on c1mp1 for up to three minutes of game time: the two bots
+// leave their spots, meet and fire on each other.
+TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {
+  if (!have_game()) return;
+  const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
+                           arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
+  int standing[2] = {0, 0};
+  float start_gap = 0, closest_gap = 1e30f;
+  const auto gap = [] {
+    const auto& mechs = mech3::arena::arena_mechs();
+    if (mechs.size() != 2) return -1.0f;
+    float a[3], b[3];
+    if (!mech3::program_vehicle_centre(mechs[0].mech, a) || !mech3::program_vehicle_centre(mechs[1].mech, b))
+      return -1.0f;
+    return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[2] - b[2]) * (a[2] - b[2]));
+  };
+  const auto one_down = [] {
+    for (const auto& entry : mech3::arena::arena_mechs())
+      if (!arena_counts::standing(entry.mech)) return true;
+    return false;
+  };
+  const int three_minutes = 3 * 60 * 1000 / 16;  // the fake clock's 16 ms frames
+  const auto run = arena_headless_run(
+      json, three_minutes,
+      [&](int frame) {
+        if (frame == 1) {
+          arena_counts::begin();
+          start_gap = gap();
+        }
+        const float now = gap();
+        if (now >= 0) closest_gap = std::min(closest_gap, now);
+        standing[0] = standing[1] = 0;
+        for (const auto& entry : mech3::arena::arena_mechs())
+          standing[entry.side] += arena_counts::standing(entry.mech) ? 1 : 0;
+      },
+      one_down);
+  arena_counts::end();
+  std::printf("  arena 1v1 c1mp1: core frames %d, gap %.0f m -> closest %.0f m, shots A %d B %d, hits on A %d B %d, "
+              "standing A %d B %d\n",
+              run.core_frames, start_gap, closest_gap, arena_counts::shots(0), arena_counts::shots(1),
+              arena_counts::hits(0), arena_counts::hits(1), standing[0], standing[1]);
+  EXPECT(run.setup_read && run.core_frames > 0);
+  EXPECT(closest_gap < start_gap);
+  EXPECT(arena_counts::shots(0) > 0 && arena_counts::shots(1) > 0);
+  EXPECT(arena_counts::hits(0) > 0 && arena_counts::hits(1) > 0);
 }
 
 // The mobile bases' stations in a network game (0x00490950, after piece

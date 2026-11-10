@@ -48,6 +48,8 @@ class HuntState : public BehaviourState {
   float last_seen[3] = {};
   NavWay nav;
   float turn = 0;               // kept frame to frame, as the follow's crumbs
+  bool by_grid = false;         // this frame's steer point came from the grid
+  float steer_to[3] = {};       // this frame's steer point (the waypoint or the goal)
 };
 
 // The hunt's one step: every order on the hunt net runs a HuntState.

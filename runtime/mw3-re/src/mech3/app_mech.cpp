@@ -1050,6 +1050,8 @@ void wire_net(bool on) {
     if (entity_is_mech(owner)) net_send_event(*static_cast<Mech*>(owner), kind, reinterpret_cast<intptr_t>(w));
   };
   const auto net_update = [](Mech& m, float dt) {
+    // Ours (#287): an arena bot's tick would spend the host's state send.
+    if (m.arena_bot) return;
     if (!m.remote) return net_mech_tick(m);
     auto& n = *static_cast<NetMech*>(&m);
     net_calls().reckon ? net_calls().reckon(n, dt) : net_reckon(n, dt);

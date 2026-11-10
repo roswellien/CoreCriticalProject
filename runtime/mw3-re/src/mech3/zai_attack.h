@@ -166,6 +166,9 @@ struct NavWay {
 };
 // Whether this pilot walks by the grid (zfix bugs, its side's switch).
 bool nav_for(zgame::Handle v);
+// Ours (#287): forget the frame the grid was last serviced in, so a second
+// arena run in one process services it on the same frames as the first.
+void nav_frame_reset();
 void nav_drive(Brain& b, zgame::Handle v, const float pos[3], const float goal[3], float* turn);
 
 // The fight (0x004d1ca0 -> 0x004d1cc0, vtable 0x005ccb60, over the waiting

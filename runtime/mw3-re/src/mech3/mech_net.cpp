@@ -301,6 +301,7 @@ float net_send_period(int32_t players) {
 // Mech3.exe 1.2 @ 0x0046f160
 int32_t net_send_event(Mech& m, int32_t kind, intptr_t arg) {
   if (!g_net.running || m.remote) return 0;  // a network mech's vt+0x168 is 0x00410490: 0
+  if (m.arena_bot) return 0;  // ours (#287): no player owns a bot, so nothing is sent for it
   const NetCalls& c = g_calls;
   switch (kind) {
     case 0xf: {
