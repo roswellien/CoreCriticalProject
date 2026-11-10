@@ -587,6 +587,10 @@ These change how the game talks to the computer, not how it plays.
 - Setting the game up takes whatever you have (ours): one POINT TO YOUR GAME button takes your installed game, the disc, a disc image (.iso, .cue/.bin with its music) or the file you downloaded (.zip, .7z, .rar, even a zip inside a zip) and installs straight from it, with nothing to unpack by hand; it tells MechWarrior 3 from Pirate's Moon by the files themselves. Started directly, the game goes straight in when it finds your install, and shows only this setup screen when it does not.
 - A launcher (ours; its own program, the main icon, which starts the game and steps aside while it runs; the game also starts directly) finds your MechWarrior 3 by itself and, when it cannot, sets it up from buttons instead of command lines: point to your game (with a progress bar and Cancel), apply the official 1.2 patch (offered only for game files of an unknown version), add the music from a disc image.
 
+## Test tools, not in play
+
+- An AI arena for testing the AI (ours, docs/arena.md): bots fight each other on a multiplayer map on one computer. On those maps, which have no AI routes, bots walk toward the nearest enemy they know of and then fight with the game's own AI. Nothing changes in the campaign, Instant Action or multiplayer games with people.
+
 ## Kept as the original, on purpose
 
 Known quirks the rebuild deliberately keeps:
