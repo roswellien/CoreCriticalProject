@@ -138,7 +138,7 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
       {"side", entry.side},
       {"pos", {rounded(pos[0]), rounded(pos[1]), rounded(pos[2])}},
       {"heading", rounded(heading)},
-      {"speed", rounded(m->vec_3c.z)},
+      {"speed", rounded(-m->vec_3c.z)},  // forward is the mech's -z: walking ahead is positive
       {"torso", {{"twist", rounded(m->torso ? m->torso->yaw : 0.0f)}, {"pitch", rounded(m->torso ? m->torso->pitch : 0.0f)}}},
       {"arms", arms},
       {"anim", {{"index", m->anim_index}, {"t", rounded(anim ? anim->t : 0.0f)}}},

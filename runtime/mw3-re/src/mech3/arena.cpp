@@ -10,6 +10,7 @@
 #include "mech3/arena_log.h"
 #include "mech3/mech.h"
 #include "mech3/mech_control.h"
+#include "mech3/mech_lod.h"
 #include "mech3/mech_net.h"
 #include "mech3/zai_attack.h"
 #include "mech3/zai_hunt.h"
@@ -25,6 +26,7 @@ std::deque<std::string> g_names;
 // The match's clock and result: started at the first Core frame.
 bool g_started = false;
 float g_start_time = 0;
+int64_t g_seed = 0;
 Result g_result;
 
 // The map's 16 spawn spots (remote_0 .. remote_15): their places and yaws.
@@ -92,6 +94,7 @@ znet::Transport* arena_open_session(znet::Hub& hub) {
 void set_arena_setup(const Setup* setup) {
   if (g_started && !g_result.decided) log_match_stop();  // the shot and hit hooks off
   g_setup = setup;
+  lod_calls().same_detail_for_all = false;  // stock until a match starts
   g_mechs.clear();
   g_names.clear();
   g_started = false;
@@ -100,6 +103,7 @@ void set_arena_setup(const Setup* setup) {
 }
 
 const Result& arena_result() { return g_result; }
+void set_arena_seed(int64_t seed) { g_seed = seed; }
 float arena_match_time() { return g_started ? world().time - g_start_time : 0.0f; }
 
 // Ours (#287)
@@ -153,26 +157,40 @@ void arena_tick() {
 const Setup* arena_setup() { return g_setup; }
 
 // Ours (#287)
-std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a, int side_b) {
-  std::vector<int> free_spots;
-  for (int spot = 0; spot < kSpawnSpots; ++spot)
-    if (spot != kHostSpot) free_spots.push_back(spot);
-  const float* host = spots[kHostSpot];
-  // Nearest first, the lower spot first on a tie.
-  std::stable_sort(free_spots.begin(), free_spots.end(), [&](int a, int b) {
-    return squared_distance(spots[a], host) < squared_distance(spots[b], host);
-  });
+std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a, int side_b, int64_t seed) {
+  // Every pair of spots, farthest apart first; a tie keeps the lower spots first.
+  struct Pair {
+    int first, second;
+    float apart;
+  };
+  std::vector<Pair> pairs;
+  for (int a = 0; a < kSpawnSpots; ++a)
+    for (int b = a + 1; b < kSpawnSpots; ++b) pairs.push_back({a, b, squared_distance(spots[a], spots[b])});
+  std::stable_sort(pairs.begin(), pairs.end(), [](const Pair& x, const Pair& y) { return x.apart > y.apart; });
+  // The seed picks the pair and which end is side A's, the same way every
+  // run, so a match replays exactly.
+  const uint64_t pick = static_cast<uint64_t>(seed < 0 ? -seed : seed);
+  const Pair& ends = pairs[pick % kAnchorChoices];
+  const bool flipped = (pick / kAnchorChoices) % 2 == 1;
+  const int side_ends[kSides] = {flipped ? ends.second : ends.first, flipped ? ends.first : ends.second};
+
   std::vector<int> chosen;
-  if (side_a <= 0) return chosen;
-  chosen.push_back(kHostSpot);
-  const int side_a_others = side_a - 1;
-  for (int i = 0; i < side_a_others; ++i) chosen.push_back(free_spots[i]);
-  free_spots.erase(free_spots.begin(), free_spots.begin() + side_a_others);
-  // Farthest first, the lower spot first on a tie.
-  std::stable_sort(free_spots.begin(), free_spots.end(), [&](int a, int b) {
-    return squared_distance(spots[a], host) > squared_distance(spots[b], host);
-  });
-  for (int i = 0; i < side_b; ++i) chosen.push_back(free_spots[i]);
+  bool taken[kSpawnSpots] = {};
+  const int counts[kSides] = {side_a, side_b};
+  for (int side = 0; side < kSides; ++side) {
+    // The free spots nearest this side's end (the end itself first, at 0).
+    std::vector<int> free_spots;
+    for (int spot = 0; spot < kSpawnSpots; ++spot)
+      if (!taken[spot]) free_spots.push_back(spot);
+    const float* end = spots[side_ends[side]];
+    std::stable_sort(free_spots.begin(), free_spots.end(), [&](int a, int b) {
+      return squared_distance(spots[a], end) < squared_distance(spots[b], end);
+    });
+    for (int i = 0; i < counts[side] && i < static_cast<int>(free_spots.size()); ++i) {
+      chosen.push_back(free_spots[static_cast<size_t>(i)]);
+      taken[free_spots[static_cast<size_t>(i)]] = true;
+    }
+  }
   return chosen;
 }
 
@@ -258,21 +276,25 @@ void arena_start() {
   ai::HuntNet* net = ai::make_hunt_net(fallback);
   const std::vector<Bot>& side_a = g_setup->sides[0];
   const std::vector<Bot>& side_b = g_setup->sides[1];
-  if (!hand_host_to_ai(side_a.front(), net, pos[kHostSpot], yaw[kHostSpot])) {
+  const std::vector<int> spots =
+      arena_spawn_spots(pos, static_cast<int>(side_a.size()), static_cast<int>(side_b.size()), g_seed);
+  // The launch put the host's mech at its slot's spot (remote_1); it starts
+  // the match at side A's end like the rest of its side.
+  const int host_spot = spots.front();
+  if (void* host_mech = mission_player_mech()) move_mech(host_mech, pos[host_spot], yaw[host_spot]);
+  if (!hand_host_to_ai(side_a.front(), net, pos[host_spot], yaw[host_spot])) {
     std::fprintf(stderr, "mw3: arena: the host's mech could not be handed to the AI\n");
     return;
   }
-  const std::vector<int> spots =
-      arena_spawn_spots(pos, static_cast<int>(side_a.size()), static_cast<int>(side_b.size()));
   ArenaMech host;
   host.mech = static_cast<Mech*>(mission_player_mech());
-  host.id = 0, host.side = 0, host.spot = kHostSpot;
+  host.id = 0, host.side = 0, host.spot = host_spot;
   g_mechs.push_back(host);
 
-  int id = 0;
   for (int side = 0; side < kSides; ++side) {
     const std::vector<Bot>& bots = g_setup->sides[side];
-    for (size_t i = 0; i < bots.size(); ++i, ++id) {
+    for (size_t i = 0; i < bots.size(); ++i) {
+      const int id = side == 0 ? static_cast<int>(i) : static_cast<int>(side_a.size() + i);
       if (id == 0) continue;  // the host's mech, made by the launch
       const int spot = spots[static_cast<size_t>(id)];
       ai::AivRecord record;
@@ -285,12 +307,15 @@ void arena_start() {
         continue;
       }
       mech->arena_bot = true;
-      mech->set_team(side + 1);
+      mech->set_team(record.team());
       ArenaMech entry;
       entry.mech = mech, entry.id = id, entry.side = side, entry.spot = spot;
       g_mechs.push_back(entry);
     }
   }
+  // Every mech at the same detail, whatever its distance from the host's
+  // (mech_lod.h, LodCalls::same_detail_for_all).
+  lod_calls().same_detail_for_all = true;
   g_started = true;
   log_match_start(*g_setup, g_mechs);
 }

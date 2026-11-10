@@ -66,11 +66,22 @@ std::string arena_result_line(const Result& result);
 // The spot the host's mech spawns at (a lone host is player 1, remote_1).
 constexpr int kHostSpot = 1;
 
+// The match's seed (--seed), which picks where the sides start. Set with the
+// setup; 0 until then.
+void set_arena_seed(int64_t seed);
+
+// How many of the map's most separated spot pairs the seed chooses among.
+constexpr int kAnchorChoices = 3;
+
 // Each bot's spawn spot, in setup order (side A then side B; side A's first
-// is the host's mech, at kHostSpot). Side A's other bots take the free spots
-// nearest the host's, side B's the farthest from it; equal distances go to
-// the lower spot number. `spots` are remote_0 .. remote_15's positions.
-std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a, int side_b);
+// is the host's mech, moved there at the first Core frame). The two sides
+// start at opposite ends: every pair of spots ranked by distance apart, the
+// seed picks one of the kAnchorChoices farthest pairs (seed % 3) and which
+// end is side A's ((seed / 3) % 2). Each side then takes the free spots
+// nearest its own end, side A first; equal distances go to the lower spot
+// number. `spots` are remote_0 .. remote_15's positions (docs/arena.md;
+// research: battletech-specs/research/mw3-ai/spawn-spots.md).
+std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a, int side_b, int64_t seed);
 
 // A bot's AI params: the preset's, placed at `pos` facing `yaw` (the spawn
 // spot's), on team side + 1, with the chassis' first loadout (+0xbc = 0),

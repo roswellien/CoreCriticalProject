@@ -359,23 +359,29 @@ TEST(arena_bot_sends_no_net_events) {
   znet::shutdown();
 }
 
-// Q3: side A's other bots take the free spots nearest the host's (spot 1),
-// side B's the farthest; equal distances go to the lower spot number.
-TEST(arena_spawn_spots_by_distance) {
+// The sides start at opposite ends: the seed picks one of the three farthest
+// spot pairs (seed % 3) and which end is side A's ((seed / 3) % 2); each side
+// takes the free spots nearest its end, ties to the lower spot number
+// (research/mw3-ai/spawn-spots.md).
+TEST(arena_spawn_spots_at_opposite_ends) {
+  // Spots on a line, spot n at x = 10 n. The farthest pairs: (0, 15) at
+  // 150 m, then (0, 14) and (1, 15) at 140 m, in that order.
   float spots[kSpawnSpots][3] = {};
-  // Spot n at x = |n - 1| * 10, so spot 0 and 2 tie at 10 m, 3 is 20 m ...
-  // except 15 and 14, put at 1000 m and 1000 m (a tie at the far end).
-  for (int spot = 0; spot < kSpawnSpots; ++spot) spots[spot][0] = static_cast<float>((spot > 1 ? spot - 1 : 1 - spot) * 10);
-  spots[14][0] = spots[15][0] = 1000.0f;
-  const std::vector<int> two_two = arena_spawn_spots(spots, 2, 2);
-  EXPECT((two_two == std::vector<int>{1, 0, 14, 15}));
-  const std::vector<int> three_one = arena_spawn_spots(spots, 3, 1);
-  EXPECT((three_one == std::vector<int>{1, 0, 2, 14}));
-  const std::vector<int> full = arena_spawn_spots(spots, 8, 8);
-  EXPECT(full.size() == 16 && full[0] == 1);
+  for (int spot = 0; spot < kSpawnSpots; ++spot) spots[spot][0] = static_cast<float>(spot * 10);
+  EXPECT((arena_spawn_spots(spots, 2, 2, 0) == std::vector<int>{0, 1, 15, 14}));
+  EXPECT((arena_spawn_spots(spots, 2, 2, 3) == std::vector<int>{15, 14, 0, 1}));  // the ends swapped
+  // The second pair: side B's end is 14, with 13 and 15 tied next to it.
+  EXPECT((arena_spawn_spots(spots, 2, 2, 1) == std::vector<int>{0, 1, 14, 13}));
+  // The third: side A's end is 1, with 0 and 2 tied next to it.
+  EXPECT((arena_spawn_spots(spots, 2, 2, 2) == std::vector<int>{1, 0, 15, 14}));
+  EXPECT((arena_spawn_spots(spots, 3, 1, 0) == std::vector<int>{0, 1, 2, 15}));
+  // A full match uses every spot once; the same seed always gives the same.
+  const std::vector<int> full = arena_spawn_spots(spots, 8, 8, 5);
+  EXPECT(full == arena_spawn_spots(spots, 8, 8, 5));
   std::vector<int> sorted = full;
   std::sort(sorted.begin(), sorted.end());
-  for (int spot = 0; spot < kSpawnSpots; ++spot) EXPECT(sorted[static_cast<size_t>(spot)] == spot);
+  EXPECT(sorted.size() == 16);
+  for (size_t spot = 0; spot < sorted.size(); ++spot) EXPECT(sorted[spot] == static_cast<int>(spot));
 }
 
 // A bot's params are the preset's but for its place, team, loadout and the

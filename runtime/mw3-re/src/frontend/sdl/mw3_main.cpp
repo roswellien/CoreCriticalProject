@@ -987,6 +987,7 @@ int main(int argc, char** argv) {
     }
     mech3::arena::set_arena_setup(&a.arena);  // the first Core frame hands the host's mech to the AI
     mech3::arena::set_arena_log(arena_log.get(), a.seed, a.frame_ms);
+    mech3::arena::set_arena_seed(a.seed);  // which ends of the map the sides start at
   }
   int result = 1;
   try {

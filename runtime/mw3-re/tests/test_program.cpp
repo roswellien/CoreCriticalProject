@@ -18770,6 +18770,7 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
   EXPECT(log != nullptr);
   mech3::arena::set_arena_setup(&setup);
   mech3::arena::set_arena_log(log.get(), 1, 16);
+  mech3::arena::set_arena_seed(1);
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
     engine.quiet = true;
@@ -18992,20 +18993,29 @@ TEST(arena_log_pose_matches_live_headless) {
   EXPECT(compared >= 2);
 }
 
-// #287: at the time limit with both mechs standing, the match is a draw.
-// One minute on c1mp1: the two have only just met (the 1v1 above lasts about
-// 82 s), so neither has fallen.
-TEST(arena_time_limit_with_equal_standing_is_a_draw_headless) {
+// #287: the time limit ends the match by it, and a match that reaches it goes
+// to the side with more mechs standing, equal a draw. Whether the 2v2 is
+// still on at one minute depends on the fight, so the rule is checked either
+// way: ended by elimination before it, or at it with the winner by count.
+TEST(arena_time_limit_decides_by_mechs_standing_headless) {
   if (!have_game()) return;
-  const std::string json = R"({"map": "c1mp1", "minutes": 1, "out": "arena-out", "sides": [[)" +
-                           arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
+  const std::string bot = arena_bot_json("madcat");
+  const std::string json = R"({"map": "c4mp1", "minutes": 1, "out": "arena-out", "sides": [[)" + bot + "," + bot +
+                           "], [" + bot + "," + bot + "]]}";
   const int two_minutes = 2 * 60 * 1000 / 16;  // past the limit: the end, not the frame count, stops it
   const auto run = arena_headless_run(json, two_minutes, [](int) {});
   const mech3::arena::Result& result = mech3::arena::arena_result();
   std::printf("  core frames %d, %s\n", run.core_frames, mech3::arena::arena_result_line(result).c_str());
   EXPECT(run.setup_read && run.core_frames < two_minutes);
-  EXPECT(result.decided && result.winner == -1 && result.lost[0] == 0 && result.lost[1] == 0);
-  EXPECT(result.time >= 60.0f && result.time < 61.0f);
+  EXPECT(result.decided && result.time < 61.0f);
+  const int standing[2] = {2 - result.lost[0], 2 - result.lost[1]};
+  const bool by_time = standing[0] > 0 && standing[1] > 0;
+  if (by_time) {
+    EXPECT(result.time >= 60.0f);
+    EXPECT(result.winner == (standing[0] > standing[1] ? 0 : standing[1] > standing[0] ? 1 : -1));
+  } else {
+    EXPECT(result.winner == (standing[0] > 0 ? 0 : standing[1] > 0 ? 1 : -1));
+  }
 }
 
 // The mobile bases' stations in a network game (0x00490950, after piece
