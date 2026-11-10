@@ -279,6 +279,8 @@ public:
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),
         prepared_cache_enabled_(bridge_config_.prepared_cache) {
+    lighting_.shadows = base_lighting_.shadows =
+        assets.lighting != "off" && bridge_config_.sun_shadows;
     if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
       throw std::runtime_error(
           "Geometry normal debug requires an explicit geometry mode");
@@ -462,6 +464,8 @@ public:
     // Drain packets queued for the previous mission before switching state.
     drain();
     local_lights_clear();
+    ++world_generation_;
+    scene_.world_generation = world_generation_;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
@@ -502,6 +506,8 @@ public:
     mission_changed(::platform::MissionIdentity{});
     reset_pending_ = true;
     ++group_load_epoch_;
+    ++world_generation_;
+    scene_.world_generation = world_generation_;
     for (const auto &[index, handle] : surface_normal_textures_)
       textures_.at(handle) = {};
     surface_normal_textures_.clear();
@@ -774,6 +780,7 @@ public:
     if (!scene_.draws.empty())
       flush();
     complete_local_light_packets();
+    ++world_frame_;
     ensure_extent();
     const bool hdr_enabled = window_hdr_enabled();
     if (hdr_enabled != display_hdr_) {
@@ -1249,6 +1256,8 @@ private:
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
+    scene_.world_frame = world_frame_;
+    scene_.world_generation = world_generation_;
     if (scene_.width) {
       return;
     }
@@ -1349,7 +1358,7 @@ private:
   const vk::Renderer::Quality quality_;
   mw34::sun::Settings lighting_;
   bool display_hdr_ = false;
-  const mw34::sun::Settings base_lighting_;
+  mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
@@ -1394,6 +1403,8 @@ private:
            std::shared_ptr<const vk::ModelGeometry>>
       prepared_geometry_;
   std::uint64_t group_load_epoch_{1};
+  std::uint64_t world_frame_{0};
+  std::uint64_t world_generation_{1};
   std::map<int, int32_t> surface_normal_textures_;
   bool logged_first_normal_trace_{false};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
@@ -1487,11 +1498,12 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.sun_elevation = number(assets.sun_elevation, 1.0f, 89.0f);
   config.sun = assets.lighting != "off" || assets.geometry != "legacy";
   config.sun_normals = (assets.lighting == "normal");
-  config.sun_shadows = false;
+  config.sun_shadows = (assets.lighting != "off") && config.sun_shadows;
   config.normal_maps_enabled = (assets.lighting == "normal");
 
   // Other defaults
-  config.fixture_shadows = false;
+  config.fixture_shadows =
+      (assets.lighting != "off") && config.fixture_lights && config.fixture_shadows;
   config.fixture_atlas_reuse = true;
   config.fixture_atlas_tracked = false;
   config.fixture_atlas_audit = false;

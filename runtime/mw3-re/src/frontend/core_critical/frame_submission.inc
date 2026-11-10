@@ -8,6 +8,8 @@ void flush() override {
     CpuInterval interval(cpu_profile_ ? &render_ticks_ : nullptr);
     if (cpu_profile_)
         ++render_calls_;
+    scene_.world_frame = world_frame_;
+    scene_.world_generation = world_generation_;
     const bool initialize = scene_.width != resident_width_ || scene_.height != resident_height_;
     if (initialize) {
         const auto size = std::size_t(scene_.width) * scene_.height;

@@ -27,7 +27,9 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
         local_light_test_env(name, nullptr);
     }
   } catalog_env("MW34_EFFECT_LIGHT_CATALOG"), enabled_env("MW34_EFFECT_LIGHTS"),
-      fixtures_env("MW34_FIXTURE_LIGHTS");
+      fixtures_env("MW34_FIXTURE_LIGHTS"),
+      sun_shadows_env("MW34_SUN_SHADOWS"),
+      fixture_shadows_env("MW34_FIXTURE_SHADOWS");
   const auto path = std::filesystem::temp_directory_path() /
                     ("mw34-wp04a-" + std::to_string(SDL_GetTicksNS()) + ".bin");
   struct Restore {
@@ -168,6 +170,51 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
           "Ambient-only native source was discarded or changed intensity");
   require(render(true, false, true, true) == off,
           "HUD sprite incorrectly admitted as an emitter");
+  // Multi-frame sun and fixture shadow execution across mission transition
+  // (advances world_frame_ and world_generation_ on live FrameRenderer).
+  {
+    data = original;
+    local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+    local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
+    local_light_test_env("MW34_SUN_SHADOWS", "1");
+    local_light_test_env("MW34_FIXTURE_SHADOWS", "1");
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets);
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    const uint8_t grey[4] = {128, 128, 128, 255};
+    mw34::materials::set_active_surface_key({1, 1, 1, 456});
+    platform::DrawState state{};
+    state.texture = renderer->create_texture(1, 1, grey, 1);
+    mw34::materials::clear_active_surface_key();
+    for (int f = 0; f < 2; ++f) {
+      renderer->clear(true, 0, 0, 0);
+      renderer->begin_scene();
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+      renderer->end_scene();
+    }
+    std::vector<uint32_t> pixels;
+    int w = 0, h = 0;
+    require(renderer->read_back(&pixels, &w, &h) && w == 32 && h == 32,
+            "Shadowed multi-frame readback failed on outdoor mission");
+    require(pixels.at(16 * 32 + 16) != off,
+            "Shadowed outdoor mission frame produced unlit receiver");
+    // Transition to sealed underground mission c2m2 ({1, 2}): suppresses
+    // directional sun shadows while preserving local fixture shadows and
+    // advancing world_generation_.
+    renderer->mission_changed({1, 2});
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+    renderer->end_scene();
+    require(renderer->read_back(&pixels, &w, &h) && w == 32 && h == 32,
+            "Shadowed readback failed after sealed mission transition");
+    require(pixels.at(16 * 32 + 16) != off,
+            "Sealed mission fixture shadow frame produced unlit receiver");
+    local_light_test_env("MW34_SUN_SHADOWS", "0");
+    local_light_test_env("MW34_FIXTURE_SHADOWS", "0");
+  }
   // Budget rejection must retain the scene. Retrying the same unchanged
   // submission must reject again, rather than silently succeeding after loss.
   {

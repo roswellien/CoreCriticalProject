@@ -2068,6 +2068,59 @@ void check_renderer_bridge_config() {
   require(cfg_wsi.normal_maps_enabled == false,
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
+  require(cfg_wsi.sun_shadows == false, "sun_shadows default false mismatch");
+  require(cfg_wsi.fixture_shadows == false,
+          "fixture_shadows default false mismatch");
+
+  {
+    struct Env {
+      const char *name;
+      std::optional<std::string> prior;
+      explicit Env(const char *n) : name(n) {
+        if (const char *v = std::getenv(n))
+          prior = v;
+      }
+      ~Env() {
+        if (prior)
+          local_light_test_env(name, prior->c_str());
+        else
+          local_light_test_env(name, nullptr);
+      }
+    } effect_env("MW34_EFFECT_LIGHTS"), fixture_env("MW34_FIXTURE_LIGHTS"),
+        sun_sh_env("MW34_SUN_SHADOWS"), fix_sh_env("MW34_FIXTURE_SHADOWS");
+
+    local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+    local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
+    local_light_test_env("MW34_SUN_SHADOWS", "1");
+    local_light_test_env("MW34_FIXTURE_SHADOWS", "1");
+
+    auto cfg_shadows = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, quality, assets);
+    require(cfg_shadows.sun_shadows == true,
+            "sun_shadows env propagation mismatch");
+    require(cfg_shadows.fixture_shadows == true,
+            "fixture_shadows env propagation mismatch");
+
+    sdlfe::CoreCriticalAssets off_assets = assets;
+    off_assets.lighting = "off";
+    auto cfg_off = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, quality, off_assets);
+    require(cfg_off.sun_shadows == false,
+            "sun_shadows should be false when lighting is off");
+    require(cfg_off.fixture_shadows == false,
+            "fixture_shadows should be false when lighting is off");
+
+    local_light_test_env("MW34_FIXTURE_LIGHTS", "0");
+    bool threw_fixture_req = false;
+    try {
+      (void)cc_mw3_re::configure_bridge(
+          sdlfe::RendererBackend::core_critical_wsi, quality, assets);
+    } catch (const std::runtime_error &) {
+      threw_fixture_req = true;
+    }
+    require(threw_fixture_req,
+            "MW34_FIXTURE_SHADOWS without MW34_FIXTURE_LIGHTS must throw");
+  }
 
   check_campaign_lighting_and_policy();
 

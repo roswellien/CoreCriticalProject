@@ -90,7 +90,7 @@ struct RendererBridgeConfig {
     RendererBridgeConfig cfg;
     auto read_env_bool = [](const char *name, bool fallback) {
       const char *value = std::getenv(name);
-      if (!value)
+      if (!value || !*value)
         return fallback;
       if (std::strcmp(value, "0") == 0)
         return false;
@@ -111,6 +111,10 @@ struct RendererBridgeConfig {
     if (cfg.fixture_lights && !cfg.effect_lights)
       throw std::runtime_error(
           "MW34_FIXTURE_LIGHTS requires MW34_EFFECT_LIGHTS");
+    cfg.fixture_shadows = read_env_bool("MW34_FIXTURE_SHADOWS", false);
+    if (cfg.fixture_shadows && !cfg.fixture_lights)
+      throw std::runtime_error(
+          "MW34_FIXTURE_SHADOWS requires MW34_FIXTURE_LIGHTS");
     if (const char *path = std::getenv("MW34_EFFECT_LIGHT_CATALOG"))
       cfg.effect_light_catalog = path;
     if (const char *path = std::getenv("MW34_NATIVE_MATERIALS"))
