@@ -1,6 +1,13 @@
 void present() override {
   flush();
   complete_local_light_packets();
+  // Advance the frame identity only after this frame's pending shadow/local-
+  // light packets are submitted, so every scene batch in one frame shares a
+  // single world_frame stamp and the next frame differs even across the
+  // hidden/capture/empty early returns below.
+  ++world_frame_;
+  shadow_revisions_.clear();
+  active_shadow_source_ = active_shadow_revision_ = 0;
   if (!resident_width_) {
     return;
   }

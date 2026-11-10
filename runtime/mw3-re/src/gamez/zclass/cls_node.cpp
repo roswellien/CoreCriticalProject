@@ -465,6 +465,9 @@ int32_t& immediate_delete() { return g_immediate; }
 // Mech3.exe 1.2 @ 0x004eb370
 int node_set_model(Node* node, zmod::Model* model) {
   if (!node) return zerr::report(0x400, kClassFile, 0x52a, "Null node pointer."), 5;
+  if (node->model != model)
+    if (auto* renderer = zvid::render3d())
+      renderer->retire_shadow_node(reinterpret_cast<std::uintptr_t>(node));
   if (node->model) add_uses(node->model->header, -1);  // 0x00539d60
   node->model = model;
   if (model) {
@@ -570,6 +573,8 @@ int node_remove_child(Node* parent, Node* child) {
 int node_free(Node* node) {
   if (!node) return zerr::report(0x400, kClassFile, 0x381, "Null node pointer."), 5;
   if (node->child_count() > 0 || node->parent_count() > 0 || node_model_header(node)) return 1;
+  if (auto* renderer = zvid::render3d())
+    renderer->retire_shadow_node(reinterpret_cast<std::uintptr_t>(node));
   delete[] node->children;
   node->children = nullptr;
   delete[] node->parents;
@@ -587,6 +592,8 @@ int node_free(Node* node) {
 // is running) the node waits on the deferred-delete list.
 int node_release(Node* node) {
   if (!node) return zerr::report(0x400, kClassFile, 0x3ea, "Null node pointer."), 5;
+  if (auto* renderer = zvid::render3d())
+    renderer->retire_shadow_node(reinterpret_cast<std::uintptr_t>(node));
   node->set_flags(node->flags() & ~2u);
   if (node->changed) node->changed->removable = 1;
   if (g_immediate) {

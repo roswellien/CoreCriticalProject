@@ -212,6 +212,32 @@ void checks() {
     same(*get(), reference());
     require(!first->vertices.empty() && !owned->vertices.empty(),
             "Eviction invalidated an owned result");
+    // Shadow caster identity is an opaque scalar stamped by prepare_draw so
+    // the fixture stage can separate same-geometry instances; the cache keys
+    // on the node, but the retained caster map consumes the stamped identity.
+    source.camera[8] = 1;
+    context.node = &actor_a;
+    const auto model_a = get();
+    const auto model_a_fresh = reference();
+    require(model_a->draw.model && model_a_fresh.draw.model,
+            "Shadow identity fixture lost its model draw");
+    const auto identity_a = model_a->draw.model->shadow_source;
+    require(identity_a != 0,
+            "Model draw captured no opaque shadow source identity");
+    require(model_a_fresh.draw.model->shadow_source == identity_a,
+            "Same node and batch did not repeat the same shadow source identity");
+    context.node = &actor_b;
+    const auto model_b = get();
+    require(model_b->draw.model && model_b->draw.model->shadow_source != 0,
+            "Second node captured no opaque shadow source identity");
+    require(model_b->draw.model->shadow_source != identity_a,
+            "Different node sharing geometry reused another instance's shadow identity");
+    context.node = &actor_a;
+    const auto model_a_cached = get();
+    require(model_a_cached->draw.model->shadow_source == identity_a,
+            "Cached prepared submission reused another node's shadow identity");
+    source.camera[8] = 1.95;
+    context.node = &actor_a;
 }
 
 static std::filesystem::path make_private_staging_dir(const char *prefix) {
