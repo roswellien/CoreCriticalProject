@@ -372,6 +372,13 @@ struct World {
   float dt = 0.0f;                  // 0x0072c52c
   int32_t dead_updates = 0;         // 0x006099c0  frames a dead mech played its fall
   float move_volume_floor = 0.0f;   // 0x00605630  the movement sounds' volume at a standstill (0)
+  // Ours (#287, the arena's spectator seat): with no mission player, side
+  // A's team and enemy masks stand in for the player's where a shot is
+  // tagged hostile and where an AMS picks the shots it may engage, so each
+  // AMS judges hostile by its own mech's side. 0 outside an arena match,
+  // where the stock rules run unchanged.
+  uint32_t arena_side_a_team = 0;
+  uint32_t arena_side_a_enemies = 0;
 };
 World& world();
 

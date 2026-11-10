@@ -207,7 +207,12 @@ void wire_weapons(uint32_t (*log)(const char* key)) {
     if (d) mech_lock_warning(m);
   };
   c.entity_enemies = [](Handle e) { return mech_of(e)->enemies; };                         // +0xc8
-  c.player_team = [] { return mech3::world().mission_player ? mech3::world().mission_player->team : 0u; };
+  // Ours (#287): with no player, an arena match's side A team (0 elsewhere,
+  // as stock), so a shot is tagged by whether it is hostile to side A.
+  c.player_team = [] {
+    const World& w = mech3::world();
+    return w.mission_player ? w.mission_player->team : w.arena_side_a_team;
+  };
   c.part_by_id = [](Handle owner, int32_t id) -> Handle { return part_by_id(*mech_of(owner), id); };
   c.part_node = [](Handle part) { return static_cast<MechPart*>(part)->node; };          // +0x08
   c.part_mech = [](Handle part) -> Handle { return static_cast<MechPart*>(part)->mech; };
