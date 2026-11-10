@@ -104,6 +104,7 @@
 #include "mech3/mission_world.h"
 #include "gamez/zclass/cls_di.h"
 #include "mech3/options.h"
+#include "mech3/arena.h"
 #include "mech3/player.h"
 #include "mech3/sensors.h"
 #include "mech3/zai_brain.h"
@@ -2822,6 +2823,17 @@ Handle GameEngine::alloc_block(uint32_t size) {
 void hook_census_report(const char* key) {
   if (GameEngine* g = engine_of_hooks()) g->unported(key, {});
 }
+
+// Ours (#287): the controls registered with the mission's hooks, so
+// mission_controls_free deletes them when their mech is released.
+void* program_make_ai_mech_controls(void* net, void* rec) {
+  GameEngine* e = g_player_hooks.e;
+  if (!e || !net || !rec) return nullptr;
+  const Handle ctl = make_mech_controls(e->handle_of(static_cast<ai::AiNet*>(net)), static_cast<ai::AivRecord*>(rec));
+  return ctl ? e->object_of(ctl) : nullptr;
+}
+
+void GameEngine::arena_start() { arena::arena_start(); }
 
 // Ours (W58, docs/lancemate-pathing.md): as play starts, the 3 x 3 tiles
 // round the player built when a pilot uses the grid (the lance starts by him).

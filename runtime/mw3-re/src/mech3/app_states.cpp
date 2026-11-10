@@ -355,6 +355,7 @@ void CoreState::start_mission() {
   }
   if (en.pixel_double() != 0) en.video_double(0, 0);
   en.nav_prebuild();  // ours (W58)
+  en.arena_start();   // ours (#287): after the grid, so a bot's first step finds it
   en.input_reset();
   elapsed_ = 0;
   en.debug_mark(" L e t s  P l a y ! ");

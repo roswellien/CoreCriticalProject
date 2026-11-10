@@ -983,6 +983,7 @@ int main(int argc, char** argv) {
       SDL_Quit();
       return 1;
     }
+    mech3::arena::set_arena_setup(&a.arena);  // the first Core frame hands the host's mech to the AI
   }
   int result = 1;
   try {
@@ -992,6 +993,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
   }
   if (arena_hub) {
+    mech3::arena::set_arena_setup(nullptr);
     znet::shutdown();
     arena_hub.reset();
   }

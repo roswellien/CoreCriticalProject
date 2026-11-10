@@ -79,6 +79,7 @@
 #include "crt/msvc_math.h"
 #include "mech3/message_panel.h"
 #include "mech3/app_mech.h"
+#include "mech3/arena.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mech_salvage.h"
@@ -18627,6 +18628,95 @@ TEST(net_pilot_respawns_c1mp1_headless) {
   net_respawn_run(false, &died, &back, &health, &camera);
   std::printf("  respawn off: died %d, back %d, camera %d\n", died, back, camera);
   EXPECT(died && !back && camera == 4);
+}
+
+// #287 step 3 (docs/arena.md): an arena match on c1mp1 as mw3 --arena starts
+// it (the hub's session, respawn off, the host on side A's first bot's
+// chassis): at the first Core frame the host's mech goes on AI controls over
+// the hunt net, and 300 frames later the mission ends with nothing broken.
+TEST(arena_host_mech_runs_on_ai_controls_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("arena_host_write"));
+  mech3::arena::Setup setup;
+  std::string error;
+  const std::string bot =
+      R"({"mech": "madcat", "preset": {"world": "c1", "mission": "mp1", "record": "remote_1"}})";
+  EXPECT(mech3::arena::parse_arena_setup(
+      R"({"map": "c1mp1", "minutes": 10, "out": "arena-out", "sides": [[)" + bot + "], [" + bot + "]]}", &setup,
+      &error));
+  EXPECT(mech3::arena::read_arena_game_files(&setup, &error));
+  if (!error.empty()) std::printf("  arena: %s\n", error.c_str());
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::player_controls_instance() = nullptr;
+  mech3::options() = mech3::Options{};
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  znet::Hub hub;
+  EXPECT(mech3::arena::arena_open_session(hub) != nullptr);
+  mech3::arena::set_arena_setup(&setup);
+  int core_frames = 0, hunt_frames = 0;
+  bool on_ai = false, team_one = false, player_controls_kept = false;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    mech3::MultiplayerGame game(nullptr);
+    game.x70 = 1 << 30;
+    game.b8c = 0;
+    game.slot.mech = setup.sides[0].front().mech;
+    mech3::GameEngine::Launch l;
+    l.index = 0, l.number = 1, l.type = 3, l.multi = &game, l.mech = game.slot.mech;
+    engine.set_launch(l);
+    mech3::program_net_debug_lobby();
+    app.post_intro_ = &mech3::states().load;
+    engine.on_present = [&](int) {
+      if (app.current() != &mech3::states().core) return;
+      ++core_frames;
+      const mech3::arena::HostState host = mech3::arena::arena_host_state();
+      if (core_frames == 1) {
+        on_ai = host.on_ai;
+        team_one = host.team_mask == 1u << 1;
+        player_controls_kept = mech3::player_controls_instance() != nullptr;
+      }
+      if (host.hunting) ++hunt_frames;
+    };
+    CountingPump pump;
+    pump.limit = 2600;
+    pump.stop = [&] { return core_frames >= 300; };
+    app.run(pump);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  mech3::arena::set_arena_setup(nullptr);
+  znet::shutdown();
+  std::printf("  arena host: core frames %d, on AI %d, team 1 %d, player controls kept %d, hunting %d frames\n",
+              core_frames, on_ai, team_one, player_controls_kept, hunt_frames);
+  EXPECT(core_frames >= 300);
+  EXPECT(on_ai && team_one && player_controls_kept);
+  EXPECT(hunt_frames > 0);
+  EXPECT(!mech3::arena::arena_hunt_net_held());  // the mission's end freed it
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::options() = mech3::Options{};
 }
 
 // The mobile bases' stations in a network game (0x00490950, after piece
