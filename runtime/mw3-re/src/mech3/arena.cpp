@@ -279,6 +279,7 @@ void arena_start() {
   view_clear();
   world().arena_side_a_team = 0, world().arena_side_a_enemies = 0;
   world().arena_spectating = !world().mission_player;
+  set_update_order_seed(static_cast<uint32_t>(g_seed));  // the update order replays with the match
   g_mechs.clear();
   g_names.clear();
   g_result = Result{};

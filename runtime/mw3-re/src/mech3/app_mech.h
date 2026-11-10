@@ -406,6 +406,8 @@ const float* spawn_position();                                     // the placed
 bool is_launched_mech(const void* mech);                           // the pilot's mech, the port's
 void update_mech(void* mech, float dt);
 void update_entities(float dt);                                   // 0x004a1140: every other entity's frame
+// Ours (#287): seeds the arena's per-frame update order (update_entities).
+void set_update_order_seed(uint32_t seed);
 void* node_owner(void* node);                                     // 0x0040e9d0 (app_weapons.cpp)
 void* node_entity(void* node);                                    // 0x0040e920 (app_weapons.cpp)
 struct MechControls;

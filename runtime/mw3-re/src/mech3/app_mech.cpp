@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <random>
 #include <string>
 
 #include "gamez/zclass/cls_mechlib.h"
@@ -2159,8 +2160,29 @@ void update_mech(void* mech, float dt) {
 // 0x005a8850 over zEntity's list, the program's mechs; the sensors leave the
 // player's +0x09 clear, so its frame is the player tick's alone. The basic
 // vehicles' frame is 0x004a1040 (app_vehicle.cpp).
+//
+// Ours (#287): in an arena match the walk takes a fresh order every frame.
+// Stock walks one fixed order: the budget moves its start only when its cap
+// runs out, never with a handful of bots, so each frame the same bots update
+// first. A bot's line-of-fire check reads its target's position as of that
+// moment, so a bot that updates before its enemies always sees where they were
+// last frame, and one after them sees where they are now. The fresher view
+// found a clear shot 23% more often and the team made second won about 70% of
+// matches on c2mp2 (battletech-specs/research/mw3-ai/order-bias). The order
+// comes from a generator of its own, seeded by the match, so the game's rand
+// is untouched and a match still replays exactly.
+namespace {
+std::mt19937 g_update_order_rng;
+std::vector<ai::Handle> g_update_order;  // one buffer, so the budget's resume point stays valid
+}  // namespace
+void set_update_order_seed(uint32_t seed) { g_update_order_rng.seed(seed); }
 void update_entities(float dt) {
-  zent::budget().update_all(ai::entity_list(), [dt](ai::Handle h) {
+  const bool shuffled = world().arena_spectating;
+  if (shuffled) {
+    g_update_order.assign(ai::entity_list().begin(), ai::entity_list().end());
+    std::shuffle(g_update_order.begin(), g_update_order.end(), g_update_order_rng);
+  }
+  zent::budget().update_all(shuffled ? g_update_order : ai::entity_list(), [dt](ai::Handle h) {
     Mech* m = entity_mech(h);
     if (!m) {  // another entity's vt+0x34
       if (program_pocket_marker(h)) return;  // the command marker's (0x004d7f80's: nothing to do)
