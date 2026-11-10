@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "gamez/znetwork/znet_object.h"
+#include "gamez/zutil/zfix.h"
 #include "mech3/zai_target.h"
 
 namespace mech3::ai {
@@ -95,7 +96,9 @@ void HuntState::run(float dt) {
   const bool toward_enemy = goal.rule == HuntRule::kContact;
   float waypoint[3];
   const float reach = b.params.get<float>(0x28);
-  const bool by_grid = nav.step(v, in.pos, goal.at, toward_enemy, reach, dt, waypoint);
+  // The grid is ours behind bug fixes, as the follow state's (zai_attack.cpp);
+  // the arena refuses --original, so in a match it is always on.
+  const bool by_grid = zfix::options().bugs && nav.step(v, in.pos, goal.at, toward_enemy, reach, dt, waypoint);
   nav_drive(b, v, in.pos, by_grid ? waypoint : goal.at, &turn);
 }
 
