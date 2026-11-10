@@ -157,7 +157,6 @@ struct Draw {
   unsigned detail_role{};
   bool native_sky{};
   std::uint64_t shadow_source{};
-  std::function<bool()> shadow_valid;
   bool condition_schematic{};
   bool depth_only{};
   std::uint32_t emission_index{mw34::submission::DrawEmissions::none};

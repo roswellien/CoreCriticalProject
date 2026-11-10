@@ -22,11 +22,6 @@ void flush() override {
       constexpr std::size_t kLocalBudget = 128u * 1024u * 1024u;
       if (local_bytes > kLocalBudget - pending_local_bytes_)
         throw std::runtime_error("Local light packet staging exceeds budget");
-      if (worker_)
-        for (const auto &draw : scene_.draws)
-          if (draw.shadow_valid)
-            throw std::runtime_error(
-                "Render packet contains a live shadow callback");
     }
     resident_width_ = scene_.width;
     resident_height_ = scene_.height;
@@ -50,9 +45,6 @@ void flush() override {
       return;
     }
     if (worker_) {
-        for (const auto &draw : scene_.draws)
-            if (draw.shadow_valid)
-                throw std::runtime_error("Render packet contains a live shadow callback");
         auto packet = std::make_shared<vk::Scene>(std::move(scene_));
         const auto bytes = packet_bytes(*packet);
         worker_->post(

@@ -8,7 +8,6 @@ struct FixtureCaster {
   mw34::fixture_shadow::Matrix world = mw34::fixture_shadow::identity;
   mw34::fixture_shadow::Bounds bounds;
   std::vector<ModelVertex> tl;
-  std::function<bool()> valid;
   std::uint64_t frame{};
   Tex *texture{};
   unsigned sampler{};
@@ -265,8 +264,7 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
   const float retention = effects_settings.fixture_retain_distance;
   for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
     auto &caster = it->second;
-    const bool invalid =
-        caster.valid ? !caster.valid() : scene.world_frame > caster.frame + 1;
+    const bool invalid = scene.world_frame > caster.frame + 1;
     if (invalid || (camera && !caster.bounds.overlaps(eye, retention * 2))) {
       fixture_atlas_touch();
       it = fixtureCasters.erase(it);
@@ -307,9 +305,8 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
                  caster.world[r * 4 + 2] * v.z + caster.world[r * 4 + 3];
         caster.bounds.add(p);
       }
-      if (instance.world && draw.shadow_source && draw.shadow_valid) {
+      if (instance.world && draw.shadow_source) {
         key = {draw.shadow_source, 0};
-        caster.valid = draw.shadow_valid;
       } else
         key = {instance.shadow_source ? instance.shadow_source
                                       : instance.geometry->key,
