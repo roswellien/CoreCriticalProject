@@ -449,6 +449,10 @@ apart. Everything else is a real gap and stays listed.
   Instant Action, Training, options, credits and multiplayer menus,
   c1m1's pause, Training's lesson 1 from the menus: 0 keys outside the
   table.
+- `--arena SETUP.json --seed N --frame-ms N` (ours, #287, for testing the
+  AI): an AI bot match on a multiplayer map, the host a spectator with no
+  mech, written to a match log; with `--hidden` it draws nothing and
+  replays exactly. The setup, the log and what it refuses: arena.md.
 - `--campaign-chain new:N` / `resume:N` and `sdl_program_campaign_chain`
   (MW3_CAMPAIGN=1): the campaign played through, campaign.md section 13.
   `kills:N` wins each mission by shooting every enemy through zWeapon's

@@ -589,7 +589,7 @@ These change how the game talks to the computer, not how it plays.
 
 ## Test tools, not in play
 
-- An AI arena for testing the AI (ours, docs/arena.md; the first piece, how bots find each other, is in, and the arena run arrives next): bots fight each other on a multiplayer map on one computer. On those maps, which have no AI routes, bots walk toward the nearest enemy they know of and then fight with the game's own AI. Nothing changes in the campaign, Instant Action or multiplayer games with people.
+- An AI arena for testing the AI (ours, docs/arena.md): bots fight each other on a multiplayer map on one computer, started with `--arena` and a setup file naming the map, time limit and each side's mechs and pilots. On those maps, which have no AI routes, bots walk toward the nearest enemy they know of and then fight with the game's own AI. Each match writes a log of every mech's state, shots, hits and kills, and the same seed replays the same match. Nothing changes in the campaign, Instant Action or multiplayer games with people.
 
 ## Kept as the original, on purpose
 
