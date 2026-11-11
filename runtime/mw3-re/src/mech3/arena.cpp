@@ -93,8 +93,11 @@ int next_standing(int from) {
   return -1;
 }
 
-// Each frame: a fallen viewed bot hands the view on.
+// Each frame: a fallen viewed bot hands the view on. A match nobody watches
+// (arena_headless) views no bot at all: the camera then never touches a
+// bot's torso or controls, and no bot is the HUD's world().player.
 void view_follow() {
+  if (arena_headless()) return;
   const bool viewed_standing = g_viewed >= 0 && arena_standing(g_mechs[static_cast<size_t>(g_viewed)].mech);
   if (viewed_standing) return;
   const int next = next_standing(g_viewed < 0 ? -1 : g_viewed);
@@ -263,7 +266,7 @@ Mech* arena_viewed_mech() {
 
 // Ours (#287)
 bool arena_view_next() {
-  if (!g_started || g_mechs.empty()) return false;
+  if (!g_started || g_mechs.empty() || arena_headless()) return false;
   const int next = next_standing(g_viewed);
   if (next < 0) return false;
   view_mech(next);

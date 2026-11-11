@@ -82,7 +82,7 @@ void set_arena_seed(int64_t seed);
 int64_t arena_seed();
 
 // Ours (#287): a match nobody watches (--hidden, no screenshots) draws
-// nothing. Drawing changes how a match plays out (a single frame drawn early
+// nothing and views no bot (arena_viewed_mech stays null). Drawing changes how a match plays out (a single frame drawn early
 // can change a bot's steering minutes later; battletech-specs research
 // mw3-ai/order-bias), so a hidden match must not depend on where the view is.
 void set_arena_headless(bool on);

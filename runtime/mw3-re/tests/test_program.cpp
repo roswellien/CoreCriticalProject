@@ -18773,6 +18773,30 @@ TEST(arena_spectator_launch_has_no_player_mech_headless) {
   EXPECT(!mech3::arena::arena_hunt_net_held());  // the mission's end freed it
 }
 
+// #287: a match nobody watches (mw3 --arena --hidden) views no bot at all, so
+// the camera never touches one, and still runs with every bot on AI.
+TEST(arena_hidden_match_views_no_bot_headless) {
+  if (!have_game()) return;
+  int viewed_frames = 0, player_frames = 0, bots_on_ai = 0;
+  mech3::arena::set_arena_headless(true);
+  const auto run = arena_headless_run(
+      R"({"map": "c1mp1", "minutes": 10, "out": "arena-out", "sides": [[)" + arena_bot_json("madcat") + "], [" +
+          arena_bot_json("madcat") + "]]}",
+      300, [&](int frame) {
+        if (mech3::arena::arena_viewed_mech()) ++viewed_frames;
+        if (mech3::program_view_mech()) ++player_frames;  // the camera's mech
+        if (frame == 1)
+          for (const auto& entry : mech3::arena::arena_mechs())
+            if (mech3::arena::arena_brain_params(entry.mech)) ++bots_on_ai;
+      });
+  mech3::arena::set_arena_headless(false);
+  std::printf("  arena hidden: core frames %d, viewed %d, camera on a mech %d, on AI %d\n", run.core_frames,
+              viewed_frames, player_frames, bots_on_ai);
+  EXPECT(run.setup_read && run.core_frames >= 300);
+  EXPECT(viewed_frames == 0 && player_frames == 0);
+  EXPECT(bots_on_ai == 2);
+}
+
 // #287 criterion 11: every bot's brain runs on its preset's params, with only
 // the arena's own changes (place, team, loadout, engaging, any-enemy wake-up).
 TEST(arena_bot_params_match_the_preset_headless) {
