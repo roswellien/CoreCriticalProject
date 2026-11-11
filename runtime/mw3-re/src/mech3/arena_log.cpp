@@ -26,6 +26,7 @@ float g_now = 0;
 float g_next_state = 0;
 std::vector<bool> g_was_standing;
 bool g_hooked = false;
+ShotStarts g_shot_starts;
 decltype(WeaponCalls::net_event) g_kept_shot = nullptr;
 decltype(DamageCalls::controls_hit) g_kept_hit = nullptr;
 
@@ -84,7 +85,7 @@ nlohmann::json ai_record(const Mech* mech) {
 
 void on_shot(Handle owner, int32_t kind, Weapon* weapon) {
   const int id = id_of(owner);
-  if (id >= 0) write_line({{"type", "shot"}, {"t", rounded(g_now)}, {"id", id}});
+  if (id >= 0 && g_shot_starts.is_new_shot(weapon)) write_line({{"type", "shot"}, {"t", rounded(g_now)}, {"id", id}});
   if (g_kept_shot) g_kept_shot(owner, kind, weapon);
 }
 
@@ -185,7 +186,18 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   if (damage_calls().controls_hit != on_hit) g_kept_hit = damage_calls().controls_hit;
   weapon_calls().net_event = on_shot;
   damage_calls().controls_hit = on_hit;
+  g_shot_starts.clear();
   g_hooked = true;
+}
+
+// Ours (#287)
+bool ShotStarts::is_new_shot(const Weapon* weapon) {
+  if (!weapon || !weapon->is_beam()) return true;
+  if (!weapon->is_firing()) {
+    beams_on.erase(weapon);
+    return false;
+  }
+  return beams_on.insert(weapon).second;
 }
 
 // Ours (#287)

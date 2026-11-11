@@ -3,11 +3,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <nlohmann-json/json.hpp>
 
 #include "mech3/arena.h"
+
+namespace mech3 {
+struct Weapon;
+}
 
 // Ours, not the exe's (#287, docs/arena.md): the arena match log, one JSON
 // object a line. A "start" line (the setup, seed and frame time), "state"
@@ -33,6 +38,16 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs);
 void log_match_end(const Result& result);
 // The hooks off without an end line (a match cleared before it was decided).
 void log_match_stop();
+
+// Which weapon reports are new shots. The weapon report hook
+// (WeaponCalls::net_event) fires once per projectile, but for a beam also on
+// every frame it is held and once when it stops (weapon.cpp, BeamWeapon), so
+// a beam counts once, when it turns on. Each counter keeps its own.
+struct ShotStarts {
+  bool is_new_shot(const Weapon* weapon);
+  void clear() { beams_on.clear(); }
+  std::unordered_set<const Weapon*> beams_on;
+};
 
 // One mech's state record, as the log writes it at `now`.
 nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<ArenaMech>& mechs);

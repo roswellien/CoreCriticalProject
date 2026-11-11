@@ -63,6 +63,7 @@ struct SavedMounts {
 };
 
 int g_shots[kSides], g_hits[kSides];
+mech3::arena::ShotStarts g_shot_starts;
 bool g_counting = false;
 decltype(mech3::WeaponCalls::net_event) g_kept_shot = nullptr;
 decltype(mech3::DamageCalls::controls_hit) g_kept_hit = nullptr;
@@ -80,11 +81,12 @@ int side_of(const void* mech) {
 namespace arena_counts {
 void begin() {
   for (int side = 0; side < kSides; ++side) g_shots[side] = g_hits[side] = 0;
+  g_shot_starts.clear();
   g_counting = true;
   g_kept_shot = mech3::weapon_calls().net_event;
   mech3::weapon_calls().net_event = [](auto owner, int32_t kind, mech3::Weapon* w) {
     const int side = side_of(owner);
-    if (side >= 0) ++g_shots[side];
+    if (side >= 0 && g_shot_starts.is_new_shot(w)) ++g_shots[side];
     if (g_kept_shot) g_kept_shot(owner, kind, w);
   };
   g_kept_hit = mech3::damage_calls().controls_hit;
