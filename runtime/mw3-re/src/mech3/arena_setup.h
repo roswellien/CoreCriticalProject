@@ -63,6 +63,8 @@ struct Flags {
   bool host = false, join = false, net_upnp = false, original = false, mission = false;
   bool net_minutes = false, net_soak = false, net_drive = false, frames = false;
   bool seed = false, frame_ms = false;
+  // Options that drive the player's mech or a menu screen; the arena has neither.
+  bool fire = false, net_walk = false, net_ahead = false, briefing = false, lab_mech = false;
 };
 // "" when the run may go on, else the message naming the option.
 std::string arena_refusal(const Flags& f);

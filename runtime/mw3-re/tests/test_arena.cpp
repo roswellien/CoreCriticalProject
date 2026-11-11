@@ -233,7 +233,9 @@ TEST(arena_refusals_name_every_refused_option) {
                         {&Flags::net_upnp, "--net-upnp"},   {&Flags::original, "--original"},
                         {&Flags::mission, "--mission"},     {&Flags::net_minutes, "--net-minutes"},
                         {&Flags::net_soak, "--net-soak"},   {&Flags::net_drive, "--net-drive"},
-                        {&Flags::frames, "--frames"}};
+                        {&Flags::frames, "--frames"},       {&Flags::fire, "--fire"},
+                        {&Flags::net_walk, "--net-walk"},   {&Flags::net_ahead, "--net-ahead"},
+                        {&Flags::briefing, "--briefing"},   {&Flags::lab_mech, "--lab-mech"}};
   for (const Case& c : cases) {
     Flags f;
     f.seed = f.frame_ms = true;

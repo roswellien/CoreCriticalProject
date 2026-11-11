@@ -492,6 +492,8 @@ bool parse(int argc, char** argv, Args& a) {
     f.original = a.play_original, f.mission = !a.mission.empty();
     f.net_minutes = a.net_minutes > 0, f.net_soak = a.net_soak, f.net_drive = a.net_drive >= 0;
     f.frames = a.frames > 0, f.seed = a.seed >= 0, f.frame_ms = a.frame_ms > 0;
+    f.fire = a.fire > 0, f.net_walk = a.net_walk[1] > 0, f.net_ahead = a.net_ahead > 0;
+    f.briefing = !a.briefing.empty(), f.lab_mech = a.lab_mech >= 0;
     if (const std::string refused = mech3::arena::arena_refusal(f); !refused.empty()) {
       std::fprintf(stderr, "mw3: %s\n", refused.c_str());
       return false;

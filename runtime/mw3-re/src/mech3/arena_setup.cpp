@@ -179,6 +179,11 @@ std::string arena_refusal(const Flags& f) {
   if (f.net_soak) return "--arena: --net-soak is refused";
   if (f.net_drive) return "--arena: --net-drive is refused";
   if (f.frames) return "--arena: --frames is refused (the match runs to its end)";
+  if (f.fire) return "--arena: --fire is refused (there is no player mech)";
+  if (f.net_walk) return "--arena: --net-walk is refused (there is no player mech)";
+  if (f.net_ahead) return "--arena: --net-ahead is refused (there is no player mech)";
+  if (f.briefing) return "--arena: --briefing is refused (the arena opens no menus)";
+  if (f.lab_mech) return "--arena: --lab-mech is refused (the arena opens no menus)";
   if (!f.seed) return "--arena: needs --seed (a match log must repeat)";
   if (!f.frame_ms) return "--arena: needs --frame-ms (a match log must repeat)";
   return {};
