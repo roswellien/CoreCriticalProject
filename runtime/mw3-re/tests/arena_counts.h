@@ -25,7 +25,7 @@ int hits(int side);
 // log against it.
 nlohmann::json live_pose(int id);
 
-bool standing(const mech3::Mech* mech);  // Mech::active: not destroyed
+bool standing(const mech3::Mech* mech);  // arena_standing: not destroyed or dying
 bool is_bot(const mech3::Mech* mech);    // Mech::arena_bot
 
 }  // namespace arena_counts

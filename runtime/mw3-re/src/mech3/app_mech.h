@@ -383,10 +383,6 @@ void program_action_lineup(bool launch);  // app_mission.cpp: player.cpp's 0x004
 void program_objectives_start();   // app_mission.cpp: 0x0045c4a0 on the mission's objectives
 // 0x00491120: a mech's controls (+0x37c), the controls told their owner.
 void program_mech_set_controls(void* mech, void* controls);
-// Ours (#287): AI controls over `net` (an ai::AiNet) and `rec` (an
-// ai::AivRecord), made as player.cpp makes a bot's (make_mech_controls), so
-// the mission frees them with the mech they go on. Null outside a mission.
-void* program_make_ai_mech_controls(void* net, void* rec);
 // Ours (#287): an AI mech of roster `mech` named `name`, on AI controls over
 // `net` (an ai::AiNet) and `rec` (an ai::AivRecord), placed at the record's
 // place, as player.cpp's create_ai_mech makes one. Null when it fails.

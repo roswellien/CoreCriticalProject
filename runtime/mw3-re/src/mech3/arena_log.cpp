@@ -144,7 +144,7 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
       {"anim", {{"index", m->anim_index}, {"t", rounded(anim ? anim->t : 0.0f)}}},
       {"jumping", m->airborne()},
       {"fallen", m->anim_state == kFallenBack || m->anim_state == kFallenFront},
-      {"standing", m->active},
+      {"standing", arena_standing(m)},
       {"heat", rounded(m->heat)},
       {"parts", parts},
       {"target", target_id(m)},
@@ -194,7 +194,7 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs) {
   g_now = now;
   if (g_was_standing.size() != mechs.size()) g_was_standing.assign(mechs.size(), true);
   for (size_t i = 0; i < mechs.size(); ++i) {
-    const bool standing = mechs[i].mech->active;
+    const bool standing = arena_standing(mechs[i].mech);
     if (g_was_standing[i] && !standing)
       write_line({{"type", "destroyed"}, {"t", rounded(now)}, {"id", mechs[i].id}, {"by", id_of(mechs[i].mech->attacker)}});
     g_was_standing[i] = standing;

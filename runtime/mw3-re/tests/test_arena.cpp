@@ -67,7 +67,10 @@ bool g_counting = false;
 decltype(mech3::WeaponCalls::net_event) g_kept_shot = nullptr;
 decltype(mech3::DamageCalls::controls_hit) g_kept_hit = nullptr;
 
+// The match log stops at its end line, while the bots fire on until the run
+// exits: count only what the log can see, the frames before the result.
 int side_of(const void* mech) {
+  if (mech3::arena::arena_result().decided) return -1;
   for (const ArenaMech& entry : arena_mechs())
     if (entry.mech == mech) return entry.side;
   return -1;
@@ -129,7 +132,7 @@ nlohmann::json live_pose(int id) {
   return pose;
 }
 
-bool standing(const mech3::Mech* mech) { return mech->active; }
+bool standing(const mech3::Mech* mech) { return mech3::arena::arena_standing(mech); }
 bool is_bot(const mech3::Mech* mech) { return mech->arena_bot; }
 }  // namespace arena_counts
 

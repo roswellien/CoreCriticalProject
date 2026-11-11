@@ -88,14 +88,14 @@ int next_standing(int from) {
   const int count = static_cast<int>(g_mechs.size());
   for (int step = 1; step <= count; ++step) {
     const int index = (from + step + count) % count;
-    if (g_mechs[static_cast<size_t>(index)].mech->active) return index;
+    if (arena_standing(g_mechs[static_cast<size_t>(index)].mech)) return index;
   }
   return -1;
 }
 
 // Each frame: a fallen viewed bot hands the view on.
 void view_follow() {
-  const bool viewed_standing = g_viewed >= 0 && g_mechs[static_cast<size_t>(g_viewed)].mech->active;
+  const bool viewed_standing = g_viewed >= 0 && arena_standing(g_mechs[static_cast<size_t>(g_viewed)].mech);
   if (viewed_standing) return;
   const int next = next_standing(g_viewed < 0 ? -1 : g_viewed);
   if (next >= 0 && next != g_viewed) view_mech(next);
@@ -159,7 +159,7 @@ void arena_tick() {
   int standing[kSides] = {};
   int lost[kSides] = {};
   for (const ArenaMech& entry : g_mechs) {
-    if (entry.mech->active) ++standing[entry.side];
+    if (arena_standing(entry.mech)) ++standing[entry.side];
     else ++lost[entry.side];
   }
   const float match_time = world().time - g_start_time;
@@ -273,6 +273,11 @@ bool arena_hunt_net_held() { return ai::hunt_net() != nullptr; }
 
 const std::vector<ArenaMech>& arena_mechs() { return g_mechs; }
 
+bool arena_standing(const Mech* mech) {
+  constexpr int kDead = 10;  // Mech::anim_state's death animation (mech_damage.cpp)
+  return mech->active && mech->anim_state != kDead;
+}
+
 const ai::AiParams* arena_brain_params(const Mech* mech) {
   auto* controls = mech ? dynamic_cast<AiControls*>(mech->controls) : nullptr;
   const ai::Brain* brain = controls ? controls->brain.get() : nullptr;
@@ -284,14 +289,17 @@ void arena_start() {
   // What a run before this one in the same process left behind.
   view_clear();
   world().arena_side_a_team = 0, world().arena_side_a_enemies = 0;
-  world().arena_spectating = !world().mission_player;
-  set_update_order_seed(static_cast<uint32_t>(g_seed));  // the update order replays with the match
+  world().arena_spectating = false;
   g_mechs.clear();
   g_names.clear();
   g_result = Result{};
   g_started = false;
-  ai::nav_frame_reset();
   if (!g_setup || g_setup->sides[0].empty()) return;
+  // Only an arena run is changed from here on: a stock mission keeps its own
+  // update order and nav servicing even when it starts with no player mech.
+  world().arena_spectating = !world().mission_player;
+  set_update_order_seed(static_cast<uint32_t>(g_seed));  // the update order replays with the match
+  ai::nav_frame_reset();
   g_start_time = world().time;
 
   float pos[kSpawnSpots][3], yaw[kSpawnSpots];

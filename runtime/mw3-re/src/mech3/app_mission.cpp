@@ -2836,15 +2836,6 @@ void hook_census_report(const char* key) {
   if (GameEngine* g = engine_of_hooks()) g->unported(key, {});
 }
 
-// Ours (#287): the controls registered with the mission's hooks, so
-// mission_controls_free deletes them when their mech is released.
-void* program_make_ai_mech_controls(void* net, void* rec) {
-  GameEngine* e = g_player_hooks.e;
-  if (!e || !net || !rec) return nullptr;
-  const Handle ctl = make_mech_controls(e->handle_of(static_cast<ai::AiNet*>(net)), static_cast<ai::AivRecord*>(rec));
-  return ctl ? e->object_of(ctl) : nullptr;
-}
-
 // Ours (#287): a bot made as player.cpp makes a mission's AI mech
 // (create_ai_mech), on `net` (an ai::AiNet) and `rec` (an ai::AivRecord).
 void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* rec) {

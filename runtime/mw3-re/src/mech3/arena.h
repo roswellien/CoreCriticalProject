@@ -116,6 +116,12 @@ struct ArenaMech {
 };
 // The match's mechs in setup order; empty outside a match.
 const std::vector<ArenaMech>& arena_mechs();
+// Whether a mech still counts in the match: active and not in its death
+// animation. Stock clears Mech::active only once the death fall ends, a few
+// seconds after the kill; take_damage and program_pilot_alive already treat
+// the dead state (anim_state 10) as dead, so the result, the log and the view
+// hand-off count the kill when it happens.
+bool arena_standing(const Mech* mech);
 // The AI params a mech's brain runs on; null when it is not on AI controls.
 const ai::AiParams* arena_brain_params(const Mech* mech);
 
