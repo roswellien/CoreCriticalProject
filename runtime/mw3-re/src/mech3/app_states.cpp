@@ -6,12 +6,9 @@
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/app.h"
 #include "mech3/pilot.h"
+#include "mech3/spectator_seat.h"
 
 namespace mech3 {
-
-// Ours (#287): mech3/mission_launch.h, whose mech headers clash with pilot.h.
-bool launch_spectator();
-void set_launch_spectator(bool spectator);
 
 namespace {
 States* g_states = nullptr;

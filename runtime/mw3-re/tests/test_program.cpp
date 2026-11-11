@@ -18632,98 +18632,6 @@ TEST(net_pilot_respawns_c1mp1_headless) {
   EXPECT(died && !back && camera == 4);
 }
 
-// #287 step 3b (docs/arena.md): an arena match on c1mp1 as mw3 --arena starts
-// it (the hub's session, respawn off, the host a spectator): the Core state
-// is reached with no player mech at all, every fighter is a bot on AI
-// controls, the view follows one of them, and 300 frames later the mission
-// ends with nothing broken.
-TEST(arena_spectator_launch_has_no_player_mech_headless) {
-  if (!have_game()) return;
-  SavedMounts keep;
-  zutl::mounts() = zutl::Mounts{};
-  zutl::mount(MW3_GAME_DIR);
-  zutl::set_write_dir(temp_dir("arena_spectator_write"));
-  mech3::arena::Setup setup;
-  std::string error;
-  const std::string bot =
-      R"({"mech": "madcat", "preset": {"world": "c1", "mission": "mp1", "record": "remote_1"}})";
-  EXPECT(mech3::arena::parse_arena_setup(
-      R"({"map": "c1mp1", "minutes": 10, "out": "arena-out", "sides": [[)" + bot + "], [" + bot + "]]}", &setup,
-      &error));
-  EXPECT(mech3::arena::read_arena_game_files(&setup, &error));
-  if (!error.empty()) std::printf("  arena: %s\n", error.c_str());
-  mech3::reset_states();
-  reset_process_state();
-  mech3::missions() = mech3::Missions{};
-  mech3::mech_types_forget();
-  mech3::player_controls_instance() = nullptr;
-  mech3::options() = mech3::Options{};
-  FakeWindow window;
-  FakeAlert alert;
-  FakeClock clock;
-  FakeScreen screen;
-  platform::SilentSoundOutput sound;
-  mech3::MountFiles files;
-  mech3::Platform p;
-  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
-  znet::Hub hub;
-  EXPECT(mech3::arena::arena_open_session(hub) != nullptr);
-  mech3::arena::set_arena_setup(&setup);
-  int core_frames = 0, player_frames = 0, unviewed_frames = 0, mechs = 0, bots_on_ai = 0;
-  {
-    mech3::GameEngine engine(p, "mech3.exe -nofmv");
-    engine.quiet = true;
-    mech3::Mech3App app(&engine);
-    mech3::set_app(&app);
-    EXPECT(app.init_instance());
-    mech3::MultiplayerGame game(nullptr);
-    game.x70 = 1 << 30;
-    game.b8c = 0;
-    mech3::GameEngine::Launch l;
-    l.index = 0, l.number = 1, l.type = 3, l.multi = &game, l.spectator = true;
-    engine.set_launch(l);
-    mech3::program_net_debug_lobby();
-    app.post_intro_ = &mech3::states().load;
-    engine.on_present = [&](int) {
-      if (app.current() != &mech3::states().core) return;
-      ++core_frames;
-      if (mech3::mech_mission_player()) ++player_frames;  // world().mission_player
-      mech3::Mech* viewed = mech3::arena::arena_viewed_mech();
-      if (!viewed || mech3::program_view_mech() != viewed) ++unviewed_frames;
-      if (core_frames == 1) {
-        mechs = static_cast<int>(mech3::arena::arena_mechs().size());
-        for (const auto& entry : mech3::arena::arena_mechs())
-          if (mech3::arena::arena_brain_params(entry.mech)) ++bots_on_ai;
-      }
-    };
-    CountingPump pump;
-    pump.limit = 2600;
-    pump.stop = [&] { return core_frames >= 300; };
-    app.run(pump);
-    mech3::missions().cleanup(false);
-    app.stop_game();
-    app.exit_instance();
-    mech3::set_app(nullptr);
-  }
-  mech3::arena::set_arena_setup(nullptr);
-  znet::shutdown();
-  std::printf("  arena spectator: core frames %d, frames with a player mech %d, frames off a viewed bot %d, "
-              "mechs %d, on AI %d\n",
-              core_frames, player_frames, unviewed_frames, mechs, bots_on_ai);
-  EXPECT(core_frames >= 300);
-  EXPECT(player_frames == 0);
-  EXPECT(unviewed_frames == 0);
-  EXPECT(mechs == 2 && bots_on_ai == 2);
-  EXPECT(mech3::arena::arena_viewed_mech() == nullptr);  // cleared with the match
-  EXPECT(!mech3::arena::arena_hunt_net_held());  // the mission's end freed it
-  zrdr::close_archives(true);
-  mech3::reset_states();
-  reset_process_state();
-  mech3::missions() = mech3::Missions{};
-  mech3::mech_types_forget();
-  mech3::options() = mech3::Options{};
-}
-
 namespace {
 // #287: an arena match run headless, as mw3 --arena runs it, from a setup's
 // JSON text. `on_core` sees each Core frame (from 1); the run stops after
@@ -18772,7 +18680,7 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
   mech3::arena::LogFile log = mech3::arena::create_arena_log(setup, 1, &result.log_path, &error);
   EXPECT(log != nullptr);
   mech3::arena::set_arena_setup(&setup);
-  mech3::arena::set_arena_log(log.get(), 1, 16);
+  mech3::arena::set_arena_log(log.get(), 16);
   mech3::arena::set_arena_seed(1);
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
@@ -18813,7 +18721,7 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
     mech3::set_app(nullptr);
   }
   mech3::arena::set_arena_setup(nullptr);
-  mech3::arena::set_arena_log(nullptr, -1, 0);
+  mech3::arena::set_arena_log(nullptr, 0);
   log.reset();
   znet::shutdown();
   zrdr::close_archives(true);
@@ -18830,6 +18738,40 @@ std::string arena_bot_json(const char* mech) {
          R"(", "preset": {"world": "c1", "mission": "ia1", "record": "Enemy_01"}})";
 }
 }  // namespace
+
+// #287 step 3b (docs/arena.md): an arena match on c1mp1 as mw3 --arena starts
+// it (the hub's session, respawn off, the host a spectator): the Core state
+// is reached with no player mech at all, every fighter is a bot on AI
+// controls, the view follows one of them, and 300 frames later the mission
+// ends with nothing broken.
+TEST(arena_spectator_launch_has_no_player_mech_headless) {
+  if (!have_game()) return;
+  const std::string bot =
+      R"({"mech": "madcat", "preset": {"world": "c1", "mission": "mp1", "record": "remote_1"}})";
+  int player_frames = 0, unviewed_frames = 0, mechs = 0, bots_on_ai = 0;
+  const auto run = arena_headless_run(
+      R"({"map": "c1mp1", "minutes": 10, "out": "arena-out", "sides": [[)" + bot + "], [" + bot + "]]}", 300,
+      [&](int frame) {
+        if (mech3::mech_mission_player()) ++player_frames;  // world().mission_player
+        mech3::Mech* viewed = mech3::arena::arena_viewed_mech();
+        if (!viewed || mech3::program_view_mech() != viewed) ++unviewed_frames;
+        if (frame == 1) {
+          mechs = static_cast<int>(mech3::arena::arena_mechs().size());
+          for (const auto& entry : mech3::arena::arena_mechs())
+            if (mech3::arena::arena_brain_params(entry.mech)) ++bots_on_ai;
+        }
+      });
+  std::printf("  arena spectator: core frames %d, frames with a player mech %d, frames off a viewed bot %d, "
+              "mechs %d, on AI %d\n",
+              run.core_frames, player_frames, unviewed_frames, mechs, bots_on_ai);
+  EXPECT(run.setup_read);
+  EXPECT(run.core_frames >= 300);
+  EXPECT(player_frames == 0);
+  EXPECT(unviewed_frames == 0);
+  EXPECT(mechs == 2 && bots_on_ai == 2);
+  EXPECT(mech3::arena::arena_viewed_mech() == nullptr);  // cleared with the match
+  EXPECT(!mech3::arena::arena_hunt_net_held());  // the mission's end freed it
+}
 
 // #287 criterion 11: every bot's brain runs on its preset's params, with only
 // the arena's own changes (place, team, loadout, engaging, any-enemy wake-up).

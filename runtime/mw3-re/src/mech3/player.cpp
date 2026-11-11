@@ -8,12 +8,11 @@
 
 #include "gamez/zmodel/gmod_cull.h"
 #include "gamez/zutil/zfix.h"
+#include "mech3/spectator_seat.h"
 #include "mech3/zrdraiv.h"
 
 // The mission start's vehicles and the player's tick; docs/mission-start.md.
 namespace mech3 {
-
-bool launch_spectator();  // ours (#287): mech3/mission_launch.h
 
 namespace {
 

@@ -3,6 +3,7 @@
 
 #include "gamez/zgame/unported.h"
 #include "mech3/mech.h"
+#include "mech3/spectator_seat.h"
 
 // C:\zipper\Mech3\mission.cpp 0x00491150: the launch, from the briefing's
 // Launch (0x0040500a): the player's controls and mech from the pilot's game
@@ -94,14 +95,5 @@ LaunchHooks& launch_hooks();
 // without a `player` record in aiv.zrd or when the mech is not made.
 bool launch_player();
 Mech* launched_mech();  // the mech the last launch made (the pilot's +0x14 in the exe)
-
-// Ours (#287, the arena's spectator seat): a spectator's launch makes no
-// player mech. launch_player then does only the work that does not need one
-// (the session's player data, the pilot save, the camera that is the sound
-// listener), the Core state does not leave for the menu over the missing
-// vehicle, and the player tick skips its vehicle calls. Set by
-// GameEngine::set_launch from Launch::spectator; false for every other launch.
-void set_launch_spectator(bool spectator);
-bool launch_spectator();
 
 }  // namespace mech3

@@ -113,6 +113,7 @@
 #include "mech3/zrdraiv.h"
 #include "mech3/zainetedit.h"
 #include "mech3/zrdrvalve.h"
+#include "mech3/spectator_seat.h"
 #include "platform/render3d.h"
 
 namespace mech3 {
@@ -127,7 +128,6 @@ void engine_sounds_clear();  // mech3/veh_basic_object.h: 0x004add10
 void vehicle_markers_create();  // mech3/veh_basic_object.h: 0x004ac3d0
 void vehicle_markers_delete();  // 0x004ac4e0
 bool launch_player();                                        // 0x00491150 (mech3/mission_launch.h)
-void set_launch_spectator(bool spectator);                   // ours (#287, mech3/mission_launch.h)
 void radar_objects_create();                                 // 0x004b4ab0
 void hit_globals_init(bool network);                         // 0x00413e60's first part (mech_parts.h)
 void radar_objects_destroy();                                // 0x004b4ae0

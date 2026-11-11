@@ -235,9 +235,10 @@ struct Args {
   bool net_soak = false;
   bool shot_any = false;
   // Ours (#287, docs/arena.md): --arena SETUP.json, an AI bot match on the
-  // setup's map, hosted in-process; the setup as read (its map is the mission).
+  // setup's map, hosted in-process (its map is the mission). The run, once
+  // its setup is read; shared so Args stays copyable.
   std::string arena_path;
-  mech3::arena::Setup arena;
+  std::shared_ptr<mech3::arena::ArenaRun> arena;
 };
 
 void usage() {
@@ -494,16 +495,13 @@ bool parse(int argc, char** argv, Args& a) {
     f.frames = a.frames > 0, f.seed = a.seed >= 0, f.frame_ms = a.frame_ms > 0;
     f.fire = a.fire > 0, f.net_walk = a.net_walk[1] > 0, f.net_ahead = a.net_ahead > 0;
     f.briefing = !a.briefing.empty(), f.lab_mech = a.lab_mech >= 0;
-    if (const std::string refused = mech3::arena::arena_refusal(f); !refused.empty()) {
-      std::fprintf(stderr, "mw3: %s\n", refused.c_str());
+    a.arena = std::make_shared<mech3::arena::ArenaRun>();
+    std::string message;
+    if (!a.arena->read_setup(a.arena_path, f, &message)) {
+      std::fprintf(stderr, "mw3: %s\n", message.c_str());
       return false;
     }
-    std::string error;
-    if (!mech3::arena::read_arena_setup(a.arena_path, &a.arena, &error)) {
-      std::fprintf(stderr, "mw3: --arena %s: %s\n", a.arena_path.c_str(), error.c_str());
-      return false;
-    }
-    a.mission = a.arena.map;
+    a.mission = a.arena->setup().map;
     a.nosound = true;  // a match runs unattended: the silent stand-in, never the speakers
   }
   // --lab-mech alone (ours): the lab is reached from c1m2's briefing (MECHLAB,
@@ -892,17 +890,14 @@ int main(int argc, char** argv) {
   // --arena (ours, #287): with the install mounted, the map's spawn spots and
   // every pilot preset read from the player's files, then the match log made
   // (never over an old one). A failure exits 2 before the engine starts.
-  mech3::arena::LogFile arena_log;  // held for the run's life (the match log, #287 step 6)
-  if (!a.arena_path.empty()) {
-    std::string error, log_path;
-    if (mech3::arena::read_arena_game_files(&a.arena, &error))
-      arena_log = mech3::arena::create_arena_log(a.arena, a.seed, &log_path, &error);
-    if (!arena_log) {
-      std::fprintf(stderr, "mw3: --arena %s: %s\n", a.arena_path.c_str(), error.c_str());
+  if (a.arena) {
+    std::string message;
+    if (!a.arena->read_game_files(a.seed, &message)) {
+      std::fprintf(stderr, "mw3: %s\n", message.c_str());
       SDL_Quit();
       return 2;
     }
-    std::printf("mw3: arena on %s, the log %s\n", a.arena.map.c_str(), log_path.c_str());
+    std::printf("mw3: arena on %s, the log %s\n", a.arena->setup().map.c_str(), a.arena->log_path().c_str());
   }
   const mech3::DataVersion data = mech3::detect_data_version();
   std::printf("mw3: %s\n", data.describe().c_str());  // ours: assets.md, Data versions
@@ -976,21 +971,16 @@ int main(int argc, char** argv) {
     }
   }
   // --arena (ours, #287): a lone host's session on the in-process hub, never
-  // the ENet transport above (refused with --host and --join): no socket is
-  // opened. The hub outlives run(), whose engine is gone before the shutdown.
-  std::unique_ptr<znet::Hub> arena_hub;
-  if (!a.arena_path.empty()) {
-    arena_hub = std::make_unique<znet::Hub>();
-    if (!mech3::arena::arena_open_session(*arena_hub)) {
-      std::fprintf(stderr, "mw3: --arena: the in-process session failed\n");
-      znet::shutdown();
+  // the ENet transport above (refused with --host and --join). The run
+  // outlives run(), whose engine is gone before its shutdown.
+  if (a.arena) {
+    std::string message;
+    if (!a.arena->open(a.seed, a.frame_ms, a.hidden && a.shot.empty(), &message)) {
+      std::fprintf(stderr, "mw3: %s\n", message.c_str());
+      a.arena.reset();
       SDL_Quit();
       return 1;
     }
-    mech3::arena::set_arena_setup(&a.arena);  // the first Core frame makes every bot
-    mech3::arena::set_arena_log(arena_log.get(), a.seed, a.frame_ms);
-    mech3::arena::set_arena_seed(a.seed);  // which ends of the map the sides start at
-    mech3::arena::set_arena_headless(a.hidden && a.shot.empty());  // nobody watches: draw nothing
   }
   int result = 1;
   try {
@@ -999,12 +989,7 @@ int main(int argc, char** argv) {
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
   }
-  if (arena_hub) {
-    mech3::arena::set_arena_setup(nullptr);
-    mech3::arena::set_arena_log(nullptr, -1, 0);
-    znet::shutdown();
-    arena_hub.reset();
-  }
+  a.arena.reset();  // the arena's hooks off and its session shut, before SDL goes
   g_net_pass = nullptr;
   vfw.reset();
   SDL_Quit();  // after every SDL object above is gone
@@ -1305,7 +1290,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           // --arena's clock is the setup's minutes (ours, #287; --net-minutes is refused with it),
           // plus 10 s: the stock end starts 3 s before its clock runs out, and
           // the arena's own end (arena_tick) must count the result first.
-          const int clock_minutes = a.arena_path.empty() ? a.net_minutes : a.arena.minutes;
+          const int clock_minutes = a.arena ? a.arena->setup().minutes : a.net_minutes;
           const float arena_margin = a.arena_path.empty() ? 0.0f : 10.0f;
           if (clock_minutes > 0)
             mech3::missions().clock = clock_minutes * 60.0f + arena_margin, mech3::missions().clock_down = 1;

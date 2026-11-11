@@ -134,6 +134,7 @@ void set_arena_setup(const Setup* setup) {
 
 const Result& arena_result() { return g_result; }
 void set_arena_seed(int64_t seed) { g_seed = seed; }
+int64_t arena_seed() { return g_seed; }
 
 namespace {
 bool g_headless = false;
@@ -274,8 +275,7 @@ bool arena_hunt_net_held() { return ai::hunt_net() != nullptr; }
 const std::vector<ArenaMech>& arena_mechs() { return g_mechs; }
 
 bool arena_standing(const Mech* mech) {
-  constexpr int kDead = 10;  // Mech::anim_state's death animation (mech_damage.cpp)
-  return mech->active && mech->anim_state != kDead;
+  return mech->active && mech->anim_state != kAnimDead;
 }
 
 const ai::AiParams* arena_brain_params(const Mech* mech) {
@@ -349,6 +349,55 @@ void arena_start() {
   g_started = true;
   if (!g_mechs.empty()) view_follow();
   log_match_start(*g_setup, g_mechs);
+}
+
+// Ours (#287)
+bool ArenaRun::read_setup(const std::string& path, const Flags& flags, std::string* message) {
+  path_ = path;
+  if (const std::string refused = arena_refusal(flags); !refused.empty()) {
+    *message = refused;
+    return false;
+  }
+  std::string error;
+  if (!read_arena_setup(path_, &setup_, &error)) {
+    *message = "--arena " + path_ + ": " + error;
+    return false;
+  }
+  return true;
+}
+
+// Ours (#287)
+bool ArenaRun::read_game_files(int64_t seed, std::string* message) {
+  std::string error;
+  if (read_arena_game_files(&setup_, &error)) log_ = create_arena_log(setup_, seed, &log_path_, &error);
+  if (!log_) {
+    *message = "--arena " + path_ + ": " + error;
+    return false;
+  }
+  return true;
+}
+
+// Ours (#287): never the ENet transport: no socket is opened.
+bool ArenaRun::open(int64_t seed, int32_t frame_ms, bool headless, std::string* message) {
+  hub_ = std::make_unique<znet::Hub>();
+  if (!arena_open_session(*hub_)) {
+    *message = "--arena: the in-process session failed";
+    return false;
+  }
+  set_arena_setup(&setup_);  // the first Core frame makes every bot
+  set_arena_seed(seed);      // which ends of the map the sides start at, and the update order
+  set_arena_log(log_.get(), frame_ms);
+  set_arena_headless(headless);  // nobody watches: draw nothing
+  return true;
+}
+
+ArenaRun::~ArenaRun() {
+  if (!hub_) return;
+  set_arena_setup(nullptr);
+  set_arena_log(nullptr, 0);
+  set_arena_headless(false);
+  znet::shutdown();
+  hub_.reset();
 }
 
 }  // namespace mech3::arena

@@ -16,7 +16,6 @@ namespace mech3::arena {
 
 namespace {
 std::FILE* g_file = nullptr;
-int64_t g_seed = -1;
 int32_t g_frame_ms = 0;
 
 // The match being logged: its mechs (the hooks look an object up in them),
@@ -108,9 +107,8 @@ void unhook() {
 }
 }  // namespace
 
-void set_arena_log(std::FILE* file, int64_t seed, int32_t frame_ms) {
+void set_arena_log(std::FILE* file, int32_t frame_ms) {
   g_file = file;
-  g_seed = seed;
   g_frame_ms = frame_ms;
 }
 
@@ -133,7 +131,6 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
       parts.push_back({{"id", part->id}, {"armor", rounded(part->armor)}, {"internal", rounded(part->internal)},
                        {"destroyed", part->destroyed}});
   const MechAnim* anim = m->anim_index >= 0 && m->anim_index < 13 ? m->anims[m->anim_index] : nullptr;
-  constexpr int kFallenBack = 12, kFallenFront = 13;
   nlohmann::json record = {
       {"id", entry.id},
       {"side", entry.side},
@@ -144,7 +141,7 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
       {"arms", arms},
       {"anim", {{"index", m->anim_index}, {"t", rounded(anim ? anim->t : 0.0f)}}},
       {"jumping", m->airborne()},
-      {"fallen", m->anim_state == kFallenBack || m->anim_state == kFallenFront},
+      {"fallen", m->anim_state == kAnimFallenBack || m->anim_state == kAnimFallenFront},
       {"standing", arena_standing(m)},
       {"heat", rounded(m->heat)},
       {"parts", parts},
@@ -175,7 +172,7 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   write_line({{"type", "start"},
               {"map", setup.map},
               {"minutes", setup.minutes},
-              {"seed", g_seed},
+              {"seed", arena_seed()},
               {"frame_ms", g_frame_ms},
               {"sides", sides},
               {"mechs", ids}});

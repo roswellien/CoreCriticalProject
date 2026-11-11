@@ -127,7 +127,7 @@ nlohmann::json live_pose(int id) {
         {"arms", arms},
         {"anim", {{"index", m.anim_index}, {"t", round3(anim ? anim->t : 0.0f)}}},
         {"jumping", m.airborne()},
-        {"fallen", m.anim_state == 12 || m.anim_state == 13},
+        {"fallen", m.anim_state == mech3::arena::kAnimFallenBack || m.anim_state == mech3::arena::kAnimFallenFront},
         {"heat", round3(m.heat)},
     };
   }

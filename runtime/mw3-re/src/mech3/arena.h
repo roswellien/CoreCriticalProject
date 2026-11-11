@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -30,10 +31,11 @@ znet::Transport* arena_open_session(znet::Hub& hub);
 // arena's hooks do nothing in any other game. Not owned.
 void set_arena_setup(const Setup* setup);
 const Setup* arena_setup();
-// The open match log for this run (create_arena_log's), with its seed and
-// frame time for the start line; not owned. Null (the default, and every
-// non-arena run) writes nothing. The log itself: arena_log.h.
-void set_arena_log(std::FILE* file, int64_t seed, int32_t frame_ms);
+// The open match log for this run (create_arena_log's), with the frame time
+// for the start line (the seed is the arena's, set_arena_seed); not owned.
+// Null (the default, and every non-arena run) writes nothing. The log
+// itself: arena_log.h.
+void set_arena_log(std::FILE* file, int32_t frame_ms);
 
 // At the first Core frame (app_states, after nav_prebuild): with a match
 // set, every bot made in its spawn spot (the host is a spectator with no
@@ -77,6 +79,7 @@ std::string arena_result_line(const Result& result);
 // The match's seed (--seed), which picks where the sides start. Set with the
 // setup; 0 until then.
 void set_arena_seed(int64_t seed);
+int64_t arena_seed();
 
 // Ours (#287): a match nobody watches (--hidden, no screenshots) draws
 // nothing. Drawing changes how a match plays out (a single frame drawn early
@@ -116,6 +119,11 @@ struct ArenaMech {
 };
 // The match's mechs in setup order; empty outside a match.
 const std::vector<ArenaMech>& arena_mechs();
+// Mech::anim_state values the arena reads, as the stock files name them
+// (mech_damage.cpp, mech_move.cpp): the death animation, and lying fallen on
+// the back or the front.
+constexpr int kAnimDead = 10, kAnimFallenBack = 12, kAnimFallenFront = 13;
+
 // Whether a mech still counts in the match: active and not in its death
 // animation. Stock clears Mech::active only once the death fall ends, a few
 // seconds after the kill; take_damage and program_pilot_alive already treat
@@ -127,5 +135,36 @@ const ai::AiParams* arena_brain_params(const Mech* mech);
 
 // Whether the hunt net is still made (the mission's end frees it).
 bool arena_hunt_net_held();
+
+// One mw3 --arena run, from the command line to the exit: what the program's
+// main needs, in the order it needs it. Every failure is a message for
+// stderr; nothing is set until open() succeeds, and the destructor clears
+// whatever open() set, so the arena's hooks stay off in any later run.
+class ArenaRun {
+ public:
+  ArenaRun() = default;
+  ArenaRun(const ArenaRun&) = delete;
+  ArenaRun& operator=(const ArenaRun&) = delete;
+  ~ArenaRun();
+
+  // Before anything starts: the options refused, then the setup file read.
+  bool read_setup(const std::string& path, const Flags& flags, std::string* message);
+  // With the install mounted: the map's spawn spots and the presets read from
+  // the player's files, then the match log made (never over an old one).
+  bool read_game_files(int64_t seed, std::string* message);
+  // Before the engine runs: the in-process session opened and the match set,
+  // with the seed and frame time a log must repeat and whether anyone watches.
+  bool open(int64_t seed, int32_t frame_ms, bool headless, std::string* message);
+
+  const Setup& setup() const { return setup_; }
+  const std::string& log_path() const { return log_path_; }
+
+ private:
+  std::string path_;
+  Setup setup_;
+  LogFile log_;
+  std::string log_path_;
+  std::unique_ptr<znet::Hub> hub_;  // outlives the engine: znet::shutdown() first
+};
 
 }  // namespace mech3::arena
