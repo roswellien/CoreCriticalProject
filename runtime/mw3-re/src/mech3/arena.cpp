@@ -134,6 +134,12 @@ void set_arena_setup(const Setup* setup) {
 
 const Result& arena_result() { return g_result; }
 void set_arena_seed(int64_t seed) { g_seed = seed; }
+
+namespace {
+bool g_headless = false;
+}  // namespace
+void set_arena_headless(bool on) { g_headless = on; }
+bool arena_headless() { return g_headless && g_setup != nullptr; }
 float arena_match_time() { return g_started ? world().time - g_start_time : 0.0f; }
 
 // Ours (#287)

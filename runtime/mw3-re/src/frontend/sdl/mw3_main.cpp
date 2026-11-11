@@ -988,6 +988,7 @@ int main(int argc, char** argv) {
     mech3::arena::set_arena_setup(&a.arena);  // the first Core frame makes every bot
     mech3::arena::set_arena_log(arena_log.get(), a.seed, a.frame_ms);
     mech3::arena::set_arena_seed(a.seed);  // which ends of the map the sides start at
+    mech3::arena::set_arena_headless(a.hidden && a.shot.empty());  // nobody watches: draw nothing
   }
   int result = 1;
   try {

@@ -78,6 +78,13 @@ std::string arena_result_line(const Result& result);
 // setup; 0 until then.
 void set_arena_seed(int64_t seed);
 
+// Ours (#287): a match nobody watches (--hidden, no screenshots) draws
+// nothing. Drawing changes how a match plays out (a single frame drawn early
+// can change a bot's steering minutes later; battletech-specs research
+// mw3-ai/order-bias), so a hidden match must not depend on where the view is.
+void set_arena_headless(bool on);
+bool arena_headless();
+
 // How many of the map's most separated spot pairs the seed chooses among.
 constexpr int kAnchorChoices = 3;
 

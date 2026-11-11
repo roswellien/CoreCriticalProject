@@ -2785,7 +2785,8 @@ uint32_t GameEngine::vcall(Handle obj, uint32_t slot, std::initializer_list<Arg>
   if (obj && obj == view_ && slot == 0x04) {
     if (zcls::Node* cam = mission_node(*this, camera_)) {
       ++zcls::frames().frame;
-      zcls::render_world(cam, 0);
+      // Ours (#287): a hidden arena match draws nothing (arena.h, set_arena_headless).
+      if (!arena::arena_headless()) zcls::render_world(cam, 0);
       scene_drawn_ = true;
     }
     return 0;
