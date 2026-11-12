@@ -56,11 +56,6 @@ coordinator = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(coordinator))
 from startup_cache import environment_resources
 from prepared_environment_packs import select
-from owned_emission import pack, read
-bindings = [dict(owner='torso', material='Glass', width=1, height=1, hash=77,
-                 bounds=((-1,1),(-1,1),(-1,1)))]
-records = [dict(id='eyes', batch=0, strength=.35, regions=[(0,0,1,1)], anchors=[])]
-assert read(pack(12, bindings, records), 12, bindings)[0]['id'] == 'eyes'
 host = dict(content_capabilities={'environment-resources': [1]},
             executable_sha256='a' * 64, runtime_environment={})
 for index, chosen in enumerate(({}, select([sys.argv[2]], host))):
@@ -70,7 +65,7 @@ for index, chosen in enumerate(({}, select([sys.argv[2]], host))):
     if chosen:
         assert Path(first['MW34_REMASTER_BANKS']).is_file()
 for name, module in tuple(sys.modules.items()):
-    if name in ('startup_cache', 'normal_materials', 'normal_codec', 'owned_emission'):
+    if name in ('startup_cache', 'normal_materials', 'normal_codec'):
         assert Path(module.__file__).resolve().parent == coordinator
 '''
             for runtime in (staged, refreshed):

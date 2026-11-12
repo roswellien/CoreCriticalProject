@@ -11,11 +11,7 @@ public static class ChassisAppearances
     public const string Capability = "mech-appearances";
     private const long MaxPageBytes = 128L * 1024 * 1024;
     private const long MaxCatalogBytes = 512L * 1024 * 1024;
-<<<<<<< HEAD
     private readonly record struct ColorKey(uint Width, uint Height, uint Format, ulong Hash);
-=======
-    internal readonly record struct ColorKey(uint Width, uint Height, uint Format, ulong Hash);
->>>>>>> origin/develop
 
     private static void Fields(JsonElement value, params string[] names)
     {
@@ -31,11 +27,7 @@ public static class ChassisAppearances
         return value.GetString()!;
     }
 
-<<<<<<< HEAD
     private static ulong PixelHash(ReadOnlySpan<byte> data)
-=======
-    internal static ulong PixelHash(ReadOnlySpan<byte> data)
->>>>>>> origin/develop
     {
         ulong hash = 0xCBF29CE484222325;
         foreach (var value in data) hash = unchecked((hash ^ value) * 0x100000001B3);
@@ -47,25 +39,7 @@ public static class ChassisAppearances
     {
         if (!payload.RequiredCapabilities.TryGetValue(Capability, out var version) || version != 1)
             throw new InvalidDataException("Chassis appearances require version 1.");
-<<<<<<< HEAD
         Fields(appearances, "upgraded");
-=======
-        if (appearances.ValueKind != JsonValueKind.Object ||
-            !appearances.EnumerateObject().Any() ||
-            appearances.EnumerateObject().Any(p => p.Name != "upgraded" && p.Name != "new"))
-            throw new InvalidDataException("Invalid chassis appearance fields.");
-        if (appearances.TryGetProperty("new", out var owned))
-        {
-            if (!payload.RequiredFormats.Contains("BWMESH4") || !payload.RequiredFormats.Contains("BWTEX1"))
-                throw new InvalidDataException("Undeclared owned visual formats.");
-            OwnedChassisVisuals.Read(owned, verify);
-            if (owned.TryGetProperty("emission", out _) && !payload.RequiredFormats.Contains(OwnedEmission.Format))
-                throw new InvalidDataException("Undeclared owned emission format.");
-            if (owned.TryGetProperty("normals", out var normalPages) && normalPages.ValueKind == JsonValueKind.Array && normalPages.GetArrayLength() > 0 && !payload.RequiredFormats.Contains("BWSNR2"))
-                throw new InvalidDataException("Undeclared owned normal format.");
-        }
-        if (!appearances.TryGetProperty("upgraded", out _)) return;
->>>>>>> origin/develop
         var upgraded = appearances.GetProperty("upgraded");
         Fields(upgraded, "textures", "normals");
         var textures = upgraded.GetProperty("textures");
@@ -112,11 +86,7 @@ public static class ChassisAppearances
         }
     }
 
-<<<<<<< HEAD
     private static void ReadNormals(byte[] data, HashSet<ColorKey> colors, HashSet<ColorKey> bindings)
-=======
-    internal static void ReadNormals(byte[] data, HashSet<ColorKey> colors, HashSet<ColorKey> bindings)
->>>>>>> origin/develop
     {
         using var stream = new MemoryStream(data);
         using var reader = new BinaryReader(stream);

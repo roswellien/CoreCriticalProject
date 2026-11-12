@@ -26,11 +26,6 @@ inline std::vector<Addition> read_additions(std::istream& file) {
     if(file.peek()!=std::char_traits<char>::eof())fail();
     return result;
 }
-// An owned base livery cannot stand in for an unprovided original alternate skin.
-inline const char* replacement_texture_path(const char* explicit_path, const char* base_path,
-                                            unsigned skin, const char* configured_path) {
-    return explicit_path ? explicit_path : skin == 0 && base_path ? base_path : configured_path;
-}
 // Original per-instance skin identity is never mutated by an added appearance.
 inline unsigned appearance(unsigned original, unsigned additional, bool player, bool player_preview) {
     return additional>=8 && (player||player_preview) ? additional : original;

@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 """Validated texture-only appearances for an owned legacy chassis.
-=======
-"""Validated appearance selection for an owned legacy chassis.
->>>>>>> origin/develop
 
 Selection never changes a registration, controller or gameplay resource. Normal
 pages bind complete color pixels; content cannot register unrelated surfaces.
@@ -29,18 +25,8 @@ def mode(value):
 
 def references(appearances, texture_names):
     """Yield (role, texture name or None, path); do not read untrusted paths here."""
-<<<<<<< HEAD
     if not isinstance(appearances, dict) or set(appearances) != {"upgraded"}:
         raise ValueError("Appearance v1 requires exactly the upgraded alternative")
-=======
-    if not isinstance(appearances, dict) or not appearances or set(appearances) - {"upgraded", "new"}:
-        raise ValueError("Appearance v1 requires exactly the upgraded alternative")
-    if "new" in appearances:
-        from owned_chassis_visuals import references as owned_references
-        list(owned_references(appearances["new"]))
-    if "upgraded" not in appearances:
-        return
->>>>>>> origin/develop
     upgraded = appearances["upgraded"]
     if not isinstance(upgraded, dict) or set(upgraded) != {"textures", "normals"}:
         raise ValueError("Appearance may change only textures and normals")

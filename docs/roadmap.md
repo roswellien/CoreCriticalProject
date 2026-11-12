@@ -15,9 +15,6 @@ behavior, fidelity/compatibility coverage, known defects and release checks.
 The paused initializer audit does not measure current project progress or gate
 routine development/releases.
 
-See the [renderer and feature parity roadmap](renderer-feature-parity.md) for
-MW3-RE integration status, remaining milestones and contributor pickup.
-
 ## Optional FidelityFX integration plan: 2026-10-29
 
 The [FidelityFX implementation plan](fidelityfx-implementation-plan.md) defines

@@ -301,10 +301,7 @@ void effect_scene(mw34::vkscene::Scene&scene){
  // Unverified hard-coded map emitters are not admitted as scene fixtures.
  if(count<settings.limit){
   const unsigned budget=mw34::effects::fixture_slots(count,settings.limit,settings.weapon_reserve);
-  auto moving=headlight_lights(settings.strength);
-  auto owned=mw34::emission::moving_lights(scene.draws,scene.world_eye,settings.strength,settings.fixtures);
-  moving.insert(moving.end(),owned.begin(),owned.end());
-  auto lights=mw34::fixtures::FixtureManager::instance().select_combined({s.camera[3],s.camera[7],s.camera[11]},budget,settings.strength,settings.fixture_range_scale,settings.fixture_retain_distance,settings.fixture_fade_distance,moving,settings.fixtures);
+  auto lights=mw34::fixtures::FixtureManager::instance().select_combined({s.camera[3],s.camera[7],s.camera[11]},budget,settings.strength,settings.fixture_range_scale,settings.fixture_retain_distance,settings.fixture_fade_distance,headlight_lights(settings.strength),settings.fixtures);
   for(const auto& selected:lights){scene.effect_lights.lights[count]=selected.light;scene.effect_lights.cones[count]=selected.cone;++count;}
  }
  if(effect_trace())std::fprintf(stderr,"Light budget frame=%u weapons=%u fixtures=%u total=%u limit=%u cached=%zu\n",host.frames,weapons,count-weapons,count,settings.limit,mw34::fixtures::FixtureManager::instance().active_count());

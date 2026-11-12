@@ -75,7 +75,7 @@ void*d3d_call(const Import&imp,unsigned token,const std::function<unsigned(unsig
    if(vcount>65535||!readable(verts,32*vcount))deny(n+" vertices outside the memory contract",verts);D3DCmd c{D3DCmd::Draw,type,0,0.f,{},{},0};draw_vertex_scratch.prepare(c.vertices,32*size_t(vcount));get_bytes(verts,c.vertices.data(),32*vcount);
    if(n=="DrawIndexedPrimitive"){const unsigned idx=arg(5),icount=arg(6);if(icount>196605||!readable(idx,2*icount))deny("Indices outside the memory contract",idx);c.indices.resize(icount);for(unsigned i=0;i<icount;++i)c.indices[i]=runtime.memory().load<unsigned short>({idx+2*i});}
    if(host.draw_log&&host.draw_detail_frame==host.frames+1){std::uint64_t h=0xcbf29ce484222325ULL;for(unsigned char b:c.vertices){h^=b;h*=0x100000001b3ULL;}float v0[8]{};if(c.vertices.size()>=32)std::memcpy(v0,c.vertices.data(),32);std::fprintf(host.draw_log,"  draw %u type %u n %u idx %zu v0 %.2f %.2f %.4f tex %08x %016llx\n",host.draw_calls,type,vcount,c.indices.size(),v0[0],v0[1],v0[2],dev->textures[0],(unsigned long long)h);}if(host.draw_log){++host.draw_calls;host.draw_fold(&type,4);host.draw_fold(&vcount,4);host.draw_fold(c.vertices.data(),c.vertices.size());if(!c.indices.empty())host.draw_fold(c.indices.data(),2*c.indices.size());}
-   if(!dev->snap||dev->snap_epoch!=dev->epoch){dev->snap=std::make_shared<const std::vector<unsigned>>(snapshot(*dev));dev->snap_epoch=dev->epoch;}c.state_snapshot=dev->snap;c.texture=dev->textures[0];c.hud_role=hud_deferred_role(type,verts,vcount,wide_hud_role());c.condition_schematic=override_status_preview();zoom_capture_command(c);divergence_trace(c);world_capture(c);camera_capture(c,dev->target);weapon_visual_world_view(*dev);sun_capture_tl(c);sun_capture_sky(c);weapon_visual_capture(c,type,verts,vcount);if(!c.weapon_visual)effect_observe(c);if(c.condition_schematic)override_emit(&c);if(!override_suppress_draw()&&!hud_deferred_source_suppressed(type,verts,vcount)&&!photo_replay_suppress_d3d_draw(c.hud_role)){
+   if(!dev->snap||dev->snap_epoch!=dev->epoch){dev->snap=std::make_shared<const std::vector<unsigned>>(snapshot(*dev));dev->snap_epoch=dev->epoch;}c.state_snapshot=dev->snap;c.texture=dev->textures[0];c.hud_role=hud_deferred_role(type,verts,vcount,wide_hud_role());c.condition_schematic=override_status_preview();zoom_capture_command(c);divergence_trace(c);world_capture(c);camera_capture(c,dev->target);sun_capture_tl(c);sun_capture_sky(c);effect_observe(c);if(c.condition_schematic)override_emit(&c);if(!override_suppress_draw()&&!photo_replay_suppress_d3d_draw(c.hud_role)){
     static const bool early=[] {
      const char* value=std::getenv("MW34_EARLY_TRIANGLE_COMMANDS");
      if(!value||!*value||!std::strcmp(value,"0"))return false;
@@ -113,7 +113,7 @@ void*d3d_call(const Import&imp,unsigned token,const std::function<unsigned(unsig
   if(n=="GetTextureStageState"){const unsigned stg=arg(1),st=arg(2);if(stg>=8||st>=32||!writable(arg(3),4))deny("GetTextureStageState arguments outside the model",st);store(arg(3),dev->tss[stg][st]);return done(DD_OK,4);}
   if(n=="GetTexture"){const unsigned stg=arg(1);if(stg>=8||!writable(arg(2),4))deny("GetTexture arguments outside the model",stg);store(arg(2),dev->textures[stg]);if(dev->textures[stg])++host.com_object(dev->textures[stg])->refs;return done(DD_OK,3);}
   if(n=="SetLightState"||n=="SetTransform"){if(!(n=="SetTransform"?readable(arg(2),64):true))deny("SetTransform matrix outside the memory contract",arg(2));return done(DD_OK,3);}
-  if(n=="BeginScene"){if(dev->in_scene)return done(unsigned(D3DERR_SCENE_IN_SCENE),1);dev->in_scene=true;weapon_visual_scene_start();++dev->weapon_scene;override_scene_start();return done(DD_OK,1);}
+  if(n=="BeginScene"){if(dev->in_scene)return done(unsigned(D3DERR_SCENE_IN_SCENE),1);dev->in_scene=true;override_scene_start();return done(DD_OK,1);}
   if(n=="EndScene"){if(!dev->in_scene)return done(unsigned(D3DERR_SCENE_NOT_IN_SCENE),1);dev->in_scene=false;render_scene(*dev);return done(DD_OK,1);}
   }
  if(imp.dll=="IDirect3DTexture2"){auto*t=vsurface(root);if(!t)deny("Texture object without its surface",root);
@@ -158,7 +158,7 @@ static bool rs_handled(unsigned k){switch(k){case D3DRENDERSTATE_TEXTUREADDRESS:
 // z-buffer); scenes with draws are rendered by the Vulkan scene renderer into the guest target and z-buffer.
 #include "surface_texture_warmup.inc"
 #include "surface_resident_texture_warmup.inc"
-void render_scene(D3DDev&d){weapon_visual_prepare(d);if(override_state().preview_active)override_preview_finish(&d);auto*rt=vsurface(d.target);if(!rt)deny("Scene render target is gone",d.target);if(rt->bpp!=16)deny("Scene render target is not 16-bit",rt->bpp);
+void render_scene(D3DDev&d){if(override_state().preview_active)override_preview_finish(&d);auto*rt=vsurface(d.target);if(!rt)deny("Scene render target is gone",d.target);if(rt->bpp!=16)deny("Scene render target is not 16-bit",rt->bpp);
  VSurfaceRec*zb=rt->zbuffer?vsurface(rt->zbuffer):nullptr;if(zb&&(zb->bpp!=16||zb->width!=rt->width||zb->height!=rt->height))deny("Z-buffer surface outside the model",rt->zbuffer);
  const bool draws=std::any_of(d.commands.begin(),d.commands.end(),[](const D3DCmd&c){return c.kind==D3DCmd::Draw;});
  auto clip=[&](const RECT&r){RECT c{std::max<LONG>(r.left,0),std::max<LONG>(r.top,0),std::min<LONG>(r.right,LONG(rt->width)),std::min<LONG>(r.bottom,LONG(rt->height))};return c;};
@@ -285,13 +285,6 @@ void render_scene(D3DDev&d){weapon_visual_prepare(d);if(override_state().preview
   if(tex&&(c.sun_tl||c.sky_view||(c.model&&c.model->world)))if(auto*surface=vsurface(tex)){SunCaptureFp preserve;mw34::vkscene::HostFpEnvironment fp;
    dr.detail_role=surface_detail_role(*surface);if(bind_normal_idx<0||dr.detail_role)bind_normal_idx=surface_normal_index(*surface);
   }
-  if(bind_normal_idx<0&&c.override_texture>=0&&override_enabled()&&mw34::materials::normal_maps_enabled()){
-   const auto&o=override_state();
-   if(size_t(c.override_texture)<o.textures.size()){
-    const auto&texture=o.textures[c.override_texture];
-    bind_normal_idx=replacement_surface_normal_index(unsigned(c.override_texture),texture.width,texture.height,texture.pixels);
-   }
-  }
   if(bind_normal_idx>=0){const auto&o=override_state();if(size_t(bind_normal_idx)<o.normal_textures.size()){const auto&t=o.normal_textures[bind_normal_idx];
    const std::uint64_t key=0x42574e524d000000ULL+unsigned(bind_normal_idx);auto it=std::find_if(sc.textures.begin(),sc.textures.end(),[&](const vs::TextureRef&r){return r.key==key;});
    if(it==sc.textures.end()){vs::TextureRef r{};r.key=key;r.hash=t.hash;r.width=t.width;r.height=t.height;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->sent_current(key,t.hash,t.width,t.height)){surface_normals_require_image(bind_normal_idx);r.pixels32=t.pixels32;}sc.textures.push_back(std::move(r));dr.normal_texture=int(sc.textures.size()-1);}else dr.normal_texture=int(it-sc.textures.begin());}}
@@ -303,11 +296,6 @@ void render_scene(D3DDev&d){weapon_visual_prepare(d);if(override_state().preview
   pu.fog[0]=float((fc>>16)&255)/255.f;pu.fog[1]=float((fc>>8)&255)/255.f;pu.fog[2]=float(fc&255)/255.f;pu.fog[3]=1;pu.factor[0]=float((tf>>16)&255)/255.f;pu.factor[1]=float((tf>>8)&255)/255.f;pu.factor[2]=float(tf&255)/255.f;pu.factor[3]=float(tf>>24)/255.f;
   if(tex&&effect_enabled()&&mw34::effects::settings().fixtures){if(auto*surface=vsurface(tex)){if(const auto*fixture=fixture_of(*surface)){pu.fog[3]=1.0f+fixture->intensity;
     if(!fixture->emission_regions.empty()){const auto count=std::min(size_t(32),fixture->emission_regions.size());dr.emission_index=sc.emissions.capture({float(count),fixture->intensity,0,0},std::span<const mw34::submission::DrawEmissions::Float4>(fixture->emission_regions.data(),count));}}}}
-  // Owned descriptors are authenticated against the selected batch and color pixels.
-  if(c.owned_emission&&effect_enabled()&&mw34::effects::settings().fixtures){
-   const auto& emission=*c.owned_emission;
-   dr.emission_index=mw34::emission::capture(emission,pu.fog,sc.emissions,true);
-  }
   pu.mode[0]=(rs(D3DRENDERSTATE_SHADEMODE)==D3DSHADE_FLAT?1U:0U)|(rs(D3DRENDERSTATE_TEXTUREPERSPECTIVE)?2U:0U)|((tex||c.override_texture>=0||c.missile_exhaust)?4U:0U)|(rs(D3DRENDERSTATE_SPECULARENABLE)?8U:0U)|(rs(D3DRENDERSTATE_FOGENABLE)?16U:0U)|(rs(D3DRENDERSTATE_ALPHATESTENABLE)?32U:0U);
   pu.mode[1]=ts(0,D3DTSS_COLOROP)|ts(0,D3DTSS_COLORARG1)<<8|ts(0,D3DTSS_COLORARG2)<<16;pu.mode[2]=ts(0,D3DTSS_ALPHAOP)|ts(0,D3DTSS_ALPHAARG1)<<8|ts(0,D3DTSS_ALPHAARG2)<<16;
   pu.mode[3]=(rs(D3DRENDERSTATE_ALPHAFUNC)&255)|(rs(D3DRENDERSTATE_ALPHAREF)&255)<<8;
@@ -320,7 +308,7 @@ void render_scene(D3DDev&d){weapon_visual_prepare(d);if(override_state().preview
     dr.shadow_proof=true;effect_lighting.shadow_proofs[dr.shadow_source]={proof,sc.shadow_sequence};
    }
   }
-  dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.surface_material=c.surface_material;dr.owned_emission=c.owned_emission;dr.owned_emission_instance=c.owned_emission_instance;
+  dr.sun_tl=c.sun_tl;dr.sky_view=c.sky_view;dr.camera_view=c.camera_view;dr.surface_material=c.surface_material;
   if(c.model&&c.model->world)dr.model=c.model;
   if(c.model&&!c.model->world){if(!mw34::vkscene::Renderer::gpu_models()||!c.model->geometry)deny("Optional GPU model draw is not enabled",0);
    dr.model=c.model;dr.first=0;dr.count=unsigned(c.model->geometry->vertices.size());wide_adapt_tl(sc,dr,c.hud_role,c.zoom_anchor_known?&c.zoom_anchor:nullptr);sc.order.push_back({false,unsigned(sc.draws.size())});sc.draws.push_back(std::move(dr));continue;}

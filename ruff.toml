@@ -7,7 +7,6 @@ target-version = "py311"
 # Must hold exactly the lines in tools/style/exclude.txt (check_style.py checks this).
 force-exclude = true
 extend-exclude = [
-    "runtime/mw3-re/",
     "tools/m4-*/",
     "tools/x87-*/",
     "tools/m4-crt-locale-default-check.py",

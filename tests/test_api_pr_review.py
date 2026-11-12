@@ -321,11 +321,7 @@ class ApiPrReviewTests(unittest.TestCase):
                 "path": ".github/workflows/build.yml",
                 "head_sha": "a" * 40,
                 "event": "pull_request",
-<<<<<<< HEAD
                 "head_repository": {"full_name": "roswellien/MW3Recomp-Private"},
-=======
-                "head_repository": {"full_name": review.REPOSITORY},
->>>>>>> origin/develop
                 "run_number": 1,
                 "run_attempt": 1,
                 "id": 10,

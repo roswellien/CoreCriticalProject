@@ -89,7 +89,7 @@ def materials(data):
     return result
 
 
-def model(data, material_count, material_offset=0, names=None, nodes=None):
+def model(data, material_count, material_offset=0, names=None):
     """Check MW3 Object3d/mesh spans and relocate only material/name references.
 
     The 352-byte node, 92-byte mesh and 36-byte polygon layouts match the existing
@@ -114,10 +114,6 @@ def model(data, material_count, material_offset=0, names=None, nodes=None):
         kind, pointer = struct.unpack_from("<I4xI", data, position + 52)
         if kind != 5 or bool(flags & 0x200) != bool(pointer):
             raise ValueError("Unsupported legacy node type or mesh flag")
-        node_info = dict(name=name, parents=struct.unpack_from("<I", data, position + 84)[0],
-                         children=struct.unpack_from("<I", data, position + 92)[0], vertices=0)
-        if nodes is not None:
-            nodes.append(node_info)
         position += 352
         node_count += 1
         if not flags & 0x200:
@@ -126,7 +122,6 @@ def model(data, material_count, material_offset=0, names=None, nodes=None):
             raise ValueError("Truncated legacy mesh header")
         counts = struct.unpack_from("<5I", data, position + 16)
         polygons, vertices, normals, morphs, lights = counts
-        node_info["vertices"] = vertices
         if any(n > 100000 for n in counts):
             raise ValueError("Excessive legacy mesh count")
         position += 92 + 12 * (vertices + normals + morphs)

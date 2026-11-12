@@ -68,7 +68,6 @@ public static class ChassisPack
 
     public static List<Chassis> Read(string root, PackManifest manifest)
     {
-<<<<<<< HEAD
         if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry ||
             !(manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
@@ -76,23 +75,6 @@ public static class ChassisPack
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1", "BWSFM1" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY" }) ||
               manifest.NativePayload.RequiredFormats.SequenceEqual(new[] { "MW3LEGACY", "BWSNR2" })) ||
-=======
-        var formats = manifest.NativePayload?.RequiredFormats;
-        var baselineFormats = formats?.Where(format => format != OwnedEmission.Format).ToList();
-        if (formats != null && formats.Contains(OwnedEmission.Format) &&
-            (formats.Count(format => format == OwnedEmission.Format) != 1 ||
-             !new[] { "MW3LEGACY", "BWMESH4", "BWTEX1" }.All(formats.Contains)))
-            throw new InvalidDataException("Invalid owned emission format declaration.");
-        if (manifest.NativePayload?.Profile != Profile || manifest.NativePayload.Registry != Registry || baselineFormats == null ||
-            !(baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1" }) ||
-              baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1" }) ||
-              baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "BWSFM1" }) ||
-              baselineFormats!.SequenceEqual(new[] { "BWMESH4", "BWTEX1", "MW3ICON1", "BWSFM1" }) ||
-              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY" }) ||
-              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY", "BWSNR2" }) ||
-              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1" }) ||
-              baselineFormats!.SequenceEqual(new[] { "MW3LEGACY", "BWMESH4", "BWTEX1", "BWSNR2" })) ||
->>>>>>> origin/develop
             (manifest.NativePayload.RequiredFormats.Contains("BWSFM1") &&
              (!manifest.NativePayload.RequiredCapabilities.TryGetValue("surface-materials", out var surfaceVersion) || surfaceVersion != 1)) ||
             manifest.Dependencies?.Count > 0 || manifest.Conflicts?.Count > 0 ||
@@ -142,13 +124,9 @@ public static class ChassisPack
             if (manifest.NativePayload.RequiredFormats.Contains("MW3LEGACY"))
             {
                 if (!manifest.NativePayload.RequiredCapabilities.TryGetValue("additional-mech-chassis", out var version) || version != 3 ||
-<<<<<<< HEAD
                     !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" })
                         .SetEquals(row.EnumerateObject().Select(p => p.Name)
                             .Where(name => name != "appearances" && name != "headlights")))
-=======
-                    !new HashSet<string>(new[] { "id", "name", "metadata_template", "legacy" }).SetEquals(row.EnumerateObject().Select(p => p.Name).Where(name => name != "appearances" && name != "headlights")))
->>>>>>> origin/develop
                     throw new InvalidDataException("Legacy chassis resources require version 3 and exact fields.");
                 var legacyId = row.GetProperty("id").GetString() ?? "";
                 var legacyName = row.GetProperty("name").GetString() ?? "";

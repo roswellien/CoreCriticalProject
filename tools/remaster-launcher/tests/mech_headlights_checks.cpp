@@ -72,43 +72,6 @@ int main() {
     require(owner.retire_node(102, 1), "current generation accepts mount retirement");
     require(!owner.emitters.at("left").valid && owner.emitters.at("right").valid,
             "ancestor retirement isolates lamps");
-    auto missing_mount = owner;
-    require(!missing_mount.retire_missing_mount("unknown"),
-            "initial missing mount is not silently retired");
-    require(missing_mount.retire_missing_mount("right") &&
-                !missing_mount.emitters.at("right").valid,
-            "previously authenticated missing mount retires before destruction callback");
-    // Mid-mission mount failures: a lamp that worked on this model is retired; one that
-    // never resolved here (a distance model) goes dark, logs once and is retried.
-    Owner losing;
-    losing.root = 100;
-    losing.emitters["near"] = emitter;
-    losing.emitters["far"] = emitter;
-    losing.source_ancestry = {{"near", {104, 100}}};
-    require(losing.lose_mount("near") == MountLoss::retired &&
-                losing.retired_emitters.count("near") && !losing.emitters.at("near").valid,
-            "mount lost on the same model retires the lamp");
-    require(losing.lose_mount("far") == MountLoss::went_dark && !losing.emitters.at("far").valid &&
-                !losing.retired_emitters.count("far"),
-            "mount missing on this model goes dark without retiring");
-    require(losing.lose_mount("far") == MountLoss::still_dark,
-            "a dark lamp logs going dark only once");
-    losing.bind_root(200);
-    require(losing.dark_mounts.count("far") && losing.lose_mount("far") == MountLoss::still_dark,
-            "model swap keeps a dark lamp quiet");
-    require(losing.found_mount("far") && !losing.found_mount("far"),
-            "a returning lamp logs coming back once");
-    Owner lamps;
-    lamps.envelope = {true, 0, 0};
-    require(refresh_needed(lamps), "switched-on lamps refresh");
-    lamps.envelope = {false, .5, 0};
-    require(refresh_needed(lamps), "fading lamps keep following their mounts");
-    lamps.envelope = {false, 0, 0};
-    require(!refresh_needed(lamps), "dark lamps skip the mount search");
-    lamps.envelope = {true, 1, 0};
-    for (std::uint64_t tick = 1; tick <= 60; ++tick)
-        lamps.envelope.advance(1.0 / 60, tick, true);
-    require(!refresh_needed(lamps), "a shut-down mech stops searching once faded");
     owner.bind_root(200);
     require(owner.emitters.empty() && owner.source_ancestry.empty() && owner.envelope.desired &&
                 owner.retired_emitters.count("left"),

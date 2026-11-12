@@ -27,22 +27,16 @@ if ($Checks.Count) {
     foreach ($check in $Checks) { if ($check -notin $known) { throw "Unknown check: $check" } }
     $sources = $sources | Where-Object { [IO.Path]::GetFileNameWithoutExtension($_) -in $Checks }
 }
-$previousPreference = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-try {
-    foreach ($source in $sources) {
-        $name = [IO.Path]::GetFileNameWithoutExtension($source)
-        $inputPath = Join-Path $projectRoot "tools/remaster-launcher/$source"
-        & $compiler /nologo /std:c++20 /O2 /EHsc /showIncludes "/I$hostSource" "/I$VulkanInclude" $inputPath "/Fe:$output/$name.exe" "/Fo:$output/$name.obj" /link user32.lib dxgi.lib d3d11.lib *> "$output/$name-build.txt"
-        if ($LASTEXITCODE) { Get-Content "$output/$name-build.txt" -Tail 30; throw "Compile failed: $name" }
-        & "$output/$name.exe" *> "$output/$name-run.txt"
-        if ($LASTEXITCODE) { Get-Content "$output/$name-run.txt"; throw "Check failed: $name" }
-        Write-Output "$name passed"
-        if ($name -eq 'test_campaign_lighting') {
-            & "$output/$name.exe" manual *> "$output/$name-manual.txt"
-            if ($LASTEXITCODE) { throw 'Manual campaign check failed' }
-        }
+foreach ($source in $sources) {
+    $name = [IO.Path]::GetFileNameWithoutExtension($source)
+    $inputPath = Join-Path $projectRoot "tools/remaster-launcher/$source"
+    & $compiler /nologo /std:c++20 /O2 /EHsc /showIncludes "/I$hostSource" "/I$VulkanInclude" $inputPath "/Fe:$output/$name.exe" "/Fo:$output/$name.obj" /link user32.lib *> "$output/$name-build.txt"
+    if ($LASTEXITCODE) { Get-Content "$output/$name-build.txt" -Tail 30; throw "Compile failed: $name" }
+    & "$output/$name.exe" *> "$output/$name-run.txt"
+    if ($LASTEXITCODE) { Get-Content "$output/$name-run.txt"; throw "Check failed: $name" }
+    Write-Output "$name passed"
+    if ($name -eq 'test_campaign_lighting') {
+        & "$output/$name.exe" manual *> "$output/$name-manual.txt"
+        if ($LASTEXITCODE) { throw 'Manual campaign check failed' }
     }
-} finally {
-    $ErrorActionPreference = $previousPreference
 }

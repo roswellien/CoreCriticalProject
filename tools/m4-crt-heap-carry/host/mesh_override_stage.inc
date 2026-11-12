@@ -50,29 +50,10 @@ inline static constexpr std::array<OverrideModel,36> stock_override_models{{
  {"firefly","MW34_FIREFLY_MESH","MW34_FIREFLY_TEXTURES",override_firefly_meshes.data(),override_firefly_meshes.size(),0,nullptr,nullptr,nullptr,nullptr},
  {"firefly","MW34_FIREFLY_LOD1_MESH","MW34_FIREFLY_LOD1_TEXTURES",override_firefly_lod1_meshes.data(),override_firefly_lod1_meshes.size(),1,nullptr,nullptr,nullptr,nullptr}
 }};
-static const std::map<std::pair<std::string,unsigned>,std::vector<OverrideSourceMesh>>& owned_override_rosters() {
- static const auto rosters=[] {
-  std::map<std::pair<std::string,unsigned>,std::vector<OverrideSourceMesh>> result;
-  for(const auto& r:mw34::chassis::configured_catalog())if(r.owned_visuals)
-   for(unsigned lod=0;lod<2;++lod) {
-    auto& rows=result[{r.id,lod}];
-    for(const auto& mesh:r.owned_rosters[lod])rows.push_back({mesh.name.c_str(),mesh.vertices,mesh.owner.c_str()});
-   }
-  return result;
- }();return rosters;
-}
 static const std::vector<OverrideModel>& override_models() {
  static const auto models=[] {
   std::vector<OverrideModel> result(stock_override_models.begin(),stock_override_models.end());
   for(const auto& record:mw34::chassis::configured_catalog()) {
-   if(record.owned_visuals) {
-    for(unsigned lod=0;lod<2;++lod) {
-     const auto& roster=owned_override_rosters().at({record.id,lod});
-     result.push_back({record.id.c_str(),"","",roster.data(),roster.size(),lod,
-       record.resource.c_str(),record.meshes[lod].c_str(),record.textures[lod].c_str(),record.resource.c_str()});
-    }
-    continue;
-   }
    if(record.visual_template.empty())continue;
    for(unsigned lod=0;lod<2;++lod) {
     const OverrideModel* original=nullptr;
@@ -97,13 +78,13 @@ static bool override_candidate_name(const std::string&name){
  return names.count(name)!=0;}
 #include "override_arm_damage_plans.inc"
 using OverrideVertex=mw34::vkscene::ModelVertex;
-struct OverrideBatch{std::string owner;std::string visibility_node;unsigned color;std::vector<OverrideVertex>vertices;int texture{-1};int normal_texture{-1};unsigned model{};std::shared_ptr<const mw34::vkscene::ModelGeometry>geometry;std::array<float,3>lo{},hi{};std::string placement_frame;std::array<float,3>placement_offset{};unsigned donor_bone{~0U};std::vector<unsigned>vertex_bones;std::vector<int> skin_textures=std::vector<int>(8,-1);std::string joint_frame;std::array<float,3>joint_offset{};std::string anchor_control;std::array<float,3>anchor_position{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};std::shared_ptr<const mw34::emission::Record>emission{};int emission_texture{-1};};
+struct OverrideBatch{std::string owner;std::string visibility_node;unsigned color;std::vector<OverrideVertex>vertices;int texture{-1};int normal_texture{-1};unsigned model{};std::shared_ptr<const mw34::vkscene::ModelGeometry>geometry;std::array<float,3>lo{},hi{};std::string placement_frame;std::array<float,3>placement_offset{};unsigned donor_bone{~0U};std::vector<unsigned>vertex_bones;std::vector<int> skin_textures=std::vector<int>(8,-1);std::string joint_frame;std::array<float,3>joint_offset{};std::string anchor_control;std::array<float,3>anchor_position{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};};
 using OverrideMatrix=std::array<double,16>;
 struct OverrideScope{unsigned node{};std::string owner;OverrideMatrix owner_to_node{};unsigned root{},model{};unsigned skin{};bool attached_cockpit{};bool preview{};OverrideMatrix preview_camera{};};
 struct OverrideMxcsr{unsigned value=_mm_getcsr();~OverrideMxcsr(){_mm_setcsr(value);}};
 struct OverrideTexture{std::string name;unsigned width,height;std::uint64_t hash;std::vector<std::uint16_t>pixels;std::vector<std::uint32_t>pixels32;};
 struct OverrideDonorInstance{std::map<std::string,OverrideMatrix>raw;mw34::donor::Pose pose;double gait{};};
-struct OverrideState{std::map<unsigned,unsigned>arm_damage_masks;std::map<unsigned,std::pair<size_t,size_t>> model_ranges;std::set<std::pair<unsigned,unsigned>> skin_attempts;std::set<std::pair<unsigned,std::string>>attached_cockpit_nodes;std::map<unsigned,mw34::donor::Rig>donor_rigs;std::map<std::pair<unsigned,unsigned>,OverrideDonorInstance>donor_poses;std::set<std::pair<unsigned,unsigned>>retarget_clamp_roots;std::vector<OverrideTexture>textures,normal_textures,surface_material_textures;int ground_normal_texture{-1};std::vector<std::array<unsigned,5>> ground_normal_bindings;bool loaded{};std::vector<OverrideBatch>batches;OverrideScope scope;std::map<unsigned,int>validated_roots;std::map<unsigned,unsigned>source_skins;std::map<std::pair<unsigned,std::string>,bool>active_nodes;std::set<std::pair<unsigned,unsigned>>announced_roots;std::set<std::pair<unsigned,unsigned>>damage_announced;bool preview_active{},preview_has_bounds{},preview_fit_applied{};unsigned preview_role{};size_t preview_begin{};std::array<RECT,4>preview_boxes{};std::array<double,4>preview_bounds{};std::set<unsigned>preview_emitted;std::set<std::pair<unsigned,std::string>>emitted;std::ofstream log;unsigned emitted_frames{},last_frame{~0U};};
+struct OverrideState{std::map<unsigned,std::pair<size_t,size_t>> model_ranges;std::set<std::pair<unsigned,unsigned>> skin_attempts;std::set<std::pair<unsigned,std::string>>attached_cockpit_nodes;std::map<unsigned,mw34::donor::Rig>donor_rigs;std::map<std::pair<unsigned,unsigned>,OverrideDonorInstance>donor_poses;std::set<std::pair<unsigned,unsigned>>retarget_clamp_roots;std::vector<OverrideTexture>textures,normal_textures,surface_material_textures;int ground_normal_texture{-1};std::vector<std::array<unsigned,5>> ground_normal_bindings;bool loaded{};std::vector<OverrideBatch>batches;OverrideScope scope;std::map<unsigned,int>validated_roots;std::map<unsigned,unsigned>source_skins;std::map<std::pair<unsigned,std::string>,bool>active_nodes;std::set<std::pair<unsigned,unsigned>>announced_roots;std::set<std::pair<unsigned,unsigned>>damage_announced;bool preview_active{},preview_has_bounds{},preview_fit_applied{};unsigned preview_role{};size_t preview_begin{};std::array<RECT,4>preview_boxes{};std::array<double,4>preview_bounds{};std::set<unsigned>preview_emitted;std::set<std::pair<unsigned,std::string>>emitted;std::ofstream log;unsigned emitted_frames{},last_frame{~0U};};
 static OverrideState&override_state(){static OverrideState state;return state;}
 static bool override_enabled(){static const bool enabled=[](){for(const auto&m:override_models())if(override_mesh_env(m))return true;if(std::getenv("MW34_GROUND_NORMALS")||std::getenv("MW34_SURFACE_NORMALS")||std::getenv("MW34_WORLD_NORMALS"))return true;return false;}();return enabled;}
 static OverrideMatrix override_identity(){return {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};}
@@ -114,7 +95,7 @@ static OverrideMatrix override_inverse(OverrideMatrix a){auto inverse=override_i
 
 #include "donor_runtime.inc"
 void override_load_textures(const OverrideModel&model,size_t first,size_t end,const char*alternate_env=nullptr,unsigned skin=0,const char*direct_path=nullptr){
- const char*path=mw34::skins::replacement_texture_path(direct_path,model.direct_texture,skin,std::getenv(alternate_env?alternate_env:model.texture_env));if(!path)return;
+ const char*path=direct_path?direct_path:model.direct_texture?model.direct_texture:std::getenv(alternate_env?alternate_env:model.texture_env);if(!path)return;
  auto&o=override_state();std::ifstream file(std::filesystem::path(additional_skin_wide(path)),std::ios::binary);
  auto bytes=[&](void*p,size_t n){if(!file.read(static_cast<char*>(p),std::streamsize(n)))throw std::runtime_error("Replacement textures: incomplete sidecar");};
  char magic[8];bytes(magic,8);if(std::memcmp(magic,"BWTEX1\0\0",8))throw std::runtime_error("Replacement textures: wrong format");
@@ -182,8 +163,6 @@ void override_load_surface_materials(const OverrideModel&model,size_t first,size
  for(size_t at=first;at<end;++at){const auto rec_index=pack.bindings[at-first];o.batches[at].surface_material=rec_index==mw34::materials::no_surface_material?nullptr:pack.records[rec_index];}
  o.log<<"{\"event\":\"surface_materials_loaded\",\"model\":\""<<model.id<<"\",\"lod\":"<<model.lod<<",\"records\":"<<pack.records.size()<<",\"images\":"<<pack.images.size()<<",\"format\":\"BWSFM1\"}\n";
 }
-#include "owned_emission_stage.inc"
-
 void override_load_ground_normals(){
  auto& o=override_state();
  o.ground_normal_texture=-1;
@@ -258,19 +237,6 @@ void override_load_model(unsigned id){
   override_load_textures(model,first,o.batches.size());
   override_load_normals(model,first,o.batches.size());
   override_load_surface_materials(model,first,o.batches.size());
-  if(model.resource)for(const auto& record:mw34::chassis::configured_catalog())if(record.owned_visuals&&record.resource==model.resource&&!record.weapon_visuals.at(model.lod).empty()){
-   if(mw34::materials::compute_mesh_uv_hash(o.batches,first,o.batches.size())!=record.weapon_visual_identity.at(model.lod))throw std::runtime_error("Weapon visuals: selected mesh identity mismatch");
-   const auto& rig=o.donor_rigs.at(id);
-   for(const auto& anchor:record.weapon_visuals.at(model.lod)){
-    auto bone=std::find_if(rig.bones.begin(),rig.bones.end(),[&](const auto& b){return b.name==anchor.bone&&b.control==anchor.source_control;});
-    if(bone==rig.bones.end())throw std::runtime_error("Weapon visuals: missing donor bone");
-    const auto index=unsigned(bone-rig.bones.begin());bool found=false;std::array<double,3>lo{INFINITY,INFINITY,INFINITY},hi{-INFINITY,-INFINITY,-INFINITY};
-    for(size_t at=first;at<o.batches.size();++at){const auto& b=o.batches[at];if(b.donor_bone==index&&b.vertex_bones.empty()){found=true;for(unsigned axis=0;axis<3;++axis){lo[axis]=std::min(lo[axis],double(b.lo[axis]));hi[axis]=std::max(hi[axis],double(b.hi[axis]));}}}
-    if(!found)throw std::runtime_error("Weapon visuals: no rigid donor geometry");
-    for(unsigned axis=0;axis<3;++axis)if(anchor.position[axis]<lo[axis]-.1||anchor.position[axis]>hi[axis]+.1)throw std::runtime_error("Weapon visuals: muzzle outside donor geometry");
-   }
-  }
-  override_load_emission(model,first,o.batches.size());
   o.model_ranges.emplace(id,std::pair{first,o.batches.size()});
   std::fprintf(stderr,"Model resource ready: chassis=%s lod=%u batches=%zu elapsed_ms=%llu\n",model.id,model.lod,o.batches.size()-first,(unsigned long long)(::GetTickCount64()-started));
   o.log<<"{\"event\":\"enabled\",\"model\":\""<<model.id<<"\",\"lod\":"<<model.lod<<",\"batches\":"<<count<<",\"scope\":\"optional visual replacement; source gameplay preserved\"}\n";
@@ -310,14 +276,9 @@ int override_validate_root(unsigned root){auto&o=override_state();auto cached=o.
  }
  int result=-1;unsigned damage_mask=0;
  const auto root_name=pose_name(root,36);const char* added_resource=chassis_actor_resource(root);
- for(const auto& registration:mw34::chassis::configured_catalog())if(!added_resource&&(!registration.visual_template.empty()||registration.owned_visuals)) {
+ for(const auto& registration:mw34::chassis::configured_catalog())if(!added_resource&&!registration.visual_template.empty()) {
   const auto& key=registration.resource;
   if(root_name==key||root_name=="mech_"+key+".flt"||root_name=="mech_"+key+"_1.flt")added_resource=key.c_str();
- }
- if(added_resource)for(const auto& r:mw34::chassis::configured_catalog())if(r.owned_visuals&&r.resource==added_resource&&!r.cockpit_roster.empty()) {
-  bool complete=true;
-  for(const auto& mesh:r.cockpit_roster){auto found=meshes.find(mesh.name);if(found==meshes.end()||found->second!=mesh.vertices){complete=false;break;}}
-  if(complete)for(const auto& mesh:r.cockpit_roster){o.attached_cockpit_nodes.emplace(root,mesh.name);meshes.erase(mesh.name);}
  }
  for(unsigned id=0;id<override_models().size();++id){const auto&m=override_models()[id];
   if(bool(m.resource)!=bool(added_resource)||(m.resource&&std::strcmp(m.resource,added_resource)))continue;
@@ -325,7 +286,6 @@ int override_validate_root(unsigned root){auto&o=override_state();auto cached=o.
   if(match)for(size_t at=0;at<m.count;++at){const auto&r=m.roster[at];auto it=meshes.find(r.name);if(it==meshes.end()||it->second!=r.vertices){match=false;break;}}
   unsigned changed=0;if(!match)match=override_arm_damage_match(m,meshes,mesh_nodes,changed);
   if(match){if(result>=0)throw std::runtime_error("Replacement models: ambiguous chassis identity");result=int(id);damage_mask=changed;}}
- if(result>=0)o.arm_damage_masks[root]=damage_mask;
  if(result>=0&&damage_mask){
   const auto&m=override_models()[result];
   for(size_t i=0;i<m.count;++i)if(!meshes.count(m.roster[i].name))o.active_nodes[{root,m.roster[i].name}]=false;
@@ -347,14 +307,7 @@ int override_validate_root(unsigned root){auto&o=override_state();auto cached=o.
    for(unsigned i=0;i<count;++i){const unsigned mat=load(polys+i*36+28);if(!readable(mat,20))throw std::runtime_error("Mech skin: invalid original material");
     if(!(load(mat)&0x100))continue;const unsigned ref=load(mat+16);if(!ref||!readable(ref,40))throw std::runtime_error("Mech skin: invalid original texture reference");
     const auto name=pose_name(ref+8,32);
-    bool owned=false;
-    if(model.resource)for(const auto& registration:mw34::chassis::configured_catalog())
-     if(registration.owned_visuals&&registration.resource==model.resource) {
-      owned=true;const auto found=registration.skin_textures.find(name);
-      if(found!=registration.skin_textures.end())selection.observe(found->second);
-      break;
-     }
-    if(!owned)selection.observe(mw34::skins::texture_skin(model.source_chassis?model.source_chassis:model.id,name));
+    selection.observe(mw34::skins::texture_skin(model.source_chassis?model.source_chassis:model.id,name));
    }
   }
   const auto selected=selection.result();
@@ -471,7 +424,7 @@ OverrideScope override_begin(unsigned node){OverrideMxcsr preserve;auto&o=overri
 }
 void override_preview_start(){auto&o=override_state();o.preview_emitted.clear();o.donor_poses.clear();o.preview_has_bounds=false;o.preview_fit_applied=false;o.preview_role=override_preview_role();o.preview_begin=0;for(auto&d:host.devices)if(d.in_scene)o.preview_begin=d.commands.size();}
 void override_restore(const OverrideScope&scope){override_state().scope=scope;}
-void override_scene_start(){if(override_enabled()){override_state().emitted.clear();override_state().validated_roots.clear();override_state().attached_cockpit_nodes.clear();override_state().source_skins.clear();override_state().active_nodes.clear();override_state().arm_damage_masks.clear();override_state().donor_poses.clear();}}
+void override_scene_start(){if(override_enabled()){override_state().emitted.clear();override_state().validated_roots.clear();override_state().attached_cockpit_nodes.clear();override_state().source_skins.clear();override_state().active_nodes.clear();override_state().donor_poses.clear();}}
 bool override_suppress_draw(){if(override_state().scope.node&&override_state().scope.attached_cockpit)return true;if(!override_enabled()||!override_state().scope.node)return false;if(override_state().scope.preview)return override_state().preview_emitted.count(override_state().scope.node)!=0;if(!override_state().emitted.count({override_state().scope.root,override_state().scope.owner}))throw std::runtime_error("Bushwacker test: source draw reached without replacement projection");return true;}
 // Recover the requested ancestor's current camera basis from this exact
 // instance and animation sample. Never reuse another actor's cached pose.
@@ -501,7 +454,7 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
  auto state_=preview?*original->state_snapshot:snapshot(*device);state_[D3DRENDERSTATE_TEXTUREPERSPECTIVE]=1;state_[256+D3DTSS_MAGFILTER]=D3DTFG_LINEAR;state_[256+D3DTSS_MINFILTER]=D3DTFN_LINEAR;state_[D3DRENDERSTATE_ALPHABLENDENABLE]=0;state_[D3DRENDERSTATE_ALPHATESTENABLE]=0;state_[D3DRENDERSTATE_SPECULARENABLE]=0;state_[D3DRENDERSTATE_CULLMODE]=D3DCULL_NONE;state_[D3DRENDERSTATE_SHADEMODE]=D3DSHADE_GOURAUD;state_[256+D3DTSS_COLOROP]=o.textures.empty()?D3DTOP_SELECTARG1:D3DTOP_MODULATE;state_[256+D3DTSS_COLORARG1]=o.textures.empty()?D3DTA_DIFFUSE:D3DTA_TEXTURE;state_[256+D3DTSS_COLORARG2]=D3DTA_DIFFUSE;state_[256+D3DTSS_ALPHAOP]=D3DTOP_SELECTARG1;state_[256+D3DTSS_ALPHAARG1]=D3DTA_DIFFUSE;auto saved_state=std::make_shared<const std::vector<unsigned>>(std::move(state_));
  struct CameraVertex{double x,y,z,u,v,shade;};struct TlVertex{float x,y,z,rhw;unsigned diffuse,specular;float u,v;};static_assert(sizeof(TlVertex)==32);
  std::map<std::string,OverrideMatrix>placement_frames;
- unsigned triangles=0,gpu_batches=0,cpu_near_batches=0,cpu_emission_batches=0;
+ unsigned triangles=0,gpu_batches=0,cpu_near_batches=0;
  for(const auto&batch:o.batches)if(batch.model==o.scope.model&&batch.owner==o.scope.owner){
   if(preview){const auto name=pose_name(o.scope.node,36);if(!batch.visibility_node.empty()?batch.visibility_node!=name:name!=batch.owner)continue;}
   if(!batch.visibility_node.empty()){const auto node=o.active_nodes.find({o.scope.root,batch.visibility_node});if(node==o.active_nodes.end())throw std::runtime_error("Replacement models: missing source visibility node");if(!node->second)continue;}
@@ -521,17 +474,7 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
   }
   const int active_tex=o.scope.skin?batch.skin_textures.at(o.scope.skin):batch.texture;
   const auto active_surface_material=(batch.surface_material&&active_tex>=0&&size_t(active_tex)<o.textures.size()&&o.textures[active_tex].name==batch.surface_material->material_name)?batch.surface_material:nullptr;
-  D3DCmd draw{D3DCmd::Draw,D3DPT_TRIANGLELIST,0,0.f,{},{},0};draw.state_snapshot=saved_state;draw.texture=0;draw.override_texture=active_tex;draw.override_normal_texture=batch.normal_texture;draw.surface_material=active_surface_material;if(active_tex==batch.emission_texture)draw.owned_emission=batch.emission;draw.hud_role=wide_hud_role();draw.condition_schematic=preview;zoom_capture_command(draw);
-  // Snapshot the exact rendered rigid pose before the CPU/GPU paths diverge.
-  if(draw.owned_emission&&!preview&&!frontend_on()){
-   OverrideMatrix camera_world;
-   if(sun_camera_world(camera_world)){
-    auto emission=std::make_shared<mw34::emission::Instance>();
-    emission->material=draw.owned_emission;emission->root=o.scope.root;emission->owner=batch.owner;
-    emission->world=mw34::sun::world_matrix(override_product(camera_world,batch_to_camera));
-    draw.owned_emission_instance=std::move(emission);
-   }
-  }
+  D3DCmd draw{D3DCmd::Draw,D3DPT_TRIANGLELIST,0,0.f,{},{},0};draw.state_snapshot=saved_state;draw.texture=0;draw.override_texture=active_tex;draw.override_normal_texture=batch.normal_texture;draw.surface_material=active_surface_material;draw.hud_role=wide_hud_role();draw.condition_schematic=preview;zoom_capture_command(draw);
   if(mw34::vkscene::Renderer::gpu_models()&&batch.vertex_bones.empty()){if(!batch.geometry)throw std::runtime_error("Replacement GPU geometry was not prepared");
    double zlo=batch_to_camera[11],zhi=zlo;for(unsigned i=0;i<3;++i){const double a=batch_to_camera[8+i]*batch.lo[i],b=batch_to_camera[8+i]*batch.hi[i];zlo+=std::min(a,b);zhi+=std::max(a,b);}
    // Conservative AABB: batches touching the near plane retain the current CPU
@@ -541,24 +484,14 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
     instance->projection={float(near_scale),float(scale_x),float(scale_y),float(center_x),float(center_y),float(near_clip)};for(float p:instance->projection)if(!std::isfinite(p))throw std::runtime_error("Replacement GPU projection is not representable");instance->color=batch.color;instance->diagnostic_fog_factor=float(preview_specular>>24)/255.f;sun_capture_model(*instance,o.scope.node,node_to_camera,batch_to_camera);draw.model=std::move(instance);
     if(preview)for(unsigned corner=0;corner<8;++corner){double p[3];for(unsigned a=0;a<3;++a)p[a]=(corner&(1U<<a))?batch.hi[a]:batch.lo[a];double camera[3];for(unsigned row=0;row<3;++row){camera[row]=batch_to_camera[row*4+3];for(unsigned a=0;a<3;++a)camera[row]+=batch_to_camera[row*4+a]*p[a];}const double rhw=near_scale/camera[2];override_preview_point(camera[0]*scale_x*rhw+center_x,camera[1]*scale_y*rhw+center_y);}device->commands.push_back(std::move(draw));triangles+=unsigned(batch.vertices.size()/3);++gpu_batches;if(geometry_profile.file){++geometry_profile.gpu_batches;geometry_profile.gpu_vertices+=batch.vertices.size();}continue;}++cpu_near_batches;if(geometry_profile.file)++geometry_profile.near_batches;
   }if(geometry_profile.file)geometry_profile.cpu_vertices+=batch.vertices.size();draw.vertices.reserve(batch.vertices.size()*sizeof(TlVertex));
-  // Clipped replacements still need a world receiver, even without a GPU model.
-  // Capture directly: the original-draw observer intentionally suppresses replacements.
-  if(draw.owned_emission_instance){
-   OverrideMatrix camera_world;
-   if(!sun_camera_world(camera_world))throw std::runtime_error("Owned emission lost its draw camera");
-   auto view=std::make_shared<mw34::sun::Tl>();
-   view->camera_world=mw34::sun::world_matrix(camera_world);
-   view->projection={float(near_scale),float(scale_x),float(scale_y),float(center_x),float(center_y),float(near_clip)};
-   draw.sun_tl=std::move(view);
-  }
   for(size_t at=0;at<batch.vertices.size();at+=3){std::array<CameraVertex,3>polygon{};for(unsigned i=0;i<3;++i){const auto&v=batch.vertices[at+i];auto m=batch_to_camera;if(donor&&!batch.vertex_bones.empty())m=override_product(m,donor->pose.world.at(batch.vertex_bones.at(at+i)));double nx=m[0]*v.nx+m[1]*v.ny+m[2]*v.nz,ny=m[4]*v.nx+m[5]*v.ny+m[6]*v.nz,nz=m[8]*v.nx+m[9]*v.ny+m[10]*v.nz;double length=std::sqrt(nx*nx+ny*ny+nz*nz);double shade=.35+.65*std::max(0.,(.3*nx+.6*ny-.74*nz)/length);polygon[i]={m[0]*v.x+m[1]*v.y+m[2]*v.z+m[3],m[4]*v.x+m[5]*v.y+m[6]*v.z+m[7],m[8]*v.x+m[9]*v.y+m[10]*v.z+m[11],v.u,v.v,shade};}
    std::array<CameraVertex,4>clipped{};size_t clipped_count=0;for(size_t i=0;i<polygon.size();++i){const auto&a=polygon[i];const auto&b=polygon[(i+1)%polygon.size()];bool in_a=a.z>=near_clip,in_b=b.z>=near_clip;if(in_a)clipped[clipped_count++]=a;if(in_a!=in_b){double t=(near_clip-a.z)/(b.z-a.z);clipped[clipped_count++]={a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),near_clip,a.u+t*(b.u-a.u),a.v+t*(b.v-a.v),a.shade+t*(b.shade-a.shade)};}}
    auto add=[&](const CameraVertex&v){double rhw=near_scale/v.z;unsigned color=0xff000000U;for(unsigned shift:{0U,8U,16U})color|=unsigned(std::clamp(double((batch.color>>shift)&255)*v.shade,0.,255.))<<shift;TlVertex vertex{float(v.x*scale_x*rhw+center_x),float(v.y*scale_y*rhw+center_y),float(rhw),float(rhw),color,preview_specular,float(v.u),float(v.v)};if(!std::isfinite(vertex.x)||!std::isfinite(vertex.y)||!std::isfinite(vertex.z))throw std::runtime_error("Bushwacker test: nonfinite projected vertex");const auto*p=reinterpret_cast<const unsigned char*>(&vertex);draw.vertices.insert(draw.vertices.end(),p,p+sizeof vertex);};
    for(size_t i=1;i+1<clipped_count;++i){add(clipped[0]);add(clipped[i]);add(clipped[i+1]);++triangles;}
   }
-  if(!draw.vertices.empty()){if(draw.sun_tl&&draw.owned_emission)++cpu_emission_batches;device->commands.push_back(std::move(draw));}
+  if(!draw.vertices.empty())device->commands.push_back(std::move(draw));
  }
- if(preview)o.preview_emitted.insert(o.scope.node);else o.emitted.insert({o.scope.root,o.scope.owner});if(o.last_frame!=host.frames){o.last_frame=host.frames;++o.emitted_frames;}if(o.emitted_frames<4||host.frames%100==0)o.log<<"{\"event\":\"replacement_queued\",\"frame\":"<<host.frames<<",\"node\":"<<o.scope.node<<",\"model\":\""<<override_models()[o.scope.model].id<<"\",\"lod\":"<<override_models()[o.scope.model].lod<<",\"root\":"<<o.scope.root<<",\"skin\":"<<o.scope.skin<<",\"owner\":\""<<o.scope.owner<<"\",\"triangles\":"<<triangles<<",\"preview\":"<<(preview?"true":"false")<<",\"role\":"<<wide_hud_role()<<",\"fog_factor\":"<<(preview_specular>>24)<<",\"gpu_batches\":"<<gpu_batches<<",\"cpu_near_batches\":"<<cpu_near_batches<<",\"cpu_emission_batches\":"<<cpu_emission_batches<<"}\n";
+ if(preview)o.preview_emitted.insert(o.scope.node);else o.emitted.insert({o.scope.root,o.scope.owner});if(o.last_frame!=host.frames){o.last_frame=host.frames;++o.emitted_frames;}if(o.emitted_frames<4||host.frames%100==0)o.log<<"{\"event\":\"replacement_queued\",\"frame\":"<<host.frames<<",\"node\":"<<o.scope.node<<",\"model\":\""<<override_models()[o.scope.model].id<<"\",\"lod\":"<<override_models()[o.scope.model].lod<<",\"root\":"<<o.scope.root<<",\"skin\":"<<o.scope.skin<<",\"owner\":\""<<o.scope.owner<<"\",\"triangles\":"<<triangles<<",\"preview\":"<<(preview?"true":"false")<<",\"role\":"<<wide_hud_role()<<",\"fog_factor\":"<<(preview_specular>>24)<<",\"gpu_batches\":"<<gpu_batches<<",\"cpu_near_batches\":"<<cpu_near_batches<<"}\n";
 }
 
 #include "model_geometry_warmup.inc"

@@ -365,18 +365,10 @@ foreign surfaces and conflicting existing normal bindings are rejected.
 
 For explicit development profiles, `native.mech_appearance` accepts `original`,
 `upgraded` or `new`. Absent/null keeps the original selection. Upgraded without
-<<<<<<< HEAD
 an alternative falls back to original with `upgrade-unavailable`; new selects
 upgraded when available, otherwise original, with `new-model-unavailable`.
 The coordinator returns and prints per-chassis coverage. New geometry is not a
 version 1 appearance. The global launcher selector, stock-pack filtering and
-=======
-an alternative falls back to original with `upgrade-unavailable`. New selects
-provided owned geometry; without it, New falls back to upgraded when available,
-otherwise original, with `new-model-unavailable`.
-The coordinator returns and prints per-chassis coverage. New geometry additionally requires the
-owned-controller visual contract below. The global launcher selector, stock-pack filtering and
->>>>>>> origin/develop
 old-setting migration are subsequent work, not delivered by this contract.
 
 Selected normal pages require native normal format 2 and are composed into a
@@ -438,14 +430,8 @@ to runtime float precision.
 `guest_node` resolves a live node under the actor's current root. `donor_bone`
 requires prepared visuals and names a donor skeleton bone, using the same axis
 conversion and root-world basis as firepoints. Direction receives rotation/scale
-and normalization, never translation. A mount that can't be found when the mech
-is built fails visibly. Once the mission is running, a lamp whose mount is lost
-(for example a destroyed limb) switches off and the mission carries on: a lamp
-that worked on the current model stays off for the rest of the mission, and one
-whose mount is missing from the current model (a distance model, say) stays dark
-and is tried again until the mount returns. Each change is logged once to the
-host's `native/stderr.txt`. Reconstructed visual bones alone cannot keep a
-removed component's lamp alive.
+and normalization, never translation. Missing required mounts fail visibly;
+reconstructed visual bones alone cannot keep a removed component's lamp alive.
 
 Build, import and enable the pack normally. Enable Dynamic Lighting and Headlights
 in Display, then assign a key or enabled-controller button in Controls → Headlight
@@ -465,64 +451,3 @@ This adds cone illumination, not PM's lamp facade or volumetric beams.
 The coordinator emits MWCHAS5 only for nonempty lists and retains MWCHAS1–4
 compatibility. Presentation-policy v2 must ship with its matching host; copying
 the coordinator alone does not upgrade an older runtime.
-## New geometry on an owned legacy controller (development)
-
-A legacy chassis can retain its original definition, collision meshes, hierarchy,
-motion clips, cockpit and attachments while adding a visual-only `new` appearance.
-Keep its original `legacy` descriptor and stable chassis ID. The additional record
-uses this portable authoring shape:
-
-```json
-{
-  "appearances": {
-    "new": {
-      "schema_version": 1,
-      "meshes": {"close": "visual/close.mesh", "distance": "visual/distance.mesh"},
-      "textures": {"close": "visual/close.textures", "distance": "visual/distance.textures"},
-      "normals": ["visual/normals.bin"]
-    }
-  }
-}
-```
-
-Both geometry files use BWMESH4 and their matching texture files use BWTEX1.
-Normals are optional BWSNR2 pages whose full RGB565 keys must belong to the selected
-visual textures. `upgraded` may coexist with `new`; retain each alternative's own
-UVs, color resources and normal bindings. Do not apply PM skin pixels to MW5 UVs.
-Inactive resources still undergo path, hash and format validation. Selecting new
-geometry with the existing donor solver requires `owned-chassis-visuals: 1`.
-BWMESH4 rig flag `2` uses the complete original joint matrices and requires
-`owned-chassis-visuals: 2`; flags `0` and `1` retain their existing donor solver.
-Original mode does not acquire either renderer requirement. Existing appearance capability support is still
-required by the coordinator.
-
-Authors supply visual batches, original control names and original visibility
-nodes. They do not supply a suppression roster. The coordinator derives exact
-mesh names/counts and ancestry from the pinned original close/distance models,
-and requires each visual visibility node to belong to its original controller.
-Close and distance source mesh name/count signatures must differ; ambiguous LOD
-signatures fail during validation before a native session starts.
-The original cockpit signature is derived separately and remains outside the
-exterior replacement. The private MWCHAS6 session catalog carries those derived
-rosters, paths and authoritative namespaced original skin lookup names. Existing
-MWCHAS1 through MWCHAS6 inputs retain their prior layouts; the serialized
-headlight block is unchanged. Flag-2 preparation emits MWCHAS7 with original arm
-subtree removal lists and parent names derived by the coordinator. Packs cannot
-supply those plans. The native matcher still requires the exact original shared
-GameZ stump, its live parent topology and every surviving mesh signature.
-Flag-2 sources require both original arm subtrees without overlap or preexisting
-stump meshes. Close and distance signatures must remain distinguishable across
-intact, left-arm, right-arm and both-arm loss combinations.
-
-The development Atlas candidate uses an AS7-K visual weapon assembly to match
-the PM primary configuration, with a neutral test livery and donor body normals.
-It retains the eight original skin rows and the existing Gunmetal upgrade.
-The new visual currently covers the primary skin; unavailable alternate new-model
-skin bindings retain original geometry at runtime. Final paint appearance,
-full limb damage behavior, both live LOD transitions, player/allied isolation,
-save/reload and exterior fit acceptance remain playtest work. A first-person
-mission and status-model draw do not establish all of those criteria.
-
-Use a development runtime implementing this contract before importing/launching
-the candidate. Do not advertise it on a historical runtime profile. Keep the
-prior pack and selections for rollback, and keep donor/derived media local.

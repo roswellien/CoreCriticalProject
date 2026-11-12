@@ -7,7 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 START = '<!-- mechlab:updates:start -->'
 END = '<!-- mechlab:updates:end -->'
-REPO = 'https://github.com/roswellien/CoreCriticalProject'
+REPO = 'https://github.com/roswellien/MW3Recomp-Private'
 SITE = 'https://corecritical.dev'
 
 def render_feed(notes, out):

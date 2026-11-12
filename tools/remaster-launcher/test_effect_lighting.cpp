@@ -42,9 +42,8 @@ void contracts(){
  rejects([&]{std::istringstream f(bad);read_catalog(f);});
 }
 struct Tl{float x,y,z,rhw;unsigned color,spec;float u,v;};
-Scene receiver(double detail_time = 0){
- Scene s{};s.width=s.height=64;s.has_depth=true;s.detail_time=detail_time;s.color.assign(4096,0);s.depth.assign(4096,0);
- s.environment=mw34::sun::current_settings(detail_time);
+Scene receiver(){
+ Scene s{};s.width=s.height=64;s.has_depth=true;s.color.assign(4096,0);s.depth.assign(4096,0);
  auto g=std::make_shared<ModelGeometry>();g->key=g->hash=1;
  g->vertices={{-1,-1,2,0,0,1,0,0},{1,-1,2,0,0,1,1,0},{1,1,2,0,0,1,1,1},
  {-1,-1,2,0,0,1,0,0},{1,1,2,0,0,1,1,1},{-1,1,2,0,0,1,0,1}};
@@ -86,7 +85,7 @@ int main(){try{
  require(render({0,0,100})==dark,"Light list replacement leaves no stale light");
  auto& campaign=mw34::campaign::CampaignManager::instance();
  campaign.set_active_mission("c1m3");campaign.enter_world();
- auto weather_pixel=[&](double time){auto s=receiver(time);renderer.render(s);return s.color[32*64+32];};
+ auto weather_pixel=[&](double time){auto s=receiver();s.detail_time=time;renderer.render(s);return s.color[32*64+32];};
  const auto flash=weather_pixel(.01);
  require(weather_pixel(.01)==flash,"Frozen scene time holds campaign lightning shading");
  require(weather_pixel(1.0)!=flash,"Resumed scene time changes campaign lighting on actual GPU receivers");

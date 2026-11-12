@@ -51,10 +51,8 @@ unsigned headlight_player() {
     return context && readable(context, 0x18) ? load(context + 0x14) : 0;
 }
 bool headlight_shutdown(unsigned actor) {
-    if (!readable(actor, 0x579))
-
-        return true;
-
+    if (!readable(actor, 0x579))
+        return true;
     return runtime.memory().load<unsigned char>({actor + 0xde}) != 0 || load(actor + 0x578) == 10;
 }
 bool headlight_actor_root_matches(unsigned actor, unsigned root) {
@@ -160,64 +158,7 @@ std::vector<unsigned> headlight_ancestry(unsigned node, unsigned root) {
         node = load(load(node + 0x58));
     }
 }
-struct HeadlightResolvedLamp {
-    std::vector<unsigned> ancestry;
-    mw34::headlights::Emitter emitter;
-};
-// Finds one lamp's mount on the current model and places the lamp there. Throws when the
-// mount can't be found or the actor's part tree looks wrong; the caller decides whether
-// that ends the run.
-HeadlightResolvedLamp headlight_resolve_lamp(unsigned root,
-                                             const mw34::chassis::Registration &record,
-                                             const mw34::chassis::Headlight &lamp) {
-    OverrideMatrix world{};
-    std::string control = lamp.attachment;
-    std::optional<OverrideDonorInstance> pose;
-    unsigned model = ~0U;
-    size_t bone_index = 0;
-    if (lamp.space == "donor_bone") {
-        for (unsigned i = 0; i < override_models().size(); ++i)
-            if (override_models()[i].lod == 0 && record.id == override_models()[i].id) {
-                if (model != ~0U)
-                    throw std::runtime_error("Headlights: ambiguous donor model");
-                model = i;
-            }
-        if (model == ~0U)
-            throw std::runtime_error("Headlights: unavailable donor model");
-        override_load_model(model);
-        const auto &rig = override_state().donor_rigs.at(model);
-        auto bone = std::find_if(rig.bones.begin(), rig.bones.end(),
-                                 [&](const auto &b) { return b.name == lamp.attachment; });
-        if (bone == rig.bones.end())
-            throw std::runtime_error("Headlights: unavailable donor bone");
-        bone_index = size_t(bone - rig.bones.begin());
-        // Unbound helper bones inherit their nearest bound ancestor's survival.
-        auto parent = bone;
-        while (parent->control.empty() && parent->parent >= 0)
-            parent = rig.bones.begin() + parent->parent;
-        control = parent->control;
-        if (control.empty())
-            throw std::runtime_error("Headlights: bone has no live controller");
-        pose = chassis_socket_pose(root, model);
-    }
-    const unsigned node = headlight_node(root, control);
-    if (!node || (pose && !pose->raw.count(control)))
-        throw std::runtime_error("Headlights: unresolved required attachment " + control);
-    HeadlightResolvedLamp resolved;
-    resolved.ancestry = headlight_ancestry(node, root);
-    if (pose)
-        world = override_product(override_product(chassis_socket_world(root),
-                                                  mw34::donor::inverse(mw34::donor::axis())),
-                                 pose->pose.world.at(bone_index));
-    else
-        world = chassis_socket_world(node);
-    resolved.emitter = mw34::headlights::transform(lamp, world);
-    return resolved;
-}
-// strict is true only when a mech first becomes ready, so a pack with wrong mounts fails
-// visibly. Mid-mission (each tick, and returning from a replay) a failed mount switches
-// off just that lamp: limb loss or a distance model must not end the mission.
-void headlight_refresh(unsigned actor, mw34::headlights::Owner &owner, bool strict) {
+void headlight_refresh(unsigned actor, mw34::headlights::Owner &owner) {
     const auto *record = headlight_registration(actor);
     if (!record || !owner.ready) {
         owner.emitters.clear();
@@ -233,35 +174,47 @@ void headlight_refresh(unsigned actor, mw34::headlights::Owner &owner, bool stri
             owner.emitters[lamp.id].valid = false;
             continue;
         }
-        try {
-            auto resolved = headlight_resolve_lamp(root, *record, lamp);
-            // Stored only once the lamp fully works, so a recorded ancestry means a later
-            // failure on this model is damage.
-            owner.source_ancestry[lamp.id] = std::move(resolved.ancestry);
-            owner.emitters[lamp.id] = resolved.emitter;
-            if (owner.found_mount(lamp.id))
-                std::fprintf(stderr, "Headlights: lamp %s on actor %08x back\n", lamp.id.c_str(),
-                             actor);
-        } catch (const m4_runtime::Fault &) {
-            // A guest memory fault has already armed the exit watchdog (stop() in
-            // mfc_stage.hpp); swallowing it here would only end the run later, misreported.
-            throw;
-        } catch (const std::exception &error) {
-            if (strict)
-                throw;
-            switch (owner.lose_mount(lamp.id)) {
-            case mw34::headlights::MountLoss::retired:
-                std::fprintf(stderr, "Headlights: lamp %s on actor %08x retired: %s\n",
-                             lamp.id.c_str(), actor, error.what());
-                break;
-            case mw34::headlights::MountLoss::went_dark:
-                std::fprintf(stderr, "Headlights: lamp %s on actor %08x dark: %s\n",
-                             lamp.id.c_str(), actor, error.what());
-                break;
-            case mw34::headlights::MountLoss::still_dark:
-                break;
-            }
+        OverrideMatrix world{};
+        std::string control = lamp.attachment;
+        std::optional<OverrideDonorInstance> pose;
+        unsigned model = ~0U;
+        size_t bone_index = 0;
+        if (lamp.space == "donor_bone") {
+            for (unsigned i = 0; i < override_models().size(); ++i)
+                if (override_models()[i].lod == 0 && record->id == override_models()[i].id) {
+                    if (model != ~0U)
+                        throw std::runtime_error("Headlights: ambiguous donor model");
+                    model = i;
+                }
+            if (model == ~0U)
+                throw std::runtime_error("Headlights: unavailable donor model");
+            override_load_model(model);
+            const auto &rig = override_state().donor_rigs.at(model);
+            auto bone = std::find_if(rig.bones.begin(), rig.bones.end(),
+                                     [&](const auto &b) { return b.name == lamp.attachment; });
+            if (bone == rig.bones.end())
+                throw std::runtime_error("Headlights: unavailable donor bone");
+            bone_index = size_t(bone - rig.bones.begin());
+            // Unbound helper bones inherit their nearest bound ancestor's survival.
+            auto parent = bone;
+            while (parent->control.empty() && parent->parent >= 0)
+                parent = rig.bones.begin() + parent->parent;
+            control = parent->control;
+            if (control.empty())
+                throw std::runtime_error("Headlights: bone has no live controller");
+            pose = chassis_socket_pose(root, model);
         }
+        const unsigned node = headlight_node(root, control);
+        if (!node || (pose && !pose->raw.count(control)))
+            throw std::runtime_error("Headlights: unresolved required attachment " + control);
+        owner.source_ancestry[lamp.id] = headlight_ancestry(node, root);
+        if (pose)
+            world = override_product(override_product(chassis_socket_world(root),
+                                                      mw34::donor::inverse(mw34::donor::axis())),
+                                     pose->pose.world.at(bone_index));
+        else
+            world = chassis_socket_world(node);
+        owner.emitters[lamp.id] = mw34::headlights::transform(lamp, world);
     }
 }
 std::vector<mw34::fixtures::MovingLight> headlight_lights(float strength) {
@@ -399,8 +352,7 @@ template <class Next> void *headlight_body(State *s, unsigned target, void *p, N
                     if (owner.ready) {
                         owner.envelope.advance(headlight_seconds, headlight_tick,
                                                headlight_shutdown(id));
-                        if (mw34::headlights::refresh_needed(owner))
-                            headlight_refresh(id, owner, false);
+                        headlight_refresh(id, owner);
                         if (effect_trace() && host.frames % 60 == 0 && !owner.emitters.empty())
                             std::fprintf(stderr,
                                          "Headlights frame=%u tick=%llu actor=%08x root=%08x "
@@ -448,7 +400,7 @@ template <class Next> void *headlight_body(State *s, unsigned target, void *p, N
             if (target == 0x415b00) {
                 found->second.ready = (state.gpr.rax.dword & 255) != 0;
                 if (found->second.ready && headlight_registration(actor))
-                    headlight_refresh(actor, found->second, true);
+                    headlight_refresh(actor, found->second);
                 else
                     headlight_owners.erase(found);
             } else if (target == 0x41de80) {
@@ -457,7 +409,6 @@ template <class Next> void *headlight_body(State *s, unsigned target, void *p, N
                 found->second.envelope = {};
                 found->second.emitters.clear();
                 found->second.source_ancestry.clear();
-                found->second.dark_mounts.clear();
                 found->second.ready = false;
             }
         }
@@ -494,6 +445,6 @@ void headlight_restore(const std::vector<mw34::photo_replay::ReplayHeadlightStat
         owner.envelope = {lamp.desired != 0, lamp.intensity, headlight_tick};
         headlight_generation = std::max(headlight_generation, lamp.generation);
         mw34::headlights::restore_retirement(owner, *record, lamp.retired_mask);
-        headlight_refresh(lamp.actor, owner, false);
+        headlight_refresh(lamp.actor, owner);
     }
 }

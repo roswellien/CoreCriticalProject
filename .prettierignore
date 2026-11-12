@@ -3,7 +3,6 @@ tools/m4-*/
 tools/x87-*/
 tools/m4-crt-locale-default-check.py
 tools/remaster-launcher/native-overrides/
-runtime/mw3-re/
 games/mw3/mod-tools/editor/web/static/js/three.min.js
 games/mw3/mod-tools/editor/web/static/js/OrbitControls.js
 games/mw3/mod-tools/editor/web/static/js/TransformControls.js

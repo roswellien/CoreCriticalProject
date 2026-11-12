@@ -50,8 +50,6 @@ struct Emitter {
     effects::Point position{}, direction{};
     bool valid{};
 };
-// What happened to a lamp whose mount failed mid-mission; the caller logs the first two.
-enum class MountLoss { retired, went_dark, still_dark };
 struct Owner {
     std::uint64_t generation{};
     unsigned root{}, chassis{};
@@ -62,37 +60,14 @@ struct Owner {
     // Capture the authenticated mount ancestry while nodes are live. A parent
     // can be unlinked before its destruction callback, so walking it then is unsafe.
     std::map<std::string, std::vector<unsigned>> source_ancestry;
-    // Lamps whose mount never resolved on the current model (a distance model can lack
-    // it). They stay dark and are retried each refresh; the set makes "dark" and "back"
-    // log once each instead of every tick.
-    std::set<std::string> dark_mounts;
     void bind_root(unsigned next_root) {
         if (root == next_root)
             return;
         root = next_root;
         emitters.clear();
         source_ancestry.clear();
-        // A root/LOD change is not a new actor lifetime: damaged mounts stay retired, and
-        // dark mounts stay dark so a lamp missing from the far model logs only once.
+        // A root/LOD change is not a new actor lifetime: damaged mounts stay retired.
     }
-    bool retire_missing_mount(const std::string &id) {
-        if (!source_ancestry.count(id))
-            return false;
-        retired_emitters.insert(id);
-        emitters[id].valid = false;
-        return true;
-    }
-    // A lamp that worked on this model loses its mount only to damage, so it is retired
-    // for the mission. One that never resolved here waits for its mount to come back.
-    MountLoss lose_mount(const std::string &id) {
-        if (retire_missing_mount(id))
-            return MountLoss::retired;
-        emitters[id].valid = false;
-        const bool first_dark_tick = dark_mounts.insert(id).second;
-        return first_dark_tick ? MountLoss::went_dark : MountLoss::still_dark;
-    }
-    // True when the lamp was dark, so the caller logs that it came back.
-    bool found_mount(const std::string &id) { return dark_mounts.erase(id) != 0; }
     bool retire_node(unsigned node, std::uint64_t expected_generation) {
         if (generation != expected_generation)
             return false;
@@ -108,12 +83,6 @@ struct Owner {
         return true;
     }
 };
-// Lamps that are off and fully faded emit nothing, so their mount search can wait until
-// they are switched on again. That also covers shut-down and dead mechs once faded.
-inline bool refresh_needed(const Owner &owner) {
-    const bool lamps_lit_or_fading = owner.envelope.desired || owner.envelope.current > 0;
-    return lamps_lit_or_fading;
-}
 inline std::set<std::string> emitter_ids(const chassis::Registration &record) {
     std::set<std::string> result;
     for (const auto &lamp : record.headlights)

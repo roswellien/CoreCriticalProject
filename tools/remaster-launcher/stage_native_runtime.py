@@ -20,12 +20,7 @@ COORDINATOR_FILES = (
     "play_remaster.py", "play_native.ps1", "resolve_sun_preset.ps1",
     "prepared_mech_packs.py", "prepared_environment_packs.py",
     "prepared_skin_packs.py", "prepared_chassis_packs.py",
-<<<<<<< HEAD
     "surface_catalog_composition.py", "chassis_appearances.py",
-=======
-    "chassis_appearances.py", "owned_chassis_visuals.py", "owned_emission.py",
-    "surface_catalog_composition.py",
->>>>>>> origin/develop
     "legacy_chassis_resources.py", "legacy_chassis_skins.py",
     "chassis_catalog.py", "chassis_icons.py", "reader_archive.py", "zrd_document.py",
     "content_capabilities.py", "legacy_content_capabilities.json",
