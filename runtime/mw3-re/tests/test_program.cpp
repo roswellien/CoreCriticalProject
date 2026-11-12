@@ -82,6 +82,7 @@
 #include "arena_counts.h"
 #include "mech3/arena.h"
 #include "mech3/arena_log.h"
+#include "mech3/replay_terrain.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mech_salvage.h"
@@ -19050,6 +19051,33 @@ bool is_missile(const std::string& weapon) {
   return false;
 }
 }  // namespace
+
+// #289 step 2 criterion 5: the replay viewer's terrain from the player's
+// install, the whole c1 world (the worst case, as no spawn spots are known
+// here to frame on) in under 3 s, with real relief and walls outlined; an
+// unknown map fails with a message.
+TEST(replay_terrain_c1mp1) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  const float whole_world[4] = {1, 1, 0, 0};
+  const auto started = std::chrono::steady_clock::now();
+  const mech3::replay::Terrain terrain = mech3::replay::build_terrain("c1mp1", whole_world);
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  float low = 1e30f, high = -1e30f;
+  for (const float y : terrain.heights) low = std::min(low, y), high = std::max(high, y);
+  int outlined = 0;
+  for (const uint8_t o : terrain.outline) outlined += o;
+  std::printf("  terrain: %s %dx%d cells of %.2f m in %.2f s, heights %.1f..%.1f, %d outlined\n",
+              terrain.error.c_str(), terrain.width, terrain.height, terrain.cell, seconds, low, high, outlined);
+  EXPECT(terrain.error.empty() && terrain.width > 0 && terrain.height > 0);
+  EXPECT(seconds < 3.0);
+  EXPECT(high - low > 10.0f && outlined > 0);
+  EXPECT(terrain.rgba.size() == terrain.heights.size() * 4);
+  const mech3::replay::Terrain unknown = mech3::replay::build_terrain("zz9mp1", whole_world);
+  EXPECT(!unknown.error.empty() && unknown.heights.empty());
+}
 
 // #289 step 1 (criteria 2 to 6) on the real game: a c1mp1 4v4 logs shots of
 // every kind with their rounds and beams, routes, contacts in and out of

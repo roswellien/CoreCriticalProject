@@ -46,6 +46,7 @@ endif()
 add_library(mw3core STATIC
   src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
   src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
+  src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
