@@ -527,6 +527,67 @@ TEST(arena_route_change_rule) {
   EXPECT(route_changed(last, nullptr));
 }
 
+// #289 criterion 7: the AI's decision note is set only while an arena match
+// is logged with detail on, so no other game runs anything new.
+TEST(arena_decision_note_is_unset_outside_a_match) {
+  using mech3::ai::decision_note;
+  std::FILE* file = std::tmpfile();
+  EXPECT(file != nullptr);
+  set_arena_log(file, 16);
+  const Setup setup;
+  const std::vector<ArenaMech> mechs;
+  EXPECT(decision_note() == nullptr);
+  log_match_start(setup, mechs);
+  EXPECT(decision_note() != nullptr);
+  log_match_end(Result{});
+  EXPECT(decision_note() == nullptr);
+  log_match_start(setup, mechs);
+  EXPECT(decision_note() != nullptr);
+  log_match_stop();
+  EXPECT(decision_note() == nullptr);
+  set_arena_log_detail(false);
+  log_match_start(setup, mechs);
+  EXPECT(decision_note() == nullptr);
+  log_match_stop();
+  set_arena_log_detail(true);
+  set_arena_log(nullptr, 0);
+  if (file) std::fclose(file);
+}
+
+// #289 criterion 5, game-free: a decision record for each order or target
+// change and for no other frame, with the reason noted since the last frame
+// or the fallback.
+TEST(arena_decision_book_follows_the_rules) {
+  using mech3::ai::Decision;
+  int hunt = 0, fight = 0;
+  const OrderKey hunting{&hunt, 1}, fighting{&fight, 2};
+  DecisionBook book;
+  EXPECT(book.frame(hunting, -1, "contact").empty());  // the baseline
+  EXPECT(book.frame(hunting, -1, "contact").empty());
+  // A note with no change gives nothing, and is gone by the next change.
+  book.note(Decision::kEngage);
+  EXPECT(book.frame(hunting, -1, "contact").empty());
+  std::vector<nlohmann::json> records = book.frame(fighting, -1, nullptr);
+  EXPECT(records.size() == 1 && records[0]["code"] == "order_other");
+  // Back to the hunt: its goal rule is the reason.
+  records = book.frame(hunting, -1, "last_seen");
+  EXPECT(records.size() == 1 && records[0]["code"] == "hunt_last_seen");
+  // Engage noted: the order change says so; a target change with it, the order first.
+  book.note(Decision::kEngage);
+  book.note(Decision::kTargetVolley);
+  records = book.frame(fighting, 5, nullptr);
+  EXPECT(records.size() == 2 && records[0]["code"] == "engage");
+  EXPECT(records.size() == 2 && records[1]["code"] == "target_volley" && records[1]["target"] == 5);
+  book.note(Decision::kTargetLost);
+  records = book.frame(fighting, 6, nullptr);
+  EXPECT(records.size() == 1 && records[0]["code"] == "target_lost" && records[0]["target"] == 6);
+  records = book.frame(fighting, -1, nullptr);
+  EXPECT(records.size() == 1 && records[0]["code"] == "target_other" && records[0]["target"] == -1);
+  // The same state at a different stack depth is a new order.
+  records = book.frame(OrderKey{&fight, 3}, -1, nullptr);
+  EXPECT(records.size() == 1 && records[0]["code"] == "order_other");
+}
+
 TEST(arena_bot_params_change_only_the_arena_fields) {
   Bot bot;
   for (size_t i = 0; i < bot.params.size(); ++i) bot.params[i] = static_cast<uint8_t>(i * 7 + 1);

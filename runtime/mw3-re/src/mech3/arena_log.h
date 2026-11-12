@@ -9,6 +9,7 @@
 #include <nlohmann-json/json.hpp>
 
 #include "mech3/arena.h"
+#include "mech3/zai_brain.h"
 
 namespace mech3 {
 struct Weapon;
@@ -136,6 +137,33 @@ struct RouteSeen {
 // Whether the route changed since `last` (a new follower, none any more, or
 // a path found or found again), with `last` brought up to date.
 bool route_changed(RouteSeen& last, const ai::nav::Follower* follower);
+
+// Ours (#289): one bot's decisions. The game's sites note why (the
+// DecisionNote in zai_brain.h); each frame the logger hands over the bot's
+// order and target, and a change gives a record with the reason noted since
+// the last frame, or the "_other" fallback when no site noted one.
+struct OrderKey {
+  const void* state = nullptr;  // the current order's BehaviourState
+  size_t count = 0;             // how many orders are stacked
+  bool operator==(const OrderKey& other) const { return state == other.state && count == other.count; }
+};
+class DecisionBook {
+ public:
+  void note(ai::Decision why);
+  // This frame's decision records ({"code"} for an order change,
+  // {"code","target"} for a target change; no "type", "t" or "id"), the
+  // order first. `hunt_rule` is the hunt's goal rule name when the order is
+  // the hunt, else null. The first frame only sets the baseline. Notes are
+  // dropped after every call, whether or not anything changed.
+  std::vector<nlohmann::json> frame(const OrderKey& order, int target, const char* hunt_rule);
+
+ private:
+  bool started_ = false;
+  OrderKey order_;
+  int target_ = -1;
+  const char* order_code_ = nullptr;
+  const char* target_code_ = nullptr;
+};
 
 // One mech's state record, as the log writes it at `now`.
 nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<ArenaMech>& mechs);

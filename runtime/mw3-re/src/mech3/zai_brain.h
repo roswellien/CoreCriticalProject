@@ -332,6 +332,18 @@ inline void ai_switch_on() { ai_switch() = true; }    // 0x004ea740
 inline void ai_switch_off() { ai_switch() = false; }  // 0x004ea750
 void set_brain_hooks(BrainHooks* h);
 
+// Ours (#289): why a bot's order or target changed, for the arena match log
+// (arena_log.cpp). Null outside an arena match, so no other game runs
+// anything new; the note only records the reason, never changes the game.
+enum class Decision : uint8_t {
+  kEngage,        // the hunt gave way to the stock fight (Brain::update's push)
+  kTargetVolley,  // the firing plan took its best-scored contact (volley_plan_pick)
+  kTargetLost,    // the sensors replaced or dropped a target that left (sensors.cpp)
+};
+using DecisionNote = void (*)(zgame::Handle vehicle, Decision why);
+void set_decision_note(DecisionNote note);
+DecisionNote decision_note();
+
 // What a net builds in an order (its vt+0x5c, in place at the order's
 // +0x30; docs/ai.md 17.2). Slot 0 destroys it in place (no free).
 class NetPart {

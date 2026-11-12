@@ -29,6 +29,7 @@ float g_now = 0;
 float g_next_state = 0;
 std::vector<bool> g_was_standing;
 std::vector<RouteSeen> g_routes;  // #289: each mech's, by index in the match's list
+std::vector<DecisionBook> g_decisions;  // #289: likewise
 bool g_hooked = false;
 ShotStarts g_shot_starts;
 RoundBook g_rounds;
@@ -109,6 +110,11 @@ void add_ai_detail(const Mech* mech, int self_side, nlohmann::json* ai) {
   (*ai)["contacts"] = contacts;
 }
 
+const char* hunt_rule_name(const ai::HuntState& hunt) {
+  static const char* const kRules[] = {"contact", "last_seen", "fallback"};
+  return kRules[static_cast<int>(hunt.goal.rule)];
+}
+
 // The order a mech's brain is running: its own hunt, the stock fight, or
 // another of the game's.
 nlohmann::json ai_record(const Mech* mech) {
@@ -118,9 +124,8 @@ nlohmann::json ai_record(const Mech* mech) {
   if (!brain || brain->orders.empty()) return ai;
   const ai::BehaviourState* state = brain->current().state.get();
   if (auto* hunt = dynamic_cast<const ai::HuntState*>(state)) {
-    static const char* const kRules[] = {"contact", "last_seen", "fallback"};
     ai["order"] = "hunt";
-    ai["goal_rule"] = kRules[static_cast<int>(hunt->goal.rule)];
+    ai["goal_rule"] = hunt_rule_name(*hunt);
     ai["goal"] = {rounded(hunt->goal.at[0]), rounded(hunt->goal.at[1]), rounded(hunt->goal.at[2])};
   } else if (dynamic_cast<const ai::FightState*>(state)) {
     ai["order"] = "fight";
@@ -198,6 +203,38 @@ void on_hit(Mech& mech, WeaponDef* def, Collision* collision, float damage, Hand
   else if (mech.controls) mech.controls->on_hit(attacker);  // what take_damage does with no hook
 }
 
+// #289: the DecisionNote the AI's sites call during a match: the reason goes
+// to that bot's book until the frame's comparison.
+void on_decision(zgame::Handle vehicle, ai::Decision why) {
+  const int id = id_of_vehicle(vehicle);
+  if (!g_mechs || id < 0) return;
+  for (size_t i = 0; i < g_mechs->size() && i < g_decisions.size(); ++i)
+    if ((*g_mechs)[i].id == id) g_decisions[i].note(why);
+}
+
+// #289: a "decision" line for each order or target change this frame.
+void log_decisions(float now, const std::vector<ArenaMech>& mechs) {
+  if (g_decisions.size() != mechs.size()) g_decisions.assign(mechs.size(), DecisionBook{});
+  for (size_t i = 0; i < mechs.size(); ++i) {
+    const Mech* mech = mechs[i].mech;
+    auto* controls = dynamic_cast<AiControls*>(mech->controls);
+    ai::Brain* brain = controls ? controls->brain.get() : nullptr;
+    OrderKey order;
+    const char* hunt_rule = nullptr;
+    if (brain && !brain->orders.empty()) {
+      const ai::BehaviourState* state = brain->current().state.get();
+      order = {state, brain->orders.size()};
+      if (auto* hunt = dynamic_cast<const ai::HuntState*>(state)) hunt_rule = hunt_rule_name(*hunt);
+    }
+    for (nlohmann::json& record : g_decisions[i].frame(order, target_id(mech), hunt_rule)) {
+      record["type"] = "decision";
+      record["t"] = rounded(now);
+      record["id"] = mechs[i].id;
+      write_line(record);
+    }
+  }
+}
+
 // #289: a "route" line for each bot whose route changed this frame: its
 // follower's waypoints, empty when its order has no follower or no path.
 void log_routes(float now, const std::vector<ArenaMech>& mechs) {
@@ -260,6 +297,7 @@ nlohmann::json beams_held(float now) {
 
 void unhook() {
   g_rounds.clear();  // its weapons and pool slots belong to the mission that is ending
+  if (ai::decision_note() == on_decision) ai::set_decision_note(nullptr);
   if (!g_hooked) return;
   g_hooked = false;
   // Put back only while ours is still the one installed: something that
@@ -327,6 +365,7 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   g_next_state = 0;
   g_was_standing.assign(mechs.size(), true);
   g_routes.assign(mechs.size(), RouteSeen{});
+  g_decisions.assign(mechs.size(), DecisionBook{});
   if (!g_file) return;
   nlohmann::json sides = nlohmann::json::array();
   for (const std::vector<Bot>& bots : setup.sides) {
@@ -355,6 +394,7 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   damage_calls().controls_hit = on_hit;
   g_shot_starts.clear();
   g_rounds.clear();
+  if (g_detail) ai::set_decision_note(on_decision);
   g_hooked = true;
 }
 
@@ -363,6 +403,35 @@ ShotStarts::Report ShotStarts::report(const Weapon* weapon) {
   if (!weapon || !weapon->is_beam()) return Report::kNewShot;
   if (!weapon->is_firing()) return beams_on.erase(weapon) > 0 ? Report::kEnded : Report::kHeld;
   return beams_on.insert(weapon).second ? Report::kNewShot : Report::kHeld;
+}
+
+// Ours (#289)
+void DecisionBook::note(ai::Decision why) {
+  switch (why) {
+    case ai::Decision::kEngage: order_code_ = "engage"; break;
+    case ai::Decision::kTargetVolley: target_code_ = "target_volley"; break;
+    case ai::Decision::kTargetLost: target_code_ = "target_lost"; break;
+  }
+}
+
+// Ours (#289)
+std::vector<nlohmann::json> DecisionBook::frame(const OrderKey& order, int target, const char* hunt_rule) {
+  std::vector<nlohmann::json> records;
+  if (started_) {
+    if (!(order == order_)) {
+      std::string code = "order_other";
+      if (hunt_rule) code = std::string("hunt_") + hunt_rule;
+      else if (order_code_) code = order_code_;
+      records.push_back({{"code", code}});
+    }
+    if (target != target_) records.push_back({{"code", target_code_ ? target_code_ : "target_other"}, {"target", target}});
+  }
+  started_ = true;
+  order_ = order;
+  target_ = target;
+  order_code_ = nullptr;
+  target_code_ = nullptr;
+  return records;
 }
 
 // Ours (#289)
@@ -457,7 +526,10 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs) {
       write_line({{"type", "destroyed"}, {"t", rounded(now)}, {"id", mechs[i].id}, {"by", id_of(mechs[i].mech->attacker)}});
     g_was_standing[i] = standing;
   }
-  if (g_detail) log_routes(now, mechs);
+  if (g_detail) {
+    log_routes(now, mechs);
+    log_decisions(now, mechs);
+  }
   if (now < g_next_state) return;
   // Each due time once, on the first frame at or past it: the same seed and
   // frame time give the same frames, so the same lines.
