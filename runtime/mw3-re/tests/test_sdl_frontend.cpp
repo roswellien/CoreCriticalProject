@@ -1,5 +1,18 @@
 // The SDL front end's pieces that run without a window (docs/program.md):
 // the DirectInput stand-in and the GDI text on SDL3_ttf.
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+// Win16 memory-model macros collide with the game's near() and test predicates.
+#undef near
+#undef far
+#include <stdexcept>
+#endif
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -1164,6 +1177,268 @@ struct Mounted {
 };
 bool have_fonts() { return std::filesystem::exists(std::string(MW3_GAME_DIR) + "/arial.ttf"); }
 }  // namespace
+
+#if defined(_WIN32)
+namespace font_discovery {
+namespace fs = std::filesystem;
+using GetDirectory = UINT(WINAPI*)(wchar_t*, UINT);
+thread_local const std::wstring* directory = nullptr;
+thread_local unsigned directory_calls = 0;
+
+GetDirectory real_directory() {
+  auto function = reinterpret_cast<GetDirectory>(
+      GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetWindowsDirectoryW"));
+  if (!function) throw std::runtime_error("Cannot resolve the real Windows directory API");
+  return function;
+}
+
+UINT WINAPI directory_for_test(wchar_t* buffer, UINT capacity) {
+  ++directory_calls;
+  if (!directory) return real_directory()(buffer, capacity);
+  const auto required = static_cast<UINT>(directory->size() + 1);
+  if (capacity < required) return required;
+  std::copy(directory->begin(), directory->end(), buffer);
+  buffer[directory->size()] = 0;
+  return required - 1;
+}
+
+struct ScopedDirectory {
+  const std::wstring* saved = directory;
+  explicit ScopedDirectory(const std::wstring* value) { directory = value; }
+  ~ScopedDirectory() { directory = saved; }
+  ScopedDirectory(const ScopedDirectory&) = delete;
+  ScopedDirectory& operator=(const ScopedDirectory&) = delete;
+};
+
+std::wstring windows_directory(bool original) {
+  wchar_t buffer[32768]{};
+  const UINT length = original ? real_directory()(buffer, 32768)
+                               : GetWindowsDirectoryW(buffer, 32768);
+  if (!length || length >= 32768) throw std::runtime_error("Windows directory lookup failed");
+  return std::wstring(buffer, length);
+}
+
+struct Fixture {
+  zutl::Mounts mounts = zutl::mounts();
+  zvid::PixelFormat pixel_format = zvid::pixel_format();
+  const std::wstring* prior_directory = directory;
+  unsigned prior_calls = directory_calls;
+  bool had_windir = std::getenv("WINDIR") != nullptr;
+  std::string windir = had_windir ? std::getenv("WINDIR") : "";
+  fs::path source_fonts = fs::path(windows_directory(true)) / "Fonts";
+  fs::path root;
+  fs::path mounted;
+  fs::path fonts;
+  std::wstring controlled;
+  std::wstring empty;
+
+  Fixture() {
+    static unsigned sequence = 0;
+    root = fs::path(MW3_TEST_TMP) / ("font-discovery-" + std::to_string(++sequence));
+    mounted = root / "mounted";
+    fonts = root / "windows" / "Fonts";
+    controlled = fonts.parent_path().wstring();
+    empty = (root / "empty-windows").wstring();
+    if (!fs::is_regular_file(source_fonts / "arial.ttf") ||
+        !fs::is_regular_file(source_fonts / "consola.ttf"))
+      throw std::runtime_error("Font tests require readable installed Arial and Consolas");
+    fs::create_directories(mounted);
+    fs::create_directories(fonts);
+    fs::create_directories(fs::path(empty) / "Fonts");
+    if (_putenv_s("WINDIR", "Z:/not-a-real-Windows-directory") != 0)
+      throw std::runtime_error("Cannot isolate WINDIR for the font test");
+    zutl::mounts() = zutl::Mounts{};
+    zutl::mount(mounted.u8string());
+    zutl::set_write_dir(mounted.u8string());
+    zvid::set_pixel_format(5, 6, 5);
+  }
+  ~Fixture() {
+    directory = prior_directory;
+    directory_calls = prior_calls;
+    zutl::mounts() = mounts;
+    zvid::pixel_format() = pixel_format;
+    _putenv_s("WINDIR", had_windir ? windir.c_str() : "");
+    std::error_code error;
+    fs::remove_all(root, error);
+  }
+  void prepare(const char* filename) {
+    fs::remove_all(fonts);
+    fs::remove_all(mounted);
+    fs::create_directories(fonts);
+    fs::create_directories(mounted);
+    fs::copy_file(source_fonts / "arial.ttf", fonts / filename);
+  }
+};
+
+struct Rendered {
+  int32_t width = 0, height = 0;
+  size_t ordinary = 0, enhanced = 0;
+};
+
+Rendered render(const char* face, const std::wstring* missing_hud = nullptr) {
+  Rendered result;
+  sdlfe::SdlTwodHost host(nullptr, nullptr, nullptr);
+  EXPECT(TTF_WasInit() > 0);
+  host.enable_hud_text(true);
+  const auto font = host.CreateFontA(-16, 0, 0, 0, 400, 0, 0, 0, 0, 4, 0, 1, 0, face);
+  EXPECT(font != 0);
+  if (!font) return result;  // The prerequisite has failed, not skipped successfully.
+  std::vector<uint16_t> pixels(640 * 64, 0);
+  zimg::Texture image{};
+  image.flags = zimg::kTwoBytes;
+  image.width = image.width_again = 640;
+  image.height = 64;
+  image.pixels = pixels.data();
+  const auto dc = host.image_dc(&image);
+  struct Resources {
+    sdlfe::SdlTwodHost& host;
+    zimg::Texture* image;
+    zgame::Handle dc, font;
+    ~Resources() { host.image_dc_release(image, dc); host.DeleteObject(font); }
+  } resources{host, &image, dc, font};
+  host.SelectObject(dc, font);
+  host.SetTextColor(dc, 0xffffff);
+  host.SetBkMode(dc, 1);
+  const char* sample = "iiiiWWWW MECH WARRIOR 123";
+  EXPECT(host.GetTextExtentPoint32A(dc, sample, static_cast<int32_t>(std::strlen(sample)),
+                                   &result.width, &result.height) == 1);
+  EXPECT(result.width > 0 && result.height > 0);
+  ztwod::Rect rectangle{4, 4, 636, 60};
+  EXPECT(host.DrawTextA(dc, sample, -1, &rectangle, 0x20) > 0);
+  result.ordinary = std::count_if(pixels.begin(), pixels.end(), [](uint16_t p) { return p != 0; });
+  EXPECT(result.ordinary > 0);
+  if (missing_hud) {
+    ScopedDirectory missing(missing_hud);
+    bool threw = false;
+    try { (void)host.hud_text_image(&image, 2.0f, 0); }
+    catch (const std::runtime_error& error) {
+      threw = true;
+      EXPECT(std::string(error.what()) == "Cannot open the enhanced HUD font");
+    }
+    EXPECT(threw);
+  } else {
+    const auto enhanced = host.hud_text_image(&image, 2.0f, 0);
+    EXPECT(enhanced && enhanced->width == 1280 && enhanced->height == 128);
+    if (enhanced)
+      result.enhanced = std::count_if(enhanced->pixels.begin(), enhanced->pixels.end(),
+                                     [](uint32_t p) { return (p & 0x00ffffffU) != 0; });
+    EXPECT(result.enhanced > 0);
+  }
+  return result;
+}
+
+void unexpected(const std::exception& error) {
+  std::fprintf(stderr, "font-discovery unexpected exception: %s\n", error.what());
+  EXPECT(false);
+}
+
+const char* faces[] = {"Arial", "Impact", "Lucida Console"};
+const char* filenames[] = {"arial.ttf", "impact.ttf", "lucon.ttf"};
+}  // namespace font_discovery
+
+// Only this test executable replaces its import boundary. Production mw3 keeps
+// kernel32's real import; other threads and out-of-fixture callers forward to it.
+extern "C" {
+UINT(WINAPI* __imp_GetWindowsDirectoryW)(wchar_t*, UINT) = font_discovery::directory_for_test;
+}
+
+TEST(sdl_host_font_discovery_installed_lookup_table) {
+  using namespace font_discovery;
+  int rows = 0;
+  const auto saved_mounts = zutl::mounts();
+  const auto saved_pixel = zvid::pixel_format();
+  const auto saved_directory = directory;
+  const std::string saved_windir = std::getenv("WINDIR") ? std::getenv("WINDIR") : "";
+  try {
+    Fixture fixture;
+    EXPECT(directory == saved_directory);
+    const auto actual = windows_directory(true);
+    EXPECT(windows_directory(false) == actual);
+    {
+      ScopedDirectory scoped(&fixture.controlled);
+      std::wstring other_thread;
+      std::thread thread([&] { other_thread = windows_directory(false); });
+      thread.join();
+      EXPECT(other_thread == actual);
+      try { ScopedDirectory nested(&fixture.empty); throw std::runtime_error("restore"); }
+      catch (const std::runtime_error&) {}
+      EXPECT(directory == &fixture.controlled);
+    }
+    EXPECT(directory == saved_directory);
+    const struct { const char* face; const char* file; } cases[] = {
+        {"Arial", "arial.ttf"}, {"Arial", "segoeui.ttf"},
+        {"Impact", "impact.ttf"}, {"Impact", "arialbd.ttf"}, {"Impact", "arial.ttf"},
+        {"Lucida Console", "lucon.ttf"}, {"Lucida Console", "consola.ttf"},
+        {"Lucida Console", "cour.ttf"}};
+    for (const auto& item : cases) {
+      fixture.prepare(item.file);
+      ScopedDirectory scoped(&fixture.controlled);
+      render(item.face);
+      ++rows;
+      std::printf("font_case controlled %s %s\n", item.face, item.file);
+    }
+    for (const char* face : faces) {
+      render(face);
+      ++rows;
+      std::printf("font_case actual-system %s\n", face);
+    }
+    for (const char* face : faces) {
+      ScopedDirectory scoped(&fixture.empty);
+      sdlfe::SdlTwodHost host(nullptr, nullptr, nullptr);
+      EXPECT(host.CreateFontA(-16, 0, 0, 0, 400, 0, 0, 0, 0, 4, 0, 1, 0, face) == 0);
+      ++rows;
+      std::printf("font_case ordinary-exhaustion %s\n", face);
+    }
+  } catch (const std::exception& error) { unexpected(error); }
+  EXPECT(rows == 14);
+  EXPECT(directory == saved_directory);
+  EXPECT(zutl::mounts().read == saved_mounts.read && zutl::mounts().write == saved_mounts.write);
+  EXPECT(zvid::pixel_format().r_bits == saved_pixel.r_bits &&
+         zvid::pixel_format().g_bits == saved_pixel.g_bits &&
+         zvid::pixel_format().b_bits == saved_pixel.b_bits);
+  EXPECT(std::string(std::getenv("WINDIR") ? std::getenv("WINDIR") : "") == saved_windir);
+  std::printf("font_rows installed_lookup_table %d/14\n", rows);
+}
+
+TEST(sdl_host_font_discovery_mounted_priority) {
+  using namespace font_discovery;
+  int rows = 0;
+  try {
+    Fixture fixture;
+    for (int index = 0; index < 3; ++index) {
+      fixture.prepare(filenames[index]);
+      ScopedDirectory scoped(&fixture.controlled);
+      const auto system = render(faces[index]);
+      fs::copy_file(fixture.source_fonts / "consola.ttf", fixture.mounted / filenames[index]);
+      const auto before = directory_calls;
+      const auto override_font = render(faces[index]);
+      EXPECT(directory_calls == before);
+      EXPECT(system.width != override_font.width || system.height != override_font.height);
+      ++rows;
+      std::printf("font_case mounted-priority %s\n", faces[index]);
+    }
+  } catch (const std::exception& error) { unexpected(error); }
+  EXPECT(rows == 3);
+  std::printf("font_rows mounted_priority %d/3\n", rows);
+}
+
+TEST(sdl_host_font_discovery_enhanced_exhaustion) {
+  using namespace font_discovery;
+  int rows = 0;
+  try {
+    Fixture fixture;
+    for (int index = 0; index < 3; ++index) {
+      fixture.prepare(filenames[index]);
+      ScopedDirectory scoped(&fixture.controlled);
+      render(faces[index], &fixture.empty);
+      ++rows;
+      std::printf("font_case enhanced-exhaustion %s\n", faces[index]);
+    }
+  } catch (const std::exception& error) { unexpected(error); }
+  EXPECT(rows == 3);
+  std::printf("font_rows enhanced_exhaustion %d/3\n", rows);
+}
+#endif
 
 TEST(sdl_host_faces_use_the_games_ttf_files) {
   EXPECT(sdlfe::SdlTwodHost::font_file("Arial") == "arial.ttf");
