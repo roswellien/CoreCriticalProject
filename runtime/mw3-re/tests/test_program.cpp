@@ -19064,7 +19064,8 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
   const int ninety_seconds = 90 * 1000 / 16;  // the fake clock's 16 ms frames
   // Each run empties the temp log folder, so each log is read before the next run.
   // A warm-up match first: after other tests, something they leave behind
-  // changes the first match in the process (mw3 itself plays one per process).
+  // changes the first match in the process (mw3 itself plays one per process;
+  // issue #302).
   arena_headless_run(json, ninety_seconds, [](int) {});
   const auto run_on = arena_headless_run(json, ninety_seconds, [](int) {});
   const std::string bytes_on = file_text(run_on.log_path);
