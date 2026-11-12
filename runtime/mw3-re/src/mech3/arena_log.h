@@ -12,6 +12,7 @@
 
 namespace mech3 {
 struct Weapon;
+struct BeamWeapon;
 }
 
 // Ours, not the exe's (#287, docs/arena.md): the arena match log, one JSON
@@ -57,9 +58,68 @@ void log_match_stop();
 // every frame it is held and once when it stops (weapon.cpp, BeamWeapon), so
 // a beam counts once, when it turns on. Each counter keeps its own.
 struct ShotStarts {
-  bool is_new_shot(const Weapon* weapon);
+  // What one report is: a new shot, a beam still held, or a beam that just
+  // stopped (#289's beam_end).
+  enum class Report { kNewShot, kHeld, kEnded };
+  Report report(const Weapon* weapon);
+  bool is_new_shot(const Weapon* weapon) { return report(weapon) == Report::kNewShot; }
   void clear() { beams_on.clear(); }
   std::unordered_set<const Weapon*> beams_on;
+};
+
+// Ours (#289): one round or missile on its weapon def's list, as a state
+// line's walk sees it.
+struct RoundSeen {
+  const void* round = nullptr;  // its pool slot
+  float age = 0;                // seconds since it was fired (Projectile::age)
+  float pos[3] = {};
+};
+
+// Ours (#289): the rounds and beams arena mechs fired. Rounds and beams name
+// their shooter by scene node, not by mech, so the shot hook records each one
+// as it is fired, and the state lines look them up here. Rounds are kept in
+// the order they were fired, so ended rounds come out in the same order on
+// every run of a seed (pool addresses differ between runs).
+class RoundBook {
+ public:
+  // A round fired at that pool slot. A round still known at the slot (reused
+  // before a state line saw it leave) ends first, as in walk().
+  void shot(const void* round, int shooter, std::string weapon);
+  // A beam weapon turned on or off. Kept by the weapon, never by its zWeapon
+  // beam, which the game may free once it stops.
+  void beam_on(const BeamWeapon* weapon, int shooter, std::string name);
+  void beam_off(const BeamWeapon* weapon);
+  // The state line's "rounds": every known round in `flying` (in its order),
+  // each given an id the first time. A round with an id that is no longer
+  // flying, or whose age went down (its slot reused by a shot the hook never
+  // saw), ends: a "round_end" record (no "t") goes to `ended` and the round is
+  // forgotten. One that never got an id lived under a state period and is
+  // forgotten with no record. Unknown slots are skipped.
+  nlohmann::json walk(const std::vector<RoundSeen>& flying, std::vector<nlohmann::json>* ended);
+  void clear();
+
+  struct HeldBeam {
+    const BeamWeapon* weapon = nullptr;
+    int shooter = -1;
+    std::string name;
+  };
+  const std::vector<HeldBeam>& beams() const { return beams_; }
+
+ private:
+  struct Round {
+    const void* slot = nullptr;
+    int shooter = -1;
+    std::string weapon;
+    int id = -1;  // -1 until a state line sees it
+    float age = 0;
+    double pos[3] = {};
+    bool done = false;  // this walk: ended or reused
+  };
+  nlohmann::json end_record(const Round& round) const;
+  std::vector<Round> rounds_;
+  std::vector<nlohmann::json> ended_by_reuse_;  // from shot(), handed out by the next walk
+  std::vector<HeldBeam> beams_;
+  int next_id_ = 0;
 };
 
 // One mech's state record, as the log writes it at `now`.

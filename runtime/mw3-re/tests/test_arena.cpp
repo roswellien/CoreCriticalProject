@@ -437,6 +437,77 @@ TEST(arena_log_reader_refuses_missing_or_unknown_version) {
   EXPECT(read.error.empty() && read.records.size() == 2 && read.complete);
 }
 
+// #289 criterion 3, game-free: rounds keep their ids across state lines and
+// end once; a reused slot ends the old round; a round that never reached a
+// state line, or a slot the hook never recorded, writes nothing.
+TEST(arena_round_book_keeps_ids_and_ends_rounds) {
+  int slots[4] = {};
+  const auto seen = [](const void* slot, float age, float x) { return RoundSeen{slot, age, {x, 0, 0}}; };
+  const auto run = [&] {
+    RoundBook book;
+    std::vector<nlohmann::json> walks, ended_all;
+    const auto walk = [&](const std::vector<RoundSeen>& flying) {
+      std::vector<nlohmann::json> ended;
+      walks.push_back(book.walk(flying, &ended));
+      for (nlohmann::json& record : ended) ended_all.push_back(record);
+      return ended;
+    };
+    book.shot(&slots[0], 2, "LRM20");
+    book.shot(&slots[1], 3, "AC10");
+    // The first walk: both get ids, in walk order; slots[2] was never recorded.
+    walk({seen(&slots[1], 0.05f, 1), seen(&slots[0], 0.05f, 2), seen(&slots[2], 0.05f, 3)});
+    // slots[0] is gone: it ends once at its last position.
+    EXPECT(walk({seen(&slots[1], 0.15f, 4)}).size() == 1);
+    // slots[1] reused by a shot the hook never saw (its age went down): ends.
+    EXPECT(walk({seen(&slots[1], 0.01f, 5)}).size() == 1);
+    // A round fired and gone between two walks: no record at all.
+    book.shot(&slots[3], 1, "MG");
+    EXPECT(walk({}).empty());
+    // A slot reused by a recorded shot ends the old round with its id.
+    book.shot(&slots[0], 2, "LRM20");
+    walk({seen(&slots[0], 0.05f, 6)});
+    book.shot(&slots[0], 3, "SRM6");
+    const std::vector<nlohmann::json> reused = walk({seen(&slots[0], 0.02f, 7)});
+    EXPECT(reused.size() == 1);
+    return std::make_pair(walks, ended_all);
+  };
+  const auto first = run();
+  const auto second = run();
+  EXPECT(first == second);  // the same calls give the same ids and records
+  const std::vector<nlohmann::json>& walks = first.first;
+  const std::vector<nlohmann::json>& ended = first.second;
+  EXPECT(walks.size() == 6 && walks[0].size() == 2);
+  EXPECT(walks[0][0]["id"] == 0 && walks[0][0]["by"] == 3 && walks[0][1]["id"] == 1 && walks[0][1]["by"] == 2);
+  EXPECT(walks[1].size() == 1 && walks[1][0]["id"] == 0 && walks[1][0]["pos"][0] == 4.0);
+  EXPECT(walks[2].empty());  // the reused slot's new round is not ours
+  EXPECT(ended.size() == 3);
+  EXPECT(ended[0]["type"] == "round_end" && ended[0]["round"] == 1 && ended[0]["pos"][0] == 2.0);
+  EXPECT(ended[1]["round"] == 0 && ended[1]["pos"][0] == 4.0);
+  EXPECT(ended[2]["round"] == 2 && ended[2]["pos"][0] == 6.0);
+  EXPECT(walks[5].size() == 1 && walks[5][0]["id"] == 3 && walks[5][0]["weapon"] == "SRM6");
+}
+
+// #289 criterion 2, game-free: a beam reports a new shot when it turns on,
+// held while it stays on, and ended once when it stops.
+TEST(arena_shot_starts_reports_beam_end) {
+  static mech3::WeaponType type;
+  static mech3::WeaponManager manager(nullptr);
+  zwep::WeaponDef def{};
+  def.type = &type;
+  using Report = ShotStarts::Report;
+  ShotStarts starts;
+  {
+    mech3::BeamWeapon beam(&def, nullptr, &manager);
+    beam.firing = true;
+    EXPECT(starts.report(&beam) == Report::kNewShot);
+    EXPECT(starts.report(&beam) == Report::kHeld);
+    beam.firing = false;
+    EXPECT(starts.report(&beam) == Report::kEnded);
+    EXPECT(starts.report(&beam) == Report::kHeld);  // a second stop report is not a second end
+  }
+  EXPECT(starts.report(nullptr) == Report::kNewShot);
+}
+
 TEST(arena_bot_params_change_only_the_arena_fields) {
   Bot bot;
   for (size_t i = 0; i < bot.params.size(); ++i) bot.params[i] = static_cast<uint8_t>(i * 7 + 1);

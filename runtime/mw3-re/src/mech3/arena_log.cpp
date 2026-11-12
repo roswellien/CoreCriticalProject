@@ -1,8 +1,11 @@
 #include "mech3/arena_log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 
+#include "gamez/zweapon/zweapon.h"
+#include "gamez/zweapon/zwep_init.h"
 #include "mech3/app_mech.h"
 #include "mech3/mech.h"
 #include "mech3/mech_anim.h"
@@ -27,6 +30,7 @@ float g_next_state = 0;
 std::vector<bool> g_was_standing;
 bool g_hooked = false;
 ShotStarts g_shot_starts;
+RoundBook g_rounds;
 decltype(WeaponCalls::net_event) g_kept_shot = nullptr;
 decltype(DamageCalls::controls_hit) g_kept_hit = nullptr;
 
@@ -83,21 +87,122 @@ nlohmann::json ai_record(const Mech* mech) {
   return ai;
 }
 
+nlohmann::json rounded3(float x, float y, float z) { return {rounded(x), rounded(y), rounded(z)}; }
+
+// A weapon def's name as the log writes it: its NAME, else its key.
+std::string weapon_name(const zwep::WeaponDef* def) {
+  if (!def) return "";
+  if (def->name) return def->name;
+  return def->key ? def->key : "";
+}
+
+const Mech* mech_of(int id) {
+  if (!g_mechs || id < 0) return nullptr;
+  for (const ArenaMech& entry : *g_mechs)
+    if (entry.id == id) return entry.mech;
+  return nullptr;
+}
+
+// #289: what the shot line adds, and the round or beam it started.
+void log_shot_detail(int id, Weapon& weapon, ShotStarts::Report report, nlohmann::json* shot) {
+  const std::string name = weapon_name(weapon.def);
+  if (shot) {
+    const Mech* shooter = mech_of(id);
+    (*shot)["weapon"] = name;
+    (*shot)["beam"] = weapon.is_beam();
+    (*shot)["target"] = shooter ? target_id(shooter) : -1;
+    (*shot)["locked"] = weapon.locked;
+    (*shot)["muzzle"] = rounded3(weapon.muzzle.x, weapon.muzzle.y, weapon.muzzle.z);
+    (*shot)["dir"] = rounded3(weapon.direction.x, weapon.direction.y, weapon.direction.z);
+  }
+  if (weapon.is_beam()) {
+    // is_beam() is only overridden by BeamWeapon (weapon.h).
+    const auto* beam_weapon = static_cast<const BeamWeapon*>(&weapon);
+    if (report == ShotStarts::Report::kNewShot) g_rounds.beam_on(beam_weapon, id, name);
+    if (report == ShotStarts::Report::kEnded) {
+      g_rounds.beam_off(beam_weapon);
+      write_line({{"type", "beam_end"}, {"t", rounded(g_now)}, {"id", id}, {"weapon", name}});
+    }
+    return;
+  }
+  // zwep::spawn put the new round on the front of its def's list just before
+  // this report, at age 0. A refused spawn leaves an older round in front,
+  // which is already older than 0, so it is never taken for this shot.
+  const zwep::Projectile* fired = weapon.def ? weapon.def->active : nullptr;
+  if (report == ShotStarts::Report::kNewShot && fired && fired->age == 0.0f) g_rounds.shot(fired, id, name);
+}
+
 void on_shot(Handle owner, int32_t kind, Weapon* weapon) {
   const int id = id_of(owner);
-  if (id >= 0 && g_shot_starts.is_new_shot(weapon)) write_line({{"type", "shot"}, {"t", rounded(g_now)}, {"id", id}});
+  if (id >= 0) {
+    const ShotStarts::Report report = g_shot_starts.report(weapon);
+    nlohmann::json shot = {{"type", "shot"}, {"t", rounded(g_now)}, {"id", id}};
+    const bool is_new_shot = report == ShotStarts::Report::kNewShot;
+    if (g_detail && weapon) log_shot_detail(id, *weapon, report, is_new_shot ? &shot : nullptr);
+    if (is_new_shot) write_line(shot);
+  }
   if (g_kept_shot) g_kept_shot(owner, kind, weapon);
 }
 
 void on_hit(Mech& mech, WeaponDef* def, Collision* collision, float damage, Handle attacker) {
   const int id = id_of(&mech);
-  if (id >= 0)
-    write_line({{"type", "hit"}, {"t", rounded(g_now)}, {"id", id}, {"by", id_of(attacker)}, {"damage", rounded(damage)}});
+  if (id >= 0) {
+    nlohmann::json hit = {{"type", "hit"}, {"t", rounded(g_now)}, {"id", id}, {"by", id_of(attacker)}, {"damage", rounded(damage)}};
+    if (g_detail && def) hit["weapon"] = weapon_name(def);
+    write_line(hit);
+  }
   if (g_kept_hit) g_kept_hit(mech, def, collision, damage, attacker);
   else if (mech.controls) mech.controls->on_hit(attacker);  // what take_damage does with no hook
 }
 
+// #289: the state line's "rounds", from every non-beam weapon def's list of
+// shots in flight (the list at +0x7c holds Beams for beam defs instead); the
+// rounds that ended since the last state line are written first.
+nlohmann::json rounds_in_flight(float now) {
+  std::vector<RoundSeen> flying;
+  for (const zwep::WeaponDef& def : zwep::state().defs) {
+    if (def.flags & zwep::kBeam) continue;
+    for (const zwep::Projectile* round = def.active; round; round = round->next) {
+      if (round->state != 1) continue;  // 1 flying; 2 a dormant mine
+      flying.push_back({round, round->age, {round->position.x, round->position.y, round->position.z}});
+    }
+  }
+  std::vector<nlohmann::json> ended;
+  nlohmann::json rounds = g_rounds.walk(flying, &ended);
+  for (nlohmann::json& record : ended) {
+    record["t"] = rounded(now);
+    write_line(record);
+  }
+  return rounds;
+}
+
+// #289: the state line's "beams": each beam weapon on, read through the
+// weapon, which holds its zWeapon beam while it fires. One that stopped with
+// no stop report (its part destroyed) ends here.
+nlohmann::json beams_held(float now) {
+  nlohmann::json beams = nlohmann::json::array();
+  const std::vector<RoundBook::HeldBeam> held = g_rounds.beams();
+  for (const RoundBook::HeldBeam& entry : held) {
+    if (!entry.weapon->is_firing()) {
+      g_rounds.beam_off(entry.weapon);
+      write_line({{"type", "beam_end"}, {"t", rounded(now)}, {"id", entry.shooter}, {"weapon", entry.name}});
+      continue;
+    }
+    const auto* beam = static_cast<const zwep::Beam*>(entry.weapon->beam);
+    if (!beam || !beam->origin || !beam->dir) continue;
+    const zwep::Vec3f3& from = *beam->origin;
+    const zwep::Vec3f3& dir = *beam->dir;
+    beams.push_back({{"by", entry.shooter},
+                     {"weapon", entry.name},
+                     {"from", rounded3(from.x, from.y, from.z)},
+                     {"to", rounded3(from.x + dir.x * beam->length, from.y + dir.y * beam->length,
+                                     from.z + dir.z * beam->length)}});
+  }
+  return beams;
+}
+
 void unhook() {
+  g_rounds.clear();  // its weapons and pool slots belong to the mission that is ending
   if (!g_hooked) return;
   g_hooked = false;
   // Put back only while ours is still the one installed: something that
@@ -190,17 +295,87 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   weapon_calls().net_event = on_shot;
   damage_calls().controls_hit = on_hit;
   g_shot_starts.clear();
+  g_rounds.clear();
   g_hooked = true;
 }
 
 // Ours (#287)
-bool ShotStarts::is_new_shot(const Weapon* weapon) {
-  if (!weapon || !weapon->is_beam()) return true;
-  if (!weapon->is_firing()) {
-    beams_on.erase(weapon);
-    return false;
+ShotStarts::Report ShotStarts::report(const Weapon* weapon) {
+  if (!weapon || !weapon->is_beam()) return Report::kNewShot;
+  if (!weapon->is_firing()) return beams_on.erase(weapon) > 0 ? Report::kEnded : Report::kHeld;
+  return beams_on.insert(weapon).second ? Report::kNewShot : Report::kHeld;
+}
+
+// Ours (#289)
+nlohmann::json RoundBook::end_record(const Round& round) const {
+  return {{"type", "round_end"}, {"round", round.id}, {"pos", {round.pos[0], round.pos[1], round.pos[2]}}};
+}
+
+// Ours (#289)
+void RoundBook::shot(const void* round, int shooter, std::string weapon) {
+  for (auto it = rounds_.begin(); it != rounds_.end(); ++it) {
+    if (it->slot != round) continue;
+    if (it->id >= 0) ended_by_reuse_.push_back(end_record(*it));
+    rounds_.erase(it);
+    break;
   }
-  return beams_on.insert(weapon).second;
+  Round fired;
+  fired.slot = round;
+  fired.shooter = shooter;
+  fired.weapon = std::move(weapon);
+  rounds_.push_back(std::move(fired));
+}
+
+// Ours (#289)
+void RoundBook::beam_on(const BeamWeapon* weapon, int shooter, std::string name) {
+  beam_off(weapon);
+  beams_.push_back({weapon, shooter, std::move(name)});
+}
+
+// Ours (#289)
+void RoundBook::beam_off(const BeamWeapon* weapon) {
+  for (auto it = beams_.begin(); it != beams_.end(); ++it)
+    if (it->weapon == weapon) {
+      beams_.erase(it);
+      return;
+    }
+}
+
+// Ours (#289)
+nlohmann::json RoundBook::walk(const std::vector<RoundSeen>& flying, std::vector<nlohmann::json>* ended) {
+  for (nlohmann::json& record : ended_by_reuse_) ended->push_back(std::move(record));
+  ended_by_reuse_.clear();
+  for (Round& round : rounds_) round.done = true;  // until seen flying
+  nlohmann::json entries = nlohmann::json::array();
+  for (const RoundSeen& seen : flying) {
+    Round* round = nullptr;
+    for (Round& known : rounds_)
+      if (known.slot == seen.round) round = &known;
+    if (!round) continue;
+    const bool slot_reused = round->id >= 0 && seen.age < round->age;
+    if (slot_reused) continue;  // stays done: ended below, and the new shot is not ours
+    round->done = false;
+    if (round->id < 0) round->id = next_id_++;
+    round->age = seen.age;
+    for (int axis = 0; axis < 3; ++axis) round->pos[axis] = rounded(seen.pos[axis]);
+    entries.push_back({{"id", round->id},
+                       {"by", round->shooter},
+                       {"weapon", round->weapon},
+                       {"pos", {round->pos[0], round->pos[1], round->pos[2]}}});
+  }
+  for (const Round& round : rounds_)
+    if (round.done && round.id >= 0) ended->push_back(end_record(round));
+  rounds_.erase(std::remove_if(rounds_.begin(), rounds_.end(), [](const Round& round) { return round.done; }),
+                rounds_.end());
+  return entries;
+}
+
+// Ours (#289)
+void RoundBook::clear() {
+  rounds_.clear();
+  ended_by_reuse_.clear();
+  beams_.clear();
+  next_id_ = 0;
 }
 
 // Ours (#287)
@@ -221,6 +396,10 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs) {
   if (!g_file) return;
   nlohmann::json state = {{"type", "state"}, {"t", rounded(now)}, {"mechs", nlohmann::json::array()}};
   for (const ArenaMech& entry : mechs) state["mechs"].push_back(mech_state_record(entry, mechs));
+  if (g_detail) {
+    state["rounds"] = rounds_in_flight(now);
+    state["beams"] = beams_held(now);
+  }
   write_line(state);
 }
 
