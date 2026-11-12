@@ -724,6 +724,7 @@ if(SDL3_FOUND)
       src/frontend/sdl/campaign_chain.cpp
       src/frontend/sdl/modes_chain.cpp
       src/frontend/sdl/first_run_import.cpp
+      src/frontend/sdl/replay_view.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     if(MSVC)

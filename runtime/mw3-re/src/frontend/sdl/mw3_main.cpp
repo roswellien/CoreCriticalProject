@@ -77,6 +77,8 @@
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/launcher.h"
+#include "frontend/sdl/replay_view.h"
+#include "mech3/replay_log.h"
 #include "frontend/sdl/sdl_install.h"
 #include "mech3/game_setup.h"
 #include "frontend/sdl/sdl_force.h"
@@ -239,6 +241,8 @@ struct Args {
   // its setup is read; shared so Args stays copyable.
   std::string arena_path;
   std::shared_ptr<mech3::arena::ArenaRun> arena;
+  std::string replay_path;  // ours (#289): --replay LOG, the top-down replay viewer
+  std::string replay_script;  // --replay-script FILE: drives it for tests (replay_view.h)
 };
 
 void usage() {
@@ -278,7 +282,7 @@ void usage() {
       "DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] "
       "[--window WxH] "
       "[--nosound] [--hidden] [--verbose]\n"
-      "    [--arena SETUP.json --seed N --frame-ms N]\n"
+      "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -333,6 +337,8 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--net-drive" && next(1)) a.net_drive = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--net-soak") a.net_soak = true;
     else if (s == "--arena" && next(1)) a.arena_path = argv[++i];
+    else if (s == "--replay" && next(1)) a.replay_path = argv[++i];
+    else if (s == "--replay-script" && next(1)) a.replay_script = argv[++i];
     else if (s == "--net-staged" && next(1)) a.net_staged = std::atoi(argv[++i]) != 0;
     else if (s == "--net-ahead" && next(1)) a.net_ahead = std::strtof(argv[++i], nullptr);
     else if (s == "--net-discovery" && next(1)) a.net_discovery = std::atoi(argv[++i]);
@@ -481,6 +487,17 @@ bool parse(int argc, char** argv, Args& a) {
     } else {
       std::fprintf(stderr, "mw3: unknown argument %s\n", s.c_str());
       return usage(), false;
+    }
+  }
+  // --replay (ours, #289): the options it refuses, exit 2 before anything starts.
+  if (!a.replay_path.empty()) {
+    mech3::replay::ReplayFlags f;
+    f.arena = !a.arena_path.empty(), f.host = a.net_host, f.join = !a.net_join.empty();
+    f.net_upnp = !a.net_upnp.empty(), f.mission = !a.mission.empty(), f.fly = a.fly;
+    const std::string message = mech3::replay::replay_refusal(f);
+    if (!message.empty()) {
+      std::fprintf(stderr, "mw3: %s\n", message.c_str());
+      return false;
     }
   }
   // --arena (ours, #287): the options it refuses, then the setup file, each
@@ -887,6 +904,13 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::printf("mw3: install %s, write dir %s\n", a.install.c_str(), a.write_dir.c_str());
+  // --replay (ours, #289): with the install mounted, the viewer and nothing
+  // else: no engine, mission, match or network.
+  if (!a.replay_path.empty()) {
+    const int code = sdlfe::run_replay(a.replay_path, a.replay_script);
+    SDL_Quit();
+    return code;
+  }
   // --arena (ours, #287): with the install mounted, the map's spawn spots and
   // every pilot preset read from the player's files, then the match log made
   // (never over an old one). A failure exits 2 before the engine starts.
