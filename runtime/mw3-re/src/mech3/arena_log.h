@@ -67,7 +67,6 @@ struct ShotStarts {
   // stopped (#289's beam_end).
   enum class Report { kNewShot, kHeld, kEnded };
   Report report(const Weapon* weapon);
-  bool is_new_shot(const Weapon* weapon) { return report(weapon) == Report::kNewShot; }
   void clear() { beams_on.clear(); }
   std::unordered_set<const Weapon*> beams_on;
 };

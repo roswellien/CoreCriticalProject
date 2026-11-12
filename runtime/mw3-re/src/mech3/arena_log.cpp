@@ -112,7 +112,8 @@ void add_ai_detail(const Mech* mech, int self_side, nlohmann::json* ai) {
   for (const ai::Contact* contact : mech->contacts) {
     const int id = id_of_contact(contact);
     if (id < 0 || side_of(id) == self_side) continue;
-    contacts.push_back({{"id", id}, {"seen", (contact->flags & 1) != 0}});  // bit 0: the sensors detect it now (zai_target.h)
+    constexpr uint8_t kDetected = 1;  // Contact::flags bit 0: the sensors detect it now (zai_target.h)
+    contacts.push_back({{"id", id}, {"seen", (contact->flags & kDetected) != 0}});
   }
   (*ai)["contacts"] = contacts;
 }
@@ -596,8 +597,11 @@ LogRead read_arena_log(const std::string& path) {
   const nlohmann::json* start = read.records.empty() ? nullptr : &read.records.front();
   const bool has_version = start && start->value("type", "") == "start" && start->contains("version") &&
                            (*start)["version"].is_number_integer();
-  if (!has_version) {
-    read.error = "no format version (a log from before #289)";
+  const bool has_start = start && start->value("type", "") == "start";
+  if (!has_start) {
+    read.error = "no readable start line (empty or damaged log)";
+  } else if (!has_version) {
+    read.error = "no whole-number format version (a log from before #289)";
   } else if ((*start)["version"].get<int>() != kLogVersion) {
     read.error = "format version " + std::to_string((*start)["version"].get<int>()) + ", this build reads " +
                  std::to_string(kLogVersion);

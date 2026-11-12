@@ -87,7 +87,7 @@ void begin() {
   g_kept_shot = mech3::weapon_calls().net_event;
   mech3::weapon_calls().net_event = [](auto owner, int32_t kind, mech3::Weapon* w) {
     const int side = side_of(owner);
-    if (side >= 0 && g_shot_starts.is_new_shot(w)) ++g_shots[side];
+    if (side >= 0 && g_shot_starts.report(w) == ShotStarts::Report::kNewShot) ++g_shots[side];
     if (g_kept_shot) g_kept_shot(owner, kind, w);
   };
   g_kept_hit = mech3::damage_calls().controls_hit;
@@ -431,9 +431,11 @@ TEST(arena_log_reader_refuses_missing_or_unknown_version) {
   };
   LogRead read = read_with_start(R"({"type":"start","map":"c1mp1"})");
   EXPECT(read.opened && read.records.empty() && !read.complete);
-  EXPECT(read.error.find("no format version") != std::string::npos);
+  EXPECT(read.error.find("format version (a log from before") != std::string::npos);
   read = read_with_start(R"({"type":"start","version":2,"map":"c1mp1"})");
   EXPECT(read.records.empty() && read.error.find("format version 2") != std::string::npos);
+  read = read_with_start(R"(not json)");
+  EXPECT(read.records.empty() && read.error.find("no readable start line") != std::string::npos);
   read = read_with_start(R"({"type":"start","version":1,"map":"c1mp1"})");
   EXPECT(read.error.empty() && read.records.size() == 2 && read.complete);
 }
