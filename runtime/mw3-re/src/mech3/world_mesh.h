@@ -6,10 +6,11 @@
 #include <string>
 #include <vector>
 
-// A development tool, not part of the port: flattens a mission world read by
-// the ported loaders (zcls::read_zbd, zimg) into triangle batches for the
-// viewer. The real render path (zRender) is ported separately; this only lets
-// the loaded data be looked at.
+// Ours, not part of the port: flattens a mission world read by the ported
+// loaders (zcls::read_zbd, zimg) into triangle batches, for the mw3view
+// development tool and the arena replay viewer's terrain (#289). The real
+// render path (zRender) is ported separately; this only lets the loaded data
+// be looked at.
 namespace viewer {
 
 struct Vertex {

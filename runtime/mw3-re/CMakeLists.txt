@@ -44,6 +44,7 @@ if(MSVC)
   target_compile_options(cc_geometry_resources PRIVATE /EHsc)
 endif()
 add_library(mw3core STATIC
+  src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
@@ -832,9 +833,8 @@ if(SDL3_FOUND)
     message(STATUS "SDL3_ttf not found: mw3 is not built (brew install sdl3_ttf)")
   endif()
   # Development tools (not part of the port): the world viewer.
-  add_executable(mw3view tools/viewer/viewer.cpp tools/viewer/scene.cpp)
+  add_executable(mw3view tools/viewer/viewer.cpp)
   target_link_libraries(mw3view PRIVATE mw3core mw3sdl SDL3::SDL3)
-  target_include_directories(mw3view PRIVATE tools/viewer)
   target_compile_definitions(mw3view PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}")
   # The importer's movies (docs/fmv.md, The imported movies): only with FFmpeg's
   # libraries (Indeo 5 decoding, the MPEG-1 encoder); not needed to build the game.
