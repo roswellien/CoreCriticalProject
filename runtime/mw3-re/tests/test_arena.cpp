@@ -443,7 +443,12 @@ TEST(arena_log_reader_refuses_missing_or_unknown_version) {
 // state line, or a slot the hook never recorded, writes nothing.
 TEST(arena_round_book_keeps_ids_and_ends_rounds) {
   int slots[4] = {};
-  const auto seen = [](const void* slot, float age, float x) { return RoundSeen{slot, age, {x, 0, 0}}; };
+  int owners[2] = {};  // two shooters' scene nodes
+  const void* a = &owners[0];
+  const void* b = &owners[1];
+  const auto seen = [](const void* slot, float age, float x, const void* owner) {
+    return RoundSeen{slot, age, {x, 0, 0}, owner};
+  };
   const auto run = [&] {
     RoundBook book;
     std::vector<nlohmann::json> walks, ended_all;
@@ -453,23 +458,31 @@ TEST(arena_round_book_keeps_ids_and_ends_rounds) {
       for (nlohmann::json& record : ended) ended_all.push_back(record);
       return ended;
     };
-    book.shot(&slots[0], 2, "LRM20");
-    book.shot(&slots[1], 3, "AC10");
+    book.shot(&slots[0], a, 2, "LRM20");
+    book.shot(&slots[1], b, 3, "AC10");
     // The first walk: both get ids, in walk order; slots[2] was never recorded.
-    walk({seen(&slots[1], 0.05f, 1), seen(&slots[0], 0.05f, 2), seen(&slots[2], 0.05f, 3)});
+    walk({seen(&slots[1], 0.05f, 1, b), seen(&slots[0], 0.05f, 2, a), seen(&slots[2], 0.05f, 3, a)});
     // slots[0] is gone: it ends once at its last position.
-    EXPECT(walk({seen(&slots[1], 0.15f, 4)}).size() == 1);
+    EXPECT(walk({seen(&slots[1], 0.15f, 4, b)}).size() == 1);
     // slots[1] reused by a shot the hook never saw (its age went down): ends.
-    EXPECT(walk({seen(&slots[1], 0.01f, 5)}).size() == 1);
+    EXPECT(walk({seen(&slots[1], 0.01f, 5, b)}).size() == 1);
     // A round fired and gone between two walks: no record at all.
-    book.shot(&slots[3], 1, "MG");
+    book.shot(&slots[3], a, 1, "MG");
     EXPECT(walk({}).empty());
     // A slot reused by a recorded shot ends the old round with its id.
-    book.shot(&slots[0], 2, "LRM20");
-    walk({seen(&slots[0], 0.05f, 6)});
-    book.shot(&slots[0], 3, "SRM6");
-    const std::vector<nlohmann::json> reused = walk({seen(&slots[0], 0.02f, 7)});
+    book.shot(&slots[0], a, 2, "LRM20");
+    walk({seen(&slots[0], 0.05f, 6, a)});
+    book.shot(&slots[0], b, 3, "SRM6");
+    const std::vector<nlohmann::json> reused = walk({seen(&slots[0], 0.02f, 7, b)});
     EXPECT(reused.size() == 1);
+    // Reused by another shooter the hook never saw, though older: ends, and
+    // the stranger's round is not listed as ours.
+    book.shot(&slots[2], a, 1, "MG");
+    walk({seen(&slots[2], 0.05f, 8, a)});
+    EXPECT(walk({seen(&slots[2], 0.2f, 9, b)}).size() == 1);
+    // A round with no id yet whose slot a stranger took: forgotten, no record.
+    book.shot(&slots[3], a, 1, "MG");
+    EXPECT(walk({seen(&slots[3], 0.05f, 10, b)}).empty());
     return std::make_pair(walks, ended_all);
   };
   const auto first = run();
@@ -477,11 +490,14 @@ TEST(arena_round_book_keeps_ids_and_ends_rounds) {
   EXPECT(first == second);  // the same calls give the same ids and records
   const std::vector<nlohmann::json>& walks = first.first;
   const std::vector<nlohmann::json>& ended = first.second;
-  EXPECT(walks.size() == 6 && walks[0].size() == 2);
+  EXPECT(walks.size() == 9 && walks[0].size() == 2);
   EXPECT(walks[0][0]["id"] == 0 && walks[0][0]["by"] == 3 && walks[0][1]["id"] == 1 && walks[0][1]["by"] == 2);
   EXPECT(walks[1].size() == 1 && walks[1][0]["id"] == 0 && walks[1][0]["pos"][0] == 4.0);
   EXPECT(walks[2].empty());  // the reused slot's new round is not ours
-  EXPECT(ended.size() == 3);
+  EXPECT(ended.size() == 5);  // the SRM6 round ends when slots[2]'s walk leaves it out
+  EXPECT(ended[3]["round"] == 3 && ended[3]["pos"][0] == 7.0);
+  EXPECT(ended[4]["round"] == 4 && ended[4]["pos"][0] == 8.0);
+  EXPECT(walks[7].empty() && walks[8].empty());
   EXPECT(ended[0]["type"] == "round_end" && ended[0]["round"] == 1 && ended[0]["pos"][0] == 2.0);
   EXPECT(ended[1]["round"] == 0 && ended[1]["pos"][0] == 4.0);
   EXPECT(ended[2]["round"] == 2 && ended[2]["pos"][0] == 6.0);

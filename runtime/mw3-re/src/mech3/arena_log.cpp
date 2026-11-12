@@ -177,7 +177,7 @@ void log_shot_detail(int id, Weapon& weapon, ShotStarts::Report report, nlohmann
   // this report, at age 0. A refused spawn leaves an older round in front,
   // which is already older than 0, so it is never taken for this shot.
   const zwep::Projectile* fired = weapon.def ? weapon.def->active : nullptr;
-  if (report == ShotStarts::Report::kNewShot && fired && fired->age == 0.0f) g_rounds.shot(fired, id, name);
+  if (report == ShotStarts::Report::kNewShot && fired && fired->age == 0.0f) g_rounds.shot(fired, fired->owner, id, name);
 }
 
 void on_shot(Handle owner, int32_t kind, Weapon* weapon) {
@@ -258,7 +258,8 @@ nlohmann::json rounds_in_flight(float now) {
     if (def.flags & zwep::kBeam) continue;
     for (const zwep::Projectile* round = def.active; round; round = round->next) {
       if (round->state != 1) continue;  // 1 flying; 2 a dormant mine
-      flying.push_back({round, round->age, {round->position.x, round->position.y, round->position.z}});
+      flying.push_back(
+          {round, round->age, {round->position.x, round->position.y, round->position.z}, round->owner});
     }
   }
   std::vector<nlohmann::json> ended;
@@ -451,7 +452,7 @@ nlohmann::json RoundBook::end_record(const Round& round) const {
 }
 
 // Ours (#289)
-void RoundBook::shot(const void* round, int shooter, std::string weapon) {
+void RoundBook::shot(const void* round, const void* owner, int shooter, std::string weapon) {
   for (auto it = rounds_.begin(); it != rounds_.end(); ++it) {
     if (it->slot != round) continue;
     if (it->id >= 0) ended_by_reuse_.push_back(end_record(*it));
@@ -460,6 +461,7 @@ void RoundBook::shot(const void* round, int shooter, std::string weapon) {
   }
   Round fired;
   fired.slot = round;
+  fired.owner = owner;
   fired.shooter = shooter;
   fired.weapon = std::move(weapon);
   rounds_.push_back(std::move(fired));
@@ -491,7 +493,9 @@ nlohmann::json RoundBook::walk(const std::vector<RoundSeen>& flying, std::vector
     for (Round& known : rounds_)
       if (known.slot == seen.round) round = &known;
     if (!round) continue;
-    const bool slot_reused = round->id >= 0 && seen.age < round->age;
+    // A slot taken over by a shot the hook never saw: another shooter, or the
+    // same one firing again (its age went down).
+    const bool slot_reused = seen.owner != round->owner || (round->id >= 0 && seen.age < round->age);
     if (slot_reused) continue;  // stays done: ended below, and the new shot is not ours
     round->done = false;
     if (round->id < 0) round->id = next_id_++;

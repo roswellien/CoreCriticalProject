@@ -78,6 +78,7 @@ struct RoundSeen {
   const void* round = nullptr;  // its pool slot
   float age = 0;                // seconds since it was fired (Projectile::age)
   float pos[3] = {};
+  const void* owner = nullptr;  // the scene node that fired it (Projectile::owner)
 };
 
 // Ours (#289): the rounds and beams arena mechs fired. Rounds and beams name
@@ -87,17 +88,18 @@ struct RoundSeen {
 // every run of a seed (pool addresses differ between runs).
 class RoundBook {
  public:
-  // A round fired at that pool slot. A round still known at the slot (reused
-  // before a state line saw it leave) ends first, as in walk().
-  void shot(const void* round, int shooter, std::string weapon);
+  // A round fired at that pool slot by the scene node `owner`. A round still
+  // known at the slot (reused before a state line saw it leave) ends first,
+  // as in walk().
+  void shot(const void* round, const void* owner, int shooter, std::string weapon);
   // A beam weapon turned on or off. Kept by the weapon, never by its zWeapon
   // beam, which the game may free once it stops.
   void beam_on(const BeamWeapon* weapon, int shooter, std::string name);
   void beam_off(const BeamWeapon* weapon);
   // The state line's "rounds": every known round in `flying` (in its order),
   // each given an id the first time. A round with an id that is no longer
-  // flying, or whose age went down (its slot reused by a shot the hook never
-  // saw), ends: a "round_end" record (no "t") goes to `ended` and the round is
+  // flying, or whose age went down or owner changed (its slot reused by a
+  // shot the hook never saw), ends: a "round_end" record (no "t") goes to `ended` and the round is
   // forgotten. One that never got an id lived under a state period and is
   // forgotten with no record. Unknown slots are skipped.
   nlohmann::json walk(const std::vector<RoundSeen>& flying, std::vector<nlohmann::json>* ended);
@@ -113,6 +115,7 @@ class RoundBook {
  private:
   struct Round {
     const void* slot = nullptr;
+    const void* owner = nullptr;
     int shooter = -1;
     std::string weapon;
     int id = -1;  // -1 until a state line sees it
