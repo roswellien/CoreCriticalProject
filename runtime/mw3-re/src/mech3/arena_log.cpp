@@ -28,6 +28,7 @@ const std::vector<ArenaMech>* g_mechs = nullptr;
 float g_now = 0;
 float g_next_state = 0;
 std::vector<bool> g_was_standing;
+std::vector<RouteSeen> g_routes;  // #289: each mech's, by index in the match's list
 bool g_hooked = false;
 ShotStarts g_shot_starts;
 RoundBook g_rounds;
@@ -55,15 +56,57 @@ int id_of(const void* object) {
   return -1;
 }
 
-// The arena id of what a mech's AI has targeted, -1 for none.
-int target_id(const Mech* mech) {
-  const ai::Contact* contact = mech->target;
-  if (!contact || !g_mechs) return -1;
+// The arena id of a vehicle handle (a contact's vehicle, a brain's), -1 for
+// anything not an arena mech.
+int id_of_vehicle(zgame::Handle vehicle) {
+  if (!vehicle || !g_mechs) return -1;
   ai::BrainHooks& hooks = ai::brain_hooks();
-  const zgame::Handle seen = hooks.contact_vehicle(contact);
   for (const ArenaMech& entry : *g_mechs)
-    if (hooks.vehicle_handle(entry.mech) == seen) return entry.id;
+    if (hooks.vehicle_handle(entry.mech) == vehicle) return entry.id;
   return -1;
+}
+
+int id_of_contact(const ai::Contact* contact) {
+  return contact ? id_of_vehicle(ai::brain_hooks().contact_vehicle(contact)) : -1;
+}
+
+// The arena id of what a mech's AI has targeted, -1 for none.
+int target_id(const Mech* mech) { return id_of_contact(mech->target); }
+
+int side_of(int id) {
+  if (!g_mechs) return -1;
+  for (const ArenaMech& entry : *g_mechs)
+    if (entry.id == id) return entry.side;
+  return -1;
+}
+
+// #289: the follower of the order a brain is running: the hunt's, the
+// fight's or the follow's NavWay; other orders walk without one.
+const ai::nav::Follower* current_follower(const ai::BehaviourState* state) {
+  if (auto* hunt = dynamic_cast<const ai::HuntState*>(state)) return &hunt->nav.follow;
+  if (auto* fight = dynamic_cast<const ai::FightState*>(state)) return &fight->nav.follow;
+  if (auto* follow = dynamic_cast<const ai::FollowState*>(state)) return &follow->nav.follow;
+  return nullptr;
+}
+
+const ai::BehaviourState* current_state(const Mech* mech) {
+  auto* controls = dynamic_cast<AiControls*>(mech->controls);
+  ai::Brain* brain = controls ? controls->brain.get() : nullptr;
+  if (!brain || brain->orders.empty()) return nullptr;
+  return brain->current().state.get();
+}
+
+// #289: the route and contact fields of the ai record.
+void add_ai_detail(const Mech* mech, int self_side, nlohmann::json* ai) {
+  const ai::nav::Follower* follower = current_follower(current_state(mech));
+  (*ai)["at"] = follower ? follower->at : -1;
+  nlohmann::json contacts = nlohmann::json::array();
+  for (const ai::Contact* contact : mech->contacts) {
+    const int id = id_of_contact(contact);
+    if (id < 0 || side_of(id) == self_side) continue;
+    contacts.push_back({{"id", id}, {"seen", (contact->flags & 1) != 0}});  // bit 0: in sight now (zai_target.h)
+  }
+  (*ai)["contacts"] = contacts;
 }
 
 // The order a mech's brain is running: its own hunt, the stock fight, or
@@ -153,6 +196,20 @@ void on_hit(Mech& mech, WeaponDef* def, Collision* collision, float damage, Hand
   }
   if (g_kept_hit) g_kept_hit(mech, def, collision, damage, attacker);
   else if (mech.controls) mech.controls->on_hit(attacker);  // what take_damage does with no hook
+}
+
+// #289: a "route" line for each bot whose route changed this frame: its
+// follower's waypoints, empty when its order has no follower or no path.
+void log_routes(float now, const std::vector<ArenaMech>& mechs) {
+  if (g_routes.size() != mechs.size()) g_routes.assign(mechs.size(), RouteSeen{});
+  for (size_t i = 0; i < mechs.size(); ++i) {
+    const ai::nav::Follower* follower = current_follower(current_state(mechs[i].mech));
+    if (!route_changed(g_routes[i], follower)) continue;
+    nlohmann::json points = nlohmann::json::array();
+    if (follower)
+      for (const auto& point : follower->path) points.push_back(rounded3(point[0], point[1], point[2]));
+    write_line({{"type", "route"}, {"t", rounded(now)}, {"id", mechs[i].id}, {"points", points}});
+  }
 }
 
 // #289: the state line's "rounds", from every non-beam weapon def's list of
@@ -258,6 +315,7 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
       {"target", target_id(m)},
       {"ai", ai_record(m)},
   };
+  if (g_detail) add_ai_detail(m, entry.side, &record["ai"]);
   g_mechs = kept;
   return record;
 }
@@ -268,6 +326,7 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   g_now = 0;
   g_next_state = 0;
   g_was_standing.assign(mechs.size(), true);
+  g_routes.assign(mechs.size(), RouteSeen{});
   if (!g_file) return;
   nlohmann::json sides = nlohmann::json::array();
   for (const std::vector<Bot>& bots : setup.sides) {
@@ -304,6 +363,15 @@ ShotStarts::Report ShotStarts::report(const Weapon* weapon) {
   if (!weapon || !weapon->is_beam()) return Report::kNewShot;
   if (!weapon->is_firing()) return beams_on.erase(weapon) > 0 ? Report::kEnded : Report::kHeld;
   return beams_on.insert(weapon).second ? Report::kNewShot : Report::kHeld;
+}
+
+// Ours (#289)
+bool route_changed(RouteSeen& last, const ai::nav::Follower* follower) {
+  RouteSeen now;
+  if (follower) now = {follower, follower->paths, follower->repaths};
+  const bool changed = now.follower != last.follower || now.paths != last.paths || now.repaths != last.repaths;
+  last = now;
+  return changed;
 }
 
 // Ours (#289)
@@ -389,6 +457,7 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs) {
       write_line({{"type", "destroyed"}, {"t", rounded(now)}, {"id", mechs[i].id}, {"by", id_of(mechs[i].mech->attacker)}});
     g_was_standing[i] = standing;
   }
+  if (g_detail) log_routes(now, mechs);
   if (now < g_next_state) return;
   // Each due time once, on the first frame at or past it: the same seed and
   // frame time give the same frames, so the same lines.

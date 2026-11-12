@@ -14,6 +14,9 @@ namespace mech3 {
 struct Weapon;
 struct BeamWeapon;
 }
+namespace mech3::ai::nav {
+struct Follower;
+}
 
 // Ours, not the exe's (#287, docs/arena.md): the arena match log, one JSON
 // object a line. A "start" line (the setup, seed and frame time), "state"
@@ -121,6 +124,18 @@ class RoundBook {
   std::vector<HeldBeam> beams_;
   int next_id_ = 0;
 };
+
+// Ours (#289): a bot's route as the log last wrote it. Each order makes its
+// own follower (the hunt's, the fight's or the follow's NavWay), whose
+// counters start at 0, so the follower's address is kept with them.
+struct RouteSeen {
+  const ai::nav::Follower* follower = nullptr;
+  int32_t paths = 0;
+  int32_t repaths = 0;
+};
+// Whether the route changed since `last` (a new follower, none any more, or
+// a path found or found again), with `last` brought up to date.
+bool route_changed(RouteSeen& last, const ai::nav::Follower* follower);
 
 // One mech's state record, as the log writes it at `now`.
 nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<ArenaMech>& mechs);

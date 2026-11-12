@@ -24,6 +24,7 @@
 #include "mech3/mech_names.h"
 #include "mech3/mech_net.h"
 #include "mech3/weapon.h"
+#include "mech3/zai_nav.h"
 #include "mech3/zai_params.h"
 
 namespace {
@@ -506,6 +507,24 @@ TEST(arena_shot_starts_reports_beam_end) {
     EXPECT(starts.report(&beam) == Report::kHeld);  // a second stop report is not a second end
   }
   EXPECT(starts.report(nullptr) == Report::kNewShot);
+}
+
+// #289 criterion 4, game-free: a route line only when the bot's follower
+// changed (a new order's, or none) or found a path again.
+TEST(arena_route_change_rule) {
+  mech3::ai::nav::Follower hunt_follower, fight_follower;
+  RouteSeen last;
+  EXPECT(!route_changed(last, nullptr));  // no follower, as before
+  EXPECT(route_changed(last, &hunt_follower));
+  EXPECT(!route_changed(last, &hunt_follower));
+  ++hunt_follower.paths;
+  EXPECT(route_changed(last, &hunt_follower));
+  ++hunt_follower.repaths;
+  EXPECT(route_changed(last, &hunt_follower));
+  ++hunt_follower.waypoints;  // walking on along the same path is no change
+  EXPECT(!route_changed(last, &hunt_follower));
+  EXPECT(route_changed(last, &fight_follower));
+  EXPECT(route_changed(last, nullptr));
 }
 
 TEST(arena_bot_params_change_only_the_arena_fields) {
