@@ -90,16 +90,23 @@ const ai::nav::Follower* current_follower(const ai::BehaviourState* state) {
   return nullptr;
 }
 
-const ai::BehaviourState* current_state(const Mech* mech) {
+// The order a mech's brain is running and how many it has stacked; a null
+// state and 0 for a mech with no AI brain or no orders. The one place the
+// log finds a bot's order, so a new kind of order is added once.
+struct CurrentOrder {
+  const ai::BehaviourState* state = nullptr;
+  size_t count = 0;
+};
+CurrentOrder current_order(const Mech* mech) {
   auto* controls = dynamic_cast<AiControls*>(mech->controls);
   ai::Brain* brain = controls ? controls->brain.get() : nullptr;
-  if (!brain || brain->orders.empty()) return nullptr;
-  return brain->current().state.get();
+  if (!brain || brain->orders.empty()) return {};
+  return {brain->current().state.get(), brain->orders.size()};
 }
 
 // #289: the route and contact fields of the ai record.
 void add_ai_detail(const Mech* mech, int self_side, nlohmann::json* ai) {
-  const ai::nav::Follower* follower = current_follower(current_state(mech));
+  const ai::nav::Follower* follower = current_follower(current_order(mech).state);
   (*ai)["at"] = follower ? follower->at : -1;
   nlohmann::json contacts = nlohmann::json::array();
   for (const ai::Contact* contact : mech->contacts) {
@@ -119,10 +126,8 @@ const char* hunt_rule_name(const ai::HuntState& hunt) {
 // another of the game's.
 nlohmann::json ai_record(const Mech* mech) {
   nlohmann::json ai = nlohmann::json::object();
-  auto* controls = dynamic_cast<AiControls*>(mech->controls);
-  ai::Brain* brain = controls ? controls->brain.get() : nullptr;
-  if (!brain || brain->orders.empty()) return ai;
-  const ai::BehaviourState* state = brain->current().state.get();
+  const ai::BehaviourState* state = current_order(mech).state;
+  if (!state) return ai;
   if (auto* hunt = dynamic_cast<const ai::HuntState*>(state)) {
     ai["order"] = "hunt";
     ai["goal_rule"] = hunt_rule_name(*hunt);
@@ -217,15 +222,10 @@ void log_decisions(float now, const std::vector<ArenaMech>& mechs) {
   if (g_decisions.size() != mechs.size()) g_decisions.assign(mechs.size(), DecisionBook{});
   for (size_t i = 0; i < mechs.size(); ++i) {
     const Mech* mech = mechs[i].mech;
-    auto* controls = dynamic_cast<AiControls*>(mech->controls);
-    ai::Brain* brain = controls ? controls->brain.get() : nullptr;
-    OrderKey order;
+    const CurrentOrder current = current_order(mech);
+    const OrderKey order = {current.state, current.count};
     const char* hunt_rule = nullptr;
-    if (brain && !brain->orders.empty()) {
-      const ai::BehaviourState* state = brain->current().state.get();
-      order = {state, brain->orders.size()};
-      if (auto* hunt = dynamic_cast<const ai::HuntState*>(state)) hunt_rule = hunt_rule_name(*hunt);
-    }
+    if (auto* hunt = dynamic_cast<const ai::HuntState*>(current.state)) hunt_rule = hunt_rule_name(*hunt);
     for (nlohmann::json& record : g_decisions[i].frame(order, target_id(mech), hunt_rule)) {
       record["type"] = "decision";
       record["t"] = rounded(now);
@@ -240,7 +240,7 @@ void log_decisions(float now, const std::vector<ArenaMech>& mechs) {
 void log_routes(float now, const std::vector<ArenaMech>& mechs) {
   if (g_routes.size() != mechs.size()) g_routes.assign(mechs.size(), RouteSeen{});
   for (size_t i = 0; i < mechs.size(); ++i) {
-    const ai::nav::Follower* follower = current_follower(current_state(mechs[i].mech));
+    const ai::nav::Follower* follower = current_follower(current_order(mechs[i].mech).state);
     if (!route_changed(g_routes[i], follower)) continue;
     nlohmann::json points = nlohmann::json::array();
     if (follower)
