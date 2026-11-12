@@ -17,6 +17,7 @@ namespace mech3::arena {
 namespace {
 std::FILE* g_file = nullptr;
 int32_t g_frame_ms = 0;
+bool g_detail = true;
 
 // The match being logged: its mechs (the hooks look an object up in them),
 // the time of the last state lines, and each mech's standing last frame.
@@ -112,6 +113,10 @@ void set_arena_log(std::FILE* file, int32_t frame_ms) {
   g_frame_ms = frame_ms;
 }
 
+// Ours (#289)
+void set_arena_log_detail(bool on) { g_detail = on; }
+bool arena_log_detail() { return g_detail; }
+
 // Ours (#287)
 nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<ArenaMech>& mechs) {
   const std::vector<ArenaMech>* kept = g_mechs;
@@ -170,6 +175,7 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   nlohmann::json ids = nlohmann::json::array();
   for (const ArenaMech& entry : mechs) ids.push_back({{"id", entry.id}, {"side", entry.side}, {"spot", entry.spot}});
   write_line({{"type", "start"},
+              {"version", kLogVersion},
               {"map", setup.map},
               {"minutes", setup.minutes},
               {"seed", arena_seed()},
@@ -249,7 +255,20 @@ LogRead read_arena_log(const std::string& path) {
     }
     read.records.push_back(std::move(record));
   }
-  read.complete = !read.records.empty() && read.records.back().value("type", "") == "end";
+  const nlohmann::json* start = read.records.empty() ? nullptr : &read.records.front();
+  const bool has_version = start && start->value("type", "") == "start" && start->contains("version") &&
+                           (*start)["version"].is_number_integer();
+  if (!has_version) {
+    read.error = "no format version (a log from before #289)";
+  } else if ((*start)["version"].get<int>() != kLogVersion) {
+    read.error = "format version " + std::to_string((*start)["version"].get<int>()) + ", this build reads " +
+                 std::to_string(kLogVersion);
+  }
+  if (!read.error.empty()) {
+    read.records.clear();
+    return read;
+  }
+  read.complete = read.records.back().value("type", "") == "end";
   return read;
 }
 

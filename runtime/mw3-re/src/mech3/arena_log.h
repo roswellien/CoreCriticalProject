@@ -29,6 +29,19 @@ namespace mech3::arena {
 // Seconds between state lines.
 constexpr float kLogStatePeriod = 0.1f;
 
+// The log's format version, in the start line (#289). The reader refuses a
+// log without it or with another, so a viewer never misreads one; fields a
+// reader doesn't know are still kept, so a later version can add fields.
+constexpr int kLogVersion = 1;
+
+// Ours (#289): everything the replay viewers need beyond #287's log (shot
+// detail, rounds and beams in flight, routes, contacts, decision reasons),
+// on by default. Off, the log is #287's plus the version and the match runs
+// no new code at all, so one build can show the additions change nothing:
+// matches repeat only on the same build (docs/arena.md, #294).
+void set_arena_log_detail(bool on);
+bool arena_log_detail();
+
 // Called by the match (arena.cpp): the start line and the shot and hit hooks
 // on, at the first Core frame; each frame's state lines when due and the
 // destroyed lines of mechs that fell this frame; the end line and the hooks
@@ -54,12 +67,15 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
 
 // A log read back: every line that parsed, in order, and whether it ends with
 // an "end" line. Lines that do not parse are counted, not kept; fields the
-// reader does not know are kept as they are in each record.
+// reader does not know are kept as they are in each record. A log whose first
+// record is not a start line of version kLogVersion is refused: no records,
+// and `error` says why.
 struct LogRead {
   bool opened = false;
   std::vector<nlohmann::json> records;
   int bad_lines = 0;
   bool complete = false;  // the last record is an "end"
+  std::string error;      // empty unless refused
 };
 LogRead read_arena_log(const std::string& path);
 

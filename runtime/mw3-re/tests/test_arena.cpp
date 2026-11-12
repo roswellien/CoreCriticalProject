@@ -400,7 +400,7 @@ TEST(arena_log_reader_reports_incomplete_logs) {
   const std::string path = temp_dir("arena_log_reader") + "/match-1.jsonl";
   {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out << R"({"type":"start","map":"c1mp1"})" << "\n";
+    out << R"({"type":"start","version":1,"map":"c1mp1"})" << "\n";
     out << "{not json\n";
     out << R"({"type":"state","t":0.1,"mechs":[],"future_field":7})" << "\n";
   }
@@ -414,6 +414,27 @@ TEST(arena_log_reader_reports_incomplete_logs) {
   read = read_arena_log(path);
   EXPECT(read.complete && read.records.size() == 3);
   EXPECT(!read_arena_log(path + ".missing").opened);
+}
+
+// #289 criterion 1: a log with no format version, or one this build doesn't
+// know, is refused with a message naming it; version 1 reads as before.
+TEST(arena_log_reader_refuses_missing_or_unknown_version) {
+  const std::string path = temp_dir("arena_log_version") + "/match-1.jsonl";
+  const auto read_with_start = [&](const char* start_line) {
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      out << start_line << "\n";
+      out << R"({"type":"end","winner":"A","t":1.0,"lost":[0,1]})" << "\n";
+    }
+    return read_arena_log(path);
+  };
+  LogRead read = read_with_start(R"({"type":"start","map":"c1mp1"})");
+  EXPECT(read.opened && read.records.empty() && !read.complete);
+  EXPECT(read.error.find("no format version") != std::string::npos);
+  read = read_with_start(R"({"type":"start","version":2,"map":"c1mp1"})");
+  EXPECT(read.records.empty() && read.error.find("format version 2") != std::string::npos);
+  read = read_with_start(R"({"type":"start","version":1,"map":"c1mp1"})");
+  EXPECT(read.error.empty() && read.records.size() == 2 && read.complete);
 }
 
 TEST(arena_bot_params_change_only_the_arena_fields) {
