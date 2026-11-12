@@ -30,8 +30,9 @@ bool all_digits(const std::string& s, size_t from) {
   return from < s.size() && s.find_first_not_of("0123456789", from) == std::string::npos;
 }
 
-// "c1mp1": world c1, multiplayer map 1. Whether the map ships (and has its 16
-// spawn spots) is read from the game files later.
+}  // namespace
+
+// Ours (#287; public since #289, for the replay viewer's terrain).
 bool split_map(const std::string& map, std::string* dir, int32_t* number) {
   const size_t mp = map.rfind("mp");
   if (mp == std::string::npos || mp == 0 || !all_digits(map, mp + 2)) return false;
@@ -39,6 +40,8 @@ bool split_map(const std::string& map, std::string* dir, int32_t* number) {
   *number = std::atoi(map.c_str() + mp + 2);
   return is_world(*dir) && *number > 0;
 }
+
+namespace {
 
 // A reader's mission part: m<N> (campaign), ia<N> (Instant Action) or mp<N>.
 bool is_reader_mission(const std::string& m) {
