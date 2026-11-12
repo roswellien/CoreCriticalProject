@@ -31,6 +31,16 @@ namespace MW3RemasterLauncher
             finally { button.IsEnabled = true; }
         }
         private readonly string _basePath;
+        private void OpenModProfiles(object sender, RoutedEventArgs e)
+        {
+            if (_nativeSessionActive || _launchPreparing || _assetInstallActive) return;
+            if (new ModProfilesWindow(_settingsMgr.Current, _dataRoot) { Owner = this }.ShowDialog() == true)
+            {
+                _settingsMgr.Save();
+                LoadSettingsIntoUi();
+                ValidateGamePath();
+            }
+        }
         private void OpenControls(object sender, RoutedEventArgs e)
         {
             new ControlsWindow(_dataRoot, _settingsMgr.Current.GamePath, _settingsMgr) { Owner = this }.ShowDialog();
@@ -153,11 +163,13 @@ namespace MW3RemasterLauncher
                 TxtStatusReady.Text = "GAME STATUS: READY";
                 TxtStatusReady.Foreground = (System.Windows.Media.Brush)FindResource("BrushAmber");
                 BorderGameMissingAlert.Visibility = Visibility.Collapsed;
-                BtnLaunchGame.Content = _settingsMgr.Current.EngineMode == "d7vk" ? "▶  LAUNCH ORIGINAL (D7VK)" : "▶  LAUNCH REMASTER";
+                BtnLaunchGame.Content = !string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile)
+                    ? "▶  PLAY MW3-RE PROFILE" : _settingsMgr.Current.EngineMode == "d7vk" ? "▶  LAUNCH ORIGINAL (D7VK)" : "▶  LAUNCH REMASTER";
                 BtnLaunchGame.IsEnabled = true;
                 try
                 {
-                    if (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null)
+                    if (string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile) &&
+                        (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null))
                         NativeRuntimeLayout.FindInstalled(_basePath);
                 }
                 catch (Exception error)
@@ -406,6 +418,7 @@ namespace MW3RemasterLauncher
             if (_isInitializing) return;
 
             bool isD7Vk = RadioEngineD7vk.IsChecked == true;
+            if (isD7Vk) _settingsMgr.Current.ModularContentProfile = "";
             _settingsMgr.Current.EngineMode = isD7Vk ? "d7vk" : "remaster";
             _settingsMgr.Save();
 
@@ -428,6 +441,7 @@ namespace MW3RemasterLauncher
             if (_isInitializing) return;
 
             bool isD7Vk = RadioGfxD7vk.IsChecked == true;
+            if (isD7Vk) _settingsMgr.Current.ModularContentProfile = "";
             if (RadioEngineRemaster != null && RadioEngineD7vk != null)
             {
                 RadioEngineRemaster.IsChecked = !isD7Vk;
@@ -866,13 +880,13 @@ namespace MW3RemasterLauncher
                                     StringComparison.Ordinal);
                                 BtnLaunchGame.Content = "●  PREPARING REMASTER...";
                             }));
-                        if (line.StartsWith("Native Remaster PID "))
+                        if (line.StartsWith("Native Remaster PID ") || line.StartsWith("MW3-RE PID "))
                             Dispatcher.BeginInvoke(new Action(() =>
                             {
                                 if (!_nativeSessionActive) return;
                                 SetLaunchPreparing(false);
-                                BtnLaunchGame.Content = "●  GAME RUNNING (REMASTER)...";
-                                TxtStatusReady.Text = "GAME STATUS: REMASTER HOST RUNNING";
+                                BtnLaunchGame.Content = line.StartsWith("MW3-RE PID ") ? "●  MW3-RE RUNNING..." : "●  GAME RUNNING (REMASTER)...";
+                                TxtStatusReady.Text = line.StartsWith("MW3-RE PID ") ? "GAME STATUS: MW3-RE PROFILE RUNNING" : "GAME STATUS: REMASTER HOST RUNNING";
                                 TxtStartupProgress.Text = "The game process has started.";
                             }));
                     }));
@@ -895,7 +909,8 @@ namespace MW3RemasterLauncher
             BtnLaunchGame.IsEnabled = true;
             BtnInstallPack.IsEnabled = true;
             ListPacks.IsEnabled = true;
-            BtnLaunchGame.Content = "▶  LAUNCH REMASTER";
+            BtnLaunchGame.Content = string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile)
+                ? "▶  LAUNCH REMASTER" : "▶  PLAY MW3-RE PROFILE";
         }
 
         private async System.Threading.Tasks.Task ObserveNativeCompletionAsync(Process process)

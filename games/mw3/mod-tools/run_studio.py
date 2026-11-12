@@ -33,6 +33,7 @@ import zipfile
 
 from editor.core.map_pack import MapPackProject, MapPackBuilder, pack_directory
 from editor.core.campaign import CampaignProject, CampaignBuilder, campaign_directory
+from editor.core.content_authoring import ContentAuthoring, ContentToolError, configure_content, templates
 from editor.config import (
     game_directory,
     is_game_installed,
@@ -57,6 +58,8 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_list_packs()
         elif self.path == "/api/list-campaigns":
             self.handle_list_campaigns()
+        elif self.path == "/api/content/templates":
+            self.send_json_response(200, {"status": "ok", "templates": templates()})
         else:
             super().do_GET()
 
@@ -93,8 +96,48 @@ class StudioRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_package_campaign()
         elif self.path == "/api/launch-campaign":
             self.handle_launch_campaign()
+        elif self.path == "/api/content":
+            self.handle_content()
         else:
             self.send_error(404, "Endpoint not found")
+
+    def handle_content(self):
+        """Route native content operations without compiling catalogue semantics here."""
+        try:
+            data = self.read_json_request()
+            action = data.get("action")
+            if action == "configure":
+                configure_content(data["tool"], data["runtime"], data["workspace"])
+                result = {"message": "Native content tools configured."}
+            else:
+                authoring = ContentAuthoring()
+                if action == "save":
+                    result = authoring.save(data["project_id"], data["source"])
+                elif action == "compile":
+                    result = authoring.compile(data["project_id"])
+                elif action == "package":
+                    result = authoring.package(data["project_id"])
+                elif action == "profile":
+                    result = authoring.save_profile(data["profile_path"], data["profile"])
+                elif action == "install":
+                    result = authoring.install(data["project_id"])
+                elif action == "inspect":
+                    result = authoring.cli("inspect", str(authoring.path(data["profile_path"])), "--store", str(authoring.path("store")))
+                elif action == "playtest":
+                    result = authoring.playtest(
+                        data["profile_path"], data.get("mission", ""), data.get("network")
+                    )
+                elif action == "capabilities":
+                    result = authoring.cli("capabilities")
+                elif action == "list":
+                    result = authoring.cli("list", "--store", str(authoring.path("store")))
+                else:
+                    raise ValueError("Unknown native content action.")
+            self.send_json_response(200, {"status": "ok", "result": result})
+        except ContentToolError as error:
+            self.send_json_response(400, {"status": "error", "message": str(error), "diagnostics": error.result.get("diagnostics", [])})
+        except (TypeError, ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
+            self.send_json_response(400, {"status": "error", "message": str(error)})
 
     def handle_status(self):
         try:
