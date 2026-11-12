@@ -590,6 +590,7 @@ These change how the game talks to the computer, not how it plays.
 ## Test tools, not in play
 
 - An AI arena for testing the AI (ours, docs/arena.md): bots fight each other on a multiplayer map on one computer, started with `--arena` and a setup file naming the map, time limit and each side's mechs and pilots. On those maps, which have no AI routes, bots walk toward the nearest enemy they know of and then fight with the game's own AI. Each match writes a log of every mech's state, shots, hits and kills, and the same seed replays the same match. Nothing changes in the campaign, Instant Action or multiplayer games with people.
+- The arena's match log (ours, docs/arena.md) also records what replay viewers need: each shot's weapon, target and aim, bullets, missiles and beams while in flight, each bot's route, the enemies it can and can't see, and a reason each time it changes order or target. Logs carry a format version, and logs from before it are refused. The match plays out exactly as before.
 
 ## Kept as the original, on purpose
 

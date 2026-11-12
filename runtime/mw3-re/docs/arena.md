@@ -97,6 +97,46 @@ times are game seconds from the match's first frame.
 A run stopped early leaves a log with no `end` line; delete it before running
 the same seed again, since an existing log is never overwritten.
 
+### What the replay viewers read (#289)
+
+The start line carries `"version": 1`. The log reader refuses a log with no
+version (one written before #289) or another version, with a message saying
+which; it keeps fields it doesn't know, so a later version can add fields.
+
+- `shot` also names the `weapon`, whether it is a `beam`, the shooter's AI
+  `target` (a mech id, -1 for none), whether the weapon had a `locked` lock,
+  and the `muzzle` and aim `dir`.
+- `hit` also names the `weapon`.
+- `state` also lists `rounds`: every bullet or missile an arena mech fired
+  that is still flying, with its `id`, its shooter (`by`), `weapon` and
+  `pos`. A round gets its id the first state line it is in and keeps it.
+  One that lands within a tenth of a second never shows; a viewer draws it
+  from its shot's muzzle and direction and its hit.
+- `round_end`: a round left the air, with its `round` id and last logged
+  `pos`.
+- `state` also lists `beams`: every beam an arena mech holds on, with `by`,
+  `weapon`, `from` (the muzzle) and `to` (as far as the beam reached).
+- `beam_end`: a beam turned off (`id`, `weapon`). Each beam `shot` has one.
+- Each mech's `ai` also has `at`, the waypoint its route is on (-1 with no
+  route), and `contacts`: the enemy mechs its sensors know, nearest first,
+  each with `seen`, whether its sensors detect it now. The game clears that
+  only for a shut-down mech, two passive radars or ECM, not for walls or
+  hills, so it is not line of sight; the log runs no sight test of its own.
+- `route`: a bot's route changed (a new order, or a path found again), with
+  its waypoints as `points`; empty when its order walks without one.
+- `decision`: a bot changed its order or target, with a `code`, and the new
+  `target` for a target change. Order codes: `hunt_contact`,
+  `hunt_last_seen` and `hunt_fallback` (it went back to hunting, by that goal
+  rule), `engage` (the hunt gave way to the game's fight) and `order_other`.
+  Target codes: `target_volley` (its weapons planner took the best-scored
+  contact), `target_lost` (its target left the sensors and they picked
+  another or none) and `target_other`. The `_other` codes mean the change
+  came from somewhere the log doesn't name yet.
+
+`mech3::arena::set_arena_log_detail(false)` leaves all of this out except the
+version, and the match then runs no new code at all; the tests use it to show
+the additions change nothing (`arena_log_detail_c1mp1_4v4_headless`).
+
 ## Repeating a match
 
 The same seed and frame time play the same match, byte for byte, when the run
