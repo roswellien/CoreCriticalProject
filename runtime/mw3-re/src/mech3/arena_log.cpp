@@ -552,6 +552,18 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs) {
 
 // Ours (#287)
 void log_match_end(const Result& result) {
+  // #289: every round still flying and beam still held ends before the end
+  // line, so a viewer never has one left open (unhook forgets them).
+  if (g_detail) {
+    std::vector<nlohmann::json> ended;
+    g_rounds.walk({}, &ended);  // nothing flying: every round with an id ends
+    for (nlohmann::json& record : ended) {
+      record["t"] = rounded(result.time);
+      write_line(record);
+    }
+    for (const RoundBook::HeldBeam& entry : g_rounds.beams())
+      write_line({{"type", "beam_end"}, {"t", rounded(result.time)}, {"id", entry.shooter}, {"weapon", entry.name}});
+  }
   unhook();
   write_line({{"type", "end"},
               {"winner", result.winner == 0 ? "A" : result.winner == 1 ? "B" : "draw"},

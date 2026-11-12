@@ -18899,8 +18899,17 @@ TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {
   // the shots, hits and the kill, and an end line agreeing with the result.
   const mech3::arena::LogRead log = mech3::arena::read_arena_log(run.log_path);
   int states = 0, shot_lines = 0, hit_lines = 0, destroyed_lines = 0;
+  // #289: by the end line every beam shot has its beam_end and every round a
+  // state line listed has its round_end.
+  int beam_shots = 0, beam_ends = 0;
+  std::set<int> rounds_listed, rounds_ended;
   for (const auto& record : log.records) {
     const std::string type = record.value("type", "");
+    beam_shots += type == "shot" && record.value("beam", false);
+    beam_ends += type == "beam_end";
+    if (type == "round_end") rounds_ended.insert(record.value("round", -1));
+    if (type == "state" && record.contains("rounds"))
+      for (const auto& round : record["rounds"]) rounds_listed.insert(round.value("id", -1));
     states += type == "state";
     shot_lines += type == "shot";
     hit_lines += type == "hit";
@@ -18909,6 +18918,9 @@ TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {
   std::printf("  log: %zu lines, %d state, %d shot, %d hit, %d destroyed, complete %d\n", log.records.size(), states,
               shot_lines, hit_lines, destroyed_lines, log.complete);
   EXPECT(log.opened && log.bad_lines == 0 && log.complete);
+  std::printf("  beams %d shot, %d ended; rounds %zu listed, %zu ended\n", beam_shots, beam_ends, rounds_listed.size(),
+              rounds_ended.size());
+  EXPECT(beam_shots == beam_ends && rounds_listed == rounds_ended);
   EXPECT(!log.records.empty() && log.records.front().value("type", "") == "start");
   EXPECT(!log.records.empty() && log.records.front().value("map", "") == "c1mp1");
   EXPECT(shot_lines == arena_counts::shots(0) + arena_counts::shots(1));

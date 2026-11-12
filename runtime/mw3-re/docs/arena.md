@@ -117,8 +117,9 @@ which; it keeps fields it doesn't know, so a later version can add fields.
   `pos`.
 - `state` also lists `beams`: every beam an arena mech holds on, with `by`,
   `weapon`, `from` (the muzzle) and `to` (as far as the beam reached).
-- `beam_end`: a beam turned off (`id`, `weapon`). Each beam `shot` has one,
-  unless the match ended while it was held.
+- `beam_end`: a beam turned off (`id`, `weapon`). Each beam `shot` has one.
+  Rounds and beams still open when the match ends get their `round_end` or
+  `beam_end` just before the `end` line.
 - Each mech's `ai` also has `at`, the index in its latest `route` line's
   `points` of the waypoint it is heading for (-1 with no route), and `contacts`: the enemy mechs its sensors know, nearest first,
   each with `seen`, whether its sensors detect it now. The game clears that
