@@ -273,3 +273,102 @@ coverage, original save/load, controller hotplug, replay restoration or crowded
 scene performance. These remain [playtest requirements](https://github.com/roswellien/MW3Recomp-Private/issues/115)
 before capability promotion. Released runtime profiles and original game save formats remain
 unchanged; no update or installer is published by this work.
+## New geometry on an owned legacy controller (development)
+
+A legacy chassis can retain its original definition, collision meshes, hierarchy,
+motion clips, cockpit and attachments while adding a visual-only `new` appearance.
+Keep its original `legacy` descriptor and stable chassis ID. The additional record
+uses this portable authoring shape:
+
+```json
+{
+  "appearances": {
+    "new": {
+      "schema_version": 1,
+      "meshes": {"close": "visual/close.mesh", "distance": "visual/distance.mesh"},
+      "textures": {"close": "visual/close.textures", "distance": "visual/distance.textures"},
+      "normals": ["visual/normals.bin"]
+    }
+  }
+}
+```
+
+Both geometry files use BWMESH4 and their matching texture files use BWTEX1.
+Normals are optional BWSNR2 pages whose full RGB565 keys must belong to the selected
+visual textures. `upgraded` may coexist with `new`; retain each alternative's own
+UVs, color resources and normal bindings. Do not apply PM skin pixels to MW5 UVs.
+Inactive resources still undergo path, hash and format validation. Selecting new
+geometry with the existing donor solver requires `owned-chassis-visuals: 1`.
+BWMESH4 rig flag `2` uses the complete original joint matrices and requires
+`owned-chassis-visuals: 2`; flags `0` and `1` retain their existing donor solver.
+BWMESH4 policy value `3` requires `owned-chassis-visuals: 3`. It retains the
+complete original world-joint path for torso/legs, while canonical arm controls
+(`larm`, `rarm`, `lhand`, `rhand`) use authored donor rest spacing and the original
+parent-relative 3x3 articulation. Original arm translation deltas are excluded
+from replacement geometry so differently proportioned elbows stay connected.
+This changes no source gameplay or weapon origin. Values 0/1/2 keep their prior
+behavior and the binary layout is unchanged; unknown values fail visibly.
+
+Policy 3 requires unique nonempty bone controls. `Upperarm_Left/Right` must bind
+`larm/rarm` beneath the closest controlled ancestor `torso`; `Forearm_Left/Right`
+must bind `lhand/rhand` beneath their same-side upper arm. Uncontrolled helper
+bones may intervene and inherit parent motion once. Other controlled descendants
+under an arm are unsupported. Python, C# and native admission enforce this
+contract; required current arm transforms must be nonsingular. Selected New
+requires version 3, while Original with an updated coordinator remains usable on
+a runtime that advertises only older owned-visual versions. Keep this requirement
+out of whole-pack capabilities. Regenerate mesh-bound emission identities after
+changing geometry; normal/color images need not change with arm placement.
+
+Muzzle/FX alignment is a separate acceptance check. Donor rest spacing does not
+make a relocated visual muzzle coincide with an original gameplay firepoint.
+Do not move simulation origins or claim complete weapon alignment from a static
+pose. The current Atlas validation record documents the measured conflict.
+
+Original mode does not acquire these renderer requirements. Existing appearance capability support is still
+required by the coordinator.
+
+Authors supply visual batches, original control names and original visibility
+nodes. They do not supply a suppression roster. The coordinator derives exact
+mesh names/counts and ancestry from the pinned original close/distance models,
+and requires each visual visibility node to belong to its original controller.
+The original cockpit signature is derived separately and remains outside the
+exterior replacement. The private MWCHAS6 session catalog carries those derived
+rosters, paths and authoritative namespaced original skin lookup names. Existing
+MWCHAS1 through MWCHAS6 inputs retain their prior layouts; the serialized
+headlight block is unchanged. Flag-2/3 preparation emits MWCHAS7 with original arm
+subtree removal lists and parent names derived by the coordinator. Packs cannot
+supply those plans. The native matcher still requires the exact original shared
+GameZ stump, its live parent topology and every surviving mesh signature.
+Flag-2/3 sources require both original arm subtrees without overlap or preexisting
+stump meshes. Close and distance signatures must remain distinguishable across
+intact, left-arm, right-arm and both-arm loss combinations.
+
+The development Atlas candidate uses an AS7-K visual weapon assembly to match
+the PM primary configuration, with a neutral test livery and donor body normals.
+It retains the eight original skin rows and the existing Gunmetal upgrade.
+The new visual currently covers the primary skin; unavailable alternate new-model
+skin bindings retain original geometry at runtime. Final paint appearance,
+full limb damage behavior, both live LOD transitions, player/allied isolation,
+save/reload and exterior fit acceptance remain playtest work. A first-person
+mission and status-model draw do not establish all of those criteria.
+
+Use a development runtime implementing this contract before importing/launching
+the candidate. Do not advertise it on a historical runtime profile. Keep the
+prior pack and selections for rollback, and keep donor/derived media local.
+
+The [November 5 native validation record](atlas-mw5-port-validation-2026-11-05.md)
+contains the fitted primary candidate, exact source/pack receipts, observed
+behavior and remaining release acceptance.
+
+## Level forearms and render-only beam attachments
+
+The current local `0.4.9-mw5-level-forearms-preview` candidate rotates the complete
+forearm assemblies and corresponding rest frames about the accepted elbows.
+Its two `ERLaser_Large` attachment records bind the actual close/distance mesh
+identities and independently exported local muzzle landmarks. The records are
+selected-only; they do not impose the new capability on Original. It declares no
+simulation sockets. See [the attachment contract](atlas-weapon-visual-attachments.md)
+and [native validation](atlas-mw5-port-validation-2026-11-05.md#november-6-level-forearm-development-candidate)
+for the bounded native evidence and remaining acceptance gates. This candidate
+is local and does not replace the previously recorded packs or videos.

@@ -56,6 +56,20 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_render_queue_tests)
     add_test(NAME render_queue COMMAND mw34_render_queue_tests)
 
+<<<<<<< HEAD
+=======
+    add_executable(mw34_owned_arm_damage_tests tests/owned_arm_damage_tests.cpp)
+    mw34_warnings(mw34_owned_arm_damage_tests)
+    add_test(NAME owned_arm_damage COMMAND mw34_owned_arm_damage_tests)
+
+    add_executable(mw34_weapon_visuals_tests tests/weapon_visuals_tests.cpp)
+    mw34_warnings(mw34_weapon_visuals_tests)
+    add_test(NAME weapon_visuals COMMAND mw34_weapon_visuals_tests)
+    add_executable(mw34_donor_retarget_tests tools/remaster-launcher/test_donor_retarget.cpp)
+    mw34_warnings(mw34_donor_retarget_tests)
+    add_test(NAME donor_retarget COMMAND mw34_donor_retarget_tests)
+
+>>>>>>> origin/develop
     add_executable(mw34_material_normal_tests tools/remaster-launcher/test_material_normals.cpp)
     target_include_directories(mw34_material_normal_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime/graphics")
     target_compile_definitions(mw34_material_normal_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -89,6 +103,19 @@ if(BUILD_TESTING)
     mw34_warnings(mw34_surface_access_history_tests)
     add_test(NAME surface_access_history COMMAND mw34_surface_access_history_tests)
 
+    add_executable(mw34_deferred_source_tests tools/remaster-launcher/test_deferred_source.cpp)
+    mw34_warnings(mw34_deferred_source_tests)
+    add_test(NAME deferred_source_provenance COMMAND mw34_deferred_source_tests)
+
+    add_executable(mw34_owned_emission_tests tools/remaster-launcher/test_owned_emission.cpp)
+    # effect_lighting.hpp stable-sorts 16-byte-aligned lights. MSVC before 14.51 (the CI
+    # runner has 14.44) rejects that unless the correct extended alignment is confirmed;
+    # see tools/m4-crt-heap-carry/HOST_BUILD.md.
+    target_compile_definitions(mw34_owned_emission_tests PRIVATE _CRT_SECURE_NO_WARNINGS
+                                                                 _ENABLE_EXTENDED_ALIGNED_STORAGE)
+    mw34_warnings(mw34_owned_emission_tests)
+    add_test(NAME owned_emission_contract COMMAND mw34_owned_emission_tests)
+
     if(WIN32)
         add_executable(mw34_local_cd_audio_tests tests/local_cd_audio_tests.cpp)
         target_include_directories(mw34_local_cd_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
@@ -116,6 +143,9 @@ if(BUILD_TESTING)
     add_test(NAME surface_materials_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_surface_materials.py -v)
     set_tests_properties(surface_materials_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME owned_visuals_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p "test_owned*.py" -v)
+    set_tests_properties(owned_visuals_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME binary_tools
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests -p test_binary_tools.py -v)
     set_tests_properties(binary_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
@@ -175,6 +205,7 @@ if(MW34_CLANG_FORMAT)
     file(GLOB_RECURSE MW34_FORMAT_FILES CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/runtime/*.hpp" "${PROJECT_SOURCE_DIR}/runtime/*.cpp"
         "${PROJECT_SOURCE_DIR}/tests/*.cpp")
+    list(FILTER MW34_FORMAT_FILES EXCLUDE REGEX "/runtime/mw3-re/")
     add_custom_target(format
         COMMAND "${MW34_CLANG_FORMAT}" -i ${MW34_FORMAT_FILES}
         VERBATIM)

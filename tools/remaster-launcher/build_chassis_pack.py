@@ -74,6 +74,44 @@ def build(project_path, output):
                 row['appearances'] = dict(upgraded=variant)
             if 'headlights' in entry:
                 row['headlights'] = entry['headlights']
+            if 'appearances' in entry:
+                from chassis_appearances import references, validate, MAX_PAGE_BYTES
+                def read_appearance(name, fmt):
+                    path = resolve(project_path.parent, name)
+                    limit = MAX_PAGE_BYTES if fmt else 16 * 1024**2
+                    if fmt == 'BWMEM1':
+                        from owned_emission import MAX_BYTES
+                        limit = MAX_BYTES
+                    if not 0 < path.stat().st_size <= limit:
+                        raise ValueError('Appearance project resource exceeds size limit')
+                    return path.read_bytes()
+                validate(entry['appearances'], legacy_resources, read_appearance)
+                variant = dict(textures={}, normals=[])
+                for role, name, relative in references(entry['appearances'], legacy_resources['textures']):
+                    fmt = 'BWSNR2' if role == 'normals' else None
+                    packed = add(read_appearance(relative, fmt), fmt)
+                    if role == 'textures':
+                        variant['textures'][name] = packed
+                    elif packed not in variant['normals']:
+                        variant['normals'].append(packed)
+                row['appearances'] = {}
+                if 'upgraded' in entry['appearances']:
+                    row['appearances']['upgraded'] = variant
+                if 'new' in entry['appearances']:
+                    from owned_chassis_visuals import references as owned_references, validate as owned_validate
+                    owned_validate(entry['appearances']['new'], legacy_resources, read_appearance)
+                    new = dict(schema_version=1, meshes={}, textures={}, normals=[])
+                    for role, lod, relative in owned_references(entry['appearances']['new']):
+                        fmt = {'meshes': 'BWMESH4', 'textures': 'BWTEX1',
+                               'normals': 'BWSNR2', 'emission': 'BWMEM1'}[role]
+                        packed = add(read_appearance(relative, fmt), fmt)
+                        if role == 'normals':
+                            new['normals'].append(packed)
+                        else:
+                            new.setdefault(role, {})[lod] = packed
+                    if 'weapon_attachments' in entry['appearances']['new']:
+                        new['weapon_attachments'] = json.loads(json.dumps(entry['appearances']['new']['weapon_attachments']))
+                    row['appearances']['new'] = new
             records.append(row)
             continue
         row = {k: entry[k] for k in ('id', 'name', 'controller', 'metadata_template')}
@@ -119,7 +157,8 @@ def build(project_path, output):
     version_two = headlights or icons or any('base_skin_name' in row or 'sockets' in row for row in records)
     from surface_materials import CAPABILITY as SURFACE_CAPABILITY, FORMAT as SURFACE_FORMAT
     required_formats = (['MW3LEGACY'] if legacy else
-                        ['BWMESH4', 'BWTEX1'] + (['MW3ICON1'] if icons else []) + ([SURFACE_FORMAT] if surface_materials else []))
+                        ['BWMESH4', 'BWTEX1'] + (['MW3ICON1'] if icons else [])
+                        + ([SURFACE_FORMAT] if surface_materials else []))
     manifest = dict(schema_version=2, game_id='mw3', id=project['pack_id'], name=project['name'],
                     version=project['version'], author=project.get('author', 'Community'), category='Mechs',
                     description=project.get('description', 'Additional selectable mechs. Choose in Mech Lab.'),
@@ -128,13 +167,12 @@ def build(project_path, output):
                     provides=dict(mechs=[r['id'] for r in records]), files=files)
     if headlights:
         manifest['native_payload']['required_capabilities']['mech-headlights'] = 1
-    if surface_materials:
-        manifest['native_payload']['required_capabilities'][SURFACE_CAPABILITY] = 1
     from legacy_chassis_skins import CAPABILITY as SKIN_CAPABILITY
     if legacy_skins:
         manifest['native_payload']['required_capabilities'][SKIN_CAPABILITY] = 1
     if any('appearances' in row for row in records):
         manifest['native_payload']['required_capabilities']['mech-appearances'] = 1
+<<<<<<< HEAD
         if any(row.get('appearances', {}).get('upgraded', {}).get('normals') for row in records):
             manifest['native_payload']['required_formats'].append('BWSNR2')
     (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
@@ -145,6 +183,25 @@ def build(project_path, output):
         },
         'normal_map_formats': [2],
     })
+=======
+        if any('new' in row.get('appearances', {}) for row in records):
+            for fmt in ('BWMESH4', 'BWTEX1'):
+                if fmt not in manifest['native_payload']['required_formats']:
+                    manifest['native_payload']['required_formats'].append(fmt)
+        if any(any(v.get('normals') for v in row.get('appearances', {}).values()) for row in records):
+            if 'BWSNR2' not in manifest['native_payload']['required_formats']:
+                manifest['native_payload']['required_formats'].append('BWSNR2')
+        if any(row.get('appearances', {}).get('new', {}).get('emission') for row in records):
+            manifest['native_payload']['required_formats'].append('BWMEM1')
+    if surface_materials:
+        manifest['native_payload']['required_capabilities'][SURFACE_CAPABILITY] = 1
+    (stage / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    select([(stage, manifest)], {'content_capabilities': {
+        CAPABILITY: [1, 2, 3], 'mech-appearances': [1], SKIN_CAPABILITY: [1],
+        'mech-headlights': [1], 'owned-chassis-visuals': [1, 2, 3],
+        'owned-chassis-emission': [1], 'owned-chassis-weapon-visuals': [1], SURFACE_CAPABILITY: [1]},
+        'normal_map_formats': [2]})
+>>>>>>> origin/develop
     archive = output / (project['pack_id'] + '-' + project['version'] + '.mw3pack')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as target:
         for path in sorted(stage.rglob('*')):

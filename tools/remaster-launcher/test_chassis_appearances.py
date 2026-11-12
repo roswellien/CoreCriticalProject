@@ -1,9 +1,15 @@
 import copy
+<<<<<<< HEAD
 import hashlib
 import json
 import struct
 import tempfile
 import types
+=======
+import json
+import struct
+import tempfile
+>>>>>>> origin/develop
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -262,7 +268,13 @@ class AppearanceTests(unittest.TestCase):
         profile_environment = {"MW34_SURFACE_NORMALS": "world/surface-normals.txt"}
         prepared_environment = {"MW34_REMASTER_BANKS": "/prepared/banks.bin"}
         with patch("play_remaster.ROOT", self.root):
+<<<<<<< HEAD
             effective = _chassis_preparation_environment(profile_environment, prepared_environment)
+=======
+            effective = _chassis_preparation_environment(
+                profile_environment, prepared_environment
+            )
+>>>>>>> origin/develop
         self.assertEqual(
             effective["MW34_SURFACE_NORMALS"],
             str((self.root / "world/surface-normals.txt").resolve()),
@@ -326,6 +338,7 @@ class AppearanceTests(unittest.TestCase):
         for name, data in stock.items():
             self.assertEqual((directory / name).read_bytes(), data)
 
+<<<<<<< HEAD
         # Exercise the coordinator boundary where chassis preparation supplies
         # the first normal catalog, after environment policy was already applied.
         import play_remaster
@@ -409,6 +422,9 @@ class AppearanceTests(unittest.TestCase):
                         )
 
     def test_builder_validates_headlights_instead_of_dropping_them(self):
+=======
+    def test_builder_rejects_malformed_headlights(self):
+>>>>>>> origin/develop
         project, _, _ = fixtures.ChassisPackTests.legacy_project(self)
         document = json.loads(project.read_text())
         document["chassis"][0]["headlights"] = [{"id": "preserve-me"}]

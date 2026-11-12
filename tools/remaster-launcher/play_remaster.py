@@ -627,8 +627,11 @@ def main():
             if p.get('prepared_profile') is not None:
                 native['runtime_environment'].pop(CHASSIS_KEY, None)
                 native['runtime_environment'].update(chassis_bindings)
+<<<<<<< HEAD
                 # Chassis appearances can supply the session's first normal
                 # catalog. Resolve lighting flags after those resources exist.
+=======
+>>>>>>> origin/develop
                 from presentation_policy import apply as apply_presentation
                 apply_presentation(native, p.get('environment_packs') or {})
                 environment.update(native['runtime_environment'])
