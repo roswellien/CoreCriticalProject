@@ -140,6 +140,46 @@ which; it keeps fields it doesn't know, so a later version can add fields.
 version, and the match then reads and logs nothing new; the tests use it to show
 the additions change nothing (`arena_log_detail_c1mp1_4v4_headless`).
 
+## Watching a match (#289)
+
+```sh
+mw3 GAME_DIR --replay <out>/match-<seed>.jsonl
+```
+
+A window plays the log back on the map seen from above. Nothing of the match
+runs: no engine, mission, network or bots, so a replay shows exactly what
+the log holds. It exits 2 before any window for a log the reader refuses
+(missing, damaged or without a version), and with `--arena`, `--host`,
+`--join`, `--net-upnp`, `--mission` or `--fly`.
+
+- The ground is the map's own triangles from the install, shaded by height
+  and lit from the northwest; dark lines mark steps over 3 m (walls,
+  cliffs). It is drawn for orientation and can differ a little from what the
+  AI walks on. A map that can't be loaded gives gray ground with a message
+  at the top; the replay still plays.
+- Each mech is a dot in its side's color (A blue, B red) with its id, a white
+  arrow where the legs walk, a shaded wedge where the torso points, the last
+  10 seconds of its trail, and an X once destroyed. Rounds are small dots,
+  beams lines, shots a short streak from the muzzle, hits a flash.
+
+Controls:
+
+- Drag to pan; the mouse wheel zooms about the cursor.
+- Space plays or pauses (at the end, plays again from the start); Left and
+  Right jump 5 seconds; `<` and `>` (the `,` and `.` keys) halve or double
+  the speed, 0.25x to 8x; click or drag the bar at the bottom to seek.
+- 1 to 5 switch the overlays: 1 routes, 2 target lines, 3 hunt goals,
+  4 radar contacts (solid detected now, dashed known but not detected),
+  5 the last decision reason under each mech.
+- Click a mech for its panel: chassis, side, heat, target, order, last
+  reason and each part's armor and internal structure; click elsewhere to
+  close it. F12 saves the window as `replay-<time>.bmp` beside the log;
+  Escape closes the viewer.
+
+`--replay-script FILE` drives the viewer from a file of commands, in a hidden
+window, for tests: `wait`, `key`, `click`, `drag`, `wheel`, `shot` and
+`quit` (`src/frontend/sdl/replay_view.h`).
+
 ## Repeating a match
 
 The same seed and frame time play the same match, byte for byte, when the run
