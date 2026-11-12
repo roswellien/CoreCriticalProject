@@ -278,7 +278,9 @@ nlohmann::json beams_held(float now) {
   const std::vector<RoundBook::HeldBeam> held = g_rounds.beams();
   for (const RoundBook::HeldBeam& entry : held) {
     if (!entry.weapon->is_firing()) {
+      // Both books forget it, so a later stop report can't end it twice.
       g_rounds.beam_off(entry.weapon);
+      g_shot_starts.beams_on.erase(entry.weapon);
       write_line({{"type", "beam_end"}, {"t", rounded(now)}, {"id", entry.shooter}, {"weapon", entry.name}});
       continue;
     }
@@ -526,7 +528,7 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs) {
       write_line({{"type", "destroyed"}, {"t", rounded(now)}, {"id", mechs[i].id}, {"by", id_of(mechs[i].mech->attacker)}});
     g_was_standing[i] = standing;
   }
-  if (g_detail) {
+  if (g_detail && g_file) {
     log_routes(now, mechs);
     log_decisions(now, mechs);
   }

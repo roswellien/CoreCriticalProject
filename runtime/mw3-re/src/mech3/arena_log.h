@@ -41,8 +41,9 @@ constexpr int kLogVersion = 1;
 
 // Ours (#289): everything the replay viewers need beyond #287's log (shot
 // detail, rounds and beams in flight, routes, contacts, decision reasons),
-// on by default. Off, the log is #287's plus the version and the match runs
-// no new code at all, so one build can show the additions change nothing:
+// on by default. Off, the log is #287's plus the version and the match reads
+// and logs nothing new (only null checks on hooks left unset), so one build
+// can show the additions change nothing:
 // matches repeat only on the same build (docs/arena.md, #294).
 void set_arena_log_detail(bool on);
 bool arena_log_detail();

@@ -421,8 +421,8 @@ FirePlan* volley_plan_pick(Firing& f) {
     bool ok = true;
     if (t && r.slot != &t->target) {
       ok = h.select_target(v, *r.slot);  // vt+0xc0(contact, 0)
-      if (ok)
-        if (DecisionNote note = decision_note()) note(v, Decision::kTargetVolley);  // ours (#289)
+      DecisionNote note = ok ? decision_note() : nullptr;  // ours (#289)
+      if (note) note(v, Decision::kTargetVolley);
     }
     if (ok) {
       if (t) r.slot = &t->target;

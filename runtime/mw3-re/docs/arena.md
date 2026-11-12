@@ -111,14 +111,16 @@ which; it keeps fields it doesn't know, so a later version can add fields.
   that is still flying, with its `id`, its shooter (`by`), `weapon` and
   `pos`. A round gets its id the first state line it is in and keeps it.
   One that lands within a tenth of a second never shows; a viewer draws it
-  from its shot's muzzle and direction and its hit.
+  from its shot's muzzle and direction and its hit. Extra rounds a weapon
+  spawns on its own (an LB-X's spread) aren't listed; their hits are.
 - `round_end`: a round left the air, with its `round` id and last logged
   `pos`.
 - `state` also lists `beams`: every beam an arena mech holds on, with `by`,
   `weapon`, `from` (the muzzle) and `to` (as far as the beam reached).
-- `beam_end`: a beam turned off (`id`, `weapon`). Each beam `shot` has one.
-- Each mech's `ai` also has `at`, the waypoint its route is on (-1 with no
-  route), and `contacts`: the enemy mechs its sensors know, nearest first,
+- `beam_end`: a beam turned off (`id`, `weapon`). Each beam `shot` has one,
+  unless the match ended while it was held.
+- Each mech's `ai` also has `at`, the index in its latest `route` line's
+  `points` of the waypoint it is heading for (-1 with no route), and `contacts`: the enemy mechs its sensors know, nearest first,
   each with `seen`, whether its sensors detect it now. The game clears that
   only for a shut-down mech, two passive radars or ECM, not for walls or
   hills, so it is not line of sight; the log runs no sight test of its own.
@@ -134,7 +136,7 @@ which; it keeps fields it doesn't know, so a later version can add fields.
   came from somewhere the log doesn't name yet.
 
 `mech3::arena::set_arena_log_detail(false)` leaves all of this out except the
-version, and the match then runs no new code at all; the tests use it to show
+version, and the match then reads and logs nothing new; the tests use it to show
 the additions change nothing (`arena_log_detail_c1mp1_4v4_headless`).
 
 ## Repeating a match
