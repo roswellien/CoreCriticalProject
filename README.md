@@ -159,6 +159,12 @@ visuals, saved replay and original-process diagnostics have different scopes.
 
 ## License and original content
 
+The MW3-RE renderer builds on [mw3-re](https://github.com/telltaleatheist/mw3-re)
+by Owen Morgan (copyright 2026), released under the
+[MIT license](https://github.com/telltaleatheist/mw3-re/blob/main/LICENSE).
+The [Core Critical fork](https://github.com/roswellien/CoreCritical-MW3-RE)
+retains the upstream license and third-party notices.
+
 Project-authored contributions use the [MIT license](LICENSE). Third-party tools,
 fonts and libraries retain their own licenses. MechWarrior and original game
 content belong to their respective rights holders; no affiliation or endorsement

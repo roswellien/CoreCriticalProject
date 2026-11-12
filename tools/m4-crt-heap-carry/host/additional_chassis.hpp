@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <set>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,6 +29,9 @@ struct Headlight {
     std::array<float, 3> position{}, direction{}, color{};
     float intensity{}, range{}, inner_angle{}, outer_angle{};
 };
+struct SourceMesh { std::string name, owner; unsigned vertices{}; };
+struct ArmDamage { std::string arm, parent; std::vector<std::string> removed; };
+struct WeaponVisualAttachment { std::string source_control, weapon, bone; std::array<double,3> position{}; };
 struct Registration {
     std::string id, name, resource;
     unsigned metadata_template{};
@@ -36,6 +40,13 @@ struct Registration {
     std::array<std::string, 2> meshes, textures;
     std::vector<Socket> sockets;
     std::vector<Headlight> headlights;
+    bool owned_visuals{};
+    std::array<std::vector<SourceMesh>, 2> owned_rosters;
+    std::vector<SourceMesh> cockpit_roster;
+    std::map<std::string,unsigned> skin_textures;
+    std::array<std::vector<ArmDamage>,2> arm_damage;
+    std::array<std::uint64_t,2> weapon_visual_identity{};
+    std::array<std::vector<WeaponVisualAttachment>,2> weapon_visuals;
 };
 inline bool identifier(const std::string& value, unsigned maximum) {
     if (value.empty() || value.size() > maximum) return false;
@@ -59,7 +70,10 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
         return value;
     };
     char magic[8]; bytes(magic, 8);
-    const bool headlights = std::string(magic, 8) == std::string("MWCHAS5\0", 8);
+    const bool weapon_visuals = std::string(magic, 8) == std::string("MWCHAS8\0", 8);
+    const bool damage = weapon_visuals || std::string(magic, 8) == std::string("MWCHAS7\0", 8);
+    const bool owned = damage || std::string(magic, 8) == std::string("MWCHAS6\0", 8);
+    const bool headlights = owned || std::string(magic, 8) == std::string("MWCHAS5\0", 8);
     const bool sockets = headlights || std::string(magic, 8) == std::string("MWCHAS4\0", 8);
     const bool names = sockets || std::string(magic, 8) == std::string("MWCHAS3\0", 8);
     const bool visuals = names || std::string(magic, 8) == std::string("MWCHAS2\0", 8);
@@ -138,6 +152,73 @@ inline std::vector<Registration> read_catalog(std::istream& file) {
                 light.outer_angle = scalar(0, 89);
                 if (light.inner_angle >= light.outer_angle) fail();
                 r.headlights.push_back(std::move(light));
+            }
+        }
+        if (owned) {
+            const unsigned enabled = number(); if (enabled > 1) fail();
+            r.owned_visuals = enabled != 0;
+            if (r.owned_visuals) {
+                if (!r.visual_template.empty() || !r.sockets.empty()) fail();
+                auto roster = [&](bool required) {
+                    const unsigned size = number(); if (size > 256 || (required && !size)) fail();
+                    std::vector<SourceMesh> rows;
+                    std::set<std::string> names;
+                    for (unsigned at = 0; at < size; ++at) {
+                        SourceMesh mesh{text(31), text(31), number()};
+                        auto valid_name = [](const std::string& value) {
+                            for (unsigned char c : value)
+                                if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                                      (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-')) return false;
+                            return !value.empty();
+                        };
+                        if (!valid_name(mesh.name) || !valid_name(mesh.owner) ||
+                            !names.insert(mesh.name).second || !mesh.vertices || mesh.vertices > 100000) fail();
+                        rows.push_back(std::move(mesh));
+                    }
+                    return rows;
+                };
+                for (unsigned lod = 0; lod < 2; ++lod) {
+                    r.meshes[lod] = text(4096); r.textures[lod] = text(4096);
+                    r.owned_rosters[lod] = roster(true);
+                }
+                r.cockpit_roster = roster(false);
+                const unsigned skins = number(); if (skins > 4096) fail();
+                for (unsigned at = 0; at < skins; ++at) {
+                    auto name = text(31); const unsigned skin = number();
+                    if (skin > 7 || !identifier(name,31) || !r.skin_textures.emplace(name,skin).second) fail();
+                }
+                if(damage)for(unsigned lod=0;lod<2;++lod){
+                    const unsigned count=number();if(count>2)fail();
+                    std::set<std::string> arms,removed;
+                    for(unsigned at=0;at<count;++at){
+                        ArmDamage plan{text(4),text(31),{}};
+                        if((plan.arm!="larm"&&plan.arm!="rarm")||!arms.insert(plan.arm).second)fail();
+                        for(unsigned char c:plan.parent)if(!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-'))fail();
+                        const unsigned size=number();if(!size||size>8)fail();
+                        for(unsigned i=0;i<size;++i){
+                            auto name=text(31);bool found=false;
+                            for(const auto& mesh:r.owned_rosters[lod])if(mesh.name==name)found=true;
+                            if(!found||!removed.insert(name).second)fail();plan.removed.push_back(std::move(name));
+                        }
+                        r.arm_damage[lod].push_back(std::move(plan));
+                    }
+                }
+                if(weapon_visuals)for(unsigned lod=0;lod<2;++lod){
+                    auto& identity=r.weapon_visual_identity[lod];bytes(reinterpret_cast<char*>(&identity),8);
+                    const unsigned count=number();if(count>64||bool(count)!=bool(identity))fail();
+                    std::set<std::pair<std::string,std::string>> keys;
+                    for(unsigned at=0;at<count;++at){
+                        WeaponVisualAttachment anchor{text(31),text(31),text(31),{}};
+                        if((anchor.source_control!="lhand"&&anchor.source_control!="rhand")||
+                           anchor.bone!=(anchor.source_control=="lhand"?"Forearm_Left":"Forearm_Right")||
+                           !keys.emplace(anchor.source_control,anchor.weapon).second)fail();
+                        for(unsigned char c:anchor.weapon)if(!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-'))fail();
+                        for(double& v:anchor.position){bytes(reinterpret_cast<char*>(&v),8);if(!std::isfinite(v)||std::abs(v)>100)fail();}
+                        if(lod){const auto& previous=r.weapon_visuals[0];if(at>=previous.size()||previous[at].source_control!=anchor.source_control||previous[at].weapon!=anchor.weapon)fail();}
+                        r.weapon_visuals[lod].push_back(std::move(anchor));
+                    }
+                    if(lod&&r.weapon_visuals[0].size()!=count)fail();
+                }
             }
         }
         result.push_back(std::move(r));

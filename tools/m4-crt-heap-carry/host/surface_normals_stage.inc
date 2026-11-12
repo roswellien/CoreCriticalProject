@@ -31,6 +31,7 @@ struct SurfaceNormalState {
         bool registered{}, world{}; unsigned detail{};
     };
     std::map<unsigned, Cached> cache;
+    std::map<unsigned, int> replacement_cache;
 } surface_normals;
 #include "world_normals_pages.inc"
 static bool surface_normals_enabled() {
@@ -125,6 +126,32 @@ void surface_normals_load() {
         std::fprintf(stderr, "Normal warmup: %u resident texture surfaces checked before rendering\n", prepared);
     }
 }
+std::pair<bool, int> surface_normal_key_binding(const mw34::materials::SurfaceKey& key) {
+    if (!surface_normals_enabled()) return {false, -1};
+    surface_normals_load();
+    const auto page = surface_normals.world_bindings.find(key);
+    const bool world = page != surface_normals.world_bindings.end();
+    if (world && !surface_normals.authored.count(key) && mw34::materials::normal_maps_enabled() &&
+        !surface_normals.pages[page->second].initialized)
+        surface_normals_load_page(page->second);
+    const auto binding = surface_normals.bindings.find(key);
+    const int index = binding == surface_normals.bindings.end() ? -1 : binding->second;
+    const bool registered = binding != surface_normals.bindings.end();
+    return {registered, index};
+}
+int replacement_surface_normal_index(unsigned texture, unsigned width, unsigned height,
+                                     const std::vector<unsigned short>& pixels) {
+    if (!mw34::materials::normal_maps_enabled()) return -1;
+    auto& cache = surface_normals.replacement_cache;
+    if (const auto found=cache.find(texture);found!=cache.end()) return found->second;
+    if (!width || !height || pixels.size()!=size_t(width)*height)
+        throw std::runtime_error("Replacement normal requires complete RGB565 pixels");
+    const mw34::materials::SurfaceKey key{width,height,1,
+        mw34::materials::normal_hash(reinterpret_cast<const unsigned char*>(pixels.data()),pixels.size()*2)};
+    const int index=surface_normal_key_binding(key).second;
+    cache.emplace(texture,index); // Interned replacement textures are immutable for this host lifetime.
+    return index;
+}
 std::pair<bool, int> surface_normal_binding(VSurfaceRec &surface) {
     // Return (registered, global normal-texture index). An absent normal image
     // does not mean that the surface identity was absent from the catalogs.
@@ -163,14 +190,8 @@ std::pair<bool, int> surface_normal_binding(VSurfaceRec &surface) {
     const mw34::materials::SurfaceKey key{
         surface.width, surface.height, format,
         mw34::materials::normal_hash(pixels.data(), pixels.size())};
-    const auto page = surface_normals.world_bindings.find(key);
-    const bool world = page != surface_normals.world_bindings.end();
-    if (world && !surface_normals.authored.count(key) && mw34::materials::normal_maps_enabled() &&
-        !surface_normals.pages[page->second].initialized)
-        surface_normals_load_page(page->second);
-    const auto binding = surface_normals.bindings.find(key);
-    const int index = binding == surface_normals.bindings.end() ? -1 : binding->second;
-    const bool registered = binding != surface_normals.bindings.end();
+    const auto [registered, index] = surface_normal_key_binding(key);
+    const bool world = surface_normals.world_bindings.count(key) != 0;
     cache[surface.guest] = {surface.version, surface.width, surface.height,
                             surface.pitch,   surface.mem,   format,
                             index,           registered,    world, surface_normals.detail_roles.count(key)?surface_normals.detail_roles.at(key):0};
