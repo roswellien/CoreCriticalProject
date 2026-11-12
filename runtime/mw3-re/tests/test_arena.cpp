@@ -23,6 +23,7 @@
 #include "mech3/mech_parts.h"
 #include "mech3/mech_names.h"
 #include "mech3/mech_net.h"
+#include "mech3/replay_log.h"
 #include "mech3/weapon.h"
 #include "mech3/zai_nav.h"
 #include "mech3/zai_params.h"
@@ -630,4 +631,108 @@ TEST(arena_bot_params_change_only_the_arena_fields) {
   for (int off = mech3::ai::AiParams::kBegin; off < mech3::ai::AiParams::kEnd; ++off)
     if (!changed(off) && params.raw[off] != bot.params[static_cast<size_t>(off)]) ++other_bytes_differ;
   EXPECT(other_bytes_differ == 0);
+}
+
+namespace {
+// #289 step 2: a small hand-written log with every line type the replay reads.
+std::string replay_test_log(bool with_end) {
+  std::string text =
+      R"({"type":"start","version":1,"map":"c1mp1","sides":[[{"mech":"madcat"}],[{"mech":"orion"}]],"mechs":[{"id":0,"side":0},{"id":1,"side":1}]})"
+      "\n"
+      R"({"type":"state","t":0.0,"mechs":[{"id":0,"pos":[0,0,0],"heading":3.0,"torso":{"twist":0},"ai":{"order":"hunt","goal":[50,0,50],"at":0,"contacts":[{"id":1,"seen":true}]}},{"id":1,"pos":[10,0,0],"heading":0,"standing":true}],"rounds":[{"id":0,"by":0,"weapon":"AC","pos":[0,0,0]}],"beams":[{"by":1,"weapon":"L","from":[10,0,0],"to":[0,0,0]}]})"
+      "\n"
+      R"({"type":"shot","t":0.0,"id":1,"weapon":"L","beam":true,"muzzle":[10,1,0],"dir":[-1,0,0]})"
+      "\n"
+      R"({"type":"beam_end","t":0.05,"id":1,"weapon":"L"})"
+      "\n"
+      R"({"type":"route","t":0.05,"id":0,"points":[[1,0,1],[2,0,2]]})"
+      "\n"
+      R"({"type":"decision","t":0.08,"id":0,"code":"engage"})"
+      "\n"
+      R"({"type":"state","t":0.1,"mechs":[{"id":0,"pos":[2,0,0],"heading":-3.0},{"id":1,"pos":[10,0,0],"heading":0}],"rounds":[{"id":0,"by":0,"weapon":"AC","pos":[4,0,0]}],"beams":[]})"
+      "\n"
+      R"({"type":"hit","t":0.12,"id":1,"by":0,"weapon":"AC","damage":1.0})"
+      "\n"
+      R"({"type":"round_end","t":0.15,"round":0,"pos":[4,0,0]})"
+      "\n"
+      R"({"type":"destroyed","t":0.18,"id":1,"by":0})"
+      "\n"
+      R"({"type":"state","t":0.2,"mechs":[{"id":0,"pos":[4,0,0],"heading":-3.0},{"id":1,"pos":[10,0,0],"heading":0,"standing":false}],"rounds":[],"beams":[]})"
+      "\n";
+  if (with_end) text += R"({"type":"end","t":0.25,"winner":"A","lost":[0,1]})" "\n";
+  return text;
+}
+
+mech3::replay::ReplayLog replay_load(const std::string& text) {
+  const std::string path = temp_dir("replay_log") + "/match-1.jsonl";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+  }
+  mech3::replay::ReplayLog log;
+  std::string error;
+  EXPECT(log.load(path, &error));
+  if (!error.empty()) std::printf("  replay: %s\n", error.c_str());
+  return log;
+}
+}  // namespace
+
+// #289 step 2 criterion 2: mechs between two state lines, angles the short
+// way, the same frame for the same time whatever was asked before.
+TEST(replay_frame_interpolates_and_repeats) {
+  const mech3::replay::ReplayLog log = replay_load(replay_test_log(true));
+  EXPECT(log.mechs().size() == 2 && log.mechs()[1].chassis == "orion" && log.mechs()[1].side == 1);
+  EXPECT(log.map() == "c1mp1" && std::abs(log.duration() - 0.25f) < 1e-4f);
+  const mech3::replay::Frame mid = log.frame_at(0.05f);
+  EXPECT(mid.mechs.size() == 2 && std::abs(mid.mechs[0].pos.x - 1.0f) < 1e-4f);
+  EXPECT(std::abs(mid.mechs[0].heading - 3.1416f) < 0.01f);  // across +-pi, not through 0
+  EXPECT(mid.mechs[0].order == "hunt" && mid.mechs[0].has_goal && mid.mechs[0].contacts.size() == 1);
+  const mech3::replay::Frame first = log.frame_at(0.15f);
+  log.frame_at(0.02f);
+  const mech3::replay::Frame again = log.frame_at(0.15f);
+  EXPECT(first.mechs.size() == again.mechs.size() && first.mechs[0].pos.x == again.mechs[0].pos.x &&
+         first.rounds.size() == again.rounds.size() && first.recent.size() == again.recent.size());
+  float box[4];
+  log.bounds(box);
+  EXPECT(box[0] == 0.0f && box[2] == 50.0f && box[3] == 50.0f);
+  EXPECT(log.trail(0, 0.2f, 10.0f).size() == 3);
+}
+
+// #289 step 2 criterion 3: rounds and beams start and stop at their lines;
+// routes, decisions, hits and deaths show from their times.
+TEST(replay_frame_follows_the_events) {
+  const mech3::replay::ReplayLog log = replay_load(replay_test_log(true));
+  EXPECT(log.frame_at(0.04f).beams.size() == 1);
+  EXPECT(log.frame_at(0.06f).beams.empty());  // its beam_end came at 0.05
+  const mech3::replay::Frame flying = log.frame_at(0.12f);
+  EXPECT(flying.rounds.size() == 1 && flying.rounds[0].pos.x == 4.0f);  // held at its last place
+  EXPECT(log.frame_at(0.16f).rounds.empty());                          // its round_end came at 0.15
+  EXPECT(log.frame_at(0.04f).routes[0].t < 0 && log.frame_at(0.06f).routes[0].points.size() == 2);
+  EXPECT(log.frame_at(0.07f).last_decision[0].type.empty());
+  EXPECT(log.frame_at(0.09f).last_decision[0].code == "engage");
+  EXPECT(log.frame_at(0.17f).mechs[1].standing && !log.frame_at(0.19f).mechs[1].standing);
+  EXPECT(log.frame_at(0.13f).recent.size() == 2);  // the shot at 0 and the hit at 0.12
+  const mech3::replay::Frame hit = log.frame_at(0.35f);
+  EXPECT(hit.recent.size() == 1 && hit.recent[0].type == "hit" && hit.recent[0].by == 0);
+  EXPECT(log.frame_at(0.5f).recent.empty());
+}
+
+// #289 step 2: a log stopped before its end line plays to its last state line;
+// a missing log and refused options are named.
+TEST(replay_log_without_end_and_refusals) {
+  const mech3::replay::ReplayLog log = replay_load(replay_test_log(false));
+  EXPECT(std::abs(log.duration() - 0.2f) < 1e-4f);
+  mech3::replay::ReplayLog missing;
+  std::string error;
+  EXPECT(!missing.load(temp_dir("replay_missing") + "/none.jsonl", &error) && !error.empty());
+  mech3::replay::ReplayFlags flags;
+  EXPECT(mech3::replay::replay_refusal(flags).empty());
+  flags.arena = true;
+  EXPECT(mech3::replay::replay_refusal(flags).find("--arena") != std::string::npos);
+  flags = {};
+  flags.join = true;
+  EXPECT(mech3::replay::replay_refusal(flags).find("--join") != std::string::npos);
+  flags = {};
+  flags.mission = flags.fly = true;  // --fly sets the mission too
+  EXPECT(mech3::replay::replay_refusal(flags).find("--fly") != std::string::npos);
 }
