@@ -105,7 +105,7 @@ void add_ai_detail(const Mech* mech, int self_side, nlohmann::json* ai) {
   for (const ai::Contact* contact : mech->contacts) {
     const int id = id_of_contact(contact);
     if (id < 0 || side_of(id) == self_side) continue;
-    contacts.push_back({{"id", id}, {"seen", (contact->flags & 1) != 0}});  // bit 0: in sight now (zai_target.h)
+    contacts.push_back({{"id", id}, {"seen", (contact->flags & 1) != 0}});  // bit 0: the sensors detect it now (zai_target.h)
   }
   (*ai)["contacts"] = contacts;
 }

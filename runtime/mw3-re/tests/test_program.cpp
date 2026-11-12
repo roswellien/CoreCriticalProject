@@ -19003,6 +19003,199 @@ TEST(arena_log_pose_matches_live_headless) {
   EXPECT(compared >= 2);
 }
 
+namespace {
+// #289: a log with everything step 1 added taken out, as the detail switch
+// off writes it.
+std::vector<nlohmann::json> without_detail(const std::vector<nlohmann::json>& records) {
+  std::vector<nlohmann::json> kept;
+  for (nlohmann::json record : records) {
+    const std::string type = record.value("type", "");
+    if (type == "round_end" || type == "beam_end" || type == "route" || type == "decision") continue;
+    if (type == "shot")
+      for (const char* field : {"weapon", "beam", "target", "locked", "muzzle", "dir"}) record.erase(field);
+    if (type == "hit") record.erase("weapon");
+    if (type == "state") {
+      record.erase("rounds");
+      record.erase("beams");
+      for (nlohmann::json& mech : record["mechs"]) {
+        mech["ai"].erase("at");
+        mech["ai"].erase("contacts");
+      }
+    }
+    kept.push_back(std::move(record));
+  }
+  return kept;
+}
+
+std::string file_text(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+bool is_missile(const std::string& weapon) {
+  for (const char* part : {"LRM", "SRM", "MRM", "Streak", "ATM", "Missile", "lrm", "srm", "mrm", "streak"})
+    if (weapon.find(part) != std::string::npos) return true;
+  return false;
+}
+}  // namespace
+
+// #289 step 1 (criteria 2 to 6) on the real game: a c1mp1 4v4 logs shots of
+// every kind with their rounds and beams, routes, contacts in and out of
+// sight and decisions with reasons; the same seed writes the same bytes; and
+// with the detail switch off the match plays out the same, line for line.
+TEST(arena_log_detail_c1mp1_4v4_headless) {
+  if (!have_game()) return;
+  const std::string side =
+      arena_bot_json("madcat") + ", " + arena_bot_json("madcat") + ", " + arena_bot_json("orion") + ", " + arena_bot_json("orion");
+  const std::string json =
+      R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" + side + "], [" + side + "]]}";
+  const int ninety_seconds = 90 * 1000 / 16;  // the fake clock's 16 ms frames
+  // Each run empties the temp log folder, so each log is read before the next run.
+  const auto run_on = arena_headless_run(json, ninety_seconds, [](int) {});
+  const std::string bytes_on = file_text(run_on.log_path);
+  const mech3::arena::LogRead log = mech3::arena::read_arena_log(run_on.log_path);
+  const auto run_again = arena_headless_run(json, ninety_seconds, [](int) {});
+  const std::string bytes_again = file_text(run_again.log_path);
+  mech3::arena::set_arena_log_detail(false);
+  const auto run_off = arena_headless_run(json, ninety_seconds, [](int) {});
+  mech3::arena::set_arena_log_detail(true);
+  const std::string bytes_off = file_text(run_off.log_path);
+  const mech3::arena::LogRead off = mech3::arena::read_arena_log(run_off.log_path);
+  EXPECT(run_on.setup_read && run_again.setup_read && run_off.setup_read);
+  std::printf("  log sizes: detail on %zu bytes, off %zu bytes\n", bytes_on.size(), bytes_off.size());
+  EXPECT(!bytes_on.empty() && bytes_on == bytes_again);  // criterion 6: same seed, same bytes
+
+  EXPECT(log.error.empty() && off.error.empty() && !log.records.empty());
+  if (log.records.empty()) return;
+  EXPECT(log.records[0].value("version", 0) == 1);  // criterion 1
+  // Criterion 6: the additions taken out, the detail-on log is the detail-off one.
+  const std::vector<nlohmann::json> stripped = without_detail(log.records);
+  EXPECT(stripped.size() == off.records.size());
+  size_t first_difference = 0;
+  while (first_difference < stripped.size() && first_difference < off.records.size() &&
+         stripped[first_difference] == off.records[first_difference])
+    ++first_difference;
+  if (first_difference < stripped.size())
+    std::printf("  first difference at record %zu: %s\n", first_difference, stripped[first_difference].dump().c_str());
+  EXPECT(stripped == off.records);
+
+  // Criteria 2 to 5, walking the detail-on log in order.
+  const size_t mech_count = log.records[0]["mechs"].size();
+  int beam_shots = 0, ballistic_shots = 0, missile_shots = 0;
+  std::map<std::string, int> shots_by_weapon, followed_by_weapon;
+  struct PendingShot {
+    double t;
+    int id;
+    std::string weapon;
+  };
+  std::vector<PendingShot> round_shots;
+  std::map<std::pair<int, std::string>, int> beams_open;
+  int beam_mismatches = 0, bad_beam_ends = 0, round_ends = 0, moved_rounds = 0;
+  std::map<int, nlohmann::json> last_round_pos;
+  std::set<int> routed;
+  bool seen_true = false, seen_false = false;
+  std::map<std::string, int> codes;
+  int decisions = 0, unexplained_changes = 0;
+  std::vector<double> last_decision_t(mech_count, -1.0);
+  nlohmann::json previous_state;
+  for (const nlohmann::json& record : log.records) {
+    const std::string type = record.value("type", "");
+    const double t = record.value("t", 0.0);
+    if (type == "shot") {
+      for (const char* field : {"weapon", "beam", "target", "locked", "muzzle", "dir"}) EXPECT(record.contains(field));
+      const std::string weapon = record.value("weapon", "");
+      ++shots_by_weapon[weapon];
+      if (record.value("beam", false)) {
+        ++beam_shots;
+        ++beams_open[{record.value("id", -1), weapon}];
+      } else {
+        ++(is_missile(weapon) ? missile_shots : ballistic_shots);
+        round_shots.push_back({t, record.value("id", -1), weapon});
+      }
+    } else if (type == "beam_end") {
+      int& open = beams_open[{record.value("id", -1), record.value("weapon", "")}];
+      if (open <= 0) ++bad_beam_ends;
+      else --open;
+    } else if (type == "hit") {
+      EXPECT(record.contains("weapon"));
+    } else if (type == "round_end") {
+      ++round_ends;
+    } else if (type == "route") {
+      routed.insert(record.value("id", -1));
+    } else if (type == "decision") {
+      ++decisions;
+      ++codes[record.value("code", "")];
+      const int id = record.value("id", -1);
+      if (id >= 0 && static_cast<size_t>(id) < mech_count) last_decision_t[id] = t;
+    } else if (type == "state") {
+      // Every open beam has exactly its entries in this state line.
+      std::map<std::pair<int, std::string>, int> drawn;
+      for (const nlohmann::json& beam : record["beams"]) ++drawn[{beam.value("by", -1), beam.value("weapon", "")}];
+      for (const auto& [key, open] : beams_open)
+        if (open != (drawn.count(key) ? drawn[key] : 0)) ++beam_mismatches;
+      for (const auto& [key, count] : drawn)
+        if (!beams_open.count(key)) ++beam_mismatches;
+      for (const nlohmann::json& round : record["rounds"]) {
+        const int id = round.value("id", -1);
+        if (last_round_pos.count(id) && last_round_pos[id] != round["pos"]) ++moved_rounds;
+        last_round_pos[id] = round["pos"];
+        for (PendingShot& shot : round_shots)
+          if (shot.id == round.value("by", -2) && shot.weapon == round.value("weapon", "") && t > shot.t &&
+              t <= shot.t + 0.2) {
+            ++followed_by_weapon[shot.weapon];
+            shot.id = -1;  // counted once
+            break;
+          }
+      }
+      for (const nlohmann::json& mech : record["mechs"]) {
+        for (const nlohmann::json& contact : mech["ai"].value("contacts", nlohmann::json::array()))
+          (contact.value("seen", false) ? seen_true : seen_false) = true;
+        EXPECT(mech["ai"].contains("at"));
+      }
+      // Each order or target change since the last state line has a decision.
+      if (!previous_state.is_null())
+        for (size_t i = 0; i < mech_count && i < record["mechs"].size(); ++i) {
+          const nlohmann::json& before = previous_state["mechs"][i];
+          const nlohmann::json& now = record["mechs"][i];
+          const bool changed = before["target"] != now["target"] || before["ai"].value("order", "") != now["ai"].value("order", "");
+          if (changed && !(last_decision_t[i] > previous_state.value("t", 0.0))) ++unexplained_changes;
+        }
+      previous_state = record;
+    }
+  }
+  int other = codes["order_other"] + codes["target_other"];
+  std::printf("  shots: beam %d, ballistic %d, missile %d; rounds moved %d, ended %d\n", beam_shots, ballistic_shots,
+              missile_shots, moved_rounds, round_ends);
+  for (const auto& [weapon, count] : shots_by_weapon)
+    std::printf("    %s: %d shots, %d seen in flight\n", weapon.c_str(), count, followed_by_weapon[weapon]);
+  std::printf("  decisions %d:", decisions);
+  for (const auto& [code, count] : codes) std::printf(" %s %d", code.c_str(), count);
+  std::printf("\n  routes for %zu of %zu bots; contacts seen %d, unseen %d\n", routed.size(), mech_count, seen_true,
+              seen_false);
+  EXPECT(beam_shots > 0 && ballistic_shots > 0 && missile_shots > 0);
+  // Every round weapon that fired is seen in flight by its shooter at least
+  // once: the shot hook found its rounds (fast rounds that land inside one
+  // state period never show, so not every shot is).
+  for (const auto& [weapon, count] : shots_by_weapon)
+    if (followed_by_weapon[weapon] == 0 && count >= 5 && !weapon.empty()) {
+      bool is_beam_weapon = false;
+      for (const auto& [key, open] : beams_open)
+        if (key.second == weapon) is_beam_weapon = true;
+      if (!is_beam_weapon) std::printf("  never seen in flight: %s\n", weapon.c_str());
+      EXPECT(is_beam_weapon);
+    }
+  EXPECT(moved_rounds > 0 && round_ends > 0);
+  EXPECT(beam_mismatches == 0 && bad_beam_ends == 0);
+  EXPECT(routed.size() == mech_count);
+  // `seen` is the sensors' detect bit, cleared only by shutdown, passive radar
+  // or ECM, none of which a plain match uses; so only a detected one is sure.
+  EXPECT(seen_true);
+  EXPECT(codes["hunt_contact"] + codes["hunt_last_seen"] + codes["hunt_fallback"] > 0);
+  EXPECT(codes["engage"] > 0 && codes["target_volley"] > 0);
+  EXPECT(decisions > 0 && other * 2 < decisions);
+  EXPECT(unexplained_changes == 0);
+}
+
 // #287: the time limit ends the match by it, and a match that reaches it goes
 // to the side with more mechs standing, equal a draw. Whether the 2v2 is
 // still on at one minute depends on the fight, so the rule is checked either
