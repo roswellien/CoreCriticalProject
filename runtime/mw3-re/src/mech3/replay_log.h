@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 #include <string>
 #include <vector>
 
@@ -106,11 +107,13 @@ class ReplayLog {
 
   const std::string& map() const { return map_; }
   const std::vector<MechInfo>& mechs() const { return mechs_; }
+  // The start line's entry for a mech id, null when it has none.
+  const MechInfo* info_of(int id) const;
   // The end line's time, else the last state line's (a log stopped early).
   float duration() const { return duration_; }
   Frame frame_at(float t) const;
   // A mech's positions from its state lines in [t - seconds, t], oldest first.
-  std::vector<Vec3> trail(int mech_index, float t, float seconds) const;
+  std::vector<Vec3> trail(int id, float t, float seconds) const;
   // Every position the log holds (mechs, rounds, beams, routes, goals), as
   // min x, min z, max x, max z; min > max when there are none.
   void bounds(float box[4]) const;
@@ -122,19 +125,17 @@ class ReplayLog {
     std::vector<RoundAt> rounds;
     std::vector<BeamAt> beams;
   };
-  struct RoundEnd {
-    float t = 0;
-    int round = -1;
-  };
-  struct Route {
-    float t = 0;
-    int id = -1;
-    std::vector<Vec3> points;
-  };
   struct BeamEnd {
     float t = 0;
     int by = -1;
     std::string weapon;
+  };
+  // What the log says about one mech over time, each list by time, so a
+  // frame finds the latest entry at or before t by binary search.
+  struct MechHistory {
+    std::vector<RouteAt> routes;
+    std::vector<Event> decisions;
+    float destroyed_at = 1e30f;
   };
   // The last state line at or before t (0 before the first).
   size_t state_before(float t) const;
@@ -143,10 +144,10 @@ class ReplayLog {
   std::vector<MechInfo> mechs_;
   float duration_ = 0;
   std::vector<State> states_;
-  std::vector<Event> events_;  // shots, hits, destroyed and decisions, by time
-  std::vector<RoundEnd> round_ends_;
-  std::vector<BeamEnd> beam_ends_;
-  std::vector<Route> routes_;
+  std::vector<Event> fire_;  // shots and hits, by time
+  std::map<int, float> round_end_at_;
+  std::vector<BeamEnd> beam_ends_;  // by time
+  std::map<int, MechHistory> history_;  // by mech id
 };
 
 }  // namespace mech3::replay

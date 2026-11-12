@@ -108,7 +108,7 @@ struct Painter {
       line(tip, {tip.x + bx * head, tip.y + by * head}, c);
     }
   }
-  // A thin wedge from the center along `dir`, `half_angle` each side.
+  // A thin wedge from the center toward `yaw`, `half_angle` each side.
   void cone(SDL_FPoint from, float yaw, float half_angle, float length, const SDL_FColor& c) {
     const SDL_FPoint left = screen_direction(yaw + half_angle), right = screen_direction(yaw - half_angle);
     const SDL_Vertex v[3] = {{from, c, {0, 0}},
@@ -204,17 +204,23 @@ struct Viewer {
   void jump(float seconds) { t = std::clamp(t + seconds, 0.0f, log->duration()); }
 };
 
-// The terrain as one texture, its walls and cliffs darkened in.
-SDL_Texture* make_terrain_texture(SDL_Renderer* renderer, const Terrain& terrain) {
-  if (terrain.width <= 0 || terrain.height <= 0) return nullptr;
-  std::vector<uint8_t> pixels = terrain.rgba;
-  for (size_t i = 0; i < terrain.outline.size(); ++i)
-    if (terrain.outline[i]) pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = 24;
+// The terrain as one texture, its walls and cliffs darkened in. The grids are
+// freed once uploaded (drawing needs only the placement): at the cell cap
+// they hold about 150 MB. A failure sets terrain->error, which the window shows.
+SDL_Texture* make_terrain_texture(SDL_Renderer* renderer, Terrain* terrain) {
+  if (terrain->width <= 0 || terrain->height <= 0) return nullptr;
+  for (size_t i = 0; i < terrain->outline.size(); ++i)
+    if (terrain->outline[i]) terrain->rgba[i * 4] = terrain->rgba[i * 4 + 1] = terrain->rgba[i * 4 + 2] = 24;
   SDL_Texture* tex =
-      SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, terrain.width, terrain.height);
-  if (!tex) return nullptr;
-  SDL_UpdateTexture(tex, nullptr, pixels.data(), terrain.width * 4);
-  SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+      SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, terrain->width, terrain->height);
+  if (tex) {
+    SDL_UpdateTexture(tex, nullptr, terrain->rgba.data(), terrain->width * 4);
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+  } else {
+    terrain->error = std::string("cannot make the terrain texture: ") + SDL_GetError();
+  }
+  for (auto* grid : {&terrain->rgba, &terrain->outline}) grid->clear(), grid->shrink_to_fit();
+  terrain->heights.clear(), terrain->heights.shrink_to_fit();
   return tex;
 }
 
@@ -251,13 +257,15 @@ void draw_world(Viewer& v, const Frame& frame, Painter& paint, Text& text) {
                            v.terrain.height * v.terrain.cell * cam.zoom};
     SDL_RenderTexture(paint.renderer, v.terrain_texture, nullptr, &dst);
   }
-  const auto& infos = v.log->mechs();
-  const auto side_of = [&](int i) { return i < static_cast<int>(infos.size()) ? std::clamp(infos[i].side, 0, 1) : 0; };
+  const auto side_of = [&](int id) {
+    const auto* info = v.log->info_of(id);
+    return info ? std::clamp(info->side, 0, 1) : 0;
+  };
 
   // Trails.
-  for (size_t i = 0; i < frame.mechs.size(); ++i) {
-    const std::vector<Vec3> trail = v.log->trail(static_cast<int>(i), v.t, kTrailSeconds);
-    SDL_FColor c = kSideColor[side_of(static_cast<int>(i))];
+  for (const MechPose& m : frame.mechs) {
+    const std::vector<Vec3> trail = v.log->trail(m.id, v.t, kTrailSeconds);
+    SDL_FColor c = kSideColor[side_of(m.id)];
     c.a = 0.45f;
     for (size_t k = 1; k < trail.size(); ++k) paint.line(cam.to_screen(trail[k - 1]), cam.to_screen(trail[k]), c);
   }
@@ -266,12 +274,17 @@ void draw_world(Viewer& v, const Frame& frame, Painter& paint, Text& text) {
     if (!m.standing) continue;
     const SDL_FPoint at = cam.to_screen(m.pos);
     if (v.overlay[kRoute] && !frame.routes[i].points.empty()) {
+      // The legs already walked dim, the waypoint it is heading for ringed,
+      // the rest from the mech on.
       const auto& points = frame.routes[i].points;
+      const size_t at_point = static_cast<size_t>(std::max(m.at, 0));
+      for (size_t k = 1; k < points.size() && k <= at_point; ++k)
+        paint.line(cam.to_screen(points[k - 1]), cam.to_screen(points[k]), color(255, 230, 90, 70));
       SDL_FPoint prev = at;
-      for (size_t k = std::max(m.at, 0); k < points.size(); ++k) {
+      for (size_t k = at_point; k < points.size(); ++k) {
         const SDL_FPoint p = cam.to_screen(points[k]);
         paint.line(prev, p, color(255, 230, 90, 200));
-        paint.circle(p, 2.5f, color(255, 230, 90, 200));
+        paint.circle(p, k == at_point ? 5.0f : 2.5f, color(255, 230, 90, k == at_point ? 255 : 200));
         prev = p;
       }
     }
@@ -303,7 +316,7 @@ void draw_world(Viewer& v, const Frame& frame, Painter& paint, Text& text) {
   for (size_t i = 0; i < frame.mechs.size(); ++i) {
     const MechPose& m = frame.mechs[i];
     const SDL_FPoint at = cam.to_screen(m.pos);
-    const SDL_FColor side = kSideColor[side_of(static_cast<int>(i))];
+    const SDL_FColor side = kSideColor[side_of(m.id)];
     if (!m.standing) {
       paint.cross(at, 7, color(170, 170, 170));
     } else {
@@ -327,9 +340,10 @@ void draw_world(Viewer& v, const Frame& frame, Painter& paint, Text& text) {
 void draw_panel(const Viewer& v, const Frame& frame, Painter& paint, Text& text) {
   if (v.selected < 0 || v.selected >= static_cast<int>(frame.mechs.size())) return;
   const MechPose& m = frame.mechs[v.selected];
-  const auto& info = v.log->mechs()[v.selected];
+  const mech3::replay::MechInfo* info = v.log->info_of(m.id);
   std::vector<std::string> lines;
-  lines.push_back("mech " + std::to_string(m.id) + "  " + info.chassis + "  side " + (info.side == 0 ? "A" : "B"));
+  lines.push_back("mech " + std::to_string(m.id) + "  " + (info ? info->chassis : std::string("?")) + "  side " +
+                  (!info ? "?" : info->side == 0 ? "A" : "B"));
   lines.push_back(m.standing ? "standing" : "destroyed");
   char buf[96];
   std::snprintf(buf, sizeof buf, "heat %.0f", m.heat);
@@ -355,7 +369,7 @@ void draw_bar(const Viewer& v, Painter& paint, Text& text) {
   const float done = v.log->duration() > 0 ? v.t / v.log->duration() : 0;
   paint.box({0, top, w * done, 4}, color(255, 150, 40));
   char buf[96];
-  std::snprintf(buf, sizeof buf, "%s  %s / %s  %gx   1 route  2 target  3 goal  4 contacts  5 reasons",
+  std::snprintf(buf, sizeof buf, "%s  %s / %s  %gx (< >)   1 route  2 target  3 goal  4 contacts  5 reasons",
                 v.playing ? "playing" : "paused", clock_text(v.t).c_str(), clock_text(v.log->duration()).c_str(),
                 v.speed);
   text.draw(buf, 8, top + 7);
@@ -484,8 +498,9 @@ bool handle(Viewer& v, const SDL_Event& e, const Frame& frame) {
           break;
         case SDLK_LEFT: v.jump(-kJumpSeconds); break;
         case SDLK_RIGHT: v.jump(kJumpSeconds); break;
-        case SDLK_COMMA: v.speed = std::max(kMinSpeed, v.speed / 2); break;   // the "<" key
-        case SDLK_PERIOD: v.speed = std::min(kMaxSpeed, v.speed * 2); break;  // the ">" key
+        // "<" and ">": shifted , and . on a US layout, their own key on many others.
+        case SDLK_COMMA: case SDLK_LESS: v.speed = std::max(kMinSpeed, v.speed / 2); break;
+        case SDLK_PERIOD: case SDLK_GREATER: v.speed = std::min(kMaxSpeed, v.speed * 2); break;
         case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5:
           v.overlay[e.key.key - SDLK_1] = !v.overlay[e.key.key - SDLK_1];
           break;
@@ -537,6 +552,7 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
   }
   Script script;
   const bool scripted = !script_path.empty();
+  bool script_failed = false;
   if (scripted && !script.load(script_path)) {
     std::fprintf(stderr, "mw3: --replay-script: cannot read %s\n", script_path.c_str());
     return 2;
@@ -562,7 +578,7 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
   }
   SDL_SetRenderVSync(renderer, 1);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-  v.terrain_texture = make_terrain_texture(renderer, v.terrain);
+  v.terrain_texture = make_terrain_texture(renderer, &v.terrain);
   {
     Text text(renderer);
     text.open();
@@ -574,7 +590,9 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
     uint64_t last = SDL_GetTicksNS();
     for (bool open = true; open;) {
       const uint64_t now = SDL_GetTicksNS();
-      const float elapsed = scripted ? 1.0f / 60 : static_cast<float>(now - last) / 1e9f;
+      // Capped, so a stall (Windows stops the loop while the window is dragged)
+      // doesn't jump the replay ahead.
+      const float elapsed = scripted ? 1.0f / 60 : std::min(static_cast<float>(now - last) / 1e9f, 0.1f);
       last = now;
       if (v.playing && !v.seeking) v.t += elapsed * v.speed;
       if (v.t >= log.duration()) v.t = log.duration(), v.playing = false;
@@ -594,14 +612,14 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
       }
       draw_panel(v, frame, paint, text);
       draw_bar(v, paint, text);
-      if (scripted && !run_script(script, renderer)) open = false;
+      if (scripted && !run_script(script, renderer)) open = false, script_failed = true;
       SDL_RenderPresent(renderer);
     }
   }
   if (v.terrain_texture) SDL_DestroyTexture(v.terrain_texture);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
-  return 0;
+  return script_failed ? 2 : 0;  // a test script with a bad command fails its run
 }
 
 }  // namespace sdlfe

@@ -815,7 +815,8 @@ int main(int argc, char** argv) {
   // one (the launcher's main screen is mw3launcher's). Checks, shots, debug starts and a
   // named install or source go straight on.
   const bool player_start = !a.hidden && a.frames == 0 && a.shot.empty() && a.chain.empty() && a.modes.empty() &&
-                            a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() && a.install.empty() &&
+                            a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() &&
+                            a.replay_path.empty() && a.install.empty() &&
                             a.install_from.empty() && a.patch.empty() && a.original.find("-nofmv") == std::string::npos;
   bool setup_only = false;
   if (!a.ready_file.empty()) sdlfe::set_ready_file(a.ready_file);

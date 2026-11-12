@@ -725,6 +725,15 @@ TEST(replay_log_without_end_and_refusals) {
   mech3::replay::ReplayLog missing;
   std::string error;
   EXPECT(!missing.load(temp_dir("replay_missing") + "/none.jsonl", &error) && !error.empty());
+  // A wrong-typed field after the start line is refused with a message, not a crash.
+  const std::string damaged_path = temp_dir("replay_damaged") + "/match-1.jsonl";
+  {
+    std::ofstream out(damaged_path, std::ios::binary | std::ios::trunc);
+    out << replay_test_log(true) << R"({"type":"state","t":"soon","mechs":[]})" << "\n";
+  }
+  mech3::replay::ReplayLog damaged;
+  error.clear();
+  EXPECT(!damaged.load(damaged_path, &error) && error.find("damaged line") != std::string::npos);
   mech3::replay::ReplayFlags flags;
   EXPECT(mech3::replay::replay_refusal(flags).empty());
   flags.arena = true;
