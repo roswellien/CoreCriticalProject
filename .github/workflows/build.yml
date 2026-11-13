@@ -114,9 +114,14 @@ jobs:
           if ($crt.Count -ne 1) { throw 'Missing or ambiguous Release CRT root.' }
           Assert-Unlinked $dumpbin
           Assert-Unlinked $crt[0].FullName
+          $cmake = Join-Path $vs 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
+          $ninja = Join-Path $vs 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
+          $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
+          $clang = (Get-Command clang-cl.exe -CommandType Application -ErrorAction Stop).Source
+          foreach ($tool in @($cmake,$ninja,$git,$clang)) { Assert-Unlinked $tool }
           $env:TEMP = $scratch
           $env:TMP = $scratch
-          python -B tools/remaster-launcher/test_installed_runtime.py --native-stage-fixture-exe "$PWD/build/default/Release/mw34_native_stage_fixture.exe" --native-stage-fixture-dll "$PWD/build/default/Release/mw34_normal_hash.dll" --dumpbin $dumpbin --crt-root $crt[0].FullName --stage-plan-tool "$artifacts/bin/LauncherChecks/release/LauncherChecks.exe" -v
+          python -B tools/remaster-launcher/test_installed_runtime.py --native-stage-fixture-exe "$PWD/build/default/Release/mw34_native_stage_fixture.exe" --native-stage-fixture-dll "$PWD/build/default/Release/mw34_normal_hash.dll" --dumpbin $dumpbin --crt-root $crt[0].FullName --stage-plan-tool "$artifacts/bin/LauncherChecks/release/LauncherChecks.exe" --vs $vs --git $git --cmake $cmake --ninja $ninja --clang-cl $clang -v
           if ($LASTEXITCODE -ne 0) { throw 'Actual authored PE staging qualification failed.' }
 
   api-review-canary:

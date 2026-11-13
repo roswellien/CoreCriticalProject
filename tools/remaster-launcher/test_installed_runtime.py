@@ -100,6 +100,20 @@ for name, module in tuple(sys.modules.items()):
             self.assertFalse((output / "texture-banks.bin").exists())
 
 
+def volume_guid_alias(path):
+    """Resolve the actual test drive's alternate spelling without creating a mount or link."""
+    import ctypes
+    from ctypes import wintypes
+    path = Path(path).absolute()
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetVolumeNameForVolumeMountPointW.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    kernel.GetVolumeNameForVolumeMountPointW.restype = wintypes.BOOL
+    volume = ctypes.create_unicode_buffer(32768)
+    if not kernel.GetVolumeNameForVolumeMountPointW(path.anchor, volume, len(volume)):
+        raise OSError(ctypes.get_last_error(), "Cannot resolve the required volume-GUID test alias")
+    return Path(volume.value) / path.relative_to(path.anchor)
+
+
 def native_stage_tests(inputs):
     """Explicit Windows-only authored PE qualification; never substitutes for a native build."""
     import stage_mw3_re_runtime as producer
@@ -306,6 +320,30 @@ def native_stage_tests(inputs):
                 with self.subTest(output=output), self.assertRaises(ValueError):
                     producer.stage_inventory(inventory, output)
 
+        def test_volume_alias_staging_overlap_precedes_any_mutation(self):
+            from dataclasses import replace
+            inventory = self.inventory()
+            before = {path.relative_to(self.root).as_posix(): producer.file_hash(path)
+                      for path in self.root.rglob("*") if path.is_file()}
+            original_paths = {path.relative_to(self.root).as_posix() for path in self.root.rglob("*")}
+            alias = volume_guid_alias(self.release)
+            self.assertTrue(alias.is_dir())
+            cases = ((inventory, alias / "missing-parent/payload"),
+                     (replace(inventory, input_roots=(alias, Path(inputs.crt_root))),
+                      self.release / "another-missing-parent/payload"))
+            for candidate, output in cases:
+                with self.subTest(output=output), self.assertRaisesRegex(ValueError, "overlaps"):
+                    producer.stage_inventory(candidate, output)
+                self.assertFalse(output.exists())
+                self.assertEqual(original_paths, {path.relative_to(self.root).as_posix() for path in self.root.rglob("*")})
+                self.assertEqual(before, {path.relative_to(self.root).as_posix(): producer.file_hash(path)
+                                         for path in self.root.rglob("*") if path.is_file()})
+            hardlink = self.root / "same-file-hardlink.dll"
+            os.link(self.library, hardlink)
+            self.assertTrue(producer._paths_overlap(self.library, hardlink))
+            producer.stage_inventory(inventory, self.output)
+            self.assertTrue((self.output / "runtime.json").is_file())
+
         def test_inventory_budget_precedes_source_hashing(self):
             with patch.object(producer, "MAX_CLOSURE_BYTES", 1), \
                  patch.object(producer, "file_hash", side_effect=AssertionError("premature hash")):
@@ -364,12 +402,299 @@ def native_stage_tests(inputs):
     return NativeStageTests
 
 
+def native_recipe_tests(inputs):
+    """Real selected-tool/environment controls; these remain authored builds, never MW3 positives."""
+    import stage_mw3_re_runtime as producer
+
+    class NativeRecipeTests(unittest.TestCase):
+        @classmethod
+        def setUpClass(cls):
+            cls.temporary = tempfile.TemporaryDirectory(prefix="mw34-native-recipe-")
+            cls.addClassCleanup(cls.temporary.cleanup)
+            cls.root = Path(cls.temporary.name)
+            cls.paths = {name: Path(getattr(inputs, name)) for name in ("git", "cmake", "ninja", "clang_cl", "dumpbin", "crt_root")}
+            cls.paths["source"] = Path(__file__).resolve().parents[2]
+            cls.environment, cls.derived, cls.system = producer.build_environment(
+                Path(inputs.vs), cls.paths, cls.root, source=cls.paths["source"])
+            cls.tools = producer._tool_observations(
+                {key: value for key, value in cls.paths.items() if key in producer._TOOL_NAMES},
+                cls.environment, cls.root)
+            print("Selected recipe tools: " + json.dumps(cls.tools, sort_keys=True))
+            cls.fixture, cls.flags = producer.build_qualification_fixture(
+                cls.paths, cls.derived, cls.environment, cls.root / "clean")
+
+        def test_selected_environment_strips_parent_controls(self):
+            keys = ("CC", "CXX", "CFLAGS", "CXXFLAGS", "CL", "_CL_", "LINK", "_LINK_",
+                    "CMAKE_TOOLCHAIN_FILE", "CMAKE_PREFIX_PATH", "VCPKG_ROOT",
+                    "PKG_CONFIG_PATH", "GIT_EXEC_PATH", "AUTHORED_PACKAGE_ROOT", "HOME",
+                    "USERPROFILE", "AUTHORED_CREDENTIAL_SENTINEL")
+            parent = dict(os.environ)
+            parent.update({key: "AUTHORED_PARENT_CONTROL" for key in keys})
+            parent["NoDefaultCurrentDirectoryInExePath"] = "0"
+            environment, _, _ = producer.build_environment(Path(inputs.vs), self.paths, self.root,
+                                                           source=self.paths["source"], parent=parent)
+            script = "import json,os,sys; print(json.dumps({k:os.environ.get(k) for k in sys.argv[1:]}))"
+            received = json.loads(producer._run([sys.executable, "-I", "-c", script, *keys,
+                                                "NoDefaultCurrentDirectoryInExePath"],
+                                               environment, self.root))
+            self.assertEqual({key: received[key] for key in keys}, dict.fromkeys(keys))
+            self.assertEqual(received["NoDefaultCurrentDirectoryInExePath"], "1")
+            self.assertEqual(Path(environment["PATH"].split(";")[0]), self.paths["git"].parent)
+            _, flags = producer.build_qualification_fixture(self.paths, self.derived, environment,
+                                                            self.root / "sanitized-parent-controls")
+            self.assertEqual(flags, self.flags)
+
+        def test_bootstrap_fetches_only_allowlisted_parent_values(self):
+            from collections.abc import Mapping
+            permitted = {name.swapcase(): os.environ[name] for name in producer._WINDOWS_KEYS if name in os.environ}
+            class HostileParent(Mapping):
+                def __iter__(self):
+                    return iter([*permitted, "AUTHORED_VALUE_MUST_NOT_BE_READ", "NoDefaultCurrentDirectoryInExePath"])
+                def __len__(self):
+                    return len(permitted) + 2
+                def __getitem__(self, name):
+                    if name not in permitted:
+                        raise AssertionError("Non-allowlisted parent value was accessed.")
+                    return permitted[name]
+            environment, _ = producer._bootstrap_base(self.root, HostileParent())
+            self.assertEqual(environment["NoDefaultCurrentDirectoryInExePath"], "1")
+            self.assertNotIn("AUTHORED_VALUE_MUST_NOT_BE_READ", environment)
+
+        def test_real_cmake_git_guard_and_shadow_control(self):
+            commit = producer._run([self.paths["git"], "-C", self.paths["source"], "rev-parse", "HEAD"],
+                                   self.environment, self.root).decode().strip()
+            guarded = producer.qualify_git_lookup(self.paths["source"], commit, self.paths,
+                self.environment, self.fixture, self.root / "git-guarded")
+            unsafe = producer.qualify_git_lookup(self.paths["source"], commit, self.paths,
+                self.environment, self.fixture, self.root / "git-unsafe", unsafe_control=True)
+            self.assertTrue(guarded["guarded"])
+            self.assertFalse(unsafe["guarded"])
+            self.assertEqual((self.root / "git-unsafe/result.txt").read_text().strip(), "MW34_AUTHORED_SHADOW_GIT")
+
+        def test_actual_compiler_and_linker_parent_controls(self):
+            controls = {"CXXFLAGS": "-DMW34_POISON_CXXFLAGS", "CFLAGS": "-DMW34_POISON_CFLAGS",
+                        "CL": "/DMW34_POISON_CL", "_CL_": "/DMW34_POISON_UNDERSCORE_CL",
+                        "LINK": "/INCLUDE:MW34_POISON_LINK"}
+            for name, value in controls.items():
+                with self.subTest(control=name):
+                    injected = dict(os.environ, **{name: value})
+                    sanitized, _, _ = producer.build_environment(Path(inputs.vs), self.paths, self.root,
+                                                                  source=self.paths["source"], parent=injected)
+                    self.assertNotIn(name, sanitized)
+                    unsafe = dict(sanitized, **{name: value})
+                    directory = self.root / ("unsafe-" + name)
+                    with self.assertRaisesRegex(ValueError, "Selected external tool failed"):
+                        producer.build_qualification_fixture(self.paths, self.derived, unsafe, directory)
+                    diagnostics = "\n".join(path.read_text(errors="strict") for path in
+                                           (directory / "configure.log", directory / "build.log") if path.exists())
+                    if name == "_CL_":
+                        # Clang21 appends _CL_ after CMake's "--"; retain that exact adverse oracle.
+                        self.assertIn("clang-cl: error: no such file or directory: '/DMW34_POISON_UNDERSCORE_CL'",
+                                      diagnostics)
+                        direct = directory / "direct-compiler.log"
+                        with self.assertRaisesRegex(ValueError, "Selected external tool failed"):
+                            producer._run([self.paths["clang_cl"], "/nologo", "/c",
+                                           "/Fo" + str(directory / "guard.obj"),
+                                           self.root / "clean/source/guard.c"],
+                                          unsafe, directory, log=direct)
+                        self.assertIn("MW34_POISON_COMPILER_CONTROL", direct.read_text())
+                        continue
+                    expected = "MW34_POISON_LINK" if name == "LINK" else "MW34_POISON_COMPILER_CONTROL"
+                    self.assertIn(expected, diagnostics)
+
+        def test_toolchain_and_prefix_specific_oracles(self):
+            toolchain = self.root / "poison-toolchain.cmake"
+            marker = self.root / "toolchain-evaluated"
+            toolchain.write_text("file(WRITE " + producer._cmake_literal(marker) +
+                                 ' "evaluated")\nmessage(FATAL_ERROR "MW34_POISON_TOOLCHAIN")\n', encoding="utf-8")
+            parent = dict(os.environ, CMAKE_TOOLCHAIN_FILE=str(toolchain))
+            sanitized, _, _ = producer.build_environment(Path(inputs.vs), self.paths, self.root, parent=parent)
+            self.assertNotIn("CMAKE_TOOLCHAIN_FILE", sanitized)
+            with self.assertRaisesRegex(ValueError, "Selected external tool failed"):
+                producer.build_qualification_fixture(self.paths, self.derived,
+                    dict(sanitized, CMAKE_TOOLCHAIN_FILE=str(toolchain)), self.root / "unsafe-toolchain")
+            self.assertTrue(marker.is_file())
+            self.assertIn("MW34_POISON_TOOLCHAIN", (self.root / "unsafe-toolchain/configure.log").read_text())
+            prefix = self.root / "poison-prefix"
+            prefix.mkdir()
+            prefix_marker = self.root / "prefix-evaluated"
+            (prefix / "MW34MarkerConfig.cmake").write_text(
+                "file(WRITE " + producer._cmake_literal(prefix_marker) + ' "found")\nset(MW34Marker_FOUND TRUE)\n', encoding="utf-8")
+            configure_source = self.root / "clean/source"
+            for restored, search_enabled in ((False, False), (True, False), (True, True)):
+                directory = self.root / ("prefix-" + str(restored) + "-" + str(search_enabled))
+                directory.mkdir()
+                command, _ = producer.configure_arguments(self.paths, self.derived, configure_source, directory / "build")
+                if search_enabled:
+                    command.append("-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=TRUE")
+                environment = dict(sanitized)
+                if restored:
+                    environment["CMAKE_PREFIX_PATH"] = str(prefix)
+                producer._run(command, environment, directory, timeout=180, log=directory / "configure.log")
+                self.assertEqual(prefix_marker.exists(), restored and search_enabled)
+
+        def test_configured_dependency_roots_and_escape(self):
+            result = producer._validate_edges(self.paths, self.environment, self.system, self.fixture,
+                                               target="mw34_native_stage_fixture")
+            self.assertTrue(result["selected_root_checks"])
+            reply = self.fixture / ".cmake/api/v1/reply"
+            target = next(reply.glob("target-mw34_normal_hash-*.json"))
+            original = target.read_bytes()
+            modified = json.loads(original)
+            outside = self.root / "outside-include"
+            outside.mkdir()
+            modified["compileGroups"][0].setdefault("includes", []).append(dict(path=str(outside)))
+            target.write_text(json.dumps(modified), encoding="utf-8")
+            try:
+                with self.assertRaisesRegex(ValueError, "dependency escapes"):
+                    producer._validate_edges(self.paths, self.environment, self.system, self.fixture,
+                                              target="mw34_native_stage_fixture")
+            finally:
+                target.write_bytes(original)
+
+        def test_bad_cache_controls_stop_before_native_build(self):
+            cache = producer._cache(self.fixture / "CMakeCache.txt")
+            _, expected = producer.configure_arguments(self.paths, self.derived, self.root / "clean/source", self.fixture)
+            native = dict(MW3_PACKAGE="ON", MW3_CORE_CRITICAL_VULKAN="ON",
+                          CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound="TRUE")
+            cache.update(native)
+            expected.update(native)
+            cases = (("CMAKE_CXX_COMPILER", str(self.root / "other.exe"), "selected path mismatch"),
+                     ("CMAKE_BUILD_TYPE", "Debug", "recipe option mismatch"),
+                     ("MW3_PACKAGE", "OFF", "recipe option mismatch"),
+                     ("MW3_CORE_CRITICAL_VULKAN", "OFF", "recipe option mismatch"),
+                     ("CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound", "FALSE", "recipe option mismatch"),
+                     ("CMAKE_TOOLCHAIN_FILE", "poison", "Unexpected configured toolchain"),
+                     ("CMAKE_CXX_FLAGS_RELEASE", "/DMW34_POISON", "non-clean recipe flags"))
+            for name, value, error in cases:
+                with self.subTest(field=name), self.assertRaisesRegex(ValueError, error):
+                    producer._validate_configured(self.paths, self.derived, dict(cache, **{name: value}),
+                                                   expected, self.flags, self.fixture, {})
+
+        def test_actual_pe_architecture_and_kind_are_required(self):
+            original = Path(inputs.native_stage_fixture_exe).read_bytes()
+            offset = int.from_bytes(original[60:64], "little")
+            for name, position, value in (("wrong-machine", offset + 4, b"\x4c\x01"),
+                                           ("dll-as-exe", offset + 22,
+                                            (int.from_bytes(original[offset + 22:offset + 24], "little") | 0x2000).to_bytes(2, "little"))):
+                path = self.root / (name + ".exe")
+                changed = bytearray(original)
+                changed[position:position + 2] = value
+                path.write_bytes(changed)
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Expected an x64"):
+                    producer._pe(path, library=False)
+
+        def test_recipe_destinations_and_cpu_are_rejected_before_mutation(self):
+            from argparse import Namespace
+            arguments = dict(self.paths, vs=Path(inputs.vs), commit="a" * 40, jobs=1,
+                             build=self.root / "never-built", output=self.root / "never-staged")
+            for name in ("sdl3", "sdl3_ttf", "archive_prefix", "vulkan_headers", "ttf_notices"):
+                directory = self.root / ("path-" + name)
+                directory.mkdir()
+                arguments[name] = directory
+            for name in ("glslang", "dxc"):
+                arguments[name] = self.root / producer._TOOL_NAMES[name]
+                arguments[name].write_bytes(b"authored invalid tool; never executed")
+            for name in ("archive_lib", "zlib_lib", "lzma_lib"):
+                arguments[name] = self.root / (name + ".lib")
+                arguments[name].write_bytes(b"authored invalid library; never linked")
+            existing = self.root / "existing-destination"
+            existing.mkdir()
+            for changes, reason in ((dict(jobs=0), "CPU budget"), (dict(jobs=9), "CPU budget"),
+                                    (dict(build=existing), "already exists"),
+                                    (dict(output=arguments["source"] / "owned-stage-must-not-exist"), "overlaps"),
+                                    (dict(output=arguments["build"] / "nested"), "overlap")):
+                candidate = {key: str(value) if isinstance(value, Path) else value
+                             for key, value in dict(arguments, **changes).items()}
+                with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, reason):
+                    producer._recipe_paths(Namespace(**candidate))
+            source_alias = volume_guid_alias(arguments["source"])
+            root_alias = volume_guid_alias(self.root)
+            for changes in (dict(build=source_alias / "owned-stage-must-not-exist"),
+                            dict(output=source_alias / "owned-stage-must-not-exist"),
+                            dict(source=source_alias, output=arguments["source"] / "owned-stage-must-not-exist"),
+                            dict(output=root_alias / arguments["build"].name)):
+                candidate = {key: str(value) if isinstance(value, Path) else value
+                             for key, value in dict(arguments, **changes).items()}
+                with self.subTest(alias_changes=changes), self.assertRaisesRegex(ValueError, "overlap"):
+                    producer._recipe_paths(Namespace(**candidate))
+                self.assertFalse(Path(candidate["build"]).exists())
+                self.assertFalse(Path(candidate["output"]).exists())
+            ordinary = {key: str(value) if isinstance(value, Path) else value for key, value in arguments.items()}
+            normalized = producer._recipe_paths(Namespace(**ordinary))
+            self.assertEqual(normalized["build"], arguments["build"])
+            self.assertEqual(normalized["output"], arguments["output"])
+            self.assertFalse(arguments["build"].exists())
+            self.assertFalse(arguments["output"].exists())
+
+        def test_real_git_observation_rejects_stale_and_dirty_source(self):
+            repository = self.root / "authored-repository"
+            repository.mkdir()
+            def git(*arguments):
+                return producer._run([self.paths["git"], "-C", repository,
+                    "-c", "core.hooksPath=NUL", "-c", "commit.gpgsign=false", *arguments],
+                    self.environment, self.root).decode().strip()
+            git("init")
+            for name in ("CMakeLists.txt", "AGENTS.md", "runtime/mw3-re/CMakeLists.txt",
+                         "tests/native_stage_fixture.cpp", "tools/remaster-launcher/normal_hash.cpp"):
+                path = repository / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("authored Git observation control\n", encoding="utf-8")
+            git("add", ".")
+            git("-c", "user.name=Authored Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Create authored Git fixture")
+            commit = git("rev-parse", "HEAD")
+            producer._source_identity(repository, self.paths["git"], self.environment, commit)
+            with self.assertRaisesRegex(ValueError, "identity mismatch"):
+                producer._source_identity(repository, self.paths["git"], self.environment, "a" * 40)
+            (repository / "AGENTS.md").write_text("changed authored input\n")
+            with self.assertRaisesRegex(ValueError, "Dirty tracked"):
+                producer._source_identity(repository, self.paths["git"], self.environment, commit)
+
+        def test_producer_ownership_conflict_is_visible(self):
+            with producer._producer_ownership():
+                with self.assertRaisesRegex(ValueError, "Another owned native producer"):
+                    with producer._producer_ownership():
+                        self.fail("A duplicate producer acquired ownership.")
+
+        def test_timeout_stops_owned_grandchild(self):
+            child_pid = self.root / "owned-child.pid"
+            grandchild_pid = self.root / "owned-grandchild.pid"
+            script = ("import os,sys,time,subprocess;from pathlib import Path;"
+                      "Path(sys.argv[1]).write_text(str(os.getpid()));"
+                      "subprocess.Popen([sys.executable,'-I','-c',"
+                      "'import os,sys,time;from pathlib import Path;Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(20)',sys.argv[2]]);time.sleep(20)")
+            with self.assertRaisesRegex(ValueError, "inspection timed out"):
+                producer._capture_inspection([sys.executable, "-I", "-c", script, str(child_pid), str(grandchild_pid)],
+                                             self.environment, self.root, timeout=1)
+            import ctypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+            kernel.CloseHandle.argtypes = (ctypes.c_void_p,)
+            for path in (child_pid, grandchild_pid):
+                self.assertTrue(path.is_file())
+                handle = kernel.OpenProcess(0x00100000, False, int(path.read_text()))
+                if handle:
+                    try:
+                        self.assertEqual(kernel.WaitForSingleObject(handle, 1000), 0)
+                    finally:
+                        kernel.CloseHandle(handle)
+                else:
+                    self.assertEqual(ctypes.get_last_error(), 87)
+
+    return NativeRecipeTests
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("native-stage-fixture-exe", "native-stage-fixture-dll", "dumpbin", "crt-root", "stage-plan-tool"):
         parser.add_argument("--" + name)
+    for name in ("vs", "git", "cmake", "ninja", "clang-cl"):
+        parser.add_argument("--" + name)
     inputs, remaining = parser.parse_known_args()
-    supplied = vars(inputs)
+    recipe_names = ("vs", "git", "cmake", "ninja", "clang_cl")
+    supplied = {name: value for name, value in vars(inputs).items() if name not in recipe_names}
     if any(supplied.values()):
         if os.name != "nt" or not all(supplied.values()):
             parser.error("Explicit native staging requires Windows and all five fixture/tool inputs.")
@@ -378,6 +703,19 @@ if __name__ == "__main__":
             if not path.is_absolute() or not (path.is_dir() if name == "crt_root" else path.is_file()):
                 parser.error("Missing or non-absolute fixture/tool input: " + name)
         NativeStageTests = native_stage_tests(inputs)
-        unittest.main(argv=[sys.argv[0], *remaining], defaultTest="NativeStageTests")
+        selected = ["NativeStageTests"]
+        recipe = {name: getattr(inputs, name) for name in recipe_names}
+        if any(recipe.values()):
+            if not all(recipe.values()):
+                parser.error("Recipe qualification requires all five explicit selected tool inputs.")
+            for name, value in recipe.items():
+                path = Path(value)
+                if not path.is_absolute() or not (path.is_dir() if name == "vs" else path.is_file()):
+                    parser.error("Missing explicit recipe tool input: " + name)
+            NativeRecipeTests = native_recipe_tests(inputs)
+            selected.append("NativeRecipeTests")
+        unittest.main(argv=[sys.argv[0], *remaining], defaultTest=selected)
     else:
+        if any(getattr(inputs, name) for name in recipe_names):
+            parser.error("Recipe tools also require the five explicit PE fixture inputs.")
         unittest.main(argv=[sys.argv[0], *remaining])
