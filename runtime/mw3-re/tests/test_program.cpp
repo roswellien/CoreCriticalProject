@@ -18,6 +18,8 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <list>
+#include <memory>
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #endif
@@ -24076,4 +24078,236 @@ TEST(reset_process_state_clears_the_entity_walk) {
   std::vector<int> order;
   zent::budget().update_all(list, [&](int i) { order.push_back(i); });
   EXPECT(order == (std::vector<int>{0, 1, 2, 3}));  // from the start
+}
+
+namespace {
+constexpr const char* kPilotStateOwnershipImage = "pilot_state_ownership_probe";
+
+class PilotStateOwnershipHost final : public ztwod::Host {
+ public:
+  struct ImageRecord {
+    std::unique_ptr<zimg::Texture> texture;
+    int acquisitions = 0;
+    int releases = 0;
+  };
+
+  zimg::Texture* image_get(const char* name) override {
+    if (!name) return nullptr;
+    ImageRecord& record = images[name];
+    if (!record.texture) {
+      record.texture = std::make_unique<zimg::Texture>();
+      record.texture->width = 16;
+      record.texture->height = 16;
+      record.texture->mip_scale = 1.0f;
+    }
+    ++record.acquisitions;
+    return record.texture.get();
+  }
+
+  zimg::Texture* image_release(zimg::Texture* image) override {
+    for (auto& [name, record] : images) {
+      (void)name;
+      if (record.texture.get() == image) {
+        ++record.releases;
+        return nullptr;
+      }
+    }
+    ++unexpected_releases;
+    return nullptr;
+  }
+
+  ztwod::Handle font_find(const char*) override { return 0; }
+  void font_release(ztwod::Handle) override {}
+  void video_lock() override {}
+  void video_unlock() override {}
+  zimg::Texture* screen_grab(int32_t) override { return nullptr; }
+
+  int acquisitions_for(const char* name) const {
+    const auto it = images.find(name);
+    return it == images.end() ? 0 : it->second.acquisitions;
+  }
+
+  int releases_for(const char* name) const {
+    const auto it = images.find(name);
+    return it == images.end() ? 0 : it->second.releases;
+  }
+
+  int outstanding() const {
+    int total = 0;
+    for (const auto& [name, record] : images) {
+      (void)name;
+      total += record.acquisitions - record.releases;
+    }
+    return total;
+  }
+
+  int unexpected_releases = 0;
+
+ private:
+  std::map<std::string, ImageRecord> images;
+};
+
+class PilotStateOwnershipEngine final : public mech3::GameEngine {
+ public:
+  PilotStateOwnershipEngine(const mech3::Platform& platform, zrdr::Node* definition)
+      : GameEngine(platform, "mech3.exe -nofmv"), definition_(definition) {}
+
+  zrdr::Node* main_menu_definition() override { return definition_; }
+  bool main_menu_background(zimg::Texture** image, uint8_t* moving) override {
+    *image = nullptr;
+    *moving = 0;
+    return false;
+  }
+
+ private:
+  zrdr::Node* definition_;
+};
+
+struct PilotStateOwnershipDialog {
+  PilotStateOwnershipDialog() {
+    constexpr char text[] = R"(
+(
+  "PILOTDIALOG" (
+    "BUTTONS" (
+      "CANCEL" ("BITMAP" ("pilot_state_ownership_probe"))
+      "ACCEPT" ()
+      "DELETE" ()
+      "RENAME" ()
+      "PILOTLIST" ()
+      "GAMELIST" ()
+      "EDITBAR" ()
+      "RENAMEBAR" ()
+      "SCENARIO_LIST" ()
+      "SCENARIO_DESC" ()
+      "SCENARIO_COMPLETE" ()
+    )
+    "PRIMITIVES" (
+      "LINES" ()
+      "LINES2" ()
+    )
+  )
+)
+)";
+    std::FILE* file = std::tmpfile();
+    if (!file) return;
+    const size_t size = std::strlen(text);
+    if (std::fwrite(text, 1, size, file) == size) {
+      std::rewind(file);
+      root = zrdr::parse_text(file);
+    }
+    std::fclose(file);
+  }
+
+  ~PilotStateOwnershipDialog() {
+    if (root) zrdr::free_node(root);
+  }
+
+  zrdr::Node* root = nullptr;
+};
+
+struct PilotStateOwnershipProcessState {
+  explicit PilotStateOwnershipProcessState(PilotStateOwnershipHost& host, const char* case_name)
+      : previous_app(mech3::app_if_any()), previous_host(&ztwod::host()), previous_mounts(zutl::mounts()),
+        previous_current_pilot(mech3::current_pilot()), previous_globals(mech3::globals()),
+        previous_sensitivity_slider(mech3::options_sensitivity_slider()) {
+    saved_pilots.swap(mech3::pilots());
+    mech3::set_app(nullptr);
+    mech3::globals() = mech3::AppGlobals{};
+    mech3::current_pilot() = nullptr;
+    ztwod::set_host(&host);
+
+    const std::filesystem::path root = std::filesystem::path(MW3_TEST_TMP) / "pilot-state-screen-ownership" / case_name;
+    std::error_code error;
+    std::filesystem::create_directories(root / "read", error);
+    if (error) return;
+    std::filesystem::create_directories(root / "write", error);
+    if (error) return;
+    zutl::mounts() = zutl::Mounts{};
+    zutl::mounts().read = {(root / "read").string()};
+    zutl::mounts().write = (root / "write").string();
+    ready = true;
+  }
+
+  ~PilotStateOwnershipProcessState() {
+    for (mech3::Pilot* pilot : mech3::pilots()) {
+      pilot->dirty = 0;
+      delete pilot;
+    }
+    mech3::pilots().clear();
+    mech3::pilots().swap(saved_pilots);
+    mech3::current_pilot() = previous_current_pilot;
+    zutl::mounts() = previous_mounts;
+    mech3::globals() = previous_globals;
+    mech3::options_sensitivity_slider() = previous_sensitivity_slider;
+    mech3::set_app(previous_app);
+    ztwod::set_host(previous_host);
+  }
+
+  bool ready = false;
+
+ private:
+  mech3::Mech3App* previous_app;
+  ztwod::Host* previous_host;
+  zutl::Mounts previous_mounts;
+  std::list<mech3::Pilot*> saved_pilots;
+  mech3::Pilot* previous_current_pilot;
+  mech3::AppGlobals previous_globals;
+  bool previous_sensitivity_slider;
+};
+
+struct PilotStateOwnershipSentinel {};
+
+void run_pilot_state_ownership_engine_case(PilotStateOwnershipHost& host, zrdr::Node* definition,
+                                           bool delete_state_first, bool throw_after_shutdown) {
+  mech3::Platform platform;
+  PilotStateOwnershipEngine engine(platform, definition);
+  // Match the post-shutdown boundary: keep the app global cleared through cleanup.
+  mech3::set_app(nullptr);
+  const mech3::Handle state = engine.construct(0x488910, {});
+  EXPECT(state != 0);
+  EXPECT(engine.state_screen(state) != 0);
+  EXPECT(host.acquisitions_for(kPilotStateOwnershipImage) == 1);
+  EXPECT(host.outstanding() == 1);
+  if (delete_state_first) {
+    engine.vcall(state, 0, {});
+    EXPECT(engine.state_screen(state) == 0);
+    EXPECT(host.releases_for(kPilotStateOwnershipImage) == 1);
+  }
+  if (throw_after_shutdown) throw PilotStateOwnershipSentinel{};
+}
+
+void run_pilot_state_ownership_case(const char* case_name, bool delete_state_first, bool throw_after_shutdown) {
+  PilotStateOwnershipHost host;
+  PilotStateOwnershipProcessState process_state(host, case_name);
+  PilotStateOwnershipDialog dialog;
+  EXPECT(process_state.ready);
+  EXPECT(dialog.root != nullptr);
+  if (!process_state.ready || !dialog.root) return;
+
+  bool caught_sentinel = false;
+  try {
+    run_pilot_state_ownership_engine_case(host, dialog.root, delete_state_first, throw_after_shutdown);
+  } catch (const PilotStateOwnershipSentinel&) {
+    caught_sentinel = true;
+  }
+  EXPECT(caught_sentinel == throw_after_shutdown);
+  ztimer::set_clock(nullptr);
+  zsnd_cd::set_backend(nullptr, nullptr, "music");
+  EXPECT(host.acquisitions_for(kPilotStateOwnershipImage) == 1);
+  EXPECT(host.releases_for(kPilotStateOwnershipImage) == 1);
+  EXPECT(host.outstanding() == 0);
+  EXPECT(host.unexpected_releases == 0);
+}
+}  // namespace
+
+TEST(pilot_state_screen_ownership_ordinary_state_deletion_releases_once) {
+  run_pilot_state_ownership_case("ordinary-delete", true, false);
+}
+
+TEST(pilot_state_screen_ownership_engine_teardown_with_app_cleared_releases_once) {
+  run_pilot_state_ownership_case("after-app-shutdown", false, false);
+}
+
+TEST(pilot_state_screen_ownership_engine_teardown_during_unwind_with_app_cleared_releases_once) {
+  run_pilot_state_ownership_case("stack-unwind", false, true);
 }
