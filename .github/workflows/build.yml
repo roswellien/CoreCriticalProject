@@ -49,6 +49,75 @@ jobs:
         run: python tools/check.py --setup --only format-check
       - name: Build, CTest and C++ format check
         run: python tools/check.py --only build --only ctest --only format-check
+      - name: Qualify authored Windows native staging and pinned planning
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build build/default --config Release --target mw34_native_stage_fixture mw34_normal_hash
+          if ($LASTEXITCODE -ne 0) { throw 'Release staging fixture build failed.' }
+          $artifacts = Join-Path $env:RUNNER_TEMP 'mw34-stage-dotnet'
+          dotnet build tools/mw3-remaster-launcher-tests -c Release --artifacts-path $artifacts
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher fixture build failed.' }
+          dotnet run --no-build --no-restore --project tools/mw3-remaster-launcher-tests -c Release --artifacts-path $artifacts -- --mw3-re-contract-only
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned planning contract checks failed.' }
+          function Assert-Unlinked([string] $Path) {
+            $item = Get-Item -LiteralPath $Path -Force
+            while ($null -ne $item) {
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked tool path.' }
+              $item = if ($item.PSIsContainer) { $item.Parent } else { $item.Directory }
+            }
+          }
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio/Installer/vswhere.exe'
+          Assert-Unlinked $vswhere
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or @($vs).Count -ne 1 -or -not $vs) { throw 'Missing selected VS installation.' }
+          $bootstrap = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          Assert-Unlinked $bootstrap
+          if ($bootstrap -match '[\r\n\x00"&|<>^%!]') { throw 'Unsafe VS bootstrap path.' }
+          $scratch = Join-Path $env:RUNNER_TEMP ('mw34-stage-' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $scratch | Out-Null
+          Assert-Unlinked $scratch
+          $system = Join-Path $env:SystemRoot 'System32'
+          $info = [Diagnostics.ProcessStartInfo]::new((Join-Path $system 'cmd.exe'))
+          $info.UseShellExecute = $false
+          $info.CreateNoWindow = $true
+          $info.RedirectStandardOutput = $true
+          $info.RedirectStandardError = $true
+          $info.Environment.Clear()
+          foreach ($key in @('SystemRoot','WINDIR','SystemDrive','COMSPEC','ProgramFiles','ProgramFiles(x86)','ProgramW6432','ProgramData','OS','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS')) {
+            $value = [Environment]::GetEnvironmentVariable($key)
+            if ($null -ne $value) { $info.Environment[$key] = $value }
+          }
+          $info.Environment['TEMP'] = $scratch
+          $info.Environment['TMP'] = $scratch
+          $info.Environment['PATH'] = "$system;$env:SystemRoot;$system\Wbem;$system\WindowsPowerShell\v1.0"
+          $info.Environment['NoDefaultCurrentDirectoryInExePath'] = '1'
+          $info.Arguments = '/d /s /c ""' + $bootstrap + '" >nul && set"'
+          $child = [Diagnostics.Process]::Start($info)
+          $collected = $child.StandardOutput.ReadToEndAsync()
+          $diagnostics = $child.StandardError.ReadToEndAsync()
+          if (-not $child.WaitForExit(30000)) { $child.Kill($true); throw 'VS bootstrap timed out.' }
+          if ($child.ExitCode -ne 0) { throw 'VS bootstrap failed.' }
+          # Inspect selected tool roots privately; never print the collected environment.
+          $selected = @{}
+          foreach ($line in $collected.GetAwaiter().GetResult() -split '\r?\n') {
+            if ($line -match '^([^=]+)=(.*)$') { $selected[$Matches[1]] = $Matches[2] }
+          }
+          if ($selected['VSCMD_ARG_TGT_ARCH'] -ne 'x64' -or $selected['VSCMD_ARG_HOST_ARCH'] -ne 'x64') { throw 'VS bootstrap was not x64.' }
+          $toolRoot = $selected['VCToolsInstallDir']
+          if (-not $toolRoot -or -not [IO.Path]::GetFullPath($toolRoot).StartsWith($vs + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Selected compiler leaves VS.' }
+          $dumpbin = Join-Path $toolRoot 'bin/Hostx64/x64/dumpbin.exe'
+          $redistVersion = (Get-Content -LiteralPath (Join-Path $vs 'VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt') -Raw).Trim()
+          if ($redistVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid selected redist version.' }
+          $crt = @(Get-ChildItem -LiteralPath (Join-Path $vs "VC/Redist/MSVC/$redistVersion/x64") -Directory | Where-Object Name -match '^Microsoft\.VC\d+\.CRT$')
+          if ($crt.Count -ne 1) { throw 'Missing or ambiguous Release CRT root.' }
+          Assert-Unlinked $dumpbin
+          Assert-Unlinked $crt[0].FullName
+          $env:TEMP = $scratch
+          $env:TMP = $scratch
+          python -B tools/remaster-launcher/test_installed_runtime.py --native-stage-fixture-exe "$PWD/build/default/Release/mw34_native_stage_fixture.exe" --native-stage-fixture-dll "$PWD/build/default/Release/mw34_normal_hash.dll" --dumpbin $dumpbin --crt-root $crt[0].FullName --stage-plan-tool "$artifacts/bin/LauncherChecks/release/LauncherChecks.exe" -v
+          if ($LASTEXITCODE -ne 0) { throw 'Actual authored PE staging qualification failed.' }
 
   api-review-canary:
     if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'roswellien' && github.repository == 'roswellien/CoreCriticalProject' }}

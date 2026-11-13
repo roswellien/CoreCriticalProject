@@ -8,6 +8,15 @@ using MW3RemasterLauncher.Core;
 
 static class NativeRuntimeLayoutChecks
 {
+    /// <summary>Test-only transport through production readers and the sole argv planner; never launch the payload.</summary>
+    public static void RunMw3ReStagePlan(string payload, string gameDirectory, string dataRoot, string profileId)
+    {
+        var contract = Mw3ReRuntimeContract.ReadStructure(payload);
+        var options = Mw3RePlanningProfile.Read(contract);
+        var request = Mw3ReLaunchRequest.Create(contract, options, gameDirectory, dataRoot, profileId);
+        Console.WriteLine(RunMw3RePlanner(request).ToJsonString());
+    }
+
     public static void Run()
     {
         var app = Path.Combine(Path.GetTempPath(), "MW3 installed layout " + Guid.NewGuid().ToString("N"));

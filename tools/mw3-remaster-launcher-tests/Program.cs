@@ -90,6 +90,12 @@ if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
     NativeRuntimeLayoutChecks.RunMw3ReStageA();
     return;
 }
+if (args.Length > 0 && args[0] == "--mw3-re-stage-plan")
+{
+    if (args.Length != 5) throw new ArgumentException("Stage planning requires payload, game, data and profile inputs.");
+    NativeRuntimeLayoutChecks.RunMw3ReStagePlan(args[1], args[2], args[3], args[4]);
+    return;
+}
 if (args.Length == 1 && args[0] == "--content-only")
 {
     ChassisPackChecks.Run();
