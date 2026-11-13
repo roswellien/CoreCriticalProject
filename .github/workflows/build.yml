@@ -93,8 +93,8 @@ jobs:
           Write-Host "Selected VS toolset $toolVersion; Release CRT $redistVersion."
           $cmake = Join-Path $vs 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
           $ninja = Join-Path $vs 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
-          $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
-          $clang = (Get-Command clang-cl.exe -CommandType Application -ErrorAction Stop).Source
+          $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          $clang = (Get-Command clang-cl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
           foreach ($tool in @($cmake,$ninja,$git,$clang)) { Assert-Unlinked $tool }
           $env:TEMP = $scratch
           $env:TMP = $scratch
