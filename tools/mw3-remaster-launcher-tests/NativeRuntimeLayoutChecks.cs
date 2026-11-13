@@ -198,6 +198,7 @@ static class NativeRuntimeLayoutChecks
                 .ToDictionary(path => path, path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
             var type = typeof(Mw3ReRuntimeContract);
             var contract = Mw3ReRuntimeContract.ReadStructure(root);
+            CheckMw3ReRequestProjection(contract);
             if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
                 throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
             if (Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length != before.Count ||
@@ -339,6 +340,66 @@ static class NativeRuntimeLayoutChecks
             Console.WriteLine("Native integrity snapshot: schema, closure, hash, bounds and immutable-interface controls passed.");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void CheckMw3ReRequestProjection(Mw3ReRuntimeContract contract)
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), "MW3 planned writes " + Guid.NewGuid().ToString("N"));
+        var assets = new List<string> { "F:/Mods Pack/alpha", "F:/Mods/é" };
+        var options = new Mw3RePlanningOptions
+        {
+            Antialiasing = Mw3ReAntialiasing.Two, AnisotropicFiltering = 8, RenderThread = false,
+            Lighting = Mw3ReLighting.Normal, Assets = assets
+        };
+        var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "pilot-a");
+        var wire = JsonNode.Parse(json)!.AsObject();
+        var expectedWrite = Path.Combine(dataRoot, "mw3-re", "profiles", "pilot-a");
+        if (wire["schema_version"]!.GetValue<int>() != 2 || wire["engine"]!.GetValue<string>() != "mw3-re" ||
+            wire["runtime_root"]!.GetValue<string>() != contract.Root ||
+            wire["executable"]!.GetValue<string>() != contract.Executable ||
+            wire["write_dir"]!.GetValue<string>() != expectedWrite || wire["width"]!.GetValue<int>() != 1280 ||
+            wire["render_thread"]!.GetValue<bool>())
+            throw new Exception("Typed projection lost an identity, write root, number or Boolean.");
+        assets.Add("F:/later-caller-mutation");
+        if (wire["assets"]!.AsArray().Count != 2) throw new Exception("Projected assets alias caller-owned state.");
+        foreach (var (choice, token) in new[]
+        {
+            (Mw3ReAntialiasing.Off, "off"), (Mw3ReAntialiasing.One, "1"), (Mw3ReAntialiasing.Fxaa, "fxaa"),
+            (Mw3ReAntialiasing.Two, "2"), (Mw3ReAntialiasing.Four, "4"), (Mw3ReAntialiasing.Eight, "8")
+        })
+        {
+            var projected = JsonNode.Parse(Mw3ReLaunchRequest.Create(contract, options with { Antialiasing = choice }, "D:/Original MW3", dataRoot, "pilot-a"))!;
+            if (projected["aa"]!.GetValue<string>() != token) throw new Exception("Native AA projection silently remapped a saved choice.");
+        }
+        Reject(() => Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "../escape"));
+        Reject(() => Mw3ReLaunchRequest.Create(contract, options with { Renderer = (Mw3ReRenderer)99 }, "D:/Original MW3", dataRoot, "pilot-a"));
+        var python = D7VkRunner.FindPythonExecutable(requirePython311: true)
+            ?? throw new Exception("Native planner integration requires Python3.11 or later.");
+        var info = new System.Diagnostics.ProcessStartInfo(python)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "-I", "-c",
+            "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('mw3_re_launch',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(json.dumps(m.plan_launch(json.load(sys.stdin))))",
+            Path.Combine(AppContext.BaseDirectory, "mw3_re_launch.py") }) info.ArgumentList.Add(argument);
+        using var child = System.Diagnostics.Process.Start(info) ?? throw new Exception("Python planner test child did not start.");
+        child.StandardInput.Write(json);
+        child.StandardInput.Close();
+        var output = child.StandardOutput.ReadToEnd();
+        var error = child.StandardError.ReadToEnd();
+        child.WaitForExit();
+        if (child.ExitCode != 0) throw new Exception("Actual Python planner rejected projected JSON: " + error);
+        var planned = JsonNode.Parse(output)!;
+        var expected = new[] { contract.Executable, "--install", "D:/Original MW3", "--write-dir", expectedWrite,
+            "--cc-vulkan-wsi", "--window", "1280x720", "--windowed", "--cc-aa", "ssaa2", "--cc-af", "8",
+            "--cc-render-thread", "0", "--cc-lighting", "normal", "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é" };
+        if (!planned["ok"]!.GetValue<bool>() ||
+            !planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).SequenceEqual(expected) ||
+            planned["working_directory"]!.GetValue<string>() != Path.GetDirectoryName(contract.Executable))
+            throw new Exception("Actual Python argv did not preserve the typed native request.");
+        if (Directory.Exists(expectedWrite)) throw new Exception("Planning unexpectedly created a write directory.");
+        Console.WriteLine("Typed native JSON -> isolated actual Python argv planner passed; no game process.");
     }
 
     private static string WithManifestFields(string baseJson, params string[] fields) =>
