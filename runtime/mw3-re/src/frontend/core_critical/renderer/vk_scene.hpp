@@ -201,6 +201,16 @@ struct Scene {
   mw34::submission::DrawEmissions emissions;
   std::vector<Clear> clears;
   std::vector<Command> order;
+
+  bool texture_slot_matches(std::size_t slot, std::uint64_t key,
+                            std::uint64_t version, unsigned texture_width,
+                            unsigned texture_height) const {
+    if (slot >= textures.size())
+      return false;
+    const auto &texture = textures[slot];
+    return texture.key == key && texture.hash == version &&
+           texture.width == texture_width && texture.height == texture_height;
+  }
 };
 
 // Owns the loader, device, caches, render targets and child presentation
@@ -1523,6 +1533,11 @@ private:
     std::vector<VkDescriptorSet> drawSets(s.draws.size());
     for (size_t i = 0; i < s.draws.size(); ++i) {
       const auto &d = s.draws[i];
+      if (d.texture >= 0 && size_t(d.texture) >= bound.size())
+        throw std::runtime_error(
+            "Scene albedo texture slot out of range: draw=" +
+            std::to_string(i) + " slot=" + std::to_string(d.texture) +
+            " textures=" + std::to_string(bound.size()));
       Tex *t = d.texture >= 0 ? bound[size_t(d.texture)] : &white;
       auto it = sets.find({t, d.sampler});
       if (it == sets.end()) {
@@ -1566,8 +1581,13 @@ private:
                                        : normal_settings.ground_normal_strength;
         const bool normal_active =
             (normal_strength > 0 || mw34::detail::enabled(d.detail_role));
-        Tex *t = (normal_active && d.normal_texture >= 0 &&
-                  size_t(d.normal_texture) < bound.size())
+        if (normal_active && d.normal_texture >= 0 &&
+            size_t(d.normal_texture) >= bound.size())
+          throw std::runtime_error(
+              "Scene normal texture slot out of range: draw=" +
+              std::to_string(i) + " slot=" + std::to_string(d.normal_texture) +
+              " textures=" + std::to_string(bound.size()));
+        Tex *t = (normal_active && d.normal_texture >= 0)
                      ? bound[size_t(d.normal_texture)]
                      : &flatNormal;
         const unsigned normal_sampler =
