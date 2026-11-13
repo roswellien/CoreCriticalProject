@@ -202,6 +202,7 @@ static class NativeRuntimeLayoutChecks
             var contract = Mw3ReRuntimeContract.ReadStructure(root);
             CheckMw3ReRequestProjection(contract);
             CheckPinnedProfileSnapshot(root);
+            CheckMw3RePlanningProfile(root);
             if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
                 throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
             if (Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length != before.Count ||
@@ -420,6 +421,208 @@ static class NativeRuntimeLayoutChecks
         }
     }
 
+    private static void CheckMw3RePlanningProfile(string root)
+    {
+        const string sentinel = "AUTHORED_PRIVATE_SENTINEL";
+        const string recipe = """{"schema_version":1,"engine":"mw3-re","purpose":"planning-defaults","options":{"renderer":"vulkan-wsi","width":1280,"height":720,"aa":"fxaa","af":16,"window_mode":"windowed","render_thread":true,"lighting":"off"}}""";
+        var manifestPath = Path.Combine(root, "runtime.json");
+        var profilePath = Path.Combine(root, "profile.json");
+        var manifestBytes = File.ReadAllBytes(manifestPath);
+        var profileBytes = File.ReadAllBytes(profilePath);
+        var descriptor = JsonNode.Parse(manifestBytes)!.AsObject();
+        var dataRoot = Path.Combine(Path.GetTempPath(), "MW3 profile planning " + Guid.NewGuid().ToString("N"));
+        var defaults = new Mw3RePlanningOptions();
+        int accepted = 0, rejected = 0, plannerRejected = 0;
+        Mw3ReRuntimeContract Fresh(byte[] bytes)
+        {
+            File.WriteAllBytes(profilePath, bytes);
+            var candidate = descriptor.DeepClone().AsObject();
+            candidate["files"]!["profile.json"] = new JsonObject
+            {
+                ["bytes"] = bytes.Length,
+                ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes))
+            };
+            File.WriteAllText(manifestPath, GameRunner.SerializeLaunchProfile(candidate));
+            return Mw3ReRuntimeContract.ReadStructure(root);
+        }
+        string Changed(string field, string rawValue, bool atRoot = false)
+        {
+            var candidate = JsonNode.Parse(recipe)!.AsObject();
+            var target = atRoot ? candidate : candidate["options"]!.AsObject();
+            target[field] = JsonNode.Parse(rawValue);
+            return candidate.ToJsonString();
+        }
+        Mw3RePlanningOptions ReadOnly(Mw3ReRuntimeContract contract)
+        {
+            var before = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .ToDictionary(path => path, path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+            try { return Mw3RePlanningProfile.Read(contract); }
+            finally
+            {
+                var after = Directory.GetFiles(root, "*", SearchOption.AllDirectories);
+                if (after.Length != before.Count ||
+                    before.Any(pair => !File.Exists(pair.Key) ||
+                        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pair.Key))) != pair.Value))
+                    throw new Exception("Planning profile reading changed its input closure.");
+            }
+        }
+        void RejectContract(Mw3ReRuntimeContract contract)
+        {
+            try { ReadOnly(contract); }
+            catch (InvalidDataException error)
+            {
+                if (error.InnerException != null || error.ToString().Contains(sentinel, StringComparison.Ordinal))
+                    throw new Exception("Planning profile error disclosed private content or parser details.");
+                rejected++;
+                return;
+            }
+            throw new Exception("Invalid planning profile was accepted.");
+        }
+        void RejectText(string raw) => RejectContract(Fresh(Encoding.UTF8.GetBytes(raw)));
+        void RoundTrip(byte[] raw, Mw3RePlanningOptions expected, string aa, bool blocked = false)
+        {
+            var contract = Fresh(raw);
+            var options = ReadOnly(contract);
+            if (options.Assets.Count != 0 || options with { Assets = expected.Assets } != expected)
+                throw new Exception("Planning profile silently changed a typed option.");
+            var request = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "profile-a");
+            var wire = JsonNode.Parse(request)!;
+            var original = JsonNode.Parse(new UTF8Encoding(false, true).GetString(
+                raw.AsSpan(raw.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf }) ? 3 : 0)))!;
+            foreach (var field in new[] { "renderer", "width", "height", "aa", "af", "window_mode", "render_thread", "lighting" })
+                if (!JsonNode.DeepEquals(wire[field], original["options"]![field]))
+                    throw new Exception("Planning projection substituted a packaged option.");
+            var planned = RunMw3RePlanner(request);
+            if (blocked)
+            {
+                if (planned["ok"]!.GetValue<bool>() || planned["argv"] != null ||
+                    planned["reasons"]!.AsArray().Count == 0)
+                    throw new Exception("Unsupported saved options produced argv.");
+            }
+            else
+            {
+                var expectedWrite = Path.Combine(dataRoot, "mw3-re", "profiles", "profile-a");
+                var argv = new[] { contract.Executable, "--install", "D:/Original MW3", "--write-dir", expectedWrite,
+                    "--cc-vulkan-wsi", "--window", expected.Width + "x" + expected.Height, "--windowed",
+                    "--cc-aa", aa, "--cc-af", expected.AnisotropicFiltering.ToString(),
+                    "--cc-render-thread", expected.RenderThread ? "1" : "0", "--cc-lighting",
+                    original["options"]!["lighting"]!.GetValue<string>() };
+                if (!planned["ok"]!.GetValue<bool>() ||
+                    !planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).SequenceEqual(argv) ||
+                    planned["working_directory"]!.GetValue<string>() != Path.GetDirectoryName(contract.Executable))
+                    throw new Exception("Packaged planning profile did not reach the actual full argv planner.");
+            }
+            if (!File.ReadAllBytes(profilePath).SequenceEqual(raw) || Directory.Exists(dataRoot))
+                throw new Exception("Planning changed the packaged choices or created user data.");
+            accepted++;
+        }
+        try
+        {
+            RoundTrip(Encoding.UTF8.GetBytes(recipe), defaults, "fxaa");
+            foreach (var (value, choice, argv) in new[]
+            {
+                ("off", Mw3ReAntialiasing.Off, "off"), ("1", Mw3ReAntialiasing.One, "off"),
+                ("fxaa", Mw3ReAntialiasing.Fxaa, "fxaa"), ("2", Mw3ReAntialiasing.Two, "ssaa2"),
+                ("4", Mw3ReAntialiasing.Four, "ssaa4"), ("8", Mw3ReAntialiasing.Eight, "")
+            })
+                RoundTrip(Encoding.UTF8.GetBytes(Changed("aa", JsonSerializer.Serialize(value))),
+                    defaults with { Antialiasing = choice }, argv, choice == Mw3ReAntialiasing.Eight);
+            foreach (var (value, choice) in new[]
+            {
+                ("windowed", Mw3ReWindowMode.Windowed), ("fullscreen", Mw3ReWindowMode.Fullscreen),
+                ("borderless", Mw3ReWindowMode.Borderless)
+            })
+                RoundTrip(Encoding.UTF8.GetBytes(Changed("window_mode", JsonSerializer.Serialize(value))),
+                    defaults with { WindowMode = choice }, "fxaa", choice != Mw3ReWindowMode.Windowed);
+            foreach (var (value, choice) in new[]
+            {
+                ("off", Mw3ReLighting.Off), ("flat", Mw3ReLighting.Flat), ("normal", Mw3ReLighting.Normal)
+            })
+                RoundTrip(Encoding.UTF8.GetBytes(Changed("lighting", JsonSerializer.Serialize(value))),
+                    defaults with { Lighting = choice }, "fxaa");
+            foreach (var value in new[] { false, true })
+                RoundTrip(Encoding.UTF8.GetBytes(Changed("render_thread", value ? "true" : "false")),
+                    defaults with { RenderThread = value }, "fxaa");
+            var alternate = JsonNode.Parse(recipe)!;
+            alternate["options"]!["width"] = 1920;
+            alternate["options"]!["height"] = 1080;
+            alternate["options"]!["af"] = 8;
+            RoundTrip(Encoding.UTF8.GetBytes(alternate.ToJsonString()),
+                defaults with { Width = 1920, Height = 1080, AnisotropicFiltering = 8 }, "fxaa");
+            RoundTrip(new byte[] { 0xef, 0xbb, 0xbf }.Concat(Encoding.UTF8.GetBytes(recipe)).ToArray(), defaults, "fxaa");
+            foreach (var field in new[] { "schema_version", "engine", "purpose", "options" })
+            {
+                var candidate = JsonNode.Parse(recipe)!.AsObject();
+                candidate.Remove(field);
+                RejectText(candidate.ToJsonString());
+            }
+            foreach (var field in new[] { "renderer", "width", "height", "aa", "af", "window_mode", "render_thread", "lighting" })
+            {
+                var candidate = JsonNode.Parse(recipe)!;
+                candidate["options"]!.AsObject().Remove(field);
+                RejectText(candidate.ToJsonString());
+            }
+            foreach (var value in new[] { "0", "2", "true", "\"1\"", "1.0", "1e0", "null" })
+                RejectText(Changed("schema_version", value, atRoot: true));
+            foreach (var field in new[] { "engine", "purpose" })
+                foreach (var value in new[] { JsonSerializer.Serialize(sentinel), "null", "true", "1" })
+                    RejectText(Changed(field, value, atRoot: true));
+            foreach (var value in new[] { "[]", "null", "\"options\"", "1", "true" })
+                RejectText(Changed("options", value, atRoot: true));
+            foreach (var field in new[] { "width", "height", "af" })
+                foreach (var value in new[] { "\"1280\"", "true", "null", "1.5", "1e3", "2147483648" })
+                    RejectText(Changed(field, value));
+            foreach (var field in new[] { "renderer", "aa", "window_mode", "lighting" })
+                foreach (var value in new[] { JsonSerializer.Serialize(sentinel), "null", "true", "1", "[]" })
+                    RejectText(Changed(field, value));
+            foreach (var value in new[] { "1", "\"true\"", "null", "[]" })
+                RejectText(Changed("render_thread", value));
+            RejectText(Changed("extra", JsonSerializer.Serialize(sentinel), atRoot: true));
+            RejectText(Changed("assets", "[]"));
+            foreach (var raw in new[]
+            {
+                recipe[..^1] + ",\"schema_version\":1}",
+                recipe[..^1] + ",\"\\u0065ngine\":\"mw3-re\"}",
+                recipe.Replace("\"width\":1280", "\"width\":1280,\"width\":1280"),
+                Changed("extra", "[{\"value\":1,\"value\":2}]", atRoot: true)
+            }) RejectText(raw);
+            foreach (var raw in new[]
+            {
+                "[]", "null", "{", recipe + ",", recipe.Replace("1280", sentinel), recipe + "/*" + sentinel + "*/"
+            }) RejectText(raw);
+            RejectText(recipe[..^1] + ",\"extra\":" + new string('[', 65) + "0" + new string(']', 65) + "}");
+            foreach (var raw in new[]
+            {
+                Encoding.UTF8.GetBytes(recipe + sentinel).Concat(new byte[] { 0xc3, 0x28 }).ToArray(),
+                Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(recipe + sentinel)).ToArray(),
+                Encoding.UTF32.GetPreamble().Concat(Encoding.UTF32.GetBytes(recipe + sentinel)).ToArray()
+            }) RejectContract(Fresh(raw));
+            foreach (var width in new[] { "1920", "640" })
+            {
+                var pinned = Fresh(Encoding.UTF8.GetBytes(recipe));
+                Fresh(Encoding.UTF8.GetBytes(Changed("width", width)));
+                RejectContract(pinned);
+            }
+            foreach (var (field, value) in new[] { ("width", "0"), ("af", "3") })
+            {
+                var contract = Fresh(Encoding.UTF8.GetBytes(Changed(field, value)));
+                var options = ReadOnly(contract);
+                var planned = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "profile-a"));
+                if (planned["validation_error"]?.GetValue<bool>() != true || planned["argv"] != null)
+                    throw new Exception("The actual planner did not enforce numeric bounds.");
+                plannerRejected++;
+            }
+            if (accepted != 17 || rejected != 92 || plannerRejected != 2)
+                throw new Exception($"Planning profile case count mismatch: {accepted}/{rejected}/{plannerRejected}.");
+            Console.WriteLine($"Pinned planning profiles: {accepted} roundtrips, {rejected} rejections, {plannerRejected} planner-bound controls passed.");
+        }
+        finally
+        {
+            File.WriteAllBytes(profilePath, profileBytes);
+            File.WriteAllBytes(manifestPath, manifestBytes);
+        }
+    }
+
     private static void CheckMw3ReRequestProjection(Mw3ReRuntimeContract contract)
     {
         var dataRoot = Path.Combine(Path.GetTempPath(), "MW3 planned writes " + Guid.NewGuid().ToString("N"));
@@ -451,24 +654,7 @@ static class NativeRuntimeLayoutChecks
         }
         Reject(() => Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "../escape"));
         Reject(() => Mw3ReLaunchRequest.Create(contract, options with { Renderer = (Mw3ReRenderer)99 }, "D:/Original MW3", dataRoot, "pilot-a"));
-        var python = D7VkRunner.FindPythonExecutable(requirePython311: true)
-            ?? throw new Exception("Native planner integration requires Python3.11 or later.");
-        var info = new System.Diagnostics.ProcessStartInfo(python)
-        {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
-        };
-        foreach (var argument in new[] { "-I", "-c",
-            "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('mw3_re_launch',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(json.dumps(m.plan_launch(json.load(sys.stdin))))",
-            Path.Combine(AppContext.BaseDirectory, "mw3_re_launch.py") }) info.ArgumentList.Add(argument);
-        using var child = System.Diagnostics.Process.Start(info) ?? throw new Exception("Python planner test child did not start.");
-        child.StandardInput.Write(json);
-        child.StandardInput.Close();
-        var output = child.StandardOutput.ReadToEnd();
-        var error = child.StandardError.ReadToEnd();
-        child.WaitForExit();
-        if (child.ExitCode != 0) throw new Exception("Actual Python planner rejected projected JSON: " + error);
-        var planned = JsonNode.Parse(output)!;
+        var planned = RunMw3RePlanner(json);
         var expected = new[] { contract.Executable, "--install", "D:/Original MW3", "--write-dir", expectedWrite,
             "--cc-vulkan-wsi", "--window", "1280x720", "--windowed", "--cc-aa", "ssaa2", "--cc-af", "8",
             "--cc-render-thread", "0", "--cc-lighting", "normal", "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é" };
@@ -478,6 +664,28 @@ static class NativeRuntimeLayoutChecks
             throw new Exception("Actual Python argv did not preserve the typed native request.");
         if (Directory.Exists(expectedWrite)) throw new Exception("Planning unexpectedly created a write directory.");
         Console.WriteLine("Typed native JSON -> isolated actual Python argv planner passed; no game process.");
+    }
+
+    private static JsonNode RunMw3RePlanner(string json)
+    {
+        var python = D7VkRunner.FindPythonExecutable(requirePython311: true)
+            ?? throw new Exception("Native planner integration requires Python3.11 or later.");
+        var info = new System.Diagnostics.ProcessStartInfo(python)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "-I", "-c",
+            "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('mw3_re_launch',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\ntry: result=m.plan_launch(json.load(sys.stdin))\nexcept ValueError: result={'validation_error':True}\nprint(json.dumps(result))",
+            Path.Combine(AppContext.BaseDirectory, "mw3_re_launch.py") }) info.ArgumentList.Add(argument);
+        using var child = System.Diagnostics.Process.Start(info) ?? throw new Exception("Python planner test child did not start.");
+        child.StandardInput.Write(json);
+        child.StandardInput.Close();
+        var output = child.StandardOutput.ReadToEnd();
+        var error = child.StandardError.ReadToEnd();
+        child.WaitForExit();
+        if (child.ExitCode != 0) throw new Exception("Actual Python planner rejected projected JSON: " + error);
+        return JsonNode.Parse(output)!;
     }
 
     private static string WithManifestFields(string baseJson, params string[] fields) =>
