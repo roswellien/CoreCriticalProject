@@ -72,48 +72,25 @@ jobs:
           Assert-Unlinked $vswhere
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or @($vs).Count -ne 1 -or -not $vs) { throw 'Missing selected VS installation.' }
-          $bootstrap = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
-          Assert-Unlinked $bootstrap
-          if ($bootstrap -match '[\r\n\x00"&|<>^%!]') { throw 'Unsafe VS bootstrap path.' }
+          # Tool selection needs installed metadata, not a second developer-shell bootstrap.
+          # The Python recipe controls below still qualify the real stripped-environment bootstrap.
+          $toolVersionPath = Join-Path $vs 'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt'
+          Assert-Unlinked $toolVersionPath
+          $toolVersion = (Get-Content -LiteralPath $toolVersionPath -Raw).Trim()
+          if ($toolVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid selected toolset version.' }
+          $dumpbin = Join-Path $vs "VC/Tools/MSVC/$toolVersion/bin/Hostx64/x64/dumpbin.exe"
           $scratch = Join-Path $env:RUNNER_TEMP ('mw34-stage-' + [Guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $scratch | Out-Null
           Assert-Unlinked $scratch
-          $system = Join-Path $env:SystemRoot 'System32'
-          $info = [Diagnostics.ProcessStartInfo]::new((Join-Path $system 'cmd.exe'))
-          $info.UseShellExecute = $false
-          $info.CreateNoWindow = $true
-          $info.RedirectStandardOutput = $true
-          $info.RedirectStandardError = $true
-          $info.Environment.Clear()
-          foreach ($key in @('SystemRoot','WINDIR','SystemDrive','COMSPEC','ProgramFiles','ProgramFiles(x86)','ProgramW6432','ProgramData','OS','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS')) {
-            $value = [Environment]::GetEnvironmentVariable($key)
-            if ($null -ne $value) { $info.Environment[$key] = $value }
-          }
-          $info.Environment['TEMP'] = $scratch
-          $info.Environment['TMP'] = $scratch
-          $info.Environment['PATH'] = "$system;$env:SystemRoot;$system\Wbem;$system\WindowsPowerShell\v1.0"
-          $info.Environment['NoDefaultCurrentDirectoryInExePath'] = '1'
-          $info.Arguments = '/d /s /c ""' + $bootstrap + '" >nul && set"'
-          $child = [Diagnostics.Process]::Start($info)
-          $collected = $child.StandardOutput.ReadToEndAsync()
-          $diagnostics = $child.StandardError.ReadToEndAsync()
-          if (-not $child.WaitForExit(30000)) { $child.Kill($true); throw 'VS bootstrap timed out.' }
-          if ($child.ExitCode -ne 0) { throw 'VS bootstrap failed.' }
-          # Inspect selected tool roots privately; never print the collected environment.
-          $selected = @{}
-          foreach ($line in $collected.GetAwaiter().GetResult() -split '\r?\n') {
-            if ($line -match '^([^=]+)=(.*)$') { $selected[$Matches[1]] = $Matches[2] }
-          }
-          if ($selected['VSCMD_ARG_TGT_ARCH'] -ne 'x64' -or $selected['VSCMD_ARG_HOST_ARCH'] -ne 'x64') { throw 'VS bootstrap was not x64.' }
-          $toolRoot = $selected['VCToolsInstallDir']
-          if (-not $toolRoot -or -not [IO.Path]::GetFullPath($toolRoot).StartsWith($vs + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Selected compiler leaves VS.' }
-          $dumpbin = Join-Path $toolRoot 'bin/Hostx64/x64/dumpbin.exe'
-          $redistVersion = (Get-Content -LiteralPath (Join-Path $vs 'VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt') -Raw).Trim()
+          $redistVersionPath = Join-Path $vs 'VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt'
+          Assert-Unlinked $redistVersionPath
+          $redistVersion = (Get-Content -LiteralPath $redistVersionPath -Raw).Trim()
           if ($redistVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid selected redist version.' }
           $crt = @(Get-ChildItem -LiteralPath (Join-Path $vs "VC/Redist/MSVC/$redistVersion/x64") -Directory | Where-Object Name -match '^Microsoft\.VC\d+\.CRT$')
           if ($crt.Count -ne 1) { throw 'Missing or ambiguous Release CRT root.' }
           Assert-Unlinked $dumpbin
           Assert-Unlinked $crt[0].FullName
+          Write-Host "Selected VS toolset $toolVersion; Release CRT $redistVersion."
           $cmake = Join-Path $vs 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
           $ninja = Join-Path $vs 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
           $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
