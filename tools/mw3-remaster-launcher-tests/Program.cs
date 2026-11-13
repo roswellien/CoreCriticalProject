@@ -85,6 +85,11 @@ if (args.Length == 1 && args[0] == "--runtime-layout-only")
     NativeRuntimeLayoutChecks.Run();
     return;
 }
+if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
+{
+    NativeRuntimeLayoutChecks.RunMw3ReStageA();
+    return;
+}
 if (args.Length == 1 && args[0] == "--content-only")
 {
     ChassisPackChecks.Run();
