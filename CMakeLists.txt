@@ -140,6 +140,9 @@ if(BUILD_TESTING)
     add_test(NAME surface_materials_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_surface_materials.py -v)
     set_tests_properties(surface_materials_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME mw3_re_launch_plan_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_mw3_re_launch.py -v)
+    set_tests_properties(mw3_re_launch_plan_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME owned_visuals_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p "test_owned*.py" -v)
     set_tests_properties(owned_visuals_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

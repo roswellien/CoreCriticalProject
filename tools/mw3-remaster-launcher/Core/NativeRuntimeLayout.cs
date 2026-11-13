@@ -1,5 +1,6 @@
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Reflection.PortableExecutable;
@@ -34,14 +35,74 @@ public sealed record NativeRuntimeLayout(string Root, string Profile, string Coo
         }
     }
 
+    private static void ValidateLegacyRouting(JsonElement document)
+    {
+        if (document.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Legacy routing requires a JSON object.");
+        PackStorage.ValidateUniqueProperties(document);
+        foreach (var property in document.EnumerateObject())
+        {
+            if (property.Name.Equals("engine", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("A legacy runtime cannot declare an explicit engine routing field.");
+            if (property.Name.Equals("schema_version", StringComparison.OrdinalIgnoreCase) &&
+                (property.Name != "schema_version" || property.Value.ValueKind != JsonValueKind.Number ||
+                 !property.Value.TryGetInt32(out var version) || version != 1))
+                throw new InvalidDataException("Unsupported legacy routing schema.");
+            if (property.Name.Equals("native", StringComparison.OrdinalIgnoreCase) &&
+                property.Value.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var binding in property.Value.EnumerateObject())
+                    if (binding.Name.Equals("engine", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("A legacy profile cannot declare native engine routing.");
+            }
+        }
+    }
+
+    internal static JsonObject ParseLegacyProfile(string json)
+    {
+        if (Encoding.UTF8.GetByteCount(json) > PackStorage.MaxJsonBytes)
+            throw new InvalidDataException("Legacy profile JSON is too large.");
+        try
+        {
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 64 });
+            ValidateLegacyRouting(document.RootElement);
+            // Parse this immutable snapshot, never a second file read that could differ.
+            return JsonNode.Parse(json)!.AsObject();
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException("Invalid legacy profile JSON.", error);
+        }
+    }
+
+    internal static string ReadJsonSnapshot(string path)
+    {
+        PackStorage.EnsureNoLinks(path);
+        using var stream = File.OpenRead(path);
+        var buffer = new byte[PackStorage.MaxJsonBytes + 1];
+        var count = 0;
+        while (count < buffer.Length)
+        {
+            var read = stream.Read(buffer, count, buffer.Length - count);
+            if (read == 0) break;
+            count += read;
+        }
+        if (count > PackStorage.MaxJsonBytes) throw new InvalidDataException("Runtime JSON is too large.");
+        using var snapshot = new MemoryStream(buffer, 0, count, false);
+        using var reader = new StreamReader(snapshot, Encoding.UTF8, true);
+        var json = reader.ReadToEnd();
+        if (Encoding.UTF8.GetByteCount(json) > PackStorage.MaxJsonBytes)
+            throw new InvalidDataException("Runtime JSON is too large.");
+        return json;
+    }
+
     public static bool HasPrecompiledRuntime(string applicationDirectory)
     {
         var manifest = Path.Combine(applicationDirectory, "Runtime", "runtime.json");
         if (!File.Exists(manifest)) return false;
         PackStorage.EnsureNoLinks(manifest);
-        if (new FileInfo(manifest).Length > PackStorage.MaxJsonBytes)
-            throw new InvalidDataException("Installed runtime manifest is too large.");
-        using var document = JsonDocument.Parse(File.ReadAllText(manifest));
+        using var document = JsonDocument.Parse(ReadJsonSnapshot(manifest));
+        ValidateLegacyRouting(document.RootElement);
         if (!document.RootElement.TryGetProperty("precompiled_runtime_version", out var version)) return false;
         if (version.GetInt32() != 1) throw new InvalidDataException("Unsupported precompiled runtime version.");
         return true;
@@ -69,10 +130,9 @@ public sealed record NativeRuntimeLayout(string Root, string Profile, string Coo
     {
         var manifestPath = PackStorage.Resolve(root, "runtime.json");
         PackStorage.EnsureNoLinks(manifestPath);
-        if (new FileInfo(manifestPath).Length > PackStorage.MaxJsonBytes)
-            throw new InvalidDataException("Installed runtime manifest is too large.");
-        using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        using var manifest = JsonDocument.Parse(ReadJsonSnapshot(manifestPath));
         var document = manifest.RootElement;
+        ValidateLegacyRouting(document);
         if (document.GetProperty("schema_version").GetInt32() != 1)
             throw new InvalidDataException("Unsupported installed runtime version.");
         var files = document.GetProperty("files");
@@ -108,7 +168,7 @@ public sealed record NativeRuntimeLayout(string Root, string Profile, string Coo
     /// <summary>Resolve only explicitly marked installation paths; preserve numeric flags and user pack choices.</summary>
     public static string ResolveProfile(string json, string root, string? gameDirectory = null)
     {
-        var profile = JsonNode.Parse(json)?.AsObject() ?? throw new InvalidDataException("Empty installed profile.");
+        var profile = ParseLegacyProfile(json);
         JsonNode? Resolve(JsonNode? node)
         {
             if (node is JsonObject obj)

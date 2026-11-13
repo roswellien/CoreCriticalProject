@@ -21,7 +21,225 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Read-LegacyJsonString {
+    param([string]$Json, [ref]$Position, [bool]$DecodeName)
+    $length = $Json.Length
+    $index = [int]$Position.Value
+    $quote = $Json[$index]
+    $index++
+    # Values need lexical boundaries only; never retain their contents.
+    if (-not $DecodeName) {
+        while ($index -lt $length) {
+            if ($Json[$index] -ceq $quote) { $Position.Value = $index + 1; return '' }
+            if ($Json[$index] -ceq '\') { $index++ }
+            $index++
+        }
+        throw 'Invalid legacy JSON string'
+    }
+    $coreRuntime = $PSVersionTable.PSEdition -ne 'Desktop'
+    $name = [Text.StringBuilder]::new()
+    while ($index -lt $length) {
+        $character = $Json[$index]
+        if ($character -ceq $quote) {
+            $Position.Value = $index + 1
+            if ($coreRuntime) { return $name.ToString() }
+            # Desktop's converter replaces unpaired units after unescaping.
+            $decoded = $name.ToString()
+            $legacyName = [Text.StringBuilder]::new()
+            for ($unitIndex = 0; $unitIndex -lt $decoded.Length; $unitIndex++) {
+                $unit = $decoded[$unitIndex]
+                if ([char]::IsHighSurrogate($unit) -and $unitIndex + 1 -lt $decoded.Length -and
+                    [char]::IsLowSurrogate($decoded[$unitIndex + 1])) {
+                    [void]$legacyName.Append($unit)
+                    $unitIndex++
+                    [void]$legacyName.Append($decoded[$unitIndex])
+                } elseif ([char]::IsSurrogate($unit)) {
+                    [void]$legacyName.Append([char]0xFFFD)
+                } else { [void]$legacyName.Append($unit) }
+            }
+            return $legacyName.ToString()
+        }
+        if ($character -cne '\') {
+            [void]$name.Append($character)
+            $index++
+            continue
+        }
+        $index++
+        if ($index -ge $length) { throw 'Invalid legacy JSON string' }
+        $escape = $Json[$index]
+        if ($escape -ceq 'u') {
+            if ($index + 4 -ge $length) { throw 'Invalid legacy JSON string' }
+            $unit = 0
+            for ($digit = 1; $digit -le 4; $digit++) {
+                $hex = [int][char]$Json[$index + $digit]
+                if ($hex -ge 48 -and $hex -le 57) { $value = $hex - 48 }
+                elseif ($hex -ge 65 -and $hex -le 70) { $value = $hex - 55 }
+                elseif ($hex -ge 97 -and $hex -le 102) { $value = $hex - 87 }
+                else { throw 'Invalid legacy JSON string' }
+                $unit = $unit * 16 + $value
+            }
+            $index += 5
+            if ($coreRuntime -and [char]::IsHighSurrogate([char]$unit)) {
+                $paired = $false
+                if ($index + 5 -lt $length -and $Json[$index] -ceq '\' -and $Json[$index + 1] -ceq 'u') {
+                    $low = 0
+                    $valid = $true
+                    for ($digit = 2; $digit -le 5; $digit++) {
+                        $hex = [int][char]$Json[$index + $digit]
+                        if ($hex -ge 48 -and $hex -le 57) { $value = $hex - 48 }
+                        elseif ($hex -ge 65 -and $hex -le 70) { $value = $hex - 55 }
+                        elseif ($hex -ge 97 -and $hex -le 102) { $value = $hex - 87 }
+                        else { $valid = $false; break }
+                        $low = $low * 16 + $value
+                    }
+                    if ($valid -and [char]::IsLowSurrogate([char]$low)) {
+                        [void]$name.Append([char]$unit)
+                        [void]$name.Append([char]$low)
+                        $index += 6
+                        $paired = $true
+                    }
+                }
+                if (-not $paired) { [void]$name.Append([char]0xFFFD) }
+            } elseif ($coreRuntime -and [char]::IsLowSurrogate([char]$unit)) {
+                [void]$name.Append([char]0xFFFD)
+            } else { [void]$name.Append([char]$unit) }
+            continue
+        }
+        switch -CaseSensitive ($escape) {
+            '"' { [void]$name.Append('"') }
+            "'" { [void]$name.Append("'") }
+            '\' { [void]$name.Append('\') }
+            '/' { [void]$name.Append('/') }
+            'b' { [void]$name.Append([char]8) }
+            'f' { [void]$name.Append([char]12) }
+            'n' { [void]$name.Append([char]10) }
+            'r' { [void]$name.Append([char]13) }
+            't' { [void]$name.Append([char]9) }
+            default { throw 'Invalid legacy JSON string' }
+        }
+        $index++
+    }
+    throw 'Invalid legacy JSON string'
+}
+
+function Assert-UniqueLegacyJson {
+    param([string]$Json)
+    if ([Text.Encoding]::UTF8.GetByteCount($Json) -gt 2097152) { throw 'Legacy profile JSON is too large' }
+    $frames = [Collections.Generic.List[object]]::new()
+    $index = 0
+    while ($index -lt $Json.Length) {
+        $character = $Json[$index]
+        if ([char]::IsWhiteSpace($character)) { $index++; continue }
+        if ($character -ceq '/' -and $index + 1 -lt $Json.Length) {
+            if ($Json[$index + 1] -ceq '/') {
+                $index += 2
+                while ($index -lt $Json.Length -and $Json[$index] -notin @([char]10, [char]13)) { $index++ }
+                continue
+            }
+            if ($Json[$index + 1] -ceq '*') {
+                $index += 2
+                while ($index + 1 -lt $Json.Length -and -not ($Json[$index] -ceq '*' -and $Json[$index + 1] -ceq '/')) { $index++ }
+                if ($index + 1 -ge $Json.Length) { throw 'Invalid legacy JSON comment' }
+                $index += 2
+                continue
+            }
+        }
+        $frame = if ($frames.Count) { $frames[$frames.Count - 1] } else { $null }
+        if ($null -ne $frame -and $frame.Kind -ceq '{' -and $frame.Phase -ceq 'key' -and $character -cne '}') {
+            if ($character -ceq '"' -or $character -ceq "'") {
+                $name = Read-LegacyJsonString $Json ([ref]$index) $true
+            } else {
+                $start = $index
+                while ($index -lt $Json.Length -and -not [char]::IsWhiteSpace($Json[$index]) -and
+                    -not '{}[]():,\"''/'.Contains([string]$Json[$index])) { $index++ }
+                if ($index -eq $start) { throw 'Invalid legacy JSON member' }
+                $name = $Json.Substring($start, $index - $start)
+            }
+            if (-not $frame.Names.Add($name)) { throw 'Duplicate JSON property' }
+            $frame.Phase = 'colon'
+            continue
+        }
+        if ($null -ne $frame -and $frame.Kind -ceq '{' -and $frame.Phase -ceq 'colon') {
+            if ($character -cne ':') { throw 'Invalid legacy JSON member' }
+            $frame.Phase = 'value'
+            $index++
+            continue
+        }
+        if ($character -ceq '"' -or $character -ceq "'") {
+            $null = Read-LegacyJsonString $Json ([ref]$index) $false
+            continue
+        }
+        if ('{[('.Contains([string]$character)) {
+            if ($frames.Count -ge 64) { throw 'Legacy profile JSON exceeds depth limit' }
+            $names = $null
+            if ($character -ceq '{') { $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
+            $frames.Add([pscustomobject]@{Kind=$character; Phase='key'; Names=$names})
+        } elseif ('}])'.Contains([string]$character)) {
+            $expected = switch ($character) { '}' { '{' } ']' { '[' } ')' { '(' } }
+            if ($null -eq $frame -or $frame.Kind -cne $expected -or $frame.Phase -ceq 'colon') {
+                throw 'Invalid legacy JSON container'
+            }
+            $frames.RemoveAt($frames.Count - 1)
+        } elseif ($character -ceq ',' -and $null -ne $frame -and $frame.Kind -ceq '{') {
+            $frame.Phase = 'key'
+        }
+        $index++
+    }
+    if ($frames.Count) { throw 'Invalid legacy JSON container' }
+}
+
+function Read-LegacyProfileSnapshot {
+    param([string]$Path)
+    $limit = 2097152
+    $buffer = New-Object byte[] ($limit + 1)
+    $count = 0
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        while ($count -lt $buffer.Length) {
+            $read = $stream.Read($buffer, $count, $buffer.Length - $count)
+            if ($read -le 0) { break }
+            $count += $read
+        }
+        if ($count -gt $limit) { throw 'Legacy profile snapshot is too large.' }
+    } finally { $stream.Dispose() }
+    $memory = [IO.MemoryStream]::new($buffer, 0, $count, $false)
+    try {
+        $reader = [IO.StreamReader]::new($memory, [Text.Encoding]::UTF8, $true)
+        try { $text = $reader.ReadToEnd() }
+        finally { $reader.Dispose() }
+    } finally { $memory.Dispose() }
+    if ([Text.Encoding]::UTF8.GetByteCount($text) -gt $limit) { throw 'Legacy profile snapshot is too large.' }
+    return $text
+}
+
+function ConvertFrom-LegacyLaunchProfile {
+    param([string]$Json)
+    Assert-UniqueLegacyJson $Json
+    try { $config = ConvertFrom-Json -InputObject $Json }
+    catch { throw [IO.InvalidDataException]::new('Invalid legacy profile JSON') }
+    if ($config -isnot [System.Management.Automation.PSCustomObject]) {
+        throw 'Legacy routing requires a JSON object'
+    }
+    foreach ($property in $config.PSObject.Properties) {
+        if ($property.Name -ieq 'engine') { throw 'Legacy routing rejects an explicit engine' }
+        if ($property.Name -ieq 'schema_version' -and
+            ($property.Name -cne 'schema_version' -or
+             ($property.Value -isnot [int] -and $property.Value -isnot [long]) -or $property.Value -ne 1)) {
+            throw 'Unsupported legacy routing schema'
+        }
+        if ($property.Name -ieq 'native') {
+            foreach ($binding in $property.Value.PSObject.Properties) {
+                if ($binding.Name -ieq 'engine') { throw 'Legacy routing rejects native.engine' }
+            }
+        }
+    }
+    return $config
+}
+
 $taskRoot = if ($RuntimeRoot) { [IO.Path]::GetFullPath($RuntimeRoot) } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+$profilePath = if ([IO.Path]::IsPathRooted($Profile)) { $Profile } else { Join-Path $taskRoot $Profile }
+$config = ConvertFrom-LegacyLaunchProfile (Read-LegacyProfileSnapshot $profilePath)
 Set-Location $taskRoot
 $active = Get-CimInstance Win32_Process | Where-Object {$_.Name -in @('entry_commandline.exe','Mech3.exe')}
 if ($active) {
@@ -29,7 +247,6 @@ if ($active) {
 }
 
 # Profile bindings affect this coordinator and its child, never machine/user settings.
-$config = Get-Content -LiteralPath $Profile -Raw | ConvertFrom-Json
 if ($config.native.runtime_environment) {
     foreach ($binding in $config.native.runtime_environment.PSObject.Properties) {
         if ($binding.Name -notlike 'MW34_*') {
