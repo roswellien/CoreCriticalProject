@@ -56,9 +56,23 @@ target_sources(mw3platform_nonwin_check PRIVATE ${MW3_CC_SHADER_HEADERS})
 
 add_executable(mw3ccvulkan_checks adapter_checks.cpp platform_portable_contract.cpp)
 
+# The Scene type needs C++20, while existing adapter fixtures intentionally use
+# C++17 filesystem strings. Keep the pure slot controls in their own check TU.
+add_library(mw3scene_binding_slot_checks OBJECT scene_binding_slot_checks.cpp)
+target_compile_features(mw3scene_binding_slot_checks PRIVATE cxx_std_20)
+target_compile_definitions(mw3scene_binding_slot_checks PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_include_directories(mw3scene_binding_slot_checks PRIVATE
+  "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" "${MW3_VULKAN_HEADERS}" . platform renderer "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(mw3scene_binding_slot_checks PRIVATE SDL3::SDL3)
+if(MSVC)
+  target_compile_options(mw3scene_binding_slot_checks PRIVATE /EHsc)
+endif()
+add_dependencies(mw3scene_binding_slot_checks mw3_cc_shaders)
+target_sources(mw3scene_binding_slot_checks PRIVATE ${MW3_CC_SHADER_HEADERS})
+
 target_compile_definitions(mw3ccvulkan_checks PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(mw3platform_nonwin_check PRIVATE SDL3::SDL3)
-target_link_libraries(mw3ccvulkan_checks PRIVATE mw3sdl mw3platform_nonwin_check)
+target_link_libraries(mw3ccvulkan_checks PRIVATE mw3sdl mw3platform_nonwin_check mw3scene_binding_slot_checks)
 target_include_directories(mw3ccvulkan_checks PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" "${MW3_VULKAN_HEADERS}" . platform renderer "${CMAKE_CURRENT_BINARY_DIR}")
 if(MSVC)
   target_compile_options(mw3ccvulkan_checks PRIVATE /EHsc)
@@ -122,6 +136,8 @@ add_test(NAME mw3ccvulkan_material_ssaa COMMAND mw3ccvulkan_checks --wsi --mater
 
 add_test(NAME mw3ccvulkan_thread_dxgi COMMAND mw3ccvulkan_checks --render-thread)
 add_test(NAME mw3ccvulkan_thread_wsi COMMAND mw3ccvulkan_checks --render-thread --wsi)
+add_test(NAME mw3ccvulkan_scene_bindings_wsi COMMAND mw3ccvulkan_checks --wsi --scene-bindings)
+add_test(NAME mw3ccvulkan_scene_bindings_thread COMMAND mw3ccvulkan_checks --render-thread --wsi --scene-bindings)
 add_test(NAME mw3ccvulkan_thread_geometry COMMAND mw3ccvulkan_checks --render-thread --wsi --geometry)
 add_test(NAME mw3ccvulkan_thread_material COMMAND mw3ccvulkan_checks --render-thread --wsi --materials --quality fxaa)
 add_test(NAME mw3ccvulkan_ultrawide_dxgi COMMAND mw3ccvulkan_checks --ultrawide)

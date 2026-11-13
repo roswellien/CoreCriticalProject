@@ -1,6 +1,15 @@
 public:
 void flush() override {
     if (scene_.order.empty()) {
+        if (!scene_.draws.empty() || !scene_.clears.empty() ||
+            !scene_.vertices.empty())
+          throw std::runtime_error(
+              "Command-empty producer Scene retains draw or clear work");
+        // A wholly clipped producer may bind resources without emitting a
+        // command. No packet owns those references, so discard them before a
+        // texture update/release while retaining this view's other state.
+        scene_.textures.clear();
+        invalidate_scene_bindings();
         return;
     }
     if (!local_active_)
@@ -45,8 +54,7 @@ void flush() override {
         scene_ = std::move(recycled_scenes_.back());
         recycled_scenes_.pop_back();
       }
-      for (auto &entry : textures_)
-        entry.scene_index = entry.sharp_index = no_binding;
+      invalidate_scene_bindings();
       return;
     }
     if (worker_) {
@@ -76,11 +84,17 @@ void flush() override {
         renderer_->render(scene_, initialize, false);
         recycle_scene(scene_);
     }
-    for (auto &entry : textures_)
-        entry.scene_index = entry.sharp_index = no_binding;
+    invalidate_scene_bindings();
 }
 
 private:
+  void invalidate_scene_bindings() {
+    // Both slots name entries in exactly one producer Scene. Worker-owned
+    // packets and ordered upload receipts have separate lifetimes.
+    for (auto &entry : textures_)
+      entry.scene_index = entry.sharp_index = no_binding;
+  }
+
   struct PendingLocalPacket {
     std::shared_ptr<vk::Scene> packet;
     bool initialize;
@@ -123,8 +137,21 @@ private:
     if (scene_.order.empty()) {
       std::lock_guard<std::mutex> lock(recycle_mutex_);
       if (!recycled_scenes_.empty()) {
-        scene_ = std::move(recycled_scenes_.back());
+        if (!scene_.draws.empty() || !scene_.clears.empty() ||
+            !scene_.vertices.empty())
+          throw std::runtime_error(
+              "Command-empty producer Scene retains draw or clear work");
+        // Adopt capacity, not the recycled packet's reset view. A clipped
+        // batch may already have established this view's extent/light state.
+        auto &recycled = recycled_scenes_.back();
+        scene_.textures.clear();
+        scene_.vertices.swap(recycled.vertices);
+        scene_.draws.swap(recycled.draws);
+        scene_.textures.swap(recycled.textures);
+        scene_.order.swap(recycled.order);
+        scene_.clears.swap(recycled.clears);
         recycled_scenes_.pop_back();
+        invalidate_scene_bindings();
       }
     }
   }

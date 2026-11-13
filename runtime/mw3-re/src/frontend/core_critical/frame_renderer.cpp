@@ -319,6 +319,13 @@ public:
     if (worker_)
       worker_->drain();
   }
+  SceneBindingStatistics scene_binding_statistics() override {
+    if (worker_)
+      worker_->drain();
+    std::lock_guard<std::mutex> lock(recycle_mutex_);
+    return {true, scene_.textures.size(), scene_.order.size(),
+            scene_.draws.size(), recycled_scenes_.size()};
+  }
   QualityStatistics quality_statistics() const override {
     if (worker_)
       worker_->drain();
@@ -1246,6 +1253,7 @@ private:
       window_bound_ = false;
       resident_width_ = resident_height_ = 0;
       scene_ = {};
+      invalidate_scene_bindings();
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
@@ -1290,13 +1298,25 @@ private:
     if (entry.pixels.empty()) {
       throw std::runtime_error("mw3-re draw references a released texture");
     }
+    const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
     unsigned &index = sharp ? entry.sharp_index : entry.scene_index;
     if (index != no_binding) {
+      if (!scene_.texture_slot_matches(index, key, entry.version, entry.width,
+                                      entry.height)) {
+        throw std::runtime_error(
+            "Producer Scene texture binding mismatch: handle=" +
+            std::to_string(handle) + " sharp=" + std::to_string(sharp) +
+            " slot=" + std::to_string(index) +
+            " textures=" + std::to_string(scene_.textures.size()) +
+            " key=" + std::to_string(key) +
+            " version=" + std::to_string(entry.version) +
+            " extent=" + std::to_string(entry.width) + "x" +
+            std::to_string(entry.height));
+      }
       return index;
     }
     const auto w = entry.width;
     const auto h = entry.height;
-    const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
     vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {},
                        {}};
     const auto current = submitted_textures_.find(ref.key);
