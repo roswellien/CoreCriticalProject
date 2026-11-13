@@ -40,8 +40,10 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
   };
   const auto camera = matrix(context.model_to_camera),
              world = matrix(context.model_to_world);
+  const auto shadow_revision = advance_shadow_source(
+      reinterpret_cast<std::uintptr_t>(context.node));
   if (geometry_mode_ == cc::geometry::Mode::cpu_reference) {
-    emit_reference_geometry(*source, materials, context, camera, world, fog);
+    emit_reference_geometry(*source, materials, context, camera, world, fog, shadow_revision);
     ++geometry_statistics_.submitted_models;
     return cc::geometry::Submission::submitted;
   }
@@ -76,6 +78,9 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
   }
   auto instance = std::make_shared<vk::ModelInstance>();
   instance->geometry = cached.geometry;
+  // Opaque producer identity only; workers never dereference the node.
+  instance->shadow_source = reinterpret_cast<std::uintptr_t>(context.node);
+  instance->shadow_revision = shadow_revision;
   instance->source = source;
   instance->gpu_vertices = true;
   instance->camera = matrix_rows(camera);
