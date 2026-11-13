@@ -165,10 +165,182 @@ static class NativeRuntimeLayoutChecks
             RejectLegacyJson("HasPrecompiledRuntime size", "large", () => NativeRuntimeLayout.HasPrecompiledRuntime(app));
             File.WriteAllText(manifestPath, baseJson);
             CheckLegacyProfileRouting(root);
+            CheckMw3ReIntegrityContract();
             Console.WriteLine("MW3-RE stage A installed-descriptor engine routing checks passed.");
         }
         finally { Directory.Delete(app, true); }
     }
+    private static void CheckMw3ReIntegrityContract()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "MW3 integrity contract " + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "bin"));
+        try
+        {
+            File.Copy(Path.Combine(AppContext.BaseDirectory, "LauncherChecks.exe"), Path.Combine(root, "bin", "mw3.exe"));
+            File.WriteAllText(Path.Combine(root, "profile.json"), "{\"authored\":true}");
+            File.WriteAllText(Path.Combine(root, "support.txt"), "authored support closure");
+            var pins = new JsonObject();
+            foreach (var relative in new[] { "bin/mw3.exe", "profile.json", "support.txt" })
+            {
+                var bytes = File.ReadAllBytes(Path.Combine(root, relative));
+                pins[relative] = new JsonObject { ["bytes"] = bytes.Length, ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) };
+            }
+            var descriptor = new JsonObject
+            {
+                ["schema_version"] = 2, ["engine"] = "mw3-re",
+                ["roles"] = new JsonObject { ["executable"] = "bin/mw3.exe", ["profile"] = "profile.json" },
+                ["dependencies"] = new JsonArray("support.txt"), ["files"] = pins,
+                ["provenance"] = new JsonObject { ["source_commit"] = new string('a', 40), ["build_id"] = "authored-build", ["builder"] = "fixture" },
+                ["capabilities"] = new JsonObject { ["authored-capability"] = new JsonArray(1, 2) }
+            };
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
+            var before = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .ToDictionary(path => path, path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+            var type = typeof(Mw3ReRuntimeContract);
+            var contract = Mw3ReRuntimeContract.ReadStructure(root);
+            if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
+                throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
+            if (Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length != before.Count ||
+                before.Any(pair => !File.Exists(pair.Key) || Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pair.Key))) != pair.Value))
+                throw new Exception("Integrity reading changed its input closure.");
+            if (!type.IsSealed || type.GetConstructors().Length != 0 ||
+                type.GetProperties().Any(property => property.SetMethod != null))
+                throw new Exception("Integrity snapshot exposes a mutable/publicly constructible interface.");
+            void RejectMutation(Action mutate)
+            {
+                try { mutate(); }
+                catch (NotSupportedException) { return; }
+                throw new Exception("Integrity snapshot exposed a mutable collection.");
+            }
+            RejectMutation(() => ((IDictionary<string, string>)contract.Roles)["profile"] = "changed.json");
+            RejectMutation(() => ((IList<string>)contract.Dependencies).Clear());
+            RejectMutation(() => ((IList<int>)contract.Capabilities["authored-capability"]).Add(7));
+            void RejectDescriptor(Action<JsonObject> change, string reason = "")
+            {
+                var candidate = descriptor.DeepClone().AsObject();
+                change(candidate);
+                File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(candidate));
+                try { Mw3ReRuntimeContract.ReadStructure(root); }
+                catch (InvalidDataException invalid) when (invalid.Message.Contains(reason, StringComparison.OrdinalIgnoreCase)) { return; }
+                throw new Exception("Invalid native integrity descriptor accepted; expected " + reason);
+            }
+            foreach (var change in new Action<JsonObject>[]
+            {
+                json => json["schema_version"] = 1,
+                json => json["schema_version"] = true,
+                json => json["engine"] = "legacy",
+                json => json["extra"] = 1,
+                json => json.Remove("engine"),
+                json => json["roles"]!["extra"] = "support.txt",
+                json => json["roles"]!.AsObject().Remove("profile"),
+                json => json["roles"]!["profile"] = "bin/mw3.exe",
+                json => json["roles"]!["profile"] = "Profile.json",
+                json => json["roles"]!["profile"] = "../escape.json",
+                json => json["roles"]!["profile"] = "C:/escape.json",
+                json => json["roles"]!["coordinator"] = "support.txt",
+                json => json["dependencies"] = new JsonArray("profile.json"),
+                json => json["dependencies"] = new JsonArray("support.txt", "SUPPORT.TXT"),
+                json => json["files"]!.AsObject().Remove("support.txt"),
+                json => json["files"]!["SUPPORT.TXT"] = json["files"]!["support.txt"]!.DeepClone(),
+                json => json["files"]!["runtime.json"] = json["files"]!["support.txt"]!.DeepClone(),
+                json => json["files"]!["other.txt"] = json["files"]!["support.txt"]!.DeepClone(),
+                json => json["files"]!["support.txt"]!["extra"] = 1,
+                json => json["files"]!["support.txt"]!["bytes"] = true,
+                json => json["files"]!["support.txt"]!["bytes"] = 0,
+                json => json["files"]!["support.txt"]!["bytes"] = 4294967297L,
+                json => json["files"]!["support.txt"]!["sha256"] = "wrong",
+                json => json["provenance"]!["extra"] = "fixture",
+                json => json["provenance"]!["source_commit"] = new string('A', 40),
+                json => json["provenance"]!["build_id"] = "NUL",
+                json => json["capabilities"]!["authored-capability"] = new JsonArray(1, 1),
+                json => json["capabilities"]!["authored-capability"] = new JsonArray(0),
+                json => json["capabilities"]!["authored-capability"] = new JsonArray(true),
+                json => json["capabilities"]!["BAD"] = new JsonArray(1)
+            }) RejectDescriptor(change);
+            RejectDescriptor(json => json["capabilities"]!["authored-capability"] = new JsonArray(Enumerable.Range(1, 17).Select(value => (JsonNode)JsonValue.Create(value)).ToArray()));
+            RejectDescriptor(json =>
+            {
+                var excessive = new JsonObject();
+                for (var i = 0; i < 65; i++) excessive["cap-" + i] = new JsonArray(1);
+                json["capabilities"] = excessive;
+            });
+            RejectDescriptor(json =>
+            {
+                var excessive = new JsonObject();
+                for (var i = 0; i < 20001; i++) excessive["f" + i] = new JsonObject { ["bytes"] = 1, ["sha256"] = new string('0', 64) };
+                json["files"] = excessive;
+            });
+            RejectDescriptor(json => json["files"]!["support.txt"]!["sha256"] = new string('0', 64), "hash");
+            // Quota rejection must precede opening the deliberately absent payload.
+            RejectDescriptor(json =>
+            {
+                json["dependencies"] = new JsonArray("absent.bin");
+                json["files"]!.AsObject().Remove("support.txt");
+                json["files"]!["absent.bin"] = new JsonObject { ["bytes"] = 4294967296L, ["sha256"] = new string('0', 64) };
+            }, "size");
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
+            var emptyCapabilities = descriptor.DeepClone().AsObject();
+            emptyCapabilities["capabilities"] = new JsonObject();
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(emptyCapabilities));
+            if (Mw3ReRuntimeContract.ReadStructure(root).Capabilities.Count != 0)
+                throw new Exception("Integrity reader manufactured empty capability declarations.");
+            var badExecutable = File.ReadAllBytes(Path.Combine(root, "bin", "mw3.exe"));
+            var originalExecutable = badExecutable.ToArray();
+            badExecutable[BitConverter.ToInt32(badExecutable, 60) + 23] |= 0x20;
+            File.WriteAllBytes(Path.Combine(root, "bin", "mw3.exe"), badExecutable);
+            RejectDescriptor(json => json["files"]!["bin/mw3.exe"]!["sha256"] = Convert.ToHexString(SHA256.HashData(badExecutable)), "executable");
+            File.WriteAllBytes(Path.Combine(root, "bin", "mw3.exe"), originalExecutable);
+            var text = GameRunner.SerializeLaunchProfile(descriptor);
+            foreach (var raw in new[] { text[..^1] + ",\"schema_version\":2}", text[..^1] + ",}", "[]" })
+            {
+                File.WriteAllText(Path.Combine(root, "runtime.json"), raw);
+                Reject(() => Mw3ReRuntimeContract.ReadStructure(root));
+            }
+            File.WriteAllText(Path.Combine(root, "runtime.json"), text);
+            Reject(() => NativeRuntimeLayout.ReadRoot(root));
+            var paired = descriptor.DeepClone().AsObject();
+            foreach (var role in new[] { "coordinator", "python" })
+            {
+                var relative = role + ".fixture";
+                File.WriteAllText(Path.Combine(root, relative), "authored optional transport bytes");
+                var bytes = File.ReadAllBytes(Path.Combine(root, relative));
+                paired["roles"]![role] = relative;
+                paired["files"]![relative] = new JsonObject { ["bytes"] = bytes.Length, ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) };
+            }
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(paired));
+            Mw3ReRuntimeContract.ReadStructure(root);
+            File.WriteAllText(Path.Combine(root, "runtime.json"), text);
+            var linkTarget = Directory.CreateDirectory(Path.Combine(root, "target")).FullName;
+            File.Copy(Path.Combine(root, "support.txt"), Path.Combine(linkTarget, "support.txt"));
+            var link = Path.Combine(root, "linked");
+            var junction = new System.Diagnostics.ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            foreach (var argument in new[] { "/c", "mklink", "/J", link, linkTarget }) junction.ArgumentList.Add(argument);
+            using (var process = System.Diagnostics.Process.Start(junction) ?? throw new Exception("Junction control did not start."))
+            {
+                var output = process.StandardOutput.ReadToEnd();
+                var error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                if (process.ExitCode != 0) throw new Exception("Required junction control unavailable: " + error + output);
+            }
+            try
+            {
+                RejectDescriptor(json =>
+                {
+                    json["dependencies"] = new JsonArray("linked/support.txt");
+                    json["files"]!["linked/support.txt"] = json["files"]!["support.txt"]!.DeepClone();
+                    json["files"]!.AsObject().Remove("support.txt");
+                }, "link");
+            }
+            finally { Directory.Delete(link); }
+            Console.WriteLine("Native integrity snapshot: schema, closure, hash, bounds and immutable-interface controls passed.");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static string WithManifestFields(string baseJson, params string[] fields) =>
         fields.Length == 0 ? baseJson : baseJson[..^1] + "," + string.Join(",", fields) + "}";
 
