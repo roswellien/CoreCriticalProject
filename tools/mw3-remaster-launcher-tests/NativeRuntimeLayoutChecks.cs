@@ -1,4 +1,6 @@
 using System.IO;
+using System.Reflection;
+using System.Text;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -199,6 +201,7 @@ static class NativeRuntimeLayoutChecks
             var type = typeof(Mw3ReRuntimeContract);
             var contract = Mw3ReRuntimeContract.ReadStructure(root);
             CheckMw3ReRequestProjection(contract);
+            CheckPinnedProfileSnapshot(root);
             if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
                 throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
             if (Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length != before.Count ||
@@ -340,6 +343,81 @@ static class NativeRuntimeLayoutChecks
             Console.WriteLine("Native integrity snapshot: schema, closure, hash, bounds and immutable-interface controls passed.");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void CheckPinnedProfileSnapshot(string root)
+    {
+        const string sentinel = "AUTHORED_PRIVATE_SENTINEL";
+        var method = typeof(Mw3ReRuntimeContract).GetMethod("ReadPinnedPlanningProfile",
+            BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null)
+            ?? throw new Exception("Required pinned profile snapshot method is missing.");
+        var manifestPath = Path.Combine(root, "runtime.json");
+        var manifestBytes = File.ReadAllBytes(manifestPath);
+        var descriptor = JsonNode.Parse(manifestBytes)!.AsObject();
+        var relative = descriptor["roles"]!["profile"]!.GetValue<string>();
+        var profilePath = Path.Combine(root, relative);
+        var profileBytes = File.ReadAllBytes(profilePath);
+        int cases = 0;
+        void SetProfile(byte[] bytes)
+        {
+            File.WriteAllBytes(profilePath, bytes);
+            var candidate = descriptor.DeepClone().AsObject();
+            candidate["files"]![relative] = new JsonObject
+            {
+                ["bytes"] = bytes.Length,
+                ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes))
+            };
+            File.WriteAllText(manifestPath, GameRunner.SerializeLaunchProfile(candidate));
+        }
+        Mw3ReRuntimeContract Fresh(byte[] bytes)
+        {
+            SetProfile(bytes);
+            return Mw3ReRuntimeContract.ReadStructure(root);
+        }
+        string Read(Mw3ReRuntimeContract contract) => (string)method.Invoke(contract, null)!;
+        void RejectSnapshot(Mw3ReRuntimeContract contract)
+        {
+            try { Read(contract); }
+            catch (TargetInvocationException error) when (error.InnerException is InvalidDataException)
+            {
+                if (error.InnerException.ToString().Contains(sentinel, StringComparison.Ordinal))
+                    throw new Exception("Pinned profile error disclosed private content.");
+                cases++;
+                return;
+            }
+            throw new Exception("Invalid pinned profile snapshot was accepted.");
+        }
+        try
+        {
+            var original = Fresh(profileBytes);
+            if (Read(original) != new UTF8Encoding(false, true).GetString(profileBytes))
+                throw new Exception("Pinned profile baseline content changed.");
+            cases++;
+            var valid = Encoding.UTF8.GetBytes("{\"v\":\"" + sentinel + "\"}");
+            var pinned = Fresh(valid);
+            var replacement = valid.ToArray();
+            replacement[replacement.Length - 3] ^= 1;
+            SetProfile(replacement);
+            RejectSnapshot(pinned);
+            pinned = Fresh(valid);
+            SetProfile(Encoding.UTF8.GetBytes("{\"v\":\"different length\"}"));
+            RejectSnapshot(pinned);
+            RejectSnapshot(Fresh(new byte[] { 0xc3, 0x28 }));
+            RejectSnapshot(Fresh(Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes("{}" )).ToArray()));
+            RejectSnapshot(Fresh(Encoding.UTF32.GetPreamble().Concat(Encoding.UTF32.GetBytes("{}")).ToArray()));
+            var bomText = "{\"v\":\"bom\"}";
+            var bom = new byte[] { 0xef, 0xbb, 0xbf }.Concat(Encoding.UTF8.GetBytes(bomText)).ToArray();
+            if (Read(Fresh(bom)) != bomText) throw new Exception("UTF8 BOM snapshot decoding failed.");
+            cases++;
+            RejectSnapshot(Fresh(new byte[2 * 1024 * 1024 + 1]));
+            if (cases != 8) throw new Exception("Pinned profile case count mismatch.");
+            Console.WriteLine($"Pinned profile snapshots: {cases} cases passed.");
+        }
+        finally
+        {
+            File.WriteAllBytes(profilePath, profileBytes);
+            File.WriteAllBytes(manifestPath, manifestBytes);
+        }
     }
 
     private static void CheckMw3ReRequestProjection(Mw3ReRuntimeContract contract)

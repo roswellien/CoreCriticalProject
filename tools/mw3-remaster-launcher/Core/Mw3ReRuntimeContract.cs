@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -10,6 +11,10 @@ namespace MW3RemasterLauncher.Core;
 public sealed class Mw3ReRuntimeContract
 {
     private const long MaxClosureBytes = 4L * 1024 * 1024 * 1024;
+    private const int MaxPlanningProfileBytes = 2 * 1024 * 1024;
+    private readonly string profileRelativePath;
+    private readonly long profileBytes;
+    private readonly string profileSha256;
 
     public string Root { get; }
     public string Executable { get; }
@@ -23,11 +28,15 @@ public sealed class Mw3ReRuntimeContract
 
     private Mw3ReRuntimeContract(string root, Dictionary<string, string> roles,
         List<string> dependencies, Dictionary<string, IReadOnlyList<int>> capabilities,
-        string sourceCommit, string buildId, string builder, Dictionary<string, string> paths)
+        string sourceCommit, string buildId, string builder, Dictionary<string, string> paths,
+        (long Bytes, string Sha256) profilePin)
     {
         Root = root;
         Executable = paths[roles["executable"]];
         Profile = paths[roles["profile"]];
+        profileRelativePath = roles["profile"];
+        profileBytes = profilePin.Bytes;
+        profileSha256 = profilePin.Sha256;
         SourceCommit = sourceCommit;
         BuildId = buildId;
         Builder = builder;
@@ -35,6 +44,51 @@ public sealed class Mw3ReRuntimeContract
         Dependencies = Array.AsReadOnly(dependencies.ToArray());
         Capabilities = new ReadOnlyDictionary<string, IReadOnlyList<int>>(capabilities.ToDictionary(
             pair => pair.Key, pair => (IReadOnlyList<int>)Array.AsReadOnly(pair.Value.ToArray()), StringComparer.Ordinal));
+    }
+
+    /// <summary>Read planning text from one bounded snapshot checked against its original raw pin.</summary>
+    internal string ReadPinnedPlanningProfile()
+    {
+        if (profileBytes > MaxPlanningProfileBytes)
+            throw new InvalidDataException("Native planning profile is too large.");
+
+        var path = PackStorage.Resolve(Root, profileRelativePath);
+        var expectedBytes = (int)profileBytes;
+        // One extra byte detects growth without reading an unbounded replacement file.
+        var snapshot = new byte[expectedBytes + 1];
+        int count = 0;
+        using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            while (count < snapshot.Length)
+            {
+                var read = file.Read(snapshot, count, snapshot.Length - count);
+                if (read == 0) break;
+                count += read;
+            }
+        }
+        if (count != expectedBytes)
+            throw new InvalidDataException("Native planning profile size mismatch.");
+        var bytes = snapshot.AsSpan(0, count);
+        if (!Convert.ToHexString(SHA256.HashData(bytes)).Equals(profileSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Native planning profile hash mismatch.");
+
+        // Hash the raw BOM too; decoding must never select another encoding implicitly.
+        if ((bytes.Length >= 2 &&
+                ((bytes[0] == 0xff && bytes[1] == 0xfe) ||
+                 (bytes[0] == 0xfe && bytes[1] == 0xff))) ||
+            (bytes.Length >= 4 && bytes[0] == 0 && bytes[1] == 0 &&
+                bytes[2] == 0xfe && bytes[3] == 0xff))
+            throw new InvalidDataException("Unsupported native planning profile encoding.");
+        if (bytes.Length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf)
+            bytes = bytes[3..];
+        try
+        {
+            return new UTF8Encoding(false, true).GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new InvalidDataException("Invalid native planning profile encoding.");
+        }
     }
 
     public static Mw3ReRuntimeContract ReadStructure(string runtimeRoot)
@@ -140,7 +194,8 @@ public sealed class Mw3ReRuntimeContract
                 paths.Add(relative, path);
             }
             NativeRuntimeLayout.ValidateLaunchExecutable(paths[roles["executable"]]);
-            return new Mw3ReRuntimeContract(root, roles, dependencies, capabilities, sourceCommit, buildId, builder, paths);
+            return new Mw3ReRuntimeContract(root, roles, dependencies, capabilities, sourceCommit, buildId, builder, paths,
+                pins[roles["profile"]]);
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException or OverflowException)
         {
