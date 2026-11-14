@@ -76,9 +76,10 @@ struct MaterialOrdinalRenderer : Renderer {
                     source->source_vertices == 3 && context.source_vertices == 3 &&
                     source->source_polygons == count && context.source_polygons == count,
                 "Repeated-material producer lost source ownership or counts");
-        require(source->ranges.size() == count && materials.size() == count &&
-                    source->vertices.size() == count * 3 && source->indices.size() == count * 3,
-                "Repeated-material producer merged original polygon ranges");
+        require(source->ranges.size() == count && materials.size() == count,
+                "Repeated-material original polygon range/material count changed");
+        require(source->vertices.size() == count * 3 && source->indices.size() == count * 3,
+                "Repeated-material triangle corner/index count changed");
         require(model.render_materials == expected_materials,
                 "Repeated-material producer changed original material pointers");
         for (std::size_t index = 0; index < count; ++index) {
@@ -105,7 +106,7 @@ struct MaterialOrdinalRenderer : Renderer {
     }
 };
 
-void check_material_ordinals(std::uint32_t polygon_count) {
+void check_material_ordinals(std::uint32_t polygon_count, bool force_outer_unwind = false) {
     float source_positions[]{-1, -1, 3, 1, -1, 3, 0, 1, 3};
     const float original_positions[]{-1, -1, 3, 1, -1, 3, 0, 1, 3};
     uint32_t source_indices[]{0, 1, 2};
@@ -132,6 +133,18 @@ void check_material_ordinals(std::uint32_t polygon_count) {
     zcls::Node source_node{};
     source_node.model = &source_model;
     recorder.expected_node = &source_node;
+    // Declared after recorder, so its pointer is restored before recorder dies.
+    struct FixtureState {
+        platform::Render3D *renderer = zvid::render3d();
+        std::fenv_t environment{};
+        FixtureState() {
+            require(std::fegetenv(&environment) == 0, "Cannot preserve material fixture FP state");
+        }
+        ~FixtureState() {
+            zvid::set_render3d(renderer);
+            std::fesetenv(&environment);
+        }
+    } restore;
     zvid::set_render3d(&recorder);
     std::fesetround(FE_UPWARD);
     std::feclearexcept(FE_ALL_EXCEPT);
@@ -167,6 +180,8 @@ void check_material_ordinals(std::uint32_t polygon_count) {
                 !std::memcmp(source_positions, original_positions, sizeof source_positions) &&
                 source_indices[0] == 0 && source_indices[1] == 1 && source_indices[2] == 2,
             "Repeated-material callback/source preservation failed");
+    if (force_outer_unwind)
+        throw std::runtime_error("Authored material fixture unwind");
 }
 
 int main() try {
@@ -244,10 +259,32 @@ int main() try {
     require(zmod::submit_geometry(node), "Direct early handoff rejected authored geometry");
     require(std::fegetround() == FE_UPWARD && std::fetestexcept(FE_ALL_EXCEPT) == FE_DIVBYZERO,
             "Rendering callback leaked FP environment");
+    std::fenv_t before_material_fixtures{};
+    require(std::fegetenv(&before_material_fixtures) == 0,
+            "Cannot preserve material fixture caller FP state");
     unsigned material_failures = 0;
     for (unsigned polygon_count : {3U, 14U}) {
+        const auto *prior_renderer = zvid::render3d();
+        std::fesetround(FE_TOWARDZERO);
+        std::feclearexcept(FE_ALL_EXCEPT);
+        std::feraiseexcept(FE_OVERFLOW);
+        const auto prior_round = std::fegetround();
+        const auto prior_flags = std::fetestexcept(FE_ALL_EXCEPT);
         try {
             check_material_ordinals(polygon_count);
+            require(zvid::render3d() == prior_renderer && std::fegetround() == prior_round &&
+                        std::fetestexcept(FE_ALL_EXCEPT) == prior_flags,
+                    "Material fixture success changed caller renderer/FP state");
+            bool unwound = false;
+            try {
+                check_material_ordinals(polygon_count, true);
+            } catch (const std::runtime_error &error) {
+                unwound = std::string_view(error.what()) == "Authored material fixture unwind";
+            }
+            require(unwound && zvid::render3d() == prior_renderer &&
+                        std::fegetround() == prior_round &&
+                        std::fetestexcept(FE_ALL_EXCEPT) == prior_flags,
+                    "Material fixture unwind changed caller renderer/FP state");
             std::cout << "Material ordinal fixture " << polygon_count << ": passed\n";
         } catch (const std::exception &error) {
             ++material_failures;
@@ -255,8 +292,10 @@ int main() try {
                       << '\n';
         }
     }
+    std::fesetenv(&before_material_fixtures);
     zvid::set_render3d(&renderer);
     require(material_failures == 0, "Original polygon material identity regression");
+    std::cout << "Material fixture renderer/FP restoration and outer unwind pass\n";
     std::fesetround(FE_TONEAREST);
     zmth::matrix_stack().top = 0;
     material.alpha = 100;
