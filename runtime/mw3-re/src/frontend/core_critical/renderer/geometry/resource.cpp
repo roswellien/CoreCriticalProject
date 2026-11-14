@@ -1,5 +1,7 @@
 #include "resource.hpp"
 
+#include <cstring>
+
 namespace cc::geometry {
 std::shared_ptr<const Resource> register_resource(const float *positions,
                                                   std::uint32_t position_count,
@@ -18,6 +20,7 @@ std::shared_ptr<const Resource> register_resource(const float *positions,
     } while (
         !next_identity.compare_exchange_weak(identity, identity + 1, std::memory_order_relaxed));
     resource->identity = identity;
+    bool uncertain_bounds = false;
     for (std::size_t polygon_index = 0; polygon_index < polygons.size(); ++polygon_index) {
         const auto &source = polygons[polygon_index];
         if (!source.positions || source.count < 3 || source.count > 64)
@@ -46,10 +49,24 @@ std::shared_ptr<const Resource> register_resource(const float *positions,
                 vertex.ny = normals[3 * normal + 1];
                 vertex.nz = normals[3 * normal + 2];
             }
-            for (float value : {vertex.x, vertex.y, vertex.z, vertex.nx, vertex.ny, vertex.nz,
-                                vertex.u, vertex.v})
-                if (!std::isfinite(value))
+            const std::array<float, 8> attributes{vertex.x,  vertex.y,  vertex.z, vertex.nx,
+                                                  vertex.ny, vertex.nz, vertex.u, vertex.v};
+            for (std::size_t attribute = 0; attribute < attributes.size(); ++attribute) {
+                const float value = attributes[attribute];
+                std::uint32_t bits{};
+                std::memcpy(&bits, &value, sizeof(bits));
+                if (!std::isfinite(value) || (bits & 0x7f800000u) == 0x7f800000u)
                     throw std::runtime_error("Nonfinite registered geometry");
+                if (attribute < 3) {
+                    if ((bits & 0x007fffffu) != 0u && (bits & 0x7f800000u) == 0u)
+                        uncertain_bounds = true;
+                    if (resource->vertices.empty() || value < resource->source_min[attribute])
+                        resource->source_min[attribute] = value;
+                    if (resource->vertices.empty() || value > resource->source_max[attribute])
+                        resource->source_max[attribute] = value;
+                }
+            }
+            resource->source_bounds_valid = !uncertain_bounds;
             resource->vertices.push_back(vertex);
         }
         Range range{std::uint32_t(resource->indices.size()), 0, std::uint32_t(polygon_index),

@@ -9,9 +9,12 @@
 #include "platform/render3d.h"
 
 #include <algorithm>
+#include <array>
 #include <cfenv>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace zmod {
@@ -59,6 +62,104 @@ bool source_supported(Model &model) {
         }
     }
     return true;
+}
+
+std::uint32_t float_bits(float value) noexcept {
+    std::uint32_t bits{};
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+bool is_nonfinite_or_subnormal(float value) noexcept {
+    const std::uint32_t bits = float_bits(value);
+    const std::uint32_t exponent = bits & 0x7f800000u;
+    const std::uint32_t mantissa = bits & 0x007fffffu;
+    if (exponent == 0x7f800000u)
+        return true;
+    if (exponent == 0u && mantissa != 0u)
+        return true;
+    return !std::isfinite(value);
+}
+
+bool is_positive_normal(float value) noexcept {
+    if (is_nonfinite_or_subnormal(value))
+        return false;
+    const std::uint32_t bits = float_bits(value);
+    return (bits & 0x80000000u) == 0u && (bits & 0x7f800000u) != 0u && value > 0.f;
+}
+
+double add_up(double left, double right) noexcept {
+    const double sum = left + right;
+    if (!std::isfinite(sum))
+        return std::numeric_limits<double>::infinity();
+    return std::nextafter(sum, std::numeric_limits<double>::infinity());
+}
+
+double mul_up(double left, double right) noexcept {
+    const double product = left * right;
+    if (!std::isfinite(product))
+        return std::numeric_limits<double>::infinity();
+    return std::nextafter(product, std::numeric_limits<double>::infinity());
+}
+
+// Native GPU submission clips every triangle at the far plane, whereas the
+// legacy CPU clipper only rejects polygons whose corners are all >= far_z when
+// clip.mask & 0x20 and never cuts crossing polygons. Admit stock geometry only
+// when every corner of its source AABB is provably < far_z across all finite
+// float multiply/add/FMA orders, rounding modes and intermediate FTZ states.
+bool far_plane_safe(const cc::geometry::Resource &resource,
+                    const platform::ModelDrawContext &context, float clip_far) noexcept {
+    if (!resource.source_bounds_valid || !context.model_to_camera)
+        return false;
+    if (!is_positive_normal(clip_far) || !is_positive_normal(context.far_z) ||
+        float_bits(clip_far) != float_bits(context.far_z) || clip_far != context.far_z)
+        return false;
+    constexpr double kMaxSafeMagnitude = 0.25 * double(std::numeric_limits<float>::max());
+    if (double(clip_far) > kMaxSafeMagnitude)
+        return false;
+    const std::array<float, 3> coeff{context.model_to_camera[2], context.model_to_camera[5],
+                                     context.model_to_camera[8]};
+    const float translation = context.model_to_camera[11];
+    if (is_nonfinite_or_subnormal(translation))
+        return false;
+    const double trans = double(translation);
+    const double trans_abs = std::abs(trans);
+    if (trans_abs > kMaxSafeMagnitude)
+        return false;
+    std::array<double, 3> axis_max{};
+    std::array<double, 3> axis_abs{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const float min_coord = resource.source_min[axis];
+        const float max_coord = resource.source_max[axis];
+        if (is_nonfinite_or_subnormal(coeff[axis]) || is_nonfinite_or_subnormal(min_coord) ||
+            is_nonfinite_or_subnormal(max_coord) || !(min_coord <= max_coord))
+            return false;
+        const double c = double(coeff[axis]);
+        const double lo = double(min_coord);
+        const double hi = double(max_coord);
+        if (std::abs(c) > kMaxSafeMagnitude || std::abs(lo) > kMaxSafeMagnitude ||
+            std::abs(hi) > kMaxSafeMagnitude)
+            return false;
+        const double prod_lo = mul_up(c, lo);
+        const double prod_hi = mul_up(c, hi);
+        axis_max[axis] = c >= 0.0 ? prod_hi : prod_lo;
+        const double raw_abs = std::max(std::abs(c * lo), std::abs(c * hi));
+        if (!std::isfinite(axis_max[axis]) || !std::isfinite(raw_abs) ||
+            raw_abs > kMaxSafeMagnitude)
+            return false;
+        axis_abs[axis] = std::nextafter(raw_abs, std::numeric_limits<double>::infinity());
+    }
+    const double support_sum =
+        add_up(add_up(axis_max[0], axis_max[1]), add_up(axis_max[2], trans));
+    const double abs_sum =
+        add_up(add_up(axis_abs[0], axis_abs[1]), add_up(axis_abs[2], trans_abs));
+    if (!std::isfinite(support_sum) || !std::isfinite(abs_sum) || abs_sum > kMaxSafeMagnitude)
+        return false;
+    constexpr double kFloatEpsilon = double(std::numeric_limits<float>::epsilon());
+    constexpr double kFloatMinNormal = double(std::numeric_limits<float>::min());
+    const double margin = add_up(mul_up(64.0 * kFloatEpsilon, abs_sum), 64.0 * kFloatMinNormal);
+    const double max_camera_z = add_up(support_sum, margin);
+    return std::isfinite(max_camera_z) && max_camera_z < double(clip_far);
 }
 } // namespace
 
@@ -128,6 +229,13 @@ bool submit_geometry(zcls::Node &node) {
         model.render_geometry = cc::geometry::register_resource(
             model.vertices, model.count(0x14), model.normals, model.count(0x18), polygons);
         model.render_materials = std::move(material_sources);
+    }
+    if (!far_plane_safe(*model.render_geometry, context, draw_state().clip.far_z)) {
+        // Static baking also indexes cached normals with vertex shading off.
+        if (model.count(0x14) > std::uint32_t(kModelVerts) ||
+            model.count(0x18) > std::uint32_t(kModelVerts))
+            throw std::runtime_error("Legacy model draw buffer capacity exceeded");
+        return unsupported();
     }
     std::vector<cc::geometry::Material> materials;
     materials.reserve(model.render_geometry->ranges.size());
