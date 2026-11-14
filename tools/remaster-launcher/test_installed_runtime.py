@@ -100,6 +100,38 @@ for name, module in tuple(sys.modules.items()):
             self.assertFalse((output / "texture-banks.bin").exists())
 
 
+class NativePathArgumentTests(unittest.TestCase):
+    def test_rooted_volume_guid_when_pathlib_does_not_recognize_it(self):
+        import stage_mw3_re_runtime as producer
+
+        volume = r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}"
+        valid = (volume + "\\", volume + r"\payload", volume.upper() + r"\new\payload")
+        invalid = (
+            volume, volume + "payload", volume + "/payload",
+            volume.replace("89ab", "89ag") + "\\",
+            volume.replace("01234567-", "0123456-") + "\\",
+            volume.replace("Volume{", "Volume") + "\\",
+            volume[1:] + "\\", r"\payload", r"C:payload", "payload", "", None, 7,
+            *(volume + "\\payload" + character for character in '\0\r\n;"'),
+        )
+        downstream = object()
+        # Simulate the older pathlib lexical result without filesystem access.
+        # Real Windows alias/overlap tests still exercise the physical checks.
+        with patch.object(producer.Path, "is_absolute", return_value=False), \
+             patch.object(producer, "_unlinked", return_value=downstream) as unlinked:
+            for value in valid:
+                with self.subTest(valid=value):
+                    unlinked.reset_mock()
+                    self.assertIs(producer._path_argument(value), downstream)
+                    unlinked.assert_called_once_with(value)
+            for value in invalid:
+                with self.subTest(invalid=value):
+                    unlinked.reset_mock()
+                    with self.assertRaisesRegex(ValueError, "explicit absolute single paths"):
+                        producer._path_argument(value)
+                    unlinked.assert_not_called()
+
+
 def volume_guid_alias(path):
     """Resolve the actual test drive's alternate spelling without creating a mount or link."""
     import ctypes

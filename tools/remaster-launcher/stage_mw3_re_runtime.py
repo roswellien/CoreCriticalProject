@@ -750,7 +750,10 @@ def _small_text(path):
 
 
 def _path_argument(value):
-    if (not isinstance(value, str) or not Path(value).is_absolute()
+    # Python 3.11 does not recognize rooted volume-GUID paths as absolute.
+    if (not isinstance(value, str) or not (Path(value).is_absolute()
+            or re.match(r"\\\\\?\\Volume\{[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\}\\",
+                        value, re.IGNORECASE))
             or any(character in value for character in '\0\r\n;"')):
         raise ValueError("CLI paths must be explicit absolute single paths")
     return _unlinked(value)
