@@ -19002,7 +19002,10 @@ TEST(arena_log_pose_matches_live_headless) {
     if (record.value("type", "") != "state") continue;
     for (const auto& pose : live) {
       if (record.value("t", -1.0) != pose.value("t", -2.0)) continue;
-      const auto& written = record["mechs"][0];
+      nlohmann::json written = record["mechs"][0];
+      // The live pose reads #287's anim index and t; version 2's phase, cps,
+      // weight and limp are checked by arena_log_detail_c1mp1_4v4_headless.
+      for (const char* field : {"phase", "cps", "weight", "limp"}) written["anim"].erase(field);
       for (const char* field : {"pos", "heading", "torso", "arms", "anim", "jumping", "fallen", "heat"}) {
         if (written[field] != pose["mech"][field])
           std::printf("  t %.3f %s: log %s, live %s\n", pose.value("t", 0.0), field, written[field].dump().c_str(),
@@ -19017,22 +19020,30 @@ TEST(arena_log_pose_matches_live_headless) {
 }
 
 namespace {
-// #289: a log with everything step 1 added taken out, as the detail switch
-// off writes it.
+// #289: a log with everything steps 1 and 3 added taken out, as the detail
+// switch off writes it.
 std::vector<nlohmann::json> without_detail(const std::vector<nlohmann::json>& records) {
   std::vector<nlohmann::json> kept;
   for (nlohmann::json record : records) {
     const std::string type = record.value("type", "");
-    if (type == "round_end" || type == "beam_end" || type == "route" || type == "decision") continue;
+    if (type == "round_end" || type == "beam_end" || type == "route" || type == "decision" || type == "action" ||
+        type == "voice")
+      continue;
     if (type == "shot")
       for (const char* field : {"weapon", "beam", "target", "locked", "muzzle", "dir"}) record.erase(field);
-    if (type == "hit") record.erase("weapon");
+    if (type == "hit") {
+      record.erase("weapon");
+      record.erase("at");
+    }
+    if (type == "start")
+      for (nlohmann::json& mech : record["mechs"]) mech.erase("voice");
     if (type == "state") {
       record.erase("rounds");
       record.erase("beams");
       for (nlohmann::json& mech : record["mechs"]) {
         mech["ai"].erase("at");
         mech["ai"].erase("contacts");
+        for (const char* field : {"phase", "cps", "weight", "limp"}) mech["anim"].erase(field);
       }
     }
     kept.push_back(std::move(record));
@@ -19111,7 +19122,7 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
 
   EXPECT(log.error.empty() && off.error.empty() && !log.records.empty());
   if (log.records.empty()) return;
-  EXPECT(log.records[0].value("version", 0) == 1);  // criterion 1
+  EXPECT(log.records[0].value("version", 0) == 2);  // criterion 1
   // Criterion 6: the additions taken out, the detail-on log is the detail-off one.
   const std::vector<nlohmann::json> stripped = without_detail(log.records);
   EXPECT(stripped.size() == off.records.size());
@@ -19238,6 +19249,31 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
   EXPECT(codes["engage"] > 0 && codes["target_volley"] > 0);
   EXPECT(decisions > 0 && other * 2 < decisions);
   EXPECT(unexplained_changes == 0);
+
+  // #289 step 3 (version 2): each new field is written at least once.
+  int actions = 0, hits_at = 0, round_ends_at = 0, voices = 0, voices_tagged = 0, phased = 0, blended = 0;
+  for (const nlohmann::json& mech : log.records[0]["mechs"])
+    if (mech.contains("voice")) ++voices_tagged;
+  for (const nlohmann::json& record : log.records) {
+    const std::string type = record.value("type", "");
+    if (type == "action") ++actions;
+    if (type == "voice") ++voices;
+    if (type == "hit" && record.contains("at")) ++hits_at;
+    if (type == "round_end" && record.contains("at") && record.contains("terrain")) ++round_ends_at;
+    if (type == "state")
+      for (const nlohmann::json& mech : record["mechs"]) {
+        const nlohmann::json& anim = mech["anim"];
+        EXPECT(anim.contains("phase") && anim.contains("cps") && anim.contains("weight") && anim.contains("limp"));
+        if (anim.value("phase", 0.0) > 0.0) ++phased;
+        if (anim.value("weight", 0.0) > 0.0) ++blended;
+      }
+  }
+  std::printf("  version 2: actions %d, hits with at %d, round ends with at %d, voices %d (%d tagged), phased %d, blended %d\n",
+              actions, hits_at, round_ends_at, voices, voices_tagged, phased, blended);
+  EXPECT(hits_at > 0 && round_ends_at > 0 && phased > 0 && blended > 0);
+  EXPECT(actions > 0);
+  // Voice lines and tags come only from bots with a radio voice; the stock
+  // enemy presets the arena uses have none (checked 2026-11-13), so none here.
 }
 
 // #287: the time limit ends the match by it, and a match that reaches it goes

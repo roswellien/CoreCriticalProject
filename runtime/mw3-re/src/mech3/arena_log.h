@@ -37,7 +37,12 @@ constexpr float kLogStatePeriod = 0.1f;
 // The log's format version, in the start line (#289). The reader refuses a
 // log without it or with another, so a viewer never misreads one; fields a
 // reader doesn't know are still kept, so a later version can add fields.
-constexpr int kLogVersion = 1;
+// Version 2 (#289 step 3) adds, with detail on, the state lines' anim phase,
+// cps, weight and limp, "action" and "voice" lines, the hit point "at", the
+// round ends' "at" and "terrain", and each start-line mech's "voice". The
+// reader takes 1 and 2.
+constexpr int kLogVersion = 2;
+constexpr int kOldestLogVersion = 1;
 
 // Ours (#289): everything the replay viewers need beyond #287's log (shot
 // detail, rounds and beams in flight, routes, contacts, decision reasons),
@@ -95,6 +100,10 @@ class RoundBook {
   // beam, which the game may free once it stops.
   void beam_on(const BeamWeapon* weapon, int shooter, std::string name);
   void beam_off(const BeamWeapon* weapon);
+  // Version 2: the round at that pool slot hit something at `at`, terrain or
+  // not; its round_end gains "at" and "terrain". Slots not tracked (a beam's
+  // temporary projectile, another shooter's round) are ignored.
+  void impact(const void* round, const float at[3], bool terrain);
   // The state line's "rounds": every known round in `flying` (in its order),
   // each given an id the first time. A round with an id that is no longer
   // flying, or whose age went down or owner changed (its slot reused by a
@@ -121,6 +130,9 @@ class RoundBook {
     float age = 0;
     double pos[3] = {};
     bool done = false;  // this walk: ended or reused
+    bool has_at = false;  // impact() saw it hit
+    double at[3] = {};
+    bool terrain = false;
   };
   nlohmann::json end_record(const Round& round) const;
   std::vector<Round> rounds_;
@@ -174,7 +186,8 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
 // A log read back: every line that parsed, in order, and whether it ends with
 // an "end" line. Lines that do not parse are counted, not kept; fields the
 // reader does not know are kept as they are in each record. A log whose first
-// record is not a start line of version kLogVersion is refused: no records,
+// record is not a start line of a version from kOldestLogVersion to
+// kLogVersion is refused: no records,
 // and `error` says why.
 struct LogRead {
   bool opened = false;

@@ -129,6 +129,10 @@ using WeaponDef = zwep::WeaponDef;
 struct Collision {
   Handle x20 = nullptr;   // +0x20
   Handle node = nullptr;  // +0x24  the node hit
+  // Ours (#289): the world point hit, when the hit came from zWeapon (the
+  // arena log's "at"); other damage has none.
+  float point[3] = {};
+  bool has_point = false;
 };
 
 enum PartId : int32_t {

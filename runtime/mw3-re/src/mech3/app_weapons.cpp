@@ -109,6 +109,10 @@ uint32_t mech_damage(zwep::Handle object, zwep::WeaponDef* def, zwep::HitRecord*
   Collision c;
   c.x20 = hit->material;
   c.node = hit->node;
+  c.point[0] = hit->point.x;
+  c.point[1] = hit->point.y;
+  c.point[2] = hit->point.z;
+  c.has_point = true;
   return static_cast<uint32_t>(static_cast<Mech*>(object)->take_damage(def, &c, damage));
 }
 

@@ -355,6 +355,7 @@ uint32_t apply_damage(WeaponDef* def, Handle owner, const Vec3f3* from, HitRecor
 // the sound (1), craters and effect (2), the animation (4).
 uint32_t impact(WeaponDef* def, HitRecord* rec, Projectile* p, Handle anim) {
   const int32_t soil = soil_of(rec->material);
+  if (g_hh.impact_seen) g_hh.impact_seen(p, rec, soil);
   int32_t skip = 0;
   uint32_t flags = 0;
   if (def->callback) flags = def->callback(def, rec, p);

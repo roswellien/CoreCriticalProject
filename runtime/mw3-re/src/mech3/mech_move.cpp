@@ -343,6 +343,7 @@ void Mech::select_gait(float dt) {
   const int st = anim_state;
   const bool asks_walk = !(st == 1 || st == 2 || st == 3) && gait[kStep][kHi] <= std::fabs(target);
   blend_weight = 0.0f;
+  limp_playing = -1;
   if (st == 12 || st == 13) return;
   if (powered_down) return;
   const bool planted = foot(0)->ground_state == 3 && foot(1)->ground_state == 3;
@@ -449,6 +450,7 @@ void Mech::select_gait(float dt) {
     prev_state = anim_state;
     anim_state = 0;
     anim_index = kStepWalk;  // not 11 (docs/movement.md)
+    limp_playing = limp;
     anims[kLimpBlend]->set_blend(0.5f);
     const float lim = gait[kTrot][kLo];
     if (thr > lim) thr = lim;
@@ -641,13 +643,17 @@ void Mech::update_action(float dt) {
     act = action_objects[kind];
     act->reset();
   }
-  if (!act->started()) begin_action(act, kind);
+  if (!act->started()) {
+    if (g_calls.action_started) g_calls.action_started(*this, kind);
+    begin_action(act, kind);
+  }
   animate_action(dt, act, kind);
 }
 
 // Ours (#289): the start of an action, split out of ActionUpdate so a replay
 // puppet starts its logged actions the same way.
 void Mech::begin_action(MechAction* act, int kind) {
+  limp_playing = -1;
   {
     const int next = state_for_action(kind);
     prev_state = anim_state;

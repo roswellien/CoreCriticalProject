@@ -66,12 +66,16 @@ void sound_extras_clear() {
   g_extras.clear();
 }
 
+// Ours (#289): the MINDELAY test of 0x004e6cd0 and 0x004e6c60 (fcomp, test
+// ah, 0x41: a NaN next time plays).
+bool sound_extra_blocked(const SoundExtra& r) { return r.next > world().time; }
+
 // Mech3.exe 1.2 @ 0x004e6cd0. The game time [0x0060991c]; a delay of 0
 // leaves the next time alone.
 zsnd::VoiceBase* sound_extra_play(SoundExtra& r, zsnd::Object* obj, float volume, const float* pos, const float* vel,
                                   float fade_to) {
   const float now = world().time;
-  if (r.next > now) return nullptr;  // fcomp, test ah, 0x41: NaN plays
+  if (sound_extra_blocked(r)) return nullptr;
   if (r.min_delay > 0.0f) r.next = now + r.min_delay;
   zsnd::VoiceBase* v = g_hooks.play_fading ? g_hooks.play_fading(obj, pos, volume, vel, fade_to, 0)
                                            : zsnd::play_fading(obj, pos, volume, vel, fade_to, 0);
@@ -92,7 +96,7 @@ zsnd::VoiceBase* sound_play(zsnd::Object* obj, const float* pos, float volume, c
 // Mech3.exe 1.2 @ 0x004e6c60: 0x004e6cd0's tests, zSound's 2D play.
 zsnd::VoiceBase* sound_extra_say(SoundExtra& r, zsnd::Object* obj, float volume) {
   const float now = world().time;
-  if (r.next > now) return nullptr;  // test ah, 0x41: NaN plays
+  if (sound_extra_blocked(r)) return nullptr;
   if (r.min_delay > 0.0f) r.next = now + r.min_delay;
   zsnd::VoiceBase* v = g_hooks.play ? g_hooks.play(obj, volume) : zsnd::play(obj, volume);
   if (g_subtitles && r.subtitle) {

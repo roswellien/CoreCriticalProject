@@ -419,7 +419,7 @@ TEST(arena_log_reader_reports_incomplete_logs) {
 }
 
 // #289 criterion 1: a log with no format version, or one this build doesn't
-// know, is refused with a message naming it; version 1 reads as before.
+// know, is refused with a message naming it; versions 1 and 2 read.
 TEST(arena_log_reader_refuses_missing_or_unknown_version) {
   const std::string path = temp_dir("arena_log_version") + "/match-1.jsonl";
   const auto read_with_start = [&](const char* start_line) {
@@ -433,11 +433,16 @@ TEST(arena_log_reader_refuses_missing_or_unknown_version) {
   LogRead read = read_with_start(R"({"type":"start","map":"c1mp1"})");
   EXPECT(read.opened && read.records.empty() && !read.complete);
   EXPECT(read.error.find("format version (a log from before") != std::string::npos);
-  read = read_with_start(R"({"type":"start","version":2,"map":"c1mp1"})");
-  EXPECT(read.records.empty() && read.error.find("format version 2") != std::string::npos);
+  read = read_with_start(R"({"type":"start","version":3,"map":"c1mp1"})");
+  EXPECT(read.records.empty() && read.error.find("format version 3") != std::string::npos);
+  EXPECT(read.error.find("versions 1 and 2") != std::string::npos);
+  read = read_with_start(R"({"type":"start","version":0,"map":"c1mp1"})");
+  EXPECT(read.records.empty() && read.error.find("format version 0") != std::string::npos);
   read = read_with_start(R"(not json)");
   EXPECT(read.records.empty() && read.error.find("no readable start line") != std::string::npos);
   read = read_with_start(R"({"type":"start","version":1,"map":"c1mp1"})");
+  EXPECT(read.error.empty() && read.records.size() == 2 && read.complete);
+  read = read_with_start(R"({"type":"start","version":2,"map":"c1mp1"})");
   EXPECT(read.error.empty() && read.records.size() == 2 && read.complete);
 }
 

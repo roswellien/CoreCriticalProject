@@ -4,15 +4,20 @@
 #include <cmath>
 #include <fstream>
 
+#include "gamez/zsound/zsnd.h"
 #include "gamez/zweapon/zweapon.h"
 #include "gamez/zweapon/zwep_init.h"
 #include "mech3/app_mech.h"
 #include "mech3/mech.h"
 #include "mech3/mech_anim.h"
 #include "mech3/mech_control.h"
+#include "mech3/mech_data.h"
+#include "mech3/mech_move.h"
 #include "mech3/mech_parts.h"
+#include "mech3/sound_extra.h"
 #include "mech3/weapon.h"
 #include "mech3/zai_attack.h"
+#include "mech3/zai_brain.h"
 #include "mech3/zai_hunt.h"
 
 namespace mech3::arena {
@@ -35,6 +40,11 @@ ShotStarts g_shot_starts;
 RoundBook g_rounds;
 decltype(WeaponCalls::net_event) g_kept_shot = nullptr;
 decltype(DamageCalls::controls_hit) g_kept_hit = nullptr;
+// #289 version 2's hooks, each passing on to what was installed before.
+decltype(MoveCalls::action_started) g_kept_action = nullptr;
+decltype(ai::RadioCalls::line) g_kept_radio = nullptr;
+decltype(zwep::HitHooks::impact_seen) g_kept_impact = nullptr;
+constexpr int kLimpBlendSlot = 11;  // anims[11], the walk/limp blend (mech_move.cpp kLimpBlend)
 
 void write_line(const nlohmann::json& record) {
   if (!g_file) return;
@@ -116,6 +126,26 @@ void add_ai_detail(const Mech* mech, int self_side, nlohmann::json* ai) {
     contacts.push_back({{"id", id}, {"seen", (contact->flags & kDetected) != 0}});
   }
   (*ai)["contacts"] = contacts;
+}
+
+// #289 version 2: the anim record's phase (0..1 through the loop), cps
+// (loops a second), blend weight and limping leg. A limp plays the walk/limp
+// blend while anim_index stays at the step/walk slot, so those come from the
+// blend; "index" and "t" stay the slot's, as version 1 wrote them.
+void add_anim_detail(const Mech* m, const MechAnim* slot_anim, nlohmann::json* anim) {
+  const MechAnim* playing = m->limp_playing >= 0 ? m->anims[kLimpBlendSlot] : slot_anim;
+  float phase = 0.0f, cps = 0.0f, weight = 0.0f;
+  if (playing && playing->loop_time > 0.0f) {
+    // set_speed keeps rate * t fixed, so rate * t is the time into the loop.
+    const float loops = playing->rate * playing->t / playing->loop_time;
+    phase = loops - std::floor(loops);
+    cps = playing->rate / playing->loop_time;
+  }
+  if (const auto* blend = dynamic_cast<const BlendAnim*>(playing)) weight = blend->weight;
+  (*anim)["phase"] = rounded(phase);
+  (*anim)["cps"] = rounded(cps);
+  (*anim)["weight"] = rounded(weight);
+  (*anim)["limp"] = m->limp_playing;
 }
 
 const char* hunt_rule_name(const ai::HuntState& hunt) {
@@ -203,10 +233,57 @@ void on_hit(Mech& mech, WeaponDef* def, Collision* collision, float damage, Hand
   if (id >= 0) {
     nlohmann::json hit = {{"type", "hit"}, {"t", rounded(g_now)}, {"id", id}, {"by", id_of(attacker)}, {"damage", rounded(damage)}};
     if (g_detail && def) hit["weapon"] = weapon_name(def);
+    if (g_detail && collision && collision->has_point)
+      hit["at"] = rounded3(collision->point[0], collision->point[1], collision->point[2]);
     write_line(hit);
   }
   if (g_kept_hit) g_kept_hit(mech, def, collision, damage, attacker);
   else if (mech.controls) mech.controls->on_hit(attacker);  // what take_damage does with no hook
+}
+
+// #289 version 2: an "action" line when a logged mech's fall, landing,
+// get-up or collapse first starts.
+void on_action(Mech& mech, int kind) {
+  const int id = id_of(&mech);
+  const char* name = action_name(kind);
+  if (id >= 0 && name) write_line({{"type", "action"}, {"t", rounded(g_now)}, {"id", id}, {"name", name}});
+  if (g_kept_action) g_kept_action(mech, kind);
+}
+
+// The arena mech whose AI brain is `brain`, -1 for none.
+int id_of_brain(const ai::Brain& brain) {
+  if (!g_mechs) return -1;
+  for (const ArenaMech& entry : *g_mechs) {
+    auto* controls = dynamic_cast<AiControls*>(entry.mech->controls);
+    if (controls && controls->brain.get() == &brain) return entry.id;
+  }
+  return -1;
+}
+
+// #289 version 2: a "voice" line for each radio line a logged bot says,
+// "dropped" when the line's MINDELAY makes the game skip it.
+void on_radio(ai::Brain& brain, int32_t event) {
+  if (g_kept_radio) g_kept_radio(brain, event);
+  const int id = id_of_brain(brain);
+  if (id < 0) return;
+  nlohmann::json voice = {{"type", "voice"}, {"t", rounded(g_now)}, {"id", id}, {"event", event}};
+  auto* sound = brain.radio ? static_cast<zsnd::Object*>(brain.radio->sounds[event]) : nullptr;
+  if (sound) {
+    auto* extra = static_cast<const SoundExtra*>(zsnd::user_data(sound));
+    if (sound_extra_blocked(extra ? *extra : default_extra())) voice["dropped"] = true;
+  }
+  write_line(voice);
+}
+
+// #289 version 2: every impact zWeapon makes; a tracked round keeps where it
+// hit. Anything not a mech's node counts as terrain.
+void on_impact(const zwep::Projectile* round, const zwep::HitRecord* hit, int32_t soil) {
+  if (round && hit) {
+    const float at[3] = {hit->point.x, hit->point.y, hit->point.z};
+    const bool terrain = node_owner(hit->node) == nullptr;  // no vehicle or mech part owns the node
+    g_rounds.impact(round, at, terrain);
+  }
+  if (g_kept_impact) g_kept_impact(round, hit, soil);
 }
 
 // #289: the DecisionNote the AI's sites call during a match: the reason goes
@@ -309,6 +386,9 @@ void unhook() {
   // with no match does nothing but pass each call on.
   if (weapon_calls().net_event == on_shot) weapon_calls().net_event = g_kept_shot;
   if (damage_calls().controls_hit == on_hit) damage_calls().controls_hit = g_kept_hit;
+  if (move_calls().action_started == on_action) move_calls().action_started = g_kept_action;
+  if (ai::radio_calls().line == on_radio) ai::radio_calls().line = g_kept_radio;
+  if (zwep::hit_hooks().impact_seen == on_impact) zwep::hit_hooks().impact_seen = g_kept_impact;
 }
 }  // namespace
 
@@ -357,7 +437,10 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
       {"target", target_id(m)},
       {"ai", ai_record(m)},
   };
-  if (g_detail) add_ai_detail(m, entry.side, &record["ai"]);
+  if (g_detail) {
+    add_ai_detail(m, entry.side, &record["ai"]);
+    add_anim_detail(m, anim, &record["anim"]);
+  }
   g_mechs = kept;
   return record;
 }
@@ -380,7 +463,14 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
     sides.push_back(side);
   }
   nlohmann::json ids = nlohmann::json::array();
-  for (const ArenaMech& entry : mechs) ids.push_back({{"id", entry.id}, {"side", entry.side}, {"spot", entry.spot}});
+  for (const ArenaMech& entry : mechs) {
+    nlohmann::json mech = {{"id", entry.id}, {"side", entry.side}, {"spot", entry.spot}};
+    // #289 version 2: the radio voice ("dom", ...), for the 3D replay's chatter.
+    auto* controls = dynamic_cast<AiControls*>(entry.mech->controls);
+    const ai::Brain* brain = controls ? controls->brain.get() : nullptr;
+    if (g_detail && brain && brain->params.sound_tag) mech["voice"] = brain->params.sound_tag;
+    ids.push_back(mech);
+  }
   write_line({{"type", "start"},
               {"version", kLogVersion},
               {"map", setup.map},
@@ -398,7 +488,16 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   damage_calls().controls_hit = on_hit;
   g_shot_starts.clear();
   g_rounds.clear();
-  if (g_detail) ai::set_decision_note(on_decision);
+  if (g_detail) {
+    ai::set_decision_note(on_decision);
+    // As above: keep what was there unless it is ours left from the last match.
+    if (move_calls().action_started != on_action) g_kept_action = move_calls().action_started;
+    if (ai::radio_calls().line != on_radio) g_kept_radio = ai::radio_calls().line;
+    if (zwep::hit_hooks().impact_seen != on_impact) g_kept_impact = zwep::hit_hooks().impact_seen;
+    move_calls().action_started = on_action;
+    ai::radio_calls().line = on_radio;
+    zwep::hit_hooks().impact_seen = on_impact;
+  }
   g_hooked = true;
 }
 
@@ -449,7 +548,23 @@ bool route_changed(RouteSeen& last, const ai::nav::Follower* follower) {
 
 // Ours (#289)
 nlohmann::json RoundBook::end_record(const Round& round) const {
-  return {{"type", "round_end"}, {"round", round.id}, {"pos", {round.pos[0], round.pos[1], round.pos[2]}}};
+  nlohmann::json record = {{"type", "round_end"}, {"round", round.id}, {"pos", {round.pos[0], round.pos[1], round.pos[2]}}};
+  if (round.has_at) {
+    record["at"] = {round.at[0], round.at[1], round.at[2]};
+    record["terrain"] = round.terrain;
+  }
+  return record;
+}
+
+// Ours (#289)
+void RoundBook::impact(const void* round, const float at[3], bool terrain) {
+  for (Round& known : rounds_) {
+    if (known.slot != round) continue;
+    known.has_at = true;
+    for (int axis = 0; axis < 3; ++axis) known.at[axis] = rounded(at[axis]);
+    known.terrain = terrain;
+    return;
+  }
 }
 
 // Ours (#289)
@@ -602,9 +717,11 @@ LogRead read_arena_log(const std::string& path) {
     read.error = "no readable start line (empty or damaged log)";
   } else if (!has_version) {
     read.error = "no whole-number format version (a log from before #289)";
-  } else if ((*start)["version"].get<int>() != kLogVersion) {
-    read.error = "format version " + std::to_string((*start)["version"].get<int>()) + ", this build reads " +
-                 std::to_string(kLogVersion);
+  } else {
+    const int version = (*start)["version"].get<int>();
+    if (version < kOldestLogVersion || version > kLogVersion)
+      read.error = "format version " + std::to_string(version) + ", this build reads versions " +
+                   std::to_string(kOldestLogVersion) + " and " + std::to_string(kLogVersion);
   }
   if (!read.error.empty()) {
     read.records.clear();

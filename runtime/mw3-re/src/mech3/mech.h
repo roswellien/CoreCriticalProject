@@ -206,7 +206,11 @@ struct Mech : Vehicle {
   // mech, so without this the network would send its state, shots and death
   // as the host player's.
   bool arena_bot = false;
-  bool invincible{};          // +0x630  the Invincible cheat (docs/damage.md)
+  // Ours (#289): the limping leg (0 or 1) while the walk/limp blend (slot 11)
+  // plays, else -1. The limp leaves anim_index at the step/walk slot, so the
+  // log reads the playing blend from here.
+  int limp_playing = -1;
+  bool invincible{};         // +0x630  the Invincible cheat (docs/damage.md)
   uint32_t x634 = 0;         // +0x634
   float x63c = 1.0f;         // +0x63c
   Vec3 x640{};               // +0x640

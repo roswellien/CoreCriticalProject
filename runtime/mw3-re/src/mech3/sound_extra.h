@@ -39,6 +39,10 @@ void* sound_extra_load(zsnd::Object* obj, zrdr::Node* extra);
 void sound_extra_free(zsnd::Object* obj, void* user);   // 0x004e6be0
 void sound_extras_clear();                              // 0x004e69a0: every record freed
 
+// Ours (#289): true while the record's MINDELAY holds, when a play now is
+// dropped. The test both plays below make, and what the arena log asks.
+bool sound_extra_blocked(const SoundExtra& r);
+
 // The sound, unless it played less than its delay ago; its subtitle to the
 // message panel when subtitles are on.
 zsnd::VoiceBase* sound_extra_play(SoundExtra& r, zsnd::Object* obj, float volume, const float* pos,
