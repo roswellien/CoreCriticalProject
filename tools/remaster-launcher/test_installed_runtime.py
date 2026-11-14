@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import native_assets
 import prepared_environment_packs
@@ -344,6 +344,28 @@ def native_stage_tests(inputs):
             producer.stage_inventory(inventory, self.output)
             self.assertTrue((self.output / "runtime.json").is_file())
 
+        def test_volume_root_stops_legacy_namespace_parent_traversal(self):
+            alias = volume_guid_alias(self.release)
+            volume_root = volume_guid_alias(Path(self.release.anchor))
+            namespace = Path("\\\\?\\")
+            valid_parents = tuple(parent for parent in alias.parents if parent != namespace)
+            legacy_parents = (*valid_parents, namespace)
+            observed = []
+            original = os.stat
+            def checked_stat(path, *args, **kwargs):
+                observed.append(os.fspath(path))
+                if Path(path) == namespace:
+                    raise OSError(123, "Authored invalid namespace-only ancestor")
+                return original(path, *args, **kwargs)
+            # Python 3.11 includes the invalid namespace-only parent above the real volume root.
+            with patch.object(Path, "parents", new_callable=PropertyMock, return_value=legacy_parents), \
+                 patch.object(os, "stat", new=checked_stat), \
+                 patch.object(os, "lstat", new=lambda path: checked_stat(path, follow_symlinks=False)):
+                self.assertEqual(producer._unlinked(alias), alias)
+            root_directory = str(volume_root).rstrip("\\") + "\\"
+            self.assertEqual(observed, [str(alias), *map(str, valid_parents[:-1]), root_directory])
+            self.assertNotIn(str(namespace), observed)
+
         def test_inventory_budget_precedes_source_hashing(self):
             with patch.object(producer, "MAX_CLOSURE_BYTES", 1), \
                  patch.object(producer, "file_hash", side_effect=AssertionError("premature hash")):
@@ -388,6 +410,8 @@ def native_stage_tests(inputs):
             self.addCleanup(lambda: linked.rmdir())
             with self.assertRaisesRegex(ValueError, "link"):
                 self.inventory(executable=linked / self.executable.name)
+            with self.assertRaisesRegex(ValueError, "link"):
+                self.inventory(executable=volume_guid_alias(linked / self.executable.name))
 
         def test_inspection_failure_and_false_empty_success(self):
             bad_outputs = ("", "unrecognized localized output", "Dump of file x\nFile Type: EXECUTABLE IMAGE\n",

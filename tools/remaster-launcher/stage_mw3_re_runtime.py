@@ -69,13 +69,23 @@ def _relative(value):
 
 def _unlinked(path):
     path = Path(os.path.abspath(path))
+    volume_root = re.match(r"\\\\\?\\Volume\{[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\}(?=\\|$)",
+                           str(path), re.IGNORECASE)
     for ancestor in (path, *path.parents):
+        is_volume_root = volume_root and str(ancestor).rstrip("\\").casefold() == volume_root[0].casefold()
         try:
-            attributes = ancestor.lstat()
+            # A GUID volume without its trailing slash names the device, not its root directory.
+            attributes = (os.stat(volume_root[0] + "\\", follow_symlinks=False)
+                          if is_volume_root else ancestor.lstat())
         except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(attributes.st_mode) or getattr(attributes, "st_file_attributes", 0) & 0x400:
+            attributes = None
+        if attributes is not None and (stat.S_ISLNK(attributes.st_mode)
+                or getattr(attributes, "st_file_attributes", 0) & 0x400):
             raise ValueError("Staging input/output contains a link")
+        # Python 3.11 lists the invalid namespace-only \\?\ parent above a GUID volume.
+        # Check the real volume root itself, then stop before that non-filesystem parent.
+        if is_volume_root:
+            break
     return path
 
 
