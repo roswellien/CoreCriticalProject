@@ -298,6 +298,8 @@ void check_scene_bindings(SDL_Window *window, sdlfe::RendererBackend backend) {
     if (std::string_view(mode) == "cpu-reference") {
       auto resource = std::make_shared<cc::geometry::Resource>();
       resource->identity = 309;
+      resource->source_vertices = 3;
+      resource->source_polygons = 1;
       resource->vertices = {{-1, -1, 2, 0, 0, 1, 0, 0},
                             {1, -1, 2, 0, 0, 1, 1, 0},
                             {0, 1, 2, 0, 0, 1, .5f, 1}};
