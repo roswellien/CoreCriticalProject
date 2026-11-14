@@ -23537,6 +23537,7 @@ struct AimRun {
 }  // namespace
 
 TEST(mission_c1m2_triturret_aim_on_fast_frames_headless) {
+  if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
   zutl::mount(MW3_GAME_DIR);
