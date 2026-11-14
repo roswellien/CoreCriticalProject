@@ -26,7 +26,7 @@ import time
 MAX_METADATA_BYTES = 2 * 1024 * 1024
 MAX_CLOSURE_BYTES = 4 * 1024**3
 MAX_MEMBERS = 20000
-ENVIRONMENT_POLICY = "mw3-re-explicit-windows-environment-v1"
+ENVIRONMENT_POLICY = "mw3-re-explicit-windows-native-bootstrap-v2"
 _TOOL_NAMES = {"git": "git.exe", "cmake": "cmake.exe", "ninja": "ninja.exe",
                "clang_cl": "clang-cl.exe", "glslang": "glslangValidator.exe",
                "dxc": "dxc.exe", "dumpbin": "dumpbin.exe"}
@@ -44,6 +44,60 @@ _SEARCH_POLICY = {"CMAKE_FIND_USE_PACKAGE_REGISTRY": "FALSE",
                   "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY": "FALSE",
                   "CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH": "FALSE",
                   "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "FALSE"}
+_NATIVE_BOOTSTRAP_FILES = (
+    'Common7/Tools/VsDevCmd.bat',
+    'Common7/Tools/vsdevcmd/core/vsdevcmd_start.bat',
+    'Common7/Tools/vsdevcmd/core/parse_cmd.bat',
+    'Common7/Tools/vsdevcmd/core/dotnet.bat',
+    'Common7/Tools/vsdevcmd/core/msbuild.bat',
+    'Common7/Tools/vsdevcmd/core/winsdk.bat',
+    'Common7/Tools/vsdevcmd/core/vsdevcmd_end.bat',
+    'Common7/Tools/vsdevcmd/ext/vcvars.bat',
+)
+_NATIVE_BOOTSTRAP_PROFILES = (
+    dict(name='vs17-native-x64-01',
+         source_hashes=(
+             'c004278e64444bf3524360f960511b5ce7b1d0306910f08a4ebcf1c42ff9bd6d',
+             'da311beae7797632908b5a2e292ac00811e1373ab3108921ab1fe3ef2ec84466',
+             '01aa909650dfcb166c0fd6352ccf550177b8e90cde140214f18d105061f9196b',
+             'e9fcdd8a29629e2594a3d2ac34e03ca944aaf92f1e93aed003173a5466f262e2',
+             '0a1cca60b353b2881ac1ed587c1323a7535e1bedda749c94247b9ef110efdf08',
+             '66bbdb774bf79d538828efafb2099e2485a79c610beac775052d43f8c6bd752b',
+             '4f85ee6d2b1b4dff009ea9681ffaf7a698a96e8dd4e4ca3c779b8884de1c7206',
+             '136beb56e4c59f6f704ec5ccbc6e86ffc92d526f1f2996c79e48739f909696c6',
+         ),
+         metadata={
+             'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt':
+                 '030613df718548a88970e4c1844a8605d17aba9aa36bfea0b4359d8f28fd62bf',
+             'VC/Auxiliary/Build/Microsoft.VCToolsVersion.v143.default.txt':
+                 '030613df718548a88970e4c1844a8605d17aba9aa36bfea0b4359d8f28fd62bf',
+             'VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt':
+                 'a57d05f36a0e13206231f97899d320819d02725273bc30d4c3197d529af63d91',
+         },
+         preferred_toolset='VC/Auxiliary/Build/Microsoft.VCToolsVersion.v143.default.txt',
+         toolset='14.44.35207', redist='14.44.35112', crt='Microsoft.VC143.CRT'),
+    dict(name='vs18-native-x64-01',
+         source_hashes=(
+             'a7815e85d636828e5cf70fe4235b11fcb41750896a4d2d60756b43bacaf4f0b2',
+             '96a54921f33a23ca4be2db17f125baf09800a1885733e8e6efb1f6e43ccc43ba',
+             '79d8abad15711f28985159dea103301392f49c3621320133257da1beeac0aa4f',
+             'e9fcdd8a29629e2594a3d2ac34e03ca944aaf92f1e93aed003173a5466f262e2',
+             '0a1cca60b353b2881ac1ed587c1323a7535e1bedda749c94247b9ef110efdf08',
+             '66bbdb774bf79d538828efafb2099e2485a79c610beac775052d43f8c6bd752b',
+             'a1f6367dacf1305200838c46ab51a8090cf122b6c5a15c93aee20a741f4ac295',
+             '525c2879279791fb005b162b6dc42f9a78c59d07982864357bdcc284e65cfa24',
+         ),
+         metadata={
+             'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt':
+                 '2ca998516f8f18b39c28ce022abb90ef5ad711b468494671dd84b74618b569d9',
+             'VC/Auxiliary/Build/Microsoft.VCToolsVersion.v145.default.txt':
+                 '2ca998516f8f18b39c28ce022abb90ef5ad711b468494671dd84b74618b569d9',
+             'VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt':
+                 '2ca998516f8f18b39c28ce022abb90ef5ad711b468494671dd84b74618b569d9',
+         },
+         preferred_toolset='VC/Auxiliary/Build/Microsoft.VCToolsVersion.v145.default.txt',
+         toolset='14.51.36231', redist='14.51.36231', crt='Microsoft.VC145.CRT'),
+)
 _GENERATED = {"profile.json", "THIRD-PARTY.txt", "metadata/build-observation.json"}
 _CRT = re.compile(r"(?:vcruntime|msvcp|concrt|vccorlib)", re.IGNORECASE)
 _ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
@@ -719,24 +773,160 @@ def _bootstrap_base(scratch, parent=None):
     scratch = _directory(scratch)
     result.update(TEMP=str(scratch), TMP=str(scratch), PATH=";".join(map(str, system)))
     result["NoDefaultCurrentDirectoryInExePath"] = "1"
+    result["VSCMD_SKIP_SENDTELEMETRY"] = "1"
     return result, system
 
 
-def build_environment(vs, tools, scratch, *, source=None, parent=None):
-    """Construct the sole native child environment from a fixed selected VS x64 bootstrap."""
+def _native_bootstrap_inputs(vs):
+    """Admit only the reviewed native core/VC source and exact selected metadata."""
     vs = _directory(vs)
-    bootstrap = _regular(vs / "VC/Auxiliary/Build/vcvars64.bat")
-    if any(character in str(bootstrap) for character in '\0\r\n"&|<>^%!'):
-        raise ValueError("Unsafe selected VS bootstrap path")
-    base, system = _bootstrap_base(scratch, parent)
-    # cmd.exe's /s quote rules differ from MSVCRT argv quoting. This is the one fixed,
-    # path-validated bootstrap command; every other child receives an argument array.
-    command = subprocess.list2cmdline([base["COMSPEC"]]) + f' /d /s /c ""{bootstrap}" >nul && set"'
-    # Never log, pin or return the complete collected environment.
+    if any(character in str(vs) for character in '\0\r\n"&|<>^%!'):
+        raise ValueError("Unsafe native bootstrap path")
+    remaining = MAX_METADATA_BYTES
+    members = {}
+    digests = {}
+    contents = {}
+
+    def acquire(relative):
+        nonlocal remaining
+        path = _regular(vs / relative)
+        before = _identity(path)
+        if not 0 < before[2] <= remaining:
+            raise ValueError("Native bootstrap inputs exceed their byte budget")
+        with path.open("rb") as stream:
+            data = stream.read(before[2] + 1)
+        if len(data) != before[2] or _identity(path) != before:
+            raise ValueError("Native bootstrap input changed during acquisition")
+        remaining -= len(data)
+        members[relative] = path
+        digests[relative] = hashlib.sha256(data).hexdigest()
+        contents[relative] = data
+
+    for relative in _NATIVE_BOOTSTRAP_FILES:
+        acquire(relative)
+    vector = tuple(digests[relative] for relative in _NATIVE_BOOTSTRAP_FILES)
+    profile = next((item for item in _NATIVE_BOOTSTRAP_PROFILES
+                    if item["source_hashes"] == vector), None)
+    if profile is None:
+        raise ValueError("Unsupported native bootstrap source profile")
+    for relative, expected in profile["metadata"].items():
+        acquire(relative)
+        if digests[relative] != expected:
+            raise ValueError("Unsupported native bootstrap metadata")
+        try:
+            value = contents[relative].decode("ascii").strip()
+        except UnicodeDecodeError:
+            raise ValueError("Unsupported native bootstrap metadata") from None
+        version = profile["redist"] if "RedistVersion" in relative else profile["toolset"]
+        if not re.fullmatch(r"14\.[1-9][0-9]*\.[0-9]+", value) or value != version:
+            raise ValueError("Unsupported native bootstrap metadata")
+    return profile["name"], members
+
+
+def _native_bootstrap_selection(vs):
+    name, _ = _native_bootstrap_inputs(vs)
+    return next(profile for profile in _NATIVE_BOOTSTRAP_PROFILES if profile["name"] == name)
+
+
+def _validate_native_crt(vs, crt, profile):
+    expected = vs / "VC/Redist/MSVC" / profile["redist"] / "x64" / profile["crt"]
+    if crt != expected:
+        raise ValueError("Selected CRT differs from the admitted redist version")
+
+
+def _native_bootstrap(vs, environment, scratch, *, expected_profile=None):
+    """Run one admitted native-only initialization, collecting its environment privately."""
+    profile, members = _native_bootstrap_inputs(vs)
+    if expected_profile is not None and profile != expected_profile:
+        raise ValueError("Native bootstrap profile changed before wrapper creation")
+    identities = {name: _identity(path) for name, path in members.items()}
+    scratch = _directory(scratch)
+    if any(character in str(scratch) for character in '\0\r\n"&|<>^%!'):
+        raise ValueError("Unsafe native bootstrap scratch path")
+    if (environment.get("VSCMD_SKIP_SENDTELEMETRY") != "1"
+            or environment.get("NoDefaultCurrentDirectoryInExePath") != "1"):
+        raise ValueError("Missing fixed native bootstrap controls")
+    directory = Path(tempfile.mkdtemp(prefix="mw34-vs-native-", dir=scratch))
+    wrapper = directory / "native.cmd"
+    phase = directory / "phase.txt"
+    core = members["Common7/Tools/VsDevCmd.bat"]
+    vc = members["Common7/Tools/vsdevcmd/ext/vcvars.bat"]
+    script = ("@echo off\r\nsetlocal DisableDelayedExpansion\r\n"
+              f'> "{phase}" echo core\r\n'
+              f'call "{core}" -no_ext -no_logo -arch=x64 -host_arch=x64 -startdir=none >nul\r\n'
+              'if errorlevel 1 exit /b 1\r\n'
+              'if /i not "%VSCMD_ARG_HOST_ARCH%"=="x64" exit /b 1\r\n'
+              'if /i not "%VSCMD_ARG_TGT_ARCH%"=="x64" exit /b 1\r\n'
+              'if /i not "%VSCMD_ARG_APP_PLAT%"=="Desktop" exit /b 1\r\n'
+              'if not "%VSCMD_ARG_NO_EXT%"=="1" exit /b 1\r\n'
+              'if defined __VSCMD_INTERNAL_INIT_STATE exit /b 1\r\n'
+              f'> "{phase}" echo vc\r\ncall "{vc}" >nul\r\n'
+              'if errorlevel 1 exit /b 1\r\n'
+              'if not defined __VSCMD_VCVARS_INCLUDE exit /b 1\r\n'
+              'if not defined INCLUDE exit /b 1\r\n'
+              'set "INCLUDE=%__VSCMD_VCVARS_INCLUDE%%INCLUDE%"\r\n'
+              'set "EXTERNAL_INCLUDE=%__VSCMD_VCVARS_INCLUDE%%EXTERNAL_INCLUDE%"\r\n'
+              'set "__VSCMD_VCVARS_INCLUDE="\r\n'
+              f'> "{phase}" echo collect\r\nset\r\nexit /b 0\r\n')
     try:
-        raw = bytes(_capture_inspection(command, base, _directory(scratch)))
-    except _CommandFailed:
-        raise ValueError("Selected VS bootstrap failed") from None
+        encoded = script.encode("mbcs", errors="strict")
+    except UnicodeError:
+        directory.rmdir()
+        raise ValueError("Unsupported native bootstrap path encoding") from None
+    if len(encoded) > 64 * 1024:
+        directory.rmdir()
+        raise ValueError("Native bootstrap wrapper exceeds its byte budget")
+
+    def phase_name():
+        try:
+            with _regular(phase).open("rb") as stream:
+                value = stream.read(65)
+            return (value.strip().decode("ascii")
+                    if len(value) <= 64 and value.strip() in (b"core", b"vc", b"collect") else "unknown")
+        except (OSError, ValueError):
+            return "unknown"
+
+    exited = True
+    try:
+        with wrapper.open("xb") as stream:
+            stream.write(encoded)
+        command = subprocess.list2cmdline([environment["COMSPEC"]]) + f' /d /s /c ""{wrapper}""'
+        exited = False
+        try:
+            raw = bytes(_capture_inspection(command, environment, directory, timeout=30))
+            exited = True
+        except ValueError as error:
+            # A ValueError reaches here only after the capture's verified Job cleanup.
+            exited = True
+            kind = "timed out" if str(error) == "Dependency inspection timed out" else "failed"
+            raise ValueError("Selected VS native bootstrap " + kind + " at phase " + phase_name()) from None
+        except (OSError, subprocess.SubprocessError):
+            # Preserve owned scratch if exit/cleanup could not be established.
+            raise ValueError("Selected VS native bootstrap failed at phase " + phase_name()) from None
+        if phase_name() != "collect":
+            raise ValueError("Selected VS native bootstrap failed at phase " + phase_name())
+        after_profile, after_members = _native_bootstrap_inputs(vs)
+        if (profile != after_profile or members != after_members
+                or identities != {name: _identity(path) for name, path in after_members.items()}):
+            raise ValueError("Native bootstrap inputs changed across initialization")
+        return raw
+    finally:
+        if exited:
+            _unlinked(directory)
+            wrapper.unlink(missing_ok=True)
+            phase.unlink(missing_ok=True)
+            directory.rmdir()
+
+
+def build_environment(vs, tools, scratch, *, source=None, parent=None, bootstrap_profile=None):
+    """Construct the sole native child environment from admitted native-only VS x64 inputs."""
+    vs = _directory(vs)
+    profile = _native_bootstrap_selection(vs)
+    if bootstrap_profile is not None and profile["name"] != bootstrap_profile:
+        raise ValueError("Native bootstrap profile changed before initialization")
+    base, system = _bootstrap_base(scratch, parent)
+    # Never log, pin or return the complete collected environment.
+    raw = _native_bootstrap(vs, base, _directory(scratch), expected_profile=profile["name"])
     try:
         collected = dict(line.split("=", 1) for line in raw.decode("mbcs").splitlines()
                          if "=" in line and not line.startswith("="))
@@ -752,6 +942,9 @@ def build_environment(vs, tools, scratch, *, source=None, parent=None):
     if _directory(selected["VSINSTALLDIR"]) != vs:
         raise ValueError("VS bootstrap selected another installation")
     vc = _directory(selected["VCToolsInstallDir"])
+    if (selected.get("VCToolsVersion") != profile["toolset"]
+            or vc != vs / "VC/Tools/MSVC" / profile["toolset"]):
+        raise ValueError("VS bootstrap selected a different admitted toolset version")
     if not vc.is_relative_to(vs / "VC/Tools/MSVC") or _directory(selected["VCINSTALLDIR"]) != vs / "VC":
         raise ValueError("Unexpected selected VS compiler origin")
     kits = _directory(Path(base["ProgramFiles(x86)"]) / "Windows Kits")
@@ -1036,6 +1229,8 @@ def _recipe_paths(args):
         raise ValueError("Release CRT leaves the selected VS installation")
     if not re.fullmatch(r"Microsoft\.VC[0-9]+\.CRT", paths["crt_root"].name) or paths["crt_root"].parent.name != "x64":
         raise ValueError("Selected CRT is not an x64 Release CRT")
+    profile = _native_bootstrap_selection(paths["vs"])
+    _validate_native_crt(paths["vs"], paths["crt_root"], profile)
     build, output = paths["build"], paths["output"]
     if _paths_overlap(build, output):
         raise ValueError("Recipe build/output destinations overlap")
@@ -1216,9 +1411,10 @@ def build_qualification_fixture(paths, derived, environment, directory):
     guard = ("#if defined(MW34_POISON_CXXFLAGS) || defined(MW34_POISON_CFLAGS) || "
              "defined(MW34_POISON_CL) || defined(MW34_POISON_UNDERSCORE_CL)\n"
              "#error MW34_POISON_COMPILER_CONTROL\n#endif\n")
-    (source / "guard.cpp").write_text(guard + "#include " +
+    (source / "guard.cpp").write_text(guard + "#include <windows.h>\n#include <vector>\n#include " +
         '"' + (paths["source"] / "tests/native_stage_fixture.cpp").as_posix() + '"\n', encoding="utf-8")
-    (source / "guard.c").write_text(guard + "void mw34_environment_guard(void) {}\n", encoding="utf-8")
+    (source / "guard.c").write_text(guard + "#include <windows.h>\n#include <stdio.h>\n"
+        "void mw34_environment_guard(void) { (void)sizeof(DWORD); }\n", encoding="utf-8")
     project = ('cmake_minimum_required(VERSION 3.24)\nproject(mw34_recipe_probe LANGUAGES C CXX)\n'
         'find_package(MW34Marker CONFIG QUIET)\n'
         'add_library(mw34_normal_hash SHARED ' + _cmake_literal(paths["source"] / "tools/remaster-launcher/normal_hash.cpp") + ')\n'
@@ -1322,8 +1518,11 @@ def produce(args):
         raise ValueError("Owned native recipe requires Windows")
     paths = _recipe_paths(args)
     tools = {name: paths[name] for name in _TOOL_NAMES}
+    bootstrap_profile, bootstrap_inputs = _native_bootstrap_inputs(paths["vs"])
+    profile = next(item for item in _NATIVE_BOOTSTRAP_PROFILES if item["name"] == bootstrap_profile)
+    _validate_native_crt(paths["vs"], paths["crt_root"], profile)
     environment, derived, allowed_system = build_environment(paths["vs"], tools, paths["build"].parent,
-                                                            source=paths["source"])
+                                                            source=paths["source"], bootstrap_profile=bootstrap_profile)
     tools_before = _tool_observations(tools, environment, paths["build"].parent)
     source_before = _source_identity(paths["source"], paths["git"], environment, args.commit)
     notices, components, inputs, distributions = _notice_inputs(paths, args.commit)
@@ -1331,6 +1530,7 @@ def produce(args):
         raise ValueError("Observed native version exceeds the bounded component index")
     components[0]["version"] = source_before["describe"]
     inputs.update({"selected-tool/" + name: path for name, path in derived.items()})
+    inputs.update({"selected-bootstrap/" + name: path for name, path in bootstrap_inputs.items()})
     inputs_before = _observe_inputs(inputs)
     with _producer_ownership():
         build = paths["build"]
@@ -1361,9 +1561,12 @@ def produce(args):
         source_after = _source_identity(paths["source"], paths["git"], environment, args.commit)
         tools_after = _tool_observations(tools, environment, build)
         inputs_after = _observe_inputs(inputs)
+        if _native_bootstrap_inputs(paths["vs"])[0] != bootstrap_profile:
+            raise ValueError("Native bootstrap profile changed across native build")
         if source_after != source_before or tools_after != tools_before or inputs_after != inputs_before:
             raise ValueError("Selected source/tool/dependency observations changed across native build")
         observation = dict(source=source_before, environment_policy=ENVIRONMENT_POLICY,
+                           bootstrap_profile=bootstrap_profile,
                            toolchain_versions={name: environment[name] for name in
                                                ("VCToolsVersion", "WindowsSDKVersion", "UCRTVersion") if name in environment},
                            recipe=dict(platform="windows-x64", configuration="Release", package=True,

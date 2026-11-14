@@ -447,22 +447,247 @@ def native_recipe_tests(inputs):
             cls.fixture, cls.flags = producer.build_qualification_fixture(
                 cls.paths, cls.derived, cls.environment, cls.root / "clean")
 
+        def _authored_bootstrap(self, name, *, core_extra="", vc_extra=""):
+            # These stand-ins test wrapper construction, never actual VS/native qualification.
+            root = self.root / name
+            core = root / "Common7/Tools/VsDevCmd.bat"
+            vc = root / "Common7/Tools/vsdevcmd/ext/vcvars.bat"
+            vc.parent.mkdir(parents=True)
+            extension = root / "extension-sentinel"
+            telemetry = root / "telemetry-sentinel"
+            core.write_bytes((
+                '@echo off\r\nif not "%1"=="-no_ext" (\r\n'
+                f'> "{extension}" echo MW34_AUTHORED_EXTENSION\r\nexit /b 47\r\n)\r\n'
+                'if not "%VSCMD_SKIP_SENDTELEMETRY%"=="1" (\r\n'
+                f'> "{telemetry}" echo MW34_AUTHORED_TELEMETRY\r\nexit /b 48\r\n)\r\n'
+                'set "VSCMD_ARG_HOST_ARCH=x64"\r\nset "VSCMD_ARG_TGT_ARCH=x64"\r\n'
+                'set "VSCMD_ARG_APP_PLAT=Desktop"\r\nset "VSCMD_ARG_NO_EXT=1"\r\n'
+                'set "INCLUDE=SDK_INCLUDE"\r\nset "EXTERNAL_INCLUDE=SDK_EXTERNAL"\r\n'
+                + core_extra + '\r\nexit /b 0\r\n').encode("mbcs"))
+            vc.write_bytes((
+                '@echo off\r\nif not "%VSCMD_ARG_HOST_ARCH%"=="x64" exit /b 49\r\n'
+                'if not "%VSCMD_ARG_TGT_ARCH%"=="x64" exit /b 49\r\n'
+                'if not "%VSCMD_ARG_APP_PLAT%"=="Desktop" exit /b 49\r\n'
+                'if defined __VSCMD_INTERNAL_INIT_STATE exit /b 49\r\n'
+                'set "__VSCMD_VCVARS_INCLUDE=VC_INCLUDE;"\r\n'
+                + vc_extra + '\r\nexit /b 0\r\n').encode("mbcs"))
+            return root, {"Common7/Tools/VsDevCmd.bat": core,
+                          "Common7/Tools/vsdevcmd/ext/vcvars.bat": vc}
+
+        def test_native_bootstrap_command_order_and_include_prefix(self):
+            root, members = self._authored_bootstrap("wrapper-order")
+            environment, _ = producer._bootstrap_base(self.root)
+            admitted = ("authored-wrapper-construction-control", members)
+            with patch.object(producer, "_native_bootstrap_inputs", return_value=admitted):
+                raw = producer._native_bootstrap(root, environment, self.root)
+            values = dict(line.split("=", 1) for line in raw.decode("mbcs").splitlines()
+                          if "=" in line and not line.startswith("="))
+            self.assertEqual(values["INCLUDE"], "VC_INCLUDE;SDK_INCLUDE")
+            self.assertEqual(values["EXTERNAL_INCLUDE"], "VC_INCLUDE;SDK_EXTERNAL")
+            self.assertNotIn("__VSCMD_VCVARS_INCLUDE", values)
+            self.assertFalse((root / "extension-sentinel").exists())
+            self.assertFalse((root / "telemetry-sentinel").exists())
+            for argument, changes, marker, sentinel in (
+                    ("-no_logo", {}, "extension-sentinel", "MW34_AUTHORED_EXTENSION"),
+                    ("-no_ext", {"VSCMD_SKIP_SENDTELEMETRY": "0"},
+                     "telemetry-sentinel", "MW34_AUTHORED_TELEMETRY")):
+                command = (subprocess.list2cmdline([environment["COMSPEC"]]) +
+                           f' /d /s /c ""{members["Common7/Tools/VsDevCmd.bat"]}" {argument}"')
+                with self.assertRaises(producer._CommandFailed):
+                    producer._capture_inspection(command, dict(environment, **changes), self.root)
+                self.assertEqual((root / marker).read_text().strip(), sentinel)
+            actual_capture = producer._capture_inspection
+            def omit_prefix(command, environment, directory, **options):
+                wrapper = Path(directory) / "native.cmd"
+                data = wrapper.read_bytes()
+                line = b'set "INCLUDE=%__VSCMD_VCVARS_INCLUDE%%INCLUDE%"'
+                self.assertIn(line, data)
+                wrapper.write_bytes(data.replace(line, b"rem AUTHORED_OMITTED_VC_PREFIX", 1))
+                return actual_capture(command, environment, directory, **options)
+            with patch.object(producer, "_native_bootstrap_inputs", return_value=admitted), \
+                 patch.object(producer, "_capture_inspection", side_effect=omit_prefix):
+                unsafe = producer._native_bootstrap(root, environment, self.root)
+            self.assertIn(b"INCLUDE=SDK_INCLUDE\r\n", unsafe)
+            self.assertNotIn(b"INCLUDE=VC_INCLUDE;SDK_INCLUDE", unsafe)
+            # The class's real C/C++ configure/build is a separate, required VS positive.
+            first = Path(self.environment["INCLUDE"].split(";")[0])
+            self.assertEqual(first, Path(self.environment["VCToolsInstallDir"]) / "include")
+
+        def test_native_bootstrap_rejects_unknown_profile_before_child(self):
+            profile, original = producer._native_bootstrap_inputs(Path(inputs.vs))
+            other = next(item["name"] for item in producer._NATIVE_BOOTSTRAP_PROFILES
+                         if item["name"] != profile)
+            environment, _ = producer._bootstrap_base(self.root)
+            before = set(self.root.iterdir())
+            with patch.object(producer, "_native_bootstrap_inputs", return_value=(other, original)), \
+                 patch.object(producer, "_capture_inspection", side_effect=AssertionError("Unexpected child")), \
+                 self.assertRaisesRegex(ValueError, "profile changed before wrapper creation"):
+                producer._native_bootstrap(Path(inputs.vs), environment, self.root,
+                                           expected_profile=profile)
+            self.assertEqual(set(self.root.iterdir()), before)
+            copied = self.root / "copied-bootstrap-inputs"
+            for relative, source in original.items():
+                destination = copied / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, destination)
+            self.assertEqual(producer._native_bootstrap_inputs(copied)[0], profile)
+            unselected = copied / "Common7/Tools/vsdevcmd/ext/unselected.bat"
+            unselected.write_text("@echo MW34_UNSELECTED_EXTENSION_MUST_NOT_RUN\n")
+            self.assertNotIn(unselected, producer._native_bootstrap_inputs(copied)[1].values())
+            environment, _ = producer._bootstrap_base(self.root)
+            metadata = next(name for name in original if "VCToolsVersion.v" in name)
+            cases = ((producer._NATIVE_BOOTSTRAP_FILES[0], b"@echo changed\r\n", "source profile"),
+                     (metadata, b"14.0\r\n", "metadata"))
+            for relative, replacement, oracle in cases:
+                path = copied / relative
+                saved = path.read_bytes()
+                try:
+                    path.write_bytes(replacement)
+                    with patch.object(producer, "_capture_inspection", side_effect=AssertionError("Child started")), \
+                         patch.object(producer.tempfile, "mkdtemp", side_effect=AssertionError("Wrapper created")), \
+                         self.assertRaisesRegex(ValueError, oracle):
+                        producer._native_bootstrap(copied, environment, self.root)
+                finally:
+                    path.write_bytes(saved)
+            path = copied / metadata
+            saved = path.read_bytes()
+            path.unlink()
+            try:
+                with patch.object(producer, "_capture_inspection", side_effect=AssertionError("Child started")), \
+                     patch.object(producer.tempfile, "mkdtemp", side_effect=AssertionError("Wrapper created")), \
+                     self.assertRaises(FileNotFoundError):
+                    producer._native_bootstrap(copied, environment, self.root)
+            finally:
+                path.write_bytes(saved)
+            unsafe = self.root / "unsafe&bootstrap"
+            unsafe.mkdir()
+            linked = self.root / "linked-bootstrap"
+            result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(linked), str(copied)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.addCleanup(linked.rmdir)
+            for candidate, oracle in ((unsafe, "Unsafe native bootstrap path"), (linked, "link")):
+                with patch.object(producer, "_capture_inspection", side_effect=AssertionError("Child started")), \
+                     patch.object(producer.tempfile, "mkdtemp", side_effect=AssertionError("Wrapper created")), \
+                     self.assertRaisesRegex(ValueError, oracle):
+                    producer._native_bootstrap(candidate, environment, self.root)
+
+        def test_native_bootstrap_fixed_policy_and_privacy(self):
+            import contextlib
+            import io
+            root, members = self._authored_bootstrap("wrapper-privacy")
+            environment, _ = producer._bootstrap_base(self.root)
+            secret = "MW34_AUTHORED_PRIVATE_ENVIRONMENT_SENTINEL"
+            environment["AUTHORED_CREDENTIAL_SENTINEL"] = secret
+            actual_capture = producer._capture_inspection
+            phases = []
+            def corrupt_phase(command, environment, directory, **options):
+                data = actual_capture(command, environment, directory, **options)
+                self.assertIn(secret.encode(), data)
+                phase = Path(directory) / "phase.txt"
+                phases.append(phase.read_bytes())
+                phase.write_bytes(secret.encode() * 8)
+                return data
+            output = io.StringIO()
+            before = set(self.root.iterdir())
+            with patch.object(producer, "_native_bootstrap_inputs", return_value=("authored-control", members)), \
+                 patch.object(producer, "_capture_inspection", side_effect=corrupt_phase), \
+                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output), \
+                 self.assertRaisesRegex(ValueError, "failed at phase unknown") as caught:
+                producer._native_bootstrap(root, environment, self.root)
+            self.assertEqual(set(self.root.iterdir()), before)
+            self.assertEqual([value.strip() for value in phases], [b"collect"])
+            self.assertNotIn(secret, str(caught.exception) + output.getvalue())
+            for key in ("VSCMD_SKIP_SENDTELEMETRY", "NoDefaultCurrentDirectoryInExePath"):
+                with patch.object(producer, "_native_bootstrap_inputs", return_value=("authored-control", members)), \
+                     patch.object(producer.tempfile, "mkdtemp", side_effect=AssertionError("Wrapper created")), \
+                     self.assertRaisesRegex(ValueError, "Missing fixed native bootstrap controls"):
+                    producer._native_bootstrap(root, dict(environment, **{key: "0"}), self.root)
+            self.assertEqual(self.environment["VSCMD_SKIP_SENDTELEMETRY"], "1")
+
+        def test_native_bootstrap_timeout_phase_and_owned_cleanup(self):
+            actual_capture = producer._capture_inspection
+            actual_finish = producer._finish_child_job
+            for phase in ("core", "vc"):
+                with self.subTest(phase=phase):
+                    pid_file = self.root / ("bootstrap-grandchild-" + phase)
+                    sleeper = self.root / ("bootstrap-sleeper-" + phase + ".py")
+                    sleeper.write_text("import pathlib,subprocess,sys,time\n"
+                        "child=subprocess.Popen([sys.executable,'-I','-c','import time;time.sleep(60)'])\n"
+                        "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\ntime.sleep(60)\n")
+                    stall = f'"{sys.executable}" -I -B "{sleeper}" "{pid_file}"'
+                    root, members = self._authored_bootstrap("timeout-" + phase,
+                        core_extra=stall if phase == "core" else "",
+                        vc_extra=stall if phase == "vc" else "")
+                    environment, _ = producer._bootstrap_base(self.root)
+                    finished = []
+                    def bounded_capture(*args, **options):
+                        self.assertEqual(options["timeout"], 30)
+                        return actual_capture(*args, **dict(options, timeout=2))
+                    def observed_finish(*args):
+                        state = actual_finish(*args)
+                        finished.append(state)
+                        return state
+                    before = set(self.root.iterdir())
+                    with patch.object(producer, "_native_bootstrap_inputs", return_value=("authored-control", members)), \
+                         patch.object(producer, "_capture_inspection", side_effect=bounded_capture), \
+                         patch.object(producer, "_finish_child_job", side_effect=observed_finish), \
+                         self.assertRaisesRegex(ValueError, "timed out at phase " + phase):
+                        producer._native_bootstrap(root, environment, self.root)
+                    self.assertTrue(pid_file.is_file(), "Owned grandchild did not start")
+                    self.assertEqual(set(self.root.iterdir()) - {pid_file}, before)
+                    self.assertEqual(len(finished), 1)
+                    self.assertEqual(finished[0]["active_processes"], 0)
+                    self.assertGreaterEqual(finished[0]["total_processes"], 3)
+
         def test_selected_environment_strips_parent_controls(self):
             keys = ("CC", "CXX", "CFLAGS", "CXXFLAGS", "CL", "_CL_", "LINK", "_LINK_",
                     "CMAKE_TOOLCHAIN_FILE", "CMAKE_PREFIX_PATH", "VCPKG_ROOT",
                     "PKG_CONFIG_PATH", "GIT_EXEC_PATH", "AUTHORED_PACKAGE_ROOT", "HOME",
-                    "USERPROFILE", "AUTHORED_CREDENTIAL_SENTINEL")
+                    "USERPROFILE", "AUTHORED_CREDENTIAL_SENTINEL", "VSCMD_DEBUG", "VSCMD_TEST",
+                    "__VSCMD_INTERNAL_INIT_STATE")
             parent = dict(os.environ)
             parent.update({key: "AUTHORED_PARENT_CONTROL" for key in keys})
             parent["NoDefaultCurrentDirectoryInExePath"] = "0"
+            parent["VSCMD_SKIP_SENDTELEMETRY"] = "0"
+            parent["VCToolsVersion"] = "AUTHORED_PARENT_CONTROL"
+            script = "import json,os,sys; print(json.dumps({k:os.environ.get(k) for k in sys.argv[1:]}))"
+            bootstrap, _ = producer._bootstrap_base(self.root, parent)
+            initial = json.loads(producer._run([sys.executable, "-I", "-c", script, "VCToolsVersion"],
+                                              bootstrap, self.root))
+            self.assertIsNone(initial["VCToolsVersion"])
             environment, _, _ = producer.build_environment(Path(inputs.vs), self.paths, self.root,
                                                            source=self.paths["source"], parent=parent)
-            script = "import json,os,sys; print(json.dumps({k:os.environ.get(k) for k in sys.argv[1:]}))"
             received = json.loads(producer._run([sys.executable, "-I", "-c", script, *keys,
-                                                "NoDefaultCurrentDirectoryInExePath"],
+                                                "NoDefaultCurrentDirectoryInExePath", "VSCMD_SKIP_SENDTELEMETRY",
+                                                "VCToolsVersion"],
                                                environment, self.root))
             self.assertEqual({key: received[key] for key in keys}, dict.fromkeys(keys))
+            # This key is stripped initially, then supplied by the admitted VS initialization.
+            self.assertEqual(received["VCToolsVersion"], self.environment["VCToolsVersion"])
+            self.assertNotEqual(received["VCToolsVersion"], parent["VCToolsVersion"])
             self.assertEqual(received["NoDefaultCurrentDirectoryInExePath"], "1")
+            self.assertEqual(received["VSCMD_SKIP_SENDTELEMETRY"], "1")
+            # Reject vendor output that disagrees with the admitted selection,
+            # before looking up or executing a compiler/linker child.
+            for changed in ({"VCToolsVersion": "14.0.00000"},
+                            {"VCToolsVersion": ""},
+                            {"VCToolsInstallDir": str(Path(inputs.vs) / "VC/Tools/MSVC")}):
+                vendor = dict(self.environment, **changed)
+                raw = "\r\n".join(key + "=" + value for key, value in vendor.items()).encode("mbcs")
+                with self.subTest(vendor_selection=changed), \
+                     patch.object(producer, "_native_bootstrap", return_value=raw), \
+                     patch.object(producer, "_capture_inspection", side_effect=AssertionError("Unexpected child")), \
+                     self.assertRaisesRegex(ValueError, "different admitted toolset version"):
+                    producer.build_environment(Path(inputs.vs), self.paths, self.root,
+                                               source=self.paths["source"])
+            selected = producer._native_bootstrap_selection(Path(inputs.vs))
+            other = next(profile for profile in producer._NATIVE_BOOTSTRAP_PROFILES
+                         if profile["name"] != selected["name"])
+            with patch.object(producer, "_capture_inspection", side_effect=AssertionError("Unexpected child")), \
+                 self.assertRaisesRegex(ValueError, "profile changed before initialization"):
+                producer.build_environment(Path(inputs.vs), self.paths, self.root,
+                                           bootstrap_profile=other["name"])
             self.assertEqual(Path(environment["PATH"].split(";")[0]), self.paths["git"].parent)
             _, flags = producer.build_qualification_fixture(self.paths, self.derived, environment,
                                                             self.root / "sanitized-parent-controls")
@@ -473,15 +698,17 @@ def native_recipe_tests(inputs):
             permitted = {name.swapcase(): os.environ[name] for name in producer._WINDOWS_KEYS if name in os.environ}
             class HostileParent(Mapping):
                 def __iter__(self):
-                    return iter([*permitted, "AUTHORED_VALUE_MUST_NOT_BE_READ", "NoDefaultCurrentDirectoryInExePath"])
+                    return iter([*permitted, "AUTHORED_VALUE_MUST_NOT_BE_READ",
+                                 "NoDefaultCurrentDirectoryInExePath", "VSCMD_SKIP_SENDTELEMETRY"])
                 def __len__(self):
-                    return len(permitted) + 2
+                    return len(permitted) + 3
                 def __getitem__(self, name):
                     if name not in permitted:
                         raise AssertionError("Non-allowlisted parent value was accessed.")
                     return permitted[name]
             environment, _ = producer._bootstrap_base(self.root, HostileParent())
             self.assertEqual(environment["NoDefaultCurrentDirectoryInExePath"], "1")
+            self.assertEqual(environment["VSCMD_SKIP_SENDTELEMETRY"], "1")
             self.assertNotIn("AUTHORED_VALUE_MUST_NOT_BE_READ", environment)
 
         def test_real_cmake_git_guard_and_shadow_control(self):
@@ -648,6 +875,31 @@ def native_recipe_tests(inputs):
             normalized = producer._recipe_paths(Namespace(**ordinary))
             self.assertEqual(normalized["build"], arguments["build"])
             self.assertEqual(normalized["output"], arguments["output"])
+            # A copied static source tree is a negative preflight control only;
+            # its in-tree x64 CRT has an unselected version and is never run.
+            copied = self.root / "copied-crt-selection-control"
+            _, members = producer._native_bootstrap_inputs(Path(inputs.vs))
+            for relative, source in members.items():
+                destination = copied / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, destination)
+            profile = producer._native_bootstrap_selection(copied)
+            for version, family in (("14.0.00000", profile["crt"]),
+                                    (profile["redist"], "Microsoft.VC999.CRT")):
+                crt = copied / "VC/Redist/MSVC" / version / "x64" / family
+                crt.mkdir(parents=True)
+                candidate = dict(ordinary, vs=str(copied), crt_root=str(crt))
+                with self.subTest(redist_version=version, crt_family=family), \
+                     patch.object(producer, "_capture_inspection", side_effect=AssertionError("Unexpected child")), \
+                     self.assertRaisesRegex(ValueError, "differs from the admitted redist version"):
+                    producer._recipe_paths(Namespace(**candidate))
+            other = next(item for item in producer._NATIVE_BOOTSTRAP_PROFILES
+                         if item["name"] != profile["name"])
+            with patch.object(producer, "_recipe_paths", return_value=normalized), \
+                 patch.object(producer, "_native_bootstrap_inputs", return_value=(other["name"], {})), \
+                 patch.object(producer, "_capture_inspection", side_effect=AssertionError("Unexpected child")), \
+                 self.assertRaisesRegex(ValueError, "differs from the admitted redist version"):
+                producer.produce(Namespace(**ordinary))
             self.assertFalse(arguments["build"].exists())
             self.assertFalse(arguments["output"].exists())
 

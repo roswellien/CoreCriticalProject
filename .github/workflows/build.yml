@@ -43,7 +43,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
-      - name: Inspect hosted VS17 bootstrap sources (read-only)
+      - name: Admit selected Windows native bootstrap sources
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -51,330 +51,39 @@ jobs:
           function Assert-Unlinked([string] $Path) {
             $item = Get-Item -LiteralPath $Path -Force
             while ($null -ne $item) {
-              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked path rejected.' }
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked tool path.' }
               $item = if ($item.PSIsContainer) { $item.Parent } else { $item.Directory }
             }
           }
-          Assert-Unlinked $env:RUNNER_TEMP
           $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio/Installer/vswhere.exe'
           Assert-Unlinked $vswhere
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or @($vs).Count -ne 1 -or -not $vs) { throw 'Missing selected VS installation.' }
-          Assert-Unlinked $vs
-          $evidenceDir = Join-Path $env:RUNNER_TEMP 'mw34-vs17-evidence'
-          if (Test-Path -LiteralPath $evidenceDir) { throw 'Owned evidence directory already exists.' }
-          New-Item -ItemType Directory -Path $evidenceDir | Out-Null
-          Assert-Unlinked $evidenceDir
-          $workDir = Join-Path $env:RUNNER_TEMP ('mw34-vs17-work-' + [Guid]::NewGuid().ToString('N'))
-          New-Item -ItemType Directory -Path $workDir | Out-Null
-          Assert-Unlinked $workDir
-          $collectorPath = Join-Path $workDir 'collector.py'
-          $driverPath = Join-Path $workDir 'driver.py'
-          $collectorSource = @'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import re
-          import stat
-          import sys
-          import time
-
-          MAX_FILE_BYTES = 256 * 1024
-          MAX_BUNDLE_BYTES = 2 * 1024 * 1024
-          MAX_VCPKG_EXE_BYTES = 64 * 1024 * 1024
-          DEADLINE_SECONDS = 28.0
-
-          REQUIRED_BATCH = (
-              "Common7/Tools/VsDevCmd.bat",
-              "Common7/Tools/vsdevcmd/core/vsdevcmd_start.bat",
-              "Common7/Tools/vsdevcmd/core/parse_cmd.bat",
-              "Common7/Tools/vsdevcmd/core/dotnet.bat",
-              "Common7/Tools/vsdevcmd/core/msbuild.bat",
-              "Common7/Tools/vsdevcmd/core/winsdk.bat",
-              "Common7/Tools/vsdevcmd/core/vsdevcmd_end.bat",
-              "Common7/Tools/vsdevcmd/ext/vcvars.bat",
-          )
-          REQUIRED_METADATA = (
-              "VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt",
-              "VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt",
-          )
-          OPTIONAL_VCPKG_FILES = (
-              "Common7/Tools/vsdevcmd/ext/vcpkg.bat",
-              "VC/vcpkg/vcpkg-init.cmd",
-              "VC/vcpkg/.vcpkg-root",
-              "VC/vcpkg/vcpkg-version.txt",
-          )
-          VCPKG_EXE = "VC/vcpkg/vcpkg.exe"
-          VERSION_META_RE = re.compile(r"Microsoft\.VC(?:Tools|Redist)Version[A-Za-z0-9._-]*\.default\.txt")
-
-
-          def is_reparse(st):
-              return bool(getattr(st, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
-
-
-          class CollectionError(ValueError):
-              def __init__(self, code):
-                  super().__init__(code)
-                  self.code = code
-
-
-          def diagnostic_id(exc):
-              return exc.code if isinstance(exc, CollectionError) else type(exc).__name__
-
-
-          def assert_unlinked_tree(path, root=None):
-              current = Path(path)
-              stop = Path(root) if root is not None else None
-              while True:
-                  st = os.lstat(current)
-                  if is_reparse(st):
-                      raise CollectionError("reparse_point_rejected")
-                  if stop is not None and current == stop:
-                      break
-                  parent = current.parent
-                  if parent == current:
-                      break
-                  current = parent
-
-
-          def assert_local_drive(path):
-              text = str(path)
-              if text.startswith("\\\\"):
-                  raise CollectionError("non_local_unc_path_rejected")
-              drive, _ = os.path.splitdrive(text)
-              if len(drive) != 2 or drive[1] != ":" or not drive[0].isalpha():
-                  raise CollectionError("non_drive_path_rejected")
-
-
-          def stat_identity(st):
-              return (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev)
-
-
-          def copy_bounded(vs_root, evidence_root, rel_posix, category, remaining_bundle):
-              src = vs_root / rel_posix
-              if not src.exists():
-                  return {"relative_path": rel_posix, "category": category, "status": "missing"}, 0
-              assert_unlinked_tree(src, vs_root)
-              before = os.lstat(src)
-              if not stat.S_ISREG(before.st_mode) or is_reparse(before):
-                  raise CollectionError("non_regular_source_file")
-              limit = min(MAX_FILE_BYTES, remaining_bundle)
-              if before.st_size > limit:
-                  raise CollectionError("source_exceeds_byte_budget")
-              with open(src, "rb") as stream:
-                  data = stream.read(limit + 1)
-              if len(data) > limit:
-                  raise CollectionError("source_read_exceeded_byte_budget")
-              after = os.lstat(src)
-              if stat_identity(before) != stat_identity(after) or len(data) != before.st_size:
-                  raise CollectionError("source_changed_during_read")
-              digest = hashlib.sha256(data).hexdigest()
-              dest = evidence_root / "files" / rel_posix
-              dest.parent.mkdir(parents=True, exist_ok=True)
-              with open(dest, "wb") as out:
-                  out.write(data)
-              return {
-                  "relative_path": rel_posix,
-                  "category": category,
-                  "status": "copied",
-                  "bytes": len(data),
-                  "sha256": digest,
-              }, len(data)
-
-
-          def hash_vcpkg_exe(vs_root):
-              src = vs_root / VCPKG_EXE
-              if not src.exists():
-                  return {"relative_path": VCPKG_EXE, "status": "missing"}
-              assert_unlinked_tree(src, vs_root)
-              before = os.lstat(src)
-              if not stat.S_ISREG(before.st_mode) or is_reparse(before):
-                  raise CollectionError("non_regular_vcpkg_exe")
-              if before.st_size > MAX_VCPKG_EXE_BYTES:
-                  return {"relative_path": VCPKG_EXE, "status": "oversize_unsupported", "bytes": before.st_size}
-              hasher = hashlib.sha256()
-              total = 0
-              with open(src, "rb") as stream:
-                  while True:
-                      chunk = stream.read(65536)
-                      if not chunk:
-                          break
-                      total += len(chunk)
-                      if total > MAX_VCPKG_EXE_BYTES:
-                          return {"relative_path": VCPKG_EXE, "status": "oversize_unsupported", "bytes": total}
-                      hasher.update(chunk)
-              after = os.lstat(src)
-              if stat_identity(before) != stat_identity(after) or total != before.st_size:
-                  raise CollectionError("vcpkg_exe_changed_during_hash")
-              return {"relative_path": VCPKG_EXE, "status": "hashed", "bytes": total, "sha256": hasher.hexdigest()}
-
-
-          def write_manifest(evidence_root, manifest):
-              target = evidence_root / "manifest.json"
-              temp = evidence_root / "manifest.json.tmp"
-              temp.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-              os.replace(temp, target)
-
-
-          def main():
-              try:
-                  if len(sys.argv) != 3:
-                      raise CollectionError("invalid_arguments")
-                  vs_root = Path(sys.argv[1])
-                  evidence_root = Path(sys.argv[2])
-                  assert_local_drive(vs_root)
-                  assert_local_drive(evidence_root)
-                  assert_unlinked_tree(vs_root)
-                  assert_unlinked_tree(evidence_root)
-                  if not vs_root.is_dir() or not evidence_root.is_dir():
-                      raise CollectionError("invalid_root_directory")
-              except Exception as exc:
-                  print(json.dumps({"status": "incomplete", "error": diagnostic_id(exc)}))
-                  return 1
-
-              started = time.monotonic()
-              manifest = {
-                  "schema_version": 1,
-                  "status": "incomplete",
-                  "total_copied_bytes": 0,
-                  "missing_required": [],
-                  "errors": [],
-                  "files": [],
-                  "vcpkg_exe": None,
-              }
-              write_manifest(evidence_root, manifest)
-
-              targets = [(rel, "required_batch") for rel in REQUIRED_BATCH]
-              targets.extend((rel, "required_metadata") for rel in REQUIRED_METADATA)
-              aux_dir = vs_root / "VC/Auxiliary/Build"
-              try:
-                  if aux_dir.is_dir():
-                      assert_unlinked_tree(aux_dir, vs_root)
-                      seen = set(REQUIRED_METADATA)
-                      extra = []
-                      with os.scandir(aux_dir) as entries:
-                          for entry in entries:
-                              if VERSION_META_RE.fullmatch(entry.name):
-                                  rel = "VC/Auxiliary/Build/" + entry.name
-                                  if rel not in seen:
-                                      extra.append(rel)
-                      for rel in sorted(extra):
-                          targets.append((rel, "version_metadata"))
-              except Exception as exc:
-                  manifest["errors"].append(f"VC/Auxiliary/Build: {diagnostic_id(exc)}")
-              targets.extend((rel, "optional_vcpkg") for rel in OPTIONAL_VCPKG_FILES)
-
-              total_bytes = 0
-              for rel, category in targets:
-                  if time.monotonic() - started > DEADLINE_SECONDS:
-                      manifest["errors"].append("collection_deadline_exceeded")
-                      break
-                  try:
-                      record, copied = copy_bounded(vs_root, evidence_root, rel, category, MAX_BUNDLE_BYTES - total_bytes)
-                      manifest["files"].append(record)
-                      total_bytes += copied
-                      manifest["total_copied_bytes"] = total_bytes
-                      if record["status"] == "missing" and category in ("required_batch", "required_metadata"):
-                          manifest["missing_required"].append(rel)
-                  except Exception as exc:
-                      manifest["errors"].append(f"{rel}: {diagnostic_id(exc)}")
-                      if category in ("required_batch", "required_metadata"):
-                          manifest["missing_required"].append(rel)
-                  write_manifest(evidence_root, manifest)
-
-              if time.monotonic() - started <= DEADLINE_SECONDS:
-                  try:
-                      manifest["vcpkg_exe"] = hash_vcpkg_exe(vs_root)
-                  except Exception as exc:
-                      manifest["errors"].append(f"{VCPKG_EXE}: {diagnostic_id(exc)}")
-              else:
-                  manifest["errors"].append("collection_deadline_exceeded_before_vcpkg_exe")
-
-              if not manifest["missing_required"] and not manifest["errors"]:
-                  manifest["status"] = "complete"
-              write_manifest(evidence_root, manifest)
-              print(json.dumps({
-                  "status": manifest["status"],
-                  "files": len(manifest["files"]),
-                  "total_copied_bytes": manifest["total_copied_bytes"],
-                  "missing_required": len(manifest["missing_required"]),
-                  "errors": len(manifest["errors"]),
-              }))
-              return 0 if manifest["status"] == "complete" else 1
-
-
-          if __name__ == "__main__":
-              sys.exit(main())
-          '@
-          $driverSource = @'
-          import importlib.util
+          $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          $producerDirectory = Join-Path $PWD 'tools/remaster-launcher'
+          Assert-Unlinked $python
+          Assert-Unlinked $producerDirectory
+          $admission = @'
           from pathlib import Path
           import sys
-
-
-          def load_producer(module_path):
-              spec = importlib.util.spec_from_file_location("stage_mw3_re_runtime", str(module_path))
-              if spec is None or spec.loader is None:
-                  raise RuntimeError("Unable to load producer module")
-              module = importlib.util.module_from_spec(spec)
-              sys.modules[spec.name] = module
-              try:
-                  spec.loader.exec_module(module)
-              except Exception:
-                  sys.modules.pop(spec.name, None)
-                  raise
-              return module
-
-
-          def main():
-              vs_root = Path(sys.argv[1])
-              evidence_root = Path(sys.argv[2])
-              work_dir = Path(sys.argv[3])
-              collector_path = Path(sys.argv[4])
-              producer_path = Path(sys.argv[5])
-              scratch = work_dir / "scratch"
-              scratch.mkdir(parents=False, exist_ok=False)
-              producer = load_producer(producer_path)
-              sanitized, _ = producer._bootstrap_base(scratch)
-              output = producer._capture_inspection(
-                  [sys.executable, "-I", "-B", str(collector_path), str(vs_root), str(evidence_root)],
-                  sanitized,
-                  scratch,
-                  timeout=30,
-              )
-              sys.stdout.buffer.write(output)
-              return 0
-
-
-          if __name__ == "__main__":
-              sys.exit(main())
+          sys.path.insert(0, sys.argv[1])
+          import stage_mw3_re_runtime as producer
+          try:
+              profile, _ = producer._native_bootstrap_inputs(Path(sys.argv[2]))
+          except (OSError, ValueError):
+              raise SystemExit('Native bootstrap source admission failed.') from None
+          print(profile)
           '@
-          [IO.File]::WriteAllText($collectorPath, $collectorSource, [Text.UTF8Encoding]::new($false))
-          [IO.File]::WriteAllText($driverPath, $driverSource, [Text.UTF8Encoding]::new($false))
-          $producerPath = Join-Path $PWD 'tools/remaster-launcher/stage_mw3_re_runtime.py'
-          python -I -B $driverPath $vs $evidenceDir $workDir $collectorPath $producerPath
-          if ($LASTEXITCODE -ne 0) { throw 'Read-only VS17 source inspection failed.' }
-      - name: Upload hosted VS17 source evidence
-        if: runner.os == 'Windows' && always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: vs17-source-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: ${{ runner.temp }}/mw34-vs17-evidence
-          if-no-files-found: warn
-          include-hidden-files: true
-      - name: Stop on unsupported VS17 source profile
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          throw 'Unsupported VS17 source profile: admission requires independent source review of collected evidence.'
+          $admissionArguments = @('-I', '-B', '-c', $admission, $producerDirectory, $vs)
+          & $python @admissionArguments
+          if ($LASTEXITCODE -ne 0) { throw 'Selected native bootstrap source profile was rejected.' }
       # tools/check.py owns the configure options per OS (-A x64 with MSVC, clang++ on
       # Linux) and the pinned clang-format, so CI and local runs can't drift apart.
       - name: Install the pinned clang-format
         run: python tools/check.py --setup --only format-check
       - name: Build, CTest and C++ format check
         run: python tools/check.py --only build --only ctest --only format-check
-      - name: Qualify authored Windows native staging and pinned planning
+      - name: Qualify authored Windows native staging and pinned planning (34 cases)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
