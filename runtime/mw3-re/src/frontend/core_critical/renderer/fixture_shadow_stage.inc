@@ -5,10 +5,10 @@ struct FixtureCaster {
   VkBuffer buffer{};
   unsigned first{}, count{};
   std::uint64_t geometry_key{};
+  std::uint64_t source{}, revision{};
   mw34::fixture_shadow::Matrix world = mw34::fixture_shadow::identity;
   mw34::fixture_shadow::Bounds bounds;
   std::vector<ModelVertex> tl;
-  std::function<bool()> valid;
   std::uint64_t frame{};
   Tex *texture{};
   unsigned sampler{};
@@ -234,6 +234,34 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
     fixtureGeneration = scene.world_generation;
     fixtureContext = scene.world_context;
   }
+  const auto latest_revision = [&scene](std::uint64_t source) {
+    const auto found = std::lower_bound(
+        scene.shadow_revisions.begin(), scene.shadow_revisions.end(), source,
+        [](const auto &entry, std::uint64_t id) { return entry.first < id; });
+    return found != scene.shadow_revisions.end() && found->first == source
+               ? found->second
+               : std::uint64_t{0};
+  };
+  for (const auto &draw : scene.draws) {
+    if (!draw.model || !draw.count)
+      continue;
+    if (!draw.model->shadow_source)
+      throw std::runtime_error("Fixture shadows require a model source identity");
+    if (!draw.model->shadow_revision ||
+        !latest_revision(draw.model->shadow_source))
+      throw std::runtime_error("Fixture shadows require a captured model revision");
+  }
+  // Source updates retire old poses and parts even when this packet has no
+  // relevant lights or the replacement itself is outside every light range.
+  for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
+    if (it->second.source &&
+        latest_revision(it->second.source) != it->second.revision) {
+      fixture_atlas_touch();
+      it = fixtureCasters.erase(it);
+    } else {
+      ++it;
+    }
+  }
   const unsigned count = std::min(unsigned(lights.params[0]),
                                   mw34::effects::capacity),
                  weapons = std::min(unsigned(lights.params[1]), count);
@@ -265,8 +293,11 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
   const float retention = effects_settings.fixture_retain_distance;
   for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
     auto &caster = it->second;
-    const bool invalid =
-        caster.valid ? !caster.valid() : scene.world_frame > caster.frame + 1;
+    // Rigid models move, so no geometry-backed caster is provably static with
+    // immutable packets: expire every prior-frame caster at the next frame
+    // (which also stops node address reuse from retaining an old-frame
+    // caster) and retain only across scene batches sharing this frame stamp.
+    const bool invalid = scene.world_frame > caster.frame;
     if (invalid || (camera && !caster.bounds.overlaps(eye, retention * 2))) {
       fixture_atlas_touch();
       it = fixtureCasters.erase(it);
@@ -284,6 +315,10 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
       continue;
     FixtureCaster caster;
     caster.frame = scene.world_frame;
+    caster.source = draw.model ? draw.model->shadow_source : draw.shadow_source;
+    caster.revision = draw.model ? draw.model->shadow_revision : draw.shadow_revision;
+    if (caster.source && latest_revision(caster.source) != caster.revision)
+      continue;
     caster.texture =
         draw.texture >= 0 ? bound.at(size_t(draw.texture)) : &white;
     caster.sampler = draw.sampler;
@@ -307,13 +342,7 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
                  caster.world[r * 4 + 2] * v.z + caster.world[r * 4 + 3];
         caster.bounds.add(p);
       }
-      if (instance.world && draw.shadow_source && draw.shadow_valid) {
-        key = {draw.shadow_source, 0};
-        caster.valid = draw.shadow_valid;
-      } else
-        key = {instance.shadow_source ? instance.shadow_source
-                                      : instance.geometry->key,
-               instance.geometry->key};
+      key = {instance.shadow_source, instance.geometry->key};
     } else if (draw.sun_tl) {
       std::uint64_t hash = 0xcbf29ce484222325ULL;
       for (unsigned i = 0; i < draw.count; ++i) {
@@ -335,7 +364,7 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
         }
       }
       caster.count = unsigned(caster.tl.size());
-      key = {0, hash};
+      key = {draw.shadow_source, hash};
     } else
       continue;
     bool relevant = false;
@@ -347,8 +376,7 @@ prepare_fixture_shadows(const Scene &scene, const std::vector<Tex *> &bound,
     if (!relevant)
       continue;
     if (fixtureCasters.size() >= 32768 && !fixtureCasters.contains(key))
-      throw std::runtime_error(
-          "Retained fixture shadow caster capacity exceeded");
+      continue;
     auto [stored, inserted] = fixtureCasters.try_emplace(key);
     if (fixture_atlas_capture_changed(inserted, stored->second, caster))
       fixture_atlas_touch();
@@ -572,6 +600,8 @@ void drop_fixture_shadow() {
   fixtureAtlasRecorded = false;
   fixtureAtlasIdentity.clear();
   fixtureAtlasNext.clear();
+  fixtureAtlasPersistentIdentity.clear();
+  fixtureAtlasPersistentNext.clear();
   fixtureCasters.clear();
   fixtureFrameCasters.clear();
   if (fixtureShadowPipeline)

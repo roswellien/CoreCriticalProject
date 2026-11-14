@@ -123,6 +123,8 @@ class Render3D {
   virtual bool wants_player_headlight_ticks() const { return false; }
   virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
   virtual void retire_headlight_node(std::uintptr_t /*node*/) {}
+  // Producer-side model ownership loss, independent of headlight eligibility.
+  virtual void retire_shadow_node(std::uintptr_t /*node*/) {}
   virtual bool wants_material_context() const { return false; }
   virtual std::shared_ptr<const DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t) {

@@ -1,7 +1,11 @@
 // Renderer-private exact atlas identity. This caches only previously submitted
-// depth contents within the same original world frame. All caster preparation,
+// depth contents. All caster preparation,
 // source validation, pruning and texture/model updates still execute first.
 std::vector<unsigned char> fixtureAtlasIdentity, fixtureAtlasNext;
+// Exact cross-frame contents, independent of ownership/revision churn. A
+// changed slot, light or caster still rebuilds the complete physical atlas.
+std::vector<unsigned char> fixtureAtlasPersistentIdentity,
+    fixtureAtlasPersistentNext;
 std::uint64_t fixtureAtlasFrame{}, fixtureAtlasHits{}, fixtureAtlasBuilds{},
     fixtureAtlasMutation{}, fixtureAtlasAudits{};
 std::uint64_t fixtureAtlasSubmittedFrame{}, fixtureAtlasSubmittedMutation{};
@@ -48,7 +52,7 @@ bool fixture_atlas_capture_changed(bool inserted, const FixtureCaster &old,
 // reads the previous immutable identity without building another byte vector.
 template <class Visit>
 bool fixture_atlas_visit(const mw34::effects::Uniform &lights, Visit visit,
-                         bool metadata_only = false) {
+                         bool metadata_only = false, bool persistent = false) {
   auto field = [&](const auto &value) {
     static_assert(
         std::is_trivially_copyable_v<std::remove_cvref_t<decltype(value)>>);
@@ -57,7 +61,9 @@ bool fixture_atlas_visit(const mw34::effects::Uniform &lights, Visit visit,
 #define MW34_ATLAS_FIELD(value)                                                \
   if (!field(value))                                                           \
   return false
-  MW34_ATLAS_FIELD(fixtureAtlasFrame);
+  if (!persistent) {
+    MW34_ATLAS_FIELD(fixtureAtlasFrame);
+  }
   MW34_ATLAS_FIELD(fixtureGeneration);
   MW34_ATLAS_FIELD(fixtureContext);
   MW34_ATLAS_FIELD(fixtureTile);
@@ -65,7 +71,7 @@ bool fixture_atlas_visit(const mw34::effects::Uniform &lights, Visit visit,
   MW34_ATLAS_FIELD(fixtureAtlasHeight);
   MW34_ATLAS_FIELD(fixtureShadowImage);
   MW34_ATLAS_FIELD(fixtureShadowPipeline);
-  if (fixture_atlas_tracked()) {
+  if (fixture_atlas_tracked() && !persistent) {
     MW34_ATLAS_FIELD(fixtureAtlasMutation);
     MW34_ATLAS_FIELD(uploads);
     MW34_ATLAS_FIELD(model_uploads);
@@ -125,6 +131,28 @@ bool fixture_atlas_visit(const mw34::effects::Uniform &lights, Visit visit,
 bool fixture_atlas_unchanged(const mw34::effects::Uniform &lights) {
   if (!fixture_atlas_reuse_enabled())
     return false;
+  // Ownership expiry and fresh snapshots have already run. Only the complete
+  // effective shader inputs may establish unchanged depth across frames;
+  // neither a source address nor an old frame's revision is that proof.
+  if (fixtureAtlasValid && fixtureAtlasFrame != fixtureAtlasSubmittedFrame &&
+      !fixtureAtlasPersistentIdentity.empty()) {
+    size_t offset = 0;
+    const bool same = fixture_atlas_visit(
+        lights,
+        [&](const void *data, size_t bytes) {
+          if (bytes > fixtureAtlasPersistentIdentity.size() - offset ||
+              std::memcmp(fixtureAtlasPersistentIdentity.data() + offset,
+                          data, bytes))
+            return false;
+          offset += bytes;
+          return true;
+        },
+        false, true);
+    if (same && offset == fixtureAtlasPersistentIdentity.size()) {
+      ++fixtureAtlasHits;
+      return true;
+    }
+  }
   const bool tracked = fixture_atlas_tracked(), audit = fixture_atlas_audit();
   const bool compact = tracked && !audit;
   if (fixtureAtlasValid) {
@@ -169,6 +197,17 @@ bool fixture_atlas_unchanged(const mw34::effects::Uniform &lights) {
         return true;
       },
       compact);
+  fixtureAtlasPersistentNext.clear();
+  fixtureAtlasPersistentNext.reserve(fixtureAtlasPersistentIdentity.size());
+  fixture_atlas_visit(
+      lights,
+      [&](const void *data, size_t size) {
+        const auto *bytes = static_cast<const unsigned char *>(data);
+        fixtureAtlasPersistentNext.insert(fixtureAtlasPersistentNext.end(),
+                                          bytes, bytes + size);
+        return true;
+      },
+      false, true);
   return false;
 }
 void fixture_atlas_submitted() {
@@ -177,6 +216,7 @@ void fixture_atlas_submitted() {
   if (!fixtureAtlasRecorded)
     return;
   fixtureAtlasIdentity.swap(fixtureAtlasNext);
+  fixtureAtlasPersistentIdentity.swap(fixtureAtlasPersistentNext);
   fixtureAtlasValid = true;
   fixtureAtlasSubmittedFrame = fixtureAtlasFrame;
   fixtureAtlasSubmittedMutation = fixtureAtlasMutation;

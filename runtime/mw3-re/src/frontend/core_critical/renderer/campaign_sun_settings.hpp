@@ -30,6 +30,7 @@ mission_sun_settings(const sun::Settings &base,
   }
   result.color = profile.sun_color;
   result.strength = mission.policy.suppress_sun ? 0.f : profile.sun_strength;
+  result.shadows = mission.policy.suppress_sun ? false : base.shadows;
   result.ambient_color = profile.ambient_color;
   result.ambient = profile.ambient_strength;
   result.night_world_gain = profile.night_world_gain;

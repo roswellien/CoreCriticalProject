@@ -9,8 +9,10 @@ submit_prepared_geometry(const ::platform::ModelDrawContext &context,
   if (!selected.replace)
     return cc::geometry::Submission::unsupported;
   ensure_geometry_scene();
+  const auto shadow_revision = advance_shadow_source(
+      reinterpret_cast<std::uintptr_t>(context.node));
   for (const auto &draw : selected.batches)
-    emit_gpu_prepared(draw, context, fog);
+    emit_gpu_prepared(draw, context, fog, shadow_revision);
   ++early_prepared_models_;
   ++geometry_statistics_.submitted_models;
   geometry_statistics_.skipped_vertices += context.source_vertices;
@@ -41,7 +43,7 @@ static cc::geometry::Fog prepared_fog() {
 
 void emit_gpu_prepared(const PreparedBatchDraw &source,
                        const ::platform::ModelDrawContext &context,
-                       const cc::geometry::Fog &fog) {
+                       const cc::geometry::Fog &fog, std::uint64_t shadow_revision) {
   if (!source.deformed.empty())
     throw std::runtime_error(
         "GPU prepared geometry does not admit CPU-deformed vertices");
@@ -73,7 +75,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     material.color = source.batch->color;
     const auto first = scene_.draws.size();
     emit_reference_geometry(reference, {material}, context, source.camera,
-                            source.world, fog);
+                            source.world, fog, shadow_revision);
     for (auto index = first; index < scene_.draws.size(); ++index) {
       auto &draw = scene_.draws[index];
       apply_surface_material(draw, source, lighting_.normals);
@@ -86,6 +88,9 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
   } else {
     auto instance = std::make_shared<vk::ModelInstance>();
     instance->geometry = geometry;
+    // Opaque producer identity only; workers never dereference the node.
+    instance->shadow_source = reinterpret_cast<std::uintptr_t>(context.node);
+    instance->shadow_revision = shadow_revision;
     instance->gpu_vertices = instance->sun_eligible = true;
     instance->camera = matrix_rows(source.camera);
     instance->sun_world = matrix_rows(source.world);

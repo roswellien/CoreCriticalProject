@@ -115,6 +115,13 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
 
 void retire_headlight_node(std::uintptr_t node) override {
   headlight_player_.owner.retire_node(node, headlight_player_.owner.generation);
+  retire_shadow_node(node);
+}
+
+void retire_shadow_node(std::uintptr_t node) override {
+  // A newer revision without matching draws is an immutable retirement receipt.
+  if (node)
+    advance_shadow_source(node);
 }
 
 void local_lights_clear() {

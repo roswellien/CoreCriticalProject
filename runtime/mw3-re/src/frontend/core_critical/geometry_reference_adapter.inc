@@ -3,7 +3,8 @@ void emit_reference_geometry(
     const std::vector<cc::geometry::Material> &materials,
     const ::platform::ModelDrawContext &context,
     const ::platform::prepared::Matrix &camera,
-    const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog) {
+    const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog,
+    std::uint64_t shadow_revision) {
   const auto normal_matrix = mw34::sun::normal_matrix(camera);
   const auto camera_to_world =
       mw34::donor::product(world, mw34::donor::inverse(camera));
@@ -48,6 +49,8 @@ void emit_reference_geometry(
     const auto &range = resource.ranges[range_index];
     const auto &material = materials[range_index];
     vk::Draw draw{};
+    draw.shadow_source = reinterpret_cast<std::uintptr_t>(context.node);
+    draw.shadow_revision = shadow_revision;
     draw.geometry_debug_normals = geometry_debug_;
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     draw.texture =

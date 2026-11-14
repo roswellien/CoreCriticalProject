@@ -127,6 +127,7 @@ struct ModelInstance {
   std::array<float, 12> sun_normal{}, sun_world{};
   bool sun_eligible{};
   std::uint64_t shadow_source{};
+  std::uint64_t shadow_revision{};
   std::shared_ptr<const cc::geometry::Resource> source;
   std::array<float, 4> geometry_fog0{}, geometry_fog1{};
   float geometry_near{};
@@ -157,7 +158,7 @@ struct Draw {
   unsigned detail_role{};
   bool native_sky{};
   std::uint64_t shadow_source{};
-  std::function<bool()> shadow_valid;
+  std::uint64_t shadow_revision{};
   bool condition_schematic{};
   bool depth_only{};
   std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
@@ -182,6 +183,8 @@ struct Command {
 struct Scene {
   double detail_time{};
   std::uint64_t world_frame{}, world_generation{}, world_context{};
+  // Sorted immutable source revisions captured by the producer for this packet.
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> shadow_revisions;
   std::array<float, 3> world_eye{};
   bool world_eye_valid{};
   mw34::effects::Uniform effect_lights{};
@@ -281,6 +284,8 @@ public:
   }
   std::uint64_t scenes{}, draws{}, uploads{}, submitted_draws{},
       combined_draws{};
+  std::uint64_t fixture_shadow_builds() const { return fixtureAtlasBuilds; }
+  std::uint64_t fixture_shadow_hits() const { return fixtureAtlasHits; }
   ~Renderer() { shutdown(); }
   // Presents a 16-bit RGB565 frame (rows of `pitch` bytes) to the window. False
   // when this device cannot present to the window (no surface/swapchain
@@ -2449,7 +2454,7 @@ private:
   // replacement draw once with its sun-clip transform.
   ShadowFrame prepare_shadow(const Scene &s, const mw34::sun::Settings &sun) {
     ShadowFrame frame;
-    if (!sun.shadows || s.hud)
+    if (!sun.shadows || s.hud || sun.strength <= 0.0f)
       return frame;
     // MW3 may draw terrain and mechs in separate BeginScene/EndScene
     // batches. A batch without casters (or without a camera reference)

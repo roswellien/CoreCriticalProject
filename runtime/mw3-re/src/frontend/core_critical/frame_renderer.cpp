@@ -279,6 +279,8 @@ public:
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),
         prepared_cache_enabled_(bridge_config_.prepared_cache) {
+    lighting_.shadows = base_lighting_.shadows =
+        assets.lighting != "off" && bridge_config_.sun_shadows;
     if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
       throw std::runtime_error(
           "Geometry normal debug requires an explicit geometry mode");
@@ -406,7 +408,7 @@ public:
             bridge_config_.trace_native_bindings);
   }
   bool wants_model_context() const override {
-    return !prepared_.empty() || wants_material_context();
+    return !prepared_.empty() || wants_material_context() || bridge_config_.fixture_shadows;
   }
   void
   begin_material_draw(const ::platform::MaterialDrawContext &context) override {
@@ -423,6 +425,7 @@ public:
   void end_model_draw() noexcept override {
     suppress_model_draws_ = false;
     native_context_ = {};
+    active_shadow_source_ = active_shadow_revision_ = 0;
   }
   void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
@@ -430,6 +433,8 @@ public:
     VisualFloatScope float_scope;
     suppress_model_draws_ = false;
     native_context_ = {};
+    active_shadow_source_ = reinterpret_cast<std::uintptr_t>(context.node);
+    active_shadow_revision_ = advance_shadow_source(active_shadow_source_);
     if (wants_material_context()) {
       native_context_.node = static_cast<const zcls::Node *>(context.node);
       native_context_.model =
@@ -462,6 +467,10 @@ public:
     // Drain packets queued for the previous mission before switching state.
     drain();
     local_lights_clear();
+    shadow_revisions_.clear();
+    active_shadow_source_ = active_shadow_revision_ = 0;
+    ++world_generation_;
+    scene_.world_generation = world_generation_;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
@@ -502,6 +511,8 @@ public:
     mission_changed(::platform::MissionIdentity{});
     reset_pending_ = true;
     ++group_load_epoch_;
+    ++world_generation_;
+    scene_.world_generation = world_generation_;
     for (const auto &[index, handle] : surface_normal_textures_)
       textures_.at(handle) = {};
     surface_normal_textures_.clear();
@@ -827,6 +838,18 @@ public:
   }
 
 private:
+  std::uint64_t advance_shadow_source(std::uint64_t source) {
+    if (!bridge_config_.fixture_shadows)
+      return 0;
+    if (!source)
+      throw std::runtime_error("Fixture shadows require a model source identity");
+    if (shadow_revision_serial_ == ~std::uint64_t{0})
+      throw std::runtime_error("Fixture shadow source revision overflow");
+    const auto revision = ++shadow_revision_serial_;
+    shadow_revisions_[source] = revision;
+    return revision;
+  }
+
   int32_t prepared_normal(const ::platform::prepared::NormalImage &image) {
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())
@@ -903,6 +926,8 @@ private:
     }
 
     vk::Draw draw{};
+    draw.shadow_source = active_shadow_source_;
+    draw.shadow_revision = active_shadow_revision_;
     draw.native_sky = state.native_sky;
     draw.depth_only = depth_only;
     draw.first = first;
@@ -1020,6 +1045,8 @@ private:
     if (!scene_.order.empty() && !scene_.order.back().clear) {
       auto &previous = scene_.draws.back();
       if (!previous.model && previous.depth_only == draw.depth_only &&
+          previous.shadow_source == draw.shadow_source &&
+          previous.shadow_revision == draw.shadow_revision &&
           previous.native_sky == draw.native_sky &&
           previous.texture == draw.texture &&
           previous.normal_texture == draw.normal_texture &&
@@ -1175,7 +1202,7 @@ private:
     CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
     if (geometry_mode_ != cc::geometry::Mode::legacy &&
         source.deformed.empty()) {
-      emit_gpu_prepared(source, context, prepared_fog());
+      emit_gpu_prepared(source, context, prepared_fog(), active_shadow_revision_);
       return;
     }
     if (geometry_mode_ == cc::geometry::Mode::gpu)
@@ -1188,6 +1215,14 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
+    if (draw.model) {
+      auto instance = std::make_shared<vk::ModelInstance>(*draw.model);
+      instance->shadow_revision = active_shadow_revision_;
+      draw.model = std::move(instance);
+    } else {
+      draw.shadow_source = active_shadow_source_;
+      draw.shadow_revision = active_shadow_revision_;
+    }
     apply_surface_material(draw, source, lighting_.normals);
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     draw.texture = int(bind_texture(prepared_texture(*source.texture), false));
@@ -1249,6 +1284,8 @@ private:
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
+    scene_.world_frame = world_frame_;
+    scene_.world_generation = world_generation_;
     if (scene_.width) {
       return;
     }
@@ -1349,7 +1386,7 @@ private:
   const vk::Renderer::Quality quality_;
   mw34::sun::Settings lighting_;
   bool display_hdr_ = false;
-  const mw34::sun::Settings base_lighting_;
+  mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
@@ -1394,6 +1431,10 @@ private:
            std::shared_ptr<const vk::ModelGeometry>>
       prepared_geometry_;
   std::uint64_t group_load_epoch_{1};
+  std::uint64_t world_frame_{0};
+  std::uint64_t world_generation_{1};
+  std::uint64_t shadow_revision_serial_{}, active_shadow_source_{}, active_shadow_revision_{};
+  std::map<std::uint64_t, std::uint64_t> shadow_revisions_;
   std::map<int, int32_t> surface_normal_textures_;
   bool logged_first_normal_trace_{false};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
@@ -1487,11 +1528,12 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.sun_elevation = number(assets.sun_elevation, 1.0f, 89.0f);
   config.sun = assets.lighting != "off" || assets.geometry != "legacy";
   config.sun_normals = (assets.lighting == "normal");
-  config.sun_shadows = false;
+  config.sun_shadows = (assets.lighting != "off") && config.sun_shadows;
   config.normal_maps_enabled = (assets.lighting == "normal");
 
   // Other defaults
-  config.fixture_shadows = false;
+  config.fixture_shadows =
+      (assets.lighting != "off") && config.fixture_lights && config.fixture_shadows;
   config.fixture_atlas_reuse = true;
   config.fixture_atlas_tracked = false;
   config.fixture_atlas_audit = false;

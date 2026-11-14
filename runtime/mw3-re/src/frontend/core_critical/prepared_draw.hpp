@@ -194,6 +194,8 @@ prepare_draw(const PreparedBatchDraw &source,
       append(vertex, false);
     auto instance = std::make_shared<vk::ModelInstance>();
     instance->geometry = std::move(geometry);
+    // Opaque producer identity only; workers never dereference the node.
+    instance->shadow_source = reinterpret_cast<std::uintptr_t>(context.node);
     instance->camera = camera;
     instance->projection = projection;
     instance->sun_world = matrix_rows(source.world);

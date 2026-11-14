@@ -1077,10 +1077,16 @@ void check_sealed_environment(SDL_Window *window,
       auto px = read();
       require(px_at(px, 30, 2) == 0xFF25598F, "outdoor clear");
       renderer->begin_scene();
-      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000);
+      platform::DrawState sky_state;
+      sky_state.native_sky = true;
+      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000, sky_state);
       renderer->end_scene();
       auto px2 = read();
-      require(px_at(px2, 30, 2) == 0xFFFF0000, "outdoor sky");
+      const uint32_t outdoor_sky_expected =
+          (mode[0] == 'f' && id.world_index == 5 && id.number == 1)
+              ? 0xFF6B5261
+              : 0xFFFF0000;
+      require(px_at(px2, 30, 2) == outdoor_sky_expected, "outdoor sky");
     }
     renderer->mission_changed({1, 2});
     renderer->reset_scene_resources();
@@ -1878,6 +1884,16 @@ void check_campaign_lighting_and_policy() {
     require(sealed_res.policy.sky_source == SkySource::Interior,
             "Sealed mission must resolve to SkySource::Interior");
 
+    // Sealed missions must suppress sun shadows and set strength to 0.f
+    mw34::sun::Settings base_sun{};
+    base_sun.enabled = true;
+    base_sun.shadows = true;
+    const auto sealed_sun = mission_sun_settings(
+        base_sun, sealed_res, true, false, nullptr, sealed_id);
+    require(sealed_sun.strength == 0.f, "Sealed mission must zero sun strength");
+    require(sealed_sun.shadows == false,
+            "Sealed mission must suppress sun shadows");
+
     // Independent of contradictory profile input: even if profile_interior ==
     // false
     const auto forced_ext = resolve_environment_policy(sealed_id, false);
@@ -1902,13 +1918,19 @@ void check_campaign_lighting_and_policy() {
   require(unsealed_interior.sky_source == SkySource::Interior,
           "Profile interior flag must set Interior sky");
 
-  // Normal unsealed mission (c1m1)
+  // Normal unsealed mission (c1m1) retains sun shadows
   const auto c1m1_res = resolve_mission_lighting("c1m1");
   require(c1m1_res.policy.inside == false, "c1m1 must not be inside");
   require(c1m1_res.policy.suppress_sun == false, "c1m1 must not suppress sun");
   require(c1m1_res.policy.suppress_sky == false, "c1m1 must not suppress sky");
   require(c1m1_res.policy.sky_source == SkySource::Twilight,
           "c1m1 must have Twilight sky");
+  mw34::sun::Settings c1m1_base{};
+  c1m1_base.enabled = true;
+  c1m1_base.shadows = true;
+  const auto c1m1_sun = mission_sun_settings(
+      c1m1_base, c1m1_res, true, false, nullptr, "c1m1");
+  require(c1m1_sun.shadows == true, "c1m1 must retain sun shadows");
 
   // 4. Expected sky categories
   // ClearDay: t1m2, c2m1, c3m1, c3m2, c4m6
@@ -2046,6 +2068,59 @@ void check_renderer_bridge_config() {
   require(cfg_wsi.normal_maps_enabled == false,
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
+  require(cfg_wsi.sun_shadows == false, "sun_shadows default false mismatch");
+  require(cfg_wsi.fixture_shadows == false,
+          "fixture_shadows default false mismatch");
+
+  {
+    struct Env {
+      const char *name;
+      std::optional<std::string> prior;
+      explicit Env(const char *n) : name(n) {
+        if (const char *v = std::getenv(n))
+          prior = v;
+      }
+      ~Env() {
+        if (prior)
+          local_light_test_env(name, prior->c_str());
+        else
+          local_light_test_env(name, nullptr);
+      }
+    } effect_env("MW34_EFFECT_LIGHTS"), fixture_env("MW34_FIXTURE_LIGHTS"),
+        sun_sh_env("MW34_SUN_SHADOWS"), fix_sh_env("MW34_FIXTURE_SHADOWS");
+
+    local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+    local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
+    local_light_test_env("MW34_SUN_SHADOWS", "1");
+    local_light_test_env("MW34_FIXTURE_SHADOWS", "1");
+
+    auto cfg_shadows = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, quality, assets);
+    require(cfg_shadows.sun_shadows == true,
+            "sun_shadows env propagation mismatch");
+    require(cfg_shadows.fixture_shadows == true,
+            "fixture_shadows env propagation mismatch");
+
+    sdlfe::CoreCriticalAssets off_assets = assets;
+    off_assets.lighting = "off";
+    auto cfg_off = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, quality, off_assets);
+    require(cfg_off.sun_shadows == false,
+            "sun_shadows should be false when lighting is off");
+    require(cfg_off.fixture_shadows == false,
+            "fixture_shadows should be false when lighting is off");
+
+    local_light_test_env("MW34_FIXTURE_LIGHTS", "0");
+    bool threw_fixture_req = false;
+    try {
+      (void)cc_mw3_re::configure_bridge(
+          sdlfe::RendererBackend::core_critical_wsi, quality, assets);
+    } catch (const std::runtime_error &) {
+      threw_fixture_req = true;
+    }
+    require(threw_fixture_req,
+            "MW34_FIXTURE_SHADOWS without MW34_FIXTURE_LIGHTS must throw");
+  }
 
   check_campaign_lighting_and_policy();
 
