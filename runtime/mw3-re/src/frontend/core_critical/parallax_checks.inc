@@ -305,10 +305,11 @@ std::array<double, 2> decode(const vk::Scene &scene, unsigned x = 16, unsigned y
   return {double(unsigned(bytes[0]) | (unsigned(bytes[1]) << 8)) / 65535,
           double(unsigned(bytes[2]) | (unsigned(bytes[3]) << 8)) / 65535};
 }
-std::array<double, 2> expected(const Fixture &fixture, Height height) {
+std::array<double, 2> expected(const Fixture &fixture, Height height,
+                              Vector view = {0, 0, -1}) {
   const auto &material = fixture.scene.draws[0].height_binding->material;
-  // At pixel (16,16), authored camera ray is (0,0,+1) and P=(0,0,4).
-  const Vector view{0, 0, -1};
+  // Default centre P=(0,0,4) sees the origin along -Z. Other authored
+  // samples supply eye-P; its length cancels in both analytic ratios.
   const double incidence = dot(fixture.normal, view);
   const auto reciprocal_u = cross(fixture.dv, fixture.normal);
   const auto reciprocal_v = cross(fixture.normal, fixture.du);
@@ -353,6 +354,91 @@ void compare_uv(const std::array<double, 2> &actual, const std::array<double, 2>
                    actual[axis], wanted[axis]);
       require(false, message);
     }
+}
+
+void per_draw_eye_affine_oracle(vk::Renderer &renderer, vk::Renderer &disabled) {
+  // The existing integer-raster plane has centre UV(.5,.5). Scaling X/Y by
+  // .5 and translating its source X by +/-2 puts its world-space centres at
+  // (-1,0,4)/(1,0,4), precisely under pixels(12,16)/(20,16).
+  auto left = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7,
+      {1, 1}, {0, 0}, {.5, .5}, false, mat::surface_address_wrap,
+      std::nullopt, true, {-2, 0, 0});
+  auto right = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7,
+      {1, 1}, {0, 0}, {.5, .5}, false, mat::surface_address_wrap,
+      std::nullopt, true, {2, 0, 0});
+  left.scene.draws[0].surface_eye = {-1.5f, .8f, -.5f, 1};
+  right.scene.draws[0].surface_eye = {1.75f, -.6f, .25f, 1};
+  // Independent eye-minus-known-surface-point vectors; neither expected UV
+  // comes from renderer output or from rendering one draw as a golden image.
+  const auto wanted_left = expected(left, Height::ramp_u, {-.5, .8, -4.5});
+  const auto wanted_right = expected(right, Height::ramp_u, {.75, -.6, -3.75});
+  const auto wrong_left = expected(left, Height::ramp_u, {1, 0, -4});
+  const auto wrong_right = expected(right, Height::ramp_u, {-1, 0, -4});
+  require(std::abs(wanted_left[0] - wrong_left[0]) > .006 &&
+              std::abs(wanted_right[0] - wrong_right[0]) > .006 &&
+              std::abs(wanted_left[0] - wanted_right[0]) > .006,
+          "POM per-draw eye analytic control intervals overlap");
+  auto mixed = left.scene;
+  mixed.vertices.insert(mixed.vertices.end(), right.scene.vertices.begin(),
+                         right.scene.vertices.end());
+  mixed.draws.push_back(right.scene.draws[0]);
+  mixed.draws[1].first = mixed.draws[0].count;
+  mixed.order.push_back({false, 1});
+  // This valid Scene eye differs from both owned draw eyes. One global eye
+  // cannot satisfy these two analytic displacement expectations.
+  mixed.world_eye = {0, 0, 0};
+  mixed.world_eye_valid = true;
+  // render() uploads and replaces Scene color/depth; compare two fresh inputs.
+  auto replay = mixed;
+  std::printf("pom_per_draw_eye_affine_oracle begin\n");
+  renderer.render(mixed);
+  for (unsigned x : {12U, 20U})
+    require(mixed.pom_depth32.at(16 * 32 + x) > 0,
+            "POM per-draw eye analytic sample is not covered");
+  compare_uv(decode(mixed, 12, 16), wanted_left,
+              "POM same-scene left draw used another eye");
+  compare_uv(decode(mixed, 20, 16), wanted_right,
+              "POM same-scene right draw used another eye");
+  replay.world_eye = {std::numeric_limits<float>::quiet_NaN(),
+                       std::numeric_limits<float>::infinity(), 0};
+  replay.world_eye_valid = false;
+  renderer.render(replay);
+  require(replay.pom_rgba8 == mixed.pom_rgba8 &&
+              replay.pom_depth32 == mixed.pom_depth32,
+          "POM per-draw eyes depended on obsolete Scene camera metadata");
+
+  for (auto route : {Route::model, Route::world, Route::tl, Route::native}) {
+    auto origin = fixture(route, Height::ramp_u, .08f, .1f);
+    origin.scene.world_eye_valid = false;
+    renderer.render(origin.scene);
+    compare_uv(decode(origin.scene), expected(origin, Height::ramp_u),
+                "POM rejected or changed a valid world-origin draw eye");
+    for (unsigned invalid = 0; invalid < 8; ++invalid) {
+      auto test = fixture(route, Height::ramp_u, .08f, .1f);
+      auto &eye = test.scene.draws[0].surface_eye;
+      if (invalid == 0) eye = {};
+      if (invalid == 1) eye[0] = std::numeric_limits<float>::quiet_NaN();
+      if (invalid == 2) eye[1] = std::numeric_limits<float>::infinity();
+      if (invalid == 3) eye[2] = -std::numeric_limits<float>::infinity();
+      if (invalid == 4) eye[3] = std::numeric_limits<float>::quiet_NaN();
+      if (invalid == 5) eye[3] = std::numeric_limits<float>::infinity();
+      if (invalid == 6) eye[3] = 0;
+      if (invalid == 7) eye[3] = 2;
+      bool rejected{};
+      try { renderer.render(test.scene); }
+      catch (const std::runtime_error &) { rejected = true; }
+      require(rejected, "POM admitted a missing/nonfinite/nonposition draw eye");
+      // Off must not acquire a new required camera dependency.
+      auto valid_off = fixture(route, Height::ramp_u, .08f, .1f);
+      disabled.render(valid_off.scene);
+      disabled.render(test.scene);
+      require(test.scene.pom_rgba8 == valid_off.scene.pom_rgba8 &&
+                  test.scene.pom_depth32 == valid_off.scene.pom_depth32 &&
+                  disabled.height_uploads == 0,
+              "POM Off inspected an excluded invalid draw eye");
+    }
+  }
+  std::printf("pom_per_draw_eye_affine_oracle pass\n");
 }
 
 void shader_layout(const std::uint32_t *words, std::size_t count) {
@@ -624,7 +710,7 @@ void atlas_and_finite_fallback(vk::Renderer &renderer) {
     if (invalid == 1) snapshot->material.address_mode_u = 0;
     if (invalid == 2) snapshot->material.atlas_rect[2] = 1.f / 32;
     if (invalid == 3) snapshot->normal_width = 31;
-    if (invalid == 4) test.scene.world_eye_valid = false;
+    if (invalid == 4) test.scene.draws[0].surface_eye = {};
     if (invalid == 5) snapshot->material.uv_scale[1] = std::numeric_limits<float>::infinity();
     if (invalid == 6) snapshot->material.uv_scale[1] = 1e-30f;
     test.scene.draws[0].height_binding = snapshot;
@@ -814,6 +900,7 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
                 uncombined.max_texture_dimension(native) >= 64,
             "POM authored textures exceed the selected WSI device");
     off_and_zero_amplitude_identity(renderer, disabled);
+    per_draw_eye_affine_oracle(renderer, disabled);
     constant_and_ramp_signed_uv(renderer);
     inverse_chart_color_normal_correspondence(renderer);
     atlas_and_finite_fallback(renderer);

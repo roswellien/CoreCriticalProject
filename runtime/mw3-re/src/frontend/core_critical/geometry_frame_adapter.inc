@@ -46,6 +46,11 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     ++geometry_statistics_.submitted_models;
     return cc::geometry::Submission::submitted;
   }
+  std::array<float, 4> surface_eye{};
+  if (std::any_of(admissions.begin(), admissions.end(),
+                  [](const auto &admission) { return bool(admission.height_binding); }))
+    surface_eye = native_height_eye(
+        mw34::donor::product(world, mw34::donor::inverse(camera)));
   for (auto iterator = native_geometry_.begin();
        iterator != native_geometry_.end();) {
     if (iterator->second.source.expired())
@@ -112,6 +117,8 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     draw.texture =
         material.texture < 0 ? -1 : int(bind_texture(material.texture, false));
     apply_native_geometry_admission(draw, admissions[range_index]);
+    if (draw.height_binding)
+      draw.surface_eye = surface_eye;
     draw.sampler = 3U | unsigned(material.address_u) << 4 |
                    unsigned(material.address_v) << 8;
     draw.key = {0, 5, 6, 1, 7, 1, std::uint8_t(range.two_sided ? 1 : 3), 0};

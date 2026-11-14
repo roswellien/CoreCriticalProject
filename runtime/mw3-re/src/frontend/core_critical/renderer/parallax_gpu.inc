@@ -119,10 +119,10 @@ void validate_height(const Scene &scene, const Draw &draw,
         address > surface_address_clamp)
       throw std::runtime_error("POM chart/address has no filter-safe height interval");
   }
-  if (!scene.world_eye_valid ||
-      !std::all_of(scene.world_eye.begin(), scene.world_eye.end(),
+  if (draw.surface_eye[3] != 1.f ||
+      !std::all_of(draw.surface_eye.begin(), draw.surface_eye.end(),
                    [](float value) { return std::isfinite(value); }))
-    throw std::runtime_error("POM requires the owned world-space scene eye");
+    throw std::runtime_error("POM requires the owned world-space draw eye");
 }
 HeightImageKey height_key(const mw34::materials::HeightBinding &binding) const {
   const auto &image = *binding.image;
@@ -153,7 +153,7 @@ void height_uniform(const Scene &scene, const Draw &draw, mw34::sun::Uniform &un
                     material.uv_offset[1]};
   uniform.pom_atlas = material.atlas_rect;
   uniform.pom_policy = {material.address_mode_u, material.address_mode_v, 8, 32};
-  uniform.surface_eye = {scene.world_eye[0], scene.world_eye[1], scene.world_eye[2], 1};
+  uniform.surface_eye = draw.surface_eye;
 }
 std::vector<HeightImage *> prepare_height_images(const Scene &scene,
                                                 const std::vector<Tex *> &bound,

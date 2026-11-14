@@ -1182,6 +1182,73 @@ void check_native_ground_height_admission() {
         require(rejected, "Out-of-range original polygon was admitted");
         passed("range_original_polygon_rejection");
     }
+    {
+        // Actual shared native producer helper, with an independently authored
+        // world camera. Model position and camera-space translation differ.
+        const platform::prepared::Matrix world{
+            0, -3, 0, 12, 2, 0, 0, -7, 0, 0, 4, 9, 0, 0, 0, 1};
+        const platform::prepared::Matrix world_camera{
+            0, 0, 1, 17, 0, 1, 0, -9, -1, 0, 0, 5, 0, 0, 0, 1};
+        const auto camera = mw34::donor::product(mw34::donor::inverse(world_camera), world);
+        const auto derived = mw34::donor::product(world, mw34::donor::inverse(camera));
+        const std::array<float, 4> expected_eye{17, -9, 5, 1};
+        require(cc::native_height_eye(derived) == expected_eye &&
+                    cc::native_height_eye(world_camera) == expected_eye &&
+                    cc::native_height_eye(mw34::donor::identity()) ==
+                        std::array<float, 4>{0, 0, 0, 1},
+                "Native CPU/GPU/TL camera eye used model position or an invalid origin");
+        mw34::vkscene::Draw ground;
+        ground.height_binding = retained;
+        require(ground.surface_parameters[3] == 0,
+                "Native eye fixture unexpectedly has a standalone BRDF sidecar");
+        ground.surface_eye = cc::native_height_eye(world_camera);
+        auto wrapped_camera = world_camera;
+        wrapped_camera[3] += 100;
+        wrapped_camera[7] -= 50;
+        wrapped_camera[11] += 25;
+        const auto wrapped_model_camera = mw34::donor::product(
+            mw34::donor::inverse(wrapped_camera), world);
+        auto wrapped = ground;
+        wrapped.surface_eye = cc::native_height_eye(mw34::donor::product(
+            world, mw34::donor::inverse(wrapped_model_camera)));
+        require(ground.surface_eye == expected_eye &&
+                    wrapped.surface_eye == std::array<float, 4>{117, -59, 30, 1},
+                "Native wrapped view lost its own world-space eye");
+        mw34::vkscene::Scene packet;
+        packet.draws = {ground, wrapped};
+        const auto queued = packet;
+        packet.draws.clear();
+        ground = {};
+        wrapped = {};
+        require(queued.draws[0].surface_eye == expected_eye &&
+                    queued.draws[1].surface_eye == std::array<float, 4>{117, -59, 30, 1},
+                "Owned native draw eyes changed after producer packet reuse");
+        passed("native_model_view_world_eye_origin_wrapped_no_brdf_ownership");
+        for (unsigned invalid = 0; invalid < 7; ++invalid) {
+            auto broken = world_camera;
+            if (invalid == 0) broken = {};
+            if (invalid == 1) broken[8] = 0; // Missing one independent basis axis.
+            if (invalid == 2) broken[3] = std::numeric_limits<double>::quiet_NaN();
+            if (invalid == 3) broken[5] = std::numeric_limits<double>::infinity();
+            if (invalid == 4) broken[11] = 1e40; // Finite double, invalid owned float.
+            if (invalid == 5) broken[15] = 0;
+            if (invalid == 6) broken[14] = std::numeric_limits<double>::quiet_NaN();
+            bool rejected = false;
+            try { (void)cc::native_height_eye(broken); }
+            catch (const std::runtime_error &) { rejected = true; }
+            require(rejected, "Native POM eye admitted a missing/singular/nonfinite camera");
+        }
+        auto singular_camera = camera;
+        for (unsigned column = 0; column < 4; ++column)
+            singular_camera[column] = 0;
+        bool rejected = false;
+        try {
+            (void)cc::native_height_eye(mw34::donor::product(
+                world, mw34::donor::inverse(singular_camera)));
+        } catch (const std::runtime_error &) { rejected = true; }
+        require(rejected, "Native model-to-camera inversion accepted a singular basis");
+        passed("native_eye_rejects_missing_singular_nonfinite_affine_float_overflow");
+    }
     auto model_binding = std::make_shared<HeightBinding>(*retained);
     model_binding->world_source.reset();
     model_binding->sidecar_path.clear();

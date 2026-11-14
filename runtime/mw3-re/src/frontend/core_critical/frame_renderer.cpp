@@ -1043,6 +1043,21 @@ private:
                                     primitive == Primitive::kPoints)) {
       const auto &slot = textures_.at(state.texture);
       draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
+      if (draw.height_binding) {
+        const auto &projection = zmth::projection();
+        if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
+            !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||
+            !std::isfinite(projection.near_z) || !std::isfinite(projection.fx_near) ||
+            !std::isfinite(projection.fy_near) || !std::isfinite(projection.far_z) ||
+            !std::isfinite(projection.cx) || !std::isfinite(projection.cy) ||
+            viewport_[2] <= 0 || viewport_[3] <= 0)
+          throw std::runtime_error("POM native ground requires a valid native projection");
+        const float *m = zmth::view().camera.m;
+        const ::platform::prepared::Matrix camera_to_world{
+            m[0], m[3], m[6], m[9], m[1], m[4], m[7], m[10],
+            m[2], m[5], m[8], m[11], 0, 0, 0, 1};
+        draw.surface_eye = native_height_eye(camera_to_world);
+      }
     }
     draw.push.target[0] = float(scene_.width);
     draw.push.target[1] = float(scene_.height);

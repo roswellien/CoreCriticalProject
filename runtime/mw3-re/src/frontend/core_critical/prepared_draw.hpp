@@ -19,6 +19,21 @@ matrix_rows(const ::platform::prepared::Matrix &matrix) {
   return result;
 }
 
+inline std::array<float, 4> native_height_eye(
+    const ::platform::prepared::Matrix &camera_to_world) {
+  for (double value : camera_to_world)
+    if (!std::isfinite(value))
+      throw std::runtime_error("POM native camera transform is nonfinite");
+  if (camera_to_world[12] != 0 || camera_to_world[13] != 0 ||
+      camera_to_world[14] != 0 || camera_to_world[15] != 1)
+    throw std::runtime_error("POM native camera transform is not affine");
+  // A finite origin alone cannot establish a real camera: a missing or
+  // singular basis must not become an implicit identity-camera fallback.
+  (void)mw34::donor::inverse(camera_to_world);
+  const auto eye = matrix_rows(camera_to_world);
+  return {eye[3], eye[7], eye[11], 1.f};
+}
+
 inline void apply_surface_material(mw34::vkscene::Draw &draw,
                                    const PreparedBatchDraw &source,
                                    bool enabled, bool height_enabled = false,
