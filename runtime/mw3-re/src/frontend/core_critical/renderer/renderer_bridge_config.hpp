@@ -36,6 +36,8 @@ struct RendererBridgeConfig {
   bool geometry_debug_normals{false};
   bool gpu_models{false};
   bool normal_maps_enabled{false};
+  // Transport is opt-in for internal qualification; no CLI/capability claim.
+  bool parallax_materials{false};
   bool prepared_cache{true};
 
   // Lighting / Sun

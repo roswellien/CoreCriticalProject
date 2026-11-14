@@ -18,6 +18,9 @@
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/surface_detail.hpp"
 #include "renderer/surface_materials.hpp"
+#include "renderer/vk_scene.hpp"
+#include "platform/sha256.hpp"
+#include <sstream>
 #include <limits>
 
 namespace mw34::materials {
@@ -42,6 +45,13 @@ bool get_active_surface_key(SurfaceKey *out);
 namespace cc_mw3_re::checks {
 void check_scene_binding_slots();
 }
+// Win32 compatibility macros must not rewrite fixture variable names.
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
 
 namespace {
 bool threaded_checks = false;
@@ -1086,15 +1096,16 @@ void check_sealed_environment(SDL_Window *window,
       auto px = read();
       require(px_at(px, 30, 2) == 0xFF25598F, "outdoor clear");
       renderer->begin_scene();
-      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000);
+      platform::DrawState sky_state;
+      sky_state.native_sky = true;
+      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000, sky_state);
       renderer->end_scene();
       auto px2 = read();
-      // Flat t1m1 uses the authored manual horizon haze (.42,.32,.38),
-      // rounded to bytes (107,82,97). Off and unknown missions retain red.
-      const bool training_haze =
-          mode[0] == 'f' && id.world_index == 5 && id.number == 1;
-      const uint32_t sky_expected = training_haze ? 0xFF6B5261 : 0xFFFF0000;
-      require(px_at(px2, 30, 2) == sky_expected, "outdoor sky/horizon");
+      const uint32_t outdoor_sky_expected =
+          (mode[0] == 'f' && id.world_index == 5 && id.number == 1)
+              ? 0xFF6B5261
+              : 0xFFFF0000;
+      require(px_at(px2, 30, 2) == outdoor_sky_expected, "outdoor sky");
     }
     renderer->mission_changed({1, 2});
     renderer->reset_scene_resources();
@@ -1630,6 +1641,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 
 #include "geometry_checks.inc"
 #include "scene_binding_checks.inc"
+#include "parallax_checks.inc"
 #include "platform_checks.inc"
 #include "prepared_gpu_checks.inc"
 #include "ultrawide_checks.inc"
@@ -2062,6 +2074,57 @@ void check_renderer_bridge_config() {
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
 
+  // POM is opt-in and must not disappear when it is the only explicit option.
+  sdlfe::CoreCriticalAssets pom_assets{};
+  require(!pom_assets.pom, "POM must default off");
+  require(pom_assets.empty(), "Default Core Critical assets must be empty");
+  require(!cfg_dxgi.parallax_materials && !cfg_wsi.parallax_materials,
+          "Default bridge configuration must leave POM off");
+  pom_assets.pom = true;
+  require(!pom_assets.empty(), "Explicit POM must make assets nonempty");
+  pom_assets.pom = false;
+  require(pom_assets.empty(), "POM off must preserve empty assets");
+
+  struct PomCase {
+    sdlfe::RendererBackend backend;
+    const char *lighting;
+    bool pom;
+    bool accepted;
+  };
+  const PomCase pom_cases[] = {
+      {sdlfe::RendererBackend::core_critical_dxgi, "off", false, true},
+      {sdlfe::RendererBackend::core_critical_wsi, "flat", false, true},
+      {sdlfe::RendererBackend::sdl, "off", false, true},
+      {sdlfe::RendererBackend::core_critical_dxgi, "normal", true, true},
+      {sdlfe::RendererBackend::core_critical_wsi, "normal", true, true},
+      {sdlfe::RendererBackend::core_critical_dxgi, "off", true, false},
+      {sdlfe::RendererBackend::core_critical_wsi, "off", true, false},
+      {sdlfe::RendererBackend::core_critical_dxgi, "flat", true, false},
+      {sdlfe::RendererBackend::core_critical_wsi, "flat", true, false},
+      {sdlfe::RendererBackend::sdl, "normal", true, false},
+  };
+  for (const auto &test : pom_cases) {
+    pom_assets = {};
+    pom_assets.lighting = test.lighting;
+    pom_assets.pom = test.pom;
+    bool rejected = false;
+    try {
+      const auto config =
+          cc_mw3_re::configure_bridge(test.backend, {}, pom_assets);
+      require(test.accepted, "Unsupported POM configuration was accepted");
+      require(config.parallax_materials == test.pom,
+              "Typed POM option did not reach the renderer bridge");
+      require(config.normal_maps_enabled == (pom_assets.lighting == "normal"),
+              "POM changed normal-map permission");
+    } catch (const std::runtime_error &error) {
+      require(std::string_view(error.what()).find("--cc-pom 1 requires ") == 0,
+              "POM configuration failed for an unrelated reason");
+      rejected = true;
+    }
+    require(rejected != test.accepted,
+            "POM configuration acceptance mismatch");
+  }
+
   check_campaign_lighting_and_policy();
 
   std::fprintf(stderr, "check_renderer_bridge_config: passed\n");
@@ -2070,7 +2133,7 @@ void check_renderer_bridge_config() {
 int main(int argc, char **argv) {
   bool geometry_check = false, ultrawide_check = false;
   bool native_wsi = false, quality_check = false, prepared_check = false,
-       material_check = false, scene_bindings_check = false;
+       material_check = false, scene_bindings_check = false, pom_check = false;
   sdlfe::CoreCriticalQuality quality;
   for (int i = 1; i < argc; ++i) {
     const std::string_view option(argv[i]);
@@ -2084,6 +2147,8 @@ int main(int argc, char **argv) {
       geometry_check = true;
     else if (option == "--scene-bindings")
       scene_bindings_check = true;
+    else if (option == "--pom")
+      pom_check = true;
     else if (option == "--ultrawide")
       ultrawide_check = true;
     else if (option == "--materials")
@@ -2094,7 +2159,7 @@ int main(int argc, char **argv) {
       quality_check = true;
     } else {
       std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] "
-                           "[--prepared|--materials|--scene-bindings] "
+                           "[--prepared|--materials|--scene-bindings|--pom] "
                            "[--quality MODE]\n");
       return 1;
     }
@@ -2186,6 +2251,8 @@ int main(int argc, char **argv) {
                              : sdlfe::RendererBackend::core_critical_dxgi;
     if (scene_bindings_check)
       check_scene_bindings(window, backend);
+    else if (pom_check)
+      check_parallax(window, backend);
     else if (ultrawide_check)
       check_ultrawide(window, backend);
     else if (geometry_check) {

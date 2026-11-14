@@ -258,7 +258,8 @@ void usage() {
       "[--cc-hud-text 0|1]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] "
       "[--cc-geometry-debug normals]\n"
-      "    [--cc-render-thread 0|1]\n"
+      "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires "
+      "Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] "
       "[--cc-af LEVEL] "
       "[--original] [--import | --no-import] [--no-launcher] [--debug-camera] "
@@ -401,6 +402,18 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
     else if (s == "--cc-textures" && next(1)) a.cc_assets.textures = argv[++i];
     else if (s == "--cc-lighting" && next(1)) a.cc_assets.lighting = argv[++i];
+    else if (s == "--cc-pom") {
+      if (!next(1)) {
+        std::fprintf(stderr, "--cc-pom requires 0 or 1\n");
+        return false;
+      }
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-pom supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.pom = value == "1";
+    }
     else if (s == "--cc-render-thread" && next(1)) {
       const std::string value = argv[++i];
       if (value != "0" && value != "1") {

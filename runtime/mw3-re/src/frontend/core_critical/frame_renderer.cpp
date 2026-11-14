@@ -1,5 +1,6 @@
 #include "frame_renderer.hpp"
 #include "frontend/sdl/cpu_interval.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zimage/zimg_texture.h"
@@ -272,37 +273,57 @@ public:
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
-        sun_explicit_(assets.sun_explicit), environment_(assets.environment),
+        sun_explicit_(assets.sun_explicit),
+        environment_(assets.environment),
+        bridge_config_(configure_bridge(backend, quality, assets)),
         prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
-        bridge_config_(configure_bridge(backend, quality, assets)),
         prepared_cache_enabled_(bridge_config_.prepared_cache),
         local_staging_budget_(local_staging_budget) {
-      if (!local_staging_budget_ || local_staging_budget_ > staging::native_budget_bytes)
-          throw std::invalid_argument("Invalid local light staging budget");
-      if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
-          throw std::runtime_error("Geometry normal debug requires an explicit geometry mode");
-      if (!native_wsi_ && !hwnd_) {
-          throw std::runtime_error("Direct3D presentation requires a Win32 window handle");
-      }
-      if (backend == sdlfe::RendererBackend::sdl)
-          throw std::runtime_error("The Core Critical factory requires a Vulkan backend");
-      // Admit catalog paths and headers before native mission callbacks start.
-      // World pixel payloads remain lazy; failures here reach the window's normal
-      // initialization error boundary instead of unwinding legacy game loaders.
-      if (lighting_.normals)
-          surface_normals_load();
-      local_lights_load();
-      initialize_renderer();
-      if (assets.render_thread) {
-          worker_ = std::make_unique<RenderWorker>(8, staging::native_budget_bytes, [] {
-              // Process only synchronous window messages, without consuming
-              // input or reentering the game. DXGI may send one while waiting.
-              cc_mw3_re::platform::pump_presentation_messages();
-          });
-          std::fprintf(stderr, "Core Critical render worker: enabled (8 jobs, 1024 MiB)\n");
-      }
+    if (!local_staging_budget_ || local_staging_budget_ > staging::native_budget_bytes)
+      throw std::invalid_argument("Invalid local light staging budget");
+    if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
+      throw std::runtime_error(
+          "Geometry normal debug requires an explicit geometry mode");
+    if (!native_wsi_ && !hwnd_) {
+      throw std::runtime_error(
+          "Direct3D presentation requires a Win32 window handle");
+    }
+    if (backend == sdlfe::RendererBackend::sdl)
+      throw std::runtime_error(
+          "The Core Critical factory requires a Vulkan backend");
+    // Admit catalog paths and headers before native mission callbacks start.
+    // World pixel payloads remain lazy; failures here reach the window's normal
+    // initialization error boundary instead of unwinding legacy game loaders.
+    if (lighting_.normals)
+      surface_normals_load();
+    local_lights_load();
+    initialize_renderer();
+    if (assets.render_thread) {
+      worker_ = std::make_unique<RenderWorker>(8, staging::native_budget_bytes, [] {
+        // Process only synchronous window messages, without consuming
+        // input or reentering the game. DXGI may send one while waiting.
+        cc_mw3_re::platform::pump_presentation_messages();
+      });
+      std::fprintf(stderr,
+                   "Core Critical render worker: enabled (8 jobs, 1024 MiB)\n");
+    }
+    std::vector<zcls::ZbdSourceRequest> requests;
+    const auto groups = ::platform::prepared::collect_material_target_sources(
+        environment_.get(),
+        bridge_config_.parallax_materials && lighting_.normals);
+    requests.reserve(groups.size());
+    for (const auto &group : groups) {
+      zcls::ZbdSourceRequest request;
+      request.member = group.member;
+      request.sha256 = group.sha256;
+      request.bytes = group.bytes;
+      request.model_slots.insert(group.model_slots.begin(),
+                                 group.model_slots.end());
+      requests.push_back(std::move(request));
+    }
+    observation_session_ = zcls::observe_zbd_sources(std::move(requests));
   }
 
   bool ok() const override { return true; }
@@ -377,7 +398,11 @@ public:
 
   std::shared_ptr<const ::platform::DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t texture) override {
-    if (!lighting_.normals || bridge_config_.native_material_sidecar.empty() ||
+    VisualFloatScope preserve;
+    if (!lighting_.normals ||
+        (bridge_config_.native_material_sidecar.empty() &&
+         (!bridge_config_.parallax_materials || !environment_ ||
+          environment_->material_targets.empty())) ||
         texture < 0 || std::size_t(texture) >= textures_.size())
       return {};
     surface_normals_load(); // Reset clears catalogs; deferred admission can be
@@ -390,6 +415,7 @@ public:
     receipt->version = textures_[texture].version;
     receipt->texture = texture;
     receipt->surface_parameters = native_surface_parameters(key, texture);
+    receipt->height_binding = native_height_binding(key, texture);
     receipt->normal_index = surface_normal_index(receipt->key, true, texture);
     return receipt;
   }
@@ -408,6 +434,8 @@ public:
   bool wants_material_context() const override {
     return lighting_.normals &&
            (!bridge_config_.native_material_sidecar.empty() ||
+            (bridge_config_.parallax_materials && environment_ &&
+             !environment_->material_targets.empty()) ||
             bridge_config_.trace_native_bindings);
   }
   bool wants_model_context() const override {
@@ -440,6 +468,7 @@ public:
       native_context_.model =
           native_context_.node ? native_context_.node->model : nullptr;
       native_context_.epoch = group_load_epoch_;
+      native_context_.height_eligible = native_ground_eligible(context);
     }
     ensure_extent();
     const auto draws = prepared_.draw(context);
@@ -1007,6 +1036,14 @@ private:
                 uint8_t(state.depth_write),
                 1,
                 0};
+    // Final draw policy is known here. Ineligible passes never ask for new
+    // height provenance, including deferred packets captured in model scope.
+    if (lighting_.enabled && lighting_.normals && state.texture >= 0 &&
+        native_ground_draw_eligible(state, hud, depth_only, geometry_debug_,
+                                    primitive == Primitive::kPoints)) {
+      const auto &slot = textures_.at(state.texture);
+      draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
+    }
     draw.push.target[0] = float(scene_.width);
     draw.push.target[1] = float(scene_.height);
     std::copy(fog_.begin(), fog_.end(), draw.push.fog);
@@ -1035,6 +1072,7 @@ private:
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
+          mw34::materials::same_height_binding(previous.height_binding, draw.height_binding) &&
           previous.sampler == draw.sampler &&
           previous.key.packed() == draw.key.packed() &&
           std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
@@ -1193,9 +1231,11 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
-    apply_surface_material(draw, source, lighting_.normals);
+    const auto texture = prepared_texture(*source.texture);
+    apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                           group_load_epoch_, textures_.at(texture).version);
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
-    draw.texture = int(bind_texture(prepared_texture(*source.texture), false));
+    draw.texture = int(bind_texture(texture, false));
     if (source.normal && lighting_.normals)
       draw.normal_texture =
           int(bind_texture(prepared_normal(*source.normal), false));
@@ -1371,16 +1411,18 @@ private:
   const bool campaign_enabled_, sun_explicit_;
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
+  std::shared_ptr<const zcls::ZbdObservationSession> observation_session_;
   // Owned current-mission state: canonical mission ID plus resolved campaign
   // lighting/policy. The profile pointer refers only to the static campaign
   // profile database (no borrowed native pointers).
   ::platform::MissionIdentity current_mission_identity_{};
   std::string current_mission_id_;
   mw34::campaign::ResolvedMissionLighting current_mission_lighting_{};
+  // Validate the original request before sanitizing or loading prepared models.
+  const RendererBridgeConfig bridge_config_;
   PreparedModels prepared_;
   const cc::geometry::Mode geometry_mode_;
   const bool geometry_debug_;
-  const RendererBridgeConfig bridge_config_;
   cc::geometry::Statistics geometry_statistics_;
   struct NativeGeometry {
     std::weak_ptr<const cc::geometry::Resource> source;
@@ -1441,7 +1483,15 @@ private:
 RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
                                       const sdlfe::CoreCriticalQuality &quality,
                                       const sdlfe::CoreCriticalAssets &assets) {
+  if (assets.pom &&
+      (backend != sdlfe::RendererBackend::core_critical_dxgi &&
+       backend != sdlfe::RendererBackend::core_critical_wsi))
+    throw std::runtime_error(
+        "--cc-pom 1 requires a Core Critical Vulkan backend");
+  if (assets.pom && assets.lighting != "normal")
+    throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   auto config = RendererBridgeConfig::from_diagnostic_env();
+  config.parallax_materials = assets.pom;
   if (assets.environment) {
     std::fprintf(stderr,
                  "Environment renderer catalogs: %zu authored, %zu world\n",

@@ -1,6 +1,7 @@
 // The 1.2 data layer (mech3/patch12, docs/patch12.md): 1.0's files, with the
 // layer, parse as 1.2's.
 #include <cstdio>
+#include <cerrno>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -20,6 +21,10 @@
 #include "mech3/patch12.h"
 #include "mech3/patch12_tree.h"
 #include "platform/silent_sound.h"
+#include "platform/sha256.hpp"
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
 
 namespace {
 
@@ -66,6 +71,111 @@ struct SavedMounts {
 };
 
 }  // namespace
+
+namespace {
+std::vector<std::tuple<int, int, int, long, int>> source_hook_access;
+}
+
+TEST(patch12_world_proof_preserves_readonly_hook_access) {
+  const zcls::ZbdHeader header{0x02971222, 27, 0, 0x24, 0x24, 0x24, 0, -1, 0x24};
+  const auto path = std::filesystem::path(MW3_TEST_TMP) / "readonly-world.zbd";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(&header), sizeof header); out.put('a');
+  }
+  platform::integrity::Sha256 hash;
+  hash.update(&header, sizeof header); const char tail = 'a'; hash.update(&tail, 1);
+  auto member = path.generic_string();
+  for (auto& c : member) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  const zcls::ZbdSourceRequest request{member, hash.hex(), sizeof header + 1, {0}};
+  const auto previous = zcls::open_hook();
+  source_hook_access.clear();
+  zcls::set_open_hook([](const char*, std::FILE* input) -> std::FILE* {
+    const auto incoming_errno = errno;
+    const auto position = std::ftell(input);
+    EXPECT(position == 0 && !std::ferror(input) && !std::feof(input));
+    errno = 0;
+    const auto write = std::fputc('x', input);
+    const auto write_errno = errno;
+    const auto write_error = std::ferror(input);
+    source_hook_access.emplace_back(write, write_errno, write_error, std::ftell(input), incoming_errno);
+    EXPECT(write == EOF && write_error != 0);
+    std::clearerr(input);
+    EXPECT(std::fseek(input, position, SEEK_SET) == 0);
+    return input;
+  });
+  for (int observed = 0; observed < 2; ++observed) {
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::ObserveSelected); proof.expected = request;
+    zcls::ZbdHeader result{};
+    errno = E2BIG;
+    auto* file = zcls::open_zbd(path.generic_string().c_str(), &result, observed ? &proof : nullptr);
+    EXPECT(file && result.version == 27);
+    if (file) {
+      EXPECT(!std::ferror(file) && !std::feof(file) && std::fgetc(file) == 'a');
+      EXPECT(std::fputc('x', file) == EOF && std::ferror(file));
+      std::fclose(file);
+    }
+    if (observed) EXPECT(proof.snapshot_verified && !proof.failed && !proof.transformed);
+  }
+  EXPECT(source_hook_access.size() == 2 && source_hook_access[0] == source_hook_access[1]);
+  zcls::set_open_hook(previous);
+  std::ifstream unchanged(path, std::ios::binary);
+  const std::string original((std::istreambuf_iterator<char>(unchanged)), std::istreambuf_iterator<char>());
+  EXPECT(original.size() == sizeof header + 1 && original.back() == 'a');
+}
+
+TEST(patch12_world_proof_rejects_an_effective_stream_change_without_bypassing_hook) {
+  // A tiny authored header and trailing byte exercise the actual open hook
+  // boundary. No shipped C3 world or renderer observation supplies a pin.
+  zcls::ZbdHeader header{0x02971222, 27, 0, 0x24, 0x24, 0x24, 0, -1, 0x24};
+  const auto path = std::filesystem::path(MW3_TEST_TMP) / "transformed-world.zbd";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(&header), sizeof header); out.put('a');
+  }
+  platform::integrity::Sha256 hash;
+  hash.update(&header, sizeof header); const char tail = 'a'; hash.update(&tail, 1);
+  auto member = path.generic_string();
+  for (auto& c : member) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  const zcls::ZbdSourceRequest request{member, hash.hex(), sizeof header + 1, {0}};
+  const auto previous = zcls::open_hook();
+  zcls::set_open_hook([](const char*, std::FILE* input) -> std::FILE* {
+    // Like the actual patch12 hook, read the original, write a replacement,
+    // close the original and return a new stream positioned at its start.
+    unsigned char bytes[sizeof(zcls::ZbdHeader) + 1];
+    if (std::fread(bytes, sizeof bytes, 1, input) != 1) { EXPECT(false); return input; }
+    const auto output = std::filesystem::path(MW3_TEST_TMP) / "replacement-world.tmp";
+    auto* replacement = std::fopen(output.string().c_str(), "w+b");
+    if (!replacement) { EXPECT(false); return input; }
+    bytes[sizeof(zcls::ZbdHeader)] = 'b';
+    EXPECT(std::fwrite(bytes, sizeof bytes, 1, replacement) == 1 && std::fflush(replacement) == 0);
+    std::rewind(replacement); std::fclose(input);
+    return replacement;
+  });
+  zcls::ZbdHeader observed{};
+  {
+    auto* file = zcls::open_zbd(path.generic_string().c_str(), &observed);
+    EXPECT(file && observed.version == 27 && std::fgetc(file) == 'b');
+    if (file) std::fclose(file);
+  }
+  {
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::ObserveSelected); proof.expected = request;
+    auto* file = zcls::open_zbd(path.generic_string().c_str(), &observed, &proof);
+    EXPECT(file && observed.version == 27 && proof.failed && proof.transformed && !proof.snapshot_verified);
+    if (file) EXPECT(std::fgetc(file) == 'b');
+    if (file) std::fclose(file);
+  }
+  {
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::StrictExport); proof.expected = request;
+    bool refused = false;
+    try { auto* file = zcls::open_zbd(path.generic_string().c_str(), &observed, &proof); if (file) std::fclose(file); }
+    catch (const std::runtime_error&) { refused = true; }
+    EXPECT(refused && proof.failed && proof.transformed);
+  }
+  zcls::set_open_hook(previous);
+  std::ifstream unchanged(path, std::ios::binary);
+  unchanged.seekg(sizeof header); EXPECT(unchanged.get() == 'a');
+}
 
 // The message table: every key 1.2 has, with 1.2's text, except where the
 // wording is ours (listed); the version line 1.2 dropped is gone.

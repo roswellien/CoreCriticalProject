@@ -37,6 +37,7 @@
 #include "light_cull_tiled_comp.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
+#include "native_texture_identity.hpp"
 #include "platform/vk_loader.hpp"
 #include "platform/wsi_surface.hpp"
 #include "platform/wsi_win32_dxgi.hpp"
@@ -48,6 +49,7 @@
 #include "sun_tl_vert.h"
 #include "sun_world_vert.h"
 #include "surface_detail.hpp"
+#include "surface_materials.hpp"
 #include "texture_staging.hpp"
 #include "tiled_light_stage.inc"
 #include "world_binding.hpp"
@@ -64,6 +66,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -165,6 +168,7 @@ struct Draw {
   // and eye (world xyz, valid); owned values, zero preserves the legacy path.
   std::array<float, 4> surface_parameters{};
   std::array<float, 4> surface_eye{};
+  std::shared_ptr<const mw34::materials::HeightBinding> height_binding;
   bool geometry_debug_normals{};
 };
 struct Clear {
@@ -184,6 +188,12 @@ struct Scene {
   std::uint64_t world_frame{}, world_generation{}, world_context{};
   std::array<float, 3> world_eye{};
   bool world_eye_valid{};
+  // Private authored-fixture capture. Mode 1 packs the actual fragment UV in
+  // four raw bytes; production guest color remains the ordinary RGB565 copy.
+  unsigned pom_diagnostic_mode{};
+  bool pom_raw_readback{};
+  std::vector<unsigned char> pom_rgba8;
+  std::vector<float> pom_depth32;
   mw34::effects::Uniform effect_lights{};
   unsigned width, height;
   std::vector<std::uint16_t> color,
@@ -232,6 +242,19 @@ public:
     bool fxaa;
   };
   enum class ColorTarget { device_default, rgba8 };
+  static std::array<unsigned, 2> material_descriptor_counts(std::uint64_t capacity) {
+    if (capacity > (std::uint64_t(UINT32_MAX) - 2) / 4)
+      throw std::runtime_error("Material descriptor pool arithmetic overflow");
+    return {unsigned(capacity * 4 + 2), unsigned(capacity * 2 + 1)};
+  }
+  static unsigned material_descriptor_capacity(std::uint64_t draw_count,
+                                                std::uint64_t caster_count) {
+    constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 4;
+    if (draw_count > limit || caster_count > limit - draw_count ||
+        draw_count + caster_count > limit - 64)
+      throw std::runtime_error("Scene material descriptor capacity overflows Vulkan counts");
+    return unsigned(draw_count + caster_count + 64);
+  }
   // An explicit format preference lets format-sensitive callers exercise the
   // RGBA fallback without changing device capabilities or process settings.
   explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
@@ -1026,6 +1049,8 @@ public:
   std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{},
       world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{};
   std::uint64_t normal_draws{};
+  std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
+      height_retired_images{};
   std::uint64_t presents{};
   bool presentInFlight{};
   // True when the cached texture for this guest surface already holds content
@@ -1095,6 +1120,7 @@ public:
   // this call returns.
   void render(Scene &s, bool upload_in = true, bool readback_out = true) {
     settle();
+    retire_height_images();
     // The previous GPU submission has completed. Indexed geometry owns no
     // live engine pointers and can retire once its source and packets expire.
     for (auto it = model_buffers.begin(); it != model_buffers.end();) {
@@ -1119,6 +1145,14 @@ public:
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);
+    s.pom_rgba8.clear();
+    s.pom_depth32.clear();
+    if (s.pom_diagnostic_mode > 1 ||
+        (s.pom_diagnostic_mode && !s.pom_raw_readback) ||
+        (s.pom_raw_readback &&
+         (!readback_out || !require_rgba8 || !rgba || quality_settings.samples_x != 1 ||
+          quality_settings.samples_y != 1 || fxaa_enabled() || rw != width || rh != height)))
+      throw std::runtime_error("POM raw capture requires linear RGBA8, single sample and readback");
     if (bridge_config.temporal_inputs) {
       if (s.frontend_canvas)
         camera_history.invalidate(mw34::temporal::Reset::transition);
@@ -1309,11 +1343,26 @@ private:
                  : t.pixels.size()) != size_t(t.width) * t.height)
           throw std::runtime_error(
               "Vulkan scene renderer: changed texture without pixels");
+        if (bridge_config.parallax_materials) {
+          c.source_rgb565_hash = c.source_rgba8_hash = 0;
+          if (t.format == TexFormat::rgba8888) {
+            const auto *pixels = reinterpret_cast<const unsigned char *>(t.pixels32.data());
+            c.source_rgb565_hash =
+                mw34::materials::canonical_upload_key(t.width, t.height, pixels, 1).hash;
+            c.source_rgba8_hash =
+                mw34::materials::normal_hash(pixels, t.pixels32.size() * 4);
+          } else if (t.format == TexFormat::rgb565) {
+            c.source_rgb565_hash =
+                mw34::materials::normal_hash(t.pixels.data(), t.pixels.size() * 2);
+          }
+        }
         changed.push_back({&c, &t});
         texBytes += VkDeviceSize(t.width) * t.height * 4;
       }
       bound[i] = &c;
     }
+    std::vector<HeightUpload> pending_heights;
+    const auto draw_heights = prepare_height_images(s, bound, pending_heights);
     ensure(texUpload, std::max<VkDeviceSize>(texBytes, 4),
            VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     {
@@ -1474,6 +1523,7 @@ private:
             u.surface_parameters = draw.surface_parameters;
             u.surface_eye = draw.surface_eye;
           }
+          height_uniform(s, draw, u);
           if (skyEyeValid) {
             const auto &e =
                 draw.sun_tl && !draw.sky ? draw.sun_tl->camera_world : skyEye;
@@ -1525,8 +1575,9 @@ private:
     emission_draw_records += s.draws.size();
     emission_payloads += s.emissions.size();
     // Descriptor sets: one per distinct (texture, sampler).
-    if (descriptorCapacity < s.draws.size() + fixtureFrameCasters.size() + 1)
-      pool(unsigned(s.draws.size() + fixtureFrameCasters.size() + 64));
+    const auto descriptor_count = material_descriptor_capacity(s.draws.size(), fixtureFrameCasters.size());
+    if (descriptorCapacity < descriptor_count - 63)
+      pool(unsigned(descriptor_count));
     check(f.vkResetDescriptorPool(device, descriptorPool, 0),
           "reset descriptor pool");
     std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> sets;
@@ -1570,7 +1621,7 @@ private:
       drawSets[i] = it->second;
     }
     fixture_shadow_sets(sets);
-    std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> normalSets;
+    std::map<MaterialDescriptorKey, VkDescriptorSet> normalSets;
     std::vector<VkDescriptorSet> drawNormalSets(s.draws.size());
     if (lighting_settings.enabled) {
       for (size_t i = 0; i < s.draws.size(); ++i) {
@@ -1592,7 +1643,27 @@ private:
                      : &flatNormal;
         const unsigned normal_sampler =
             d.detail_role > 0 && d.detail_role < 3 ? 0x10113U : d.sampler;
-        auto it = normalSets.find({t, normal_sampler});
+        // A normal texture's cache hash is its immutable upload version. Height
+        // adds its full pack owner, source digests, image/version and sampler.
+        MaterialDescriptorKey material_key{};
+        material_key.normal_width = t->width;
+        material_key.normal_height = t->height;
+        material_key.normal_sampler = normal_sampler;
+        if (t != &flatNormal) {
+          const auto &normal_ref = s.textures[std::size_t(d.normal_texture)];
+          material_key.normal_key = normal_ref.key;
+          material_key.normal_version = normal_ref.hash;
+        }
+        Tex *height_texture = &white;
+        // Height sampling has fixed linear, clamp, level-zero policy. Declared
+        // wrap/mirror/clamp and atlas selection are applied in the shader.
+        material_key.height_sampler = 3U | (3U << 4) | (3U << 8);
+        if (draw_heights[i]) {
+          material_key.height = height_key(*d.height_binding);
+          material_key.normal_source_hash = d.height_binding->normal_hash;
+          height_texture = &draw_heights[i]->texture;
+        }
+        auto it = normalSets.find(material_key);
         if (it == normalSets.end()) {
           VkDescriptorSetAllocateInfo ai{};
           ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1611,7 +1682,13 @@ private:
           w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
           w.pImageInfo = &info;
           f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
-          it = normalSets.emplace(std::make_pair(t, normal_sampler), set).first;
+          VkDescriptorImageInfo height_info{sampler(material_key.height_sampler),
+                                             height_texture->view,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+          w.dstBinding = 1;
+          w.pImageInfo = &height_info;
+          f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+          it = normalSets.emplace(std::move(material_key), set).first;
         }
         drawNormalSets[i] = it->second;
       }
@@ -1662,6 +1739,7 @@ private:
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(f.vkBeginCommandBuffer(cmd, &bi), "begin");
+    record_height_uploads(pending_heights);
     record_tiled(tiledFrameViews);
     if (profile_queries) {
       f.vkCmdResetQueryPool(cmd, profile_queries, 0, 2);
@@ -1805,6 +1883,7 @@ private:
           !left.count || !right.count || left.count % 3 || right.count % 3 ||
           left.key.packed() != right.key.packed() ||
           drawSets[a] != drawSets[b] ||
+          !mw34::materials::same_height_binding(left.height_binding, right.height_binding) ||
           std::memcmp(&left.push, &right.push, sizeof(Push)) != 0 ||
           std::memcmp(&left.scissor, &right.scissor, sizeof(VkRect2D)) != 0)
         return false;
@@ -2000,6 +2079,13 @@ private:
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
     check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
+    // Keep retirement/reuse blocked even when a later readback wait fails.
+    scene_pending = true;
+    for (const auto &upload : pending_heights) {
+      upload.cached->texture.valid = true;
+      ++height_uploads;
+      height_uploaded_bytes += upload.cached->bytes;
+    }
     profile_queries_pending = profile_queries != VK_NULL_HANDLE;
     fixture_atlas_submitted();
     if (reconstruction_stage != ReconstructionStage::coverage)
@@ -2008,9 +2094,9 @@ private:
       check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
             "wait");
       collect_profile_queries();
+      scene_pending = false;
       copy_back(s);
-    } else
-      scene_pending = true;
+    }
   }
 
 public:
@@ -2119,6 +2205,15 @@ public:
     const VkDeviceSize pixels = VkDeviceSize(width) * height,
                        colorBytes = pixels * (rgba ? 4 : 2);
     const auto *rd = static_cast<const unsigned char *>(readback.mapped);
+    if (s.pom_raw_readback) {
+      if (!require_rgba8 || !rgba || rw != width || rh != height ||
+          quality_settings.samples_x != 1 || quality_settings.samples_y != 1 || fxaa_enabled())
+        throw std::runtime_error("POM raw readback requires an unfiltered full-size RGBA8 target");
+      s.pom_rgba8.assign(rd, rd + std::size_t(pixels) * 4);
+      s.pom_depth32.resize(std::size_t(pixels));
+      std::memcpy(s.pom_depth32.data(), rd + mw34::depth::offset(std::size_t(colorBytes)),
+                  std::size_t(pixels) * sizeof(float));
+    }
     if (rgba) {
       for (VkDeviceSize i = 0; i < pixels; ++i) {
         const std::uint32_t r = rd[4 * i], g = rd[4 * i + 1], b = rd[4 * i + 2];
@@ -2259,8 +2354,12 @@ private:
     VkImageView view{};
     unsigned width{}, height{}, levels{1};
     std::uint64_t hash{};
+    // Authenticated source comparisons for relief; independent of upload hash,
+    // which is a monotonically assigned version in native frontend scenes.
+    std::uint64_t source_rgb565_hash{}, source_rgba8_hash{};
     bool valid{};
   };
+#include "parallax_gpu.inc"
   cc_mw3_re::platform::VulkanLoader loader;
   VkInstance instance{};
   VkPhysicalDevice gpu{};
@@ -3359,13 +3458,20 @@ private:
         check(
             f.vkCreateDescriptorSetLayout(device, &si, nullptr, &sunSetLayout),
             "sun descriptor layout");
-        VkDescriptorSetLayoutBinding nb{
-            0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        if (p.limits.maxPerStageDescriptorSamplers < 6 ||
+            p.limits.maxPerStageDescriptorSampledImages < 6 ||
+            p.limits.maxDescriptorSetSamplers < 6 ||
+            p.limits.maxDescriptorSetSampledImages < 6)
+          throw std::runtime_error("GPU cannot provide the normal/height descriptor contract");
+        const std::array<VkDescriptorSetLayoutBinding, 2> nb{{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}}};
         VkDescriptorSetLayoutCreateInfo ni{};
         ni.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        ni.bindingCount = 1;
-        ni.pBindings = &nb;
+        ni.bindingCount = unsigned(nb.size());
+        ni.pBindings = nb.data();
         check(f.vkCreateDescriptorSetLayout(device, &ni, nullptr,
                                             &normalSetLayout),
               "normal descriptor layout");
@@ -3900,16 +4006,17 @@ private:
     create_world_target();
   }
   void pool(unsigned n) {
+    const auto counts = material_descriptor_counts(n);
     if (descriptorPool)
       f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     const std::array<VkDescriptorPoolSize, 4> ps{
-        {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 3 + 2},
+        {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, counts[0]},
          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = n * 2 + 1;
+    pi.maxSets = counts[1];
     pi.poolSizeCount = lighting_settings.enabled ? 4 : 1;
     pi.pPoolSizes = ps.data();
     check(f.vkCreateDescriptorPool(device, &pi, nullptr, &descriptorPool),
@@ -4515,6 +4622,9 @@ private:
     destroy_tiled();
     for (auto &[k, t] : textures)
       destroy(t);
+    for (auto &[key, cached] : height_images)
+      destroy(cached.texture);
+    height_images.clear();
     destroy(white);
     destroy(flatNormal);
     for (auto &[k, p] : pipelines)
@@ -4539,7 +4649,7 @@ private:
     if (presentPool)
       f.vkDestroyCommandPool(device, presentPool, nullptr);
     for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer,
-                      &texUpload, &presentUpload, &sunBuffer, &effectBuffer})
+                      &texUpload, &presentUpload, &sunBuffer, &effectBuffer, &height_upload})
       if (b->buffer) {
         f.vkDestroyBuffer(device, b->buffer, nullptr);
         f.vkFreeMemory(device, b->memory, nullptr);

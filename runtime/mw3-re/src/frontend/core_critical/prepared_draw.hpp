@@ -21,9 +21,11 @@ matrix_rows(const ::platform::prepared::Matrix &matrix) {
 
 inline void apply_surface_material(mw34::vkscene::Draw &draw,
                                    const PreparedBatchDraw &source,
-                                   bool enabled) {
+                                   bool enabled, bool height_enabled = false,
+                                   std::uint64_t epoch = 0, std::uint64_t texture_version = 0) {
   draw.surface_parameters = {};
   draw.surface_eye = {};
+  draw.height_binding.reset();
   if (!enabled || !source.surface_material)
     return;
   const auto &material = *source.surface_material;
@@ -32,6 +34,14 @@ inline void apply_surface_material(mw34::vkscene::Draw &draw,
   draw.surface_parameters = {material.roughness, material.reflectivity,
                              material.metallic, 1.f};
   draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
+  if (height_enabled && material.height_image != mw34::materials::no_surface_image) {
+    if (!source.height_binding)
+      throw std::runtime_error("Prepared height material has no admitted normal/source binding");
+    auto binding = std::make_shared<mw34::materials::HeightBinding>(*source.height_binding);
+    binding->producer_epoch = epoch;
+    binding->texture_version = texture_version;
+    draw.height_binding = std::move(binding);
+  }
 }
 
 struct PreparedVertex {

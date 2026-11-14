@@ -30,6 +30,7 @@ bool get_active_surface_key(SurfaceKey *out) {
 #include <string>
 
 #include "gamez/zerror/zerr.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zrender/zrndr_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
@@ -50,7 +51,11 @@ TextureEntry* texture_at(int index) { return index == -1 ? nullptr : &g_table.en
 // Mech3.exe 1.2 @ 0x00518160. Quirk kept: a count of 0 returns without clearing
 // the table count. On a short read the original keeps the bytes it got in the
 // table; the port leaves the table as it was.
-int read_texture_directory(int count, std::FILE* f, const char* where) {
+int read_texture_directory(int count, std::FILE* f, const char* where, zcls::ZbdReadContext* proof) {
+  if (proof) {
+    proof->require(count >= 0 && count <= kMaxTextures, "invalid source texture table count");
+    if (proof->strict()) proof->span(f, std::uint64_t(count) * 0x28);
+  }
   if (count == 0) return 0;
   if (count > kMaxTextures) {
     zerr::report(0x100, kFile, 0x10d, "Too many textures for texture array size.");
@@ -58,15 +63,19 @@ int read_texture_directory(int count, std::FILE* f, const char* where) {
   }
   static uint8_t buf[kMaxTextures * 0x28];
   if (std::fread(buf, static_cast<size_t>(count) * 0x28, 1, f) != 1) {
+    if (proof) proof->require(false, "texture directory read failed");
     zerr::report(0x200, kFile, 0x11b, "Error reading GameZ Texture directory data.");
     return -1;
   }
   // Ours (docs/modding.md, M3): each mip index -1 or a row of this table;
   // the exe made a pointer of any index (texture_at) and followed it later.
   for (int i = 0; i < count; ++i) {
+    if (proof) proof->require(std::memchr(buf + i * 0x28 + 8, 0, 20) != nullptr,
+                              "unterminated source texture name");
     int32_t mip;
     std::memcpy(&mip, buf + i * 0x28 + 0x24, 4);
     if (mip < -1 || mip >= count) {
+      if (proof) proof->require(false, "source texture mip index outside table");
       std::printf("mw3: %s: its texture directory is broken (texture %d's mip %d of %d), not read\n",
                   where ? where : "gamez.zbd", i, mip, count);
       return -1;

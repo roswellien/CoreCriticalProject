@@ -3,7 +3,8 @@ void emit_reference_geometry(
     const std::vector<cc::geometry::Material> &materials,
     const ::platform::ModelDrawContext &context,
     const ::platform::prepared::Matrix &camera,
-    const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog) {
+    const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog,
+    const std::vector<NativeGroundRangeAdmission> &admissions) {
   const auto normal_matrix = mw34::sun::normal_matrix(camera);
   const auto camera_to_world =
       mw34::donor::product(world, mw34::donor::inverse(camera));
@@ -52,6 +53,7 @@ void emit_reference_geometry(
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     draw.texture =
         material.texture < 0 ? -1 : int(bind_texture(material.texture, false));
+    apply_native_geometry_admission(draw, admissions[range_index]);
     draw.sampler = 3U | unsigned(material.address_u) << 4 |
                    unsigned(material.address_v) << 8;
     draw.key = {0, 5, 6, 1, 7, 1, std::uint8_t(range.two_sided ? 1 : 3), 0};
