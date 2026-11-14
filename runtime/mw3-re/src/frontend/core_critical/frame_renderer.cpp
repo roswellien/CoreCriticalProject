@@ -1,15 +1,16 @@
 #include "frame_renderer.hpp"
 #include "frontend/sdl/cpu_interval.h"
-#include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/class.h"
-#include "gamez/zinput/zinput.h"
+#include "gamez/zclass/cls_node.h"
 #include "gamez/zimage/zimg_texture.h"
+#include "gamez/zinput/zinput.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "native_staging_budget.hpp"
 #include "prepared_draw.hpp"
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
@@ -20,8 +21,8 @@
 #include "renderer/geometry/reference.hpp"
 #include "renderer/headlight_original_binding.hpp"
 #include "renderer/headlight_spotlight.hpp"
-#include "renderer/mech_headlights.hpp"
 #include "renderer/material_normals.hpp"
+#include "renderer/mech_headlights.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include <filesystem>
 #include <fstream>
@@ -256,55 +257,52 @@ class FrameRenderer final : public VulkanFrameRenderer {
 public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
                          const sdlfe::CoreCriticalQuality &quality,
-                         const sdlfe::CoreCriticalAssets &assets)
+                         const sdlfe::CoreCriticalAssets &assets,
+                         std::size_t local_staging_budget = staging::native_budget_bytes)
       : window_(window),
         window_state_tracker_(
             backend == sdlfe::RendererBackend::core_critical_wsi
-                ? std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(
-                      window)
+                ? std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(window)
                 : nullptr),
-        native_window_(
-            backend == sdlfe::RendererBackend::core_critical_wsi
-                ? cc_mw3_re::platform::get_window_native_handle(window)
-                : static_cast<cc_mw3_re::platform::NativeWindowHandle>(
-                      cc_mw3_re::platform::get_window_hwnd(window))),
+        native_window_(backend == sdlfe::RendererBackend::core_critical_wsi
+                           ? cc_mw3_re::platform::get_window_native_handle(window)
+                           : static_cast<cc_mw3_re::platform::NativeWindowHandle>(
+                                 cc_mw3_re::platform::get_window_hwnd(window))),
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
-        sun_explicit_(assets.sun_explicit),
-        environment_(assets.environment),
+        sun_explicit_(assets.sun_explicit), environment_(assets.environment),
         prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),
-        prepared_cache_enabled_(bridge_config_.prepared_cache) {
-    if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
-      throw std::runtime_error(
-          "Geometry normal debug requires an explicit geometry mode");
-    if (!native_wsi_ && !hwnd_) {
-      throw std::runtime_error(
-          "Direct3D presentation requires a Win32 window handle");
-    }
-    if (backend == sdlfe::RendererBackend::sdl)
-      throw std::runtime_error(
-          "The Core Critical factory requires a Vulkan backend");
-    // Admit catalog paths and headers before native mission callbacks start.
-    // World pixel payloads remain lazy; failures here reach the window's normal
-    // initialization error boundary instead of unwinding legacy game loaders.
-    if (lighting_.normals)
-      surface_normals_load();
-    local_lights_load();
-    initialize_renderer();
-    if (assets.render_thread) {
-      worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
-        // Process only synchronous window messages, without consuming
-        // input or reentering the game. DXGI may send one while waiting.
-        cc_mw3_re::platform::pump_presentation_messages();
-      });
-      std::fprintf(stderr,
-                   "Core Critical render worker: enabled (8 jobs, 128 MiB)\n");
-    }
+        prepared_cache_enabled_(bridge_config_.prepared_cache),
+        local_staging_budget_(local_staging_budget) {
+      if (!local_staging_budget_ || local_staging_budget_ > staging::native_budget_bytes)
+          throw std::invalid_argument("Invalid local light staging budget");
+      if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
+          throw std::runtime_error("Geometry normal debug requires an explicit geometry mode");
+      if (!native_wsi_ && !hwnd_) {
+          throw std::runtime_error("Direct3D presentation requires a Win32 window handle");
+      }
+      if (backend == sdlfe::RendererBackend::sdl)
+          throw std::runtime_error("The Core Critical factory requires a Vulkan backend");
+      // Admit catalog paths and headers before native mission callbacks start.
+      // World pixel payloads remain lazy; failures here reach the window's normal
+      // initialization error boundary instead of unwinding legacy game loaders.
+      if (lighting_.normals)
+          surface_normals_load();
+      local_lights_load();
+      initialize_renderer();
+      if (assets.render_thread) {
+          worker_ = std::make_unique<RenderWorker>(8, staging::native_budget_bytes, [] {
+              // Process only synchronous window messages, without consuming
+              // input or reentering the game. DXGI may send one while waiting.
+              cc_mw3_re::platform::pump_presentation_messages();
+          });
+          std::fprintf(stderr, "Core Critical render worker: enabled (8 jobs, 1024 MiB)\n");
+      }
   }
 
   bool ok() const override { return true; }
@@ -318,6 +316,13 @@ public:
     complete_local_light_packets();
     if (worker_)
       worker_->drain();
+  }
+  SceneBindingStatistics scene_binding_statistics() override {
+    if (worker_)
+      worker_->drain();
+    std::lock_guard<std::mutex> lock(recycle_mutex_);
+    return {true, scene_.textures.size(), scene_.order.size(),
+            scene_.draws.size(), recycled_scenes_.size()};
   }
   QualityStatistics quality_statistics() const override {
     if (worker_)
@@ -1246,6 +1251,7 @@ private:
       window_bound_ = false;
       resident_width_ = resident_height_ = 0;
       scene_ = {};
+      invalidate_scene_bindings();
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
@@ -1290,13 +1296,25 @@ private:
     if (entry.pixels.empty()) {
       throw std::runtime_error("mw3-re draw references a released texture");
     }
+    const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
     unsigned &index = sharp ? entry.sharp_index : entry.scene_index;
     if (index != no_binding) {
+      if (!scene_.texture_slot_matches(index, key, entry.version, entry.width,
+                                      entry.height)) {
+        throw std::runtime_error(
+            "Producer Scene texture binding mismatch: handle=" +
+            std::to_string(handle) + " sharp=" + std::to_string(sharp) +
+            " slot=" + std::to_string(index) +
+            " textures=" + std::to_string(scene_.textures.size()) +
+            " key=" + std::to_string(key) +
+            " version=" + std::to_string(entry.version) +
+            " extent=" + std::to_string(entry.width) + "x" +
+            std::to_string(entry.height));
+      }
       return index;
     }
     const auto w = entry.width;
     const auto h = entry.height;
-    const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
     vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {},
                        {}};
     const auto current = submitted_textures_.find(ref.key);
@@ -1414,6 +1432,7 @@ private:
   std::uint64_t gpu_prepared_vertices_{}, prepared_reference_vertices_{},
       early_prepared_models_{}, prepared_cpu_fallback_batches_{};
   const bool prepared_cache_enabled_;
+  const std::size_t local_staging_budget_;
   PreparedDrawCache prepared_draw_cache_;
 };
 
@@ -1506,5 +1525,13 @@ make_renderer(SDL_Window *window, sdlfe::RendererBackend backend,
               const sdlfe::CoreCriticalAssets &assets) {
   return std::make_unique<FrameRenderer>(window, backend, quality, assets);
 }
+
+namespace testing {
+std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
+    SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
+    const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
+    return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+} // namespace testing
 
 } // namespace cc_mw3_re

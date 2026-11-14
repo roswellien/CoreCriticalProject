@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
@@ -26,6 +27,13 @@ struct AssetStatistics {
   std::uint64_t binding_rejected_mismatch{}, native_fingerprint_evaluations{};
 };
 
+// Read-only authored-check observation, sampled on the producer after the
+// render worker drains. Unsupported implementations must say so explicitly.
+struct SceneBindingStatistics {
+  bool supported{};
+  std::uint64_t textures{}, commands{}, draws{}, recycled_scenes{};
+};
+
 class VulkanFrameRenderer : public sdlfe::FrameRenderer {
 public:
   // Successful visible presentations, including SUBOPTIMAL, across scene
@@ -34,6 +42,7 @@ public:
   virtual QualityStatistics quality_statistics() const = 0;
   virtual AssetStatistics asset_statistics() const = 0;
   virtual cc::geometry::Statistics geometry_statistics() const = 0;
+  virtual SceneBindingStatistics scene_binding_statistics() { return {}; }
 };
 
 RendererBridgeConfig configure_bridge(
@@ -46,5 +55,13 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer(
     sdlfe::RendererBackend backend = sdlfe::RendererBackend::core_critical_dxgi,
     const sdlfe::CoreCriticalQuality &quality = {},
     const sdlfe::CoreCriticalAssets &assets = {});
+
+namespace testing {
+// Exercise the real retained-packet rejection path without allocating a full
+// production allowance. Normal frontend construction always uses the native cap.
+std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
+    SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
+    const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget);
+} // namespace testing
 
 } // namespace cc_mw3_re

@@ -35,17 +35,26 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
+
+namespace cc_mw3_re::checks {
+void check_scene_binding_slots();
+}
 
 namespace {
 bool threaded_checks = false;
 std::unique_ptr<cc_mw3_re::VulkanFrameRenderer>
 make_check_renderer(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality = {},
-                    sdlfe::CoreCriticalAssets assets = {}) {
-  assets.render_thread = threaded_checks;
-  return cc_mw3_re::make_renderer(window, backend, quality, assets);
+                    sdlfe::CoreCriticalAssets assets = {},
+                    std::optional<std::size_t> local_staging_budget = std::nullopt) {
+    assets.render_thread = threaded_checks;
+    if (local_staging_budget)
+        return cc_mw3_re::testing::make_renderer_with_staging_budget(window, backend, quality,
+                                                                     assets, *local_staging_budget);
+    return cc_mw3_re::make_renderer(window, backend, quality, assets);
 }
 
 void require(bool condition, const char *message) {
@@ -1080,7 +1089,12 @@ void check_sealed_environment(SDL_Window *window,
       quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000);
       renderer->end_scene();
       auto px2 = read();
-      require(px_at(px2, 30, 2) == 0xFFFF0000, "outdoor sky");
+      // Flat t1m1 uses the authored manual horizon haze (.42,.32,.38),
+      // rounded to bytes (107,82,97). Off and unknown missions retain red.
+      const bool training_haze =
+          mode[0] == 'f' && id.world_index == 5 && id.number == 1;
+      const uint32_t sky_expected = training_haze ? 0xFF6B5261 : 0xFFFF0000;
+      require(px_at(px2, 30, 2) == sky_expected, "outdoor sky/horizon");
     }
     renderer->mission_changed({1, 2});
     renderer->reset_scene_resources();
@@ -1615,6 +1629,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 } // namespace
 
 #include "geometry_checks.inc"
+#include "scene_binding_checks.inc"
 #include "platform_checks.inc"
 #include "prepared_gpu_checks.inc"
 #include "ultrawide_checks.inc"
@@ -2055,7 +2070,7 @@ void check_renderer_bridge_config() {
 int main(int argc, char **argv) {
   bool geometry_check = false, ultrawide_check = false;
   bool native_wsi = false, quality_check = false, prepared_check = false,
-       material_check = false;
+       material_check = false, scene_bindings_check = false;
   sdlfe::CoreCriticalQuality quality;
   for (int i = 1; i < argc; ++i) {
     const std::string_view option(argv[i]);
@@ -2067,6 +2082,8 @@ int main(int argc, char **argv) {
       prepared_check = true;
     else if (option == "--geometry")
       geometry_check = true;
+    else if (option == "--scene-bindings")
+      scene_bindings_check = true;
     else if (option == "--ultrawide")
       ultrawide_check = true;
     else if (option == "--materials")
@@ -2077,7 +2094,8 @@ int main(int argc, char **argv) {
       quality_check = true;
     } else {
       std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] "
-                           "[--prepared|--materials] [--quality MODE]\n");
+                           "[--prepared|--materials|--scene-bindings] "
+                           "[--quality MODE]\n");
       return 1;
     }
   }
@@ -2166,7 +2184,9 @@ int main(int argc, char **argv) {
     const auto backend = native_wsi
                              ? sdlfe::RendererBackend::core_critical_wsi
                              : sdlfe::RendererBackend::core_critical_dxgi;
-    if (ultrawide_check)
+    if (scene_bindings_check)
+      check_scene_bindings(window, backend);
+    else if (ultrawide_check)
       check_ultrawide(window, backend);
     else if (geometry_check) {
       check_strict_geometry(window, backend);

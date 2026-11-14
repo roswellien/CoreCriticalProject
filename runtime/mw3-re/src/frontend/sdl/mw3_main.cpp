@@ -72,6 +72,7 @@
 #include "frontend/sdl/modes_chain.h"
 #include "frontend/sdl/debug_states.h"
 #include "frontend/sdl/first_run_import.h"
+#include "frontend/sdl/frontend_lifetime.h"
 #include "frontend/sdl/crash_report.h"
 #include "frontend/sdl/data_folder_start.h"
 #include "frontend/sdl/run_log.h"
@@ -993,7 +994,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   // FIX (B): a first start's mission at the desktop's size; checks and shots keep 640x480.
   window.set_first_start_desktop(!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
   sdlfe::SdlZinHost zin_host(&input);
-  zin::set_host(&zin_host);
+  sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;
   clock.frame_ms = static_cast<uint32_t>(a.frame_ms);
   // --seed: every srand(time()) takes N instead (with --frame-ms a run repeats).
@@ -1095,11 +1096,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   {
     mech3::GameEngine engine(p, "mech3.exe" + a.original);
     sdlfe::SdlTwodHost host(&engine, &input, &window);
+    sdlfe::FrontendUiLifetime ui_lifetime(engine, host);
     host.enable_hud_text(a.hud.mode == "core-critical" && a.hud.text);
-    ztwod::set_host(&host);
     mech3::reset_states();
     mech3::Mech3App app(&engine);
-    mech3::set_app(&app);
+    sdlfe::FrontendAppLifetime app_lifetime(ui_lifetime, app, input.in_mission);
     // FIX (A), ours: in a shown window the menus leave the mouse free and a
     // mission's can be let go (sdl_input.h); fullscreen and hidden runs hold it.
     input.windowed = [&window, hidden = a.hidden] { return !hidden && !window.fullscreen(); };
@@ -1805,11 +1806,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       std::fprintf(stderr, "mw3: %zu original functions reached are not ported (--verbose lists them and %zu known)\n",
                    gaps, engine.unported_counts().size() - gaps);
     }
-    ztwod::set_host(nullptr);
-    mech3::set_app(nullptr);
-    input.in_mission = nullptr;  // the app is gone
   }
-  zin::set_host(nullptr);
   return result;
 }
 
