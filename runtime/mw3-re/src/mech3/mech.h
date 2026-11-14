@@ -206,7 +206,7 @@ struct Mech : Vehicle {
   // mech, so without this the network would send its state, shots and death
   // as the host player's.
   bool arena_bot = false;
-  bool invincible{};           // +0x630  the Invincible cheat (docs/damage.md)
+  bool invincible{};          // +0x630  the Invincible cheat (docs/damage.md)
   uint32_t x634 = 0;         // +0x634
   float x63c = 1.0f;         // +0x63c
   Vec3 x640{};               // +0x640
@@ -288,6 +288,14 @@ struct Mech : Vehicle {
   void ground_dust();                 // 0x004164f3.. / 0x00416d3a..: dust or a splash on the ground below
   void landing_pose();                // 0x0041660b..: landf from its start, its root kept
   void move(float dt, MechAnim* anim, float speed);  // 0x00417a80
+  // Ours (#289): the animate halves of the frame, split out of Move,
+  // ActionUpdate and Update so a replay puppet animates without simulating.
+  void advance_gait(float dt, MechAnim* anim);
+  void animate_gait(float dt, MechAnim* anim, int jets, const Vec3& saved);
+  void begin_action(MechAction* act, int kind);
+  void animate_action(float dt, MechAction* act, int kind);
+  void animate_torso_hip(float dt);
+  void animate_limbs(float dt);
   // The pose on the parts (mech_pose.cpp, docs/movement-pose.md).
   float gait_blend(int jets) const;   // 0x00417c65..: the blend-in weight, -1 when none
   void pose_gait(MechAnim& a, int jets, const Vec3& saved);  // 0x00417bbc..0x0041818d in Move

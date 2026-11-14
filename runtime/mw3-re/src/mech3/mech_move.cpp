@@ -91,12 +91,25 @@ void Mech::move(float dt, MechAnim* anim, float speed) {
     }
   }
   const Vec3 saved = vec_3c;
-  if (anim) {
-    anim->set_speed(speed);
-    anim->advance(dt);
-    anim->velocity(&vec_3c);
-  }
+  if (anim) anim->set_speed(speed);
+  advance_gait(dt, anim);
+  // The jets read and change the root motion advance_gait just wrote.
   const int jets = jump_jets(dt);
+  animate_gait(dt, anim, jets, saved);
+}
+
+// Ours (#289): the animation half of Move, split out so a replay puppet can
+// animate without simulating. The clip runs on and its root motion lands in
+// +0x44.
+void Mech::advance_gait(float dt, MechAnim* anim) {
+  if (!anim) return;
+  anim->advance(dt);
+  anim->velocity(&vec_3c);
+}
+
+// Ours (#289): the rest of Move's animation half: the ground fit, then the
+// gait pose (leg IK) with the root motion blended in.
+void Mech::animate_gait(float dt, MechAnim* anim, int jets, const Vec3& saved) {
   ground_step(dt);
   if (!anim || !(detail & 0x10)) {
     foot_ground(*legs[0]->foot);
@@ -628,7 +641,14 @@ void Mech::update_action(float dt) {
     act = action_objects[kind];
     act->reset();
   }
-  if (!act->started()) {
+  if (!act->started()) begin_action(act, kind);
+  animate_action(dt, act, kind);
+}
+
+// Ours (#289): the start of an action, split out of ActionUpdate so a replay
+// puppet starts its logged actions the same way.
+void Mech::begin_action(MechAction* act, int kind) {
+  {
     const int next = state_for_action(kind);
     prev_state = anim_state;
     anim_state = next;
@@ -657,6 +677,11 @@ void Mech::update_action(float dt) {
     act->hip(&action_root.x, q);
     momentum = vec_3c;
   }
+}
+
+// Ours (#289): ActionUpdate's animation tail: momentum, the ground fit, the
+// clip and its hip root motion, then the action pose.
+void Mech::animate_action(float dt, MechAction* act, int) {
   // x0.6 a frame (0x005bcd50). FIX (B): 0.6 per 1/30 s (fixes.md, Frame rate).
   const float carry = zfix::options().per_second ? std::pow(0.6f, zfix::frame_steps(dt)) : 0.6f;
   momentum = {momentum.x * carry, momentum.y * carry, momentum.z * carry};

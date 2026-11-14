@@ -267,6 +267,7 @@ class Torso : public MechPart {
   bool init(const Config* cfg) override;                    // 0x004644b0
   bool setup() override;                                    // 0x00464290
   void update(float dt) override;                           // 0x00464e80
+  void refresh_turn();  // ours (#289): turn_q and front from yaw/pitch, for a replay puppet
   void node_changed() override;                             // 0x004659c0
   bool steer(float dt, float* yaw, float* pitch, const float* yaw_in, float* pitch_in);  // 0x00464ce0: true when clamped
   bool aim_angles(const Vec3& dir, float* pitch, float* yaw) const;  // 0x00465bc0: false when clamped
