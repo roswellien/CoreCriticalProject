@@ -19,9 +19,8 @@ void flush() override {
     std::size_t local_bytes = 0;
     if (local_active_) {
       local_bytes = packet_bytes(scene_);
-      constexpr std::size_t kLocalBudget = 128u * 1024u * 1024u;
-      if (local_bytes > kLocalBudget - pending_local_bytes_)
-        throw std::runtime_error("Local light packet staging exceeds budget");
+      if (!staging::fits(local_bytes, pending_local_bytes_, local_staging_budget_))
+          throw std::runtime_error("Local light packet staging exceeds budget");
       if (worker_)
         for (const auto &draw : scene_.draws)
           if (draw.shadow_valid)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
@@ -46,5 +47,13 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer(
     sdlfe::RendererBackend backend = sdlfe::RendererBackend::core_critical_dxgi,
     const sdlfe::CoreCriticalQuality &quality = {},
     const sdlfe::CoreCriticalAssets &assets = {});
+
+namespace testing {
+// Exercise the real retained-packet rejection path without allocating a full
+// production allowance. Normal frontend construction always uses the native cap.
+std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
+    SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
+    const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget);
+} // namespace testing
 
 } // namespace cc_mw3_re

@@ -35,6 +35,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -43,9 +44,13 @@ bool threaded_checks = false;
 std::unique_ptr<cc_mw3_re::VulkanFrameRenderer>
 make_check_renderer(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality = {},
-                    sdlfe::CoreCriticalAssets assets = {}) {
-  assets.render_thread = threaded_checks;
-  return cc_mw3_re::make_renderer(window, backend, quality, assets);
+                    sdlfe::CoreCriticalAssets assets = {},
+                    std::optional<std::size_t> local_staging_budget = std::nullopt) {
+    assets.render_thread = threaded_checks;
+    if (local_staging_budget)
+        return cc_mw3_re::testing::make_renderer_with_staging_budget(window, backend, quality,
+                                                                     assets, *local_staging_budget);
+    return cc_mw3_re::make_renderer(window, backend, quality, assets);
 }
 
 void require(bool condition, const char *message) {

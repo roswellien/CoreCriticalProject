@@ -168,18 +168,20 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
           "Ambient-only native source was discarded or changed intensity");
   require(render(true, false, true, true) == off,
           "HUD sprite incorrectly admitted as an emitter");
-  // Budget rejection must retain the scene. Retrying the same unchanged
+  // Use a small check-only allowance to exercise real rejection without a
+  // production-sized allocation. Two 128-square RGBA payloads fill it before
+  // scene metadata. Budget rejection must retain the scene. Retrying the same unchanged
   // submission must reject again, rather than silently succeeding after loss.
   {
     sdlfe::CoreCriticalAssets assets{};
     assets.lighting = "flat";
-    auto renderer = make_check_renderer(window, backend, {}, assets);
+    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
     renderer->mission_changed({5, 1});
     renderer->set_viewport(0, 0, 32, 32);
-    const std::vector<uint8_t> pixels(std::size_t(4096) * 4096 * 4, 128);
+    const std::vector<uint8_t> pixels(std::size_t(128) * 128 * 4, 128);
     platform::DrawState first{}, second{};
-    first.texture = renderer->create_texture(4096, 4096, pixels.data(), 1);
-    second.texture = renderer->create_texture(4096, 4096, pixels.data(), 1);
+    first.texture = renderer->create_texture(128, 128, pixels.data(), 1);
+    second.texture = renderer->create_texture(128, 128, pixels.data(), 1);
     renderer->clear(true, 0, 0, 0);
     renderer->begin_scene();
     quad(*renderer, 4, 28, .5f, 0xffffffff, first);
