@@ -5,7 +5,8 @@ struct HeightImageKey {
   std::weak_ptr<const mw34::materials::SurfaceMaterialImage> owner;
   const mw34::materials::SurfaceMaterialImage *image{};
   std::string source_sha256, sidecar_sha256, name;
-  std::uint64_t mesh_uv_hash{}, image_version{}, producer_epoch{}, texture_version{}, hash{};
+  // Per-draw admission stamps do not version these immutable image pixels.
+  std::uint64_t mesh_uv_hash{}, image_version{}, hash{};
   unsigned width{}, height{}, role{};
   bool operator<(const HeightImageKey &other) const {
     if (owner.owner_before(other.owner)) return true;
@@ -16,10 +17,9 @@ struct HeightImageKey {
     if (std::less<const mw34::materials::SurfaceMaterialImage *>{}(other.image, image))
       return false;
     return std::tie(source_sha256, sidecar_sha256, name, mesh_uv_hash, image_version,
-                    producer_epoch, texture_version, hash, width, height, role) <
+                    hash, width, height, role) <
            std::tie(other.source_sha256, other.sidecar_sha256, other.name, other.mesh_uv_hash,
-                    other.image_version, other.producer_epoch, other.texture_version,
-                    other.hash, other.width, other.height, other.role);
+                    other.image_version, other.hash, other.width, other.height, other.role);
   }
 };
 struct HeightImage {
@@ -127,8 +127,8 @@ void validate_height(const Scene &scene, const Draw &draw,
 HeightImageKey height_key(const mw34::materials::HeightBinding &binding) const {
   const auto &image = *binding.image;
   return {binding.image, &image, binding.source_sha256, binding.sidecar_sha256, image.name,
-          binding.mesh_uv_hash, binding.image_version, binding.producer_epoch,
-          binding.texture_version, image.hash, image.width, image.height, image.role};
+          binding.mesh_uv_hash, binding.image_version, image.hash, image.width, image.height,
+          image.role};
 }
 void retire_height_images() {
   for (auto it = height_images.begin(); it != height_images.end();) {

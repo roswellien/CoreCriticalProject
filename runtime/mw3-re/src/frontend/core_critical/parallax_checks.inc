@@ -820,6 +820,102 @@ void descriptor_identity_and_mixed_draws(vk::Renderer &renderer, vk::Renderer &u
   std::printf("pom_descriptor_identity_and_mixed_draws pass\n");
 }
 
+void immutable_height_reuse_across_admission_stamps(vk::Renderer &renderer) {
+  auto source = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
+  const auto immutable = source.scene.draws[0].height_binding;
+  const auto payload_bytes = immutable->image->pixels.size() * sizeof(std::uint32_t);
+  require(payload_bytes == 4096, "POM shared height fixture has an unexpected size");
+  const auto uploads = renderer.height_uploads;
+  const auto uploaded_bytes = renderer.height_uploaded_bytes;
+  const auto hits = renderer.height_cache_hits;
+  std::vector<std::shared_ptr<const mat::HeightBinding>> retained_snapshots;
+  std::vector<unsigned char> expected_pixels;
+  std::vector<float> expected_depth;
+  // Every render starts from identical pristine color/depth. Only the admitted
+  // albedo upload stamp changes; source pixels and the immutable pack stay live.
+  for (std::uint64_t version = 1; version <= 5; ++version) {
+    auto scene = source.scene;
+    auto snapshot = std::make_shared<mat::HeightBinding>(*immutable);
+    snapshot->texture_version = version;
+    require(snapshot->image == immutable->image &&
+                !snapshot->image.owner_before(immutable->image) &&
+                !immutable->image.owner_before(snapshot->image),
+            "POM stamp fixture changed its immutable payload owner");
+    scene.textures[0].hash = version;
+    scene.draws[0].height_binding = snapshot;
+    retained_snapshots.push_back(snapshot);
+    renderer.render(scene); // Readback settles the scene before the next version.
+    compare_uv(decode(scene), expected(source, Height::ramp_u),
+                "POM albedo version changed immutable height displacement");
+    if (version == 1) {
+      expected_pixels = scene.pom_rgba8;
+      expected_depth = scene.pom_depth32;
+    }
+    require(scene.pom_rgba8 == expected_pixels && scene.pom_depth32 == expected_depth,
+            "POM albedo version changed exact height readback");
+  }
+  std::printf("pom_shared_height_versions uploads=%llu bytes=%llu versions=5\n",
+      static_cast<unsigned long long>(renderer.height_uploads - uploads),
+      static_cast<unsigned long long>(renderer.height_uploaded_bytes - uploaded_bytes));
+  require(renderer.height_uploads == uploads + 1 &&
+              renderer.height_uploaded_bytes == uploaded_bytes + payload_bytes,
+          "POM immutable height payload reuploaded for an albedo version");
+  for (std::uint64_t epoch = 2; epoch <= 5; ++epoch) {
+    auto scene = source.scene;
+    auto snapshot = std::make_shared<mat::HeightBinding>(*immutable);
+    snapshot->texture_version = 5;
+    snapshot->producer_epoch = epoch;
+    scene.textures[0].hash = 5;
+    scene.draws[0].height_binding = snapshot;
+    retained_snapshots.push_back(snapshot);
+    renderer.render(scene);
+    require(scene.pom_rgba8 == expected_pixels && scene.pom_depth32 == expected_depth,
+            "POM producer epoch changed immutable height readback");
+  }
+  require(renderer.height_uploads == uploads + 1 && renderer.height_cache_hits >= hits + 8,
+          "POM producer epoch duplicated an immutable height payload");
+  auto shared = source.scene;
+  auto first = std::make_shared<mat::HeightBinding>(*immutable);
+  auto second = std::make_shared<mat::HeightBinding>(*immutable);
+  first->texture_version = 11;
+  second->texture_version = 12;
+  second->producer_epoch = 19;
+  shared.textures[0].hash = 11;
+  auto second_albedo = shared.textures[0];
+  second_albedo.key = 3;
+  second_albedo.hash = 12;
+  shared.textures.push_back(std::move(second_albedo));
+  shared.draws[0].height_binding = first;
+  shared.draws.push_back(shared.draws[0]);
+  shared.draws[1].texture = 2;
+  shared.draws[1].height_binding = second;
+  shared.draws[0].scissor = {{0, 0}, {16, 32}};
+  shared.draws[1].scissor = {{16, 0}, {16, 32}};
+  shared.order.push_back({false, 1});
+  renderer.render(shared);
+  require(shared.pom_rgba8 == expected_pixels && shared.pom_depth32 == expected_depth &&
+              renderer.height_uploads == uploads + 1 &&
+              renderer.height_uploaded_bytes == uploaded_bytes + payload_bytes,
+          "POM same-frame albedo contexts duplicated or changed shared height");
+  auto other_owner = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
+  require(other_owner.scene.draws[0].height_binding->image != immutable->image,
+          "POM distinct-owner control accidentally reused its decoded image");
+  renderer.render(other_owner.scene);
+  require(renderer.height_uploads == uploads + 2 &&
+              other_owner.scene.pom_rgba8 == expected_pixels &&
+              other_owner.scene.pom_depth32 == expected_depth,
+          "POM distinct immutable owner failed to upload its payload");
+  auto other_content = fixture(Route::tl, Height::one, .08f, .1f, .7);
+  renderer.render(other_content.scene);
+  compare_uv(decode(other_content.scene), expected(other_content, Height::one),
+              "POM replacement content lost its independent displacement");
+  require(renderer.height_uploads == uploads + 3 &&
+              renderer.height_uploaded_bytes == uploaded_bytes + 3 * payload_bytes &&
+              other_content.scene.pom_rgba8 != expected_pixels,
+          "POM changed immutable height content failed to upload a new payload");
+  std::printf("pom_immutable_height_reuse_across_admission_stamps pass\n");
+}
+
 void height_replacement_and_queued_retirement(vk::Renderer &renderer) {
   auto old = fixture(Route::tl, Height::constant, .04f, 0, .3);
   auto replacement = fixture(Route::tl, Height::ramp_u, .04f, 0, .3);
@@ -905,6 +1001,7 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
     inverse_chart_color_normal_correspondence(renderer);
     atlas_and_finite_fallback(renderer);
     descriptor_identity_and_mixed_draws(renderer, uncombined);
+    immutable_height_reuse_across_admission_stamps(renderer);
     height_replacement_and_queued_retirement(renderer);
     for (const auto quality : {vk::Renderer::Quality{1, 1, 16, true},
                                vk::Renderer::Quality{2, 1, 16, false},
