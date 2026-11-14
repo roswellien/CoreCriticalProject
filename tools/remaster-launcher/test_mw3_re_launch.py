@@ -3,6 +3,7 @@
 import copy
 import importlib
 import importlib.util
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -56,6 +57,79 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 self.assertTrue(result["reasons"])
                 self.assertNotIn("argv", result)
                 self.assertEqual(request, before)
+
+    def test_schema_three_optional_pom_and_schema_two_identity(self):
+        plan = self.planner()
+        baseline = plan(self.request())
+        for additions in ({}, {"visuals": {}}, {"visuals": {"pom": False}}):
+            request = dict(self.request(), schema_version=3, **additions)
+            before = copy.deepcopy(request)
+            with self.subTest(additions=additions):
+                self.assertEqual(plan(request), baseline)
+                self.assertEqual(request, before)
+        request = dict(self.request(), schema_version=3, visuals={"pom": True})
+        before = copy.deepcopy(request)
+        result = plan(request)
+        self.assertTrue(result["ok"])
+        args = result["argv"]
+        self.assertEqual(args.count("--cc-pom"), 1)
+        self.assertEqual(args[args.index("--cc-pom") + 1], "1")
+        without_pom = args.copy()
+        index = without_pom.index("--cc-pom")
+        del without_pom[index:index + 2]
+        self.assertEqual(without_pom, baseline["argv"])
+        self.assertEqual(request, before)
+        for lighting in ("off", "flat"):
+            with self.subTest(lighting=lighting), self.assertRaises(ValueError):
+                plan(dict(request, lighting=lighting))
+        for additions in (
+            {"visuals": None}, {"visuals": []}, {"visuals": True},
+            {"visuals": {"unknown": False}}, {"visuals": {"pom": True, "fog": 0}},
+            {"unknown": 1},
+        ):
+            with self.subTest(additions=additions), self.assertRaises(ValueError):
+                plan(dict(self.request(), schema_version=3, **additions))
+        for value in (0, 1, 1.0, "true", None, [], {}):
+            with self.subTest(pom=value), self.assertRaises(ValueError):
+                plan(dict(self.request(), schema_version=3, visuals={"pom": value}))
+        with self.assertRaises(ValueError):
+            plan(dict(self.request(), visuals={"pom": False}))
+
+    def test_raw_json_duplicate_and_resource_bounds(self):
+        self.planner()
+        plan_json = importlib.import_module("mw3_re_launch").plan_json
+        raw = json.dumps(dict(self.request(), schema_version=3, visuals={"pom": True}))
+        self.assertEqual(plan_json(raw), self.planner()(json.loads(raw)))
+        self.assertEqual(plan_json(raw.encode("utf-8")), plan_json(raw))
+        for malformed in (
+            raw[:-1] + ', "schema_version": 3}',
+            raw.replace('"pom": true', '"pom": false, "pom": true'),
+            raw.replace('"pom": true', '"pom": false, "p\\u006fm": true'),
+            raw.replace('"visuals": {"pom": true}', '"visuals": {"pom": true, "extra": {"x": 1, "x": 2}}'),
+            raw[:-1] + ', "visuals": {}}',
+            raw[:-1] + ', "extra": NaN}',
+            '[' * 65 + '0' + ']' * 65,
+            '[' * 10000 + '0' + ']' * 10000,
+            raw + ' ' * (2 * 1024 * 1024),
+            raw.replace('"pom": true', '"pom": true, "extra": "é"') + ' ' * (2 * 1024 * 1024 - len(raw)),
+            b'\xff', {}, None,
+        ):
+            with self.subTest(malformed=str(malformed)[:100]), self.assertRaises(ValueError):
+                plan_json(malformed)
+        # Strings containing delimiters and escaped quotes do not count as container nesting.
+        quoted = dict(self.request(), assets=['F:/' + '[' * 80 + '\"quoted'])
+        with self.assertRaisesRegex(ValueError, "path component"):
+            plan_json(json.dumps(quoted))
+        self.assertTrue(plan_json(json.dumps(dict(self.request(), assets=['F:/' + '[' * 80])))["ok"])
+        padded = raw + ' ' * (2 * 1024 * 1024 - len(raw.encode("utf-8")))
+        self.assertEqual(plan_json(padded), plan_json(raw))
+        unicode_raw = json.dumps(self.request(), ensure_ascii=False)
+        with self.assertRaisesRegex(ValueError, "too large"):
+            plan_json(unicode_raw + ' ' * (2 * 1024 * 1024 - len(unicode_raw)))
+        with self.assertRaisesRegex(ValueError, "Missing or unknown"):
+            plan_json('[' * 64 + '0' + ']' * 64)
+        with self.assertRaisesRegex(ValueError, "too deep"):
+            plan_json('[' * 65 + '0' + ']' * 65)
 
     def test_quality_tokens_preserve_sampling_choices(self):
         plan = self.planner()

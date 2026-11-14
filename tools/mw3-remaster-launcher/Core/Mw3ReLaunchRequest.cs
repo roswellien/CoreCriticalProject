@@ -19,6 +19,7 @@ public sealed record Mw3RePlanningOptions
     public Mw3ReWindowMode WindowMode { get; init; } = Mw3ReWindowMode.Windowed;
     public bool RenderThread { get; init; } = true;
     public Mw3ReLighting Lighting { get; init; } = Mw3ReLighting.Off;
+    public bool Pom { get; init; } = false;
     public IReadOnlyList<string> Assets { get; init; } = Array.Empty<string>();
 }
 
@@ -57,10 +58,15 @@ public static class Mw3ReLaunchRequest
             Mw3ReLighting.Off => "off", Mw3ReLighting.Flat => "flat", Mw3ReLighting.Normal => "normal",
             _ => throw new InvalidDataException("Unknown native lighting.")
         };
+        // This pinned combined runtime/planner claim is observational, not trusted execution admission.
+        if (options.Pom && (options.Lighting != Mw3ReLighting.Normal ||
+            !contract.Capabilities.TryGetValue("pom", out var versions) || !versions.Contains(1) ||
+            !contract.Roles.ContainsKey("coordinator") || !contract.Roles.ContainsKey("python")))
+            throw new InvalidDataException("Native POM planning requires normal lighting and compatible pinned runtime/planner roles.");
         // Do not create directories or repair input paths; the sole planner validates their lexical contract.
         var request = new JsonObject
         {
-            ["schema_version"] = 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
+            ["schema_version"] = options.Pom ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
@@ -68,6 +74,7 @@ public static class Mw3ReLaunchRequest
             ["render_thread"] = options.RenderThread, ["lighting"] = lighting,
             ["assets"] = new JsonArray(options.Assets.Select(asset => (JsonNode?)JsonValue.Create(asset)).ToArray())
         };
+        if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };
         return GameRunner.SerializeLaunchProfile(request);
     }
 }

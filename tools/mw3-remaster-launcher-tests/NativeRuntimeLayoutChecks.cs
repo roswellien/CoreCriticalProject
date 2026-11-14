@@ -323,6 +323,7 @@ static class NativeRuntimeLayoutChecks
             }
             File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(paired));
             Mw3ReRuntimeContract.ReadStructure(root);
+            CheckMw3RePomProjection(root, paired);
             File.WriteAllText(Path.Combine(root, "runtime.json"), text);
             var linkTarget = Directory.CreateDirectory(Path.Combine(root, "target")).FullName;
             File.Copy(Path.Combine(root, "support.txt"), Path.Combine(linkTarget, "support.txt"));
@@ -642,6 +643,9 @@ static class NativeRuntimeLayoutChecks
             Lighting = Mw3ReLighting.Normal, Assets = assets
         };
         var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "pilot-a");
+        if (options.Pom || json != Mw3ReLaunchRequest.Create(contract, options with { Pom = false },
+            "D:/Original MW3", dataRoot, "pilot-a"))
+            throw new Exception("Default POM changed ordinary schema2 request bytes.");
         var wire = JsonNode.Parse(json)!.AsObject();
         var expectedWrite = Path.Combine(dataRoot, "mw3-re", "profiles", "pilot-a");
         if (wire["schema_version"]!.GetValue<int>() != 2 || wire["engine"]!.GetValue<string>() != "mw3-re" ||
@@ -675,6 +679,95 @@ static class NativeRuntimeLayoutChecks
         Console.WriteLine("Typed native JSON -> isolated actual Python argv planner passed; no game process.");
     }
 
+    private static void CheckMw3RePomProjection(string root, JsonObject paired)
+    {
+        var manifestPath = Path.Combine(root, "runtime.json");
+        var original = File.ReadAllBytes(manifestPath);
+        var dataRoot = Path.Combine(Path.GetTempPath(), "MW3 POM planned writes " + Guid.NewGuid().ToString("N"));
+        var options = new Mw3RePlanningOptions { Lighting = Mw3ReLighting.Normal, Pom = true };
+        string Project(Mw3ReRuntimeContract contract, Mw3RePlanningOptions value) =>
+            Mw3ReLaunchRequest.Create(contract, value, "D:/Original MW3", dataRoot, "pom-fixture");
+        Mw3ReRuntimeContract Snapshot(JsonObject descriptor)
+        {
+            File.WriteAllText(manifestPath, GameRunner.SerializeLaunchProfile(descriptor));
+            return Mw3ReRuntimeContract.ReadStructure(root);
+        }
+        try
+        {
+            // Only authored fixtures make this combined claim; it does not attest native execution.
+            var compatible = paired.DeepClone().AsObject();
+            compatible["capabilities"]!["pom"] = new JsonArray(1);
+            foreach (var version in new[] { 0, 2 })
+            {
+                var unsupported = compatible.DeepClone().AsObject();
+                if (version == 0) unsupported["capabilities"]!.AsObject().Remove("pom");
+                else unsupported["capabilities"]!["pom"] = new JsonArray(version);
+                var snapshot = Snapshot(unsupported);
+                Reject(() => Project(snapshot, options));
+                if (JsonNode.Parse(Project(snapshot, options with { Pom = false }))!["schema_version"]!.GetValue<int>() != 2)
+                    throw new Exception("Unsupported POM claim changed default-Off planning.");
+            }
+            var noTransport = compatible.DeepClone().AsObject();
+            foreach (var role in new[] { "coordinator", "python" })
+            {
+                var relative = noTransport["roles"]![role]!.GetValue<string>();
+                noTransport["roles"]!.AsObject().Remove(role);
+                noTransport["files"]!.AsObject().Remove(relative);
+            }
+            var missingRoles = Snapshot(noTransport);
+            Reject(() => Project(missingRoles, options));
+            var admitted = Snapshot(compatible);
+            foreach (var lighting in new[] { Mw3ReLighting.Off, Mw3ReLighting.Flat })
+                Reject(() => Project(admitted, options with { Lighting = lighting }));
+            var json = Project(admitted, options);
+            var wire = JsonNode.Parse(json)!.AsObject();
+            if (wire["schema_version"]!.GetValue<int>() != 3 || !wire["visuals"]!["pom"]!.GetValue<bool>())
+                throw new Exception("Explicit typed POM was not captured into schema3.");
+            options = options with { Pom = false };
+            Snapshot(paired);
+            if (Project(admitted, options with { Pom = true }) != json ||
+                !JsonNode.Parse(json)!["visuals"]!["pom"]!.GetValue<bool>())
+                throw new Exception("POM projection changed after caller/descriptor replacement.");
+            var planned = RunMw3RePlanner(json);
+            var args = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+            if (!planned["ok"]!.GetValue<bool>() || args.Count(value => value == "--cc-pom") != 1 ||
+                args[args.IndexOf("--cc-pom") + 1] != "1")
+                throw new Exception("Actual Python planner did not produce explicit POM exactly once.");
+            args.RemoveRange(args.IndexOf("--cc-pom"), 2);
+            var offJson = Project(admitted, options);
+            var baseline = RunMw3RePlanner(offJson)["argv"]!.ToJsonString();
+            if (new JsonArray(args.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()).ToJsonString() != baseline)
+                throw new Exception("POM changed an unrelated actual Python argument.");
+            foreach (var visuals in new JsonObject?[] { null, new(), new() { ["pom"] = false } })
+            {
+                var neutral = JsonNode.Parse(offJson)!.AsObject();
+                neutral["schema_version"] = 3;
+                if (visuals != null) neutral["visuals"] = visuals;
+                if (RunMw3RePlanner(neutral.ToJsonString())["argv"]!.ToJsonString() != baseline)
+                    throw new Exception("Optional schema3 visuals changed default-Off argv.");
+            }
+            var raw = wire.ToJsonString();
+            foreach (var invalid in new[]
+            {
+                raw[..^1] + ",\"schema_version\":3}",
+                raw.Replace("\"pom\":true", "\"pom\":false,\"pom\":true"),
+                raw.Replace("\"pom\":true", "\"pom\":1"),
+                raw.Replace("\"pom\":true", "\"pom\":null"),
+                raw.Replace("\"pom\":true", "\"pom\":true,\"unknown\":false"),
+                raw[..^1] + ",\"unknown\":false}",
+                raw.Replace("\"lighting\":\"normal\"", "\"lighting\":\"off\""),
+                raw.Replace("\"lighting\":\"normal\"", "\"lighting\":\"flat\"")
+            })
+            {
+                if (RunMw3RePlanner(invalid)["validation_error"]?.GetValue<bool>() != true)
+                    throw new Exception("Raw typed POM request bypassed Python wire validation.");
+            }
+            if (Directory.Exists(dataRoot)) throw new Exception("POM planning created user data.");
+            Console.WriteLine("Typed POM observational schema3 -> actual Python controls passed; installed admission pending.");
+        }
+        finally { File.WriteAllBytes(manifestPath, original); }
+    }
+
     private static JsonNode RunMw3RePlanner(string json)
     {
         var python = D7VkRunner.FindPythonExecutable(requirePython311: true)
@@ -685,7 +778,7 @@ static class NativeRuntimeLayoutChecks
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
         foreach (var argument in new[] { "-I", "-c",
-            "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('mw3_re_launch',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\ntry: result=m.plan_launch(json.load(sys.stdin))\nexcept ValueError: result={'validation_error':True}\nprint(json.dumps(result))",
+            "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('mw3_re_launch',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\ntry: result=m.plan_json(sys.stdin.read())\nexcept ValueError: result={'validation_error':True}\nprint(json.dumps(result))",
             Path.Combine(AppContext.BaseDirectory, "mw3_re_launch.py") }) info.ArgumentList.Add(argument);
         using var child = System.Diagnostics.Process.Start(info) ?? throw new Exception("Python planner test child did not start.");
         child.StandardInput.Write(json);
