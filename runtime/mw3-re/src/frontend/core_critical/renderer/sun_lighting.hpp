@@ -188,8 +188,16 @@ struct alignas(16) Uniform {
   std::array<float, 4> geometry_fog0{}, geometry_fog1{};
   // Raster tile columns, rows, SSBO word offset and active flag for this draw.
   std::array<std::uint32_t, 4> tiled_lights{};
+  // Signed world-height relief, height chart and filter-safe atlas bounds.
+  // Separate from surface_parameters so relief never enables the BRDF path.
+  std::array<float, 4> pom_params{}, pom_uv{}, pom_atlas{};
+  std::array<std::uint32_t, 4> pom_policy{};
 };
-static_assert(sizeof(Uniform) == 992);
+static_assert(sizeof(Uniform) == 1056 && alignof(Uniform) == 16);
+static_assert(offsetof(Uniform, pom_params) == 992);
+static_assert(offsetof(Uniform, pom_uv) == 1008);
+static_assert(offsetof(Uniform, pom_atlas) == 1024);
+static_assert(offsetof(Uniform, pom_policy) == 1040);
 static_assert(offsetof(Uniform, tiled_lights) == 976);
 static_assert(offsetof(Uniform, surface_parameters) == 128);
 static_assert(offsetof(Uniform, surface_eye) == 144);

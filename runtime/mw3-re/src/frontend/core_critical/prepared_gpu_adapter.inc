@@ -71,12 +71,15 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     cc::geometry::Material material;
     material.texture = texture;
     material.color = source.batch->color;
+    NativeGroundRangeAdmission admission;
+    admission.height_binding = source.height_binding;
     const auto first = scene_.draws.size();
     emit_reference_geometry(reference, {material}, context, source.camera,
-                            source.world, fog);
+                            source.world, fog, {admission});
     for (auto index = first; index < scene_.draws.size(); ++index) {
       auto &draw = scene_.draws[index];
-      apply_surface_material(draw, source, lighting_.normals);
+      apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                             group_load_epoch_, textures_.at(texture).version);
       draw.sampler |= 0x10000U;
       draw.push.mode[3] = 0; // Preserve prepared smooth-normal orientation.
       if (normal >= 0)
@@ -103,7 +106,8 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
         (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
         context.far_z};
     vk::Draw draw{};
-    apply_surface_material(draw, source, lighting_.normals);
+    apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                           group_load_epoch_, textures_.at(texture).version);
     draw.model = std::move(instance);
     draw.geometry_debug_normals = geometry_debug_;
     draw.count = unsigned(geometry->vertices.size());

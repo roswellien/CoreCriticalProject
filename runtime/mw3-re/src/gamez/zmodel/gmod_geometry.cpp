@@ -12,7 +12,6 @@
 #include <cfenv>
 #include <cmath>
 #include <cstring>
-#include <map>
 #include <stdexcept>
 
 namespace zmod {
@@ -115,14 +114,11 @@ bool submit_geometry(zcls::Node &node) {
         return unsupported();
     if (!model.render_geometry) {
         std::vector<cc::geometry::Polygon> polygons;
-        std::map<const Material *, std::uint32_t> material_slots;
         std::vector<const Material *> material_sources;
         polygons.reserve(model.count(0x10));
         for (std::uint32_t index = 0; index < model.count(0x10); ++index) {
             const auto &polygon = model.polygons[index];
-            const auto slot =
-                material_slots.emplace(polygon.material, std::uint32_t(material_slots.size()))
-                    .first->second;
+            const auto slot = index;
             material_sources.push_back(polygon.material);
             polygons.push_back({polygon.flags & 255, polygon.vertex_indices,
                                 (polygon.flags & 0x200) ? polygon.normal_indices : nullptr,

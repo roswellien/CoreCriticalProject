@@ -1,12 +1,16 @@
 #pragma once
 #include "material_normals.hpp"
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <istream>
+#include <limits>
 #include <memory>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -32,6 +36,54 @@ inline constexpr std::uint32_t max_surface_dimension = 4096U;
 inline constexpr std::uint64_t max_surface_sidecar_bytes = 256ULL * 1024ULL * 1024ULL;
 inline constexpr float max_surface_world_amplitude = 16.0f;
 inline constexpr float max_surface_uv_transform = 1024.0f;
+
+class SurfaceDecodedReservation;
+// Shared by source selection, prepared models and their queued immutable image
+// owners. Replacing a selection cannot forget pixels still owned by old draws.
+class SurfaceDecodedBudget {
+  public:
+    explicit SurfaceDecodedBudget(std::uint64_t limit = max_surface_sidecar_bytes) : limit_(limit) {
+        if (limit > max_surface_sidecar_bytes)
+            throw std::runtime_error("Surface decoded budget exceeds its format limit");
+    }
+    std::uint64_t used() const { return used_.load(std::memory_order_acquire); }
+    std::uint64_t limit() const { return limit_; }
+
+  private:
+    friend class SurfaceDecodedReservation;
+    void acquire(std::uint64_t bytes) {
+        auto current = used_.load(std::memory_order_acquire);
+        do {
+            if (bytes > limit_ || current > limit_ - bytes)
+                throw std::runtime_error("Retained surface image owners exceed decoded budget");
+        } while (!used_.compare_exchange_weak(current, current + bytes,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire));
+    }
+    void release(std::uint64_t bytes) { used_.fetch_sub(bytes, std::memory_order_acq_rel); }
+    const std::uint64_t limit_;
+    std::atomic<std::uint64_t> used_{};
+};
+class SurfaceDecodedReservation {
+  public:
+    explicit SurfaceDecodedReservation(std::shared_ptr<SurfaceDecodedBudget> budget)
+        : budget_(std::move(budget)) {
+        if (!budget_)
+            throw std::runtime_error("Surface decoded reservation has no budget owner");
+    }
+    SurfaceDecodedReservation(const SurfaceDecodedReservation &) = delete;
+    SurfaceDecodedReservation &operator=(const SurfaceDecodedReservation &) = delete;
+    ~SurfaceDecodedReservation() { budget_->release(bytes_); }
+    void grow(std::uint64_t bytes) {
+        budget_->acquire(bytes);
+        bytes_ += bytes;
+    }
+    const std::shared_ptr<SurfaceDecodedBudget> &budget() const { return budget_; }
+
+  private:
+    std::shared_ptr<SurfaceDecodedBudget> budget_;
+    std::uint64_t bytes_{};
+};
 
 // Owns decoded linear RGBA8 pixels where the red channel carries scalar height
 // or thickness. Normal-map alpha is never modified or repurposed for these
@@ -71,15 +123,177 @@ struct SurfaceMaterialRecord {
     // Resolved host-wide image table indices (-1 when absent).
     int host_height_texture{-1};
     int host_thickness_texture{-1};
+    bool operator==(const SurfaceMaterialRecord &other) const {
+        return std::tie(asset_id, material_name, height_image, thickness_image, height_reference,
+                        height_amplitude, max_displacement, tessellation_cap, uv_scale, uv_offset,
+                        address_mode_u, address_mode_v, atlas_rect, sss_participation, sss_tint,
+                        sss_radius, thickness_scale, roughness, reflectivity, metallic,
+                        host_height_texture, host_thickness_texture) ==
+               std::tie(other.asset_id, other.material_name, other.height_image,
+                        other.thickness_image, other.height_reference, other.height_amplitude,
+                        other.max_displacement, other.tessellation_cap, other.uv_scale,
+                        other.uv_offset, other.address_mode_u, other.address_mode_v,
+                        other.atlas_rect, other.sss_participation, other.sss_tint, other.sss_radius,
+                        other.thickness_scale, other.roughness, other.reflectivity, other.metallic,
+                        other.host_height_texture, other.host_thickness_texture);
+    }
 };
 
 struct SurfaceMaterialPack {
+    SurfaceMaterialPack() = default;
+    // Copying the pixel vectors would create unreserved decoded allocations.
+    // Consumers share an immutable owner or move a freshly decoded pack.
+    SurfaceMaterialPack(const SurfaceMaterialPack &) = delete;
+    SurfaceMaterialPack &operator=(const SurfaceMaterialPack &) = delete;
+    SurfaceMaterialPack(SurfaceMaterialPack &&) = default;
+    SurfaceMaterialPack &operator=(SurfaceMaterialPack &&) = delete;
     std::uint32_t version{1U};
     std::uint64_t mesh_uv_hash{};
+    // Declared before pixels so destruction frees images before returning the
+    // reservation. Image aliases retain this complete pack through retirement.
+    std::shared_ptr<SurfaceDecodedReservation> decoded_reservation;
     std::vector<std::uint32_t> bindings;
     std::vector<std::shared_ptr<SurfaceMaterialRecord>> records;
     std::vector<SurfaceMaterialImage> images;
 };
+
+// A draw owns the validated image through an aliasing immutable shared pointer.
+// The image index in BWSFM1 is meaningful only inside its source pack; it must
+// never be interpreted as a renderer-wide texture handle.
+struct HeightWorldSource {
+    std::string kind, member;
+    std::uint64_t bytes{}, load_epoch{};
+    std::uint32_t model_slot{};
+    bool operator==(const HeightWorldSource &other) const {
+        return std::tie(kind, member, bytes, load_epoch, model_slot) ==
+               std::tie(other.kind, other.member, other.bytes, other.load_epoch, other.model_slot);
+    }
+};
+
+struct HeightBinding {
+    SurfaceMaterialRecord material;
+    std::shared_ptr<const SurfaceMaterialImage> image;
+    std::string source_sha256, sidecar_sha256;
+    // Models without world provenance retain the existing absent snapshot.
+    std::optional<HeightWorldSource> world_source;
+    std::string sidecar_path;
+    std::uint64_t mesh_uv_hash{}, image_version{}, producer_epoch{}, texture_version{};
+    SurfaceKey albedo;
+    std::uint32_t normal_width{}, normal_height{};
+    std::uint64_t normal_hash{};
+    std::uint64_t retained_decoded_bytes{};
+    std::uint32_t source_batch{};
+
+    bool operator==(const HeightBinding &other) const {
+        return material == other.material && image == other.image &&
+               source_sha256 == other.source_sha256 && sidecar_sha256 == other.sidecar_sha256 &&
+               world_source == other.world_source && sidecar_path == other.sidecar_path &&
+               mesh_uv_hash == other.mesh_uv_hash &&
+               image_version == other.image_version && producer_epoch == other.producer_epoch &&
+               texture_version == other.texture_version && !(albedo < other.albedo) &&
+               !(other.albedo < albedo) && normal_width == other.normal_width &&
+               normal_height == other.normal_height && normal_hash == other.normal_hash &&
+               source_batch == other.source_batch &&
+               retained_decoded_bytes == other.retained_decoded_bytes;
+    }
+};
+
+inline std::size_t height_binding_metadata_bytes(const HeightBinding &binding) {
+    std::size_t bytes = sizeof(binding);
+    const auto add = [&](std::size_t count) {
+        if (count > std::numeric_limits<std::size_t>::max() - bytes)
+            throw std::runtime_error("Height snapshot byte count overflow");
+        bytes += count;
+    };
+    add(binding.source_sha256.capacity());
+    add(binding.sidecar_sha256.capacity());
+    add(binding.sidecar_path.capacity());
+    add(binding.material.asset_id.capacity());
+    add(binding.material.material_name.capacity());
+    if (binding.world_source) {
+        add(binding.world_source->kind.capacity());
+        add(binding.world_source->member.capacity());
+    }
+    return bytes;
+}
+
+// Producer-only replay validation. Queued frames retain their immutable values
+// and must not consult these mutable producer stamps on a worker thread.
+inline bool height_binding_stamps_match(const HeightBinding &binding,
+                                       std::uint64_t source_epoch,
+                                       std::uint64_t group_epoch,
+                                       std::uint64_t texture_version,
+                                       const SurfaceKey &key) {
+    return binding.world_source && binding.world_source->load_epoch == source_epoch &&
+           binding.producer_epoch == group_epoch && binding.texture_version == texture_version &&
+           binding.albedo == key;
+}
+
+inline bool same_height_binding(const std::shared_ptr<const HeightBinding> &left,
+                                const std::shared_ptr<const HeightBinding> &right) {
+    return left == right || (left && right && *left == *right);
+}
+
+// Unique image ownership is charged before a packet can be queued. A repeated
+// material may share its immutable image; a replacement image is a new owner
+// even when its non-cryptographic format hash happens to collide.
+inline std::uint64_t height_binding_bytes(
+    const std::vector<std::shared_ptr<const HeightBinding>> &bindings,
+    std::uint64_t limit = max_surface_sidecar_bytes) {
+    std::set<std::shared_ptr<const SurfaceMaterialImage>,
+             std::owner_less<std::shared_ptr<const SurfaceMaterialImage>>> seen;
+    std::uint64_t bytes{};
+    for (const auto &binding : bindings) {
+        if (!binding || !binding->image || !seen.insert(binding->image).second)
+            continue;
+        // Aliasing an image retains its complete immutable decoded pack. Charge
+        // that allocation once, including unused height/thickness images.
+        const auto size = binding->retained_decoded_bytes;
+        if (size > limit || bytes > limit - size)
+            throw std::runtime_error("Height image ownership exceeds decoded budget");
+        bytes += size;
+    }
+    return bytes;
+}
+
+inline std::shared_ptr<const HeightBinding> resolve_height_binding(
+    const std::shared_ptr<const SurfaceMaterialPack> &pack, std::size_t batch,
+    const std::string &source_sha256, const std::string &sidecar_sha256, const SurfaceKey &albedo,
+    std::uint32_t normal_width = 0, std::uint32_t normal_height = 0,
+    std::uint64_t normal_hash = 0) {
+    if (!pack || batch >= pack->bindings.size())
+        return {};
+    const auto index = pack->bindings[batch];
+    if (index == no_surface_material)
+        return {};
+    const auto &record = *pack->records.at(index);
+    if (record.height_image == no_surface_image)
+        return {};
+    const auto &image = pack->images.at(record.height_image);
+    if (source_sha256.size() != 64 || source_sha256.find_first_not_of("0123456789abcdef") !=
+                                              std::string::npos ||
+        !pack->mesh_uv_hash || image.role != surface_role_height || !image.width ||
+        !image.height || image.pixels.size() != std::uint64_t(image.width) * image.height ||
+        sidecar_sha256.size() != 64 ||
+        sidecar_sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
+        normal_hash == 0 || !normal_width || !normal_height || !albedo.hash)
+        throw std::runtime_error("Height binding requires complete source/image identity");
+    auto binding = std::make_shared<HeightBinding>();
+    binding->material = record;
+    binding->image = std::shared_ptr<const SurfaceMaterialImage>(pack, &image);
+    binding->source_sha256 = source_sha256;
+    binding->sidecar_sha256 = sidecar_sha256;
+    binding->mesh_uv_hash = pack->mesh_uv_hash;
+    binding->image_version = pack->version;
+    binding->albedo = albedo;
+    binding->normal_width = normal_width;
+    binding->normal_height = normal_height;
+    binding->normal_hash = normal_hash;
+    for (const auto &retained : pack->images)
+        binding->retained_decoded_bytes += std::uint64_t(retained.pixels.size()) * 4;
+    binding->source_batch = std::uint32_t(batch);
+    return binding;
+}
 
 inline bool valid_surface_identifier(const std::string &value, std::size_t max_bytes,
                                      bool allow_colon) {
@@ -125,9 +339,12 @@ inline SurfaceMaterialPack
 read_surface_materials(std::istream &input, const std::string &expected_asset_id,
                        std::uint64_t expected_mesh_uv_hash,
                        const std::vector<std::string> &expected_batch_materials,
-                       std::uint64_t max_bytes = max_surface_sidecar_bytes) {
+                       std::uint64_t max_bytes = max_surface_sidecar_bytes,
+                       std::uint64_t max_decoded_bytes = max_surface_sidecar_bytes,
+                       std::shared_ptr<SurfaceDecodedBudget> budget = {}) {
     auto fail = [] { throw std::runtime_error("Invalid surface-material sidecar"); };
-    if (!max_bytes || max_bytes > max_surface_sidecar_bytes || expected_batch_materials.empty() ||
+    if (!max_bytes || max_bytes > max_surface_sidecar_bytes ||
+        max_decoded_bytes > max_surface_sidecar_bytes || expected_batch_materials.empty() ||
         expected_batch_materials.size() > max_surface_batches)
         fail();
     if (!expected_asset_id.empty() &&
@@ -181,6 +398,9 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
         fail();
 
     SurfaceMaterialPack pack;
+    if (!budget)
+        budget = std::make_shared<SurfaceDecodedBudget>(max_decoded_bytes);
+    pack.decoded_reservation = std::make_shared<SurfaceDecodedReservation>(std::move(budget));
     pack.version = u32();
     const auto batch_count = u32();
     const auto record_count = u32();
@@ -298,10 +518,12 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
             fail();
 
         const auto pixel_bytes = std::uint64_t(image.width) * image.height * 4ULL;
-        if (pixel_bytes > max_bytes - decoded_image_bytes)
+        if (pixel_bytes > max_bytes - decoded_image_bytes ||
+            pixel_bytes > max_decoded_bytes - decoded_image_bytes)
             fail();
         decoded_image_bytes += pixel_bytes;
 
+        pack.decoded_reservation->grow(pixel_bytes);
         image.pixels.resize(static_cast<std::size_t>(pixel_bytes / 4ULL));
         bytes(image.pixels.data(), static_cast<std::size_t>(pixel_bytes));
         if (normal_hash(image.pixels.data(), static_cast<std::size_t>(pixel_bytes)) != image.hash)

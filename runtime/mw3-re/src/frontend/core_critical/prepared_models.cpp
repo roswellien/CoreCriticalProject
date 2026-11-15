@@ -3,6 +3,7 @@
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "renderer/donor_retarget.hpp"
+#include "platform/sha256.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -219,6 +220,16 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
     std::set<std::string> selected;
     std::map<std::pair<std::string, std::string>, std::string> normals;
     std::map<std::pair<std::string, std::string>, std::string> surface_materials;
+    surface_budget_ = options.environment && options.environment->surface_budget
+                          ? options.environment->surface_budget
+                          : std::make_shared<mw34::materials::SurfaceDecodedBudget>();
+    if (options.environment) {
+        for (const auto &[region, targets] : options.environment->material_targets)
+            for (const auto &target : targets)
+                if (target.pack && (!target.pack->decoded_reservation ||
+                                    target.pack->decoded_reservation->budget() != surface_budget_))
+                    throw std::runtime_error("Foreign decoded target ownership domain");
+    }
     for (const auto &binding : materials)
         if (!surface_materials.emplace(std::make_pair(binding.chassis, binding.lod), binding.path)
                  .second)
@@ -236,6 +247,11 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
         model.source_asset = "mech_" + binding.chassis + (binding.lod == "1" ? "_1.flt" : ".flt");
         if (!selected.insert(model.source_asset).second)
             throw std::runtime_error("Duplicate prepared model selection");
+        const auto mat = surface_materials.find({binding.chassis, binding.lod});
+        const auto source_sha = mat == surface_materials.end()
+                                    ? std::string{}
+                                    : platform::integrity::sha256_file(
+                                          std::filesystem::u8path(binding.mesh));
         auto geometry = open(binding.mesh), textures = open(binding.textures);
         model.mesh = platform::prepared::read_mesh(geometry);
         model.textures = platform::prepared::read_textures(textures);
@@ -248,8 +264,13 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
             std::fprintf(stderr, "Prepared normals loaded: %s, %zu images\n",
                          model.source_asset.c_str(), model.normals.images.size());
         }
-        const auto mat = surface_materials.find({binding.chassis, binding.lod});
         if (mat != surface_materials.end()) {
+            const auto sidecar_bytes = std::filesystem::file_size(
+                std::filesystem::u8path(mat->second));
+            if (sidecar_bytes < 32 || sidecar_bytes > mw34::materials::max_surface_sidecar_bytes)
+                throw std::runtime_error("Prepared height sidecar byte budget exceeded");
+            const auto sidecar_sha = platform::integrity::sha256_file(
+                std::filesystem::u8path(mat->second));
             auto input = open(mat->second);
             std::vector<std::string> batch_materials;
             batch_materials.reserve(model.mesh.batches.size());
@@ -267,10 +288,30 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
             const uint64_t uv_hash = mw34::materials::compute_mesh_uv_hash(
                 model.mesh.batches, 0, model.mesh.batches.size());
             const std::string expected_asset_id =
-                binding.chassis + (binding.lod == "1" ? ":far" : ":close");
+                binding.chassis + (binding.lod == "1" ? ":distance" : ":close");
             model.surface_materials = std::make_shared<mw34::materials::SurfaceMaterialPack>(
-                platform::prepared::validate_surface_materials(input, expected_asset_id, uv_hash,
-                                                               batch_materials));
+                mw34::materials::read_surface_materials(
+                    input, expected_asset_id, uv_hash, batch_materials,
+                    sidecar_bytes,
+                    mw34::materials::max_surface_sidecar_bytes, surface_budget_));
+            model.height_bindings.resize(model.mesh.batches.size());
+            for (std::size_t b = 0; b < model.mesh.batches.size(); ++b) {
+                if (model.normals.bindings.empty() ||
+                    model.normals.bindings[b] == platform::prepared::no_normal)
+                    continue; // Metadata-only and normal-Off remain compatible.
+                const auto &image = model.textures.images.at(model.textures.bindings[b]);
+                const auto &normal_image = model.normals.images.at(model.normals.bindings[b]);
+                const mw34::materials::SurfaceKey albedo{
+                    image.width, image.height, 1,
+                    mw34::materials::normal_hash(image.pixels.data(), image.pixels.size() * 2)};
+                model.height_bindings[b] = mw34::materials::resolve_height_binding(
+                    model.surface_materials, b, source_sha, sidecar_sha, albedo, normal_image.width,
+                    normal_image.height, normal_image.hash);
+            }
+            if (platform::integrity::sha256_file(std::filesystem::u8path(binding.mesh)) !=
+                    source_sha ||
+                platform::integrity::sha256_file(std::filesystem::u8path(mat->second)) != sidecar_sha)
+                throw std::runtime_error("Prepared height source changed during admission");
             surface_materials.erase(mat);
             std::fprintf(stderr, "Prepared surface materials loaded: %s, %zu records\n",
                          model.source_asset.c_str(), model.surface_materials->records.size());
@@ -370,6 +411,8 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         PreparedBatchDraw draw;
         draw.batch = &batch;
         draw.texture = &selected->textures.images.at(selected->textures.bindings[index]);
+        if (index < selected->height_bindings.size())
+            draw.height_binding = selected->height_bindings[index];
         if (!selected->normals.bindings.empty()) {
             const auto normal = selected->normals.bindings[index];
             if (normal != platform::prepared::no_normal)

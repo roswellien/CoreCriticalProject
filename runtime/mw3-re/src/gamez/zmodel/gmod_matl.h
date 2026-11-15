@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "gamez/zimage/zimg_texture.h"
+namespace zcls { struct ZbdReadContext; }
 
 // World materials (zModel\gmod_matl.c): the table a gamez.zbd fills, which
 // mechlib materials are later added to (docs/gamez.md).
@@ -54,7 +55,7 @@ struct MaterialTable {
 };
 MaterialTable& materials();
 
-int read_materials(std::FILE* f);  // 0x005363d0
+int read_materials(std::FILE* f, zcls::ZbdReadContext* proof = nullptr);  // 0x005363d0
 Material* take_material(int32_t index);  // 0x00536070, marks it referenced
 // The table's equal material (0x00536f10: all but the bookkeeping flags; a
 // soil of 0 on either side takes the other's), else a new one copied from

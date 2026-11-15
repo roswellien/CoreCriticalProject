@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <map>
 #include <string>
 #include <vector>
@@ -19,10 +20,17 @@ struct ListItem;
 struct Node;
 using NodeAction = void (*)(Node* node);  // +0x48, run by the action lists with ECX = node
 
+struct WorldSourceIdentity {
+  std::string kind, member, sha256;
+  std::uint64_t bytes{}, load_epoch{};
+  std::uint32_t model_slot{};
+};
 struct SourceAsset {
   std::string name;
   std::map<std::string, unsigned> nodes;
   std::string member_sha256; // Empty if the source bytes could not be verified.
+  // World containers are distinct from the existing MechLib entry identity.
+  std::optional<WorldSourceIdentity> world;
 };
 
 struct Node {                      // 0xd4-byte pool slot

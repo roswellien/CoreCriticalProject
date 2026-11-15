@@ -19,6 +19,12 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 shadow0; vec4 shadow1; vec4 shadow2; vec4 shadowParams;
  vec4 skyEye; vec4 skyTint; vec4 skyGlow; vec4 skyGrade; vec4 skyBlend;
  vec4 detail; vec4 detailMotion;
+ vec4 weather; vec4 weatherFog;
+ vec4 emissionParams; vec4 emissionRegions[32];
+ vec4 geometryFog0; vec4 geometryFog1;
+ uvec4 tiledLights;
+ vec4 pomParams; vec4 pomUV; vec4 pomAtlas;
+ uvec4 pomPolicy;
 } sun;
 
 layout(location=0) out vec2 uvPerspective;

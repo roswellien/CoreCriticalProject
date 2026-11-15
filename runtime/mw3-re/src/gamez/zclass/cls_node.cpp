@@ -467,6 +467,10 @@ int node_set_model(Node* node, zmod::Model* model) {
   if (!node) return zerr::report(0x400, kClassFile, 0x52a, "Null node pointer."), 5;
   if (node->model) add_uses(node->model->header, -1);  // 0x00539d60
   node->model = model;
+  if (model && model->world_source_asset)
+    node->source_asset = model->world_source_asset;
+  else if (node->source_asset && node->source_asset->world)
+    node->source_asset.reset();
   if (model) {
     add_uses(model->header, 1);  // 0x00539d50
     node_model_box(node);        // 0x0053b4e0 into +0x8c, flag 0x200

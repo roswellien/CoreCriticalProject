@@ -41,6 +41,7 @@ struct CoreCriticalAssets {
   std::vector<std::string> environment_packs;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
+  bool pom = false;
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
   std::string textures;
@@ -51,7 +52,7 @@ struct CoreCriticalAssets {
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool empty() const {
     return environment_packs.empty() && !environment && !sun_explicit &&
-           !render_thread && geometry == "legacy" && !geometry_debug_normals &&
+           !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&
            textures.empty() && models.empty() && normals.empty() &&
            materials.empty() && lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";

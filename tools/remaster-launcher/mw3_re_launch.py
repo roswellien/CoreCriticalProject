@@ -1,6 +1,7 @@
 """Pure MW3-RE argv planning; lexical validation is not package/execution admission."""
 
 from pathlib import PureWindowsPath
+import json
 import re
 
 
@@ -9,6 +10,51 @@ _FIELDS = frozenset({
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
+_MAX_JSON_BYTES = 2 * 1024 * 1024
+_MAX_JSON_DEPTH = 64
+
+
+def plan_json(raw):
+    """Plan bounded raw JSON, rejecting duplicate properties before dict conversion."""
+    if type(raw) not in (str, bytes) or len(raw) > _MAX_JSON_BYTES:
+        raise ValueError("Invalid native request JSON size or type")
+    if type(raw) is bytes:
+        raw = raw.decode("utf-8", errors="strict")
+    if len(raw.encode("utf-8")) > _MAX_JSON_BYTES:
+        raise ValueError("Native request JSON is too large")
+    # Bound nesting before the recursive JSON decoder, ignoring delimiters inside strings.
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > _MAX_JSON_DEPTH:
+                raise ValueError("Native request JSON is too deep")
+        elif character in "]}":
+            depth -= 1
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate native request property")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("Non-finite native request JSON number")
+
+    return plan_launch(json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant))
 
 
 def _windows_path(value, *, directory=True):
@@ -32,10 +78,25 @@ def _windows_path(value, *, directory=True):
 
 def plan_launch(request):
     """Return complete argv or explicit unsupported reasons; never probe or start anything."""
-    if type(request) is not dict or set(request) != _FIELDS:
+    if type(request) is not dict:
         raise ValueError("Missing or unknown native request fields")
-    if type(request["schema_version"]) is not int or request["schema_version"] != 2:
+    schema = request.get("schema_version")
+    if type(schema) is not int or schema not in (2, 3):
         raise ValueError("Unsupported native request schema")
+    allowed = _FIELDS if schema == 2 else _FIELDS | {"visuals"}
+    if not _FIELDS.issubset(request) or not set(request).issubset(allowed):
+        raise ValueError("Missing or unknown native request fields")
+    pom = False
+    if schema == 3 and "visuals" in request:
+        visuals = request["visuals"]
+        if type(visuals) is not dict or not set(visuals).issubset({"pom"}):
+            raise ValueError("Invalid native visuals fields")
+        if "pom" in visuals:
+            if type(visuals["pom"]) is not bool:
+                raise ValueError("Native POM selection must be Boolean")
+            pom = visuals["pom"]
+    if pom and request["lighting"] != "normal":
+        raise ValueError("Native POM requires normal lighting")
     if request["engine"] != "mw3-re" or request["renderer"] != "vulkan-wsi":
         raise ValueError("Unsupported native engine or renderer")
     for field, minimum, maximum in (("width", 640, 7680), ("height", 480, 4320)):
@@ -77,6 +138,8 @@ def plan_launch(request):
         "--cc-aa", _AA[request["aa"]], "--cc-af", str(request["af"]),
         "--cc-render-thread", "1" if request["render_thread"] else "0", "--cc-lighting", request["lighting"],
     ]
+    if pom:
+        argv.extend(("--cc-pom", "1"))
     for asset in request["assets"]:
         argv.extend(("--assets", asset))
     return {"ok": True, "argv": argv, "working_directory": str(executable.parent)}

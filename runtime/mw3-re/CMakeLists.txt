@@ -553,6 +553,11 @@ if(MSVC)
   target_compile_options(mw3prepared_checks PRIVATE /EHsc)
 endif()
 add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
+add_library(mw3ground_export STATIC tools/analysis/ground_targets.cpp)
+target_include_directories(mw3ground_export PRIVATE third_party)
+target_link_libraries(mw3ground_export PUBLIC mw3core)
+add_executable(mw3ground_targets tools/analysis/export_ground_targets.cpp)
+target_link_libraries(mw3ground_targets PRIVATE mw3ground_export)
 add_executable(mw3tests
   tests/main.cpp
   tests/test_znet.cpp
@@ -588,7 +593,8 @@ add_executable(mw3tests
   tests/test_hooks.cpp
   tests/place_survey.cpp
 )
-target_link_libraries(mw3tests PRIVATE mw3core)
+target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export)
+target_include_directories(mw3tests PRIVATE third_party)
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
@@ -800,6 +806,19 @@ if(SDL3_FOUND)
       tests/test_net_upnp.cpp
     )
     target_link_libraries(mw3sdltests PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    add_executable(mw3frontend_lifetime_checks tests/test_frontend_lifetime.cpp)
+    target_link_libraries(mw3frontend_lifetime_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    target_compile_definitions(mw3frontend_lifetime_checks PRIVATE
+      MW3_LIFETIME_TEST_ROOT="${CMAKE_CURRENT_BINARY_DIR}")
+    if(MSVC)
+      target_compile_options(mw3frontend_lifetime_checks PRIVATE /EHsc)
+    endif()
+    add_test(NAME mw3frontend_lifetime_checks COMMAND mw3frontend_lifetime_checks)
+    if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+      add_custom_command(TARGET mw3frontend_lifetime_checks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3frontend_lifetime_checks> $<TARGET_FILE_DIR:mw3frontend_lifetime_checks>
+        COMMAND_EXPAND_LISTS)
+    endif()
     add_executable(mw3hud_checks tests/test_gpu_hud.cpp)
     target_link_libraries(mw3hud_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     if(MSVC)

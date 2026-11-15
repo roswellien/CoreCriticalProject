@@ -10,7 +10,7 @@
 
 #include "crt/msvc_math.h"
 #include "gamez/zclass/cls_node.h"
-#include "crt/msvc_math.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zerror/zerr.h"
@@ -29,9 +29,13 @@ const char kFile[] = "C:\\zipper\\GameZMech3\\zModel\\gmod_const.c";
 ModelPool g_pool;
 
 template <typename T>
-T* read_array(std::FILE* f, uint32_t count, uint32_t size, bool* ok) {
+T* read_array(std::FILE* f, uint32_t count, uint32_t size, bool* ok,
+               zcls::ZbdReadContext* proof = nullptr) {
+  if (proof) proof->span(f, std::uint64_t(count) * size, true);
   auto* p = static_cast<T*>(std::malloc(static_cast<size_t>(count) * size));
+  if (proof) proof->own_malloc(p);
   *ok = std::fread(p, static_cast<size_t>(count) * size, 1, f) == 1;
+  if (proof) proof->require(*ok, "model array read failed");
   return p;
 }
 }  // namespace
@@ -54,21 +58,29 @@ Model* model_at(int32_t index) {
 // index): one model read again into a new slot, its arrays from the data
 // offset its slot records (+0x5c). A failed read gives the slot back when
 // the file's use count is 0 (else it stays taken, half read).
-Model* reread_model(std::FILE* f, int32_t index) {
+Model* reread_model(std::FILE* f, int32_t index, zcls::ZbdReadContext* proof) {
   int32_t size, count, free_head;
   int line = 0;
+  if (proof) proof->span(f, 12);
   if (std::fread(&size, 4, 1, f) != 1) line = 0x323;
   else if (std::fread(&count, 4, 1, f) != 1) line = 0x330;
   else if (std::fread(&free_head, 4, 1, f) != 1) line = 0x33d;
   if (line) {
+    if (proof) proof->require(false, "reread model header failed");
     zerr::report(0x200, kFile, line, "Error reading GameZ Model3D buffer data.");
     zerr::report(0x200, kFile, 0x4b9, "Error reading GameZ Model3D buffer data.");
     return nullptr;
   }
+  if (proof) proof->require(size >= 0 && size <= 1048576 && count >= 0 && count <= size &&
+      index >= 0 && index < size && proof->expected.model_slots.count(std::uint32_t(index)),
+      "reread model selector is not admitted");
   if (size == 0 || size <= index) return nullptr;
-  std::fseek(f, static_cast<long>(index) * 0x60, SEEK_CUR);
+  const auto seek_record = std::fseek(f, static_cast<long>(index) * 0x60, SEEK_CUR);
+  if (proof) proof->require(seek_record == 0, "reread model record seek failed");
   uint8_t raw[0x60];
+  if (proof) proof->span(f, sizeof raw);
   if (std::fread(raw, sizeof raw, 1, f) != 1) {
+    if (proof) proof->require(false, "reread model record failed");
     zerr::report(0x200, kFile, 0x4d2, "Error reading GameZ Model3D buffer data.");
     return nullptr;
   }
@@ -76,8 +88,20 @@ Model* reread_model(std::FILE* f, int32_t index) {
   std::memcpy(m->header, raw, 0x5c);
   uint32_t offset;
   std::memcpy(&offset, raw + 0x5c, 4);
-  std::fseek(f, static_cast<long>(offset), SEEK_SET);
-  if (read_model_data(f, *m) == 0) return m;  // 0x00553450's edge pass: not ported (one video mode)
+  if (proof && proof->strict()) proof->require(offset <= proof->section_end, "reread model offset outside section");
+  const auto seek_payload = std::fseek(f, static_cast<long>(offset), SEEK_SET);
+  if (proof) proof->require(seek_payload == 0, "reread model payload seek failed");
+  if (read_model_data(f, *m, proof) == 0) {
+    if (proof && !proof->failed && proof->snapshot_verified && proof->reread_origin &&
+        proof->reread_origin->world) {
+      const auto& origin = *proof->reread_origin->world;
+      if (origin.member == proof->member && origin.sha256 == proof->sha256 &&
+          origin.bytes == proof->input_bytes && origin.model_slot == std::uint32_t(index) &&
+          origin.load_epoch == zcls::world_source_epoch())
+        m->world_source_asset = proof->reread_origin;
+    }
+    return m;  // 0x00553450's edge pass: not ported (one video mode)
+  }
   model_release(m);  // 1 (kept) when the file's use count is not 0
   return nullptr;
 }
@@ -85,6 +109,7 @@ Model* reread_model(std::FILE* f, int32_t index) {
 // Mech3.exe 1.2 @ 0x00526800 (the pool's part; the draw table and lighting
 // settings are the caller's).
 void reset_pool() {
+  zcls::invalidate_world_source_proofs();
   ModelPool& p = g_pool;
   if (p.size == 0) p.size = 0x6d6;
   p.slots.assign(p.size, Model{});
@@ -110,18 +135,26 @@ Model* model_alloc() {
 
 // Mech3.exe 1.2 @ 0x00538a70. Every read error returns -1, which the caller
 // ignores.
-int read_model_data(std::FILE* f, Model& m) {
+int read_model_data(std::FILE* f, Model& m, zcls::ZbdReadContext* proof) {
   m.invalidate_render_geometry();
+  m.world_source_asset.reset();
   bool ok = true;
   const uint32_t polys = m.count(0x10), verts = m.count(0x14), norms = m.count(0x18);
   const uint32_t morphs = m.count(0x1c), lights = m.count(0x20);
-  if (static_cast<int32_t>(verts) > 0 && (m.vertices = read_array<float>(f, verts, 12, &ok), !ok)) return -1;
-  if (static_cast<int32_t>(norms) > 0 && (m.normals = read_array<float>(f, norms, 12, &ok), !ok)) return -1;
-  if (static_cast<int32_t>(morphs) > 0 && (m.morphs = read_array<float>(f, morphs, 12, &ok), !ok)) return -1;
+  if (proof) proof->require(verts <= 1048576 && norms <= 1048576 && morphs <= 1048576 &&
+                            lights <= 1048576 && polys <= 1048576, "model counts exceed export cap");
+  if (static_cast<int32_t>(verts) > 0 && (m.vertices = read_array<float>(f, verts, 12, &ok, proof), !ok)) return -1;
+  if (static_cast<int32_t>(norms) > 0 && (m.normals = read_array<float>(f, norms, 12, &ok, proof), !ok)) return -1;
+  if (static_cast<int32_t>(morphs) > 0 && (m.morphs = read_array<float>(f, morphs, 12, &ok, proof), !ok)) return -1;
   if (static_cast<int32_t>(lights) > 0) {
+    if (proof) { proof->span(f, std::uint64_t(lights) * 0x4c); proof->allocate(std::uint64_t(lights) * sizeof(Light)); }
     m.lights = static_cast<Light*>(std::calloc(lights, sizeof(Light)));
+    if (proof) proof->own_malloc(m.lights);
     for (uint32_t i = 0; i < lights; ++i)
-      if (std::fread(m.lights[i].raw, 0x4c, 1, f) != 1) return -1;
+      if (std::fread(m.lights[i].raw, 0x4c, 1, f) != 1) {
+        if (proof) proof->require(false, "model light read failed");
+        return -1;
+      }
     for (uint32_t i = 0; i < lights; ++i) {
       Light& l = m.lights[i];
       float rgb[3];
@@ -132,52 +165,85 @@ int read_model_data(std::FILE* f, Model& m) {
       l.color = zvid::pack_bytes(r, g, b);
       int32_t n;
       std::memcpy(&n, l.raw + 0x0c, 4);
-      if (n > 0 && (l.vertices = read_array<float>(f, n, 12, &ok), !ok)) {
+      if (proof) proof->require(n >= 0 && n <= 1048576, "invalid model light point count");
+      if (n > 0 && (l.vertices = read_array<float>(f, n, 12, &ok, proof), !ok)) {
         zerr::report(0x200, kFile, 0, "Error reading GameZ Model3D point light data.");
         return -1;
       }
     }
   }
   if (static_cast<int32_t>(polys) <= 0) return 0;
+  if (proof) { proof->span(f, std::uint64_t(polys) * 0x24, true); proof->allocate(std::uint64_t(polys) * sizeof(Polygon)); }
   std::vector<uint8_t> raw(static_cast<size_t>(polys) * 0x24);
-  if (std::fread(raw.data(), raw.size(), 1, f) != 1) return -1;
+  if (std::fread(raw.data(), raw.size(), 1, f) != 1) {
+    if (proof) proof->require(false, "polygon records read failed");
+    return -1;
+  }
   m.polygons = new Polygon[polys]{};
+  if (proof) proof->own_new(m.polygons, true);
   for (uint32_t i = 0; i < polys; ++i) {
     const uint8_t* p = raw.data() + i * 0x24;
     Polygon& q = m.polygons[i];
     int32_t index;
     std::memcpy(&q.flags, p, 4), std::memcpy(&q.priority, p + 4, 4);
     std::memcpy(&index, p + 0x1c, 4), std::memcpy(&q.zone_set, p + 0x20, 4);
+    if (proof) proof->require(index >= -1 && index < proof->material_count, "polygon material index outside source table");
     q.material = take_material(index);
+    if (proof) proof->require(!q.material || !(q.material->flags & 0x20),
+                               "source polygon refers to a free material slot");
   }
   for (uint32_t i = 0; i < polys; ++i) {
     Polygon& q = m.polygons[i];
     const uint32_t k = q.flags & 0xff;
+    if (proof) proof->require(k >= 3 && k <= 64, "invalid source polygon corner count");
     if (k) {
-      if ((q.vertex_indices = read_array<uint32_t>(f, k, 4, &ok), !ok)) return -1;
-      if ((q.flags & 0x200) && (q.normal_indices = read_array<uint32_t>(f, k, 4, &ok), !ok)) return -1;
+      if ((q.vertex_indices = read_array<uint32_t>(f, k, 4, &ok, proof), !ok)) return -1;
+      if ((q.flags & 0x200) && (q.normal_indices = read_array<uint32_t>(f, k, 4, &ok, proof), !ok)) return -1;
+      if (proof)
+        for (std::uint32_t corner = 0; corner < k; ++corner)
+          proof->require(q.vertex_indices[corner] < verts &&
+              (!(q.flags & 0x200) || q.normal_indices[corner] < norms), "source corner index outside array");
     }
-    if (q.material && (q.material->flags & 1) && (q.uvs = read_array<float>(f, k, 8, &ok), !ok)) return -1;
-    if ((q.colors = read_array<float>(f, k, 12, &ok), !ok)) return -1;
+    if (q.material && (q.material->flags & 1) && (q.uvs = read_array<float>(f, k, 8, &ok, proof), !ok)) return -1;
+    if ((q.colors = read_array<float>(f, k, 12, &ok, proof), !ok)) return -1;
+    if (proof) proof->allocate(std::uint64_t(k) * 4);
     q.scratch = static_cast<uint32_t*>(std::malloc(k * 4));
+    if (proof) proof->own_malloc(q.scratch);
   }
   return 0;
 }
 
 // Mech3.exe 1.2 @ 0x00538e30. FIX (A): a vector of slots; the data arrays are
 // read in slot order, free slots having no counts.
-int read_models(std::FILE* f) {
+int read_models(std::FILE* f, zcls::ZbdReadContext* proof) {
   ModelPool& p = g_pool;
   int32_t size, count, free_head;
+  if (proof) proof->span(f, 12);
   if (std::fread(&size, 4, 1, f) != 1 || std::fread(&count, 4, 1, f) != 1 ||
       std::fread(&free_head, 4, 1, f) != 1) {
     zerr::report(0x200, kFile, 0, "Error reading GameZ Model3D buffer data.");
+    if (proof) proof->require(false, "model table header read failed");
     return -1;
+  }
+  if (proof) {
+    proof->require(size >= 0 && size <= 1048576 && count >= 0 && count <= size &&
+                    free_head >= -1 && free_head < size, "invalid model table count/free head");
+    if (!proof->failed) {
+      proof->model_count = size;
+      try {
+        proof->allocate(std::uint64_t(size));
+        proof->model_ok.assign(std::size_t(size), 0);
+      } catch (const std::bad_alloc&) {
+        proof->require(false, "optional model proof allocation failed");
+      }
+    }
+    if (proof->strict()) { proof->span(f, std::uint64_t(size) * 0x60, true); proof->allocate(std::uint64_t(size) * sizeof(Model)); }
   }
   p.size = size, p.count = count, p.free_head = free_head;
   if (size == 0) return 0;
   std::vector<uint8_t> raw(static_cast<size_t>(size) * 0x60);
   if (std::fread(raw.data(), raw.size(), 1, f) != 1) {
+    if (proof) proof->require(false, "model table records read failed");
     zerr::report(0x200, kFile, 0, "Error reading GameZ Model3D buffer data.");
     return -1;
   }
@@ -186,7 +252,24 @@ int read_models(std::FILE* f) {
     std::memcpy(p.slots[i].header, raw.data() + i * 0x60, 0x5c);
     std::memcpy(&p.slots[i].link, raw.data() + i * 0x60 + 0x5c, 4);
   }
-  for (int i = 0; i < size; ++i) read_model_data(f, p.slots[i]);
+  if (proof && proof->strict()) {
+    proof->allocate(std::uint64_t(size));
+    std::vector<std::uint8_t> free_slots(std::size_t(size), 0);
+    std::int32_t free_count = 0;
+    for (auto index = free_head; index != -1; index = std::int32_t(p.slots[std::size_t(index)].link)) {
+      proof->require(index >= 0 && index < size && !free_slots[std::size_t(index)],
+                      "source model free list index/cycle is invalid");
+      free_slots[std::size_t(index)] = 1;
+      ++free_count;
+      for (int offset = 0x10; offset <= 0x20; offset += 4)
+        proof->require(p.slots[std::size_t(index)].count(offset) == 0, "free model slot has payload counts");
+    }
+    proof->require(free_count == size - count, "source model free count disagrees with table");
+  }
+  for (int i = 0; i < size; ++i) {
+    const auto result = read_model_data(f, p.slots[i], proof);
+    if (proof) proof->model_result(std::uint32_t(i), result == 0);
+  }
   return size;
 }
 
@@ -197,6 +280,7 @@ int model_release(Model* m) {
   if (!m) return 5;
   if (m->count(0xc) != 0) return 1;
   m->invalidate_render_geometry();
+  m->world_source_asset.reset();
   for (uint32_t i = 0; m->polygons && i < m->count(0x10); ++i) {
     Polygon& q = m->polygons[i];
     std::free(q.vertex_indices), std::free(q.normal_indices), std::free(q.uvs);
@@ -256,6 +340,7 @@ void put32(uint8_t* h, int off, uint32_t v) { std::memcpy(h + off, &v, 4); }
 // the (copied) material is textured.
 Model* model_copy(const Model& m, int32_t own_materials, int32_t shared) {
   Model* c = model_alloc();
+  c->world_source_asset = m.world_source_asset;
   uint8_t* h = c->header;
   std::memcpy(h, m.header, 8);  // +0 type, +4 mode
   put32(h, 0xc, 0);
