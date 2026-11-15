@@ -30,4 +30,28 @@ class PuppetProbe {
   std::unique_ptr<State> s_;
 };
 
+// #289 (plan step 7): the 3D replay's frame branch in a running arena match.
+// From `from` for `frames` Core frames a test ReplayHooks is set, stepping a
+// replay clock of its own; the probe checks nothing is simulated meanwhile.
+struct FrameResults {
+  int frames = 0;          // frames run with the hooks set
+  int mechs_moved = 0;     // frames where any arena mech moved or its gait ran
+  int time_off_clock = 0;  // frames where game time was not the replay clock
+  int clock_not_real = 0;  // frames where the frame clock was not real time after the frame
+  int before = 0, after = 0;  // the hooks' calls
+};
+
+class FrameProbe {
+ public:
+  // `hooks_on` false makes it a control run: the same checks, nothing set.
+  FrameProbe(int from, int frames, bool hooks_on = true);
+  ~FrameProbe();
+  void frame(int frame);
+  const FrameResults& results() const;
+
+ private:
+  struct State;
+  std::unique_ptr<State> s_;
+};
+
 }  // namespace replay_game

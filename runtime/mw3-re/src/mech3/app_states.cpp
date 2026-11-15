@@ -360,7 +360,10 @@ void CoreState::start_mission() {
   }
   if (en.pixel_double() != 0) en.video_double(0, 0);
   en.nav_prebuild();  // ours (W58)
-  en.arena_start();   // ours (#287): after the grid, so a bot's first step finds it
+  // Ours (#287): after the grid, so a bot's first step finds it; a 3D replay
+  // (#289) makes its puppets instead.
+  if (en.replay_on()) en.replay_start();
+  else en.arena_start();
   en.input_reset();
   elapsed_ = 0;
   en.debug_mark(" L e t s  P l a y ! ");
@@ -401,15 +404,20 @@ void CoreState::start_mission() {
 bool CoreState::frame() {
   Engine& en = e();
   elapsed_ = en.frame_dt() + elapsed_;
+  // Ours (#289): a 3D replay polls without the command callbacks, so no game
+  // command fires (replay_hooks.h).
+  const bool replay = en.replay_on();
   if (!paused_) {
-    en.input_poll(1);
+    en.input_poll(replay ? 0 : 1);
     if (!a().fullscreen() && (a().input_mode_ & 0xc) == 8) {
       int32_t x = 0, y = 0;
       en.cursor_pos(&x, &y);
       en.mouse_set_pos(x, y);
     }
   }
+  if (replay) en.replay_before_lists();  // the action lists on the replay's step
   en.lists_update();
+  if (replay) en.replay_after_lists();  // real time back; the replay's time, puppets and camera
   en.sound_update(0, 1);
   const Handle view = en.player_view();
   const Handle target = en.field32(view, 0x64);
@@ -479,6 +487,8 @@ void zoom_pass(Engine& en, Handle veh) {
   en.hud_zoom_pass(en.pilot_hud(en.field32(veh, 0x684)), en.frame_dt());
 }
 void world_tick(Engine& en) {
+  // Ours (#289): a 3D replay simulates nothing; only its camera runs.
+  if (en.replay_on()) return en.camera_update();
   en.sensors_update();
   en.missions_update(0x6098d0, en.frame_dt());
   en.pilot_update(en.pilot(), en.frame_dt());

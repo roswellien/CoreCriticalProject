@@ -96,6 +96,7 @@
 #include "mech3/weapon_planner.h"
 #include "mech3/zai_brain.h"
 #include "mech3/weapon.h"
+#include "mech3/replay_hooks.h"
 
 namespace mech3 {
 
@@ -2185,6 +2186,9 @@ std::vector<ai::Handle> g_update_order;  // one buffer, so the budget's resume p
 }  // namespace
 void set_update_order_seed(uint32_t seed) { g_update_order_rng.seed(seed); }
 void update_entities(float dt) {
+  // Ours (#289): a 3D replay updates no entity: the log poses every mech
+  // (replay_hooks.h), and no turret or vehicle acts.
+  if (replay_hooks()) return;
   const bool shuffled = world().arena_spectating;
   if (shuffled) {
     g_update_order.assign(ai::entity_list().begin(), ai::entity_list().end());

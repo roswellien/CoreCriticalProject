@@ -8,6 +8,7 @@
 
 #include "gamez/zmodel/gmod_cull.h"
 #include "gamez/zutil/zfix.h"
+#include "mech3/replay_hooks.h"
 #include "mech3/spectator_seat.h"
 #include "mech3/zrdraiv.h"
 
@@ -560,7 +561,9 @@ void player_tick() {
   const bool has_vehicle = !launch_spectator();
   if (has_vehicle) h.vehicle_update(h.pilot_vehicle(), s.dt);
   const Handle st = h.stealth();
-  if (h.view_target(h.view()) == st) h.stealth_update(st, s.dt);
+  // Ours (#289): in a 3D replay the stealth entity neither reads input nor
+  // moves; the replay's camera owns the view (replay_hooks.h).
+  if (!replay_hooks() && h.view_target(h.view()) == st) h.stealth_update(st, s.dt);
   h.clear_6099c0();
   h.entities_update(s.dt);
   h.tick_41e3f0(s.dt);

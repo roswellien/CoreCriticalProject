@@ -19116,6 +19116,30 @@ TEST(replay_puppet_follows_a_live_mech_headless) {
   EXPECT(r.collapsed && r.never_died && r.armor_kept);
 }
 
+// #289 step 3 (plan step 7) on the real game: with a replay's hooks set for
+// 60 frames in the middle of an arena match, no mech is updated (none moves
+// and no gait clip runs), the game time is the replay's clock every frame,
+// the frame clock is real time again after each frame, and the hooks run
+// once a frame each.
+TEST(replay_frame_branch_simulates_nothing_headless) {
+  if (!have_game()) return;
+  const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
+                           arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
+  arena_headless_run(json, 60, [](int) {});  // the warm-up (#302)
+  replay_game::FrameProbe probe(200, 60);
+  arena_headless_run(json, 300, [&](int frame) { probe.frame(frame); });
+  const replay_game::FrameResults& r = probe.results();
+  std::printf("  replay frames: %d, moved %d, off clock %d, clock not real %d, hooks %d/%d\n", r.frames,
+              r.mechs_moved, r.time_off_clock, r.clock_not_real, r.before, r.after);
+  EXPECT(r.frames == 60 && r.mechs_moved == 0 && r.time_off_clock == 0 && r.clock_not_real == 0);
+  EXPECT(r.before == 60 && r.after == 60);
+  // The control: the same frames without the hooks, where the bots move.
+  replay_game::FrameProbe control(200, 60, false);
+  arena_headless_run(json, 300, [&](int frame) { control.frame(frame); });
+  std::printf("  control frames: %d, moved %d\n", control.results().frames, control.results().mechs_moved);
+  EXPECT(control.results().mechs_moved > 50);
+}
+
 // #289 step 1 (criteria 2 to 6) on the real game: a c1mp1 4v4 logs shots of
 // every kind with their rounds and beams, routes, contacts in and out of
 // sight and decisions with reasons; the same seed writes the same bytes; and

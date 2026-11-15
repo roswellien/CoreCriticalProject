@@ -49,6 +49,7 @@ add_library(mw3core STATIC
   src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
   src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
   src/mech3/replay_run.cpp  # ours (#289): mw3 --replay3d's log, map checks and session
+  src/mech3/replay_hooks.cpp  # ours (#289): what a 3D replay changes in the game's frame
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp

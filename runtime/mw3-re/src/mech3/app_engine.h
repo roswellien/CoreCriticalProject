@@ -90,6 +90,11 @@ class GameEngine : public Engine {
   void nav_prebuild() override;  // ours (W58, app_mission.cpp)
   void arena_start() override;   // ours (#287, app_mission.cpp -> mech3/arena)
   void arena_tick() override;    // ours (#287, app_mission.cpp -> mech3/arena)
+  // Ours (#289): the 3D replay's frame, through replay_hooks() (replay_hooks.h).
+  bool replay_on() override;
+  void replay_start() override;
+  void replay_before_lists() override;
+  void replay_after_lists() override;
   // A mission started from the command line (our addition, docs/program.md):
   // the pilot's game answers these, and the load goes on to the Core state.
   struct Launch {

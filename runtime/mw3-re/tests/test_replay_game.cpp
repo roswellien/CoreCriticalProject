@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "gamez/zclass/class.h"
+#include "gamez/zutil/ztimer.h"
+#include "mech3/replay_hooks.h"
 #include "mech3/app_mech.h"
 #include "mech3/arena.h"
 #include "mech3/arena_log.h"
@@ -160,6 +162,93 @@ void PuppetProbe::frame(int frame, int last_frame) {
     // replay keeps it off them), and it would take a collapsed one as a wreck.
     s_->other.reset();
   }
+}
+
+namespace {
+
+// A replay's hooks for the test: the action lists run on a fixed step of
+// its own clock, and the game time follows that clock.
+class TestHooks : public mech3::ReplayHooks {
+ public:
+  static constexpr float kStep = 0.05f;
+  float clock = 0;
+  float real_dt = 0;
+  int before = 0, after = 0;
+  void start() override {}
+  void before_lists(bool) override {
+    ++before;
+    real_dt = ztimer::state().dt;
+    ztimer::state().dt = kStep;
+  }
+  void after_lists() override {
+    ++after;
+    ztimer::state().dt = real_dt;
+    clock += kStep;
+    mech3::mech_set_game_time(clock);
+  }
+  void quit() override {}
+};
+
+// What a mech's update would change: where it is and its gait clip's time.
+struct MechMark {
+  float pos[3] = {};
+  float anim_t = 0;
+};
+MechMark mark(mech3::Mech& m) {
+  MechMark k;
+  mech3::program_vehicle_centre(&m, k.pos);
+  const mech3::MechAnim* anim = m.anim_index >= 0 && m.anim_index < 13 ? m.anims[m.anim_index] : nullptr;
+  k.anim_t = anim ? anim->t : 0.0f;
+  return k;
+}
+
+}  // namespace
+
+struct FrameProbe::State {
+  int from = 0, frames = 0;
+  bool hooks_on = true;
+  TestHooks hooks;
+  std::vector<MechMark> marks;
+  float real_dt = 0;
+  FrameResults r;
+};
+
+FrameProbe::FrameProbe(int from, int frames, bool hooks_on) : s_(new State()) {
+  s_->from = from;
+  s_->frames = frames;
+  s_->hooks_on = hooks_on;
+}
+FrameProbe::~FrameProbe() {
+  if (mech3::replay_hooks() == &s_->hooks) mech3::set_replay_hooks(nullptr);
+}
+const FrameResults& FrameProbe::results() const { return s_->r; }
+
+void FrameProbe::frame(int frame) {
+  State& s = *s_;
+  const auto& mechs = mech3::arena::arena_mechs();
+  const auto take_marks = [&] {
+    s.marks.clear();
+    for (const auto& entry : mechs) s.marks.push_back(mark(*entry.mech));
+  };
+  if (frame == s.from) {  // the hooks on, from the next frame
+    s.hooks.clock = mech3::world().time;
+    if (s.hooks_on) mech3::set_replay_hooks(&s.hooks);
+    take_marks();
+    return;
+  }
+  if (frame <= s.from || frame > s.from + s.frames) return;
+  ++s.r.frames;
+  bool moved = false;
+  for (size_t i = 0; i < mechs.size() && i < s.marks.size(); ++i) {
+    const MechMark now = mark(*mechs[i].mech);
+    for (int c = 0; c < 3; ++c) moved = moved || now.pos[c] != s.marks[i].pos[c];
+    moved = moved || now.anim_t != s.marks[i].anim_t;
+  }
+  if (moved) ++s.r.mechs_moved;
+  if (mech3::world().time != s.hooks.clock) ++s.r.time_off_clock;
+  if (ztimer::state().dt == TestHooks::kStep) ++s.r.clock_not_real;
+  s.r.before = s.hooks.before, s.r.after = s.hooks.after;
+  if (frame == s.from + s.frames) mech3::set_replay_hooks(nullptr);
 }
 
 }  // namespace replay_game
