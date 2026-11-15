@@ -54,7 +54,10 @@ std::string logical_member(const char* path) {
 }
 }
 std::uint64_t world_source_epoch() { return g_world_source_epoch.load(); }
-std::uint64_t invalidate_world_source_proofs() { return g_world_source_epoch.fetch_add(1) + 1; }
+std::uint64_t invalidate_world_source_proofs() {
+  fixture_load_retire();
+  return g_world_source_epoch.fetch_add(1) + 1;
+}
 std::shared_ptr<const ZbdObservationSession>
 observe_zbd_sources(std::vector<ZbdSourceRequest> sources) {
   auto session = std::make_shared<ZbdObservationSession>();
@@ -525,6 +528,7 @@ int read_nodes(int32_t size, std::FILE* f, ZbdReadContext* proof) {
   if (proof) proof->require(size >= 0 && size <= 1048576, "invalid node table size");
   NodePool& p = nodes();
   if (size == 0) return 0;
+  fixture_pool_retire(); // Direct import overwrites slots without node_alloc.
   const int32_t bs = p.block_size;
   if (proof) proof->require(bs > 0 && bs <= 1048576, "invalid node pool block size");
   if (proof) proof->span(f, std::uint64_t(size) * 0xd4);
@@ -590,6 +594,7 @@ int read_nodes(int32_t size, std::FILE* f, ZbdReadContext* proof) {
     } else {
       ++p.live;
       node->link |= kNodeLive;
+      fixture_source_begin(node);
     }
   }
   for (ListItem* item = lists().list[kWorlds].head; item; item = item->next) {

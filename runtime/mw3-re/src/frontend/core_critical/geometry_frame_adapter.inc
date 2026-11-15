@@ -131,6 +131,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     draw.push.mode[2] = material.texture >= 0 ? 2U | (2U << 8) : 2U;
     draw.push.mode[3] = 0x80000000U; // Modern two-sided normal orientation.
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    apply_fixture_observation(draw, capture_fixture_range(*source, context, range, material.texture));
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));
   }

@@ -23,6 +23,10 @@ struct NativeBindingContext {
   bool material_active{};
   bool fingerprint_computed{};
   std::optional<std::uint64_t> fingerprint;
+  // Borrowed source scope ends at end_model_draw; deferred fixture receipts
+  // retain only the completed values, never these native pointers.
+  ::platform::prepared::Matrix fixture_world{};
+  bool fixture_eligible{};
 } native_context_;
 std::uint64_t binding_rejected_mismatch_{};
 std::uint64_t native_fingerprint_evaluations_{};
@@ -33,6 +37,7 @@ struct NativeDeferredBinding final : ::platform::DeferredMaterialBinding {
   int texture{-1}, normal_index{-1};
   std::array<float, 4> surface_parameters{};
   std::shared_ptr<const mw34::materials::HeightBinding> height_binding;
+  std::shared_ptr<const mw34::native_fixtures::Observation> fixture;
 };
 const std::shared_ptr<const int> material_binding_owner_ =
     std::make_shared<const int>(0);
@@ -445,7 +450,7 @@ deferred_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
 bool authenticated_deferred_world_draw() const {
   const auto *binding = dynamic_cast<const NativeDeferredBinding *>(
       deferred_material_binding_.get());
-  return binding && (binding->normal_index >= 0 ||
+  return binding && (binding->normal_index >= 0 || binding->fixture ||
                      binding->surface_parameters[3] > .5f) &&
          binding->owner.lock() == material_binding_owner_ &&
          binding->epoch == group_load_epoch_ && binding->texture >= 0 &&

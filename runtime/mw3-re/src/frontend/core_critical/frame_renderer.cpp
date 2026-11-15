@@ -1,4 +1,5 @@
 #include "frame_renderer.hpp"
+#include "crt/msvc_rand.h"
 #include "frontend/sdl/cpu_interval.h"
 #include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
@@ -26,6 +27,7 @@
 #include "renderer/mech_headlights.hpp"
 #include "gamez/zmodel/gmod_geometry.h"
 #include "renderer/native_surface_identity.hpp"
+#include "renderer/native_fixture_sources.hpp"
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -48,6 +50,8 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <array>
 #include <atomic>
 #include <cfenv>
+#include <charconv>
+#include <cstdarg>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -82,6 +86,145 @@ public:
 private:
   std::fenv_t saved_;
 };
+
+
+// One process-local, opt-in run. Fixed storage prevents diagnostic tracking or
+// formatting from growing with scene size. It owns no native source pointers.
+struct FixtureTraceRecord {
+  std::array<char, 8192> bytes{};
+  std::size_t size{};
+  bool valid{true};
+  void append(const char* format, ...) {
+    if(!valid) return;
+    va_list arguments;
+    va_start(arguments,format);
+    const int count=std::vsnprintf(bytes.data()+size,bytes.size()-size,format,arguments);
+    va_end(arguments);
+    if(count<0 || std::size_t(count)>=bytes.size()-size) { valid=false; return; }
+    size+=std::size_t(count);
+  }
+  void quoted(const char* data,std::size_t count,std::size_t limit=192) {
+    if(!data) { append("null"); return; }
+    append("\"");
+    for(std::size_t index=0;index<std::min(count,limit);++index) {
+      const unsigned char value=static_cast<unsigned char>(data[index]);
+      if(value=='\"' || value=='\\') append("\\%c",value);
+      else if(value<32 || value>126) append("\\u%04x",unsigned(value));
+      else append("%c",value);
+    }
+    append("\"");
+  }
+  void text(const char* field,const char* data,std::size_t count,std::size_t limit=192) {
+    append(",\"%s\":",field);
+    quoted(data,count,limit);
+    if(data && count>limit) append(",\"%s_truncated\":true",field);
+  }
+  void text(const char* field,const std::string& value,std::size_t limit=192) {
+    text(field,value.empty() ? nullptr : value.data(),value.size(),limit);
+  }
+  void hash(const char* field,std::uint64_t value) {
+    append(",\"%s\":\"%016llx\"",field,(unsigned long long)value);
+  }
+  void scalar(float value) {
+    if(!std::isfinite(value)) { append("null"); return; }
+    char storage[48];
+    const auto result=std::to_chars(storage,storage+sizeof storage,value,
+        std::chars_format::general,std::numeric_limits<float>::max_digits10);
+    if(result.ec!=std::errc{}) { append("null"); return; }
+    append("%.*s",int(result.ptr-storage),storage);
+  }
+  void floats(const char* field,const float* values,std::size_t count,bool available) {
+    append(",\"%s\":",field);
+    if(!available) { append("null"); return; }
+    append("[");
+    for(std::size_t index=0;index<count;++index) {
+      if(index) append(",");
+      scalar(values[index]);
+    }
+    append("]");
+  }
+  void key(const char* field,const mw34::materials::SurfaceKey* value) {
+    append(",\"%s\":",field);
+    if(!value || !value->width || !value->height || !value->hash) { append("null"); return; }
+    append("{\"width\":%u,\"height\":%u,\"format\":%u,\"hash\":\"%016llx\"}",
+        value->width,value->height,value->format,(unsigned long long)value->hash);
+  }
+};
+std::uint64_t fixture_trace_hash(const void* data,std::size_t bytes,
+                               std::uint64_t value=0xcbf29ce484222325ULL) {
+  const auto* source=static_cast<const unsigned char*>(data);
+  for(std::size_t index=0;index<bytes;++index) value=(value^source[index])*0x100000001b3ULL;
+  return value;
+}
+struct FixtureTraceRun {
+  static constexpr std::size_t maximum_records=1024,maximum_observations=4096,maximum_bytes=512*1024,summary_reserve=512;
+  const bool enabled=[] {
+    const auto* value=std::getenv("MW34_TRACE_FIXTURE_SOURCES");
+    return value && std::strcmp(value,"1")==0;
+  }();
+  std::array<std::uint64_t,maximum_records> seen{};
+  std::size_t records{},observations{},bytes{},duplicates{},oversized{};
+  bool stopped{},summarized{},native_control{};
+  bool open() const { return enabled && !stopped; }
+  bool claim() {
+    if(!open()) return false;
+    if(observations==maximum_observations) { stopped=true; finish("observation_limit"); return false; }
+    ++observations;
+    return true;
+  }
+  void finish(const char* reason) {
+    if(!enabled || summarized) return;
+    summarized=true;
+    char storage[summary_reserve];
+    const int length=std::snprintf(storage,sizeof storage,
+        "[NATIVE_FIXTURE_SOURCE] {\"schema\":\"mw34.fixture-source.v1\",\"type\":\"summary\","
+        "\"reason\":\"%s\",\"records\":%zu,\"bytes_before_summary\":%zu,\"duplicates\":%zu,"
+        "\"oversized\":%zu,\"observations\":%zu,\"record_limit\":%zu,"
+        "\"observation_limit\":%zu,\"byte_limit\":%zu,\"native_control\":%s}\n",
+        reason,records,bytes,duplicates,oversized,observations,maximum_records,maximum_observations,maximum_bytes,
+        native_control ? "true":"false");
+    if(length>0 && std::size_t(length)<sizeof storage && std::size_t(length)<=maximum_bytes-bytes)
+      bytes+=std::fwrite(storage,1,std::size_t(length),stderr);
+  }
+  void submit(FixtureTraceRecord& record) {
+    if(!open()) return;
+    if(!record.valid) { ++oversized; stopped=true; finish("record_buffer_limit"); return; }
+    const auto signature=fixture_trace_hash(record.bytes.data(),record.size);
+    if(std::find(seen.begin(),seen.begin()+records,signature)!=seen.begin()+records) {
+      ++duplicates;
+      if(observations==maximum_observations) { stopped=true; finish("observation_limit"); }
+      return;
+    }
+    const auto length=record.size+1;
+    if(records==maximum_records || length>maximum_bytes-summary_reserve-bytes) {
+      stopped=true;
+      finish(records==maximum_records ? "record_limit" : "byte_limit");
+      return;
+    }
+    // Share stderr's FILE lock with native renderer diagnostics. A separate
+    // buffered stdout stream can split a JSON line around their writes even
+    // when both OS handles ultimately target the same merged log file.
+    record.bytes[record.size++]='\n';
+    const auto written=std::fwrite(record.bytes.data(),1,record.size,stderr);
+    bytes+=written;
+    if(written!=record.size) {
+      stopped=true;
+      finish("diagnostic_write_error");
+      return;
+    }
+    seen[records++]=signature;
+    if(records==maximum_records) { stopped=true; finish("record_limit"); }
+    else if(observations==maximum_observations) { stopped=true; finish("observation_limit"); }
+  }
+  ~FixtureTraceRun() {
+    if(!enabled || summarized) return;
+    try { VisualFloatScope preserve; finish("process_exit"); } catch(...) {}
+  }
+};
+FixtureTraceRun& fixture_trace_run() {
+  static FixtureTraceRun state;
+  return state;
+}
 
 vk::Renderer::Quality parse_quality(const sdlfe::CoreCriticalQuality &quality) {
   vk::Renderer::Quality result{1, 1, 1, false};
@@ -204,6 +347,7 @@ struct Texture {
   std::vector<std::uint32_t> pixels;
   std::string name;
   mw34::materials::SurfaceKey surface_key{};
+  std::optional<mw34::materials::SurfaceKey> fixture_visual_key;
   std::uint64_t group_load_epoch{0};
 };
 
@@ -435,14 +579,17 @@ public:
   std::shared_ptr<const ::platform::DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t texture) override {
     VisualFloatScope preserve;
-    if (!lighting_.normals ||
-        (bridge_config_.native_material_sidecar.empty() &&
-         (!bridge_config_.parallax_materials || !environment_ ||
-          environment_->material_targets.empty())) ||
-        texture < 0 || std::size_t(texture) >= textures_.size())
+    if (texture < 0 || std::size_t(texture) >= textures_.size())
       return {};
-    surface_normals_load(); // Reset clears catalogs; deferred admission can be
-                            // first.
+    const bool normal_admission = lighting_.normals &&
+        (!bridge_config_.native_material_sidecar.empty() ||
+         (bridge_config_.parallax_materials && environment_ &&
+          !environment_->material_targets.empty()));
+    const auto fixture = capture_fixture_polygon(texture);
+    if (!normal_admission && !fixture)
+      return {};
+    if (normal_admission)
+      surface_normals_load(); // Reset can make a deferred draw first.
     const auto &key = textures_[texture].surface_key;
     auto receipt = std::make_shared<NativeDeferredBinding>();
     receipt->owner = material_binding_owner_;
@@ -450,9 +597,12 @@ public:
     receipt->epoch = group_load_epoch_;
     receipt->version = textures_[texture].version;
     receipt->texture = texture;
-    receipt->surface_parameters = native_surface_parameters(key, texture);
-    receipt->height_binding = native_height_binding(key, texture);
-    receipt->normal_index = surface_normal_index(receipt->key, true, texture);
+    receipt->fixture = fixture;
+    if (normal_admission) {
+      receipt->surface_parameters = native_surface_parameters(key, texture);
+      receipt->height_binding = native_height_binding(key, texture);
+      receipt->normal_index = surface_normal_index(receipt->key, true, texture);
+    }
     return receipt;
   }
   void begin_deferred_material_draw(
@@ -468,11 +618,12 @@ public:
     native_context_.fingerprint.reset();
   }
   bool wants_material_context() const override {
-    return lighting_.normals &&
-           (!bridge_config_.native_material_sidecar.empty() ||
-            (bridge_config_.parallax_materials && environment_ &&
-             !environment_->material_targets.empty()) ||
-            bridge_config_.trace_native_bindings);
+    return fixture_producer_enabled() || fixture_trace_run().open() ||
+           (lighting_.normals &&
+            (!bridge_config_.native_material_sidecar.empty() ||
+             (bridge_config_.parallax_materials && environment_ &&
+              !environment_->material_targets.empty()) ||
+             bridge_config_.trace_native_bindings));
   }
   bool wants_model_context() const override {
     return !prepared_.empty() || wants_material_context();
@@ -481,6 +632,7 @@ public:
   begin_material_draw(const ::platform::MaterialDrawContext &context) override {
     native_context_.material = context;
     native_context_.material_active = true;
+    if(fixture_trace_run().open()) fixture_trace_native("native-material",context,-1,nullptr);
   }
   void end_material_draw() noexcept override {
     native_context_.material = {};
@@ -492,6 +644,7 @@ public:
   void end_model_draw() noexcept override {
     suppress_model_draws_ = false;
     native_context_ = {};
+    if(fixture_trace_run().open()) fixture_trace_pose_ = {};
   }
   void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
@@ -506,6 +659,8 @@ public:
       native_context_.epoch = group_load_epoch_;
       native_context_.height_eligible = native_ground_eligible(context);
     }
+    fixture_model_scope(context);
+    if(fixture_trace_run().open()) fixture_trace_model(context);
     ensure_extent();
     const auto draws = prepared_.draw(context);
     if (!draws.replace)
@@ -793,6 +948,7 @@ public:
     entry.surface_key = source_key;
     entry.group_load_epoch = group_load_epoch_;
     entry.version = ++texture_version_;
+    entry.fixture_visual_key.reset();
   }
 
   int32_t create_named_texture(const char *name, int width, int height,
@@ -1128,6 +1284,9 @@ private:
                             ? 2 | diffuse
                             : (state.alpha_modulate ? 4 : 2) | texture;
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    if (native_ground_draw_eligible(state, hud, depth_only, geometry_debug_,
+                                    primitive == Primitive::kPoints))
+      apply_fixture_observation(draw, deferred_fixture_observation(state.texture));
     if (!scene_.order.empty() && !scene_.order.back().clear) {
       auto &previous = scene_.draws.back();
       if (!previous.model && previous.depth_only == draw.depth_only &&
@@ -1141,6 +1300,7 @@ private:
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
+          previous.emission_index == draw.emission_index &&
           mw34::materials::same_height_binding(previous.height_binding, draw.height_binding) &&
           previous.sampler == draw.sampler &&
           previous.key.packed() == draw.key.packed() &&
@@ -1248,12 +1408,19 @@ private:
 private:
   int32_t prepared_texture(const ::platform::prepared::Image &image) {
     const auto found = prepared_textures_.find(&image);
-    if (found != prepared_textures_.end())
+    if (found != prepared_textures_.end()) {
+      // PreparedModels owns this immutable image across mission resource
+      // resets. A real draw republishes its value identity in the new epoch.
+      textures_.at(found->second).group_load_epoch = group_load_epoch_;
       return found->second;
+    }
     const auto pixels = image_pixels(image);
     const auto handle =
         create_texture(int(image.width), int(image.height),
                        reinterpret_cast<const uint8_t *>(pixels.data()), 1);
+    // The prepared reader preserves a declared hash without checking it. This
+    // immutable slot gets an exact key from its complete visible RGB565 plane.
+    textures_.at(handle).surface_key = prepared_fixture_key(image);
     prepared_textures_.emplace(&image, handle);
     return handle;
   }
@@ -1284,6 +1451,7 @@ private:
 
   void emit_prepared(const PreparedBatchDraw &source,
                      const ::platform::ModelDrawContext &context) {
+    VisualFloatScope guard;
     CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
     if (geometry_mode_ != cc::geometry::Mode::legacy &&
         source.deformed.empty()) {
@@ -1312,6 +1480,7 @@ private:
                            staged->vertices.end());
     cpu_clipped_triangles_ += staged->clipped_triangles;
     if (draw.count) {
+      apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
       ++prepared_batches_;

@@ -343,12 +343,16 @@ bool Skin::apply_first(void* node) {
     if (!e->texture) {
       if (!holes && e->name != e->alt) {
         e->load(true, true);
+        mat.fixture_revision.reset();
         mat.texture = e->cached ? nullptr : static_cast<zimg::TextureEntry*>(e->texture);
       } else {
         e->texture = t;
       }
     }
-    if (holes && e->damage) mat.flags |= 2;
+    if (holes && e->damage) {
+      mat.fixture_revision.reset();
+      mat.flags |= 2;
+    }
   });
   for (int32_t k = 0; k < n->child_count(); ++k) apply_first(n->children[k]);
   return true;
@@ -368,6 +372,7 @@ void Skin::apply(void* node, Skin* to) const {
     SkinEntry* target = k >= 0 && k < static_cast<int32_t>(to->entries.size()) ? to->entries[k] : nullptr;
     if (!target) return;
     if (!(target->cached ? nullptr : target->texture)) target->load(true, !holes);
+    mat.fixture_revision.reset();
     mat.texture = target->cached ? nullptr : static_cast<zimg::TextureEntry*>(target->texture);
   });
   for (int32_t k = 0; k < n->child_count(); ++k) apply(n->children[k], to);

@@ -112,22 +112,30 @@ struct WiredVehicles : VehBasicHooks {
   // vt+0xec are itself, bit 19), field bases alike.
   void entity_set_node(Vehicle& v, Handle node) override {
     void* self = static_cast<BasicVehicle*>(&v);
+    const bool registered = g_vehicles.count(&v) != 0;
+    zcls::fixture_vehicle_unregister(&v);
     if (v.node) entity_unbind(zn(v.node), self, entity_unbind_calls());
     vehicle_set_node(v, node);
     if (zn(node)) {
       EntityCasts casts;
       casts.vehicle_base = casts.vehicle = self;
       entity_bind(zn(node), self, casts);
+      if (registered) zcls::fixture_vehicle_register(&v, zn(node), v.active, v.transform);
     }
   }
-  void zentity_set_node(Vehicle& v, Handle node) override { v.node = node; }            // 0x005a8390 with none
+  void zentity_set_node(Vehicle& v, Handle node) override {
+    zcls::fixture_vehicle_unregister(&v);
+    v.node = node;
+  }            // 0x005a8390 with none
   // 0x005a7f50 / 0x005a7f70: zEntity's list, the port's (mech3/sensors).
   void entity_register(Vehicle& v) override {
     ai::entity_list().push_back(g_w.handle_of(g_w.engine, &v));
     g_vehicles.insert(&v);
     g_order.push_back(&v);
+    zcls::fixture_vehicle_register(&v, zn(v.node), v.active, v.transform);
   }
   void entity_unregister(Vehicle& v) override {
+    zcls::fixture_vehicle_unregister(&v);
     auto& l = ai::entity_list();
     l.erase(std::remove(l.begin(), l.end(), g_w.handle_of(g_w.engine, &v)), l.end());
     g_vehicles.erase(&v);

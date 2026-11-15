@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "gamez/zclass/cls_di.h"
+#include "gamez/zclass/cls_node.h"
 #include "gamez/zweapon/zweapon.h"
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zutil/zfix.h"
@@ -618,6 +619,7 @@ void vehicle_frame(BasicVehicle& v, float dt) {
   const bool ran = c.update(dt) == 1;  // IControls vt+0x0c
   if (c.destroyed()) {
     v.active = false;
+    zcls::fixture_vehicle_state(static_cast<zcls::Node*>(v.node), false);
     v.engine.entry = nullptr;  // 0x004adb40
     if (v.motion.anim) {  // 0x004ade70
       h.anim_stop(v.motion.anim);

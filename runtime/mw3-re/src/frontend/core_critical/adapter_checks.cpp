@@ -9,6 +9,8 @@
 #include "gamez/zclass/light.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zclass/object3d.h"
+#include "mech3/mech.h"
+#include "gamez/zmodel/gmod_init.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
@@ -22,6 +24,8 @@
 #include "renderer/effect_lighting_stage.inc"
 #include "renderer/material_normals.hpp"
 #include "renderer/native_surface_identity.hpp"
+#include "renderer/native_fixture_geometry.hpp"
+#include "renderer/native_fixture_sources.hpp"
 #include "renderer/surface_detail.hpp"
 #include "renderer/surface_materials.hpp"
 #include "renderer/vk_scene.hpp"
@@ -80,6 +84,7 @@ void require(bool condition, const char *message) {
 }
 
 #include "local_light_checks.inc"
+#include "native_fixture_checks.inc"
 #include "owned_rigid_capture_checks.inc"
 
 void quad(platform::Render3D &renderer, float low, float high, float depth,
@@ -2181,6 +2186,8 @@ int main(int argc, char **argv) {
   int result = 0;
   try {
     check_local_light_core();
+    check_native_fixture_core();
+    check_native_fixture_sources_core();
     check_renderer_bridge_config();
     cc_mw3_re::platform::run_platform_checks();
     require(window != nullptr, SDL_GetError());
@@ -2291,6 +2298,7 @@ int main(int argc, char **argv) {
       check_quality(window, backend, quality);
     else {
       check_local_light_gpu(window, backend);
+      check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
     }
   } catch (const std::exception &error) {

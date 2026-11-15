@@ -68,6 +68,7 @@ Material* new_material(const Material& m) {
   }
   const int32_t index = t.free_head;
   Material& e = t.at(index);
+  e.fixture_revision.reset();
   const int16_t prev = e.prev, next = e.next;
   t.free_head = next;
   if (prev >= 0) t.at(prev).next = next;
@@ -150,6 +151,7 @@ Material& default_material() {
 // Mech3.exe 1.2 @ 0x00536a70. The exe keeps flag bits 3..7 of whatever the
 // material held (callers pass an uninitialised one on the stack); 0 here.
 void material_init(Material& m) {
+  m.fixture_revision.reset();
   m.cycle = nullptr;
   m.texture = nullptr;
   m.alpha = 0xff;
@@ -170,6 +172,7 @@ int material_set_soil(Material* m, uint32_t soil) {
 // Mech3.exe 1.2 @ 0x005375d0
 int cycle_create(Material& m, int32_t count) {
   if (&m == &default_material()) return 0;
+  m.fixture_revision.reset();
   m.flags |= 5;
   if (m.cycle && count <= static_cast<int32_t>(m.cycle->texture_count)) return 0;
   // The exe reallocs the cycle and drops its old texture list. It sets every
@@ -193,6 +196,7 @@ int cycle_add(Material& m, zimg::TextureEntry* t) {
   if (!(m.flags & 4)) return 0;
   Cycle* c = m.cycle;
   if (!c->textures || c->added >= c->texture_count) return 0;
+  m.fixture_revision.reset();
   c->textures[c->added++] = t;
   return 1;
 }
@@ -234,6 +238,7 @@ Material* material_copy(const Material& m) { return new_material(m); }
 // itself is left as it is.
 void material_free(Material* m) {
   if (!m) return;
+  m->fixture_revision.reset();
   MaterialTable& t = g_table;
   if ((m->flags & 4) && m->cycle) {
     std::free(m->cycle->textures);

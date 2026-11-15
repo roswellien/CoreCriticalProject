@@ -46,7 +46,11 @@ struct Model {                   // 0x60-byte slot
   std::shared_ptr<const cc::geometry::Resource> render_geometry;
   std::vector<const Material*> render_materials;
   std::shared_ptr<const zcls::SourceAsset> world_source_asset;
+  // Lazily allocated only for authenticated retained fixture sources. Weak
+  // consumers detect mutation/destruction without retaining a Model*.
+  mutable std::shared_ptr<const int> fixture_revision;
   void invalidate_render_geometry() noexcept {
+    fixture_revision.reset();
     render_geometry.reset();
     render_materials.clear();
   }

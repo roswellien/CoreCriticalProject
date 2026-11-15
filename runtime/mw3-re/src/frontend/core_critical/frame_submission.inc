@@ -163,6 +163,10 @@ static std::size_t packet_bytes(const vk::Scene &scene) {
       scene.draws.capacity() * sizeof(vk::Draw) +
       scene.order.capacity() * sizeof(vk::Command) +
       scene.textures.capacity() * sizeof(vk::TextureRef);
+  const auto emission_bytes = scene.emissions.allocated_bytes();
+  if (emission_bytes > std::numeric_limits<std::size_t>::max() - bytes)
+    throw std::runtime_error("Emission packet byte count overflow");
+  bytes += emission_bytes;
   for (const auto &texture : scene.textures)
     bytes += texture.pixels.capacity() * sizeof(uint16_t) +
              texture.pixels32.capacity() * sizeof(uint32_t);

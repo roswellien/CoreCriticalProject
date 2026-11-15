@@ -347,6 +347,7 @@ int classes_reset() {
   zmod::clear_light_list();
   NodePool& p = nodes();
   if (p.capacity > 0) {
+    fixture_pool_retire();
     p.blocks.clear();
     p.capacity = 0, p.live = 0, p.free_head = -1;
   }

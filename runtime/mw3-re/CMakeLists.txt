@@ -645,6 +645,7 @@ add_executable(mw3ground_targets tools/analysis/export_ground_targets.cpp)
 target_link_libraries(mw3ground_targets PRIVATE mw3ground_export)
 add_executable(mw3tests
   tests/main.cpp
+  tests/test_fixture_source_lifetime.cpp
   tests/test_znet.cpp
   tests/test_cue.cpp
   tests/test_mech.cpp

@@ -41,6 +41,7 @@ int object3d_init(Node* node) {
   }
   node->set_flags(node->flags() | 2);
   if (node->changed) node->changed->removable = 0;
+  fixture_transform_changed(node);
   return 0;
 }
 
@@ -98,6 +99,7 @@ int object3d_set_translation(Node* node, float x, float y, float z) {
   }
   node->set_flags(node->flags() | 2);
   if (node->changed) node->changed->removable = 0;
+  fixture_transform_changed(node);
   return 0;
 }
 
@@ -119,6 +121,7 @@ void touch(Node* node, Object3d* d) {
   }
   node->set_flags(node->flags() | 2);
   if (node->changed) node->changed->removable = 0;
+  fixture_transform_changed(node);
 }
 
 Object3d* data_or_report(Node* node, int line) {
@@ -136,6 +139,7 @@ void drop_initial(Object3d* d) { d->put<uint32_t>(0, d->get<uint32_t>(0) & ~8u);
 int object3d_set_opacity(Node* node, float v) {
   if (int r = check_class(node, 5, kFile, 0x249)) return r;
   static_cast<Object3d*>(node->data)->put(0x4, v);
+  fixture_source_changed(node);
   return 0;
 }
 
@@ -158,6 +162,7 @@ int object3d_use_opacity(Node* node, int on) {
   if (int r = check_class(node, 5, kFile, 0x29b)) return r;
   auto* d = static_cast<Object3d*>(node->data);
   d->put<uint32_t>(0, on ? d->get<uint32_t>(0) | 2 : d->get<uint32_t>(0) & ~2u);
+  fixture_source_changed(node);
   return 0;
 }
 
@@ -166,6 +171,7 @@ int object3d_use_blend(Node* node, int on) {
   if (int r = check_class(node, 5, kFile, 0x1db)) return r;
   auto* d = static_cast<Object3d*>(node->data);
   d->put<uint32_t>(0, on ? d->get<uint32_t>(0) | 4 : d->get<uint32_t>(0) & ~4u);
+  fixture_source_changed(node);
   return 0;
 }
 
@@ -182,6 +188,7 @@ int object3d_set_blend(Node* node, const float* rgb, float weight) {
     for (int i = 0; i < 3; ++i) d->put(8 + 4 * i, rgb[i]);
     for (int i = 0; i < 3; ++i) d->put(8 + 4 * i, clamp01(d->get<float>(8 + 4 * i)));
   }
+  fixture_source_changed(node);
   return 0;
 }
 
