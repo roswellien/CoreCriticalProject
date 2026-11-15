@@ -1,20 +1,21 @@
+#include "upgrades/mods/screen_fit.h"
 #include "mech3/action_menu.h"
 
 #include <cstdio>
 #include <string>
 
+#include "gamez/zimage/zimg_library.h"
 #include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/mission.h"
 #include "mech3/mods.h"
+#include "upgrades/mods/ia_mods_menu.h"
 #include "mech3/mech_config.h"
 #include "mech3/pilot.h"
 #include "mech3/player.h"
+#include "mech3/mech_names.h"
 
 namespace mech3 {
-
-// mech_names.h (its Engine clashes with the app's): 0x00484670's message.
-int32_t mech_name_message(int32_t mech);
 
 // 0x005e6fb0
 const ActionScenario kActionScenarios[6] = {
@@ -35,6 +36,7 @@ int32_t mode_of(int32_t scenario) {
 
 // 0x00484670: a mech's shown name, "notmech" out of range.
 const char* mech_label(Engine& e, int32_t mech) {
+  if (const char* t = mech_title(mech)) return t;  // ours: a mod's row
   if (mech < 0 || mech >= 19) return "notmech";
   const char* s = e.message(mech_name_message(mech));
   return s ? s : "";
@@ -273,6 +275,17 @@ ActionScreen::ActionScreen(Engine& e, Handle s)
       c.hide();
     }
     bind_button(&waves, "ENEMY_WAVE");
+    if (ia_mods_page()) {  // ours
+      mods_tab = std::make_unique<ModsTab>(e);
+      if (bind_button(&mods_tab->btn, "IAMODS")) {
+        mods_text_put(mods_tab->line, "ia_dark_grey", 504, 175);
+        add(&mods_tab->line);
+        mods_text_put(mods_tab->hint, "ia_dark_grey", 420, 203);
+        mods_text_put(mods_tab->hint2, "ia_dark_grey", 420, 216);
+        add(&mods_tab->hint), add(&mods_tab->hint2);
+        mods_text_say(mods_tab->line, ia_mods_line(mods_menu_write_dir()));
+      }
+    }
   }
   for (int32_t i = 0; i < 4; ++i) worlds.add_item(e.message(0xe33 + i), i);  // c1..c4
   // Ours: the worlds mods add (ia_world= in mod.txt, docs/modding.md), after them.
@@ -291,6 +304,27 @@ ActionScreen::ActionScreen(Engine& e, Handle s)
   set_active(1);
 }
 
+// Ours: with the mouse over the MODS tab, what a press does, in two rows under the mission's box.
+void ActionScreen::update(float dt) {
+  MenuScreen::update(dt);
+  int32_t wide = 0;  // ours: what its images show (a stretched look put back unstretched changes it; W6)
+  for (ztwod::Object2D* o = head; o; o = o->next)
+    if (auto* im = dynamic_cast<ztwod::Image*>(o); im && im->image && !(o->flags & ztwod::kHidden)) wide += im->image->width;
+  if (wide != pictures_wide) pictures_wide = wide, std::printf("mw3: Instant Action's pictures: %d wide in all\n", wide);
+  if (!mods_tab) return;
+  ModsTab& t = *mods_tab;
+  const bool over = cursor && !(t.btn.flags & ztwod::kHidden) && t.btn.hit(cursor->get_x(), cursor->get_y());
+  if (over == t.hinted) return;
+  t.hinted = over;
+  const auto lines = over ? mods_note_lines("Play Instant Action with mods. The game starts again to load them.",
+                                            [&](const std::string& s) { return mods_text_fits(s, &t.hint, 210, 50); })
+                          : std::pair<std::string, std::string>{};
+  mods_text_say(t.hint, lines.first);
+  mods_text_say(t.hint2, lines.second);
+  if (over) std::printf("mw3: Instant Action: hover: %s | %s\n", t.hint.text, t.hint2.text);  // for the checks
+  dirty_all();
+}
+
 // Mech3.exe 1.2 @ 0x0048a680: CANCEL back to the pilot screen's state (1),
 // ACCEPT on to the briefing; everything drawn again either way.
 void ActionScreen::on_button(int32_t id, int32_t a, int32_t b) {
@@ -299,6 +333,10 @@ void ActionScreen::on_button(int32_t id, int32_t a, int32_t b) {
     engine().pop_state(1);
   } else if (id == 4) {
     accept();
+  } else if (id == 5) {  // ours: MODS, its screen over this one (upgrades/mods/ia_mods_menu.h)
+    Engine& e = engine();
+    if (!ia_mods_state()) ia_mods_state() = e.construct(kIaModsStateCtor, {});
+    if (ia_mods_state()) keep_lineup(), e.push_state(ia_mods_state(), 0);
   }
   dirty_all();
 }
@@ -354,7 +392,8 @@ void ActionScreen::show_custom() {
   for (int i = 0; i < 6; ++i) {
     EnemyList& l = enemies[i];
     int32_t chosen = 0, n = 0;
-    for (int32_t mech = -1; mech < 0x13; ++mech) {
+    for (int32_t mech = -1; mech < mech_count(); ++mech) {  // ours: the mods' mechs after the exe's
+      if (mech == 0x13) continue;  // none
       if (i == 0) {
         if (slot && mech == slot->mech) chosen = n;
         if (mech == -1) continue;
@@ -381,6 +420,11 @@ void ActionScreen::show_custom() {
 // the kept choice ([0x00605820]) replaces it when there is one.
 void ActionScreen::reset() {
   Engine& e = engine();
+  if (mods_tab) {  // ours: the line as this run stands, said in the log as the screen opens
+    const std::string line = ia_mods_line(mods_menu_write_dir());
+    mods_text_say(mods_tab->line, line);
+    std::printf("mw3: Instant Action open, %s, %d maps\n", line.c_str(), worlds.count());
+  }
   const ActionSetup& k = action_setup();
   GameSlot* slot = player_slot();
   worlds.select(k.g874 < worlds.count() ? k.g874 : 0);  // ours: a mod's world kept by a pilot, the mod since gone
@@ -388,18 +432,21 @@ void ActionScreen::reset() {
   descriptions.select(k.g878);
   for (AllyList& l : allies) l.clear_items();
   for (EnemyList& l : enemies) l.clear_items();
-  int32_t chosen = 0;
-  for (int32_t mech = 0; mech < 0x13; ++mech) {
-    if (mech == 7) continue;
+  int32_t chosen = 0, row = 0;
+  for (int32_t mech = 0; mech < mech_count(); ++mech, ++row) {  // ours: the mods' mechs after the exe's
+    if (mech == 7 || mech == 0x13) {
+      --row;
+      continue;
+    }
     allies[0].add_item(e.message_format(0x18b, mech_label(e, mech)), mech);
-    if (slot && mech == slot->mech) chosen = mech;
+    if (slot && mech == slot->mech) chosen = mech < 0x13 ? mech : row;  // ours: a mod's mech by its row
   }
   allies[0].select(chosen);
   allies[1].add_item(e.message(0x28a), -1);  // Mobile Field Base: off
   allies[1].add_item(e.message(0x28b), 10);  // on
   for (int i = 2; i < 5; ++i) {
-    for (int32_t mech = -1; mech < 0x13; ++mech) {
-      if (mech == 7) continue;
+    for (int32_t mech = -1; mech < mech_count(); ++mech) {
+      if (mech == 7 || mech == 0x13) continue;
       const std::string text =
           mech == -1 ? e.message_format_ints(0x28c, {}) : std::string(e.message_format(0x28d, mech_label(e, mech)));
       allies[i].add_item(text.c_str(), mech);

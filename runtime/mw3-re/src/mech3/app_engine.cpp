@@ -4,6 +4,7 @@
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zimage/zimg_library.h"
 #include "mech3/app_engine.h"
+#include "upgrades/game_boxes.h"
 #include "mech3/game_editor.h"
 #include "mech3/mods.h"
 #include "mech3/force_feedback.h"
@@ -30,6 +31,10 @@
 #include "mech3/app_hud.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/options.h"
+#include "mech3/mods_menu.h"
+#include "upgrades/mods/ia_mods_menu.h"
+#include "upgrades/editor/mods_edit.h"
+#include "upgrades/mods/mod_test.h"
 #include "mech3/options_menu.h"
 #include "mech3/pocket_panel.h"
 
@@ -47,6 +52,7 @@
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_init.h"
 #include "gamez/zmodel/gmod_light.h"
+#include "gamez/zmodel/gmod_strip.h"
 #include "gamez/zreader/zreader.h"
 #include "gamez/zrender/zrndr_span.h"
 #include "gamez/zrender/zrndr_flare.h"
@@ -210,10 +216,56 @@ GameEngine::GameEngine(const Platform& p, std::string command_line)
   wire_view(&vp);
   patch12::install();  // 1.0's data read as 1.2's (docs/patch12.md), and our own record edits
   options_sensitivity_slider() = true;  // ours: the options' MOUSE SENSITIVITY
+  options_upgrades_page() = true;       // ours: the options' UPGRADES page
+  mods_menu_page() = true;              // ours: the main menu's MODS
+  ia_mods_page() = true;                // ours: Instant Action's MODS tab
+  mp_mods_page() = true;                // ours: the multiplayer screen's MODS button
+  // Ours: MODS's EDIT (upgrades/editor/mods_edit.h): the mission started as
+  // a debug start is (a stand-in pilot, no briefing), the chosen pilot and
+  // the launch put back when it is over.
+  mods_menu_edit_start() = [this](const std::string& mod, const std::string& world, int32_t number, std::string* why) {
+    const int32_t index = mission_dir_index(world.c_str());
+    if (index < 0) return *why = "no world " + world, false;
+    Launch l;
+    // The operation the world is of, for the debriefing's title (c1..c3 1..3, c4 and c4b 4; any other world 4, as
+    // a mod's campaign counts it: mod_campaign.cpp).
+    l.index = index, l.number = number, l.type = 1, l.op = index < 3 ? index + 1 : 4;
+    const Handle real = peek32(0x60861c);
+    set_launch(l);
+    mods_edit_begin(mod, [this, real] {
+      launch_.active = false;
+      poke32(0x60861c, real);
+    });
+    replace_state(6);  // the Load state: the mission, then Core
+    return true;
+  };
+  // Ours: MODS's TEST (docs/modding.md, Quick testing): the same start, the
+  // editor left closed; MODS again when the main menu comes back.
+  mods_menu_test_start() = [this](const std::string& mod, const std::string& world, int32_t number, std::string* why) {
+    const int32_t index = mission_dir_index(world.c_str());
+    if (index < 0) return *why = "no world " + world, false;
+    mod_test_reload();  // the mechs' definitions read again (upgrades/mods/mod_test.h)
+    Launch l;
+    // The operation the world is of, for the debriefing's title (c1..c3 1..3, c4 and c4b 4; any other world 4, as
+    // a mod's campaign counts it: mod_campaign.cpp).
+    l.index = index, l.number = number, l.type = 1, l.op = index < 3 ? index + 1 : 4;
+    const Handle real = peek32(0x60861c);
+    set_launch(l);
+    mods_edit_begin(
+        mod,
+        [this, real] {
+          launch_.active = false;
+          poke32(0x60861c, real);
+        },
+        false);
+    replace_state(6);
+    return true;
+  };
   patch12::provide_files();  // and 1.2's added maps beside it, in the write dir
 }
 
 GameEngine::~GameEngine() {
+  game_box() = nullptr;  // ours (upgrades/game_boxes.h): the game's box is gone with the engine
   if (force_) program_force_feedback(nullptr), force_.reset();  // an engine gone without the app's stop: its calls off
   delete_screens();
   if (g_engine == this) {
@@ -382,7 +434,7 @@ uint32_t GameEngine::message_dll_load(const char* name) {
   patch12::messages(dll_);
   // Ours: the mods' strings.txt over the table (docs/modding.md).
   if (!zutl::mounts().mods.empty())
-    for (const std::string& line : mods_apply_strings(dll_.text, dll_.ids)) std::printf("mw3: %s\n", line.c_str());
+    for (const std::string& line : mods_apply_strings(dll_.text, dll_.ids, &dll_.ids)) std::printf("mw3: %s\n", line.c_str());
   zutl::install_messages(&dll_);
   return 1;
 }
@@ -401,7 +453,7 @@ const char* GameEngine::message_format_n(int32_t id, int32_t n) {
 // a button answers; FastMenu off meanwhile. The text is formatted by the
 // callers (0x00575ff0 with their arguments); the answer is the box's (IDOK 1,
 // IDCANCEL 2, IDYES 6 ...).
-uint32_t GameEngine::game_message_box(int32_t style, int32_t caption, const std::string& text) {
+uint32_t GameEngine::game_message_box(int32_t style, int32_t caption, const std::string& text, const char* caption_words) {
   video_begin_3d();
   video_end_3d();
   const int32_t fast = exchange_fast_menu(0);
@@ -409,8 +461,18 @@ uint32_t GameEngine::game_message_box(int32_t style, int32_t caption, const std:
   {
     ztwod::MessageBox box("dlgMessage.zrd", "MESSAGEBOX", false);
     box_ = &box;
-    const char* cap = message(caption);
+    const char* cap = caption_words ? caption_words : message(caption);  // ours: a caption of our own words
+    // Ours: the box's words go to the log too (players' logs; W11).
+    std::string one;
+    for (char c : text) {
+      if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+      if (c != ' ' || (!one.empty() && one.back() != ' ')) one += c;
+    }
+    while (!one.empty() && one.back() == ' ') one.pop_back();
+    std::printf("mw3: message box: [%s] %s\n", cap ? cap : "", one.c_str());
+    std::fflush(stdout);
     r = box.run(text.c_str(), cap ? cap : "", static_cast<uint32_t>(style));
+    std::printf("mw3: message box answered %d\n", r);
     box_ = nullptr;
   }
   exchange_fast_menu(fast & 0xff);
@@ -448,6 +510,14 @@ uint32_t GameEngine::message_box3(int32_t a, int32_t caption, int32_t text, cons
     return on_message_box(a, caption, text);
   }
   return game_message_box(a, caption, zutl::format_message(text, {s1, s2, s3}));
+}
+
+uint32_t GameEngine::message_box_words(int32_t a, const std::string& caption, const std::string& text) {
+  if (on_message_box) {
+    last_box_text = text;
+    return on_message_box(a, 0, 0);
+  }
+  return game_message_box(a, 0, text, caption.c_str());
 }
 
 uint32_t GameEngine::message_box_plain(int32_t a, int32_t caption, const std::string& text) {
@@ -611,6 +681,7 @@ void GameEngine::clock_init() { ztimer::init(); }
 // chosen; the software renderer's modes are not offered (render.md).
 int32_t GameEngine::video_open(uint32_t, int32_t hw, int32_t, int32_t) {
   poke32(0x72f348, hw ? 1u : 0u);
+  zmod::strips() = hw != 0;  // 0x00579e79
   if (!hw) unported("0x00579c60 software", {});
   video_opened_ = true;  // [0x0080271c]
   const Rect& d = mech3::display();
@@ -623,6 +694,7 @@ int32_t GameEngine::video_open(uint32_t, int32_t hw, int32_t, int32_t) {
 // for a mode): the 16-bit buffer, Render3D's viewport, the window's shape.
 void GameEngine::screen_size(int32_t w, int32_t h, int32_t frame_w, int32_t frame_h) {
   if (p_.screen) p_.screen->cancel_overlay_16();
+  if (!quiet) std::printf("mw3: screen: frame %d x %d, canvas %d x %d\n", frame_w > 0 ? frame_w : w, frame_h > 0 ? frame_h : h, w, h);  // ours (tests)
   width_ = w, height_ = h;
   // FIX (B): on a canvas (2D smaller than the frame) the dialogs' 640x480 frame centred on it.
   const bool canvas = frame_w > 0 && (frame_w != w || frame_h != h) && w >= 640 && h >= 480;
@@ -804,7 +876,7 @@ void GameEngine::video_clear_b(Handle) {
   if (!p_.render) return;
   uint8_t r, g, b;
   zmod::fog_frame_fill(&r, &g, &b);
-  p_.render->clear(zfix::options().bugs, r, g, b);
+  p_.render->clear(zfix::options().fixed, r, g, b);
 }
 // 0x00579840: the cursor's on/off, the old state back. The menus draw their own.
 uint32_t GameEngine::video_show_cursor(uint32_t on) {
@@ -912,7 +984,10 @@ void GameEngine::hud_update() {
   if (MessagePanel* p = message_panel()) p->update(dt);  // [0x00603d7c] vt+0x24: its text
   pocket_draw(dt);                                       // 0x0046a410
 }
-void GameEngine::hud_draw() { editor_frame(); }
+void GameEngine::hud_draw() {
+  mods_edit_frame();  // ours: MODS's EDIT opens the editor on the mission's first frame
+  editor_frame();
+}
 Handle GameEngine::pilot_hud(Handle data) { return handle_of(program_pilot_hud(object_of(data))); }
 void GameEngine::hud_static(Handle hud, float dt) { program_hud_static(object_of(hud), dt); }
 bool program_intensity_flag() { return options().intensity_flag[0] != 0; }
@@ -1092,4 +1167,8 @@ void GameEngine::shadows_reset() { shade_apply(); }  // 0x004e6900: the option a
 namespace mech3 {
 // W45: a network game in play runs on while the window is inactive (FIX (A)).
 bool GameEngine::run_while_inactive() { return program_net_running(); }
+void program_app_pause(bool on) {
+  if (Mech3App* a = app_if_any()) on ? a->deactivate() : a->activate();
+}
+
 }  // namespace mech3

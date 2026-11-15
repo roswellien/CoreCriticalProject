@@ -24,8 +24,10 @@
 #include "renderer/headlight_spotlight.hpp"
 #include "renderer/material_normals.hpp"
 #include "renderer/mech_headlights.hpp"
+#include "gamez/zmodel/gmod_geometry.h"
 #include "renderer/native_surface_identity.hpp"
 #include <filesystem>
+#include <functional>
 #include <fstream>
 
 namespace mw34::materials {
@@ -254,6 +256,26 @@ sanitize_prepared_assets(sdlfe::CoreCriticalAssets assets) {
   return assets;
 }
 
+class FrameRenderer;
+} // namespace
+
+struct RigidCaptureSeal {
+  private:
+    friend FrameRenderer;
+    static std::shared_ptr<const CapturedNativeRigid> seal(
+        std::shared_ptr<const cc::geometry::Resource> resource,
+        std::vector<CapturedNativeRigidRange> ranges,
+        std::weak_ptr<const int> renderer_owner,
+        std::uint64_t world_source_epoch,
+        std::uint64_t group_load_epoch) {
+      return std::shared_ptr<const CapturedNativeRigid>(new CapturedNativeRigid(
+          std::move(resource), std::move(ranges), std::move(renderer_owner),
+          world_source_epoch, group_load_epoch));
+    }
+};
+
+namespace {
+
 class FrameRenderer final : public VulkanFrameRenderer {
 public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
@@ -327,6 +349,20 @@ public:
   }
 
   bool ok() const override { return true; }
+  void attach_editor(sdlfe::EditorUiSource* source) override {
+    require_editor_producer();
+    if (source == editor_source_) return;
+    detach_editor();
+    editor_source_ = source;
+  }
+  void detach_editor() override {
+    require_editor_producer();
+    if (!editor_source_ && !editor_present_active_) return;
+    drain(); // Completes retained light packets, then joins all renderer jobs.
+    renderer_->detach_editor();
+    editor_present_active_ = false;
+    editor_source_ = nullptr;
+  }
   std::uint64_t presentation_count() const override {
     if (worker_)
       worker_->drain();
@@ -553,6 +589,13 @@ public:
   }
 
   ~FrameRenderer() override {
+    try {
+      detach_editor();
+    } catch (...) {
+      std::fprintf(stderr, "Core editor detach failed during renderer shutdown\n");
+      std::fflush(stderr);
+      std::_Exit(3);
+    }
     try {
       drain();
     } catch (const std::exception &error) {
@@ -1272,7 +1315,20 @@ private:
     return mw34::sun::display_ambient(lighting_, campaign_enabled_, display_hdr_);
   }
 
+  void require_editor_producer() const {
+    if (SDL_GetCurrentThreadID() != editor_thread_)
+      throw std::logic_error("Core editor routing requires its producer thread");
+  }
+
   void initialize_renderer() {
+    if (renderer_) {
+      // A normal scene reset retires the old device's owner on the producer.
+      // Never turn a failed editor/device lifetime into automatic recovery.
+      if (renderer_->editor_gpu_statistics().failed)
+        throw std::runtime_error("Core editor failure prevents renderer reset");
+      renderer_->detach_editor();
+      editor_present_active_ = false;
+    }
     display_hdr_ = window_hdr_enabled();
     auto source = native_wsi_ ? sdl_surface(window_, window_state_tracker_)
                               : vk::Renderer::WindowSurface{};
@@ -1413,6 +1469,9 @@ private:
     capture_path_.clear();
   }
 
+  sdlfe::EditorUiSource *editor_source_{};
+  const SDL_ThreadID editor_thread_ = SDL_GetCurrentThreadID();
+  bool editor_present_active_{};
   SDL_Window *window_;
   std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
       window_state_tracker_;
@@ -1596,6 +1655,173 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+struct RigidCaptureTestAccess {
+    static FrameRenderer &impl(VulkanFrameRenderer &renderer) {
+        auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+        if (!typed)
+            throw std::runtime_error("Renderer is not a FrameRenderer");
+        return *typed;
+    }
+    static std::shared_ptr<const CapturedNativeRigid> capture(
+        VulkanFrameRenderer &renderer, const zcls::Node &node,
+        const ::platform::ModelDrawContext &context,
+        const zmod::RigidGeometryEligibility &eligibility, std::size_t maximum_owned_bytes) {
+        return impl(renderer).capture_original_rigid(
+            node, context, eligibility, maximum_owned_bytes);
+    }
+    static bool validate(VulkanFrameRenderer &renderer, const CapturedNativeRigid &captured) {
+        return impl(renderer).validate_captured_original_rigid(captured);
+    }
+    static std::vector<NativeGroundRangeAdmission> baseline_admissions(
+        VulkanFrameRenderer &renderer,
+        const std::shared_ptr<const cc::geometry::Resource> &resource,
+        const ::platform::ModelDrawContext &context,
+        const std::vector<cc::geometry::Material> &materials) {
+        return impl(renderer).native_geometry_admissions(resource, context, materials);
+    }
+    static std::shared_ptr<mw34::materials::SurfaceDecodedBudget> surface_budget(
+        VulkanFrameRenderer &renderer) {
+        return impl(renderer).prepared_.surface_budget();
+    }
+    static void set_mission_and_environment(
+        VulkanFrameRenderer &renderer, std::string mission_id,
+        std::shared_ptr<const ::platform::prepared::EnvironmentSelection> environment) {
+        auto &r = impl(renderer);
+        r.current_mission_id_ = std::move(mission_id);
+        r.environment_ = std::move(environment);
+    }
+    static void seed_authored_normal(VulkanFrameRenderer &renderer,
+                                     const mw34::materials::SurfaceKey &key,
+                                     mw34::materials::WorldNormalCache::TextureRecord record) {
+        auto &r = impl(renderer);
+        r.surface_normals_.loaded = true;
+        const int idx = int(r.surface_normals_.cache.textures.size());
+        r.surface_normals_.cache.textures.push_back(std::move(record));
+        r.surface_normals_.cache.register_authored(key, idx);
+    }
+    static void seed_authored_no_normal(VulkanFrameRenderer &renderer,
+                                        const mw34::materials::SurfaceKey &key) {
+        auto &r = impl(renderer);
+        r.surface_normals_.loaded = true;
+        r.surface_normals_.cache.register_authored(key, -1);
+    }
+    static void mutate_normal_record(VulkanFrameRenderer &renderer, int index,
+                                     std::uint32_t width, std::uint32_t height,
+                                     std::uint64_t hash,
+                                     std::vector<std::uint32_t> pixels) {
+        auto &rec = impl(renderer).surface_normals_.cache.textures.at(std::size_t(index));
+        rec.width = width;
+        rec.height = height;
+        rec.hash = hash;
+        rec.pixels32 = std::move(pixels);
+    }
+    static void advance_group_epoch(VulkanFrameRenderer &renderer) {
+        ++impl(renderer).group_load_epoch_;
+    }
+    static std::uint64_t group_epoch(const VulkanFrameRenderer &renderer) {
+        return impl(const_cast<VulkanFrameRenderer &>(renderer)).group_load_epoch_;
+    }
+    static void set_slot_surface_key(VulkanFrameRenderer &renderer, int handle,
+                                     const mw34::materials::SurfaceKey &key) {
+        impl(renderer).textures_.at(std::size_t(handle)).surface_key = key;
+    }
+    static void set_slot_version(VulkanFrameRenderer &renderer, int handle,
+                                 std::uint64_t version) {
+        impl(renderer).textures_.at(std::size_t(handle)).version = version;
+    }
+    static void set_slot_group_epoch(VulkanFrameRenderer &renderer, int handle,
+                                     std::uint64_t epoch) {
+        impl(renderer).textures_.at(std::size_t(handle)).group_load_epoch = epoch;
+    }
+    static void set_slot_pixels(VulkanFrameRenderer &renderer, int handle,
+                                unsigned width, unsigned height,
+                                std::vector<std::uint32_t> pixels) {
+        auto &slot = impl(renderer).textures_.at(std::size_t(handle));
+        slot.width = width;
+        slot.height = height;
+        slot.pixels = std::move(pixels);
+    }
+};
+
+std::shared_ptr<const CapturedNativeRigid> RigidCaptureTestHook::capture_original_rigid(
+    VulkanFrameRenderer &renderer, const zcls::Node &node,
+    const ::platform::ModelDrawContext &context, const zmod::RigidGeometryEligibility &eligibility,
+    std::size_t maximum_owned_bytes) {
+    return RigidCaptureTestAccess::capture(
+        renderer, node, context, eligibility, maximum_owned_bytes);
+}
+
+bool RigidCaptureTestHook::validate_captured_original_rigid(
+    VulkanFrameRenderer &renderer, const CapturedNativeRigid &captured) {
+    return RigidCaptureTestAccess::validate(renderer, captured);
+}
+
+std::vector<NativeGroundRangeAdmission> RigidCaptureTestHook::native_geometry_admissions(
+    VulkanFrameRenderer &renderer, const std::shared_ptr<const cc::geometry::Resource> &resource,
+    const ::platform::ModelDrawContext &context,
+    const std::vector<cc::geometry::Material> &materials) {
+    return RigidCaptureTestAccess::baseline_admissions(renderer, resource, context, materials);
+}
+
+std::shared_ptr<mw34::materials::SurfaceDecodedBudget> RigidCaptureTestHook::surface_budget(
+    VulkanFrameRenderer &renderer) {
+    return RigidCaptureTestAccess::surface_budget(renderer);
+}
+
+void RigidCaptureTestHook::set_mission_and_environment(
+    VulkanFrameRenderer &renderer, std::string mission_id,
+    std::shared_ptr<const ::platform::prepared::EnvironmentSelection> environment) {
+    RigidCaptureTestAccess::set_mission_and_environment(
+        renderer, std::move(mission_id), std::move(environment));
+}
+
+void RigidCaptureTestHook::seed_authored_normal(
+    VulkanFrameRenderer &renderer, const mw34::materials::SurfaceKey &key,
+    mw34::materials::WorldNormalCache::TextureRecord record) {
+    RigidCaptureTestAccess::seed_authored_normal(renderer, key, std::move(record));
+}
+
+void RigidCaptureTestHook::seed_authored_no_normal(
+    VulkanFrameRenderer &renderer, const mw34::materials::SurfaceKey &key) {
+    RigidCaptureTestAccess::seed_authored_no_normal(renderer, key);
+}
+
+void RigidCaptureTestHook::mutate_normal_record(
+    VulkanFrameRenderer &renderer, int index, std::uint32_t width, std::uint32_t height,
+    std::uint64_t hash, std::vector<std::uint32_t> pixels) {
+    RigidCaptureTestAccess::mutate_normal_record(
+        renderer, index, width, height, hash, std::move(pixels));
+}
+
+void RigidCaptureTestHook::advance_group_epoch(VulkanFrameRenderer &renderer) {
+    RigidCaptureTestAccess::advance_group_epoch(renderer);
+}
+
+std::uint64_t RigidCaptureTestHook::group_epoch(const VulkanFrameRenderer &renderer) {
+    return RigidCaptureTestAccess::group_epoch(renderer);
+}
+
+void RigidCaptureTestHook::set_slot_surface_key(
+    VulkanFrameRenderer &renderer, int handle, const mw34::materials::SurfaceKey &key) {
+    RigidCaptureTestAccess::set_slot_surface_key(renderer, handle, key);
+}
+
+void RigidCaptureTestHook::set_slot_version(
+    VulkanFrameRenderer &renderer, int handle, std::uint64_t version) {
+    RigidCaptureTestAccess::set_slot_version(renderer, handle, version);
+}
+
+void RigidCaptureTestHook::set_slot_group_epoch(
+    VulkanFrameRenderer &renderer, int handle, std::uint64_t epoch) {
+    RigidCaptureTestAccess::set_slot_group_epoch(renderer, handle, epoch);
+}
+
+void RigidCaptureTestHook::set_slot_pixels(
+    VulkanFrameRenderer &renderer, int handle, unsigned width, unsigned height,
+    std::vector<std::uint32_t> pixels) {
+    RigidCaptureTestAccess::set_slot_pixels(renderer, handle, width, height, std::move(pixels));
 }
 } // namespace testing
 

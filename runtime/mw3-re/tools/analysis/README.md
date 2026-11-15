@@ -1,7 +1,11 @@
 # Analysis tools
 
 Scripts used to map `Mech3.exe` 1.2. They write into `analysis-output/`
-(git-ignored) and are run from there. REA needs the Node 24 install noted in
+(git-ignored) or to a path given on the command line, never into the folder
+they happen to be run from: `vtscan.py`, `filemap.py` and `modmap.py` find
+`analysis-output/` themselves and take the output file as an optional
+argument; the others take their output path or write to `analysis-output/`
+or `build/`. REA needs the Node 24 install noted in
 CLAUDE.md; Ghidra headless needs `JAVA_HOME` as noted there.
 
 Decompiling a few more functions with `CreateAndDecompile.java`:
@@ -39,6 +43,7 @@ analyzeHeadless analysis-output/ghidra-project mech3 \
 | `typesfull.py`, `fpconsts.py` | Inputs for `../ghidra/ApplyTypes.java`: `docs/types.json` with placeholder fields, and the float constants in `.rdata` (`docs/structs.md`). |
 | `../ghidra/ApplyTypes.java` | Ghidra headless post-script: applies the structs, names, methods and signatures, then writes typed decompilations to `decomp-typed/`. |
 | `tex2png.py <library.zbd> <outdir> [filter]` | Exports textures from `rimage.zbd` / `rmechtex*.zbd` as PNG (`docs/textures.md`). |
+| `dlgdump.py <exe> [id ...]` | Prints the exe's dialog templates: each control's class, id, text, place and style (`docs/editor.md`). |
 | `mech2obj.py <mech> <outdir>` | Exports a mech from `mechlib.zbd` as OBJ + MTL + PNG textures, plus a CPU-rendered preview (`docs/mechlib.md`). |
 | `keycheck.py` | Reader keys the exe looks up that no data file contains: optional, dead or misspelt (`docs/discoveries.md`). |
 | `isols.py`, `isoget.py` | List or extract an ISO 9660 image (the disc), without mounting it. |
@@ -46,7 +51,7 @@ analyzeHeadless analysis-output/ghidra-project mech3 \
 | `../ghidra/DumpFunctions.java <outdir> <label> [decompile]` | Ghidra headless post-script for another exe (Pirate's Moon): after the analysis, functions at the data sections' code pointers (as `vtscan.py`), then each function's facts to `<outdir>/functions.jsonl` and, with `decompile`, its pseudocode (`pirates-moon.md`, The function diff). |
 | `pmdiff.py` | Pairs every PM function with its MW3 1.2 twin (bytes, strings, calls, link order, structure) and sorts them identical / changed / new / MW3 only, into `analysis-output/pm-diff/` (`pairs.json`, `report.txt`) and `pm-func2file.json`. |
 | `pmdata.py [mw3_dir] [pm_dir] [-v]` | PM's `zbd/` against MW3 1.2's, file by file and zArchive entry by entry. |
-| `x87.py <start> <end> [reg=name ...]` | Traces a straight-line asm range's x87 code into C expressions in the exe's evaluation order (Ghidra's printed sums are not; a port that must match bit for bit needs the real order). Run from the repo root. |
+| `x87.py <start> <end> [<start> <end> ...] [reg=name ...]` | Traces asm ranges' x87 code into C expressions in the exe's evaluation order (Ghidra's printed sums are not; a port that must match bit for bit needs the real order), each store marked `f(...)` where it rounds to a float, and a stored slot read back as stored: what is outside an `f()` stays on the x87, a double at the reference runtime's 53 bits (docs/ai.md 17.4b). Several ranges are one path through branches, the stack carried over. Run from the repo root. |
 
 `objdump -d --x86-asm-syntax=intel Mech3.exe` (Apple's, from Xcode) gives the
 whole disassembly in a few seconds; the analysis keeps it as `mech3.asm`.

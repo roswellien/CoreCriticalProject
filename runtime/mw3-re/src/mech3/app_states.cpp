@@ -1,6 +1,17 @@
+#include "mech3/mainmenu.h"
+#include "mech3/mod_campaign.h"
+#include "mech3/mods_menu.h"
+#include "upgrades/editor/mods_edit.h"
+#include "upgrades/game_boxes.h"
+#include "upgrades/mods/entry_pilots.h"
+#include "upgrades/mods/entry_run.h"
+#include "upgrades/mods/ia_mods_menu.h"
+#include "mech3/options_menu.h"
 #include "mech3/app_states.h"
 #include "gamez/zutil/zfix.h"
 #include "mech3/app_shadows.h"
+
+#include <cstdio>
 
 #include "crt/msvc_math.h"
 #include "gamez/zvideo/zvid_format.h"
@@ -93,7 +104,8 @@ void AttractState::leave() {
 
 // Mech3.exe 1.2 @ 0x0047a9b0: the movie whatever the -nofmv setting.
 bool WinMovieState::enter() {
-  movie_ = start_movie(e(), "c4win");
+  const char* end = e().campaign_end_movie();  // ours: "c4win", or a mod campaign's
+  movie_ = end ? start_movie(e(), end) : 0;
   return true;
 }
 
@@ -307,6 +319,7 @@ void CoreState::start_mission() {
   en.input_poll(0);
   en.input_reset();
   en.input_center_mouse();
+  mods_edit_mission_started();  // ours: the first seconds' line where the editor can be reached (mods_edit.h)
   if (en.hw_card_flag() != 0) {
     en.camera_set_5ea53c(0);
     en.camera_set_hse_test(0);  // the objects' hidden-surface test off with a card
@@ -954,15 +967,49 @@ void delete_object(Engine& en, uint32_t global) {
 // flags press a button at once.
 bool MainState::enter() {
   Engine& en = e();
+  if (en.take_menu_reshape()) en.set_screen_mode(en.menu_vmode());  // ours: a mode picked in the menus (menu_mode_picked)
   ShellState::enter();
   screen_ = en.construct(0x486260, {addr()});  // new(0x12c1c)
   en.screen_refresh(screen_);
   for (const auto& m : kMenus) en.poke32(m.global, en.construct(m.ctor, {}));
+  if (options_upgrades_page()) options_upgrades_state() = en.construct(kUpgradesStateCtor, {});  // ours
+  if (mods_menu_page()) mods_menu_state() = en.construct(kModsStateCtor, {});  // ours
   en.twod_reset(en.peek32(0x609854));
   reset_idle();
+  // Ours (upgrades/game_boxes.h, W16): the original's own message boxes in the game's box from here on (the
+  // engine clears it at its end), and the first start's notes, once, in it.
+  game_box() = [&en](const std::string& text, const std::string& caption, uint32_t style) {
+    return static_cast<int32_t>(en.message_box_words(static_cast<int32_t>(style & 0xf), caption, text));
+  };
+  if (!first_start_notes().empty()) {
+    const std::string notes = first_start_notes();
+    first_start_notes().clear();
+    en.message_box_words(0, "First start", notes);
+  }
   Mech3App& ap = a();
-  if (ap.multiplayer() || en.network_lobby_active()) en.vcall(screen_ + kButtonMulti, 0x30, {});
+  const bool back_to_multi = ap.multiplayer() || en.network_lobby_active();
+  if (back_to_multi) en.vcall(screen_ + kButtonMulti, 0x30, {});
+  entry_run().opened = back_to_multi && entry_run().screen == EntryRun::kMultiplayer;  // ours (upgrades/mods/entry_run.h)
+  // Ours (upgrades/mods/ia_mods.h): the pilot a start into Instant Action or multiplayer was given, picked now
+  // the pilots are loaded.
+  if (!ia_start_pilot().empty()) {
+    const bool mp = mp_open_once() || entry_run().screen == EntryRun::kMultiplayer;
+    const char* whose = mp ? "multiplayer" : "Instant Action";
+    Pilot* p = find_pilot(ia_start_pilot().c_str());
+    std::string why;
+    if (!p && entry_is_main_pilot(ia_start_pilot())) p = entry_bring_pilot(ia_start_pilot(), &why);  // the main menu's, brought across
+    if (!why.empty()) std::printf("mw3: %s's pilot %s could not be brought: %s\n", whose, ia_start_pilot().c_str(), why.c_str());
+    std::printf("mw3: %s's pilot %s: %s\n", whose, ia_start_pilot().c_str(), p ? "picked" : "not there, the pilot screen");
+    ia_start_pilot().clear();
+    if (p) current_pilot() = p;
+    if (p && mp) mp_pilot_once() = true;
+    else if (p) ap.set_reopen_instant_action(1, 1);
+  }
+  // Ours (upgrades/mods/ia_mods.h): a plain start on the multiplayer screen (ALL OFF inside its entry).
+  if (mp_open_once() && !back_to_multi) en.vcall(screen_ + kButtonMulti, 0x30, {});
+  mp_open_once() = false;
   if (ap.reopen_instant_action()) {
+    entry_run().opened = entry_run().screen == EntryRun::kInstantAction;
     en.vcall(screen_ + kButtonInstantAction, 0x30, {});
     ap.set_reopen_instant_action(0, ap.instant_action_arg());
   } else if (ap.reopen_training()) {
@@ -972,6 +1019,14 @@ bool MainState::enter() {
     ap.reopen_credits() = 0;
     en.vcall(screen_ + kButtonCredits, 0x30, {});
   }
+  // Ours: a mission entered by MODS's EDIT is over however it ended; MODS
+  // again when the editor's exit asked for it.
+  mods_edit_end();
+  if (mods_menu_reopen()) {
+    mods_menu_reopen() = false;
+    // Inside an entry opened for the editor (entry_run.h, kEdit) MODS is not shown: the update leaves the entry.
+    if (const Handle m = entry_run().screen == EntryRun::kEdit ? 0 : mods_menu_state()) en.push_state(m, 0);
+  }
   return true;
 }
 
@@ -979,6 +1034,58 @@ bool MainState::enter() {
 // hotkeys press the screen's buttons.
 bool MainState::update() {
   Engine& en = e();
+  // Ours (upgrades/mods/entry_run.h): inside a MODS entry the main menu only
+  // opens the entry's screen, and that screen's BACK (the menu on top again)
+  // leaves; the entry's pilots stay up, the main menu's are never loaded.
+  if (EntryRun& run = entry_run(); run.screen == EntryRun::kTest || run.screen == EntryRun::kEdit) {
+    // TEST through an entry: the mission at once; then (the main menu up again: mods_edit's reopen flag
+    // has opened MODS in its test mode from enter) MODS's BACK leaves.
+    const bool r = ShellState::update();
+    if (run.left) return r;
+    if (!run.started) {
+      run.started = true;
+      std::string why = "the mission cannot be started here";
+      const ModsEditStart& start = run.screen == EntryRun::kEdit ? mods_menu_edit_start() : mods_menu_test_start();
+      if (!start || !start(run.mod, run.world, run.number, &why)) {
+        run.said = run.world + " mission " + std::to_string(run.number) + " cannot be played: " + why;
+        std::printf("mw3: entry %s: %s\n", run.id.c_str(), run.said.c_str());
+        if (const Handle m = run.screen == EntryRun::kTest ? mods_menu_state() : 0) en.push_state(m, 0);  // the test screen, saying so
+        else run.left = true, run.leave ? run.leave() : void();
+      }
+    } else {
+      run.left = true;
+      if (run.leave) run.leave();
+    }
+    return r;
+  }
+  if (EntryRun& run = entry_run(); run.screen != EntryRun::kNone) {
+    const bool r = ShellState::update();
+    if (run.left) return r;
+    std::string why;
+    if (!run.opened && run.screen == EntryRun::kPlay && !run.campaign.empty()) {
+      const ModCampaign* found = nullptr;
+      for (const ModCampaign& c : mod_campaigns())
+        if (c.mod == run.mod && c.id == run.campaign) found = &c;
+      why = "its campaign is not among the mounted mods'";
+      if (found && campaign_enter(*found, &why)) why.clear();
+      if (!why.empty()) std::printf("mw3: entry %s cannot be played: %s\n", run.id.c_str(), why.c_str());
+    }
+    if (run.opened || !why.empty()) {
+      run.left = true;
+      if (run.leave) run.leave();
+    } else {
+      run.opened = true;
+      if (run.screen == EntryRun::kInstantAction) en.vcall(screen_ + kButtonInstantAction, 0x30, {});
+      else if (run.screen == EntryRun::kMultiplayer) en.vcall(screen_ + kButtonMulti, 0x30, {});
+      else en.push_state(en.peek32(menu_global(MainMenuButton::kNewCampaign)), 0);
+    }
+    return r;
+  }
+  // Ours: the main menu up again lets a custom campaign's pilots go (MODS's
+  // ENTER). Not on a resume: the Campaign State's pop on its way to the
+  // mission and ENTER's pop of MODS resume it in the same batch as the next
+  // command, so it never updates between.
+  if (entered_campaign()) campaign_leave();
   const bool r = ShellState::update();
   idle_ = idle_ - en.frame_dt();
   const Handle s = screen_;
@@ -1009,6 +1116,10 @@ void MainState::leave() {
     delete_object(en, m.global);
     en.poke32(m.global, 0);
   }
+  if (const Handle u = options_upgrades_state()) en.vcall(u, 0x00, {1}), options_upgrades_state() = 0;  // ours
+  if (const Handle m = mods_menu_state()) en.vcall(m, 0x00, {1}), mods_menu_state() = 0;  // ours
+  if (const Handle m = ia_mods_state()) en.vcall(m, 0x00, {1}), ia_mods_state() = 0;  // ours
+  if (const Handle m = mp_mods_state()) en.vcall(m, 0x00, {1}), mp_mods_state() = 0;  // ours
   if (save_pilots_) en.pilot_delete("mechlab");
 }
 
@@ -1057,6 +1168,7 @@ void PauseState::leave() {
   delete_object(en, 0x609868);
   delete_object(en, 0x60986c);
   delete_object(en, 0x609870);
+  if (const Handle u = options_upgrades_state()) en.vcall(u, 0x00, {1}), options_upgrades_state() = 0;  // ours
   screen_ = 0;
   en.poke32(0x609868, 0);
   en.poke32(0x60986c, 0);
@@ -1123,7 +1235,8 @@ bool LoadState::update() {
   en.missions_reset(0x6098d0);
   char name[256];
   static const char* const kNames[] = {"brief_%s%d", "brief_ia%s%d", "brief_mp%s%d", "brief_%s%d"};
-  if (type >= 1 && type <= 4) en.format(kNames[type - 1], {dir, mission}, name, sizeof name);
+  if (const char* b = en.campaign_briefing()) std::snprintf(name, sizeof name, "%s", b);  // ours
+  else if (type >= 1 && type <= 4) en.format(kNames[type - 1], {dir, mission}, name, sizeof name);
   else en.format("default", {}, name, sizeof name);
   en.sounds_nop(en.app_sounds(), 0);  // an empty function, called with a stray argument
   if (en.app_flag_1c3() == 0) en.voice_start(name);
@@ -1181,7 +1294,7 @@ bool WinState::enter() {
   en.twod_set_cursor(0);
   const int32_t type = static_cast<int32_t>(en.vcall(en.field32(en.pilot(), 0x6c), 0x2c, {}));
   if (type == 1) {
-    if (!lost && clean) campaign_won_ = (campaign == 4 && mission == 6) ? 1 : 0;
+    if (!lost && clean) campaign_won_ = en.campaign_ends_at(campaign, mission) ? 1 : 0;  // Op 4 Mission 6 (ours: a hook)
     else en.mission_results(1, 1);
   }
   screen_ = en.construct(0x47b430, {addr(), campaign, mission, addr() + 0x10});  // new(0x13bf4)

@@ -1,5 +1,6 @@
 #include <string>
 #include "frontend/sdl/sdl_render3d.h"
+#include "frontend/sdl/editor_imgui.h"
 #include "frontend/sdl/sdl_child.h"
 
 #include <algorithm>
@@ -130,6 +131,14 @@ SdlRender3D::SdlRender3D(SDL_GPUDevice* device, SDL_Window* window) : dev_(devic
   ok_ = vs_ && fs_tex_ && fs_flat_;
   if (!ok_) std::fprintf(stderr, "SdlRender3D shaders: %s\n", SDL_GetError());
 }
+
+void SdlRender3D::attach_editor(EditorUiSource* source) {
+  if (SDL_GetCurrentThreadID() != editor_thread_)
+    throw std::logic_error("SDL editor attachment requires its producer thread");
+  editor_source_ = source;
+}
+
+void SdlRender3D::detach_editor() { attach_editor(nullptr); }
 
 SdlRender3D::~SdlRender3D() {
   if (last_frame_) SDL_WaitForGPUFences(dev_, true, &last_frame_, 1), SDL_ReleaseGPUFence(dev_, last_frame_);
@@ -542,6 +551,14 @@ void SdlRender3D::present() {
     }
     bi.filter = SDL_GPU_FILTER_LINEAR;
     SDL_BlitGPUTexture(cmd, &bi);
+    // Typed host routing takes one frame; legacy overlay users stay supported
+    // when no typed source is attached. Captures above never enter either path.
+    if (editor_source_) {
+      if (auto* editor = editor_source_->acquire_if_active())
+        editor->overlay(cmd, sc, w, h);
+    } else if (overlay) {
+      overlay(cmd, sc, w, h);
+    }
     SDL_SubmitGPUCommandBuffer(cmd);
     mark_ready();  // a frame on the screen: the launcher may hide (sdl_child.h)
     return;

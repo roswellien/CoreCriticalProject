@@ -116,6 +116,15 @@ public:
   static bool requested(bool configured = false) { return configured; }
   bool active() const { return device_ != VK_NULL_HANDLE; }
   VkImage image() const { return image_; }
+  unsigned presentation_image_count() const {
+    if (!swap_)
+      throw std::runtime_error("DXGI presentation count requires an actual swapchain");
+    DXGI_SWAP_CHAIN_DESC1 description{};
+    check_hr(swap_->GetDesc1(&description), "query actual presentation image count");
+    if (description.BufferCount < 2)
+      throw std::runtime_error("DXGI swapchain has an invalid presentation image count");
+    return description.BufferCount;
+  }
   void attach(VkDevice device, const VkPhysicalDeviceIDProperties &identity,
               unsigned family, PFN_vkGetDeviceProcAddr get,
               VkExtent3D maximum_extent) {

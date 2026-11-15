@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mech3/lance_armor.h"
@@ -60,6 +61,16 @@ class Engine : public zgame::AppHooks {
   // picked in the menus applies to them at the next start.
   int32_t menu_vmode();
   int32_t menu_vmode_ = -1;
+  // Ours: an ACCEPT that may change the menus' mode (GRAPHICS' resolution,
+  // UPGRADES' wide menus). From the main menu the menus are made again in the
+  // new shape at once: the screens above the main menu's are popped and its
+  // state replaced by itself (as after a game; MainState::enter takes the flag
+  // and sets the mode between the old screens, freed by its leave, and the new).
+  // From a mission's pause the screens stay as made: the menus after the
+  // mission take it (resolution.md section 12).
+  void menu_mode_picked();
+  bool take_menu_reshape() { return std::exchange(menu_reshape_, false); }
+  bool menu_reshape_ = false;
   virtual float mouse_accel_x();
   virtual float mouse_accel_y();
 
@@ -81,6 +92,7 @@ class Engine : public zgame::AppHooks {
   virtual void set_use_joystick(int32_t on);           // 0x0040d070
   virtual void set_fast_menu(int32_t on);              // 0x0040ce90
   virtual int32_t fast_menu();                         // 0x0040cec0
+  virtual void widen_before_bake(MenuScreen*) {}       // ours: the wide layout ahead of a FastMenu bake (app_menus.cpp)
   virtual int32_t display_width();                     // 0x0040d760
   virtual int32_t display_height();                    // 0x0040d770
   virtual void options_apply_all();                    // 0x0040cb30
@@ -215,6 +227,11 @@ class Engine : public zgame::AppHooks {
   // Ours: the game's message box with our own text (no message id; the
   // lobby's mods check). The answer as message_box's.
   virtual uint32_t message_box_plain(int32_t a, int32_t caption, const std::string& text) {
+    (void)a, (void)caption, (void)text;
+    return 1;
+  }
+  // Ours: the same with a caption of our own words (Instant Action's pilot offer, upgrades/mods/ia_mods_menu.h).
+  virtual uint32_t message_box_words(int32_t a, const std::string& caption, const std::string& text) {
     (void)a, (void)caption, (void)text;
     return 1;
   }
@@ -685,6 +702,16 @@ class Engine : public zgame::AppHooks {
   // Our addition: the Load state is entered (its 0x004091e0 reads the
   // pilot's game first). The program fills its game from the chosen pilot.
   virtual void load_state_enter() {}
+  // Ours (custom-campaigns.md): a mod campaign's briefing for the Load state
+  // (null: the original's brief_<dir><n>), and the Win Movie state's movie
+  // (the original's c4win; a mod campaign's movie_end=, null for none).
+  virtual const char* campaign_briefing() { return nullptr; }
+  virtual const char* campaign_end_movie() { return "c4win"; }
+  // Ours: a campaign mission won that ends the campaign (the Win State's Op 4
+  // Mission 6), and one a replay loads afresh (the debriefing's Op N Mission
+  // 1 and Op 4 Mission 4: a world's start); a mod campaign's by its list.
+  virtual bool campaign_ends_at(int32_t op, int32_t mission) { return op == 4 && mission == 6; }
+  virtual bool campaign_world_start(int32_t op, int32_t mission) { return mission == 1 || (op == 4 && mission == 4); }
   // The Load state's start of the briefing's script (inline in 0x00409440:
   // the list +0x11220's playing byte set, its current entry the first).
   virtual void briefing_script_start(Handle s) {

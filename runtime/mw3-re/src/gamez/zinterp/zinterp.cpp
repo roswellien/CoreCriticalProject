@@ -2,7 +2,9 @@
 // archive and the ScrollAlways list: Mech3.exe 0x594dc0..0x596e04, the
 // functions after zinterp_parse.cpp's dispatcher. The exe names no file here;
 // this one is named for the module (docs/interp.md).
+#include "gamez/zutil/zfix.h"
 #include "gamez/zinterp/zinterp.h"
+#include "upgrades/reference/reference.h"
 #include "gamez/zmodel/gmod_init.h"
 
 #include <sys/stat.h>
@@ -90,6 +92,22 @@ Engine make_engine() {
   e.lod_add_child = zcls::node_link;            // 0x004fe0a0 is a jmp to it
   e.display_set_clear_color = zcls::display_set_clear_color;
   e.light_create = zcls::light_create;
+  // FIX (bug), playtest W12: the light setters were left null, so each world script's sun (c1.gs: LightNew
+  // sunlight, LightSetColor ... LightSetStatic) kept a new light's state: a point light, ambient only. Wired by
+  // address to the ported Light.c setters (their names in zcls are the flags' meanings, the script's the
+  // commands').
+  e.light_set_ambient = zcls::light_set_ambient;           // 0x004fa940
+  e.light_set_color = zcls::light_set_color;               // 0x004fb510
+  e.light_set_diffuse = zcls::light_set_diffuse;           // 0x004fa9b0
+  e.light_set_directed = zcls::light_set_bit3;             // 0x004faaa0
+  e.light_set_directional = zcls::light_set_bit2;          // 0x004faa20
+  e.light_set_orientation = zcls::light_set_orientation;   // 0x004faff0
+  e.light_set_point = zcls::light_set_bit4;                // 0x004fab20
+  e.light_set_ranges = zcls::light_set_range;              // 0x004fadf0
+  e.light_set_saturated = zcls::light_set_ambient_only;    // 0x004faba0
+  e.light_set_static = zcls::light_set_directional;        // 0x004fad30
+  e.light_set_subdivide = zcls::light_set_diffuse_only;    // 0x004fac70
+  e.light_set_translate = zcls::light_set_position;        // 0x004faf80
   e.object3d_create = zcls::object3d_create;
   e.model_set_priority = zmod::model_set_priority;  // Object3DSetPriority's
   // The support scripts' render settings (item 7's census: every mission).
@@ -334,7 +352,10 @@ bool argv0_starts(Interp& in, const char* name, size_t n) {
 }
 
 // Mech3.exe 1.2 @ 0x00595270
-bool argv0_is(Interp& in, const char* name) { return std::strcmp(in.argc ? in.argv[0] : "", name) == 0; }
+bool argv0_is(Interp& in, const char* name) {
+  upgrades::reference::seen(name);  // ours: the modding reference's test (null in play)
+  return std::strcmp(in.argc ? in.argv[0] : "", name) == 0;
+}
 
 // Mech3.exe 1.2 @ 0x004108f0. The exe keeps this copy in MW3's code; nothing
 // sets the callback unless the debug console is open, so the shipped game
@@ -641,6 +662,7 @@ void echo(Interp& in) {
 
 // Mech3.exe 1.2 @ 0x00595e70. argv[0], the command, is never expanded.
 char* next_arg(Interp& in) {
+  upgrades::reference::arg_read('s');
   const uint32_t i = in.cursor++;
   char* a = i < in.argc ? in.argv[i] : nullptr;
   if (!a) return nullptr;
@@ -649,6 +671,7 @@ char* next_arg(Interp& in) {
 
 // Mech3.exe 1.2 @ 0x00595ea0
 bool arg_bool(Interp& in, bool def) {
+  upgrades::reference::arg_read('b');  // ours: the reference test's (null in play); before next_arg's 's'
   const char* s = next_arg(in);
   if (!s) return def;
   return crt::msvc_stricmp(s, "on") == 0 || crt::msvc_stricmp(s, "true") == 0;
@@ -656,12 +679,14 @@ bool arg_bool(Interp& in, bool def) {
 
 // Mech3.exe 1.2 @ 0x00595ef0. atof's double, rounded by each caller.
 double arg_float(Interp& in, float def) {
+  upgrades::reference::arg_read('f');
   const char* s = next_arg(in);
   return s ? crt::msvc_atof(s) : def;
 }
 
 // Mech3.exe 1.2 @ 0x00595f10
 int32_t arg_int(Interp& in, int32_t def) {
+  upgrades::reference::arg_read('i');
   const char* s = next_arg(in);
   return s ? crt::msvc_atoi(s) : def;
 }
@@ -845,6 +870,9 @@ bool scroll_on(Node* node, float u, float v, bool always) {
 // Otherwise each listed node's model scroll offset (+0x30) goes back to 0.
 void scroll_list_clear(bool full) {
   if (full) {
+    // FIX (bug): the exe keeps its three model pointers (0x00730c14..1c) past the mission whose models they
+    // are; the next mission's CycleTextureSet* before its own CycleTextureSetOn would write into a freed one.
+    if (zfix::options().fixed) g_globals.object_model = g_globals.cycle_model = g_globals.model_out = nullptr;
     g_scroll.nodes.clear();
     if (g_scroll.holder && call(g_engine.pool_alive)) {
       call(g_engine.set_action, g_scroll.holder, static_cast<Action>(nullptr));

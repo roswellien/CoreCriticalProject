@@ -16,24 +16,15 @@
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/app_states.h"
 #include "mech3/pilot.h"
+#include "mech3/mech_names.h"
 
 namespace mech3 {
 
-// mech_names.h (its Engine clashes with the app's): 0x00484670's message and 0x004846e0.
-int32_t mech_name_message(int32_t mech);
-float max_mass(int32_t mech);
-int32_t internal_points(int32_t mech, int32_t column);    // 0x00485400..0x00485490
-int32_t armor_points(int32_t tech, bool ferro, float tons);  // 0x00424760
-constexpr int32_t kClan = 1, kAnyTech = 3;               // mech_names.h's Tech
+// Declared here, not included: weapon.h, mech_salvage.h and mech_data.h bring mech_parts.h, whose
+// mech3::Handle clashes with the 2D screens' Handle.
 int32_t lab_rounds(int32_t weapon, int32_t n);           // weapon.h (0x004b4900)
-int32_t mech_tech(int32_t mech);                         // 0x00484720
-int32_t equip_name_message(int32_t kind);                // 0x00484980's table (its text through message)
-double engine_weight_of(int32_t index, uint8_t xl);      // 0x00432f40 (as on the x87)
-int32_t engine_rating_of(int32_t index);                 // 0x00432fa0
 int32_t engine_maker_message(int32_t index);             // 0x00432ec0's message (mech_salvage.h)
 float engine_kph(int32_t engine, float mass, bool run);  // 0x00433050 (mech_data.h)
-bool weapon_uses_ammo(int32_t weapon);                   // 0x00484960
-int32_t weapon_count();                                  // 37, the plain PPC's 38th with zfix bugs
 
 namespace {
 int32_t g_none = -1;  // the tabs' and mech buttons' id until bound
@@ -41,6 +32,7 @@ int32_t g_none = -1;  // the tabs' and mech buttons' id until bound
 // Mech3.exe 1.2 @ 0x00484670: a mech's name from Mech3Msg.dll, "notmech"
 // out of range; CString::Format's "%s" gives "(null)" for none.
 std::string display_name(Engine& e, int32_t mech) {
+  if (const char* t = mech_title(mech)) return t;  // ours: a mod's row
   if (mech < 0 || mech >= 19) return "notmech";
   const char* s = e.message(mech_name_message(mech));
   return s ? s : "(null)";
@@ -292,7 +284,7 @@ void LabChassisList::refill() {
   }
   // 0x004496c0: by the mech's number (0, the names are looked up and not
   // used) or its tonnage then number (1); anything else keeps no order.
-  // FIX (bug), zfix bugs: SORT_CHASSISNAME by the names it looks up, then the number.
+  // FIX (bug), zfix fixed: SORT_CHASSISNAME by the names it looks up, then the number.
   auto mech_of = [&](const Item* x) {
     const ConfigItem* it = e.item_of(static_cast<Handle>(x->value));
     return x->value && it ? it->id() : -1;
@@ -307,7 +299,7 @@ void LabChassisList::refill() {
 bool chassis_before(Engine& e, int32_t by, int32_t ma, int32_t mb) {
   const std::string na = display_name(e, ma), nb = display_name(e, mb);
   if (by == 0) {
-    if (zfix::options().bugs && na != nb) return na < nb;
+    if (zfix::options().fixed && na != nb) return na < nb;
     return ma < mb;
   }
   if (by != 1) return false;

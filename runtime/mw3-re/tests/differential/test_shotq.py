@@ -21,6 +21,8 @@ INTERSECT_BBOX and some materials flag 2 (the textured test). The results,
 the records (all 32 slots, pointers as indices), the options left, the
 captured texture coordinates, and every few queries each model's cached
 polygon and each node's flags must match bit for bit at 24-bit precision.
+At the reference's 53 bits (MW3_PRECISION=53) the six worlds match whole too
+(docs/movement-collision.md, Precision).
 """
 import ctypes
 import math

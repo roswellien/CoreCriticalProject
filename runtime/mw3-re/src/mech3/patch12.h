@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,7 +15,7 @@ namespace zutl { struct MessageDll; }
 // official 1.2 patch changed in the game's data, redone while 1.0's data
 // loads. Each change applies only to a file that is 1.0's own (by size and
 // CRC, data_version.h), so 1.2's files, a mix's patched files and unknown
-// data (a mod, another version) are left as they are. Not behind zfix bugs:
+// data (a mod, another version) are left as they are. Not behind a zfix switch:
 // it makes 1.0's data the 1.2 the port was ported from. The changes are our
 // own values, edits and wording, except the small copies Owen agreed to
 // (patch12_copies.inc's entries, patch12_files.inc's two maps: 1.2's data).
@@ -54,6 +55,11 @@ bool message_is_ours(int32_t id);
 // 5's paths and regions, from missions 6 and 4), copied from the player's own
 // file and edited to 1.2's. Null when none.
 zrdr::Node* provide(const char* entry);
+// Ours (upgrades/mods/mp_mods.h): the entry 1.2 adds to `archive` (a data path) as the layer would give it to
+// 1.0's data, with no archive open: `read` gives the source archive's entry (a data path, the entry) as read
+// from the install. Null when 1.2 adds no such entry or it cannot be made.
+zrdr::Node* provided_with(const std::string& archive, const std::string& entry,
+                          const std::function<zrdr::Node*(const std::string& source, const std::string& entry)>& read);
 // The same for one entry, without the checks on the open archives.
 zrdr::Node* copy_entry(const std::string& archive, const std::string& entry, const std::string& source,
                        uint32_t size, uint32_t crc);

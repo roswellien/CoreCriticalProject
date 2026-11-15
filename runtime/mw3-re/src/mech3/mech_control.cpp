@@ -263,7 +263,7 @@ float AxisBinding::value(const void* j, const void* m) const {
 }
 
 bool lever_reverse_on(const AxisBinding& b) {
-  if (!zfix::options().bugs || !zfix::options().throttle_reverse || b.source < 1 || b.source > 8) return false;
+  if (!zfix::options().fixed || !zfix::options().throttle_reverse || b.source < 1 || b.source > 8) return false;
   // No stick: the original's reading (its axes then read the offset).
   if (!(g_calls.joy_present ? g_calls.joy_present() : zin::joy_present())) return false;
   return !(g_calls.joy_gamepad ? g_calls.joy_gamepad() : zin::joy_gamepad());
@@ -305,7 +305,7 @@ void PlayerControls::read_axes(float dt, float* thr, float* tn, float* p, float*
   // FIX (bug): with no stick a saved file's stick axes stay bound (only the stock
   // file is moved off it, 0x00480570) and read their offset each frame: the mech
   // walked and its torso turned by itself (docs/fixes.md).
-  const bool no_stick = zfix::options().bugs && !(g_calls.joy_present ? g_calls.joy_present() : zin::joy_present());
+  const bool no_stick = zfix::options().fixed && !(g_calls.joy_present ? g_calls.joy_present() : zin::joy_present());
   const auto bound = [&](const AxisBinding& a) { return a.source != 0 && !(no_stick && a.source <= 8); };
   if (bound(ax[3])) *tn = ax[3].value(j, m);
   if (bound(ax[0])) {
@@ -599,6 +599,13 @@ void AiControls::on_death() {
   if (brain) player_takes_triggers(brain->params);
   MechControls::on_death();  // 0x004aed50
   if (brain) brain->died();
+}
+
+// Mech3.exe 1.2 @ 0x004d8a50 (through the thunk 0x004d8d10): the owner's
+// vt+0x50, the entity as a mech (a mech itself), gets up (0x0041b840), so an
+// AI mech is up as soon as its fall lands, not after the 5 s lie (movement-jump.md).
+void AiControls::landed() {
+  if (owner) owner->get_up();  // the exe calls it on 0 too; an AI's owner is always a mech
 }
 
 // Mech3.exe 1.2 @ 0x004ea630

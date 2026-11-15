@@ -1,4 +1,5 @@
 #include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zgeometry/zgeo_x87.h"
 
 #include <cmath>
 #include <cstdio>
@@ -24,18 +25,20 @@ Projection g_proj;
 
 // r = l * t for 3x4 row-vector matrices (l applied first). The sums in the x87 code's order (0x0051fee0, 0x0051fb30 and 0x00521670
 // share it): the z column adds its terms from the last, and the z
-// translation adds the first term to t[11] before the others.
+// translation adds the first term to t[11] before the others. Each word's
+// sums stay on the x87, stored once (tools/analysis/x87.py 51fb88 51fd3b).
 void mul34(const float* l, const float* t, float* r, bool translation) {
+  using zgeo::X;
   for (int row = 0; row < 3; ++row) {
     const float* a = l + 3 * row;
-    r[3 * row] = a[0] * t[0] + a[1] * t[3] + a[2] * t[6];
-    r[3 * row + 1] = a[0] * t[1] + a[1] * t[4] + a[2] * t[7];
-    r[3 * row + 2] = (a[2] * t[8] + a[1] * t[5]) + a[0] * t[2];
+    r[3 * row] = ((X(a[0]) * t[0] + X(a[1]) * t[3]) + X(a[2]) * t[6]).f();
+    r[3 * row + 1] = ((X(a[0]) * t[1] + X(a[1]) * t[4]) + X(a[2]) * t[7]).f();
+    r[3 * row + 2] = ((X(a[2]) * t[8] + X(a[1]) * t[5]) + X(a[0]) * t[2]).f();
   }
   if (!translation) return;
-  r[9] = l[9] * t[0] + l[10] * t[3] + l[11] * t[6] + t[9];
-  r[10] = l[9] * t[1] + l[10] * t[4] + l[11] * t[7] + t[10];
-  r[11] = (l[11] * t[8] + l[10] * t[5]) + (l[9] * t[2] + t[11]);
+  r[9] = (((X(l[9]) * t[0] + X(l[10]) * t[3]) + X(l[11]) * t[6]) + t[9]).f();
+  r[10] = (((X(l[9]) * t[1] + X(l[10]) * t[4]) + X(l[11]) * t[7]) + t[10]).f();
+  r[11] = ((X(l[11]) * t[8] + X(l[10]) * t[5]) + (X(l[9]) * t[2] + t[11])).f();
 }
 
 // x87 compares: an unordered (NaN) result sets C3 like "equal", so the
@@ -195,25 +198,21 @@ void multiply(const Mat34& local, int mode) {
   // The x87's order: columns 0 and 1 sum left to right, column 2 as
   // a0 t2 + (a1 t5 + a2 t8); the translation's z as (l9 t2 + t11) + (l10 t5
   // + l11 t8) (docs/render-shadows.md, the shadow box checks it bit for bit).
+  // Each entry's products and sums stay on the x87, stored once.
   float r[12] = {};
   const float* l = local.m;
   const float* t = top.m;
+  using zgeo::X;
   for (int row = 0; row < 3; ++row) {
     const float* a = l + 3 * row;
-    const float x0 = a[0] * t[0], x1 = a[1] * t[3], x2 = a[2] * t[6];
-    r[3 * row] = (x0 + x1) + x2;
-    const float y0 = a[0] * t[1], y1 = a[1] * t[4], y2 = a[2] * t[7];
-    r[3 * row + 1] = (y0 + y1) + y2;
-    const float z0 = a[0] * t[2], z1 = a[1] * t[5], z2 = a[2] * t[8];
-    r[3 * row + 2] = z0 + (z1 + z2);
+    r[3 * row] = ((X(a[0]) * t[0] + X(a[1]) * t[3]) + X(a[2]) * t[6]).f();
+    r[3 * row + 1] = ((X(a[0]) * t[1] + X(a[1]) * t[4]) + X(a[2]) * t[7]).f();
+    r[3 * row + 2] = (X(a[0]) * t[2] + (X(a[1]) * t[5] + X(a[2]) * t[8])).f();
   }
   if (mode != 2) {
-    const float x0 = l[9] * t[0], x1 = l[10] * t[3], x2 = l[11] * t[6];
-    r[9] = ((x0 + x1) + x2) + t[9];
-    const float y0 = l[9] * t[1], y1 = l[10] * t[4], y2 = l[11] * t[7];
-    r[10] = ((y0 + y1) + y2) + t[10];
-    const float z0 = l[9] * t[2], z1 = l[10] * t[5], z2 = l[11] * t[8];
-    r[11] = (z0 + t[11]) + (z1 + z2);
+    r[9] = (((X(l[9]) * t[0] + X(l[10]) * t[3]) + X(l[11]) * t[6]) + t[9]).f();
+    r[10] = (((X(l[9]) * t[1] + X(l[10]) * t[4]) + X(l[11]) * t[7]) + t[10]).f();
+    r[11] = ((X(l[9]) * t[2] + t[11]) + (X(l[10]) * t[5] + X(l[11]) * t[8])).f();
   }
   std::memcpy(top.m, r, sizeof r);
   g_stack.is_identity() = 0;
@@ -235,8 +234,12 @@ void translate(float x, float y, float z) {
   float* t = g_stack.matrix().m;
   if (g_stack.is_identity()) {
     t[9] = x, t[10] = y, t[11] = z;
-  } else {
-    for (int j = 0; j < 3; ++j) t[9 + j] = t[j] * x + t[6 + j] * z + t[3 + j] * y + t[9 + j];
+  } else {  // the x87 code's order, its sums kept: x's term last in t[9], first in t[10] and t[11]
+    using zgeo::X;
+    const float t9 = (((X(y) * t[3] + X(z) * t[6]) + X(x) * t[0]) + t[9]).f();
+    const float t10 = (((X(z) * t[7] + X(x) * t[1]) + X(y) * t[4]) + t[10]).f();
+    const float t11 = (((X(z) * t[8] + X(x) * t[2]) + X(y) * t[5]) + t[11]).f();
+    t[9] = t9, t[10] = t10, t[11] = t11;
   }
   g_stack.is_identity() = 0;
 }
@@ -248,8 +251,8 @@ void rotate_rows(int i, int k, float c, float s) {
   float* t = g_stack.matrix().m;
   for (int j = 0; j < 3; ++j) {
     const float a = t[3 * i + j], b = t[3 * k + j];
-    t[3 * i + j] = c * a + s * b;
-    t[3 * k + j] = c * b - s * a;
+    t[3 * i + j] = (zgeo::X(c) * a + zgeo::X(s) * b).f();  // each sum on the x87, stored once
+    t[3 * k + j] = (zgeo::X(c) * b - zgeo::X(s) * a).f();
   }
 }
 }  // namespace
@@ -297,11 +300,15 @@ void euler(const float rot[3], const float pos[3], const float scl[3]) {
   const float sa = std::sin(rot[0]), ca = std::cos(rot[0]);
   const float sb = std::sin(rot[1]), cb = std::cos(rot[1]);
   const float sc = std::sin(rot[2]), cc = std::cos(rot[2]);
-  const float cc_cb = cc * cb, sb_sa = sb * sa, sc_cb = sc * cb;
+  // sb sa and sc cb stay on the x87 for the words that use them, cc cb is
+  // stored first (tools/analysis/x87.py 521750 5217db).
+  using zgeo::X;
+  const X sb_sa = X(sb) * sa, sc_cb = X(sc) * cb;
+  const float cc_cb = (X(cc) * cb).f();
   float l[12] = {
-      sb_sa * sc + cc_cb, sc * ca,  sc_cb * sa - cc * sb,
-      sb_sa * cc - sc_cb, cc * ca,  cc_cb * sa + sc * sb,
-      sb * ca,            -sa,      cb * ca,
+      (sb_sa * sc + cc_cb).f(), (X(sc) * ca).f(), (sc_cb * sa - X(cc) * sb).f(),
+      (sb_sa * cc - sc_cb).f(), (X(cc) * ca).f(), (X(cc_cb) * sa + X(sc) * sb).f(),
+      (X(sb) * ca).f(),         -sa,              (X(cb) * ca).f(),
       0, 0, 0};
   for (int i = 0; i < 3; ++i)
     if (differs(pos[i], 0.0)) l[9 + i] = pos[i];
@@ -481,17 +488,20 @@ bool invert(const Mat34& mat, Mat34& out, bool translation) {
   const float a = static_cast<float>(m[0] * inv), b = static_cast<float>(inv * m[1]);
   const double c = inv * m[2];
   o[0] = static_cast<float>(inv * c0);
-  o[1] = static_cast<float>(c * m[7] - b * m[8]);
-  o[2] = static_cast<float>(b * m[5] - c * m[4]);
+  // a and b are stored (floats), their products with the matrix's words still on the x87: as doubles, not two
+  // floats multiplied in single (x87.py 523cb6 523de3).
+  o[1] = static_cast<float>(c * m[7] - double{b} * m[8]);
+  o[2] = static_cast<float>(double{b} * m[5] - c * m[4]);
   o[3] = static_cast<float>(inv * c1);
-  o[4] = static_cast<float>(a * m[8] - c * m[6]);
-  o[5] = static_cast<float>(c * m[3] - a * m[5]);
+  o[4] = static_cast<float>(double{a} * m[8] - c * m[6]);
+  o[5] = static_cast<float>(c * m[3] - double{a} * m[5]);
   o[6] = static_cast<float>(inv * c2);
-  o[7] = b * m[6] - a * m[7];
-  o[8] = a * m[4] - b * m[3];
-  if (translation) {
+  o[7] = static_cast<float>(double{b} * m[6] - double{a} * m[7]);
+  o[8] = static_cast<float>(double{a} * m[4] - double{b} * m[3]);
+  if (translation) {  // -t stored, each row's sums on the x87
     const float t0 = -m[9], t1 = -m[10], t2 = -m[11];
-    for (int j = 0; j < 3; ++j) o[9 + j] = t0 * o[j] + t1 * o[3 + j] + t2 * o[6 + j];
+    for (int j = 0; j < 3; ++j)
+      o[9 + j] = static_cast<float>((double{t0} * o[j] + double{t1} * o[3 + j]) + double{t2} * o[6 + j]);
   }
   return true;
 }
@@ -666,17 +676,20 @@ Vec3 transform(const Vec3& v, const float* t) {
 }  // namespace
 
 // Mech3.exe 1.2 @ 0x00522d60. The shared products and their sums in the
-// x87 code's order.
+// x87 code's order; each corner keeps on the x87 what the exe keeps there
+// (tools/analysis/x87.py 522d63 522f40), stored where it stores.
 void box_corners_xz(const float* m, const float b[6], float out[8][2]) {
-  const float r = m[0] * b[0], t = m[0] * b[3], p = m[3] * b[4], u = m[3] * b[1];
-  const float s = m[2] * b[0], w = m[2] * b[3], q = m[5] * b[4], v = m[5] * b[1];
-  const float a_lo = b[2] * m[6] + m[9], c_lo = m[8] * b[2] + m[11];
-  const float a_hi = m[6] * b[5] + m[9], c_hi = m[8] * b[5] + m[11];
-  const float ur = u + r, ut = u + t, pr = p + r, pt = p + t;
-  const float vs = v + s, vw = v + w, qs = q + s, qw = q + w;
-  const float x[8] = {a_hi + ur, a_hi + ut, a_lo + ut, a_lo + ur, pr + a_hi, pt + a_hi, pt + a_lo, pr + a_lo};
-  const float z[8] = {c_hi + vs, c_hi + vw, c_lo + vw, c_lo + vs, qs + c_hi, qw + c_hi, qw + c_lo, qs + c_lo};
-  for (int i = 0; i < 8; ++i) out[i][0] = x[i], out[i][1] = z[i];
+  using zgeo::X;
+  auto F = [](X v) { return X(v.f()); };
+  const X r = X(m[0]) * b[0], t = X(m[0]) * b[3], p = X(m[3]) * b[4], u = X(m[3]) * b[1];
+  const X s = X(m[2]) * b[0], w = X(m[2]) * b[3], q = X(m[5]) * b[4], v = X(m[5]) * b[1];
+  const X a_lo = X(b[2]) * m[6] + m[9], c_lo = X(m[8]) * b[2] + m[11];
+  const X a_hi = X(m[6]) * b[5] + m[9], c_hi = X(m[8]) * b[5] + m[11];
+  const X ur = F(u + F(r)), ut = F(F(u) + F(t)), pr = p + F(r), pt = F(F(p) + F(t));
+  const X vs = F(F(v) + F(s)), vw = F(v + F(w)), qs = q + F(s), qw = F(F(q) + F(w));
+  const X x[8] = {a_hi + ur, F(a_hi) + ut, a_lo + ut, F(a_lo) + ur, pr + F(a_hi), pt + F(a_hi), pt + F(a_lo), pr + F(a_lo)};
+  const X z[8] = {c_hi + vs, F(c_hi) + vw, c_lo + vw, F(c_lo) + vs, qs + F(c_hi), qw + F(c_hi), qw + F(c_lo), qs + F(c_lo)};
+  for (int i = 0; i < 8; ++i) out[i][0] = x[i].f(), out[i][1] = z[i].f();
 }
 
 // Mech3.exe 1.2 @ 0x005225b0. Nothing to do when the top is the identity.
@@ -709,7 +722,14 @@ void rotate_points_to(const Vec3* src, Vec3* dst, uint32_t count) {
 // Mech3.exe 1.2 @ 0x005227a0
 void transform_points(Vec3* v, uint32_t count) {
   if (g_stack.is_identity()) return;
-  for (; count != 0; --count, ++v) *v = transform(*v, g_stack.matrix().m);
+  using zgeo::X;  // each word's sums on the x87, stored once
+  const float* t = g_stack.matrix().m;
+  for (; count != 0; --count, ++v) {
+    const Vec3 p = *v;
+    *v = {((((X(p.x) * t[0] + X(p.y) * t[3]) + X(p.z) * t[6]) + t[9])).f(),
+          ((((X(p.x) * t[1] + X(p.y) * t[4]) + X(p.z) * t[7]) + t[10])).f(),
+          ((((X(p.x) * t[2] + X(p.y) * t[5]) + X(p.z) * t[8]) + t[11])).f()};
+  }
 }
 
 namespace {
@@ -767,16 +787,23 @@ void transform_points_to(const Vec3* src, Vec3* dst, uint32_t count) {
   } while (--count != 0);
 }
 
-// Mech3.exe 1.2 @ 0x00522ab0. Each corner is (x r0 + y r1) + (z r2 + t).
+// Mech3.exe 1.2 @ 0x00522ab0. Each corner is (x r0 + y r1) + (z r2 + t), the
+// x + y sum stored. Which products and z sums the exe stores first differs
+// word by word (tools/analysis/x87.py 522ab0 522d5f): bit 1 the x
+// product, 2 the y product, 4 the z sum.
 void box_corners(const float* m, const float box[6], float out[8][3]) {
+  using zgeo::X;
   static const int kPick[8][3] = {{0, 1, 5}, {3, 1, 5}, {3, 1, 2}, {0, 1, 2},
                                   {0, 4, 5}, {3, 4, 5}, {3, 4, 2}, {0, 4, 2}};
+  static const uint8_t kStored[8][3] = {{1, 1, 1}, {3, 3, 4}, {3, 3, 0}, {5, 5, 5}, {1, 1, 5}, {3, 3, 6}, {7, 7, 6}, {5, 5, 5}};
+  auto keep = [](X v, bool stored) { return stored ? X(v.f()) : v; };
   for (int i = 0; i < 8; ++i) {
     const float x = box[kPick[i][0]], y = box[kPick[i][1]], z = box[kPick[i][2]];
     for (int c = 0; c < 3; ++c) {
-      const float xy = x * m[c] + y * m[3 + c];
-      const float zt = z * m[6 + c] + m[9 + c];
-      out[i][c] = xy + zt;
+      const int k = kStored[i][c];
+      const float xy = (keep(X(x) * m[c], k & 1) + keep(X(y) * m[3 + c], k & 2)).f();
+      const X zt = keep(X(z) * m[6 + c] + m[9 + c], k & 4);
+      out[i][c] = (zt + xy).f();
     }
   }
 }

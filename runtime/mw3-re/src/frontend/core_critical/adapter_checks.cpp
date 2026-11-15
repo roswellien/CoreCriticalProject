@@ -3,6 +3,7 @@
 #include "frontend/sdl/sdl_child.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_util.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
@@ -74,6 +75,7 @@ void require(bool condition, const char *message) {
 }
 
 #include "local_light_checks.inc"
+#include "owned_rigid_capture_checks.inc"
 
 void quad(platform::Render3D &renderer, float low, float high, float depth,
           uint32_t color, const platform::DrawState &state = {}) {
@@ -2251,11 +2253,14 @@ int main(int argc, char **argv) {
                              : sdlfe::RendererBackend::core_critical_dxgi;
     if (scene_bindings_check)
       check_scene_bindings(window, backend);
-    else if (pom_check)
+    else if (pom_check) {
+      check_owned_rigid_capture(window, backend);
       check_parallax(window, backend);
+    }
     else if (ultrawide_check)
       check_ultrawide(window, backend);
     else if (geometry_check) {
+      check_owned_rigid_capture(window, backend);
       check_strict_geometry(window, backend);
       const auto gpu = check_native_geometry(window, backend);
       const auto reference = check_native_geometry(window, backend, true);

@@ -3,6 +3,7 @@
 // Core states: the pilot's game for a debug launch (our addition), the view
 // the Core state draws through. Not original code: it stands where the exe's
 // other modules will be. What has no port is logged once by address.
+#include <optional>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -62,6 +63,7 @@
 #include "mech3/cheats.h"
 #include "mech3/cockpit_sound.h"
 #include "mech3/landmines.h"
+#include "mech3/load_watch.h"
 #include "mech3/entity_classes.h"
 #include "mech3/message_panel.h"
 #include "mech3/mech_objective.h"
@@ -113,6 +115,7 @@
 #include "mech3/zainetedit.h"
 #include "mech3/zrdrvalve.h"
 #include "platform/render3d.h"
+#include "upgrades/mods/save_mods.h"
 
 namespace mech3 {
 
@@ -351,7 +354,10 @@ struct WiredPlayerHooks : PlayerHooks {
     return n ? e->handle_of(zrdr::find(n, key)) : 0;
   }
   void reader_free(Handle node) override {
-    if (zrdr::Node* n = as<zrdr::Node>(node)) zrdr::free_node(n);
+    if (zrdr::Node* n = as<zrdr::Node>(node)) {
+      e->forget_object(n);  // its handle with it (docs/handles.md)
+      zrdr::free_node(n);
+    }
   }
   float reader_item_float(Handle node, int32_t i) override { return as<zrdr::Node>(node)->list[i].f; }
   Handle reader_item(Handle node, int32_t i) override { return e->handle_of(&as<zrdr::Node>(node)->list[i]); }
@@ -850,7 +856,7 @@ struct WiredBrainHooks : ai::BrainHooks {
     if (void* b = veh(v)) return program_vehicle_speed_at(b, share);
     return mech_speed_at(mech(v), share);
   }
-  float stopping_distance(Handle v, float speed) override {
+  double stopping_distance(Handle v, float speed) override {
     if (void* b = veh(v)) return program_vehicle_stopping_distance(b, speed);
     return mech_stopping_distance(mech(v), speed);
   }
@@ -1631,6 +1637,9 @@ struct WiredMissionHooks : MissionHooks {
     return objectives_visible(ob().objs.primary.get(), ob().objs.final.get(), ob().objs.fail.get());
   }
   void objectives_free(Handle, Handle, Handle, Handle, Handle) override {
+    for (const void* o : {static_cast<const void*>(ob().objs.primary.get()), static_cast<const void*>(ob().objs.secondary.get()),
+                          static_cast<const void*>(ob().objs.final.get()), static_cast<const void*>(ob().objs.fail.get())})
+      if (o) e->forget_object(o);  // their handles with them (docs/handles.md)
     mech3::objectives_free(ob().objs, ob());
     ob().sync();
   }
@@ -1759,6 +1768,7 @@ struct WiredMissionHooks : MissionHooks {
   }
   void progress_text(const char* s) override {
     program_briefing_line(s);
+    LoadWatch::step(s);
     if (s && *s && !e->quiet)
       std::printf("mw3: load: %s (%lld ms)\n", s,
                   static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2089,9 +2099,6 @@ struct WiredMissionHooks : MissionHooks {
       if (GameEngine* g = engine_of_hooks()) g->unported("0x00507220", {});
       return 1;
     };
-    r.effect = [](void*, zeff::AnimDef*, uint8_t*) {
-      if (GameEngine* g = engine_of_hooks()) g->unported("0x005031b0", {});
-    };
     r.camera_state = [](void*, zeff::AnimDef*, uint8_t*) {
       if (GameEngine* g = engine_of_hooks()) g->unported("0x00503c10", {});
     };
@@ -2177,7 +2184,10 @@ struct WiredMissionHooks : MissionHooks {
       zcls::node_set_priority(static_cast<zcls::Node*>(n), p);
     };
     w.set_tick_action = [](zwep::Handle n) {
-      zcls::node_set_action(static_cast<zcls::Node*>(n), [](zcls::Node*) { zwep::tick(); });
+      zcls::node_set_action(static_cast<zcls::Node*>(n), [](zcls::Node*) {
+        zwep::run_state().net_clock = ztimer::state().total_raw;  // one store in the exe, 0x0072c538
+        zwep::tick();
+      });
     };
     w.error = [](int32_t level, int32_t line, const char* what) {
       if (GameEngine* g = engine_of_hooks(); g && !g->quiet)
@@ -2434,6 +2444,9 @@ void wire_mission_hooks(GameEngine* e) {
   w.pilot = [](void* p) { return static_cast<GameEngine*>(p)->pilot(); };
   w.view = [](void* p) { return static_cast<GameEngine*>(p)->player_view(); };
   w.forget_object = [](void* p, const void* o) { static_cast<GameEngine*>(p)->forget_object(o); };
+  w.message_box1 = [](void* p, int32_t caption, int32_t text, const char* s) {
+    static_cast<GameEngine*>(p)->message_box1(0, caption, text, s);
+  };
   (void)en;
   wire_mech_build(&w);
   wire_sensors(&w, [](void* p, int32_t id) { return static_cast<GameEngine*>(p)->message(id); });
@@ -2478,8 +2491,18 @@ void GameEngine::missions_start(uint32_t list) {
   ai::entity_list().clear();
   if (stealth) ai::entity_list().push_back(stealth);
   mech_entities_forget();
-  m.start();
-  if (m.failed) std::fprintf(stderr, "mw3: the mission load failed\n");
+  {
+    std::optional<LoadWatch> watch;
+    if (!quiet) watch.emplace();
+    m.start();
+  }
+  if (m.failed) {
+    std::fprintf(stderr, "mw3: the mission load failed\n");
+    // FIX (bug): the exe's report is empty, so a failed load went back to the briefing without a word.
+    if (may_ask || on_message_box)
+      message_box_plain(0, 0x1e0, "This mission could not be loaded: " + (m.failed_why.empty() ? std::string("its files are incomplete") : m.failed_why) +
+                                      ". Your game files may be damaged or incomplete: install them again from your disc (the launcher's GAME FILES).");
+  }
   // Typed mission-change notification, fired even when the load failed (with
   // the empty identity) so renderers drop any stale mission state.
   if (auto *render = platform_parts().render) {
@@ -2552,7 +2575,10 @@ void GameEngine::model_use_gfx_flags(const char* name, int32_t flags) {
   zmod::use_gfx_flags(name, static_cast<uint32_t>(flags));
 }
 int32_t GameEngine::weapons_init() { return zwep::startup(); }
-void GameEngine::save_init() { zsave::init(); }
+void GameEngine::save_init() {
+  zsave::init();
+  save_mods_register();  // ours: the mods a game is saved with (upgrades/mods/save_mods)
+}
 void GameEngine::save_shutdown() { zsave::shutdown(); }
 void GameEngine::anim_enable(int32_t on) { zeff::anim_enable_save(on); }
 void GameEngine::weapons_set_mode(int32_t v) { zwep::set_network(v); }
@@ -2781,6 +2807,17 @@ uint32_t GameEngine::vcall(Handle obj, uint32_t slot, std::initializer_list<Arg>
   return Engine::vcall(obj, slot, args);
 }
 
+const uint32_t* program_weather_flags() {
+  auto* w = static_cast<ProgramWeather*>(missions().world.weather);
+  return w ? &w->obj->flags : nullptr;
+}
+void program_weather_show(bool on) {
+  auto* w = static_cast<ProgramWeather*>(missions().world.weather);
+  if (!w) return;
+  if (on) w->obj->show_for(-1.0f);
+  else w->obj->hide();
+}
+
 const float* program_mission_fog(bool water) {
   static float f[7];
   const MissionWorld& w = missions().world;
@@ -2826,7 +2863,7 @@ void hook_census_report(const char* key) {
 // Ours (W58, docs/lancemate-pathing.md): as play starts, the 3 x 3 tiles
 // round the player built when a pilot uses the grid (the lance starts by him).
 void GameEngine::nav_prebuild() {
-  if (zfix::options().bugs) ai::nav::restart();
+  if (zfix::options().improved_ai) ai::nav::restart();
   void* p = mech_mission_player();
   if (!p) return;
   int32_t made = 0;

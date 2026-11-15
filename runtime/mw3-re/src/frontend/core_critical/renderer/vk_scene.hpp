@@ -74,6 +74,20 @@
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan_core.h>
+#if defined(_WIN32)
+#include <cmath>
+#include <exception>
+#include <mutex>
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
+#include "frontend/sdl/editor_imgui.h"
+#include "backends/imgui_impl_vulkan.h"
+#include "editor_srgb_frag.h"
+#endif
 
 namespace mw34::vkscene {
 // rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour
@@ -320,7 +334,15 @@ public:
   // support); the caller then uses its other presenter.
   bool present(cc_mw3_re::platform::NativeWindowHandle hwnd,
                const std::uint8_t *pixels, unsigned w, unsigned h,
-               unsigned pitch, bool wide_world = false, bool rgba32 = false) {
+               unsigned pitch, bool wide_world = false, bool rgba32 = false
+#if defined(_WIN32)
+               , sdlfe::EditorUi *editor = nullptr
+#endif
+               ) {
+#if defined(_WIN32)
+    const bool requested_editor = editor_requested(editor);
+    try {
+#endif
     const bool visible = surface_source.is_visible
                              ? surface_source.is_visible(hwnd)
                              : cc_mw3_re::platform::is_window_visible(hwnd);
@@ -342,22 +364,42 @@ public:
       if (!child && bridge_config.dxgi_present)
         throw std::runtime_error(
             "Cannot create the required DXGI presentation window");
-      if (!child && !surface_source.create)
+      if (!child && !surface_source.create) {
+#if defined(_WIN32)
+        if (requested_editor)
+          editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor presentation child unavailable");
+#endif
         return false;
+      }
       // A presenting instance selects the device that can present to this
       // window (on hybrid systems the display may belong to another adapter
       // than the one rendering scenes).
       if (!device)
         init(surface_source.create ? hwnd : child);
-      else if (presentable && !surface(surface_source.create ? hwnd : child))
+      else if (presentable && !surface(surface_source.create ? hwnd : child)) {
+#if defined(_WIN32)
+        if (requested_editor)
+          editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor window surface unavailable");
+#endif
         return false;
+      }
     }
-    if (!presentable || (!windowSurface && !dxgi.active()))
+    if (!presentable || (!windowSurface && !dxgi.active())) {
+#if defined(_WIN32)
+      if (requested_editor)
+        editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor device cannot present to this window");
+#endif
       return false;
+    }
     // The previous Flip's copy/blit is waited for here, before its upload
     // buffer, command pool or source image are reused, instead of right after
     // vkQueuePresentKHR (presentation stays one frame per Flip).
     if (presentInFlight) {
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -399,8 +441,18 @@ public:
         check(r, "acquire swapchain image");
     }
     const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
+#if defined(_WIN32)
+    const bool editor_frame = prepare_editor(editor, requested_editor);
+#else
+    const bool editor_frame = false;
+#endif
     const VkImage swap_target =
         dxgi.active() ? dxgi.image() : swapImages[index];
+    VkImage game_target = swap_target;
+#if defined(_WIN32)
+    if (editor_frame)
+      game_target = editor_.composition.color.image;
+#endif
     check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -438,6 +490,10 @@ public:
       bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
           VK_ACCESS_TRANSFER_WRITE_BIT);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_begin_composition();
+#endif
     // Scaled to the window's client area with nearest sampling (the GDI
     // presenter's COLORONCOLOR).
     VkImageBlit blit{};
@@ -452,15 +508,15 @@ public:
         swapExtent.height, wide_world);
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
-    if (destination.left || destination.top ||
+    if (!editor_frame && (destination.left || destination.top ||
         destination.right != int32_t(swapExtent.width) ||
-        destination.bottom != int32_t(swapExtent.height)) {
+        destination.bottom != int32_t(swapExtent.height))) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      f.vkCmdClearColorImage(presentCmd, swap_target,
+      f.vkCmdClearColorImage(presentCmd, game_target,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
                              &all);
-      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      bar(game_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_ACCESS_TRANSFER_WRITE_BIT);
     }
@@ -472,9 +528,13 @@ public:
       blit.dstOffsets[1] = {fit.x + fit.width, fit.y + fit.height, 1};
     }
     f.vkCmdBlitImage(presentCmd, srcImage.image,
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap_target,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, game_target,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                      VK_FILTER_NEAREST);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_finish_composition(swap_target);
+#endif
     if (dxgi.active())
       dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
     else
@@ -494,6 +554,11 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_submit(si);
+    else
+#endif
     check(f.vkQueueSubmit(queue, 1, &si, presentFence), "submit present");
     if (dxgi.active()) {
       presentInFlight = true;
@@ -519,6 +584,11 @@ public:
       if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
           r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
         check(r, "present");
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -528,6 +598,16 @@ public:
     check(r, "present");
     presentInFlight = true;
     return true;
+#if defined(_WIN32)
+    } catch (...) {
+      const auto failure = std::current_exception();
+      if (requested_editor || editor_.cpu) {
+        editor_note_failure(failure);
+        editor_rethrow(failure);
+      }
+      throw;
+    }
+#endif
   }
   // Presents the resident scene target (lazy residency on this device: the 3D
   // scenes and the GPU HUD of the frame) directly: no guest copy, no upload.
@@ -546,7 +626,15 @@ public:
     }
   }
   bool present_resident(cc_mw3_re::platform::NativeWindowHandle hwnd,
-                        unsigned w, unsigned h, bool manage_window = true) {
+                        unsigned w, unsigned h, bool manage_window = true
+#if defined(_WIN32)
+                        , sdlfe::EditorUi *editor = nullptr
+#endif
+                        ) {
+#if defined(_WIN32)
+    const bool requested_editor = editor_requested(editor);
+    try {
+#endif
     finish_world();
     const bool visible = surface_source.is_visible
                              ? surface_source.is_visible(hwnd)
@@ -558,6 +646,11 @@ public:
         !colorImage.image || w != width || h != height)
       return false;
     if (presentInFlight) {
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -589,8 +682,18 @@ public:
         check(r, "acquire swapchain image");
     }
     const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
+#if defined(_WIN32)
+    const bool editor_frame = prepare_editor(editor, requested_editor);
+#else
+    const bool editor_frame = false;
+#endif
     const VkImage swap_target =
         dxgi.active() ? dxgi.image() : swapImages[index];
+    VkImage game_target = swap_target;
+#if defined(_WIN32)
+    if (editor_frame)
+      game_target = editor_.composition.color.image;
+#endif
     check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -625,6 +728,10 @@ public:
       bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_begin_composition();
+#endif
     // The frame keeps its aspect ratio (side or top bars are cleared to black
     // when the window's differs).
     const auto ss = sample_grid();
@@ -633,15 +740,15 @@ public:
         ow, oh, swapExtent.width, swapExtent.height);
     const int dw = destination.right - destination.left;
     const int dh = destination.bottom - destination.top;
-    if (destination.left || destination.top ||
+    if (!editor_frame && (destination.left || destination.top ||
         destination.right != int32_t(swapExtent.width) ||
-        destination.bottom != int32_t(swapExtent.height)) {
+        destination.bottom != int32_t(swapExtent.height))) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      f.vkCmdClearColorImage(presentCmd, swap_target,
+      f.vkCmdClearColorImage(presentCmd, game_target,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
                              &all);
-      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      bar(game_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -653,10 +760,14 @@ public:
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
     f.vkCmdBlitImage(presentCmd, colorImage.image,
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap_target,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, game_target,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                      (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST
                                                       : VK_FILTER_LINEAR);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_finish_composition(swap_target);
+#endif
     if (dxgi.active())
       dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
     else
@@ -694,6 +805,11 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_submit(si);
+    else
+#endif
     check(f.vkQueueSubmit(queue, 1, &si, presentFence),
           "submit resident present");
     if (dxgi.active()) {
@@ -722,6 +838,11 @@ public:
       if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
           r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
         check(r, "present");
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -731,6 +852,16 @@ public:
     check(r, "present");
     presentInFlight = true;
     return true;
+#if defined(_WIN32)
+    } catch (...) {
+      const auto failure = std::current_exception();
+      if (requested_editor || editor_.cpu) {
+        editor_note_failure(failure);
+        editor_rethrow(failure);
+      }
+      throw;
+    }
+#endif
   }
   std::uint64_t resident_presents{};
   bool dxgi_presenting() const { return dxgi.active(); }
@@ -2324,7 +2455,7 @@ private:
     X(vkUpdateDescriptorSets) X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) \
     X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline) X(vkCreateCommandPool) \
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
-    X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
+    X(vkCmdCopyBuffer) X(vkCmdCopyImage) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
     X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences) \
     X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp)
@@ -2953,6 +3084,7 @@ private:
   // acquired again; a render fence alone does not complete presentation waits.
   std::vector<VkSemaphore> swapRendered;
   VkExtent2D swapExtent{};
+  VkFormat swapFormat{VK_FORMAT_UNDEFINED};
   VkSemaphore acquired{};
   VkCommandPool presentPool{};
   VkCommandBuffer presentCmd{};
@@ -2960,6 +3092,9 @@ private:
   Image srcImage;
   unsigned srcWidth{}, srcHeight{};
   Buffer presentUpload;
+#if defined(_WIN32)
+#include "editor_overlay.inc"
+#endif
 
   static void check(VkResult r, const char *what) {
     if (r != VK_SUCCESS)
@@ -4373,6 +4508,9 @@ private:
     presentWindow = {};
   }
   void dropSwapchain() {
+#if defined(_WIN32)
+    retire_editor();
+#endif
     if (dxgi.active()) {
       dxgi.reset_window();
       return;
@@ -4387,6 +4525,7 @@ private:
     swapRendered.clear();
     swapchain = {};
     swapImages.clear();
+    swapFormat = VK_FORMAT_UNDEFINED;
   }
   // A zero-sized surface is a temporary no-present state. A changed extent
   // drains presentation and rebuilds both the swapchain and its per-image
@@ -4526,6 +4665,7 @@ private:
       check(f.vkCreateSemaphore(device, &semaphoreInfo, nullptr, &sem),
             "per-image presentation semaphore");
     swapExtent = e;
+    swapFormat = fmt.format;
     return syncExclusive();
   }
   cc_mw3_re::platform::ExclusiveFullscreenHandler exclusive_fullscreen_;
@@ -4557,6 +4697,9 @@ private:
   // image/buffer handles precede their backing memory; the loader is released
   // last.
   void shutdown() {
+#if defined(_WIN32)
+    editor_retire_for_shutdown();
+#endif
     if (!device) {
       dropSurface();
       if (instance && f.vkDestroyInstance)

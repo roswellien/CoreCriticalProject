@@ -329,7 +329,8 @@ struct Mech : Vehicle {
   // docs/ai.md 17.4a): the speed at a share of the top speed, and how far a
   // speed carries while the throttle eases down (speed / decel_rate).
   float speed_at(float share) const { return max_speed * share; }
-  float stopping_distance(float speed) const { return speed / throttle_down; }
+  // Returned in the register, unrounded, as 0x0041d210 does (the AI divides by it: zai_x87.h).
+  double stopping_distance(float speed) const { return double{speed} / throttle_down; }
   // vt+0x114 0x0041d1d0: the speed the smoothed throttle asks (its
   // controls' vt+0x1c, GetThrottle, times the top speed).
   float throttle_speed() const;
@@ -354,15 +355,17 @@ struct Mech : Vehicle {
 };
 
 // Globals of other modules that the heat and damage code reads.
+// The hitting shot's line, from then to: 0x009a0ec4, which the weapons write (zwep::HitState, 0x00583480) and the
+// damage reads (0x00581e30). One copy: the world kept a second the game never filled, so in play every torso hit
+// went to the centre torso's front and no hit pushed a mech (docs/damage.md, Front or rear).
+const Vec3* hit_shot();
+
 struct World {
   Mech* player = nullptr;           // 0x005f4c8c +0x64
   Mech* mission_player = nullptr;   // 0x0060861c +0x14  (the same mech in play)
   bool force_feedback = false;      // [0x00608620] the force feedback object exists (mech3/force_feedback)
-  float difficulty = 1.0f;          // 0x00608e5c  damage taken by your side: 0.7, 1.0, 1.3
-  Vec3 shot[2] = {};                // 0x009a0ec4  the hitting shot: from, to
   bool death_anim_toggle = false;   // 0x00605cc0
   bool full_heat_all_mechs = true;  // 0x005e1fd0
-  bool no_heat_haze = false;        // 0x00608e4d
   float time = 0.0f;                // 0x0060991c  game time, seconds
   int32_t last_action = 0;          // 0x0060550c  the kind of the last action finished
   float dt = 0.0f;                  // 0x0072c52c
@@ -370,6 +373,8 @@ struct World {
   float move_volume_floor = 0.0f;   // 0x00605630  the movement sounds' volume at a standstill (0)
 };
 World& world();
+float& difficulty_scale();  // [0x00608e5c] the third of GameIntensity's floats: damage to your side (options.cpp)
+uint8_t& no_heat_haze();    // [0x00608e4d] GameIntensity's second flag (options.cpp)
 
 // Calls into code that is not ported yet. Unset ones do nothing and return 0.
 struct HeatCalls {
@@ -467,5 +472,6 @@ AimCalls& aim_calls();
 void update_heat(Mech& m, float dt);  // 0x004192f0
 bool update_ams(Mech& m);             // 0x00419200: the AMS's frame; true when it fired
 MechPart* part_by_id(Mech& m, int32_t id);  // 0x0041d510: 1, 7, 8 the torso .. 15 the hip
+bool mech_equipment_in_part(Mech& m, int kind, int part);  // 0x00460c10
 
 }  // namespace mech3

@@ -113,9 +113,15 @@ From the damage code (damage.md).
   (a lost side torso takes its arm with it).
 - **A part can't be destroyed while it has armor.** Structure damage can never
   take the internal value below the remaining armor fraction.
-- **Difficulty only scales damage you take**: x0.7, x1.0 or x1.3, and not in
-  multiplayer. Your allies' mechs likely get the same scaling (a team-mask
-  test); enemies always take full damage.
+- **Difficulty is much kinder than it looks, and Hard is the real number.** The
+  exe has a fallback table (x0.7, x1.0, x1.3), but the game's own `intensity.zrd`
+  replaces it: you and your side take x0.4 on Low, x0.7 on Medium and x1.0 on
+  High. So the numbers people quote for damage are High's, and on Medium you take
+  under three quarters of them. It doesn't apply in multiplayer. The same file
+  sets the AI's aim error (x1.5, x1.2, x1.0) and how long it waits between actions
+  (x0.3, x0.5, x1.0). The rebuild's first releases missed the damage half, so every
+  level played like High for damage. Your allies' mechs likely get the same scaling (a
+  team-mask test); enemies always take full damage.
 
 From the port of the damage code, checked in an emulator against the original
 (damage.md, section 4):
@@ -202,10 +208,17 @@ From the port of the damage code, checked in an emulator against the original
 - **Only your lance's kills fill the salvage.** In the campaign a mech
   killed by you or a lancemate goes to the mission's salvage; one finished
   off by anyone else (or with no attacker, such as a heat death) does not.
-- **Blown-off arms and legs fly out sideways**, away from the mech's own
+- **Blown-off arms and legs fly out sideways only four times in ten.**
+  When an arm or leg is destroyed, the game picks one of two effects: six
+  times in ten it blows up where it hangs and vanishes in about a quarter of
+  a second; four times in ten it detaches and flies away from the mech's own
   side, at 20 m/s plus three quarters of the mech's speed, with a little
-  lift; an empty stump model is left in their place. In Instant Action the
-  wreckage fades out.
+  lift, arcing down and bouncing. Either way an empty stump model is left in
+  its place. In Instant Action the wreckage fades out.
+- **A side torso never comes off.** When a side torso's structure runs out,
+  it stays on the mech and takes its arm with it. The debriefing's damage
+  bars show armour, not structure, so a side torso can read empty there
+  while its arm is still on.
 - **A Blackhawk or Owens that loses a leg loses the arm on that side too.**
   No other mech does.
 - **An AI mech remembers who hit it last forever.** Only the player's own
@@ -441,6 +454,10 @@ From the gait, the controls, the ground probes, the jump jets and the falls
   keeps being refreshed every frame after that.
 - **A mech lying on the ground that is powered down still turns its torso
   and moves its parts**; one that is powered up holds still until it gets up.
+- **Knocked down, an AI mech gets up as soon as it lands; you lie on the
+  ground five seconds first.** Only the AI pilot's controls ask for the
+  get-up at the end of the fall; everyone else waits the lying timer (and a
+  powered-down mech does not get up at all).
 - **"Center legs" swings the legs round at 1.75 times the twist per second**
   (0x464e80, `movement-ground.md`): with the torso twisted 40 degrees, the legs
   start turning at 70 degrees a second and slow as they catch up. Throttle
@@ -489,6 +506,23 @@ From the gait, the controls, the ground probes, the jump jets and the falls
 
 From the weapon code (weapons.md).
 
+- **Some "weapon destroyed" voices are missing from the data.** When a
+  weapon is destroyed the game says its name and "destroyed", and a
+  critical hit on a weapon plays its family's line (autocannon, laser,
+  LRM...). The names a weapon's file gives (NAMESOUND) do not all exist in
+  the sound list: the autocannons, LB-X and machine guns ask for
+  `wep_autocannon_name`, which is not there (the list has `wep_cannon_name`
+  and `wep_mgun_name`), the "destroyed" word `mech_part_destroy` is not
+  there either, and TAG says "laser" (`wep_las_name`). The LB-X
+  autocannons have no family at all, so a critical on one is silent.
+  (0x004b3020, 0x004853d0; Pirate's Moon's data the same)
+- **A destroyed weapon can stay selected.** When your selected weapon is
+  destroyed, the game moves you on to the next weapon on the HUD's list
+  without checking that it still works, so if that one was already gone
+  (an arm's weapons, say) you are left on a dead weapon and have to pick
+  another yourself. Pirate's Moon changed this: it skips to the next weapon
+  that can fire. The rebuild moves on to the next working one in MW3 too.
+  (0x004b3020, PM's 0x004b6f70)
 - **Craters really dig into the ground.** A crater is not a painted mark:
   the game cuts the terrain polygons under the hole away, clips the ones on
   its edge, and puts in a sloped ring and a floor, textured to match the
@@ -622,6 +656,11 @@ From the weapon code (weapons.md).
   out of room and misses; from farther away it has time to come round. A
   lock is kept for 3.5 seconds after the reticle leaves the target, so you
   can fire after looking away.
+- **A lock never carries over to a new target, it only looks that way.**
+  Switching targets drops the lock at once; the new one takes 0.6 seconds
+  with the reticle on it (1.2 against ECM). Missiles fired before that fly
+  unguided straight along the reticle, so with the reticle already on the
+  new target they still fly at it (0x00443cc0, 0x00443d20).
 - **Only a weapon's first group counts.** A loadout can list a weapon in two
   groups, like `group (1 2)`, and 59 entries across 11 stock mechs do, but the
   game reads only the first number.
@@ -964,6 +1003,11 @@ From the settings loader at 0x40c420 and the registry code around 0x5977d0
   "about equal" test (within 2%) nobody used.
 - **The hidden "FastMenu" option (the `-seasick` switch) defaults on below
   200 MHz**, so slow machines got the still menus.
+- **The salvage screen looks the same with FastMenu on.** Its background is a
+  still picture anyway, and the game turns FastMenu off while it builds the
+  screen (0x0047d3b0), so `-seasick` changes nothing there: a shot of it with
+  and without the switch is the same to the byte (the campaign chain test's
+  FastMenu run checks this).
 
 ## Loading a mission
 
@@ -985,6 +1029,14 @@ From mission.cpp, 0x48faf0 and 0x490ab0 (details: `mission-load.md`).
   whatever the card reports.
 - **In software mode the mechs wear a cheaper texture set** (`mechtexS`, the
   palettised one); with a 3D card they use `mechtex`.
+- **With a 3D card the mechs are rebuilt as triangle strips when they load.**
+  The game joins each mech's triangles that share an edge (same texture,
+  colour and shading) into strips of up to 64 points: 302 of the 770 mech
+  models change, 10,589 polygons becoming 9,046. The shapes stay the same,
+  but shots and the ground test check the faces in a new order and stop at
+  the first that answers, so where two faces overlap, a shot in 3D-card mode
+  can meet a different face than in software mode (on a Thor, one up to
+  1.5 m away). The rebuild does as the 3D-card mode.
 - **Every mission opens with an animation script, not code.** The start is
   `start_single_player_m<n>` (instant action `switch_ia_m<n>`, multiplayer
   `start_multiplayer_m<n>`, training `start_training_m<n>`) from the
@@ -1200,9 +1252,15 @@ From mission.cpp's frame 0x48f470 and its neighbours (details:
 - **The reticle stops looking at 800 m.** It only turns yellow over what
   it finds within the camera's 800 m view distance, but six weapons reach
   further (the ER large laser and NARC 1000 m, the ER PPC 920, the Gauss
-  rifle 880, the LB 2-X 870, the Ultra AC/2 810): a mech past 800 m stays
+  rifle 880, the LB 2-X 900 counting its 30 m shell, the Ultra AC/2 810): a mech past 800 m stays
   under a green reticle (and never locks), though your shots still hit it. The rebuild looks out to
   your selected weapons' range (bug fixes on).
+- **Aimed at the sky, the zoom window reads 800 m** whatever you carry: it
+  shows the view distance when nothing is under the reticle, which is 800 m in
+  every mission. That happens to be the LRMs' and the Large Pulse Laser's range.
+  Every weapon's real range is in `docs/weapon-ranges.md`. Pirate's Moon reads the
+  farther of 800 m and your selected group's range there (1000 m with an ER Large
+  Laser), and the rebuild does the same with bug fixes on.
 - **Buildings you target never show in the TARGET window.** Only their
   name and range appear. The mission files can turn the picture on for a
   building (a `display` flag), but none of the shipped missions do.
@@ -1399,7 +1457,9 @@ From the network code (network-messages.md).
   over the running mission with EDIT AI NETS, EDIT VEHICLES, EDIT WEAPONS (which does nothing in MW3) and
   EXIT GAME EDIT. The AI net editor has its own menu: go to a net, change a
   net's or a node's parameters, add a vehicle to a node, move or delete a
-  node, save the changes, a tree view. While it is open the camera rides an
+  node, a tree view, and Save Changes, which in the release saves nothing:
+  the step that wrote the file is empty in the exe (read, not run), so an edit is gone with the
+  mission. While it is open the camera rides an
   invisible vehicle, the "stealth" object every mission makes, and you fly
   it with the game's own movement keys: throttle, turn and pitch, plus the
   mouse. It hovers at a fixed height over the ground like a sled, and a
@@ -1410,6 +1470,23 @@ From the network code (network-messages.md).
   vehicle. Nothing in the released game can open it (docs/editor.md; the
   rebuild opens it for developers with Shift+F12 under --debug-camera and
   gives the view back on exit).
+- **How the hidden AI path editor shows a net.** Every path node is a red
+  circle over the 3D view, sized by its distance, and every link a line
+  with arrowheads pointing the way the AI may walk it (both ends for a
+  two-way link). A line is blue when its two nodes can see each other and
+  red when something is in between, so a designer could spot a path that
+  runs through a wall. Click nodes to pick them (hold shift to pick several),
+  and letting go over the ground links every picked node to the first one.
+  Move Node makes the first picked node follow the mouse over the ground.
+  Looking steeply down, the editor pulls the far clip in to about one and a
+  half times the distance to the ground, likely to keep the frame quick
+  over a whole map (docs/editor.md, The net view). In the original the blue could
+  come out red at random: it read leftover memory to decide.
+- **Battlesport was Recoil.** Recoil's exes carry their source paths, and the game's folder is
+  `D:\Proj\Battlesport`, beside the engine's `D:\Proj\GameZRecoil`. So the "BATTLESPORT GAME
+  EDITOR" in MW3 is most likely a name from Recoil, built alongside MW3 on the same engine
+  and finished first, and not the 1996 BattleSport by Cyclone Studios (read from the
+  exes' strings; the two games' overlap as a modder describes it).
 - **Every mission builds that invisible camera vehicle anyway.** The
   loading screen's "Creating Stealth" step makes it in every mission, campaign,
   Instant Action and multiplayer alike, even though nothing in the release
@@ -3070,6 +3147,13 @@ From the weapons' effects (details: `weapon-effects.md`):
   loaded with the mission, not with the weapon: the weapons' own looping
   sounds are found by name there.
 
+## Lights
+
+- **Every world's sun is told to be static, and isn't.** Each world's build script ends its sun's setup
+  with a bare `LightSetStatic`. The game reads a missing on/off as off, so the sun is never made
+  static, though the line is plainly there to turn it on. It changes nothing you can see: the sun is
+  lit the same either way, and the static flag only decides how often lit models are recomputed.
+
 ## Menus
 
 From the 2D front end, zTwoD (details: `twod.md`).
@@ -3476,6 +3560,12 @@ The screen after the pilot for INSTANT ACTION, 0x00488bc0 (details:
   salvaged even when the mech is not (except TAG), each with whatever
   ammunition was left in its bin, its equipment unless the part it sat in
   was destroyed, and any heat sinks beyond the engine's ten.
+- **A destroyed vehicle's weapons are a coin flip too.** A tank, APC or
+  other vehicle you destroy gives all of its weapons (with the ammunition
+  left) or none of them, one time in two. So salvage has exactly two
+  matters of luck: this one, and the mech that lost a leg. In the rebuild a
+  mod can set those odds for a campaign played from MODS (docs/modding.md,
+  The salvage chance); the main menu's campaign keeps the original's.
 - **Salvaged weapons can change tech:** a weapon is salvaged in the tech of
   its owner's loadout; if that weapon does not exist in that tech, it comes
   out as the other side's version (an Inner Sphere-only weapon on a Clan
@@ -4202,3 +4292,75 @@ The screen after the pilot for INSTANT ACTION, 0x00488bc0 (details:
   thing the original has to pathfinding: it is why a lancemate walks a neat L
   round a hill, and why he will not follow you into a patch at all. (Found
   from the code: 0x004c3000. docs/ai.md section 11)
+
+- **Typing in the chat can move your view.** The letters you type into the
+  chat (or, in the rebuild, the cheat box) still reach the game's keys. If you
+  are still holding the last letter when you press Enter, which is normal
+  when you type fast, the game sees that letter let go after the box closes.
+  L is the hold-to-look key, so a line ending in L ("operation cwal") left the
+  mouse turning the torso instead of moving the reticle until L was pressed
+  again. The rebuild keeps keys typed into a box out of the game. (Found from
+  a playtest and the code: 0x0051a5d0, Mech::update's view key. docs/input.md)
+- **A missing mission file crashes the game, or quietly sends you back.** If an
+  operation's world file (zbd\c1\gamez.zbd and the like) is missing, starting
+  any of its missions crashes the original MechWarrior 3: the loader carries on
+  without a world and trips over it while setting up the animations. If the
+  mission scripts can't be read (zbd\interp.zbd missing), the load gives up and
+  puts you back at the briefing without saying anything: the game's error
+  messages are switched off in the released build. The rebuild stops the load in
+  both cases and says what is missing. (From the code: 0x0048faf0, 0x0050ae60,
+  the empty report 0x0049bfd0; found while making the launcher's checks)
+- **The Small Pulse Laser fires with no muzzle flash.** Its weapon data names a
+  flash, `plaser_blue_muz.flt`, that no mission contains, so nothing plays at
+  the barrel. The Small Laser's blue flash (`laser_blue_muz.flt`) is there, and
+  the Medium and Large Pulse Lasers use the green and red lasers' flashes. The
+  LB-X autocannons' scattered pellets name a missing animation too (`mac_fire`),
+  so they fly without one. (From the data: weapons.zrd against every world's
+  anim.zbd. docs/fixes.md, Candidates for Owen)
+- **The developers left their own teleport spots in every operation.** Each
+  world's reader.zbd holds a location.zrd, the list a hidden teleport tool
+  read (a debug command no key reaches in the release). The spots:
+  - c1: Mission 1 Start, Mission 2 Start, Mission 3 Start, IA_base;
+  - c2: Mission 1-3 Start, m1_dam, m3_dock, IA_base, m4_pipes;
+  - c3: m4_factories, m5_dome, m5_gateway, m6_spaceport, m3_dropship,
+    m5_dock, IA_base;
+  - c4: m1_Train_station, m3_clan_base, m4_chateau, "personal trans
+    trigger", IA_base;
+  - c4b: dome, gate, batchall;
+  - t1 (training): Start Area, beach, town, road, mech_list, RoadEnd.
+
+  "IA_base" in each campaign world points at where the Instant Action base
+  is. The tool also listed the mission's nav points and your own place, and
+  its save stamped every file "Last updated Sep 20 1999 at 16:29:38", the
+  date and time the game was built. The rebuild opens it as the editor's
+  TELEPORT. (From the data and the code: 0x004a37a0, dialog 132.
+  docs/editor.md, Teleport)
+- **None of the game's texture files uses shared palettes, and the code for
+  them crashes without one.** Each texture's table entry ends in 4 bytes
+  naming a shared palette of its file, -1 (`ff ff ff ff`) for none. All 38
+  texture files of MechWarrior 3 and Pirate's Moon have no shared palettes
+  and say -1 everywhere. A hand-made entry that says 0 instead makes the
+  original crash when that texture is loaded (it looks in a palette list
+  that was never made). For mod makers: new entries need `ff ff ff ff`
+  there. The rebuild loads such a texture anyway and says so. (From the
+  code and the emulator: 0x00518db0, the read at 0x00518e2c.
+  docs/modding.md, A table entry naming a palette the file lacks)
+- The developers' in-game editor (the Battlesport editor's panel, left in
+  the game) has no mouse pointer: the mouse still moves an unseen point,
+  and the row under it lights green; that lit row is all you get to aim
+  with. The rebuild shows the system's cursor while the editor is up.
+  (From the code and a run: 0x0040e4b0. docs/editor.md, The pointer)
+- **Some names show as raw `MSG_...` codes in the original.** The game looks
+  its texts up by name in Mech3Msg.dll, and a few names in the data are
+  spelled differently from the file's, so the code name itself appears. In
+  MechWarrior 3 1.0, two targets in Operation 3 Mission 6 (the Clan fortress
+  and spaceport) show as `MSG_TGT_CLAN_FORTRESS` and `MSG_TGT_CLAN_SPACEPORT`;
+  1.2 fixed them. In Pirate's Moon: the four "exotic" loadouts of a dozen
+  mechs show as `MSG_CONFIG_EXOTIC_A` to `_D`, the standalone missions' long
+  descriptions as `MSG_C1SA1_VERBOSE` and the like, one line of the campaign
+  results as `MSG_WIN_CAMP_MISS`, a nav point in one Instant Action map as
+  `MSG_WPT_START`, and three weapons (the ER Micro Laser and the heavy and
+  light machine guns) as `MSG_WPN_ERLASER_MCR`, `MSG_WPN_M_GUN_H` and
+  `MSG_WPN_M_GUN_LT` where the game reads the weapon's description; the HUD's
+  weapon list names them right, from a table of its own. (From the data and
+  Mech3Msg.dll: tools/analysis/msg_name_scan.py. docs/fixes.md)
