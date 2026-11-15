@@ -185,14 +185,26 @@ bool parse_pose(const std::string& record_text, MechPose* out) {
   }
 }
 
-std::string replay_refusal(const ReplayFlags& f) {
-  if (f.arena) return "--replay: --arena is refused (a replay plays a log, it runs no match)";
-  if (f.host) return "--replay: --host is refused (a replay opens no network)";
-  if (f.join) return "--replay: --join is refused (a replay opens no network)";
-  if (f.net_upnp) return "--replay: --net-upnp is refused (a replay opens no network)";
-  if (f.fly) return "--replay: --fly is refused (a replay plays no mission)";
-  if (f.mission) return "--replay: --mission is refused (the log names its map)";
+namespace {
+// What both viewers refuse, the message naming `viewer`.
+std::string refusal_for(const char* viewer, const ReplayFlags& f) {
+  const std::string v = viewer;
+  if (f.arena) return v + ": --arena is refused (a replay plays a log, it runs no match)";
+  if (f.host) return v + ": --host is refused (a replay opens no network)";
+  if (f.join) return v + ": --join is refused (a replay opens no network)";
+  if (f.net_upnp) return v + ": --net-upnp is refused (a replay opens no network)";
+  if (f.fly) return v + ": --fly is refused (a replay plays no mission)";
+  if (f.mission) return v + ": --mission is refused (the log names its map)";
   return "";
+}
+}  // namespace
+
+std::string replay_refusal(const ReplayFlags& f) { return refusal_for("--replay", f); }
+
+std::string replay3d_refusal(const ReplayFlags& f) {
+  if (f.replay) return "--replay3d: --replay is refused (one viewer at a time)";
+  if (f.play_original) return "--replay3d: --original is refused (its quit box needs the bug fixes)";
+  return refusal_for("--replay3d", f);
 }
 
 bool ReplayLog::load(const std::string& path, std::string* error) {

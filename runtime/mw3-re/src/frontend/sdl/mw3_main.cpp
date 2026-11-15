@@ -273,7 +273,7 @@ void usage() {
       "DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] "
       "[--window WxH] "
       "[--nosound] [--hidden] [--verbose]\n"
-      "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl]\n"
+      "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -483,6 +483,8 @@ bool parse(int argc, char** argv, Args& a) {
   mech3::replay::ReplayFlags replay;
   replay.arena = !a.watch.arena_path.empty(), replay.host = a.net_host, replay.join = !a.net_join.empty();
   replay.net_upnp = !a.net_upnp.empty(), replay.mission = !a.mission.empty(), replay.fly = a.fly;
+  replay.replay = !a.watch.replay_path.empty(), replay.replay3d = !a.watch.replay3d_path.empty();
+  replay.play_original = a.play_original;
   mech3::arena::Flags arena;
   arena.host = a.net_host, arena.join = !a.net_join.empty(), arena.net_upnp = !a.net_upnp.empty();
   arena.original = a.play_original, arena.mission = !a.mission.empty();
@@ -786,7 +788,7 @@ int main(int argc, char** argv) {
   // named install or source go straight on.
   const bool player_start = !a.hidden && a.frames == 0 && a.shot.empty() && a.chain.empty() && a.modes.empty() &&
                             a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() &&
-                            a.watch.replay_path.empty() && a.install.empty() &&
+                            a.watch.replay_path.empty() && a.watch.replay3d_path.empty() && a.install.empty() &&
                             a.install_from.empty() && a.patch.empty() && a.original.find("-nofmv") == std::string::npos;
   bool setup_only = false;
   if (!a.ready_file.empty()) sdlfe::set_ready_file(a.ready_file);
@@ -877,7 +879,7 @@ int main(int argc, char** argv) {
   std::printf("mw3: install %s, write dir %s\n", a.install.c_str(), a.write_dir.c_str());
   // --replay and --arena (ours, #287, #289): with the install mounted, the
   // replay viewer alone, or the match's game files and log (watch_launch.h).
-  if (const int code = sdlfe::watch_after_mount(a.watch, a.seed); code >= 0) {
+  if (const int code = sdlfe::watch_after_mount(a.watch, a.seed, &a.mission); code >= 0) {
     SDL_Quit();
     return code;
   }

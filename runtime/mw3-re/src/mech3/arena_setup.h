@@ -55,6 +55,9 @@ struct Setup {
 // one of the game's worlds and the number is above 0; whether the map ships
 // (and has its 16 spawn spots) is read from the game files later.
 bool split_map(const std::string& map, std::string* dir, int32_t* number);
+// Ours (#289): whether multiplayer map `number` of world `dir` has its reader
+// in the game files (the install mounted).
+bool map_reader_ships(const std::string& dir, int32_t number);
 
 // Reads the setup's JSON text. False with *error naming the field (for
 // example "sides[1][0].mech: unknown mech \"notmech\"") on any bad value.

@@ -9,6 +9,7 @@
 
 #include "check.h"
 #include "mech3/replay_log.h"
+#include "mech3/replay_run.h"
 
 namespace {
 using mech3::replay::Frame;
@@ -173,6 +174,34 @@ TEST(replay_refuses_hostile_start_lines) {
   EXPECT(refused("replay_side", R"({"type":"start","version":2,"map":"m","mechs":[{"id":0,"side":2}]})", "side"));
   EXPECT(refused("replay_voice",
                  R"({"type":"start","version":2,"map":"m","mechs":[{"id":0,"side":0,"voice":"../x"}]})", "voice"));
+}
+
+// #289 plan step 6: --replay3d refuses what --replay does, --replay itself
+// and --original; a log's map must be a multiplayer map.
+TEST(replay3d_refusals) {
+  using mech3::replay::ReplayFlags;
+  ReplayFlags f;
+  f.replay3d = true;
+  EXPECT(mech3::replay::replay3d_refusal(f).empty());
+  const auto refused_for = [](ReplayFlags flags, const char* option) {
+    return mech3::replay::replay3d_refusal(flags).find(option) != std::string::npos;
+  };
+  ReplayFlags g = f;
+  g.replay = true;
+  EXPECT(refused_for(g, "--replay is"));
+  g = f, g.play_original = true;
+  EXPECT(refused_for(g, "--original"));
+  g = f, g.arena = true;
+  EXPECT(refused_for(g, "--replay3d: --arena"));
+  g = f, g.host = true;
+  EXPECT(refused_for(g, "--host"));
+  g = f, g.mission = true;
+  EXPECT(refused_for(g, "--mission"));
+  EXPECT(mech3::replay::replay_map_refusal("c1mp1").empty());
+  EXPECT(!mech3::replay::replay_map_refusal("c1m1").empty());   // a campaign mission
+  EXPECT(!mech3::replay::replay_map_refusal("c1ia1").empty());  // Instant Action
+  EXPECT(!mech3::replay::replay_map_refusal("zz9mp1").empty()); // no such world
+  EXPECT(!mech3::replay::replay_map_refusal("").empty());
 }
 
 // Out-of-range values are skipped and counted, never passed on.

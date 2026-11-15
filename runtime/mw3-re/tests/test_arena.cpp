@@ -24,6 +24,7 @@
 #include "mech3/mech_names.h"
 #include "mech3/mech_net.h"
 #include "mech3/replay_log.h"
+#include "mech3/replay_run.h"
 #include "mech3/weapon.h"
 #include "mech3/zai_nav.h"
 #include "mech3/zai_params.h"
@@ -293,6 +294,42 @@ TEST(arena_setup_game_files_read_the_map_and_presets) {
     EXPECT(parse_arena_setup(setup_json(map), &s, &error));
     EXPECT(read_arena_game_files(&s, &error));
   }
+}
+
+// #289 plan step 6: --replay3d's run reads a log on a shipped map and opens
+// the in-process session with no bots; a log on a map the game lacks, or with
+// an unknown chassis, is refused; closing shuts the session.
+TEST(replay3d_run_reads_opens_and_closes_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  const auto write = [](const char* name, const std::string& map, const std::string& mech) {
+    const std::string path = temp_dir(name) + "/match-1.jsonl";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << R"({"type":"start","version":2,"map":")" << map << R"(","sides":[[{"mech":")" << mech
+        << R"("}],[]],"mechs":[{"id":0,"side":0}]})" "\n"
+        << R"({"type":"state","t":0,"mechs":[{"id":0,"pos":[0,0,0],"heading":0}]})" "\n";
+    return path;
+  };
+  std::string message;
+  {
+    mech3::replay::ReplayRun run;
+    EXPECT(run.read(write("replay3d_ok", "c1mp1", "madcat"), &message));
+    if (!message.empty()) std::printf("  replay3d: %s\n", message.c_str());
+    EXPECT(run.map() == "c1mp1" && run.log().mechs().size() == 1);
+    EXPECT(run.open(&message) && znet::active());
+  }
+  EXPECT(!znet::active());  // the session went with the run
+  mech3::replay::ReplayRun missing_map;
+  EXPECT(!missing_map.read(write("replay3d_map", "c1mp9", "madcat"), &message) &&
+         message.find("not in the game files") != std::string::npos);
+  mech3::replay::ReplayRun campaign;
+  EXPECT(!campaign.read(write("replay3d_campaign", "c1m1", "madcat"), &message) &&
+         message.find("not a multiplayer map") != std::string::npos);
+  mech3::replay::ReplayRun chassis;
+  EXPECT(!chassis.read(write("replay3d_chassis", "c1mp1", "notamech"), &message) &&
+         message.find("unknown chassis") != std::string::npos);
 }
 
 TEST(arena_setup_game_files_refuse_a_map_without_16_spots) {

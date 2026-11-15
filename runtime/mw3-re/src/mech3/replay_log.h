@@ -9,13 +9,21 @@
 // function of t: seeking backward then forward gives the same frame.
 namespace mech3::replay {
 
-// Which command-line options came with --replay. A replay reads a log and
-// draws it; it opens no network, plays no mission and runs no match.
+// Which command-line options came with --replay or --replay3d. A replay
+// reads a log and draws it; it opens no network, plays no mission and runs
+// no match.
 struct ReplayFlags {
   bool arena = false, host = false, join = false, net_upnp = false, mission = false, fly = false;
+  bool replay = false, replay3d = false;  // which viewers were asked for
+  // --original: the 3D replay's quit box keys need the bug fixes on
+  // (quit_box.cpp), which it turns off.
+  bool play_original = false;
 };
 // "" when the run may go on, else the message naming the option.
 std::string replay_refusal(const ReplayFlags& flags);
+// The same for --replay3d: everything --replay refuses, --replay itself and
+// --original.
+std::string replay3d_refusal(const ReplayFlags& flags);
 
 struct Vec3 {
   float x = 0, y = 0, z = 0;

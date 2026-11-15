@@ -17,6 +17,7 @@ bool parse_watch_option(WatchArgs& w, int argc, char** argv, int* i) {
   if (s == "--arena") w.arena_path = argv[++*i];
   else if (s == "--replay") w.replay_path = argv[++*i];
   else if (s == "--replay-script") w.replay_script = argv[++*i];
+  else if (s == "--replay3d") w.replay3d_path = argv[++*i];
   else return false;
   return true;
 }
@@ -25,6 +26,13 @@ bool check_watch_options(WatchArgs& w, const mech3::replay::ReplayFlags& replay,
                          const mech3::arena::Flags& arena, std::string* mission, bool* nosound) {
   if (!w.replay_path.empty()) {
     const std::string message = mech3::replay::replay_refusal(replay);
+    if (!message.empty()) {
+      std::fprintf(stderr, "mw3: %s\n", message.c_str());
+      return false;
+    }
+  }
+  if (!w.replay3d_path.empty()) {
+    const std::string message = mech3::replay::replay3d_refusal(replay);
     if (!message.empty()) {
       std::fprintf(stderr, "mw3: %s\n", message.c_str());
       return false;
@@ -43,7 +51,19 @@ bool check_watch_options(WatchArgs& w, const mech3::replay::ReplayFlags& replay,
   return true;
 }
 
-int watch_after_mount(WatchArgs& w, int seed) {
+int watch_after_mount(WatchArgs& w, int seed, std::string* mission) {
+  // --replay3d: the log read and checked before anything is made from it.
+  if (!w.replay3d_path.empty()) {
+    w.replay3d = std::make_shared<mech3::replay::ReplayRun>();
+    std::string message;
+    if (!w.replay3d->read(w.replay3d_path, &message)) {
+      std::fprintf(stderr, "mw3: %s\n", message.c_str());
+      w.replay3d.reset();
+      return 2;
+    }
+    *mission = w.replay3d->map();
+    std::printf("mw3: replay3d of %s on %s\n", w.replay3d_path.c_str(), mission->c_str());
+  }
   // --replay: the viewer and nothing else: no engine, mission, match or network.
   if (!w.replay_path.empty()) return run_replay(w.replay_path, w.replay_script);
   // --arena: never over an old log; a failure exits 2 before the engine starts.
@@ -60,8 +80,13 @@ int watch_after_mount(WatchArgs& w, int seed) {
 
 bool open_watch_session(WatchArgs& w, int seed, int frame_ms, bool headless) {
   // The run outlives run(), whose engine is gone before its shutdown.
-  if (!w.arena) return true;
   std::string message;
+  if (w.replay3d && !w.replay3d->open(&message)) {
+    std::fprintf(stderr, "mw3: %s\n", message.c_str());
+    w.replay3d.reset();
+    return false;
+  }
+  if (!w.arena) return true;
   if (!w.arena->open(seed, frame_ms, headless, &message)) {
     std::fprintf(stderr, "mw3: %s\n", message.c_str());
     w.arena.reset();
@@ -70,10 +95,13 @@ bool open_watch_session(WatchArgs& w, int seed, int frame_ms, bool headless) {
   return true;
 }
 
-void close_watch(WatchArgs& w) { w.arena.reset(); }
+void close_watch(WatchArgs& w) {
+  w.arena.reset();
+  w.replay3d.reset();
+}
 
 void watch_seat(const WatchArgs& w, mech3::MultiplayerGame* game, mech3::GameEngine::Launch* launch) {
-  if (w.arena_path.empty()) return;
+  if (!w.watched_match()) return;
   game->b8c = 0;  // +0x8c, net_pilot_respawn's switch
   launch->spectator = true;
 }

@@ -120,6 +120,12 @@ struct AivTree {
 
 }  // namespace
 
+// Ours (#289): whether the multiplayer map's reader ships in the game files.
+bool map_reader_ships(const std::string& dir, int32_t number) {
+  AivTree map;
+  return map.read(reader_path(dir, "mp" + std::to_string(number)));
+}
+
 // Ours (#287): the setup file's fields, each refused by name.
 bool parse_arena_setup(const std::string& json_text, Setup* out, std::string* error) {
   *out = Setup{};
