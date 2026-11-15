@@ -16,6 +16,7 @@
 #pragma once
 #include "capture_pixels.hpp"
 #include "frontend/sdl/cpu_interval.h"
+#include "frontend/core_critical/producer_view_test_hook.hpp"
 #define VK_NO_PROTOTYPES
 #include "buffer_reserve.hpp"
 #include "camera_history.hpp"
@@ -184,6 +185,7 @@ struct Draw {
   std::array<float, 4> surface_eye{};
   std::shared_ptr<const mw34::materials::HeightBinding> height_binding;
   bool geometry_debug_normals{};
+  ::platform::ProducerView producer_view{};
 };
 struct Clear {
   unsigned flags;
@@ -243,6 +245,8 @@ struct Scene {
 // and fences on one queue.
 class Renderer {
 public:
+  // Set only by the producer after draining all existing worker jobs.
+  cc_mw3_re::testing::ProducerViewObserver* producer_view_observer{};
   struct WindowSurface {
     std::vector<const char *> extensions;
     std::function<VkSurfaceKHR(VkInstance)> create;
@@ -2028,6 +2032,7 @@ private:
       if (left.model || right.model || left.key.points || right.key.points ||
           !left.count || !right.count || left.count % 3 || right.count % 3 ||
           left.key.packed() != right.key.packed() ||
+          !::platform::same_producer_view_bits(left.producer_view, right.producer_view) ||
           drawSets[a] != drawSets[b] ||
           !mw34::materials::same_height_binding(left.height_binding, right.height_binding) ||
           std::memcmp(&left.push, &right.push, sizeof(Push)) != 0 ||
@@ -2084,6 +2089,17 @@ private:
           ++logicalDraws;
           ++orderAt;
         }
+      }
+      if (producer_view_observer) {
+        cc_mw3_re::testing::ProducerViewObservation observation{};
+        observation.stage = cc_mw3_re::testing::ProducerViewStage::backend_group;
+        observation.view = d.producer_view;
+        observation.first = d.first;
+        observation.count = vertexCount;
+        observation.logical_draws = logicalDraws;
+        observation.combined = logicalDraws > 1;
+        observation.tl_combine = combine;
+        producer_view_observer->backend(observation);
       }
       const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
       const VkPipelineLayout layout =

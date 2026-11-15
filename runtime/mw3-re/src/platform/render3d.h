@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include "frontend/core_critical/renderer/geometry/resource.hpp"
+#include "platform/producer_view.h"
 
 // What the rebuilt Direct3D layer (zvid_ddd3d.c, docs/render.md section 4)
 // needs from the machine: stands in for IDirect3DDevice3 and the DirectDraw
@@ -72,25 +73,6 @@ struct DeferredMaterialBinding {
   virtual ~DeferredMaterialBinding() = default;
 };
 
-// Typed mission-change notification: the 0-based campaign world (launch
-// index) and the mission number within it. {-1, 0} is the empty identity
-// (failed load, non-campaign game type or scene reset).
-struct MissionIdentity {
-  int32_t world_index = -1;
-  int32_t number = 0;
-};
-
-inline MissionIdentity make_mission_identity(int32_t game_type,
-                                             int32_t world_index,
-                                             int32_t number,
-                                             bool load_success) {
-  // IA and multiplayer numbers name iaN/mpN blocks, not campaign mN blocks.
-  if (!load_success || (game_type != 1 && game_type != 4)) {
-    return MissionIdentity{-1, 0};
-  }
-  return MissionIdentity{world_index, number};
-}
-
 // Borrowed native player actor node, valid only during the tick callback.
 struct PlayerHeadlightTick {
   const void* node = nullptr;
@@ -98,6 +80,15 @@ struct PlayerHeadlightTick {
   float dt = 0;
   bool shutdown = true;
   uint64_t generation = 0;
+};
+
+// Synchronous receiver restoration only. This token never enters a queue/Scene.
+// Cookies belong to one receiver/reset generation; reset must make old tokens inert.
+struct ProducerViewRestoreToken {
+  ProducerView previous{};
+  std::uintptr_t receiver_cookie = 0;
+  uint64_t reset_generation = 0;
+  bool active = false;
 };
 
 class Render3D {
@@ -117,6 +108,13 @@ class Render3D {
   }
   virtual void note_cpu_model_geometry() {}
   virtual bool wants_model_context() const { return false; }
+  // Neutral consumers may ignore transport. Core supplies its owned value and
+  // CPU-packet cleanup in the consumer step; these defaults claim no such work.
+  // A throwing exchange must leave the previous binding unchanged.
+  virtual ProducerViewRestoreToken exchange_producer_view(const ProducerView&) { return {}; }
+  virtual void restore_producer_view(const ProducerViewRestoreToken&) noexcept {}
+  virtual void abandon_producer_work() noexcept {}
+  virtual void reset_producer_work() noexcept {}
   // Typed mission-change callback from the native missions object. The
   // default is a no-op so renderers that do not care are unaffected.
   virtual void mission_changed(const MissionIdentity &) {}

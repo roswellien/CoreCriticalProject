@@ -2013,6 +2013,7 @@ struct WiredMissionHooks : MissionHooks {
       auto* d = static_cast<zcls::Window*>(n->data);
       d->put<int32_t>(0x8, w), d->put<int32_t>(0xc, h);
     }
+    zvid::set_producer_canvas_rect(0, 0, w, h);
     if (e->platform_parts().render) e->platform_parts().render->set_viewport(0, 0, w, h);
   }
   void window_set_origin(Handle node, int32_t x, int32_t y) override {
@@ -2505,10 +2506,11 @@ void GameEngine::missions_start(uint32_t list) {
   }
   // Typed mission-change notification, fired even when the load failed (with
   // the empty identity) so renderers drop any stale mission state.
+  const platform::MissionIdentity identity = platform::make_mission_identity(
+      launch_.type, static_cast<int32_t>(launch_.index),
+      static_cast<int32_t>(launch_.number), !m.failed);
+  zvid::producer_mission_changed(identity);
   if (auto *render = platform_parts().render) {
-    const platform::MissionIdentity identity = platform::make_mission_identity(
-        launch_.type, static_cast<int32_t>(launch_.index),
-        static_cast<int32_t>(launch_.number), !m.failed);
     render->mission_changed(identity);
   }
   zcls::Node* cam = mission_node(*this, camera_);
@@ -2799,6 +2801,7 @@ uint32_t GameEngine::vcall(Handle obj, uint32_t slot, std::initializer_list<Arg>
   if (obj && obj == view_ && slot == 0x04) {
     if (zcls::Node* cam = mission_node(*this, camera_)) {
       ++zcls::frames().frame;
+      const zvid::ProducerPurposeScope producer_view(platform::ProducerPurpose::MainWorld);
       zcls::render_world(cam, 0);
       scene_drawn_ = true;
     }

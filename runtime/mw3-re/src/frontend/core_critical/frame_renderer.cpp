@@ -369,10 +369,54 @@ public:
     return presented_frames_.load();
   }
   void drain() override {
-    flush();
-    complete_local_light_packets();
+    if (!producer_failed_) {
+      flush();
+      complete_local_light_packets();
+    }
     if (worker_)
       worker_->drain();
+  }
+  bool observe_producer_views(testing::ProducerViewObserver* observer) override {
+    drain();
+    producer_observer_ = observer;
+    renderer_->producer_view_observer = observer;
+    return true;
+  }
+  ::platform::ProducerViewRestoreToken exchange_producer_view(
+      const ::platform::ProducerView& view) override {
+    require_producer_live();
+    validate_producer_view(view);
+    testing::ProducerViewObservation observation{};
+    observation.stage = testing::ProducerViewStage::exchange;
+    observation.view = view;
+    if (producer_observer_) producer_observer_->producer(observation);
+    ::platform::ProducerViewRestoreToken token{};
+    token.previous = producer_view_;
+    token.receiver_cookie = reinterpret_cast<std::uintptr_t>(this);
+    token.reset_generation = producer_reset_generation_;
+    token.active = true;
+    producer_view_ = view;
+    return token;
+  }
+  void restore_producer_view(const ::platform::ProducerViewRestoreToken& token) noexcept override {
+    if (!token.active || token.receiver_cookie != reinterpret_cast<std::uintptr_t>(this) ||
+        token.reset_generation != producer_reset_generation_ || producer_failed_)
+      return;
+    producer_view_ = token.previous;
+    if (producer_observer_) {
+      testing::ProducerViewObservation observation{};
+      observation.stage = testing::ProducerViewStage::restore;
+      observation.view = producer_view_;
+      producer_observer_->backend(observation);
+    }
+  }
+  void abandon_producer_work() noexcept override {
+    clear_producer_work(true);
+    zvid::invalidate_producer_transport(this, true);
+  }
+  void reset_producer_work() noexcept override {
+    clear_producer_work(false);
+    zvid::invalidate_producer_transport(this, false);
   }
   SceneBindingStatistics scene_binding_statistics() override {
     if (worker_)
@@ -529,6 +573,12 @@ public:
   // failed identities clear any prior state (no stale profile).
   void mission_changed(const ::platform::MissionIdentity &identity) override {
     VisualFloatScope fp_guard;
+    // Drop unsubmitted CPU work before the old drain path can publish it. The
+    // metadata notification restores identity after invalidation; a detached
+    // renderer must never touch another receiver's queue.
+    clear_producer_work(false);
+    if (zvid::render3d() == this)
+      zvid::producer_mission_changed(identity);
     // Drain packets queued for the previous mission before switching state.
     drain();
     local_lights_clear();
@@ -866,6 +916,7 @@ public:
 
   void draw(Primitive primitive, const TLVertex *vertices, int count,
             const DrawState &state) override {
+    require_producer_live();
     // Only the explicitly marked 2D compositor may supply CPU vertices in
     // strict mode. Depth-always also occurs in 3D overlays, so it cannot
     // identify a HUD exemption.
@@ -915,6 +966,97 @@ private:
     }
   }
 
+  void require_producer_live() const {
+    if (producer_failed_ || producer_generation_exhausted_)
+      throw std::runtime_error("Core producer requires explicit reset after abandonment");
+  }
+  static void validate_producer_view(const ::platform::ProducerView& view) {
+    const bool original = view.purpose == ::platform::ProducerPurpose::Original;
+    const bool known = original || view.purpose == ::platform::ProducerPurpose::MainWorld ||
+                       view.purpose == ::platform::ProducerPurpose::WorldZoom;
+    if (view.record_version != ::platform::kProducerViewRecordVersion || !known ||
+        view.present == original ||
+        (view.present && (!view.producer_generation || !view.mission_epoch)) ||
+        (!view.present && (view.producer_generation || view.mission_epoch)))
+      throw std::runtime_error("Invalid Core producer view provenance");
+    // No numeric policy: original NaNs and stale inverses are owned data.
+  }
+  void clear_producer_work(bool failed) noexcept {
+    const auto previous_view = producer_view_;
+    scene_ = {};
+    pending_local_packets_.clear();
+    pending_local_bytes_ = 0;
+    submitted_textures_.clear();
+    invalidate_scene_bindings();
+    deferred_material_binding_.reset();
+    native_context_ = {};
+    suppress_model_draws_ = false;
+    local_active_ = false;
+    producer_view_ = {};
+    resident_width_ = resident_height_ = 0;
+    if (producer_reset_generation_ == std::numeric_limits<std::uint64_t>::max())
+      producer_generation_exhausted_ = true;
+    else
+      ++producer_reset_generation_;
+    producer_failed_ = failed || producer_generation_exhausted_;
+    if (producer_observer_) {
+      testing::ProducerViewObservation observation{};
+      observation.stage = failed ? testing::ProducerViewStage::abandon : testing::ProducerViewStage::reset;
+      observation.failed = producer_failed_;
+      observation.view = previous_view;
+      observation.scene_draws = scene_.draws.size();
+      observation.pending_local_packets = pending_local_packets_.size();
+      observation.upload_receipts = submitted_textures_.size();
+      producer_observer_->backend(observation);
+    }
+  }
+  static testing::ProducerViewObservation producer_draw_observation(
+      const vk::Draw& draw, const vk::Scene& scene, std::uint64_t packet) {
+    testing::ProducerViewObservation observation{};
+    observation.view = draw.producer_view;
+    observation.packet = packet;
+    observation.first = draw.first;
+    observation.count = draw.count;
+    observation.sun_tl = bool(draw.sun_tl);
+    observation.height_binding = bool(draw.height_binding);
+    observation.surface_eye = draw.surface_eye;
+    if (draw.sun_tl) {
+      observation.camera_world = draw.sun_tl->camera_world;
+      observation.projection = draw.sun_tl->projection;
+    }
+    const auto offset = std::size_t(draw.first) * sizeof(TLVertex);
+    if (draw.count && offset <= scene.vertices.size() &&
+        scene.vertices.size() - offset >= sizeof(TLVertex))
+      std::memcpy(&observation.first_vertex, scene.vertices.data() + offset, sizeof(TLVertex));
+    return observation;
+  }
+  void observe_producer_draw(const vk::Draw& draw) {
+    if (!producer_observer_) return;
+    auto observation = producer_draw_observation(draw, scene_, 0);
+    observation.stage = testing::ProducerViewStage::append;
+    observation.scene_draws = scene_.draws.size();
+    observation.pending_local_packets = pending_local_packets_.size();
+    producer_observer_->producer(observation);
+  }
+  void observe_producer_packet(const vk::Scene& scene, std::uint64_t packet, bool local) {
+    if (!producer_observer_) return;
+    for (const auto& draw : scene.draws) {
+      auto observation = producer_draw_observation(draw, scene, packet);
+      observation.stage = local ? testing::ProducerViewStage::local_packet : testing::ProducerViewStage::packet;
+      observation.scene_draws = scene.draws.size();
+      observation.pending_local_packets = pending_local_packets_.size();
+      producer_observer_->producer(observation);
+    }
+  }
+  void observe_worker_packet(const vk::Scene& scene, std::uint64_t packet) noexcept {
+    if (!producer_observer_) return;
+    for (const auto& draw : scene.draws) {
+      auto observation = producer_draw_observation(draw, scene, packet);
+      observation.stage = testing::ProducerViewStage::packet;
+      producer_observer_->backend(observation);
+    }
+  }
+
   int32_t prepared_normal(const ::platform::prepared::NormalImage &image) {
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())
@@ -928,6 +1070,23 @@ private:
 
   void append_draw(Primitive primitive, const TLVertex *vertices, int count,
                    const DrawState &state, bool hud, bool depth_only = false) {
+    VisualFloatScope float_scope;
+    require_producer_live();
+    validate_producer_view(producer_view_);
+    zmth::Projection projection{};
+    const float* camera = nullptr;
+    auto viewport = viewport_;
+    if (producer_view_.present) {
+      static_assert(sizeof(projection) == sizeof(producer_view_.projection), "projection storage");
+      std::memcpy(&projection, &producer_view_.projection, sizeof projection);
+      camera = producer_view_.camera;
+      if (producer_view_.canvas_available)
+        viewport = {producer_view_.canvas.x, producer_view_.canvas.y,
+                    producer_view_.canvas.width, producer_view_.canvas.height};
+    } else {
+      projection = zmth::projection();
+      camera = zmth::view().camera.m;
+    }
     CpuInterval interval(cpu_profile_ ? &append_ticks_ : nullptr);
     if (count <= 0) {
       return;
@@ -941,9 +1100,9 @@ private:
     const unsigned first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     const auto add = [&](TLVertex vertex) {
       vertex.sx =
-          (vertex.sx - viewport_[0]) * scene_.width / float(viewport_[2]);
+          (vertex.sx - viewport[0]) * scene_.width / float(viewport[2]);
       vertex.sy =
-          (vertex.sy - viewport_[1]) * scene_.height / float(viewport_[3]);
+          (vertex.sy - viewport[1]) * scene_.height / float(viewport[3]);
       if (vertex.rhw <= 0) {
         vertex.rhw = 1;
       }
@@ -991,6 +1150,7 @@ private:
     }
 
     vk::Draw draw{};
+    draw.producer_view = producer_view_;
     draw.native_sky = state.native_sky;
     draw.depth_only = depth_only;
     draw.first = first;
@@ -1013,19 +1173,19 @@ private:
           draw.normal_texture = -1;
         }
         auto tl = std::make_shared<mw34::sun::Tl>();
-        const auto &proj = zmth::projection();
+        const auto &proj = projection;
         if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
-            viewport_[2] > 0 && viewport_[3] > 0) {
+            viewport[2] > 0 && viewport[3] > 0) {
           tl->projection = {
               proj.near_z,
-              proj.fx_near * float(scene_.width) / float(viewport_[2]),
-              proj.fy_near * float(scene_.height) / float(viewport_[3]),
-              (proj.cx - float(viewport_[0])) * float(scene_.width) /
-                  float(viewport_[2]),
-              (proj.cy - float(viewport_[1])) * float(scene_.height) /
-                  float(viewport_[3]),
+              proj.fx_near * float(scene_.width) / float(viewport[2]),
+              proj.fy_near * float(scene_.height) / float(viewport[3]),
+              (proj.cx - float(viewport[0])) * float(scene_.width) /
+                  float(viewport[2]),
+              (proj.cy - float(viewport[1])) * float(scene_.height) /
+                  float(viewport[3]),
               proj.far_z > 0 ? proj.far_z : 1000.0f};
-          const float *m = zmth::view().camera.m;
+          const float *m = camera;
           tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
                               m[7], m[10], m[2], m[5], m[8], m[11]};
         } else {
@@ -1042,8 +1202,8 @@ private:
           draw.surface_parameters =
               deferred_surface_parameters(key, state.texture);
           if (draw.surface_parameters[3] > .5f && proj.near_z > 0 &&
-              proj.fx_near > 0 && proj.fy_near > 0 && viewport_[2] > 0 &&
-              viewport_[3] > 0) {
+              proj.fx_near > 0 && proj.fy_near > 0 && viewport[2] > 0 &&
+              viewport[3] > 0) {
             const auto &eye = draw.sun_tl->camera_world;
             draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
           }
@@ -1068,8 +1228,8 @@ private:
               norm_idx,
               surface_normals_.cache.authored.count(key) ? "authored" : "world",
               state.address_u, state.address_v, proj.near_z, proj.fx_near,
-              proj.fy_near, proj.cx, proj.cy, viewport_[0], viewport_[1],
-              viewport_[2], viewport_[3], scene_.width, scene_.height,
+              proj.fy_near, proj.cx, proj.cy, viewport[0], viewport[1],
+              viewport[2], viewport[3], scene_.width, scene_.height,
               vertices[0].sx, vertices[0].sy, vertices[0].sz, vertices[0].rhw,
               vertices[0].tu, vertices[0].tv);
         }
@@ -1098,15 +1258,15 @@ private:
       const auto &slot = textures_.at(state.texture);
       draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
       if (draw.height_binding) {
-        const auto &projection = zmth::projection();
+        // projection is selected from the producing view above.
         if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
             !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||
             !std::isfinite(projection.near_z) || !std::isfinite(projection.fx_near) ||
             !std::isfinite(projection.fy_near) || !std::isfinite(projection.far_z) ||
             !std::isfinite(projection.cx) || !std::isfinite(projection.cy) ||
-            viewport_[2] <= 0 || viewport_[3] <= 0)
+            viewport[2] <= 0 || viewport[3] <= 0)
           throw std::runtime_error("POM native ground requires a valid native projection");
-        const float *m = zmth::view().camera.m;
+        const float *m = camera;
         const ::platform::prepared::Matrix camera_to_world{
             m[0], m[3], m[6], m[9], m[1], m[4], m[7], m[10],
             m[2], m[5], m[8], m[11], 0, 0, 0, 1};
@@ -1132,6 +1292,7 @@ private:
       auto &previous = scene_.draws.back();
       if (!previous.model && previous.depth_only == draw.depth_only &&
           previous.native_sky == draw.native_sky &&
+          ::platform::same_producer_view_bits(previous.producer_view, draw.producer_view) &&
           previous.texture == draw.texture &&
           previous.normal_texture == draw.normal_texture &&
           bool(previous.sun_tl) == bool(draw.sun_tl) &&
@@ -1155,11 +1316,13 @@ private:
           previous.lit_normals = std::move(merged_normals);
         }
         previous.count += drawn;
+        observe_producer_draw(previous);
         return;
       }
     }
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));
+    observe_producer_draw(scene_.draws.back());
     if (sharp)
       ++gpu_sharp_draws_;
   }
@@ -1349,6 +1512,7 @@ private:
             lighting_.enabled,
         display_lighting(), geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
+    renderer_->producer_view_observer = producer_observer_;
     texture_limit_ = renderer_->max_texture_dimension(native_window_);
     if (!native_wsi_ && !renderer_->dxgi_presenting()) {
       throw std::runtime_error("Core Critical DXGI transport is unavailable");
@@ -1356,6 +1520,7 @@ private:
   }
 
   void ensure_extent() {
+    require_producer_live();
     if (reset_pending_) {
       drain();
       retired_draws_ += renderer_->draws;
@@ -1523,6 +1688,10 @@ private:
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
   const sdlfe::FrameShape *shape_{};
   vk::Scene scene_{};
+  ::platform::ProducerView producer_view_{};
+  std::uint64_t producer_reset_generation_{1}, producer_packet_id_{};
+  bool producer_failed_{}, producer_generation_exhausted_{};
+  testing::ProducerViewObserver* producer_observer_{};
   std::array<int, 4> viewport_{0, 0, 640, 480};
   std::array<float, 3> fog_{};
   std::vector<Texture> textures_;
@@ -1662,6 +1831,9 @@ make_renderer(SDL_Window *window, sdlfe::RendererBackend backend,
 }
 
 namespace testing {
+bool observe_producer_views(VulkanFrameRenderer& renderer, ProducerViewObserver* observer) {
+    return renderer.observe_producer_views(observer);
+}
 std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {

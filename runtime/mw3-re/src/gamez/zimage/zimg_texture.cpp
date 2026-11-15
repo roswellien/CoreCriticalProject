@@ -399,6 +399,7 @@ void entry_free(TextureEntry& e) {
 // Mech3.exe 1.2 @ 0x00518b70. The default image's own record ([0x005ecbfc],
 // on Direct3D) and the block at [0x00638518] are not kept by the port.
 int32_t textures_free() {
+  zvid::abandon_producer_transport();
   TextureTable& t = textures();
   for (int32_t i = 0; i < t.count; ++i) {
     entry_free(t.entries[i]);
@@ -415,6 +416,9 @@ int32_t textures_free() {
   state().palettes.clear();
   free_all(0);
   close_all(1);
+  // The complete teardown/reset succeeded. A throwing cleanup above keeps the
+  // producer latched; only this explicit successful reset permits new work.
+  zvid::reset_producer_transport();
   return 0;
 }
 

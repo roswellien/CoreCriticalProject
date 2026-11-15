@@ -711,6 +711,7 @@ void GameEngine::screen_size(int32_t w, int32_t h, int32_t frame_w, int32_t fram
   t.pitch = static_cast<uint32_t>(width_ * 2);
   zrndr::set_finish_target(buffer_.data(), width_, height_, width_ * 2);
   // The 3D's viewport the frame (the 2D layers set their own, the canvas's; resolution.md step 4).
+  zvid::set_producer_canvas_rect(0, 0, frame_w > 0 ? frame_w : w, frame_h > 0 ? frame_h : h);
   if (p_.render) p_.render->set_viewport(0, 0, frame_w > 0 ? frame_w : w, frame_h > 0 ? frame_h : h);
   // The window's shape (ours, resolution.md step 2): the 3D frame, the 2D canvas over it (step 4).
   if (p_.window) p_.window->frame_size(frame_w > 0 ? frame_w : w, frame_h > 0 ? frame_h : h, w, h);
