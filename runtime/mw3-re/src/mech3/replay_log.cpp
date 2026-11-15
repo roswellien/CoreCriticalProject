@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 #include <nlohmann-json/json.hpp>
 
 #include "mech3/arena_log.h"
+#include "mech3/arena_setup.h"
 
 namespace mech3::replay {
 
@@ -41,18 +43,85 @@ const Json& list(const Json& record, const char* key) {
   return it != record.end() && it->is_array() ? *it : kEmpty;
 }
 
-MechPose read_pose(const Json& m) {
-  MechPose p;
+// A log is untrusted input: a position must be a real number inside the
+// world, 100 km being far beyond any MW3 map.
+constexpr float kWorldLimit = 100000.0f;
+bool in_world(const Vec3& v) {
+  const auto ok = [](float c) { return std::isfinite(c) && std::abs(c) <= kWorldLimit; };
+  return ok(v.x) && ok(v.y) && ok(v.z);
+}
+
+// A voice tag names sound files, so only plain short names pass.
+bool valid_voice(const std::string& tag) {
+  if (tag.empty() || tag.size() > 16) return false;
+  for (const char c : tag) {
+    const bool letter_digit_or_underscore = std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+    if (!letter_digit_or_underscore) return false;
+  }
+  return true;
+}
+
+// The one-shot leg actions the log names (mech_data.cpp action_name, 1..8).
+bool known_action(const std::string& name) {
+  static const std::set<std::string> kNames = {"fallf",  "fallb",  "landf",     "landb",
+                                               "getupf", "getupb", "collapsel", "collapser"};
+  return kNames.count(name) > 0;
+}
+
+constexpr int kAnimSlots = 13;   // Mech::anims
+constexpr int kLastPartId = 15;  // part ids run 1..15
+constexpr int kLastVoiceEvent = 15;
+
+// When a log has no phase (version 1, or detail off), the gait advances one
+// loop per this many meters walked: a rough stride, enough to keep feet moving.
+constexpr float kFallbackStride = 8.0f;
+
+// False when the mech's position is unusable; out-of-range fields are reset
+// to their defaults and counted in *skipped.
+bool read_pose(const Json& m, MechPose* out, int* skipped) {
+  MechPose& p = *out;
   p.id = m.value("id", -1);
   p.pos = vec3(m.value("pos", Json()));
+  if (!in_world(p.pos)) return false;
   p.heading = m.value("heading", 0.0f);
-  if (m.contains("torso")) p.twist = m.at("torso").value("twist", 0.0f);
+  p.speed = m.value("speed", 0.0f);
+  if (m.contains("torso")) {
+    p.twist = m.at("torso").value("twist", 0.0f);
+    p.pitch = m.at("torso").value("pitch", 0.0f);
+  }
+  const Json& arms = list(m, "arms");
+  for (size_t i = 0; i < 2 && i < arms.size(); ++i) {
+    if (!arms[i].is_object()) continue;
+    p.has_arm[i] = true;
+    p.arm_yaw[i] = arms[i].value("yaw", 0.0f);
+    p.arm_pitch[i] = arms[i].value("pitch", 0.0f);
+  }
+  if (m.contains("anim")) {
+    const Json& anim = m.at("anim");
+    p.anim = anim.value("index", -1);
+    if (p.anim >= kAnimSlots || p.anim < -1) {
+      p.anim = -1;
+      ++*skipped;
+    }
+    p.has_phase = anim.contains("phase");
+    p.phase = anim.value("phase", 0.0f);
+    p.cps = anim.value("cps", 0.0f);
+    p.weight = anim.value("weight", 0.0f);
+    p.limp = anim.value("limp", -1);
+  }
+  p.jumping = m.value("jumping", false);
+  p.fallen = m.value("fallen", false);
   p.heat = m.value("heat", 0.0f);
   p.standing = m.value("standing", true);
   p.target = m.value("target", -1);
-  for (const Json& part : list(m, "parts"))
-    p.parts.push_back(
-        {part.value("id", -1), part.value("armor", 0.0f), part.value("internal", 0.0f), part.value("destroyed", false)});
+  for (const Json& part : list(m, "parts")) {
+    const int id = part.value("id", -1);
+    if (id < 1 || id > kLastPartId) {
+      ++*skipped;
+      continue;
+    }
+    p.parts.push_back({id, part.value("armor", 0.0f), part.value("internal", 0.0f), part.value("destroyed", false)});
+  }
   if (m.contains("ai")) {
     const Json& ai = m.at("ai");
     p.order = ai.value("order", "");
@@ -61,10 +130,12 @@ MechPose read_pose(const Json& m) {
     p.at = ai.value("at", -1);
     for (const Json& c : list(ai, "contacts")) p.contacts.push_back({c.value("id", -1), c.value("seen", false)});
   }
-  return p;
+  return true;
 }
 
-Event read_event(const Json& r) {
+float wrap01(float x) { return x - std::floor(x); }
+
+Event read_event(const Json& r, int* skipped) {
   Event e;
   e.t = r.value("t", 0.0f);
   e.type = r.value("type", "");
@@ -76,6 +147,15 @@ Event read_event(const Json& r) {
   e.dir = vec3(r.value("dir", Json()));
   e.code = r.value("code", "");
   e.target = r.value("target", -1);
+  if (r.contains("at")) {
+    e.at = vec3(r.at("at"));
+    e.has_at = in_world(e.at);
+    if (!e.has_at) ++*skipped;  // a hit without a point is drawn at the target's center
+  }
+  e.terrain = r.value("terrain", false);
+  e.name = r.value("name", "");
+  e.event = r.value("event", -1);
+  e.dropped = r.value("dropped", false);
   return e;
 }
 
@@ -124,10 +204,31 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
     std::vector<std::string> chassis;
     for (const Json& side : list(start, "sides"))
       for (const Json& bot : side) chassis.push_back(bot.value("mech", ""));
-    for (const Json& m : list(start, "mechs")) {
+    // A log is untrusted: a start line the arena could never write is refused
+    // before anything is built from it.
+    const Json& start_mechs = list(start, "mechs");
+    if (start_mechs.size() > static_cast<size_t>(2 * arena::kMaxBotsPerSide)) {
+      *error = path + ": more mechs than an arena match holds";
+      return false;
+    }
+    std::set<int> ids;
+    for (const Json& m : start_mechs) {
       MechInfo info;
       info.id = m.value("id", -1);
       info.side = m.value("side", 0);
+      info.voice = m.value("voice", "");
+      if (!ids.insert(info.id).second) {
+        *error = path + ": mech id " + std::to_string(info.id) + " appears twice";
+        return false;
+      }
+      if (info.side != 0 && info.side != 1) {
+        *error = path + ": mech " + std::to_string(info.id) + " has a side other than 0 or 1";
+        return false;
+      }
+      if (m.contains("voice") && !valid_voice(info.voice)) {
+        *error = path + ": mech " + std::to_string(info.id) + " has a voice tag that is not a plain name";
+        return false;
+      }
       if (info.id >= 0 && info.id < static_cast<int>(chassis.size())) info.chassis = chassis[info.id];
       mechs_.push_back(info);
     }
@@ -137,23 +238,44 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
       if (type == "state") {
         State s;
         s.t = t;
-        for (const Json& m : list(r, "mechs")) s.mechs.push_back(read_pose(m));
-        for (const Json& round : list(r, "rounds"))
-          s.rounds.push_back(
-              {round.value("id", -1), round.value("by", -1), round.value("weapon", ""), vec3(round.value("pos", Json()))});
-        for (const Json& beam : list(r, "beams"))
-          s.beams.push_back({beam.value("by", -1), beam.value("weapon", ""), vec3(beam.value("from", Json())),
-                             vec3(beam.value("to", Json()))});
+        for (const Json& m : list(r, "mechs")) {
+          MechPose pose;
+          if (read_pose(m, &pose, &skipped_)) s.mechs.push_back(std::move(pose));
+          else ++skipped_;
+        }
+        for (const Json& round : list(r, "rounds")) {
+          RoundAt at{round.value("id", -1), round.value("by", -1), round.value("weapon", ""),
+                     vec3(round.value("pos", Json()))};
+          if (in_world(at.pos)) s.rounds.push_back(std::move(at));
+          else ++skipped_;
+        }
+        for (const Json& beam : list(r, "beams")) {
+          BeamAt at{beam.value("by", -1), beam.value("weapon", ""), vec3(beam.value("from", Json())),
+                    vec3(beam.value("to", Json()))};
+          if (in_world(at.from) && in_world(at.to)) s.beams.push_back(std::move(at));
+          else ++skipped_;
+        }
         states_.push_back(std::move(s));
       } else if (type == "shot" || type == "hit") {
-        fire_.push_back(read_event(r));
+        fire_.push_back(read_event(r, &skipped_));
+      } else if (type == "action") {
+        Event e = read_event(r, &skipped_);
+        if (known_action(e.name)) history_[e.id].actions.push_back(std::move(e));
+        else ++skipped_;
+      } else if (type == "voice") {
+        // Arena bots have no radio voice, so no replay plays chatter (#289,
+        // 2026-11-14); the lines are only checked.
+        if (r.value("event", -1) < 0 || r.value("event", -1) > kLastVoiceEvent) ++skipped_;
       } else if (type == "destroyed") {
         float& at = history_[r.value("id", -1)].destroyed_at;
         at = std::min(at, t);
       } else if (type == "decision") {
-        history_[r.value("id", -1)].decisions.push_back(read_event(r));
+        history_[r.value("id", -1)].decisions.push_back(read_event(r, &skipped_));
       } else if (type == "round_end") {
         round_end_at_[r.value("round", -1)] = t;
+        // Version 2: where it struck, shown as an impact like a hit.
+        Event impact = read_event(r, &skipped_);
+        if (impact.has_at) fire_.push_back(std::move(impact));
       } else if (type == "beam_end") {
         beam_ends_.push_back({t, r.value("id", -1), r.value("weapon", "")});
       } else if (type == "route") {
@@ -178,7 +300,9 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
   for (auto& [id, h] : history_) {
     std::stable_sort(h.routes.begin(), h.routes.end(), by_t);
     std::stable_sort(h.decisions.begin(), h.decisions.end(), by_t);
+    std::stable_sort(h.actions.begin(), h.actions.end(), by_t);
   }
+  derive_from_states();
   if (!ended) duration_ = states_.empty() ? 0.0f : states_.back().t;
   return true;
 }
@@ -187,6 +311,61 @@ const MechInfo* ReplayLog::info_of(int id) const {
   for (const MechInfo& info : mechs_)
     if (info.id == id) return &info;
   return nullptr;
+}
+
+void ReplayLog::derive_from_states() {
+  struct Seen {
+    Vec3 pos;
+    float walked = 0;
+    bool fallen = false;
+    std::set<int> live;  // part ids not yet destroyed
+  };
+  std::map<int, Seen> seen;  // by mech id, from its previous state line
+  std::set<int> has_actions;
+  for (const auto& [id, h] : history_)
+    if (!h.actions.empty()) has_actions.insert(id);
+  for (State& s : states_) {
+    for (MechPose& pose : s.mechs) {
+      const auto found = seen.find(pose.id);
+      std::set<int> live;
+      for (const Part& part : pose.parts)
+        if (!part.destroyed) live.insert(part.id);
+      if (found == seen.end()) {
+        seen[pose.id] = {pose.pos, 0.0f, pose.fallen, live};
+        continue;
+      }
+      Seen& was = found->second;
+      const float dx = pose.pos.x - was.pos.x, dz = pose.pos.z - was.pos.z;
+      was.walked += std::sqrt(dx * dx + dz * dz);
+      pose.walked = was.walked;
+      MechHistory& h = history_[pose.id];
+      // A part lost: destroyed since, or gone from the line altogether.
+      for (const int id : was.live) {
+        if (live.count(id)) continue;
+        Event lost;
+        lost.t = s.t, lost.type = "part_lost", lost.id = pose.id, lost.part = id;
+        h.parts_lost.push_back(lost);
+      }
+      // A log with no action lines (version 1, or detail off) still shows a
+      // fall and a get-up, from the "fallen" flag's edges.
+      if (!has_actions.count(pose.id) && pose.fallen != was.fallen) {
+        Event action;
+        action.t = s.t, action.type = "action", action.id = pose.id;
+        action.name = pose.fallen ? "fallf" : "getupf";
+        h.actions.push_back(action);
+      }
+      was.pos = pose.pos, was.fallen = pose.fallen, was.live = std::move(live);
+    }
+  }
+}
+
+std::vector<int> ReplayLog::parts_lost_by(int id, float t) const {
+  std::vector<int> lost;
+  const auto h = history_.find(id);
+  if (h == history_.end()) return lost;
+  for (const Event& e : h->second.parts_lost)
+    if (e.t <= t) lost.push_back(e.part);
+  return lost;
 }
 
 size_t ReplayLog::state_before(float t) const {
@@ -212,7 +391,18 @@ Frame ReplayLog::frame_at(float t) const {
       pose.pos = lerp(was.pos, next.pos, f);
       pose.heading = lerp_angle(was.heading, next.heading, f);
       pose.twist = lerp_angle(was.twist, next.twist, f);
+      pose.pitch = lerp_angle(was.pitch, next.pitch, f);
+      for (int arm = 0; arm < 2; ++arm) {
+        pose.arm_yaw[arm] = lerp_angle(was.arm_yaw[arm], next.arm_yaw[arm], f);
+        pose.arm_pitch[arm] = lerp_angle(was.arm_pitch[arm], next.arm_pitch[arm], f);
+      }
+      pose.speed = lerp(was.speed, next.speed, f);
+      pose.walked = lerp(was.walked, next.walked, f);
     }
+    // The gait's place in its loop: run on from the earlier line at its
+    // rate, or, with no phase in the log, from the distance walked.
+    if (pose.has_phase) pose.phase = wrap01(was.phase + was.cps * (t - before.t));
+    else pose.phase = wrap01(pose.walked / kFallbackStride);
     RouteAt route;
     Event decision;
     const auto h = history_.find(was.id);
@@ -220,6 +410,10 @@ Frame ReplayLog::frame_at(float t) const {
       if (h->second.destroyed_at <= t) pose.standing = false;
       if (const RouteAt* r = last_at_or_before(h->second.routes, t)) route = *r;
       if (const Event* d = last_at_or_before(h->second.decisions, t)) decision = *d;
+      if (const Event* a = last_at_or_before(h->second.actions, t)) {
+        pose.action = a->name;
+        pose.action_elapsed = t - a->t;
+      }
     }
     frame.mechs.push_back(std::move(pose));
     frame.routes.push_back(std::move(route));

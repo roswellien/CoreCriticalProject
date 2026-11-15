@@ -37,6 +37,7 @@ struct MechInfo {
   int id = -1;
   int side = 0;
   std::string chassis;  // the roster name, e.g. "madcat"
+  std::string voice;    // version 2: the radio voice tag, "" for none
 };
 
 // One mech in one state line, or between two of them.
@@ -45,6 +46,23 @@ struct MechPose {
   Vec3 pos;
   float heading = 0;  // radians, the hull
   float twist = 0;    // radians, the torso against the hull
+  float pitch = 0;    // radians, the torso
+  float speed = 0;    // m/s forward
+  bool has_arm[2] = {};
+  float arm_yaw[2] = {}, arm_pitch[2] = {};
+  int anim = -1;           // the gait slot, 0..12; -1 unknown or out of range
+  float phase = 0;         // 0..1 through the gait loop
+  float cps = 0;           // loops a second
+  bool has_phase = false;  // false (v1 or detail off): phase comes from distance walked
+  float weight = 0;        // the gait blend's weight
+  int limp = -1;           // the limping leg, -1 none
+  bool jumping = false, fallen = false;
+  float walked = 0;  // meters walked since the first state line (the phase fallback)
+  // The latest action at or before the frame (fallf .. collapser), "" none,
+  // and seconds since it started, unclamped: the puppet knows its length and
+  // decides when it holds or ends.
+  std::string action;
+  float action_elapsed = 0;
   float heat = 0;
   bool standing = true;
   int target = -1;
@@ -80,6 +98,13 @@ struct Event {
   Vec3 muzzle, dir;  // shot
   std::string code;  // decision
   int target = -1;   // decision
+  bool has_at = false;  // version 2 hit or round end: where it struck
+  Vec3 at;
+  bool terrain = false;
+  std::string name;      // action: fallf .. collapser
+  int event = -1;        // voice: the radio event, 0..15
+  bool dropped = false;  // voice: the game skipped it (MINDELAY)
+  int part = -1;         // part_lost: the part id, 1..15
 };
 
 struct RouteAt {
@@ -114,6 +139,11 @@ class ReplayLog {
   Frame frame_at(float t) const;
   // A mech's positions from its state lines in [t - seconds, t], oldest first.
   std::vector<Vec3> trail(int id, float t, float seconds) const;
+  // The part ids a mech had lost by t (destroyed or gone from its state
+  // lines), in the order they went.
+  std::vector<int> parts_lost_by(int id, float t) const;
+  // Values skipped as out of range (a damaged or hand-made log).
+  int skipped() const { return skipped_; }
   // Every position the log holds (mechs, rounds, beams, routes, goals), as
   // min x, min z, max x, max z; min > max when there are none.
   void bounds(float box[4]) const;
@@ -135,8 +165,13 @@ class ReplayLog {
   struct MechHistory {
     std::vector<RouteAt> routes;
     std::vector<Event> decisions;
+    std::vector<Event> actions;     // derived from "fallen" when the log has no action lines
+    std::vector<Event> parts_lost;
     float destroyed_at = 1e30f;
   };
+  // After load: each pose's distance walked, each mech's lost parts, and,
+  // for a mech with no action lines, falls and get-ups from "fallen".
+  void derive_from_states();
   // The last state line at or before t (0 before the first).
   size_t state_before(float t) const;
 
@@ -148,6 +183,7 @@ class ReplayLog {
   std::map<int, float> round_end_at_;
   std::vector<BeamEnd> beam_ends_;  // by time
   std::map<int, MechHistory> history_;  // by mech id
+  int skipped_ = 0;
 };
 
 }  // namespace mech3::replay

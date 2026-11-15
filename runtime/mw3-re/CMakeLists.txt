@@ -579,6 +579,7 @@ add_executable(mw3tests
   tests/test_nav.cpp
   tests/test_hunt.cpp
   tests/test_arena.cpp
+  tests/test_replay.cpp
   tests/test_setup_sources.cpp
   tests/test_data_folder.cpp
   tests/test_patch12.cpp
