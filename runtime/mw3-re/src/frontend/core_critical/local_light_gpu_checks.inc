@@ -344,6 +344,112 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
           "World fixture lighting did not resume after a loading canvas");
   require(render(true, false, true, false, false, false, true) == weapon,
           "World effect lighting did not resume after a loading canvas");
+
+  // A fade can begin a generic scene with a valid old projection before the
+  // next world's camera builds its light list. Retire actual native storage,
+  // then exercise that Begin and a new mission's positive GPU receiver.
+  for (const bool retire_world_first : {true, false}) {
+    auto saved_nodes = std::move(zcls::nodes());
+    auto saved_lists = std::move(zcls::lists());
+    const auto saved_frames = zcls::frames();
+    const auto saved_immediate = zcls::immediate_delete();
+    const auto saved_lights = zmod::light_list();
+    zcls::nodes() = {};
+    zcls::nodes().block_size = 16;
+    zcls::lists() = {};
+    zcls::lists().chunk_size = 16;
+    zcls::frames() = {};
+    zcls::immediate_delete() = 1;
+    std::vector<zcls::Node *> owned;
+    Restore restore_native{[&] {
+      zmod::build_light_list(nullptr, nullptr, 0);
+      for (auto *node : owned)
+        if (node)
+          zcls::node_release(node);
+      zcls::lists() = std::move(saved_lists);
+      zcls::nodes() = std::move(saved_nodes);
+      zcls::frames() = saved_frames;
+      zcls::immediate_delete() = saved_immediate;
+      zmod::light_list() = saved_lights;
+    }};
+    zmod::build_light_list(nullptr, nullptr, 0);
+    auto make_world = [&] {
+      auto *light = zcls::light_create();
+      owned.push_back(light);
+      *static_cast<zcls::Light *>(light->data) = original;
+      auto *world = zcls::world_create();
+      owned.push_back(world);
+      auto *world_data = static_cast<zcls::World *>(world->data);
+      world_data->lights = new zcls::Node *[1]{light};
+      world_data->light_data = new void *[1]{light->data};
+      world_data->put<int32_t>(0xa0, 1);
+      return std::pair{world, light};
+    };
+    auto retire = [&](zcls::Node *node, bool world) {
+      const auto before = zcls::node_live();
+      const auto result = world ? zcls::world_delete(node)
+                                : zcls::node_release(node);
+      if (zcls::node_live() == before - 1)
+        for (auto *&item : owned)
+          if (item == node)
+            item = nullptr;
+      require(result == 0 && zcls::node_live() == before - 1,
+              "Native GPU lifetime fixture did not retire its allocation");
+    };
+    local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+    local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets);
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    const uint8_t grey[4] = {128, 128, 128, 255};
+    mw34::materials::set_active_surface_key({1, 1, 1, 456});
+    platform::DrawState state{};
+    state.texture = renderer->create_texture(1, 1, grey, 1);
+    mw34::materials::clear_active_surface_key();
+    auto receiver_pixel = [&] {
+      renderer->clear(true, 0, 0, 0);
+      renderer->begin_scene();
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+      renderer->end_scene();
+      std::vector<uint32_t> pixels;
+      int width = 0, height = 0;
+      require(renderer->read_back(&pixels, &width, &height) &&
+                  width == 32 && height == 32,
+              "Native lifetime GPU receiver readback failed");
+      return pixels.at(16 * 32 + 16);
+    };
+    const auto empty_training = receiver_pixel();
+    const auto old_world = make_world();
+    require(zmod::world_build_lights(old_world.first, 0) == 0,
+            "Native old-world light build failed");
+    require(receiver_pixel() != empty_training,
+            "Native old-world fixture did not illuminate the GPU receiver");
+    if (retire_world_first)
+      retire(old_world.first, true);
+    else
+      retire(old_world.second, false);
+    const auto &retired = zmod::light_list();
+    require(retired.count == 0 && retired.in_count == 0 && retired.any == 0 &&
+                !retired.nodes && !retired.data,
+            "Native retirement left a borrowed GPU light cache");
+    require(receiver_pixel() == empty_training,
+            "Generic Begin retained a retired world's native light");
+    if (retire_world_first)
+      retire(old_world.second, false);
+    else
+      retire(old_world.first, true);
+
+    renderer->mission_changed({1, 1});
+    const auto empty_campaign = receiver_pixel();
+    const auto fresh_world = make_world();
+    require(zmod::world_build_lights(fresh_world.first, 0) == 0,
+            "Native fresh-world light build failed");
+    require(receiver_pixel() != empty_campaign,
+            "Fresh mission's native fixture did not illuminate the GPU receiver");
+  }
+
   // Use a small check-only allowance to exercise real rejection without a
   // production-sized allocation. Two 128-square RGBA payloads fill it before
   // scene metadata. Budget rejection must retain the scene. Retrying the same unchanged

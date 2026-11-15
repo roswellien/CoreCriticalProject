@@ -17,6 +17,10 @@
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zclass/light.h"
 #include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/cls_world.h"
+#include "gamez/zclass/list.h"
+#include "gamez/zclass/camera.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "mech3/mech3_interp.h"
 #include "check.h"
@@ -2275,4 +2279,273 @@ TEST(fix_material_table_read_again_keeps_no_pointer_into_the_old_blocks) {
   EXPECT(zmod::material_add(m) != nullptr);  // and the next add reads nothing freed
   zmod::materials() = std::move(keep);
   std::filesystem::remove_all(dir, ec);
+}
+
+namespace {
+
+// These are native pool nodes and owned class allocations, but no mission assets.
+// Isolate their lists as well as the pool so a failed EXPECT still releases every
+// allocation without purging another test's nodes.
+struct NativeLightLifetimeFixture {
+  zcls::NodePool saved_nodes = std::move(zcls::nodes());
+  zcls::Lists saved_lists = std::move(zcls::lists());
+  zcls::Frames saved_frames = zcls::frames();
+  int32_t saved_immediate = zcls::immediate_delete();
+  zmod::LightList saved_lights = zmod::light_list();
+  std::vector<zcls::Node*> owned;
+
+  NativeLightLifetimeFixture() {
+    zcls::nodes() = zcls::NodePool{};
+    zcls::nodes().block_size = 16;
+    zcls::lists() = zcls::Lists{};
+    zcls::lists().chunk_size = 16;
+    zcls::frames() = {};
+    zcls::immediate_delete() = 1;
+    zmod::build_light_list(nullptr, nullptr, 0);
+  }
+
+  ~NativeLightLifetimeFixture() {
+    // Clear the borrowed cache before releasing any remaining fixture storage,
+    // including when the old implementation failed a retirement assertion.
+    zmod::build_light_list(nullptr, nullptr, 0);
+    for (zcls::Node* node : owned) {
+      if (!node) continue;
+      while (node->child_count() > 0) zcls::node_unlink(node, node->children[0]);
+    }
+    for (zcls::Node* node : owned)
+      if (node) EXPECT(zcls::node_release(node) == 0);
+    EXPECT(zcls::node_live() == 0);
+    zcls::lists() = std::move(saved_lists);
+    zcls::nodes() = std::move(saved_nodes);
+    zcls::frames() = saved_frames;
+    zcls::immediate_delete() = saved_immediate;
+    zmod::light_list() = saved_lights;
+  }
+
+  zcls::Node* light() {
+    zcls::Node* node = zcls::light_create();
+    owned.push_back(node);
+    return node;
+  }
+
+  zcls::Node* world(zcls::Node* light) {
+    zcls::Node* node = zcls::world_create();
+    owned.push_back(node);
+    auto* data = static_cast<zcls::World*>(node->data);
+    // The world owns these arrays; the lights have independent native lifetimes.
+    data->lights = new zcls::Node*[1]{light};
+    data->light_data = new void*[1]{light->data};
+    data->put<int32_t>(0xa0, 1);
+    return node;
+  }
+
+  void forget(zcls::Node* node) {
+    for (zcls::Node*& item : owned)
+      if (item == node) item = nullptr;
+  }
+
+  void retire_world(zcls::Node* node, bool direct) {
+    const int32_t before = zcls::node_live();
+    if (direct) {
+      // node_free's caller owns unlisting. The class-2 deletion itself must
+      // invalidate the cache even without world_delete's early array release.
+      EXPECT(zcls::node_unlist(node) == 0);
+      EXPECT(zcls::purge_lists() == 0);
+      EXPECT(zcls::node_free(node) == 0);
+    } else {
+      EXPECT(zcls::world_delete(node) == 0);
+    }
+    EXPECT(zcls::node_live() == before - 1);
+    if (zcls::node_live() == before - 1) forget(node);
+  }
+
+  void retire_light(zcls::Node* node) {
+    const int32_t before = zcls::node_live();
+    EXPECT(zcls::node_release(node) == 0);
+    EXPECT(zcls::node_live() == before - 1);
+    if (zcls::node_live() == before - 1) forget(node);
+  }
+};
+
+void expect_native_light_cache_empty() {
+  const zmod::LightList& list = zmod::light_list();
+  // Only inspect the cache's values. Its old source arrays and class data may
+  // already be freed; dereferencing them would turn the regression into a UAF.
+  EXPECT(list.count == 0);
+  EXPECT(list.in_count == 0);
+  EXPECT(list.any == 0);
+  EXPECT(list.directed == -1);
+  EXPECT(list.nodes == nullptr);
+  EXPECT(list.data == nullptr);
+}
+
+void expect_native_light_cache_for(zcls::Node* world, zcls::Node* light) {
+  const auto* data = static_cast<const zcls::World*>(world->data);
+  const zmod::LightList& list = zmod::light_list();
+  EXPECT(list.count == 1 && list.in_count == 1 && list.any == 1);
+  EXPECT(list.nodes == data->lights);
+  EXPECT(list.data == reinterpret_cast<zcls::Light**>(data->light_data));
+  EXPECT(list.list[0].node == light);
+  EXPECT(list.list[0].data == light->data);
+}
+
+}  // namespace
+
+TEST(native_light_lifetime_world_retirement_clears_borrowed_arrays) {
+  for (const bool direct : {false, true}) {
+    NativeLightLifetimeFixture fixture;
+    zcls::Node* old_light = fixture.light();
+    zcls::Node* old_world = fixture.world(old_light);
+    EXPECT(zmod::world_build_lights(old_world, 0) == 0);
+    expect_native_light_cache_for(old_world, old_light);
+    fixture.retire_world(old_world, direct);
+    expect_native_light_cache_empty();
+
+    // Retirement must not disable lighting for the next mission. Build a fresh
+    // owner's native arrays and verify its actual enabled light is selected.
+    zcls::Node* fresh_light = fixture.light();
+    zcls::Node* fresh_world = fixture.world(fresh_light);
+    EXPECT(zmod::world_build_lights(fresh_world, 0) == 0);
+    expect_native_light_cache_for(fresh_world, fresh_light);
+  }
+}
+
+TEST(native_light_lifetime_unrelated_world_retirement_preserves_active_owner) {
+  for (const bool direct : {false, true}) {
+    NativeLightLifetimeFixture fixture;
+    zcls::Node* active_light = fixture.light();
+    zcls::Node* active_world = fixture.world(active_light);
+    zcls::Node* other_world = fixture.world(fixture.light());
+    EXPECT(zmod::world_build_lights(active_world, 0) == 0);
+    fixture.retire_world(other_world, direct);
+    expect_native_light_cache_for(active_world, active_light);
+  }
+}
+
+TEST(native_light_lifetime_soft_world_delete_keeps_live_arrays) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* light = fixture.light();
+  zcls::Node* world = fixture.world(light);
+  EXPECT(zcls::node_link(world, light) == 0);
+  EXPECT(zmod::world_build_lights(world, 0) == 0);
+  auto* data = static_cast<zcls::World*>(world->data);
+  zcls::Node** nodes = data->lights;
+  void** lights = data->light_data;
+  const int32_t before = zcls::node_live();
+  EXPECT(zcls::world_delete(world) == 0);
+  EXPECT(zcls::node_live() == before);
+  EXPECT(world->data == data && world->cls() == 2);
+  EXPECT(data->lights == nodes && data->light_data == lights);
+  expect_native_light_cache_for(world, light);
+  EXPECT(zcls::node_unlink(world, light) == 0);
+  fixture.retire_world(world, true);
+  expect_native_light_cache_empty();
+}
+
+TEST(native_light_lifetime_light_retirement_clears_node_or_data_references) {
+  // Borrowers can identify a light by either pointer. Exercise each identity
+  // independently as well as the ordinary matching pair, without stale reads.
+  for (const int identity : {0, 1, 2}) {
+    NativeLightLifetimeFixture fixture;
+    zcls::Node* light = fixture.light();
+    zcls::Node* other_light = fixture.light();
+    zcls::Node* world = fixture.world(light);
+    EXPECT(zmod::world_build_lights(world, 0) == 0);
+    expect_native_light_cache_for(world, light);
+    if (identity == 1)
+      zmod::light_list().list[0].data = static_cast<zcls::Light*>(other_light->data);
+    if (identity == 2) zmod::light_list().list[0].node = other_light;
+    fixture.retire_light(light);
+    expect_native_light_cache_empty();
+  }
+}
+
+TEST(native_light_lifetime_unrelated_light_retirement_preserves_cache) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* active_light = fixture.light();
+  zcls::Node* active_world = fixture.world(active_light);
+  zcls::Node* other_light = fixture.light();
+  EXPECT(zmod::world_build_lights(active_world, 0) == 0);
+  fixture.retire_light(other_light);
+  expect_native_light_cache_for(active_world, active_light);
+}
+
+TEST(native_light_lifetime_direct_build_replaces_world_owner) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* old_world = fixture.world(fixture.light());
+  EXPECT(zmod::world_build_lights(old_world, 0) == 0);
+  zcls::Node* light = fixture.light();
+  zcls::Node* nodes[] = {light};
+  zcls::Light* data[] = {static_cast<zcls::Light*>(light->data)};
+  zmod::build_light_list(nodes, data, 1);
+  fixture.retire_world(old_world, false);
+  const zmod::LightList& list = zmod::light_list();
+  EXPECT(list.nodes == nodes && list.data == data);
+  EXPECT(list.count == 1 && list.in_count == 1 && list.any == 1);
+  EXPECT(list.list[0].node == light && list.list[0].data == light->data);
+  fixture.retire_light(light);
+  expect_native_light_cache_empty();
+}
+
+TEST(native_light_lifetime_classes_reset_retires_pool_cache) {
+  NativeLightLifetimeFixture fixture;
+  // classes_reset also clears these globals; retain the unrelated caller's
+  // callbacks and remembered path even if a cache assertion fails.
+  struct RestoreResetGlobals {
+    zcls::SceneWalk walk = zcls::scene_walk();
+    char path_first = zcls::zbd_path()[0];
+    ~RestoreResetGlobals() {
+      zcls::scene_walk() = walk;
+      zcls::zbd_path()[0] = path_first;
+    }
+  } restore;
+  zcls::Node* light = fixture.light();
+  zcls::Node* nodes[] = {light};
+  zcls::Light* data[] = {static_cast<zcls::Light*>(light->data)};
+  zmod::build_light_list(nodes, data, 1);
+  EXPECT(zmod::light_list().count == 1 && zmod::light_list().any == 1);
+  EXPECT(zmod::light_list().list[0].node == light);
+  EXPECT(zmod::light_list().list[0].data == light->data);
+  EXPECT(zcls::node_live() == 1 && !zcls::nodes().blocks.empty());
+  EXPECT(zcls::classes_reset() == 0);
+  // The actual reset freed the node blocks; the fixture must not attempt to
+  // release their former slots again, even on the failing old implementation.
+  fixture.owned.clear();
+  EXPECT(zcls::nodes().blocks.empty() && zcls::node_live() == 0);
+  expect_native_light_cache_empty();
+}
+
+TEST(native_light_lifetime_node_destroy_retained_world_clears_borrowed_arrays) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* light = fixture.light();
+  zcls::Node* world = zcls::world_create();
+  fixture.owned.push_back(world);
+  zcls::Node* parent = zcls::world_create();
+  fixture.owned.push_back(parent);
+  EXPECT(zcls::world_add_light(world, light) == 0);
+  EXPECT(zcls::node_link(parent, world) == 0);
+  EXPECT(world->parent_count() == 1 && world->parents[0] == parent);
+  EXPECT(zmod::world_build_lights(world, 0) == 0);
+  expect_native_light_cache_for(world, light);
+  auto* data = static_cast<zcls::World*>(world->data);
+  const int32_t before = zcls::node_live();
+
+  // node_destroy releases this world's light arrays before it discovers that
+  // the native parent still retains the world. No world_delete follows yet.
+  EXPECT(zcls::node_destroy(world) == 1);
+  EXPECT(zcls::node_live() == before);
+  EXPECT(world->cls() == 2 && world->data == data);
+  EXPECT(world->parent_count() == 1 && world->parents[0] == parent);
+  EXPECT(data->lights == nullptr && data->light_data == nullptr);
+  EXPECT(data->get<int32_t>(0xa0) == 0);
+  expect_native_light_cache_empty();
+
+  EXPECT(zcls::node_unlink(parent, world) == 0);
+  fixture.retire_world(world, false);
+  // world_add_light also allocated the light's back-list. Use its actual class
+  // delete to release that allocation after world_remove_light emptied it.
+  const int32_t before_light = zcls::node_live();
+  EXPECT(zcls::light_delete(light) == 0);
+  EXPECT(zcls::node_live() == before_light - 1);
+  if (zcls::node_live() == before_light - 1) fixture.forget(light);
 }

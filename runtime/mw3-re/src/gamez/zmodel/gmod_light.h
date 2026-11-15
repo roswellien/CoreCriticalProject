@@ -102,6 +102,11 @@ void use_device_light_output();
 // --- The light list (per frame) ---
 // ECX nodes, EDX data, stack count: the active nodes (flag 4) in order, at most 128.
 void build_light_list(zcls::Node** nodes, zcls::Light** data, int32_t count);  // 0x00543b60
+// Retire borrowed cache references before their owner frees storage. These
+// compare pointer identities only; cached sources need not be readable.
+void clear_light_list();
+void retire_world_lights(const zcls::World* world);
+void retire_light(const zcls::Node* node, const zcls::Light* data);
 // ECX world node, EDX 1 for no lights.
 int32_t world_build_lights(zcls::Node* world, int32_t none);  // 0x004f2f30 (cls_world.c)
 // ECX world node: light_update on each of its lights.
