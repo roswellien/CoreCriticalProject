@@ -15,6 +15,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -747,6 +748,77 @@ void check_far_legacy_strips() {
     }
 }
 
+void check_material_publication_order() {
+    unsigned failures = 0;
+    for (auto mode : {cc::geometry::Mode::partial, cc::geometry::Mode::gpu}) {
+        for (bool far_safe : {false, true}) {
+            FarFixture fixture;
+            fixture.renderer.mode = mode;
+            zmth::projection().far_z = far_safe ? 100.f : 2.f;
+            zmod::draw_state().clip.far_z = zmth::projection().far_z;
+            fixture.material.r = std::numeric_limits<float>::quiet_NaN();
+            zmth::matrix_stack().top = 1;
+            const auto before_header = fixture.model.header;
+            std::array<std::uint8_t, 0x5c> header_copy{};
+            std::memcpy(header_copy.data(), before_header, header_copy.size());
+            std::fesetround(FE_UPWARD);
+            std::feclearexcept(FE_ALL_EXCEPT);
+            std::feraiseexcept(FE_DIVBYZERO);
+            const auto flags = std::fetestexcept(FE_ALL_EXCEPT);
+#ifdef GEOMETRY_TEST_MXCSR
+            const auto mxcsr = _mm_getcsr();
+#endif
+            bool returned = false, submitted = false;
+            std::string producer_error;
+            ++far_cases;
+            try {
+                submitted = zmod::submit_geometry(fixture.node);
+                returned = true;
+            } catch (const std::runtime_error &error) {
+                producer_error = error.what();
+            }
+            try {
+                require(fixture.model.render_geometry &&
+                            fixture.model.render_materials ==
+                                std::vector<const zmod::Material *>{&fixture.material},
+                        "RGB rejection/far fallback ran before cache publication");
+                require(fixture.renderer.submissions == 0 &&
+                            zmth::matrix_stack().top == 1 &&
+                            !std::memcmp(header_copy.data(), fixture.model.header,
+                                         header_copy.size()) &&
+                            std::fegetround() == FE_UPWARD &&
+                            std::fetestexcept(FE_ALL_EXCEPT) == flags,
+                        "RGB ordering changed producer calls, source, matrix or FP state");
+#ifdef GEOMETRY_TEST_MXCSR
+                require(_mm_getcsr() == mxcsr, "RGB ordering leaked MXCSR state");
+#endif
+                if (far_safe) {
+                    require(!returned && producer_error == "Nonfinite geometry material" &&
+                                fixture.renderer.unsupported == 0,
+                            "Far-safe RGB packing did not reject after publication");
+                } else if (mode == cc::geometry::Mode::gpu) {
+                    require(!returned &&
+                                producer_error == "Strict GPU geometry: unsupported model family" &&
+                                fixture.renderer.unsupported == 1,
+                            "Strict far fallback did not precede RGB packing");
+                } else {
+                    require(returned && !submitted && producer_error.empty() &&
+                                fixture.renderer.unsupported == 1,
+                            "Partial far fallback did not precede RGB packing");
+                }
+                std::cout << "RGB ordering " << (mode == cc::geometry::Mode::gpu ? "strict" : "partial")
+                          << '/' << (far_safe ? "safe" : "unsafe") << ": passed\n";
+            } catch (const std::exception &error) {
+                ++failures;
+                std::cerr << "RGB ordering " << (mode == cc::geometry::Mode::gpu ? "strict" : "partial")
+                          << '/' << (far_safe ? "safe" : "unsafe") << ": " << error.what()
+                          << " (producer error: " << producer_error << ")\n";
+            }
+        }
+    }
+    require(failures == 0, "Ordinary RGB publication/far fallback ordering regression");
+}
+
 void check_far_regressions() {
     struct Group { const char *name; void (*run)(); };
     const Group groups[]{
@@ -756,7 +828,8 @@ void check_far_regressions() {
         {"subnormal registration/DAZ", check_far_subnormals},
         {"strict unwind/capacity", check_far_strict_and_capacity},
         {"original legacy polygon fans", check_far_legacy_fans},
-        {"original legacy textured strips", check_far_legacy_strips}};
+        {"original legacy textured strips", check_far_legacy_strips},
+        {"material publication/RGB ordering", check_material_publication_order}};
     unsigned failures = 0;
     for (const auto &group : groups) {
         const unsigned before = far_cases;
@@ -923,6 +996,218 @@ int main() try {
     std::cout << "Early geometry handoff, skipped CPU loops, immutable revisions, FP and strict "
                  "rejection pass\n";
     check_far_regressions();
+    {
+        auto check_raw_ordinals = [&](std::uint32_t poly_count) {
+            float pos[]{-1, -1, 3, 1, -1, 3, 0, 1, 3, 1, 1, 3};
+            float nrm[]{0, 0, -1, 0, 1, 0, 1, 0, 0, 0, 0, 1};
+            float uv_coords[]{0.f, 0.f, 1.f, 0.f, 0.5f, 1.f, 1.f, 1.f};
+            uint32_t idx[]{0, 1, 2, 3};
+            uint32_t nidx[]{0, 1, 2, 3};
+            zvid::D3DTexture tex_a{}, tex_b{};
+            tex_a.type = tex_b.type = 1;
+            tex_a.handle = 11;
+            tex_b.handle = 22;
+            tex_a.address_u = 1;
+            tex_a.address_v = 3;
+            tex_b.address_u = 3;
+            tex_b.address_v = 1;
+            zimg::TextureEntry entry_a{}, entry_b{};
+            entry_a.surface = &tex_a;
+            entry_b.surface = &tex_b;
+            zmod::Material mat_a{}, mat_b{}, poison_mat{};
+            mat_a.alpha = mat_b.alpha = poison_mat.alpha = 255;
+            mat_a.flags = 1;
+            mat_a.texture = &entry_a;
+            mat_a.r = 300.f;
+            mat_a.g = -10.f;
+            mat_a.b = 128.f;
+            mat_b.flags = 1;
+            mat_b.texture = &entry_b;
+            mat_b.r = 16.f;
+            mat_b.g = 240.f;
+            mat_b.b = 32.f;
+            std::vector<zmod::Polygon> polys(poly_count);
+            const unsigned first_a = poly_count == 3 ? 2u : 3u;
+            for (unsigned i = 0; i < poly_count; ++i) {
+                auto &p = polys[i];
+                const bool use_strip = (i % 2 == 1);
+                const bool use_two_sided = (i % 3 == 0);
+                p.flags = (use_strip ? 4u : 3u) | 0x200u | (use_strip ? 0x400u : 0u) |
+                          (use_two_sided ? 0x100u : 0u);
+                p.vertex_indices = idx;
+                p.normal_indices = nidx;
+                p.uvs = uv_coords;
+                p.material = (i < first_a) ? &mat_a : &mat_b;
+            }
+            zmod::Model raw_model{};
+            raw_model.vertices = pos;
+            raw_model.normals = nrm;
+            raw_model.polygons = polys.data();
+            const uint32_t vcount = 4, ncount = 4;
+            std::memcpy(raw_model.header + 0x10, &poly_count, 4);
+            std::memcpy(raw_model.header + 0x14, &vcount, 4);
+            std::memcpy(raw_model.header + 0x18, &ncount, 4);
+
+            zmod::draw_state().overlay = 1;
+            zmod::draw_state().second_pass = 1;
+            zmod::draw_state().opacity = 0.25f;
+            const zmod::RigidGeometryEligibility ok_elig{false, false, 1.f};
+            require(zmod::rigid_source_supported(raw_model, ok_elig),
+                    "Raw eligibility read global draw_state instead of explicit argument");
+            require(!zmod::rigid_source_supported(raw_model, {true, false, 1.f}) &&
+                        !zmod::rigid_source_supported(raw_model, {false, true, 1.f}) &&
+                        !zmod::rigid_source_supported(raw_model, {false, false, 0.5f}),
+                    "Explicit raw eligibility flags were ignored");
+            zmod::draw_state().overlay = 0;
+            zmod::draw_state().second_pass = 0;
+            zmod::draw_state().opacity = 1.f;
+
+            require(!raw_model.render_geometry && raw_model.render_materials.empty(),
+                    "Empty model caches were mutated before raw registration");
+            const auto preflight_bytes = zmod::preflight_rigid_source_bytes(raw_model);
+            const auto reg_empty = zmod::register_rigid_source(raw_model);
+            const auto mats_empty = zmod::copy_rigid_materials(raw_model, *reg_empty.resource);
+            require(!raw_model.render_geometry && raw_model.render_materials.empty(),
+                    "Raw helpers mutated empty model caches");
+
+            const std::size_t expected_logical_bytes =
+                sizeof(cc::geometry::Resource) +
+                reg_empty.resource->vertices.size() * sizeof(cc::geometry::Vertex) +
+                reg_empty.resource->indices.size() * sizeof(std::uint32_t) +
+                poly_count * (sizeof(cc::geometry::Range) + sizeof(cc::geometry::Material) +
+                              sizeof(const zmod::Material *));
+            require(preflight_bytes == expected_logical_bytes,
+                    "Preflight logical retained byte count did not match registered resource");
+
+            float poison_pos[]{9, 9, 9, 8, 8, 8, 7, 7, 7};
+            uint32_t poison_idx[]{0, 1, 2};
+            const auto poison_res = cc::geometry::register_resource(
+                poison_pos, 3, nullptr, 0, {{3, poison_idx, nullptr, nullptr, false, false, 0}});
+            const std::vector<const zmod::Material *> poison_vec{&poison_mat};
+            raw_model.render_geometry = poison_res;
+            raw_model.render_materials = poison_vec;
+
+            require(zmod::rigid_source_supported(raw_model, ok_elig),
+                    "Raw eligibility rejected model with poisoned caches");
+            const auto reg = zmod::register_rigid_source(raw_model);
+            const auto mats = zmod::copy_rigid_materials(raw_model, *reg.resource);
+            require(raw_model.render_geometry == poison_res &&
+                        raw_model.render_materials == poison_vec,
+                    "Raw helpers modified poisoned model caches");
+            require(reg.resource != poison_res && reg.resource->ranges.size() == poly_count &&
+                        reg.original_materials.size() == poly_count && mats.size() == poly_count,
+                    "Raw registration/material copy cardinality mismatch");
+            std::size_t v_offset = 0;
+            for (unsigned i = 0; i < poly_count; ++i) {
+                const auto &range = reg.resource->ranges[i];
+                const bool is_strip = (i % 2 == 1);
+                const bool is_two_sided = (i % 3 == 0) || is_strip;
+                const unsigned ccount = is_strip ? 4u : 3u;
+                require(range.polygon == i && range.material_slot == i &&
+                            range.two_sided == is_two_sided &&
+                            range.count == (ccount - 2u) * 3u &&
+                            reg.original_materials[i] == polys[i].material,
+                        "Raw range ordinal/slot/two-sided/material pointer mismatch");
+                const auto &m = mats[i];
+                if (i < first_a) {
+                    require(m.color == 0xffff0080u && m.texture == 11 && m.address_u == 1 &&
+                                m.address_v == 3,
+                            "Material A color/handle/addressing mismatch");
+                } else {
+                    require(m.color == 0xff10f020u && m.texture == 22 && m.address_u == 3 &&
+                                m.address_v == 1,
+                            "Material B color/handle/addressing mismatch");
+                }
+                for (unsigned c = 0; c < ccount; ++c) {
+                    const unsigned src_c = ccount - 1u - c;
+                    const auto &v = reg.resource->vertices[v_offset + c];
+                    require(v.x == pos[src_c * 3] && v.y == pos[src_c * 3 + 1] &&
+                                v.z == pos[src_c * 3 + 2] && v.nx == nrm[src_c * 3] &&
+                                v.ny == nrm[src_c * 3 + 1] && v.nz == nrm[src_c * 3 + 2] &&
+                                v.u == uv_coords[src_c * 2] && v.v == uv_coords[src_c * 2 + 1],
+                            "Raw vertex position/normal/UV reversal mismatch");
+                }
+                v_offset += ccount;
+            }
+
+            polys.back().priority = 1;
+            require(!zmod::rigid_source_supported(raw_model, ok_elig) &&
+                        raw_model.render_geometry == poison_res &&
+                        raw_model.render_materials == poison_vec,
+                    "Late unsupported polygon in raw check altered poisoned model caches");
+            zcls::Node raw_node{};
+            raw_node.model = &raw_model;
+            zmth::matrix_stack().top = 1;
+            zmth::matrix_stack().slot[1] = &camera;
+            zvid::set_render3d(&renderer);
+            renderer.accept = true;
+            require(!zmod::submit_geometry(raw_node) && !raw_model.render_geometry &&
+                        raw_model.render_materials.empty(),
+                    "Baseline submit_geometry did not invalidate mismatched cache before late unsupported polygon");
+            zvid::set_render3d(nullptr);
+            zmth::matrix_stack().top = 0;
+            polys.back().priority = 0;
+
+            raw_model.render_geometry = poison_res;
+            raw_model.render_materials = poison_vec;
+            std::fesetround(FE_DOWNWARD);
+            std::feclearexcept(FE_ALL_EXCEPT);
+            std::feraiseexcept(FE_INEXACT);
+            const auto saved_round = std::fegetround();
+            const auto saved_except = std::fetestexcept(FE_ALL_EXCEPT);
+
+            auto expect_preflight_throw = [&](auto mutator, auto restorer) {
+                mutator();
+                bool threw = false;
+                try {
+                    (void)zmod::register_rigid_source(raw_model);
+                } catch (const std::runtime_error &) {
+                    threw = true;
+                }
+                restorer();
+                require(threw && raw_model.render_geometry == poison_res &&
+                            raw_model.render_materials == poison_vec &&
+                            std::fegetround() == saved_round &&
+                            std::fetestexcept(FE_ALL_EXCEPT) == saved_except,
+                        "Preflight rejection failed to throw or mutated caches/FP state");
+            };
+            const uint32_t bad_vcount = 1'000'001u;
+            expect_preflight_throw(
+                [&] { std::memcpy(raw_model.header + 0x14, &bad_vcount, 4); },
+                [&] { std::memcpy(raw_model.header + 0x14, &vcount, 4); });
+            expect_preflight_throw([&] { idx[0] = 99u; }, [&] { idx[0] = 0u; });
+            expect_preflight_throw([&] { nidx[0] = 99u; }, [&] { nidx[0] = 0u; });
+            expect_preflight_throw(
+                [&] { pos[0] = std::numeric_limits<float>::infinity(); },
+                [&] { pos[0] = -1.f; });
+            expect_preflight_throw(
+                [&] { uv_coords[0] = std::numeric_limits<float>::quiet_NaN(); },
+                [&] { uv_coords[0] = 0.f; });
+            mat_a.r = std::numeric_limits<float>::quiet_NaN();
+            require(zmod::rigid_source_supported(raw_model, ok_elig) &&
+                        zmod::preflight_rigid_source_bytes(raw_model) > 0,
+                    "Geometry admission inspected RGB values before material packing");
+            const auto invalid_rgb_geometry = zmod::register_rigid_source(raw_model);
+            bool packing_rejected = false;
+            try {
+                (void)zmod::copy_rigid_materials(raw_model, *invalid_rgb_geometry.resource);
+            } catch (const std::runtime_error &error) {
+                packing_rejected = std::string_view(error.what()) == "Nonfinite geometry material";
+            }
+            mat_a.r = 300.f;
+            require(packing_rejected && raw_model.render_geometry == poison_res &&
+                        raw_model.render_materials == poison_vec &&
+                        std::fegetround() == saved_round &&
+                        std::fetestexcept(FE_ALL_EXCEPT) == saved_except,
+                    "Deferred RGB packing rejection changed caches or FP state");
+        };
+        check_raw_ordinals(3u);
+        check_raw_ordinals(14u);
+        std::fesetround(FE_TONEAREST);
+        std::feclearexcept(FE_ALL_EXCEPT);
+        zvid::set_render3d(nullptr);
+        std::cout << "Raw rigid source extraction, cache isolation and preflight checks pass\n";
+    }
     return 0;
 } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
