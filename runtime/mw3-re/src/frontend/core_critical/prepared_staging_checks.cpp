@@ -315,88 +315,12 @@ static std::string build_single_batch_bwsfm1(std::uint64_t mesh_hash, const std:
     return out;
 }
 
-static void write_fixture_matrix(prepared_fixture::Bytes &out, double x = 0, double y = 0,
-                                 double z = 0) {
-    for (int i = 0; i < 16; ++i) {
-        if (i == 3)
-            out.f64(x);
-        else if (i == 7)
-            out.f64(y);
-        else if (i == 11)
-            out.f64(z);
-        else
-            out.f64(i % 5 == 0 ? 1 : 0);
-    }
-}
-
-static std::string build_valid_v4_mesh() {
-    prepared_fixture::Bytes out;
-    out.value = std::string("BWMESH4\0", 8);
-    out.u32(1); // 1 batch
-
-    struct BoneDef {
-        const char *name;
-        const char *control;
-        double x, y, z;
-    };
-    const std::vector<BoneDef> bone_defs = {{"Pelvis", "", 0, 0, 2},
-                                            {"Torso_Twist", "torso", 0, 0, 2},
-                                            {"Upperarm_Left", "larm", -1, 0, 2},
-                                            {"Upperarm_Right", "rarm", 1, 0, 2},
-                                            {"Forearm_Left", "", -1, 0, 1},
-                                            {"Forearm_Right", "", 1, 0, 1},
-                                            {"Thigh_Left", "lthigh", -0.5, 0, 2},
-                                            {"Thigh_Right", "rthigh", 0.5, 0, 2},
-                                            {"Calf_Left", "lcalf", -0.5, 0, 1},
-                                            {"Calf_Right", "rcalf", 0.5, 0, 1},
-                                            {"Foot0_Left", "lfoot", -0.5, 0, 0},
-                                            {"Foot0_Right", "rfoot", 0.5, 0, 0}};
-    struct RefDef {
-        const char *name;
-        double x, y, z;
-    };
-    const std::vector<RefDef> ref_defs = {
-        {"hip", 0, 0, 2},      {"torso", 0, 0, 2},   {"larm", -1, 0, 2},     {"rarm", 1, 0, 2},
-        {"lfoot", -0.5, 0, 0}, {"rfoot", 0.5, 0, 0}, {"lthigh", -0.5, 0, 2}, {"rthigh", 0.5, 0, 2},
-        {"lcalf", -0.5, 0, 1}, {"rcalf", 0.5, 0, 1}};
-
-    out.u32(static_cast<std::uint32_t>(bone_defs.size()));
-    out.u32(static_cast<std::uint32_t>(ref_defs.size()));
-    out.u32(0); // flags
-    out.f64(0); // hip_drop
-    out.f64(0);
-    out.f64(0); // walk_x
-    out.f64(0);
-    out.f64(0); // walk_z
-
-    for (const auto &b : bone_defs) {
-        out.name(b.name);
-        out.name(b.control);
-        out.u32(0xffffffff);
-        write_fixture_matrix(out, b.x, b.y, b.z);
-    }
-
-    for (const auto &r : ref_defs) {
-        out.name(r.name);
-        write_fixture_matrix(out, r.x, r.y, r.z);
-    }
-
-    out.name("control");
-    out.name("panel");
-    out.u32(0);          // donor_bone index 0
-    out.u32(3);          // 3 vertices
-    out.u32(0xffffffff); // color
-    for (int i = 0; i < 3; ++i) {
-        out.f32(0);
-        out.f32(0);
-        out.f32(i == 0 ? 1.0f : 0.0f);
-        out.f32(0);
-        out.f32(0);
-        out.f32(1.0f);
-        out.f32(0);
-        out.f32(0);
-    }
-    return out.value;
+static std::string build_valid_v4_mesh(const std::string &toe_name = "",
+                                       const std::string &batch_owner = "control",
+                                       const std::string &batch_visibility = "panel",
+                                       double toe_x = 0.5, double toe_y = 0.2, double toe_z = -0.1) {
+    return prepared_fixture::build_valid_v4_mesh(toe_name, batch_owner, batch_visibility, toe_x,
+                                                 toe_y, toe_z);
 }
 
 void check_prepared_models_surface_materials() {
@@ -774,6 +698,191 @@ void check_prepared_models_surface_materials() {
         require(off_draw.batches[0].surface_material != nullptr,
                 "surface_material metadata must be available when lighting is off");
     }
+}
+
+void check_prepared_models_donor_toe_admission() {
+    const auto folder = make_private_staging_dir("mw34_pm_toe");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+    } cleanup{folder};
+    const auto mesh_path = folder / "mesh.bin", texture_path = folder / "textures.bin";
+    const auto normal_path = folder / "normals.bin", material_path = folder / "materials.bin";
+    auto write = [](const auto &path, const std::string &bytes) {
+        std::ofstream output(path, std::ios::binary);
+        output.write(bytes.data(), bytes.size());
+        require(bool(output), "Could not write donor fixture");
+    };
+    write(texture_path, prepared_fixture::textures());
+    write(normal_path, prepared_fixture::normals());
+    auto options = [&](const std::string &chassis = "authored", const std::string &lod = "1") {
+        sdlfe::CoreCriticalAssets assets;
+        assets.models.push_back({chassis, lod, mesh_path.string(), texture_path.string()});
+        return assets;
+    };
+    unsigned cases = 0;
+    for (const std::string toe : {"ltoe01", "ltoe02", "ltoe03", "rtoe01", "rtoe02", "rtoe03"}) {
+        const double foot_x = toe.front() == 'l' ? -.5 : .5;
+        const auto bytes = prepared_fixture::build_valid_v4_mesh(
+            toe, "control", "panel", foot_x + .1, .2, -.1);
+        write(mesh_path, bytes);
+        std::istringstream input(bytes, std::ios::binary);
+        const auto mesh = platform::prepared::read_mesh(input);
+        write(material_path, prepared_fixture::donor_materials(
+            mw34::materials::compute_mesh_uv_hash(mesh.batches, 0, mesh.batches.size())));
+        auto assets = options();
+        assets.normals.push_back({"authored", "1", normal_path.string()});
+        assets.lighting = "normal";
+        cc_mw3_re::PreparedModels models(assets, {{"authored", "1", material_path.string()}});
+        prepared_fixture::DonorTree distance(toe, false), full(toe, true);
+        platform::prepared::Matrix resting{};
+        for (unsigned pose = 0; pose < 2; ++pose) {
+            if (pose) { distance.pose_foot(); full.pose_foot(); }
+            const auto distance_raw = distance.raw_state(), full_raw = full.raw_state();
+            const auto distance_counts = distance.asset->nodes, full_counts = full.asset->nodes;
+            const auto expected = models.draw(full.context());
+            const auto actual = models.draw(distance.context()); // Baseline RED: absent donor toe.
+            require(actual.replace && expected.replace && actual.batches.size() == 1 &&
+                        expected.batches.size() == 1, "Donor toe changed native batch visibility");
+            const auto &got = actual.batches[0], &want = expected.batches[0];
+            require(got.batch == want.batch && got.texture == want.texture && got.normal &&
+                        got.normal == want.normal && got.surface_material == want.surface_material &&
+                        got.height_binding && got.height_binding == want.height_binding &&
+                        got.deformed.empty(), "Donor toe changed batch/normal/POM identity");
+            for (unsigned i = 0; i < 16; ++i)
+                require(std::isfinite(got.world[i]) && std::isfinite(got.camera[i]) &&
+                            std::abs(got.world[i] - want.world[i]) < 1e-5 &&
+                            std::abs(got.camera[i] - want.camera[i]) < 1e-5,
+                        "Donor toe matrix differs from native full-source witness");
+            for (const auto &vertex : got.batch->vertices) {
+                const auto actual_point = mw34::donor::point(got.world,
+                    {vertex[0], vertex[1], vertex[2]});
+                const auto expected_point = mw34::donor::point(want.world,
+                    {vertex[0], vertex[1], vertex[2]});
+                for (unsigned i = 0; i < 3; ++i)
+                    require(std::abs(actual_point[i] - expected_point[i]) < 1e-5,
+                            "Donor triangle differs from full-source point witness");
+            }
+            if (!pose) {
+                // Independent analytic rest witness in original axes, with camera z=4.
+                require(std::abs(got.world[3] + .2) < 1e-5 &&
+                            std::abs(got.world[7] + .1) < 1e-5 &&
+                            std::abs(got.world[11] - (4 - foot_x - .1)) < 1e-5,
+                        "Rest toe lost its analytic original-axis offset");
+                resting = got.world;
+            } else
+                require(got.world != resting, "Posed-foot witness did not move donor geometry");
+            require(distance.raw_state() == distance_raw && full.raw_state() == full_raw &&
+                        distance.asset->nodes == distance_counts && full.asset->nodes == full_counts,
+                    "Donor admission mutated original node/data/name-count state");
+            ++cases;
+        }
+        // Canonical presence remains valid even after a native toe has detached live.
+        distance.asset->nodes[toe] = 1;
+        const auto detached = models.draw(distance.context());
+        const auto present = models.draw(full.context());
+        require(detached.batches.size() == 1 && present.batches.size() == 1,
+                "Canonical-present detached toe changed native visibility");
+        for (unsigned i = 0; i < 16; ++i)
+            require(std::abs(detached.batches[0].world[i] - present.batches[0].world[i]) < 1e-5,
+                    "Canonical-present detached toe changed the existing solver");
+        ++cases;
+
+        // Canonical-complete close LOD keeps the same geometry and authored material values.
+        auto close_assets = assets;
+        close_assets.models[0].lod = close_assets.normals[0].lod = "0";
+        const auto close_material_path = folder / "close-materials.bin";
+        write(close_material_path, prepared_fixture::donor_materials(
+            mw34::materials::compute_mesh_uv_hash(mesh.batches, 0, mesh.batches.size()),
+            "authored:close"));
+        cc_mw3_re::PreparedModels close(close_assets,
+            {{"authored", "0", close_material_path.string()}});
+        full.asset->name = "mech_authored.flt";
+        const auto close_draw = close.draw(full.context());
+        require(close_draw.replace && close_draw.batches.size() == 1 &&
+                    close_draw.batches[0].batch->vertices == present.batches[0].batch->vertices &&
+                    close_draw.batches[0].normal && close_draw.batches[0].height_binding &&
+                    close_draw.batches[0].normal->hash == present.batches[0].normal->hash &&
+                    close_draw.batches[0].height_binding->image->pixels ==
+                        present.batches[0].height_binding->image->pixels,
+                "Complete close LOD changed batch/normal/POM content");
+        for (unsigned i = 0; i < 16; ++i)
+            require(std::abs(close_draw.batches[0].world[i] - present.batches[0].world[i]) < 1e-5,
+                    "Complete close LOD changed donor world matrix");
+        ++cases;
+    }
+    auto reject = [&](const sdlfe::CoreCriticalAssets &assets,
+                      prepared_fixture::DonorTree &tree, const char *message) {
+        const auto raw = tree.raw_state();
+        const auto counts = tree.asset->nodes;
+        std::string error;
+        try {
+            cc_mw3_re::PreparedModels models(assets);
+            (void)models.draw(tree.context());
+        } catch (const std::runtime_error &failure) { error = failure.what(); }
+        require(error.find(message) != std::string::npos,
+                "Donor negative did not reject at its intended contract");
+        require(raw == tree.raw_state() && counts == tree.asset->nodes,
+                "Rejected donor admission mutated native source state");
+        ++cases;
+    };
+    const std::string toe = "rtoe02";
+    const auto valid = prepared_fixture::build_valid_v4_mesh(toe, "control", "panel", .6);
+    write(mesh_path, valid);
+    for (unsigned count : {0U, 2U}) {
+        prepared_fixture::DonorTree tree(toe, false);
+        tree.asset->nodes[toe] = count;
+        const auto message = "mech_authored_1.flt [donor reference 0]: rtoe02 (count " +
+                             std::to_string(count) + ")";
+        reject(options(), tree, message.c_str());
+    }
+    for (const std::string role : {"owner", "visibility"}) {
+        write(mesh_path, prepared_fixture::build_valid_v4_mesh(
+            toe, role == "owner" ? toe : "control", role == "visibility" ? toe : "panel", .6));
+        prepared_fixture::DonorTree tree(toe, false);
+        reject(options(), tree, ("mech_authored_1.flt [batch 0." + role +
+                                 "]: rtoe02 (absent)").c_str());
+    }
+    write(mesh_path, valid);
+    for (const std::string anchor : {"rfoot", "torso"}) {
+        for (int count : {-1, 0, 2}) {
+            prepared_fixture::DonorTree tree(toe, false);
+            if (count == -1) tree.asset->nodes.erase(anchor);
+            else tree.asset->nodes[anchor] = count;
+            const auto message = "dependency " + anchor +
+                (count == -1 ? " absent" : " count " + std::to_string(count));
+            reject(options(), tree, message.c_str());
+        }
+    }
+    for (const std::string rest : {"rfoot", "torso", "rtoe02"}) {
+        write(mesh_path, prepared_fixture::build_valid_v4_mesh(
+            toe, "control", "panel", .6, .2, -.1, rest));
+        prepared_fixture::DonorTree tree(toe, false);
+        // The real payload parser rejects a bone whose rest reference was removed.
+        reject(options(), tree, "bone names an unknown source control");
+    }
+    write(mesh_path, valid);
+    {
+        prepared_fixture::DonorTree tree(toe, false);
+        tree.asset->name = "mech_authored.flt";
+        reject(options("authored", "0"), tree, "rtoe02 (absent)");
+    }
+    {
+        prepared_fixture::DonorTree tree(toe, false);
+        reject(options("authored_1", "0"), tree, "rtoe02 (absent)");
+    }
+    for (const std::string unsupported : {"head", "ltoe04", "rtoe1", "rtoe02_extra"}) {
+        write(mesh_path, prepared_fixture::build_valid_v4_mesh(unsupported));
+        prepared_fixture::DonorTree tree(toe, false);
+        reject(options(), tree, (unsupported + " (absent)").c_str());
+    }
+    // BWMESH2 cannot carry donor references; its absent geometry control stays mandatory.
+    auto non_donor = prepared_fixture::mesh(2);
+    non_donor.replace(12, 32, toe + std::string(32 - toe.size(), '\0'));
+    write(mesh_path, non_donor);
+    prepared_fixture::DonorTree tree(toe, false);
+    reject(options(), tree, "[batch 0.owner]: rtoe02 (absent)");
+    std::printf("[DONOR_TOE_CONTRACTS] cases=%u failures=0\n", cases);
 }
 
 // Synthetic source and parsed BWSFM1 fixtures exercise the synchronous guard.
@@ -1269,6 +1378,7 @@ int main() {
     try {
         checks();
         check_prepared_models_surface_materials();
+        check_prepared_models_donor_toe_admission();
         check_native_ground_height_admission();
         std::puts("Prepared staging cache invalidation, bytes, ownership, "
                   "materials and budget checks passed");
