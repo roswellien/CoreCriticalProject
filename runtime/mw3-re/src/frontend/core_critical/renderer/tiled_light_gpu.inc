@@ -26,7 +26,7 @@ void init_tiled() {
   const auto alignment = p.limits.minUniformBufferOffsetAlignment;
   tiledViewStride = (sizeof(mw34::tiled::View) + alignment - 1) / alignment * alignment;
   tiledListAlignment = p.limits.minStorageBufferOffsetAlignment;
-  tiledRange = std::min<VkDeviceSize>(p.limits.maxStorageBufferRange, 128ULL * 1024 * 1024);
+  tiledRange = std::min<VkDeviceSize>(p.limits.maxStorageBufferRange, 1024ULL * 1024 * 1024);
   try {
     const VkDescriptorSetLayoutBinding bindings[3]{
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},

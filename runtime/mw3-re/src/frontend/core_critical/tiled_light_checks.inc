@@ -269,8 +269,41 @@ void check_tiled_gpu() {
   lights.lights[0].start[0] = 1e30f;
   rejects(views, lights);
   lights.lights[0] = {{0, 0, 8, 1}, {0, 0, 8, 0}, {1, 1, 1, 1}};
+  // One descriptor addresses the complete shared buffer. Valid ultrawide views
+  // must not inherit the old 128 MiB software cap on capable devices.
+  std::vector<tiled::View> ultrawide;
+  for (unsigned i = 0; i < 27; ++i) {
+    auto camera = identity;
+    camera[3] = float(i * 5);
+    ultrawide.push_back(
+        tiled::make_view(camera, {1720, -720, 1720, 720}, 1, 100, 3440, 1440));
+  }
+  require(tiled::bytes(ultrawide.front()) * ultrawide.size() > 128ULL * 1024 * 1024,
+          "Ultrawide fixture did not exceed the old shared-buffer cap");
+  const auto storage_limits = renderer.probe_tiled_storage_limits();
+  require(storage_limits.offset_alignment > 0, "GPU reported zero storage-buffer alignment");
+  std::uint64_t wide_bytes = 0;
+  for (const auto &view : ultrawide) {
+    const auto alignment = storage_limits.offset_alignment;
+    wide_bytes = (wide_bytes + alignment - 1) / alignment * alignment;
+    wide_bytes += tiled::bytes(view);
+  }
+  if (wide_bytes <= storage_limits.max_range) {
+    const auto wide_coverage = verify(ultrawide, lights);
+    require(wide_coverage[0] > 0 && wide_coverage[1] > 0,
+            "Ultrawide views did not exercise populated and empty light lists");
+    std::reverse(ultrawide.begin(), ultrawide.end());
+    verify(ultrawide, lights);
+    std::fprintf(stderr, "Tiled ultrawide: 27 views above 128 MiB, exact masks "
+                         "and reversed order passed\n");
+  } else {
+    rejects(ultrawide, lights);
+    std::fprintf(stderr, "Tiled ultrawide: hardware range below %llu bytes; "
+                         "bounded rejection passed (oversized positive not covered)\n",
+                 static_cast<unsigned long long>(wide_bytes));
+  }
   const auto large = tiled::make_view(identity, {32, -32, 32, 24}, 1, 100, 5120, 2160);
-  rejects(std::vector<tiled::View>(13, large), lights);
+  rejects(std::vector<tiled::View>(65, large), lights);
   verify(std::vector<tiled::View>{base}, lights); // rejected growth did not poison reuse
   const auto empty = renderer.probe_tiled_lists({}, lights);
   require(empty.empty(), "Empty tiled view retained prior outputs");

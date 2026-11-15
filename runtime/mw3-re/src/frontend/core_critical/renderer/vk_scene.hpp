@@ -2231,6 +2231,20 @@ private:
   }
 
 public:
+  struct TiledStorageLimits {
+    VkDeviceSize max_range;
+    VkDeviceSize offset_alignment;
+  };
+  // Query the selected GPU's hardware limits, independently of software budgets,
+  // so diagnostic fixtures can retain support for smaller-range devices.
+  TiledStorageLimits probe_tiled_storage_limits() {
+    if (!device)
+      init();
+    VkPhysicalDeviceProperties properties{};
+    f.vkGetPhysicalDeviceProperties(gpu, &properties);
+    return {properties.limits.maxStorageBufferRange,
+            properties.limits.minStorageBufferOffsetAlignment};
+  }
   // The frontend drains its render worker before updating this CPU snapshot.
   // Diagnostic readback uses the same producer and synchronization as rendering.
   std::vector<std::vector<uint32_t>> probe_tiled_lists(const std::vector<mw34::tiled::View> &views,
