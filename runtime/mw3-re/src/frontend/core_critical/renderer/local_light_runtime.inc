@@ -27,7 +27,25 @@ void local_lights_load() {
       std::ios::binary);
   if (!stream)
     throw std::runtime_error("effect light catalog missing");
-  local_catalog_ = mw34::effects::read_catalog(stream);
+  auto composed = mw34::effects::read_catalog(stream);
+  std::set<std::filesystem::path> catalog_paths{
+      std::filesystem::u8path(bridge_config_.effect_light_catalog).lexically_normal()};
+  if (environment_) {
+    for (const auto &[region, resources] : environment_->resources) {
+      const auto effects = resources.find(::platform::prepared::EnvironmentRole::effects);
+      if (effects == resources.end())
+        continue;
+      const auto path = std::filesystem::u8path(effects->second).lexically_normal();
+      if (!catalog_paths.insert(path).second)
+        continue;
+      std::ifstream pack(path, std::ios::binary);
+      if (!pack)
+        throw std::runtime_error("Selected pack effect light catalog missing");
+      composed = mw34::effects::merge_catalogs(
+          composed, mw34::effects::read_catalog(pack));
+    }
+  }
+  local_catalog_ = std::move(composed);
   if (!bridge_config_.mech_headlights)
     return;
   if (bridge_config_.stock_headlights.empty()) {

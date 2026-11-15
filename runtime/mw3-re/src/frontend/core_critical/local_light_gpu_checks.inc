@@ -31,6 +31,7 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
       fixtures_env("MW34_FIXTURE_LIGHTS");
   const auto path = std::filesystem::temp_directory_path() /
                     ("mw34-wp04a-" + std::to_string(SDL_GetTicksNS()) + ".bin");
+  const auto pack_path = std::filesystem::path(path.string() + ".pack");
   struct Restore {
     std::function<void()> f;
     ~Restore() { f(); }
@@ -42,9 +43,12 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
     ztimer::state() = old_clock;
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
+    std::filesystem::remove(pack_path, ignored);
   }};
-  {
-    std::ofstream f(path, std::ios::binary);
+  auto write_catalog = [&](const std::filesystem::path &catalog_path,
+                           uint32_t emitter_hash, uint32_t entry_count = 1,
+                           float intensity = 1) {
+    std::ofstream f(catalog_path, std::ios::binary);
     auto u32 = [&](uint32_t n) {
       for (unsigned i = 0; i < 4; ++i)
         f.put(char(n >> (i * 8)));
@@ -55,22 +59,31 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
       u32(bits);
     };
     f.write("MWFX1\0\0\0", 8);
-    u32(1);
-    u32(1);
-    u32(1);
-    u32(1);
-    u32(2);
-    u32(123);
-    u32(0);
-    scalar(10);
-    scalar(1);
-    scalar(1);
-    scalar(1);
-    scalar(1);
-    scalar(1);
+    u32(entry_count);
+    for (uint32_t i = 0; i < entry_count; ++i) {
+      u32(1);
+      u32(1);
+      u32(1);
+      u32(2);
+      u32(emitter_hash + i);
+      u32(0);
+      scalar(10);
+      scalar(intensity);
+      scalar(1);
+      scalar(1);
+      scalar(1);
+      scalar(1);
+    }
     f.flush();
     require(bool(f), "Could not write local-light fixture catalog");
-  }
+  };
+  write_catalog(path, 123);
+  write_catalog(pack_path, 789);
+  auto environment =
+      std::make_shared<platform::prepared::EnvironmentSelection>();
+  environment->resources["fixture-region"]
+                        [platform::prepared::EnvironmentRole::effects] =
+      pack_path.string();
   local_light_test_env("MW34_EFFECT_LIGHT_CATALOG", path.string().c_str());
   zmth::projection() = {};
   auto &projection = zmth::projection();
@@ -100,7 +113,8 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
                     bool sharp_source = false,
                     bool overlay_before_emitter = false,
                     bool ambient_only = false,
-                    bool canvas_transition = false) {
+                    bool canvas_transition = false,
+                    bool pack_source = false) {
     data = original;
     if (ambient_only) {
       data.put<float>(0x9c, 0);
@@ -112,6 +126,7 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
                          enabled && !weapon_source ? "1" : "0");
     sdlfe::CoreCriticalAssets assets{};
     assets.lighting = "flat";
+    assets.environment = environment;
     auto renderer = make_check_renderer(window, backend, {}, assets);
     renderer->mission_changed({5, 1});
     renderer->set_viewport(0, 0, 32, 32);
@@ -289,7 +304,8 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
     }
     if (weapon_source) {
       const uint8_t white[4] = {255, 255, 255, 255};
-      mw34::materials::set_active_surface_key({1, 1, 1, 123});
+      mw34::materials::set_active_surface_key(
+          {1, 1, 1, pack_source ? 789u : 123u});
       const auto emitter = renderer->create_texture(1, 1, white, 1);
       mw34::materials::clear_active_surface_key();
       platform::DrawState source{};
@@ -344,6 +360,69 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
           "World fixture lighting did not resume after a loading canvas");
   require(render(true, false, true, false, false, false, true) == weapon,
           "World effect lighting did not resume after a loading canvas");
+  const auto pack_weapon =
+      render(true, false, true, false, false, false, false, true);
+  require(pack_weapon != off,
+          "Selected pack-only emitter did not illuminate the receiver");
+  require(pack_weapon == weapon,
+          "Pack emitter did not retain the base emitter's lighting contract");
+
+  // Admission must fail before a game callback can observe a partial catalog.
+  // Repeat the same selected path in two regions to exercise source dedup too.
+  auto catalog_renderer = [&](const std::filesystem::path &selected_path) {
+    auto selected =
+        std::make_shared<platform::prepared::EnvironmentSelection>();
+    for (const char *region : {"fixture-region", "second-region"})
+      selected->resources[region]
+                         [platform::prepared::EnvironmentRole::effects] =
+          selected_path.string();
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    assets.environment = selected;
+    return make_check_renderer(window, backend, {}, assets);
+  };
+  auto rejects_catalog = [&](const std::filesystem::path &selected_path,
+                             const char *expected_error) {
+    bool rejected = false;
+    try {
+      auto renderer = catalog_renderer(selected_path);
+    } catch (const std::runtime_error &error) {
+      rejected = std::string(error.what()) == expected_error;
+    }
+    require(rejected, "Selected effects catalog did not reject its invalid source");
+  };
+  const auto missing_path = std::filesystem::path(pack_path.string() + ".missing");
+  require(!std::filesystem::exists(missing_path),
+          "Missing effects-catalog fixture unexpectedly exists");
+  rejects_catalog(missing_path, "Selected pack effect light catalog missing");
+  {
+    std::ofstream malformed(pack_path, std::ios::binary | std::ios::trunc);
+    malformed.write("bad", 3);
+    malformed.flush();
+    require(bool(malformed), "Could not write malformed effects-catalog fixture");
+  }
+  rejects_catalog(pack_path, "Invalid effect-light material catalog");
+  write_catalog(pack_path, 123, 1, 2);
+  rejects_catalog(pack_path, "Conflicting effect-light material catalog entry");
+  write_catalog(pack_path, 123);
+  {
+    auto duplicate = catalog_renderer(pack_path);
+    require(duplicate->ok(), "Equal base/pack emitter definitions were rejected");
+  }
+  write_catalog(path, 123, 8192);
+  write_catalog(pack_path, 10000);
+  rejects_catalog(pack_path, "Combined effect-light material catalog exceeds limit");
+  // A disabled local-light stage must not attempt to open either missing file.
+  local_light_test_env("MW34_EFFECT_LIGHTS", "0");
+  local_light_test_env("MW34_EFFECT_LIGHT_CATALOG", missing_path.string().c_str());
+  {
+    auto disabled = catalog_renderer(missing_path);
+    require(disabled->ok(), "Disabled local lighting opened catalog sources");
+  }
+  write_catalog(path, 123);
+  write_catalog(pack_path, 789);
+  local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+  local_light_test_env("MW34_EFFECT_LIGHT_CATALOG", path.string().c_str());
 
   // A fade can begin a generic scene with a valid old projection before the
   // next world's camera builds its light list. Retire actual native storage,

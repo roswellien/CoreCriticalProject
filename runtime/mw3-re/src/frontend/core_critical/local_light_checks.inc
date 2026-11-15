@@ -3,6 +3,100 @@ void check_local_light_core() {
   using namespace mw34::effects;
   using namespace std;
 
+  // Stock and selected-pack catalogs share exact material keys. Composition
+  // retains every definition or rejects the whole result on disagreement.
+  {
+    const Emitter emitter{2, 10.f, 1.f, .25f, {1.f, .5f, .25f}};
+    const mw34::materials::SurfaceKey base_key{1, 1, 1, 100};
+    const mw34::materials::SurfaceKey pack_key{1, 1, 1, 200};
+    const Catalog base{{base_key, emitter}}, pack{{pack_key, emitter}};
+    auto same_catalog = [](const Catalog &a, const Catalog &b) {
+      if (a.size() != b.size())
+        return false;
+      return std::equal(a.begin(), a.end(), b.begin(), [](const auto &left,
+                                                        const auto &right) {
+        const auto &x = left.second;
+        const auto &y = right.second;
+        return left.first == right.first && x.kind == y.kind &&
+               x.radius == y.radius && x.intensity == y.intensity &&
+               x.lifetime == y.lifetime && x.color == y.color;
+      });
+    };
+    unsigned passed = 0;
+    auto check_case = [&](bool condition, const char *message) {
+      require(condition, message);
+      ++passed;
+    };
+    auto rejects = [&](auto operation, const char *message) {
+      bool rejected = false;
+      try {
+        operation();
+      } catch (const std::runtime_error &) {
+        rejected = true;
+      }
+      check_case(rejected, message);
+    };
+    const auto merged = merge_catalogs(base, pack);
+    check_case(merged.size() == 2 && merged.count(base_key) == 1 &&
+                   merged.count(pack_key) == 1,
+               "Catalog composition lost a base or pack material");
+    check_case(same_catalog(merge_catalogs(merged, base), merged),
+               "Equal emitter definitions were not deduplicated");
+    check_case(same_catalog(merge_catalogs(pack, base), merged) &&
+                   same_catalog(merge_catalogs({}, merged), merged),
+               "Catalog composition depends on source ordering");
+    check_case(same_catalog(base, Catalog{{base_key, emitter}}) &&
+                   same_catalog(pack, Catalog{{pack_key, emitter}}) &&
+                   same_catalog(merge_catalogs(base, {}), base),
+               "Catalog composition mutated a source definition");
+    for (unsigned field = 0; field < 7; ++field) {
+      auto changed = emitter;
+      if (field == 0)
+        changed.kind = 3;
+      else if (field == 1)
+        changed.radius = std::nextafter(changed.radius, 11.f);
+      else if (field == 2)
+        changed.intensity = 2.f;
+      else if (field == 3)
+        changed.lifetime = .5f;
+      else
+        changed.color[field - 4] += .125f;
+      // The new key sorts before the conflict: failure must not leave that
+      // partial insertion in either caller-owned input.
+      const Catalog conflicting{{{1, 1, 1, 50}, emitter}, {base_key, changed}};
+      rejects([&] { merge_catalogs(base, conflicting); },
+              "Conflicting emitter field was accepted");
+      check_case(same_catalog(base, Catalog{{base_key, emitter}}) &&
+                     conflicting.size() == 2 &&
+                     conflicting.at(base_key).kind == changed.kind &&
+                     conflicting.at(base_key).radius == changed.radius &&
+                     conflicting.at(base_key).intensity == changed.intensity &&
+                     conflicting.at(base_key).lifetime == changed.lifetime &&
+                     conflicting.at(base_key).color == changed.color,
+                 "Rejected catalog composition mutated an input");
+    }
+    Catalog lower, upper;
+    for (std::uint64_t hash = 1; hash <= 8192; ++hash)
+      (hash <= 4096 ? lower : upper).emplace(
+          mw34::materials::SurfaceKey{1, 1, 1, hash}, emitter);
+    const auto full = merge_catalogs(lower, upper);
+    check_case(full.size() == 8192 && lower.size() == 4096 && upper.size() == 4096,
+               "Catalog composition rejected the exact combined limit");
+    check_case(same_catalog(merge_catalogs(full, lower), full),
+               "Equal definitions at the combined limit were rejected");
+    const Catalog overflow{{{1, 1, 1, 9000}, emitter}};
+    rejects([&] { merge_catalogs(full, overflow); },
+            "Catalog composition exceeded the combined limit");
+    auto oversized = full;
+    oversized.insert(*overflow.begin());
+    rejects([&] { merge_catalogs(oversized, {}); },
+            "Oversized base catalog was accepted");
+    check_case(full.size() == 8192 && overflow.size() == 1,
+               "Overflow rejection changed a source catalog");
+    std::fprintf(stderr, "[EFFECT_CATALOG_CHECKS] passed_cases=%u conflict_fields=7\n",
+                 passed);
+  }
+
   // --- Part 1: rank_frame_lights ---
   {
     vector<Candidate> cands;
