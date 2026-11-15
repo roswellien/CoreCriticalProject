@@ -197,6 +197,7 @@ void check_material_ordinals(std::uint32_t polygon_count, bool force_outer_unwin
 
 namespace {
 unsigned far_cases = 0;
+unsigned sky_cases = 0;
 
 // Draw-model writes these shared buffers even when its early handoff succeeds.
 // Keep each fixture independent, including exceptions from strict GPU mode.
@@ -217,6 +218,7 @@ struct FarState {
     zmod::Fog fog = zmod::fog();
     zmod::FogCalc fog_calc = zmod::fog_calc();
     zvid::DeviceState device = zvid::device_state();
+    bool native_sky = zvid::draw_state().native_sky;
     std::fenv_t environment{};
 #ifdef GEOMETRY_TEST_MXCSR
     unsigned mxcsr = _mm_getcsr();
@@ -241,6 +243,7 @@ struct FarState {
         zmod::fog() = fog;
         zmod::fog_calc() = fog_calc;
         zvid::device_state() = device;
+        zvid::set_native_sky(native_sky);
         std::fesetenv(&environment);
 #ifdef GEOMETRY_TEST_MXCSR
         _mm_setcsr(mxcsr);
@@ -263,6 +266,8 @@ struct FarRenderer : Renderer {
 struct LegacyEmission {
     int primitive;
     void *texture;
+    bool native_sky;
+    uint32_t color;
     std::vector<zmod::TLVertex> vertices;
     std::vector<std::array<float, 3>> camera;
 };
@@ -324,16 +329,17 @@ struct FarFixture {
         zmod::draw_table() = {};
         auto &table = zmod::draw_table();
         table.ctx = this;
-        table.flat = [](void *ctx, uint32_t, int32_t, int32_t count, int32_t, int32_t) {
-            static_cast<FarFixture *>(ctx)->record(count, nullptr);
+        table.flat = [](void *ctx, uint32_t color, int32_t, int32_t count, int32_t, int32_t) {
+            static_cast<FarFixture *>(ctx)->record(count, nullptr, color);
         };
-        table.lit = [](void *ctx, uint32_t, const float *, uint32_t, int32_t,
+        table.lit = [](void *ctx, uint32_t color, const float *, uint32_t, int32_t,
                        int32_t count, int32_t, int32_t) {
-            static_cast<FarFixture *>(ctx)->record(count, nullptr);
+            static_cast<FarFixture *>(ctx)->record(count, nullptr, color);
         };
         table.textured = [](void *ctx, int32_t count, void *texture, float, int32_t) {
             static_cast<FarFixture *>(ctx)->record(count, texture);
         };
+        zvid::set_native_sky(false);
         zvid::set_render3d(&renderer);
     }
     FarFixture(const FarFixture &) = delete;
@@ -347,9 +353,10 @@ struct FarFixture {
         positions[8] = c;
         model.invalidate_render_geometry();
     }
-    void record(int32_t count, void *texture) {
+    void record(int32_t count, void *texture, uint32_t color = 0) {
         require(count >= 3 && count <= zmod::kPolyVerts, "Invalid legacy callback count");
-        LegacyEmission emission{zvid::device_state().primitive, texture, {}, {}};
+        LegacyEmission emission{zvid::device_state().primitive, texture,
+                                zvid::draw_state().native_sky, color, {}, {}};
         for (int i = 0; i < count; ++i) {
             emission.vertices.push_back(zmod::clip2d().tl[i]);
             const float *position = zmod::clip3d_buffers().cam[i];
@@ -819,6 +826,214 @@ void check_material_publication_order() {
     require(failures == 0, "Ordinary RGB publication/far fallback ordering regression");
 }
 
+// Use the real early helper rather than FarFixture::submit: sky rejection must
+// leave even an empty stock cache untouched. This also keeps old-production RED
+// safe: its first unexpected GPU admission fails before any oversized CPU draw.
+void require_sky_decline(FarFixture &fixture, std::string_view expected_error = {}) {
+    zmth::matrix_stack().top = 1;
+    zmth::matrix_stack().slot[1] = &fixture.camera;
+    const auto resource = fixture.model.render_geometry;
+    const auto materials = fixture.model.render_materials;
+    const auto buffers = zmod::draw_buffers();
+    const auto work = zmod::clip2d();
+    const auto calls = fixture.renderer.submissions;
+    const auto unsupported = fixture.renderer.unsupported;
+    const int rounding = std::fegetround();
+    const int flags = std::fetestexcept(FE_ALL_EXCEPT);
+#ifdef GEOMETRY_TEST_MXCSR
+    const unsigned mxcsr = _mm_getcsr();
+#endif
+    bool submitted = false;
+    std::string actual_error;
+    try {
+        submitted = zmod::submit_geometry(fixture.node);
+    } catch (const std::runtime_error &error) {
+        actual_error = error.what();
+    }
+    require(!submitted && actual_error == expected_error &&
+                fixture.renderer.submissions == calls &&
+                fixture.model.render_geometry == resource &&
+                fixture.model.render_materials == materials,
+            "Native sky stock admission must decline before GPU/cache creation");
+    const bool capacity = expected_error == "Legacy model draw buffer capacity exceeded";
+    require(fixture.renderer.unsupported == unsupported + unsigned(!capacity) &&
+                fixture.emissions.empty() && zvid::draw_state().native_sky &&
+                zmth::matrix_stack().top == 1 && std::fegetround() == rounding &&
+                std::fetestexcept(FE_ALL_EXCEPT) == flags &&
+                !std::memcmp(&buffers, &zmod::draw_buffers(), sizeof buffers) &&
+                !std::memcmp(&work, &zmod::clip2d(), sizeof work),
+            "Native sky rejection changed accounting, marker, buffers or caller FP state");
+#ifdef GEOMETRY_TEST_MXCSR
+    require(_mm_getcsr() == mxcsr, "Native sky rejection leaked MXCSR state");
+#endif
+    ++sky_cases;
+}
+
+void check_native_sky_handoff() {
+    const bool original_sky = zvid::draw_state().native_sky;
+    {
+        FarFixture fixture;
+        zvid::set_native_sky(true);
+        std::fesetround(FE_UPWARD);
+        std::feraiseexcept(FE_DIVBYZERO);
+        require_sky_decline(fixture);
+        require(!fixture.model.render_geometry && fixture.model.render_materials.empty(),
+                "Fresh sky rejection registered a stock source");
+    }
+    require(zvid::draw_state().native_sky == original_sky,
+            "Sky fixture failed to restore its caller marker");
+    {
+        FarFixture fixture;
+        zmth::matrix_stack().top = 1;
+        require(zmod::submit_geometry(fixture.node) && fixture.renderer.submissions == 1 &&
+                    fixture.model.render_geometry && !zvid::draw_state().native_sky,
+                "False sky marker stopped ordinary stock acceleration");
+        ++sky_cases;
+        // A changed source pointer would invalidate this cache in source_supported.
+        // Sky rejection must not even enter that stock preflight.
+        zmod::Material replacement = fixture.material;
+        fixture.polygon.material = &replacement;
+        zvid::set_native_sky(true);
+        require_sky_decline(fixture);
+        require(fixture.model.render_materials ==
+                    std::vector<const zmod::Material *>{&fixture.material},
+                "Sky rejection republished an existing material cache");
+    }
+    {
+        FarFixture fixture;
+        fixture.renderer.prepared = true;
+        fixture.normals.resize((zmod::kModelVerts + 1) * 3, 0);
+        fixture.model.normals = fixture.normals.data();
+        fixture.count(0x18, zmod::kModelVerts + 1);
+        zvid::set_native_sky(true);
+        require(zmod::draw_model(&fixture.node, 0x20) == 0 &&
+                    zmth::matrix_stack().top == 0 && zvid::draw_state().native_sky &&
+                    fixture.renderer.submissions == 0 && fixture.renderer.unsupported == 0 &&
+                    fixture.emissions.empty() && !fixture.model.render_geometry &&
+                    fixture.model.render_materials.empty(),
+                "Native sky exclusion displaced explicit prepared replacement precedence");
+        ++sky_cases;
+    }
+    // The fixture restores the marker even when strict mode unwinds by exception.
+    try {
+        FarFixture fixture;
+        fixture.renderer.mode = cc::geometry::Mode::gpu;
+        zvid::set_native_sky(true);
+        std::fesetround(FE_UPWARD);
+        std::feraiseexcept(FE_DIVBYZERO);
+        require_sky_decline(fixture, "Strict GPU geometry: unsupported model family");
+        throw std::runtime_error("Authored sky fixture unwind");
+    } catch (const std::runtime_error &error) {
+        require(std::string_view(error.what()) == "Authored sky fixture unwind",
+                "Strict sky rejection did not follow the unsupported-family contract");
+    }
+    require(zvid::draw_state().native_sky == original_sky,
+            "Exceptional sky fixture failed to restore its caller marker");
+
+    LegacyEmission baseline{};
+    zvid::DeviceState baseline_device{};
+    uint32_t baseline_mask = 0;
+    for (bool original_route : {true, false}) {
+        FarFixture fixture;
+        fixture.renderer.mode = original_route ? cc::geometry::Mode::legacy
+                                               : cc::geometry::Mode::partial;
+        zvid::set_native_sky(true);
+        require(zmod::draw_model(&fixture.node, 0x20) == 0 &&
+                    zmth::matrix_stack().top == 0 && zvid::draw_state().native_sky &&
+                    fixture.renderer.submissions == 0 && fixture.emissions.size() == 1 &&
+                    !fixture.model.render_geometry && fixture.model.render_materials.empty() &&
+                    fixture.renderer.unsupported == unsigned(!original_route),
+                "Safe sky did not emit exactly once through the original TL producer");
+        const auto &emission = fixture.emissions[0];
+        require(emission.native_sky && emission.vertices.size() == 3 &&
+                    emission.primitive == 6,
+                "Original sky emission lost marker, primitive or vertices");
+        if (original_route) {
+            baseline = emission;
+            baseline_device = zvid::device_state();
+            baseline_mask = zmod::draw_state().clip.mask;
+        } else {
+            require(emission.texture == baseline.texture && emission.color == baseline.color &&
+                        emission.camera == baseline.camera &&
+                        !std::memcmp(emission.vertices.data(), baseline.vertices.data(),
+                                     baseline.vertices.size() * sizeof(zmod::TLVertex)) &&
+                        !std::memcmp(&baseline_device, &zvid::device_state(),
+                                     sizeof baseline_device) &&
+                        zmod::draw_state().clip.mask == baseline_mask,
+                    "Sky fallback changed original TL geometry, colors or device state");
+        }
+        ++sky_cases;
+    }
+
+    // Vertex overflow, shaded-normal overflow and static-bake normal overflow
+    // all fit the GPU source arrays, but cannot enter fixed-size CPU buffers.
+    for (int source_kind : {0, 1, 2}) {
+        FarFixture fixture;
+        const uint32_t count = zmod::kModelVerts + 1;
+        std::array<uint32_t, 3> normal_indices{{count - 1, count - 1, count - 1}};
+        zcls::Light sun{};
+        if (source_kind == 0) {
+            fixture.positions.resize(count * 3, 0);
+            fixture.model.vertices = fixture.positions.data();
+            fixture.count(0x14, count);
+        } else {
+            fixture.normals.resize(count * 3, 0);
+            fixture.normals[(count - 1) * 3 + 2] = 1;
+            fixture.model.normals = fixture.normals.data();
+            fixture.count(0x18, count);
+            zmod::draw_state().vertex_shading = source_kind == 1;
+        }
+        if (source_kind == 2) {
+            fixture.count(8, 1);
+            fixture.polygon.flags = 3 | 0x200;
+            fixture.polygon.normal_indices = normal_indices.data();
+            zmod::draw_state().static_lights = 1;
+            zmod::lighting().mask_base = 1;
+            zmod::lighting().mask = &zmod::lighting().mask_base;
+            sun.put<uint32_t>(0xb0, 0x108);
+            sun.put<float>(0x9c, 1);
+            auto &lights = zmod::light_list();
+            lights = {};
+            lights.any = lights.count = 1;
+            lights.directed = 0;
+            lights.list[0].data = &sun;
+            lights.list[0].full = lights.list[0].reach = 1;
+            zcls::frames().update_frame = zcls::frames().frame = 1;
+        }
+        zmth::matrix_stack().top = 1;
+        require(zmod::submit_geometry(fixture.node) && fixture.renderer.submissions == 1,
+                "Non-sky safe GPU source was restricted to CPU buffer capacity");
+        ++sky_cases;
+        zvid::set_native_sky(true);
+        require_sky_decline(fixture, "Legacy model draw buffer capacity exceeded");
+        const auto resource = fixture.model.render_geometry;
+        const auto materials = fixture.model.render_materials;
+        const auto buffers = zmod::draw_buffers();
+        const auto work = zmod::clip2d();
+        bool capacity_error = false;
+        zmth::matrix_stack().top = 0;
+        try {
+            zmod::draw_model(&fixture.node, 0x20);
+        } catch (const std::runtime_error &error) {
+            capacity_error = std::string_view(error.what()) ==
+                             "Legacy model draw buffer capacity exceeded";
+        }
+        require(capacity_error && fixture.renderer.submissions == 1 &&
+                    fixture.renderer.unsupported == 0 && fixture.emissions.empty() &&
+                    fixture.model.render_geometry == resource &&
+                    fixture.model.render_materials == materials &&
+                    zmth::matrix_stack().top == 0 && zvid::draw_state().native_sky &&
+                    !std::memcmp(&buffers, &zmod::draw_buffers(), sizeof buffers) &&
+                    !std::memcmp(&work, &zmod::clip2d(), sizeof work) &&
+                    fixture.node.get<uint32_t>(0xc0) == 0,
+                "Oversized native sky reached CPU preparation or static light baking");
+        ++sky_cases;
+    }
+    require(zvid::draw_state().native_sky == original_sky,
+            "Sky capacity fixtures failed to restore their caller marker");
+    std::cout << "Native sky handoff: passed (" << sky_cases << " cases)\n";
+}
+
 void check_far_regressions() {
     struct Group { const char *name; void (*run)(); };
     const Group groups[]{
@@ -995,6 +1210,7 @@ int main() try {
     zvid::set_render3d(nullptr);
     std::cout << "Early geometry handoff, skipped CPU loops, immutable revisions, FP and strict "
                  "rejection pass\n";
+    check_native_sky_handoff();
     check_far_regressions();
     {
         auto check_raw_ordinals = [&](std::uint32_t poly_count) {
