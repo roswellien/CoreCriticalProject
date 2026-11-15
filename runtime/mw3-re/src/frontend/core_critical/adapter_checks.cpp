@@ -1,6 +1,7 @@
 #include "frame_renderer.hpp"
 
 #include "frontend/sdl/sdl_child.h"
+#include "frontend/sdl/sdl_platform.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/cls_zbd.h"
@@ -9,6 +10,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "renderer/campaign_environment_policy.hpp"
 #include "renderer/campaign_lighting.hpp"

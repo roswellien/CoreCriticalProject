@@ -242,7 +242,7 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend) {
                                       {w, 0, 1, 1, 0xffffffffu, 0xff000000u, 1, 0},
                                       {w, h, 1, 1, 0xffffffffu, 0xff000000u, 1, 1},
                                       {0, h, 1, 1, 0xffffffffu, 0xff000000u, 0, 1}};
-  render_->begin_scene();
+  render_->begin_canvas_scene();
   render_->draw(platform::Primitive::kFan, quad, 4, s);
   render_->end_scene();
 }

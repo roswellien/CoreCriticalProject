@@ -106,7 +106,7 @@ bool GpuHud::finish() {
   renderer_.flush();
   renderer_.viewport(&x, &y, &width, &height);
   renderer_.set_viewport(0, 0, width_, height_);
-  renderer_.begin_scene();
+  renderer_.begin_canvas_scene();
   for (const auto& command : commands_) {
     platform::DrawState state;
     state.texture = command.texture;
