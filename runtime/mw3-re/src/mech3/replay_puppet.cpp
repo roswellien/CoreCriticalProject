@@ -1,0 +1,235 @@
+#include "mech3/replay_puppet.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+#include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/object3d.h"
+#include "gamez/zmath/zmth_matrix.h"
+#include "mech3/app_mech.h"
+#include "mech3/mech.h"
+#include "mech3/mech_anim.h"
+#include "mech3/mech_lod.h"
+#include "mech3/mech_names.h"
+#include "mech3/mech_parts.h"
+#include "mech3/zai_hunt.h"
+#include "mech3/zai_params.h"
+#include "mech3/zrdraiv.h"
+
+namespace mech3::replay {
+
+namespace {
+
+// The skis divide by the frame time, so a paused or seeking replay still
+// steps by at least this much.
+constexpr float kMinStep = 1.0f / 240.0f;
+
+constexpr int kStateStand = 1;        // anim_state: standing or moving on the gait
+constexpr int kTorsoFrozen = 2;       // Torso::mode: neither the AI nor the player aims it
+constexpr int kWalkSlot = 4;          // anims[4], the walk
+constexpr int kLimpBlendSlot = 11;    // anims[11], the walk/limp blend once start_limp made it
+constexpr int kAnimSlots = 13;
+
+// An action's kind, 1 fallf .. 8 collapser (mech_data.cpp action_name), 0
+// for a name the log should never hold.
+int action_kind(const std::string& name) {
+  static const char* const kNames[] = {"fallf",  "fallb",  "landf",     "landb",
+                                       "getupf", "getupb", "collapsel", "collapser"};
+  for (int i = 0; i < 8; ++i)
+    if (name == kNames[i]) return i + 1;
+  return 0;
+}
+
+// The gait clip at `phase` of its loop, running at `cps` loops a second,
+// so that after the coming advance(dt) it is exactly there. The rate is set
+// outright, not by set_speed, which would multiply by the stride multiplier
+// again. A blend's two clips are set the same way, so they stay in step.
+void set_phase(MechAnim* anim, float phase, float cps, float dt) {
+  if (!anim) return;
+  anim->rate = cps * anim->loop_time;
+  if (anim->rate > 0.0f) anim->t = phase * anim->loop_time / anim->rate - dt;
+  else anim->t = phase * anim->loop_time;  // still: the advance is a no-op on rate * t
+  if (auto* blend = dynamic_cast<BlendAnim*>(anim)) {
+    set_phase(blend->a, phase, cps, dt);
+    set_phase(blend->b, phase, cps, dt);
+  }
+}
+
+}  // namespace
+
+bool Puppet::detachable(int id) {
+  switch (id) {
+    case 2: case 3: case 9: case 10:            // arms and hands
+    case 4: case 5: case 11: case 12: case 13: case 14:  // thighs, calves and feet
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::unique_ptr<Puppet> Puppet::create(const std::string& chassis, int side, const MechPose& start,
+                                       std::string* error) {
+  std::unique_ptr<Puppet> puppet(new Puppet());
+  puppet->chassis_ = chassis;
+  puppet->side_ = side;
+  puppet->roster_ = mech_index(chassis.c_str());
+  if (puppet->roster_ < 0) {
+    *error = "unknown chassis \"" + chassis + "\"";
+    return nullptr;
+  }
+  if (!puppet->make(start, error)) return nullptr;
+  return puppet;
+}
+
+Puppet::~Puppet() {
+  if (mech_) mech_free_in_play(mech_);
+}
+
+bool Puppet::make(const MechPose& start, std::string* error) {
+  // The record the AI mech path reads: where it stands, its team (side A 1,
+  // side B 2, as the arena's), and the first configuration. No pilot reads
+  // the rest.
+  ai::AivRecord record;
+  record.put<float>(0x08, start.pos.x);
+  record.put<float>(0x0c, start.pos.y);
+  record.put<float>(0x10, start.pos.z);
+  record.put<float>(0x14, start.heading);
+  record.put<int32_t>(0x18, side_ + 1);
+  record.put<int32_t>(0xbc, 0);
+  // create_ai_mech wants a net; the replay controls never read it.
+  ai::HuntNet* net = ai::hunt_net();
+  if (!net) {
+    const float at[3] = {start.pos.x, start.pos.y, start.pos.z};
+    net = ai::make_hunt_net(at);
+  }
+  name_ = "replay_" + std::to_string(start.id);
+  mech_ = static_cast<Mech*>(program_create_replay_mech(roster_, name_.c_str(), net, &record));
+  if (!mech_) {
+    *error = "the " + chassis_ + " for mech " + std::to_string(start.id) + " could not be made";
+    return false;
+  }
+  mech_->set_team(record.team());
+  mech_->detail = kPuppetDetail;
+  mech_->x690 = 0;  // the full model
+  mech_->arena_bot = true;
+  mech_->remote = true;  // no landing damage or knockdown in ground_step
+  if (mech_->torso) mech_->torso->set_mode(kTorsoFrozen);
+  for (Arm* arm : mech_->arms)
+    if (arm) arm->aim_rate = 0.0f;  // the aim stays where set() puts it
+  action_.clear();
+  detached_.clear();
+  limp_started_ = false;
+  place(start);
+  return true;
+}
+
+bool Puppet::rebuild(const MechPose& pose, std::string* error) {
+  if (mech_) mech_free_in_play(mech_);
+  mech_ = nullptr;
+  return make(pose, error);
+}
+
+// The node to the logged place and heading. The heading is a yaw-only
+// quaternion, as the log read it (arena_log.cpp: 2 atan2(y, w)).
+void Puppet::place(const MechPose& pose) {
+  Mech& m = *mech_;
+  m.orientation[0] = std::cos(pose.heading * 0.5f);
+  m.orientation[1] = 0.0f;
+  m.orientation[2] = std::sin(pose.heading * 0.5f);
+  m.orientation[3] = 0.0f;
+  zmth::quat_matrix(m.orientation, m.transform);
+  zcls::object3d_set_translation(static_cast<zcls::Node*>(m.node), pose.pos.x, pose.pos.y, pose.pos.z);
+  m.entity_moved();
+}
+
+// The part hidden and marked destroyed (the game's own flag: a destroyed arm
+// stops aiming). It is not unlinked: the game unlinks a part only to hand its
+// node to the flying debris, and a mech freed with an unlinked part keeps a
+// dangling reference to it.
+void Puppet::detach(int id) {
+  MechPart* part = part_by_id(*mech_, id);
+  if (!part || !part->node) return;
+  zcls::node_set_active(static_cast<zcls::Node*>(part->node), 0);
+  part->destroyed = true;
+  detached_.push_back(id);
+}
+
+void Puppet::set(const MechPose& pose, const std::vector<int>& lost, float dt) {
+  if (!mech_) return;
+  Mech& m = *mech_;
+  dt = std::max(dt, kMinStep);
+  for (const int id : lost)
+    if (detachable(id) && std::find(detached_.begin(), detached_.end(), id) == detached_.end()) detach(id);
+
+  place(pose);
+  m.vec_3c = m.push = m.impulse = mech3::Vec3{0, 0, 0};
+  std::fill(std::begin(m.blocked), std::end(m.blocked), false);
+  if (m.torso) {
+    m.torso->yaw = pose.twist;
+    m.torso->pitch = pose.pitch;
+    m.torso->refresh_turn();
+  }
+  for (int i = 0; i < 2; ++i) {
+    if (!m.arms[i] || !pose.has_arm[i]) continue;
+    m.arms[i]->aim_yaw = pose.arm_yaw[i];
+    m.arms[i]->aim_pitch = pose.arm_pitch[i];
+  }
+
+  // An action plays while it runs, and holds its last frame while the mech
+  // lies fallen or dead.
+  const int kind = action_kind(pose.action);
+  MechAction* act = kind ? m.action_objects[kind] : nullptr;
+  const bool down = pose.fallen || !pose.standing;
+  const bool in_action = act && (pose.action_elapsed < act->loop_time || down);
+  if (in_action) play_action(pose, dt);
+  else play_gait(pose, dt);
+  m.animate_torso_hip(dt);
+  m.animate_limbs(dt);
+
+  // The log wins over root motion.
+  place(pose);
+  m.jet_effects(pose.jumping);
+}
+
+void Puppet::play_action(const MechPose& pose, float dt) {
+  Mech& m = *mech_;
+  const int kind = action_kind(pose.action);
+  MechAction* act = m.action_objects[kind];
+  if (action_ != pose.action) {
+    m.begin_action(act, kind);
+    action_ = pose.action;
+  }
+  // So that the coming advance lands on the logged time, held at the end.
+  const float at = std::clamp(pose.action_elapsed, 0.0f, act->loop_time);
+  act->t = std::max(at - dt, 0.0f);
+  act->done = false;
+  m.animate_action(dt, act, kind);
+}
+
+void Puppet::play_gait(const MechPose& pose, float dt) {
+  Mech& m = *mech_;
+  if (!action_.empty()) {
+    // Back on its feet: the fall hid the shadows.
+    m.legs[0]->foot->show_shadow(true);
+    m.legs[1]->foot->show_shadow(true);
+    action_.clear();
+  }
+  m.anim_state = m.prev_state = kStateStand;
+  m.gait_frames = 0;  // no blend-in of the root motion after an action
+  int slot = pose.anim >= 0 && pose.anim < kAnimSlots ? pose.anim : kWalkSlot;
+  if (pose.limp == 0 || pose.limp == 1) {
+    if (!limp_started_) limp_started_ = m.start_limp(pose.limp, false);
+    if (m.anims[kLimpBlendSlot]) slot = kLimpBlendSlot;
+  }
+  MechAnim* anim = m.anims[slot] ? m.anims[slot] : m.anims[kWalkSlot];
+  if (!anim) return;
+  anim->set_blend(pose.weight);
+  set_phase(anim, pose.phase, pose.cps, dt);
+  const mech3::Vec3 saved = m.vec_3c;
+  m.advance_gait(dt, anim);
+  m.animate_gait(dt, anim, pose.jumping ? 1 : 0, saved);
+  if (pose.jumping) m.pose_jump();
+}
+
+}  // namespace mech3::replay

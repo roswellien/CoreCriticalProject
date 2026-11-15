@@ -296,6 +296,7 @@ void mission_win();  // Missions::complete 0x0048f740 (the cheats')
 void mission_controls_free(void* controls);  // app_mission.cpp: an AI mech's controls (and brain) deleted
 // A mech (one on zEntity's list) deleted (vtable +0 with 1); false for anything else.
 bool mech_free(void* obj);
+void mech_free_in_play(void* mech);  // ours (#289): the sensors drop it first, as a wreck's fade does
 void mech_dead_tick(float dt);  // 0x0041e3f0, the player tick's: the dead mechs' frame
 void mech_dead_clear();         // 0x00414000's list: emptied at the mission's cleanup
 void mechs_shutdown();          // 0x00414000: the mechs' mission end (app_mission's cleanup)
@@ -387,6 +388,8 @@ void program_mech_set_controls(void* mech, void* controls);
 // `net` (an ai::AiNet) and `rec` (an ai::AivRecord), placed at the record's
 // place, as player.cpp's create_ai_mech makes one. Null when it fails.
 void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* rec);
+// Ours (#289): the same, on ReplayControls (a replay puppet, no pilot).
+void* program_create_replay_mech(int32_t mech, const char* name, void* net, void* rec);
 // 0x005a85e0: a vehicle's centroid (its node's world position); false without one.
 bool program_vehicle_centre(void* vehicle, float out[3]);
 void* program_launch_campaign();   // app_mission.cpp: the launch's CampaignGame (the menus' or the debug start's)

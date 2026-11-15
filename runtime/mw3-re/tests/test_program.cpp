@@ -82,6 +82,7 @@
 #include "arena_counts.h"
 #include "mech3/arena.h"
 #include "mech3/arena_log.h"
+#include "replay_game.h"
 #include "mech3/replay_terrain.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/mech_objective.h"
@@ -19088,6 +19089,31 @@ TEST(replay_terrain_c1mp1) {
   EXPECT(terrain.rgba.size() == terrain.heights.size() * 4);
   const mech3::replay::Terrain unknown = mech3::replay::build_terrain("zz9mp1", whole_world);
   EXPECT(!unknown.error.empty() && unknown.heights.empty());
+}
+
+// #289 step 3 (plan step 4) on the real game: a puppet posed from a live
+// arena mech's state record each sampled frame puts its feet and hip where
+// the live mech's are; it takes off a lost arm and keeps it off through a
+// rebuild; a destroyed puppet plays its collapse and never dies; jumping and
+// landing leave its armor and action queue alone. The puppet is on team 0,
+// so no bot shoots at it.
+TEST(replay_puppet_follows_a_live_mech_headless) {
+  if (!have_game()) return;
+  const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
+                           arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
+  arena_headless_run(json, 60, [](int) {});  // the warm-up (#302)
+  constexpr int kFrames = 1200;
+  replay_game::PuppetProbe probe;
+  arena_headless_run(json, kFrames, [&](int frame) { probe.frame(frame, kFrames - 1); });
+  const replay_game::PuppetResults& r = probe.results();
+  std::printf("  puppet: made in %.1f ms; %d samples, feet within 5 cm in %d, angles in %d, worst %.3f m\n",
+              r.create_ms, r.samples, r.close_feet, r.close_angles, r.worst);
+  std::printf("  puppet: arm off %d, kept off %d, collapsed %d, never died %d, armor kept %d\n", r.part_off,
+              r.kept_off, r.collapsed, r.never_died, r.armor_kept);
+  EXPECT(r.made && r.samples >= 10);
+  EXPECT(r.close_feet == r.samples && r.close_angles == r.samples);
+  EXPECT(r.part_off && r.kept_off);
+  EXPECT(r.collapsed && r.never_died && r.armor_kept);
 }
 
 // #289 step 1 (criteria 2 to 6) on the real game: a c1mp1 4v4 logs shots of

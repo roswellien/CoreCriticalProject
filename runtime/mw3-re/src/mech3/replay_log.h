@@ -122,6 +122,11 @@ struct Frame {
   std::vector<Event> recent;          // shots and hits in (t - kRecent, t]
 };
 
+// One state line's mech record, as JSON text, read as the log reader reads
+// it; false when it is not one or its position is unusable. For the tests,
+// which pose a puppet from a live mech's record.
+bool parse_pose(const std::string& record_text, MechPose* out);
+
 // How long a shot streak or a hit spark stays drawn.
 constexpr float kRecent = 0.3f;
 

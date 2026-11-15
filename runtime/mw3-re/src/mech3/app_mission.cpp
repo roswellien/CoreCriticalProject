@@ -311,7 +311,12 @@ struct WiredPlayerHooks : PlayerHooks {
   GameEngine* e = nullptr;
   void tick_41e3f0(float dt) override { mech_dead_tick(dt); }  // 0x0041e3f0 on 0x00605510
   void tick_537f20(int32_t v) override { zmod::material_sweep(v); }  // 0x00537f20: the unused materials freed (IA, multiplayer)
-  std::map<Handle, int> controls;  // the AI controllers made: 1 a mech's, 2 a vehicle's
+  // The controllers made, by kind, so each is deleted and asked as what it is.
+  enum ControlsKind { kAiMech = 1, kAiVehicle = 2, kReplayMech = 3 };
+  std::map<Handle, ControlsKind> controls;
+  // Ours (#289): set while a replay puppet is made, so the AI mech path
+  // gives it ReplayControls instead of a pilot.
+  bool make_replay_controls = false;
   std::set<Handle> params;         // their brains' settings, as vt+0x90 gives them
   std::set<Handle> mechs;          // the AI mechs made
   std::set<Handle> vehicles;       // the basic vehicles made
@@ -467,14 +472,19 @@ struct WiredPlayerHooks : PlayerHooks {
   // The AI controllers: the port's, over the vehicle's compiled net and its
   // record (the blocks player.cpp allocates for them are not used).
   Handle ai_mech_controls(Handle, Handle net, const ai::AivRecord* rec) override {
+    if (make_replay_controls) {
+      const Handle h = e->handle_of(new ReplayControls());
+      controls[h] = kReplayMech;
+      return h;
+    }
     const Handle h = e->handle_of(new AiControls(nullptr, as<ai::AiNet>(net), *rec));
-    controls[h] = 1;
+    controls[h] = kAiMech;
     return h;
   }
   Handle alloc_4ac860(uint32_t size) override { return e->alloc_block(size); }
   Handle ai_vehicle_controls(Handle, Handle net, const ai::AivRecord* rec) override {
     const Handle h = e->handle_of(new ai::AiVehicleControls(nullptr, as<ai::AiNet>(net), *rec));
-    controls[h] = 2;
+    controls[h] = kAiVehicle;
     return h;
   }
   Handle controls_interface(Handle ctl) override { return ctl; }
@@ -489,16 +499,27 @@ struct WiredPlayerHooks : PlayerHooks {
       params.erase(e->handle_of(&b->params));
       e->forget_object(&b->params);
     };
-    if (it->second == 1) {
-      AiControls* c = as<AiControls>(ictl);
-      forget_params(c->brain.get());
-      e->forget_object(c);
-      delete c;
-    } else {
-      ai::AiVehicleControls* c = as<ai::AiVehicleControls>(ictl);
-      forget_params(c->brain.get());
-      e->forget_object(c);
-      delete c;
+    switch (it->second) {
+      case kAiMech: {
+        AiControls* c = as<AiControls>(ictl);
+        forget_params(c->brain.get());
+        e->forget_object(c);
+        delete c;
+        break;
+      }
+      case kAiVehicle: {
+        ai::AiVehicleControls* c = as<ai::AiVehicleControls>(ictl);
+        forget_params(c->brain.get());
+        e->forget_object(c);
+        delete c;
+        break;
+      }
+      case kReplayMech: {
+        ReplayControls* c = as<ReplayControls>(ictl);
+        e->forget_object(c);
+        delete c;
+        break;
+      }
     }
     controls.erase(it);
   }
@@ -515,7 +536,12 @@ struct WiredPlayerHooks : PlayerHooks {
       params.insert(h);
       return h;
     }
-    ai::Brain* b = it->second == 1 ? as<AiControls>(ictl)->brain.get() : as<ai::AiVehicleControls>(ictl)->brain.get();
+    ai::Brain* b = nullptr;
+    switch (it->second) {
+      case kAiMech: b = as<AiControls>(ictl)->brain.get(); break;
+      case kAiVehicle: b = as<ai::AiVehicleControls>(ictl)->brain.get(); break;
+      case kReplayMech: break;  // no pilot
+    }
     if (!b) return 0;
     const Handle h = e->handle_of(&b->params);
     params.insert(h);
@@ -524,8 +550,12 @@ struct WiredPlayerHooks : PlayerHooks {
   // The mech itself is the port's (mech3/mech_build) on the AI's controller.
   Handle mech_create(int32_t mech, Handle ctl, int32_t config, const char* name) override {
     void* c = e->object_of(ctl);
-    if (!c || controls.count(ctl) == 0 || controls[ctl] != 1) return PlayerHooks::mech_create(mech, ctl, config, name);
-    void* m = build_ai_mech(mech, static_cast<MechControls*>(static_cast<AiControls*>(c)), config, name);
+    const auto kind = controls.find(ctl);
+    if (!c || kind == controls.end() || kind->second == kAiVehicle)
+      return PlayerHooks::mech_create(mech, ctl, config, name);
+    MechControls* mc = kind->second == kAiMech ? static_cast<MechControls*>(static_cast<AiControls*>(c))
+                                                : static_cast<MechControls*>(static_cast<ReplayControls*>(c));
+    void* m = build_ai_mech(mech, mc, config, name);
     if (!m) return 0;
     g_ai_names.emplace_back(name ? name : "");
     g_ai_mechs.push_back({m, c, nullptr});
@@ -2844,6 +2874,17 @@ void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* re
   const Handle m = create_ai_mech("arena", name, mech, static_cast<ai::AivRecord*>(rec),
                                   e->handle_of(static_cast<ai::AiNet*>(net)));
   return m ? e->object_of(m) : nullptr;
+}
+
+// Ours (#289): a replay puppet, made by the same path as an AI mech (skin,
+// team masks and placing are the game's own) but on ReplayControls, so no
+// pilot ever steers it. `net` only satisfies create_ai_mech; the replay
+// controls never read it.
+void* program_create_replay_mech(int32_t mech, const char* name, void* net, void* rec) {
+  g_player_hooks.make_replay_controls = true;
+  void* m = program_create_ai_mech(mech, name, net, rec);
+  g_player_hooks.make_replay_controls = false;
+  return m;
 }
 
 void GameEngine::arena_start() { arena::arena_start(); }

@@ -151,6 +151,27 @@ float Mech::altitude() const {
   return (p ? p->y : 0.0f) - skis->ground[6];
 }
 
+// Ours (#289): JumpJets' sound, flame and force feedback, split out so a
+// replay puppet shows its jets with the game's own code.
+void Mech::jet_effects(bool firing) {
+  if (detail & 1) {
+    Sound& s = sounds[kJetSound];
+    if (firing && !s) s = g_calls.pilot_sound ? g_calls.pilot_sound(*this, kSoundJumpJet, 0.3f, 1.0f) : nullptr;
+    else if (!firing && s) s = g_calls.fade_sound ? g_calls.fade_sound(s) : nullptr;
+  }
+  const bool ff = this == world().mission_player && world().force_feedback;
+  if (firing) {
+    if (!jet_effect && jet_node) {
+      jet_effect = g_calls.pilot_effect ? g_calls.pilot_effect(*this, 1, jet_node) : nullptr;
+      if (ff && g_calls.ff_jets) g_calls.ff_jets(1);
+    }
+  } else if (jet_effect) {
+    if (g_calls.stop_effect) g_calls.stop_effect(jet_effect);
+    jet_effect = nullptr;
+    if (ff && g_calls.ff_jets) g_calls.ff_jets(0);
+  }
+}
+
 // Mech3.exe 1.2 @ 0x004173b0. Thrust goes to the skis as a climb impulse;
 // the player's jets push along the throttle unless the MW2 option is on
 // (docs/movement-jump.md). The pose of a firing jump is pose_jump.
@@ -205,22 +226,7 @@ int Mech::jump_jets(float dt) {
   else if (jet_fuel < 0.0f) jet_fuel = 0.0f;
   if (infinite_fuel) jet_fuel = 1.0f;
 
-  if (detail & 1) {
-    Sound& s = sounds[kJetSound];
-    if (firing && !s) s = g_calls.pilot_sound ? g_calls.pilot_sound(*this, kSoundJumpJet, 0.3f, 1.0f) : nullptr;
-    else if (!firing && s) s = g_calls.fade_sound ? g_calls.fade_sound(s) : nullptr;
-  }
-  const bool ff = this == world().mission_player && world().force_feedback;
-  if (firing) {
-    if (!jet_effect && jet_node) {
-      jet_effect = g_calls.pilot_effect ? g_calls.pilot_effect(*this, 1, jet_node) : nullptr;
-      if (ff && g_calls.ff_jets) g_calls.ff_jets(1);
-    }
-  } else if (jet_effect) {
-    if (g_calls.stop_effect) g_calls.stop_effect(jet_effect);
-    jet_effect = nullptr;
-    if (ff && g_calls.ff_jets) g_calls.ff_jets(0);
-  }
+  jet_effects(firing != 0);
   if (!firing && jump_jets_firing && anims[kJumpPose]) anims[kJumpPose]->seek(-1);
   jump_jets_firing = firing;
   if (firing) {

@@ -47,6 +47,7 @@ add_library(mw3core STATIC
   src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
   src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
   src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
+  src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
@@ -580,6 +581,7 @@ add_executable(mw3tests
   tests/test_hunt.cpp
   tests/test_arena.cpp
   tests/test_replay.cpp
+  tests/test_replay_game.cpp
   tests/test_setup_sources.cpp
   tests/test_data_folder.cpp
   tests/test_patch12.cpp

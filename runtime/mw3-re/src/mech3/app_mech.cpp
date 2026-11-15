@@ -2036,6 +2036,14 @@ bool mech_free(void* obj) {
   if (g_w.forget_object) g_w.forget_object(g_w.engine, obj);
   return true;
 }
+// Ours (#289): a mech freed during play, as a network wreck's fade frees one
+// (mech_dead.cpp): every vehicle's sensors drop it first, so no contact list
+// keeps a pointer to it.
+void mech_free_in_play(void* mech) {
+  if (!entity_is_mech(mech)) return;
+  ai::entities_forget(g_w.handle_of(g_w.engine, mech));
+  mech_free(mech);
+}
 void mech_kill(void* mech, void* killer) {
   auto* m = static_cast<Mech*>(mech);
   if (killer) m->attacker = killer;

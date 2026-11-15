@@ -174,6 +174,17 @@ const T* last_at_or_before(const std::vector<T>& by_time, float t) {
 
 }  // namespace
 
+bool parse_pose(const std::string& record_text, MechPose* out) {
+  const Json record = Json::parse(record_text, nullptr, false);
+  if (!record.is_object()) return false;
+  int skipped = 0;
+  try {
+    return read_pose(record, out, &skipped);
+  } catch (const Json::exception&) {
+    return false;
+  }
+}
+
 std::string replay_refusal(const ReplayFlags& f) {
   if (f.arena) return "--replay: --arena is refused (a replay plays a log, it runs no match)";
   if (f.host) return "--replay: --host is refused (a replay opens no network)";

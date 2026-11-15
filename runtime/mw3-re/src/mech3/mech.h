@@ -300,6 +300,7 @@ struct Mech : Vehicle {
   void animate_action(float dt, MechAction* act, int kind);
   void animate_torso_hip(float dt);
   void animate_limbs(float dt);
+  void jet_effects(bool firing);  // JumpJets' sound, flame and force feedback
   // The pose on the parts (mech_pose.cpp, docs/movement-pose.md).
   float gait_blend(int jets) const;   // 0x00417c65..: the blend-in weight, -1 when none
   void pose_gait(MechAnim& a, int jets, const Vec3& saved);  // 0x00417bbc..0x0041818d in Move
