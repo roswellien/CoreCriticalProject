@@ -77,8 +77,7 @@
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/launcher.h"
-#include "frontend/sdl/replay_view.h"
-#include "mech3/replay_log.h"
+#include "frontend/sdl/watch_launch.h"
 #include "frontend/sdl/sdl_install.h"
 #include "mech3/game_setup.h"
 #include "frontend/sdl/sdl_force.h"
@@ -97,8 +96,6 @@
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/app.h"
-#include "mech3/arena.h"
-#include "mech3/arena_setup.h"
 #include "mech3/mods.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
@@ -236,13 +233,7 @@ struct Args {
   std::string net_upnp;
   bool net_soak = false;
   bool shot_any = false;
-  // Ours (#287, docs/arena.md): --arena SETUP.json, an AI bot match on the
-  // setup's map, hosted in-process (its map is the mission). The run, once
-  // its setup is read; shared so Args stays copyable.
-  std::string arena_path;
-  std::shared_ptr<mech3::arena::ArenaRun> arena;
-  std::string replay_path;  // ours (#289): --replay LOG, the top-down replay viewer
-  std::string replay_script;  // --replay-script FILE: drives it for tests (replay_view.h)
+  sdlfe::WatchArgs watch;  // ours (#287, #289): --arena and --replay (watch_launch.h)
 };
 
 void usage() {
@@ -336,9 +327,7 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--net-walk" && next(1)) std::sscanf(argv[++i], "%d,%d", &a.net_walk[0], &a.net_walk[1]);
     else if (s == "--net-drive" && next(1)) a.net_drive = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--net-soak") a.net_soak = true;
-    else if (s == "--arena" && next(1)) a.arena_path = argv[++i];
-    else if (s == "--replay" && next(1)) a.replay_path = argv[++i];
-    else if (s == "--replay-script" && next(1)) a.replay_script = argv[++i];
+    else if (sdlfe::parse_watch_option(a.watch, argc, argv, &i)) continue;
     else if (s == "--net-staged" && next(1)) a.net_staged = std::atoi(argv[++i]) != 0;
     else if (s == "--net-ahead" && next(1)) a.net_ahead = std::strtof(argv[++i], nullptr);
     else if (s == "--net-discovery" && next(1)) a.net_discovery = std::atoi(argv[++i]);
@@ -489,38 +478,19 @@ bool parse(int argc, char** argv, Args& a) {
       return usage(), false;
     }
   }
-  // --replay (ours, #289): the options it refuses, exit 2 before anything starts.
-  if (!a.replay_path.empty()) {
-    mech3::replay::ReplayFlags f;
-    f.arena = !a.arena_path.empty(), f.host = a.net_host, f.join = !a.net_join.empty();
-    f.net_upnp = !a.net_upnp.empty(), f.mission = !a.mission.empty(), f.fly = a.fly;
-    const std::string message = mech3::replay::replay_refusal(f);
-    if (!message.empty()) {
-      std::fprintf(stderr, "mw3: %s\n", message.c_str());
-      return false;
-    }
-  }
-  // --arena (ours, #287): the options it refuses, then the setup file, each
-  // refusal exit 2 before anything starts. The setup's map becomes the
-  // mission, so the start takes the headless path (player_start), and the
-  // sound is off as with --nosound.
-  if (!a.arena_path.empty()) {
-    mech3::arena::Flags f;
-    f.host = a.net_host, f.join = !a.net_join.empty(), f.net_upnp = !a.net_upnp.empty();
-    f.original = a.play_original, f.mission = !a.mission.empty();
-    f.net_minutes = a.net_minutes > 0, f.net_soak = a.net_soak, f.net_drive = a.net_drive >= 0;
-    f.frames = a.frames > 0, f.seed = a.seed >= 0, f.frame_ms = a.frame_ms > 0;
-    f.fire = a.fire > 0, f.net_walk = a.net_walk[1] > 0, f.net_ahead = a.net_ahead > 0;
-    f.briefing = !a.briefing.empty(), f.lab_mech = a.lab_mech >= 0;
-    a.arena = std::make_shared<mech3::arena::ArenaRun>();
-    std::string message;
-    if (!a.arena->read_setup(a.arena_path, f, &message)) {
-      std::fprintf(stderr, "mw3: %s\n", message.c_str());
-      return false;
-    }
-    a.mission = a.arena->setup().map;
-    a.nosound = true;  // a match runs unattended: the silent stand-in, never the speakers
-  }
+  // --replay and --arena (ours, #287, #289): the other options given, for
+  // what each refuses (exit 2 before anything starts; watch_launch.h).
+  mech3::replay::ReplayFlags replay;
+  replay.arena = !a.watch.arena_path.empty(), replay.host = a.net_host, replay.join = !a.net_join.empty();
+  replay.net_upnp = !a.net_upnp.empty(), replay.mission = !a.mission.empty(), replay.fly = a.fly;
+  mech3::arena::Flags arena;
+  arena.host = a.net_host, arena.join = !a.net_join.empty(), arena.net_upnp = !a.net_upnp.empty();
+  arena.original = a.play_original, arena.mission = !a.mission.empty();
+  arena.net_minutes = a.net_minutes > 0, arena.net_soak = a.net_soak, arena.net_drive = a.net_drive >= 0;
+  arena.frames = a.frames > 0, arena.seed = a.seed >= 0, arena.frame_ms = a.frame_ms > 0;
+  arena.fire = a.fire > 0, arena.net_walk = a.net_walk[1] > 0, arena.net_ahead = a.net_ahead > 0;
+  arena.briefing = !a.briefing.empty(), arena.lab_mech = a.lab_mech >= 0;
+  if (!sdlfe::check_watch_options(a.watch, replay, arena, &a.mission, &a.nosound)) return false;
   // --lab-mech alone (ours): the lab is reached from c1m2's briefing (MECHLAB,
   // which Op 1 Mission 1 greys), so it takes that route and clicks MECHLAB.
   if (a.lab_mech >= 0 && a.briefing.empty() && a.mission.empty()) {
@@ -816,7 +786,7 @@ int main(int argc, char** argv) {
   // named install or source go straight on.
   const bool player_start = !a.hidden && a.frames == 0 && a.shot.empty() && a.chain.empty() && a.modes.empty() &&
                             a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() &&
-                            a.replay_path.empty() && a.install.empty() &&
+                            a.watch.replay_path.empty() && a.install.empty() &&
                             a.install_from.empty() && a.patch.empty() && a.original.find("-nofmv") == std::string::npos;
   bool setup_only = false;
   if (!a.ready_file.empty()) sdlfe::set_ready_file(a.ready_file);
@@ -905,24 +875,11 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::printf("mw3: install %s, write dir %s\n", a.install.c_str(), a.write_dir.c_str());
-  // --replay (ours, #289): with the install mounted, the viewer and nothing
-  // else: no engine, mission, match or network.
-  if (!a.replay_path.empty()) {
-    const int code = sdlfe::run_replay(a.replay_path, a.replay_script);
+  // --replay and --arena (ours, #287, #289): with the install mounted, the
+  // replay viewer alone, or the match's game files and log (watch_launch.h).
+  if (const int code = sdlfe::watch_after_mount(a.watch, a.seed); code >= 0) {
     SDL_Quit();
     return code;
-  }
-  // --arena (ours, #287): with the install mounted, the map's spawn spots and
-  // every pilot preset read from the player's files, then the match log made
-  // (never over an old one). A failure exits 2 before the engine starts.
-  if (a.arena) {
-    std::string message;
-    if (!a.arena->read_game_files(a.seed, &message)) {
-      std::fprintf(stderr, "mw3: %s\n", message.c_str());
-      SDL_Quit();
-      return 2;
-    }
-    std::printf("mw3: arena on %s, the log %s\n", a.arena->setup().map.c_str(), a.arena->log_path().c_str());
   }
   const mech3::DataVersion data = mech3::detect_data_version();
   std::printf("mw3: %s\n", data.describe().c_str());  // ours: assets.md, Data versions
@@ -996,16 +953,10 @@ int main(int argc, char** argv) {
     }
   }
   // --arena (ours, #287): a lone host's session on the in-process hub, never
-  // the ENet transport above (refused with --host and --join). The run
-  // outlives run(), whose engine is gone before its shutdown.
-  if (a.arena) {
-    std::string message;
-    if (!a.arena->open(a.seed, a.frame_ms, a.hidden && a.shot.empty(), &message)) {
-      std::fprintf(stderr, "mw3: %s\n", message.c_str());
-      a.arena.reset();
-      SDL_Quit();
-      return 1;
-    }
+  // the ENet transport above (refused with --host and --join).
+  if (!sdlfe::open_watch_session(a.watch, a.seed, a.frame_ms, a.hidden && a.shot.empty())) {
+    SDL_Quit();
+    return 1;
   }
   int result = 1;
   try {
@@ -1014,7 +965,7 @@ int main(int argc, char** argv) {
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
   }
-  a.arena.reset();  // the arena's hooks off and its session shut, before SDL goes
+  sdlfe::close_watch(a.watch);  // the arena's hooks off and its session shut, before SDL goes
   g_net_pass = nullptr;
   vfw.reset();
   SDL_Quit();  // after every SDL object above is gone
@@ -1245,13 +1196,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         multi_game = std::make_unique<mech3::MultiplayerGame>(nullptr);
         multi_game->x70 = 1 << 30;  // the kills to win (+0x70)
         l.type = 3, l.multi = multi_game.get();
-        // --arena (ours, #287): respawn off (+0x8c, net_pilot_respawn's
-        // switch), so a downed bot stays down; the host is a spectator with
-        // no mech (GameEngine::Launch::spectator), every fighter a bot.
-        if (!a.arena_path.empty()) {
-          multi_game->b8c = 0;
-          l.spectator = true;
-        }
+        sdlfe::watch_seat(a.watch, multi_game.get(), &l);  // --arena (ours, #287): the spectator's seat
         mech3::program_net_debug_lobby();
       } else {
         split_mission(a.mission, dir, variant, l.number);
@@ -1312,13 +1257,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         if (l_type3 && app.current() == &mech3::states().core && !net_core) {
           net_core = true;
           s_drive_from = SDL_GetTicks() / 1000.0;
-          // --arena's clock is the setup's minutes (ours, #287; --net-minutes is refused with it),
-          // plus 10 s: the stock end starts 3 s before its clock runs out, and
-          // the arena's own end (arena_tick) must count the result first.
-          const int clock_minutes = a.arena ? a.arena->setup().minutes : a.net_minutes;
-          const float arena_margin = a.arena_path.empty() ? 0.0f : 10.0f;
-          if (clock_minutes > 0)
-            mech3::missions().clock = clock_minutes * 60.0f + arena_margin, mech3::missions().clock_down = 1;
+          sdlfe::start_watch_clock(a.watch, a.net_minutes);  // --net-minutes, or --arena's (ours, #287)
         }
         // --net-drive: a kill staged on the pilot every two minutes, from a
         // minute in, staggered by the seed (the scores' traffic, the respawn).
@@ -1350,11 +1289,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         }
         // --arena (ours, #287): the run ends once the match is decided and its
         // fade has left the mission, as the soak test's does.
-        if (!a.arena_path.empty() && net_core && !net_over && mech3::arena::arena_result().decided) {
-          const zgame::State* st = app.current();
-          if (st != &mech3::states().core && st != &mech3::states().fade && st != &mech3::states().pause)
-            net_over = launch_done = true;
-        }
+        if (net_core && !net_over && sdlfe::watch_run_over(a.watch, app.current())) net_over = launch_done = true;
         // --verbose (ours): each state the app moves to, by name, as the menus' driver prints them.
         static const zgame::State* launch_state = nullptr;
         if (a.verbose && app.current() != launch_state) {
