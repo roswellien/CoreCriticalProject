@@ -72,13 +72,22 @@ vec3 effectIllumination(vec3 p,vec3 n){
  vec3 illumination=vec3(0);
  if (sun.tiledLights.w == 0u)
    return illumination;
- uvec2 tile = uvec2(gl_FragCoord.xy) / 16u;
- if (any(greaterThanEqual(tile, sun.tiledLights.xy)))
-   return illumination;
- uint base = sun.tiledLights.z + (tile.y * sun.tiledLights.x + tile.x) * 65u;
- uint count = min(tiles.words[base], 64u);
+ bool allLights = sun.tiledLights.w == 2u;
+ uint base = 0u;
+ uint count = uint(clamp(effects.params.x, 0.0, 64.0));
+ if (!allLights) {
+   uvec2 tile = uvec2(gl_FragCoord.xy) / 16u;
+   if (any(greaterThanEqual(tile, sun.tiledLights.xy)))
+     return illumination;
+   base = sun.tiledLights.z + (tile.y * sun.tiledLights.x + tile.x) * 65u;
+   count = min(tiles.words[base], 64u);
+ }
  for (uint at = 0u; at < count; ++at) {
-   int i = int(tiles.words[base + 1u + at]);
+   int i;
+   if (allLights)
+     i = int(at);
+   else
+     i = int(tiles.words[base + 1u + at]);
    if (i < 0 || i >= min(int(effects.params.x), 64))
      continue;
    EffectLight l = effects.lights[i];

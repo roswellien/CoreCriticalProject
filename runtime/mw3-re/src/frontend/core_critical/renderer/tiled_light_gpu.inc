@@ -8,6 +8,7 @@ VkDeviceSize tiledViewStride{}, tiledListAlignment{}, tiledRange{};
 std::vector<VkDescriptorSet> tiledSets;
 std::vector<uint32_t> tiledOffsets;
 std::vector<VkDeviceSize> tiledLengths;
+bool tiledOverflowReported{};
 
 void init_tiled() {
   if (tiledPipeline)
@@ -83,7 +84,7 @@ void destroy_tiled() {
 }
 
 void prepare_tiled(const std::vector<mw34::tiled::View> &views) {
-  if (views.size() > 64)
+  if (views.size() > mw34::tiled::max_views)
     throw std::runtime_error("Too many tiled camera views");
   tiledOffsets.clear();
   tiledLengths.clear();
@@ -91,20 +92,20 @@ void prepare_tiled(const std::vector<mw34::tiled::View> &views) {
   VkDeviceSize total = 260;
   if (!views.empty()) {
     init_tiled();
-    total = 0;
+    mw34::tiled::ViewBudget budget{tiledRange, tiledListAlignment};
     for (const auto &v : views) {
       const auto checked = mw34::tiled::make_view(v.camera, v.projection, v.depth[0], v.depth[1],
                                                   v.extent[0], v.extent[1]);
       if (checked.extent != v.extent)
         throw std::runtime_error("Tiled view extent mismatch");
-      total = (total + tiledListAlignment - 1) / tiledListAlignment * tiledListAlignment;
       const auto length = mw34::tiled::bytes(v);
-      if (length > tiledRange || total > tiledRange - length)
+      const auto offset = budget.reserve(length);
+      if (!offset)
         throw std::runtime_error("Tiled view storage exceeds bounded capacity");
-      tiledOffsets.push_back(uint32_t(total / 4));
+      tiledOffsets.push_back(uint32_t(*offset / 4));
       tiledLengths.push_back(length);
-      total += length;
     }
+    total = budget.used;
   }
   ensure(tiledLists, total,
          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |

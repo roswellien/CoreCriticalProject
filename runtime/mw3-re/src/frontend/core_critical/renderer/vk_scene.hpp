@@ -1566,6 +1566,7 @@ private:
     mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
     std::vector<unsigned> sunUniformIds(s.draws.size());
     std::vector<mw34::tiled::View> tiledFrameViews;
+    constexpr unsigned allEffectLights = ~0u - 1;
     std::vector<unsigned> tiledDrawViews(s.draws.size(), ~0u);
     bool sunScene = false;
     if (lighting_settings.enabled) {
@@ -1582,6 +1583,8 @@ private:
       std::memcpy(effectBuffer.mapped, &fx, sizeof(fx));
       mw34::tiled::validate_lights(fx);
       if (effects_settings.enabled && fx.params[0] > 0) {
+        init_tiled();
+        mw34::tiled::ViewBudget budget{tiledRange, tiledListAlignment};
         for (size_t at = 0; at < s.draws.size(); ++at) {
           const auto &d = s.draws[at];
           if (s.hud || s.frontend_canvas || d.sky || !sun_lit(d))
@@ -1596,11 +1599,21 @@ private:
               std::find_if(tiledFrameViews.begin(), tiledFrameViews.end(), [&](const auto &prior) {
                 return std::memcmp(&prior, &v, sizeof(v)) == 0;
               });
-          tiledDrawViews[at] = unsigned(found - tiledFrameViews.begin());
-          if (found == tiledFrameViews.end()) {
-            if (tiledFrameViews.size() == 64)
-              throw std::runtime_error("Too many tiled camera views");
+          if (found != tiledFrameViews.end()) {
+            tiledDrawViews[at] = unsigned(found - tiledFrameViews.begin());
+          } else if (budget.reserve(mw34::tiled::bytes(v))) {
+            tiledDrawViews[at] = unsigned(tiledFrameViews.size());
             tiledFrameViews.push_back(v);
+          } else {
+            // Preserve this exact draw's lighting when the tiled optimization is full.
+            tiledDrawViews[at] = allEffectLights;
+            if (!tiledOverflowReported) {
+              std::fprintf(stderr, "Tiled lights: GPU all-light overflow path; "
+                                   "views=%zu bytes=%llu range=%llu\n",
+                           budget.views, static_cast<unsigned long long>(budget.used),
+                           static_cast<unsigned long long>(budget.range));
+              tiledOverflowReported = true;
+            }
           }
         }
       }
@@ -1691,7 +1704,9 @@ private:
           u.detail_motion[3] =
               draw.key.blend ? -1.f : environment.night_world_gain;
           s.emissions.apply(draw.emission_index, u);
-          if (tiledDrawViews[at] != ~0u) {
+          if (tiledDrawViews[at] == allEffectLights) {
+            u.tiled_lights = {0, 0, 0, 2};
+          } else if (tiledDrawViews[at] != ~0u) {
             const auto id = tiledDrawViews[at];
             u.tiled_lights = {tiledFrameViews[id].extent[2], tiledFrameViews[id].extent[3],
                               tiledOffsets[id], 1};

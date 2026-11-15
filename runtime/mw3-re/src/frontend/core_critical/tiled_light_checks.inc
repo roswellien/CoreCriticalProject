@@ -132,8 +132,186 @@ void check_tiled_view_render() {
   require(reused.color == expected,
           "Tiled asynchronous view buffers were reused before fence or retained stale lights");
 }
+
+void check_tiled_view_budget() {
+  using namespace mw34;
+  const auto unchanged_on_failure = [](tiled::ViewBudget &budget, uint64_t length) {
+    const auto used = budget.used;
+    const auto views = budget.views;
+    require(!budget.reserve(length), "Tiled budget accepted an excessive reservation");
+    require(budget.used == used && budget.views == views,
+            "Failed tiled budget reservation changed state");
+  };
+  tiled::ViewBudget count{1024 * 1024, 256};
+  for (unsigned i = 0; i < 64; ++i) {
+    const auto offset = count.reserve(260);
+    require(offset && *offset == uint64_t(i) * 512,
+            "Tiled budget count/alignment admission mismatch");
+  }
+  unchanged_on_failure(count, 260);
+
+  const std::array<float, 12> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+  const auto wide = tiled::make_view(identity, {1720, -720, 1720, 720}, 1, 100, 3440, 1440);
+  tiled::ViewBudget legacy{128ULL * 1024 * 1024, 256};
+  unsigned admitted = 0;
+  for (unsigned i = 0; i < 27; ++i) {
+    const auto used = legacy.used;
+    const auto views = legacy.views;
+    const auto offset = legacy.reserve(tiled::bytes(wide));
+    if (offset) {
+      require(*offset % legacy.alignment == 0 && legacy.used <= legacy.range,
+              "Tiled byte budget returned an unaligned/out-of-range allocation");
+      ++admitted;
+    } else {
+      require(legacy.used == used && legacy.views == views,
+              "Tiled ultrawide budget failure changed state");
+    }
+  }
+  require(admitted == 26, "128 MiB tiled budget did not reject the 27th ultrawide view");
+  require(legacy.reserve(4).has_value(), "Failed large reservation poisoned smaller reuse");
+
+  tiled::ViewBudget padding{512, 256};
+  require(padding.reserve(260).value() == 0, "Tiled initial reservation offset");
+  unchanged_on_failure(padding, 1); // Padding alone fills the remaining space.
+  tiled::ViewBudget exact{516, 256};
+  require(exact.reserve(260).value() == 0 && exact.reserve(4).value() == 512 &&
+              exact.used == 516,
+          "Tiled exact aligned byte boundary was rejected");
+  unchanged_on_failure(exact, 1);
+
+  tiled::ViewBudget overflow{UINT64_MAX, 256, UINT64_MAX - 1, 1};
+  unchanged_on_failure(overflow, 1); // Rounding up itself would overflow uint64_t.
+  tiled::ViewBudget addition{UINT64_MAX, 1, 1, 1};
+  unchanged_on_failure(addition, UINT64_MAX);
+  require(addition.reserve(UINT64_MAX - 1).value() == 1 && addition.used == UINT64_MAX,
+          "Tiled checked addition rejected a representable exact limit");
+  unchanged_on_failure(addition, 1);
+  tiled::ViewBudget zero_alignment{512, 0};
+  unchanged_on_failure(zero_alignment, 4);
+}
+
+mw34::vkscene::Scene make_tiled_overflow_scene(unsigned light_count) {
+  using namespace mw34;
+  // Keep the full raster and vertex buffer identical in bulk and serial renders.
+  // Each exact projection owns a disjoint 32-pixel stripe, including views 64/65.
+  auto scene = make_tiled_view_scene(false);
+  const auto prototype = scene.draws.front();
+  scene.width = 66 * 32;
+  scene.color.assign(scene.width * scene.height, 0);
+  scene.depth.assign(scene.width * scene.height, 0);
+  scene.draws.clear();
+  scene.order.clear();
+  std::vector<platform::TLVertex> vertices;
+  for (unsigned view = 0; view < 66; ++view) {
+    const float left = float(view * 32 + 4), right = left + 24;
+    for (auto p : std::array<std::array<float, 2>, 6>{
+             {{left, 4}, {right, 4}, {right, 28}, {left, 4}, {right, 28}, {left, 28}}})
+      vertices.push_back({p[0], p[1], .5f, .5f, 0xffffffff, 0xff000000, 0, 0});
+    auto draw = prototype;
+    draw.first = view * 6;
+    draw.scissor = {{0, 0}, {scene.width, scene.height}};
+    draw.push.target[0] = float(scene.width);
+    auto camera = std::make_shared<sun::Tl>();
+    camera->camera_world = {1, 0, 0, view % 2 ? 100.f : 0.f, 0, 1, 0, 0, 0, 0, 1, 0};
+    camera->projection = {1, 16, 16, float(view * 32 + 16), 16, 100};
+    draw.sun_tl = camera;
+    scene.draws.push_back(draw);
+    scene.order.push_back({false, view});
+  }
+  scene.vertices.resize(vertices.size() * sizeof(vertices[0]));
+  std::memcpy(scene.vertices.data(), vertices.data(), scene.vertices.size());
+  const std::array<effects::Light, 6> mixed{{
+      {{-.3f, 0, 1, 3}, {-.3f, 0, 1, 0}, {.2f, .05f, .03f, 1}},
+      {{-.5f, -.5f, 1, 3}, {.5f, .5f, 1, 1}, {.03f, .2f, .05f, 1}},
+      {{0, 0, 1, 3}, {0, 0, 1, 2}, {.05f, .03f, .2f, 1}},
+      {{.3f, 0, 1, 3}, {.3f, 0, 1, 0}, {.1f, .06f, .04f, 1}},
+      {{.2f, 0, 1, 3}, {0, 0, 1, 2}, {.04f, .1f, .06f, 1}},
+      {{-.5f, .5f, 1, 3}, {.5f, -.5f, 1, 1}, {.06f, .04f, .1f, 1}},
+  }};
+  scene.effect_lights.params[0] = float(light_count);
+  for (unsigned i = 0; i < light_count; ++i) {
+    scene.effect_lights.lights[i] = mixed[i % mixed.size()];
+    scene.effect_lights.lights[i].color[3] = 3.f / float(light_count);
+    scene.effect_lights.cones[i] = {.98f, .7f, 1, 0};
+  }
+  return scene;
+}
+
+void check_tiled_overflow_render() {
+  using namespace mw34;
+  sun::Settings settings{};
+  settings.enabled = true;
+  settings.strength = 0;
+  settings.ambient = .1f;
+  cc_mw3_re::RendererBridgeConfig config{};
+  config.effect_lights = true;
+  config.effect_light_catalog = "diagnostic-owned-scene";
+  vkscene::Renderer renderer(vkscene::Renderer::ColorTarget::rgba8, {},
+                             vkscene::Renderer::Quality{1, 1, 1, false}, true, settings, false,
+                             config);
+  auto off = make_tiled_overflow_scene(0);
+  renderer.render(off);
+  for (unsigned light_count : {6u, 64u}) {
+    const auto input = make_tiled_overflow_scene(light_count);
+    auto expected = off.color;
+    // Every reference render admits only one exact tiled view. It cannot enter
+    // the overflow shader path, so disabling that path cannot make this pass.
+    for (unsigned view = 0; view < input.draws.size(); ++view) {
+      auto serial = input;
+      serial.draws = {input.draws[view]};
+      serial.order = {{false, 0}};
+      renderer.render(serial);
+      unsigned illuminated = 0;
+      for (unsigned y = 0; y < input.height; ++y)
+        for (unsigned x = 0; x < input.width; ++x) {
+          const auto pixel = y * input.width + x;
+          if (x / 32 == view) {
+            expected[pixel] = serial.color[pixel];
+            if (serial.color[pixel] != off.color[pixel])
+              ++illuminated;
+          } else {
+            require(serial.color[pixel] == 0,
+                    "Serial tiled reference wrote outside its own camera stripe");
+          }
+        }
+      require(view % 2 ? illuminated == 0 : illuminated > 0,
+              "Serial tiled reference did not exercise alternating lit/dark views");
+    }
+    auto bulk = input;
+    renderer.render(bulk);
+    require(bulk.color == expected,
+            "Tiled overflow pixels/masks differ from serial one-view reference");
+    auto reversed = input;
+    std::reverse(reversed.draws.begin(), reversed.draws.end());
+    renderer.render(reversed);
+    require(reversed.color == expected,
+            "Reversed tiled overflow pixels/masks differ from serial reference");
+    renderer.render(reversed, true, false);
+    auto reused = input;
+    renderer.render(reused);
+    require(reused.color == expected, "Tiled overflow async reuse changed lighting");
+
+    auto malformed = input;
+    auto invalid = std::make_shared<sun::Tl>(*malformed.draws.back().sun_tl);
+    invalid->projection[1] = 0;
+    malformed.draws.back().sun_tl = invalid;
+    bool rejected = false;
+    try {
+      renderer.render(malformed);
+    } catch (const std::exception &) {
+      rejected = true;
+    }
+    require(rejected, "Malformed projection after tiled overflow was accepted");
+    reused = input;
+    renderer.render(reused);
+    require(reused.color == expected, "Rejected overflow draw poisoned valid render reuse");
+  }
+  std::fprintf(stderr, "Tiled overflow: 66 exact views, mixed/64 lights, serial reference, "
+                       "reverse order, async reuse and malformed recovery passed\n");
+}
 void check_tiled_gpu() {
   using namespace mw34;
+  check_tiled_view_budget();
   {
     const uint8_t rgba[3][4]{{8, 4, 8, 255}, {255, 0, 255, 255}, {0x11, 0x22, 0x33, 0x44}};
     const uint8_t packed[3][2]{{0x21, 0x08}, {0x1f, 0xfc}, {0x23, 0x41}};
@@ -323,4 +501,5 @@ void check_tiled_gpu() {
   std::fprintf(stderr, "Tiled light GPU: exact masks, 64-light ordering, isolated views, maximum "
                        "extent and rejection recovery passed\n");
   check_tiled_view_render();
+  check_tiled_overflow_render();
 }
