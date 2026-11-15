@@ -33,7 +33,7 @@ namespace {
 // The whole probe library tests the original path: the zfix fixes off.
 // MW3_FPU53=1 keeps the 53-bit rounding, to compare with the original run at
 // full precision (MW3_X87=64).
-const bool g_fixes_off = (zfix::options().per_second = false, zfix::options().bugs = false,
+const bool g_fixes_off = (zfix::options().per_second = false, zfix::set_all(false),
                           zfix::options().any_resolution = false,
                           zfix::options().nested_lock = false,
                           zfix::options().fpu53 = std::getenv("MW3_FPU53") && *std::getenv("MW3_FPU53") == '1', true);
@@ -157,6 +157,22 @@ int probe_zrdr_load(const char* path, long offset) {
   return n;
 }
 
+// One entry of an archive through zrdr::load, the game's way (the archive's own data its only bound): 1 with the
+// tree loaded, 0 when the entry is not read (broken or not there), -1 when the archive does not open.
+int probe_zrdr_load_entry(const char* archive, const char* name) {
+  if (g_probe_loaded) zrdr::free_contents(&g_probe_root);
+  g_probe_loaded = false;
+  zrdr::init();
+  if (!zrdr::open_archive(archive, true)) return -1;
+  zrdr::Node* root = zrdr::load(name);
+  zrdr::close_archives(true);
+  if (!root) return 0;
+  g_probe_root = *root;
+  std::free(root);
+  g_probe_loaded = true;
+  return 1;
+}
+
 int probe_zrdr_dump(char* buf, int size) {
   std::string s;
   dump(g_probe_root, s);
@@ -242,7 +258,7 @@ void probe_heat_io(int32_t* v, int write) {
       {nullptr, nullptr, &m.powered_down}, {nullptr, nullptr, &m.invincible},
       {nullptr, nullptr, &m.heat_sinks.doubles}, {nullptr, nullptr, &g_feet[0].in_water},
       {nullptr, nullptr, &g_feet[1].in_water}, {nullptr, nullptr, &w.full_heat_all_mechs},
-      {nullptr, nullptr, &w.no_heat_haze},
+      {nullptr, nullptr, reinterpret_cast<bool*>(&mech3::no_heat_haze())},
       {nullptr, &m.jump_jets_firing}, {nullptr, &m.heat_sinks.count},
       {nullptr, reinterpret_cast<int32_t*>(&m.heat_state)}, {nullptr, &g_feet[0].soil},
       {nullptr, &g_feet[1].soil}, {nullptr, &beep}, {nullptr, &alarm}, {nullptr, &warn},
@@ -640,6 +656,7 @@ int probe_models(const char* path, long moff, long off, uint8_t* out, int cap) {
 #include "gamez/zclass/list.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_strip.h"
 #include "gamez/zrender/zrndr_fog.h"
 
 namespace {
@@ -998,7 +1015,7 @@ int probe_copy_lib(const char* path) {
   g_copy_lib = zcls::MechLib{};
   zutl_zar::init(g_copy_lib.archive);
   zcls::copy_state() = zcls::CopyState{};
-  zcls::mechlib_post_process() = false;
+  zmod::strips() = false;
   return zcls::mechlib_open(g_copy_lib, path) ? 1 : 0;
 }
 int probe_copy_load(const char* name) { return node_index(zcls::mechlib_load(g_copy_lib, name)); }
@@ -1151,7 +1168,7 @@ extern "C" {
 int g_anim_fix = 0;
 void probe_anim_fix(int on) { g_anim_fix = on; }
 // The port's play-changing fixes on or off (zfix bugs), for a test's fixed path.
-void probe_set_bugs(int on) { zfix::options().bugs = on != 0; }
+void probe_set_bugs(int on) { zfix::set_all(on != 0); }
 
 // After probe_anim: def i's prerequisite count | the count to meet << 8, and
 // its entries' types (the FIX (bug) case in test_anim.py).
@@ -1177,15 +1194,15 @@ int probe_anim(const char* world, const char* path, int fail_at, int full, uint8
   g_reports.clear();
   zeff::anim() = zeff::AnimState{};
   zeff::anim().fix_prerequisites = g_anim_fix != 0;
-  const bool bugs = zfix::options().bugs;
-  zfix::options().bugs = g_anim_fix != 0;  // the fix acts with zfix bugs
+  const bool bugs = zfix::all();
+  zfix::set_all(g_anim_fix != 0);  // the fix acts with zfix bugs
   zeff::anim().fix_instance_tree = false;  // the exe's path
   zeff::anim_allow_loading(1);
   zeff::anim_set_zbd_path(path);
   install_anim_hooks();
   g_trace.clear(), g_calls = 0, g_fail_at = fail_at;
   const int32_t r = zeff::anim_read_zbd();
-  zfix::options().bugs = bugs;
+  zfix::set_all(bugs);
   zerr::set_sink(nullptr);
   std::vector<uint8_t> b;
   put_i32(b, r), put_i32(b, g_calls);
@@ -1202,6 +1219,7 @@ int probe_anim(const char* world, const char* path, int fail_at, int full, uint8
 }  // extern "C"
 
 #include "gamez/zutil/zutl_msg.h"
+#include "gamez/zmath/zmth_vector.h"
 #include "mech3/mech_skin.h"
 
 namespace {
@@ -1685,3 +1703,14 @@ int probe_load_and_save(const char* dir, int mech) {
 }
 
 }  // extern "C"
+
+// What the port side runs at, for original.py's check at exit (MW3_PRECISION).
+extern "C" int probe_fpu53() { return zfix::options().fpu53 ? 1 : 0; }
+extern "C" void probe_set_fpu53(int on) { zfix::options().fpu53 = on != 0; }
+
+// A weapon's family (0x004853c0), which picks its destroyed voice (test_weapon_voice.py).
+extern "C" int32_t probe_weapon_family(int32_t weapon) { return mech3::weapon_family(weapon); }
+// An equipment kind's voice index (0x00485360), which picks its callout (test_equip_voice.py).
+extern "C" int32_t probe_equip_voice_index(int32_t kind) { return mech3::equip_voice_index(kind); }
+// zMath's pitch and yaw to the way they face (0x00522170, test_look_dir.py).
+extern "C" void probe_look_dir(const float* angles, float* out) { zmth::look_dir(angles, out); }

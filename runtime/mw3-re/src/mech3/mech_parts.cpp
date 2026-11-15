@@ -9,6 +9,7 @@
 #include "gamez/zinput/zinput.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zutil/zfix.h"
+#include "gamez/zweapon/zweapon.h"
 #include "mech3/mech.h"
 #include "mech3/mech_config.h"
 #include "mech3/mech_control.h"
@@ -87,6 +88,8 @@ std::vector<EquipmentItem*> equipment_in(Mech& m, int part) {
 }  // namespace
 
 DamageCalls& damage_calls() { return g_calls; }
+
+const Vec3* hit_shot() { return reinterpret_cast<const Vec3*>(zwep::shot_line()); }  // shot_from, shot_to
 FlyCalls& fly_calls() { return g_fly; }
 FreeCalls& free_calls() { return g_free; }
 
@@ -97,9 +100,9 @@ int MechPart::take_hit(WeaponDef* def, Collision*, float damage, Vec3* impulse) 
   float d = damage * interp_globals().damage_scale;  // 0x005e1f68
   if (game_type() != kMultiplayer) {
     // Difficulty (0x0040cc20) scales what the player and its side take.
-    if (&m == w.mission_player || (w.mission_player->allies & m.team) != 0) d = w.difficulty * d;
+    if (&m == w.mission_player || (w.mission_player->allies & m.team) != 0) d = difficulty_scale() * d;
   }
-  const Vec3* shot = w.shot;  // 0x00581e30
+  const Vec3* shot = hit_shot();  // 0x00581e30
   if (impulse) {
     WeaponType* t = def ? def->type : nullptr;
     apply_impact(impulse, t->impact_force);
@@ -295,7 +298,14 @@ Handle Arm::fly_away(Vec3* velocity, bool stub) {
   return MechPart::fly_away(velocity, stub);
 }
 
-// Mech3.exe 1.2 @ 0x00460cc0 / 0x00460c10. A destroyed item still counts.
+// Mech3.exe 1.2 @ 0x00460c10: by the config's part number. A destroyed item still counts.
+bool mech_equipment_in_part(Mech& m, int kind, int part) {
+  for (EquipmentItem* it : equipment_in(m, part))
+    if (it->equipment == kind) return true;
+  return false;
+}
+
+// Mech3.exe 1.2 @ 0x00460cc0.
 bool MechPart::has_equipment(int kind) {
   if (!node) return false;
   for (EquipmentItem* it : equipment_in(*mech, id))
@@ -358,12 +368,12 @@ bool MechPart::critical(int kind, int) {
   bool ok = false;
   switch (kind) {
     case kCritSink: {
-      // FIX (bug), behind bugs: 0x0045fbc0 always reports failure, so the
+      // FIX (bug), behind fixed: 0x0045fbc0 always reports failure, so the
       // callout never played; a sink actually lost counts as success
       // (docs/fixes.md).
       const int32_t before = m.heat_sinks.count;
       m.heat_sinks.lose(1);
-      ok = zfix::options().bugs && m.heat_sinks.count < before;
+      ok = zfix::options().fixed && m.heat_sinks.count < before;
       if (!player) return ok;
       if (ok && g_calls.equip_voice) g_calls.equip_voice(kSink);
       break;

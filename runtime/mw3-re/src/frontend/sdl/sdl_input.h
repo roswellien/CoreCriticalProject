@@ -72,16 +72,17 @@ class SdlInput : public platform::Input {
   int32_t joystick_set_deadzone(uint32_t ofs, uint32_t dz) override;
 
   // The window an exclusive mouse captures (relative mouse mode, as
-  // DirectInput's DISCL_EXCLUSIVE hides and holds the cursor). Captured, a
-  // mickey is a count of the mouse's own, as DirectInput's were at any screen
-  // size (FIX (A); SDL's relative motion is raw, without the system's speed).
-  // Not captured, the mickeys a window pixel of motion makes (the game's 640
-  // over the window's width).
+  // DirectInput's DISCL_EXCLUSIVE hides and holds the cursor). Held or not,
+  // a mickey is a frame pixel's worth of the system pointer's motion (FIX
+  // (A), motion_scale: the system's speed, the window's size now), as the
+  // original moves under DDrawCompat on Windows 11 at any screen size.
+  // `mickey_scale` only without a window (tests).
   SDL_Window* window = nullptr;
   float mickey_scale = 1.0f;
-  // With any_resolution, the frame's shape in the window (sdl_fit.h): an
-  // uncaptured mouse's scale is then a frame pixel a mickey, through the
-  // pillarboxed rect.
+  std::function<void(int*, int*)> window_size;  // tests: the window's size (unset: SDL's)
+  float motion_scale() const;  // the mickeys a window pixel (point on the Mac) of motion makes
+  // The frame's shape in the window (sdl_fit.h): with any_resolution the
+  // scale is through the pillarboxed rect, else the window's whole width.
   const FrameShape* shape = nullptr;
   bool captured() const { return captured_; }
   bool fitted() const { return shape && shape->fit; }
@@ -97,6 +98,35 @@ class SdlInput : public platform::Input {
   std::function<bool()> windowed;    // shown, not fullscreen (unset: fullscreen's rules)
   std::function<bool()> in_mission;  // the mission's own state (not a menu or the pause)
   std::function<void(float, float)> absolute_cursor;  // window point -> zInput's mouse
+  // Ours (docs/editor.md, The pointer): the game editor up in a mission. The
+  // mouse is let go, in a window and fullscreen, the system's cursor shows
+  // and zInput's mouse is put where it is, so the panel's lit row, the net
+  // editor's picks and the dialogs all point where the player sees.
+  std::function<bool()> pointer_free;
+  bool pointer_is_free() const { return free_; }  // as of the last refresh
+  // FIX (A), playtest W4 (sdl_focus.h; docs/input.md, The focus is checked):
+  // the window's real focus, asked at every refresh, so a window that came up
+  // without it does not hold a mouse that gives no motion, and takes the mouse
+  // when the focus is really its own. Unset (tests, a hidden window): SDL's
+  // focus events alone, the window taken as focused from the start.
+  std::function<bool()> has_focus;
+  // SDL made to look at the focus again (sdl_focus.h, window_focus_nudge); true when asked.
+  std::function<bool()> nudge_focus;
+  // The focus as the system and SDL have it, for the log's lines.
+  std::function<std::string()> focus_report;
+  std::function<uint64_t()> now_ns;  // tests: the clock (unset: SDL's)
+  // Held with no motion seen since it was taken, a mouse button press lets
+  // the mouse go and takes it again, the game none the wiser: what cures a
+  // stuck one by hand (the quit box, Alt+Tab). A key press does so only after
+  // kQuietNs with no motion (a player holding a key at a mission's start,
+  // the mouse not yet touched, sees no flicker). At most kHeals times a
+  // capture, kHealGapNs apart, and never once motion has come.
+  static constexpr int kHeals = 8;
+  static constexpr int kNudges = 10;  // nudge_focus asked this many times running, a second apart
+  static constexpr uint64_t kHealGapNs = 1000000000ull;
+  static constexpr uint64_t kQuietNs = 3000000000ull;  // "no motion in 3 s", said once a capture
+  int heals() const { return heals_total_; }
+  bool focused() const { return focused_; }
   bool released() const { return released_; }
   bool in_window() const { return win_; }  // as of the last refresh
   void refresh();  // the capture as the window, the state and the release say
@@ -128,9 +158,18 @@ class SdlInput : public platform::Input {
   uint32_t coop_[3] = {};
   bool focused_ = true;
   bool captured_ = false;  // capture(true) asked: the relative mouse
-  bool muted() const { return released_ && win_ && mission_; }
+  bool muted() const { return released_ && win_ && mission_ && !free_; }
+  void focus_gained(uint64_t ns);
+  void focus_lost();
+  void check_focus();
+  void heal(const char* by, bool key);
+  int nudges_ = 0;
+  uint64_t clock() const;
+  uint64_t captured_ns_ = 0, healed_ns_ = 0, nudged_ns_ = 0;
+  bool motion_seen_ = false, quiet_said_ = false;
+  int heals_ = 0, heals_total_ = 0;
   void release_chord(SDL_Scancode s, bool down);
-  bool win_ = false, mission_ = false, absolute_ = false;
+  bool win_ = false, mission_ = false, absolute_ = false, free_ = false;
   bool released_ = false;
   bool cursor_hidden_ = false;
   bool cursor_moved_ = false;  // the cursor moved since the menus took it (else zInput's place stays)

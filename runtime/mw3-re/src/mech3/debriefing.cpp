@@ -14,6 +14,7 @@
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/mission.h"
 #include "mech3/pilot.h"
+#include "upgrades/editor/mods_edit.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -219,6 +220,24 @@ void LanceDisplay::Bar::fill(float left) {
   lost_w = width;
 }
 
+// Ours (16:9 menus): where the bar stands now, as fill leaves it.
+void LanceDisplay::Bar::shift(int32_t dx) {
+  x += dx;
+  full.set_pos(x, y);
+  const float fx = static_cast<float>(x), fx1 = static_cast<float>(x + full_w + 1);
+  full.set_point(0, fx, static_cast<float>(y));
+  full.set_point(1, fx, static_cast<float>(y + full_h));
+  full.set_point(2, fx1, static_cast<float>(y + full_h));
+  full.set_point(3, fx1, static_cast<float>(y));
+  if (lost_w == 0) return;
+  const float lx1 = static_cast<float>(x + lost_w + 1);
+  const int32_t y2 = y + full_h;
+  lost.set_point(0, fx, static_cast<float>(y2));
+  lost.set_point(1, fx, static_cast<float>(y2 + lost_h));
+  lost.set_point(2, lx1, static_cast<float>(y2 + lost_h));
+  lost.set_point(3, lx1, static_cast<float>(y2));
+}
+
 // Mech3.exe 1.2 @ 0x0047e810
 void LanceDisplay::Bar::update(float dt) {
   full.Object2D::update(dt);
@@ -235,6 +254,15 @@ LanceDisplay::LanceDisplay(const std::function<const char*(int32_t)>& message, i
   for (ztwod::FontText& l : labels) l.set_font(font);
   for (int i = 0; i < 4; ++i) labels[i].set_text_plain(message(0xf3b + i));  // H, T, A, L
   line.color = zvid::pack_bytes(1, 0xa2, 0x1f);
+}
+
+// Ours (16:9 menus): the cards are filled in the screen's constructor, so the
+// widening finds the display laid out by its own numbers.
+void LanceDisplay::shift(int32_t dx) {
+  px += dx, left += dx, right += dx;
+  for (Bar& b : bars) b.shift(dx);
+  for (ztwod::FontText& l : labels) l.set_pos(l.get_x() + dx, l.get_y());
+  line.set(line.get_x() + dx, line.get_y(), line.end_x + dx, line.end_y);
 }
 
 // Mech3.exe 1.2 @ 0x0047eb60
@@ -360,7 +388,7 @@ DebriefScreen::DebriefScreen(Engine& e, Handle state, int32_t campaign, int32_t 
   const float m = t * 0.016666668f;
   const float hours = std::floor(m * 0.016666668f);
   const float minutes = std::floor(m - hours * 60.0f);
-  const float seconds = zfix::options().bugs ? std::floor(t - hours * 3600.0f - minutes * 60.0f)
+  const float seconds = zfix::options().fixed ? std::floor(t - hours * 3600.0f - minutes * 60.0f)
                                              : std::floor(t - minutes * 60.0f);
   char time[32];
   std::snprintf(time, sizeof time, "%02d:%02d:%02d", static_cast<int32_t>(hours), static_cast<int32_t>(minutes),
@@ -397,6 +425,18 @@ DebriefScreen::DebriefScreen(Engine& e, Handle state, int32_t campaign, int32_t 
     }
     if (*won)
       if (ztwod::Text* h = help(continue_btn)) h->set_message(0xfb8);
+  } else if (mods_edit_session().active) {
+    // Ours (upgrades/editor/mods_edit.h): MODS's TEST or EDITOR mission is played by a stand-in pilot with no
+    // game of its own, so neither branch above filled the title and it read the dialog's unfilled message
+    // ("Operation !d!, Mission !d!"). Filled as a campaign mission's; nothing is kept of a test, so no salvage
+    // and no replay.
+    if (ztwod::Text* l = label(title, 2)) l->set_text_id(0x177, campaign, mission);  // the start's (app_engine.cpp)
+    if (ztwod::Text* l = label(title, 3)) l->set_text_plain(time);
+    if (ztwod::Text* l = label(title, 1)) l->set_message(e.mission_failed() ? 0x180 : 0x181);
+    if (ztwod::Text* h = help(continue_btn)) h->set_message(0x173);
+    salvage.hide();
+    replay_btn.hide();
+    if (ztwod::Text* l = label(title, 2)) std::printf("mw3: debriefing of a MODS test mission: %s\n", l->text);
   }
   results(kind);
 }
@@ -637,6 +677,16 @@ void DebriefScreen::on_button(int32_t id, int32_t a, int32_t b) {
     e.debrief_voice_play(state);
     return;
   }
+  // Ours (upgrades/editor/mods_edit.h): a mission started from MODS (MISSIONS, or the editor's) is played by a
+  // stand-in pilot with no game, so the kind is none of the three below and CONTINUE and ABORT both did
+  // nothing: the player stood on the debriefing with no way on (found 2026-11-11 by a scripted run of a won
+  // mission). Both leave it: the mission cleaned up and the main menu, which opens MODS again.
+  if (mods_edit_session().active && (id == kAbort || id == kContinue)) {
+    std::printf("mw3: debriefing of a MODS mission: %s, back to MODS\n", id == kAbort ? "ABORT" : "CONTINUE");
+    e.mission_cleanup(1);
+    e.replace_state(2);
+    return;
+  }
   if (id == kAbort) {
     if (kind == kInstantAction) {
       e.fade_to_state(kIaDummyState, 0, 1, 2, 2.0f, 0, 0, 0);  // [0x005e7274]: 2 s
@@ -663,7 +713,7 @@ void DebriefScreen::on_button(int32_t id, int32_t a, int32_t b) {
       e.campaign_reset_lancemates();
       int32_t op = 0, mission = 0;
       e.game_campaign(&op, &mission);
-      e.mission_cleanup(mission == 1 || (op == 4 && mission == 4) ? 1 : 0);
+      e.mission_cleanup(e.campaign_world_start(op, mission) ? 1 : 0);  // Op N Mission 1, Op 4 Mission 4 (ours: a hook)
       e.anim_reset();
       e.campaign_set_b0(0);
     }

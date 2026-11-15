@@ -60,7 +60,9 @@ bug fixes, covers every play change. After this:
 
 - **The bug fixes switch goes away.**
 - **Game-breaking bug fixes are always on,** with no switch.
-- **Every other fix is an upgrade,** on a new settings page, each with its own
+- **Every other fix is an upgrade,** on the settings page (the UPGRADES page,
+  from the options, holds the bug fixes and wide menus switches since
+  2026-11-08: menus.md section 4), each with its own
   switch, all on by default, so a player can turn them off for the original
   experience. These include:
   - The mobile field bases regrouping as soon as a repair is done.
@@ -90,7 +92,7 @@ or upgrade, for Owen to approve.
 - [ ] The release notes are drafted (`docs/release-notes-<version>.md`) and
       Owen has read them.
 - [ ] The players' read-mes match the build: `tools/windows/dist/README.txt`,
-      `tools/macos/README.txt`, the top-level `README.md`.
+      `tools/macos/README.txt`, `tools/linux/README.txt`, the top-level `README.md`.
 - [x] Open since 2026-11-01: the Mac `--deps` release form
       (`tools/macos/make_app.sh --deps`) not built since libarchive, zlib
       and liblzma arrived: rebuild build-deps/mac (`build_deps.sh mac`),
@@ -124,7 +126,8 @@ the game's path is built into the programs.
 `build-win\dist\mw3-<version>-win64\`, its `.zip`, and
 `MW3-Rebuild-Setup-<version>.exe` (Inno Setup).
 
-- [ ] `mw3.exe --version` names the version.
+- [ ] `mw3.exe --version` names the version (and `mw3launcher.exe --version`, `mw3pm.exe --version` in the
+      combined package).
 - [x] The folder has `mw3.exe`, `mw3indeo.exe`, `mw3import.exe`, the SDL and
       FFmpeg DLLs, the Visual C++ runtime, `README.txt`, `THIRD-PARTY.txt`,
       `licenses\`, `assets\launcher\`.
@@ -154,6 +157,9 @@ the game's path is built into the programs.
 `tools/deps/build_deps.sh linux` (JOBS=6 under WSL), then
 `tools/linux/make-appimage.sh build-deps/linux/prefix <tools dir>`
 (docs/linux.md) makes `build-linux-pkg/dist/MW3-Rebuild-<version>-x86_64.AppImage`.
+PREFIX must be build_deps.sh's own prefix, which has FFmpeg as well as SDL: a
+prefix with SDL alone made v1.0.5's AppImage without `mw3import`. The script
+now refuses such a prefix.
 
 - [x] `AppDir/usr/lib` has SDL3, SDL3_ttf, SDL3_sound and the four FFmpeg
       libraries; `ldd` on `mw3` and `mw3import` finds them there, and nothing
@@ -162,6 +168,91 @@ the game's path is built into the programs.
 - [ ] `--import --movie INTRO` converts the movies and plays the intro.
 - [x] `AppDir/usr/share/doc/mw3/licenses` has every bundled library's
       licence files.
+
+### Packages with Pirate's Moon
+
+`main` builds no `mw3pm`; main's package scripts take one built on `pm`
+(`MW3_PKG_PM_BIN`): `tools/macos/make_app.sh` copies it to Contents/MacOS, adds
+it to the library walk and signs it as `mw3`; `tools/linux/make-appimage.sh`
+copies it to usr/bin and gives it to linuxdeploy with `-e`;
+`tools/windows/package.cmd` copies it beside `mw3.exe` and `check_dist.ps1 -Pm`
+requires it and checks its DLLs. Each checks every program is there.
+
+## The combined package (1.1.0 on)
+
+From 1.1.0 every release is one package per platform holding the launcher,
+MechWarrior 3 and Pirate's Moon (Owen, 2026-11-09), plus each game alone, all on
+one GitHub release. The launcher's updater takes only the combined package's
+name (launcher.md, Updates).
+
+| Platform | Combined (the updater's) | MechWarrior 3 alone | Pirate's Moon alone |
+|---|---|---|---|
+| Windows | `MW3-Rebuild-Setup-<v>.exe`, `MW3-Rebuild-<v>-win64.zip` | `MW3-alone-Setup-<v>.exe`, `MW3-alone-<v>-win64.zip` | `PM-Rebuild-Setup-<pm v>.exe`, `mw3pm-<pm v>-win64.zip` |
+| Mac | `MW3-Rebuild-<v>-mac.dmg` | `MW3-alone-<v>-mac.dmg` | `PM-Rebuild-<pm v>-mac.dmg` |
+| Linux | `MW3-Rebuild-<v>-x86_64.AppImage` | `MW3-alone-<v>-x86_64.AppImage` | `PM-Rebuild-<pm v>-x86_64.AppImage` |
+
+The combined and MW3-alone Windows installers share 1.0's AppId, so either
+upgrades an existing install in place (MW3 alone removes a combined install's
+`mw3pm.exe`); PM alone has its own. The Mac apps are "MechWarrior 3.app"
+(combined and MW3 alone, one bundle id, replacing 1.0's) and "Pirate's
+Moon.app".
+
+### Versions and tags
+
+- [ ] `main` and `pm` each pass section 1 on their release commits.
+- [ ] The package's version is main's tag, a bare `vX.Y.Z` (1.1.0 first); the
+      launcher shows it on its footer and the updater compares it. Pirate's
+      Moon keeps its own `pm-vX.Y.Z` tag, shown on its line (launcher.md,
+      Versions).
+- [ ] `pm` has `main` merged before its tag, so mw3pm carries the version tag
+      the launcher reads (`mw3_version_tag`) and the shared mods code
+      (`mods_game` "mw3pm" as its default); otherwise its line says "modified
+      (program)".
+- [ ] Owen tags both commits, or approves the tags.
+
+### Building
+
+- [ ] Each platform from the two tags, in clean worktrees of their own:
+      `tools/package/combined.sh mac v1.1.0 pm-v1.0.2 --deps` on the Mac,
+      `tools/package/combined.sh linux v1.1.0 pm-v1.0.2 PREFIX TOOLS` in WSL
+      (PREFIX: `build-deps/linux/prefix`, the one with FFmpeg),
+      `tools\package\combined.cmd v1.1.0 pm-v1.0.2` on the PC. Each makes the
+      three packages in `build-pkg/dist/<platform>/` with their SHA256SUMS and
+      runs the platform's own checks (section 3) on each.
+- [ ] No version ends in `-dirty`, and the combined package's file names carry
+      main's version, PM alone's pm's.
+- [ ] Every platform's files gathered in one folder and
+      `python3 -I tools/package/sums.py <folder>` run over all of them: that
+      SHA256SUMS goes up with the release (**required**: the updater installs
+      nothing without its line).
+
+### Checking
+
+- [ ] On each platform, the combined package installed over the last release
+      (1.0.x's Setup, its app, its AppImage) with a pilot, a save, a mod and a
+      data folder moved by MY DATA FOLDER present: every one of them unchanged
+      by hash after the install and after a game of each, and the uninstaller
+      (Windows) leaves them (the hard rule; `sdl_program_package_upgrade_keeps_the_players_files`
+      checks the launcher's side).
+- [ ] The launcher shows both games, "official" with their own versions, and
+      starts each; each game starts alone too.
+- [ ] MW3 alone and PM alone each install and start on their own.
+- [ ] The updater: a release's UPDATES from the last package finds this one
+      (once published, from a copy of the last release).
+
+### The notes
+
+- [ ] One GitHub release per package version, named for it ("MechWarrior 3
+      Rebuild 1.1.0"). Its page is short (Owen, 2026-11-12: "just put the
+      installers there at the very top and only the text that's necessary"):
+      the three combined installers as links first, then only what a player
+      needs before installing (your own game, upgrading keeps your files, the
+      Mac's first open, the Linux AppImage), a few lines of what's new, and a
+      link to the full notes (`docs/release-notes-<version>.md` at the tag).
+      Each game alone, the zips and `SHA256SUMS` stay under Assets. The page's
+      text is kept as `docs/release-page-<version>.md`. The launcher's UPDATE
+      screen shows it as written (headings, `- ` items, links as their names).
+- [ ] Not a draft and not a prerelease once published (the updater skips both).
 
 ## 4. Privacy
 
@@ -214,6 +305,14 @@ the Linux AppDir. Left, and why:
 
 ## 5. Publishing (Owen)
 
-- [ ] The tag pushed, the GitHub release made with the notes, and the three
-      platforms' files uploaded, with a `SHA256SUMS` of them.
+- [ ] The tag pushed (a package's: a bare `vX.Y.Z` on `main`), the GitHub
+      release made with the notes, and the three platforms' files uploaded,
+      with a `SHA256SUMS` of them. **Required on every release**: the
+      launcher's UPDATES installs nothing without its line (docs/launcher.md,
+      Updates). `shasum -a 256 <files> > SHA256SUMS` (or `sha256sum`), one
+      `<hash>  <name>` line each. The packages' names stay
+      `MW3-Rebuild-Setup-<version>.exe`, `MW3-Rebuild-<version>-mac.dmg`,
+      `MW3-Rebuild-<version>-x86_64.AppImage`, which the updater looks for; the games' own downloads may go on the same release
+      as extra assets. Not a draft and not a prerelease once published (the
+      updater skips both); the Latest flag does not matter to it.
 - [ ] Each upload downloaded again and its checksum checked.

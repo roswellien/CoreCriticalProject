@@ -1,5 +1,11 @@
 #include "gamez/zclass/cls_zbd.h"
+#include "gamez/zutil/zutl_zip.h"
+#include "upgrades/json/gamez_json.h"
 
+#include <cstdio>
+#include <memory>
+#include <set>
+#include <string>
 #include <vector>
 #include <algorithm>
 #include <array>
@@ -603,9 +609,30 @@ OpenHook open_hook() { return g_open_hook; }
 
 // Mech3.exe 1.2 @ 0x004ff6a0. Only the signature and version are checked.
 std::FILE* open_zbd(const char* path, ZbdHeader* header, ZbdReadContext* proof) {
-  std::FILE* f = zutl::open(path, "rb");  // FIX (A): the mounts (zutl_path.h)
+  std::FILE* f = nullptr;
   try {
+    bool from_mod = false;
+    {
+      // UPGRADE (mods): an enabled mod's unzbd JSON for this world, as the file it stands for (docs/modding.md, gamez
+      // JSON); one that does not read is said and the gamez.zbd read. The file stays until the next open: the caller
+      // reads on from it, and Windows will not remove an open file.
+      static std::unique_ptr<zutl_zip::ScratchFile> scratch;
+      static std::set<std::string> said;
+      std::vector<uint8_t> bytes;
+      std::string what, why;
+      const int got = gamez_from_mod(path, &bytes, &what, &why);
+      if (got > 0) scratch = std::make_unique<zutl_zip::ScratchFile>(bytes.data(), bytes.size());
+      if (got > 0 && scratch->file) {
+        f = std::fopen(scratch->path.string().c_str(), "rb");
+        from_mod = f != nullptr;
+        if (said.insert(what + "\n").second) std::printf("mw3: mod: %s instead of %s\n", what.c_str(), path);
+      } else if (got != 0 && said.insert(what + "\n" + why).second) {
+        std::printf("mw3: mod: %s: %s; %s read instead\n", what.c_str(), why.c_str(), path);
+      }
+    }
+    if (!f) f = zutl::open(path, "rb");  // FIX (A): the mounts (zutl_path.h)
     if (f && proof) {
+      if (from_mod) proof->transformed = true;
       proof->require(!proof->expected.member.empty() && proof->expected.member.size() <= 1024 &&
           proof->expected.sha256.size() == 64 && proof->expected.bytes > 0 &&
           proof->expected.bytes <= kProofLimit && proof->expected.model_slots.size() <= 4096,
@@ -625,7 +652,8 @@ std::FILE* open_zbd(const char* path, ZbdHeader* header, ZbdReadContext* proof) 
       std::string effective_hash;
       std::uint64_t effective_bytes{};
       f = freeze_source(f, *proof, effective_hash, effective_bytes);
-      proof->transformed = effective_hash != proof->sha256 || effective_bytes != proof->input_bytes;
+      proof->transformed = proof->transformed || from_mod ||
+          effective_hash != proof->sha256 || effective_bytes != proof->input_bytes;
       proof->require(!proof->transformed, "raw/effective transformed source is not eligible");
       proof->snapshot_verified = !proof->failed;
     }

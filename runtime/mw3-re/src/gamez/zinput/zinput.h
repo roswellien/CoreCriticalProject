@@ -100,6 +100,7 @@ struct State {
   // modifiers, for the controls screen's capture (frame_key).
   uint32_t frame_key = 0;
   KeySlot keys[kKeys];                 // 0x006385ac
+  uint8_t typed[kKeys] = {};           // ours (FIX bug): the key's press went to a text field (zin_kbd.cpp)
   CharCallback char_callback = nullptr;  // 0x0063c49c
   uintptr_t char_ctx = 0;              // 0x0063c4a0
 
@@ -125,6 +126,7 @@ struct State {
   MouseInfo mouse;                     // 0x0063d1d8
   uint32_t no_clamp = 0;               // 0x0063d214 (nothing sets it)
   float accel_x = 1.3f, accel_y = 1.3f;  // 0x005ece48, 4c
+  float frac_x = 0, frac_y = 0;        // ours: mouse_integrate's cut-off fractions, carried (FIX (A))
   uint32_t mode = 5;                   // 0x005ece50 the mouse's cooperative level
   int32_t mouse_result = 1;            // 0x005ece54
 

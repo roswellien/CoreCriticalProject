@@ -66,7 +66,7 @@ struct DockSummary {
   int32_t states = -1;
   bool idle_first = false, begin_next = false, drive = true, deploy_valve = false;
   // The front state: 0 idle, 1 places, 2 contact, 3 deploy, 4 repair, 5 close, 6 reset, 7 parked
-  // (ours, after a repair with bugs on); -1 none.
+  // (ours, after a repair with mfb_regroup on); -1 none.
   int32_t front = -1;
   bool busy = false;
   void* requester = nullptr;
@@ -161,7 +161,7 @@ bool program_vehicle_free(void* v);       // vt+0x00 0x004ac630(1); false when n
 // active, velocity) is zEntity's, the mech helpers' (app_mech.h).
 float program_vehicle_health(void* v);                      // vt+0x98 0x004ad820
 float program_vehicle_speed_at(void* v, float share);       // vt+0x118
-float program_vehicle_stopping_distance(void* v, float s);  // vt+0x120
+double program_vehicle_stopping_distance(void* v, float s);  // vt+0x120: in the register
 float program_vehicle_stop_share(void* v, float d);         // vt+0x12c
 float program_vehicle_move_speed(void* v);                  // vt+0x114
 bool program_vehicle_can_face(void* v, const float d[3]);   // vt+0x8c
@@ -189,6 +189,7 @@ void* program_vehicle_named(const char* name);  // zEntity's by name (0x005a8210
 void program_vehicle_destroy(void* v);          // vt+0x70 0x004ad2d0
 void* program_vehicle_brain(void* controls);    // a program vehicle's AI controls' brain (ai::Brain*), else null
 std::vector<void*> program_vehicles();    // this mission's, as made
+std::vector<void*> program_ai_brains();   // every AI mech's and vehicle's brain (ai::Brain*)
 // What the headless tests check of one.
 struct VehicleSummary {
   const char* name = nullptr;  // its node's

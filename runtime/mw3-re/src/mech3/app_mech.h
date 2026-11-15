@@ -28,6 +28,8 @@ struct MechWiring {
   uint32_t (*pilot)(void* e) = nullptr;   // [0x0060861c]
   uint32_t (*view)(void* e) = nullptr;    // [0x005f4c8c]
   void (*forget_object)(void* e, const void* p) = nullptr;  // an object freed: its handle forgotten (FIX (A))
+  // 0x004ac150 (style 0, caption 0x1e0) with the message's %1: the build's error boxes.
+  void (*message_box1)(void* e, int32_t caption, int32_t text, const char* s) = nullptr;
 };
 void wire_mech_build(const MechWiring* w);  // null: the hooks' defaults again
 void net_start();  // 0x0046ceb0 (mech_net.cpp): the mission's network start
@@ -259,6 +261,28 @@ struct BeamProbe {
   float ready = 0, origin[3] = {}, live[3] = {};
 };
 bool mech_group_beam(void* mech, int32_t g, BeamProbe* out);
+float mech_tag_muzzle(void* mech, bool* mounted);  // tests: TAG added as the build adds it, its muzzle from the torso
+// Tests (pm-tests item 21): the first weapon in the list's order selected, the one after it destroyed, then it;
+// whether the selection ends on a destroyed weapon. -1 with fewer than three weapons.
+int32_t mech_weapon_gone_case(void* mech, bool* picked);
+// Tests (pm-tests item 25): a key's command (Mech::command, e.g. 0x46 E); the first lock-on weapon through its
+// trigger (whether the shot locked); its first shot in flight (its place, whether it has a lock).
+void mech_command(void* mech, int32_t cmd);
+bool mech_torso_pitch(void* mech, float pitch, float range[2]);  // tests: the torso's pitch set, its limits
+int mech_trigger_lock_on(void* mech, bool* locked);
+int mech_lock_on_shot(void* mech, float at[3], bool* has_lock);
+float mech_knock(void* mech, float* threshold, bool* airborne);  // tests: pm-tests item 23
+// Tests: zWeapon's sphere query at `at` (the splash's, through its hook): how many hits it counts, and in
+// `matched` how many of those hold zClass's own record; a weapon by name burst at a point.
+int32_t weapons_query_flood(const float at[3], float radius, int32_t* matched);
+bool weapons_burst(const char* name, const float at[3]);
+// Tests only: a copy of the weapon `name` given IMPACT_PROXIMITY `proximity`, its splash query and splash run at
+// `at` (as a hit there, 0x00586350's tail); out: the query's count, how many of its records hold a node, the
+// damage calls made.
+// Also each point of a `radius` query around `at` (up to 32), for finding a crowded spot.
+bool weapons_splash_copy(const char* name, float proximity, const float at[3], int32_t* counted, int32_t* listed,
+                         int32_t* damaged);
+int32_t weapons_query_points(const float at[3], float radius, float out[32][3]);
 std::string mech_group_names(void* mech, int32_t g);
 // Tests only: the HUD's lock on the manager (+0x88), and the object of the target selected (+0x6c).
 bool mech_lock_shown(void* mech);
@@ -422,7 +446,7 @@ bool mech_world_position(void* mech, float out[3]);  // 0x005a85e0; false (0, 0,
 const float* vehicle_position(void* vehicle);        // 0x005a85e0's pointer (a mech's or vehicle's node data); null without one
 float mech_health(void* mech);                   // vt+0x98, 0x0041ba40
 float mech_speed_at(void* mech, float share);    // vt+0x118, 0x0041d1c0
-float mech_stopping_distance(void* mech, float speed);  // vt+0x120, 0x0041d210
+double mech_stopping_distance(void* mech, float speed);  // vt+0x120, 0x0041d210: in the register
 float mech_stop_share(void* mech, float d);      // vt+0x12c, 0x0041d240
 float mech_throttle_speed(void* mech);           // vt+0x114, 0x0041d1d0
 void mech_forward(void* mech, float out[3]);     // +0x24, the flat forward
@@ -504,6 +528,9 @@ void program_mech_forget(void* mech, uint32_t self, uint32_t x);
 bool program_mech_lock_on(void* mech, void* target);                 // for the tests
 std::vector<std::string> program_holders_of(uint32_t x, const void* gone);  // for the tests: who still holds it
 void program_mech_set_attacker(void* mech, void* attacker);  // for the tests
+float program_leg_hit_loss(void* mech, float damage);
+bool program_weapon_fcs(void* mech, int32_t i);
+const char* program_weapon_desc(void* mech, int32_t i);
 void program_mech_wreck_gone(void* mech);                            // for the tests: 0x0041e140's delete  // vt+0xd4 0x004aeec0 (with the attacker FIX)
 // The IA Dummy State's tally (0x0047ce80's loop over zEntity's list): each
 // mech's kills (+0x3f4) to the Instant Action game's player (+0x4c), ally
@@ -606,6 +633,8 @@ struct AiMechMade {
   const char* name = nullptr;  // the aiv.zrd record's
 };
 const AiMechMade* mission_ai_mechs(int32_t* count);
+void* program_ai_mech_brain(void* controls);
+void program_app_pause(bool on);  // the app deactivated (0x0058fa80) or activated again (0x0058faa0)  // an AI mech's controls' brain (ai::Brain*), else null
 // A mech freed: off the AI mechs made (their names, for the valves' lookups) and the player hooks' set.
 void mission_ai_mech_forget(const void* mech, uint32_t handle);
 // The mission's objectives as the program read them (mech_objective.h), and

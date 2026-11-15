@@ -22,6 +22,14 @@ file; `mech_collide` would fit the alphabetical link order). Everything works
 on a collider object embedded in the mech at +0xfc (ctor 0x4222e0 from the mech
 ctor 0x414a39, probe setup 0x422360 at 0x416165 once the model exists).
 
+Precision (2026-11-07): `mech_collide.cpp` works in `zgeo::X` between the exe's
+stores, so `test_collide.py` is bit for bit at 53 bits, the reference runtime's,
+as well as at 24. As plain floats it matched at 24 only, and at 53 it took
+another path on 397 of 18,993 random trials. On the walking runs at walls (33 +- 2 ms,
+193,293 sweeps, 2,489 wall responses) the same inputs flipped none of the turn, move,
+reflect or sign tests, and the reflected move differed by 2e-6 m at most.
+PM forked this file (`pm` branch): the change crosses by hand.
+
 ## In the frame
 
 ```
@@ -261,10 +269,59 @@ it, with exclude 0x40000 and the node's own INTERSECT off, finds nothing
 (first-hit is left off after, not restored). The record: node, its centre
 as the point, material 0, the squared distance; the normal is left.
 
-**Precision.** These run while the game is up, at the 24-bit precision
-Direct3D 6 sets; the ports are in floats. The inverse 0x00523c50 had been
-ported at 53 bits (`zmth::invert`, doubles); `zmth::invert_single` is the
-same at 24 bits, which this test needed.
+**Precision.** These run while the game is up. The reference runtime runs
+the x87 at 53 bits (CLAUDE.md, FPU precision), where what the exe keeps in
+the register is a double until it stores it; Direct3D 6 on Win9x would have
+set 24, where each step rounds to a float. All of cls_di's queries (the
+ground, the mechs' segments, the shots, the one point and the sphere) now
+take the exe's form at 53 behind `zfix fpu53` (`zgeo::X`), and the old float
+form at 24, which the tests still check. Read from the disassembly with
+`tools/analysis/x87.py`; what stays in the register, by function:
+- The cell index (`cell_of`, all nine sites): `(x - origin) * inv` goes to
+  `floor` unrounded. **At 24 a probe within an ulp of a cell's edge can land
+  in the cell beside the one 53 gives**, and its ground is then looked up
+  among the other cell's nodes (seen on c1: a probe at x = -1536.0001 found
+  ground at 53 and none at 24).
+- The polygon normal 0x524020: only the first edge's x difference is
+  stored; the other differences, the cross, the root and 1 over it stay.
+  0x54d760 (the shot test): its own cross kept for both dots, the normal
+  stored too; the end's dot compared unrounded; t kept for the point.
+- The ground polygon 0x54c330 and the one-point test 0x54d640: the edge
+  test's sum (the loop's edges store `c - a` first in 0x54d640, the closing
+  one not); 1 over the normal's y and both slopes kept for every probe; the
+  height stored once.
+- The crossings 0x54e2b0 / 0x54ea30 / 0x54dd30: the plane dot's sum, t's
+  difference, the edge test's sum and the texture coordinates' sums; their
+  gradient 0x5240d7 keeps p, q and b (q stored too), stores r, s, a, d and 1/d.
+- The vertices through the stack's top (0x54c655, 0x54cad0 both ways), the
+  box corners 0x522d60 / 0x522ab0 (which products and sums are stored
+  differs word by word: a table in `zmth_matrix.cpp`), the box matrices of
+  0x4ebdb0 / 0x4ec150 and the stack's multiply 0x51fee0: each word's sums
+  stored once.
+- The inverse 0x523c50 (`zmth::invert`, now also its last row and the
+  translation's sums) at 53, `invert_single` at 24. The sphere's corners
+  0x4f9c40 (hz kept), its range (0x51e000's squares summed, root stored) and
+  the nearest hit's squared distances (0x51dfa0).
+
+At 53 (`MW3_PRECISION=53`), `test_di` matches whole (9000 ground and 9000
+segment queries on the six worlds), so do `test_inout` with the ground on and
+`test_inout_query`. `test_shotq` matches whole too (3000 shot and 3000 sphere
+queries on the six worlds) since zmath's matrices went to 53 (2026-11-11):
+`transform_points` 0x5227a0, the multiply's 3x4 form, the translate 0x520480
+(its ninth word's order, ((y t3 + z t6) + x t0) + t9, at both precisions), the
+rotations 0x520610.. and euler 0x521670's products, each as the exe keeps
+them, and the cell walk 0x4eefe0's edge t on the x87. The last difference was
+in the inverse: of its nine rotation words, four (1, 2, 4 and 5) subtract a
+product of a stored value (m0 / det or m1 / det, floats) and a matrix word,
+which the exe leaves on the x87 and the port had multiplied as two floats in
+single. One ulp in the inverse's fifth word put a class-5 node's local
+segment an ulp off on c2 (query 241 of the test: a candidate with no hit,
+seen only in the record's scratch slot).
+
+The 24-bit port of 0x4ebdb0's local-times-top had four entries summed in
+the wrong order ((0 + 2) + 1 where the exe does (0 + 1) + 2); no shipped
+world reached it in the tests (a node with both its own matrix and a stack
+top). Corrected at both precisions.
 
 **FIX (A)**: the model test past the record's 32nd slot would write past it
 (only the walk's entry checks); the port stops at 32.

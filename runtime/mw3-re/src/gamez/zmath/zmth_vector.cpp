@@ -1,5 +1,7 @@
 #include "gamez/zmath/zmth_vector.h"
 
+#include "gamez/zgeometry/zgeo_x87.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -23,6 +25,20 @@ float normalize(Vec3& v) {
   }
   return len;
 }
+// The same as the x87 runs it (zgeo::X): the squares and the root on the
+// x87, the root stored for the zero test, 1 over the unrounded root.
+float normalize_x87(float v[3]) {
+  using zgeo::X;
+  const X root = sqrt((X(v[0]) * v[0] + X(v[2]) * v[2]) + X(v[1]) * v[1]);
+  const float len = root.f();
+  uint32_t bits;
+  std::memcpy(&bits, &len, 4);
+  if (bits & 0x7fffffff) {
+    const X inv = X(1.0f) / root;
+    v[0] = (inv * v[0]).f(), v[1] = (inv * v[1]).f(), v[2] = (inv * v[2]).f();
+  }
+  return len;
+}
 
 // Mech3.exe 1.2 @ 0x0051e210. 0 stays 0; out may be v.
 void flat_normalize(const Vec3& v, Vec3& out) {
@@ -41,18 +57,26 @@ float direction(const Vec3& from, const Vec3& to, Vec3& out) {
 // Mech3.exe 1.2 @ 0x00525840: 2w (q x v) + 2 (q.v) q + (2w^2 - 1) v, summed
 // in the original's order (z adds its terms the other way round).
 void quat_rotate(const Quat& q, const Vec3& v, Vec3& out) {
-  const float d = (q.x * v.x + q.y * v.y) + q.z * v.z;
-  const float d2 = d + d, w2 = q.w + q.w;
-  const float c = w2 * q.w - 1.0f;
-  out.x = ((v.z * q.y - q.z * v.y) * w2 + d2 * q.x) + c * v.x;
-  out.y = ((v.x * q.z - v.z * q.x) * w2 + d2 * q.y) + c * v.y;
-  out.z = ((v.y * q.x - v.x * q.y) * w2 + c * v.z) + d2 * q.z;
+  using zgeo::X;
+  const float d = ((X(q.x) * v.x + X(q.y) * v.y) + X(q.z) * v.z).f();
+  const X d2 = X(d) + d, w2 = X(q.w) + q.w;
+  const X c = w2 * q.w - 1.0f;
+  const float x = (((X(v.z) * q.y - X(q.z) * v.y) * w2 + d2 * q.x) + c * v.x).f();
+  const float y = (((X(v.x) * q.z - X(v.z) * q.x) * w2 + d2 * q.y) + c * v.y).f();
+  out.z = (((X(v.y) * q.x - X(v.x) * q.y) * w2 + c * v.z) + d2 * q.z).f();
+  out.x = x, out.y = y;
 }
 
 // Mech3.exe 1.2 @ 0x0051dfa0
 float distance_sq(const Vec3& a, const Vec3& b) {
   const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
   return (dx * dx + dy * dy) + dz * dz;
+}
+// The same with the squares summed on the x87 (zgeo::X), stored once.
+float distance_sq_x87(const Vec3& a, const Vec3& b) {
+  using zgeo::X;
+  const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+  return ((X(dx) * dx + X(dy) * dy) + X(dz) * dz).f();
 }
 
 // Mech3.exe 1.2 @ 0x0051e740: a unit vector at right angles to v in the xy
@@ -84,6 +108,12 @@ void add_scaled(const Vec3& base, const Vec3& dir, float s, Vec3* out) {
 float distance(const Vec3& a, const Vec3& b) {
   const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
   return std::sqrt((dx * dx + dy * dy) + dz * dz);
+}
+// The same with the squares summed on the x87 (zgeo::X); the root is stored.
+float distance_x87(const Vec3& a, const Vec3& b) {
+  using zgeo::X;
+  const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+  return sqrt((X(dx) * dx + X(dy) * dy) + X(dz) * dz).f();
 }
 
 // Mech3.exe 1.2 @ 0x0051e280. out may be v.
@@ -206,34 +236,42 @@ void rotate_y(float out[3], const float in[3], float angle) {
 // EDX b, stack c. A zero-length normal is stored as (y, z, x), as the x87
 // stack leaves it (all zero anyway).
 void poly_normal(const float a[3], const float b[3], const float c[3], float out[3]) {
-  const float px = c[0] - a[0], py = c[1] - a[1], pz = c[2] - a[2];
-  const float qx = b[0] - a[0], qy = b[1] - a[1], qz = b[2] - a[2];
-  const float x = qy * pz - py * qz;
-  const float y = qz * px - pz * qx;
-  const float z = qx * py - qy * px;
-  const float len = std::sqrt(x * x + y * y + z * z);
-  if (len == 0.0f) {
-    out[0] = y, out[1] = z, out[2] = x;
+  using zgeo::X;
+  // Only px is stored; the other differences, the cross and 1 over the root stay on the x87.
+  const float px = (X(c[0]) - a[0]).f();
+  const X py = X(c[1]) - a[1], pz = X(c[2]) - a[2];
+  const X qx = X(b[0]) - a[0], qy = X(b[1]) - a[1], qz = X(b[2]) - a[2];
+  const X x = qy * pz - py * qz;
+  const X y = qz * px - pz * qx;
+  const X z = qx * py - qy * px;
+  const X root = sqrt((x * x + y * y) + z * z);
+  if (root.f() == 0.0f) {
+    out[0] = y.f(), out[1] = z.f(), out[2] = x.f();
     return;
   }
-  const float inv = 1.0f / len;
-  out[0] = x * inv, out[1] = y * inv, out[2] = z * inv;
+  const X inv = X(1.0f) / root;
+  out[0] = (x * inv).f(), out[1] = (y * inv).f(), out[2] = (z * inv).f();
 }
 
 // Mech3.exe 1.2 @ 0x005240d7. ECX ga, EDX gb; differences taken from vertex 1.
 void plane_gradient(float a0, float b0, float a1, float b1, float a2, float b2, float t0, float t1, float t2,
                     float* ga, float* gb) {
-  const float p = a2 - a1, q = b2 - b1, r = a0 - a1, s = b0 - b1;
-  const float d = q * r - p * s;
-  if (d == 0.0f) {
+  using zgeo::X;
+  // On the x87: p, q (stored too, for its second use), b and the products;
+  // stored: r, s, a, d and 1 over d.
+  const X p = X(a2) - a1, q = X(b2) - b1;
+  const float r = (X(a0) - a1).f(), s = (X(b0) - b1).f();
+  const X d = q * r - p * s;
+  if (d.v == 0.0) {
     *ga = 0.0f;
     *gb = 0.0f;
     return;
   }
-  const float inv = 1.0f / d;
-  const float b = t2 - t1, a = t0 - t1;
-  *ga = -((b * s - q * a) * inv);
-  *gb = -((p * a - b * r) * inv);
+  const float inv = (X(1.0f) / d.f()).f();
+  const X b = X(t2) - t1;
+  const float a = (X(t0) - t1).f();
+  *ga = -((b * s - X(q.f()) * a) * inv).f();
+  *gb = -((p * a - b * r) * inv).f();
 }
 
 // Mech3.exe 1.2 @ 0x00525210. The sine and cosine of the half angle as the
@@ -380,6 +418,17 @@ void quat_slerp(const float a_in[4], const float b_in[4], float t, float out[4])
   for (int i = 0; i < 4; ++i) out[i] = crt::x87_mul_f24(a[i], sa) + crt::x87_mul_f24(sb, b[i]);
   const float inv = 1.0f / s;
   for (int i = 0; i < 4; ++i) out[i] = inv * out[i];
+}
+
+// Mech3.exe 1.2 @ 0x00522170. Each sine and cosine is stored as a float before the products
+// (the exe's two branches by |angle| against 9.22e18 compute the same).
+void look_dir(const float angles[2], float out[3]) {
+  const float cp = static_cast<float>(std::cos(double{angles[0]}));
+  out[1] = static_cast<float>(std::sin(double{angles[0]}));
+  const float sy = static_cast<float>(std::sin(double{angles[1]}));
+  const float cy = static_cast<float>(std::cos(double{angles[1]}));
+  out[0] = -cp * sy;
+  out[2] = -cp * cy;
 }
 
 namespace {

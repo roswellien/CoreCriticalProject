@@ -1,6 +1,17 @@
 void present() override {
+  if (editor_source_ || editor_present_active_) require_editor_producer();
   flush();
   complete_local_light_packets();
+  // Retire one active-to-closed transition even during a capture/hidden frame.
+  // Peek cannot create a CPU context or admit filesystem paths.
+  if (editor_present_active_) {
+    auto* existing = editor_source_ ? editor_source_->existing() : nullptr;
+    if (!existing || !existing->active()) {
+      if (worker_) worker_->drain();
+      renderer_->detach_editor();
+      editor_present_active_ = false;
+    }
+  }
   if (!resident_width_) {
     return;
   }
@@ -18,6 +29,13 @@ void present() override {
   if (!window_state.visible) {
     return;
   }
+  // Query after the event/game input path, so Shift+F12's first activation is
+  // visible in this presentation, without moving the game's on_present hook.
+  auto* editor = editor_source_ ? editor_source_->acquire_if_active() : nullptr;
+  if (editor) {
+    if (worker_) worker_->drain();
+    editor_present_active_ = true;
+  }
   CpuInterval interval(cpu_profile_ ? &transport_ticks_ : nullptr);
   if (!window_bound_) {
     std::vector<uint32_t> argb;
@@ -31,7 +49,7 @@ void present() override {
     const auto before = renderer_->presents;
     if (!renderer_->present(native_window_,
                             reinterpret_cast<const uint8_t *>(rgba.data()),
-                            width, height, width * 4, false, true)) {
+                            width, height, width * 4, false, true, editor)) {
       throw std::runtime_error(
           "Could not bind the selected Core Critical Vulkan presenter");
     }
@@ -72,10 +90,21 @@ void present() override {
       if (renderer_->resident_presents)
         resident_draws_.store(renderer_->draws);
     };
-    if (worker_)
+    if (editor) {
+      // This is deliberately outside the worker closure: no source, CPU
+      // context or ImDrawData borrow crosses the producer/worker boundary.
+      const auto before = renderer_->presents;
+      if (!renderer_->present_resident(native_window_, resident_width_,
+                                       resident_height_, false, editor))
+        throw std::runtime_error("Core Critical editor resident present failed");
+      presented_frames_ += renderer_->presents - before;
+      if (renderer_->resident_presents)
+        resident_draws_.store(renderer_->draws);
+    } else if (worker_) {
       worker_->post(present);
-    else
+    } else {
       present();
+    }
   }
   if (!reported_resident_ && resident_draws_.load()) {
     std::fprintf(stderr, "%s resident frame: %llu Vulkan draws\n",

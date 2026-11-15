@@ -123,6 +123,11 @@ void program_count_sounds(int id, int* count);
 // Tests only: the player's target set to its contact on `mech` (TARGET given
 // it, as the targeting keys would) and TARGET's mode set; false without one.
 bool program_hud_target(void* mech, int mode);
+int32_t program_reticle_lock(int32_t set, float timer, bool* has_target);  // tests: pm-tests item 25
+void* program_view_target_mech();  // tests: the view mech's target's mech, if a mech
+const void* program_view_target_contact();  // tests: the view mech's target contact
+bool program_view_target_delta(float d[3]);  // tests: from the view mech to its target, as its sensors last saw
+float program_view_target_since();  // tests: seconds since TARGET last changed (-1 without a HUD)
 bool program_hud_target_other(const void* object, int mode);  // tests: on a turret or targets.zrd object
 // Tests only: the first group that locks selected and the player's target
 // set to its contact on `mech`; the group, -1 for none.
@@ -138,6 +143,7 @@ uint8_t* entity_active_flag(void* object);
 // image worked out (0x00443d20, the lock reset first): the state, 0 off,
 // 1 on, 2 over (yellow), 3 can't; -1 without a HUD.
 int program_hud_aim_at(void* node, float distance);
+int program_hud_active(void* mech);  // for the tests: the mech's HUD's +0x04 active flag, -1 without one
 int program_hud_pick_at(const float at[3], void** node, float* distance, float* range, float* far_clip);  // for the tests: 0x00444350 there
 void program_hud_draw3d(float dt);   // the view target's vt+0xe4, 0x0041cd90: the HUD's Direct3D pass
 void program_hud_data(float dt);     // 0x0040f8d0's HUD part: the view target's HUD data update (0x0043c390)

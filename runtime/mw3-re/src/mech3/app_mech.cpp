@@ -82,6 +82,7 @@
 #include "mech3/mech_reader.h"
 #include "mech3/mech_salvage.h"
 #include "crt/msvc_rand.h"
+#include "upgrades/mods/salvage_chance.h"
 #include "mech3/mission_launch.h"
 #include "mech3/mission_world.h"
 #include "gamez/zentity/zent_manager.h"
@@ -138,7 +139,10 @@ class WiredData : public MechDataHooks {
   }
   Handle cameras(MechData& p) override { return program_cameras(p.roster); }      // 0x00430e70
   void cameras_free(Handle list) override { program_cameras_free(list); }  // 0x0040abf0
-  void hud_free(Handle hud) override { delete static_cast<Hud*>(hud); }  // 0x0043b860 and the delete
+  void hud_free(Handle hud) override {  // 0x0043b860 and the delete; its handle with it (docs/handles.md)
+    if (hud && g_w.forget_object) g_w.forget_object(g_w.engine, hud);
+    delete static_cast<Hud*>(hud);
+  }
   Handle anim_find(const char* name) override { return zeff::anim_find(name); }  // 0x0050b450, the mission's
   // The motions the gaits read (0x005a9ad0's archive) open with the first mech.
   void animations(MechData& p) override {
@@ -243,6 +247,12 @@ WiredShade g_shade_hooks;
 
 class WiredBuild : public MechBuildHooks {
  public:
+  // 0x004ac150's error boxes (no model 0xf25, unable to create 0xf30), shown
+  // (ours: a mod's mech with a file missing reaches them; logged before).
+  void message_box(int32_t message, const char* name) override {
+    if (g_w.message_box1) g_w.message_box1(g_w.engine, 0x1e0, message, name);
+    else MechBuildHooks::message_box(message, name);
+  }
   // The exe's operator new (ours): an address just allocated has no handle
   // yet, so one still mapped to it is a freed object's. Forgotten, the new
   // object gets a fresh handle: the entities' sort (0x004d7360, which breaks
@@ -831,6 +841,9 @@ void wire_mech_parts() {
     zcls::tree_destroy(zn(m.lod_node));
     m.model_node = m.lod_node = nullptr;
   };
+  fr.forget = [](const void* p) {  // a freed object's handle (docs/handles.md)
+    if (p && g_w.forget_object) g_w.forget_object(g_w.engine, p);
+  };
   fr.entity_free = [](Mech& m) {  // 0x005a7f70: off zEntity's list
     mech_objects().erase(&m);
     auto& list = ai::entity_list();
@@ -1351,6 +1364,8 @@ std::string program_net_soak_line() {
                   me->arms[0] ? me->arms[0]->aim_yaw : 0.0f, me->arms[1] ? me->arms[1]->aim_pitch : 0.0f,
                   me->arms[1] ? me->arms[1]->aim_yaw : 0.0f);
     s += buf;
+    std::snprintf(buf, sizeof buf, " top %.2f", me->max_speed);  // its loadout's top speed (m/s), for the remote's against it
+    s += buf;
   }
   for (NetMech* m : net_game().mechs) {
     mech_world_position(m, p);
@@ -1359,6 +1374,8 @@ std::string program_net_soak_line() {
                   p[0], p[1], p[2], (m->state.flags >> 1 & 1) ? 0 : 1, mech_health(m), m->anim_index,
                   m->arms[0] ? m->arms[0]->aim_pitch : 0.0f, m->arms[0] ? m->arms[0]->aim_yaw : 0.0f,
                   m->arms[1] ? m->arms[1]->aim_pitch : 0.0f, m->arms[1] ? m->arms[1]->aim_yaw : 0.0f, now - m->heard);
+    s += buf;
+    std::snprintf(buf, sizeof buf, " top %.2f", m->max_speed);
     s += buf;
   }
   return s;
@@ -1659,14 +1676,14 @@ bool program_net_scores_box_check(NetScoresBoxSeen* out) {
   HudObjectives& box = h->objectives;
   auto written = [&box] {  // its lines with a text (it keeps 25)
     int32_t n = 0;
-    for (const ztwod::Text& t : box.lines) n += t.text && *t.text;
+    for (const ztwod::Text& t : box.lines) n += *t.text != 0;
     return n;
   };
   box.show_for(-1.0f);  // F12: shown and filled
   box.clear();
   net_score_kill(1, 1);  // our own death: the host scores it
   out->refilled_open = written();
-  if (box.lines.size() && box.lines[0].text) out->header = box.lines[0].text;
+  if (box.lines.size()) out->header = box.lines[0].text;
   box.hide();
   box.clear();
   net_score_kill(1, 1);
@@ -2053,6 +2070,10 @@ bool describe_mech(const void* mech, LaunchedMech* out) {
     s.parts += p && p->node;
     if (p) s.armor += p->armor + p->internal;
   }
+  if (m->torso) {  // the torso's other sections: rear (3-5) and side (1, 2) armour, the side torsos' internal
+    for (int i = 1; i <= 5; ++i) s.armor += m->torso->sec_armor[i];
+    s.armor += m->torso->side_internal[0] + m->torso->side_internal[1];
+  }
   s.heat = m->heat;
   for (const Arm* a : m->arms) s.parts += a && a->hand && a->hand->node;
   for (const Leg* l : m->legs) {
@@ -2218,6 +2239,7 @@ const SalvageCalls& salvage_calls() {
   static const SalvageCalls c = [] {
     SalvageCalls k;
     k.rand = [] { return static_cast<int32_t>(crt::msvc_rand()); };
+    k.chance = [] { return salvage_chance_now(); };  // ours: a mod's odds for this mission, else -1
     k.empty_bin = [](const SalvageMech& v, int32_t bin) {
       const_cast<AmmoBin*>(static_cast<const AmmoBin*>(v.owner_bins[bin]))->set_amount(0);
     };
@@ -2462,7 +2484,7 @@ void* mech_controls_of(void* mech) { return mech ? static_cast<Mech*>(mech)->con
 float mech_game_time() { return world().time; }
 float mech_health(void* mech) { return static_cast<Mech*>(mech)->health(); }
 float mech_speed_at(void* mech, float share) { return static_cast<Mech*>(mech)->speed_at(share); }
-float mech_stopping_distance(void* mech, float speed) { return static_cast<Mech*>(mech)->stopping_distance(speed); }
+double mech_stopping_distance(void* mech, float speed) { return static_cast<Mech*>(mech)->stopping_distance(speed); }
 float mech_stop_share(void* mech, float d) { return mech ? static_cast<Mech*>(mech)->stop_share(d) : 0.0f; }
 float mech_throttle_speed(void* mech) { return mech ? static_cast<Mech*>(mech)->throttle_speed() : 0.0f; }
 void mech_forward(void* mech, float out[3]) {  // any entity's +0x24
@@ -2677,6 +2699,35 @@ std::vector<std::string> program_holders_of(uint32_t x, const void* gone) {
       if (on(c)) out.push_back("a targets.zrd object: a contact");
   return out;
 }
+// For the tests: weapon i of the mech has its FCS in the firing part, as the shot asks (Weapon::fire).
+bool program_weapon_fcs(void* mech, int32_t i) {
+  auto* m = static_cast<Mech*>(mech);
+  auto* wm = static_cast<WeaponManager*>(m->ammo);
+  Weapon* w = i >= 0 && static_cast<uint32_t>(i) < wm->count ? wm->weapons[i] : nullptr;
+  return w && w->firepoint && weapon_calls().equipment_in_part && weapon_calls().equipment_in_part(m, 3, w->firepoint->part);
+}
+const char* program_weapon_desc(void* mech, int32_t i) {
+  auto* wm = static_cast<WeaponManager*>(static_cast<Mech*>(mech)->ammo);
+  Weapon* w = i >= 0 && static_cast<uint32_t>(i) < wm->count ? wm->weapons[i] : nullptr;
+  return w && w->def ? w->def->desc : nullptr;
+}
+
+// For the tests: what a real hit of `damage` takes off the mech's left leg's armour; a critical takes none, so again.
+float program_leg_hit_loss(void* mech, float damage) {
+  auto* m = static_cast<Mech*>(mech);
+  WeaponDef def{};
+  WeaponType type{};
+  def.type = &type;
+  float loss = 0.0f;
+  for (int tries = 0; tries < 200 && loss <= 0.0f; ++tries) {
+    m->legs[0]->set_armor(1.0f, 0);
+    m->legs[0]->take_hit(&def, nullptr, damage, nullptr);
+    loss = 1.0f - m->legs[0]->armor;
+  }
+  m->legs[0]->set_armor(1.0f, 0);
+  return loss;
+}
+
 // For the tests: `mech`'s last attacker (+0x664) set.
 void program_mech_set_attacker(void* mech, void* attacker) {
   if (entity_is_mech(mech)) static_cast<Mech*>(mech)->attacker = attacker;
@@ -2896,6 +2947,23 @@ std::vector<int32_t> salvage_weapon_types(void* o) {
   for (const SalvageWeapon& w : s.weapons)
     if (w.present) out.push_back(w.type);
   return out;
+}
+
+}  // namespace mech3
+namespace mech3 {
+// Tests (pm-tests item 23): a mech's knock (+0x53c), the gait's threshold for it (0x00417a80) and whether it is
+// airborne.
+float mech_knock(void* mech, float* threshold, bool* airborne) {
+  auto* m = static_cast<Mech*>(mech);
+  float t = m->tonnage();
+  if (t < 10.0f) t = 10.0f;
+  *threshold = (t - 10.0f) * 0.0111111114f * m->knockdown[4] + m->knockdown[3];
+  *airborne = m->airborne();
+  return m->knock;
+}
+void* program_ai_mech_brain(void* controls) {
+  auto* c = dynamic_cast<AiControls*>(static_cast<MechControls*>(controls));
+  return c ? c->brain.get() : nullptr;
 }
 
 }  // namespace mech3

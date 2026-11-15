@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "frontend/sdl/sdl_render3d.h"
+#include "renderer/original_rigid_capture.hpp"
 #include "renderer/renderer_bridge_config.hpp"
 
 namespace cc_mw3_re {

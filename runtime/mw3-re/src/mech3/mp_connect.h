@@ -23,10 +23,18 @@ struct MultiplayerSetup {
   int32_t max_players = 0;    // [0x00608e30]  the game's limit
 };
 MultiplayerSetup& multiplayer_setup();
+// Ours, for the checks (--click-sessions): how many games the connection screen's list shows now.
+int32_t connect_sessions_listed();
 
 // The game's version in a session's second word ([0x005e55e8]): a join to a
 // host with another one is refused (0xfdd, 0xfde).
 constexpr uint32_t kGameVersion = 0x28;
+
+// Ours: the versions the two games' sessions carry, by name, so a join to the
+// other game's host says which game it is (MW3 1.2's constant 0x28; Pirate's
+// Moon's is its exe's file version 1.0.11.5, low word pair 0x000b0005,
+// 0x004b3110). Null for any other version.
+const char* game_of_version(uint32_t version);
 
 // The connection for the chosen provider (0x0058a110: kind 2 TCP/IP's,
 // vtable 0x005cefa8 family; the modem's, IPX's and serial's are gone, FIX
@@ -119,6 +127,17 @@ class ConnectScreen : public MenuScreen {
   // forward line): the host's addresses under the host setup, from the
   // platform's UPnP, refreshed each half second.
   void show_reach();
+  // Ours (upgrades/mods/ia_mods_menu.h, multiplayer's MODS): the MODS button (9) right of HOST SETUP and its
+  // line ("MODS: 2 on"), made and bound only where the program turns them on (mp_mods_page).
+  struct ModsTab {
+    explicit ModsTab(Engine& e) : btn(e, 9) {}
+    ShellButton btn;
+    ztwod::Text line;
+    // The tab's hover line (Owen, 2026-11-11: every button says what a press does), two rows under the addresses.
+    ztwod::Text hint, hint2;
+    bool hinted = false;
+  };
+  std::unique_ptr<ModsTab> mods_tab;
   CopyLine internet_line;            // the public address, or what stands in its way
   CopyLine lan_line;                 // this computer's on the LAN
   float reach_timer = 0;

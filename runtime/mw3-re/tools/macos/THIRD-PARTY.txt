@@ -25,6 +25,23 @@ and others. zlib licence. Built into it (no other library):
   All rights reserved.
 
 
+Liberation Sans, Liberation Mono and Anton (Resources/assets/fonts)
+-------------------------------------------------------------------
+Stand-ins for an install without the game's Arial, Lucida Console and Impact.
+Liberation: Copyright (c) 2010 Google Corporation, Copyright (c) 2012 Red Hat,
+Inc., https://github.com/liberationfonts/liberation-fonts. Anton: Copyright
+2020 The Anton Project Authors, https://github.com/googlefonts/AntonFont.
+SIL Open Font License 1.1 (licenses/liberation/OFL.txt,
+licenses/anton/OFL.txt). Unchanged, under their reserved names.
+
+
+Saira Condensed Bold (Resources/assets/launcher/font.ttf)
+---------------------------------------------------------
+The launcher's lettering. Copyright 2016 The Saira Project Authors,
+https://github.com/Omnibus-Type/Saira. SIL Open Font License 1.1
+(licenses/saira-condensed/OFL.txt). Unchanged, under its reserved name.
+
+
 SDL_sound 3 (libSDL3_sound), version 3.2.0
 ------------------------------------------
 https://github.com/icculus/SDL_sound. Copyright (c) 2001-2026 Ryan C. Gordon
@@ -147,6 +164,34 @@ Utils: only liblzma is used). libarchive's LZMA and LZMA2 (7z, xz).
 pl_mpeg (built into the program)
 --------------------------------
 Dominic Szablewski, https://github.com/phoboslab/pl_mpeg. MIT licence.
+
+
+Dear ImGui 1.93.0 (built into the program)
+------------------------------------------
+The game editor's dialogs (a debug tool), https://github.com/ocornut/imgui.
+MIT licence:
+
+The MIT License (MIT)
+
+Copyright (c) 2014-2026 Omar Cornut
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 
 MechWarrior 3

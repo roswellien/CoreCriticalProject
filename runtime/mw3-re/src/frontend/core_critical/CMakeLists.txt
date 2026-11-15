@@ -35,6 +35,7 @@ mw3_cc_shader(fixture_shadow_vert fixture_shadow.vert)
 mw3_cc_shader(fixture_shadow_frag fixture_shadow.frag)
 mw3_cc_shader(fxaa_vert fxaa.vert)
 mw3_cc_shader(fxaa_frag fxaa.frag)
+mw3_cc_shader(editor_srgb_frag editor_srgb.frag)
 mw3_cc_shader(model_scene_vert model_scene.vert)
 mw3_cc_shader(sun_model_vert sun_model.vert)
 mw3_cc_shader(sun_shadow_vert sun_shadow.vert)
@@ -69,6 +70,11 @@ target_compile_definitions(mw3scene_binding_slot_checks PRIVATE NOMINMAX WIN32_L
 target_include_directories(mw3scene_binding_slot_checks PRIVATE
   "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" "${MW3_VULKAN_HEADERS}" . platform renderer "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(mw3scene_binding_slot_checks PRIVATE SDL3::SDL3)
+if(WIN32)
+  # The real Windows renderer header includes the editor backend. Keep this
+  # dependency off the simulated non-Windows boundary target.
+  target_link_libraries(mw3scene_binding_slot_checks PRIVATE mw3imgui)
+endif()
 if(MSVC)
   target_compile_options(mw3scene_binding_slot_checks PRIVATE /EHsc)
 endif()

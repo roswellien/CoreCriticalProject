@@ -6,6 +6,7 @@
 #include "mech3/mech_names.h"
 #include "mech3/pilot.h"
 #include "mech3/cheats.h"
+#include "upgrades/mods/salvage_chance.h"
 
 namespace mech3 {
 
@@ -13,6 +14,14 @@ namespace {
 constexpr int32_t kElemental = 7;
 constexpr int32_t kTag = 0x20;          // never salvaged
 constexpr int32_t kSingleSink = 9, kDoubleSink = 10;
+
+// The coin: rand() & 1. Ours: with a mod's odds for the mission (salvage_chance.h) the same one draw, judged
+// against them.
+bool coin(const SalvageCalls& c) {
+  const int32_t r = c.rand();
+  const int32_t chance = c.chance ? c.chance() : -1;
+  return chance < 0 ? (r & 1) != 0 : salvage_coin(r, chance);
+}
 }  // namespace
 
 // Mech3.exe 1.2 @ 0x00472da0. A weapon not made in its tech is taken in the
@@ -41,7 +50,7 @@ bool add_salvage(Store& s, SalvageMech& m, const SalvageCalls& c) {
   if (!m.has_data || m.type == kElemental) return false;
   bool mech = !m.torso_gone || m.head_gone;
   // Ours: food for thought wins the coin (cheats.h).
-  if (mech && (m.leg_gone[0] || m.leg_gone[1])) mech = cheats().max_salvage || (c.rand() & 1) != 0;
+  if (mech && (m.leg_gone[0] || m.leg_gone[1])) mech = cheats().max_salvage || coin(c);
   if (mech) s.add_mech(m.type);
   add_weapons(s, m, m.tech, c);
   if (m.config) {
@@ -61,7 +70,7 @@ bool add_salvage(Store& s, SalvageMech& m, const SalvageCalls& c) {
 
 // Mech3.exe 1.2 @ 0x00472ec0
 bool add_vehicle_salvage(Store& s, SalvageMech& m, const SalvageCalls& c) {
-  if (!cheats().max_salvage && !(c.rand() & 1)) return true;  // ours: food for thought wins it (cheats.h)
+  if (!cheats().max_salvage && !coin(c)) return true;  // ours: food for thought wins it (cheats.h)
   return add_weapons(s, m, 1, c);
 }
 
@@ -92,13 +101,15 @@ std::string printf_s(const char* fmt, const std::string& a, int32_t n) {
 // Clan tech), 0x004739c0 (ammo: its weapon's), 0x00473960 (equipment).
 std::string item_name(const ConfigItem& it, const MessageText& msg) {
   switch (it.kind()) {
-    case 0: return text_of(msg, mech_name_message(it.id()), "notmech");
+    case 0:
+      if (const char* t = mech_title(it.id())) return t;  // ours: a mod's row
+      return text_of(msg, mech_name_message(it.id()), "notmech");
     case 1: {
-      std::string s = text_of(msg, weapon_name_message(it.id()), "noweapon");
+      std::string s = weapon_title(it.id()) ? weapon_title(it.id()) : text_of(msg, weapon_name_message(it.id()), "noweapon");
       if (static_cast<const WeaponItem&>(it).tech == 1) s += " (CLAN)";
       return s;
     }
-    case 2: return text_of(msg, weapon_name_message(it.id()), "noweapon");
+    case 2: return weapon_title(it.id()) ? weapon_title(it.id()) : text_of(msg, weapon_name_message(it.id()), "noweapon");
     case 3: {
       auto& e = static_cast<const EquipmentItem&>(it);
       std::string s = text_of(msg, equip_name_message(e.equipment), "none");
@@ -129,7 +140,7 @@ std::string engine_name(int32_t engine, uint8_t xl, const MessageText& msg) {
   const int32_t index = engine > 78 ? 78 : engine < 0 ? 0 : engine;
   const char* maker = msg(engine_maker_message(index));
   char b[512];
-  std::snprintf(b, sizeof b, "%s %d%s", maker ? maker : "(null)", engine_rating(Engine{index, xl}), xl ? " XL" : "");
+  std::snprintf(b, sizeof b, "%s %d%s", maker ? maker : "(null)", engine_rating(ConfigEngine{index, xl}), xl ? " XL" : "");
   return b;
 }
 

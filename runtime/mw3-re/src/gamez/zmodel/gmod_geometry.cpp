@@ -31,16 +31,40 @@ class PreserveFloat {
     std::fenv_t saved_;
 };
 
-bool source_supported(Model &model) {
+bool raw_model_header_supported(const Model &model,
+                                const RigidGeometryEligibility &eligibility) noexcept {
     // Light-bearing/morph/facade producers still have independent effect contracts.
     if (model.count(0) != 0 || model.count(0x1c) || model.count(0x20) || !model.count(0x10) ||
-        !model.vertices || !model.polygons || draw_state().overlay || draw_state().second_pass ||
-        draw_state().opacity != 1.f)
+        !model.vertices || !model.polygons || eligibility.overlay || eligibility.second_pass ||
+        eligibility.opacity != 1.f)
         return false;
     float scroll_u{}, scroll_v{};
     std::memcpy(&scroll_u, model.header + 0x28, 4);
     std::memcpy(&scroll_v, model.header + 0x2c, 4);
-    if (scroll_u != 0 || scroll_v != 0)
+    return scroll_u == 0 && scroll_v == 0;
+}
+
+bool raw_polygon_supported(const Polygon &polygon) noexcept {
+    const auto *material = polygon.material;
+    if (!material || material->alpha != 255 || (material->flags & 4) || polygon.priority ||
+        (polygon.flags & 255) < 3 || (polygon.flags & 255) > 64)
+        return false;
+    if (material->flags & 1) {
+        if (!material->texture || !material->texture->surface || !polygon.uvs)
+            return false;
+        const auto *texture = static_cast<const zvid::D3DTexture *>(material->texture->surface);
+        if (texture->type != 1 || texture->handle < 0 ||
+            (texture->address_u != 1 && texture->address_u != 3) ||
+            (texture->address_v != 1 && texture->address_v != 3))
+            return false;
+    }
+    return true;
+}
+
+bool source_supported(Model &model) {
+    const RigidGeometryEligibility eligibility{
+        draw_state().overlay != 0, draw_state().second_pass != 0, draw_state().opacity};
+    if (!raw_model_header_supported(model, eligibility))
         return false;
     for (std::uint32_t index = 0; index < model.count(0x10); ++index) {
         const auto &polygon = model.polygons[index];
@@ -48,20 +72,20 @@ bool source_supported(Model &model) {
         if (model.render_geometry && (model.render_materials.size() != model.count(0x10) ||
                                       model.render_materials[index] != material))
             model.invalidate_render_geometry();
-        if (!material || material->alpha != 255 || (material->flags & 4) || polygon.priority ||
-            (polygon.flags & 255) < 3 || (polygon.flags & 255) > 64)
+        if (!raw_polygon_supported(polygon))
             return false;
-        if (material->flags & 1) {
-            if (!material->texture || !material->texture->surface || !polygon.uvs)
-                return false;
-            const auto *texture = static_cast<const zvid::D3DTexture *>(material->texture->surface);
-            if (texture->type != 1 || texture->handle < 0 ||
-                (texture->address_u != 1 && texture->address_u != 3) ||
-                (texture->address_v != 1 && texture->address_v != 3))
-                return false;
-        }
     }
     return true;
+}
+
+void add_checked_bytes(std::size_t &total, std::size_t count, std::size_t elem_size,
+                       const char *overflow_msg) {
+    if (elem_size != 0 && count > std::numeric_limits<std::size_t>::max() / elem_size)
+        throw std::runtime_error(overflow_msg);
+    const std::size_t bytes = count * elem_size;
+    if (bytes > std::numeric_limits<std::size_t>::max() - total)
+        throw std::runtime_error(overflow_msg);
+    total += bytes;
 }
 
 std::uint32_t float_bits(float value) noexcept {
@@ -163,6 +187,189 @@ bool far_plane_safe(const cc::geometry::Resource &resource,
 }
 } // namespace
 
+bool rigid_source_supported(const Model &model, const RigidGeometryEligibility &eligibility) {
+    PreserveFloat preserve;
+    if (!raw_model_header_supported(model, eligibility))
+        return false;
+    const std::uint32_t polygon_count = model.count(0x10);
+    for (std::uint32_t index = 0; index < polygon_count; ++index) {
+        if (!raw_polygon_supported(model.polygons[index]))
+            return false;
+    }
+    return true;
+}
+
+std::size_t preflight_rigid_source_bytes(const Model &model) {
+    PreserveFloat preserve;
+    const std::uint32_t position_count = model.count(0x14);
+    const std::uint32_t normal_count = model.count(0x18);
+    const std::uint32_t polygon_count = model.count(0x10);
+    if (!model.vertices || !model.polygons || !position_count || position_count > 1'000'000 ||
+        !polygon_count || polygon_count > 1'000'000)
+        throw std::runtime_error("Geometry registration exceeds supported source bounds");
+    std::size_t total_vertices = 0;
+    std::size_t total_indices = 0;
+    std::vector<cc::geometry::Vertex> poly_vertices;
+    poly_vertices.reserve(64);
+    for (std::uint32_t polygon_index = 0; polygon_index < polygon_count; ++polygon_index) {
+        const auto &polygon = model.polygons[polygon_index];
+        const std::uint32_t count = polygon.flags & 255u;
+        if (!polygon.vertex_indices || count < 3 || count > 64)
+            throw std::runtime_error("Invalid geometry polygon");
+        if (total_vertices > 1'000'000 - count)
+            throw std::runtime_error("Geometry corner budget exceeded");
+        const auto *material = polygon.material;
+        if (!material)
+            throw std::runtime_error("Invalid geometry polygon");
+        const bool textured = (material->flags & 1) != 0;
+        if (textured && !polygon.uvs)
+            throw std::runtime_error("Invalid geometry polygon");
+        const bool has_normals = (polygon.flags & 0x200u) != 0;
+        const bool strip = (polygon.flags & 0x400u) != 0;
+        poly_vertices.clear();
+        for (std::uint32_t corner = count; corner-- > 0;) {
+            const auto index = polygon.vertex_indices[corner];
+            if (index >= position_count)
+                throw std::runtime_error("Geometry position index outside resource");
+            cc::geometry::Vertex vertex{};
+            vertex.x = model.vertices[3 * index];
+            vertex.y = model.vertices[3 * index + 1];
+            vertex.z = model.vertices[3 * index + 2];
+            if (textured) {
+                vertex.u = polygon.uvs[2 * corner];
+                vertex.v = polygon.uvs[2 * corner + 1];
+            }
+            if (has_normals) {
+                if (!polygon.normal_indices || !model.normals)
+                    throw std::runtime_error("Geometry normal index outside resource");
+                const auto normal = polygon.normal_indices[corner];
+                if (normal >= normal_count)
+                    throw std::runtime_error("Geometry normal index outside resource");
+                vertex.nx = model.normals[3 * normal];
+                vertex.ny = model.normals[3 * normal + 1];
+                vertex.nz = model.normals[3 * normal + 2];
+            }
+            const std::array<float, 8> attributes{vertex.x,  vertex.y,  vertex.z, vertex.nx,
+                                                  vertex.ny, vertex.nz, vertex.u, vertex.v};
+            for (float value : attributes) {
+                const std::uint32_t bits = float_bits(value);
+                if (!std::isfinite(value) || (bits & 0x7f800000u) == 0x7f800000u)
+                    throw std::runtime_error("Nonfinite registered geometry");
+            }
+            poly_vertices.push_back(vertex);
+        }
+        if (!has_normals) {
+            std::array<float, 3> flat{};
+            for (std::uint32_t triangle = 2; triangle < count; ++triangle) {
+                std::uint32_t i0 = 0, i1 = triangle - 1, i2 = triangle;
+                if (strip) {
+                    const auto first = triangle - 2;
+                    i0 = first + (first & 1U);
+                    i1 = first + 1 - (first & 1U);
+                }
+                const auto &a = poly_vertices[i0];
+                const auto &b = poly_vertices[i1];
+                const auto &c = poly_vertices[i2];
+                const float ax = b.x - a.x, ay = b.y - a.y, az = b.z - a.z;
+                const float bx = c.x - a.x, by = c.y - a.y, bz = c.z - a.z;
+                const std::array<float, 3> normal{az * by - ay * bz, ax * bz - az * bx,
+                                                  ay * bx - ax * by};
+                if (strip) {
+                    for (std::uint32_t idx : {i0, i1, i2}) {
+                        poly_vertices[idx].nx += normal[0];
+                        poly_vertices[idx].ny += normal[1];
+                        poly_vertices[idx].nz += normal[2];
+                    }
+                } else if (flat == std::array<float, 3>{}) {
+                    flat = normal;
+                }
+            }
+            for (std::uint32_t corner = 0; corner < count; ++corner) {
+                auto &vertex = poly_vertices[corner];
+                if (!strip) {
+                    vertex.nx = flat[0];
+                    vertex.ny = flat[1];
+                    vertex.nz = flat[2];
+                }
+                const float length = std::sqrt(vertex.nx * vertex.nx + vertex.ny * vertex.ny +
+                                               vertex.nz * vertex.nz);
+                if (!std::isfinite(length))
+                    throw std::runtime_error("Geometry normal exceeds finite range");
+            }
+        }
+        total_vertices += count;
+        total_indices += std::size_t(count - 2) * 3u;
+    }
+    std::size_t retained_bytes = sizeof(cc::geometry::Resource);
+    add_checked_bytes(retained_bytes, total_vertices, sizeof(cc::geometry::Vertex),
+                      "Retained geometry byte count overflow");
+    add_checked_bytes(retained_bytes, total_indices, sizeof(std::uint32_t),
+                      "Retained geometry byte count overflow");
+    add_checked_bytes(retained_bytes, polygon_count, sizeof(cc::geometry::Range),
+                      "Retained geometry byte count overflow");
+    add_checked_bytes(retained_bytes, polygon_count, sizeof(cc::geometry::Material),
+                      "Retained geometry byte count overflow");
+    add_checked_bytes(retained_bytes, polygon_count, sizeof(const Material *),
+                      "Retained geometry byte count overflow");
+    return retained_bytes;
+}
+
+RegisteredRigidSource register_rigid_source(const Model &model) {
+    PreserveFloat preserve;
+    (void)preflight_rigid_source_bytes(model);
+    const std::uint32_t polygon_count = model.count(0x10);
+    std::vector<cc::geometry::Polygon> polygons;
+    std::vector<const Material *> material_sources;
+    polygons.reserve(polygon_count);
+    material_sources.reserve(polygon_count);
+    for (std::uint32_t index = 0; index < polygon_count; ++index) {
+        const auto &polygon = model.polygons[index];
+        const auto slot = index;
+        material_sources.push_back(polygon.material);
+        polygons.push_back({polygon.flags & 255, polygon.vertex_indices,
+                            (polygon.flags & 0x200) ? polygon.normal_indices : nullptr,
+                            (polygon.material->flags & 1) ? polygon.uvs : nullptr,
+                            bool(polygon.flags & 0x400), bool(polygon.flags & 0x100), slot});
+    }
+    auto resource = cc::geometry::register_resource(
+        model.vertices, model.count(0x14), model.normals, model.count(0x18), polygons);
+    return {std::move(resource), std::move(material_sources)};
+}
+
+std::vector<cc::geometry::Material> copy_rigid_materials(
+    const Model &model, const cc::geometry::Resource &resource) {
+    PreserveFloat preserve;
+    if (!model.polygons)
+        throw std::runtime_error("Geometry model polygons missing");
+    const std::uint32_t polygon_count = model.count(0x10);
+    std::vector<cc::geometry::Material> materials;
+    materials.reserve(resource.ranges.size());
+    for (const auto &range : resource.ranges) {
+        if (range.polygon >= polygon_count || !model.polygons[range.polygon].material)
+            throw std::runtime_error("Geometry range polygon outside source model");
+        const auto &source = *model.polygons[range.polygon].material;
+        cc::geometry::Material material;
+        material.color = 0xff000000;
+        unsigned shift = 16;
+        for (float channel : {source.r, source.g, source.b}) {
+            if (!std::isfinite(channel))
+                throw std::runtime_error("Nonfinite geometry material");
+            material.color |= std::uint32_t(std::clamp(channel, 0.f, 255.f)) << shift;
+            shift -= 8;
+        }
+        if (source.flags & 1) {
+            if (!source.texture || !source.texture->surface)
+                throw std::runtime_error("Textured geometry material missing surface");
+            const auto &texture = *static_cast<const zvid::D3DTexture *>(source.texture->surface);
+            material.texture = texture.handle;
+            material.address_u = std::uint8_t(texture.address_u);
+            material.address_v = std::uint8_t(texture.address_v);
+        }
+        materials.push_back(material);
+    }
+    return materials;
+}
+
 bool submit_geometry(zcls::Node &node) {
     auto *renderer = zvid::render3d();
     if (!renderer || renderer->geometry_mode() == cc::geometry::Mode::legacy)
@@ -214,21 +421,9 @@ bool submit_geometry(zcls::Node &node) {
     if (!source_supported(model))
         return unsupported();
     if (!model.render_geometry) {
-        std::vector<cc::geometry::Polygon> polygons;
-        std::vector<const Material *> material_sources;
-        polygons.reserve(model.count(0x10));
-        for (std::uint32_t index = 0; index < model.count(0x10); ++index) {
-            const auto &polygon = model.polygons[index];
-            const auto slot = index;
-            material_sources.push_back(polygon.material);
-            polygons.push_back({polygon.flags & 255, polygon.vertex_indices,
-                                (polygon.flags & 0x200) ? polygon.normal_indices : nullptr,
-                                (polygon.material->flags & 1) ? polygon.uvs : nullptr,
-                                bool(polygon.flags & 0x400), bool(polygon.flags & 0x100), slot});
-        }
-        model.render_geometry = cc::geometry::register_resource(
-            model.vertices, model.count(0x14), model.normals, model.count(0x18), polygons);
-        model.render_materials = std::move(material_sources);
+        auto registered = register_rigid_source(model);
+        model.render_geometry = std::move(registered.resource);
+        model.render_materials = std::move(registered.original_materials);
     }
     if (!far_plane_safe(*model.render_geometry, context, draw_state().clip.far_z)) {
         // Static baking also indexes cached normals with vertex shading off.
@@ -237,27 +432,7 @@ bool submit_geometry(zcls::Node &node) {
             throw std::runtime_error("Legacy model draw buffer capacity exceeded");
         return unsupported();
     }
-    std::vector<cc::geometry::Material> materials;
-    materials.reserve(model.render_geometry->ranges.size());
-    for (const auto &range : model.render_geometry->ranges) {
-        const auto &source = *model.polygons[range.polygon].material;
-        cc::geometry::Material material;
-        material.color = 0xff000000;
-        unsigned shift = 16;
-        for (float channel : {source.r, source.g, source.b}) {
-            if (!std::isfinite(channel))
-                throw std::runtime_error("Nonfinite geometry material");
-            material.color |= std::uint32_t(std::clamp(channel, 0.f, 255.f)) << shift;
-            shift -= 8;
-        }
-        if (source.flags & 1) {
-            const auto &texture = *static_cast<const zvid::D3DTexture *>(source.texture->surface);
-            material.texture = texture.handle;
-            material.address_u = std::uint8_t(texture.address_u);
-            material.address_v = std::uint8_t(texture.address_v);
-        }
-        materials.push_back(material);
-    }
+    const auto materials = copy_rigid_materials(model, *model.render_geometry);
     if (renderer->submit_model_geometry(model.render_geometry, context, materials, fog_state) !=
         cc::geometry::Submission::submitted)
         return unsupported();

@@ -359,7 +359,7 @@ struct ProgramHudHooks : HudHooks {
     if (own) zcls::node_set_intersect(own, 1);
     out->count = r.count;
     out->total = r.total;
-    for (int i = 0; i < r.count && i < 31; ++i) std::memcpy(&out->rec[i], &r.hit[i], sizeof(zwep::HitRecord));
+    for (int i = 0; i < r.count && i < 32; ++i) std::memcpy(&out->rec[i], &r.hit[i], sizeof(zwep::HitRecord));  // all 32 (zwep_init.h)
     return res;
   }
   // The player's mech, its weapon manager and target (hud.md sections 12,
@@ -503,6 +503,13 @@ struct ProgramHudHooks : HudHooks {
     out[0] = m->torso->flat_front.x, out[1] = m->torso->flat_front.y, out[2] = m->torso->flat_front.z;
   }
   float mission_time(bool) override { return mech_game_time(); }
+  // 0x00522170 on the view camera's pitch and yaw ([[0x005f4c8c]+4]'s data +0x20): the way it
+  // faces, for the radar's wedge over the mission map.
+  void radar_view_dir(float out[3]) override {
+    static const float none[3] = {};
+    zcls::Camera* c = camera_data();
+    zmth::look_dir(c ? c->floats(0x20) : none, out);
+  }
   // The radar (hud.md section 15): the mission map is not ported (no map
   // mode), nor the nav route's polylines (no points). The
   // contacts' objects are of every class, each with its own blips (vt+0x3c).
@@ -671,6 +678,7 @@ struct ProgramHudHooks : HudHooks {
     return c ? c->name : nullptr;
   }
   const char* mech_display_name(int32_t kind) override {  // 0x00484670
+    if (const char* t = mech_title(kind)) return t;  // ours: a mod's row
     return kind >= 0 && kind < 19 ? message(0xd82 + kind) : "notmech";
   }
   int32_t mech_aim_part(Mech* m) override { return m->xf8; }
@@ -865,6 +873,9 @@ void wire_hud() {
     h.set_active(0);
   };
   update_calls().hud_weapons = [](void* s) { static_cast<Hud*>(s)->weapons.layout(); };
+  damage_calls().zaps_hud = [](void* s, float level, int kind, float hold) {  // 0x0043be70
+    static_cast<Hud*>(s)->zap_static(level, kind, hold);
+  };
   damage_calls().hud_weapons = [](void* s) { static_cast<Hud*>(s)->weapons.refresh_all(); };
   damage_calls().message = [](int id) { return hud_hooks().message(id); };
   // 0x00586ce0: in a network game a destroyed part always takes the first
@@ -891,6 +902,26 @@ void wire_hud() {
     return hud_hooks().reticle_over_target(&h->target, x, y) ? 1 : 0;
   };
   wc.hud_443d20 = [](Handle s, int32_t v) { static_cast<Hud*>(s)->reticle.aim_state(v != 0); };
+  // Ours (pm-tests item 25): each lock-on volley of the player's in the log: locked or not, the target and how
+  // long since it was picked, the reticle's lock state and how long it has held, where the shot was aimed.
+  wc.lock_shot = [](const Weapon& w) {
+    Mech* m = program_view_mech();
+    Hud* h = m && m->pilot ? pilot_hud(*m->pilot) : nullptr;
+    if (!h) return;
+    Mech* tm = m->target && collide_calls().contact_mech ? collide_calls().contact_mech(m->target) : nullptr;
+    const char* name = tm && tm->node ? static_cast<zcls::Node*>(tm->node)->name() : (m->target ? "(not a mech)" : "(none)");
+    float tp[3] = {};
+    if (tm) {
+      mech_world_position(tm, tp);
+    } else if (m->target) {  // a vehicle or building: where the sensors last saw it
+      mech_world_position(m, tp);
+      for (int i = 0; i < 3; ++i) tp[i] += m->target->delta[i];
+    }
+    std::printf("mw3: lock shot: %s locked %d; target %s at %.0f %.0f %.0f, picked %.2f s ago; reticle %d, locked for %.2f s; "
+                "aimed at %.0f %.0f %.0f\n",
+                w.def && w.def->name ? w.def->name : "?", w.locked ? 1 : 0, name, tp[0], tp[1], tp[2], h->target.since_set,
+                h->reticle.lock, h->reticle.locked_for, w.target.x, w.target.y, w.target.z);
+  };
   wc.hud_highlight = [](Handle o) -> Weapon* {
     Hud* h = hud_of(o);
     return h ? static_cast<Weapon*>(h->weapons.next_weapon) : nullptr;
@@ -986,9 +1017,10 @@ void unwire_hud() {
   update_calls().hud_weapons = nullptr;
   damage_calls().hud_weapons = nullptr;
   damage_calls().head_hit_hud = nullptr;
+  damage_calls().zaps_hud = nullptr;
   WeaponCalls& wc = weapon_calls();
   wc.screen = nullptr, wc.hud_screen = nullptr, wc.hud_groups = nullptr, wc.hud_weapons = nullptr;
-  wc.hud_fire = nullptr, wc.hud_highlight = nullptr;
+  wc.hud_fire = nullptr, wc.hud_highlight = nullptr, wc.lock_shot = nullptr;
   mech_radar_blips_destroy();
   update_calls().player_frame = nullptr;
   mech_hud_calls() = MechHudCalls{};
@@ -1025,6 +1057,11 @@ int program_hud_aim_at(void* node, float distance) {
 
 // For the tests: the reticle put over a world point and its pick run
 // (0x00444350), then its aim state (0x00443d20); the node hit, if any.
+int program_hud_active(void* mech) {
+  auto* m = static_cast<Mech*>(mech);
+  Hud* h = m && m->pilot ? pilot_hud(*m->pilot) : nullptr;
+  return h ? h->active : -1;
+}
 int program_hud_pick_at(const float at[3], void** node, float* distance, float* range, float* far_clip) {
   auto* m = static_cast<Mech*>(mech_mission_player());
   Hud* h = m && m->pilot ? pilot_hud(*m->pilot) : nullptr;
@@ -1342,7 +1379,7 @@ std::string program_hud_objectives_text() {
   std::string out;
   if (!h || (h->objectives.flags >> 4 & 1)) return out;  // hidden
   for (const ztwod::Text& t : h->objectives.lines)
-    if (t.text && *t.text) out += (out.empty() ? "" : " | ") + std::string(t.text);
+    if (*t.text) out += (out.empty() ? "" : " | ") + std::string(t.text);
   return out;
 }
 
@@ -1378,5 +1415,36 @@ bool program_hud_power_state(void* mech, bool* on, bool* reticle_shown) {
   if (!h) return false;
   *on = h->active == 1, *reticle_shown = !(h->reticle.flags & ztwod::kHidden);
   return true;
+}
+
+void* program_view_target_mech() {
+  Mech* m = program_view_mech();
+  return m && m->target && collide_calls().contact_mech ? collide_calls().contact_mech(m->target) : nullptr;
+}
+const void* program_view_target_contact() {
+  Mech* m = program_view_mech();
+  return m ? m->target : nullptr;
+}
+bool program_view_target_delta(float d[3]) {
+  Mech* m = program_view_mech();
+  if (!m || !m->target) return false;
+  std::copy(m->target->delta, m->target->delta + 3, d);
+  return true;
+}
+float program_view_target_since() {
+  Mech* m = program_view_mech();
+  Hud* h = m && m->pilot ? pilot_hud(*m->pilot) : nullptr;
+  return h ? h->target.since_set : -1.0f;
+}
+// Tests (pm-tests item 25): the view mech's reticle lock state (0..4, 3 locked) and its timer, set first when
+// `set` >= 0; and whether its weapons may lock (the manager's +0x88).
+int32_t program_reticle_lock(int32_t set, float timer, bool* has_target) {
+  Mech* m = program_view_mech();
+  Hud* h = m && m->pilot ? pilot_hud(*m->pilot) : nullptr;
+  *has_target = false;
+  if (!h) return -1;
+  if (set >= 0) h->reticle.lock = set, h->reticle.lock_timer = timer;
+  if (auto* wm = static_cast<WeaponManager*>(m->ammo)) *has_target = wm->has_target;
+  return h->reticle.lock;
 }
 }  // namespace mech3
