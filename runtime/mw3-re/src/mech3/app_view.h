@@ -49,6 +49,7 @@ int32_t program_view_look_state();
 // For the tests: the camera put at (x, y, z), then the view's ground and water
 // check (0x0040af30); the camera's y after it, whether it found ground, and
 // whether it is under water (the world taking the water's fog).
+bool program_view_follow_ground();  // ours (#289): the camera's zone and fog after the replay moved it
 bool program_view_ground_probe(float x, float y, float z, float* y_after, bool* under);
 // For the tests: a point within `range` of (x, z) where water (soil 1) lies
 // over the ground: its x, the surface's y, its z, and the ground's y under it.

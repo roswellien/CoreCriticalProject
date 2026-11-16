@@ -68,6 +68,11 @@ void sound_extras_clear() {
 
 // Ours (#289): the MINDELAY test of 0x004e6cd0 and 0x004e6c60 (fcomp, test
 // ah, 0x41: a NaN next time plays).
+void sound_extras_rearm() {
+  g_default.next = 0.0f;
+  for (const auto& r : g_extras) r->next = 0.0f;
+}
+
 bool sound_extra_blocked(const SoundExtra& r) { return r.next > world().time; }
 
 // Mech3.exe 1.2 @ 0x004e6cd0. The game time [0x0060991c]; a delay of 0

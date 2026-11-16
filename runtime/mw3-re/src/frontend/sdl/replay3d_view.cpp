@@ -22,6 +22,7 @@
 #include "mech3/app_mech.h"
 #include "mech3/replay_puppet.h"
 #include "mech3/replay_run.h"
+#include "mech3/sound_extra.h"
 
 namespace sdlfe {
 
@@ -325,6 +326,7 @@ void Replay3dView::State::pose() {
   // no effect starts for the span skipped.
   const bool first = posed_t < 0;
   const bool seeked = !first && (seek_pending || t < posed_t);
+  if (seeked && t < posed_t) mech3::sound_extras_rearm();
   for (auto& [id, puppet] : puppets) {
     const MechPose* p = pose_of(frame, id);
     if (!p) continue;

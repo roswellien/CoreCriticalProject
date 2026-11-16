@@ -608,7 +608,9 @@ void GameEngine::replay_after_lists() {
 }
 void GameEngine::replay_camera() {
   ReplayHooks* replay = replay_hooks();
-  if (replay && camera_) replay->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
+  if (!replay || !camera_) return;
+  replay->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
+  program_view_follow_ground();
 }
 void GameEngine::replay_draw() {
   if (ReplayHooks* replay = replay_hooks()) replay->draw_overlay();

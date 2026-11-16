@@ -80,8 +80,14 @@ TEST(replay_v2_round_trip_and_phase_wrap) {
   const auto& m = f.mechs[0];
   EXPECT(m.has_phase && m.anim == 2 && std::abs(m.weight - 0.25f) < 1e-4f && m.limp == -1);
   EXPECT(std::abs(m.pitch - 0.2f) < 1e-4f && m.has_arm[0] && !m.has_arm[1] && std::abs(m.arm_yaw[0] - 0.1f) < 1e-4f);
-  EXPECT(std::abs(m.phase - 0.05f) < 1e-3f);  // 0.9 + 3 loops/s * 0.05 s, wrapped
-  EXPECT(std::abs(log.frame_at(0.12f).mechs[0].phase - 0.96f) < 1e-3f);
+  // Every line logs phase 0.9 at 3 loops/s, which its rate doesn't reach, so
+  // between lines the phase blends from the run-on (1.05 at 0.15 s) to the
+  // next line's run back (0.75), the short way round: 0.9 at the middle.
+  EXPECT(std::abs(m.phase - 0.9f) < 1e-3f);
+  // 0.12 s: 0.96 run on, 0.66 run back, a fifth of the way: 0.90.
+  EXPECT(std::abs(log.frame_at(0.12f).mechs[0].phase - 0.9f) < 1e-3f);
+  // After the last line it runs on alone and wraps: 0.9 + 3 * 0.05 = 0.05.
+  EXPECT(std::abs(log.frame_at(8.05f).mechs[0].phase - 0.05f) < 1e-3f);
   EXPECT(log.skipped() == 0);
   const Frame hit = log.frame_at(2.1f);
   bool found = false;

@@ -355,6 +355,9 @@ void program_view_look(int32_t look) {
   g_view->mode->set_look(look);
   sync();
 }
+// Ours (#289): after the replay placed the camera, its zone (what the world
+// draws and runs effects in) and fog follow it, as each game frame's do.
+bool program_view_follow_ground() { return g_view && g_view->follow_ground(); }
 bool program_view_ground_probe(float x, float y, float z, float* y_after, bool* under) {
   if (!g_view) return false;
   zcls::camera_set_position(zn(g_view->camera), x, y, z);

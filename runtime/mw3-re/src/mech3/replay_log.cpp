@@ -452,8 +452,23 @@ Frame ReplayLog::frame_at(float t) const {
     }
     // The gait's place in its loop: run on from the earlier line at its
     // rate, or, with no phase in the log, from the distance walked.
-    if (pose.has_phase) pose.phase = wrap01(was.phase + was.cps * (t - before.t));
-    else pose.phase = wrap01(pose.walked / kFallbackStride);
+    // With a later line, the phase blends toward that line's phase run back
+    // to now, so a mech speeding up doesn't pop at each line.
+    if (pose.has_phase) {
+      const float from_was = was.phase + was.cps * (t - before.t);
+      pose.phase = wrap01(from_was);
+      for (const MechPose& next : after.mechs) {
+        if (next.id != was.id || !next.has_phase || &after == &before) continue;
+        const float from_next = next.phase - next.cps * (after.t - t);
+        float gap = std::fmod(from_next - from_was, 1.0f);
+        if (gap > 0.5f) gap -= 1.0f;
+        if (gap < -0.5f) gap += 1.0f;
+        pose.phase = wrap01(from_was + gap * f);
+        pose.cps = lerp(was.cps, next.cps, f);
+      }
+    } else {
+      pose.phase = wrap01(pose.walked / kFallbackStride);
+    }
     RouteAt route;
     Event decision;
     const auto h = history_.find(was.id);
