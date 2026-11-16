@@ -7,6 +7,7 @@ import json
 import os
 import struct
 import unittest
+from pathlib import PureWindowsPath
 from unittest.mock import patch
 
 
@@ -237,7 +238,30 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = self.temporary.name
-        self.plan = importlib.import_module("mw3_re_launch").plan_launch
+        planner_module = importlib.import_module("mw3_re_launch")
+        plan_launch = planner_module.plan_launch
+
+        def plan_with_portable_fixture_paths(request):
+            if os.name == "nt":
+                return plan_launch(request)
+
+            original_windows_path = planner_module._windows_path
+
+            def windows_path(value, **kwargs):
+                if isinstance(value, str) and os.path.isabs(value):
+                    try:
+                        relative = os.path.relpath(value, self.root)
+                    except ValueError:
+                        relative = ".."
+                    if relative == "." or not relative.startswith(".." + os.sep):
+                        parts = [] if relative == "." else relative.split(os.sep)
+                        return PureWindowsPath("F:/test-fixtures", *parts)
+                return original_windows_path(value, **kwargs)
+
+            with patch.object(planner_module, "_windows_path", side_effect=windows_path):
+                return plan_launch(request)
+
+        self.plan = plan_with_portable_fixture_paths
 
     def write(self, relative, content):
         path = os.path.join(self.root, *relative.split("/"))
@@ -415,7 +439,6 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertNotIn(os.path.join(second, "payload", "solo-mesh.bin"), argv)
         self.assertEqual(result["overridden_models"], [{"root": second, "chassis": "strider", "kept_from": first}])
 
-    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_surface_materials_are_emitted_for_each_lod_and_first_chassis_wins(self):
         first_model = {"id": "strider", "backend": "native", "status": "runtime-ready",
                        "environment": {}}
@@ -443,7 +466,6 @@ class NativePreviewPlanTests(unittest.TestCase):
             {"root": second, "chassis": "strider", "kept_from": first},
         ])
 
-    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_invalid_surface_material_sidecar_is_reported_and_left_off(self):
         model = {"id": "strider", "backend": "native", "status": "runtime-ready",
                  "environment": {}}
@@ -463,6 +485,89 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual((skipped[0]["root"], skipped[0]["chassis"], skipped[0]["lod"]),
                          (pack, "strider", "0"))
         self.assertIn("invalid", skipped[0]["reason"].lower())
+
+    def test_null_and_non_string_surface_material_entries_are_ignored(self):
+        for declaration in (None, 0, [], {}, ""):
+            with self.subTest(declaration=declaration):
+                model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                         "environment": {
+                             "MW34_STRIDER_MESH": "payload/mesh0.bin",
+                             "MW34_STRIDER_TEXTURES": "payload/tex0.bin",
+                             "MW34_STRIDER_SURFACE_MATERIALS": declaration,
+                         }}
+                pack = self.model_pack(f"undeclared-{type(declaration).__name__}", [model])
+                result = self.plan(self.request(model_packs=[pack]))
+                self.assertTrue(result["ok"])
+                self.assertIn("--cc-model", result["argv"])
+                self.assertNotIn("--cc-model-materials", result["argv"])
+                self.assertEqual(result["skipped_packs"], [])
+
+        model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                 "environment": {"MW34_STRIDER_SURFACE_MATERIALS": None}}
+        pack = self.model_pack("null-sidecar-without-assets", [model])
+        result = self.plan(self.request(model_packs=[pack]))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["skipped_packs"], [])
+
+    def test_surface_material_without_matching_mesh_or_textures_is_reported(self):
+        model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                 "environment": {
+                     "MW34_STRIDER_TEXTURES": "payload/tex0.bin",
+                     "MW34_STRIDER_SURFACE_MATERIALS": "payload/materials.bin",
+                 }}
+        pack = self.model_pack("missing-material-mesh", [model])
+        result = self.plan(self.request(model_packs=[pack]))
+        skipped = [item for item in result["skipped_packs"]
+                   if item.get("feature") == "surface_materials"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["reason"],
+                         "surface-material sidecar requires its matching mesh and textures")
+
+    def test_oversized_and_mismatched_surface_materials_are_skipped(self):
+        from surface_materials import (
+            mesh_uv_identity,
+            pack_surface_materials,
+            texture_batch_materials,
+        )
+
+        mesh, textures, valid_sidecar = self.surface_sidecar("strider:close")
+        mismatched_uv_sidecar = pack_surface_materials(
+            asset_id="strider:close",
+            mesh_uv_hash=0,
+            batch_materials=texture_batch_materials(textures),
+            records=[],
+        )
+        mismatched_materials_sidecar = pack_surface_materials(
+            asset_id="strider:close",
+            mesh_uv_hash=mesh_uv_identity(mesh),
+            batch_materials=["not-the-texture-material"],
+            records=[],
+        )
+        for label, sidecar in (("oversized", valid_sidecar),
+                               ("uv-mismatch", mismatched_uv_sidecar),
+                               ("materials-mismatch", mismatched_materials_sidecar),
+                               ("reader-typeerror", valid_sidecar)):
+            with self.subTest(case=label):
+                bindings = self.add_surface_material(
+                    label, "strider", sidecar=(mesh, textures, sidecar))
+                model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                         "environment": bindings}
+                pack = self.model_pack(label, [model])
+                if label == "oversized":
+                    with patch("mw3_re_launch.MAX_SIDECAR_BYTES", 1):
+                        result = self.plan(self.request(model_packs=[pack]))
+                elif label == "reader-typeerror":
+                    with patch("mw3_re_launch.read_surface_materials_file",
+                               side_effect=TypeError("bad sidecar value")):
+                        result = self.plan(self.request(model_packs=[pack]))
+                else:
+                    result = self.plan(self.request(model_packs=[pack]))
+                self.assertTrue(result["ok"])
+                self.assertIn("--cc-model", result["argv"])
+                self.assertNotIn("--cc-model-materials", result["argv"])
+                skipped = [item for item in result["skipped_packs"]
+                           if item.get("feature") == "surface_materials"]
+                self.assertEqual(len(skipped), 1)
 
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},

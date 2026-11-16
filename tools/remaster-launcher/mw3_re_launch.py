@@ -9,6 +9,13 @@ import json
 import re
 import struct
 
+from surface_materials import (
+    MAX_SIDECAR_BYTES,
+    mesh_uv_identity_file,
+    read_surface_materials_file,
+    texture_batch_materials_file,
+)
+
 
 _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
@@ -217,8 +224,9 @@ def _model_pack_arguments(root, taken=None):
             # MW34_BUSHWACKER_TEST name.
             mesh_name = "TEST" if chassis == "bushwacker" and level == 0 else "MESH"
             mesh, textures = files.get(prefix + mesh_name), files.get(prefix + "TEXTURES")
+            material_member = files.get(material_key)
             if mesh is None or textures is None:
-                if material_key in files:
+                if isinstance(material_member, str) and material_member:
                     skipped_materials.append({
                         "chassis": chassis,
                         "lod": str(level),
@@ -230,16 +238,9 @@ def _model_pack_arguments(root, taken=None):
             normals = files.get(prefix + "NORMALS")
             if normals is not None:
                 arguments += ["--cc-model-normals", chassis, str(level), _pack_member(root, normals)]
-            if material_key in files:
+            if isinstance(material_member, str) and material_member:
                 try:
-                    from surface_materials import (
-                        MAX_SIDECAR_BYTES,
-                        mesh_uv_identity_file,
-                        read_surface_materials_file,
-                        texture_batch_materials_file,
-                    )
-
-                    material_path = _pack_member(root, files[material_key])
+                    material_path = _pack_member(root, material_member)
                     if Path(material_path).stat().st_size > MAX_SIDECAR_BYTES:
                         raise ValueError("BWSFM1 sidecar exceeds its size limit")
                     mesh_path = _pack_member(root, mesh)
@@ -253,7 +254,7 @@ def _model_pack_arguments(root, taken=None):
                             Path(texture_path)),
                     )
                     arguments += ["--cc-model-materials", chassis, str(level), material_path]
-                except (OSError, ValueError, OverflowError, struct.error) as error:
+                except (OSError, ValueError, OverflowError, struct.error, TypeError) as error:
                     skipped_materials.append({
                         "chassis": chassis,
                         "lod": str(level),
