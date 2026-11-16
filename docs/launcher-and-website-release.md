@@ -17,17 +17,18 @@ runtime inputs and release artifacts outside Git.
 
 2. **Supply the build inputs.** Use Windows with the .NET SDK required by the
    launcher project, Inno Setup 7 (`ISCC.exe`), and the Windows SDK SignTool.
-   Supply a validated precompiled runtime directory from its separately
-   reviewed native build, including its `runtime.json` receipt. The runtime is
-   generated output and stays local. The release builder validates it before
-   packaging. The maintainer also supplies, outside the clone, the update
-   signing PEM and key ID, plus Azure Artifact Signing's SignTool Dlib and
-   metadata file and its locally authenticated signing credentials. Never
-   commit any private key, signing metadata with credentials, or token.
+   Supply the MW3-RE runtime directory staged by
+   `tools/remaster-launcher/stage_mw3_re_runtime.py`; include its `runtime.json`
+   receipt. The runtime is generated output and stays local. The release builder
+   validates it before packaging. The maintainer also supplies, outside the
+   clone, the update signing PEM and key ID, plus Azure Artifact Signing's
+   SignTool Dlib and metadata file and its locally authenticated signing
+   credentials. Never commit any private key, signing metadata with credentials,
+   or token. The legacy precompiled Remaster runtime is no longer shipped.
 
-   If the runtime changes and existing players need an update, package it with
-   the committed `tools/native-preparation/build_precompiled_update.py`, using
-   the same runtime directory, reviewed `InstallPrecompiledRuntime.exe`,
+   If the MW3-RE runtime changes and existing players need an update, package
+   it with the committed `tools/native-preparation/build_native_update.py`,
+   using the same runtime directory, reviewed `InstallNativeRuntime.exe`,
    original-file input directory (read-only), and a fresh output directory:
 
    ```powershell

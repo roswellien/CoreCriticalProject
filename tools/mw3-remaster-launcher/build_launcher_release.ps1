@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Compiler,
     [Parameter(Mandatory=$true)][string]$PublishDirectory,
-    [Parameter(Mandatory=$true)][string]$RuntimeDirectory,
+    [Parameter(Mandatory=$true)][string]$NativePreviewDirectory,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [Parameter(Mandatory=$true)][string]$Version,
     [Parameter(Mandatory=$true)][long]$Sequence,
@@ -9,26 +9,24 @@ param(
     [Parameter(Mandatory=$true)][string]$KeyId,
     [Parameter(Mandatory=$true)][string]$WindowsSignTool,
     [Parameter(Mandatory=$true)][string]$SigningDlib,
-    [Parameter(Mandatory=$true)][string]$SigningMetadata,
-    # Optional MW3-RE Native preview runtime; packaged in the full installer only.
-    [string]$NativePreviewDirectory = ''
+    [Parameter(Mandatory=$true)][string]$SigningMetadata
 )
 # One release produces a full installer plus the separate launcher-only update.
 $ErrorActionPreference = 'Stop'
 $PublishDirectory = [IO.Path]::GetFullPath($PublishDirectory)
-$RuntimeDirectory = [IO.Path]::GetFullPath($RuntimeDirectory)
+$NativePreviewDirectory = [IO.Path]::GetFullPath($NativePreviewDirectory)
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $SigningKey = [IO.Path]::GetFullPath($SigningKey)
 $numericVersion = ($Version -split '-')[0]
 if ([version]::Parse($numericVersion).Build -lt 0 -or $Sequence -lt 1) { throw 'Supply a release version and positive launcher sequence' }
 if (Test-Path -LiteralPath $OutputDirectory) { throw 'Use a fresh release output directory' }
-foreach ($root in @($PublishDirectory, $RuntimeDirectory, $OutputDirectory)) {
+foreach ($root in @($PublishDirectory, $NativePreviewDirectory, $OutputDirectory)) {
     if ($SigningKey.StartsWith($root.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The update private key must stay outside all publication inputs and outputs'
     }
 }
 if (Test-Path -LiteralPath (Join-Path $PublishDirectory 'Runtime')) {
-    throw 'Use a fresh launcher publication without Runtime; the full installer stages it after the launcher-only update is built'
+    throw 'Old precompiled Runtime must never be packaged'
 }
 # Reject a mismatched update key before signing/building either installer.
 $trust = Get-Content -LiteralPath (Join-Path $PublishDirectory 'update-trust.json') -Raw | ConvertFrom-Json
@@ -58,8 +56,7 @@ $updateDirectory = Join-Path $OutputDirectory 'LauncherUpdate'
     -InstallerReceipt (Join-Path $launcherSetup 'installer-build.json') -Version $numericVersion -Sequence $Sequence `
     -SigningKey $SigningKey -KeyId $KeyId -OutputDirectory $updateDirectory
 $fullSetup = Join-Path $OutputDirectory 'Setup'
-$fullArguments = @{ OutputDirectory=$fullSetup; RuntimeDirectory=$RuntimeDirectory }
-if ($NativePreviewDirectory) { $fullArguments.NativePreviewDirectory = [IO.Path]::GetFullPath($NativePreviewDirectory) }
+$fullArguments = @{ OutputDirectory=$fullSetup; NativePreviewDirectory=$NativePreviewDirectory }
 & (Join-Path $PSScriptRoot 'build_installer.ps1') @common @fullArguments
 
 $artifacts = @{}
