@@ -171,7 +171,8 @@ class SdlPump : public platform::MessagePump {
   // Ours: Alt+Enter, swallowed before the game sees the Enter.
   std::function<void()> toggle_fullscreen;
   // Ours: the game editor's ImGui sees each event first while it is up; true
-  // keeps the event from zInput (editor_imgui.h). Window events go on as ever.
+  // ends the event's handling there (editor_imgui.h). It answers true only
+  // for mouse, key and text events, so window and quit events go on as ever.
   std::function<bool(const SDL_Event&)> overlay_event;
   // Ours (#289): a layer ahead of the game's input (mw3 --replay3d's
   // controls), after the editor's; true when it took the event.

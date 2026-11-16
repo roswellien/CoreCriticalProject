@@ -980,6 +980,10 @@ int program(int argc, char** argv) {
   // always-on fixes stay: zfix.h's `fixed`, docs/upgrades-sort.md). 1.0.x's
   // bugfixes= becomes the five keys at once.
   sdlfe::apply_upgrades_config(a.write_dir, a.cfg_upgrades, a.play_original);
+  // Ours (#287): an arena match always walks the grid (zai_hunt.cpp), whatever
+  // this machine's mw3.cfg says, so a setup and seed give the same match on
+  // every machine. The arena refuses --original.
+  if (!a.watch.arena_path.empty()) zfix::options().improved_ai = true;
   // Tests only (not a player's switch): MW3_EXE_PATHS=1 runs the exe's own
   // path everywhere, the always-on fixes too, for the tests that compare a
   // child mw3 with the original (zfix.h's `fixed`).

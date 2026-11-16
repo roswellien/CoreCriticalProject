@@ -96,6 +96,19 @@ TEST(replay_v2_round_trip_and_phase_wrap) {
   EXPECT(found);
 }
 
+// A clip change between lines (walk to run): the next clip has its own loop,
+// so the phase only runs on from the earlier line, with no blend.
+TEST(replay_v2_phase_no_blend_across_clips) {
+  const std::string run = R"({"index":3,"t":0.5,"phase":0.2,"cps":3.0,"weight":0.25,"limp":-1})";
+  const std::string text = kStart + state(0, mech(0, 0, false, kPhased, kParts)) +
+                           state(0.1f, mech(0, 0, false, run, kParts));
+  ReplayLog log;
+  std::string error;
+  EXPECT(load(&log, "replay_clips", text, &error));
+  // 0.9 + 3 * 0.05 = 1.05, wrapped: 0.05.
+  EXPECT(std::abs(log.frame_at(0.05f).mechs[0].phase - 0.05f) < 1e-3f);
+}
+
 // The same frame whatever was asked before it.
 TEST(replay_v2_seek_order_does_not_matter) {
   ReplayLog log;

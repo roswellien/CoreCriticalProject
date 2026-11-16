@@ -111,7 +111,7 @@ void HuntState::run(float dt) {
   float waypoint[3];
   const float reach = b.params.get<float>(0x28);
   // The grid is ours behind the improved AI switch, as the follow state's
-  // (zai_attack.cpp); the arena refuses --original, so in a match it is on.
+  // (zai_attack.cpp); an arena run turns it on (mw3_main.cpp), so in a match it is on.
   by_grid = zfix::options().improved_ai && nav.step(v, in.pos, goal.at, toward_enemy, reach, dt, waypoint);
   copy3(steer_to, by_grid ? waypoint : goal.at);
   nav_drive(b, v, in.pos, steer_to, &turn);
