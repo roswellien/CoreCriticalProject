@@ -1313,7 +1313,41 @@ private:
     draw.count = drawn;
     draw.texture =
         state.texture < 0 ? -1 : int(bind_texture(state.texture, state.sharp));
-    if (lighting_.enabled && state.texture >= 0) {
+    // Built from this draw's owned producer view (projection/camera/viewport above), never
+    // from the live global camera, so queued draws keep the view they were recorded with.
+    auto capture_tl_view = [&]() {
+      auto tl = std::make_shared<mw34::sun::Tl>();
+      const auto &proj = projection;
+      if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
+          viewport[2] > 0 && viewport[3] > 0) {
+        tl->projection = {
+            proj.near_z,
+            proj.fx_near * float(scene_.width) / float(viewport[2]),
+            proj.fy_near * float(scene_.height) / float(viewport[3]),
+            (proj.cx - float(viewport[0])) * float(scene_.width) /
+                float(viewport[2]),
+            (proj.cy - float(viewport[1])) * float(scene_.height) /
+                float(viewport[3]),
+            proj.far_z > 0 ? proj.far_z : 1000.0f};
+        const float *m = camera;
+        tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
+                            m[7], m[10], m[2], m[5], m[8], m[11]};
+      } else {
+        tl->projection = {1.0f,
+                          float(scene_.width),
+                          float(scene_.height),
+                          float(scene_.width) * .5f,
+                          float(scene_.height) * .5f,
+                          1000.0f};
+        tl->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+      }
+      return tl;
+    };
+    // Native sky keeps its unlit TL material role. The owned view is only
+    // for intentional campaign/profile sky shading in apply_atmosphere.
+    if (lighting_.enabled && state.native_sky)
+      draw.sky_view = capture_tl_view();
+    if (lighting_.enabled && !state.native_sky && state.texture >= 0) {
       const auto &tex_entry = textures_.at(state.texture);
       const auto key = tex_entry.surface_key;
       const auto epoch = tex_entry.group_load_epoch;
@@ -1328,32 +1362,8 @@ private:
         } else {
           draw.normal_texture = -1;
         }
-        auto tl = std::make_shared<mw34::sun::Tl>();
+        draw.sun_tl = capture_tl_view();
         const auto &proj = projection;
-        if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
-            viewport[2] > 0 && viewport[3] > 0) {
-          tl->projection = {
-              proj.near_z,
-              proj.fx_near * float(scene_.width) / float(viewport[2]),
-              proj.fy_near * float(scene_.height) / float(viewport[3]),
-              (proj.cx - float(viewport[0])) * float(scene_.width) /
-                  float(viewport[2]),
-              (proj.cy - float(viewport[1])) * float(scene_.height) /
-                  float(viewport[3]),
-              proj.far_z > 0 ? proj.far_z : 1000.0f};
-          const float *m = camera;
-          tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
-                              m[7], m[10], m[2], m[5], m[8], m[11]};
-        } else {
-          tl->projection = {1.0f,
-                            float(scene_.width),
-                            float(scene_.height),
-                            float(scene_.width) * .5f,
-                            float(scene_.height) * .5f,
-                            1000.0f};
-          tl->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-        }
-        draw.sun_tl = std::move(tl);
         if (lighting_.normals) {
           draw.surface_parameters =
               deferred_surface_parameters(key, state.texture);
@@ -1458,6 +1468,10 @@ private:
           (!draw.sun_tl ||
            (previous.sun_tl->camera_world == draw.sun_tl->camera_world &&
             previous.sun_tl->projection == draw.sun_tl->projection)) &&
+          bool(previous.sky_view) == bool(draw.sky_view) &&
+          (!draw.sky_view ||
+           (previous.sky_view->camera_world == draw.sky_view->camera_world &&
+            previous.sky_view->projection == draw.sky_view->projection)) &&
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
