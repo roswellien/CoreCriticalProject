@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -13,6 +14,7 @@
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/cls_world.h"
 #include "gamez/zclass/list.h"
+#include "gamez/zclass/window.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmath/zmth_matrix.h"
@@ -32,12 +34,55 @@ namespace {
 const char kFile[] = "C:\\zipper\\GameZMech3\\zClass\\Camera.c";
 SceneWalk g_walk;
 WorldRenderHooks g_hooks;
+unsigned g_visual_far_request = kDefaultVisualFar;
+const void* g_visual_camera = nullptr;
+float g_visual_far = 0.0f;
+const void* g_zoom_visual_camera = nullptr;
 
 constexpr uint32_t kActive = 4, kTreeValid = 0x80000, kOverride = 0x800000;
 constexpr uint32_t kDrawn = 0x80000000u, kUnk25 = 0x2000000;
+constexpr int32_t kTilerRingCapacity = 128;
+constexpr int32_t kTilerCellsPerRing = 64;
 const float kOnes[3] = {1.0f, 1.0f, 1.0f};
 const float kZeros[3] = {};
 const float kNullOffset[3] = {};   // 0x0063d870, never written
+
+bool full_display_viewport(Node* window) {
+  int32_t x = 0, y = 0, width = 0, height = 0;
+  return !zcls::window_origin(window, &x, &y) &&
+         !zcls::window_size(window, &width, &height) && x == 0 && y == 0 &&
+         width == zmod::walk_state().screen_w &&
+         height == zmod::walk_state().screen_h;
+}
+
+class VisualRenderScope {
+ public:
+  VisualRenderScope(Camera* camera, Node* window) {
+    if (g_visual_far_request <= kDefaultVisualFar ||
+        (!full_display_viewport(window) && g_zoom_visual_camera != camera)) return;
+    const float authored_far = camera->get<float>(0xb4);
+    const float expanded = visual_far(authored_far, g_visual_far_request, true);
+    if (!(expanded > authored_far)) return;
+    previous_camera_ = g_visual_camera;
+    previous_far_ = g_visual_far;
+    g_visual_camera = camera;
+    g_visual_far = expanded;
+    fog_.emplace(authored_far, expanded);
+    active_ = true;
+  }
+  ~VisualRenderScope() {
+    if (active_) {
+      g_visual_camera = previous_camera_;
+      g_visual_far = previous_far_;
+    }
+  }
+
+ private:
+  const void* previous_camera_ = nullptr;
+  float previous_far_ = 0.0f;
+  bool active_ = false;
+  std::optional<zmod::ScopedRenderFog> fog_;
+};
 
 Camera* cam_of(Node* n) { return static_cast<Camera*>(n->data); }
 zmth::Mat34* mat(float* p) { return reinterpret_cast<zmth::Mat34*>(p); }
@@ -564,9 +609,11 @@ void footprint(Camera* cam, int line, float* min_x, float* max_x, float* min_z, 
 
 void add_cell(int32_t ring, int32_t x, int32_t z, int32_t wrapped, float dx, float dz, uint32_t mask,
               int line_rings, int line_cells) {
-  if (ring >= 50) return fill_rect_error(line_rings, "Error: Need more diamond tiler rings.");
+  if (ring >= kTilerRingCapacity)
+    return fill_rect_error(line_rings, "Error: Diamond tiler ring capacity exceeded.");
   ScreenRing& r = g_walk.rings[ring];
-  if (r.count >= 30) return fill_rect_error(line_cells, "Error: Need more diamond tiler cells per ring.");
+  if (r.count >= kTilerCellsPerRing)
+    return fill_rect_error(line_cells, "Error: Diamond tiler cell capacity exceeded.");
   ScreenRing::Cell& c = r.cell[r.count++];
   c.x = x, c.z = z, c.mask = mask, c.wrapped = wrapped;
   if (wrapped) c.dx = dx, c.dz = dz;
@@ -577,6 +624,23 @@ Partition& cell_at(World* w, int32_t x, int32_t z) { return w->rows[z][x]; }
 
 SceneWalk& scene_walk() { return g_walk; }
 WorldRenderHooks& world_render_hooks() { return g_hooks; }
+void set_visual_far_request(unsigned requested_far) {
+  if (g_visual_far_request != requested_far)
+    g_visual_far_request = requested_far;
+}
+unsigned visual_far_request() { return g_visual_far_request; }
+float visual_far_for_render(const void* camera, float authored_far) {
+  return camera == g_visual_camera ? g_visual_far : authored_far;
+}
+ScopedZoomVisualFar::ScopedZoomVisualFar(const void* camera)
+    : previous_camera_(g_zoom_visual_camera),
+      active_(g_visual_far_request > kDefaultVisualFar) {
+  if (!active_) return;
+  g_zoom_visual_camera = camera;
+}
+ScopedZoomVisualFar::~ScopedZoomVisualFar() {
+  if (active_) g_zoom_visual_camera = previous_camera_;
+}
 
 // Mech3.exe 1.2 @ 0x004f6c80 (ECX the camera, EDX the zone list). The ids
 // are read up to the count byte, as many as it says.
@@ -824,7 +888,7 @@ int camera_update_offset(Node* node, const float* offset) {
   if (d->get<int32_t>(0xf8)) {
     d->put<int32_t>(0xf8, 0);
     d->put<uint32_t>(0xfc, 0), d->put<uint32_t>(0x100, 0), d->put<uint32_t>(0x104, 0);
-    const float far_z = d->get<float>(0xb4);
+    const float far_z = visual_far_for_render(d, d->get<float>(0xb4));
     const float a = static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xe8) * 0.5f)) * far_z);
     const float b = -static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xec) * 0.5f)) * far_z);
     const float c = -far_z;
@@ -834,7 +898,8 @@ int camera_update_offset(Node* node, const float* offset) {
   const float* dir = d->floats(0x74);
   const float* pos = d->floats(0x2c);
   for (int off : {0xb8, 0xc4}) {
-    const float k = d->get<float>(off == 0xb8 ? 0xb0 : 0xb4);
+    const float k = off == 0xb8 ? d->get<float>(0xb0)
+                                : visual_far_for_render(d, d->get<float>(0xb4));
     float* p = d->floats(off);
     p[0] = dir[0] * k, p[1] = dir[1] * k, p[2] = dir[2] * k;
     p[0] = p[0] + pos[0], p[1] = p[1] + pos[1], p[2] = p[2] + pos[2];
@@ -1031,9 +1096,9 @@ int render_cells(Node* world, Node* camera_node, Camera* cam) {
   int32_t restored = 1;
   const int r = w->get<int32_t>(0x50) ? pick_cells_virtual(world, cam) : pick_cells(world, cam);
   if (r) return r;
-  const int32_t fog = zmod::fog_on();
-  const float fog_near = fog ? zmod::fog_near() : 0.0f;
-  for (int32_t ring = 0; ring < 50; ++ring) {
+  const int32_t fog = zmod::render_fog().on;
+  const float fog_near = fog ? zmod::render_fog().near_range : 0.0f;
+  for (int32_t ring = 0; ring < kTilerRingCapacity; ++ring) {
     g_walk.ring = ring;
     for (int32_t k = 0; k < g_walk.rings[ring].count; ++k) {
       const ScreenRing::Cell& e = g_walk.rings[ring].cell[k];
@@ -1249,6 +1314,7 @@ int render_world(Node* camera_node, int32_t after) {
   g_walk.camera = cam;
   Node* world = camera_world(camera_node);
   auto* window = static_cast<Window*>(cam->nodes[1]->data);
+  VisualRenderScope visual_scope(cam, cam->nodes[1]);
   if (g_walk.lod_dynamic) {
     if (ztimer::state().dt > g_walk.lod_target)
       g_walk.lod_factor = g_walk.lod_factor - g_walk.lod_step;

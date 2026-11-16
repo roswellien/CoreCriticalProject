@@ -2,18 +2,41 @@
 
 #include <algorithm>
 
+#include "gamez/zclass/visual_distance.h"
+
 #include "gamez/zrender/zrndr_fog.h"
 
 namespace zmod {
 
 namespace {
 Fog g_fog;
+Fog* g_render_fog = nullptr;
 }  // namespace
 
 Fog& fog() { return g_fog; }
+const Fog& render_fog() { return g_render_fog ? *g_render_fog : g_fog; }
+
+ScopedRenderFog::ScopedRenderFog(float authored_far, float visual_far) {
+  if (!(authored_far > 0.0f) || !(visual_far > authored_far)) return;
+  previous_ = g_render_fog;
+  copy_ = render_fog();
+  const float scale = visual_far / authored_far;
+  copy_.near_range *= scale;
+  copy_.near_sq = copy_.near_range * copy_.near_range;
+  copy_.far_range *= scale;
+  copy_.far_sq = copy_.far_range * copy_.far_range;
+  const float range = copy_.far_range - copy_.near_range;
+  if (range != 0.0f) copy_.inv_range = 1.0f / range;
+  if (!copy_.linear) copy_.density /= scale;
+  g_render_fog = &copy_;
+}
+
+ScopedRenderFog::~ScopedRenderFog() {
+  if (previous_ || g_render_fog == &copy_) g_render_fog = previous_;
+}
 
 // Mech3.exe 1.2 @ 0x00526b80
-void fog_set_on(int32_t on) { g_fog.on = on; }
+void fog_set_on(int32_t on) { (g_render_fog ? g_render_fog : &g_fog)->on = on; }
 
 // Mech3.exe 1.2 @ 0x00526ce0
 void fog_set_linear(int32_t linear) { g_fog.linear = linear; }

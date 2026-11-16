@@ -28,7 +28,7 @@ void ensure_geometry_scene() {
 }
 
 static cc::geometry::Fog prepared_fog() {
-  const auto &source = zmod::fog();
+  const auto &source = zmod::render_fog();
   cc::geometry::Fog fog;
   fog.enabled = source.on != 0;
   std::copy_n(source.color, 3, fog.color.begin());

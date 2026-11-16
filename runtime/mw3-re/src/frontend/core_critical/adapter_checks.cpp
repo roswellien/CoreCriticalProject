@@ -2050,6 +2050,7 @@ void check_renderer_bridge_config() {
   sdlfe::CoreCriticalQuality quality{};
   quality.antialiasing = "fxaa";
   quality.anisotropy = "16";
+  quality.draw_distance = 1600;
 
   sdlfe::CoreCriticalAssets assets{};
   assets.lighting = "normal";
@@ -2062,6 +2063,8 @@ void check_renderer_bridge_config() {
   require(cfg_dxgi.dxgi_present == true, "dxgi_present true mismatch");
   require(cfg_dxgi.fxaa == true, "fxaa propagation mismatch");
   require(cfg_dxgi.af_level == 16, "af_level propagation mismatch");
+  require(cfg_dxgi.draw_distance == 1600,
+          "draw-distance propagation mismatch");
   require(cfg_dxgi.normal_maps_enabled == true,
           "normal_maps_enabled propagation mismatch");
   require(cfg_dxgi.prepared_cache == true,
@@ -2086,6 +2089,7 @@ void check_renderer_bridge_config() {
   require(cfg_wsi.normal_maps_enabled == false,
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
+  require(cfg_wsi.draw_distance == 800, "draw-distance default mismatch");
 
   // POM is opt-in and must not disappear when it is the only explicit option.
   sdlfe::CoreCriticalAssets pom_assets{};

@@ -160,7 +160,7 @@ prepare_draw(const PreparedBatchDraw &source,
         output.color[channel] = std::floor(
             float((source.batch->color >> (16 - channel * 8)) & 255) * light);
       output.visibility =
-          zmod::fog().on ? 1.f - zmod::fog_at(output.camera.data()) : 1.f;
+          zmod::render_fog().on ? 1.f - zmod::fog_at(output.camera.data()) : 1.f;
       output.u = vertex[6];
       output.v = vertex[7];
       gpu = gpu && output.camera[2] >= near_clip &&
@@ -177,9 +177,9 @@ prepare_draw(const PreparedBatchDraw &source,
   draw.key = {0, 5, 6, 1, 7, 1, 1, 0};
   draw.push.target[0] = float(width);
   draw.push.target[1] = float(height);
-  std::copy(std::begin(zmod::fog().color), std::end(zmod::fog().color),
+  std::copy(std::begin(zmod::render_fog().color), std::end(zmod::render_fog().color),
             draw.push.fog);
-  draw.push.mode[0] = 2U | 4U | (zmod::fog().on ? 16U : 0U);
+  draw.push.mode[0] = 2U | 4U | (zmod::render_fog().on ? 16U : 0U);
   draw.push.mode[1] = 4U | (2U << 8);
   draw.push.mode[2] = 2;
   draw.scissor = {{0, 0}, {width, height}};
