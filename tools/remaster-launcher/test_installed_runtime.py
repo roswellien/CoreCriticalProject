@@ -913,6 +913,47 @@ def native_recipe_tests(inputs):
                 with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Expected an x64"):
                     producer._pe(path, library=False)
 
+        def test_x86_helper_pe_is_distinct_from_the_x64_game_image(self):
+            image = bytearray(90)
+            image[:2] = b"MZ"
+            image[60:64] = (64).to_bytes(4, "little")
+            image[64:68] = b"PE\0\0"
+            image[68:70] = (0x14c).to_bytes(2, "little")
+            image[86:88] = (2).to_bytes(2, "little")
+            image[88:90] = (0x10b).to_bytes(2, "little")
+            helper = self.root / "mw3indeo.exe"
+            helper.write_bytes(image)
+            producer._pe(helper, library=False, architecture="x86")
+            with self.assertRaisesRegex(ValueError, "Expected an x64"):
+                producer._pe(helper, library=False)
+
+        def test_x86_helper_closure_uses_only_the_windows_x86_system_directory(self):
+            image = bytearray(90)
+            image[:2] = b"MZ"
+            image[60:64] = (64).to_bytes(4, "little")
+            image[64:68] = b"PE\0\0"
+            image[68:70] = (0x14c).to_bytes(2, "little")
+            image[86:88] = (2).to_bytes(2, "little")
+            image[88:90] = (0x10b).to_bytes(2, "little")
+            helper = self.root / "mw3indeo.exe"
+            helper.write_bytes(image)
+
+            def inspect(path, _dumpbin, _environment):
+                return ["kernel32.dll"] if path == helper else []
+
+            with patch.object(producer, "_inspect", side_effect=inspect):
+                inventory = self.inventory(additional_images=((helper, "bin/mw3indeo.exe", "x86"),))
+            paths = {member.relative: member.source for member in inventory.members}
+            self.assertEqual(paths["bin/mw3indeo.exe"], helper)
+            self.assertNotIn("bin/kernel32.dll", paths)
+
+            def missing_x86_import(path, _dumpbin, _environment):
+                return ["mw34_missing_x86.dll"] if path == helper else []
+
+            with patch.object(producer, "_inspect", side_effect=missing_x86_import):
+                with self.assertRaisesRegex(ValueError, "Missing application dependency"):
+                    self.inventory(additional_images=((helper, "bin/mw3indeo.exe", "x86"),))
+
         def test_recipe_destinations_and_cpu_are_rejected_before_mutation(self):
             from argparse import Namespace
             arguments = dict(self.paths, vs=Path(inputs.vs), commit="a" * 40, jobs=1,

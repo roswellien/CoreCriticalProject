@@ -367,7 +367,8 @@ as it did.
 `Ir50_32.dll`, is a 32-bit Video for Windows driver (it exports DriverProc
 and imports only WINMM, KERNEL32, USER32, GDI32, ADVAPI32 and ole32), which
 64-bit mw3 cannot load and Windows 11 no longer registers. `mw3indeo.exe`
-(tools/indeo, built 32-bit by `tools\windows\build_indeo.cmd`) loads it
+(tools/indeo, built 32-bit by `tools\windows\build_indeo.cmd` for the package,
+or by the pinned x86 MSVC toolchain in the MW3-RE staging recipe) loads it
 from the install and calls its DriverProc itself, as the ICM layer does
 (DRV_LOAD, DRV_ENABLE, DRV_OPEN with an ICOPEN for decompression, then
 ICM_DECOMPRESS_QUERY, _BEGIN and ICM_DECOMPRESS with the player's flags):
