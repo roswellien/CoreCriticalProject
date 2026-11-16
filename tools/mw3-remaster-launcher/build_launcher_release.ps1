@@ -9,7 +9,9 @@ param(
     [Parameter(Mandatory=$true)][string]$KeyId,
     [Parameter(Mandatory=$true)][string]$WindowsSignTool,
     [Parameter(Mandatory=$true)][string]$SigningDlib,
-    [Parameter(Mandatory=$true)][string]$SigningMetadata
+    [Parameter(Mandatory=$true)][string]$SigningMetadata,
+    # Optional MW3-RE Native preview runtime; packaged in the full installer only.
+    [string]$NativePreviewDirectory = ''
 )
 # One release produces a full installer plus the separate launcher-only update.
 $ErrorActionPreference = 'Stop'
@@ -56,7 +58,9 @@ $updateDirectory = Join-Path $OutputDirectory 'LauncherUpdate'
     -InstallerReceipt (Join-Path $launcherSetup 'installer-build.json') -Version $numericVersion -Sequence $Sequence `
     -SigningKey $SigningKey -KeyId $KeyId -OutputDirectory $updateDirectory
 $fullSetup = Join-Path $OutputDirectory 'Setup'
-& (Join-Path $PSScriptRoot 'build_installer.ps1') @common -OutputDirectory $fullSetup -RuntimeDirectory $RuntimeDirectory
+$fullArguments = @{ OutputDirectory=$fullSetup; RuntimeDirectory=$RuntimeDirectory }
+if ($NativePreviewDirectory) { $fullArguments.NativePreviewDirectory = [IO.Path]::GetFullPath($NativePreviewDirectory) }
+& (Join-Path $PSScriptRoot 'build_installer.ps1') @common @fullArguments
 
 $artifacts = @{}
 foreach ($relative in @("Setup/$setupFilename", "LauncherUpdate/$numericVersion.ccupdate", "LauncherUpdate/$numericVersion.zip")) {

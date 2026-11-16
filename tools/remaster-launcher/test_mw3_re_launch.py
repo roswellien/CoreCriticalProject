@@ -209,5 +209,138 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         self.assertEqual(dict(os.environ), environment)
 
 
+class NativePreviewPlanTests(unittest.TestCase):
+    """Schema 4: the labelled Native preview reads small pack manifests and emits pack arguments."""
+
+    def setUp(self):
+        import tempfile
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = self.temporary.name
+        self.plan = importlib.import_module("mw3_re_launch").plan_launch
+
+    def write(self, relative, content):
+        path = os.path.join(self.root, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(content if isinstance(content, str) else json.dumps(content))
+        return path
+
+    def model_pack(self, name="mechs", models=None, profile="prepared-native-v1"):
+        """Build a pack in the installed layout: pack.json plus models/models.json and payload files."""
+        for payload in ("mesh0", "tex0", "nrm0", "mesh1", "tex1", "nrm1", "solo-mesh", "solo-tex"):
+            self.write(f"{name}/payload/{payload}.bin", "x")
+        if models is None:
+            models = [
+                {"id": "strider", "backend": "native", "status": "runtime-candidate", "environment": {
+                    "MW34_STRIDER_MESH": "payload/mesh0.bin", "MW34_STRIDER_TEXTURES": "payload/tex0.bin",
+                    "MW34_STRIDER_NORMALS": "payload/nrm0.bin", "MW34_STRIDER_LOD1_MESH": "payload/mesh1.bin",
+                    "MW34_STRIDER_LOD1_TEXTURES": "payload/tex1.bin", "MW34_STRIDER_LOD1_NORMALS": "payload/nrm1.bin",
+                    "MW34_STRIDER_SKIN_B_TEXTURES": "payload/tex0.bin"}},
+                {"id": "owens", "backend": "native", "status": "runtime-ready", "environment": {
+                    "MW34_OWENS_MESH": "payload/solo-mesh.bin", "MW34_OWENS_TEXTURES": "payload/solo-tex.bin"}},
+                {"id": "madcat", "backend": "legacy", "status": "runtime-ready", "environment": {}},
+                {"id": "thor", "backend": "native", "status": "retired", "environment": {}},
+            ]
+        self.write(f"{name}/models/models.json", {"schema_version": 2, "models": models})
+        self.write(f"{name}/pack.json", {"schema_version": 2, "native_payload": {
+            "profile": profile, "registry": "models/models.json", "path_base": "pack-root"}})
+        return os.path.join(self.root, name)
+
+    def environment_pack(self, name="training", largest=1024):
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": {
+            "environment/banks/a.zbd": {"bytes": 100, "sha256": "0" * 64},
+            "environment/banks/b.zbd": {"bytes": largest, "sha256": "1" * 64}},
+            "native_payload": {"profile": "prepared-environment-v1"}})
+        return os.path.join(self.root, name)
+
+    def request(self, **preview):
+        return {
+            "schema_version": 4, "engine": "mw3-re", "runtime_root": "C:/Runtime",
+            "executable": "C:/Runtime/bin/mw3.exe", "game_dir": "D:/Original MW3",
+            "write_dir": "E:/Data/mw3-re/profiles/native-preview", "renderer": "vulkan-wsi",
+            "width": 1280, "height": 720, "aa": "fxaa", "af": 16, "window_mode": "windowed",
+            "render_thread": True, "lighting": "normal", "assets": [], "visuals": {"pom": True},
+            "preview": preview,
+        }
+
+    def test_complete_preview_argv_order_and_absolute_pack_paths(self):
+        models, training = self.model_pack(), self.environment_pack()
+        result = self.plan(self.request(draw_distance=1200, hud="core-critical", hud_text=True,
+                                        geometry="partial", model_packs=[models], environment_packs=[training]))
+        payload = lambda name: os.path.join(models, "payload", name + ".bin")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["skipped_packs"], [])
+        self.assertEqual(result["argv"][17:], [
+            "--cc-pom", "1", "--cc-draw-distance", "1200", "--cc-hud", "core-critical", "--cc-hud-text", "1",
+            "--cc-geometry", "partial",
+            "--cc-model", "strider", "0", payload("mesh0"), payload("tex0"),
+            "--cc-model-normals", "strider", "0", payload("nrm0"),
+            "--cc-model", "strider", "1", payload("mesh1"), payload("tex1"),
+            "--cc-model-normals", "strider", "1", payload("nrm1"),
+            "--cc-model", "owens", "0", payload("solo-mesh"), payload("solo-tex"),
+            "--cc-environment-pack", training,
+        ])
+        self.assertEqual(result["argv"][16], "normal")
+
+    def test_original_distance_adds_no_argument_and_defaults_apply(self):
+        result = self.plan(self.request())
+        self.assertTrue(result["ok"])
+        self.assertNotIn("--cc-draw-distance", result["argv"])
+        self.assertEqual(result["skipped_packs"], [])
+
+    def test_oversized_map_pack_is_reported_not_loaded(self):
+        large = self.environment_pack("shared", largest=2 ** 31)
+        result = self.plan(self.request(environment_packs=[large]))
+        self.assertTrue(result["ok"])
+        self.assertNotIn("--cc-environment-pack", result["argv"])
+        self.assertEqual([item["root"] for item in result["skipped_packs"]], [large])
+        self.assertIn("2 GiB", result["skipped_packs"][0]["reason"])
+
+    def test_invalid_choices_are_refused(self):
+        for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},
+                        {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},
+                        {"model_packs": "C:/one"}, {"unknown": 1}, {"model_packs": ["relative/pack"]}):
+            with self.subTest(preview=preview), self.assertRaises(ValueError):
+                self.plan(self.request(**preview))
+        request = self.request()
+        request["preview"] = []
+        with self.assertRaises(ValueError):
+            self.plan(request)
+
+    def test_pack_problems_fail_the_whole_plan(self):
+        escape = self.model_pack("escape", models=[{"id": "strider", "backend": "native",
+            "status": "runtime-ready", "environment": {"MW34_STRIDER_MESH": "../outside.bin",
+                                                       "MW34_STRIDER_TEXTURES": "payload/tex0.bin"}}])
+        missing = self.model_pack("missing", models=[{"id": "strider", "backend": "native",
+            "status": "runtime-ready", "environment": {"MW34_STRIDER_MESH": "payload/absent.bin",
+                                                       "MW34_STRIDER_TEXTURES": "payload/tex0.bin"}}])
+        wrong = self.model_pack("wrong", profile="prepared-environment-v1")
+        for pack in (escape, missing, wrong, os.path.join(self.root, "no-such-pack")):
+            with self.subTest(pack=pack), self.assertRaises(ValueError):
+                self.plan(self.request(model_packs=[pack]))
+        with self.assertRaises(ValueError):
+            self.plan(self.request(environment_packs=[self.model_pack("mechs-as-map")]))
+
+    def test_bushwacker_close_mesh_uses_its_historical_key(self):
+        pack = self.model_pack("bush", models=[{"id": "bushwacker", "backend": "native", "status": "runtime-ready",
+            "environment": {"MW34_BUSHWACKER_TEST": "payload/mesh0.bin", "MW34_BUSHWACKER_TEXTURES": "payload/tex0.bin",
+                            "MW34_BUSHWACKER_LOD1_MESH": "payload/mesh1.bin",
+                            "MW34_BUSHWACKER_LOD1_TEXTURES": "payload/tex1.bin"}}])
+        argv = self.plan(self.request(model_packs=[pack]))["argv"]
+        self.assertEqual(argv.count("--cc-model"), 2)
+        self.assertEqual(argv[argv.index("--cc-model") + 3], os.path.join(pack, "payload", "mesh0.bin"))
+
+    def test_pack_inside_write_root_is_refused(self):
+        request = self.request(model_packs=["E:/Data/mw3-re/profiles/native-preview/mods/pack"])
+        with self.assertRaises(ValueError):
+            self.plan(request)
+
+    def test_schema_four_json_round_trip(self):
+        plan_json = importlib.import_module("mw3_re_launch").plan_json
+        result = plan_json(json.dumps(self.request(draw_distance=1600)))
+        self.assertEqual(result["argv"][result["argv"].index("--cc-draw-distance") + 1], "1600")
+
+
 if __name__ == "__main__":
     unittest.main()
