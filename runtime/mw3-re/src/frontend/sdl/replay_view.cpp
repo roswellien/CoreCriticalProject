@@ -69,8 +69,7 @@ struct Viewer {
 // they hold about 150 MB. A failure sets terrain->error, which the window shows.
 SDL_Texture* make_terrain_texture(SDL_Renderer* renderer, Terrain* terrain) {
   if (terrain->width <= 0 || terrain->height <= 0) return nullptr;
-  for (size_t i = 0; i < terrain->outline.size(); ++i)
-    if (terrain->outline[i]) terrain->rgba[i * 4] = terrain->rgba[i * 4 + 1] = terrain->rgba[i * 4 + 2] = 24;
+  mech3::replay::darken_outline(terrain);
   SDL_Texture* tex =
       SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, terrain->width, terrain->height);
   if (tex) {

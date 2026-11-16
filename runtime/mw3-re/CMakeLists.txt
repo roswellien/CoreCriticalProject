@@ -299,6 +299,7 @@ add_library(mw3core STATIC
   src/mech3/zai_nav.cpp
   src/mech3/zai_hunt.cpp
   src/mech3/arena_setup.cpp
+  src/mech3/arena_catalog.cpp
   src/mech3/arena.cpp
   src/mech3/arena_log.cpp
   src/mech3/zai_repair.cpp

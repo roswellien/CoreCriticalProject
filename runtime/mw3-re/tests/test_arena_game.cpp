@@ -26,6 +26,7 @@
 #include "mech3/app_states.h"
 #include "mech3/app_view.h"
 #include "mech3/arena.h"
+#include "mech3/arena_catalog.h"
 #include "mech3/arena_log.h"
 #include "mech3/mech_control.h"
 #include "mech3/mech_names.h"
@@ -784,4 +785,49 @@ TEST(arena_time_limit_decides_by_mechs_standing_headless) {
   } else {
     EXPECT(result.winner == (standing[0] > 0 ? 0 : standing[1] > 0 ? 1 : -1));
   }
+}
+
+// #287 runner: --arena-catalog's files, from the install alone. The ten
+// arena maps (t1mp1 has no 16 spots), the 19 mechs with their 58 stock
+// loadouts (the dfn files' 62 less Bushwacker's four training ones), the
+// game's own names, the pilot presets, and pictures sized as their JSON says.
+TEST(arena_catalog_lists_the_game_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  const std::string dir = temp_dir("arena_catalog");
+  std::filesystem::remove_all(dir);
+  std::string error;
+  const auto t0 = std::chrono::steady_clock::now();
+  EXPECT(mech3::arena::write_arena_catalog(dir, &error));
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  std::printf("  arena catalog: %.1f s %s\n", seconds, error.c_str());
+  const nlohmann::json c = nlohmann::json::parse(file_text(dir + "/catalog.json"), nullptr, false);
+  EXPECT(c.is_object() && c.value("version", 0) == 1);
+  if (!c.is_object()) return;
+  std::set<std::string> maps;
+  for (const auto& m : c["maps"]) maps.insert(m.value("id", ""));
+  EXPECT(maps.size() == 10 && maps.count("c1mp1") && maps.count("c3mp1") && !maps.count("t1mp1"));
+  size_t loadouts = 0;
+  for (const auto& m : c["mechs"]) loadouts += m["loadouts"].size();
+  EXPECT(c["mechs"].size() == 19 && loadouts == 58);
+  for (const auto& m : c["mechs"]) {
+    if (m.value("id", "") != "thor") continue;
+    const auto& primary = m["loadouts"][0];
+    EXPECT(primary.value("name", "") == "Primary" && !primary["weapons"].empty());
+    EXPECT(m.value("picture", false) && std::filesystem::file_size(dir + "/mechs/thor.ppm") > 0);
+  }
+  bool enemy_01 = false;
+  for (const auto& p : c["presets"])
+    if (p.value("world", "") == "c1" && p.value("mission", "") == "ia1" && p.value("record", "") == "Enemy_01")
+      enemy_01 = p["numbers"].value("attack_m", 0.0) > 0;
+  EXPECT(enemy_01);
+  // The picture's PPM header matches its placement file.
+  std::ifstream ppm(dir + "/terrain/c3mp1.ppm", std::ios::binary);
+  std::string magic;
+  int width = 0, height = 0;
+  ppm >> magic >> width >> height;
+  const nlohmann::json place = nlohmann::json::parse(file_text(dir + "/terrain/c3mp1.json"), nullptr, false);
+  EXPECT(magic == "P6" && place.is_object() && width == place.value("width", -1) && height == place.value("height", -1));
 }

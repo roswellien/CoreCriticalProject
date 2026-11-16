@@ -31,4 +31,8 @@ constexpr int kMaxTerrainCells = 4096;
 // the rest is empty.
 Terrain build_terrain(const std::string& map, const float box[4]);
 
+// Walls and cliffs (outline cells) drawn near-black in rgba, as every picture
+// of the terrain shows them (the viewer's texture, the arena catalog's).
+void darken_outline(Terrain* terrain);
+
 }  // namespace mech3::replay

@@ -7,6 +7,7 @@
 #include "frontend/sdl/replay3d_view.h"
 #include "frontend/sdl/replay_view.h"
 #include "frontend/sdl/sdl_platform.h"
+#include "mech3/arena_catalog.h"
 #include "mech3/replay_hooks.h"
 #include "gamez/zgame/zgameapp.h"
 #include "mech3/app_states.h"
@@ -23,12 +24,17 @@ bool parse_watch_option(WatchArgs& w, int argc, char** argv, int* i) {
   else if (s == "--replay") w.replay_path = argv[++*i];
   else if (s == "--replay-script") w.replay_script = argv[++*i];
   else if (s == "--replay3d") w.replay3d_path = argv[++*i];
+  else if (s == "--arena-catalog") w.catalog_dir = argv[++*i];
   else return false;
   return true;
 }
 
 bool check_watch_options(WatchArgs& w, const mech3::replay::ReplayFlags& replay,
                          const mech3::arena::Flags& arena, std::string* mission, bool* nosound) {
+  if (!w.catalog_dir.empty() && (!w.arena_path.empty() || !w.replay_path.empty() || !w.replay3d_path.empty())) {
+    std::fprintf(stderr, "mw3: --arena-catalog runs alone (no --arena, --replay or --replay3d)\n");
+    return false;
+  }
   if (!w.replay_path.empty()) {
     const std::string message = mech3::replay::replay_refusal(replay);
     if (!message.empty()) {
@@ -57,6 +63,16 @@ bool check_watch_options(WatchArgs& w, const mech3::replay::ReplayFlags& replay,
 }
 
 int watch_after_mount(WatchArgs& w, int seed, std::string* mission) {
+  // --arena-catalog: the files, then the end of the run.
+  if (!w.catalog_dir.empty()) {
+    std::string message;
+    if (!mech3::arena::write_arena_catalog(w.catalog_dir, &message)) {
+      std::fprintf(stderr, "mw3: --arena-catalog: %s\n", message.c_str());
+      return 1;
+    }
+    std::printf("mw3: arena catalog written to %s\n", w.catalog_dir.c_str());
+    return 0;
+  }
   // --replay3d: the log read and checked before anything is made from it.
   if (!w.replay3d_path.empty()) {
     w.replay3d = std::make_shared<mech3::replay::ReplayRun>();

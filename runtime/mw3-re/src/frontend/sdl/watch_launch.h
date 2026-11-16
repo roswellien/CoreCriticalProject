@@ -37,6 +37,9 @@ struct WatchArgs {
   // once its log is read (after the install is mounted).
   std::string replay3d_path;
   std::shared_ptr<mech3::replay::ReplayRun> replay3d;
+  // --arena-catalog DIR: the arena runner's lists and pictures written there
+  // (arena_catalog.h), then the run ends.
+  std::string catalog_dir;
   // Either watched run: the host's seat is a spectator's.
   bool watched_match() const { return !arena_path.empty() || !replay3d_path.empty(); }
 };

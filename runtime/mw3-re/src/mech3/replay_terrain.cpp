@@ -121,4 +121,10 @@ Terrain build_terrain(const std::string& map, const float box[4]) {
   return t;
 }
 
+void darken_outline(Terrain* terrain) {
+  constexpr uint8_t kWall = 24;
+  for (size_t i = 0; i < terrain->outline.size(); ++i)
+    if (terrain->outline[i]) terrain->rgba[i * 4] = terrain->rgba[i * 4 + 1] = terrain->rgba[i * 4 + 2] = kWall;
+}
+
 }  // namespace mech3::replay
