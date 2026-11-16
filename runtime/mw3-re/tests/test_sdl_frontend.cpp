@@ -312,14 +312,22 @@ TEST(controller_profile_v1_calibrates_axes_and_emits_zin_command_states) {
     int32_t joystick_state(platform::JoyState*) override { return 0; }
     uint32_t command_state(int32_t command) override { return command == 12 ? action : 0; }
   } input;
+  struct OverlayHost final : zin::Host {
+    void client_size(int32_t* width, int32_t* height) override { *width = 640, *height = 480; }
+  } host;
   zin::reset_state();
   zin::set_input(&input);
+  zin::set_host(&host);
   zin::init(167, "controller overlay test");
+  EXPECT(zin::start(1, 0) == 0);
   input.action = zin::kPressed;
   EXPECT(zin::command(12) == zin::kPressed);
   input.action = zin::kReleased;
   EXPECT(zin::command(12) == zin::kReleased);
+  zin::stop();
   zin::shutdown();
+  zin::set_input(nullptr);
+  zin::set_host(nullptr);
   zin::reset_state();
 }
 
