@@ -173,6 +173,7 @@ public sealed class NativeGameRunner
         var (models, environments) = SelectPreviewPacks(activePacks);
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
         Directory.CreateDirectory(writeDirectory);
+        NativeControls.PrepareLaunch(_dataRoot, writeDirectory, validation.GameDirectory, settings, log);
         var headlightBindings = new HeadlightBindings(_dataRoot)
             .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
         var options = new Mw3RePlanningOptions

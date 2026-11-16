@@ -365,6 +365,12 @@ TEST(sdl_joystick_axes_from_the_t16000m_descriptor) {
          sdlfe::joystick_rank(false, 4, 12) > sdlfe::joystick_rank(false, 1, 2));
 }
 
+TEST(sdl_joystick_can_be_disabled_by_profile) {
+  sdlfe::SdlInput input;
+  input.joystick_disabled = true;
+  EXPECT(!input.open(platform::Input::kJoystick));
+}
+
 TEST(sdl_input_t16000m_twist_reaches_rz) {
   EXPECT(SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD));
   const SDL_JoystickID id = attach_stick("T.16000M", 4, 16, 1, 0x044f, 0xb10a);

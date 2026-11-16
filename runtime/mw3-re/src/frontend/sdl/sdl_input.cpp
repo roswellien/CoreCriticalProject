@@ -245,6 +245,10 @@ std::vector<uint16_t> read_hid_usages(SDL_Joystick* j) {
 // mw3.cfg's joystick= by name, else the best ranked, the first of a rank;
 // each device found is logged.
 bool SdlInput::open_joystick() {
+  if (joystick_disabled) {
+    std::printf("mw3: joystick disabled by mw3.cfg\n");
+    return false;
+  }
   int n = 0;
   SDL_JoystickID* ids = SDL_GetJoysticks(&n);
   int best = -1, best_rank = -1, wanted = -1;
