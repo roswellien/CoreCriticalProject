@@ -732,12 +732,15 @@ static class NativeRuntimeLayoutChecks
             var options = new Mw3RePlanningOptions
             {
                 Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
-                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
+                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared },
+                    WaterDetail = false, CloudDetail = false }
             };
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
-                wire["visuals"]!["pom"]!.GetValue<bool>() != true)
+                wire["visuals"]!["pom"]!.GetValue<bool>() != true ||
+                wire["preview"]!["water_detail"]!.GetValue<bool>() ||
+                wire["preview"]!["cloud_detail"]!.GetValue<bool>())
                 throw new Exception("Native preview projection lost its schema, distance or POM.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();

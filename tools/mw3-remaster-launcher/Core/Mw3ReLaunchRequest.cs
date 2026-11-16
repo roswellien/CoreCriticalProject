@@ -40,6 +40,8 @@ public sealed record Mw3RePreviewOptions
     public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();
     public bool DynamicLighting { get; init; }
     public bool Headlights { get; init; }
+    public bool WaterDetail { get; init; } = true;
+    public bool CloudDetail { get; init; } = true;
     public string? HeadlightBindings { get; init; }
     public string? StockEffectCatalog { get; init; }
     public string? StockHeadlightCatalog { get; init; }
@@ -131,6 +133,8 @@ public static class Mw3ReLaunchRequest
                 ["environment_packs"] = Paths(preview.EnvironmentPacks),
                 ["dynamic_lighting"] = preview.DynamicLighting,
                 ["headlights"] = preview.Headlights,
+                ["water_detail"] = preview.WaterDetail,
+                ["cloud_detail"] = preview.CloudDetail,
                 ["headlight_bindings"] = preview.HeadlightBindings,
                 ["stock_effect_catalog"] = preview.StockEffectCatalog,
                 ["stock_headlight_catalog"] = preview.StockHeadlightCatalog

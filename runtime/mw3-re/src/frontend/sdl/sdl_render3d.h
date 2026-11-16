@@ -57,12 +57,15 @@ struct CoreCriticalAssets {
   bool sun_explicit = false;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool dynamic_lighting_explicit = false, dynamic_lighting = false;
+  bool water_detail_explicit = false, water_detail = false;
+  bool cloud_detail_explicit = false, cloud_detail = false;
   bool effect_lights = false, fixture_lights = false, mech_headlights = false;
   std::string effect_light_catalog, stock_headlights, headlight_bindings;
   bool empty() const {
     return environment_packs.empty() && !environment_packs_explicit &&
            !environment && !sun_explicit &&
-           !dynamic_lighting_explicit && !effect_lights && !fixture_lights &&
+           !dynamic_lighting_explicit && !water_detail_explicit &&
+           !cloud_detail_explicit && !effect_lights && !fixture_lights &&
            !mech_headlights && effect_light_catalog.empty() &&
            stock_headlights.empty() && headlight_bindings.empty() &&
            !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&

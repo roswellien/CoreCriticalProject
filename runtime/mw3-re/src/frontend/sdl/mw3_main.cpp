@@ -314,7 +314,8 @@ void usage() {
       "    [--cc-environment-pack DIR]... [--cc-environment-packs-explicit]\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
-      "    [--cc-dynamic-lighting 0|1] [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
+      "    [--cc-dynamic-lighting 0|1] [--cc-water-detail 0|1] [--cc-cloud-detail 0|1]\n"
+      "    [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
       "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
@@ -539,6 +540,22 @@ bool parse(int argc, char** argv, Args& a) {
       }
       a.cc_assets.dynamic_lighting_explicit = true;
       a.cc_assets.dynamic_lighting = value == "1";
+    } else if (s == "--cc-water-detail" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-water-detail supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.water_detail_explicit = true;
+      a.cc_assets.water_detail = value == "1";
+    } else if (s == "--cc-cloud-detail" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-cloud-detail supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.cloud_detail_explicit = true;
+      a.cc_assets.cloud_detail = value == "1";
     } else if (s == "--cc-effect-lights" && next(1)) {
       a.cc_assets.effect_lights = true;
       a.cc_assets.effect_light_catalog = argv[++i];

@@ -688,25 +688,26 @@ static EnvironmentSelection load_environment_packs_impl(
         env_catalog(pack, "world", "MW34SNP1", refs, world_bytes, world_pages);
         selected.world_manifests.push_back(
             pack.pins.at(env_text(pack.registry["world_manifest"])).path);
-        const auto &detail = pack.registry.at("detail");
-        if (!detail.is_object() || detail.size() != 3 ||
-            !detail.contains("water") || !detail.contains("surf") ||
-            !detail.contains("cloud"))
-          env_fail("missing detail resources");
+        const auto detail = pack.registry.value("detail", EJson::object());
+        if (!detail.is_object() || detail.size() > 3)
+          env_fail("invalid detail resource table");
         for (const auto &entry : detail.items()) {
+          if (entry.key() != "water" && entry.key() != "surf" &&
+              entry.key() != "cloud")
+            env_fail("unknown detail role");
           const auto name = env_text(entry.value());
           if (!pack.pins.count(name) || pack.pins.at(name).format != "BWSNR2")
             env_fail("invalid detail role");
           refs.insert(name);
-          selected.resources[pack.region]
-                            [entry.key() == "water"  ? EnvironmentRole::water
-                             : entry.key() == "surf" ? EnvironmentRole::surf
-                                                     : EnvironmentRole::cloud] =
-              pack.pins.at(name).path;
+          const auto role = entry.key() == "water"  ? EnvironmentRole::water
+                            : entry.key() == "surf" ? EnvironmentRole::surf
+                                                    : EnvironmentRole::cloud;
+          selected.resources[pack.region][role] = pack.pins.at(name).path;
           const auto &digest = pack.pins.at(name).digest;
           if (common.count(entry.key()) && common[entry.key()] != digest)
             env_fail("conflicting shared detail resource");
           common[entry.key()] = digest;
+          selected.detail_digests[role] = digest;
         }
         const auto name = env_text(pack.registry.at("effects"));
         if (!pack.pins.count(name) || pack.pins.at(name).format != "MWFX1")

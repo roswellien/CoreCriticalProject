@@ -27,6 +27,7 @@
 #include "renderer/native_fixture_geometry.hpp"
 #include "renderer/native_fixture_sources.hpp"
 #include "renderer/surface_detail.hpp"
+#include "renderer/surface_detail_bindings.hpp"
 #include "renderer/surface_materials.hpp"
 #include "renderer/vk_scene.hpp"
 #include "platform/sha256.hpp"
@@ -2377,6 +2378,53 @@ void check_campaign_lighting_and_policy() {
 }
 
 void check_renderer_bridge_config() {
+  mw34::materials::SurfaceNormals catalog;
+  const mw34::materials::SurfaceKey water_key{64, 64, 1, 0x1234};
+  catalog.bindings.emplace(water_key, 0);
+  catalog.pack.images.push_back({"water", 1, 1, 0x5678, {}});
+  mw34::detail::Bindings detail_bindings;
+  mw34::detail::register_catalog(detail_bindings, catalog, 1, 7);
+  const mw34::materials::SurfaceKey surf_key{32, 32, 1, 0x2345};
+  mw34::materials::SurfaceNormals surf_catalog;
+  surf_catalog.bindings.emplace(surf_key, 0);
+  surf_catalog.pack.images.push_back({"surf", 1, 1, 0x6789, {}});
+  mw34::detail::register_catalog(detail_bindings, surf_catalog, 2, 8);
+  const mw34::materials::SurfaceKey cloud_key{128, 64, 1, 0x3456};
+  mw34::materials::SurfaceNormals cloud_catalog;
+  cloud_catalog.bindings.emplace(cloud_key, 0);
+  cloud_catalog.pack.images.push_back({"cloud", 1, 1, 0x789a, {}});
+  mw34::detail::register_catalog(detail_bindings, cloud_catalog, 3, 9);
+  mw34::detail::Settings detail_settings;
+  detail_settings.water = true;
+  require(mw34::detail::role_for(detail_bindings, water_key, detail_settings) == 1 &&
+              mw34::detail::normal_index_for(detail_bindings, water_key,
+                                             detail_settings) == 7,
+          "exact water surface identity did not bind its detail role/image");
+  detail_settings.clouds = true;
+  require(mw34::detail::role_for(detail_bindings, surf_key, detail_settings) == 2 &&
+              mw34::detail::role_for(detail_bindings, cloud_key, detail_settings) == 3,
+          "surf/cloud catalog identities did not bind their detail roles");
+  detail_settings.water = false;
+  require(mw34::detail::role_for(detail_bindings, water_key, detail_settings) == 0 &&
+              mw34::detail::normal_index_for(detail_bindings, water_key,
+                                             detail_settings) == -1,
+          "disabled water detail retained its role or image");
+  detail_settings.water = true;
+  require(mw34::detail::role_for(detail_bindings,
+                                 mw34::materials::SurfaceKey{64, 64, 1, 0x9999},
+                                 detail_settings) == 0,
+          "unmatched texture identity was inferred as water");
+  mw34::sun::Uniform detail_uniform{};
+  mw34::detail::uniform(detail_uniform, 1, detail_settings, 2.0);
+  require(detail_uniform.detail[0] == 1.0f && detail_uniform.detail[1] > 0,
+          "enabled detail role did not reach the shader uniform path");
+  detail_settings.water = false;
+  mw34::sun::Uniform legacy_uniform{};
+  mw34::detail::uniform(legacy_uniform, 1, detail_settings, 2.0);
+  require(legacy_uniform.detail == std::array<float, 4>{} &&
+              legacy_uniform.detail_motion == std::array<float, 4>{},
+          "disabled surface detail changed the legacy shader uniform path");
+
   // 1. Zero function-static env cache test
   require(mw34::detail::presentation_time(1, 10.5) == 10.5,
           "detail_fixed_time 10.5 mismatch");
@@ -2403,6 +2451,10 @@ void check_renderer_bridge_config() {
   assets.geometry = "gpu";
   assets.sun_azimuth = "60";
   assets.sun_elevation = "40";
+  assets.water_detail_explicit = true;
+  assets.water_detail = true;
+  assets.cloud_detail_explicit = true;
+  assets.cloud_detail = true;
 
   auto cfg_dxgi = cc_mw3_re::configure_bridge(
       sdlfe::RendererBackend::core_critical_dxgi, quality, assets);
@@ -2427,6 +2479,8 @@ void check_renderer_bridge_config() {
           "temporal_inputs propagation mismatch");
   require(cfg_dxgi.fixture_lights == false,
           "fixture_lights propagation mismatch");
+  require(cfg_dxgi.water_detail && cfg_dxgi.cloud_detail,
+          "surface detail launch options did not reach renderer config");
   sdlfe::CoreCriticalAssets local_light_assets{};
   local_light_assets.lighting = "normal";
   local_light_assets.geometry = "gpu";

@@ -196,6 +196,8 @@ public sealed class NativeGameRunner
                 EnvironmentPacks = environments,
                 DynamicLighting = settings.DynamicLighting,
                 Headlights = settings.Headlights && settings.DynamicLighting,
+                WaterDetail = settings.WaterDetail,
+                CloudDetail = settings.CloudDetail,
                 HeadlightBindings = headlightBindings,
                 StockEffectCatalog = contract.FindDeclaredFile("resources/stock-effect-lights.bin"),
                 StockHeadlightCatalog = contract.FindDeclaredFile("resources/stock-headlights.bin")

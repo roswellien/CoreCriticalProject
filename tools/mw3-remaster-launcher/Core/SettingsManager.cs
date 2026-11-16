@@ -28,6 +28,10 @@ namespace MW3RemasterLauncher.Core
         public bool Headlights { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
+        // Enabled by default; MW3-RE only turns either feature on when an active
+        // environment pack provides its validated role catalog.
+        public bool WaterDetail { get; set; } = true;
+        public bool CloudDetail { get; set; } = true;
         public string DirectInputJoystickInstanceGuid { get; set; } = string.Empty;
         public string DirectInputJoystickProductName { get; set; } = string.Empty;
         public bool DirectInputJoystickNone { get; set; }

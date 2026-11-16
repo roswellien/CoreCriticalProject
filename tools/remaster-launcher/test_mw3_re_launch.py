@@ -404,8 +404,9 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
         self.assertEqual(result["argv"][17:], [
-            "--cc-dynamic-lighting", "0",
-            "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200",
+            "--cc-dynamic-lighting", "0", "--cc-water-detail", "0",
+            "--cc-cloud-detail", "0", "--cc-pom", "1", "--cc-environment-packs-explicit",
+            "--cc-draw-distance", "1200",
             "--cc-hud", "core-critical", "--cc-hud-text", "1",
             "--cc-geometry", "partial",
             "--cc-model", "strider", "0", payload("mesh0"), payload("tex0"),
@@ -754,6 +755,61 @@ class NativePreviewPlanTests(unittest.TestCase):
     def test_headlights_cannot_be_selected_without_dynamic_lighting(self):
         with self.assertRaisesRegex(ValueError, "require dynamic lighting"):
             self.plan(self.request(headlights=True))
+        with self.assertRaisesRegex(ValueError, "surface detail requires normal lighting"):
+            self.plan(dict(self.request(water_detail=True), lighting="off", visuals={"pom": False}))
+        for field, value in (("water_detail", 1), ("cloud_detail", "true")):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "must be Boolean"):
+                self.plan(self.request(**{field: value}))
+
+    def detail_environment_pack(self, name, roles):
+        detail = {}
+        files = {}
+        for role in roles:
+            member = f"environment/{role}.bin"
+            catalog = b"BWSNR2\0\0" + (1).to_bytes(4, "little")
+            self.write(f"{name}/{member}", catalog)
+            detail[role] = member
+            files[member] = {"bytes": len(catalog), "sha256": "0" * 64, "format": "BWSNR2"}
+        registry = {"schema_version": 2, "payload_profile": "prepared-environment-v1",
+                    "operation": "training", "banks": {}, "detail": detail}
+        registry_bytes = json.dumps(registry).encode("utf-8")
+        self.write(f"{name}/environment/environment.json", registry_bytes)
+        files["environment/environment.json"] = {
+            "bytes": len(registry_bytes), "sha256": "1" * 64, "format": "JSON"}
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": files,
+                    "native_payload": {"profile": "prepared-environment-v1",
+                                       "registry": "environment/environment.json"}})
+        return os.path.join(self.root, name)
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_missing_detail_roles_are_reported_and_feature_flags_stay_off(self):
+        water_pack = self.detail_environment_pack("water", ("water", "surf"))
+        water_result = self.plan(self.request(environment_packs=[water_pack],
+                                              water_detail=True, cloud_detail=True))
+        water_argv = water_result["argv"]
+        self.assertEqual(water_argv[water_argv.index("--cc-water-detail") + 1], "1")
+        self.assertEqual(water_argv[water_argv.index("--cc-cloud-detail") + 1], "0")
+        skipped = [item for item in water_result["skipped_packs"]
+                   if item.get("feature") == "cloud_detail"]
+        self.assertEqual(len(skipped), 1)
+        self.assertIn("cloud detail map", skipped[0]["reason"])
+
+        complete_pack = self.detail_environment_pack(
+            "complete", ("water", "surf", "cloud"))
+        complete_result = self.plan(self.request(environment_packs=[complete_pack],
+                                                 water_detail=True, cloud_detail=True))
+        complete_argv = complete_result["argv"]
+        self.assertEqual(complete_argv[complete_argv.index("--cc-water-detail") + 1], "1")
+        self.assertEqual(complete_argv[complete_argv.index("--cc-cloud-detail") + 1], "1")
+        self.assertEqual(complete_result["skipped_packs"], [])
+
+        water_only_pack = self.detail_environment_pack("water-only", ("water",))
+        water_only_result = self.plan(self.request(environment_packs=[water_only_pack],
+                                                   water_detail=True))
+        water_only_argv = water_only_result["argv"]
+        self.assertEqual(water_only_argv[water_only_argv.index("--cc-water-detail") + 1], "0")
+        self.assertTrue(any(item.get("feature") == "water_detail"
+                            for item in water_only_result["skipped_packs"]))
 
 
 if __name__ == "__main__":

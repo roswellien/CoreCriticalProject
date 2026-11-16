@@ -8,6 +8,7 @@ struct SurfaceNormalState {
   std::string native_material_bytes;
   std::uint64_t expected_mesh_uv_hash{};
   std::uint32_t expected_polygon_count{};
+  mw34::detail::Bindings detail_bindings;
   std::shared_ptr<mw34::materials::SurfaceMaterialPack> native_material_pack;
   std::set<std::pair<std::uint64_t, std::uint64_t>> traced_native;
   std::set<std::tuple<std::uintptr_t, std::uintptr_t, std::uint64_t>>
@@ -56,6 +57,13 @@ bool reject_surface_binding(const char *reason) {
 
 bool surface_normals_enabled() const { return lighting_.normals; }
 
+mw34::detail::Settings surface_detail_settings() const {
+  mw34::detail::Settings settings;
+  settings.water = bridge_config_.water_detail;
+  settings.clouds = bridge_config_.cloud_detail;
+  return settings;
+}
+
 void surface_normals_load() {
   if (surface_normals_.loaded) {
     return;
@@ -63,6 +71,7 @@ void surface_normals_load() {
   // Transactional build: fill a local cache first and publish only on success,
   // so an exception leaves no partial entries behind for a subsequent attempt.
   mw34::materials::WorldNormalCache cache{};
+  mw34::detail::Bindings detail_bindings;
   std::vector<std::string> authored_paths;
   if (!bridge_config_.surface_normal_catalog.empty())
     authored_paths.push_back(bridge_config_.surface_normal_catalog);
@@ -116,6 +125,54 @@ void surface_normals_load() {
     }
   }
   surface_normals_load_world(cache);
+  auto load_detail_role = [&](::platform::prepared::EnvironmentRole source_role,
+                              unsigned detail_role, bool active) {
+    if (!active)
+      return;
+    std::string path;
+    if (environment_) {
+      for (const auto &[region, resources] : environment_->resources) {
+        const auto found = resources.find(source_role);
+        if (found != resources.end()) {
+          path = found->second;
+          break;
+        }
+      }
+    }
+    if (path.empty())
+      throw std::runtime_error("Enabled surface detail has no admitted role catalog");
+    const auto digest = environment_->detail_digests.find(source_role);
+    if (digest == environment_->detail_digests.end() ||
+        ::platform::integrity::sha256_file(std::filesystem::u8path(path)) !=
+            digest->second)
+      throw std::runtime_error(
+          "Surface detail catalog changed after environment admission");
+    const auto size = std::filesystem::file_size(std::filesystem::u8path(path));
+    if (size < 12 || size > 16ULL * 1024 * 1024)
+      throw std::runtime_error("Surface detail catalog size is outside its limit");
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
+    if (!input)
+      throw std::runtime_error("Admitted surface detail catalog cannot be opened");
+    auto parsed = mw34::materials::read_surface_normals(input);
+    const auto texture_base = cache.textures.size();
+    mw34::detail::register_catalog(detail_bindings, parsed, detail_role,
+                                   texture_base);
+    for (auto &image : parsed.pack.images) {
+      mw34::materials::WorldNormalCache::TextureRecord record{};
+      record.name = std::move(image.name);
+      record.width = image.width;
+      record.height = image.height;
+      record.hash = image.hash;
+      record.pixels32 = std::move(image.pixels);
+      cache.textures.push_back(std::move(record));
+    }
+  };
+  load_detail_role(::platform::prepared::EnvironmentRole::water, 1,
+                   bridge_config_.water_detail);
+  load_detail_role(::platform::prepared::EnvironmentRole::surf, 2,
+                   bridge_config_.water_detail);
+  load_detail_role(::platform::prepared::EnvironmentRole::cloud, 3,
+                   bridge_config_.cloud_detail);
   std::string native_bytes;
   std::uint64_t expected_hash{};
   std::uint32_t expected_polygons{};
@@ -150,6 +207,7 @@ void surface_normals_load() {
   surface_normals_.expected_mesh_uv_hash = expected_hash;
   surface_normals_.expected_polygon_count = expected_polygons;
   surface_normals_.cache = std::move(cache);
+  surface_normals_.detail_bindings = std::move(detail_bindings);
   surface_normals_.loaded = true;
 }
 

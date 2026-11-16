@@ -201,6 +201,7 @@ struct Command {
 };
 struct Scene {
   double detail_time{};
+  mw34::detail::Settings detail_settings{};
   std::uint64_t world_frame{}, world_generation{}, world_context{};
   std::array<float, 3> world_eye{};
   bool world_eye_valid{};
@@ -1704,7 +1705,8 @@ private:
               ((draw.detail_role == 3 && draw.sky == 1) ||
                (draw.detail_role > 0 && draw.detail_role < 3 && !draw.sky &&
                 (draw.sun_tl || (draw.model && draw.model->world)))))
-            mw34::detail::uniform(u, draw.detail_role, s.detail_time);
+            mw34::detail::uniform(u, draw.detail_role, s.detail_settings,
+                                  s.detail_time);
           u.detail_motion[3] =
               draw.key.blend ? -1.f : environment.night_world_gain;
           s.emissions.apply(draw.emission_index, u);
@@ -1781,7 +1783,8 @@ private:
             d.model && !d.model->world ? normal_settings.normal_strength
                                        : normal_settings.ground_normal_strength;
         const bool normal_active =
-            (normal_strength > 0 || mw34::detail::enabled(d.detail_role));
+            (normal_strength > 0 ||
+             mw34::detail::enabled(d.detail_role, s.detail_settings));
         if (normal_active && d.normal_texture >= 0 &&
             size_t(d.normal_texture) >= bound.size())
           throw std::runtime_error(
@@ -2952,13 +2955,18 @@ private:
         ++haze_routed;
         continue;
       }
-      if (d.model || (!d.native_sky && (d.sun_tl || d.key.blend)) || !d.count ||
+      const bool cloud_detail_draw =
+          d.detail_role == 3 && mw34::detail::enabled(3, s.detail_settings);
+      if (d.model ||
+          (!d.native_sky && (d.sun_tl || d.key.blend) &&
+           !cloud_detail_draw) ||
+          !d.count ||
           (d.texture >= 0 && !sun.sky_active && !sun.sky_shading &&
            !sun.suppress_sky) ||
           (d.texture < 0 && !sun.haze_active && !sun.sky_shading &&
            !sun.suppress_sky))
         continue;
-      const bool distant = d.native_sky || mw34::sky::backdrop(
+      const bool distant = d.native_sky || cloud_detail_draw || mw34::sky::backdrop(
           s.vertices.data() + size_t(d.first) * 32, size_t(d.count) * 32,
           d.detail_role, d.texture >= 0, d.key.zwrite != 0);
       if (!distant) {
@@ -2973,7 +2981,9 @@ private:
         d.count = 0;
         continue;
       }
-      if (sun.sky_shading && view[at]) {
+      if ((sun.sky_shading ||
+           (d.detail_role == 3 &&
+            mw34::detail::enabled(3, s.detail_settings))) && view[at]) {
         d.sky = d.texture < 0 ? 2 : 1;
         d.sun_tl = view[at];
         if (d.sky_view)
