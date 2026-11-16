@@ -198,6 +198,11 @@ int32_t render_object3d(Node* node, int32_t mode) {
         if (!g_walk.recompute) recomputed = 1, g_walk.recompute = 1;
       }
     }
+    // Copy the already-composed matrix; no extra transform evaluation.
+    const auto& fixture_stack = zmth::matrix_stack();
+    if (!fixture_stack.overflow && fixture_stack.top >= 0 &&
+        fixture_stack.top < zmth::kStackDepth && fixture_stack.slot[fixture_stack.top])
+      fixture_observe_world(node, fixture_stack.slot[fixture_stack.top]->m);
     int32_t caster = 0, saved_shadows = 0, overlay = 0, opacity = 0, color = 0;
     if (is_caster(node)) {
       caster = 1;
@@ -880,6 +885,7 @@ int camera_matrices(Node* node, Camera* d, const float* offset) {
 // caller leaves its child (or cell node) count there, so a node is culled
 // only when it has a sibling; the world's own children get 2 (0x004f6c29).
 void render_node(Node* node, int32_t siblings) {
+  FixtureWalkScope fixture_scope(node);
   if (!zmod::zone_visible(node->raw[0x30])) return;
   if ((nu(node, 0x2c) & 0x20) && g_walk.pre) g_walk.pre(node);
   const bool horizon = g_walk.camera && node == g_walk.camera->nodes[2];
@@ -1162,6 +1168,7 @@ void horizon_follow() {
 // parent's world matrix when it has one parent.
 int render_subtree(Node* camera_node, Node* node, int32_t hw) {
   if (!node || !camera_node) return 1;
+  const zvid::ProducerWorldScope producer_view(true);
   zmth::Mat34 local;
   zmth::push(&local);
   Camera* cam = cam_of(camera_node);
@@ -1234,6 +1241,7 @@ int camera_draw_flares(Camera* cam, int32_t from) {
 // The Direct3D frame's 3D part: LoD scale, lights, camera, horizon,
 // viewport, zones, then the scene walk between BeginScene and EndScene.
 int render_world(Node* camera_node, int32_t after) {
+  zvid::ProducerWorldScope producer_view;
   zmth::check_stack_at_frame();  // FIX (bug), ours (W59): one imbalance cannot carry
   zmth::Mat34 local;
   zmth::push(&local);
@@ -1255,6 +1263,7 @@ int render_world(Node* camera_node, int32_t after) {
   camera_update(camera_node);
   horizon_follow();
   zmod::set_camera(g_walk.camera);
+  producer_view.begin_emission();
   zmod::world_update_lights(world);
   if (g_hooks.world_sounds) g_hooks.world_sounds(g_hooks.ctx, world);
   if (zmod::shadows_on()) {
@@ -1286,6 +1295,7 @@ int render_world(Node* camera_node, int32_t after) {
   if (g_hooks.begin_scene) g_hooks.begin_scene(g_hooks.ctx);
   render_scene(world, camera_node, g_walk.camera);
   if (g_hooks.puffers) g_hooks.puffers(g_hooks.ctx);
+  producer_view.end_emission();
   zmth::pop();
   if (g_hooks.flush_transparent) g_hooks.flush_transparent(g_hooks.ctx);
   if (after && g_hooks.after_scene) g_hooks.after_scene(g_hooks.ctx, ztimer::state().dt);

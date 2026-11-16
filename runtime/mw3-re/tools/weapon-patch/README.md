@@ -19,7 +19,7 @@ Made with AI assistance, by Claude, on Owen's project.
 | Launchers | works without editing the exe, so a launcher's hash check still passes (run through a launcher that checks the exe's hash: works) | a launcher that verifies the exe's hash will refuse it, and that's for its author to allow |
 | Weapons in all | 127 at most, unproven past the lab's lists (What was tested) | 49 |
 | Exes | official 1.2, NOCD 1.2, and either with ZipperFixup: anything else is left alone | only the ones in `ACCEPTED` |
-| Needs | a built DLL | Python only |
+| Needs | nothing: the zip's `install.cmd` | Python |
 | Antivirus | **may be flagged** | less likely |
 
 Use the stand-in unless you have a reason not to. Use the patched copy if your antivirus objects, or you want one file
@@ -31,22 +31,32 @@ start: restore it (below) or take it out of quarantine.
 
 ## The stand-in DLL
 
+1. Unzip the whole release zip to its own folder. Don't paste its files into the game folder.
+2. Drop your game folder onto `install.cmd`. It tells you what it did, or why it stopped.
+3. Start the game the way you always do, and look for the plain PPC in the mech lab's weapon list.
+4. If it isn't there, send `weapon-patch.log` from your game folder. `restore.cmd` undoes it all the same way.
+
+`install.cmd` needs nothing else installed. It renames the game's `IFORCE2.dll` to `IFORCE2o.dll`, and copies in the stand-in, from `install-files\`, and `weapon-rows.txt`. It stops if the folder has neither `Mech3.exe` nor `Mech3fixup.exe`, if `IFORCE2.dll` is missing, if `IFORCE2o.dll` exists, or if the
+`IFORCE2.dll` there is already ours, which means the original was overwritten: put that back first. It never overwrites anything, and keeps a `weapon-rows.txt` that's already there. `restore.cmd` deletes only our own file, and only with `IFORCE2o.dll` there to put back.
+
+**If the game says `IFORCE2o.dll` was not found,** the stand-in is in the game folder without the original beside it. Put the original `IFORCE2.dll` back, 61,440 bytes, then run `install.cmd`.
+
+To change your rows, edit `weapon-rows.txt` in the game folder with any text editor. Each time the game starts, the stand-in writes one line to `weapon-patch.log` beside it, saying how many weapons it added or why it added none, such as
+`weapon-rows.txt line 3: family is not 0..14`. **Past that, it never stops the game:** a bad row, a missing file or an exe it doesn't recognise means no changes at all, and the game runs as usual.
+
+### Building it yourself
+
+The zip's DLL is built from this source with mingw (`i686-w64-mingw32-gcc`), and Python runs the tools; neither is needed to install. In the zip the Python tools are under `tools\`; building needs this repository's layout. The command is in `proxy_install.py`, and the same source and compiler give the same file:
+
     python tools/weapon-patch/proxy_install.py build --out IFORCE2.dll
     python tools/weapon-patch/proxy_install.py install "<game folder>" IFORCE2.dll rows.txt
-
-Building needs mingw (`i686-w64-mingw32-gcc`); the command is in `proxy_install.py`. Install renames the game's `IFORCE2.dll` to
-`IFORCE2o.dll`, and copies in the stand-in and your rows as `weapon-rows.txt`. It refuses if either name is taken, and never
-overwrites. To undo it, which removes the stand-in and puts the original back:
-
     python tools/weapon-patch/proxy_install.py restore "<game folder>"
 
-To change your rows, edit `weapon-rows.txt` in the game folder with any text editor. Each time the game starts, the stand-in
-writes one line to `weapon-patch.log` beside it, saying how many weapons it added or why it added none, such as
-`weapon-rows.txt line 3: family is not 0..14`. **It never stops the game:** a bad row, a missing file or an exe it doesn't
-recognise means no changes at all, and the game runs as usual. To check a row file first, against your own `reader.zbd`, DLL
-and exe:
+To check a row file first, against your own `reader.zbd`, DLL and exe:
 
     python tools/weapon-patch/proxy_install.py check "<game folder>" rows.txt
+
+`package/make_zip.py` makes the release zip, and refuses a DLL that isn't the tested one. `package/test_install_cmd.py` runs both scripts on Windows `cmd` with dummy files.
 
 ## The patched copy
 
@@ -66,16 +76,21 @@ One line for each weapon:
     # name  family  tech    ammo  label
     PPC     3       sphere  no    0x2fd
 
+Any number of spaces or tabs goes between the columns, so you can line them up. A line starting with `#` is a note and is
+not read: a row of your own must not start with one.
+
 - `name`: the weapon's key under `BALLISTICS` in `weapons.zrd`, in exact case.
 - `family`: 0 to 14. Copy a similar weapon's.
 - `tech`: `clan`, `sphere`, `both` or `none`.
 - `ammo`: `yes` or `no`.
-- `label`: the lab's name, as a message id in your `Mech3Msg.dll`.
+- `label`: the lab's name, as a message id in your `Mech3Msg.dll`. A resource editor such as Resource Tuner shows the ids.
+  Keep the `0x`: `0x307` and `0x00000307` are the same id, while `307` without it is a different one, read as a decimal number.
 
 Always add at the end of your list and keep the order: saved loadouts hold a weapon's position.
 
 A row needs a definition in `weapons.zrd`. The game has 12 without a row, most not meant to be mounted (`LANDMINE`, `NUKE`,
-`lb2xburst`); only the PPC has been tried. `ammo` has to match the definition: in every row the game has, `yes` means its `MASS` has an `ammo` entry, so the tools refuse
+`lb2xburst`); of those, only the PPC has been tried. A brand-new weapon works too: a player added one with its own definition and
+label, and its damage, range, weight and slots all came out right in the game. `ammo` has to match the definition: in every row the game has, `yes` means its `MASS` has an `ammo` entry, so the tools refuse
 a mismatch, and each tech in the row needs its own `MASS` entry.
 
 ### Adding a definition
@@ -158,7 +173,8 @@ As of 2026-11-05:
   log line, and `restore` puts the original back.
 - **127 weapons, unproven.** With 90 made-up rows, 394 store items, the lab's weapon and ammo lists opened and scrolled to the end on a real game. Then, after Accept on the lab and the next click, the game crashed
   once (0xc0000005 at `Mech3.exe+0x89d19`, on the Instant Action screen's enemy list). That code uses the screen's wave numbers, not the weapon table, and reading finds no limit on row count, so the cause is not known. The original
-  also crashes easily on Windows 11. Until that is settled, treat large lists as a risk.
+  also crashes easily on Windows 11. Two later full runs at 127 weapons, with both lists scrolled and the enemy list used, did not crash, and neither did one run each at 38, 49 and
+  without the stand-in. So the crash hasn't been reproduced, and that doesn't clear it: nothing was fitted or saved at 127. Treat large lists as a risk.
 - **On a real game, through a launcher that checks the exe's hash:** the stand-in works, with the PPC fitted, saved, restarted, fired and damaging a target. A patched copy is refused there.
 - **A new definition, in the emulator:** one added to `weapons.zrd`, copied from the PPC with its own weight and damage, is read by the game's own code on both routes. Its name, HUD text, weight, slots, ammo, damage and place in the store all line up, and no other
   definition changes. 5 deliberate breaks were caught. On an exe without its row, it's only one more definition.

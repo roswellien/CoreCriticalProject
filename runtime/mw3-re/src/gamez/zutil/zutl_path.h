@@ -21,6 +21,22 @@ using BankOverrides = std::map<std::string, std::string>;
 std::shared_ptr<const BankOverrides>
 set_bank_overrides(std::shared_ptr<const BankOverrides> banks);
 
+// Names on Windows (docs/program.md, Names on Windows; zutl_winnames.cpp).
+// Whether the narrow calls take UTF-8: not before Windows 10 1903, which ignores
+// the manifest; a name in plain ASCII works either way. A path from mw3.cfg or
+// the data folder's pointer, which an earlier build may have left in the
+// system's code page, as UTF-8. Files of `write_dir` an earlier build named
+// wrongly, put right, once per settings folder.
+#if defined(_WIN32)
+bool narrow_paths_utf8();
+std::string path_from_config(const std::string& s);
+void repair_old_names(const std::string& write_dir);
+#else
+inline bool narrow_paths_utf8() { return true; }
+inline std::string path_from_config(const std::string& s) { return s; }
+inline void repair_old_names(const std::string&) {}
+#endif
+
 struct Mounts {
   std::vector<std::string> read;   // searched in order
   std::string write;               // where the game writes (configs\, saves); "" = the first read mount
@@ -45,6 +61,8 @@ bool is_mod_dir(const std::string& dir);     // a mod's root or a folder under o
 bool mod_may_serve(const std::string& host_path);
 // The first mod's copy of a game path (host form, from a mod's root), "" if none.
 std::string find_in_mods(const std::string& host_path);
+// Mod `i`'s copy (Mounts::mods' order), "" if none; the same refusals.
+std::string find_in_mod(size_t i, const std::string& host_path);
 void set_write_dir(const std::string& dir);
 // FIX (A): the original's names meet Windows, where case does not matter; an
 // install on a case-sensitive disk may be in any case (a tool's lower case, a
@@ -59,6 +77,8 @@ std::string any_case(const std::string& root, const std::string& rel);
 std::string host(const char* path);
 // UTF-8 text in the game's code page (Windows-1252); false for a character it lacks.
 bool game_text(const std::string& utf8, std::string* out);
+// The game's text (Windows-1252) as UTF-8.
+std::string utf8_text(const std::string& game);
 std::string find(const char* path);          // the host path in the first mount that has it, "" if none
 // Ours: every mount's copy of a game path, in the order find() looks (the
 // write dir, then the mounts; a mod's only where it may serve).

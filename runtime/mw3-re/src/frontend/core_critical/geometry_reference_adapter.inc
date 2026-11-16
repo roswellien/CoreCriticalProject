@@ -3,10 +3,16 @@ void emit_reference_geometry(
     const std::vector<cc::geometry::Material> &materials,
     const ::platform::ModelDrawContext &context,
     const ::platform::prepared::Matrix &camera,
-    const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog) {
+    const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog,
+    const std::vector<NativeGroundRangeAdmission> &admissions,
+    bool native_fixture_source = true) {
   const auto normal_matrix = mw34::sun::normal_matrix(camera);
   const auto camera_to_world =
       mw34::donor::product(world, mw34::donor::inverse(camera));
+  std::array<float, 4> surface_eye{};
+  if (std::any_of(admissions.begin(), admissions.end(),
+                  [](const auto &admission) { return bool(admission.height_binding); }))
+    surface_eye = native_height_eye(camera_to_world);
   std::vector<cc::geometry::ReferenceVertex> vertices;
   vertices.reserve(resource.vertices.size());
   for (const auto &source : resource.vertices) {
@@ -52,6 +58,9 @@ void emit_reference_geometry(
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     draw.texture =
         material.texture < 0 ? -1 : int(bind_texture(material.texture, false));
+    apply_native_geometry_admission(draw, admissions[range_index]);
+    if (draw.height_binding)
+      draw.surface_eye = surface_eye;
     draw.sampler = 3U | unsigned(material.address_u) << 4 |
                    unsigned(material.address_v) << 8;
     draw.key = {0, 5, 6, 1, 7, 1, std::uint8_t(range.two_sided ? 1 : 3), 0};
@@ -102,6 +111,9 @@ void emit_reference_geometry(
     draw.count = unsigned(normals->size());
     draw.lit_normals = std::move(normals);
     if (draw.count) {
+      if (native_fixture_source)
+        apply_fixture_observation(draw, capture_fixture_range(resource, context, range,
+                                                              material.texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
     }

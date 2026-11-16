@@ -15,6 +15,7 @@
 #include "gamez/zclass/sound.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmodel/gmod_const.h"
+#include "gamez/zmodel/gmod_light.h"
 
 namespace zcls {
 
@@ -262,6 +263,7 @@ int node_destroy(Node* node) {
       while (w->get<int32_t>(0xa0) > 0)
         if (int r = world_remove_light(node, w->lights[0])) return r;
       if (w->lights) {
+        zmod::retire_world_lights(w);
         delete[] w->lights, delete[] w->light_data;
         w->lights = nullptr, w->light_data = nullptr;
       }
@@ -340,8 +342,12 @@ void free_items() { g_lists.chunks.clear(); }
 // the remembered gamez.zbd path cleared.
 int classes_reset() {
   destroy_all();
+  // A no-progress destroy pass can leave nodes alive. The whole pool is
+  // nevertheless retired below, so no borrowed light reference may survive.
+  zmod::clear_light_list();
   NodePool& p = nodes();
   if (p.capacity > 0) {
+    fixture_pool_retire();
     p.blocks.clear();
     p.capacity = 0, p.live = 0, p.free_head = -1;
   }

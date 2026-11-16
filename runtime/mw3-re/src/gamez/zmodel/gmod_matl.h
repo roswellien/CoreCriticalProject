@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "gamez/zimage/zimg_texture.h"
+namespace zcls { struct ZbdReadContext; }
 
 // World materials (zModel\gmod_matl.c): the table a gamez.zbd fills, which
 // mechlib materials are later added to (docs/gamez.md).
@@ -35,6 +36,9 @@ struct Material {                  // 0x2c bytes
   uint32_t file_cycle;             // the file's stale pointer (the exe's +0x24 without a
                                    // cycle; 0 on materials made at run time)
   int16_t prev, next;              // +0x28, +0x2a
+  // Host-only, lazy and per material. Shared native models share this exact
+  // mapping lifetime; unrelated materials keep their own retained sources.
+  mutable std::shared_ptr<const int> fixture_revision;
 };
 
 constexpr int32_t kMaterialBlock = 1000;  // 0x005edd50
@@ -54,7 +58,7 @@ struct MaterialTable {
 };
 MaterialTable& materials();
 
-int read_materials(std::FILE* f);  // 0x005363d0
+int read_materials(std::FILE* f, zcls::ZbdReadContext* proof = nullptr);  // 0x005363d0
 Material* take_material(int32_t index);  // 0x00536070, marks it referenced
 // The table's equal material (0x00536f10: all but the bookkeeping flags; a
 // soil of 0 on either side takes the other's), else a new one copied from

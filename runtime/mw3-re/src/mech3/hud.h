@@ -290,6 +290,7 @@ class HudRadar : public ztwod::FilledBox {
   uint32_t select_map();             // 0x0043da00: the mission map for the size, kept at [0x0060998c]
   void set_fov(float radians);       // 0x0043f0c0
   void set_dir(const float* v);      // 0x0043f130: the cone's edges from the view direction
+  void set_heading(const float* v);  // 0x0043f2d0: the mech's facing, a red line over the mission map
   void update(float dt) override;    // +0x24  0x0043dd00 (part 1: the radar; the contacts part 2)
   void update_contacts(float dt, float noise_px);  // 0x0043dd00 from 0x0043e445: the contacts, the projectiles, the network's
   uint16_t x58 = 0;                  // +0x58
@@ -300,6 +301,7 @@ class HudRadar : public ztwod::FilledBox {
   int32_t to_r = 0, to_x = 0, to_y = 0;      // +0x78 the size moved to
   int32_t r_steps = 0, x_steps = 0, y_steps = 0;  // +0x84
   float dir[3] = {};                 // +0x90
+  float heading[3] = {};             // +0x9c the mech's forward (0x0043f2d0)
   float half_fov = 0.0f;             // +0xa8
   float cos_half = 0.0f, sin_half = 0.0f;  // +0xac, +0xb0
   ztwod::ClipLine2D lines[3];        // +0xb4 the cone's edges (green) and a red one
@@ -451,6 +453,7 @@ class HudTarget : public HudMfd {
   void* target = nullptr;            // +0x2404
   uint8_t shown = 0;                 // +0x2408
   float x240c = 0.0f;                // +0x240c the new target's pulse: the triangle starts large and shrinks
+  float since_set = 0.0f;            // ours: seconds since the target last changed, for the shots' log
   int32_t line_h = 0;                // +0x2410
 };
 
@@ -518,6 +521,7 @@ class HudReticle : public ztwod::Image {
   zwep::HitRecord hit{};             // +0x928 what the aim hit (its node 0: nothing)
   int32_t lock = 0;                  // +0x950 the missile lock: 0 none, 1 acquiring, 2 waiting, 3 locked, 4 lost
   float lock_timer = 0.0f;           // +0x954 0.6 after a reset ([0x005e3a0c]); counts down in update
+  float locked_for = 0.0f;           // ours: seconds the lock (state 3) has held, for the shots' log
   void aim_state(bool over);         // 0x00443d20: the lock and the reticle's image
   void* source = nullptr;            // +0x958 (not set by the constructor)
 };
@@ -875,7 +879,6 @@ class HudHooks : public zgame::Unported {
   virtual float normalize(float v[3]) {  // 0x004020d0, in place; the length
     return zgame::from_bits(unported("0x004020d0", {zgame::bits(v[0]), zgame::bits(v[1]), zgame::bits(v[2])}));
   }
-  virtual void radar_heading(void* radar, Mech* m) { unported("0x0043f2d0", {id(radar), id(m) + 0x24}); }
   virtual void mech_radar_dir(Mech* m, float out[3]) { vec3_at(unported("0x0041cdf0", {id(m)}), out); }
   // The equipment's: the mech's AMS (+0x3f0: on, rounds +0x18),
   // an item kind's name (0x00484980: message 0x1c6 + kind).
@@ -1100,9 +1103,10 @@ class Hud : public ztwod::Layer {
   void static_tick(float dt);        // 0x0043cd20: from the frame's draw paths
   void add_static(float step, int32_t kind, float hold, float most);  // 0x0043bfe0
   void raise_static(float level, int32_t kind, float hold);          // 0x0043c1f0
+  void zap_static(float level, int32_t kind, float hold);            // 0x0043be70: a ZAPS_HUD hit's
   zrdr::Node* reader = nullptr;      // +0x22e38 hud.zrd's root during the set-up
   // +0x22e3c the resolution's block during it. Not set by the original's
-  // constructor; FIX (bug), behind zfix bugs: cleared here (docs/hud.md).
+  // constructor; FIX (bug), behind zfix fixed: cleared here (docs/hud.md).
   zrdr::Node* block;
   // FIX (B), any_resolution (resolution.md step 4): past mode 10 hud.zrd has no
   // block, so V640x480's positions are laid out on the display (the canvas)

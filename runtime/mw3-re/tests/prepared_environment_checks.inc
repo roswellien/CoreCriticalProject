@@ -149,6 +149,130 @@ template <class F> void env_test_reject(F action, const char *message) {
 void check_environment_packs() {
   using namespace platform::prepared;
   using platform::integrity::Sha256;
+  {
+    int collector_cases = 0;
+    require(collect_material_target_sources(nullptr, false).empty(),
+            "Collector null disabled must be empty");
+    ++collector_cases;
+    require(collect_material_target_sources(nullptr, true).empty(),
+            "Collector null enabled must be empty");
+    ++collector_cases;
+
+    EnvironmentSelection empty_sel;
+    require(collect_material_target_sources(&empty_sel, false).empty(),
+            "Collector empty disabled must be empty");
+    ++collector_cases;
+    require(collect_material_target_sources(&empty_sel, true).empty(),
+            "Collector empty enabled must be empty");
+    ++collector_cases;
+
+    EnvironmentSelection bad_sel;
+    MaterialTarget bad_target;
+    bad_target.source.kind = "corrupted-kind";
+    bad_target.source.member = "/bad/leading/slash";
+    bad_target.source.sha256 = "short";
+    bad_target.source.bytes = 0;
+    bad_target.source.model_slot = 99999999;
+    bad_sel.material_targets["test_region"].push_back(bad_target);
+    require(collect_material_target_sources(&bad_sel, false).empty(),
+            "Collector disabled with bad metadata must return empty without throwing");
+    ++collector_cases;
+
+    EnvironmentSelection valid_sel;
+    const std::string valid_hash =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    auto make_target = [&](const std::string &member, std::uint32_t slot) {
+      MaterialTarget t;
+      t.source.kind = "gamez-zbd-v27";
+      t.source.member = member;
+      t.source.sha256 = valid_hash;
+      t.source.bytes = 1024;
+      t.source.model_slot = slot;
+      return t;
+    };
+    valid_sel.material_targets["region_a"].push_back(make_target("zbd/t1/gamez.zbd", 5));
+    valid_sel.material_targets["region_a"].push_back(make_target("zbd/c1/gamez.zbd", 2));
+    valid_sel.material_targets["region_b"].push_back(make_target("zbd/t1/gamez.zbd", 1));
+    valid_sel.material_targets["region_b"].push_back(make_target("zbd/t1/gamez.zbd", 5));
+    const auto sel_copy = valid_sel;
+    const auto collected = collect_material_target_sources(&valid_sel, true);
+    require(collected.size() == 2, "Expected 2 canonical source groups");
+    require(collected[0].member == "zbd/c1/gamez.zbd" &&
+                collected[0].model_slots == std::vector<std::uint32_t>{2},
+            "First group must be zbd/c1/gamez.zbd with slot 2");
+    require(collected[1].member == "zbd/t1/gamez.zbd" &&
+                collected[1].model_slots == std::vector<std::uint32_t>{1, 5},
+            "Second group must be zbd/t1/gamez.zbd with sorted, deduped slots 1 and 5");
+    require(valid_sel.material_targets.size() == sel_copy.material_targets.size(),
+            "Selection must remain unchanged");
+    ++collector_cases;
+
+    {
+      EnvironmentSelection conflicting_sha = valid_sel;
+      auto conflict = make_target("zbd/t1/gamez.zbd", 9);
+      conflict.source.sha256 =
+          "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+      conflicting_sha.material_targets["region_a"].push_back(conflict);
+      env_test_reject([&] { collect_material_target_sources(&conflicting_sha, true); },
+                      "Conflicting SHA for same member must throw");
+      ++collector_cases;
+
+      EnvironmentSelection conflicting_bytes = valid_sel;
+      auto conflict_b = make_target("zbd/t1/gamez.zbd", 9);
+      conflict_b.source.bytes = 2048;
+      conflicting_bytes.material_targets["region_a"].push_back(conflict_b);
+      env_test_reject([&] { collect_material_target_sources(&conflicting_bytes, true); },
+                      "Conflicting bytes for same member must throw");
+      ++collector_cases;
+    }
+
+    {
+      auto test_rejection = [&](const char *label, const MaterialTarget &bad) {
+        EnvironmentSelection sel;
+        sel.material_targets["region"].push_back(bad);
+        env_test_reject([&] { collect_material_target_sources(&sel, true); }, label);
+        ++collector_cases;
+      };
+
+      auto base = make_target("zbd/t1/gamez.zbd", 0);
+      auto bad_kind = base;
+      bad_kind.source.kind = "gamez-zbd-v26";
+      test_rejection("Unsupported kind must throw", bad_kind);
+
+      for (const char *bad_member :
+           {"", "/leading/slash", "\\backslash", "c:/drive", "ZBD/t1", "zbd//t1",
+            "zbd/./t1", "zbd/../t1", "zbd/t1/", "zbd t1"}) {
+        auto m = base;
+        m.source.member = bad_member;
+        test_rejection("Invalid canonical member must throw", m);
+      }
+
+      for (const char *bad_sha :
+           {"0123456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg"}) {
+        auto h = base;
+        h.source.sha256 = bad_sha;
+        test_rejection("Invalid canonical SHA-256 must throw", h);
+      }
+
+      auto zero_bytes = base;
+      zero_bytes.source.bytes = 0;
+      test_rejection("Zero bytes must throw", zero_bytes);
+
+      auto huge_bytes = base;
+      huge_bytes.source.bytes = 512ULL * 1024 * 1024 + 1;
+      test_rejection("Over 512MiB bytes must throw", huge_bytes);
+
+      auto bad_slot = base;
+      bad_slot.source.model_slot = 1048576;
+      test_rejection("Model slot >= 1048576 must throw", bad_slot);
+    }
+
+    std::printf("  material target source collector: %d cases verified\n", collector_cases);
+    require(collector_cases > 0, "Collector cases must be nonzero");
+  }
   require(
       env_test_digest("") ==
           "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -218,6 +342,161 @@ void check_environment_packs() {
       std::filesystem::remove_all(path, ec);
     }
   } cleanup{folder};
+  {
+    EnvironmentFixture targets(folder / "material-targets");
+    targets.put("environment/height.bin", build_bwsfm1(9, .05f, .05f), "BWSFM1");
+    targets.manifest["native_payload"]["required_capabilities"] = {{"surface-materials", 1}};
+    targets.manifest["native_payload"]["required_formats"].push_back("BWSFM1");
+    targets.manifest["native_payload"]["required_formats"].push_back("MW34-surface-targets-v1");
+    targets.registry["material_targets"] = "environment/targets.json";
+    const auto image = EnvJson{{"width", 1}, {"height", 1}, {"format", 1},
+                               {"hash", "0000000000000049"}};
+    EnvJson document = {
+        {"schema_version", 1},
+        {"targets", {{{"surface_materials", "environment/height.bin"},
+                      {"asset_id", "bushwacker:close"},
+                      {"source", {{"kind", "gamez-zbd-v27"},
+                                  {"member", "zbd/t1/gamez.zbd"},
+                                  {"sha256", env_test_digest("authored source")},
+                                  {"bytes", 15}, {"model_slot", 7}}},
+                      {"mesh_uv_hash", "0000000000000009"},
+                      {"polygon_materials", {"armor_hull", "canopy_glass"}},
+                      {"surface_keys", {image, image}}}}}};
+    const auto save = [&](const EnvJson &value) {
+      targets.put("environment/targets.json", value.dump(), "MW34-surface-targets-v1");
+      targets.save();
+    };
+    save(document);
+    auto selection = load_environment_packs({targets.path()});
+    const auto &target = selection.material_targets.at("training").at(0);
+    require(target.source.member == "zbd/t1/gamez.zbd" && target.source.model_slot == 7 &&
+                target.mesh_uv_hash == 9 && target.pack && target.pack->images.size() == 2,
+            "Independent target identity or decoded pack was lost");
+    require(!require_material_target_source(target, nullptr, false),
+            "Height-Off required missing producer provenance");
+    env_test_reject([&] { require_material_target_source(target, nullptr, true); },
+                    "Height-On accepted absent producer provenance");
+    require(require_material_target_source(target, &target.source, true),
+            "Exact authored producer source rejected");
+    auto wrong = target.source;
+    wrong.sha256 = env_test_digest("different source");
+    env_test_reject([&] { require_material_target_source(target, &wrong, true); },
+                    "Height-On accepted a wrong source member digest");
+    auto shared = document;
+    shared["targets"].push_back(document["targets"][0]);
+    shared["targets"][1]["source"]["model_slot"] = 8;
+    save(shared);
+    const auto repeated = load_environment_packs({targets.path()});
+    require(repeated.material_targets.at("training")[0].pack ==
+                repeated.material_targets.at("training")[1].pack,
+            "Shared immutable sidecar was decoded into duplicate owners");
+    save(document);
+    {
+      EnvironmentPackCache warm(32);
+      auto owner = warm.resolve({targets.path()}).material_targets.at("training")[0].pack;
+      const auto budget = warm.resolve({targets.path()}).surface_budget;
+      require(budget->used() == 32 &&
+                  warm.resolve({targets.path()}).material_targets.at("training")[0].pack == owner,
+              "Warm exact cache hit decoded or recharged an immutable owner");
+      auto bad = document;
+      bad["targets"][0]["asset_id"] = "wrong:asset";
+      save(bad);
+      bool exact_rejection = false;
+      try {
+        (void)warm.resolve({targets.path()});
+      } catch (const std::runtime_error &error) {
+        exact_rejection = std::string(error.what()).find("shared sidecar asset") != std::string::npos;
+      }
+      require(exact_rejection && budget->used() == 32,
+              "Cache hit inherited another target asset admission or lost retained ownership");
+      for (bool uv : {false, true}) {
+        bad = document;
+        if (uv)
+          bad["targets"][0]["mesh_uv_hash"] = "000000000000000a";
+        else
+          bad["targets"][0]["polygon_materials"][1] = "wrong";
+        save(bad);
+        exact_rejection = false;
+        try {
+          (void)warm.resolve({targets.path()});
+        } catch (const std::runtime_error &error) {
+          exact_rejection = std::string(error.what()).find("shared sidecar") != std::string::npos;
+        }
+        require(exact_rejection && budget->used() == 32,
+                "Cache hit skipped a changed mesh/UV or polygon material expectation");
+      }
+      bad = document;
+      bad["targets"][0]["source"]["sha256"] = env_test_digest("different canonical source");
+      save(bad);
+      const auto actual_source = target.source;
+      const auto &changed_source = warm.resolve({targets.path()}).material_targets.at("training")[0];
+      require(changed_source.pack == owner && changed_source.source.sha256 != actual_source.sha256 &&
+                  !require_material_target_source(changed_source, nullptr, false),
+              "Cache hit lost the new source expectation or required provenance while Off");
+      env_test_reject([&] { require_material_target_source(changed_source, &actual_source, true); },
+                      "Cache reuse granted an old producer admission to a new source expectation");
+      save(document);
+      require(warm.resolve({targets.path()}).material_targets.at("training")[0].pack == owner,
+              "A still-owned exact cache entry was decoded after target rejection");
+      (void)warm.resolve({});
+      require(budget->used() == 32, "Clearing selection forgot a queued image owner");
+      owner.reset();
+      require(budget->used() == 0, "Last image owner did not release its decoded reservation");
+    }
+    {
+      EnvironmentPackCache changing(64);
+      auto first_owner = changing.resolve({targets.path()}).material_targets.at("training")[0].pack;
+      const auto budget = changing.resolve({targets.path()}).surface_budget;
+      std::shared_ptr<const mw34::materials::SurfaceMaterialImage> queued(
+          first_owner, &first_owner->images[0]);
+      first_owner.reset();
+      targets.put("environment/height.bin", build_bwsfm1(9, .06f, .2f), "BWSFM1");
+      save(document);
+      auto second_owner = changing.resolve({targets.path()}).material_targets.at("training")[0].pack;
+      require(budget->used() == 64 &&
+                  changing.resolve({targets.path()}).material_targets.at("training")[0].pack == second_owner,
+              "Changed selection forgot a queued old owner or warm cache recharged it");
+      targets.put("environment/height.bin", build_bwsfm1(9, .07f, .2f), "BWSFM1");
+      save(document);
+      env_test_reject([&] { changing.resolve({targets.path()}); },
+                      "Changed selection allocated while old and new owners exhausted the budget");
+      require(budget->used() == 64, "Rejected allocation changed live owner reservations");
+      queued.reset();
+      require(budget->used() == 32, "Queued retirement did not return its old reservation");
+      (void)changing.resolve({targets.path()});
+      require(budget->used() == 64, "Retry did not admit the now-available decoded space");
+      second_owner.reset();
+      require(budget->used() == 32, "Second old source owner was not released");
+      (void)changing.resolve({});
+      require(budget->used() == 0, "Empty selection retained decoded image storage");
+      targets.put("environment/height.bin", build_bwsfm1(9, .05f, .05f), "BWSFM1");
+      save(document);
+    }
+    for (unsigned fault = 0; fault != 10; ++fault) {
+      auto bad = document;
+      auto &entry = bad["targets"][0];
+      switch (fault) {
+      case 0: bad["targets"].push_back(entry); break;
+      case 1: entry["source"]["member"] = "zbd/c1/gamez.zbd"; break;
+      case 2: entry["source"]["model_slot"] = true; break;
+      case 3: entry["source"]["observed"] = true; break;
+      case 4: entry["mesh_uv_hash"] = "0000000000000000"; break;
+      case 5: entry["asset_id"] = "wrong:source"; break;
+      case 6: entry["polygon_materials"][0] = "wrong"; break;
+      case 7: entry["surface_materials"] = "../outside.bin"; break;
+      case 8: entry["surface_keys"][0] = nullptr; break;
+      case 9: entry["surface_keys"][0]["width"] = 0; break;
+      }
+      save(bad);
+      env_test_reject([&] { load_environment_packs({targets.path()}); },
+                      "Invalid material target was admitted");
+    }
+    save(document);
+    targets.put("environment/unused-height.bin", build_bwsfm1(9, .05f, .05f), "BWSFM1");
+    targets.save();
+    env_test_reject([&] { load_environment_packs({targets.path()}); },
+                    "Unused target sidecar member accepted");
+  }
   std::string file_bytes(65537, '\0');
   for (std::size_t i = 0; i < file_bytes.size(); ++i)
     file_bytes[i] = char((i * 37 + 11) & 255);

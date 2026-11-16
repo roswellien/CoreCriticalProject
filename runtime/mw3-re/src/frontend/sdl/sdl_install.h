@@ -7,6 +7,7 @@
 
 #include <string>
 #include <vector>
+#include "upgrades/settings/upgrades.h"
 
 namespace sdlfe {
 
@@ -31,16 +32,25 @@ std::string pick_source(const std::string& file, const std::vector<std::string>&
 std::string install_of_program_value(std::string value);
 
 // Where the original may be installed, in order: the installer's registry
-// values (HKLM SOFTWARE\MicroProse\MechWarrior 3\1.0 "Program", App Paths
-// mech3.exe; their 32-bit and VirtualStore views), the installer's default
-// folders, then this program's own folder and the one above it.
-std::vector<std::string> install_candidates();
+// values (HKLM SOFTWARE\MicroProse\MechWarrior 3\1.0 "Program", Pirate's
+// Moon's "MechWarrior 3 EP1"; App Paths mech3.exe; their 32-bit and
+// VirtualStore views), the installer's default folders, the usual ones, the
+// Wine, Proton and Lutris prefixes and the Mac's CrossOver and Whisky
+// bottles, then this program's own folder and the one above it. Folders
+// only: the caller checks which game each holds (map_source).
+std::vector<std::string> install_candidates(bool pirates_moon = false);
 
 // mw3.cfg's install= line set to `install` (added, or replacing the old one),
 // the other lines kept; false when the file cannot be written.
 bool save_install(const std::string& write_dir, const std::string& install);
 // mw3.cfg's KEY=VALUE line set (first, any other KEY= line dropped).
 bool save_config_value(const std::string& write_dir, const std::string& key, const std::string& value);
+// The key's line taken out of mw3.cfg (ours: 1.0.x's bugfixes= once migrated).
+bool remove_config_value(const std::string& write_dir, const std::string& key);
+// The Upgrades page's five from mw3.cfg's lines into zfix (ours): 1.0.x's
+// bugfixes= written as the five keys and dropped; --original all five off for
+// the run, nothing saved.
+void apply_upgrades_config(const std::string& write_dir, const upgrades::Config& c, bool original);
 
 // The search: the first valid of `configured` (mw3.cfg's) and the
 // candidates; with `may_ask`, else a message box and a file dialog until a

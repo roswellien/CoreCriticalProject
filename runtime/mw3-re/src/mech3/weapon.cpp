@@ -1,10 +1,13 @@
 #include "mech3/weapon.h"
 
+#include <cstdio>
+#include <iterator>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <list>
+#include <vector>
 
 #include "crt/msvc_math.h"
 #include "crt/msvc_rand.h"
@@ -44,7 +47,7 @@ WeaponType::WeaponType(Node* node, WeaponDef* d)
   if (Node* n = zrdr::find(node, "ZAPS_HUD"); n && n->type == zrdr::List && zrdr::list_count(n) > 1) {
     float* out[2] = {&zaps_hud, &zaps_hud_2};
     for (int i = 1; i <= 2 && i < zrdr::list_count(n); ++i) {
-      const zrdr::Node& v = n->list[zfix::options().bugs ? i : 1];
+      const zrdr::Node& v = n->list[zfix::options().fixed ? i : 1];
       if (v.type == zrdr::Int) *out[i - 1] = static_cast<float>(v.i);
       else if (v.type == zrdr::Float) *out[i - 1] = v.f;
     }
@@ -256,13 +259,13 @@ uint32_t salvo_spread(WeaponDef* def, const zwep::HitRecord*, zwep::Projectile* 
 
 // Mech3.exe 1.2 @ 0x004afed0: TAG's strike, four missiles from 1500 back along
 // the beam and 400 up, 50 apart, homing on the point. FIX (bug): on the unit
-// the beam marked, so a moving one is hit too (Owen 2026-10-20; zfix bugs).
+// the beam marked, so a moving one is hit too (Owen 2026-10-20; zfix small_fixes).
 void WeaponType::strike(zwep::Handle owner_node, const zwep::Vec3f3& dir, const zwep::Vec3f3& at,
                         zwep::Handle hit_node) {
   strike_point = at;
   strike_lock = zwep::LockRef{};
   strike_lock.at = &strike_point;
-  if (zfix::options().bugs && g_calls.strike_target) {
+  if (zfix::options().small_fixes && g_calls.strike_target) {
     zwep::LockRef unit;
     if (g_calls.strike_target(hit_node, &unit) && unit.at) strike_lock = unit;
   }
@@ -552,10 +555,19 @@ Weapon* WeaponManager::find(int32_t index, uint32_t from) const {
   return nullptr;
 }
 
-// Mech3.exe 1.2 @ 0x004b0400. Nothing here stops a 17th weapon
-// (docs/weapons.md, "Latent overflow").
+// FIX (bug): the exe's adds write the next slot unchecked, so a 17th weapon lands on the owner
+// after the array, and a network peer's config can send one (docs/weapons.md, Sixteen weapons).
+static bool out_of_slots(const WeaponManager& m, int32_t weapon) {
+  if (m.count < std::size(m.weapons)) return false;
+  char msg[128];
+  std::snprintf(msg, sizeof msg, "Too many weapons: %s not added", weapon_name(weapon));
+  zerr::report(0x200, "C:\\zipper\\Mech3\\weapon.cpp", 0, msg);
+  return true;
+}
+
+// Mech3.exe 1.2 @ 0x004b0400
 Weapon* WeaponManager::add(WeaponItem* item) {
-  if (!item) return nullptr;
+  if (!item || out_of_slots(*this, item->weapon)) return nullptr;
   const int32_t g = item->group > 4 ? 4 : (item->group < 0 ? 0 : item->group);
   Weapon* w = make_weapon(item, this);
   if (w) {
@@ -568,6 +580,7 @@ Weapon* WeaponManager::add(WeaponItem* item) {
 // Mech3.exe 1.2 @ 0x004b0460, given the node (the vehicle-and-name form looks
 // it up first, 0x004abb60).
 Weapon* WeaponManager::add(int32_t index, Handle node, int32_t g) {
+  if (out_of_slots(*this, index)) return nullptr;
   Weapon* w = make_vehicle_weapon(index, node, this);
   if (w) {
     weapons[count++] = w;
@@ -642,6 +655,23 @@ bool WeaponManager::select_group(int32_t g) {
   group = g;
   refresh_hud();
   return true;
+}
+
+// Ours (Weapon::destroy's FIX): the first weapon after `from` in the HUD's order (the
+// groups 0..4, each in its order, from the start again after the last) that is not
+// destroyed; none when every other one is.
+Weapon* WeaponManager::standing_after(const Weapon* from) const {
+  std::vector<Weapon*> order;
+  for (WeaponGroup* g : groups)
+    if (g)
+      for (uint32_t i = 0; i < g->count; ++i) order.push_back(g->weapons[i]);
+  const auto at = std::find(order.begin(), order.end(), from);
+  const size_t start = at == order.end() ? 0 : static_cast<size_t>(at - order.begin()) + 1;
+  for (size_t k = 0; k < order.size(); ++k) {
+    Weapon* w = order[(start + k) % order.size()];
+    if (w && w != from && w->damage < 1.0f) return w;
+  }
+  return nullptr;
 }
 
 // Mech3.exe 1.2 @ 0x004b0790
@@ -1314,6 +1344,14 @@ void Weapon::destroy() {
     } else {
       manager->next_weapon();
     }
+    // FIX (bug): the HUD's pick is the next line whether or not it still stands, and
+    // next_weapon stays in the group, so the selection could stay on a destroyed weapon
+    // (pm-tests item 21). The first standing one after this in the list's order instead.
+    if (zfix::options().small_fixes && manager->current() && manager->current()->damage == 1.0f)
+      if (Weapon* w = manager->standing_after(this)) {
+        if (manager->select_group(w->group)) manager->group_ptr()->select(w);
+        if (is_player(owner) && g_calls.screen && g_calls.screen(owner) && g_calls.hud_weapons) g_calls.hud_weapons(owner);
+      }
   }
   halt(loop_sound);
   loop_sound = nullptr;
@@ -1434,6 +1472,7 @@ bool Weapon::fire(const Vec3f* velocity) {
                    (team & enemies) != 0);  // hostile to the player
   if (owner == g_world.mission_player && g_world.force_feedback && g_calls.ff_weapon) g_calls.ff_weapon(index);
   if (g_calls.test_fired) g_calls.test_fired(*this);
+  if (is_player(owner) && (def->flags & zwep::kLockOn) && salvo_left == 0 && g_calls.lock_shot) g_calls.lock_shot(*this);
   if (owner) net_event(owner, this);
   set_lock_globals(nullptr, nullptr);
   reload = def->period;
@@ -1465,7 +1504,7 @@ bool Weapon::aim_and_fire(const Vec3f* at, bool force) {
 // same place on screen (fixes.md).
 static double cone_cos(Handle owner) {
   constexpr double kCos = 0.89;
-  const float r = zfix::options().bugs && is_player(owner) && g_calls.view_width ? g_calls.view_width() : 1.0f;
+  const float r = zfix::options().fixed && is_player(owner) && g_calls.view_width ? g_calls.view_width() : 1.0f;
   if (!(r > 1.0f)) return kCos;
   const double t = std::sqrt(1.0 - kCos * kCos) / kCos * r;
   return 1.0 / std::sqrt(1.0 + t * t);
@@ -1702,17 +1741,17 @@ int32_t beam_recharge(float rate, float x, float dt, float* carry) {
 void BeamWeapon::update(float dt) {
   if (damage == 1.0f) return;
   const WeaponType* t = type_of(def);
-  // FIX (bug), behind bugs: the exe re-aims a beam only while its trigger is
+  // FIX (bug), behind small_fixes: the exe re-aims a beam only while its trigger is
   // held (0x004b41b0), and a short laser fires on after the release until its
   // charge is spent, from the last held frame's muzzle: behind a walking mech
   // (playtest #24, fixes.md). Here it follows the weapon as when held.
-  if (firing && aim_at && zfix::options().bugs) aim(const_cast<Vec3f*>(aim_at), &muzzle, &direction, nullptr);
+  if (firing && aim_at && zfix::options().small_fixes) aim(const_cast<Vec3f*>(aim_at), &muzzle, &direction, nullptr);
   float v = def->period * dt;
   if (!(v > 1.0f)) v = 1.0f;
   const int32_t n = crt::msvc_ftol(v);
-  if (firing && (def->flags & zwep::kDesignate) && zfix::options().bugs && bin->left() >= 0) {
+  if (firing && (def->flags & zwep::kDesignate) && zfix::options().fixed && bin->left() >= 0) {
     // FIX (bug): TAG's beam lasts what it does at 30 fps in the exe, in time:
-    // the same slack over the one-second hold at any frame rate (zfix bugs).
+    // the same slack over the one-second hold at any frame rate (always on: frame rate to time, as zwep_beam's).
     fired_time += dt;
     const int32_t per = std::max(1, crt::msvc_ftol(def->period / 30.0f));  // the 30 fps frame's drain
     const int32_t drains = (bin->max - 1 + per - 1) / per;                 // updates that empty it after the trigger's 1

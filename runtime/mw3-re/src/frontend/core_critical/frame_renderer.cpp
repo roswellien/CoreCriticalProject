@@ -1,15 +1,18 @@
 #include "frame_renderer.hpp"
+#include "crt/msvc_rand.h"
 #include "frontend/sdl/cpu_interval.h"
-#include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
-#include "gamez/zinput/zinput.h"
+#include "gamez/zclass/cls_node.h"
 #include "gamez/zimage/zimg_texture.h"
+#include "gamez/zinput/zinput.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "native_staging_budget.hpp"
 #include "prepared_draw.hpp"
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
@@ -20,10 +23,13 @@
 #include "renderer/geometry/reference.hpp"
 #include "renderer/headlight_original_binding.hpp"
 #include "renderer/headlight_spotlight.hpp"
-#include "renderer/mech_headlights.hpp"
 #include "renderer/material_normals.hpp"
+#include "renderer/mech_headlights.hpp"
+#include "gamez/zmodel/gmod_geometry.h"
 #include "renderer/native_surface_identity.hpp"
+#include "renderer/native_fixture_sources.hpp"
 #include <filesystem>
+#include <functional>
 #include <fstream>
 
 namespace mw34::materials {
@@ -44,6 +50,8 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <array>
 #include <atomic>
 #include <cfenv>
+#include <charconv>
+#include <cstdarg>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -78,6 +86,145 @@ public:
 private:
   std::fenv_t saved_;
 };
+
+
+// One process-local, opt-in run. Fixed storage prevents diagnostic tracking or
+// formatting from growing with scene size. It owns no native source pointers.
+struct FixtureTraceRecord {
+  std::array<char, 8192> bytes{};
+  std::size_t size{};
+  bool valid{true};
+  void append(const char* format, ...) {
+    if(!valid) return;
+    va_list arguments;
+    va_start(arguments,format);
+    const int count=std::vsnprintf(bytes.data()+size,bytes.size()-size,format,arguments);
+    va_end(arguments);
+    if(count<0 || std::size_t(count)>=bytes.size()-size) { valid=false; return; }
+    size+=std::size_t(count);
+  }
+  void quoted(const char* data,std::size_t count,std::size_t limit=192) {
+    if(!data) { append("null"); return; }
+    append("\"");
+    for(std::size_t index=0;index<std::min(count,limit);++index) {
+      const unsigned char value=static_cast<unsigned char>(data[index]);
+      if(value=='\"' || value=='\\') append("\\%c",value);
+      else if(value<32 || value>126) append("\\u%04x",unsigned(value));
+      else append("%c",value);
+    }
+    append("\"");
+  }
+  void text(const char* field,const char* data,std::size_t count,std::size_t limit=192) {
+    append(",\"%s\":",field);
+    quoted(data,count,limit);
+    if(data && count>limit) append(",\"%s_truncated\":true",field);
+  }
+  void text(const char* field,const std::string& value,std::size_t limit=192) {
+    text(field,value.empty() ? nullptr : value.data(),value.size(),limit);
+  }
+  void hash(const char* field,std::uint64_t value) {
+    append(",\"%s\":\"%016llx\"",field,(unsigned long long)value);
+  }
+  void scalar(float value) {
+    if(!std::isfinite(value)) { append("null"); return; }
+    char storage[48];
+    const auto result=std::to_chars(storage,storage+sizeof storage,value,
+        std::chars_format::general,std::numeric_limits<float>::max_digits10);
+    if(result.ec!=std::errc{}) { append("null"); return; }
+    append("%.*s",int(result.ptr-storage),storage);
+  }
+  void floats(const char* field,const float* values,std::size_t count,bool available) {
+    append(",\"%s\":",field);
+    if(!available) { append("null"); return; }
+    append("[");
+    for(std::size_t index=0;index<count;++index) {
+      if(index) append(",");
+      scalar(values[index]);
+    }
+    append("]");
+  }
+  void key(const char* field,const mw34::materials::SurfaceKey* value) {
+    append(",\"%s\":",field);
+    if(!value || !value->width || !value->height || !value->hash) { append("null"); return; }
+    append("{\"width\":%u,\"height\":%u,\"format\":%u,\"hash\":\"%016llx\"}",
+        value->width,value->height,value->format,(unsigned long long)value->hash);
+  }
+};
+std::uint64_t fixture_trace_hash(const void* data,std::size_t bytes,
+                               std::uint64_t value=0xcbf29ce484222325ULL) {
+  const auto* source=static_cast<const unsigned char*>(data);
+  for(std::size_t index=0;index<bytes;++index) value=(value^source[index])*0x100000001b3ULL;
+  return value;
+}
+struct FixtureTraceRun {
+  static constexpr std::size_t maximum_records=1024,maximum_observations=4096,maximum_bytes=512*1024,summary_reserve=512;
+  const bool enabled=[] {
+    const auto* value=std::getenv("MW34_TRACE_FIXTURE_SOURCES");
+    return value && std::strcmp(value,"1")==0;
+  }();
+  std::array<std::uint64_t,maximum_records> seen{};
+  std::size_t records{},observations{},bytes{},duplicates{},oversized{};
+  bool stopped{},summarized{},native_control{};
+  bool open() const { return enabled && !stopped; }
+  bool claim() {
+    if(!open()) return false;
+    if(observations==maximum_observations) { stopped=true; finish("observation_limit"); return false; }
+    ++observations;
+    return true;
+  }
+  void finish(const char* reason) {
+    if(!enabled || summarized) return;
+    summarized=true;
+    char storage[summary_reserve];
+    const int length=std::snprintf(storage,sizeof storage,
+        "[NATIVE_FIXTURE_SOURCE] {\"schema\":\"mw34.fixture-source.v1\",\"type\":\"summary\","
+        "\"reason\":\"%s\",\"records\":%zu,\"bytes_before_summary\":%zu,\"duplicates\":%zu,"
+        "\"oversized\":%zu,\"observations\":%zu,\"record_limit\":%zu,"
+        "\"observation_limit\":%zu,\"byte_limit\":%zu,\"native_control\":%s}\n",
+        reason,records,bytes,duplicates,oversized,observations,maximum_records,maximum_observations,maximum_bytes,
+        native_control ? "true":"false");
+    if(length>0 && std::size_t(length)<sizeof storage && std::size_t(length)<=maximum_bytes-bytes)
+      bytes+=std::fwrite(storage,1,std::size_t(length),stderr);
+  }
+  void submit(FixtureTraceRecord& record) {
+    if(!open()) return;
+    if(!record.valid) { ++oversized; stopped=true; finish("record_buffer_limit"); return; }
+    const auto signature=fixture_trace_hash(record.bytes.data(),record.size);
+    if(std::find(seen.begin(),seen.begin()+records,signature)!=seen.begin()+records) {
+      ++duplicates;
+      if(observations==maximum_observations) { stopped=true; finish("observation_limit"); }
+      return;
+    }
+    const auto length=record.size+1;
+    if(records==maximum_records || length>maximum_bytes-summary_reserve-bytes) {
+      stopped=true;
+      finish(records==maximum_records ? "record_limit" : "byte_limit");
+      return;
+    }
+    // Share stderr's FILE lock with native renderer diagnostics. A separate
+    // buffered stdout stream can split a JSON line around their writes even
+    // when both OS handles ultimately target the same merged log file.
+    record.bytes[record.size++]='\n';
+    const auto written=std::fwrite(record.bytes.data(),1,record.size,stderr);
+    bytes+=written;
+    if(written!=record.size) {
+      stopped=true;
+      finish("diagnostic_write_error");
+      return;
+    }
+    seen[records++]=signature;
+    if(records==maximum_records) { stopped=true; finish("record_limit"); }
+    else if(observations==maximum_observations) { stopped=true; finish("observation_limit"); }
+  }
+  ~FixtureTraceRun() {
+    if(!enabled || summarized) return;
+    try { VisualFloatScope preserve; finish("process_exit"); } catch(...) {}
+  }
+};
+FixtureTraceRun& fixture_trace_run() {
+  static FixtureTraceRun state;
+  return state;
+}
 
 vk::Renderer::Quality parse_quality(const sdlfe::CoreCriticalQuality &quality) {
   vk::Renderer::Quality result{1, 1, 1, false};
@@ -200,6 +347,7 @@ struct Texture {
   std::vector<std::uint32_t> pixels;
   std::string name;
   mw34::materials::SurfaceKey surface_key{};
+  std::optional<mw34::materials::SurfaceKey> fixture_visual_key;
   std::uint64_t group_load_epoch{0};
 };
 
@@ -252,33 +400,55 @@ sanitize_prepared_assets(sdlfe::CoreCriticalAssets assets) {
   return assets;
 }
 
+class FrameRenderer;
+} // namespace
+
+struct RigidCaptureSeal {
+  private:
+    friend FrameRenderer;
+    static std::shared_ptr<const CapturedNativeRigid> seal(
+        std::shared_ptr<const cc::geometry::Resource> resource,
+        std::vector<CapturedNativeRigidRange> ranges,
+        std::weak_ptr<const int> renderer_owner,
+        std::uint64_t world_source_epoch,
+        std::uint64_t group_load_epoch) {
+      return std::shared_ptr<const CapturedNativeRigid>(new CapturedNativeRigid(
+          std::move(resource), std::move(ranges), std::move(renderer_owner),
+          world_source_epoch, group_load_epoch));
+    }
+};
+
+namespace {
+
 class FrameRenderer final : public VulkanFrameRenderer {
 public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
                          const sdlfe::CoreCriticalQuality &quality,
-                         const sdlfe::CoreCriticalAssets &assets)
+                         const sdlfe::CoreCriticalAssets &assets,
+                         std::size_t local_staging_budget = staging::native_budget_bytes)
       : window_(window),
         window_state_tracker_(
             backend == sdlfe::RendererBackend::core_critical_wsi
-                ? std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(
-                      window)
+                ? std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(window)
                 : nullptr),
-        native_window_(
-            backend == sdlfe::RendererBackend::core_critical_wsi
-                ? cc_mw3_re::platform::get_window_native_handle(window)
-                : static_cast<cc_mw3_re::platform::NativeWindowHandle>(
-                      cc_mw3_re::platform::get_window_hwnd(window))),
+        native_window_(backend == sdlfe::RendererBackend::core_critical_wsi
+                           ? cc_mw3_re::platform::get_window_native_handle(window)
+                           : static_cast<cc_mw3_re::platform::NativeWindowHandle>(
+                                 cc_mw3_re::platform::get_window_hwnd(window))),
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
         sun_explicit_(assets.sun_explicit),
         environment_(assets.environment),
+        bridge_config_(configure_bridge(backend, quality, assets)),
         prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
-        bridge_config_(configure_bridge(backend, quality, assets)),
-        prepared_cache_enabled_(bridge_config_.prepared_cache) {
+        prepared_cache_enabled_(bridge_config_.prepared_cache),
+        local_staging_budget_(local_staging_budget) {
+    if (!local_staging_budget_ || local_staging_budget_ > staging::native_budget_bytes)
+      throw std::invalid_argument("Invalid local light staging budget");
     if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
       throw std::runtime_error(
           "Geometry normal debug requires an explicit geometry mode");
@@ -297,27 +467,107 @@ public:
     local_lights_load();
     initialize_renderer();
     if (assets.render_thread) {
-      worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
+      worker_ = std::make_unique<RenderWorker>(8, staging::native_budget_bytes, [] {
         // Process only synchronous window messages, without consuming
         // input or reentering the game. DXGI may send one while waiting.
         cc_mw3_re::platform::pump_presentation_messages();
       });
       std::fprintf(stderr,
-                   "Core Critical render worker: enabled (8 jobs, 128 MiB)\n");
+                   "Core Critical render worker: enabled (8 jobs, 1024 MiB)\n");
     }
+    std::vector<zcls::ZbdSourceRequest> requests;
+    const auto groups = ::platform::prepared::collect_material_target_sources(
+        environment_.get(),
+        bridge_config_.parallax_materials && lighting_.normals);
+    requests.reserve(groups.size());
+    for (const auto &group : groups) {
+      zcls::ZbdSourceRequest request;
+      request.member = group.member;
+      request.sha256 = group.sha256;
+      request.bytes = group.bytes;
+      request.model_slots.insert(group.model_slots.begin(),
+                                 group.model_slots.end());
+      requests.push_back(std::move(request));
+    }
+    observation_session_ = zcls::observe_zbd_sources(std::move(requests));
   }
 
   bool ok() const override { return true; }
+  void attach_editor(sdlfe::EditorUiSource* source) override {
+    require_editor_producer();
+    if (source == editor_source_) return;
+    detach_editor();
+    editor_source_ = source;
+  }
+  void detach_editor() override {
+    require_editor_producer();
+    if (!editor_source_ && !editor_present_active_) return;
+    drain(); // Completes retained light packets, then joins all renderer jobs.
+    renderer_->detach_editor();
+    editor_present_active_ = false;
+    editor_source_ = nullptr;
+  }
   std::uint64_t presentation_count() const override {
     if (worker_)
       worker_->drain();
     return presented_frames_.load();
   }
   void drain() override {
-    flush();
-    complete_local_light_packets();
+    if (!producer_failed_) {
+      flush();
+      complete_local_light_packets();
+    }
     if (worker_)
       worker_->drain();
+  }
+  bool observe_producer_views(testing::ProducerViewObserver* observer) override {
+    drain();
+    producer_observer_ = observer;
+    renderer_->producer_view_observer = observer;
+    return true;
+  }
+  ::platform::ProducerViewRestoreToken exchange_producer_view(
+      const ::platform::ProducerView& view) override {
+    require_producer_live();
+    validate_producer_view(view);
+    testing::ProducerViewObservation observation{};
+    observation.stage = testing::ProducerViewStage::exchange;
+    observation.view = view;
+    if (producer_observer_) producer_observer_->producer(observation);
+    ::platform::ProducerViewRestoreToken token{};
+    token.previous = producer_view_;
+    token.receiver_cookie = reinterpret_cast<std::uintptr_t>(this);
+    token.reset_generation = producer_reset_generation_;
+    token.active = true;
+    producer_view_ = view;
+    return token;
+  }
+  void restore_producer_view(const ::platform::ProducerViewRestoreToken& token) noexcept override {
+    if (!token.active || token.receiver_cookie != reinterpret_cast<std::uintptr_t>(this) ||
+        token.reset_generation != producer_reset_generation_ || producer_failed_)
+      return;
+    producer_view_ = token.previous;
+    if (producer_observer_) {
+      testing::ProducerViewObservation observation{};
+      observation.stage = testing::ProducerViewStage::restore;
+      observation.view = producer_view_;
+      producer_observer_->backend(observation);
+    }
+  }
+  void abandon_producer_work() noexcept override {
+    clear_producer_work(true);
+    zvid::invalidate_producer_transport(this, true);
+  }
+  void reset_producer_work() noexcept override {
+    clear_producer_work(false);
+    zvid::invalidate_producer_transport(this, false);
+  }
+  SceneBindingStatistics scene_binding_statistics() override {
+    if (worker_)
+      worker_->drain();
+    std::lock_guard<std::mutex> lock(recycle_mutex_);
+    return {true, scene_.textures.size(), scene_.order.size(),
+            scene_.draws.size(), recycled_scenes_.size()};
   }
   QualityStatistics quality_statistics() const override {
     if (worker_)
@@ -372,11 +622,18 @@ public:
 
   std::shared_ptr<const ::platform::DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t texture) override {
-    if (!lighting_.normals || bridge_config_.native_material_sidecar.empty() ||
-        texture < 0 || std::size_t(texture) >= textures_.size())
+    VisualFloatScope preserve;
+    if (texture < 0 || std::size_t(texture) >= textures_.size())
       return {};
-    surface_normals_load(); // Reset clears catalogs; deferred admission can be
-                            // first.
+    const bool normal_admission = lighting_.normals &&
+        (!bridge_config_.native_material_sidecar.empty() ||
+         (bridge_config_.parallax_materials && environment_ &&
+          !environment_->material_targets.empty()));
+    const auto fixture = capture_fixture_polygon(texture);
+    if (!normal_admission && !fixture)
+      return {};
+    if (normal_admission)
+      surface_normals_load(); // Reset can make a deferred draw first.
     const auto &key = textures_[texture].surface_key;
     auto receipt = std::make_shared<NativeDeferredBinding>();
     receipt->owner = material_binding_owner_;
@@ -384,8 +641,12 @@ public:
     receipt->epoch = group_load_epoch_;
     receipt->version = textures_[texture].version;
     receipt->texture = texture;
-    receipt->surface_parameters = native_surface_parameters(key, texture);
-    receipt->normal_index = surface_normal_index(receipt->key, true, texture);
+    receipt->fixture = fixture;
+    if (normal_admission) {
+      receipt->surface_parameters = native_surface_parameters(key, texture);
+      receipt->height_binding = native_height_binding(key, texture);
+      receipt->normal_index = surface_normal_index(receipt->key, true, texture);
+    }
     return receipt;
   }
   void begin_deferred_material_draw(
@@ -401,9 +662,12 @@ public:
     native_context_.fingerprint.reset();
   }
   bool wants_material_context() const override {
-    return lighting_.normals &&
-           (!bridge_config_.native_material_sidecar.empty() ||
-            bridge_config_.trace_native_bindings);
+    return fixture_producer_enabled() || fixture_trace_run().open() ||
+           (lighting_.normals &&
+            (!bridge_config_.native_material_sidecar.empty() ||
+             (bridge_config_.parallax_materials && environment_ &&
+              !environment_->material_targets.empty()) ||
+             bridge_config_.trace_native_bindings));
   }
   bool wants_model_context() const override {
     return !prepared_.empty() || wants_material_context();
@@ -412,6 +676,7 @@ public:
   begin_material_draw(const ::platform::MaterialDrawContext &context) override {
     native_context_.material = context;
     native_context_.material_active = true;
+    if(fixture_trace_run().open()) fixture_trace_native("native-material",context,-1,nullptr);
   }
   void end_material_draw() noexcept override {
     native_context_.material = {};
@@ -423,6 +688,7 @@ public:
   void end_model_draw() noexcept override {
     suppress_model_draws_ = false;
     native_context_ = {};
+    if(fixture_trace_run().open()) fixture_trace_pose_ = {};
   }
   void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
@@ -435,7 +701,10 @@ public:
       native_context_.model =
           native_context_.node ? native_context_.node->model : nullptr;
       native_context_.epoch = group_load_epoch_;
+      native_context_.height_eligible = native_ground_eligible(context);
     }
+    fixture_model_scope(context);
+    if(fixture_trace_run().open()) fixture_trace_model(context);
     ensure_extent();
     const auto draws = prepared_.draw(context);
     if (!draws.replace)
@@ -459,6 +728,12 @@ public:
   // failed identities clear any prior state (no stale profile).
   void mission_changed(const ::platform::MissionIdentity &identity) override {
     VisualFloatScope fp_guard;
+    // Drop unsubmitted CPU work before the old drain path can publish it. The
+    // metadata notification restores identity after invalidation; a detached
+    // renderer must never touch another receiver's queue.
+    clear_producer_work(false);
+    if (zvid::render3d() == this)
+      zvid::producer_mission_changed(identity);
     // Drain packets queued for the previous mission before switching state.
     drain();
     local_lights_clear();
@@ -519,6 +794,13 @@ public:
   }
 
   ~FrameRenderer() override {
+    try {
+      detach_editor();
+    } catch (...) {
+      std::fprintf(stderr, "Core editor detach failed during renderer shutdown\n");
+      std::fflush(stderr);
+      std::_Exit(3);
+    }
     try {
       drain();
     } catch (const std::exception &error) {
@@ -716,6 +998,7 @@ public:
     entry.surface_key = source_key;
     entry.group_load_epoch = group_load_epoch_;
     entry.version = ++texture_version_;
+    entry.fixture_visual_key.reset();
   }
 
   int32_t create_named_texture(const char *name, int width, int height,
@@ -771,17 +1054,15 @@ public:
     fog_ = {red / 255.0f, green / 255.0f, blue / 255.0f};
   }
   void begin_scene() override {
-    if (!scene_.draws.empty())
-      flush();
-    complete_local_light_packets();
-    ensure_extent();
-    const bool hdr_enabled = window_hdr_enabled();
-    if (hdr_enabled != display_hdr_) {
-      drain();
-      display_hdr_ = hdr_enabled;
-      renderer_->update_lighting_settings(display_lighting());
-    }
+    begin_scene_housekeeping();
     local_lights_begin();
+  }
+  void begin_canvas_scene() override {
+    begin_scene_housekeeping();
+    // Finish the preceding world's packets before dropping its snapshot. A
+    // canvas has no world projection, but observed effects must survive it.
+    local_active_ = false;
+    local_native_.clear();
   }
   void end_scene() override {
     flush();
@@ -791,6 +1072,7 @@ public:
 
   void draw(Primitive primitive, const TLVertex *vertices, int count,
             const DrawState &state) override {
+    require_producer_live();
     // Only the explicitly marked 2D compositor may supply CPU vertices in
     // strict mode. Depth-always also occurs in 3D overlays, so it cannot
     // identify a HUD exemption.
@@ -827,6 +1109,110 @@ public:
   }
 
 private:
+  void begin_scene_housekeeping() {
+    if (!scene_.draws.empty())
+      flush();
+    complete_local_light_packets();
+    ensure_extent();
+    const bool hdr_enabled = window_hdr_enabled();
+    if (hdr_enabled != display_hdr_) {
+      drain();
+      display_hdr_ = hdr_enabled;
+      renderer_->update_lighting_settings(display_lighting());
+    }
+  }
+
+  void require_producer_live() const {
+    if (producer_failed_ || producer_generation_exhausted_)
+      throw std::runtime_error("Core producer requires explicit reset after abandonment");
+  }
+  static void validate_producer_view(const ::platform::ProducerView& view) {
+    const bool original = view.purpose == ::platform::ProducerPurpose::Original;
+    const bool known = original || view.purpose == ::platform::ProducerPurpose::MainWorld ||
+                       view.purpose == ::platform::ProducerPurpose::WorldZoom;
+    if (view.record_version != ::platform::kProducerViewRecordVersion || !known ||
+        view.present == original ||
+        (view.present && (!view.producer_generation || !view.mission_epoch)) ||
+        (!view.present && (view.producer_generation || view.mission_epoch)))
+      throw std::runtime_error("Invalid Core producer view provenance");
+    // No numeric policy: original NaNs and stale inverses are owned data.
+  }
+  void clear_producer_work(bool failed) noexcept {
+    const auto previous_view = producer_view_;
+    scene_ = {};
+    pending_local_packets_.clear();
+    pending_local_bytes_ = 0;
+    submitted_textures_.clear();
+    invalidate_scene_bindings();
+    deferred_material_binding_.reset();
+    native_context_ = {};
+    suppress_model_draws_ = false;
+    local_active_ = false;
+    producer_view_ = {};
+    resident_width_ = resident_height_ = 0;
+    if (producer_reset_generation_ == std::numeric_limits<std::uint64_t>::max())
+      producer_generation_exhausted_ = true;
+    else
+      ++producer_reset_generation_;
+    producer_failed_ = failed || producer_generation_exhausted_;
+    if (producer_observer_) {
+      testing::ProducerViewObservation observation{};
+      observation.stage = failed ? testing::ProducerViewStage::abandon : testing::ProducerViewStage::reset;
+      observation.failed = producer_failed_;
+      observation.view = previous_view;
+      observation.scene_draws = scene_.draws.size();
+      observation.pending_local_packets = pending_local_packets_.size();
+      observation.upload_receipts = submitted_textures_.size();
+      producer_observer_->backend(observation);
+    }
+  }
+  static testing::ProducerViewObservation producer_draw_observation(
+      const vk::Draw& draw, const vk::Scene& scene, std::uint64_t packet) {
+    testing::ProducerViewObservation observation{};
+    observation.view = draw.producer_view;
+    observation.packet = packet;
+    observation.first = draw.first;
+    observation.count = draw.count;
+    observation.sun_tl = bool(draw.sun_tl);
+    observation.height_binding = bool(draw.height_binding);
+    observation.surface_eye = draw.surface_eye;
+    if (draw.sun_tl) {
+      observation.camera_world = draw.sun_tl->camera_world;
+      observation.projection = draw.sun_tl->projection;
+    }
+    const auto offset = std::size_t(draw.first) * sizeof(TLVertex);
+    if (draw.count && offset <= scene.vertices.size() &&
+        scene.vertices.size() - offset >= sizeof(TLVertex))
+      std::memcpy(&observation.first_vertex, scene.vertices.data() + offset, sizeof(TLVertex));
+    return observation;
+  }
+  void observe_producer_draw(const vk::Draw& draw) {
+    if (!producer_observer_) return;
+    auto observation = producer_draw_observation(draw, scene_, 0);
+    observation.stage = testing::ProducerViewStage::append;
+    observation.scene_draws = scene_.draws.size();
+    observation.pending_local_packets = pending_local_packets_.size();
+    producer_observer_->producer(observation);
+  }
+  void observe_producer_packet(const vk::Scene& scene, std::uint64_t packet, bool local) {
+    if (!producer_observer_) return;
+    for (const auto& draw : scene.draws) {
+      auto observation = producer_draw_observation(draw, scene, packet);
+      observation.stage = local ? testing::ProducerViewStage::local_packet : testing::ProducerViewStage::packet;
+      observation.scene_draws = scene.draws.size();
+      observation.pending_local_packets = pending_local_packets_.size();
+      producer_observer_->producer(observation);
+    }
+  }
+  void observe_worker_packet(const vk::Scene& scene, std::uint64_t packet) noexcept {
+    if (!producer_observer_) return;
+    for (const auto& draw : scene.draws) {
+      auto observation = producer_draw_observation(draw, scene, packet);
+      observation.stage = testing::ProducerViewStage::packet;
+      producer_observer_->backend(observation);
+    }
+  }
+
   int32_t prepared_normal(const ::platform::prepared::NormalImage &image) {
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())
@@ -840,6 +1226,23 @@ private:
 
   void append_draw(Primitive primitive, const TLVertex *vertices, int count,
                    const DrawState &state, bool hud, bool depth_only = false) {
+    VisualFloatScope float_scope;
+    require_producer_live();
+    validate_producer_view(producer_view_);
+    zmth::Projection projection{};
+    const float* camera = nullptr;
+    auto viewport = viewport_;
+    if (producer_view_.present) {
+      static_assert(sizeof(projection) == sizeof(producer_view_.projection), "projection storage");
+      std::memcpy(&projection, &producer_view_.projection, sizeof projection);
+      camera = producer_view_.camera;
+      if (producer_view_.canvas_available)
+        viewport = {producer_view_.canvas.x, producer_view_.canvas.y,
+                    producer_view_.canvas.width, producer_view_.canvas.height};
+    } else {
+      projection = zmth::projection();
+      camera = zmth::view().camera.m;
+    }
     CpuInterval interval(cpu_profile_ ? &append_ticks_ : nullptr);
     if (count <= 0) {
       return;
@@ -853,9 +1256,9 @@ private:
     const unsigned first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     const auto add = [&](TLVertex vertex) {
       vertex.sx =
-          (vertex.sx - viewport_[0]) * scene_.width / float(viewport_[2]);
+          (vertex.sx - viewport[0]) * scene_.width / float(viewport[2]);
       vertex.sy =
-          (vertex.sy - viewport_[1]) * scene_.height / float(viewport_[3]);
+          (vertex.sy - viewport[1]) * scene_.height / float(viewport[3]);
       if (vertex.rhw <= 0) {
         vertex.rhw = 1;
       }
@@ -903,6 +1306,7 @@ private:
     }
 
     vk::Draw draw{};
+    draw.producer_view = producer_view_;
     draw.native_sky = state.native_sky;
     draw.depth_only = depth_only;
     draw.first = first;
@@ -925,19 +1329,19 @@ private:
           draw.normal_texture = -1;
         }
         auto tl = std::make_shared<mw34::sun::Tl>();
-        const auto &proj = zmth::projection();
+        const auto &proj = projection;
         if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
-            viewport_[2] > 0 && viewport_[3] > 0) {
+            viewport[2] > 0 && viewport[3] > 0) {
           tl->projection = {
               proj.near_z,
-              proj.fx_near * float(scene_.width) / float(viewport_[2]),
-              proj.fy_near * float(scene_.height) / float(viewport_[3]),
-              (proj.cx - float(viewport_[0])) * float(scene_.width) /
-                  float(viewport_[2]),
-              (proj.cy - float(viewport_[1])) * float(scene_.height) /
-                  float(viewport_[3]),
+              proj.fx_near * float(scene_.width) / float(viewport[2]),
+              proj.fy_near * float(scene_.height) / float(viewport[3]),
+              (proj.cx - float(viewport[0])) * float(scene_.width) /
+                  float(viewport[2]),
+              (proj.cy - float(viewport[1])) * float(scene_.height) /
+                  float(viewport[3]),
               proj.far_z > 0 ? proj.far_z : 1000.0f};
-          const float *m = zmth::view().camera.m;
+          const float *m = camera;
           tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
                               m[7], m[10], m[2], m[5], m[8], m[11]};
         } else {
@@ -954,8 +1358,8 @@ private:
           draw.surface_parameters =
               deferred_surface_parameters(key, state.texture);
           if (draw.surface_parameters[3] > .5f && proj.near_z > 0 &&
-              proj.fx_near > 0 && proj.fy_near > 0 && viewport_[2] > 0 &&
-              viewport_[3] > 0) {
+              proj.fx_near > 0 && proj.fy_near > 0 && viewport[2] > 0 &&
+              viewport[3] > 0) {
             const auto &eye = draw.sun_tl->camera_world;
             draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
           }
@@ -980,8 +1384,8 @@ private:
               norm_idx,
               surface_normals_.cache.authored.count(key) ? "authored" : "world",
               state.address_u, state.address_v, proj.near_z, proj.fx_near,
-              proj.fy_near, proj.cx, proj.cy, viewport_[0], viewport_[1],
-              viewport_[2], viewport_[3], scene_.width, scene_.height,
+              proj.fy_near, proj.cx, proj.cy, viewport[0], viewport[1],
+              viewport[2], viewport[3], scene_.width, scene_.height,
               vertices[0].sx, vertices[0].sy, vertices[0].sz, vertices[0].rhw,
               vertices[0].tu, vertices[0].tv);
         }
@@ -1002,6 +1406,29 @@ private:
                 uint8_t(state.depth_write),
                 1,
                 0};
+    // Final draw policy is known here. Ineligible passes never ask for new
+    // height provenance, including deferred packets captured in model scope.
+    if (lighting_.enabled && lighting_.normals && state.texture >= 0 &&
+        native_ground_draw_eligible(state, hud, depth_only, geometry_debug_,
+                                    primitive == Primitive::kPoints)) {
+      const auto &slot = textures_.at(state.texture);
+      draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
+      if (draw.height_binding) {
+        // projection is selected from the producing view above.
+        if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
+            !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||
+            !std::isfinite(projection.near_z) || !std::isfinite(projection.fx_near) ||
+            !std::isfinite(projection.fy_near) || !std::isfinite(projection.far_z) ||
+            !std::isfinite(projection.cx) || !std::isfinite(projection.cy) ||
+            viewport[2] <= 0 || viewport[3] <= 0)
+          throw std::runtime_error("POM native ground requires a valid native projection");
+        const float *m = camera;
+        const ::platform::prepared::Matrix camera_to_world{
+            m[0], m[3], m[6], m[9], m[1], m[4], m[7], m[10],
+            m[2], m[5], m[8], m[11], 0, 0, 0, 1};
+        draw.surface_eye = native_height_eye(camera_to_world);
+      }
+    }
     draw.push.target[0] = float(scene_.width);
     draw.push.target[1] = float(scene_.height);
     std::copy(fog_.begin(), fog_.end(), draw.push.fog);
@@ -1017,10 +1444,14 @@ private:
                             ? 2 | diffuse
                             : (state.alpha_modulate ? 4 : 2) | texture;
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    if (native_ground_draw_eligible(state, hud, depth_only, geometry_debug_,
+                                    primitive == Primitive::kPoints))
+      apply_fixture_observation(draw, deferred_fixture_observation(state.texture));
     if (!scene_.order.empty() && !scene_.order.back().clear) {
       auto &previous = scene_.draws.back();
       if (!previous.model && previous.depth_only == draw.depth_only &&
           previous.native_sky == draw.native_sky &&
+          ::platform::same_producer_view_bits(previous.producer_view, draw.producer_view) &&
           previous.texture == draw.texture &&
           previous.normal_texture == draw.normal_texture &&
           bool(previous.sun_tl) == bool(draw.sun_tl) &&
@@ -1030,6 +1461,8 @@ private:
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
+          previous.emission_index == draw.emission_index &&
+          mw34::materials::same_height_binding(previous.height_binding, draw.height_binding) &&
           previous.sampler == draw.sampler &&
           previous.key.packed() == draw.key.packed() &&
           std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
@@ -1043,11 +1476,13 @@ private:
           previous.lit_normals = std::move(merged_normals);
         }
         previous.count += drawn;
+        observe_producer_draw(previous);
         return;
       }
     }
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));
+    observe_producer_draw(scene_.draws.back());
     if (sharp)
       ++gpu_sharp_draws_;
   }
@@ -1136,12 +1571,19 @@ private:
 private:
   int32_t prepared_texture(const ::platform::prepared::Image &image) {
     const auto found = prepared_textures_.find(&image);
-    if (found != prepared_textures_.end())
+    if (found != prepared_textures_.end()) {
+      // PreparedModels owns this immutable image across mission resource
+      // resets. A real draw republishes its value identity in the new epoch.
+      textures_.at(found->second).group_load_epoch = group_load_epoch_;
       return found->second;
+    }
     const auto pixels = image_pixels(image);
     const auto handle =
         create_texture(int(image.width), int(image.height),
                        reinterpret_cast<const uint8_t *>(pixels.data()), 1);
+    // The prepared reader preserves a declared hash without checking it. This
+    // immutable slot gets an exact key from its complete visible RGB565 plane.
+    textures_.at(handle).surface_key = prepared_fixture_key(image);
     prepared_textures_.emplace(&image, handle);
     return handle;
   }
@@ -1172,6 +1614,7 @@ private:
 
   void emit_prepared(const PreparedBatchDraw &source,
                      const ::platform::ModelDrawContext &context) {
+    VisualFloatScope guard;
     CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
     if (geometry_mode_ != cc::geometry::Mode::legacy &&
         source.deformed.empty()) {
@@ -1188,9 +1631,11 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
-    apply_surface_material(draw, source, lighting_.normals);
+    const auto texture = prepared_texture(*source.texture);
+    apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                           group_load_epoch_, textures_.at(texture).version);
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
-    draw.texture = int(bind_texture(prepared_texture(*source.texture), false));
+    draw.texture = int(bind_texture(texture, false));
     if (source.normal && lighting_.normals)
       draw.normal_texture =
           int(bind_texture(prepared_normal(*source.normal), false));
@@ -1198,6 +1643,7 @@ private:
                            staged->vertices.end());
     cpu_clipped_triangles_ += staged->clipped_triangles;
     if (draw.count) {
+      apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
       ++prepared_batches_;
@@ -1212,7 +1658,20 @@ private:
     return mw34::sun::display_ambient(lighting_, campaign_enabled_, display_hdr_);
   }
 
+  void require_editor_producer() const {
+    if (SDL_GetCurrentThreadID() != editor_thread_)
+      throw std::logic_error("Core editor routing requires its producer thread");
+  }
+
   void initialize_renderer() {
+    if (renderer_) {
+      // A normal scene reset retires the old device's owner on the producer.
+      // Never turn a failed editor/device lifetime into automatic recovery.
+      if (renderer_->editor_gpu_statistics().failed)
+        throw std::runtime_error("Core editor failure prevents renderer reset");
+      renderer_->detach_editor();
+      editor_present_active_ = false;
+    }
     display_hdr_ = window_hdr_enabled();
     auto source = native_wsi_ ? sdl_surface(window_, window_state_tracker_)
                               : vk::Renderer::WindowSurface{};
@@ -1222,6 +1681,7 @@ private:
             lighting_.enabled,
         display_lighting(), geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
+    renderer_->producer_view_observer = producer_observer_;
     texture_limit_ = renderer_->max_texture_dimension(native_window_);
     if (!native_wsi_ && !renderer_->dxgi_presenting()) {
       throw std::runtime_error("Core Critical DXGI transport is unavailable");
@@ -1229,6 +1689,7 @@ private:
   }
 
   void ensure_extent() {
+    require_producer_live();
     if (reset_pending_) {
       drain();
       retired_draws_ += renderer_->draws;
@@ -1246,6 +1707,7 @@ private:
       window_bound_ = false;
       resident_width_ = resident_height_ = 0;
       scene_ = {};
+      invalidate_scene_bindings();
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
@@ -1290,13 +1752,25 @@ private:
     if (entry.pixels.empty()) {
       throw std::runtime_error("mw3-re draw references a released texture");
     }
+    const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
     unsigned &index = sharp ? entry.sharp_index : entry.scene_index;
     if (index != no_binding) {
+      if (!scene_.texture_slot_matches(index, key, entry.version, entry.width,
+                                      entry.height)) {
+        throw std::runtime_error(
+            "Producer Scene texture binding mismatch: handle=" +
+            std::to_string(handle) + " sharp=" + std::to_string(sharp) +
+            " slot=" + std::to_string(index) +
+            " textures=" + std::to_string(scene_.textures.size()) +
+            " key=" + std::to_string(key) +
+            " version=" + std::to_string(entry.version) +
+            " extent=" + std::to_string(entry.width) + "x" +
+            std::to_string(entry.height));
+      }
       return index;
     }
     const auto w = entry.width;
     const auto h = entry.height;
-    const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
     vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {},
                        {}};
     const auto current = submitted_textures_.find(ref.key);
@@ -1340,6 +1814,9 @@ private:
     capture_path_.clear();
   }
 
+  sdlfe::EditorUiSource *editor_source_{};
+  const SDL_ThreadID editor_thread_ = SDL_GetCurrentThreadID();
+  bool editor_present_active_{};
   SDL_Window *window_;
   std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
       window_state_tracker_;
@@ -1353,16 +1830,18 @@ private:
   const bool campaign_enabled_, sun_explicit_;
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
+  std::shared_ptr<const zcls::ZbdObservationSession> observation_session_;
   // Owned current-mission state: canonical mission ID plus resolved campaign
   // lighting/policy. The profile pointer refers only to the static campaign
   // profile database (no borrowed native pointers).
   ::platform::MissionIdentity current_mission_identity_{};
   std::string current_mission_id_;
   mw34::campaign::ResolvedMissionLighting current_mission_lighting_{};
+  // Validate the original request before sanitizing or loading prepared models.
+  const RendererBridgeConfig bridge_config_;
   PreparedModels prepared_;
   const cc::geometry::Mode geometry_mode_;
   const bool geometry_debug_;
-  const RendererBridgeConfig bridge_config_;
   cc::geometry::Statistics geometry_statistics_;
   struct NativeGeometry {
     std::weak_ptr<const cc::geometry::Resource> source;
@@ -1378,6 +1857,10 @@ private:
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
   const sdlfe::FrameShape *shape_{};
   vk::Scene scene_{};
+  ::platform::ProducerView producer_view_{};
+  std::uint64_t producer_reset_generation_{1}, producer_packet_id_{};
+  bool producer_failed_{}, producer_generation_exhausted_{};
+  testing::ProducerViewObserver* producer_observer_{};
   std::array<int, 4> viewport_{0, 0, 640, 480};
   std::array<float, 3> fog_{};
   std::vector<Texture> textures_;
@@ -1414,6 +1897,7 @@ private:
   std::uint64_t gpu_prepared_vertices_{}, prepared_reference_vertices_{},
       early_prepared_models_{}, prepared_cpu_fallback_batches_{};
   const bool prepared_cache_enabled_;
+  const std::size_t local_staging_budget_;
   PreparedDrawCache prepared_draw_cache_;
 };
 
@@ -1422,7 +1906,15 @@ private:
 RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
                                       const sdlfe::CoreCriticalQuality &quality,
                                       const sdlfe::CoreCriticalAssets &assets) {
+  if (assets.pom &&
+      (backend != sdlfe::RendererBackend::core_critical_dxgi &&
+       backend != sdlfe::RendererBackend::core_critical_wsi))
+    throw std::runtime_error(
+        "--cc-pom 1 requires a Core Critical Vulkan backend");
+  if (assets.pom && assets.lighting != "normal")
+    throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   auto config = RendererBridgeConfig::from_diagnostic_env();
+  config.parallax_materials = assets.pom;
   if (assets.environment) {
     std::fprintf(stderr,
                  "Environment renderer catalogs: %zu authored, %zu world\n",
@@ -1506,5 +1998,183 @@ make_renderer(SDL_Window *window, sdlfe::RendererBackend backend,
               const sdlfe::CoreCriticalAssets &assets) {
   return std::make_unique<FrameRenderer>(window, backend, quality, assets);
 }
+
+namespace testing {
+bool observe_producer_views(VulkanFrameRenderer& renderer, ProducerViewObserver* observer) {
+    return renderer.observe_producer_views(observer);
+}
+std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
+    SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
+    const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
+    return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+struct RigidCaptureTestAccess {
+    static FrameRenderer &impl(VulkanFrameRenderer &renderer) {
+        auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+        if (!typed)
+            throw std::runtime_error("Renderer is not a FrameRenderer");
+        return *typed;
+    }
+    static std::shared_ptr<const CapturedNativeRigid> capture(
+        VulkanFrameRenderer &renderer, const zcls::Node &node,
+        const ::platform::ModelDrawContext &context,
+        const zmod::RigidGeometryEligibility &eligibility, std::size_t maximum_owned_bytes) {
+        return impl(renderer).capture_original_rigid(
+            node, context, eligibility, maximum_owned_bytes);
+    }
+    static bool validate(VulkanFrameRenderer &renderer, const CapturedNativeRigid &captured) {
+        return impl(renderer).validate_captured_original_rigid(captured);
+    }
+    static std::vector<NativeGroundRangeAdmission> baseline_admissions(
+        VulkanFrameRenderer &renderer,
+        const std::shared_ptr<const cc::geometry::Resource> &resource,
+        const ::platform::ModelDrawContext &context,
+        const std::vector<cc::geometry::Material> &materials) {
+        return impl(renderer).native_geometry_admissions(resource, context, materials);
+    }
+    static std::shared_ptr<mw34::materials::SurfaceDecodedBudget> surface_budget(
+        VulkanFrameRenderer &renderer) {
+        return impl(renderer).prepared_.surface_budget();
+    }
+    static void set_mission_and_environment(
+        VulkanFrameRenderer &renderer, std::string mission_id,
+        std::shared_ptr<const ::platform::prepared::EnvironmentSelection> environment) {
+        auto &r = impl(renderer);
+        r.current_mission_id_ = std::move(mission_id);
+        r.environment_ = std::move(environment);
+    }
+    static void seed_authored_normal(VulkanFrameRenderer &renderer,
+                                     const mw34::materials::SurfaceKey &key,
+                                     mw34::materials::WorldNormalCache::TextureRecord record) {
+        auto &r = impl(renderer);
+        r.surface_normals_.loaded = true;
+        const int idx = int(r.surface_normals_.cache.textures.size());
+        r.surface_normals_.cache.textures.push_back(std::move(record));
+        r.surface_normals_.cache.register_authored(key, idx);
+    }
+    static void seed_authored_no_normal(VulkanFrameRenderer &renderer,
+                                        const mw34::materials::SurfaceKey &key) {
+        auto &r = impl(renderer);
+        r.surface_normals_.loaded = true;
+        r.surface_normals_.cache.register_authored(key, -1);
+    }
+    static void mutate_normal_record(VulkanFrameRenderer &renderer, int index,
+                                     std::uint32_t width, std::uint32_t height,
+                                     std::uint64_t hash,
+                                     std::vector<std::uint32_t> pixels) {
+        auto &rec = impl(renderer).surface_normals_.cache.textures.at(std::size_t(index));
+        rec.width = width;
+        rec.height = height;
+        rec.hash = hash;
+        rec.pixels32 = std::move(pixels);
+    }
+    static void advance_group_epoch(VulkanFrameRenderer &renderer) {
+        ++impl(renderer).group_load_epoch_;
+    }
+    static std::uint64_t group_epoch(const VulkanFrameRenderer &renderer) {
+        return impl(const_cast<VulkanFrameRenderer &>(renderer)).group_load_epoch_;
+    }
+    static void set_slot_surface_key(VulkanFrameRenderer &renderer, int handle,
+                                     const mw34::materials::SurfaceKey &key) {
+        impl(renderer).textures_.at(std::size_t(handle)).surface_key = key;
+    }
+    static void set_slot_version(VulkanFrameRenderer &renderer, int handle,
+                                 std::uint64_t version) {
+        impl(renderer).textures_.at(std::size_t(handle)).version = version;
+    }
+    static void set_slot_group_epoch(VulkanFrameRenderer &renderer, int handle,
+                                     std::uint64_t epoch) {
+        impl(renderer).textures_.at(std::size_t(handle)).group_load_epoch = epoch;
+    }
+    static void set_slot_pixels(VulkanFrameRenderer &renderer, int handle,
+                                unsigned width, unsigned height,
+                                std::vector<std::uint32_t> pixels) {
+        auto &slot = impl(renderer).textures_.at(std::size_t(handle));
+        slot.width = width;
+        slot.height = height;
+        slot.pixels = std::move(pixels);
+    }
+};
+
+std::shared_ptr<const CapturedNativeRigid> RigidCaptureTestHook::capture_original_rigid(
+    VulkanFrameRenderer &renderer, const zcls::Node &node,
+    const ::platform::ModelDrawContext &context, const zmod::RigidGeometryEligibility &eligibility,
+    std::size_t maximum_owned_bytes) {
+    return RigidCaptureTestAccess::capture(
+        renderer, node, context, eligibility, maximum_owned_bytes);
+}
+
+bool RigidCaptureTestHook::validate_captured_original_rigid(
+    VulkanFrameRenderer &renderer, const CapturedNativeRigid &captured) {
+    return RigidCaptureTestAccess::validate(renderer, captured);
+}
+
+std::vector<NativeGroundRangeAdmission> RigidCaptureTestHook::native_geometry_admissions(
+    VulkanFrameRenderer &renderer, const std::shared_ptr<const cc::geometry::Resource> &resource,
+    const ::platform::ModelDrawContext &context,
+    const std::vector<cc::geometry::Material> &materials) {
+    return RigidCaptureTestAccess::baseline_admissions(renderer, resource, context, materials);
+}
+
+std::shared_ptr<mw34::materials::SurfaceDecodedBudget> RigidCaptureTestHook::surface_budget(
+    VulkanFrameRenderer &renderer) {
+    return RigidCaptureTestAccess::surface_budget(renderer);
+}
+
+void RigidCaptureTestHook::set_mission_and_environment(
+    VulkanFrameRenderer &renderer, std::string mission_id,
+    std::shared_ptr<const ::platform::prepared::EnvironmentSelection> environment) {
+    RigidCaptureTestAccess::set_mission_and_environment(
+        renderer, std::move(mission_id), std::move(environment));
+}
+
+void RigidCaptureTestHook::seed_authored_normal(
+    VulkanFrameRenderer &renderer, const mw34::materials::SurfaceKey &key,
+    mw34::materials::WorldNormalCache::TextureRecord record) {
+    RigidCaptureTestAccess::seed_authored_normal(renderer, key, std::move(record));
+}
+
+void RigidCaptureTestHook::seed_authored_no_normal(
+    VulkanFrameRenderer &renderer, const mw34::materials::SurfaceKey &key) {
+    RigidCaptureTestAccess::seed_authored_no_normal(renderer, key);
+}
+
+void RigidCaptureTestHook::mutate_normal_record(
+    VulkanFrameRenderer &renderer, int index, std::uint32_t width, std::uint32_t height,
+    std::uint64_t hash, std::vector<std::uint32_t> pixels) {
+    RigidCaptureTestAccess::mutate_normal_record(
+        renderer, index, width, height, hash, std::move(pixels));
+}
+
+void RigidCaptureTestHook::advance_group_epoch(VulkanFrameRenderer &renderer) {
+    RigidCaptureTestAccess::advance_group_epoch(renderer);
+}
+
+std::uint64_t RigidCaptureTestHook::group_epoch(const VulkanFrameRenderer &renderer) {
+    return RigidCaptureTestAccess::group_epoch(renderer);
+}
+
+void RigidCaptureTestHook::set_slot_surface_key(
+    VulkanFrameRenderer &renderer, int handle, const mw34::materials::SurfaceKey &key) {
+    RigidCaptureTestAccess::set_slot_surface_key(renderer, handle, key);
+}
+
+void RigidCaptureTestHook::set_slot_version(
+    VulkanFrameRenderer &renderer, int handle, std::uint64_t version) {
+    RigidCaptureTestAccess::set_slot_version(renderer, handle, version);
+}
+
+void RigidCaptureTestHook::set_slot_group_epoch(
+    VulkanFrameRenderer &renderer, int handle, std::uint64_t epoch) {
+    RigidCaptureTestAccess::set_slot_group_epoch(renderer, handle, epoch);
+}
+
+void RigidCaptureTestHook::set_slot_pixels(
+    VulkanFrameRenderer &renderer, int handle, unsigned width, unsigned height,
+    std::vector<std::uint32_t> pixels) {
+    RigidCaptureTestAccess::set_slot_pixels(renderer, handle, width, height, std::move(pixels));
+}
+} // namespace testing
 
 } // namespace cc_mw3_re

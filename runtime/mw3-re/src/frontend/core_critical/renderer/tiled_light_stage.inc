@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 
 namespace mw34::tiled {
@@ -15,6 +16,31 @@ inline constexpr std::size_t max_width = 5120;
 inline constexpr std::size_t max_height = 2160;
 inline constexpr std::size_t capacity = 64;
 inline constexpr std::size_t words_per_tile = 65;
+inline constexpr std::size_t max_views = 64;
+
+// Admission and upload must use the same aligned aggregate storage budget.
+// Failed reservations leave both counters intact, including at integer limits.
+struct ViewBudget {
+  uint64_t range{};
+  uint64_t alignment{};
+  uint64_t used{};
+  std::size_t views{};
+
+  [[nodiscard]] std::optional<uint64_t> reserve(uint64_t length) {
+    if (!alignment || views >= max_views || used > range)
+      return std::nullopt;
+    const auto remainder = used % alignment;
+    const auto padding = remainder ? alignment - remainder : 0;
+    if (padding > range - used)
+      return std::nullopt;
+    const auto offset = used + padding;
+    if (length > range - offset)
+      return std::nullopt;
+    used = offset + length;
+    ++views;
+    return offset;
+  }
+};
 
 struct alignas(16) View {
   std::array<float, 12> camera{};

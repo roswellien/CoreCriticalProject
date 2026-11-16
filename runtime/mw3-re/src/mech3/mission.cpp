@@ -3,6 +3,7 @@
 
 #include "mech3/options.h"
 #include "crt/msvc_string.h"
+#include "upgrades/mods/save_mods.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -183,6 +184,7 @@ bool Missions::load_world(int32_t index) {
   if (!h.interp_source(script.c_str())) {
     h.zerr(0x800, "C:\\zipper\\Mech3\\mission.cpp", 0x261, "Failed to Interpret: %s -- Mission Load Aborted",
            script.c_str());
+    failed_why = "its script, " + script + ", could not be read";
     h.cleanup(1);
     return false;
   }
@@ -198,6 +200,13 @@ bool Missions::load_world(int32_t index) {
   if (abort) return false;
   h.progress_text(h.message(0x104));
   const Handle world = h.find_node(0xd, "world1");
+  if (!world) {  // FIX (bug): the exe goes on and faults in the anim load's walk of a null node (docs/fixes.md)
+    h.zerr(0x800, "C:\\zipper\\Mech3\\mission.cpp", 0x261, "No world in %s (its gamez.zbd missing or unread) -- Mission Load Aborted",
+           script.c_str());
+    failed_why = "its world (zbd\\" + name + "\\gamez.zbd) is missing or could not be read";
+    h.cleanup(1);
+    return false;
+  }
   const Handle camera = h.find_node(8, "camera1");
   const Handle window = h.find_node(0xe, "window1");
   const Handle display = h.find_node(0xf, "display");
@@ -292,6 +301,7 @@ bool Missions::setup() {
   h.fn_4b4ab0(0x60b228);
   h.player_setup(h.app_turrets());
   if (h.game_saved()) h.progress_text("Saved Game Loaded");
+  if (const std::string n = save_mods_note(); !n.empty()) h.progress_text(n.c_str());  // ours: upgrades/mods/save_mods
   if (abort) return false;
   for (int i = 1; i < 5; ++i) objectives[i] = 0;  // +0x7c..+0x88; +0x78 is left
   const Handle out[5] = {0x6098d0 + 0x78, 0x6098d0 + 0x7c, 0x6098d0 + 0x80, 0x6098d0 + 0x84, 0x6098d0 + 0x88};
@@ -373,6 +383,7 @@ void Missions::start() {
   g_hooks->game_mission_index();
   done = 0;
   abort = 0;
+  failed_why.clear();
   failed = setup() ? 0 : 1;
   done = 1;
 }

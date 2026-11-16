@@ -16,6 +16,7 @@
 #pragma once
 #include "capture_pixels.hpp"
 #include "frontend/sdl/cpu_interval.h"
+#include "frontend/core_critical/producer_view_test_hook.hpp"
 #define VK_NO_PROTOTYPES
 #include "buffer_reserve.hpp"
 #include "camera_history.hpp"
@@ -37,6 +38,7 @@
 #include "light_cull_tiled_comp.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
+#include "native_texture_identity.hpp"
 #include "platform/vk_loader.hpp"
 #include "platform/wsi_surface.hpp"
 #include "platform/wsi_win32_dxgi.hpp"
@@ -48,6 +50,7 @@
 #include "sun_tl_vert.h"
 #include "sun_world_vert.h"
 #include "surface_detail.hpp"
+#include "surface_materials.hpp"
 #include "texture_staging.hpp"
 #include "tiled_light_stage.inc"
 #include "world_binding.hpp"
@@ -64,6 +67,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -71,6 +75,20 @@
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan_core.h>
+#if defined(_WIN32)
+#include <cmath>
+#include <exception>
+#include <mutex>
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
+#include "frontend/sdl/editor_imgui.h"
+#include "backends/imgui_impl_vulkan.h"
+#include "editor_srgb_frag.h"
+#endif
 
 namespace mw34::vkscene {
 // rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour
@@ -165,7 +183,9 @@ struct Draw {
   // and eye (world xyz, valid); owned values, zero preserves the legacy path.
   std::array<float, 4> surface_parameters{};
   std::array<float, 4> surface_eye{};
+  std::shared_ptr<const mw34::materials::HeightBinding> height_binding;
   bool geometry_debug_normals{};
+  ::platform::ProducerView producer_view{};
 };
 struct Clear {
   unsigned flags;
@@ -184,6 +204,12 @@ struct Scene {
   std::uint64_t world_frame{}, world_generation{}, world_context{};
   std::array<float, 3> world_eye{};
   bool world_eye_valid{};
+  // Private authored-fixture capture. Mode 1 packs the actual fragment UV in
+  // four raw bytes; production guest color remains the ordinary RGB565 copy.
+  unsigned pom_diagnostic_mode{};
+  bool pom_raw_readback{};
+  std::vector<unsigned char> pom_rgba8;
+  std::vector<float> pom_depth32;
   mw34::effects::Uniform effect_lights{};
   unsigned width, height;
   std::vector<std::uint16_t> color,
@@ -201,6 +227,16 @@ struct Scene {
   mw34::submission::DrawEmissions emissions;
   std::vector<Clear> clears;
   std::vector<Command> order;
+
+  bool texture_slot_matches(std::size_t slot, std::uint64_t key,
+                            std::uint64_t version, unsigned texture_width,
+                            unsigned texture_height) const {
+    if (slot >= textures.size())
+      return false;
+    const auto &texture = textures[slot];
+    return texture.key == key && texture.hash == version &&
+           texture.width == texture_width && texture.height == texture_height;
+  }
 };
 
 // Owns the loader, device, caches, render targets and child presentation
@@ -209,6 +245,8 @@ struct Scene {
 // and fences on one queue.
 class Renderer {
 public:
+  // Set only by the producer after draining all existing worker jobs.
+  cc_mw3_re::testing::ProducerViewObserver* producer_view_observer{};
   struct WindowSurface {
     std::vector<const char *> extensions;
     std::function<VkSurfaceKHR(VkInstance)> create;
@@ -222,6 +260,19 @@ public:
     bool fxaa;
   };
   enum class ColorTarget { device_default, rgba8 };
+  static std::array<unsigned, 2> material_descriptor_counts(std::uint64_t capacity) {
+    if (capacity > (std::uint64_t(UINT32_MAX) - 2) / 4)
+      throw std::runtime_error("Material descriptor pool arithmetic overflow");
+    return {unsigned(capacity * 4 + 2), unsigned(capacity * 2 + 1)};
+  }
+  static unsigned material_descriptor_capacity(std::uint64_t draw_count,
+                                                std::uint64_t caster_count) {
+    constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 4;
+    if (draw_count > limit || caster_count > limit - draw_count ||
+        draw_count + caster_count > limit - 64)
+      throw std::runtime_error("Scene material descriptor capacity overflows Vulkan counts");
+    return unsigned(draw_count + caster_count + 64);
+  }
   // An explicit format preference lets format-sensitive callers exercise the
   // RGBA fallback without changing device capabilities or process settings.
   explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
@@ -287,7 +338,15 @@ public:
   // support); the caller then uses its other presenter.
   bool present(cc_mw3_re::platform::NativeWindowHandle hwnd,
                const std::uint8_t *pixels, unsigned w, unsigned h,
-               unsigned pitch, bool wide_world = false, bool rgba32 = false) {
+               unsigned pitch, bool wide_world = false, bool rgba32 = false
+#if defined(_WIN32)
+               , sdlfe::EditorUi *editor = nullptr
+#endif
+               ) {
+#if defined(_WIN32)
+    const bool requested_editor = editor_requested(editor);
+    try {
+#endif
     const bool visible = surface_source.is_visible
                              ? surface_source.is_visible(hwnd)
                              : cc_mw3_re::platform::is_window_visible(hwnd);
@@ -309,22 +368,42 @@ public:
       if (!child && bridge_config.dxgi_present)
         throw std::runtime_error(
             "Cannot create the required DXGI presentation window");
-      if (!child && !surface_source.create)
+      if (!child && !surface_source.create) {
+#if defined(_WIN32)
+        if (requested_editor)
+          editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor presentation child unavailable");
+#endif
         return false;
+      }
       // A presenting instance selects the device that can present to this
       // window (on hybrid systems the display may belong to another adapter
       // than the one rendering scenes).
       if (!device)
         init(surface_source.create ? hwnd : child);
-      else if (presentable && !surface(surface_source.create ? hwnd : child))
+      else if (presentable && !surface(surface_source.create ? hwnd : child)) {
+#if defined(_WIN32)
+        if (requested_editor)
+          editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor window surface unavailable");
+#endif
         return false;
+      }
     }
-    if (!presentable || (!windowSurface && !dxgi.active()))
+    if (!presentable || (!windowSurface && !dxgi.active())) {
+#if defined(_WIN32)
+      if (requested_editor)
+        editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor device cannot present to this window");
+#endif
       return false;
+    }
     // The previous Flip's copy/blit is waited for here, before its upload
     // buffer, command pool or source image are reused, instead of right after
     // vkQueuePresentKHR (presentation stays one frame per Flip).
     if (presentInFlight) {
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -366,8 +445,18 @@ public:
         check(r, "acquire swapchain image");
     }
     const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
+#if defined(_WIN32)
+    const bool editor_frame = prepare_editor(editor, requested_editor);
+#else
+    const bool editor_frame = false;
+#endif
     const VkImage swap_target =
         dxgi.active() ? dxgi.image() : swapImages[index];
+    VkImage game_target = swap_target;
+#if defined(_WIN32)
+    if (editor_frame)
+      game_target = editor_.composition.color.image;
+#endif
     check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -405,6 +494,10 @@ public:
       bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
           VK_ACCESS_TRANSFER_WRITE_BIT);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_begin_composition();
+#endif
     // Scaled to the window's client area with nearest sampling (the GDI
     // presenter's COLORONCOLOR).
     VkImageBlit blit{};
@@ -419,15 +512,15 @@ public:
         swapExtent.height, wide_world);
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
-    if (destination.left || destination.top ||
+    if (!editor_frame && (destination.left || destination.top ||
         destination.right != int32_t(swapExtent.width) ||
-        destination.bottom != int32_t(swapExtent.height)) {
+        destination.bottom != int32_t(swapExtent.height))) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      f.vkCmdClearColorImage(presentCmd, swap_target,
+      f.vkCmdClearColorImage(presentCmd, game_target,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
                              &all);
-      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      bar(game_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_ACCESS_TRANSFER_WRITE_BIT);
     }
@@ -439,9 +532,13 @@ public:
       blit.dstOffsets[1] = {fit.x + fit.width, fit.y + fit.height, 1};
     }
     f.vkCmdBlitImage(presentCmd, srcImage.image,
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap_target,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, game_target,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                      VK_FILTER_NEAREST);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_finish_composition(swap_target);
+#endif
     if (dxgi.active())
       dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
     else
@@ -461,6 +558,11 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_submit(si);
+    else
+#endif
     check(f.vkQueueSubmit(queue, 1, &si, presentFence), "submit present");
     if (dxgi.active()) {
       presentInFlight = true;
@@ -486,6 +588,11 @@ public:
       if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
           r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
         check(r, "present");
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -495,6 +602,16 @@ public:
     check(r, "present");
     presentInFlight = true;
     return true;
+#if defined(_WIN32)
+    } catch (...) {
+      const auto failure = std::current_exception();
+      if (requested_editor || editor_.cpu) {
+        editor_note_failure(failure);
+        editor_rethrow(failure);
+      }
+      throw;
+    }
+#endif
   }
   // Presents the resident scene target (lazy residency on this device: the 3D
   // scenes and the GPU HUD of the frame) directly: no guest copy, no upload.
@@ -513,7 +630,15 @@ public:
     }
   }
   bool present_resident(cc_mw3_re::platform::NativeWindowHandle hwnd,
-                        unsigned w, unsigned h, bool manage_window = true) {
+                        unsigned w, unsigned h, bool manage_window = true
+#if defined(_WIN32)
+                        , sdlfe::EditorUi *editor = nullptr
+#endif
+                        ) {
+#if defined(_WIN32)
+    const bool requested_editor = editor_requested(editor);
+    try {
+#endif
     finish_world();
     const bool visible = surface_source.is_visible
                              ? surface_source.is_visible(hwnd)
@@ -525,6 +650,11 @@ public:
         !colorImage.image || w != width || h != height)
       return false;
     if (presentInFlight) {
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -556,8 +686,18 @@ public:
         check(r, "acquire swapchain image");
     }
     const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
+#if defined(_WIN32)
+    const bool editor_frame = prepare_editor(editor, requested_editor);
+#else
+    const bool editor_frame = false;
+#endif
     const VkImage swap_target =
         dxgi.active() ? dxgi.image() : swapImages[index];
+    VkImage game_target = swap_target;
+#if defined(_WIN32)
+    if (editor_frame)
+      game_target = editor_.composition.color.image;
+#endif
     check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -592,6 +732,10 @@ public:
       bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_begin_composition();
+#endif
     // The frame keeps its aspect ratio (side or top bars are cleared to black
     // when the window's differs).
     const auto ss = sample_grid();
@@ -600,15 +744,15 @@ public:
         ow, oh, swapExtent.width, swapExtent.height);
     const int dw = destination.right - destination.left;
     const int dh = destination.bottom - destination.top;
-    if (destination.left || destination.top ||
+    if (!editor_frame && (destination.left || destination.top ||
         destination.right != int32_t(swapExtent.width) ||
-        destination.bottom != int32_t(swapExtent.height)) {
+        destination.bottom != int32_t(swapExtent.height))) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      f.vkCmdClearColorImage(presentCmd, swap_target,
+      f.vkCmdClearColorImage(presentCmd, game_target,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
                              &all);
-      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      bar(game_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -620,10 +764,14 @@ public:
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
     f.vkCmdBlitImage(presentCmd, colorImage.image,
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap_target,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, game_target,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                      (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST
                                                       : VK_FILTER_LINEAR);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_finish_composition(swap_target);
+#endif
     if (dxgi.active())
       dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
     else
@@ -661,6 +809,11 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_submit(si);
+    else
+#endif
     check(f.vkQueueSubmit(queue, 1, &si, presentFence),
           "submit resident present");
     if (dxgi.active()) {
@@ -689,6 +842,11 @@ public:
       if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
           r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
         check(r, "present");
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -698,6 +856,16 @@ public:
     check(r, "present");
     presentInFlight = true;
     return true;
+#if defined(_WIN32)
+    } catch (...) {
+      const auto failure = std::current_exception();
+      if (requested_editor || editor_.cpu) {
+        editor_note_failure(failure);
+        editor_rethrow(failure);
+      }
+      throw;
+    }
+#endif
   }
   std::uint64_t resident_presents{};
   bool dxgi_presenting() const { return dxgi.active(); }
@@ -1016,6 +1184,8 @@ public:
   std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{},
       world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{};
   std::uint64_t normal_draws{};
+  std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
+      height_retired_images{};
   std::uint64_t presents{};
   bool presentInFlight{};
   // True when the cached texture for this guest surface already holds content
@@ -1085,6 +1255,7 @@ public:
   // this call returns.
   void render(Scene &s, bool upload_in = true, bool readback_out = true) {
     settle();
+    retire_height_images();
     // The previous GPU submission has completed. Indexed geometry owns no
     // live engine pointers and can retire once its source and packets expire.
     for (auto it = model_buffers.begin(); it != model_buffers.end();) {
@@ -1109,6 +1280,14 @@ public:
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);
+    s.pom_rgba8.clear();
+    s.pom_depth32.clear();
+    if (s.pom_diagnostic_mode > 1 ||
+        (s.pom_diagnostic_mode && !s.pom_raw_readback) ||
+        (s.pom_raw_readback &&
+         (!readback_out || !require_rgba8 || !rgba || quality_settings.samples_x != 1 ||
+          quality_settings.samples_y != 1 || fxaa_enabled() || rw != width || rh != height)))
+      throw std::runtime_error("POM raw capture requires linear RGBA8, single sample and readback");
     if (bridge_config.temporal_inputs) {
       if (s.frontend_canvas)
         camera_history.invalidate(mw34::temporal::Reset::transition);
@@ -1299,11 +1478,26 @@ private:
                  : t.pixels.size()) != size_t(t.width) * t.height)
           throw std::runtime_error(
               "Vulkan scene renderer: changed texture without pixels");
+        if (bridge_config.parallax_materials) {
+          c.source_rgb565_hash = c.source_rgba8_hash = 0;
+          if (t.format == TexFormat::rgba8888) {
+            const auto *pixels = reinterpret_cast<const unsigned char *>(t.pixels32.data());
+            c.source_rgb565_hash =
+                mw34::materials::canonical_upload_key(t.width, t.height, pixels, 1).hash;
+            c.source_rgba8_hash =
+                mw34::materials::normal_hash(pixels, t.pixels32.size() * 4);
+          } else if (t.format == TexFormat::rgb565) {
+            c.source_rgb565_hash =
+                mw34::materials::normal_hash(t.pixels.data(), t.pixels.size() * 2);
+          }
+        }
         changed.push_back({&c, &t});
         texBytes += VkDeviceSize(t.width) * t.height * 4;
       }
       bound[i] = &c;
     }
+    std::vector<HeightUpload> pending_heights;
+    const auto draw_heights = prepare_height_images(s, bound, pending_heights);
     ensure(texUpload, std::max<VkDeviceSize>(texBytes, 4),
            VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     {
@@ -1376,6 +1570,7 @@ private:
     mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
     std::vector<unsigned> sunUniformIds(s.draws.size());
     std::vector<mw34::tiled::View> tiledFrameViews;
+    constexpr unsigned allEffectLights = ~0u - 1;
     std::vector<unsigned> tiledDrawViews(s.draws.size(), ~0u);
     bool sunScene = false;
     if (lighting_settings.enabled) {
@@ -1392,6 +1587,8 @@ private:
       std::memcpy(effectBuffer.mapped, &fx, sizeof(fx));
       mw34::tiled::validate_lights(fx);
       if (effects_settings.enabled && fx.params[0] > 0) {
+        init_tiled();
+        mw34::tiled::ViewBudget budget{tiledRange, tiledListAlignment};
         for (size_t at = 0; at < s.draws.size(); ++at) {
           const auto &d = s.draws[at];
           if (s.hud || s.frontend_canvas || d.sky || !sun_lit(d))
@@ -1406,11 +1603,21 @@ private:
               std::find_if(tiledFrameViews.begin(), tiledFrameViews.end(), [&](const auto &prior) {
                 return std::memcmp(&prior, &v, sizeof(v)) == 0;
               });
-          tiledDrawViews[at] = unsigned(found - tiledFrameViews.begin());
-          if (found == tiledFrameViews.end()) {
-            if (tiledFrameViews.size() == 64)
-              throw std::runtime_error("Too many tiled camera views");
+          if (found != tiledFrameViews.end()) {
+            tiledDrawViews[at] = unsigned(found - tiledFrameViews.begin());
+          } else if (budget.reserve(mw34::tiled::bytes(v))) {
+            tiledDrawViews[at] = unsigned(tiledFrameViews.size());
             tiledFrameViews.push_back(v);
+          } else {
+            // Preserve this exact draw's lighting when the tiled optimization is full.
+            tiledDrawViews[at] = allEffectLights;
+            if (!tiledOverflowReported) {
+              std::fprintf(stderr, "Tiled lights: GPU all-light overflow path; "
+                                   "views=%zu bytes=%llu range=%llu\n",
+                           budget.views, static_cast<unsigned long long>(budget.used),
+                           static_cast<unsigned long long>(budget.range));
+              tiledOverflowReported = true;
+            }
           }
         }
       }
@@ -1464,6 +1671,7 @@ private:
             u.surface_parameters = draw.surface_parameters;
             u.surface_eye = draw.surface_eye;
           }
+          height_uniform(s, draw, u);
           if (skyEyeValid) {
             const auto &e =
                 draw.sun_tl && !draw.sky ? draw.sun_tl->camera_world : skyEye;
@@ -1500,7 +1708,9 @@ private:
           u.detail_motion[3] =
               draw.key.blend ? -1.f : environment.night_world_gain;
           s.emissions.apply(draw.emission_index, u);
-          if (tiledDrawViews[at] != ~0u) {
+          if (tiledDrawViews[at] == allEffectLights) {
+            u.tiled_lights = {0, 0, 0, 2};
+          } else if (tiledDrawViews[at] != ~0u) {
             const auto id = tiledDrawViews[at];
             u.tiled_lights = {tiledFrameViews[id].extent[2], tiledFrameViews[id].extent[3],
                               tiledOffsets[id], 1};
@@ -1515,14 +1725,20 @@ private:
     emission_draw_records += s.draws.size();
     emission_payloads += s.emissions.size();
     // Descriptor sets: one per distinct (texture, sampler).
-    if (descriptorCapacity < s.draws.size() + fixtureFrameCasters.size() + 1)
-      pool(unsigned(s.draws.size() + fixtureFrameCasters.size() + 64));
+    const auto descriptor_count = material_descriptor_capacity(s.draws.size(), fixtureFrameCasters.size());
+    if (descriptorCapacity < descriptor_count - 63)
+      pool(unsigned(descriptor_count));
     check(f.vkResetDescriptorPool(device, descriptorPool, 0),
           "reset descriptor pool");
     std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> sets;
     std::vector<VkDescriptorSet> drawSets(s.draws.size());
     for (size_t i = 0; i < s.draws.size(); ++i) {
       const auto &d = s.draws[i];
+      if (d.texture >= 0 && size_t(d.texture) >= bound.size())
+        throw std::runtime_error(
+            "Scene albedo texture slot out of range: draw=" +
+            std::to_string(i) + " slot=" + std::to_string(d.texture) +
+            " textures=" + std::to_string(bound.size()));
       Tex *t = d.texture >= 0 ? bound[size_t(d.texture)] : &white;
       auto it = sets.find({t, d.sampler});
       if (it == sets.end()) {
@@ -1555,7 +1771,7 @@ private:
       drawSets[i] = it->second;
     }
     fixture_shadow_sets(sets);
-    std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> normalSets;
+    std::map<MaterialDescriptorKey, VkDescriptorSet> normalSets;
     std::vector<VkDescriptorSet> drawNormalSets(s.draws.size());
     if (lighting_settings.enabled) {
       for (size_t i = 0; i < s.draws.size(); ++i) {
@@ -1566,13 +1782,38 @@ private:
                                        : normal_settings.ground_normal_strength;
         const bool normal_active =
             (normal_strength > 0 || mw34::detail::enabled(d.detail_role));
-        Tex *t = (normal_active && d.normal_texture >= 0 &&
-                  size_t(d.normal_texture) < bound.size())
+        if (normal_active && d.normal_texture >= 0 &&
+            size_t(d.normal_texture) >= bound.size())
+          throw std::runtime_error(
+              "Scene normal texture slot out of range: draw=" +
+              std::to_string(i) + " slot=" + std::to_string(d.normal_texture) +
+              " textures=" + std::to_string(bound.size()));
+        Tex *t = (normal_active && d.normal_texture >= 0)
                      ? bound[size_t(d.normal_texture)]
                      : &flatNormal;
         const unsigned normal_sampler =
             d.detail_role > 0 && d.detail_role < 3 ? 0x10113U : d.sampler;
-        auto it = normalSets.find({t, normal_sampler});
+        // A normal texture's cache hash is its immutable upload version. Height
+        // adds its full pack owner, source digests, image/version and sampler.
+        MaterialDescriptorKey material_key{};
+        material_key.normal_width = t->width;
+        material_key.normal_height = t->height;
+        material_key.normal_sampler = normal_sampler;
+        if (t != &flatNormal) {
+          const auto &normal_ref = s.textures[std::size_t(d.normal_texture)];
+          material_key.normal_key = normal_ref.key;
+          material_key.normal_version = normal_ref.hash;
+        }
+        Tex *height_texture = &white;
+        // Height sampling has fixed linear, clamp, level-zero policy. Declared
+        // wrap/mirror/clamp and atlas selection are applied in the shader.
+        material_key.height_sampler = 3U | (3U << 4) | (3U << 8);
+        if (draw_heights[i]) {
+          material_key.height = height_key(*d.height_binding);
+          material_key.normal_source_hash = d.height_binding->normal_hash;
+          height_texture = &draw_heights[i]->texture;
+        }
+        auto it = normalSets.find(material_key);
         if (it == normalSets.end()) {
           VkDescriptorSetAllocateInfo ai{};
           ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1591,7 +1832,13 @@ private:
           w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
           w.pImageInfo = &info;
           f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
-          it = normalSets.emplace(std::make_pair(t, normal_sampler), set).first;
+          VkDescriptorImageInfo height_info{sampler(material_key.height_sampler),
+                                             height_texture->view,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+          w.dstBinding = 1;
+          w.pImageInfo = &height_info;
+          f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+          it = normalSets.emplace(std::move(material_key), set).first;
         }
         drawNormalSets[i] = it->second;
       }
@@ -1642,6 +1889,7 @@ private:
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(f.vkBeginCommandBuffer(cmd, &bi), "begin");
+    record_height_uploads(pending_heights);
     record_tiled(tiledFrameViews);
     if (profile_queries) {
       f.vkCmdResetQueryPool(cmd, profile_queries, 0, 2);
@@ -1784,7 +2032,9 @@ private:
       if (left.model || right.model || left.key.points || right.key.points ||
           !left.count || !right.count || left.count % 3 || right.count % 3 ||
           left.key.packed() != right.key.packed() ||
+          !::platform::same_producer_view_bits(left.producer_view, right.producer_view) ||
           drawSets[a] != drawSets[b] ||
+          !mw34::materials::same_height_binding(left.height_binding, right.height_binding) ||
           std::memcmp(&left.push, &right.push, sizeof(Push)) != 0 ||
           std::memcmp(&left.scissor, &right.scissor, sizeof(VkRect2D)) != 0)
         return false;
@@ -1839,6 +2089,17 @@ private:
           ++logicalDraws;
           ++orderAt;
         }
+      }
+      if (producer_view_observer) {
+        cc_mw3_re::testing::ProducerViewObservation observation{};
+        observation.stage = cc_mw3_re::testing::ProducerViewStage::backend_group;
+        observation.view = d.producer_view;
+        observation.first = d.first;
+        observation.count = vertexCount;
+        observation.logical_draws = logicalDraws;
+        observation.combined = logicalDraws > 1;
+        observation.tl_combine = combine;
+        producer_view_observer->backend(observation);
       }
       const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
       const VkPipelineLayout layout =
@@ -1980,6 +2241,13 @@ private:
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
     check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
+    // Keep retirement/reuse blocked even when a later readback wait fails.
+    scene_pending = true;
+    for (const auto &upload : pending_heights) {
+      upload.cached->texture.valid = true;
+      ++height_uploads;
+      height_uploaded_bytes += upload.cached->bytes;
+    }
     profile_queries_pending = profile_queries != VK_NULL_HANDLE;
     fixture_atlas_submitted();
     if (reconstruction_stage != ReconstructionStage::coverage)
@@ -1988,12 +2256,26 @@ private:
       check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
             "wait");
       collect_profile_queries();
+      scene_pending = false;
       copy_back(s);
-    } else
-      scene_pending = true;
+    }
   }
 
 public:
+  struct TiledStorageLimits {
+    VkDeviceSize max_range;
+    VkDeviceSize offset_alignment;
+  };
+  // Query the selected GPU's hardware limits, independently of software budgets,
+  // so diagnostic fixtures can retain support for smaller-range devices.
+  TiledStorageLimits probe_tiled_storage_limits() {
+    if (!device)
+      init();
+    VkPhysicalDeviceProperties properties{};
+    f.vkGetPhysicalDeviceProperties(gpu, &properties);
+    return {properties.limits.maxStorageBufferRange,
+            properties.limits.minStorageBufferOffsetAlignment};
+  }
   // The frontend drains its render worker before updating this CPU snapshot.
   // Diagnostic readback uses the same producer and synchronization as rendering.
   std::vector<std::vector<uint32_t>> probe_tiled_lists(const std::vector<mw34::tiled::View> &views,
@@ -2099,6 +2381,15 @@ public:
     const VkDeviceSize pixels = VkDeviceSize(width) * height,
                        colorBytes = pixels * (rgba ? 4 : 2);
     const auto *rd = static_cast<const unsigned char *>(readback.mapped);
+    if (s.pom_raw_readback) {
+      if (!require_rgba8 || !rgba || rw != width || rh != height ||
+          quality_settings.samples_x != 1 || quality_settings.samples_y != 1 || fxaa_enabled())
+        throw std::runtime_error("POM raw readback requires an unfiltered full-size RGBA8 target");
+      s.pom_rgba8.assign(rd, rd + std::size_t(pixels) * 4);
+      s.pom_depth32.resize(std::size_t(pixels));
+      std::memcpy(s.pom_depth32.data(), rd + mw34::depth::offset(std::size_t(colorBytes)),
+                  std::size_t(pixels) * sizeof(float));
+    }
     if (rgba) {
       for (VkDeviceSize i = 0; i < pixels; ++i) {
         const std::uint32_t r = rd[4 * i], g = rd[4 * i + 1], b = rd[4 * i + 2];
@@ -2209,7 +2500,7 @@ private:
     X(vkUpdateDescriptorSets) X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) \
     X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline) X(vkCreateCommandPool) \
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
-    X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
+    X(vkCmdCopyBuffer) X(vkCmdCopyImage) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
     X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences) \
     X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp)
@@ -2239,8 +2530,12 @@ private:
     VkImageView view{};
     unsigned width{}, height{}, levels{1};
     std::uint64_t hash{};
+    // Authenticated source comparisons for relief; independent of upload hash,
+    // which is a monotonically assigned version in native frontend scenes.
+    std::uint64_t source_rgb565_hash{}, source_rgba8_hash{};
     bool valid{};
   };
+#include "parallax_gpu.inc"
   cc_mw3_re::platform::VulkanLoader loader;
   VkInstance instance{};
   VkPhysicalDevice gpu{};
@@ -2834,6 +3129,7 @@ private:
   // acquired again; a render fence alone does not complete presentation waits.
   std::vector<VkSemaphore> swapRendered;
   VkExtent2D swapExtent{};
+  VkFormat swapFormat{VK_FORMAT_UNDEFINED};
   VkSemaphore acquired{};
   VkCommandPool presentPool{};
   VkCommandBuffer presentCmd{};
@@ -2841,6 +3137,9 @@ private:
   Image srcImage;
   unsigned srcWidth{}, srcHeight{};
   Buffer presentUpload;
+#if defined(_WIN32)
+#include "editor_overlay.inc"
+#endif
 
   static void check(VkResult r, const char *what) {
     if (r != VK_SUCCESS)
@@ -3339,13 +3638,20 @@ private:
         check(
             f.vkCreateDescriptorSetLayout(device, &si, nullptr, &sunSetLayout),
             "sun descriptor layout");
-        VkDescriptorSetLayoutBinding nb{
-            0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        if (p.limits.maxPerStageDescriptorSamplers < 6 ||
+            p.limits.maxPerStageDescriptorSampledImages < 6 ||
+            p.limits.maxDescriptorSetSamplers < 6 ||
+            p.limits.maxDescriptorSetSampledImages < 6)
+          throw std::runtime_error("GPU cannot provide the normal/height descriptor contract");
+        const std::array<VkDescriptorSetLayoutBinding, 2> nb{{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}}};
         VkDescriptorSetLayoutCreateInfo ni{};
         ni.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        ni.bindingCount = 1;
-        ni.pBindings = &nb;
+        ni.bindingCount = unsigned(nb.size());
+        ni.pBindings = nb.data();
         check(f.vkCreateDescriptorSetLayout(device, &ni, nullptr,
                                             &normalSetLayout),
               "normal descriptor layout");
@@ -3880,16 +4186,17 @@ private:
     create_world_target();
   }
   void pool(unsigned n) {
+    const auto counts = material_descriptor_counts(n);
     if (descriptorPool)
       f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     const std::array<VkDescriptorPoolSize, 4> ps{
-        {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 3 + 2},
+        {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, counts[0]},
          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = n * 2 + 1;
+    pi.maxSets = counts[1];
     pi.poolSizeCount = lighting_settings.enabled ? 4 : 1;
     pi.pPoolSizes = ps.data();
     check(f.vkCreateDescriptorPool(device, &pi, nullptr, &descriptorPool),
@@ -4246,6 +4553,9 @@ private:
     presentWindow = {};
   }
   void dropSwapchain() {
+#if defined(_WIN32)
+    retire_editor();
+#endif
     if (dxgi.active()) {
       dxgi.reset_window();
       return;
@@ -4260,6 +4570,7 @@ private:
     swapRendered.clear();
     swapchain = {};
     swapImages.clear();
+    swapFormat = VK_FORMAT_UNDEFINED;
   }
   // A zero-sized surface is a temporary no-present state. A changed extent
   // drains presentation and rebuilds both the swapchain and its per-image
@@ -4399,6 +4710,7 @@ private:
       check(f.vkCreateSemaphore(device, &semaphoreInfo, nullptr, &sem),
             "per-image presentation semaphore");
     swapExtent = e;
+    swapFormat = fmt.format;
     return syncExclusive();
   }
   cc_mw3_re::platform::ExclusiveFullscreenHandler exclusive_fullscreen_;
@@ -4430,6 +4742,9 @@ private:
   // image/buffer handles precede their backing memory; the loader is released
   // last.
   void shutdown() {
+#if defined(_WIN32)
+    editor_retire_for_shutdown();
+#endif
     if (!device) {
       dropSurface();
       if (instance && f.vkDestroyInstance)
@@ -4495,6 +4810,9 @@ private:
     destroy_tiled();
     for (auto &[k, t] : textures)
       destroy(t);
+    for (auto &[key, cached] : height_images)
+      destroy(cached.texture);
+    height_images.clear();
     destroy(white);
     destroy(flatNormal);
     for (auto &[k, p] : pipelines)
@@ -4519,7 +4837,7 @@ private:
     if (presentPool)
       f.vkDestroyCommandPool(device, presentPool, nullptr);
     for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer,
-                      &texUpload, &presentUpload, &sunBuffer, &effectBuffer})
+                      &texUpload, &presentUpload, &sunBuffer, &effectBuffer, &height_upload})
       if (b->buffer) {
         f.vkDestroyBuffer(device, b->buffer, nullptr);
         f.vkFreeMemory(device, b->memory, nullptr);

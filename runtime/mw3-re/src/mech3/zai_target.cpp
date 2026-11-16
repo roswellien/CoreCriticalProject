@@ -10,6 +10,7 @@
 #include "gamez/zmodel/gmod_cull.h"
 #include "mech3/zai_brain.h"
 #include "mech3/zrdraiv.h"
+#include "mech3/zai_x87.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -34,6 +35,18 @@ std::vector<CZAiTarget*>& target_list() { return g_list; }
 
 // --- AiTarget -----------------------------------------------------------------------
 
+uint32_t team_number_of(uint32_t mask) {
+  if (!mask) return 0;
+  uint32_t shift = 0, out = 0, bit = 0;
+  for (; !(mask & 1); mask >>= 1) ++out;
+  bit = out;
+  while ((mask >>= 1) != 0 && (shift += 5) < 0x1c) {
+    for (++bit; !(mask & 1); mask >>= 1) ++bit;
+    out |= bit << (shift & 31);
+  }
+  return out;
+}
+
 void AiTarget::set_team(uint32_t t) {
   team = 1u << (t & 31);
   for (t >>= 5; t; t >>= 5) team |= 1u << (t & 31);
@@ -46,9 +59,8 @@ void AiTarget::set_team(uint32_t t) {
 // Mech3.exe 1.2 @ 0x004e7030: worked out once, on the first ask.
 float Contact::distance() {
   if (dist < 0.0f) {
-    zmth::Vec3 d{delta[0], delta[1], delta[2]};
-    dist = zmth::normalize(d);
-    dir[0] = d.x, dir[1] = d.y, dir[2] = d.z;
+    dir[0] = delta[0], dir[1] = delta[1], dir[2] = delta[2];
+    dist = normalize_x87(dir);  // 0x004020d0 as the exe runs it (zai_x87.h)
   }
   return dist;
 }

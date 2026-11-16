@@ -15,6 +15,12 @@
 #
 # Out: build-mac/dist/MechWarrior 3.app and
 #      build-mac/dist/MW3-Rebuild-<git describe>-mac.dmg
+#
+# For the combined package (tools/package/combined.sh, docs/release.md):
+#   MW3_PKG_PM_BIN=<mw3pm built on pm>  adds Pirate's Moon beside mw3 (bundled, signed and checked as mw3)
+#   MW3_PKG_STEM=<stem>                 the DMG's name: <stem>-<version>-mac.dmg (default MW3-Rebuild; MW3 alone is
+#                                       MW3-alone, which the launcher's updater never takes)
+#   MW3_PKG_KEEP_BUILD=1                reuse build-mac-pkg (a second package from the same build)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ID="-"  # ad hoc
@@ -36,8 +42,11 @@ VER="$(git describe --tags --match 'v[0-9]*' --always --dirty)"
 OUT=build-mac/dist
 APP="$OUT/$NAME.app"
 
+PM_BIN="${MW3_PKG_PM_BIN:-}"
+if [ -n "$PM_BIN" ] && [ ! -x "$PM_BIN" ]; then echo "MW3_PKG_PM_BIN: no program at $PM_BIN" >&2; exit 1; fi
+
 # The build, from scratch, as package.cmd does on Windows.
-rm -rf build-mac-pkg
+[ -n "${MW3_PKG_KEEP_BUILD:-}" ] || rm -rf build-mac-pkg
 CONF=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DMW3_PACKAGE=ON)
 if [ -n "$DEPS" ]; then
   CONF+=(-DCMAKE_PREFIX_PATH="$DEPS" -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0)
@@ -57,9 +66,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resourc
 cp build-mac-pkg/mw3launcher "$APP/Contents/MacOS/mw3launcher"
 cp build-mac-pkg/mw3 "$APP/Contents/MacOS/mw3"
 if [ -n "$DEPS" ]; then cp build-mac-pkg/mw3import "$APP/Contents/MacOS/mw3import"; fi
+# The combined package: Pirate's Moon beside it (the launcher finds it there, launcher.md).
+if [ -n "$PM_BIN" ]; then cp "$PM_BIN" "$APP/Contents/MacOS/mw3pm"; fi
 # The launcher's art (ours, assets/launcher), where SDL's base path is: Resources.
 mkdir -p "$APP/Contents/Resources/assets/launcher"
-cp assets/launcher/*.png "$APP/Contents/Resources/assets/launcher/"
+cp assets/launcher/*.png assets/launcher/font.ttf "$APP/Contents/Resources/assets/launcher/"
 
 # Every library outside the system, followed through the ones they load:
 # copied by their real file, named by their install name's file, and every
@@ -68,7 +79,7 @@ python3 - "$APP" "$DEPS" <<'EOF'
 import glob, os, shutil, subprocess, sys
 app = sys.argv[1]
 prefix = sys.argv[2] if len(sys.argv) > 2 else ''
-exes = [os.path.join(app, 'Contents/MacOS', n) for n in ('mw3launcher', 'mw3', 'mw3import')]
+exes = [os.path.join(app, 'Contents/MacOS', n) for n in ('mw3launcher', 'mw3', 'mw3pm', 'mw3import')]
 exes = [e for e in exes if os.path.exists(e)]
 fw = os.path.join(app, 'Contents/Frameworks')
 def deps(f):
@@ -190,6 +201,12 @@ EOF
 # The read-me and the notices beside the program.
 cp tools/macos/README.txt "$APP/Contents/Resources/README.txt"
 if [ -f LICENSE ]; then cp LICENSE "$APP/Contents/Resources/LICENSE.txt"; fi
+mkdir -p "$APP/Contents/Resources/assets/fonts" "$APP/Contents/Resources/licenses/liberation" "$APP/Contents/Resources/licenses/anton"
+cp assets/fonts/*.ttf "$APP/Contents/Resources/assets/fonts/"
+cp assets/fonts/Liberation-OFL.txt "$APP/Contents/Resources/licenses/liberation/OFL.txt"
+cp assets/fonts/Anton-OFL.txt "$APP/Contents/Resources/licenses/anton/OFL.txt"
+mkdir -p "$APP/Contents/Resources/licenses/saira-condensed"
+cp assets/launcher/font-OFL.txt "$APP/Contents/Resources/licenses/saira-condensed/OFL.txt"
 cp tools/macos/THIRD-PARTY.txt "$APP/Contents/Resources/THIRD-PARTY.txt"
 # libarchive, zlib and liblzma: linked in with --deps (build_deps.sh keeps
 # their licences in the prefix); Homebrew's libarchive is a dylib, its
@@ -209,17 +226,19 @@ for f in "$APP"/Contents/Frameworks/*.dylib; do
 done
 # The game and the importer, second programs in Contents/MacOS, before the app that seals them.
 codesign "${SIGN[@]}" --entitlements tools/macos/mw3.entitlements "$APP/Contents/MacOS/mw3"
-if [ -f "$APP/Contents/MacOS/mw3import" ]; then
-  codesign "${SIGN[@]}" --entitlements tools/macos/mw3.entitlements "$APP/Contents/MacOS/mw3import"
-fi
+for p in mw3import mw3pm; do
+  if [ -f "$APP/Contents/MacOS/$p" ]; then codesign "${SIGN[@]}" --entitlements tools/macos/mw3.entitlements "$APP/Contents/MacOS/$p"; fi
+done
 codesign "${SIGN[@]}" --entitlements tools/macos/mw3.entitlements "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 # The package carries both programs, the launcher as the app's executable.
-for p in mw3launcher mw3; do [ -x "$APP/Contents/MacOS/$p" ] || { echo "no $p in the app" >&2; exit 1; }; done
+PROGRAMS="mw3launcher mw3"
+if [ -n "$PM_BIN" ]; then PROGRAMS="$PROGRAMS mw3pm"; fi
+for p in $PROGRAMS; do [ -x "$APP/Contents/MacOS/$p" ] || { echo "no $p in the app" >&2; exit 1; }; done
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")" = mw3launcher ] || { echo "the app does not start the launcher" >&2; exit 1; }
 
 # The DMG: the app and a link to Applications, compressed, signed.
-DMG="$OUT/MW3-Rebuild-$VER-mac.dmg"
+DMG="$OUT/${MW3_PKG_STEM:-MW3-Rebuild}-$VER-mac.dmg"
 STAGE="build-mac/dmg"
 rm -rf "$STAGE" "$DMG" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"

@@ -1,4 +1,5 @@
 #include "frontend/sdl/sdl_platform.h"
+#include "upgrades/game_boxes.h"
 
 #ifdef CC_MW3_RE_ADAPTER
 #include "frontend/core_critical/frame_renderer.hpp"
@@ -241,7 +242,7 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend) {
                                       {w, 0, 1, 1, 0xffffffffu, 0xff000000u, 1, 0},
                                       {w, h, 1, 1, 0xffffffffu, 0xff000000u, 1, 1},
                                       {0, h, 1, 1, 0xffffffffu, 0xff000000u, 0, 1}};
-  render_->begin_scene();
+  render_->begin_canvas_scene();
   render_->draw(platform::Primitive::kFan, quad, 4, s);
   render_->end_scene();
 }
@@ -307,6 +308,9 @@ void SdlAlert::abort_message(const std::string& message) {
 }
 
 int32_t SdlAlert::message_box(const std::string& text, const std::string& caption, uint32_t style) {
+  // W16 (upgrades/game_boxes.h): the game's own box while its screens are up (it logs the words, W11); this
+  // system box only before.
+  if (!headless_ && mech3::game_box()) return mech3::game_box()(text, caption, style);
   std::fprintf(stderr, "mw3: [%s] %s\n", caption.c_str(), text.c_str());
   if (headless_) return 1;
   const bool ok_cancel = (style & 0xf) == 1;
@@ -361,6 +365,8 @@ void SdlPump::handle(const SDL_Event& e) {
     if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && toggle_fullscreen) toggle_fullscreen();
     return;
   }
+  const bool overlay_took = overlay_event && overlay_event(e);
+  if (overlay_took) return;
   if (intercept && intercept(e)) return;
   if (input_) input_->on_event(e);
   switch (e.type) {

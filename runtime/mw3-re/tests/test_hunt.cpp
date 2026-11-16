@@ -131,8 +131,8 @@ TEST(arena_hunt_net_survives_znet_clear) {
 TEST(arena_hunt_drives_to_the_enemy_then_where_it_was_seen) {
   HuntHooks hooks;
   set_brain_hooks(&hooks);
-  const bool bugs = zfix::options().bugs;
-  zfix::options().bugs = false;  // the grid off: straight at the goal
+  const bool improved_ai = zfix::options().improved_ai;
+  zfix::options().improved_ai = false;  // the grid off: straight at the goal
   {
     const float fallback[3] = {0, 0, -400};
     HuntNet* net = make_hunt_net(fallback);
@@ -173,6 +173,6 @@ TEST(arena_hunt_drives_to_the_enemy_then_where_it_was_seen) {
     o.net.reset();
     free_hunt_net();
   }
-  zfix::options().bugs = bugs;
+  zfix::options().improved_ai = improved_ai;
   set_brain_hooks(nullptr);
 }

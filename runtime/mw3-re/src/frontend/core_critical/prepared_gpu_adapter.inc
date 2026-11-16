@@ -71,14 +71,18 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     cc::geometry::Material material;
     material.texture = texture;
     material.color = source.batch->color;
+    NativeGroundRangeAdmission admission;
+    admission.height_binding = source.height_binding;
     const auto first = scene_.draws.size();
     emit_reference_geometry(reference, {material}, context, source.camera,
-                            source.world, fog);
+                            source.world, fog, {admission}, false);
     for (auto index = first; index < scene_.draws.size(); ++index) {
       auto &draw = scene_.draws[index];
-      apply_surface_material(draw, source, lighting_.normals);
+      apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                             group_load_epoch_, textures_.at(texture).version);
       draw.sampler |= 0x10000U;
       draw.push.mode[3] = 0; // Preserve prepared smooth-normal orientation.
+      apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       if (normal >= 0)
         draw.normal_texture = int(bind_texture(normal, false));
     }
@@ -103,7 +107,8 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
         (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
         context.far_z};
     vk::Draw draw{};
-    apply_surface_material(draw, source, lighting_.normals);
+    apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                           group_load_epoch_, textures_.at(texture).version);
     draw.model = std::move(instance);
     draw.geometry_debug_normals = geometry_debug_;
     draw.count = unsigned(geometry->vertices.size());
@@ -119,6 +124,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     draw.push.mode[1] = 4U | (2U << 8);
     draw.push.mode[2] = 2U | (2U << 8);
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));
     gpu_prepared_vertices_ += geometry->vertices.size();

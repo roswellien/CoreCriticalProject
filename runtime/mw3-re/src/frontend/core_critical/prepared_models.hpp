@@ -19,6 +19,7 @@ struct PreparedBatchDraw {
     const ::platform::prepared::Image *texture{};
     const ::platform::prepared::NormalImage *normal{};
     const ::mw34::materials::SurfaceMaterialRecord *surface_material{};
+    std::shared_ptr<const ::mw34::materials::HeightBinding> height_binding;
     ::platform::prepared::Matrix camera{}, world{};
     // Mixed-bone seams follow the existing CPU visual deformation contract.
     // Their per-frame vertices are submitted as TL data, never cached as
@@ -41,6 +42,10 @@ class PreparedModels {
     explicit PreparedModels(const sdlfe::CoreCriticalAssets &options,
                             const std::vector<PreparedMaterialBinding> &materials = {});
     bool empty() const { return models_.empty(); }
+    std::uint64_t surface_decoded_bytes() const { return surface_budget_->used(); }
+    const std::shared_ptr<::mw34::materials::SurfaceDecodedBudget> &surface_budget() const {
+        return surface_budget_;
+    }
     bool has_binding(const ::platform::ModelDrawContext &context) const;
     const ::platform::prepared::Image *named_texture(const char *name) const;
     PreparedModelDraw draw(const ::platform::ModelDrawContext &context,
@@ -53,15 +58,18 @@ class PreparedModels {
   private:
     struct Model {
         std::string source_asset;
+        bool distance_lod{};
         ::platform::prepared::Mesh mesh;
         ::platform::prepared::Textures textures;
         ::platform::prepared::Normals normals;
         std::shared_ptr<::mw34::materials::SurfaceMaterialPack> surface_materials;
+        std::vector<std::shared_ptr<const ::mw34::materials::HeightBinding>> height_bindings;
     };
     ::platform::prepared::Textures named_;
     std::vector<Model> models_;
     const bool cpu_profile_ = sdlfe::cpu_profile_requested();
     mutable CpuStatistics cpu_statistics_;
+    std::shared_ptr<::mw34::materials::SurfaceDecodedBudget> surface_budget_;
 };
 
 } // namespace cc_mw3_re

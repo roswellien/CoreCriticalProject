@@ -20,6 +20,44 @@ namespace zvid {
 
 using TLVertex = platform::TLVertex;  // D3DTLVERTEX, FVF 0x1c4
 
+// A caller labels one world invocation. An untyped nested walk cannot inherit it.
+class ProducerPurposeScope {
+ public:
+  explicit ProducerPurposeScope(platform::ProducerPurpose purpose);
+  ~ProducerPurposeScope() noexcept;
+  ProducerPurposeScope(const ProducerPurposeScope&) = delete;
+  ProducerPurposeScope& operator=(const ProducerPurposeScope&) = delete;
+ private:
+  platform::ProducerPurpose previous_;
+  uint64_t epoch_;
+};
+
+// Lives around the whole camera walk; emission ends before pop/flush/callback.
+class ProducerWorldScope {
+ public:
+  explicit ProducerWorldScope(bool force_original = false);
+  ~ProducerWorldScope() noexcept;
+  void begin_emission();
+  void end_emission() noexcept;
+  ProducerWorldScope(const ProducerWorldScope&) = delete;
+  ProducerWorldScope& operator=(const ProducerWorldScope&) = delete;
+ private:
+  platform::ProducerView previous_{};
+  platform::ProducerPurpose previous_request_;
+  platform::ProducerPurpose purpose_;
+  uint64_t epoch_, generation_ = 0;
+};
+
+void set_producer_canvas_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available = true) noexcept;
+void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available = true) noexcept;
+platform::ProducerView capture_producer_view();
+void producer_mission_changed(const platform::MissionIdentity& identity) noexcept;
+void reset_producer_transport() noexcept;
+void abandon_producer_transport() noexcept;
+// Passive attached-owner invalidation; never calls back into Render3D. A detached
+// receiver must not invalidate the current producer's queue or revive its latch.
+void invalidate_producer_transport(platform::Render3D* owner, bool failed) noexcept;
+
 // The texture record 0x0057b130 makes (0x18 bytes in the original).
 // FIX (A): the system and video surfaces (+0x00, +0x04) and the
 // IDirect3DTexture2 (+0x08) become one Render3D handle.

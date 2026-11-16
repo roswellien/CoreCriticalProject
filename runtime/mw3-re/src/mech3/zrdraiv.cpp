@@ -150,12 +150,17 @@ AivFile::~AivFile() {
   }
 }
 
-// Mech3.exe 1.2 @ 0x004df5f0 (0x004df5d0 empties the cache)
+// Mech3.exe 1.2 @ 0x004df5d0
+void AivFile::empty_cache() {
+  if (!cache) return;
+  std::map<std::string, AivRecord*> gone;
+  gone.swap(*cache);  // each record's dtor releases the file: the map is out of its way
+  for (auto& [k, r] : gone) delete r;
+}
+
+// Mech3.exe 1.2 @ 0x004df5f0
 int32_t AivFile::unload() {
-  if (cache) {
-    for (auto& [k, r] : *cache) delete r;
-    cache->clear();
-  }
+  empty_cache();
   return RdrFile::unload();
 }
 
@@ -164,6 +169,26 @@ AivRecord* AivFile::cached(const char* n) const {
   if (!cache || !n) return nullptr;
   auto it = cache->find(n);
   return it == cache->end() ? nullptr : it->second;
+}
+
+// Mech3.exe 1.2 @ 0x004defc0
+int32_t AivFile::edit(const char* n, const AivRecord& r) {
+  AivRecord* kept = cached(n);  // 0x004def10
+  if (!n) return 0;             // the exe reads a null key's characters: not reached by its one caller
+  if (kept && same_name(kept->pilot, r.pilot) && same_name(kept->sound_tag, r.sound_tag) && kept->same_vlist(r) &&
+      kept->same_numbers(r))
+    return 0;
+  if (!cache) cache = new std::map<std::string, AivRecord*>;
+  auto it = cache->find(n);
+  if (it == cache->end()) {
+    auto* copy = new AivRecord;  // 0x004d9940: the settings copied
+    static_cast<AiParams&>(*copy) = r;
+    copy->mech3_set = r.mech3_set, copy->mech3 = r.mech3;
+    return cache->emplace(n, copy).second ? 1 : 0;
+  }
+  static_cast<AiParams&>(*it->second) = r;  // 0x004d99e0
+  it->second->mech3_set = r.mech3_set, it->second->mech3 = r.mech3;
+  return 1;
 }
 
 // Mech3.exe 1.2 @ 0x004e0490
@@ -358,7 +383,7 @@ AivRecord* AivRecord::parse(zrdr::Node* value, const char* name) {
       else if (std::strcmp(name, "Alan_Mattila") == 0 ||
                // FIX (bug): two records misspell him (c1 Instant Action map 1,
                // c3 mission 6), so he had no radio voice there (Owen, 2026-10-20).
-               (zfix::options().bugs && (std::strcmp(name, "Alan_Mattilla") == 0 || std::strcmp(name, "Alan_Matilla") == 0)))
+               (zfix::options().fixed && (std::strcmp(name, "Alan_Mattilla") == 0 || std::strcmp(name, "Alan_Matilla") == 0)))
         sound_tag = dup("alan");
       else if (std::strcmp(name, "Dominic_Paine") == 0)
         sound_tag = dup("dom");
@@ -386,11 +411,11 @@ AivRecord* AivRecord::parse(zrdr::Node* value, const char* name) {
       e.f10 = word_f(s[14]);
       e.flags = with(fl, 0, nz(s, 15));
       const char* valve_name = text(s[16]);
-      // FIX (bug), behind bugs: two c4b boundaries name what is not there
+      // FIX (bug), behind small_fixes: two c4b boundaries name what is not there
       // (docs/ai.md section 8): mission 6's regions ..._c4m7 ship as
       // ..._c4bm7, mission 5's outside entry sets a valve named after its
       // region where the fail objective watches outside_c4m5.
-      if (zfix::options().bugs) {
+      if (zfix::options().small_fixes) {
         if (region_name && std::strcmp(region_name, "reg_inside_c4m7") == 0) region_name = "reg_inside_c4bm7";
         if (region_name && std::strcmp(region_name, "reg_outside_c4m7") == 0) region_name = "reg_outside_c4bm7";
         if (valve_name && std::strcmp(valve_name, "reg_outside_c4m5") == 0) valve_name = "outside_c4m5";
@@ -405,7 +430,7 @@ AivRecord* AivRecord::parse(zrdr::Node* value, const char* name) {
         if (f[k].type != zrdr::List) continue;  // FIX (bug)
         add_order(f[k].list);
       }
-    } else if (zfix::options().bugs) {
+    } else if (zfix::options().small_fixes) {
       // FIX (bug): two Instant Action records on c4 (Enemy_12 in readeria1,
       // Enemy_06 in readeria2) list their orders loose in the record, with no
       // "vlist" around them; the exe skips them (Owen, 2026-10-20).

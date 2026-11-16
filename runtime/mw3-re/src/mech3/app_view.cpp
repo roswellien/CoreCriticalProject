@@ -40,6 +40,7 @@ std::unique_ptr<PlayerView> g_view;
 // view is on the stealth object, the game editor's: editor.md S4).
 void* g_target = nullptr;
 Mech* g_target_mech = nullptr;
+Mech* g_view_mech = nullptr;  // the view's target when it is a mech (vt+0x104 is then 0x0041b980)
 
 zcls::Node* zn(void* p) { return static_cast<zcls::Node*>(p); }
 
@@ -97,12 +98,12 @@ struct ProgramViewHooks : ViewHooks {
   }
   Node3 world_node() override { return g_view ? zcls::camera_world(zn(g_view->camera)) : nullptr; }
   void node_set_intersect(Node3 node, int32_t on) override { zcls::node_set_intersect(zn(node), on); }
-  void query_mode(int32_t on) override { unported("0x004ed9c0", {on}); }
-  // Not ported yet (cls_di.c): no cover over the camera, no ground under it.
-  int32_t segment_query(const float*, const float*, uint8_t* found) override {
-    unported("0x004eed90", {});
-    *found = 0;
-    return 1;
+  void query_mode(int32_t on) override { zcls::segment_options().first_hit = on; }
+  int32_t segment_query(const float* a, const float* b, uint8_t* found) override {  // 0x004eed90
+    zcls::LineHits hits;
+    const int32_t r = zcls::segment_list(zn(world_node()), a, b, &hits);
+    *found = hits.count;
+    return r;
   }
   const float* camera_position(Node3 cam) override {
     const zcls::Node* n = zn(cam);
@@ -151,8 +152,10 @@ struct ProgramViewHooks : ViewHooks {
   void world_fog_altitude(float a, float b) override {
     if (Node3 w = world_node()) zcls::world_set_fog_altitude(zn(w), a, b);
   }
-  bool has_weather() override { return false; }
-  uint32_t weather_flags() override { return 0; }
+  bool has_weather() override { return program_weather_flags() != nullptr; }
+  uint32_t weather_flags() override { return *program_weather_flags(); }
+  void weather_hide() override { program_weather_show(false); }
+  void weather_show() override { program_weather_show(true); }
   // The wall pull-in (0x0040b310) is the port's; its query, on the world.
   void world_segments(float* segs, int32_t points, zcls::SegmentHits* out) override {
     if (Node3 w = world_node()) zcls::segment_query(zn(w), segs, points, out);  // 0x004efcd0
@@ -171,11 +174,21 @@ struct ProgramViewHooks : ViewHooks {
     if (&t == g_target_mech) return mech_camera(*g_target_mech, id);
     return vehicle_camera(id);
   }
-  // A mech's vt+0x100 and vt+0x104 do nothing here (the HUD's set-up is
-  // program_view_attach's); the stealth's vt+0x100 is empty (0x005ac5c0),
-  // its vt+0x104 (0x004a50d0) turns its overlay off.
-  void target_attached(Vehicle&) override {}
-  void target_detached(Vehicle& t) override { program_vehicle_view_detached(t); }
+  // A mech's vt+0x100 / vt+0x104 (0x0041b930 / 0x0041b980): the mission's player suspended while the
+  // view is off it, its HUD on and off; the stealth's vt+0x100 is empty (0x005ac5c0), its vt+0x104
+  // (0x004a50d0) turns its overlay off.
+  // (Which vehicle is a mech: the attach is program_view_attach's, which sets g_target_mech first.)
+  void target_attached(Vehicle& t) override {
+    g_view_mech = &t == g_target_mech ? g_target_mech : nullptr;
+    if (g_view_mech) view_attached(*g_view_mech);
+  }
+  void target_detached(Vehicle& t) override {
+    if (&t == g_view_mech) {
+      g_view_mech = nullptr;
+      return view_detached(*static_cast<Mech*>(&t), g_view && g_view->target == &t);
+    }
+    program_vehicle_view_detached(t);
+  }
   uint32_t mech_dead(Mech& t) override { return t.anim_state == 10 ? 1u : 0u; }
   const float* torso_aim(Mech& t) override {
     static float q[4] = {1, 0, 0, 0};
@@ -323,7 +336,7 @@ void program_view_make(void* camera) {
 
 void program_view_free() {
   g_view.reset();
-  g_target = nullptr, g_target_mech = nullptr;
+  g_target = nullptr, g_target_mech = nullptr, g_view_mech = nullptr;
 }
 
 // Mech3.exe 1.2 @ 0x0041ce30: the view onto the mech in its data's current
@@ -358,6 +371,7 @@ void program_view_look(int32_t look) {
 // Ours (#289): after the replay placed the camera, its zone (what the world
 // draws and runs effects in) and fog follow it, as each game frame's do.
 bool program_view_follow_ground() { return g_view && g_view->follow_ground(); }
+void* program_view_world() { return g_view ? zcls::camera_world(zn(g_view->camera)) : nullptr; }
 bool program_view_ground_probe(float x, float y, float z, float* y_after, bool* under) {
   if (!g_view) return false;
   zcls::camera_set_position(zn(g_view->camera), x, y, z);

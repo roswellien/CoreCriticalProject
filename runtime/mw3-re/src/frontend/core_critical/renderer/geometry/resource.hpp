@@ -30,6 +30,13 @@ struct Resource {
     std::uint64_t identity{};
     std::uint32_t source_vertices{};
     std::uint32_t source_polygons{};
+    bool source_bounds_valid{};
+    std::array<float, 3> source_min{std::numeric_limits<float>::infinity(),
+                                    std::numeric_limits<float>::infinity(),
+                                    std::numeric_limits<float>::infinity()};
+    std::array<float, 3> source_max{-std::numeric_limits<float>::infinity(),
+                                    -std::numeric_limits<float>::infinity(),
+                                    -std::numeric_limits<float>::infinity()};
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<Range> ranges;

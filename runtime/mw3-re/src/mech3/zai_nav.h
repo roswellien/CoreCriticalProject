@@ -9,9 +9,10 @@
 
 // Ours, not the exe's (W58, docs/lancemate-pathing.md): a walkability grid
 // over the mission's world and paths on it, so an AI pilot whose straight
-// way is blocked walks round. Behind zfix bugs (nav_allies, nav_enemies);
+// way is blocked walks round. Behind zfix improved_ai (nav_allies, nav_enemies);
 // the brain's decisions stay the exe's, only the point it walks toward is
 // a path's waypoint when the straight line is blocked.
+namespace zcls { struct Node; }
 namespace mech3::ai::nav {
 
 constexpr float kCell = 4.0f;   // m
@@ -85,6 +86,7 @@ class Grid {
   bool tight(int cx, int cz, int level);               // kTight here, worked out once
   void forget_avoid();                                 // the shapes changed
   void hold(int cx, int cz, float y, float until, uint16_t what = kHeld);  // blocked (or kNear) for a while
+  void hold_parked(const std::array<float, 5>& rect, float now);  // a World::parked rect, and round it
   void release(float now);                             // holds past their time lifted
   // The tiles under that rectangle built again behind the old ones, as what
   // stands there has changed (a door opened, a ramp fallen, a building down).
@@ -172,6 +174,7 @@ void service(float now, int steps, int search_steps = 3000);
 // A mission's start, replays too (the same world's address, its nodes new): the
 // grid and what it watches begun again.
 void restart();
+bool part_left_behind(const zcls::Node& n);  // ours: not watched, its mech freed
 
 // The pilot's follower: the path it is on toward the brain's point.
 struct Follower {
@@ -204,7 +207,7 @@ struct Follower {
   bool step(const float pos[3], const float to[3], float now, float dt, float out[3], bool must_find = false, float reach = 0.0f);
 };
 
-// Whether a pilot of that side walks by the grid: zfix bugs and the side's
+// Whether a pilot of that side walks by the grid: zfix improved_ai and the side's
 // switch, and not in a network game.
 bool on_for(bool ally);
 

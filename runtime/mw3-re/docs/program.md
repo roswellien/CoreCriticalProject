@@ -85,10 +85,30 @@ build/mw3 [install-dir] [options] [-nofmv] [-seasick] [-cdN]
   them. Logs stay behind: they are in use, and each start makes new ones.
   Anything in the folder it cannot read stops the move before the switch.
   The top level's `.DS_Store`, `Thumbs.db` and `desktop.ini` count as not data,
-  neither copied nor removed. On Windows a destination's name must be plain ASCII for
-  now: the dialog gives UTF-8, and `fs::path` reads narrow strings in the ANSI code page
-  (installs have the same limit).
+  neither copied nor removed. Before Windows 10 1903 a destination's name must be
+  plain ASCII (below, Names on Windows).
   `MW3_USUAL_FOLDER`, `MW3_LAUNCHER_MOVE_TO`, `MW3_LAUNCHER_MOVE_OLD`: for checks.
+- **Names on Windows** (2026-11-06, a player's request to install anywhere):
+  the code keeps names in UTF-8, as SDL gives them, and `fs::path`, `fopen` and
+  the C runtime's `argv` read narrow strings in the ANSI code page. So every
+  program carries `tools/windows/utf8.manifest` (`mw3`, `mw3launcher`,
+  `mw3import`, `mw3indeo`, `mw3tests`), which makes UTF-8 that page.
+  - Before Windows 10 1903 the setting is ignored. A program or data folder with
+    letters outside ASCII is then said at the start (`names_usable`), a picked one
+    in the launcher's status line, and MY DATA FOLDER refuses it as it did.
+    `MW3_OLD_WINDOWS` for checks.
+  - What earlier builds left: a path in mw3.cfg or the pointer may be in the
+    system's code page (the finder's registry reads, `.string()`), and is read as
+    that when it is not valid UTF-8 (`path_from_config`). A name made from a
+    game path was UTF-8 passed to a call reading the system's page, so a pilot
+    José's file is `JosÃ©.mw3` on disk; `repair_old_names` renames those. It
+    runs once per settings folder (the mark `names-utf8.done` stays there), only
+    in that folder's pilots, configs, keys, export and import, not through a
+    link or junction, a log line for each, and never over a file.
+  - Unaffected: game text and game paths are Windows-1252 inside and converted by
+    `zutl` (no system code page involved); drawn text goes through `utf8()` in the
+    2D host. No `CP_ACP` anywhere; the one narrow registry call, `RegGetValueA`,
+    gives UTF-8 now, which the finder wants.
 - **A crash says why** (ours, `crash_report.cpp`; not in hidden runs): a
   crash signal, a Windows exception or an uncaught exception puts a line in
   the log (`mw3: crashed: ...`, with a backtrace where the system has one) and
@@ -191,7 +211,10 @@ They run inside the original main loop, after the original start-up.
   level (not a cave's roof: playtest S7), and turned to face it
   each frame, to watch a mech up close (its damage decals with `--fire`,
   damage-decals.md). The mission's opening camera still runs first.
-- `--debug-camera` (ours; `debugcamera=1` in mw3.cfg): Shift+F12 opens
+- `--debug-camera` (ours; a developer's flag, on the command line only: no
+  player reaches it, and mw3.cfg's old `debugcamera=1` is read no more):
+  Shift+F12 opens, in any mission (players have it only in a mission the
+  MODS screen launched: editor.md, The way in),
   The "BATTLESPORT GAME EDITOR" over the mission (debug command 0x9a,
   which the exe binds to no key; F11 stays the lancemate command screen):
   the view on the stealth object, flown with the movement keys, and the
@@ -213,15 +236,24 @@ They run inside the original main loop, after the original start-up.
 - `--mod NAME` (repeatable), `--no-mods`, `--mods` (ours, docs/modding.md):
   this run's mods in order instead of mw3.cfg's `mod=` lines, none, or the
   mods found and enabled listed (then it quits).
+- `--make-starter mech|weapon|translation|mission` (ours, docs/modding.md,
+  Starter mods): a starter mod made from the install in the write dir's
+  `mods\starter_<kind>`, never over a folder or file already there; it says
+  what it made or why not and quits (exit 1 when not made).
 - `--check-mod DIR` (ours, docs/modding.md): the mod at DIR read as the game
   would read it, nothing mounted into play; the report printed, exit 1 when
   anything would be refused.
+- `--hurt F@N` (ours, for checking) sets the player's torso's internal
+  structure to F at a mission's N-th frame, as
+  `mission_c1m1_hud_static_when_hurt_headless` does: the HUD's damage static
+  in a shot (`--mission c1m1 --frame-ms 33 --hurt 0.05@5 --shot FILE
+  --shot-frame 900`).
 - `--shot FILE.bmp [--shot-frame N] [--shot-any]` saves frame N (default 30;
   with `--shot-any` every frame shown counts, the fade's too) of either
   and quits, with the window hidden; `--shot-series K` also the K frames
   before it.
 - For checking (ours, from 2026-10-25): `--tap DIK@N[:M]` presses a key as
-  an SDL event; `--click-at X,Y@N` (the plain start) clicks at a game pixel (`--click-players X,Y@N/P` N frames after the network session first holds P players, for two processes in one lobby; `--click-return X,Y@N` N frames after each return to the lobby from a game; `--net-seconds S` each menu-started network game's clock, `--net-kill-at S` a kill staged on the pilot S seconds of 30 frames into each, `--net-ahead M` the pilot held M m from the other mech there too, `--net-walk A,B` the throttle up held from A to B seconds into each; `--hover-at X,Y@N` the cursor there with no click (a rollover, W41), `--click-ingame X,Y@N`, `--tap-ingame DIK@N[:M]` and `--hold-ingame N:M` (the left button held) by each such game's frames; `--fire-probe` each game frame's buttons, trigger and weapons' reloads (a beam firing counts 100), with the wall time (W40); `--blur-ingame N:MS` the app deactivated at game frame N as a lost focus, the focus back MS ms later by a timer (W45); the soak lines' `wall` (epoch ms) and each seen mech's `heard` (ms since its last state); with `--net-soak` the shown objectives box's lines each second (`soak menus box:`); the lobby's line on coming back from the lab (`lobby back from the lab, mech N`); with `--net-soak` the "soak menus" lines each 15 frames, rss, each mech's gait slot and arms' aims included, and each lobby entry's scores);
+  an SDL event; `--click-at X,Y@N` (the plain start) clicks at a game pixel (`--click-sessions X,Y@N/S` N frames after the connection screen first lists S games, so a joiner clicks the session row and JOIN once LAN discovery has answered, which comes in real time and could come after a click at a fixed frame (sdl_two_processes_a_late_session_is_still_clicked); `--click-players X,Y@N/P` N frames after the network session first holds P players, for two processes in one lobby; `--click-return X,Y@N` N frames after each return to the lobby from a game; `--net-seconds S` each menu-started network game's clock, `--net-kill-at S` a kill staged on the pilot S seconds of 30 frames into each, `--net-ahead M` the pilot held M m from the other mech there too, `--net-walk A,B` the throttle up held from A to B seconds into each; `--hover-at X,Y@N` the cursor there with no click (a rollover, W41), `--click-ingame X,Y@N`, `--tap-ingame DIK@N[:M]` and `--hold-ingame N:M` (the left button held) by each such game's frames; `--fire-probe` each game frame's buttons, trigger and weapons' reloads (a beam firing counts 100), with the wall time (W40); `--blur-ingame N:MS` the app deactivated at game frame N as a lost focus, the focus back MS ms later by a timer (W45); the soak lines' `wall` (epoch ms) and each seen mech's `heard` (ms since its last state); with `--net-soak` the shown objectives box's lines each second (`soak menus box:`); the lobby's line on coming back from the lab (`lobby back from the lab, mech N`); with `--net-soak` the "soak menus" lines each 15 frames, rss, each mech's gait slot and arms' aims included, and each lobby entry's scores);
   `--click N:M`, `--walk`, `--fire-group G`, `--objectives N` in a mission;
   `--briefing c1m2` (the plain start) saves a pilot "Briefing" whose newest
   campaign stands at that mission and clicks CAMPAIGN, the pilot and ACCEPT,
@@ -230,7 +262,8 @@ They run inside the original main loop, after the original start-up.
   (0x00434e00), so the store, the slots and the field bases are a real
   campaign's (without the earlier missions' salvage). `--win N` wins the
   mission N frames in as a player does, by Exit Mission once won (the end
-  screen, its fade, the debriefing's Win State and its save); with
+  screen, its fade, the debriefing's Win State and its save); `--lose N`
+  ends it N frames in as a failure (0x0048fa80: the failed debriefing); with
   `--verbose` the program prints the pilot's game as the Win State saved it
   and as each briefing finds it once its mission has loaded
   (`tools/analysis/savecheck.py`, save.md), and each state the app moves to
@@ -321,7 +354,13 @@ implements it:
   on the Mac, a scheduled `--shot` on the PC). The window is raised and
   given the keyboard when shown (`SDL_HINT_FORCE_RAISEWINDOW`; on the Mac
   the app is activated), and the launcher's window events are flushed at
-  the hand-over. `MW3_FOCUS_LOST_AT=N` loses the focus at the pump's Nth
+  the hand-over. `MW3_EDIT_SAVE_AT=N` (checks only): in a mission opened by MODS's EDITOR, at
+  the editor's Nth frame net_01 is saved (the Save as box answered with the
+  name it offers) and the editor left.
+  `MW3_BOX_ANSWER=N` (checks only) answers every message box N at once (1 OK,
+  2 CANCEL) and says so in the log with the box's text: a scripted click
+  repeats while a box runs its own loop, so it cannot press the box's buttons.
+  `MW3_FOCUS_LOST_AT=N` loses the focus at the pump's Nth
   pass, for `sdl_program_check_runs_on_without_focus`.
 - **Clock** (`SdlClock`): `GetTickCount` counted from the start, `Sleep`.
 - **Input** (`SdlInput`): DirectInput as zInput opens it (0x0051b0a0): the
@@ -476,7 +515,13 @@ apart. Everything else is a real gap and stays listed.
   no message waiting), a sleep only adding its time. Scripted runs keep the
   same timing and run as fast as they draw. Until 2026-10-29 a pass that
   only took a window or SDL event counted too, so the clock depended on
-  the machine's load.
+  the machine's load. A network run (`--host`, `--join`, `--net-port`,
+  `--net-lan` or `--net-soak` with it) is paced as well: each pass also
+  waits until the wall clock reaches the passes times N plus the sleeps,
+  because the other players' packets come in real time. Without it a
+  Release build ran its game about 20 times faster than its peers (a
+  Debug one draws at about 33 ms anyway), and the two-process checks
+  failed only in Release (2026-11-08). Single-process runs stay free.
 - `--frame-times N` (ours, for measuring; performance.md): from the N-th
   frame shown, each frame's wall time (present to present), summed up at
   the end: mean, median, p95, p99, max.
@@ -582,6 +627,15 @@ Checked by hand (2026-10-20): `mw3 --mission c1 --shot` draws the world
 draws the main menu with its TrueType labels, a visible window runs 150
 frames of c1m2, a test track in the write dir's `music/` plays and loops
 through the MCI notify path.
+
+A `--mission` shot needs `--frame-ms 33` to show play (2026-11-09). The
+Core state enters under a 2 s fade-in (0x00480c70 pushes a FadeState, timed by
+the game's clock), and an unpaced hidden run draws hundreds of frames a
+second: at `--shot-frame 900` the shot is still inside the fade, with the
+world drawn but no HUD and no game editor, since the Core frame has not run
+yet. With `--frame-ms 33` the fade ends by frame 60 or so. The automated shot
+tests (test_sdl_frontend.cpp) pass it already; hand checks of the world
+alone are not affected.
 
 ## Open
 

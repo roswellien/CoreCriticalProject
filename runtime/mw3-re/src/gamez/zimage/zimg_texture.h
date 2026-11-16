@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+namespace zcls { struct ZbdReadContext; }
 
 // The global texture table (zImage\zimg_texture.cpp), filled from a world's
 // texture directory (docs/gamez.md) and by name lookups, and the loading that
@@ -30,7 +31,8 @@ TextureTable& textures();
 
 // 0x00518160. Ours (docs/modding.md, M3): a mip index outside the table
 // refuses the directory (-1, the table as it was), `where` named in the log.
-int read_texture_directory(int count, std::FILE* f, const char* where = nullptr);
+int read_texture_directory(int count, std::FILE* f, const char* where = nullptr,
+                           zcls::ZbdReadContext* proof = nullptr);
 TextureEntry* texture_at(int index);                  // 0x00518080
 
 // --- Loading ---

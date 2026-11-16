@@ -33,5 +33,8 @@ class DrawEmissions {
         uniform.emission_params=value.params;uniform.emission_regions=value.regions;
     }
     std::size_t size() const { return values.size(); }
+    // The packet staging gate accounts actual vector allocation, including
+    // unused capacity after growth. Payloads contain only fixed-size values.
+    std::size_t allocated_bytes() const { return values.capacity() * sizeof(Payload); }
 };
 } // namespace mw34::submission

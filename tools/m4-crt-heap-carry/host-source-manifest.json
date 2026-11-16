@@ -259,8 +259,8 @@
       "classification": "authored-host-source"
     },
     "dxgi_present.hpp": {
-      "sha256": "f3f1b7956fa6b2ae25e0fe8d853930754d40bbba6682a266f8bd4d9f42226c95",
-      "bytes": 18511,
+      "sha256": "61f6582cf523792b0cc1ee721394034a0b82056bd413d7fef71b5678c47bb3b4",
+      "bytes": 19438,
       "decision": "commit",
       "classification": "authored-host-source"
     },

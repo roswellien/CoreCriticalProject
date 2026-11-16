@@ -2,10 +2,12 @@
 // made-up world of flat ground, boxes for walls, a cliff and water.
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include "check.h"
+#include "gamez/zclass/cls_node.h"
 #include "gamez/zutil/zfix.h"
 #include "mech3/options.h"
 #include "mech3/zai_nav.h"
@@ -344,7 +346,7 @@ TEST(nav_is_on_for_the_players_side_with_bugs_and_off_in_network_games) {
   zfix::Options& o = zfix::options();
   const zfix::Options keep = o;
   const bool mp = mech3::options().multiplayer;
-  o.bugs = true, o.nav_allies = true, o.nav_enemies = false;
+  o.improved_ai = true, o.nav_allies = true, o.nav_enemies = false;
   mech3::options().multiplayer = 0;
   EXPECT(nav::on_for(true) && !nav::on_for(false));
   o.nav_enemies = true;
@@ -352,7 +354,7 @@ TEST(nav_is_on_for_the_players_side_with_bugs_and_off_in_network_games) {
   mech3::options().multiplayer = 1;
   EXPECT(!nav::on_for(true) && !nav::on_for(false));
   mech3::options().multiplayer = 0;
-  o.bugs = false;
+  o.improved_ai = false;
   EXPECT(!nav::on_for(true));
   o = keep;
   mech3::options().multiplayer = mp;
@@ -470,4 +472,39 @@ TEST(nav_a_search_spreads_over_frames_to_the_same_way) {
   some = 1 << 30;
   EXPECT(s.run(g, &some, &part) == nav::Find::kBuilding && !s.active() && part.empty());
   EXPECT(g.queue.empty());  // and asks nothing of the new grid for the old search
+}
+
+// A limb on the ground after its mech is freed isn't followed to the mech (watch_begin).
+TEST(nav_a_part_left_behind_is_not_watched) {
+  zcls::Node n{};
+  n.put<uint32_t>(0x28, 3);
+  EXPECT(nav::part_left_behind(n));
+  n.put<uint32_t>(0x28, 0x1003);  // not a mech part's id
+  EXPECT(!nav::part_left_behind(n));
+  n.put<uint32_t>(0x28, 0);
+  EXPECT(!nav::part_left_behind(n));
+  zcls::Node parent{};
+  zcls::Node* one[1] = {&parent};
+  n.put<uint32_t>(0x28, 3);
+  n.parents = one;
+  n.put<int32_t>(0x54, 1);
+  EXPECT(!nav::part_left_behind(n));
+  n.parents = nullptr;
+}
+
+// A box billions of metres wide (seen through a bad matrix) is left alone: walked, each of these takes hours.
+TEST(nav_huge_boxes_are_not_walked) {
+  FakeWorld w;
+  nav::Grid g;
+  g.reset(&w);
+  int steps = 1 << 20;
+  EXPECT(g.build(0, 0, &steps));  // with no tile at all the compiler drops refresh's loop
+  const float huge = 6e9f, inf = std::numeric_limits<float>::infinity(), nan = std::nanf("");
+  for (float v : {huge, inf, nan}) {
+    g.refresh(-v, -v, v, v, 0.0f);
+    g.hold_parked({-v, -v, v, v, 0.0f}, 0.0f);
+  }
+  g.refresh(0.0f, 0.0f, huge, 10.0f, 0.0f);
+  g.hold_parked({0.0f, 0.0f, 10.0f, huge, 0.0f}, 0.0f);
+  EXPECT(g.queue.empty());
 }

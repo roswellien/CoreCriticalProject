@@ -7,12 +7,14 @@
 
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/mod_rows_file.h"
 
 namespace mech3 {
 
 namespace {
 std::list<Pilot*> g_pilots;    // [0x0060860c], the count [0x00608610]
 Pilot* g_current = nullptr;    // [0x0060861c]
+std::string g_folder = "pilots";  // ours: pilots_folder()
 
 constexpr int32_t kVersion = 15 + 0x20;  // 0x00423cf0 (the loadouts' 15) + 0x20
 
@@ -66,13 +68,15 @@ bool wr4(std::FILE* f, const void* p) { return std::fwrite(p, 1, 4, f) == 4; }
 
 std::list<Pilot*>& pilots() { return g_pilots; }
 Pilot*& current_pilot() { return g_current; }
+const std::string& pilots_folder() { return g_folder; }
+void set_pilots_folder(const std::string& folder) { g_folder = folder.empty() ? "pilots" : folder; }
 
 // Mech3.exe 1.2 @ 0x00477b20. FIX (bug): the name is copied with strcpy into
 // 64 bytes; a longer one (a long pilots\ file name) overwrote the games'
 // vector and crashed. Here it is cut, and load_pilots skips such files.
 Pilot::Pilot(const char* n) : version(kVersion) {
   std::strncpy(name, n ? n : "", sizeof name - 1);
-  auto* c = new CampaignGame(this, 1, 1);  // new(200)
+  auto* c = new_campaign_game(this, 1, 1);  // new(200)
   current = c;
   campaigns.push_back(c);
   lab = new LabGame(this);                 // new(0x84)
@@ -103,8 +107,8 @@ void Pilot::close() {
   file = nullptr;
 }
 
-// Mech3.exe 1.2 @ 0x00478c80
-std::string Pilot::file_path() const { return std::string("pilots\\") + name + ".mw3"; }
+// Mech3.exe 1.2 @ 0x00478c80 (ours: in pilots_folder())
+std::string Pilot::file_path() const { return g_folder + "\\" + name + ".mw3"; }
 
 // Mech3.exe 1.2 @ 0x00478ce0. False when it was already open. A header that
 // does not match is written over, the rest of the file kept (OPEN_ALWAYS).
@@ -145,7 +149,7 @@ bool Pilot::write_header() {
 // Two pilot names name the same file: without case (ASCII and the
 // Windows-1252 letters) when the fix is on, else byte for byte (strncmp, 64).
 bool same_name(const char* a, const char* b) {
-  if (!zfix::options().bugs) return std::strncmp(a, b, 0x40) == 0;
+  if (!zfix::options().fixed) return std::strncmp(a, b, 0x40) == 0;
   auto fold = [](unsigned char c) -> unsigned char {
     if ((c >= 'A' && c <= 'Z') || (c >= 0xc0 && c <= 0xde && c != 0xd7)) return static_cast<unsigned char>(c + 0x20);
     return c;
@@ -174,6 +178,7 @@ bool Pilot::save() {
 // the file's end for up to 4 billion campaigns, a hang; here the reading
 // stops at the end (docs/fixes.md).
 bool Pilot::read() {
+  rows_file::read_begin(file_path());  // ours: the mods' rows its numbers name
   training->load();
   multi->load();
   action_game->load();
@@ -182,16 +187,17 @@ bool Pilot::read() {
   std::fread(&n, 1, 4, file);
   if (n && campaigns.capacity() < n + 1 && n < 0x10000) campaigns.reserve(n + 1);
   for (; n; --n) {
-    auto* c = new CampaignGame(this);  // new(200), read
+    auto* c = read_campaign_game(this);  // new(200), read
     if (c->readable()) campaigns.push_back(c);
     else delete c;
     if (std::feof(file)) break;
   }
-  return true;
+  return rows_file::read_end(nullptr);  // ours: refused when it names a row no enabled mod adds
 }
 
 // Mech3.exe 1.2 @ 0x00479390. The new campaign (the first) is never saved.
 bool Pilot::write() {
+  rows_file::write_begin();  // ours: the sidecar of the rows it holds
   training->save();
   multi->save();
   action_game->save();
@@ -201,6 +207,7 @@ bool Pilot::write() {
   if (n)
     for (size_t i = 1; i < campaigns.size(); ++i) campaigns[i]->save();
   dirty = 0;
+  rows_file::write_end(file_path());
   return true;
 }
 
@@ -210,7 +217,7 @@ bool Pilot::write() {
 bool Pilot::rename(const char* n) {
   if (std::strcmp(n, name) == 0) return true;
   // FIX (bug): the exe renamed onto another pilot's name, sharing its file.
-  if (zfix::options().bugs) {
+  if (zfix::options().fixed) {
     Pilot* other = find_pilot(n);
     if (other && other != this) return false;
   }
@@ -223,6 +230,7 @@ bool Pilot::rename(const char* n) {
   }
   std::strncpy(name, n, sizeof name - 1);
   move_file(old_path.c_str(), file_path().c_str());
+  rows_file::move_sidecar(old_path, file_path());  // ours (save() writes it again anyway)
   save();
   return true;
 }
@@ -231,6 +239,7 @@ bool Pilot::rename(const char* n) {
 bool Pilot::delete_files() {
   for (Game* g : campaigns) delete_file(static_cast<CampaignGame*>(g)->path());
   dirty = 0;
+  rows_file::delete_sidecar(file_path());  // ours
   return delete_file(file_path().c_str());
 }
 
@@ -257,20 +266,20 @@ bool Pilot::select_campaign(int32_t i) {
 // settled, without `next`) filed among the saved ones, replacing one of the
 // same mission when the player says so (message 0xfb3), and made current;
 // then the pilot saved. True when there is no next game: the campaign is over.
-// FIX (bug), behind `bugs`: the exe wrote the next game's world (zSave, in
+// FIX (bug), behind `fixed`: the exe wrote the next game's world (zSave, in
 // next_mission) before asking, so No kept the old entry over the new world;
 // here the world is written once filed, and not on No (fixes.md).
 bool Pilot::record_mission(bool next) {
   if (!current || current->type() != kCampaign) return false;
-  const bool fix = zfix::options().bugs;
+  const bool fix = zfix::options().fixed;
   CampaignGame* g = static_cast<CampaignGame*>(current)->next_mission(next, !fix);
   if (g && g != current) {
-    const int32_t m = g->mission_number(), op = g->operation();
+    const int32_t m = g->mission, op = g->campaign;
     auto it = campaigns.begin();
     for (; it != campaigns.end(); ++it) {
       if ((*it)->type() != kCampaign) continue;
       auto* c = static_cast<CampaignGame*>(*it);
-      if (c->operation() == op && c->mission_number() == m) break;
+      if (c->campaign == op && c->mission == m) break;
     }
     bool filed = true;
     if (it == campaigns.end()) {
@@ -325,17 +334,21 @@ Pilot* load_pilot(const char* name, bool reload) {
   if (!p) p = new Pilot(name);  // new(0x84)
   else if (!reload) return p;
   p->open();
-  bool ok = false;
+  bool ok = false, refused = false;
   if (p->file) {
     std::fseek(p->file, 0, SEEK_SET);
     int32_t m = 0, v = 0, x = 0;
-    ok = rd4(p->file, &m) && rd4(p->file, &v) && rd4(p->file, &x) && m == p->magic && v == p->version && p->read();
+    ok = rd4(p->file, &m) && rd4(p->file, &v) && rd4(p->file, &x) && m == p->magic && v == p->version;
+    if (ok) ok = !(refused = !p->read());  // read() is false only for the mods' rows
   }
   p->close();
   if (ok) {
     g_pilots.push_back(p);
     return p;
   }
+  // ours: a file refused (a mod's row no enabled mod adds) is never written over; any
+  // other failed load the destructor saves when dirty, as the exe's does
+  if (refused) p->dirty = 0;
   delete p;
   return nullptr;
 }
@@ -370,11 +383,12 @@ bool delete_pilot(const char* name) {
 // zutl::list (the write dir's and the mounts' pilots\, each name once), and
 // _mkdir makes the folders in the write dir; the exe closed the search with
 // CloseHandle, not FindClose. FIX (bug): names that do not fit a pilot's 64
-// bytes are skipped (they crashed the exe, see the constructor).
+// bytes are skipped (they crashed the exe, see the constructor). Ours: in
+// pilots_folder().
 void load_pilots() {
   std::error_code ec;
-  fs::create_directories(zutl::write_path("pilots\\games"), ec);
-  for (const std::string& file : zutl::list("pilots\\*.mw3")) {
+  fs::create_directories(zutl::write_path((g_folder + "\\games").c_str()), ec);
+  for (const std::string& file : zutl::list((g_folder + "\\*.mw3").c_str())) {
     std::string n = file;  // _splitpath's file name
     const size_t slash = n.find_last_of("\\/:");
     if (slash != std::string::npos) n = n.substr(slash + 1);

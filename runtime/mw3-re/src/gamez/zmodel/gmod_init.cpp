@@ -14,6 +14,7 @@
 #include "gamez/zmodel/gmod_light.h"
 #include "gamez/zutil/zutl_reg.h"
 #include "gamez/zrender/zrndr_fog.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 
 namespace zmod {
 
@@ -60,6 +61,7 @@ int model_set_scroll(Model* m, int on, float u, float v) {
   std::memcpy(m->header + 8, &f, 4);
   std::memcpy(m->header + 0x2c, &v, 4);
   std::memcpy(m->header + 0x28, &u, 4);
+  m->fixture_revision.reset();
   return 0;
 }
 
@@ -116,6 +118,7 @@ void set_camera(zcls::Camera* camera) {
                        camera->get<float>(0x1d4), camera->get<float>(0x1d8), camera->get<float>(0xb0),
                        camera->get<float>(0xb4));
   zmth::set_fov(camera->get<float>(0xe8), camera->get<float>(0xec));
+  zvid::set_producer_camera_rect(x, y, wd, ht);
 }
 
 // Mech3.exe 1.2 @ 0x005271a0. Sides: +x turned by half the horizontal fov

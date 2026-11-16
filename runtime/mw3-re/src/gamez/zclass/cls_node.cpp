@@ -16,6 +16,7 @@
 #include "gamez/zclass/sound.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmodel/gmod_const.h"
+#include "gamez/zmodel/gmod_light.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "platform/platform.h"
 
@@ -29,6 +30,151 @@ platform::Alert* g_alert = nullptr;
 
 NodePool& nodes() { return g_pool; }
 Frames& frames() { return g_frames; }
+
+
+namespace {
+std::uint64_t g_fixture_next_life = 1, g_fixture_pool = 1, g_fixture_load = 1;
+std::map<std::uint64_t, FixtureNodeProof> g_fixture_nodes;
+std::map<std::uint64_t, FixtureVehicleProof> g_fixture_vehicles;
+std::map<const void*, std::uint64_t> g_fixture_owners;
+std::array<std::uint64_t, 64> g_fixture_walk{};
+std::size_t g_fixture_depth{};
+FixtureNodeProof* fixture_mutable(const Node* node) {
+  if (!node || !node->fixture_life) return nullptr;
+  auto found = g_fixture_nodes.find(node->fixture_life);
+  return found == g_fixture_nodes.end() ? nullptr : &found->second;
+}
+bool fixture_named(const Node* node, const char* name) {
+  const auto size = std::strlen(name);
+  return size < 0x24 && std::memcmp(node->raw, name, size + 1) == 0;
+}
+}
+void fixture_source_refresh(Node* node) {
+  if (auto* proof = fixture_mutable(node)) {
+    proof->active = (node->flags() & 4) != 0;
+    proof->node_class = node->cls();
+    proof->healthy_branch = fixture_named(node, "healthy");
+    proof->destroyed_branch = fixture_named(node, "destroyed");
+  }
+}
+void fixture_source_begin(Node* node) {
+  fixture_source_retire(node);
+  if (!node) return;
+  if (!g_fixture_next_life) gamez_abort("Fixture source lifetime exhausted.");
+  node->fixture_life = g_fixture_next_life++;
+  FixtureNodeProof proof{};
+  proof.life = node->fixture_life;
+  proof.pool_epoch = g_fixture_pool;
+  proof.load_epoch = g_fixture_load;
+  proof.source_revision = proof.transform_revision = 1;
+  g_fixture_nodes.emplace(proof.life, proof);
+  fixture_source_refresh(node);
+}
+void fixture_source_retire(Node* node) {
+  if (!node || !node->fixture_life) return;
+  g_fixture_nodes.erase(node->fixture_life);
+  g_fixture_vehicles.erase(node->fixture_life);
+  for (auto it = g_fixture_owners.begin(); it != g_fixture_owners.end();) {
+    if (it->second == node->fixture_life) it = g_fixture_owners.erase(it);
+    else ++it;
+  }
+  node->fixture_life = 0;
+}
+void fixture_pool_retire() {
+  ++g_fixture_pool;
+  g_fixture_nodes.clear();
+  g_fixture_vehicles.clear();
+  g_fixture_owners.clear();
+}
+void fixture_load_retire() {
+  ++g_fixture_load;
+  g_fixture_nodes.clear();
+  g_fixture_vehicles.clear();
+  g_fixture_owners.clear();
+}
+void fixture_source_changed(Node* node) {
+  if (auto* proof = fixture_mutable(node)) ++proof->source_revision;
+  fixture_source_refresh(node);
+}
+void fixture_transform_changed(Node* node) {
+  if (auto* proof = fixture_mutable(node)) ++proof->transform_revision;
+}
+std::optional<FixtureNodeProof> fixture_source_proof(std::uint64_t life) {
+  auto found = g_fixture_nodes.find(life);
+  if (found == g_fixture_nodes.end()) return std::nullopt;
+  return found->second;
+}
+std::optional<FixtureVehicleProof> fixture_vehicle_proof(std::uint64_t root) {
+  auto found = g_fixture_vehicles.find(root);
+  if (found == g_fixture_vehicles.end()) return std::nullopt;
+  return found->second;
+}
+void fixture_vehicle_pose(const Node* root, bool active, const float* pose) {
+  auto* proof = fixture_mutable(root);
+  if (!proof) return;
+  auto found = g_fixture_vehicles.find(proof->life);
+  if (found == g_fixture_vehicles.end()) return;
+  auto& vehicle = found->second;
+  vehicle.active = active;
+  vehicle.pose_valid = pose != nullptr;
+  vehicle.transform_revision = proof->transform_revision;
+  ++vehicle.pose_revision;
+  if (pose) std::memcpy(vehicle.local_pose.data(), pose, sizeof(float) * 12);
+}
+void fixture_vehicle_register(const void* owner, Node* root, bool active, const float* pose) {
+  fixture_vehicle_unregister(owner);
+  auto* proof = fixture_mutable(root);
+  if (!owner || !proof || proof->vehicle_root != proof->life) return;
+  g_fixture_owners[owner] = proof->life;
+  auto& vehicle = g_fixture_vehicles[proof->life];
+  vehicle.root = proof->life;
+  vehicle.registered = true;
+  fixture_vehicle_pose(root, active, pose);
+}
+void fixture_vehicle_unregister(const void* owner) {
+  auto found = g_fixture_owners.find(owner);
+  if (found == g_fixture_owners.end()) return;
+  g_fixture_vehicles.erase(found->second);
+  g_fixture_owners.erase(found);
+}
+void fixture_vehicle_state(const Node* root, bool active) {
+  if (auto* proof = fixture_mutable(root)) {
+    auto found = g_fixture_vehicles.find(proof->life);
+    if (found != g_fixture_vehicles.end()) found->second.active = active;
+  }
+}
+FixtureWalkScope::FixtureWalkScope(Node* node) {
+  fixture_source_refresh(node);
+  if (g_fixture_depth < g_fixture_walk.size())
+    g_fixture_walk[g_fixture_depth] = node ? node->fixture_life : 0;
+  ++g_fixture_depth;
+}
+FixtureWalkScope::~FixtureWalkScope() { --g_fixture_depth; }
+FixtureAncestry fixture_ancestry() {
+  FixtureAncestry result{};
+  result.supported = g_fixture_depth && g_fixture_depth <= g_fixture_walk.size();
+  if (!result.supported) return result;
+  result.nodes.reserve(g_fixture_depth);
+  for (std::size_t index = 0; index < g_fixture_depth; ++index) {
+    auto proof = fixture_source_proof(g_fixture_walk[index]);
+    if (!proof) { result.supported = false; break; }
+    if (proof->node_class != 2 && proof->node_class != 5 && proof->node_class != 6)
+      result.supported = false;
+    result.nodes.push_back(*proof);
+  }
+  return result;
+}
+void fixture_observe_world(const Node* node, const float* world) {
+  auto* proof = fixture_mutable(node);
+  if (!proof || !world) return;
+  auto found = g_fixture_vehicles.find(proof->life);
+  if (found == g_fixture_vehicles.end()) return;
+  auto& vehicle = found->second;
+  if (!vehicle.pose_valid || vehicle.transform_revision != proof->transform_revision) return;
+  std::memcpy(vehicle.observed_local.data(), vehicle.local_pose.data(), sizeof(float) * 12);
+  std::memcpy(vehicle.observed_world.data(), world, sizeof(float) * 12);
+  vehicle.world_valid = true;
+}
 
 void set_alert(platform::Alert* alert) { g_alert = alert; }
 
@@ -65,6 +211,7 @@ Node* node_alloc() {
   Node* n = node_at(p.free_head);
   p.free_head = static_cast<int32_t>(n->link << 8) >> 8;  // sign-extended: 0xffffff is -1
   const uint32_t link = n->link;
+  fixture_source_retire(n);
   *n = Node{};
   n->link = link;
   ++p.live;
@@ -75,11 +222,13 @@ Node* node_alloc() {
   n->raw[0x30] = 0xff;
   std::snprintf(reinterpret_cast<char*>(n->raw), 0x24, "%s", "Default_node_name");
   n->put<int32_t>(0xbc, 0);
+  fixture_source_begin(n);
   return n;
 }
 
 // Mech3.exe 1.2 @ 0x004f8de0. The slot keeps its contents and lists.
 void node_slot_free(Node* node) {
+  fixture_source_retire(node);
   NodePool& p = g_pool;
   int32_t index = -1;
   for (size_t b = 0; b < p.blocks.size(); ++b) {
@@ -107,6 +256,7 @@ Node* node_at(int32_t index) {
 // Mech3.exe 1.2 @ 0x004f8ec0. Only the link changes; the slot keeps its contents.
 void free_node(int32_t index) {
   Node* n = node_at(index);
+  fixture_source_retire(n);
   n->link = (n->link & ~kNodeLinkMask) | (static_cast<uint32_t>(g_pool.free_head) & kNodeLinkMask);
   g_pool.free_head = index;
   --g_pool.live;
@@ -175,6 +325,8 @@ int node_link(Node* parent, Node* child) {
   }
   parent->set_flags(parent->flags() | 2);
   if (parent->changed) parent->changed->removable = 0;
+  fixture_source_changed(parent);
+  fixture_source_changed(child);
   return 0;
 }
 
@@ -202,12 +354,27 @@ void node_touch_frame() {
 }
 
 // Mech3.exe 1.2 @ 0x0040ea30
-void node_tree_bind(Node* node, void* owner, uint32_t kind, uint32_t flags) {
+namespace {
+void fixture_bind_tree(Node* node, void* owner, uint32_t kind, uint32_t flags,
+                       std::uint64_t root, std::uint64_t healthy, bool destroyed) {
   if (!node) return;
   node->put<uint32_t>(0x28, kind);
   node->owner = owner;
   node->put<uint32_t>(0x24, node->get<uint32_t>(0x24) | flags);
-  for (int32_t i = 0; i < node->child_count(); ++i) node_tree_bind(node->children[i], owner, kind, flags);
+  if (fixture_named(node, "healthy")) healthy = node->fixture_life;
+  destroyed = destroyed || fixture_named(node, "destroyed");
+  if (auto* proof = fixture_mutable(node)) {
+    proof->vehicle_root = kind == 0x80000 ? root : 0;
+    proof->healthy_root = kind == 0x80000 ? healthy : 0;
+    proof->destroyed_path = kind == 0x80000 && destroyed;
+  }
+  fixture_source_changed(node);
+  for (int32_t i = 0; i < node->child_count(); ++i)
+    fixture_bind_tree(node->children[i], owner, kind, flags, root, healthy, destroyed);
+}
+}
+void node_tree_bind(Node* node, void* owner, uint32_t kind, uint32_t flags) {
+  fixture_bind_tree(node, owner, kind, flags, node ? node->fixture_life : 0, 0, false);
 }
 
 // Mech3.exe 1.2 @ 0x0040ec20
@@ -218,6 +385,11 @@ void node_tree_unbind(Node* node, void* owner, uint32_t kind, uint32_t flags) {
     node->put<uint32_t>(0x28, node->get<uint32_t>(0x28) & ~kind);
     node->owner = nullptr;
     node->put<uint32_t>(0x24, node->get<uint32_t>(0x24) & ~flags);
+    if (auto* proof = fixture_mutable(node)) {
+      proof->vehicle_root = proof->healthy_root = 0;
+      proof->destroyed_path = false;
+    }
+    fixture_source_changed(node);
   }
 }
 
@@ -249,6 +421,7 @@ int node_set_active(Node* node, int on) {
   }
   if (on == 1) node->set_flags(node->flags() | 4);
   else if (on == 0) node->set_flags(node->flags() & ~4u);
+  fixture_source_refresh(node);
   return 0;
 }
 
@@ -263,6 +436,7 @@ int node_set_name(Node* node, const char* name) {
   } else {
     std::strcpy(dst, name);
   }
+  fixture_source_changed(node);
   return 0;
 }
 
@@ -345,6 +519,7 @@ namespace {
 int set_flag(Node* node, uint32_t flag, int on, int line) {
   if (!node) return zerr::report(0x400, kClassFile, line, "Null node pointer."), 5;
   node->set_flags(on ? node->flags() | flag : node->flags() & ~flag);
+  if(flag==0x800000) fixture_source_changed(node);
   return 0;
 }
 }  // namespace
@@ -376,6 +551,7 @@ uint32_t node_draw_bits(const Node* node) { return node ? (node->get<uint32_t>(0
 int node_set_draw_bits(Node* node, uint32_t bits) {
   if (!node) return zerr::report(0x400, kClassFile, 0x707, "Null node pointer."), 5;
   node->put<uint32_t>(0x2c, ((bits & 3) << 3) | (node->get<uint32_t>(0x2c) & ~0x18u));
+  fixture_source_changed(node);
   return 0;
 }
 
@@ -427,6 +603,8 @@ int node_unlink(Node* parent, Node* child) {
   }
   parent->set_flags(parent->flags() | 2);
   if (parent->changed) parent->changed->removable = 0;
+  fixture_source_changed(parent);
+  fixture_source_changed(child);
   return 0;
 }
 
@@ -467,6 +645,10 @@ int node_set_model(Node* node, zmod::Model* model) {
   if (!node) return zerr::report(0x400, kClassFile, 0x52a, "Null node pointer."), 5;
   if (node->model) add_uses(node->model->header, -1);  // 0x00539d60
   node->model = model;
+  if (model && model->world_source_asset)
+    node->source_asset = model->world_source_asset;
+  else if (node->source_asset && node->source_asset->world)
+    node->source_asset.reset();
   if (model) {
     add_uses(model->header, 1);  // 0x00539d50
     node_model_box(node);        // 0x0053b4e0 into +0x8c, flag 0x200
@@ -480,6 +662,7 @@ int node_set_model(Node* node, zmod::Model* model) {
   }
   node->set_flags(node->flags() | 2);
   if (node->changed) node->changed->removable = 0;
+  fixture_source_changed(node);
   return 0;
 }
 
@@ -499,6 +682,7 @@ void delete_class_data(Node* node) {
     case 1: delete static_cast<Camera*>(node->data); break;
     case 2: {
       auto* w = static_cast<World*>(node->data);  // the lists a staying world kept (world_delete)
+      zmod::retire_world_lights(w);
       delete[] w->lights, delete[] w->light_data, delete[] w->sounds, delete[] w->sound_data;
       delete[] w->area_pending;
       delete w;
@@ -510,7 +694,10 @@ void delete_class_data(Node* node) {
     case 6: delete static_cast<Lod*>(node->data); break;
     case 7: delete static_cast<Seq*>(node->data); break;
     case 8: delete static_cast<Animate*>(node->data); break;
-    case 9: delete static_cast<Light*>(node->data); break;
+    case 9:
+      zmod::retire_light(node, static_cast<Light*>(node->data));
+      delete static_cast<Light*>(node->data);
+      break;
     case 10: delete static_cast<Sound*>(node->data); break;
     default: break;  // no class makes other data
   }

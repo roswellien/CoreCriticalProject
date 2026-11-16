@@ -15,16 +15,18 @@ operation outside 1..4 makes no areas and the exe writes the children past
 them; the port's FIX skips them.) The areas (each polygon's kind, flags,
 corners, offsets, side lengths, box, perimeter and name, the area's other
 fields), the current area, whether `inout` survives and the error reports
-must match bit for bit at 24-bit precision.
+must match bit for bit at the reference's 53 bits (docs/ai.md 17.4b).
 
     cmake --build build && .venv/bin/python tests/differential/test_inout.py [worlds...]
 """
 import ctypes
+import os
 import struct
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+os.environ['MW3_FPU53'] = '1'  # the port at the reference's 53 bits too (docs/ai.md 17.4b)
 from test_di import World, probe, ZBD, WORLDS  # noqa: E402
 
 probe.inout_run.argtypes = [ctypes.c_int] * 5 + [ctypes.c_void_p, ctypes.c_int]
@@ -45,6 +47,7 @@ IAT = {'strdup': 0x5bb670, 'strncmp': 0x5bb654, 'snprintf': 0x5bb638, 'strnicmp'
 class Inout(World):
     def __init__(self, name):
         super().__init__(name)
+        self.cpu.fpu_control(0x027f)  # the reference's 53 bits (test_scenewalk's Walk sets play's 24)
         cpu = self.cpu
         cpu.stub_function(NEW, lambda c: self.alloc(c.arg(0)))
         cpu.stub_function(DELETE, lambda c: 0)

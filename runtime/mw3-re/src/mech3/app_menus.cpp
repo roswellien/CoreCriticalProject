@@ -5,6 +5,7 @@
 // memory the size of the original object, so the offsets the states add (a
 // button's +0x111ec) still lead to its parts; a menu object's handle is a block
 // of 0x10, its address for the hooks that name it.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -17,6 +18,8 @@
 #include "gamez/ztwod/twod.h"
 #include "gamez/ztwod/twod_host.h"
 #include "gamez/zimage/zimg_library.h"
+#include "upgrades/mods/salvage_chance.h"
+#include "upgrades/settings/upgrades.h"
 #include "mech3/app.h"
 #include "mech3/app_engine.h"
 #include "mech3/mission_map.h"
@@ -34,6 +37,9 @@
 #include "mech3/mainmenu.h"
 #include "mech3/menu_states.h"
 #include "mech3/mission.h"
+#include "mech3/mod_campaign.h"
+#include "mech3/mods_menu.h"
+#include "upgrades/mods/ia_mods_menu.h"
 #include "mech3/mech_salvage.h"
 #include "mech3/options_menu.h"
 #include "mech3/pause_menu.h"
@@ -121,10 +127,31 @@ zimg::Texture* extend_texture(zimg::Texture* src, int32_t left, int32_t right, i
   return dst;
 }
 
+// A control keeps its looks apart from the texture it shows, and its refresh (0x0059c790) puts the enabled one back
+// when the screen comes again (playtest W6: Instant Action's box and selectors drawn at their 640 places after
+// MODS > BACK). Each look that was the old texture becomes the new one, its own hold on the old let go (the
+// destructor lets go of each look that is not the one shown); a button whose images are borrowed only repoints.
+void replace_looks(ztwod::Image& im, zimg::Texture* src, zimg::Texture* dst) {
+  auto* c = dynamic_cast<ztwod::Control*>(&im);
+  if (!c || !src) return;
+  auto* sb = dynamic_cast<ShellButton*>(&im);
+  const bool borrowed = sb && sb->borrowed;
+  std::vector<zimg::Texture**> looks = {&c->img_normal, &c->img_disabled, &c->img_rollover, &c->img_activate};
+  if (auto* cb = dynamic_cast<ztwod::CheckButton*>(&im))
+    looks.insert(looks.end(), {&cb->img_disabled_checked, &cb->img_disabled_unchecked, &cb->img_unchecked, &cb->img_checked});
+  for (zimg::Texture** l : looks)
+    if (*l == src) {
+      *l = dst;
+      if (!borrowed) ztwod::host().image_release(src);
+    }
+}
+
 void widen_background(ztwod::Image& im, int32_t extra, int32_t inset, int32_t shade0, int32_t shade1) {
-  zimg::Texture* dst = extend_texture(im.image, extra / 2, extra - extra / 2, inset, shade0, shade1);
+  zimg::Texture* src = im.image;
+  zimg::Texture* dst = extend_texture(src, extra / 2, extra - extra / 2, inset, shade0, shade1);
   if (!dst) return;
   im.set_image(dst);
+  replace_looks(im, src, dst);
   im.set_pos(im.get_x(), im.get_y());
 }
 
@@ -155,6 +182,7 @@ void stretch_image(ztwod::Image& im, int32_t at, int32_t from_y, int32_t extra) 
     }
   }
   im.set_image(dst);
+  replace_looks(im, src, dst);
   im.set_pos(im.get_x(), im.get_y());
 }
 }  // namespace
@@ -189,9 +217,17 @@ const std::vector<ScreenGroups>& screen_groups() {
       // The main menu: its column of buttons at the left edge, CREDITS and
       // QUIT and the version line at the right.
       {0x486260, {{0, 0, 330, 480, kLeft}, {380, 330, 640, 480, kRight}}},
+      // Ours: the MODS screen, the pilot screen's groups; the left one reaches past its three tabs under
+      // CAMPAIGNS (MISSIONS, IMPORT, INFO, to x 268).
+      {kModsScreenCtor, {{0, 0, 275, 480, kLeft}, {275, 0, 640, 480, kRight}}, {{0, 0, 619, 320}}},
+      {kIaModsScreenCtor, {{0, 430, 400, 480, kLeft}, {0, 0, 200, 480, kLeft}, {200, 0, 640, 480, kRight}}, {{0, 0, 619, 320}}},
+      {kMpModsScreenCtor, {{0, 430, 400, 480, kLeft}, {0, 0, 200, 480, kLeft}, {200, 0, 640, 480, kRight}}, {{0, 0, 619, 320}}},
       // The game options: the settings' panel left, the screens' box,
       // ACCEPT and BACK right.
       {0x4379f0, {{0, 0, 400, 420, kLeft}, {400, 0, 640, 480, kRight}}, {{0, 0, 483, 367}}},
+      // Ours: the upgrades page, the game options' groups; its frame (the
+      // credits' lines) starts left of the frame's edge.
+      {kUpgradesScreenCtor, {{-120, 0, 400, 420, kLeft}, {400, 0, 640, 480, kRight}}},
       // The graphics and audio options: the settings' panel left, ACCEPT and
       // BACK (and the plate behind them) right.
       {0x438f60, {{0, 0, 380, 420, kLeft}, {380, 0, 640, 480, kRight}}},
@@ -206,10 +242,10 @@ const std::vector<ScreenGroups>& screen_groups() {
       // The briefing: one block, the map in the middle, its sides from its
       // terrain, past the grid's labels and the north arrow at its edges.
       {0x405230, {}, {}, 40},
-      // The debriefing: MECH STATUS left, SALVAGE FOUND right, MISSION
-      // SUCCESS in the middle, each with the button under it; its dark
-      // circuit board's sides barely dimmed (dimmed as the others, black).
-      {0x47b430, {{0, 0, 213, 480, kLeft}, {427, 0, 640, 480, kRight}}, {}, 0, 256, 160},
+      // The debriefing: one block (Owen, 2026-11-06: the columns kept together,
+      // the extra width open at the sides); its dark circuit board's sides
+      // barely dimmed (dimmed as the others, black).
+      {0x47b430, {}, {}, 0, 256, 160},
       // The mech lab: one block (its panels change looks as it goes, a
       // double one across two columns), the 3D view's hole with it
       // (lab_place_window); the sides from its edge panels, its board as
@@ -257,6 +293,10 @@ void GameEngine::widen_screen(MenuScreen* s, uint32_t ctor) {
   };
   std::vector<Move> moves;
   for (ztwod::Object2D* o = s->head; o; o = o->next) {
+    // Each object once: with FastMenu the layout ran before the bake too (widen_before_bake), and the baked
+    // picture is the canvas's width already.
+    if (o == &s->still || std::find(s->widened.begin(), s->widened.end(), o) != s->widened.end()) continue;
+    s->widened.push_back(o);
     const ztwod::Rect* r = o->get_rect();
     const int32_t left = (r ? r->left : o->get_x()) - s->origin_x, right = (r ? r->right : o->get_x()) - s->origin_x;
     const int32_t top = (r ? r->top : o->get_y()) - s->origin_y, bottom = (r ? r->bottom : o->get_y()) - s->origin_y;
@@ -272,6 +312,11 @@ void GameEngine::widen_screen(MenuScreen* s, uint32_t ctor) {
     auto* axp = dynamic_cast<AxisPopupScreen*>(s);
     auto* team = dynamic_cast<TeamScreen*>(s);  // the new team's dialog's: the same (0x00579500(2) as it enters)
     if ((lsp && o == &lsp->backdrop) || (axp && o == &axp->background) || (team && o == &team->backdrop)) continue;
+    // The main menu's background borrowed (1280x960, 0x0040a110): a view the
+    // display's size from 0, so left there (with no image, nothing to move).
+    // Held still (in a mission) the controls' went to the middle, the game
+    // options showing at its left (pm-tests.md front-end item 5).
+    if (o == &s->background && im && (!im->image || im->image->width > 640)) continue;
     if (im && !stretched && (right - left >= 600 || (img_w >= 600 && img_w <= 640))) {
       widen_background(*im, extra, table ? table->inset : 0, table ? table->shade0 : 150, table ? table->shade1 : 60);
       continue;
@@ -341,6 +386,10 @@ void GameEngine::widen_screen(MenuScreen* s, uint32_t ctor) {
       } else {
         m.o->set_pos(m.x + m.off, m.y);
       }
+      if (auto* lc = dynamic_cast<LanceCard*>(m.o)) {  // its display and line draw by their own numbers
+        if (lc->display) lc->display->shift(m.off);
+        lc->line.set(lc->line.get_x() + m.off, lc->line.get_y(), lc->line.end_x + m.off, lc->line.end_y);
+      }
       auto* pl = dynamic_cast<ztwod::PolyLine*>(m.o);  // its points are where it draws (0x005a38f0)
       if (pl && !dynamic_cast<ztwod::Shape*>(pl) && !dynamic_cast<ztwod::Caret*>(pl))
         for (int32_t i = 0; i < pl->count; ++i) pl->pts[i][0] += m.off;
@@ -367,8 +416,24 @@ void GameEngine::widen_screen(MenuScreen* s, uint32_t ctor) {
   }
 }
 
+// The screen being made is laid out wide before its bake: by the constructor construct() is in, or for the
+// screens their states make themselves (adopt_screen) by what they are.
+void GameEngine::widen_before_bake(MenuScreen* s) {
+  uint32_t ctor = making_ctor_;
+  if (dynamic_cast<PilotScreen*>(s)) ctor = 0x486f40;
+  else if (dynamic_cast<LoadSavePopupScreen*>(s)) ctor = 0x42da80;
+  else if (dynamic_cast<AxisPopupScreen*>(s)) ctor = 0x42e890;
+  if (ctor && ctor != 0x492750) widen_screen(s, ctor);
+}
+
 Handle GameEngine::construct(uint32_t ctor, std::initializer_list<Arg> args) {
   const Handle a0 = args.size() ? args.begin()->v : 0;
+  struct Making {  // the constructor this call is in, for a bake inside it (a screen may make another)
+    uint32_t& at;
+    uint32_t keep;
+    Making(uint32_t& a, uint32_t c) : at(a), keep(a) { at = c; }
+    ~Making() { at = keep; }
+  } making(making_ctor_, ctor);
   // FIX (B), playtest W13: every menu screen shows on the menus' 640x480
   // (mode 5: 0x00438c90, Core's leave), so its frame is at 0 even when Core
   // makes it on the mission's wide canvas. The pause screen shows over the
@@ -408,6 +473,22 @@ Handle GameEngine::construct(uint32_t ctor, std::initializer_list<Arg> args) {
       return state([](Handle h) -> MenuState* { return new OptionsState(OptionsState::kGame, h); });
     case 0x43a640:
       return state([](Handle h) -> MenuState* { return new OptionsState(OptionsState::kGfxAudio, h); });
+    case kUpgradesScreenCtor:  // ours: the upgrades page
+      return screen(sizeof(UpgradesScreen), [](GameEngine& e, Handle s) -> MenuScreen* { return new UpgradesScreen(e, s); });
+    case kUpgradesStateCtor:
+      return state([](Handle h) -> MenuState* { return new OptionsState(OptionsState::kUpgrades, h); });
+    case kModsScreenCtor:  // ours: the MODS screen
+      return screen(sizeof(ModsScreen), [](GameEngine& e, Handle s) -> MenuScreen* { return new ModsScreen(e, s); });
+    case kModsStateCtor:
+      return state([](Handle h) -> MenuState* { return new ModsState(h); });
+    case kIaModsScreenCtor:  // ours: Instant Action's MODS
+      return screen(sizeof(IaModsScreen), [](GameEngine& e, Handle s) -> MenuScreen* { return new IaModsScreen(e, s); });
+    case kIaModsStateCtor:
+      return state([](Handle h) -> MenuState* { return new IaModsState(h); });
+    case kMpModsScreenCtor:  // ours: multiplayer's MODS, the same screen on its own entry
+      return screen(sizeof(IaModsScreen), [](GameEngine& e, Handle s) -> MenuScreen* { return new IaModsScreen(e, s, true); });
+    case kMpModsStateCtor:
+      return state([](Handle h) -> MenuState* { return new IaModsState(h, true); });
     case 0x42a590: {  // the controls screen, new(0x16c94): its popups' states sit at its offsets
       const Handle h = alloc_block(0x16c94);
       screens_[h] = {nullptr, 0x16c94};
@@ -583,6 +664,8 @@ void GameEngine::delete_screens() {
     MenuState* st = menu_states_.begin()->second;
     menu_states_.erase(menu_states_.begin());
     st->screen_ = 0;
+    if (auto* g = dynamic_cast<GameMenuState*>(st))  // (its destructor deletes its own three: 0x0049ca00)
+      for (Handle& s : g->screens) s = 0;
     delete st;
   }
   // A screen's own popups go with it (their states delete them).
@@ -730,16 +813,10 @@ bool launch_player();  // 0x00491150 (mech3/mission_launch.h, whose mech headers
 
 namespace {
 BriefingScreen* briefing_of(const GameEngine& e, Handle s) { return dynamic_cast<BriefingScreen*>(e.screen_of(s)); }
-
-// 0x00435350 (a campaign's vt+0x54): the mission directory, c4b past Op 4 Mission 3.
-int32_t campaign_dir(const CampaignGame& c) {
-  switch (c.operation()) {
-    case 1: return 0;
-    case 2: return 1;
-    case 3: return 2;
-    case 4: return (3 < c.mission_number()) + 3;
-    default: return -1;
-  }
+// The launch's mod campaign game: the chosen pilot's, from the menus (a debug start's is not).
+const ModCampaignGame* mod_game(const GameEngine::Launch& l) {
+  const Pilot* p = l.keep_pilot ? current_pilot() : nullptr;
+  return p ? dynamic_cast<const ModCampaignGame*>(p->current) : nullptr;
 }
 }  // namespace
 
@@ -757,7 +834,7 @@ void GameEngine::load_state_enter() {
   if (auto* c = dynamic_cast<CampaignGame*>(g)) {
     l.number = c->mission_number();
     l.op = c->operation();
-    l.index = campaign_dir(*c);
+    l.index = c->world_index();
   } else if (auto* t = dynamic_cast<TrainingGame*>(g)) {
     l.number = t->mission;
     l.index = 5;  // t1
@@ -828,16 +905,41 @@ uint8_t GameEngine::briefing_has_movie() { return app().fmv(); }
 // the main window and fmv.zrd's "c<op>m<n>" of the pilot's game (0x004099c0),
 // played when it loads: the mission's briefing movie, an operation's opener
 // at its first mission. Nothing shows until zFMV is ported.
+// Ours: a mod campaign's line's movie, none when it names none.
 void GameEngine::briefing_play_movie(uint32_t state) {
   if (state != states().load.addr()) return Engine::briefing_play_movie(state);
   const Handle m = states().load.movie_;
   const Handle game = pilot_game(pilot());
   char name[32];
-  std::snprintf(name, sizeof name, "c%dm%d", static_cast<int32_t>(vcall(game, 0x48, {})),
-                static_cast<int32_t>(vcall(game, 0x4c, {})));
+  if (const ModCampaignGame* mod = mod_game(launch_)) {
+    if (!mod->movie()) return;
+    std::snprintf(name, sizeof name, "%s", mod->movie());
+  } else {
+    std::snprintf(name, sizeof name, "c%dm%d", static_cast<int32_t>(vcall(game, 0x48, {})),
+                  static_cast<int32_t>(vcall(game, 0x4c, {})));
+  }
   const Handle frame = app().frame_;
   if (const Handle hwnd = frame ? frame_hwnd(frame) : 0) movie_set_window(m, hwnd);  // 0x0040a7d0
   if (movie_load(m, "fmv.zrd", name) != -1) movie_play(m);
+}
+
+const char* GameEngine::campaign_briefing() {
+  const ModCampaignGame* mod = mod_game(launch_);
+  return mod ? mod->briefing() : nullptr;
+}
+const char* GameEngine::campaign_end_movie() {
+  const ModCampaign* c = entered_campaign();
+  if (!c) return "c4win";
+  return c->movie_end.empty() ? nullptr : c->movie_end.c_str();
+}
+
+bool GameEngine::campaign_ends_at(int32_t op, int32_t mission) {
+  const ModCampaignGame* mod = mod_game(launch_);
+  return mod ? mod->last() : Engine::campaign_ends_at(op, mission);
+}
+bool GameEngine::campaign_world_start(int32_t op, int32_t mission) {
+  const ModCampaignGame* mod = mod_game(launch_);
+  return mod ? mod->world_start() : Engine::campaign_world_start(op, mission);
 }
 
 void GameEngine::briefing_script_start(Handle s) {
@@ -968,9 +1070,9 @@ void GameEngine::win_keep_scores(Handle screen, int32_t n) {
   if (!d || !c) return Engine::win_keep_scores(screen, n);
   // n is the campaign's slots, at most the lance's four cards (+0x13be4 has
   // four). The exe writes every card's number, 0 for a card without a
-  // record line. FIX (bug), behind `bugs`: a card without one keeps the
+  // record line. FIX (bug), behind `fixed`: a card without one keeps the
   // record, else a lancemate not on that card loses their career kills.
-  const bool fix = zfix::options().bugs;
+  const bool fix = zfix::options().fixed;
   for (int32_t i = 0; i < n && i < 4; ++i)
     if (!fix || d->lance_scored[i]) c->b4[i] = d->lance_scores[i];
   c->c4 = d->score;
@@ -982,6 +1084,11 @@ bool GameEngine::missions_loaded() { return missions().finished(); }
 bool GameEngine::mission_launch() {
   const bool ok = launch_player();
   if (ok) mission_salvage().clear();
+  // Ours (salvage_chance.h): a campaign mission's odds, when a mounted mod sets them.
+  std::string from;
+  salvage_chance_now() = launch_.type == 1 ? salvage_chance_for(mission_dir(launch_.index), launch_.number, &from) : -1;
+  if (salvage_chance_now() >= 0)
+    std::printf("mw3: salvage: a kill's salvage is offered %d times in 100 in this mission (%s)\n", salvage_chance_now(), from.c_str());
   return ok;
 }
 Handle GameEngine::mission_salvage_store() { return store_handle(&mission_salvage()); }
@@ -1316,23 +1423,41 @@ zimg::Texture* GameEngine::map_image(Handle map) {
 
 namespace mech3 {
 
+namespace {
+// Mech3.exe 1.2 @ 0x0047fde0: message 0xc, a network error ("Network Error:"
+// 0xd78 with its text), handed to the game's message box 0x004ac050 with its
+// first argument 0, which shows nothing: in the release the error is dropped.
+void network_error_shown(uint32_t, const uint8_t*, size_t) {}
+}  // namespace
+
 // Mech3.exe 1.2 @ 0x0047fc40: the app's network on or off. On: zNetwork up
 // (0x00586ba0; FIX (A): on the platform's transport, not DirectPlay's
 // instance), unless it is already (a --host or --join start's); the lobby
-// launch's set-up (+0x19c) is not ported. Off: the network game ended
-// (0x0046d100), zNetwork down (0x00586c20), the transport given up.
+// launch's set-up (+0x19c) is not ported. Then no turrets (+0x1b2
+// [0x00608e3a] = 0: the mission load reads no aiTurrets.zrd), message 0xc's
+// handler, and the invincibility cheat off (+0x1b8 [0x00608e40]). Off: the
+// turrets back, the network game ended (0x0046d100), the handler gone,
+// zNetwork down (0x00586c20), the transport given up, the lobby launch's
+// +0x19c and +0x1a4 cleared (+0x1a8, its dword, is not in the port).
 void GameEngine::network_set(int32_t on) {
   if (on) {
     if (network_on_) return;
     if (!znet::session().initialised && p_.network_open)
       if (znet::Transport* t = p_.network_open()) znet::initialise(t);
+    app().byte_at(0x1b2) = 0;
+    znet::on(0xc, network_error_shown, 2);  // 0x00587aa0
+    app().byte_at(0x1b8) = 0;
     network_on_ = true;
     return;
   }
   if (!network_on_) return;
+  app().byte_at(0x1b2) = 1;
   net_end();
+  znet::off(0xc, network_error_shown);  // 0x00587b20
   znet::shutdown();
   if (p_.network_close) p_.network_close();
+  app().lobby_ = 0, app().field_1a4_ = 0;
+  upgrades::give_back();  // ours: a joiner's own switches again (the lobby took the host's)
   network_on_ = false;
 }
 

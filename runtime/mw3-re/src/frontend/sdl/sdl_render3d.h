@@ -1,7 +1,9 @@
 #pragma once
 #include <SDL3/SDL.h>
 
+#include <functional>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,8 @@ struct EnvironmentSelection;
 }
 
 namespace sdlfe {
+
+class EditorUiSource;
 
 enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
 
@@ -41,6 +45,7 @@ struct CoreCriticalAssets {
   std::vector<std::string> environment_packs;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
+  bool pom = false;
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
   std::string textures;
@@ -51,7 +56,7 @@ struct CoreCriticalAssets {
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool empty() const {
     return environment_packs.empty() && !environment && !sun_explicit &&
-           !render_thread && geometry == "legacy" && !geometry_debug_normals &&
+           !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&
            textures.empty() && models.empty() && normals.empty() &&
            materials.empty() && lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";
@@ -61,6 +66,14 @@ struct CoreCriticalAssets {
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;
+  // Unsupported recorders reject attachment explicitly. Null detach is safe.
+  virtual void attach_editor(EditorUiSource* source) {
+    if (source) throw std::invalid_argument("renderer: editor attachment unsupported");
+  }
+  virtual void detach_editor() { attach_editor(nullptr); }
+  // Frontend canvases can be presented before a mission has a world camera.
+  // Backends without world-light snapshots retain their existing scene behavior.
+  virtual void begin_canvas_scene() { begin_scene(); }
   virtual void capture_next(const char* bmp_path) = 0;
   virtual void flush() = 0;
   virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
@@ -71,6 +84,8 @@ class SdlRender3D : public FrameRenderer {
  public:
   SdlRender3D(SDL_GPUDevice* device, SDL_Window* window);
   ~SdlRender3D() override;
+  void attach_editor(EditorUiSource* source) override;
+  void detach_editor() override;
   bool ok() const override { return ok_; }
   const char* driver_name() const override;
 
@@ -97,7 +112,12 @@ class SdlRender3D : public FrameRenderer {
     if (!runs_.empty()) end_scene();
   }
   void viewport(int* x, int* y, int* w, int* h) const override { *x = vx_, *y = vy_, *w = vw_, *h = vh_; }
+
   void set_shape(const FrameShape* s) override { shape_ = s; }
+
+  // Ours: drawn on the swapchain after the game's frame is put there (the game
+  // editor's ImGui, editor_imgui.h). Not in a capture: shots show the game alone.
+  std::function<void(SDL_GPUCommandBuffer*, SDL_GPUTexture*, Uint32, Uint32)> overlay;
 
  private:
   void upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);
@@ -114,6 +134,9 @@ class SdlRender3D : public FrameRenderer {
   void ensure_buffer(uint32_t bytes);
   bool ensure_frame();
 
+  // The main attachment guard clears this borrow before destroying its source.
+  EditorUiSource* editor_source_ = nullptr;
+  const SDL_ThreadID editor_thread_ = SDL_GetCurrentThreadID();
   SDL_GPUDevice* dev_;
   SDL_Window* window_;
   bool ok_ = false;

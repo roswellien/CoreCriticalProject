@@ -1,7 +1,11 @@
+#include "mech3/options_menu.h"
 #include "mech3/pause_menu.h"
 
 #include "mech3/app.h"
 #include "mech3/pilot.h"
+#include "upgrades/editor/mods_edit.h"
+
+#include <cstdio>
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -20,7 +24,8 @@ constexpr Handle kEndWinState = 0x6099a0;  // the missions object's +0xd0
 // Mech3.exe 1.2 @ 0x00492750: the sounds paused and the playing groups taken
 // away before the frame behind is grabbed; no FastMenu bake.
 PauseScreen::PauseScreen(Engine& e, Handle s)
-    : MenuScreen(e, s), resume(e, kResume), quit(e, kQuit), options(e, kOptions), replay(e, kReplay), title(e) {
+    : MenuScreen(e, s), resume(e, kResume), quit(e, kQuit), options(e, kOptions), replay(e, kReplay), title(e),
+      editor(e, kEditor) {
   sounds = e.sound_listener();
   e.sound_stop_all(sounds);
   groups = e.sound_take_playing();
@@ -34,6 +39,10 @@ PauseScreen::PauseScreen(Engine& e, Handle s)
     bind_button(&resume, "RESUME");
     bind_button(&options, "OPTIONS");
     if (e.game_kind() == kCampaign || e.game_kind() == kInstantAction) bind_button(&replay, "REPLAY");
+    // Ours (patch12_edits.cpp): the switch between playing and editing, its label what a press does.
+    const char* sw = editor_switch_edits() ? "EDITMISSION" : "PLAYMISSION";
+    if (editor_reachable()) has_editor = bind_button(&editor, sw);
+    if (has_editor) std::printf("mw3: pause: the switch is %s\n", sw);
     unload();
   }
   // [0x006099c4] is never written: OPTIONS always stays.
@@ -77,11 +86,16 @@ void PauseScreen::on_button(int32_t id, int32_t a, int32_t b) {
       e.poke32(0x609868, e.construct(0x438be0, {}));
       e.poke32(0x60986c, e.construct(0x43a640, {}));
       e.poke32(0x609870, e.construct(0x42d9d0, {}));
+      if (options_upgrades_page()) options_upgrades_state() = e.construct(kUpgradesStateCtor, {});  // ours
       e.push_state(e.peek32(0x609868), 0);
       return;
     case kReplay:
       e.pop_state(0);
       e.mission_abort();
+      return;
+    case kEditor:  // ours: as RESUME, then the mission in the other mode (never out of it)
+      on_button(kResume, 0, 0);
+      editor_from_level();
       return;
     default:
       return;

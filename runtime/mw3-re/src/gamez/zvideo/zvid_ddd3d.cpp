@@ -5,6 +5,11 @@
 #include <cstdio>
 #include <cstring>
 #include <utility>
+#include <limits>
+#include <cstddef>
+#include <stdexcept>
+#include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zmodel/gmod_fog.h"
 #include <vector>
 
 #include "crt/msvc_math.h"
@@ -32,16 +37,98 @@ OverlayList g_overlay;
 bool g_transparent_sky[TransparentQueue::kMaxPolys];
 bool g_overlay_sky[OverlayList::kMax];
 platform::Render3D *g_render = nullptr;
+platform::ProducerView g_transparent_views[TransparentQueue::kMaxPolys];
+platform::ProducerView g_overlay_views[OverlayList::kMax];
+platform::ProducerPurpose g_requested_purpose = platform::ProducerPurpose::Original;
+platform::ProducerView g_emitting_view;
+platform::ProducerRect g_producer_canvas, g_producer_camera_rect;
+bool g_canvas_available = false, g_camera_rect_available = false;
+platform::MissionIdentity g_producer_mission;
+uint64_t g_producer_generation = 0, g_producer_epoch = 1;
+bool g_producer_failed = false, g_producer_exhausted = false;
 // Host-only admission sidecars preserve original queue records and draw order.
 std::shared_ptr<const platform::DeferredMaterialBinding>
     g_transparent_materials[TransparentQueue::kMaxPolys];
 std::shared_ptr<const platform::DeferredMaterialBinding>
     g_overlay_materials[OverlayList::kMax];
+bool known_purpose(platform::ProducerPurpose purpose) noexcept {
+  return purpose == platform::ProducerPurpose::Original ||
+         purpose == platform::ProducerPurpose::MainWorld ||
+         purpose == platform::ProducerPurpose::WorldZoom;
+}
+
+void clear_producer_transport(bool failed) noexcept {
+  for (uint32_t i = 0; i < TransparentQueue::kMaxPolys; ++i) {
+    g_transparent_views[i] = {};
+    g_transparent_materials[i].reset();
+    g_transparent_sky[i] = false;
+  }
+  for (int32_t i = 0; i < OverlayList::kMax; ++i) {
+    g_overlay_views[i] = {};
+    g_overlay_materials[i].reset();
+    g_overlay_sky[i] = false;
+  }
+  g_queue.count = g_queue.vertex_count = 0;
+  g_overlay.count = 0;
+  g_emitting_view = {};
+  g_requested_purpose = platform::ProducerPurpose::Original;
+  g_camera_rect_available = false;
+  g_producer_mission = {};
+  // Canvas setup is still the actual input viewport across mission/reset. It is
+  // configuration, not an old view receipt; losing it would break late attachment.
+  if (!g_producer_exhausted) {
+    if (g_producer_epoch == std::numeric_limits<uint64_t>::max()) {
+      g_producer_exhausted = true;
+      g_producer_epoch = 0;
+    } else {
+      ++g_producer_epoch;
+    }
+  }
+  g_producer_failed = failed || g_producer_exhausted;
+}
+
+void abandon_selected(platform::Render3D* receiver) noexcept {
+  clear_producer_transport(true);
+  if (receiver) receiver->abandon_producer_work();
+}
+
+void require_producer_live() {
+  if (g_producer_failed || g_producer_exhausted)
+    throw std::runtime_error("Producer view requires explicit reset after failure");
+}
+
+void validate_producer_view(const platform::ProducerView& view) {
+  require_producer_live();
+  if (view.record_version != platform::kProducerViewRecordVersion ||
+      !known_purpose(view.purpose) ||
+      view.present == (view.purpose == platform::ProducerPurpose::Original) ||
+      (view.present && (!view.producer_generation ||
+                        view.producer_generation > g_producer_generation ||
+                        view.mission_epoch != g_producer_epoch)) ||
+      (!view.present && (view.producer_generation || view.mission_epoch)))
+    throw std::runtime_error("Corrupt or stale producer view provenance");
+  // No float is inspected here: neutral nonfinite/stale inverse bits are data.
+}
+
+struct ProducerBindingScope {
+  platform::Render3D* receiver;
+  platform::ProducerViewRestoreToken token{};
+  ProducerBindingScope(platform::Render3D* selected, const platform::ProducerView& view)
+      : receiver(selected) {
+    validate_producer_view(view);
+    if (receiver) token = receiver->exchange_producer_view(view);
+  }
+  ~ProducerBindingScope() noexcept {
+    if (receiver) receiver->restore_producer_view(token);
+  }
+};
+
 struct DeferredMaterialScope {
   platform::Render3D *renderer;
   DeferredMaterialScope(
+      platform::Render3D* selected,
       std::shared_ptr<const platform::DeferredMaterialBinding> binding)
-      : renderer(g_render) {
+      : renderer(selected) {
     if (renderer)
       renderer->begin_deferred_material_draw(std::move(binding));
   }
@@ -123,8 +210,33 @@ void set_texture(const D3DTexture* t) { g_draw.texture = t ? t->handle : -1; }
 
 // FIX (A): DrawPrimitive (vt+0x70), FVF 0x1c4, flags 0x18. Render3D::draw has
 // no HRESULT, so the original's failure reports (0x00580550) go.
+void dispatch_bound_primitive(platform::Render3D* receiver, int32_t primitive,
+                              const TLVertex* verts, int32_t count,
+                              const platform::DrawState& state) {
+  if (receiver) receiver->draw(static_cast<platform::Primitive>(primitive), verts, count, state);
+}
+
+template <typename Dispatch>
+void dispatch_immediate(platform::Render3D* receiver, const platform::DrawState& state,
+                        Dispatch dispatch, bool original = false) {
+  if (!receiver) return;
+  try {
+    auto view = original ? platform::ProducerView{} : capture_producer_view();
+    view.draw_state_fog = state.fog;
+    const ProducerBindingScope binding(receiver, view);
+    dispatch();
+  } catch (...) {
+    // The binding has unwound before CPU ownership/cookies are invalidated.
+    abandon_selected(receiver);
+    throw;
+  }
+}
+
 void draw_primitive(int32_t primitive, const TLVertex* verts, int32_t count) {
-  if (g_render) g_render->draw(static_cast<platform::Primitive>(primitive), verts, count, g_draw);
+  auto* receiver = g_render;
+  dispatch_immediate(receiver, g_draw, [&] {
+    dispatch_bound_primitive(receiver, primitive, verts, count, g_draw);
+  });
 }
 
 // The textured draws' cached stage-0 states, then the texture.
@@ -240,7 +352,10 @@ void shadow_passes(int32_t count, const D3DTexture* texture) {
   set_texture_stage_state(16, 2);  // MAGFILTER LINEAR
   set_texture_stage_state(17, 2);  // MINFILTER LINEAR
   auto draw = [&] {
-    if (g_render) g_render->draw_multi(static_cast<platform::Primitive>(st.primitive), g_multi, sets, count, g_draw);
+    auto* receiver = g_render;
+    dispatch_immediate(receiver, g_draw, [&] {
+      receiver->draw_multi(static_cast<platform::Primitive>(st.primitive), g_multi, sets, count, g_draw);
+    });
   };
   draw();
   set_render_state(19, 1);
@@ -277,11 +392,13 @@ OverlayPoly* overlay_slot(int32_t type, int32_t count, const D3DTexture* texture
     zerr::report(0x400, kFile, line, msg);
     return nullptr;
   }
-  g_overlay_sky[o.count] = g_draw.native_sky;
-  g_overlay_materials[o.count] =
-      g_render && texture
-          ? g_render->capture_deferred_material_binding(texture->handle)
-          : nullptr;
+  const auto view = capture_producer_view();
+  const bool sky = g_draw.native_sky;
+  auto material = g_render && texture
+      ? g_render->capture_deferred_material_binding(texture->handle) : nullptr;
+  g_overlay_views[o.count] = view;
+  g_overlay_sky[o.count] = sky;
+  g_overlay_materials[o.count] = std::move(material);
   OverlayPoly& p = o.polys[o.count++];
   p.type = type;
   p.count = count;
@@ -337,6 +454,107 @@ bool is_pow2(int32_t n) {  // 0x0057e9e0: starts at 2, so 1 is not a power of tw
   return p - n == 0;
 }
 }  // namespace
+
+ProducerPurposeScope::ProducerPurposeScope(platform::ProducerPurpose purpose)
+    : previous_(g_requested_purpose), epoch_(g_producer_epoch) {
+  require_producer_live();
+  if (!known_purpose(purpose)) throw std::runtime_error("Unknown producer purpose");
+  g_requested_purpose = purpose;
+}
+ProducerPurposeScope::~ProducerPurposeScope() noexcept {
+  if (epoch_ == g_producer_epoch) g_requested_purpose = previous_;
+}
+
+ProducerWorldScope::ProducerWorldScope(bool force_original)
+    : previous_(g_emitting_view), previous_request_(g_requested_purpose),
+      purpose_(force_original ? platform::ProducerPurpose::Original : g_requested_purpose),
+      epoch_(g_producer_epoch) {
+  require_producer_live();
+  if (!known_purpose(purpose_)) throw std::runtime_error("Unknown producer purpose");
+  if (purpose_ != platform::ProducerPurpose::Original) {
+    if (g_producer_generation == std::numeric_limits<uint64_t>::max()) {
+      g_producer_exhausted = true;
+      g_producer_epoch = 0;  // Invalidate every still-live scope without wrapping.
+      abandon_selected(g_render);
+      throw std::runtime_error("Producer view generation exhausted");
+    }
+    generation_ = ++g_producer_generation;
+  }
+  g_requested_purpose = platform::ProducerPurpose::Original;
+  g_emitting_view = {};
+}
+ProducerWorldScope::~ProducerWorldScope() noexcept {
+  if (epoch_ == g_producer_epoch) {
+    g_emitting_view = previous_;
+    g_requested_purpose = previous_request_;
+  }
+}
+void ProducerWorldScope::begin_emission() {
+  require_producer_live();
+  if (epoch_ != g_producer_epoch) throw std::runtime_error("Producer view scope reset");
+  g_emitting_view = {};
+  if (purpose_ == platform::ProducerPurpose::Original) return;
+  g_emitting_view.present = true;
+  g_emitting_view.purpose = purpose_;
+  g_emitting_view.producer_generation = generation_;
+  g_emitting_view.mission_epoch = epoch_;
+  g_emitting_view.mission = g_producer_mission;
+  static_assert(sizeof(platform::ProducerFog) == sizeof(zmod::Fog), "fog snapshot size");
+  // Both are frozen standard-layout declarations; copy derived bits, not setters.
+#define FOG_OFFSET(field) static_assert(offsetof(platform::ProducerFog, field) == offsetof(zmod::Fog, field), "fog field order")
+  FOG_OFFSET(on); FOG_OFFSET(linear); FOG_OFFSET(color); FOG_OFFSET(near_range);
+  FOG_OFFSET(near_sq); FOG_OFFSET(far_range); FOG_OFFSET(far_sq); FOG_OFFSET(inv_range);
+  FOG_OFFSET(alt_high); FOG_OFFSET(alt_low); FOG_OFFSET(inv_alt); FOG_OFFSET(density);
+#undef FOG_OFFSET
+  std::memcpy(&g_emitting_view.fog, &zmod::fog(), sizeof(g_emitting_view.fog));
+}
+void ProducerWorldScope::end_emission() noexcept {
+  if (epoch_ == g_producer_epoch) g_emitting_view = {};
+}
+
+void set_producer_canvas_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available) noexcept {
+  g_producer_canvas = {x, y, width, height};
+  g_canvas_available = available;
+}
+void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available) noexcept {
+  g_producer_camera_rect = {x, y, width, height};
+  g_camera_rect_available = available;
+}
+platform::ProducerView capture_producer_view() {
+  auto result = g_emitting_view;
+  validate_producer_view(result);
+  result.draw_state_fog = g_draw.fog;
+  if (!result.present) return result;
+  static_assert(sizeof(platform::ProducerProjection) == sizeof(zmth::Projection), "projection snapshot size");
+#define PROJECTION_OFFSET(field) static_assert(offsetof(platform::ProducerProjection, field) == offsetof(zmth::Projection, field), "projection field order")
+  PROJECTION_OFFSET(origin_x); PROJECTION_OFFSET(origin_y); PROJECTION_OFFSET(half_w); PROJECTION_OFFSET(half_h);
+  PROJECTION_OFFSET(cot_h); PROJECTION_OFFSET(cot_v); PROJECTION_OFFSET(inv_cot_h); PROJECTION_OFFSET(inv_cot_v);
+  PROJECTION_OFFSET(inv_fx); PROJECTION_OFFSET(inv_fy); PROJECTION_OFFSET(fov_h); PROJECTION_OFFSET(fov_v);
+  PROJECTION_OFFSET(near_z); PROJECTION_OFFSET(cx); PROJECTION_OFFSET(cy); PROJECTION_OFFSET(inv_near);
+  PROJECTION_OFFSET(far_z); PROJECTION_OFFSET(fy_near); PROJECTION_OFFSET(fx); PROJECTION_OFFSET(fy); PROJECTION_OFFSET(fx_near);
+#undef PROJECTION_OFFSET
+  std::memcpy(&result.projection, &zmth::projection(), sizeof(result.projection));
+  std::memcpy(result.camera, zmth::view().camera.m, sizeof(result.camera));
+  std::memcpy(&result.clip_near, &zmod::draw_state().clip.near_z, sizeof(result.clip_near));
+  result.canvas_available = g_canvas_available;
+  result.canvas = g_producer_canvas;
+  result.camera_rect_available = g_camera_rect_available;
+  result.camera_rect = g_producer_camera_rect;
+  return result;
+}
+void invalidate_producer_transport(platform::Render3D* owner, bool failed) noexcept {
+  if (owner && owner != g_render) return;
+  clear_producer_transport(failed);
+}
+void reset_producer_transport() noexcept {
+  clear_producer_transport(false);
+  if (g_render) g_render->reset_producer_work();
+}
+void abandon_producer_transport() noexcept { abandon_selected(g_render); }
+void producer_mission_changed(const platform::MissionIdentity& identity) noexcept {
+  reset_producer_transport();
+  g_producer_mission = identity;
+}
 
 TransparentQueue& transparent_queue() { return g_queue; }
 OverlayList& overlay_list() { return g_overlay; }
@@ -397,11 +615,13 @@ TLVertex* queue_transparent(int32_t primitive, int32_t count, const D3DTexture* 
     zerr::report(0x400, kFile, 0x599, msg);
     return nullptr;
   }
-  g_transparent_sky[q.count] = g_draw.native_sky;
-  g_transparent_materials[q.count] =
-      g_render && texture
-          ? g_render->capture_deferred_material_binding(texture->handle)
-          : nullptr;
+  const auto view = capture_producer_view();
+  const bool sky = g_draw.native_sky;
+  auto material = g_render && texture
+      ? g_render->capture_deferred_material_binding(texture->handle) : nullptr;
+  g_transparent_views[q.count] = view;
+  g_transparent_sky[q.count] = sky;
+  g_transparent_materials[q.count] = std::move(material);
   TransparentPoly& p = q.polys[q.count++];
   p.primitive = primitive;
   p.count = count;
@@ -707,8 +927,10 @@ void clear_fan(const float* xyz, int32_t count) {
   }
   platform::DrawState s;
   s.blend = true, s.depth_write = true, s.flat = true;
-  g_render->draw(static_cast<platform::Primitive>(g_state.primitive), reinterpret_cast<const platform::TLVertex*>(v),
-                 count, s);
+  auto* receiver = g_render;
+  dispatch_immediate(receiver, s, [&] {
+    dispatch_bound_primitive(receiver, g_state.primitive, v, count, s);
+  }, true);
 }
 
 void depth_fill(const int32_t rect[4]) {
@@ -723,13 +945,18 @@ void flush_transparent() {
   TransparentQueue& q = g_queue;
   DeviceState& s = g_state;
   if (q.count == 0) return;
+  auto* receiver = g_render;
+  try {
+    require_producer_live();
   set_shade(2);
   if (s.alpha_blend != 1) set_render_state(27, 1), s.alpha_blend = 1;
   if (s.z_write != 0) set_render_state(14, 0), s.z_write = 0;
   for (uint32_t i = 0; i < q.count; ++i) q.order[i] = static_cast<int32_t>(q.count - 1 - i);
   sort_transparent();
   for (uint32_t n = 0; n < q.count; ++n) {
-    DeferredMaterialScope material_scope(
+    receiver = g_render;
+    const ProducerBindingScope view_scope(receiver, g_transparent_views[q.order[n]]);
+    DeferredMaterialScope material_scope(receiver,
         std::move(g_transparent_materials[q.order[n]]));
     const NativeSkyScope sky_scope(g_transparent_sky[q.order[n]]);
     const TransparentPoly& p = q.polys[q.order[n]];
@@ -744,12 +971,20 @@ void flush_transparent() {
       set_address(p.texture);
     }
     set_texture(p.texture);
-    draw_primitive(p.primitive, p.verts, p.count);
+    dispatch_bound_primitive(receiver, p.primitive, p.verts, p.count, g_draw);
   }
   if (s.alpha_blend != 0) set_render_state(27, 0), s.alpha_blend = 0;
   if (s.z_write != 1) set_render_state(14, 1), s.z_write = 1;
+  for (uint32_t i = 0; i < q.count; ++i) {
+    g_transparent_views[i] = {};
+    g_transparent_sky[i] = false;
+  }
   q.count = 0;
   q.vertex_count = 0;
+  } catch (...) {
+    abandon_selected(receiver);
+    throw;
+  }
 }
 
 // Mech3.exe 1.2 @ 0x0057e4c0. Every entry is drawn with the CURRENT primitive
@@ -759,9 +994,14 @@ void flush_overlay() {
   OverlayList& o = g_overlay;
   DeviceState& s = g_state;
   if (o.count == 0) return;
+  auto* receiver = g_render;
+  try {
+    require_producer_live();
   set_render_state(23, 8);  // ZFUNC ALWAYS
   for (int32_t n = 0; n < o.count; ++n) {
-    DeferredMaterialScope material_scope(std::move(g_overlay_materials[n]));
+    receiver = g_render;
+    const ProducerBindingScope view_scope(receiver, g_overlay_views[n]);
+    DeferredMaterialScope material_scope(receiver, std::move(g_overlay_materials[n]));
     const NativeSkyScope sky_scope(g_overlay_sky[n]);
     const OverlayPoly& p = o.polys[n];
     const D3DTexture* t = p.texture;
@@ -783,7 +1023,7 @@ void flush_overlay() {
           }
           set_address(t);
         }
-        draw_primitive(s.primitive, p.verts, p.count);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
         if (s.alpha_blend != 0) set_render_state(27, 0), s.alpha_blend = 0;
         if (s.z_write != 1) set_render_state(14, 1), s.z_write = 1;
         break;
@@ -792,7 +1032,7 @@ void flush_overlay() {
       case 3:
         set_texture(nullptr);
         set_shade(1);
-        draw_primitive(s.primitive, p.verts, p.count);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
         break;
       case 4:
         set_shade(1);
@@ -802,7 +1042,7 @@ void flush_overlay() {
           set_texture_stage_state(4, t->type == 2 ? 2 : 4);
         }
         set_address(t);
-        draw_primitive(s.primitive, p.verts, p.count);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
         break;
       case 5:
       case 6:
@@ -810,14 +1050,22 @@ void flush_overlay() {
         set_texture(t);
         if (s.alpha_op != 2) s.alpha_op = 2, set_texture_stage_state(4, 2);
         set_address(t);
-        draw_primitive(s.primitive, p.verts, p.count);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
         break;
       default:
         break;
     }
   }
   set_render_state(23, 7);  // ZFUNC GREATEREQUAL
+  for (int32_t i = 0; i < o.count; ++i) {
+    g_overlay_views[i] = {};
+    g_overlay_sky[i] = false;
+  }
   o.count = 0;
+  } catch (...) {
+    abandon_selected(receiver);
+    throw;
+  }
 }
 
 // Mech3.exe 1.2 @ 0x005798a0. The brightest channel is picked only when

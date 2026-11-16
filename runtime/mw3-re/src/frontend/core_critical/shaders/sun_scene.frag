@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Direct3D 6 fixed-function pixel stage for one texture stage: colour/alpha operation and arguments,
 // flat or Gouraud colour, perspective or affine texture coordinates, specular add, vertex fog (specular
 // alpha) and alpha test. Unmodelled states are refused on the host before a draw reaches this shader.
@@ -23,9 +24,10 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 detail; vec4 detailMotion;
  vec4 weather; vec4 weatherFog;
  vec4 emissionParams; vec4 emissionRegions[32];
- vec4 geometryFog0;
- vec4 geometryFog1;
+ vec4 geometryFog0; vec4 geometryFog1;
  uvec4 tiledLights;
+ vec4 pomParams; vec4 pomUV; vec4 pomAtlas;
+ uvec4 pomPolicy;
 } sun;
 #ifdef MW34_EFFECT_LIGHTING
 struct EffectLight {vec4 start;vec4 end;vec4 color;};
@@ -70,13 +72,22 @@ vec3 effectIllumination(vec3 p,vec3 n){
  vec3 illumination=vec3(0);
  if (sun.tiledLights.w == 0u)
    return illumination;
- uvec2 tile = uvec2(gl_FragCoord.xy) / 16u;
- if (any(greaterThanEqual(tile, sun.tiledLights.xy)))
-   return illumination;
- uint base = sun.tiledLights.z + (tile.y * sun.tiledLights.x + tile.x) * 65u;
- uint count = min(tiles.words[base], 64u);
+ bool allLights = sun.tiledLights.w == 2u;
+ uint base = 0u;
+ uint count = uint(clamp(effects.params.x, 0.0, 64.0));
+ if (!allLights) {
+   uvec2 tile = uvec2(gl_FragCoord.xy) / 16u;
+   if (any(greaterThanEqual(tile, sun.tiledLights.xy)))
+     return illumination;
+   base = sun.tiledLights.z + (tile.y * sun.tiledLights.x + tile.x) * 65u;
+   count = min(tiles.words[base], 64u);
+ }
  for (uint at = 0u; at < count; ++at) {
-   int i = int(tiles.words[base + 1u + at]);
+   int i;
+   if (allLights)
+     i = int(at);
+   else
+     i = int(tiles.words[base + 1u + at]);
    if (i < 0 || i >= min(int(effects.params.x), 64))
      continue;
    EffectLight l = effects.lights[i];
@@ -113,12 +124,14 @@ vec3 effectIllumination(vec3 p,vec3 n){
 layout(set=0,binding=0) uniform sampler2D image;
 layout(set=1,binding=1) uniform sampler2DShadow shadowMap;
 layout(set=2,binding=0) uniform sampler2D normalMap;
+layout(set=2,binding=1) uniform sampler2D heightMap;
 layout(location=0) out vec4 result;
 // mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test.
 // mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
 // mode.w alpha function | reference << 8.
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
 vec4 diffuse, specular, texel;
+#include "parallax_material.glsl"
 vec4 argument(uint a) {
     vec4 v;
     uint s = a & 15u;
@@ -320,7 +333,7 @@ void main() {
     vec3 N;
     if(dot(worldNormal,worldNormal)<=1e-20){
         N=normalize(cross(dFdx(worldPosition),dFdy(worldPosition)));
-        vec3 eye=vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
+        vec3 eye=sun.pomParams.x>0.5?sun.surfaceEye.xyz:vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
         if(dot(N,eye-worldPosition)<0.0)N=-N;
     }else{
         N=normalize(worldNormal);
@@ -340,6 +353,19 @@ void main() {
     // A rank-one chart can have a nonzero tangent but no invertible UV basis.
     // Compare relative area so normal mapping remains valid at small footprints.
     bool validBasis = uvScale > 0.0 && uvArea * uvArea > 1e-12 * uvScale;
+    bool displacedMaterial = sun.pomParams.x > 0.5 && sun.pomParams.z != 0.0;
+    if (displacedMaterial) {
+        uv = pomTrace(uv, N, dp1, dp2, duv1, duv2);
+        vec4 displacedTexel = (flags & 4u) != 0u ? textureGrad(image, uv, duv1, duv2) : vec4(1.0);
+        // Relief shades the receiver only; alpha coverage keeps its original
+        // sampling even for an unexpected non-opaque uploaded alpha channel.
+        displacedTexel.a = texel.a;
+        texel = displacedTexel;
+    }
+    if (sun.pomParams.w > 0.5) {
+        result = pomEncodeUV(uv);
+        return;
+    }
     vec3 n;
     // Scale-independent: near the camera the per-pixel tangents are tiny but still valid
     // (an absolute 1e-10 cut-off dropped the normal map on nearby ground, leaving a flat band).
@@ -350,7 +376,9 @@ void main() {
     }else if (validBasis && det > 1e-30) {
         float invmax = inversesqrt(det);
         // BWNRM2 encodes a neutral tangent as (128,128,255), not (127.5,127.5,255).
-        vec3 map = max((texture(normalMap, uv).xyz * 255.0 - 128.0) / 127.0, vec3(-1.0));
+        vec3 normalTexel = displacedMaterial ? textureGrad(normalMap, uv, duv1, duv2).xyz
+                                            : texture(normalMap, uv).xyz;
+        vec3 map = max((normalTexel * 255.0 - 128.0) / 127.0, vec3(-1.0));
         float strength = max(sun.extra.y, 0.0);
         vec3 perturbation = vec3(map.xy * strength, map.z);
         vec3 n_tan = dot(perturbation,perturbation)>1e-8 ? normalize(perturbation) : vec3(0,0,1);
@@ -379,7 +407,8 @@ void main() {
         float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));
         float bulb = smoothstep(0.55, 0.9, lum);
         if(sun.emissionParams.x>0.5){
-            float mask=0.0;vec2 t=fract(uv);vec2 feather=max(fwidth(t),vec2(0.0005));
+            float mask=0.0;vec2 t=fract(uv);
+            vec2 feather=max(displacedMaterial ? abs(duv1)+abs(duv2) : fwidth(t),vec2(0.0005));
             for(int i=0;i<min(int(sun.emissionParams.x),32);++i){vec4 r=sun.emissionRegions[i];vec2 low=smoothstep(r.xy-feather,r.xy+feather,t);vec2 high=1.0-smoothstep(r.zw-feather,r.zw+feather,t);mask=max(mask,low.x*low.y*high.x*high.y);}
             bulb=mask*smoothstep(0.20,0.70,max(texel.r,max(texel.g,texel.b)));
         }

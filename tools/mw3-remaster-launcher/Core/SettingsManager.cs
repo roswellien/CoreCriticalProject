@@ -36,6 +36,10 @@ namespace MW3RemasterLauncher.Core
         public bool AutomaticCrashReports { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();
+        public string ModularContentProfile { get; set; } = string.Empty;
+        public string ModularContentTool { get; set; } = string.Empty;
+        public string ModularContentStore { get; set; } = string.Empty;
+        public string ModularRuntimeExecutable { get; set; } = string.Empty;
         public bool PackSelectionInitialized { get; set; } = false;
         public bool EnvironmentPackSelectionInitialized { get; set; } = false;
         public bool HasAddedToSteam { get; set; } = false;

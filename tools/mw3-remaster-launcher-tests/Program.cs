@@ -2,6 +2,8 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+if (args.Length == 2 && args[0] == "--modular-content-only") { await ModProfilesChecks.Run(args[1]); return; }
+
 if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
 
 if(args.Length==1 && args[0]=="--steam-only") { SteamShortcutChecks.Run(); return; }
@@ -81,6 +83,17 @@ if (args.Length == 4 && args[0] == "--prepare-controller-launch")
 if (args.Length == 1 && args[0] == "--runtime-layout-only")
 {
     NativeRuntimeLayoutChecks.Run();
+    return;
+}
+if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
+{
+    NativeRuntimeLayoutChecks.RunMw3ReStageA();
+    return;
+}
+if (args.Length > 0 && args[0] == "--mw3-re-stage-plan")
+{
+    if (args.Length != 5) throw new ArgumentException("Stage planning requires payload, game, data and profile inputs.");
+    NativeRuntimeLayoutChecks.RunMw3ReStagePlan(args[1], args[2], args[3], args[4]);
     return;
 }
 if (args.Length == 1 && args[0] == "--content-only")
