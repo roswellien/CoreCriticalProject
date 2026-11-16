@@ -48,7 +48,7 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
 
     def test_known_unsupported_preferences_have_no_argv(self):
         plan = self.planner()
-        for key, value in [("window_mode", "fullscreen"), ("window_mode", "borderless"), ("aa", "8")]:
+        for key, value in [("aa", "8")]:
             request = dict(self.request(), **{key: value})
             before = copy.deepcopy(request)
             result = plan(request)
@@ -56,6 +56,25 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 self.assertFalse(result["ok"])
                 self.assertTrue(result["reasons"])
                 self.assertNotIn("argv", result)
+                self.assertEqual(request, before)
+
+    def test_fullscreen_and_borderless_plan_without_window_tokens(self):
+        plan = self.planner()
+        windowed_plan = plan(self.request())
+        self.assertTrue(windowed_plan["ok"])
+        without_window = windowed_plan["argv"].copy()
+        index = without_window.index("--window")
+        self.assertEqual(without_window[index:index + 3], ["--window", "1280x720", "--windowed"])
+        del without_window[index:index + 3]
+        for mode in ("fullscreen", "borderless"):
+            request = dict(self.request(), window_mode=mode)
+            before = copy.deepcopy(request)
+            result = plan(request)
+            with self.subTest(window_mode=mode):
+                self.assertTrue(result["ok"])
+                self.assertNotIn("--window", result["argv"])
+                self.assertNotIn("--windowed", result["argv"])
+                self.assertEqual(result["argv"], without_window)
                 self.assertEqual(request, before)
 
     def test_schema_three_optional_pom_and_schema_two_identity(self):

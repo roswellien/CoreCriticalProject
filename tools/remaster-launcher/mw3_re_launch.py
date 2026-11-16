@@ -250,6 +250,17 @@ def _preview_choices(preview):
     return choices
 
 
+def _window_arguments(window_mode, width, height):
+    """Return argv tokens for window presentation.
+
+    The native runtime defaults to borderless desktop fullscreen; --window or --windowed makes
+    it a window. Both fullscreen and borderless therefore emit no window tokens.
+    """
+    if window_mode == "windowed":
+        return ["--window", f"{width}x{height}", "--windowed"]
+    return []
+
+
 def plan_launch(request):
     """Return complete argv or explicit unsupported reasons; never probe or start anything."""
     if type(request) is not dict:
@@ -306,15 +317,14 @@ def plan_launch(request):
             if write.is_relative_to(root) or root.is_relative_to(write):
                 raise ValueError("Native write root overlaps a preview pack")
     reasons = []
-    if request["window_mode"] != "windowed":
-        reasons.append("Fullscreen and borderless presentation are not implemented in this slice")
     if request["aa"] == "8":
         reasons.append("Saved 8-sample antialiasing has no qualified native mapping")
     if reasons:
         return {"ok": False, "reasons": reasons}
     argv = [
         request["executable"], "--install", request["game_dir"], "--write-dir", request["write_dir"],
-        "--cc-vulkan-wsi", "--window", f'{request["width"]}x{request["height"]}', "--windowed",
+        "--cc-vulkan-wsi",
+        *_window_arguments(request["window_mode"], request["width"], request["height"]),
         "--cc-aa", _AA[request["aa"]], "--cc-af", str(request["af"]),
         "--cc-render-thread", "1" if request["render_thread"] else "0", "--cc-lighting", request["lighting"],
     ]
