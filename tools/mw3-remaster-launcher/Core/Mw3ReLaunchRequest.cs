@@ -38,6 +38,11 @@ public sealed record Mw3RePreviewOptions
     public string Geometry { get; init; } = "partial";
     public IReadOnlyList<string> ModelPacks { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();
+    public bool DynamicLighting { get; init; }
+    public bool Headlights { get; init; }
+    public string? HeadlightBindings { get; init; }
+    public string? StockEffectCatalog { get; init; }
+    public string? StockHeadlightCatalog { get; init; }
 }
 
 /// <summary>Project an integrity snapshot into wire data; only Python translates it into argv.</summary>
@@ -121,7 +126,12 @@ public static class Mw3ReLaunchRequest
                 ["draw_distance"] = preview.DrawDistance, ["hud"] = preview.Hud,
                 ["hud_text"] = preview.HudText, ["geometry"] = preview.Geometry,
                 ["model_packs"] = Paths(preview.ModelPacks),
-                ["environment_packs"] = Paths(preview.EnvironmentPacks)
+                ["environment_packs"] = Paths(preview.EnvironmentPacks),
+                ["dynamic_lighting"] = preview.DynamicLighting,
+                ["headlights"] = preview.Headlights,
+                ["headlight_bindings"] = preview.HeadlightBindings,
+                ["stock_effect_catalog"] = preview.StockEffectCatalog,
+                ["stock_headlight_catalog"] = preview.StockHeadlightCatalog
             }
         };
         if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };

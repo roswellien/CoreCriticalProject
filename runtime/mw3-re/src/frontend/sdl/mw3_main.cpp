@@ -310,6 +310,8 @@ void usage() {
       "    [--cc-environment-pack DIR]...\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
+      "    [--cc-dynamic-lighting 0|1] [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
+      "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
@@ -521,6 +523,28 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-sun" && next(2)) {
       a.cc_assets.sun_explicit = true;
       a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
+    } else if (s == "--cc-dynamic-lighting" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-dynamic-lighting supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.dynamic_lighting_explicit = true;
+      a.cc_assets.dynamic_lighting = value == "1";
+    } else if (s == "--cc-effect-lights" && next(1)) {
+      a.cc_assets.effect_lights = true;
+      a.cc_assets.effect_light_catalog = argv[++i];
+    } else if (s == "--cc-fixture-lights" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-fixture-lights supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.fixture_lights = value == "1";
+    } else if (s == "--cc-mech-headlights" && next(2)) {
+      a.cc_assets.mech_headlights = true;
+      a.cc_assets.stock_headlights = argv[++i];
+      a.cc_assets.headlight_bindings = argv[++i];
     } else if (s == "--cc-environment-pack" && next(1)) {
       a.cc_assets.environment_packs.push_back(argv[++i]);
     } else if (s == "--cc-model-materials" && next(3)) {

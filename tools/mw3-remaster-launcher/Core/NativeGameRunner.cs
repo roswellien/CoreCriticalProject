@@ -171,6 +171,10 @@ public sealed class NativeGameRunner
         if (reduced) log($"Scenery distance {settings.DrawDistance} is not supported; using {drawDistance}.");
         var activePacks = activeModDirs.ToList();
         var (models, environments) = SelectPreviewPacks(activePacks);
+        var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
+        Directory.CreateDirectory(writeDirectory);
+        var headlightBindings = new HeadlightBindings(_dataRoot)
+            .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
         var options = new Mw3RePlanningOptions
         {
             Width = settings.Width,
@@ -185,7 +189,12 @@ public sealed class NativeGameRunner
             {
                 DrawDistance = drawDistance,
                 ModelPacks = models,
-                EnvironmentPacks = environments
+                EnvironmentPacks = environments,
+                DynamicLighting = settings.DynamicLighting,
+                Headlights = settings.Headlights && settings.DynamicLighting,
+                HeadlightBindings = headlightBindings,
+                StockEffectCatalog = contract.FindDeclaredFile("resources/stock-effect-lights.bin"),
+                StockHeadlightCatalog = contract.FindDeclaredFile("resources/stock-headlights.bin")
             }
         };
         var request = Mw3ReLaunchRequest.Create(contract, options, validation.GameDirectory, _dataRoot, ProfileId);
@@ -197,7 +206,12 @@ public sealed class NativeGameRunner
         }
         if (plan.RootElement.TryGetProperty("skipped_packs", out var skipped))
             foreach (var item in skipped.EnumerateArray())
-                log("Pack left out: " + item.GetProperty("root").GetString() + " (" + item.GetProperty("reason").GetString() + ")");
+            {
+                var feature = item.TryGetProperty("feature", out var selectedFeature)
+                    ? selectedFeature.GetString() + " left off; " : "Pack left out; ";
+                log(feature + item.GetProperty("root").GetString() + " (" +
+                    item.GetProperty("reason").GetString() + ")");
+            }
         // Two enabled mech packs can both supply a chassis; the earlier pack in the list keeps it.
         if (plan.RootElement.TryGetProperty("overridden_models", out var overridden))
             foreach (var item in overridden.EnumerateArray())
@@ -205,8 +219,6 @@ public sealed class NativeGameRunner
                     " left out; using the one from " + item.GetProperty("kept_from").GetString());
 
         var argv = plan.RootElement.GetProperty("argv").EnumerateArray().Select(item => item.GetString()!).ToList();
-        var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
-        Directory.CreateDirectory(writeDirectory);
         // Music is optional: a broken or locked soundtrack file must not stop the game from starting.
         try
         {

@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import json
 import os
+import struct
 import unittest
 from unittest.mock import patch
 
@@ -241,6 +242,10 @@ class NativePreviewPlanTests(unittest.TestCase):
     def write(self, relative, content):
         path = os.path.join(self.root, *relative.split("/"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        if isinstance(content, bytes):
+            with open(path, "wb") as stream:
+                stream.write(content)
+            return path
         with open(path, "w", encoding="utf-8") as stream:
             stream.write(content if isinstance(content, str) else json.dumps(content))
         return path
@@ -273,6 +278,23 @@ class NativePreviewPlanTests(unittest.TestCase):
             "native_payload": {"profile": "prepared-environment-v1"}})
         return os.path.join(self.root, name)
 
+    def lighting_environment_pack(self, name="lighting"):
+        entry = struct.pack("<IIIIQ6f", 1, 1, 1, 1, 123, 1.0, 1.0, 0.5, 1.0, 1.0, 1.0)
+        effect = b"MWFX1\0\0\0" + (1).to_bytes(4, "little") + entry
+        self.write(f"{name}/environment/effects.bin", effect)
+        self.write(f"{name}/environment/environment.json", {
+            "schema_version": 2, "payload_profile": "prepared-environment-v1",
+            "operation": "training", "effects": "environment/effects.bin",
+            "banks": {"zbd/training/rtexture.zbd": "environment/bank.zbd"}})
+        self.write(f"{name}/environment/bank.zbd", "bank")
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": {
+            "environment/effects.bin": {"bytes": len(effect), "sha256": "0" * 64},
+            "environment/environment.json": {"bytes": 1, "sha256": "1" * 64},
+            "environment/bank.zbd": {"bytes": 4, "sha256": "2" * 64}},
+            "native_payload": {"profile": "prepared-environment-v1",
+                               "registry": "environment/environment.json"}})
+        return os.path.join(self.root, name)
+
     def request(self, **preview):
         return {
             "schema_version": 4, "engine": "mw3-re", "runtime_root": "C:/Runtime",
@@ -294,7 +316,8 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
         self.assertEqual(result["argv"][17:], [
-            "--cc-pom", "1", "--cc-draw-distance", "1200", "--cc-hud", "core-critical", "--cc-hud-text", "1",
+            "--cc-dynamic-lighting", "0", "--cc-pom", "1", "--cc-draw-distance", "1200",
+            "--cc-hud", "core-critical", "--cc-hud-text", "1",
             "--cc-geometry", "partial",
             "--cc-model", "strider", "0", payload("mesh0"), payload("tex0"),
             "--cc-model-normals", "strider", "0", payload("nrm0"),
@@ -400,6 +423,91 @@ class NativePreviewPlanTests(unittest.TestCase):
         plan_json = importlib.import_module("mw3_re_launch").plan_json
         result = plan_json(json.dumps(self.request(draw_distance=1600)))
         self.assertEqual(result["argv"][result["argv"].index("--cc-draw-distance") + 1], "1600")
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_dynamic_lighting_uses_enabled_pack_catalog_and_headlight_inputs(self):
+        from pathlib import Path
+        environment = self.lighting_environment_pack()
+        runtime = Path(self.root, "runtime")
+        resources = runtime / "resources"
+        resources.mkdir(parents=True)
+        stock_headlight_catalog = (
+            b"MWHDLT1\0" + struct.pack("<III", 1, 0, 0) + struct.pack("<I", 64) +
+            b"0" * 64 + struct.pack("<II", 0, 0) + b"\x01" + bytes(31) + struct.pack("<I", 0)
+        )
+        (resources / "stock-headlights.bin").write_bytes(stock_headlight_catalog)
+        bindings = Path(self.root, "headlights.txt")
+        bindings.write_text("CC_MW3_HEADLIGHTS_V1\n42 -1\n", encoding="ascii")
+        request = self.request(environment_packs=[environment], dynamic_lighting=True,
+                               headlights=True, headlight_bindings=str(bindings),
+                               stock_headlight_catalog=str(resources / "stock-headlights.bin"))
+        request["runtime_root"] = str(runtime)
+        request["executable"] = str(runtime / "bin" / "mw3.exe")
+        result = self.plan(request)
+        self.assertTrue(result["ok"])
+        argv = result["argv"]
+        catalog = str(Path(environment, "environment", "effects.bin"))
+        self.assertEqual(argv[argv.index("--cc-dynamic-lighting") + 1], "1")
+        self.assertEqual(argv[argv.index("--cc-effect-lights") + 1], catalog)
+        self.assertEqual(argv[argv.index("--cc-fixture-lights") + 1], "1")
+        self.assertEqual(argv[argv.index("--cc-mech-headlights") + 1:][:2],
+                         [str(resources / "stock-headlights.bin"), str(bindings)])
+        self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_missing_catalogs_are_reported_and_optional_lights_stay_off(self):
+        request = self.request(dynamic_lighting=True, headlights=True,
+                               headlight_bindings="C:/Data/headlights.txt")
+        result = self.plan(request)
+        argv = result["argv"]
+        self.assertEqual(argv[argv.index("--cc-dynamic-lighting") + 1], "1")
+        self.assertNotIn("--cc-effect-lights", argv)
+        self.assertNotIn("--cc-fixture-lights", argv)
+        self.assertNotIn("--cc-mech-headlights", argv)
+        self.assertEqual({item["feature"] for item in result["skipped_packs"]},
+                         {"effect_lights", "fixture_lights", "mech_headlights"})
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_missing_declared_effect_catalog_is_reported_as_skipped(self):
+        from pathlib import Path
+        environment = self.lighting_environment_pack()
+        (Path(environment) / "environment" / "effects.bin").unlink()
+        result = self.plan(self.request(environment_packs=[environment],
+                                        dynamic_lighting=True))
+        self.assertTrue(result["ok"])
+        self.assertIn("--cc-environment-pack", result["argv"])
+        self.assertNotIn("--cc-effect-lights", result["argv"])
+        skipped = [item for item in result["skipped_packs"]
+                   if item.get("feature") == "effect_lights"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["root"], environment)
+        self.assertIn("unavailable", skipped[0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "runtime catalog paths are Windows paths")
+    def test_stock_effect_catalog_fallback_must_be_declared_under_runtime(self):
+        from pathlib import Path
+        runtime = Path(self.root, "runtime")
+        resources = runtime / "resources"
+        resources.mkdir(parents=True)
+        entry = struct.pack("<IIIIQ6f", 1, 1, 1, 1, 456, 1.0, 1.0, 0.5, 1.0, 0.5, 0.25)
+        catalog = resources / "stock-effect-lights.bin"
+        catalog.write_bytes(b"MWFX1\0\0\0" + (1).to_bytes(4, "little") + entry)
+        request = self.request(dynamic_lighting=True, stock_effect_catalog=str(catalog))
+        request["runtime_root"] = str(runtime)
+        request["executable"] = str(runtime / "bin" / "mw3.exe")
+        result = self.plan(request)
+        selected_catalog = result["argv"][result["argv"].index("--cc-effect-lights") + 1]
+        self.assertEqual(selected_catalog, str(catalog))
+        self.assertEqual(result["skipped_packs"], [])
+        with self.assertRaisesRegex(ValueError, "leaves the runtime root"):
+            self.plan(self.request(
+                dynamic_lighting=True,
+                stock_effect_catalog="C:/Outside/catalog.bin",
+            ))
+
+    def test_headlights_cannot_be_selected_without_dynamic_lighting(self):
+        with self.assertRaisesRegex(ValueError, "require dynamic lighting"):
+            self.plan(self.request(headlights=True))
 
 
 if __name__ == "__main__":

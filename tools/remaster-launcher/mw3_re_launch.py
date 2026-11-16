@@ -1,7 +1,7 @@
 """MW3-RE argv planning; lexical validation is not package/execution admission.
 
 Schemas 2 and 3 are pure. Schema 4 (the labelled Native preview) also reads the pack manifests
-it is given, read-only, to turn installed model and map packs into game arguments.
+and bounded lighting-catalog headers it is given, read-only, to turn installed packs into arguments.
 """
 
 from pathlib import Path, PureWindowsPath
@@ -16,11 +16,15 @@ _FIELDS = frozenset({
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
-# Pack manifests and model registries are small JSON files; payloads themselves are never read.
+# Pack manifests and model registries are small JSON files. Lighting catalogs are read only
+# far enough to validate their bounded format headers and exact MWFX1 record size.
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
-_PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs", "environment_packs"})
+_PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
+                             "environment_packs", "dynamic_lighting", "headlights",
+                             "headlight_bindings", "stock_effect_catalog",
+                             "stock_headlight_catalog"})
 # 800 is the original game's scenery range; the preview runtime also accepts 1200 and 1600.
 _PREVIEW_DRAW_DISTANCES = (800, 1200, 1600)
 _PREVIEW_HUDS = ("original", "core-critical")
@@ -237,12 +241,75 @@ def _environment_pack_skip_reason(root):
     return None
 
 
+def _effect_catalog(root):
+    """Resolve and validate the prepared environment pack's optional MWFX1 catalog."""
+    manifest, payload = _pack_payload(root, "prepared-environment-v1")
+    if payload.get("registry") != "environment/environment.json":
+        return None, "environment pack has no supported lighting registry"
+    registry_path = _pack_member(root, payload["registry"])
+    registry = _read_pack_json(registry_path)
+    member = registry.get("effects") if type(registry) is dict else None
+    files = manifest.get("files")
+    if type(member) is not str or type(files) is not dict or member not in files:
+        return None, "environment pack has no declared effect-light catalog"
+    try:
+        path = _pack_member(root, member)
+        size = Path(path).stat().st_size
+        if size < 12 or size > 12 + 48 * 8192:
+            return None, "effect-light catalog has an invalid size"
+        with open(path, "rb") as stream:
+            header = stream.read(12)
+    except (OSError, ValueError) as error:
+        return None, f"effect-light catalog is unavailable: {error}"
+    if len(header) != 12 or header[:8] != b"MWFX1\0\0\0":
+        return None, "effect-light catalog has an invalid MWFX1 header"
+    count = int.from_bytes(header[8:12], "little")
+    if not 0 < count <= 8192 or size != 12 + 48 * count:
+        return None, "effect-light catalog has an invalid entry count or size"
+    return path, None
+
+
+def _stock_effect_catalog(path):
+    if not path or not Path(path).is_file():
+        return None
+    path = Path(path)
+    size = path.stat().st_size
+    if size < 12 or size > 12 + 48 * 8192:
+        return None
+    with path.open("rb") as stream:
+        header = stream.read(12)
+    if header[:8] != b"MWFX1\0\0\0":
+        return None
+    count = int.from_bytes(header[8:12], "little")
+    return str(path) if 0 < count <= 8192 and size == 12 + 48 * count else None
+
+
+def _stock_headlight_catalog_available(path):
+    if not path.is_file() or path.stat().st_size < 12:
+        return False
+    with path.open("rb") as stream:
+        header = stream.read(12)
+    count = int.from_bytes(header[8:12], "little")
+    return header[:8] == b"MWHDLT1\0" and 0 < count <= 18
+
+
 def _preview_choices(preview):
     """Validate the schema-4 preview object and return its choices with defaults."""
     if type(preview) is not dict or not set(preview).issubset(_PREVIEW_FIELDS):
         raise ValueError("Invalid native preview fields")
-    choices = {"draw_distance": 800, "hud": None, "hud_text": None, "geometry": None,
-               "model_packs": [], "environment_packs": []}
+    choices = {
+        "draw_distance": 800,
+        "hud": None,
+        "hud_text": None,
+        "geometry": None,
+        "model_packs": [],
+        "environment_packs": [],
+        "dynamic_lighting": False,
+        "headlights": False,
+        "headlight_bindings": None,
+        "stock_effect_catalog": None,
+        "stock_headlight_catalog": None,
+    }
     choices.update(preview)
     distance = choices["draw_distance"]
     if type(distance) is not int or distance not in _PREVIEW_DRAW_DISTANCES:
@@ -260,6 +327,14 @@ def _preview_choices(preview):
         packs = choices[field]
         if type(packs) is not list or len(packs) > _MAX_PREVIEW_PACKS:
             raise ValueError(f"Invalid native preview {field}")
+    for field in ("dynamic_lighting", "headlights"):
+        if type(choices[field]) is not bool:
+            raise ValueError(f"Native preview {field} selection must be Boolean")
+    if choices["headlights"] and not choices["dynamic_lighting"]:
+        raise ValueError("Native headlights require dynamic lighting")
+    for field in ("headlight_bindings", "stock_effect_catalog", "stock_headlight_catalog"):
+        if choices[field] is not None:
+            _windows_path(choices[field], directory=False)
     return choices
 
 
@@ -321,6 +396,12 @@ def plan_launch(request):
         _windows_path(asset)
     if executable == runtime or not executable.is_relative_to(runtime):
         raise ValueError("Native executable leaves the runtime root")
+    if preview is not None:
+        for field in ("stock_effect_catalog", "stock_headlight_catalog"):
+            resource = preview[field]
+            if (resource is not None and
+                    not _windows_path(resource, directory=False).is_relative_to(runtime)):
+                raise ValueError(f"Native preview {field} leaves the runtime root")
     for protected in (runtime, game):
         if write.is_relative_to(protected) or protected.is_relative_to(write):
             raise ValueError("Native write root overlaps a read-only input root")
@@ -341,6 +422,8 @@ def plan_launch(request):
         "--cc-aa", _AA[request["aa"]], "--cc-af", str(request["af"]),
         "--cc-render-thread", "1" if request["render_thread"] else "0", "--cc-lighting", request["lighting"],
     ]
+    if preview is not None:
+        argv.extend(("--cc-dynamic-lighting", "1" if preview["dynamic_lighting"] else "0"))
     if pom:
         argv.extend(("--cc-pom", "1"))
     skipped = []
@@ -360,12 +443,52 @@ def plan_launch(request):
             arguments, overridden = _model_pack_arguments(pack, supplied_chassis)
             argv.extend(arguments)
             overridden_models.extend({"root": pack, **item} for item in overridden)
+        effect_catalog = None
+        effect_catalog_problem = None
         for pack in preview["environment_packs"]:
             reason = _environment_pack_skip_reason(pack)
             if reason is None:
                 argv.extend(("--cc-environment-pack", pack))
+                if preview["dynamic_lighting"] and effect_catalog is None:
+                    effect_catalog, effect_reason = _effect_catalog(pack)
+                    if effect_reason and effect_catalog_problem is None:
+                        effect_catalog_problem = {"root": pack, "feature": "effect_lights",
+                                                  "reason": effect_reason}
             else:
                 skipped.append({"root": pack, "reason": reason})
+        if preview["dynamic_lighting"]:
+            if effect_catalog is None:
+                effect_catalog = _stock_effect_catalog(preview["stock_effect_catalog"])
+            if effect_catalog is not None:
+                argv.extend(("--cc-effect-lights", effect_catalog, "--cc-fixture-lights", "1"))
+            else:
+                skipped.append(effect_catalog_problem or {
+                    "root": str(runtime), "feature": "effect_lights",
+                    "reason": "no valid effect-light catalog is installed"})
+                skipped.append({"root": str(runtime), "feature": "fixture_lights",
+                                "reason": "fixture lights require an enabled effect-light catalog"})
+            if preview["headlights"]:
+                stock_headlight_path = preview["stock_headlight_catalog"]
+                stock_headlights = Path(stock_headlight_path) if stock_headlight_path else None
+                binding_path = preview["headlight_bindings"]
+                if effect_catalog is None:
+                    skipped.append({"root": str(runtime), "feature": "mech_headlights",
+                                    "reason": "headlights require an enabled effect-light catalog"})
+                elif (stock_headlights is None or
+                      not _stock_headlight_catalog_available(stock_headlights)):
+                    skipped.append({
+                        "root": stock_headlight_path or str(runtime),
+                        "feature": "mech_headlights",
+                        "reason": "stock headlight catalog is missing or invalid",
+                    })
+                elif not binding_path or not Path(binding_path).is_file():
+                    skipped.append({
+                        "root": binding_path or str(runtime),
+                        "feature": "mech_headlights",
+                        "reason": "headlight toggle binding is missing",
+                    })
+                else:
+                    argv.extend(("--cc-mech-headlights", str(stock_headlights), binding_path))
     for asset in request["assets"]:
         argv.extend(("--assets", asset))
     result = {"ok": True, "argv": argv, "working_directory": str(executable.parent)}

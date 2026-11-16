@@ -39,18 +39,22 @@ public sealed class HeadlightBindings(string dataRoot)
         binding.Validate();
         ControlProfiles.AtomicWrite(Store, JsonSerializer.Serialize(binding, new JsonSerializerOptions { WriteIndented = true }));
     }
+    public string? WriteNativeBinding(string session, bool enabled)
+    {
+        if (!enabled) return null;
+        var binding = Load();
+        if (binding.Key == 0 && binding.Button < 0) return null;
+        var path = Path.Combine(session, "mw3-headlights.txt");
+        ControlProfiles.AtomicWrite(path, "CC_MW3_HEADLIGHTS_V1\n" +
+            binding.Key.ToString(CultureInfo.InvariantCulture) + " " +
+            binding.Button.ToString(CultureInfo.InvariantCulture) + "\n");
+        return PackStorage.CanonicalFilePath(path);
+    }
     public void PrepareLaunch(JsonObject launch, string session, bool enabled)
     {
         var native = launch["native"]!.AsObject();
         native["runtime_environment"] ??= new JsonObject();
         var environment = native["runtime_environment"]!.AsObject();
-        environment["MW34_HEADLIGHT_BINDINGS"] = "";
-        if (!enabled) return;
-        var binding = Load();
-        var path = Path.Combine(session, "mw3-headlights.txt");
-        ControlProfiles.AtomicWrite(path, "CC_MW3_HEADLIGHTS_V1\n" +
-            binding.Key.ToString(CultureInfo.InvariantCulture) + " " +
-            binding.Button.ToString(CultureInfo.InvariantCulture) + "\n");
-        environment["MW34_HEADLIGHT_BINDINGS"] = PackStorage.CanonicalFilePath(path);
+        environment["MW34_HEADLIGHT_BINDINGS"] = WriteNativeBinding(session, enabled) ?? "";
     }
 }

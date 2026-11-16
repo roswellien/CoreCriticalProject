@@ -12,8 +12,9 @@ struct Settings {
   float strength{1}, night_gain{1}, fixture_range_scale{1};
 };
 
-inline Settings from_config(const cc_mw3_re::RendererBridgeConfig &cfg,
-                            bool sun_enabled) {
+inline Settings settings(const cc_mw3_re::RendererBridgeConfig &cfg,
+                         bool sun_enabled) {
+  // sun_enabled is the active sun pipeline state, including mission policy.
   Settings v;
   v.enabled = cfg.effect_lights;
   v.fixtures = cfg.fixture_lights;
@@ -31,13 +32,8 @@ inline Settings from_config(const cc_mw3_re::RendererBridgeConfig &cfg,
   v.fixture_fade_distance = 32;
   v.night_gain = 1;
   if ((v.enabled || v.night_gain != 1) && !sun_enabled)
-    throw std::runtime_error("Effect/night lighting requires MW34_SUN=1");
+    throw std::runtime_error("Effect/night lighting requires enabled sun lighting");
   return v;
 }
 
-inline const Settings &settings() {
-  static const Settings s =
-      from_config(cc_mw3_re::RendererBridgeConfig{}, false);
-  return s;
-}
 } // namespace mw34::effects
