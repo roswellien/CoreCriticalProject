@@ -58,6 +58,7 @@ class PreparedModels {
   private:
     struct Model {
         std::string source_asset;
+        bool distance_lod{};
         ::platform::prepared::Mesh mesh;
         ::platform::prepared::Textures textures;
         ::platform::prepared::Normals normals;

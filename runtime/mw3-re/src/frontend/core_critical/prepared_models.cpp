@@ -92,13 +92,24 @@ Hierarchy hierarchy(const Node *root) {
     return output;
 }
 
-void require_source(const Node &root, const std::string &name) {
+std::runtime_error binding_error(const Node &root, const std::string &name, size_t index,
+                                 const char *field, const std::string &reason) {
+    // Build context only on failure; ordinary draws keep the existing bounded name lookups.
+    const auto role = field ? "batch " + std::to_string(index) + "." + field
+                            : "donor reference " + std::to_string(index);
+    return std::runtime_error("Prepared source " + root.source_asset->name + " [" + role +
+                              "]: " + name + " (" + reason + ")");
+}
+
+void require_batch_source(const Node &root, const std::string &name, size_t index,
+                          const char *field) {
     if (name.empty())
         return;
     const auto found = root.source_asset->nodes.find(name);
-    if (found == root.source_asset->nodes.end() || found->second != 1)
-        throw std::runtime_error("Prepared binding names a missing or ambiguous source control: " +
-                                 name);
+    if (found == root.source_asset->nodes.end())
+        throw binding_error(root, name, index, field, "absent");
+    if (found->second != 1)
+        throw binding_error(root, name, index, field, "count " + std::to_string(found->second));
 }
 
 Matrix placed(const Matrix &root, const Poses &poses, const Batch &batch) {
@@ -244,6 +255,7 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
             (binding.lod != "0" && binding.lod != "1"))
             throw std::runtime_error("--cc-model requires a lowercase chassis ID and LOD 0 or 1");
         Model model;
+        model.distance_lod = (binding.lod == "1");
         model.source_asset = "mech_" + binding.chassis + (binding.lod == "1" ? "_1.flt" : ".flt");
         if (!selected.insert(model.source_asset).second)
             throw std::runtime_error("Duplicate prepared model selection");
@@ -386,13 +398,51 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     const auto *root = source_root(node);
     if (!root)
         return output; // a detached part retains the ordinary native geometry
-    for (const auto &batch : selected->mesh.batches) {
-        for (const auto *name : {&batch.owner, &batch.visibility, &batch.placement_frame,
-                                 &batch.joint_frame, &batch.anchor_control})
-            require_source(*root, *name);
+    for (size_t b = 0; b < selected->mesh.batches.size(); ++b) {
+        const auto &batch = selected->mesh.batches[b];
+        require_batch_source(*root, batch.owner, b, "owner");
+        require_batch_source(*root, batch.visibility, b, "visibility");
+        require_batch_source(*root, batch.placement_frame, b, "placement_frame");
+        require_batch_source(*root, batch.joint_frame, b, "joint_frame");
+        require_batch_source(*root, batch.anchor_control, b, "anchor_control");
     }
-    for (const auto &reference : selected->mesh.rig.references)
-        require_source(*root, reference.name);
+    const auto &references = selected->mesh.rig.references;
+    for (size_t r = 0; r < references.size(); ++r) {
+        const auto &name = references[r].name;
+        const auto &nodes = root->source_asset->nodes;
+        const auto found = nodes.find(name);
+        if (found != nodes.end()) {
+            if (found->second != 1)
+                throw binding_error(*root, name, r, nullptr,
+                                    "count " + std::to_string(found->second));
+            continue; // Canonical-present detached controls retain the existing solver behavior.
+        }
+        const bool toe = name == "ltoe01" || name == "ltoe02" || name == "ltoe03" ||
+                         name == "rtoe01" || name == "rtoe02" || name == "rtoe03";
+        if (selected->mesh.version != 4 || !selected->distance_lod || !toe)
+            throw binding_error(*root, name, r, nullptr, "absent");
+
+        // Original distance trees omit these donor-only toes. Mandatory fields above
+        // already reject any batch using an absent toe; only visual solver references
+        // can reach this exception. Do not infer LOD from the source name spelling.
+        const char *foot = name.front() == 'l' ? "lfoot" : "rfoot";
+        for (const char *anchor : {foot, "torso"}) {
+            const auto canonical = nodes.find(anchor);
+            if (canonical == nodes.end())
+                throw binding_error(*root, name, r, nullptr,
+                                    std::string("dependency ") + anchor + " absent");
+            if (canonical->second != 1)
+                throw binding_error(*root, name, r, nullptr,
+                                    std::string("dependency ") + anchor + " count " +
+                                        std::to_string(canonical->second));
+            bool rest_found = false;
+            for (const auto &reference : references)
+                rest_found |= reference.name == anchor;
+            if (!rest_found)
+                throw binding_error(*root, name, r, nullptr,
+                                    std::string("dependency ") + anchor + " rest absent");
+        }
+    }
     const auto live = hierarchy(root);
     const auto inverse_node = math::inverse(live.nodes.at(node));
     const auto root_camera = math::product(from_native(context.model_to_camera), inverse_node);
