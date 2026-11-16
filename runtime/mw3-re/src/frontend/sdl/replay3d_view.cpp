@@ -316,7 +316,15 @@ Replay3dView::Replay3dView(const mech3::replay::ReplayRun& run, FrameRenderer* r
       st.follow_id = -1;
     });
   };
-  s.actions.follow = [this](int id) { s_->next_frame.push_back([this, id] { s_->follow_id = id; }); };
+  // As a click on the mech: followed and selected (its panel and lines).
+  s.actions.follow = [this](int id) {
+    s_->next_frame.push_back([this, id] {
+      State& st = *s_;
+      st.follow_id = id, st.selected = -1;
+      for (size_t i = 0; i < st.frame.mechs.size(); ++i)
+        if (st.frame.mechs[i].id == id) st.selected = static_cast<int>(i);
+    });
+  };
   s.draw.open_text();
 }
 
@@ -632,10 +640,11 @@ void Replay3dView::draw_overlay() {
       s.draw.text(std::to_string(m.id), label.x - 4, label.y - 8);
       const size_t index = static_cast<size_t>(&m - s.frame.mechs.data());
       if (s.overlays.on[kReasons] && m.standing && !s.frame.last_decision[index].code.empty())
-        s.draw.text(s.frame.last_decision[index].code, label.x + 8, label.y - 8, {255, 230, 140, 255});
+        s.draw.text(reason_short(s.frame.last_decision[index].code), label.x + 8, label.y - 8, {255, 230, 140, 255});
     }
   }
-  draw_overlays(s.frame, s.overlays, s.draw, s.projector);
+  draw_overlays(s.frame, s.overlays, s.selected, s.draw, s.projector);
+  draw_legend(s.overlays, s.draw);
   draw_panel(*s.log, s.frame, s.selected, s.screen_w, s.draw);
   draw_bar(s.clock, s.overlays, s.screen_w, s.screen_h, s.draw);
   if (s.quit_box_open) s.draw.text("paused: the quit box is open", 8, 8);
@@ -707,6 +716,9 @@ bool Replay3dView::handle(const SDL_Event& e) {
         case SDLK_PERIOD: case SDLK_GREATER: s.clock.faster(); return true;
         case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5:
           s.overlays.toggle(static_cast<int>(e.key.key - SDLK_1));
+          return true;
+        case SDLK_H:
+          s.overlays.legend = !s.overlays.legend;
           return true;
         case SDLK_F12: {
           char name[64];

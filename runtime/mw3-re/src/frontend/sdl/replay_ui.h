@@ -74,12 +74,25 @@ float frame_elapsed(uint64_t* last_ns, bool scripted);
 enum Overlay { kRoute, kTarget, kGoal, kContacts, kReasons, kOverlays };
 struct Overlays {
   bool on[kOverlays] = {true, true, true, true, true};
+  bool legend = true;  // H: the colors' key
   void toggle(int index) { on[index] = !on[index]; }
 };
 
-// Route, goal, contacts and target lines for every standing mech.
-void draw_overlays(const mech3::replay::Frame& frame, const Overlays& overlays, ReplayDraw& draw,
+// The AI's lines. With no mech selected, every standing mech's target line
+// (who shoots whom) and nothing else, so a crowd stays readable; with one
+// selected (`selected`, its index in the frame), that mech's route, goal,
+// radar contacts and target, and the other mechs' target lines faint.
+void draw_overlays(const mech3::replay::Frame& frame, const Overlays& overlays, int selected, ReplayDraw& draw,
                    const Projector& projector);
+
+// A decision reason code from the log (docs/arena.md, "What the replay
+// viewers read") in a few plain words, for the labels: "chasing".
+std::string reason_short(const std::string& code);
+// The same as a sentence, for the panel: "chasing an enemy its radar sees".
+std::string reason_sentence(const std::string& code);
+
+// The key to the overlays' colors at the top left, when overlays.legend is on.
+void draw_legend(const Overlays& overlays, ReplayDraw& draw);
 
 // The selected mech's panel at the top right; `selected` is its index in the
 // frame, -1 for none.

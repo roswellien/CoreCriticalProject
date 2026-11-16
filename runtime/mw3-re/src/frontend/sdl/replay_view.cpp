@@ -123,7 +123,7 @@ void draw_world(Viewer& v, const Frame& frame, SdlRendererDraw& paint) {
     c.a = 0.45f;
     for (size_t k = 1; k < trail.size(); ++k) paint.line(cam.to_screen(trail[k - 1]), cam.to_screen(trail[k]), c);
   }
-  draw_overlays(frame, v.overlays, paint, cam);
+  draw_overlays(frame, v.overlays, v.selected, paint, cam);
   for (const auto& beam : frame.beams)
     paint.line(cam.to_screen(beam.from), cam.to_screen(beam.to), ui_color(120, 255, 255));
   for (const auto& round : frame.rounds) paint.circle(cam.to_screen(round.pos), 1.5f, ui_color(255, 240, 200));
@@ -152,7 +152,7 @@ void draw_world(Viewer& v, const Frame& frame, SdlRendererDraw& paint) {
     if (static_cast<int>(i) == v.selected) paint.outline({at.x - 10, at.y - 10, 20, 20}, ui_color(255, 255, 255));
     paint.text(std::to_string(m.id), at.x + 8, at.y - 18);
     if (v.overlays.on[kReasons] && m.standing && !frame.last_decision[i].code.empty())
-      paint.text(frame.last_decision[i].code, at.x + 8, at.y + 4, {255, 230, 140, 255});
+      paint.text(reason_short(frame.last_decision[i].code), at.x + 8, at.y + 4, {255, 230, 140, 255});
   }
 }
 
@@ -188,6 +188,9 @@ bool handle(Viewer& v, const SDL_Event& e, const Frame& frame) {
         case SDLK_PERIOD: case SDLK_GREATER: v.clock.faster(); break;
         case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5:
           v.overlays.toggle(static_cast<int>(e.key.key - SDLK_1));
+          break;
+        case SDLK_H:
+          v.overlays.legend = !v.overlays.legend;
           break;
         default: break;
       }
@@ -292,6 +295,7 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
         paint.rect({0, 0, v.camera.width, 24}, ui_color(120, 30, 30, 220));
         paint.text("no terrain: " + v.terrain.error, 8, 4);
       }
+      draw_legend(v.overlays, paint);
       draw_panel(log, frame, v.selected, v.camera.width, paint);
       draw_bar(v.clock, v.overlays, v.camera.width, v.camera.height, paint);
       if (scripted && !script.run(actions)) open = false, script_failed = true;

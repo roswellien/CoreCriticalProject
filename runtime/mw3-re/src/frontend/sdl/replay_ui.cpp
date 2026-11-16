@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 
 #include "gamez/zutil/zutl_path.h"
@@ -84,12 +85,93 @@ float frame_elapsed(uint64_t* last_ns, bool scripted) {
 
 // --- Overlays, panel and bar ---------------------------------------------
 
-void draw_overlays(const Frame& frame, const Overlays& overlays, ReplayDraw& draw, const Projector& projector) {
+namespace {
+// The overlays' colors, shared by the lines and the legend.
+const SDL_FColor kRouteColor = ui_color(255, 230, 90, 200);
+const SDL_FColor kTargetColor = ui_color(255, 150, 40, 230);
+const SDL_FColor kTargetFaint = ui_color(255, 150, 40, 90);
+const SDL_FColor kGoalColor = ui_color(255, 255, 255, 220);
+const SDL_FColor kContactColor = ui_color(150, 255, 150, 160);
+
+// The game's part ids (mech_names.cpp, part_name) as a player says them.
+const char* part_label(int id) {
+  static const char* const kLabels[] = {"center torso", "left arm",   "right arm",  "left thigh", "right thigh",
+                                        "head",         "left torso", "right torso", "left hand", "right hand",
+                                        "left calf",    "right calf", "left foot",  "right foot", "hip"};
+  return id >= 1 && id <= 15 ? kLabels[id - 1] : "part";
+}
+
+float distance(const Vec3& a, const Vec3& b) {
+  const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+}  // namespace
+
+std::string reason_short(const std::string& code) {
+  if (code == "hunt_contact") return "chasing";
+  if (code == "hunt_last_seen") return "searching";
+  if (code == "hunt_fallback") return "roaming";
+  if (code == "engage") return "fighting";
+  if (code == "target_volley") return "new target";
+  if (code == "target_lost") return "lost target";
+  if (code == "order_other" || code == "target_other") return "other";
+  return code;
+}
+
+std::string reason_sentence(const std::string& code) {
+  if (code == "hunt_contact") return "chasing an enemy its radar sees";
+  if (code == "hunt_last_seen") return "going to where it last saw an enemy";
+  if (code == "hunt_fallback") return "no enemy known: heading for the map's middle";
+  if (code == "engage") return "close enough: the game's own combat AI fights";
+  if (code == "target_volley") return "picked the target its weapons scored best";
+  if (code == "target_lost") return "its target left the radar";
+  if (code == "order_other") return "changed orders for a reason not logged";
+  if (code == "target_other") return "changed target for a reason not logged";
+  return code.empty() ? "no decision yet" : code;
+}
+
+void draw_legend(const Overlays& overlays, ReplayDraw& draw) {
+  if (!overlays.legend) return;
+  struct Row {
+    int overlay;
+    SDL_FColor color;
+    const char* text;
+  };
+  const Row rows[] = {
+      {kTarget, kTargetColor, "2 target: who it shoots at"},
+      {kRoute, kRouteColor, "1 route: its planned path (big dot: next)"},
+      {kGoal, kGoalColor, "3 goal: where it is going (X)"},
+      {kContacts, kContactColor, "4 radar: solid sees now, dashed remembers"},
+      {kReasons, ui_color(255, 230, 140), "5 reason: why it last changed course"},
+  };
+  const float x = 10, y = 10, line_h = 17, w = 330;
+  const float h = 12 + line_h * (std::size(rows) + 2);
+  draw.rect({x, y, w, h}, ui_color(0, 0, 0, 170));
+  for (size_t i = 0; i < std::size(rows); ++i) {
+    const float row_y = y + 6 + line_h * i;
+    const SDL_FColor c = overlays.on[rows[i].overlay] ? rows[i].color : ui_color(120, 120, 120);
+    draw.rect({x + 8, row_y + 6, 14, 3}, c);
+    draw.text(rows[i].text, x + 28, row_y, overlays.on[rows[i].overlay] ? SDL_Color{235, 235, 235, 255}
+                                                                        : SDL_Color{130, 130, 130, 255});
+  }
+  draw.text("Click a mech for its full picture", x + 8, y + 6 + line_h * std::size(rows));
+  draw.text("H hides this key", x + 8, y + 6 + line_h * (std::size(rows) + 1), {170, 170, 170, 255});
+}
+
+void draw_overlays(const Frame& frame, const Overlays& overlays, int selected, ReplayDraw& draw,
+                   const Projector& projector) {
   const auto screen = [&](const Vec3& v, SDL_FPoint* out) { return projector.to_screen(v, out); };
   for (size_t i = 0; i < frame.mechs.size(); ++i) {
     const MechPose& m = frame.mechs[i];
     SDL_FPoint at;
     if (!m.standing || !screen(m.pos, &at)) continue;
+    const bool focused = static_cast<int>(i) == selected;
+    // Who shoots whom: every mech's line, faint behind a selected mech's.
+    SDL_FPoint p;
+    if (overlays.on[kTarget] && m.target >= 0)
+      if (const MechPose* target = pose_of(frame, m.target); target && screen(target->pos, &p))
+        draw.line(at, p, selected < 0 || focused ? kTargetColor : kTargetFaint);
+    if (!focused) continue;  // the rest is the selected mech's alone
     if (overlays.on[kRoute] && !frame.routes[i].points.empty()) {
       // The legs already walked dim, the waypoint it is heading for ringed,
       // the rest from the mech on.
@@ -104,26 +186,21 @@ void draw_overlays(const Frame& frame, const Overlays& overlays, ReplayDraw& dra
       for (size_t k = at_point; k < points.size(); ++k) {
         SDL_FPoint p;
         const bool ok = screen(points[k], &p);
-        if (ok && prev_ok) draw.line(prev, p, ui_color(255, 230, 90, 200));
-        if (ok) draw.circle(p, k == at_point ? 5.0f : 2.5f, ui_color(255, 230, 90, k == at_point ? 255 : 200));
+        if (ok && prev_ok) draw.line(prev, p, kRouteColor);
+        if (ok) draw.circle(p, k == at_point ? 5.0f : 2.5f, kRouteColor);
         prev = p, prev_ok = ok;
       }
     }
-    SDL_FPoint p;
     if (overlays.on[kGoal] && m.has_goal && screen(m.goal, &p)) {
       draw.dashed(at, p, ui_color(255, 255, 255, 110), 4.0f);
-      draw.cross(p, 5, ui_color(255, 255, 255, 220));
+      draw.cross(p, 7, kGoalColor);
     }
     if (overlays.on[kContacts])
       for (const auto& contact : m.contacts)
         if (const MechPose* other = pose_of(frame, contact.id); other && screen(other->pos, &p)) {
-          const SDL_FColor c = ui_color(150, 255, 150, 120);
-          if (contact.seen) draw.line(at, p, c);
-          else draw.dashed(at, p, c);
+          if (contact.seen) draw.line(at, p, kContactColor);
+          else draw.dashed(at, p, kContactColor);
         }
-    if (overlays.on[kTarget] && m.target >= 0)
-      if (const MechPose* target = pose_of(frame, m.target); target && screen(target->pos, &p))
-        draw.line(at, p, ui_color(255, 150, 40, 230));
   }
 }
 
@@ -131,24 +208,56 @@ void draw_panel(const ReplayLog& log, const Frame& frame, int selected, float sc
   if (selected < 0 || selected >= static_cast<int>(frame.mechs.size())) return;
   const MechPose& m = frame.mechs[selected];
   const mech3::replay::MechInfo* info = log.info_of(m.id);
+  const auto name_of = [&](int id) {
+    const mech3::replay::MechInfo* other = log.info_of(id);
+    return std::to_string(id) + (other ? " (" + other->chassis + ")" : std::string());
+  };
   std::vector<std::string> lines;
-  lines.push_back("mech " + std::to_string(m.id) + "  " + (info ? info->chassis : std::string("?")) + "  side " +
-                  (!info ? "?" : info->side == 0 ? "A" : "B"));
-  lines.push_back(m.standing ? "standing" : "destroyed");
-  char buf[96];
-  std::snprintf(buf, sizeof buf, "heat %.0f", m.heat);
-  lines.push_back(buf);
-  lines.push_back("target " + (m.target >= 0 ? std::to_string(m.target) : std::string("none")));
-  lines.push_back("order " + (m.order.empty() ? std::string("none") : m.order));
+  char buf[128];
+  lines.push_back("Mech " + std::to_string(m.id) + ", " + (info ? info->chassis : std::string("?")) + ", side " +
+                  (!info ? "?" : info->side == 0 ? "A (blue)" : "B (red)") + (m.standing ? "" : ": destroyed"));
+  // What it is doing and why, in the order a reader asks.
+  const char* doing = m.order == "hunt"    ? "hunting (the arena's own order)"
+                      : m.order == "fight" ? "fighting (the game's own combat AI)"
+                      : m.order.empty()    ? "nothing (no AI)"
+                                           : "another stock order";
+  lines.push_back(std::string("Doing: ") + doing);
   const auto& decision = frame.last_decision[selected];
-  lines.push_back("last reason " +
-                  (decision.code.empty() ? std::string("none") : decision.code + " at " + clock_text(decision.t)));
-  for (const auto& part : m.parts) {
-    std::snprintf(buf, sizeof buf, "part %d  armor %.2f  internal %.2f%s", part.id, part.armor, part.internal,
-                  part.destroyed ? "  destroyed" : "");
+  lines.push_back("Why: " + reason_sentence(decision.code) +
+                  (decision.code.empty() ? std::string() : " (at " + clock_text(decision.t) + ")"));
+  if (const MechPose* target = m.target >= 0 ? pose_of(frame, m.target) : nullptr) {
+    std::snprintf(buf, sizeof buf, "Shooting at: %s, %.0f m away", name_of(m.target).c_str(),
+                  distance(m.pos, target->pos));
+    lines.push_back(buf);
+  } else {
+    lines.push_back("Shooting at: nobody");
+  }
+  if (m.has_goal) {
+    std::snprintf(buf, sizeof buf, "Going to: a point %.0f m away (the X)", distance(m.pos, m.goal));
     lines.push_back(buf);
   }
-  const float w = 300, line_h = 17, h = 12 + line_h * lines.size();
+  int sees = 0, remembers = 0;
+  for (const auto& contact : m.contacts) ++(contact.seen ? sees : remembers);
+  std::snprintf(buf, sizeof buf, "Radar: sees %d enem%s now, remembers %d more", sees, sees == 1 ? "y" : "ies",
+                remembers);
+  lines.push_back(buf);
+  std::snprintf(buf, sizeof buf, "Heat: %.0f", m.heat);
+  lines.push_back(buf);
+  // Damage: only the parts hurt, so a fresh mech stays one line. Hands, calves,
+  // feet and the hip carry no armor of their own (logged 0 and 0).
+  const auto hurt = [](const mech3::replay::Part& part) {
+    const bool no_armor = !part.destroyed && part.armor == 0.0f && part.internal == 0.0f;
+    return !no_armor && (part.destroyed || part.armor < 1.0f || part.internal < 1.0f);
+  };
+  const bool any_hurt = std::any_of(m.parts.begin(), m.parts.end(), hurt);
+  lines.push_back(any_hurt ? "Damage (armor left, structure left):" : "Damage: none");
+  for (const auto& part : m.parts) {
+    if (!hurt(part)) continue;
+    std::snprintf(buf, sizeof buf, "  %s: %.0f%%, %.0f%%%s", part_label(part.id), part.armor * 100,
+                  part.internal * 100, part.destroyed ? "  DESTROYED" : "");
+    lines.push_back(buf);
+  }
+  const float w = 380, line_h = 17, h = 12 + line_h * lines.size();
   const float x = screen_width - w - 10, y = 10;
   draw.rect({x, y, w, h}, ui_color(0, 0, 0, 190));
   for (size_t i = 0; i < lines.size(); ++i) draw.text(lines[i], x + 8, y + 6 + line_h * i);
@@ -161,7 +270,7 @@ void draw_bar(const ReplayClock& clock, const Overlays& overlays, float screen_w
   const float done = clock.duration > 0 ? clock.t / clock.duration : 0;
   draw.rect({0, top, w * done, 4}, ui_color(255, 150, 40));
   char buf[96];
-  std::snprintf(buf, sizeof buf, "%s  %s / %s  %gx (< >)   1 route  2 target  3 goal  4 contacts  5 reasons",
+  std::snprintf(buf, sizeof buf, "%s  %s / %s  %gx (< >)   1 route  2 target  3 goal  4 radar  5 reasons  H key",
                 clock.playing ? "playing" : "paused", clock_text(clock.t).c_str(), clock_text(clock.duration).c_str(),
                 clock.speed);
   draw.text(buf, 8, top + 7);
