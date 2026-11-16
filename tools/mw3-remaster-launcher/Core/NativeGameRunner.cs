@@ -169,7 +169,8 @@ public sealed class NativeGameRunner
 
         var drawDistance = PreviewDrawDistance(settings.DrawDistance, out var reduced);
         if (reduced) log($"Scenery distance {settings.DrawDistance} is not supported; using {drawDistance}.");
-        var (models, environments) = SelectPreviewPacks(activeModDirs);
+        var activePacks = activeModDirs.ToList();
+        var (models, environments) = SelectPreviewPacks(activePacks);
         var options = new Mw3RePlanningOptions
         {
             Width = settings.Width,
@@ -206,6 +207,15 @@ public sealed class NativeGameRunner
         var argv = plan.RootElement.GetProperty("argv").EnumerateArray().Select(item => item.GetString()!).ToList();
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
         Directory.CreateDirectory(writeDirectory);
+        // Music is optional: a broken or locked soundtrack file must not stop the game from starting.
+        try
+        {
+            MusicPack.StageForNative(activePacks, writeDirectory, log);
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
+        {
+            log("Music pack not used for this launch: " + error.Message);
+        }
         var start = new ProcessStartInfo(argv[0])
         {
             WorkingDirectory = plan.RootElement.GetProperty("working_directory").GetString()!,
