@@ -404,7 +404,7 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
         self.assertEqual(result["argv"][17:], [
-            "--cc-dynamic-lighting", "0",
+            "--cc-dynamic-lighting", "0", "--cc-sun-shadows", "0",
             "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200",
             "--cc-hud", "core-critical", "--cc-hud-text", "1",
             "--cc-geometry", "partial",
@@ -422,7 +422,31 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertNotIn("--cc-draw-distance", result["argv"])
         self.assertIn("--cc-environment-packs-explicit", result["argv"])
+        self.assertEqual(result["argv"][result["argv"].index("--cc-sun-shadows") + 1], "0")
         self.assertEqual(result["skipped_packs"], [])
+
+    def test_sun_shadows_follow_the_launcher_choice_and_require_sun_lighting(self):
+        enabled = self.plan(self.request(shadows=True))
+        enabled_argv = enabled["argv"]
+        self.assertEqual(enabled_argv[enabled_argv.index("--cc-sun-shadows") + 1], "1")
+        self.assertEqual(enabled["skipped_packs"], [])
+
+        disabled = self.plan(self.request(shadows=False))
+        disabled_argv = disabled["argv"]
+        self.assertEqual(disabled_argv[disabled_argv.index("--cc-sun-shadows") + 1], "0")
+
+        without_sun = self.plan(dict(
+            self.request(shadows=True), lighting="off", visuals={"pom": False}))
+        no_sun_argv = without_sun["argv"]
+        self.assertEqual(no_sun_argv[no_sun_argv.index("--cc-sun-shadows") + 1], "0")
+        self.assertEqual(without_sun["skipped_packs"], [{
+            "root": "C:\\Runtime", "feature": "sun_shadows",
+            "reason": "sun shadows require sun lighting",
+        }])
+
+        for value in (0, 1, 1.0, "true", None, [], {}):
+            with self.subTest(shadows=value), self.assertRaises(ValueError):
+                self.plan(self.request(shadows=value))
 
     # The planner accepts only Windows paths, so tests that read real packs from a temporary
     # directory run on Windows; validation-only tests below run everywhere.

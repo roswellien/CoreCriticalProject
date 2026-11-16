@@ -732,15 +732,19 @@ static class NativeRuntimeLayoutChecks
             var options = new Mw3RePlanningOptions
             {
                 Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
-                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
+                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, Shadows = true,
+                    ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
             };
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
+                !wire["preview"]!["shadows"]!.GetValue<bool>() ||
                 wire["visuals"]!["pom"]!.GetValue<bool>() != true)
-                throw new Exception("Native preview projection lost its schema, distance or POM.");
+                throw new Exception("Native preview projection lost its schema, distance, shadows or POM.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+            if (argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1")
+                throw new Exception("Native launcher shadows choice did not reach the runtime argv.");
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
                 "--cc-hud-text", "1", "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
