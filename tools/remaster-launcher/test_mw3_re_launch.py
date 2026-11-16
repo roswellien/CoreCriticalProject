@@ -58,20 +58,23 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 self.assertNotIn("argv", result)
                 self.assertEqual(request, before)
 
-    def test_fullscreen_and_borderless_have_no_window_tokens(self):
+    def test_fullscreen_and_borderless_plan_without_window_tokens(self):
         plan = self.planner()
-        baseline = plan(self.request())
-        for window_mode in ("fullscreen", "borderless"):
-            request = dict(self.request(), window_mode=window_mode)
+        windowed_plan = plan(self.request())
+        self.assertTrue(windowed_plan["ok"])
+        without_window = windowed_plan["argv"].copy()
+        index = without_window.index("--window")
+        self.assertEqual(without_window[index:index + 3], ["--window", "1280x720", "--windowed"])
+        del without_window[index:index + 3]
+        for mode in ("fullscreen", "borderless"):
+            request = dict(self.request(), window_mode=mode)
             before = copy.deepcopy(request)
             result = plan(request)
-            with self.subTest(window_mode=window_mode):
+            with self.subTest(window_mode=mode):
                 self.assertTrue(result["ok"])
-                argv = result["argv"]
-                self.assertNotIn("--window", argv)
-                self.assertNotIn("--windowed", argv)
-                self.assertEqual(argv[:5], baseline["argv"][:5])
-                self.assertEqual(argv[5:], baseline["argv"][8:])
+                self.assertNotIn("--window", result["argv"])
+                self.assertNotIn("--windowed", result["argv"])
+                self.assertEqual(result["argv"], without_window)
                 self.assertEqual(request, before)
 
     def test_schema_three_optional_pom_and_schema_two_identity(self):
