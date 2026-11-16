@@ -1,6 +1,8 @@
 #include "frontend/sdl/watch_launch.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 
 #include "frontend/sdl/replay3d_view.h"
 #include "frontend/sdl/replay_view.h"
@@ -139,6 +141,17 @@ void start_watch_clock(const WatchArgs& w, int net_minutes) {
   const float arena_margin = w.arena_path.empty() ? 0.0f : 10.0f;
   if (clock_minutes > 0)
     mech3::missions().clock = clock_minutes * 60.0f + arena_margin, mech3::missions().clock_down = 1;
+}
+
+void watch_default_hud(const WatchArgs& w, bool mode_chosen, HudOptions* hud) {
+  if (w.replay3d_path.empty() || mode_chosen) return;
+  hud->mode = "core-critical";
+  if (!hud->artwork.empty()) return;
+  const char* local = std::getenv("LOCALAPPDATA");
+  if (!local) return;
+  const std::filesystem::path pack = std::filesystem::path(local) / "MW3Remaster/mods/com.mw3remaster.hud";
+  std::error_code ec;
+  if (std::filesystem::is_directory(pack / "ui/sprites", ec)) hud->artwork = pack.string();
 }
 
 bool watch_run_over(const WatchArgs& w, const zgame::State* state) {

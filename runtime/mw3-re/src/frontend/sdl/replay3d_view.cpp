@@ -36,7 +36,10 @@ using mech3::replay::Puppet;
 using mech3::replay::ReplayLog;
 using mech3::replay::Vec3;
 
-constexpr float kMaxListStep = 0.1f;   // the action lists' longest replay step (plan step 7)
+// The longest step the game's action lists (effect animations) take in one
+// frame: a slow frame or a fast replay speed runs them in pieces no longer
+// than this, as the game's own frame would, so no effect jumps ahead.
+constexpr float kMaxListStep = 0.1f;
 constexpr float kRingMeters = 6.0f;    // the side ring at each mech's feet
 constexpr float kLabelMeters = 13.0f;  // the id label above each mech
 constexpr float kFollowBack = 25.0f, kFollowUp = 8.0f, kFollowAim = 6.0f;
@@ -227,7 +230,7 @@ struct Replay3dView::State {
   const ReplayLog* log = nullptr;
   FrameRenderer* render = nullptr;
   std::function<void()> request_quit;
-  std::string log_path_dir;
+  std::string screenshot_dir;  // F12's screenshots: the script's folder, else the current one
 
   ReplayScript script;
   bool scripted = false, script_read = true;
@@ -255,7 +258,7 @@ struct Replay3dView::State {
   Render3dDraw draw;
   GameProjector projector;
   float screen_w = 640, screen_h = 480;
-  std::string pending_shot, shot_in_flight;
+  std::string pending_screenshot, screenshot_in_flight;
   // The script's seek, camera and follow, applied as the next frame starts,
   // as its keys are: a shot before them shows the frame before them.
   std::vector<std::function<void()>> next_frame;
@@ -277,6 +280,9 @@ struct Replay3dView::State {
 
   void pose();
   void sync_shots(float dt);
+  void sync_beams(float dt);
+  void sync_rounds();
+  bool make_round(zwep::WeaponDef* def, LiveRound* made);
   void free_round(LiveRound& r);
   void start_effects(const Event& e);
   void fly(float dt);
@@ -296,8 +302,8 @@ Replay3dView::Replay3dView(const mech3::replay::ReplayRun& run, FrameRenderer* r
   s.clock.duration = s.log->duration();
   s.scripted = !script_path.empty();
   if (s.scripted) s.script_read = s.script.load(script_path);
-  s.log_path_dir = script_path.empty() ? std::string(".") : std::filesystem::path(script_path).parent_path().string();
-  s.actions.shot = [this](const std::string& path) { s_->pending_shot = path; };
+  s.screenshot_dir = script_path.empty() ? std::string(".") : std::filesystem::path(script_path).parent_path().string();
+  s.actions.shot = [this](const std::string& path) { s_->pending_screenshot = path; };
   s.actions.seek = [this](float t) { s_->next_frame.push_back([this, t] { s_->clock.seek(t); }); };
   s.actions.camera = [this](float x, float y, float z, float yaw, float pitch) {
     s_->next_frame.push_back([this, x, y, z, yaw, pitch] {
@@ -311,6 +317,9 @@ Replay3dView::Replay3dView(const mech3::replay::ReplayRun& run, FrameRenderer* r
   s.draw.open_text();
 }
 
+// The beams and rounds in flight are not freed here: their nodes are in the
+// mission's world, which a replay leaves to the process's end (mw3_main.cpp,
+// after app.run), so freeing them now would touch a world being torn down.
 Replay3dView::~Replay3dView() = default;
 
 bool Replay3dView::ready(std::string* message) const {
@@ -396,13 +405,18 @@ void Replay3dView::State::pose() {
   posed_t = t;
 }
 
-// The frame's beams and rounds made, placed or freed; a seek lands the same
-// way, since each frame names every shot in flight.
+// The frame's weapon shots in flight made, placed or freed; a seek lands the
+// same way, since each frame names every beam and round in flight.
 void Replay3dView::State::sync_shots(float dt) {
+  sync_beams(dt);
+  sync_rounds();
+}
+
+// Beams have no id in the log: one is known by its shooter, its weapon and
+// which of that pair it is this frame (a mech can fire two of one laser).
+void Replay3dView::State::sync_beams(float dt) {
   zwep::RunHooks& rh = zwep::run_hooks();
   for (auto& [key, b] : live_beams) b.seen = false;
-  for (auto& [id, r] : live_rounds) r.seen = false;
-
   std::map<std::string, int> nth;
   for (const auto& logged : frame.beams) {
     std::string key = std::to_string(logged.by) + "/" + logged.weapon;
@@ -426,8 +440,9 @@ void Replay3dView::State::sync_shots(float dt) {
     dir = {dir.x / length, dir.y / length, dir.z / length};
     seg.start = from, seg.dir = dir, seg.length = length;
     zwep::beam_draw(&seg);
-    // beam_update's pulse: the node's uniform scale swings between PULSE's
-    // two values at its rate.
+    // beam_update's pulse: the beam's opacity swings between PULSE's two
+    // values at its rate (the hook is named set_uniform_scale, but the game
+    // wires it to object3d_set_opacity, app_weapons.cpp).
     const zwep::WeaponDef* def = b.beam->def;
     const float wave = std::sin(b.age * def->pulse_rate * 2.0f * kReplayPi);
     const float pulse = (def->pulse[1] - def->pulse[0]) * ((wave + 1.0f) * 0.5f) + def->pulse[0];
@@ -441,24 +456,37 @@ void Replay3dView::State::sync_shots(float dt) {
     zwep::beam_free(it->second.beam);
     it = live_beams.erase(it);
   }
+}
 
+// A round's node as zwep_shot.cpp's pool_take and spawn make one: the weapon's
+// FLYOUT model under it (a pooled copy when the model is animated), in the
+// world, with the FLYOUT animation following it.
+bool Replay3dView::State::make_round(zwep::WeaponDef* def, LiveRound* made) {
+  zwep::RunHooks& rh = zwep::run_hooks();
+  if (!def || !rh.object3d_create) return false;
+  made->def = def;
+  made->node = rh.object3d_create();
+  const zwep::Effect& flyout = def->flyout;
+  if (flyout.model) {
+    made->pooled_model = flyout.model_animation != nullptr;
+    made->model = made->pooled_model ? zwep::model_take(def) : flyout.model;
+    if (made->model && rh.obj_add_child) rh.obj_add_child(made->node, made->model);
+  }
+  if (rh.add_child) rh.add_child(zwep::state().world, made->node);
+  if (flyout.animation && rh.anim_follow) made->flyout_anim = rh.anim_follow(flyout.animation, made->node);
+  if (made->pooled_model && rh.anim_model) made->model_anim = rh.anim_model(flyout.model_animation, made->model);
+  return true;
+}
+
+// Rounds have the log's id; each is moved to its logged spot.
+void Replay3dView::State::sync_rounds() {
+  zwep::RunHooks& rh = zwep::run_hooks();
+  for (auto& [id, r] : live_rounds) r.seen = false;
   for (const auto& logged : frame.rounds) {
     auto it = live_rounds.find(logged.id);
     if (it == live_rounds.end()) {
-      zwep::WeaponDef* def = zwep::find_def(logged.weapon.c_str());
-      if (!def || !rh.object3d_create) continue;
       LiveRound made;
-      made.def = def;
-      made.node = rh.object3d_create();
-      const zwep::Effect& fly = def->flyout;
-      if (fly.model) {
-        made.pooled_model = fly.model_animation != nullptr;
-        made.model = made.pooled_model ? zwep::model_take(def) : fly.model;
-        if (made.model && rh.obj_add_child) rh.obj_add_child(made.node, made.model);
-      }
-      if (rh.add_child) rh.add_child(zwep::state().world, made.node);
-      if (fly.animation && rh.anim_follow) made.flyout_anim = rh.anim_follow(fly.animation, made.node);
-      if (made.pooled_model && rh.anim_model) made.model_anim = rh.anim_model(fly.model_animation, made.model);
+      if (!make_round(zwep::find_def(logged.weapon.c_str()), &made)) continue;
       it = live_rounds.emplace(logged.id, made).first;
     }
     LiveRound& r = it->second;
@@ -608,12 +636,12 @@ void Replay3dView::draw_overlay() {
   draw_panel(*s.log, s.frame, s.selected, s.screen_w, s.draw);
   draw_bar(s.clock, s.overlays, s.screen_w, s.screen_h, s.draw);
   if (s.quit_box_open) s.draw.text("paused: the quit box is open", 8, 8);
-  if (!s.pending_shot.empty() && s.render) {
+  if (!s.pending_screenshot.empty() && s.render) {
     // The renderer keeps the path's pointer until the frame is shown.
-    s.shot_in_flight = s.pending_shot;
-    s.render->capture_next(s.shot_in_flight.c_str());
-    std::printf("mw3: replay3d: shot %s at %.2f s\n", s.shot_in_flight.c_str(), s.clock.t);
-    s.pending_shot.clear();
+    s.screenshot_in_flight = s.pending_screenshot;
+    s.render->capture_next(s.screenshot_in_flight.c_str());
+    std::printf("mw3: replay3d: shot %s at %.2f s\n", s.screenshot_in_flight.c_str(), s.clock.t);
+    s.pending_screenshot.clear();
   }
 }
 
@@ -680,10 +708,12 @@ bool Replay3dView::handle(const SDL_Event& e) {
         case SDLK_F12: {
           char name[64];
           std::snprintf(name, sizeof name, "replay3d-%07.2f.bmp", s.clock.t);
-          s.pending_shot = (std::filesystem::path(s.log_path_dir) / name).string();
+          s.pending_screenshot = (std::filesystem::path(s.screenshot_dir) / name).string();
           return true;
         }
-        default: return false;  // Escape and the rest: the game's (no command fires, plan step 7)
+        // Escape and every other key go to the game: Escape opens its quit
+        // box, and a replay's mechs are puppets, so no game command acts.
+        default: return false;
       }
     case SDL_EVENT_KEY_UP:
       if (!is_fly_key(e.key.scancode)) return false;

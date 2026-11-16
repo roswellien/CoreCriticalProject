@@ -217,7 +217,7 @@ TEST(replay_refuses_hostile_start_lines) {
                  R"({"type":"start","version":2,"map":"m","mechs":[{"id":0,"side":0,"voice":"../x"}]})", "voice"));
 }
 
-// #289 plan step 6: --replay3d refuses what --replay does, --replay itself
+// #289: --replay3d refuses what --replay does, --replay itself
 // and --original; a log's map must be a multiplayer map.
 TEST(replay3d_refusals) {
   using mech3::replay::ReplayFlags;

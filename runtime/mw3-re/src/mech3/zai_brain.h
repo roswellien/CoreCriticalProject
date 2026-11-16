@@ -510,7 +510,7 @@ struct Steer {
   void push_by_contacts(zgame::Handle owner, float dt);
 };
 
-// Ours, for the tests: each radio line said (a brain with a radio; the
+// Ours (the arena's match log, and the tests): each radio line said (a brain with a radio; the
 // event is Radio::kEvents'), before it plays. zSound is closed headless.
 struct RadioCalls {
   void (*line)(Brain& b, int32_t event) = nullptr;

@@ -1,5 +1,5 @@
 #pragma once
-// #289 (plan step 4): the replay puppet's checks inside a running arena
+// #289: the replay puppet's checks inside a running arena
 // match. They live in test_replay_game.cpp, which can include the mech
 // headers (test_program.cpp's own Handle type clashes with them); the arena
 // harness in test_program.cpp calls frame() from each Core frame.
@@ -30,7 +30,7 @@ class PuppetProbe {
   std::unique_ptr<State> s_;
 };
 
-// #289 (plan step 7): the 3D replay's frame branch in a running arena match.
+// #289: the 3D replay's frame branch in a running arena match.
 // From `from` for `frames` Core frames a test ReplayHooks is set, stepping a
 // replay clock of its own; the probe checks nothing is simulated meanwhile.
 struct FrameResults {

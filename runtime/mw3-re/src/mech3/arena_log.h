@@ -51,7 +51,6 @@ constexpr int kOldestLogVersion = 1;
 // can show the additions change nothing:
 // matches repeat only on the same build (docs/arena.md, #294).
 void set_arena_log_detail(bool on);
-bool arena_log_detail();
 
 // Called by the match (arena.cpp): the start line and the shot and hit hooks
 // on, at the first Core frame; each frame's state lines when due and the

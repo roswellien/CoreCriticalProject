@@ -60,7 +60,7 @@ struct MechPose {
   float arm_yaw[2] = {}, arm_pitch[2] = {};
   int anim = -1;           // the gait slot, 0..12; -1 unknown or out of range
   float phase = 0;         // 0..1 through the gait loop
-  float cps = 0;           // loops a second
+  float cps = 0;           // loops a second; negative while the clip runs backward (walking in reverse)
   bool has_phase = false;  // false (v1 or detail off): phase comes from distance walked
   float weight = 0;        // the gait blend's weight
   int limp = -1;           // the limping leg, -1 none

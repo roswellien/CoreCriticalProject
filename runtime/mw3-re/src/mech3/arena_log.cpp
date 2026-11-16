@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iterator>
 
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zweapon/zweapon.h"
@@ -149,8 +150,12 @@ void add_anim_detail(const Mech* m, const MechAnim* slot_anim, nlohmann::json* a
 }
 
 const char* hunt_rule_name(const ai::HuntState& hunt) {
-  static const char* const kRules[] = {"contact", "last_seen", "fallback"};
-  return kRules[static_cast<int>(hunt.goal.rule)];
+  switch (hunt.goal.rule) {  // a switch, so a new rule can't be logged under another's name
+    case ai::HuntRule::kContact: return "contact";
+    case ai::HuntRule::kLastSeen: return "last_seen";
+    case ai::HuntRule::kFallback: return "fallback";
+  }
+  return "unknown";
 }
 
 // The order a mech's brain is running: its own hunt, the stock fight, or
@@ -399,7 +404,6 @@ void set_arena_log(std::FILE* file, int32_t frame_ms) {
 
 // Ours (#289)
 void set_arena_log_detail(bool on) { g_detail = on; }
-bool arena_log_detail() { return g_detail; }
 
 // Ours (#287)
 nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<ArenaMech>& mechs) {
@@ -419,7 +423,8 @@ nlohmann::json mech_state_record(const ArenaMech& entry, const std::vector<Arena
     if (part && part->id >= 0)
       parts.push_back({{"id", part->id}, {"armor", rounded(part->armor)}, {"internal", rounded(part->internal)},
                        {"destroyed", part->destroyed}});
-  const MechAnim* anim = m->anim_index >= 0 && m->anim_index < 13 ? m->anims[m->anim_index] : nullptr;
+  const int slots = static_cast<int>(std::size(m->anims));
+  const MechAnim* anim = m->anim_index >= 0 && m->anim_index < slots ? m->anims[m->anim_index] : nullptr;
   nlohmann::json record = {
       {"id", entry.id},
       {"side", entry.side},

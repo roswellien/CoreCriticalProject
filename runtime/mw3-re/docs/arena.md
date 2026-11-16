@@ -33,9 +33,12 @@ each bot's goal, last-seen place and grid way live in its own order.
 mw3 GAME_DIR --arena setup.json --seed 7 --frame-ms 33 --hidden -nofmv
 ```
 
-`--seed` and `--frame-ms` are required, so a match log can be repeated. The
-host is a spectator with no mech; nothing is bound to a socket and nothing
-leaves the process. With `--hidden` and no screenshots the match draws
+`--seed` and `--frame-ms` are required, so a match log can be repeated; the
+seed is a whole number, 0 or more. The host is a spectator with no mech;
+nothing is bound to a socket and nothing leaves the process. A match plays
+without sound, watched or not. Every bot walks the grid (the Improved AI
+upgrade) whatever `mw3.cfg` says, so a setup and seed play the same match on
+any machine. With `--hidden` and no screenshots the match draws
 nothing; without `--hidden` a window follows one bot, and the camera-cycle
 key moves the view to the next bot still standing.
 
@@ -49,7 +52,12 @@ message names the field), the map or a preset can't be found in the game
 files, the match log already exists, or an option the arena can't use was
 given: `--host`, `--join`, `--net-upnp`, `--original`, `--mission` (and
 `--fly`), `--net-minutes`, `--net-soak`, `--net-drive`, `--frames`, `--fire`,
-`--net-walk`, `--net-ahead`, `--briefing` or `--lab-mech`.
+`--net-walk`, `--net-ahead`, `--briefing` or `--lab-mech`. A match that
+can't start (the map's spawn spots can't be read, or a side has no bot that
+could be made) prints why and exits 1.
+
+A match log grows by every mech's state ten times a second: a few minutes of
+4v4 is tens of megabytes, and the viewers read a whole log into memory.
 
 ## The setup file
 
@@ -242,8 +250,14 @@ Controls (the quit box's own keys work while it is open):
   and projectile model, with its flight animation, placed where the log
   puts them each frame. They are never fired, so they deal no damage.
 
+- The replay plays at the screen's shape (widescreen on a wide screen),
+  whatever mission resolution is saved, and leaves the saved one as it was.
+
 Limits: no radio chatter plays (the log records it). A seek starts no
-effects for the span it skips, and effects already playing run on. A mech is
+effects for the span it skips, and effects already playing run on. Every hit
+plays the weapon's default ground impact, even on a mech. The longer view
+and fog distance of the old Core Critical host isn't in this runtime, so the
+replay shows the map's own fog. A mech is
 picked by its label's point on the screen, not its shape. The camera goes
 through hills.
 
@@ -254,4 +268,6 @@ is `--hidden` with no screenshots and on the same build. Drawing the scene
 changes how a match plays out (#294), so a watched match can differ from the
 same seed run hidden. The bots' update order is shuffled each frame from the
 seed, so neither side always sees the other a frame late; another compiler
-or standard library may shuffle differently.
+or standard library may shuffle differently. The first match in a process can
+also differ from later ones with the same seed (#302); a fresh `mw3` run per
+match, as above, is not affected.

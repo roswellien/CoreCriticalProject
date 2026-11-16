@@ -296,7 +296,7 @@ TEST(arena_setup_game_files_read_the_map_and_presets) {
   }
 }
 
-// #289 plan step 6: --replay3d's run reads a log on a shipped map and opens
+// #289: --replay3d's run reads a log on a shipped map and opens
 // the in-process session with no bots; a log on a map the game lacks, or with
 // an unknown chassis, is refused; closing shuts the session.
 TEST(replay3d_run_reads_opens_and_closes_headless) {

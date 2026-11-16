@@ -2,6 +2,7 @@
 #include <memory>
 #include <string>
 
+#include "frontend/sdl/gpu_hud.h"
 #include "mech3/app_engine.h"
 #include "mech3/arena.h"
 #include "mech3/arena_setup.h"
@@ -81,6 +82,13 @@ void watch_seat(const WatchArgs& w, mech3::MultiplayerGame* game, mech3::GameEng
 // minutes plus 10 s (the stock end starts 3 s before its clock runs out, and
 // the arena's own end must count the result first), else `net_minutes`.
 void start_watch_clock(const WatchArgs& w, int net_minutes);
+
+// --replay3d shows the game's own quit box and HUD art, so it takes the Core
+// Critical HUD (sharp art, text at the window's density) unless the player
+// chose a HUD (`mode_chosen`: --cc-hud or mw3.cfg's cc_hud=). The art is the
+// installed HUD pack, when there is one: the Core Critical launcher installs
+// it as %LOCALAPPDATA%/MW3Remaster/mods/com.mw3remaster.hud.
+void watch_default_hud(const WatchArgs& w, bool mode_chosen, HudOptions* hud);
 
 // --arena: whether the run is over, the match decided and its fade gone
 // from the mission (`state` the app's current state).

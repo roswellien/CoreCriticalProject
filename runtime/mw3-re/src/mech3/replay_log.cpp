@@ -314,8 +314,8 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
         if (known_action(e.name)) history_[e.id].actions.push_back(std::move(e));
         else ++skipped_;
       } else if (type == "voice") {
-        // Arena bots have no radio voice, so no replay plays chatter (#289,
-        // 2026-11-14); the lines are only checked.
+        // Neither viewer plays radio chatter yet (docs/arena.md, Limits), so a
+        // voice line is only checked: one out of range counts as skipped.
         if (r.value("event", -1) < 0 || r.value("event", -1) > kLastVoiceEvent) ++skipped_;
       } else if (type == "destroyed") {
         float& at = history_[r.value("id", -1)].destroyed_at;

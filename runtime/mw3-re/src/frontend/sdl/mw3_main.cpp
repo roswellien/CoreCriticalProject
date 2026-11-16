@@ -894,19 +894,7 @@ int program(int argc, char** argv) {
   zutl::repair_old_names(a.write_dir);
   if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
-  // Ours (#289): the 3D replay shows the game's own quit box and HUD art, so
-  // it takes the Core Critical HUD (sharp art from the installed HUD pack,
-  // text at the window's density) unless --cc-hud or mw3.cfg's cc_hud= chose.
-  if (!a.watch.replay3d_path.empty() && !a.hud_mode_given && !a.cfg_hud_mode) {
-    a.hud.mode = "core-critical";
-    if (a.hud.artwork.empty()) {
-      if (const char* local = std::getenv("LOCALAPPDATA")) {
-        const std::filesystem::path pack = std::filesystem::path(local) / "MW3Remaster/mods/com.mw3remaster.hud";
-        std::error_code ec;
-        if (std::filesystem::is_directory(pack / "ui/sprites", ec)) a.hud.artwork = pack.string();
-      }
-    }
-  }
+  sdlfe::watch_default_hud(a.watch, a.hud_mode_given || a.cfg_hud_mode, &a.hud);  // --replay3d (ours, #289)
   // Ours (docs/mods-campaigns-plan.md): a plain start mounts no mods, the main menu plays the original;
   // mw3.cfg's mod= lines are only moved to the campaign entries (entries_migrate), mods mount for --entry
   // (and --mod NAME, for checks and modders).

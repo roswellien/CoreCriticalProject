@@ -11827,6 +11827,52 @@ TEST(settings_first_start_plays_at_the_desktop_size) {
   mech3::options() = mech3::Options{};
 }
 
+// #289: the 3D replay plays at the screen's shape whatever mode is saved, and
+// watching one leaves the saved mode and size as they were.
+TEST(settings_replay_plays_at_the_screen_shape_and_saves_nothing) {
+  struct Desktop : mech3::OptionsHooks {
+    bool first_start_screen(int32_t* ow, int32_t* oh) override {
+      *ow = 2560, *oh = 1080;
+      return true;
+    }
+  } desk;
+  const bool keep_fix = zfix::options().any_resolution;
+  zfix::options().any_resolution = true;
+  const std::string path = temp_dir("replay_screen") + "/settings.reg";
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  std::fprintf(f, "Windows Registry Editor Version 5.00\r\n\r\n"
+                  "[HKEY_CURRENT_USER\\Software\\MicroProse\\MechWarrior 3\\1.0]\r\n"
+                  "\"InGameVMode\"=dword:00000005\r\n");
+  std::fclose(f);
+  {
+    platform::RegFile reg(path);
+    zreg::Machine m;
+    zreg::init("MicroProse", "MechWarrior 3", "1.0", m, 0x101);
+    zreg::set_settings(&reg);
+    mech3::set_options_hooks(&desk);
+    mech3::set_replay_screen(true);
+    mech3::options() = mech3::Options{};
+    EXPECT(mech3::load_options(nullptr) == 1);
+    const mech3::Options o = mech3::options();
+    EXPECT(o.in_game_vmode == mech3::kCustomVMode && o.screen_w == 2560 && o.screen_h == 1080);
+    mech3::options().sound_frequency = 0.25f;  // a change that is saved, so the save is seen to run
+    mech3::save_options();
+    mech3::set_replay_screen(false);
+    mech3::set_options_hooks(nullptr);
+    zreg::set_settings(nullptr);
+    zreg::shutdown();
+  }
+  platform::RegFile again(path);
+  EXPECT(again.open("SOFTWARE\\MicroProse\\MechWarrior 3\\1.0", true, false));
+  uint32_t v = 0, size = 4;
+  float volume = 0;
+  EXPECT(again.read(true, "SoundVolume", &volume, &size) && volume == 0.25f);
+  size = 4;
+  EXPECT(again.read(true, "InGameVMode", &v, &size) && v == 5);
+  zfix::options().any_resolution = keep_fix;
+  mech3::options() = mech3::Options{};
+}
+
 // c1 mission 1 driven from the keyboard (docs/movement.md): the spawn's step
 // and Core's power-up (0x0041cc30 from resume(7)) leave the Mad Cat powered
 // up; the throttle-up key, held through zInput, walks it forward along the
@@ -22912,7 +22958,7 @@ TEST(replay_terrain_c1mp1) {
   EXPECT(!unknown.error.empty() && unknown.heights.empty());
 }
 
-// #289 step 3 (plan step 4) on the real game: a puppet posed from a live
+// #289 on the real game: a puppet posed from a live
 // arena mech's state record each sampled frame puts its feet and hip where
 // the live mech's are; it takes off a lost arm and keeps it off through a
 // rebuild; a destroyed puppet plays its collapse and never dies; jumping and
@@ -22937,7 +22983,7 @@ TEST(replay_puppet_follows_a_live_mech_headless) {
   EXPECT(r.collapsed && r.never_died && r.armor_kept);
 }
 
-// #289 step 3 (plan step 7) on the real game: with a replay's hooks set for
+// #289 on the real game: with a replay's hooks set for
 // 60 frames in the middle of an arena match, no mech is updated (none moves
 // and no gait clip runs), the game time is the replay's clock every frame,
 // the frame clock is real time again after each frame, and the hooks run

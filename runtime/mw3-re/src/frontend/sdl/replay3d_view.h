@@ -1,5 +1,5 @@
 #pragma once
-// #289 (plan step 9): mw3 --replay3d's view, the arena match log played back
+// #289: mw3 --replay3d's view, the arena match log played back
 // in the game's own world. It is the replay's ReplayHooks (replay_hooks.h):
 // the game runs its Core frame and draws the world, while this view keeps
 // the replay clock, poses one puppet per logged mech (replay_puppet.h),

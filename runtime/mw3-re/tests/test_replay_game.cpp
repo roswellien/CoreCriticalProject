@@ -1,4 +1,4 @@
-// #289 (plan step 4): the replay puppet against a live arena mech. Called
+// #289: the replay puppet against a live arena mech. Called
 // from the arena harness in test_program.cpp (replay_game.h says why).
 #include <algorithm>
 #include <chrono>

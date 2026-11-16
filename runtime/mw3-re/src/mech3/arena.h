@@ -131,10 +131,9 @@ constexpr int kAnimDead = 10, kAnimFallenBack = 12, kAnimFallenFront = 13;
 // the dead state (anim_state 10) as dead, so the result, the log and the view
 // hand-off count the kill when it happens.
 bool arena_standing(const Mech* mech);
-// The AI params a mech's brain runs on; null when it is not on AI controls.
+// For the tests: the AI params a mech's brain runs on (null when it is not on
+// AI controls), and whether the hunt net is still made (a mission's end frees it).
 const ai::AiParams* arena_brain_params(const Mech* mech);
-
-// Whether the hunt net is still made (the mission's end frees it).
 bool arena_hunt_net_held();
 
 // One mw3 --arena run, from the command line to the exit: what the program's

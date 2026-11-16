@@ -109,6 +109,8 @@ void HuntState::run(float dt) {
   }
   const bool toward_enemy = goal.rule == HuntRule::kContact;
   float waypoint[3];
+  // The preset's arrival distance (+0x28, squared at read, as zai_attack.cpp's
+  // follow state uses it): the grid counts a waypoint reached within it.
   const float reach = b.params.get<float>(0x28);
   // The grid is ours behind the improved AI switch, as the follow state's
   // (zai_attack.cpp); an arena run turns it on (mw3_main.cpp), so in a match it is on.

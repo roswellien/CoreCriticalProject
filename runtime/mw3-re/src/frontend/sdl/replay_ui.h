@@ -1,5 +1,5 @@
 #pragma once
-// #289 (plan step 8): what the top-down map viewer (--replay) and the 3D
+// #289: what the top-down map viewer (--replay) and the 3D
 // viewer (--replay3d) share: the replay clock, the overlay toggles, the
 // overlay lines, the selected mech's panel, the seek bar, text rendering and
 // the --replay-script runner. Each viewer supplies a ReplayDraw (how a line,
