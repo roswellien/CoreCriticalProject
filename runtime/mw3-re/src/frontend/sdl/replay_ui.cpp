@@ -88,6 +88,7 @@ float frame_elapsed(uint64_t* last_ns, bool scripted) {
 namespace {
 // The overlays' colors, shared by the lines and the legend.
 const SDL_FColor kRouteColor = ui_color(255, 230, 90, 200);
+const SDL_FColor kRouteFaint = ui_color(255, 230, 90, 80);
 const SDL_FColor kTargetColor = ui_color(255, 150, 40, 230);
 const SDL_FColor kTargetFaint = ui_color(255, 150, 40, 90);
 const SDL_FColor kGoalColor = ui_color(255, 255, 255, 220);
@@ -208,26 +209,31 @@ void draw_overlays(const Frame& frame, const Overlays& overlays, int selected, R
     if (overlays.on[kTarget] && m.target >= 0)
       if (const MechPose* target = pose_of(frame, m.target); target && screen(target->pos, &p))
         draw.line(at, p, !has_focus || focused ? kTargetColor : kTargetFaint);
-    if (!focused) continue;  // the rest is the selected mech's alone
+    // Every mech's planned route, faint, so where each is headed shows
+    // without a click; the selected mech's is bright, with its waypoints.
     if (overlays.on[kRoute] && !frame.routes[i].points.empty()) {
+      const bool bright = focused;
+      const SDL_FColor ahead = bright ? kRouteColor : kRouteFaint;
       // The legs already walked dim, the waypoint it is heading for ringed,
       // the rest from the mech on.
       const auto& points = frame.routes[i].points;
       const size_t at_point = static_cast<size_t>(std::max(m.at, 0));
-      for (size_t k = 1; k < points.size() && k <= at_point; ++k) {
-        SDL_FPoint a, b;
-        if (screen(points[k - 1], &a) && screen(points[k], &b)) draw.line(a, b, ui_color(255, 230, 90, 70));
-      }
+      if (bright)
+        for (size_t k = 1; k < points.size() && k <= at_point; ++k) {
+          SDL_FPoint a, b;
+          if (screen(points[k - 1], &a) && screen(points[k], &b)) draw.line(a, b, ui_color(255, 230, 90, 70));
+        }
       SDL_FPoint prev = at;
       bool prev_ok = true;
       for (size_t k = at_point; k < points.size(); ++k) {
-        SDL_FPoint p;
-        const bool ok = screen(points[k], &p);
-        if (ok && prev_ok) draw.line(prev, p, kRouteColor);
-        if (ok) draw.circle(p, k == at_point ? 5.0f : 2.5f, kRouteColor);
-        prev = p, prev_ok = ok;
+        SDL_FPoint q;
+        const bool ok = screen(points[k], &q);
+        if (ok && prev_ok) draw.line(prev, q, ahead);
+        if (ok && bright) draw.circle(q, k == at_point ? 5.0f : 2.5f, kRouteColor);
+        prev = q, prev_ok = ok;
       }
     }
+    if (!focused) continue;  // the rest is the selected mech's alone
     if (overlays.on[kGoal] && m.has_goal && screen(m.goal, &p)) {
       draw.dashed(at, p, ui_color(255, 255, 255, 110), 4.0f);
       draw.cross(p, 7, kGoalColor);

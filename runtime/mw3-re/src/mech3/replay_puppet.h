@@ -31,8 +31,10 @@ class Puppet {
 
   // Pose it as `pose`, `lost` the part ids lost by then (ReplayLog::
   // parts_lost_by). `dt` is the replay time since the last set (at least
-  // 1/240 s is used: the skis divide by it).
-  void set(const MechPose& pose, const std::vector<int>& lost, float dt);
+  // 1/240 s is used: the skis divide by it). `live` is a play forward (not a
+  // seek): a part lost now flies off with the game's own effects, and a
+  // mech destroyed now plays its death effect; a seek only hides lost parts.
+  void set(const MechPose& pose, const std::vector<int>& lost, float dt, bool live = false);
   // Deleted and made again at `pose` (a seek backward, where lost parts
   // must come back).
   bool rebuild(const MechPose& pose, std::string* error);
@@ -52,6 +54,9 @@ class Puppet {
   void free_mech();
   void place(const MechPose& pose);
   void detach(int id);
+  void blow_off(int id);
+  void explode(const std::string& action);
+  void stop_effects();
   void play_action(const MechPose& pose, float dt);
   void play_gait(const MechPose& pose, float dt);
 
@@ -63,6 +68,7 @@ class Puppet {
   std::string action_;  // the action being played, "" none
   std::vector<int> detached_;
   bool limp_started_ = false;
+  bool was_standing_ = true;  // for the death effect: played once, as it falls
 };
 
 }  // namespace mech3::replay

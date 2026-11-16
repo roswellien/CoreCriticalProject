@@ -414,7 +414,8 @@ void Replay3dView::State::pose() {
       std::string error;
       if (!puppet->rebuild(*p, &error)) std::fprintf(stderr, "mw3: replay3d: mech %d: %s\n", id, error.c_str());
     }
-    puppet->set(*p, lost, first || seeked ? 1.0f / 60 : t - posed_t);
+    const bool live = !first && !seeked;
+    puppet->set(*p, lost, live ? t - posed_t : 1.0f / 60, live);
   }
   if (!first && !seeked && t > posed_t)
     for (const Event& e : log->fire_between(posed_t, t)) start_effects(e);

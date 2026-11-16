@@ -194,12 +194,13 @@ Controls:
 - Space plays or pauses (at the end, plays again from the start); Left and
   Right jump 5 seconds; `<` and `>` (the `,` and `.` keys) halve or double
   the speed, 0.25x to 8x; click or drag the bar at the bottom to seek.
-- With no mech selected, only who aims at whom is drawn (orange lines),
-  with a word beside each mech's id for what it is doing this moment:
+- With no mech selected, who aims at whom is drawn (orange lines) and each
+  mech's planned route faintly (yellow), with a word beside each mech's id
+  for what it is doing this moment:
   chasing (an enemy its radar knows of, seen now or remembered), searching
   (going to where it last saw one), roaming (no enemy known: the map's
   middle), fighting (the game's own combat AI has it). Click a mech to see
-  its own picture: its planned route (yellow, the big dot its next
+  its own picture: its planned route bright (the big dot its next
   waypoint), its goal (a white X), its radar contacts (green, solid
   detected now, dashed remembered) and its target, with the others' target
   lines faint. Once the selected mech is destroyed, every line is full
@@ -236,8 +237,12 @@ drawn as the game's own mech. Nothing of the match is simulated: no AI,
 weapons, damage, missions or sensors run. Each frame every mech is posed
 from the log with the game's own animation code (the walk and run clips at
 the logged phase, falls, get-ups and collapses as the log's action lines
-say, torso and arm aims), lost arms and legs are hidden, and each logged
-shot and hit starts that weapon's own fire or impact effect and sound.
+say, torso and arm aims), and each logged shot and hit starts that weapon's
+own fire or impact effect and sound. An arm or leg lost while the replay
+plays is blown off by the game's own code: it flies away as debris with its
+explosion and leaves a smoking stump; a mech destroyed while it plays bursts
+with the game's death effect for its fall (forward, backward or a collapse).
+None of it deals damage. A seek past a loss only hides the lost part.
 Version 1 logs play too, with a walk guessed from the distance moved.
 
 It exits 2 before the game starts for a log the reader refuses, a map that

@@ -87,12 +87,34 @@ std::unique_ptr<Puppet> Puppet::create(const std::string& chassis, int side, con
 Puppet::~Puppet() { free_mech(); }
 
 // The jet flame first: Mech::release stops the mech's sounds but not that
-// effect, which would go on updating the freed jet node.
+// effect, which would go on updating the freed jet node. The damage effects
+// too (stop_effects): Mech::release frees the flown-off limbs before the
+// parts stop the effects riding them.
 void Puppet::free_mech() {
   if (!mech_) return;
+  stop_effects();
   mech_->jet_effects(false);
   mech_free_in_play(mech_);
   mech_ = nullptr;
+}
+
+// Every effect a part or the torso still runs (blow_off, explode), stopped
+// and forgotten while the nodes it rides are alive.
+void Puppet::stop_effects() {
+  const FreeCalls& f = free_calls();
+  const auto stop = [&](Handle& effect) {
+    if (effect && f.stop_effect) f.stop_effect(effect);
+    effect = nullptr;
+  };
+  for (MechPart* part : mech_->parts) {
+    if (!part) continue;
+    stop(part->debris_effect);
+    stop(part->trail_effect);
+  }
+  if (mech_->torso) {
+    stop(mech_->torso->death_effect);
+    stop(mech_->torso->death_effect2);
+  }
 }
 
 bool Puppet::make(const MechPose& start, std::string* error) {
@@ -129,6 +151,7 @@ bool Puppet::make(const MechPose& start, std::string* error) {
   action_.clear();
   detached_.clear();
   limp_started_ = false;
+  was_standing_ = start.standing;
   place(start);
   return true;
 }
@@ -163,12 +186,63 @@ void Puppet::detach(int id) {
   detached_.push_back(id);
 }
 
-void Puppet::set(const MechPose& pose, const std::vector<int>& lost, float dt) {
+// A limb lost while the replay plays: the game's own destroy (mech_parts.cpp),
+// so it flies off as debris with its explosion and leaves a smoking stump.
+// An arm's destroy takes its hand along. A thigh's is MechPart's alone plus
+// Leg::destroy's tail without its fall() and die(): the log poses the fall,
+// and die() would change the puppet's state for the rest of the replay.
+// Damage never applies: puppets are remote, so their take_damage is a no-op.
+// The variant (which of the two debris effects) isn't logged; the id picks it.
+void Puppet::blow_off(int id) {
+  MechPart* part = part_by_id(*mech_, id);
+  if (!part || part->destroyed) {  // gone with its arm or thigh already
+    detached_.push_back(id);
+    return;
+  }
+  const int variant = id % 2;
+  if (id == kLeftArm || id == kRightArm) {
+    part->destroy(variant, 1);
+    detached_.push_back(id + 7);  // its hand (9, 10) went with it
+  } else if (auto* leg = dynamic_cast<Leg*>(part); leg && (id == kLeftThigh || id == kRightThigh)) {
+    if (leg->foot && leg->foot->node) zcls::node_set_active(static_cast<zcls::Node*>(leg->foot->node), 0);
+    leg->MechPart::destroy(variant, 1);
+    if (leg->foot) leg->foot->lose_contents(), leg->foot->detach();
+    if (leg->calf) leg->calf->lose_contents(), leg->calf->detach();
+    detached_.push_back(id + 7), detached_.push_back(id + 9);  // its calf (11, 12) and foot (13, 14)
+  } else {
+    detach(id);  // a hand, calf or foot alone: hidden, as the game has no effect for it
+    return;
+  }
+  detached_.push_back(id);
+}
+
+// A mech destroyed while the replay plays: Torso::destroy's death effect, by
+// the fall the log shows (fallf: forward, fallb: backward, else the slow
+// collapse), without its fall, die() or contents (the log poses the fall).
+void Puppet::explode(const std::string& action) {
+  Mech& m = *mech_;
+  if (!m.torso || !m.pilot) return;
+  const int effect = action == "fallf" ? 2 : action == "fallb" ? 3 : 0;
+  const Handle def = m.pilot->death_effects[effect];
+  DamageCalls& calls = damage_calls();
+  if (calls.node_set_name) calls.node_set_name(m.node, "deadmech");  // as the game names a wreck
+  if (!def || !calls.spawn_effect_at) return;
+  m.torso->death_effect2 = calls.spawn_effect_at(def, m.node, 0.0f, 0.0f, 0.0f);
+  // Cleared when it ends, as the game's own (so stop_effects never stops a
+  // finished one).
+  if (m.torso->death_effect2 && calls.on_effect_end) calls.on_effect_end(m.torso->death_effect2, *m.torso);
+}
+
+void Puppet::set(const MechPose& pose, const std::vector<int>& lost, float dt, bool live) {
   if (!mech_) return;
   Mech& m = *mech_;
   dt = std::max(dt, kMinStep);
+  std::vector<int> newly_lost;
   for (const int id : lost)
-    if (detachable(id) && std::find(detached_.begin(), detached_.end(), id) == detached_.end()) detach(id);
+    if (detachable(id) && std::find(detached_.begin(), detached_.end(), id) == detached_.end()) {
+      if (live) newly_lost.push_back(id);  // flown off once posed, below
+      else detach(id);
+    }
 
   place(pose);
   m.vec_3c = m.push = m.impulse = mech3::Vec3{0, 0, 0};
@@ -197,6 +271,10 @@ void Puppet::set(const MechPose& pose, const std::vector<int>& lost, float dt) {
 
   // The log wins over root motion.
   place(pose);
+  // Posed first, so the debris and effects start where the limb is drawn.
+  for (const int id : newly_lost) blow_off(id);
+  if (live && was_standing_ && !pose.standing) explode(pose.action);
+  was_standing_ = pose.standing;
   m.jet_effects(pose.jumping);
 }
 
