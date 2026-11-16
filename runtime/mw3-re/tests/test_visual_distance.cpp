@@ -4,10 +4,58 @@
 #include "gamez/zclass/camera.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "mech3/mech_lod.h"
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <limits>
+
+namespace {
+mech3::Mech* g_lod_test_target = nullptr;
+
+mech3::Mech* lod_test_player_target(mech3::Mech&) {
+  return g_lod_test_target;
+}
+
+uint32_t mech_detail(unsigned selected_far, float distance, bool targeted,
+                     bool has_contact = true) {
+  const unsigned previous_far = zcls::visual_far_request();
+  zcls::set_visual_far_request(selected_far);
+  mech3::World& mech_world = mech3::world();
+  mech3::Mech* previous_player = mech_world.mission_player;
+  mech3::LodCalls& calls = mech3::lod_calls();
+  const mech3::LodCalls previous_calls = calls;
+  const int32_t previous_spent = mech3::lod_spent();
+
+  mech3::Mech player;
+  mech3::Mech mech;
+  mech3::MechData data;
+  mech3::ai::Contact contact;
+  data.range_sq[0] = std::numeric_limits<float>::max();
+  data.range_sq[1] = 0.0f;
+  mech.pilot = &data;
+  contact.dist2 = distance * distance;
+  mech.player_contact = has_contact ? &contact : nullptr;
+  player.target = targeted ? &contact : nullptr;
+  mech_world.mission_player = &player;
+  g_lod_test_target = targeted ? &mech : nullptr;
+  calls = mech3::LodCalls{};
+  calls.player_target = lod_test_player_target;
+  mech3::lod_spent() = 0;
+
+  mech3::lod_update(mech);
+  const uint32_t detail = mech.detail;
+
+  mech3::lod_spent() = previous_spent;
+  calls = previous_calls;
+  mech_world.mission_player = previous_player;
+  g_lod_test_target = nullptr;
+  zcls::set_visual_far_request(previous_far);
+  return detail;
+}
+}  // namespace
 
 TEST(view_distance_cli_options) {
   unsigned distance = 0;
@@ -18,6 +66,22 @@ TEST(view_distance_cli_options) {
   EXPECT(!sdlfe::parse_draw_distance("3200", &distance));
   EXPECT(!sdlfe::parse_draw_distance("1200junk", &distance));
   EXPECT(!sdlfe::parse_draw_distance(nullptr, &distance));
+}
+
+TEST(view_distance_controls_far_mech_detail) {
+  constexpr unsigned distances[] = {799, 801, 1199, 1201, 1599, 1601};
+  constexpr unsigned settings[] = {800, 1200, 1600};
+  EXPECT(zcls::visual_far_request() == zcls::kDefaultVisualFar);
+  for (const unsigned selected_far : settings) {
+    for (const unsigned distance : distances) {
+      const uint32_t expected_detail = distance < selected_far ? 0x10u : 0u;
+      EXPECT(mech_detail(selected_far, static_cast<float>(distance), false) ==
+             expected_detail);
+    }
+    EXPECT(mech_detail(selected_far, static_cast<float>(selected_far + 1), true) ==
+           0x10u);
+    EXPECT(mech_detail(selected_far, 0.0f, false, false) == 0u);
+  }
 }
 
 TEST(view_distance_policy_and_authored_clip) {
