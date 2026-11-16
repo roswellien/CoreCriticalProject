@@ -1464,7 +1464,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     // mission's can be let go (sdl_input.h); fullscreen and hidden runs hold it.
     input.windowed = [&window, hidden = a.hidden] { return !hidden && !window.fullscreen(); };
     input.in_mission = [&app] { return app.current() == &mech3::states().core; };
-    input.pointer_free = [] { return mech3::editor_state().active != 0; };
+    // Ours (#289): the 3D replay's mouse is the viewer's (clicks pick mechs,
+    // the seek bar), never the mission's, so it is left free as the editor's.
+    input.pointer_free = [replay = !a.watch.replay3d_path.empty()] {
+      return replay || mech3::editor_state().active != 0;
+    };
     // FIX (A), playtest W4 (sdl_focus.h): a shown window's real focus; the mouse is held only when it is ours.
     // MW3_FOCUS_AT=N (checks, a hidden run): the window without the focus until the pump's Nth pass.
     if (const char* f = SDL_getenv("MW3_FOCUS_AT")) {

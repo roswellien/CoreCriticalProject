@@ -276,17 +276,12 @@ struct Replay3dView::State {
   std::map<std::string, LiveBeam> live_beams;
   std::map<int, LiveRound> live_rounds;
 
-  // Lets go of every held key and the mouse look (its captured pointer too),
-  // for when the releases can't reach handle(): the quit box takes the input,
-  // or `window` loses focus. Without a window (the quit box), the one with
-  // the mouse or keyboard is used.
-  void release_input(SDL_Window* window = nullptr) {
+  // Lets go of every held key, the mouse look and a seek drag, for when the
+  // releases can't reach handle(): the quit box takes the input, or the
+  // window loses focus. The pointer is never captured (the input layer leaves
+  // it free in a replay, mw3_main.cpp), so there is nothing else to let go.
+  void release_input() {
     std::fill(std::begin(held), std::end(held), false);
-    if (looking) {
-      if (!window) window = SDL_GetMouseFocus();
-      if (!window) window = SDL_GetKeyboardFocus();
-      if (window) SDL_SetWindowRelativeMouseMode(window, false);
-    }
     looking = seeking = false;
   }
 
@@ -714,7 +709,7 @@ bool Replay3dView::handle(const SDL_Event& e) {
   State& s = *s_;
   if (!s.started) return false;
   if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-    s.release_input(SDL_GetWindowFromID(e.window.windowID));
+    s.release_input();
     return false;  // the game's own handling of it goes on
   }
   if (s.quit_box_open) return false;
@@ -752,8 +747,7 @@ bool Replay3dView::handle(const SDL_Event& e) {
       return true;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
       if (e.button.button == SDL_BUTTON_RIGHT) {
-        s.looking = true;
-        if (SDL_Window* w = SDL_GetWindowFromID(e.button.windowID)) SDL_SetWindowRelativeMouseMode(w, true);
+        s.looking = true;  // the motion's own deltas turn the camera; the pointer stays shown
         return true;
       }
       if (e.button.button != SDL_BUTTON_LEFT) return false;
@@ -777,7 +771,6 @@ bool Replay3dView::handle(const SDL_Event& e) {
     case SDL_EVENT_MOUSE_BUTTON_UP:
       if (e.button.button == SDL_BUTTON_RIGHT) {
         s.looking = false;
-        if (SDL_Window* w = SDL_GetWindowFromID(e.button.windowID)) SDL_SetWindowRelativeMouseMode(w, false);
         return true;
       }
       if (e.button.button == SDL_BUTTON_LEFT) {
