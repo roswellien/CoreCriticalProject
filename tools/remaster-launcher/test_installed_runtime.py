@@ -20,6 +20,30 @@ import test_prepared_environment_packs as environment_fixtures
 
 
 class InstalledPreparationTests(unittest.TestCase):
+    def test_sdl3_sound_recipe_pins_version_and_enables_selected_sdk(self):
+        import stage_mw3_re_runtime as producer
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "sdl3-sound" / "cmake"
+            package.mkdir(parents=True)
+            version_file = package / "SDL3_soundConfigVersion.cmake"
+            version_file.write_text('set(PACKAGE_VERSION "3.2.0")\n', encoding="utf-8")
+            self.assertEqual(producer._distribution_version(package, "SDL3_sound"), "3.2.0")
+            version_file.write_text('set(PACKAGE_VERSION "3.2.1")\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "pinned 3.2.0"):
+                producer._distribution_version(package, "SDL3_sound")
+
+            options = producer._native_cmake_options({
+                "sdl3": root / "sdl3" / "cmake", "sdl3_ttf": root / "sdl3-ttf" / "cmake",
+                "sdl3_sound": root / "sdl3-sound" / "cmake", "vulkan_headers": root / "vulkan",
+                "glslang": root / "glslangValidator.exe", "dxc": root / "dxc.exe",
+                "archive_prefix": root / "archive", "archive_lib": root / "archive.lib",
+                "zlib_lib": root / "zlib.lib", "lzma_lib": root / "lzma.lib"})
+            # Like SDL3 and SDL3_ttf, --sdl3-sound names the package's cmake directory.
+            self.assertEqual(options["SDL3_sound_DIR"], root / "sdl3-sound" / "cmake")
+            self.assertEqual(options["CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound"], "FALSE")
+
     def test_staged_coordinator_prepares_without_the_development_checkout(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -838,15 +862,20 @@ def native_recipe_tests(inputs):
         def test_bad_cache_controls_stop_before_native_build(self):
             cache = producer._cache(self.fixture / "CMakeCache.txt")
             _, expected = producer.configure_arguments(self.paths, self.derived, self.root / "clean/source", self.fixture)
+            sound_package = self.root / "pinned-sdl3-sound" / "cmake"
+            sound_package.mkdir(parents=True)
             native = dict(MW3_PACKAGE="ON", MW3_CORE_CRITICAL_VULKAN="ON",
-                          CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound="TRUE")
+                          CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound="FALSE")
             cache.update(native)
             expected.update(native)
+            cache["SDL3_sound_DIR"] = str(sound_package)
+            expected["SDL3_sound_DIR"] = sound_package
             cases = (("CMAKE_CXX_COMPILER", str(self.root / "other.exe"), "selected path mismatch"),
                      ("CMAKE_BUILD_TYPE", "Debug", "recipe option mismatch"),
                      ("MW3_PACKAGE", "OFF", "recipe option mismatch"),
                      ("MW3_CORE_CRITICAL_VULKAN", "OFF", "recipe option mismatch"),
-                     ("CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound", "FALSE", "recipe option mismatch"),
+                     ("CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound", "TRUE", "recipe option mismatch"),
+                     ("SDL3_sound_DIR", str(self.root / "other-sound"), "selected path mismatch"),
                      ("CMAKE_TOOLCHAIN_FILE", "poison", "Unexpected configured toolchain"),
                      ("CMAKE_CXX_FLAGS_RELEASE", "/DMW34_POISON", "non-clean recipe flags"))
             for name, value, error in cases:
@@ -871,7 +900,7 @@ def native_recipe_tests(inputs):
             from argparse import Namespace
             arguments = dict(self.paths, vs=Path(inputs.vs), commit="a" * 40, jobs=1,
                              build=self.root / "never-built", output=self.root / "never-staged")
-            for name in ("sdl3", "sdl3_ttf", "archive_prefix", "vulkan_headers", "ttf_notices"):
+            for name in ("sdl3", "sdl3_ttf", "sdl3_sound", "archive_prefix", "vulkan_headers", "ttf_notices"):
                 directory = self.root / ("path-" + name)
                 directory.mkdir()
                 arguments[name] = directory

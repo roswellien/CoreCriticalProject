@@ -190,8 +190,9 @@ static class NativeRuntimeLayoutChecks
             File.Copy(Path.Combine(AppContext.BaseDirectory, "LauncherChecks.exe"), Path.Combine(root, "bin", "mw3.exe"));
             File.WriteAllText(Path.Combine(root, "profile.json"), "{\"authored\":true}");
             File.WriteAllText(Path.Combine(root, "support.txt"), "authored support closure");
+            File.WriteAllText(Path.Combine(root, "bin", "SDL3_sound.dll"), "authored SDL3_sound dependency fixture");
             var pins = new JsonObject();
-            foreach (var relative in new[] { "bin/mw3.exe", "profile.json", "support.txt" })
+            foreach (var relative in new[] { "bin/mw3.exe", "profile.json", "support.txt", "bin/SDL3_sound.dll" })
             {
                 var bytes = File.ReadAllBytes(Path.Combine(root, relative));
                 pins[relative] = new JsonObject { ["bytes"] = bytes.Length, ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) };
@@ -200,7 +201,7 @@ static class NativeRuntimeLayoutChecks
             {
                 ["schema_version"] = 2, ["engine"] = "mw3-re",
                 ["roles"] = new JsonObject { ["executable"] = "bin/mw3.exe", ["profile"] = "profile.json" },
-                ["dependencies"] = new JsonArray("support.txt"), ["files"] = pins,
+                ["dependencies"] = new JsonArray("support.txt", "bin/SDL3_sound.dll"), ["files"] = pins,
                 ["provenance"] = new JsonObject { ["source_commit"] = new string('a', 40), ["build_id"] = "authored-build", ["builder"] = "fixture" },
                 ["capabilities"] = new JsonObject { ["authored-capability"] = new JsonArray(1, 2) }
             };
@@ -215,6 +216,8 @@ static class NativeRuntimeLayoutChecks
             CheckMw3RePlanningProfile(root);
             if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
                 throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
+            if (!contract.Dependencies.Contains("bin/SDL3_sound.dll", StringComparer.Ordinal))
+                throw new Exception("Integrity snapshot did not retain the pinned SDL3_sound dependency.");
             if (Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length != before.Count ||
                 before.Any(pair => !File.Exists(pair.Key) || Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pair.Key))) != pair.Value))
                 throw new Exception("Integrity reading changed its input closure.");
