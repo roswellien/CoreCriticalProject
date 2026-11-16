@@ -127,3 +127,21 @@ TEST(view_distance_nested_fog_and_setters) {
   EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
   zmod::fog() = saved;
 }
+
+// A collapsed near == far interval keeps its previous inverse range; the extended copy scales it.
+TEST(view_distance_collapsed_fog_interval) {
+  const zmod::Fog saved = zmod::fog();
+  zmod::Fog collapsed{};
+  collapsed.on = 1;
+  collapsed.linear = 1;
+  collapsed.near_range = collapsed.far_range = 500.0f;
+  collapsed.inv_range = 1.0f / 400.0f;  // left behind by an earlier, non-empty interval
+  zmod::fog() = collapsed;
+  {
+    zmod::ScopedRenderFog scope(800.0f, 1600.0f);
+    EXPECT(zmod::render_fog().near_range == 1000.0f && zmod::render_fog().far_range == 1000.0f);
+    EXPECT(zmod::render_fog().inv_range == 1.0f / 800.0f);
+  }
+  EXPECT(zmod::fog().inv_range == 1.0f / 400.0f);
+  zmod::fog() = saved;
+}

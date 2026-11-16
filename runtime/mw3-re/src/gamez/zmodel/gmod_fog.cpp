@@ -24,7 +24,12 @@ Fog scaled_fog(const Fog& source, float scale) {
   copy.far_range *= scale;
   copy.far_sq = copy.far_range * copy.far_range;
   const float range = copy.far_range - copy.near_range;
-  if (range != 0.0f) copy.inv_range = 1.0f / range;
+  // A collapsed interval keeps the inverse its setters left behind (as the original does); scale
+  // that kept value with the interval so the copy stays consistent with the authored fog.
+  if (range != 0.0f)
+    copy.inv_range = 1.0f / range;
+  else
+    copy.inv_range /= scale;
   if (!copy.linear) copy.density /= scale;
   return copy;
 }
