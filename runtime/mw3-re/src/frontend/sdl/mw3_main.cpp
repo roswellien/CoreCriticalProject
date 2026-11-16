@@ -221,6 +221,7 @@ struct Args {
   bool play_original = false;
   sdlfe::HudOptions hud;
   bool hud_mode_given = false, hud_artwork_given = false, hud_text_given = false;
+  bool cfg_hud_mode = false;  // mw3.cfg named cc_hud=
   upgrades::Config cfg_upgrades;
   int cfg_throttle_reverse = 1;  // mw3.cfg's throttle_reverse= (ours, W56: zfix.h)
   bool first_start = false;   // the install found by the search, not mw3.cfg's (ours: the first start's notes)
@@ -603,7 +604,7 @@ void read_config(const std::string& dir, Args& a) {
     if (line.rfind("install=", 0) == 0) a.cfg_install = zutl::path_from_config(line.substr(8));
     else if (line.rfind("mw1_game=", 0) == 0) a.cfg_mw1_game = zutl::path_from_config(line.substr(9));
     else if (line.rfind("assets=", 0) == 0) a.assets.push_back(line.substr(7));
-    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7);
+    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7), a.cfg_hud_mode = true;
     else if (line.rfind("cc_hud_artwork=", 0) == 0 && !a.hud_artwork_given) a.hud.artwork = line.substr(15);
     else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
     else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
@@ -891,6 +892,19 @@ int program(int argc, char** argv) {
   zutl::repair_old_names(a.write_dir);
   if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
+  // Ours (#289): the 3D replay shows the game's own quit box and HUD art, so
+  // it takes the Core Critical HUD (sharp art from the installed HUD pack,
+  // text at the window's density) unless --cc-hud or mw3.cfg's cc_hud= chose.
+  if (!a.watch.replay3d_path.empty() && !a.hud_mode_given && !a.cfg_hud_mode) {
+    a.hud.mode = "core-critical";
+    if (a.hud.artwork.empty()) {
+      if (const char* local = std::getenv("LOCALAPPDATA")) {
+        const std::filesystem::path pack = std::filesystem::path(local) / "MW3Remaster/mods/com.mw3remaster.hud";
+        std::error_code ec;
+        if (std::filesystem::is_directory(pack / "ui/sprites", ec)) a.hud.artwork = pack.string();
+      }
+    }
+  }
   // Ours (docs/mods-campaigns-plan.md): a plain start mounts no mods, the main menu plays the original;
   // mw3.cfg's mod= lines are only moved to the campaign entries (entries_migrate), mods mount for --entry
   // (and --mod NAME, for checks and modders).

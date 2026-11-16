@@ -235,12 +235,15 @@ Controls (the quit box's own keys work while it is open):
 - F12 saves `replay3d-<time>.bmp` (beside the script with `--replay-script`,
   else in the current folder).
 - Escape opens the game's quit box and pauses the replay; N goes back, Y
-  ends the program.
+  ends the program. The replay takes the Core Critical HUD (`--cc-hud
+  core-critical`, with the installed HUD pack's art when it is found) unless
+  `--cc-hud` or `cc_hud=` in `mw3.cfg` says otherwise.
+- Beams and rounds in flight are the game's own: each weapon's beam node
+  and projectile model, with its flight animation, placed where the log
+  puts them each frame. They are never fired, so they deal no damage.
 
 Limits: no radio chatter plays (the log records it). A seek starts no
-effects for the span it skips, and effects already playing run on. Rounds
-in flight and held beams aren't drawn as models; the overlays show them as
-in the top-down viewer only through the shot and hit effects. A mech is
+effects for the span it skips, and effects already playing run on. A mech is
 picked by its label's point on the screen, not its shape. The camera goes
 through hills.
 

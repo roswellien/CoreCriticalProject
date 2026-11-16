@@ -18,6 +18,7 @@
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "gamez/zweapon/zweapon.h"
 #include "gamez/zweapon/zwep_init.h"
 #include "mech3/app_mech.h"
 #include "mech3/replay_puppet.h"
@@ -182,26 +183,39 @@ bool is_fly_key(SDL_Scancode code) {
   }
 }
 
-// The shots in flight. The puppets play the fire and impact effects, but the
-// game draws a beam and a round's model from its weapon object, which a
-// replay has none of; so beams are drawn as lines and rounds as dots, always,
-// whatever overlays are on.
-void draw_shots(const Frame& frame, Render3dDraw& draw, const GameProjector& projector) {
-  const SDL_FColor beam_core = ui_color(255, 245, 230), beam_glow = ui_color(255, 90, 60);
-  for (const auto& beam : frame.beams) {
-    SDL_FPoint a, b;
-    if (!projector.to_screen(beam.from, &a) || !projector.to_screen(beam.to, &b)) continue;
-    // A glow either side of a bright core, a pixel apart.
-    draw.line({a.x, a.y - 1}, {b.x, b.y - 1}, beam_glow);
-    draw.line({a.x, a.y + 1}, {b.x, b.y + 1}, beam_glow);
-    draw.line(a, b, beam_core);
-  }
-  const SDL_FColor round_color = ui_color(255, 220, 120);
-  for (const auto& round : frame.rounds) {
-    SDL_FPoint p;
-    if (projector.to_screen(round.pos, &p)) draw.rect({p.x - 2, p.y - 2, 4, 4}, round_color);
-  }
+zwep::Vec3f3 f3(const Vec3& v) { return {v.x, v.y, v.z}; }
+
+// The node rotation a direction gives, as zwep_shot.cpp's pitch_of and yaw_of.
+void rotation_of(const zwep::Vec3f3& d, float out[3]) {
+  out[0] = std::asin(std::clamp(d.y, -1.0f, 1.0f));
+  out[1] = std::atan2(-d.x, -d.z);
+  out[2] = 0;
 }
+
+// A logged beam drawn with the game's own beam node (zwep::beam_make: the
+// weapon's FLYOUT model on a node stretched along the beam). It is never
+// started, so the game's weapon tick never casts it or deals damage: the
+// log's from and to place it, and its pulse is beam_update's.
+struct LiveBeam {
+  zwep::Beam* beam = nullptr;
+  float age = 0;
+  bool seen = false;
+};
+
+// A logged round drawn as the game draws a projectile (zwep_shot.cpp
+// pool_take and spawn): a node with the FLYOUT model under it (a pooled copy
+// when the model is animated) and the FLYOUT animation following it, moved to
+// the log's positions instead of flown.
+struct LiveRound {
+  zwep::WeaponDef* def = nullptr;
+  zwep::Handle node = nullptr, model = nullptr, flyout_anim = nullptr, model_anim = nullptr;
+  bool pooled_model = false, has_last = false, seen = false;
+  Vec3 last;
+};
+
+// The beam's origin and direction pointers: beam_make keeps them for
+// beam_update, which a replay beam never reaches, so one still pair serves all.
+const zwep::Vec3f3 kStillOrigin{}, kStillDir{0, 0, 1};
 
 }  // namespace
 
@@ -222,9 +236,6 @@ struct Replay3dView::State {
   float real_dt = 0, real_elapsed = 0;
   float posed_t = -1;  // the replay time the puppets show, -1 before the first
   bool started = false, quit_box_open = false, seek_pending = false;
-  // Ours, in place of the game's quit box: that one is 640x480 art scaled up
-  // to the window, so it shows blurred and blocky at a modern size.
-  bool confirm_open = false;
 
   std::map<int, std::unique_ptr<Puppet>> puppets;  // by mech id
   Frame frame;
@@ -246,7 +257,13 @@ struct Replay3dView::State {
   // as its keys are: a shot before them shows the frame before them.
   std::vector<std::function<void()>> next_frame;
 
+  // The shots in flight, by (shooter, weapon, nth of that pair) and round id.
+  std::map<std::string, LiveBeam> live_beams;
+  std::map<int, LiveRound> live_rounds;
+
   void pose();
+  void sync_shots(float dt);
+  void free_round(LiveRound& r);
   void start_effects(const Event& e);
   void fly(float dt);
   void seek_at(float window_x);
@@ -312,8 +329,7 @@ void Replay3dView::start() {
 
 void Replay3dView::before_lists(bool quit_box_open) {
   State& s = *s_;
-  s.quit_box_open = quit_box_open || s.confirm_open;
-  quit_box_open = s.quit_box_open;
+  s.quit_box_open = quit_box_open;
   for (const auto& apply : s.next_frame) apply();
   s.next_frame.clear();
   // Every seek (keys, the bar, the script) lands before this frame's step:
@@ -366,7 +382,122 @@ void Replay3dView::State::pose() {
   }
   if (!first && !seeked && t > posed_t)
     for (const Event& e : log->fire_between(posed_t, t)) start_effects(e);
+  sync_shots(first || seeked ? 0.0f : std::max(0.0f, t - posed_t));
   posed_t = t;
+}
+
+// The frame's beams and rounds made, placed or freed; a seek lands the same
+// way, since each frame names every shot in flight.
+void Replay3dView::State::sync_shots(float dt) {
+  zwep::RunHooks& rh = zwep::run_hooks();
+  for (auto& [key, b] : live_beams) b.seen = false;
+  for (auto& [id, r] : live_rounds) r.seen = false;
+
+  std::map<std::string, int> nth;
+  for (const auto& logged : frame.beams) {
+    std::string key = std::to_string(logged.by) + "/" + logged.weapon;
+    key += "/" + std::to_string(nth[key]++);
+    auto it = live_beams.find(key);
+    if (it == live_beams.end()) {
+      zwep::WeaponDef* def = zwep::find_def(logged.weapon.c_str());
+      if (!def) continue;
+      LiveBeam made;
+      made.beam = zwep::beam_make(def, nullptr, nullptr, &kStillOrigin, &kStillDir, 1);
+      it = live_beams.emplace(key, made).first;
+    }
+    LiveBeam& b = it->second;
+    b.seen = true;
+    b.age += dt;
+    zwep::BeamSegment& seg = b.beam->segments[0];
+    const zwep::Vec3f3 from = f3(logged.from), to = f3(logged.to);
+    zwep::Vec3f3 dir{to.x - from.x, to.y - from.y, to.z - from.z};
+    const float length = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    if (length <= 0.0f) continue;
+    dir = {dir.x / length, dir.y / length, dir.z / length};
+    seg.start = from, seg.dir = dir, seg.length = length;
+    zwep::beam_draw(&seg);
+    // beam_update's pulse: the node's uniform scale swings between PULSE's
+    // two values at its rate.
+    const zwep::WeaponDef* def = b.beam->def;
+    const float wave = std::sin(b.age * def->pulse_rate * 2.0f * kReplayPi);
+    const float pulse = (def->pulse[1] - def->pulse[0]) * ((wave + 1.0f) * 0.5f) + def->pulse[0];
+    if (rh.set_uniform_scale) rh.set_uniform_scale(seg.node, pulse);
+  }
+  for (auto it = live_beams.begin(); it != live_beams.end();) {
+    if (it->second.seen) {
+      ++it;
+      continue;
+    }
+    zwep::beam_free(it->second.beam);
+    it = live_beams.erase(it);
+  }
+
+  for (const auto& logged : frame.rounds) {
+    auto it = live_rounds.find(logged.id);
+    if (it == live_rounds.end()) {
+      zwep::WeaponDef* def = zwep::find_def(logged.weapon.c_str());
+      if (!def || !rh.object3d_create) continue;
+      LiveRound made;
+      made.def = def;
+      made.node = rh.object3d_create();
+      const zwep::Effect& fly = def->flyout;
+      if (fly.model) {
+        made.pooled_model = fly.model_animation != nullptr;
+        made.model = made.pooled_model ? zwep::model_take(def) : fly.model;
+        if (made.model && rh.obj_add_child) rh.obj_add_child(made.node, made.model);
+      }
+      if (rh.add_child) rh.add_child(zwep::state().world, made.node);
+      if (fly.animation && rh.anim_follow) made.flyout_anim = rh.anim_follow(fly.animation, made.node);
+      if (made.pooled_model && rh.anim_model) made.model_anim = rh.anim_model(fly.model_animation, made.model);
+      it = live_rounds.emplace(logged.id, made).first;
+    }
+    LiveRound& r = it->second;
+    r.seen = true;
+    const zwep::WeaponDef& def = *r.def;
+    // spawn and commit_one turn the node only for an unlit model, an
+    // animation with no model, or a falling shot; the rest keep the model's own.
+    const bool turns = ((def.flags & zwep::kFlyoutUnlit) && def.flyout.model) ||
+                       (def.flyout.animation && !def.flyout.model) ||
+                       (def.gravity != 0.0f && !(def.flags & zwep::kFixedRotate));
+    if (turns && r.has_last && rh.set_rotation) {
+      zwep::Vec3f3 d{logged.pos.x - r.last.x, logged.pos.y - r.last.y, logged.pos.z - r.last.z};
+      const float n = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+      if (n > 0.0f) {
+        float rot[3];
+        rotation_of({d.x / n, d.y / n, d.z / n}, rot);
+        rh.set_rotation(r.node, rot[0], rot[1], rot[2]);
+      }
+    }
+    if (rh.set_translation) rh.set_translation(r.node, logged.pos.x, logged.pos.y, logged.pos.z);
+    r.last = logged.pos, r.has_last = true;
+  }
+  for (auto it = live_rounds.begin(); it != live_rounds.end();) {
+    if (it->second.seen) {
+      ++it;
+      continue;
+    }
+    free_round(it->second);
+    it = live_rounds.erase(it);
+  }
+}
+
+// As zwep_shot.cpp's retire and pool_release: the animations stopped, the node
+// out of the world, its model taken off (a pooled copy back to the pool), and
+// the node destroyed.
+void Replay3dView::State::free_round(LiveRound& r) {
+  zwep::RunHooks& rh = zwep::run_hooks();
+  if (r.flyout_anim && rh.anim_stop) rh.anim_stop(r.flyout_anim);
+  if (rh.remove_child) rh.remove_child(zwep::state().world, r.node);
+  if (r.model) {
+    if (r.pooled_model) {
+      zwep::Projectile p;
+      p.node = r.node, p.model = r.model, p.model_anim = r.model_anim;
+      zwep::model_return(r.def, &p);
+    } else if (rh.obj_remove_child) {
+      rh.obj_remove_child(r.node, r.model);
+    }
+  }
+  if (rh.node_destroy) rh.node_destroy(r.node);
 }
 
 // A logged shot's fire effect and sound at its muzzle, or a hit's impact
@@ -375,19 +506,21 @@ void Replay3dView::State::start_effects(const Event& e) {
   zwep::WeaponDef* def = zwep::find_def(e.weapon.c_str());
   if (!def) return;
   const zwep::Effect* effect = nullptr;
-  float pos[3], dir[3] = {0, 0, 0};
+  float pos[3], rot[3] = {0, 0, 0};
   static const float kZero[3] = {};
   if (e.type == "shot") {
+    // As the game's fire effect (zwep_shot.cpp spawn): at the muzzle, turned
+    // along the shot.
     effect = &def->fire;
     pos[0] = e.muzzle.x, pos[1] = e.muzzle.y, pos[2] = e.muzzle.z;
-    dir[0] = e.dir.x, dir[1] = e.dir.y, dir[2] = e.dir.z;
+    rotation_of(f3(e.dir), rot);
   } else if (e.type == "hit" && e.has_at && def->impacts) {
     effect = &def->impacts[zwep::kSoilDefault];
     pos[0] = e.at.x, pos[1] = e.at.y, pos[2] = e.at.z;
   }
   if (!effect) return;
   if (effect->animation)
-    zeff::anim_start_at(static_cast<zeff::AnimDef*>(effect->animation), nullptr, pos, kZero, dir);
+    zeff::anim_start_at(static_cast<zeff::AnimDef*>(effect->animation), nullptr, pos, rot, kZero);
   if (effect->sound_count > 0 && effect->sounds[0])
     zsnd::play_at(static_cast<zsnd::Object*>(effect->sounds[0]), pos, 1.0f, nullptr);
 }
@@ -464,15 +597,7 @@ void Replay3dView::draw_overlay() {
   draw_overlays(s.frame, s.overlays, s.draw, s.projector);
   draw_panel(*s.log, s.frame, s.selected, s.screen_w, s.draw);
   draw_bar(s.clock, s.overlays, s.screen_w, s.screen_h, s.draw);
-  draw_shots(s.frame, s.draw, s.projector);
-  if (s.confirm_open) {
-    const SDL_FRect box{s.screen_w / 2 - 150, s.screen_h / 2 - 40, 300, 80};
-    s.draw.rect(box, ui_color(20, 24, 28));
-    s.draw.text("Quit the replay?", box.x + 20, box.y + 18);
-    s.draw.text("Y: quit     N or Esc: go back", box.x + 20, box.y + 46, {200, 200, 200, 255});
-  } else if (s.quit_box_open) {
-    s.draw.text("paused: the quit box is open", 8, 8);
-  }
+  if (s.quit_box_open) s.draw.text("paused: the quit box is open", 8, 8);
   if (!s.pending_shot.empty() && s.render) {
     // The renderer keeps the path's pointer until the frame is shown.
     s.shot_in_flight = s.pending_shot;
@@ -521,20 +646,7 @@ void Replay3dView::State::pick(float window_x, float window_y) {
 
 bool Replay3dView::handle(const SDL_Event& e) {
   State& s = *s_;
-  if (!s.started) return false;
-  if (s.confirm_open) {
-    // The box takes every key and click while it is up.
-    if (e.type == SDL_EVENT_KEY_DOWN) {
-      if (e.key.key == SDLK_Y) {
-        if (s.request_quit) s.request_quit();
-      } else if (e.key.key == SDLK_N || e.key.key == SDLK_ESCAPE) {
-        s.confirm_open = false;
-      }
-    }
-    return e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
-           e.type == SDL_EVENT_MOUSE_BUTTON_UP || e.type == SDL_EVENT_MOUSE_MOTION || e.type == SDL_EVENT_MOUSE_WHEEL;
-  }
-  if (s.quit_box_open) return false;
+  if (!s.started || s.quit_box_open) return false;
   switch (e.type) {
     case SDL_EVENT_KEY_DOWN:
       if (is_fly_key(e.key.scancode)) {
@@ -556,12 +668,7 @@ bool Replay3dView::handle(const SDL_Event& e) {
           s.pending_shot = (std::filesystem::path(s.log_path_dir) / name).string();
           return true;
         }
-        case SDLK_ESCAPE:
-          s.confirm_open = true;
-          if (s.looking)
-            if (SDL_Window* w = SDL_GetWindowFromID(e.key.windowID)) SDL_SetWindowRelativeMouseMode(w, false);
-          return true;
-        default: return false;  // the rest: the game's (no command fires, plan step 7)
+        default: return false;  // Escape and the rest: the game's (no command fires, plan step 7)
       }
     case SDL_EVENT_KEY_UP:
       if (!is_fly_key(e.key.scancode)) return false;
