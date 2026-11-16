@@ -724,7 +724,7 @@ static class NativeRuntimeLayoutChecks
                 throw new Exception("Native preview projection lost its schema, distance or POM.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
-            var expectedTail = new[] { "--cc-pom", "1", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
+            var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
                 "--cc-hud-text", "1", "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
