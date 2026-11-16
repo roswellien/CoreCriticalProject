@@ -302,6 +302,27 @@ TEST(controller_profile_v1_calibrates_axes_and_emits_zin_command_states) {
   state.update(config, sample);
   EXPECT(state.actions[12] == zin::kReleased && state.actions[20] == zin::kReleased);
 
+  // A throttle stop (command 27) latched before the controller is lost must not keep the throttle at
+  // zero after it reconnects and re-arms.
+  auto stop_config = config;
+  stop_config.buttons[1] = 27;
+  sdlfe::ControllerState stop_state;
+  sdlfe::ControllerSample stop_sample;
+  stop_sample.connected = stop_sample.focused = true;
+  stop_state.update(stop_config, stop_sample);  // arm
+  stop_sample.buttons[1] = true;
+  stop_sample.axes[1] = 32767;
+  stop_state.update(stop_config, stop_sample);
+  EXPECT(stop_state.throttle_stopped && stop_state.analog[0] == 0);
+  stop_sample = {};
+  stop_state.update(stop_config, stop_sample);  // controller lost
+  EXPECT(!stop_state.throttle_stopped);
+  stop_sample.connected = stop_sample.focused = true;
+  stop_state.update(stop_config, stop_sample);  // back, neutral: re-arms
+  stop_sample.axes[1] = 32767;
+  stop_state.update(stop_config, stop_sample);
+  EXPECT(stop_state.analog[0] == -1);
+
   auto inverted_config = config;
   inverted_config.triggers[0] = 61;
   inverted_config.calibration[4].inverted = true;
