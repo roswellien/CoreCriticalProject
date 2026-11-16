@@ -261,14 +261,19 @@ void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
 void check_fullscreen_resize(SDL_Window *window,
                              sdlfe::RendererBackend backend) {
   auto renderer = make_check_renderer(window, backend);
-  renderer->set_viewport(0, 0, 32, 32);
-  renderer->clear(true, 0, 0, 0);
-  renderer->begin_scene();
-  quad(*renderer, 0, 32, .5f, 0xff204080);
-  renderer->end_scene();
   require(SDL_ShowWindow(window) && SDL_SyncWindow(window), SDL_GetError());
 
-  auto present_after_window_change = [&] {
+  // Draws a scene at the window's current size and waits until it is
+  // presented, so each stage rebuilds the frame targets for the new extent
+  // as well as the presentation target.
+  auto draw_and_present = [&](const char *stage) {
+    int width = 0, height = 0;
+    SDL_GetWindowSizeInPixels(window, &width, &height);
+    renderer->set_viewport(0, 0, width, height);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    quad(*renderer, 0, 32, .5f, 0xff204080);
+    renderer->end_scene();
     const auto before = renderer->presentation_count();
     for (int attempt = 0;
          attempt < 30 && renderer->presentation_count() == before; ++attempt) {
@@ -276,9 +281,12 @@ void check_fullscreen_resize(SDL_Window *window,
       renderer->present();
       SDL_Delay(10);
     }
-    require(renderer->presentation_count() > before,
-            "Changed Vulkan presentation target did not present");
+    require(renderer->presentation_count() > before, stage);
   };
+
+  // A windowed frame first, so the fullscreen switch resizes a presentation
+  // target that is already bound rather than creating the first one.
+  draw_and_present("The windowed Vulkan presentation target did not present");
 
   // Match SdlWindow::switch_fullscreen: finish renderer work before SDL can
   // synchronously resize the window and its Vulkan/DXGI presentation target.
@@ -289,9 +297,9 @@ void check_fullscreen_resize(SDL_Window *window,
   int fullscreen_width = 0, fullscreen_height = 0;
   SDL_GetWindowSizeInPixels(window, &fullscreen_width, &fullscreen_height);
   require((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0 &&
-              fullscreen_width > 32 && fullscreen_height > 32,
+              fullscreen_width > 64 && fullscreen_height > 48,
           "The fullscreen fixture did not reach a desktop-sized drawable");
-  present_after_window_change();
+  draw_and_present("The fullscreen Vulkan presentation target did not present");
 
   renderer->drain();
   require(SDL_SetWindowFullscreen(window, false) &&
@@ -300,7 +308,7 @@ void check_fullscreen_resize(SDL_Window *window,
   SDL_PumpEvents();
   require((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) == 0,
           "The fullscreen fixture did not return to windowed mode");
-  present_after_window_change();
+  draw_and_present("The restored window's Vulkan presentation target did not present");
 }
 
 } // namespace
