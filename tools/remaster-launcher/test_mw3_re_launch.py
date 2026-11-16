@@ -367,10 +367,10 @@ class NativePreviewPlanTests(unittest.TestCase):
             "native_payload": {"profile": "prepared-environment-v1"}})
         return os.path.join(self.root, name)
 
-    def ui_pack(self, name="menu", kind="menu", background=True):
+    def ui_pack(self, name="menu", kind="menu", background=True, pixel=(1, 2, 3, 255)):
         sprite = "0123456789abcdef"
         relative = f"ui/sprites/{sprite}.rgba"
-        image = b"MW3H" + struct.pack("<IIffff", 1, 1, 0.0, 0.0, 1.0, 1.0) + bytes((1, 2, 3, 255))
+        image = b"MW3H" + struct.pack("<IIffff", 1, 1, 0.0, 0.0, 1.0, 1.0) + bytes(pixel)
         self.write(f"{name}/{relative}", image)
         registry = {"schema_version": 2, "payload_profile": "prepared-ui-v1", "kind": kind,
                     "sprites": {sprite: relative},
@@ -447,6 +447,11 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertIn("--cc-environment-packs-explicit", result["argv"])
         self.assertEqual(result["skipped_packs"], [])
 
+    def test_no_ui_packs_leaves_hud_options_unset(self):
+        result = self.plan(self.request())
+        self.assertNotIn("--cc-hud", result["argv"])
+        self.assertNotIn("--cc-hud-text", result["argv"])
+
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_ui_sprite_packs_route_to_native_artwork_and_menu_background_is_skipped(self):
         hud = self.ui_pack("hud", "hud", background=False)
@@ -454,12 +459,47 @@ class NativePreviewPlanTests(unittest.TestCase):
         result = self.plan(self.request(hud="core-critical", ui_packs=[hud, menu]))
         argv = result["argv"]
         self.assertEqual(argv.count("--cc-hud-artwork"), 2)
-        self.assertEqual([argv[i + 1] for i, value in enumerate(argv) if value == "--cc-hud-artwork"],
-                         [hud, menu])
+        self.assertEqual(
+            [argv[i + 1] for i, value in enumerate(argv) if value == "--cc-hud-artwork"],
+            [hud, menu],
+        )
         skipped = result["skipped_packs"]
         self.assertEqual(len(skipped), 1)
         self.assertEqual(skipped[0]["feature"], "menu_hd_background")
         self.assertIn("no native menu-background", skipped[0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_identical_ui_identity_hashes_are_accepted_in_input_order(self):
+        hud = self.ui_pack("hud-identical", "hud", background=False)
+        menu = self.ui_pack("menu-identical", "menu", background=False)
+        result = self.plan(self.request(hud="core-critical", hud_text=True, ui_packs=[hud, menu]))
+        artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                   if value == "--cc-hud-artwork"]
+        self.assertEqual(artwork, [hud, menu])
+        self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_conflicting_ui_identity_keeps_first_pack_and_reports_later_pack(self):
+        first = self.ui_pack("hud-first", "hud", background=False)
+        second = self.ui_pack("menu-conflict", "menu", background=False, pixel=(9, 8, 7, 255))
+        result = self.plan(self.request(hud="core-critical", hud_text=True, ui_packs=[first, second]))
+        artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                   if value == "--cc-hud-artwork"]
+        self.assertEqual(artwork, [first])
+        self.assertEqual(result["skipped_packs"][0]["root"], second)
+        self.assertIn("0123456789abcdef", result["skipped_packs"][0]["reason"])
+        self.assertIn(first, result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_duplicate_ui_kind_reports_later_pack(self):
+        first = self.ui_pack("hud-first", "hud", background=False)
+        second = self.ui_pack("hud-second", "hud", background=False, pixel=(9, 8, 7, 255))
+        result = self.plan(self.request(hud="core-critical", ui_packs=[first, second]))
+        artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                   if value == "--cc-hud-artwork"]
+        self.assertEqual(artwork, [first])
+        self.assertEqual(result["skipped_packs"][0]["root"], second)
+        self.assertIn("hud UI pack was already selected", result["skipped_packs"][0]["reason"])
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_missing_ui_pack_is_reported_without_artwork_argv(self):
@@ -468,6 +508,22 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertNotIn("--cc-hud-artwork", result["argv"])
         self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
         self.assertIn("missing", result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_ui_pack_without_core_critical_hud_is_reported_and_skipped(self):
+        hud = self.ui_pack("hud-without-hud-mode", "hud", background=False)
+        result = self.plan(self.request(ui_packs=[hud]))
+        self.assertTrue(result["ok"])
+        self.assertNotIn("--cc-hud-artwork", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["root"], hud)
+        self.assertIn("requires the core-critical HUD", result["skipped_packs"][0]["reason"])
+
+    def test_invalid_ui_pack_path_is_reported_and_skipped(self):
+        result = self.plan(self.request(ui_packs=["relative/pack"]))
+        self.assertTrue(result["ok"])
+        self.assertNotIn("--cc-hud-artwork", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["root"], os.path.join("relative", "pack"))
+        self.assertIn("unreadable", result["skipped_packs"][0]["reason"])
 
     # The planner accepts only Windows paths, so tests that read real packs from a temporary
     # directory run on Windows; validation-only tests below run everywhere.
@@ -671,7 +727,7 @@ class NativePreviewPlanTests(unittest.TestCase):
         for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},
                         {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},
                         {"model_packs": "C:/one"}, {"ui_packs": "C:/one"}, {"unknown": 1},
-                        {"model_packs": ["relative/pack"]}, {"ui_packs": ["relative/pack"]}):
+                        {"model_packs": ["relative/pack"]}):
             with self.subTest(preview=preview), self.assertRaises(ValueError):
                 self.plan(self.request(**preview))
         request = self.request()

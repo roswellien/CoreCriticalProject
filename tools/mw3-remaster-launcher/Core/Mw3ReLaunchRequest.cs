@@ -33,8 +33,8 @@ public sealed record Mw3RePreviewOptions
 {
     /// <summary>Scenery/view distance: 800 is the original game's range; 1200 and 1600 extend it.</summary>
     public int DrawDistance { get; init; } = 800;
-    public string Hud { get; init; } = "core-critical";
-    public bool HudText { get; init; } = true;
+    public string? Hud { get; init; } = "core-critical";
+    public bool? HudText { get; init; } = true;
     public string Geometry { get; init; } = "partial";
     public IReadOnlyList<string> ModelPacks { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();

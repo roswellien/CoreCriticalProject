@@ -45,14 +45,18 @@ GpuHud::GpuHud(FrameRenderer& renderer, const HudOptions& options)
       const auto existing = artwork_.find(identity);
       if (existing == artwork_.end()) {
         artwork_.emplace(identity, std::move(image));
+        artwork_roots_.emplace(identity, directory);
         continue;
       }
       const auto& prior = *existing->second;
       const auto& incoming = *image;
       if (prior.width != incoming.width || prior.height != incoming.height ||
           prior.u0 != incoming.u0 || prior.v0 != incoming.v0 || prior.u1 != incoming.u1 ||
-          prior.v1 != incoming.v1 || prior.pixels != incoming.pixels)
-        throw std::runtime_error("Conflicting HUD/menu artwork identity");
+          prior.v1 != incoming.v1 || prior.pixels != incoming.pixels) {
+        std::fprintf(stderr, "GPU HUD: conflicting identity %016llx; keeping %s, skipping %s\n",
+                     static_cast<unsigned long long>(identity), artwork_roots_.at(identity).c_str(),
+                     directory.c_str());
+      }
     }
   }
 }

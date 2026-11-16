@@ -753,6 +753,13 @@ static class NativeRuntimeLayoutChecks
             }));
             if (!NativeGameRunner.SelectUiPacks(new[] { ui }).SequenceEqual(new[] { Path.GetFullPath(ui) }))
                 throw new Exception("Enabled prepared UI packs were not selected for native planning.");
+            var unreadableUi = Path.Combine(packs, "unreadable-ui");
+            Directory.CreateDirectory(unreadableUi);
+            File.WriteAllText(Path.Combine(unreadableUi, "pack.json"), "not json");
+            var unreadableUiReports = new List<string>();
+            if (NativeGameRunner.SelectUiPacks(new[] { unreadableUi }, unreadableUiReports.Add).Count != 0 ||
+                unreadableUiReports.Count != 1 || !unreadableUiReports[0].Contains("could not be read", StringComparison.Ordinal))
+                throw new Exception("Unreadable pack was not reported as skipped.");
 
             if (NativeGameRunner.WindowModeForSettings("windowed") != Mw3ReWindowMode.Windowed ||
                 NativeGameRunner.WindowModeForSettings("fullscreen") != Mw3ReWindowMode.Fullscreen ||
@@ -785,6 +792,17 @@ static class NativeRuntimeLayoutChecks
                 !planned["skipped_packs"]!.AsArray().Any(item => item!["root"]!.GetValue<string>() == shared) ||
                 !planned["skipped_packs"]!.AsArray().Any(item => item!["feature"]!.GetValue<string>() == "menu_hd_background"))
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
+
+            var noUiOptions = options with
+            {
+                Preview = options.Preview! with { UiPacks = Array.Empty<string>(), Hud = null, HudText = null }
+            };
+            var noUiRequest = Mw3ReLaunchRequest.Create(contract, noUiOptions, "D:/Original MW3", dataRoot,
+                NativeGameRunner.ProfileId);
+            var noUiPlan = RunMw3RePlanner(noUiRequest);
+            var noUiArgv = noUiPlan["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+            if (noUiArgv.Contains("--cc-hud") || noUiArgv.Contains("--cc-hud-text"))
+                throw new Exception("No UI packs should leave saved MW3-RE HUD settings unset.");
 
             // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
             var original = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with

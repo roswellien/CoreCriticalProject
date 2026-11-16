@@ -124,6 +124,23 @@ void artwork_checks(const std::filesystem::path& directory) {
   require(platform::hud_identity(2, 1, opaque, 2) == 0xdaa81911a07d967eULL,
           "Private HUD fingerprint contract changed");
   rejects([&] { platform::hud_identity(2, 2, opaque, 2); });
+
+  const auto first_root = directory / "first";
+  const auto second_root = directory / "second";
+  std::filesystem::create_directories(first_root / "ui" / "sprites");
+  std::filesystem::create_directories(second_root / "ui" / "sprites");
+  const auto sprite = "ui/sprites/0000000000000001.rgba";
+  std::memcpy(bytes.data() + 12, uv, sizeof uv);
+  write(bytes.size());
+  std::filesystem::copy_file(path, first_root / sprite);
+  bytes[28] = 9;
+  write(bytes.size());
+  std::filesystem::copy_file(path, second_root / sprite);
+  Recorder recorder;
+  sdlfe::HudOptions options;
+  options.mode = "core-critical";
+  options.artwork = {first_root.string(), second_root.string()};
+  sdlfe::GpuHud hud(recorder, options);
 }
 void drawing_checks() {
   Recorder recorder;
