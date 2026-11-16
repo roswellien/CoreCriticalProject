@@ -1,4 +1,5 @@
 #include "frontend/sdl/sdl_platform.h"
+#include "gamez/zclass/visual_distance.h"
 #include "upgrades/game_boxes.h"
 
 #ifdef CC_MW3_RE_ADAPTER
@@ -21,6 +22,11 @@ namespace sdlfe {
 
 bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend backend,
                      const CoreCriticalQuality& quality, const CoreCriticalAssets& assets) {
+  if (backend == RendererBackend::sdl && quality.draw_distance != 800)
+    return std::fprintf(stderr,
+                        "mw3: --cc-draw-distance requires a Core Critical Vulkan backend\n"),
+           false;
+  zcls::set_visual_far_request(quality.draw_distance);
   if (backend == RendererBackend::sdl &&
       (quality.antialiasing != "off" || quality.anisotropy != "1" || !assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical quality requires a Core Critical Vulkan backend\n"), false;

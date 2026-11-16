@@ -1937,6 +1937,11 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.geometry_debug_normals = assets.geometry_debug_normals;
 
   // Quality
+  if (quality.draw_distance != 800 && quality.draw_distance != 1200 &&
+      quality.draw_distance != 1600)
+    throw std::runtime_error(
+        "--cc-draw-distance supports only 800, 1200 or 1600");
+  config.draw_distance = quality.draw_distance;
   config.antialiasing = quality.antialiasing;
   config.anisotropy = quality.anisotropy;
   if (quality.antialiasing == "fxaa") {

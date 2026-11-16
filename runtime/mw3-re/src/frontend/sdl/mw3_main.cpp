@@ -107,6 +107,7 @@
 #include "frontend/sdl/sdl_input.h"
 #include "frontend/sdl/sdl_music.h"
 #include "frontend/sdl/sdl_platform.h"
+#include "frontend/sdl/draw_distance_option.h"
 #include "frontend/sdl/sdl_sound.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "frontend/sdl/sdl_vfw.h"
@@ -312,6 +313,7 @@ void usage() {
       "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
+      "    [--cc-draw-distance 800|1200|1600 (default 800)]\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
@@ -476,6 +478,16 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
+    else if (s == "--cc-draw-distance") {
+      if (!next(1)) {
+        std::fprintf(stderr, "--cc-draw-distance requires 800, 1200 or 1600\n");
+        return false;
+      }
+      if (!sdlfe::parse_draw_distance(argv[++i], &a.quality.draw_distance)) {
+        std::fprintf(stderr, "--cc-draw-distance supports only 800, 1200 or 1600\n");
+        return false;
+      }
+    }
     else if (s == "--cc-textures" && next(1)) a.cc_assets.textures = argv[++i];
     else if (s == "--cc-lighting" && next(1)) a.cc_assets.lighting = argv[++i];
     else if (s == "--cc-pom") {

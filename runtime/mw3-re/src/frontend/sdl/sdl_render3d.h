@@ -30,6 +30,7 @@ enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
 struct CoreCriticalQuality {
   std::string antialiasing = "off";
   std::string anisotropy = "1";
+  unsigned draw_distance = 800;
 };
 
 struct PreparedModelBinding {

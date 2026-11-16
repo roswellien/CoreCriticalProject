@@ -21,6 +21,7 @@ struct RendererBridgeConfig {
   unsigned world_scale_percent{100};
   unsigned remaster_width{0};
   unsigned remaster_height{0};
+  unsigned draw_distance{800};
 
   // Quality / AA / AF
   std::string antialiasing{"off"};

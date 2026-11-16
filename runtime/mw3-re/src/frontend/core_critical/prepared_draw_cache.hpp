@@ -67,7 +67,7 @@ public:
     append(width);
     append(height);
     append(lighting);
-    append(zmod::fog());
+    append(zmod::render_fog());
     append(zmod::fog_calc().camera_to_world);
     const int rounding = std::fegetround();
     append(rounding);

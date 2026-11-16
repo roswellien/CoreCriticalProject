@@ -402,7 +402,7 @@ bool submit_geometry(zcls::Node &node) {
     context.overlay = draw_state().overlay != 0;
     context.source_vertices = model.count(0x14);
     context.source_polygons = model.count(0x10);
-    const auto &source_fog = fog();
+    const auto &source_fog = render_fog();
     cc::geometry::Fog fog_state;
     fog_state.enabled = source_fog.on != 0;
     std::copy_n(source_fog.color, 3, fog_state.color.begin());
