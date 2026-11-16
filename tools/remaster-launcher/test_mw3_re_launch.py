@@ -5,7 +5,12 @@ import importlib
 import importlib.util
 import json
 import os
+from pathlib import Path
+import shutil
 import struct
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import PureWindowsPath
 from unittest.mock import patch
@@ -465,6 +470,34 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual(result["overridden_models"], [
             {"root": second, "chassis": "strider", "kept_from": first},
         ])
+
+    @unittest.skipUnless(os.name == "nt", "isolated pack translation reads Windows paths")
+    def test_surface_material_sidecar_plans_when_planner_is_alone_under_isolated_python(self):
+        model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                 "environment": {}}
+        model["environment"].update(self.add_surface_material("isolated", "strider"))
+        pack = self.model_pack("isolated", [model])
+        request = self.request(model_packs=[pack])
+
+        with tempfile.TemporaryDirectory() as isolated_directory:
+            planner_copy = Path(isolated_directory) / "mw3_re_launch.py"
+            shutil.copyfile(Path(__file__).with_name("mw3_re_launch.py"), planner_copy)
+            isolated_script = (
+                "import json, runpy, sys; "
+                "planner = runpy.run_path(sys.argv[1]); "
+                "print(json.dumps(planner['plan_json'](sys.stdin.read())))"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-c", isolated_script, str(planner_copy)],
+                input=json.dumps(request), text=True, capture_output=True, check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        plan = json.loads(result.stdout)
+        self.assertTrue(plan["ok"])
+        self.assertIn("--cc-model-materials", plan["argv"])
+        self.assertFalse(any(item.get("feature") == "surface_materials"
+                             for item in plan["skipped_packs"]))
 
     def test_invalid_surface_material_sidecar_is_reported_and_left_off(self):
         model = {"id": "strider", "backend": "native", "status": "runtime-ready",
