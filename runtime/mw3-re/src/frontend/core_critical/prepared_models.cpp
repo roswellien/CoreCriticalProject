@@ -5,6 +5,7 @@
 #include "renderer/donor_retarget.hpp"
 #include "platform/sha256.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -147,6 +148,14 @@ void require_batch_source(const Node &root, const std::string &name, size_t inde
         throw binding_error(root, name, index, field, "absent");
     if (found->second != 1)
         throw binding_error(root, name, index, field, "count " + std::to_string(found->second));
+}
+
+bool batch_frames_present(const Batch &batch, const Poses &poses) {
+    for (const auto *name : {&batch.owner, &batch.visibility, &batch.placement_frame,
+                             &batch.joint_frame, &batch.anchor_control})
+        if (!name->empty() && !poses.count(*name))
+            return false;
+    return true;
 }
 
 Matrix placed(const Matrix &root, const Poses &poses, const Batch &batch) {
@@ -453,6 +462,28 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     const auto *root = source_root(node, true);
     if (!root)
         return output; // ambiguous ancestry keeps the ordinary native geometry
+    const auto live = hierarchy(root);
+    const auto requested_asset = mech_asset_key(node->source_asset->name);
+    const auto selected_asset = mech_asset_key(selected->source_asset);
+    const bool distance_lod_fallback =
+        requested_asset && selected_asset && requested_asset->chassis == selected_asset->chassis &&
+        !requested_asset->distance_lod && selected_asset->distance_lod;
+    const auto &references = selected->mesh.rig.references;
+    const bool missing_live_rig_frame = std::any_of(
+        references.begin(), references.end(), [&](const auto &reference) {
+            return !live.poses.count(reference.name);
+        });
+    bool missing_live_batch_frame = false;
+    for (const auto &batch : selected->mesh.batches)
+        missing_live_batch_frame |= !batch_frames_present(batch, live.poses);
+
+    // A detached subtree and a cross-LOD selection can legitimately lack frames
+    // required by the selected geometry. Decide those cases before strict source
+    // binding checks, which remain authoritative for exact attached models.
+    if ((!root->source_asset_root && (missing_live_rig_frame || missing_live_batch_frame)) ||
+        (distance_lod_fallback && (missing_live_rig_frame || missing_live_batch_frame)))
+        return output;
+
     for (size_t b = 0; b < selected->mesh.batches.size(); ++b) {
         const auto &batch = selected->mesh.batches[b];
         require_batch_source(*root, batch.owner, b, "owner");
@@ -461,7 +492,6 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         require_batch_source(*root, batch.joint_frame, b, "joint_frame");
         require_batch_source(*root, batch.anchor_control, b, "anchor_control");
     }
-    const auto &references = selected->mesh.rig.references;
     for (size_t r = 0; r < references.size(); ++r) {
         const auto &name = references[r].name;
         const auto &nodes = root->source_asset->nodes;
@@ -498,7 +528,6 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
                                     std::string("dependency ") + anchor + " rest absent");
         }
     }
-    const auto live = hierarchy(root);
     const auto inverse_node = math::inverse(live.nodes.at(node));
     const auto root_camera = math::product(from_native(context.model_to_camera), inverse_node);
     const auto root_world = math::product(from_native(context.model_to_world), inverse_node);

@@ -184,7 +184,7 @@ prepare_draw(const PreparedBatchDraw &source,
   auto &draw = result.draw;
   draw.texture = -1;
   draw.sampler = 3U | (1U << 4) | (1U << 8) | 0x10000U;
-  draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1, 1, 0};
+  draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1, context.opacity >= 1.f, 0};
   // Prepared draws do not use alpha test in mode.w, so retain the native
   // per-node opacity there for the prepared vertex shader to apply to alpha.
   draw.push.mode[3] = prepared_opacity_bits(context.opacity);
