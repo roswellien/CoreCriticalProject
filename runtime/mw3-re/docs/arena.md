@@ -99,9 +99,10 @@ the same seed again, since an existing log is never overwritten.
 
 ### What the replay viewers read (#289)
 
-The start line carries `"version": 1`. The log reader refuses a log with no
-version (one written before #289) or another version, with a message saying
-which; it keeps fields it doesn't know, so a later version can add fields.
+The start line carries `"version": 2` (1 before the 3D replay). The log
+reader reads versions 1 and 2 and refuses a log with no version (one written
+before #289) or another version, with a message saying which; it keeps
+fields it doesn't know, so a later version can add fields.
 
 - `shot` also names the `weapon`, whether it is a `beam`, the shooter's AI
   `target` (a mech id, -1 for none), whether the weapon had a `locked` lock,
@@ -135,6 +136,23 @@ which; it keeps fields it doesn't know, so a later version can add fields.
   contact), `target_lost` (its target left the sensors and they picked
   another or none) and `target_other`. The `_other` codes mean the change
   came from somewhere the log doesn't name yet.
+
+Version 2 adds what the 3D replay poses mechs and starts effects from:
+
+- Each mech in the start line has its pilot's `voice` tag.
+- Each mech's `state` record also has its `speed` (forward positive), the
+  torso's `pitch`, each arm's aim `yaw` and `pitch`, and under `anim` the
+  gait clip's `phase` (0 to 1), its cycles a second `cps`, the blend
+  `weight` and the `limp` slot playing (-1 for none). While an action plays
+  (a fall, a get-up), `limp` and these anim fields can still hold the last
+  gait's values; the action line says what plays.
+- `action`: a mech's fall, landing, get-up or collapse started, with its
+  `name`: `fallf`, `fallb`, `landf`, `landb`, `getupf`, `getupb`,
+  `collapsel` or `collapser`.
+- `voice`: a bot's radio line, with its radio `event` (0 to 15), and
+  `dropped` when the game skipped it as too soon after the last.
+- `hit` and `round_end` also give `at`, where the round struck, and
+  `terrain`, whether it struck the ground rather than a mech.
 
 `mech3::arena::set_arena_log_detail(false)` leaves all of this out except the
 version, and the match then reads and logs nothing new; the tests use it to show
@@ -177,8 +195,54 @@ Controls:
   Escape closes the viewer.
 
 `--replay-script FILE` drives the viewer from a file of commands, in a hidden
-window, for tests: `wait`, `key`, `click`, `drag`, `wheel`, `shot` and
-`quit` (`src/frontend/sdl/replay_view.h`).
+window, for tests: `wait SECONDS`, `key K` and `keyup K` (`space`, `left`,
+`right`, `comma`, `period`, `escape`, `enter`, `f12`, `1` to `5`, `a` to
+`z`), `click X Y`, `drag X1 Y1 X2 Y2`, `wheel X Y NOTCHES`, `shot FILE.bmp`,
+`seek SECONDS`, `camera X Y Z YAW PITCH`, `follow ID` and `quit`
+(`src/frontend/sdl/replay_ui.h`). Scripted runs step a fixed 1/60 s a frame.
+Input, seeks and camera moves take effect the next frame, so a `shot`
+shows the frame before the commands after it. The top-down viewer ignores
+`camera` and `follow`.
+
+## Watching a match in 3D (#289)
+
+```sh
+mw3 GAME_DIR --replay3d <out>/match-<seed>.jsonl
+```
+
+The match plays back in the game itself, on its map, with each logged mech
+drawn as the game's own mech. Nothing of the match is simulated: no AI,
+weapons, damage, missions or sensors run. Each frame every mech is posed
+from the log with the game's own animation code (the walk and run clips at
+the logged phase, falls, get-ups and collapses as the log's action lines
+say, torso and arm aims), lost arms and legs are hidden, and each logged
+shot and hit starts that weapon's own fire or impact effect and sound.
+Version 1 logs play too, with a walk guessed from the distance moved.
+
+It exits 2 before the game starts for a log the reader refuses, a map that
+isn't a multiplayer map in the install, a chassis it doesn't know, and with
+`--replay`, `--original` or anything `--replay` refuses.
+
+Controls (the quit box's own keys work while it is open):
+
+- Space, Left and Right, `<` and `>`, 1 to 5, the seek bar and the mech
+  panel as in the top-down viewer. Each mech has a ring at its feet in its
+  side's color and its id above it.
+- The camera starts behind the first mech. Hold the right mouse button and
+  move the mouse to look; W, A, S and D fly, Q and E go down and up; the
+  mouse wheel changes the flying speed. Left-click a mech to follow it from
+  behind and open its panel; flying or looking lets it go.
+- F12 saves `replay3d-<time>.bmp` (beside the script with `--replay-script`,
+  else in the current folder).
+- Escape opens the game's quit box and pauses the replay; N goes back, Y
+  ends the program.
+
+Limits: no radio chatter plays (the log records it). A seek starts no
+effects for the span it skips, and effects already playing run on. Rounds
+in flight and held beams aren't drawn as models; the overlays show them as
+in the top-down viewer only through the shot and hit effects. A mech is
+picked by its label's point on the screen, not its shape. The camera goes
+through hills.
 
 ## Repeating a match
 
