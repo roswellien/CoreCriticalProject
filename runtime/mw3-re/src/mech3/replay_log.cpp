@@ -148,7 +148,7 @@ bool read_pose(const Json& m, MechPose* out, int* skipped) {
     keep(&p.arm_pitch[i], -kMaxAngle, kMaxAngle, 0.0f);
   }
   keep(&p.phase, 0.0f, 1.0f, 0.0f);
-  keep(&p.cps, 0.0f, 100.0f, 0.0f);
+  keep(&p.cps, -100.0f, 100.0f, 0.0f);  // negative: the clip runs backward (walking in reverse)
   keep(&p.weight, 0.0f, 1.0f, 0.0f);
   keep(&p.heat, -1e6f, 1e6f, 0.0f);
   return true;

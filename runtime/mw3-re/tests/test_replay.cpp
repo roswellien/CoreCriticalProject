@@ -109,6 +109,17 @@ TEST(replay_v2_phase_no_blend_across_clips) {
   EXPECT(std::abs(log.frame_at(0.05f).mechs[0].phase - 0.05f) < 1e-3f);
 }
 
+// Walking backward logs a negative rate: it is kept, and the phase runs back.
+TEST(replay_v2_phase_runs_back_when_walking_backward) {
+  const std::string back = R"({"index":5,"t":0.5,"phase":0.5,"cps":-1.0,"weight":0.25,"limp":-1})";
+  const std::string text = kStart + state(0, mech(0, 0, false, back, kParts));
+  ReplayLog log;
+  std::string error;
+  EXPECT(load(&log, "replay_backward", text, &error));
+  const auto m = log.frame_at(0.1f).mechs[0];
+  EXPECT(m.cps < 0.0f && std::abs(m.phase - 0.4f) < 1e-3f);
+}
+
 // The same frame whatever was asked before it.
 TEST(replay_v2_seek_order_does_not_matter) {
   ReplayLog log;
@@ -248,7 +259,7 @@ TEST(replay_skips_bad_values) {
 TEST(replay_resets_non_finite_values) {
   std::string text = kStart;
   // 1e39 is past a float's range: the reader's float is infinite.
-  const std::string bad_anim = R"({"index":2,"t":0.5,"phase":1e39,"cps":-5,"weight":7,"limp":-1})";
+  const std::string bad_anim = R"({"index":2,"t":0.5,"phase":1e39,"cps":-500,"weight":7,"limp":-1})";
   std::string bad = mech(0, 0, false, bad_anim, kParts);
   bad.replace(bad.find(R"("heading":0)"), 11, R"("heading":1e39)");
   text += state(0, bad);
