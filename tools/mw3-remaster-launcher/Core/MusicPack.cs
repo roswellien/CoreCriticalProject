@@ -74,76 +74,90 @@ public static class MusicPack
                     var source = track["source"]!.GetValue<string>();
                     return (Number: number, Source: source, FileName: $"track{number:00}{Path.GetExtension(source)}");
                 }).ToList();
-        var desiredNumbers = tracks.Select(track => track.Number).ToHashSet();
+        // A launcher-staged file the enabled pack no longer supplies under the same name is removed. A file
+        // that cannot be removed now (for example still open) stays recorded and is retried next launch.
         foreach (var previous in owned.Values.ToArray())
         {
-            var number = TrackNumber(previous.FileName);
-            var desired = tracks.FirstOrDefault(track => track.Number == number);
-            var keepPath = desired.Number == number &&
-                Path.GetFileName(desired.FileName).Equals(previous.FileName, StringComparison.OrdinalIgnoreCase);
-            if (desiredNumbers.Contains(number) && keepPath) continue;
-            var path = Path.Combine(musicDirectory, previous.FileName);
-            File.Delete(path);
-            owned.Remove(previous.FileName);
-            log?.Invoke($"MW3-RE launcher-staged soundtrack {previous.FileName} removed because the enabled pack no longer supplies it.");
+            var stillSupplied = tracks.Any(track =>
+                track.FileName.Equals(previous.FileName, StringComparison.OrdinalIgnoreCase));
+            if (stillSupplied) continue;
+            try
+            {
+                File.Delete(Path.Combine(musicDirectory, previous.FileName));
+                owned.Remove(previous.FileName);
+                log?.Invoke($"MW3-RE launcher-staged soundtrack {previous.FileName} removed because the enabled pack no longer supplies it.");
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                log?.Invoke($"MW3-RE launcher-staged soundtrack {previous.FileName} could not be removed yet: {error.Message}");
+            }
         }
 
         var staged = 0;
-        foreach (var track in tracks)
+        // Every format MW3-RE looks for. A file of any of them that the launcher did not stage belongs to the
+        // player, and the pack then leaves that track number alone whichever format would win the lookup.
+        var extensions = new[] { ".ogg", ".flac", ".wav", ".mp3" };
+        try
         {
-            var number = track.Number;
-            var source = track.Source;
-            var destination = Path.Combine(musicDirectory, track.FileName);
-            using var sourceStream = File.OpenRead(source);
-            var currentRecord = new StagedTrack(track.FileName, sourceStream.Length,
-                Convert.ToHexString(SHA256.HashData(sourceStream)).ToLowerInvariant(), manifest!.Id, manifest.Version);
-            var extensions = new[] { ".ogg", ".flac", ".wav", ".mp3" };
-            var sourcePriority = Array.IndexOf(extensions, Path.GetExtension(source).ToLowerInvariant());
-            var shadow = extensions.Take(sourcePriority)
-                .Select(item => Path.Combine(musicDirectory, $"track{number:00}{item}"))
-                .FirstOrDefault(path => File.Exists(path) && !owned.ContainsKey(Path.GetFileName(path)));
-            if (shadow != null)
+            foreach (var track in tracks)
             {
-                log?.Invoke($"MW3-RE soundtrack track {number:00} was left out because {shadow} has lookup priority.");
-                continue;
-            }
-            PackStorage.EnsureNoLinks(destination);
-            if (File.Exists(destination))
-            {
-                if (owned.ContainsKey(track.FileName))
+                var number = track.Number;
+                var source = track.Source;
+                var destination = Path.Combine(musicDirectory, track.FileName);
+                var playerFile = extensions
+                    .Select(item => Path.Combine(musicDirectory, $"track{number:00}{item}"))
+                    .FirstOrDefault(path => File.Exists(path) && !owned.ContainsKey(Path.GetFileName(path)));
+                if (playerFile != null)
                 {
-                    if (!FilesMatch(source, destination))
-                    {
-                        var temporary = Path.Combine(musicDirectory, $".track{number:00}.{Guid.NewGuid():N}.tmp");
-                        try
-                        {
-                            File.Copy(source, temporary);
-                            File.Move(temporary, destination, true);
-                            ++staged;
-                            log?.Invoke($"MW3-RE launcher-staged soundtrack track {number:00} updated from pack {manifest.Id} {manifest.Version}.");
-                        }
-                        finally { if (File.Exists(temporary)) File.Delete(temporary); }
-                    }
-                    else log?.Invoke($"MW3-RE soundtrack track {number:00} is already current.");
-                    owned[track.FileName] = currentRecord;
+                    log?.Invoke($"MW3-RE soundtrack track {number:00} was left out because {playerFile} is the player's own.");
                     continue;
                 }
-                log?.Invoke($"MW3-RE soundtrack track {number:00} was left out because {destination} already exists.");
-                continue;
+                try
+                {
+                    StagedTrack currentRecord;
+                    using (var sourceStream = File.OpenRead(source))
+                        currentRecord = new StagedTrack(track.FileName, sourceStream.Length,
+                            Convert.ToHexString(SHA256.HashData(sourceStream)).ToLowerInvariant(),
+                            manifest!.Id, manifest.Version);
+                    PackStorage.EnsureNoLinks(destination);
+                    if (File.Exists(destination) && FilesMatch(source, destination))
+                    {
+                        log?.Invoke($"MW3-RE soundtrack track {number:00} is already current.");
+                        owned[track.FileName] = currentRecord;
+                        continue;
+                    }
+                    // A copy, not a hard link: a player editing the profile track must not change the
+                    // installed, hash-verified pack file. The copy goes to a temporary name first so a
+                    // failed copy never leaves a partial track under the real name.
+                    var temporary = Path.Combine(musicDirectory, $".track{number:00}.{Guid.NewGuid():N}.tmp");
+                    PackStorage.EnsureNoLinks(temporary);
+                    try
+                    {
+                        File.Copy(source, temporary);
+                        File.Move(temporary, destination, true);
+                    }
+                    finally
+                    {
+                        if (File.Exists(temporary)) File.Delete(temporary);
+                    }
+                    owned[track.FileName] = currentRecord;
+                    ++staged;
+                    log?.Invoke($"MW3-RE soundtrack track {number:00} staged from pack {manifest.Id} {manifest.Version}.");
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    // The previous record (if any) is kept, so a still-matching old copy stays launcher-owned.
+                    log?.Invoke($"MW3-RE soundtrack track {number:00} was not staged: {error.Message}");
+                }
             }
-
-            // A copy, not a hard link: a player editing the profile track must not change the installed,
-            // hash-verified pack file.
-            File.Copy(source, destination);
-            ++staged;
-            owned[track.FileName] = currentRecord;
-            log?.Invoke($"MW3-RE soundtrack track {number:00} staged in the profile music folder.");
         }
-        if (Directory.Exists(musicDirectory)) WriteStagedRecord(recordPath, owned.Values);
+        finally
+        {
+            // Recorded even after a failure, so files staged earlier in this pass stay launcher-owned.
+            if (Directory.Exists(musicDirectory)) WriteStagedRecord(recordPath, owned.Values);
+        }
         return staged;
     }
-
-    private static int TrackNumber(string fileName) => int.Parse(fileName.AsSpan(5, 2));
 
     private static List<StagedTrack>? ReadStagedRecord(string path)
     {

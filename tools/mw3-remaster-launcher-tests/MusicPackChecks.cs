@@ -68,6 +68,16 @@ static class MusicPackChecks
             if (MusicPack.StageForNative(Array.Empty<string>(), nativeWrite) != 0 ||
                 File.Exists(stagedTrack) || File.Exists(Path.Combine(nativeWrite, "music", "track03.wav")))
                 throw new Exception("Disabling the soundtrack pack did not remove launcher-staged tracks.");
+            // A player's lower-priority .mp3 still owns its track number: a staged .wav would win the
+            // runtime's lookup and silence it.
+            var mp3Write = Path.Combine(root, "native-profile-with-user-mp3");
+            var userMp3 = Path.Combine(mp3Write, "music", "track02.mp3");
+            Directory.CreateDirectory(Path.GetDirectoryName(userMp3)!);
+            File.WriteAllText(userMp3, "player mp3");
+            if (MusicPack.StageForNative(manager.GetActivePackDirectories(), mp3Write) != 1 ||
+                File.Exists(Path.Combine(mp3Write, "music", "track02.wav")) ||
+                File.ReadAllText(userMp3) != "player mp3")
+                throw new Exception("Soundtrack staging shadowed a player's lower-priority track.");
             var conflictingWrite = Path.Combine(root, "native-profile-with-user-music");
             var userMusic = Path.Combine(conflictingWrite, "music", "track02.wav");
             Directory.CreateDirectory(Path.GetDirectoryName(userMusic)!);
