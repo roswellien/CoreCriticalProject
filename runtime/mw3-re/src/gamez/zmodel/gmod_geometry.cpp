@@ -418,6 +418,14 @@ bool submit_geometry(zcls::Node &node) {
         renderer->submit_prepared_geometry(context, fog_state) ==
             cc::geometry::Submission::submitted)
       return true;
+    // Stock model packets do not carry sky state; keep the original TL producer.
+    if (zvid::draw_state().native_sky) {
+        // Static baking also indexes cached normals with vertex shading off.
+        if (model.count(0x14) > std::uint32_t(kModelVerts) ||
+            model.count(0x18) > std::uint32_t(kModelVerts))
+            throw std::runtime_error("Legacy model draw buffer capacity exceeded");
+        return unsupported();
+    }
     if (!source_supported(model))
         return unsupported();
     if (!model.render_geometry) {
