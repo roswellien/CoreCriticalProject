@@ -50,6 +50,7 @@ struct Node {                      // 0xd4-byte pool slot
   // entry so optional visuals can bind without changing game-facing raw fields.
   std::shared_ptr<const SourceAsset> source_asset;
   bool source_asset_root = false;
+  std::string source_asset_root_name; // Original name survives a death rename.
   uint32_t source_model_vertices = 0;
   std::uint64_t fixture_life = 0; // Never serialized or copied by copy_node_base.
 

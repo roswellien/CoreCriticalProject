@@ -5,11 +5,13 @@
 #include "renderer/donor_retarget.hpp"
 #include "platform/sha256.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <string_view>
 
 namespace cc_mw3_re {
 namespace {
@@ -18,15 +20,50 @@ using platform::prepared::Batch;
 using platform::prepared::Matrix;
 using zcls::Node;
 
-const Node *source_root(const Node *node) {
+const Node *source_root(const Node *node, bool allow_detached_subtree = false) {
     const Node *root = node;
     for (unsigned depth = 0; !root->source_asset_root; ++depth) {
-        if (depth >= 64 || root->parent_count() != 1 ||
-            root->parents[0]->source_asset != node->source_asset)
+        if (depth >= 64 || root->parent_count() > 1)
             return nullptr;
+        // Destroyed parts are attached below the world node after leaving the
+        // mech tree. Their highest same-asset node is still a usable visual root.
+        if (root->parent_count() == 0)
+            return allow_detached_subtree ? root : nullptr;
+        if (root->parents[0]->source_asset != node->source_asset)
+            return allow_detached_subtree ? root : nullptr;
         root = root->parents[0];
     }
     return root;
+}
+
+struct MechAssetKey {
+    std::string_view chassis;
+    bool distance_lod{};
+};
+
+std::optional<MechAssetKey> mech_asset_key(const std::string &asset) {
+    constexpr std::string_view prefix = "mech_";
+    constexpr std::string_view extension = ".flt";
+    const std::string_view name(asset);
+    if (!name.starts_with(prefix) || !name.ends_with(extension))
+        return std::nullopt;
+
+    auto chassis = name.substr(prefix.size(), name.size() - prefix.size() - extension.size());
+    bool distance_lod = false;
+    constexpr std::string_view distance_suffix = "_1";
+    if (chassis.ends_with(distance_suffix)) {
+        chassis.remove_suffix(distance_suffix.size());
+        distance_lod = true;
+    }
+    if (chassis.empty())
+        return std::nullopt;
+    return MechAssetKey{chassis, distance_lod};
+}
+
+std::string_view source_node_name(const Node *node, const Node *root) {
+    if (node == root && root->source_asset_root && !root->source_asset_root_name.empty())
+        return root->source_asset_root_name;
+    return node->name();
 }
 
 std::ifstream open(const std::string &path) {
@@ -61,10 +98,11 @@ Hierarchy hierarchy(const Node *root) {
             throw std::runtime_error("Prepared source hierarchy exceeds its node limit");
         const auto *node = pending[i];
         const auto current = output.nodes.at(node);
-        const auto canonical = root->source_asset->nodes.find(node->name());
+        const auto name = source_node_name(node, root);
+        const auto canonical = root->source_asset->nodes.find(std::string(name));
         if (canonical != root->source_asset->nodes.end() && canonical->second == 1) {
-            output.poses.emplace(node->name(), current);
-            output.targets.emplace(node->name(), node);
+            output.poses.emplace(std::string(name), current);
+            output.targets.emplace(std::string(name), node);
         }
         for (int child = 0; child < node->child_count(); ++child) {
             const auto *next = node->children[child];
@@ -110,6 +148,14 @@ void require_batch_source(const Node &root, const std::string &name, size_t inde
         throw binding_error(root, name, index, field, "absent");
     if (found->second != 1)
         throw binding_error(root, name, index, field, "count " + std::to_string(found->second));
+}
+
+bool batch_frames_present(const Batch &batch, const Poses &poses) {
+    for (const auto *name : {&batch.owner, &batch.visibility, &batch.placement_frame,
+                             &batch.joint_frame, &batch.anchor_control})
+        if (!name->empty() && !poses.count(*name))
+            return false;
+    return true;
 }
 
 Matrix placed(const Matrix &root, const Poses &poses, const Batch &batch) {
@@ -371,6 +417,27 @@ const platform::prepared::Image *PreparedModels::named_texture(const char *name)
     return nullptr;
 }
 
+const PreparedModels::Model *
+PreparedModels::model_for_asset(const std::string &source_asset) const {
+    for (const auto &model : models_)
+        if (model.source_asset == source_asset)
+            return &model;
+
+    const auto requested = mech_asset_key(source_asset);
+    if (!requested)
+        return nullptr;
+
+    const Model *closest = nullptr;
+    for (const auto &model : models_) {
+        const auto candidate = mech_asset_key(model.source_asset);
+        if (!candidate || candidate->chassis != requested->chassis)
+            continue;
+        if (!closest || candidate->distance_lod == requested->distance_lod)
+            closest = &model;
+    }
+    return closest;
+}
+
 PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context,
                                        bool rigid_only) const {
     sdlfe::CpuInterval interval(cpu_profile_ ? &cpu_statistics_.selection_ticks : nullptr);
@@ -379,14 +446,11 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     PreparedModelDraw output;
     const auto *node = static_cast<const Node *>(context.node);
     if (!node || !node->source_asset || !context.ordinary || context.morphing || context.overlay ||
-        context.opacity != 1)
+        !std::isfinite(context.opacity) || context.opacity < 0.f || context.opacity > 1.f)
         return output;
     if (!node->model || node->model->count(0x14) != node->source_model_vertices)
         return output;
-    const Model *selected = nullptr;
-    for (const auto &model : models_)
-        if (model.source_asset == node->source_asset->name)
-            selected = &model;
+    const Model *selected = model_for_asset(node->source_asset->name);
     if (!selected)
         return output;
     // Admission must not run mixed-bone vertex deformation merely to discover
@@ -395,9 +459,31 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         for (const auto &batch : selected->mesh.batches)
             if (!batch.donor_indices.empty())
                 return output;
-    const auto *root = source_root(node);
+    const auto *root = source_root(node, true);
     if (!root)
-        return output; // a detached part retains the ordinary native geometry
+        return output; // ambiguous ancestry keeps the ordinary native geometry
+    const auto live = hierarchy(root);
+    const auto requested_asset = mech_asset_key(node->source_asset->name);
+    const auto selected_asset = mech_asset_key(selected->source_asset);
+    const bool distance_lod_fallback =
+        requested_asset && selected_asset && requested_asset->chassis == selected_asset->chassis &&
+        !requested_asset->distance_lod && selected_asset->distance_lod;
+    const auto &references = selected->mesh.rig.references;
+    const bool missing_live_rig_frame = std::any_of(
+        references.begin(), references.end(), [&](const auto &reference) {
+            return !live.poses.count(reference.name);
+        });
+    bool missing_live_batch_frame = false;
+    for (const auto &batch : selected->mesh.batches)
+        missing_live_batch_frame |= !batch_frames_present(batch, live.poses);
+
+    // A detached subtree and a cross-LOD selection can legitimately lack frames
+    // required by the selected geometry. Decide those cases before strict source
+    // binding checks, which remain authoritative for exact attached models.
+    if ((!root->source_asset_root && (missing_live_rig_frame || missing_live_batch_frame)) ||
+        (distance_lod_fallback && (missing_live_rig_frame || missing_live_batch_frame)))
+        return output;
+
     for (size_t b = 0; b < selected->mesh.batches.size(); ++b) {
         const auto &batch = selected->mesh.batches[b];
         require_batch_source(*root, batch.owner, b, "owner");
@@ -406,7 +492,6 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         require_batch_source(*root, batch.joint_frame, b, "joint_frame");
         require_batch_source(*root, batch.anchor_control, b, "anchor_control");
     }
-    const auto &references = selected->mesh.rig.references;
     for (size_t r = 0; r < references.size(); ++r) {
         const auto &name = references[r].name;
         const auto &nodes = root->source_asset->nodes;
@@ -443,7 +528,6 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
                                     std::string("dependency ") + anchor + " rest absent");
         }
     }
-    const auto live = hierarchy(root);
     const auto inverse_node = math::inverse(live.nodes.at(node));
     const auto root_camera = math::product(from_native(context.model_to_camera), inverse_node);
     const auto root_world = math::product(from_native(context.model_to_world), inverse_node);
@@ -456,7 +540,8 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     for (size_t index = 0; index < selected->mesh.batches.size(); ++index) {
         const auto &batch = selected->mesh.batches[index];
         const auto &visibility = batch.visibility.empty() ? batch.owner : batch.visibility;
-        if (visibility != node->name() || !live.poses.count(batch.owner))
+        if (visibility != source_node_name(node, root) ||
+            !live.poses.count(batch.owner))
             continue;
         PreparedBatchDraw draw;
         draw.batch = &batch;
@@ -513,10 +598,7 @@ bool PreparedModels::has_binding(const platform::ModelDrawContext &context) cons
     const auto *node = static_cast<const Node *>(context.node);
     if (!node || !node->source_asset)
         return false;
-    for (const auto &model : models_)
-        if (model.source_asset == node->source_asset->name)
-            return true;
-    return false;
+    return model_for_asset(node->source_asset->name) != nullptr;
 }
 
 std::optional<Matrix>
@@ -532,12 +614,7 @@ PreparedModels::donor_headlight_socket(const platform::ModelDrawContext &context
     const auto *root = source_root(node);
     if (!root)
         return std::nullopt;
-    const Model *selected = nullptr;
-    for (const auto &model : models_) {
-        if (model.source_asset == node->source_asset->name) {
-            selected = &model;
-        }
-    }
+    const Model *selected = model_for_asset(node->source_asset->name);
     if (!selected || selected->mesh.version != 4 || selected->mesh.rig.bones.empty())
         return std::nullopt;
     int bone_index = -1;
