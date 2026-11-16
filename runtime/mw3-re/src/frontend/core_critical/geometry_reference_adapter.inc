@@ -63,7 +63,8 @@ void emit_reference_geometry(
       draw.surface_eye = surface_eye;
     draw.sampler = 3U | unsigned(material.address_u) << 4 |
                    unsigned(material.address_v) << 8;
-    draw.key = {0, 5, 6, 1, 7, 1, std::uint8_t(range.two_sided ? 1 : 3), 0};
+    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1,
+                std::uint8_t(range.two_sided ? 1 : 3), 0};
     draw.sun_tl = view;
     draw.push.target[0] = float(scene_.width);
     draw.push.target[1] = float(scene_.height);
@@ -95,7 +96,10 @@ void emit_reference_geometry(
                   view->projection[4],
               depth,
               depth,
-              material.color,
+              (material.color & 0x00ffffffU) |
+                  (std::uint32_t(std::lround(
+                       float((material.color >> 24) & 255U) * context.opacity))
+                   << 24),
               std::uint32_t(std::clamp(vertex.visibility * 255.f, 0.f, 255.f))
                   << 24,
               vertex.u,

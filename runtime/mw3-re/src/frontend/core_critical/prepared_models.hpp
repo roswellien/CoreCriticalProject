@@ -65,6 +65,7 @@ class PreparedModels {
         std::shared_ptr<::mw34::materials::SurfaceMaterialPack> surface_materials;
         std::vector<std::shared_ptr<const ::mw34::materials::HeightBinding>> height_bindings;
     };
+    const Model *model_for_asset(const std::string &source_asset) const;
     ::platform::prepared::Textures named_;
     std::vector<Model> models_;
     const bool cpu_profile_ = sdlfe::cpu_profile_requested();

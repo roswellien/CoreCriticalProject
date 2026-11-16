@@ -86,6 +86,7 @@ int copy_node_model(Node* src, Node* dst) {
 int copy_node_base(Node* src, Node* dst) {
   dst->source_asset = src->source_asset;
   dst->source_asset_root = src->source_asset_root;
+  dst->source_asset_root_name = src->source_asset_root_name;
   dst->source_model_vertices = src->source_model_vertices;
   const uint32_t f = src->flags();
   auto bit = [f](int n) { return static_cast<int>((f >> n) & 1); };

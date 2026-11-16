@@ -298,7 +298,11 @@ class WiredBuild : public MechBuildHooks {
     zcls::Node* copy = zcls::tree_copy(zn(node), 1, 1);
     // Gameplay clones the library's child (LOD 0) or grandchild (LOD 1).
     // Mark that actual instance boundary without changing the native tree.
-    if (copy && copy->source_asset) copy->source_asset_root = true;
+    // Preserve its source name because death later renames the node to deadmech.
+    if (copy && copy->source_asset) {
+      copy->source_asset_root = true;
+      copy->source_asset_root_name = copy->name();
+    }
     return copy;
   }
   void node_remove_child(Handle parent, Handle child) override { zcls::node_remove_child(zn(parent), zn(child)); }

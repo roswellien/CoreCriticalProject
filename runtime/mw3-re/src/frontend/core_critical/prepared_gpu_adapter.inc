@@ -107,6 +107,9 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
         (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
         context.far_z};
     vk::Draw draw{};
+    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1, 1, 0};
+    // Prepared model draws do not use mode.w for alpha testing.
+    draw.push.mode[3] = prepared_opacity_bits(context.opacity);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
                            group_load_epoch_, textures_.at(texture).version);
     draw.model = std::move(instance);
@@ -116,7 +119,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     if (normal >= 0)
       draw.normal_texture = int(bind_texture(normal, false));
     draw.sampler = 3U | (1U << 4) | (1U << 8) | 0x10000U;
-    draw.key = {0, 5, 6, 1, 7, 1, 1, 0};
+    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1, 1, 0};
     draw.push.target[0] = float(scene_.width);
     draw.push.target[1] = float(scene_.height);
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);

@@ -414,7 +414,7 @@ bool submit_geometry(zcls::Node &node) {
     // registration and all native vertex/polygon loops, retaining effect-bearing
     // producers until their side effects have an explicit GPU contract.
     if (context.ordinary && !context.morphing && !context.overlay && !model.count(0x1c) &&
-        !draw_state().second_pass && context.opacity == 1.f &&
+        !draw_state().second_pass &&
         renderer->submit_prepared_geometry(context, fog_state) ==
             cc::geometry::Submission::submitted)
       return true;
