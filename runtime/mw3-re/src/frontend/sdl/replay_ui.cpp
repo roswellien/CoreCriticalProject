@@ -107,30 +107,43 @@ float distance(const Vec3& a, const Vec3& b) {
 }
 }  // namespace
 
-std::string reason_short(const std::string& code) {
-  if (code == "hunt_contact") return "chasing";
-  if (code == "hunt_last_seen") return "searching";
-  if (code == "hunt_fallback") return "roaming";
-  if (code == "engage") return "fighting";
-  if (code == "target_volley") return "new target";
-  if (code == "target_lost") return "lost target";
-  if (code == "order_other" || code == "target_other") return "other";
-  return code;
+std::string doing_word(const MechPose& m) {
+  if (!m.standing) return "";
+  if (m.order == "fight") return "fighting";
+  if (m.order != "hunt") return "";
+  if (m.goal_rule == "contact") return "chasing";
+  if (m.goal_rule == "last_seen") return "searching";
+  if (m.goal_rule == "fallback") return "roaming";
+  return "hunting";
 }
 
-std::string reason_sentence(const std::string& code) {
-  if (code == "hunt_contact") return "chasing an enemy its radar sees";
-  if (code == "hunt_last_seen") return "going to where it last saw an enemy";
-  if (code == "hunt_fallback") return "no enemy known: heading for the map's middle";
-  if (code == "engage") return "close enough: the game's own combat AI fights";
+std::string doing_sentence(const MechPose& m) {
+  if (!m.standing) return "nothing: destroyed";
+  if (m.order == "fight") return "fighting, under the game's own combat AI";
+  if (m.order == "hunt") {
+    // The hunt goes for the nearest enemy its radar knows of, seen now or
+    // remembered (zai_hunt.cpp), so "knows of", not "sees".
+    if (m.goal_rule == "contact") return "chasing an enemy its radar knows of";
+    if (m.goal_rule == "last_seen") return "going to where it last saw an enemy";
+    if (m.goal_rule == "fallback") return "no enemy known: heading for the map's middle";
+    return "hunting";
+  }
+  return m.order.empty() ? "nothing (no AI)" : "another stock order";
+}
+
+std::string change_sentence(const std::string& code) {
+  if (code == "hunt_contact") return "went back to hunting, after an enemy its radar knew of";
+  if (code == "hunt_last_seen") return "went back to hunting, toward where it last saw an enemy";
+  if (code == "hunt_fallback") return "went back to hunting, with no enemy known";
+  if (code == "engage") return "close enough: handed to the game's own combat AI";
   if (code == "target_volley") return "picked the target its weapons scored best";
   if (code == "target_lost") return "its target left the radar";
   if (code == "order_other") return "changed orders for a reason not logged";
   if (code == "target_other") return "changed target for a reason not logged";
-  return code.empty() ? "no decision yet" : code;
+  return code.empty() ? "none yet" : code;
 }
 
-void draw_legend(const Overlays& overlays, ReplayDraw& draw) {
+void draw_legend(const Overlays& overlays, ReplayDraw& draw, float top) {
   if (!overlays.legend) return;
   struct Row {
     int overlay;
@@ -138,14 +151,14 @@ void draw_legend(const Overlays& overlays, ReplayDraw& draw) {
     const char* text;
   };
   const Row rows[] = {
-      {kTarget, kTargetColor, "2 target: who it shoots at"},
       {kRoute, kRouteColor, "1 route: its planned path (big dot: next)"},
+      {kTarget, kTargetColor, "2 target: the enemy it aims at"},
       {kGoal, kGoalColor, "3 goal: where it is going (X)"},
       {kContacts, kContactColor, "4 radar: solid sees now, dashed remembers"},
-      {kReasons, ui_color(255, 230, 140), "5 reason: why it last changed course"},
+      {kReasons, ui_color(255, 230, 140), "5 doing: chasing, searching, roaming, fighting"},
   };
   const float s = draw.scale();
-  const float x = 10, y = 10, line_h = 17 * s, w = 330 * s, pad = 8 * s;
+  const float x = 10, y = top, line_h = 17 * s, w = 330 * s, pad = 8 * s;
   const float h = 12 * s + line_h * (std::size(rows) + 2);
   draw.rect({x, y, w, h}, ui_color(0, 0, 0, 170));
   for (size_t i = 0; i < std::size(rows); ++i) {
@@ -181,16 +194,20 @@ void LabelPlacer::draw(ReplayDraw& draw, float x, float y, const std::string& id
 void draw_overlays(const Frame& frame, const Overlays& overlays, int selected, ReplayDraw& draw,
                    const Projector& projector) {
   const auto screen = [&](const Vec3& v, SDL_FPoint* out) { return projector.to_screen(v, out); };
+  // A selection fades the others only while that mech stands: once it is
+  // destroyed, every line is drawn in full again.
+  const bool has_focus = selected >= 0 && selected < static_cast<int>(frame.mechs.size()) &&
+                         frame.mechs[static_cast<size_t>(selected)].standing;
   for (size_t i = 0; i < frame.mechs.size(); ++i) {
     const MechPose& m = frame.mechs[i];
     SDL_FPoint at;
     if (!m.standing || !screen(m.pos, &at)) continue;
-    const bool focused = static_cast<int>(i) == selected;
-    // Who shoots whom: every mech's line, faint behind a selected mech's.
+    const bool focused = has_focus && static_cast<int>(i) == selected;
+    // Who aims at whom: every mech's line, faint behind a selected mech's.
     SDL_FPoint p;
     if (overlays.on[kTarget] && m.target >= 0)
       if (const MechPose* target = pose_of(frame, m.target); target && screen(target->pos, &p))
-        draw.line(at, p, selected < 0 || focused ? kTargetColor : kTargetFaint);
+        draw.line(at, p, !has_focus || focused ? kTargetColor : kTargetFaint);
     if (!focused) continue;  // the rest is the selected mech's alone
     if (overlays.on[kRoute] && !frame.routes[i].points.empty()) {
       // The legs already walked dim, the waypoint it is heading for ringed,
@@ -236,38 +253,43 @@ void draw_panel(const ReplayLog& log, const Frame& frame, int selected, float sc
   char buf[128];
   lines.push_back("Mech " + std::to_string(m.id) + ", " + (info ? info->chassis : std::string("?")) + ", side " +
                   (!info ? "?" : info->side == 0 ? "A (blue)" : "B (red)") + (m.standing ? "" : ": destroyed"));
-  // What it is doing and why, in the order a reader asks.
-  const char* doing = m.order == "hunt"    ? "hunting (the arena's own order)"
-                      : m.order == "fight" ? "fighting (the game's own combat AI)"
-                      : m.order.empty()    ? "nothing (no AI)"
-                                           : "another stock order";
-  lines.push_back(std::string("Doing: ") + doing);
-  const auto& decision = frame.last_decision[selected];
-  lines.push_back("Why: " + reason_sentence(decision.code) +
-                  (decision.code.empty() ? std::string() : " (at " + clock_text(decision.t) + ")"));
-  if (const MechPose* target = m.target >= 0 ? pose_of(frame, m.target) : nullptr) {
-    std::snprintf(buf, sizeof buf, "Shooting at: %s, %.0f m away", name_of(m.target).c_str(),
-                  distance(m.pos, target->pos));
+  // What it is doing now, then its last change, in the order a reader asks.
+  // A destroyed mech's AI lines are its last ones, so only its damage shows.
+  if (m.standing) {
+    lines.push_back("Doing: " + doing_sentence(m));
+    const auto& decision = frame.last_decision[selected];
+    std::string change = "Last change: " + change_sentence(decision.code);
+    if (!decision.code.empty()) {
+      std::snprintf(buf, sizeof buf, " (%.0f s ago)", std::max(0.0f, frame.t - decision.t));
+      change += buf;
+    }
+    lines.push_back(change);
+    if (const MechPose* target = m.target >= 0 ? pose_of(frame, m.target) : nullptr) {
+      std::snprintf(buf, sizeof buf, "Target: %s, %.0f m away", name_of(m.target).c_str(),
+                    distance(m.pos, target->pos));
+      lines.push_back(buf);
+    } else {
+      lines.push_back("Target: none");
+    }
+    if (m.has_goal) {
+      std::snprintf(buf, sizeof buf, "Going to: a point %.0f m away (the X)", distance(m.pos, m.goal));
+      lines.push_back(buf);
+    }
+    int sees = 0, remembers = 0;
+    for (const auto& contact : m.contacts) ++(contact.seen ? sees : remembers);
+    std::snprintf(buf, sizeof buf, "Radar: sees %d enem%s now, remembers %d more", sees, sees == 1 ? "y" : "ies",
+                  remembers);
     lines.push_back(buf);
-  } else {
-    lines.push_back("Shooting at: nobody");
-  }
-  if (m.has_goal) {
-    std::snprintf(buf, sizeof buf, "Going to: a point %.0f m away (the X)", distance(m.pos, m.goal));
+    std::snprintf(buf, sizeof buf, "Heat: %.0f", m.heat);
     lines.push_back(buf);
   }
-  int sees = 0, remembers = 0;
-  for (const auto& contact : m.contacts) ++(contact.seen ? sees : remembers);
-  std::snprintf(buf, sizeof buf, "Radar: sees %d enem%s now, remembers %d more", sees, sees == 1 ? "y" : "ies",
-                remembers);
-  lines.push_back(buf);
-  std::snprintf(buf, sizeof buf, "Heat: %.0f", m.heat);
-  lines.push_back(buf);
   // Damage: only the parts hurt, so a fresh mech stays one line. Hands, calves,
   // feet and the hip carry no armor of their own (logged 0 and 0).
   const auto hurt = [](const mech3::replay::Part& part) {
     const bool no_armor = !part.destroyed && part.armor == 0.0f && part.internal == 0.0f;
-    return !no_armor && (part.destroyed || part.armor < 1.0f || part.internal < 1.0f);
+    // As shown, to the whole percent: a part at 99.6% reads 100% and isn't listed.
+    const bool whole = part.armor * 100 >= 99.5f && part.internal * 100 >= 99.5f;
+    return !no_armor && (part.destroyed || !whole);
   };
   const bool any_hurt = std::any_of(m.parts.begin(), m.parts.end(), hurt);
   lines.push_back(any_hurt ? "Damage (armor left, structure left):" : "Damage: none");
@@ -278,7 +300,12 @@ void draw_panel(const ReplayLog& log, const Frame& frame, int selected, float sc
     lines.push_back(buf);
   }
   const float s = draw.scale();
-  const float w = 400 * s, line_h = 17 * s, h = 12 * s + line_h * lines.size();
+  // As wide as its longest line (about 7 pixels a character at scale 1, as
+  // LabelPlacer measures), never narrower than 400.
+  size_t longest = 0;
+  for (const std::string& line : lines) longest = std::max(longest, line.size());
+  const float w = std::max(400.0f, 7.5f * static_cast<float>(longest) + 16) * s;
+  const float line_h = 17 * s, h = 12 * s + line_h * lines.size();
   const float x = screen_width - w - 10, y = 10;
   draw.rect({x, y, w, h}, ui_color(0, 0, 0, 190));
   for (size_t i = 0; i < lines.size(); ++i) draw.text(lines[i], x + 8 * s, y + 6 * s + line_h * i);
@@ -286,18 +313,19 @@ void draw_panel(const ReplayLog& log, const Frame& frame, int selected, float sc
 
 void draw_bar(const ReplayClock& clock, const Overlays& overlays, float screen_width, float screen_height,
               ReplayDraw& draw) {
-  const float top = bar_top(screen_height), w = screen_width;
-  draw.rect({0, top, w, kSeekBarHeight}, ui_color(0, 0, 0, 200));
+  const float s = draw.scale();
+  const float top = bar_top(screen_height), w = screen_width, text_y = top + 7 * s;
+  draw.rect({0, top, w, bar_height(screen_height)}, ui_color(0, 0, 0, 200));
   const float done = clock.duration > 0 ? clock.t / clock.duration : 0;
-  draw.rect({0, top, w * done, 4}, ui_color(255, 150, 40));
-  char buf[96];
-  std::snprintf(buf, sizeof buf, "%s  %s / %s  %gx (< >)   1 route  2 target  3 goal  4 radar  5 reasons  H key",
+  draw.rect({0, top, w * done, 4 * s}, ui_color(255, 150, 40));
+  char buf[128];
+  std::snprintf(buf, sizeof buf, "%s  %s / %s  %gx (< >)   1 route  2 target  3 goal  4 radar  5 doing  H key",
                 clock.playing ? "playing" : "paused", clock_text(clock.t).c_str(), clock_text(clock.duration).c_str(),
                 clock.speed);
-  draw.text(buf, 8, top + 7);
+  draw.text(buf, 8, text_y);
   std::string on;
   for (int i = 0; i < kOverlays; ++i) on += overlays.on[i] ? static_cast<char>('1' + i) : '-';
-  draw.text("overlays " + on, w - 130 * draw.scale(), top + 7);
+  draw.text("overlays " + on, w - 130 * s, text_y);
 }
 
 // --- Text -----------------------------------------------------------------

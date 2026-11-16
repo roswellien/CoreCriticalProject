@@ -88,7 +88,7 @@ void fit_camera(Camera* camera, const float box[4]) {
   if (box[0] > box[2]) return;
   camera->center_x = (box[0] + box[2]) / 2, camera->center_z = (box[1] + box[3]) / 2;
   const float span_x = std::max(box[2] - box[0], 50.0f), span_z = std::max(box[3] - box[1], 50.0f);
-  camera->zoom = std::clamp(std::min(camera->width / span_x, (camera->height - kSeekBarHeight) / span_z) * 0.9f,
+  camera->zoom = std::clamp(std::min(camera->width / span_x, bar_top(camera->height) / span_z) * 0.9f,
                             kMinZoom, kMaxZoom);
 }
 
@@ -151,9 +151,7 @@ void draw_world(Viewer& v, const Frame& frame, SdlRendererDraw& paint) {
       paint.arrow(at, screen_direction(m.heading), 16, ui_color(255, 255, 255));  // where the legs walk
     }
     if (static_cast<int>(i) == v.selected) paint.outline({at.x - 10, at.y - 10, 20, 20}, ui_color(255, 255, 255));
-    const std::string& code = frame.last_decision[i].code;
-    const bool reason = v.overlays.on[kReasons] && m.standing && !code.empty();
-    labels.draw(paint, at.x + 8, at.y - 18, std::to_string(m.id), reason ? reason_short(code) : "");
+    labels.draw(paint, at.x + 8, at.y - 18, std::to_string(m.id), v.overlays.on[kReasons] ? doing_word(m) : "");
   }
 }
 
@@ -293,11 +291,14 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
       paint.set_scale_for_height(v.camera.height);
       paint.rect({0, 0, v.camera.width, v.camera.height}, ui_color(70, 70, 70));  // gray ground when there is no terrain
       draw_world(v, frame, paint);
+      float legend_top = 10;
       if (!v.terrain.error.empty()) {
-        paint.rect({0, 0, v.camera.width, 24}, ui_color(120, 30, 30, 220));
-        paint.text("no terrain: " + v.terrain.error, 8, 4);
+        const float banner_h = 24 * paint.scale();
+        paint.rect({0, 0, v.camera.width, banner_h}, ui_color(120, 30, 30, 220));
+        paint.text("no terrain: " + v.terrain.error, 8, 4 * paint.scale());
+        legend_top += banner_h;
       }
-      draw_legend(v.overlays, paint);
+      draw_legend(v.overlays, paint, legend_top);
       draw_panel(log, frame, v.selected, v.camera.width, paint);
       draw_bar(v.clock, v.overlays, v.camera.width, v.camera.height, paint);
       if (scripted && !script.run(actions)) open = false, script_failed = true;

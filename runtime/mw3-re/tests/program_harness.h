@@ -1,8 +1,8 @@
 #pragma once
 // What test_program.cpp's headless runs and test_arena_game.cpp's arena runs
 // both need: the fake window, clock and screen the program gives the engine,
-// the mounts guard, and the game-files and temp-folder helpers. Include it
-// after mech3/mission.h (CountingPump's quit cleans the missions up).
+// the mounts guard, and the game-files and temp-folder helpers. It includes
+// mech3/mission.h itself (CountingPump's quit cleans the missions up).
 #include <cstdint>
 #include <filesystem>
 #include <functional>

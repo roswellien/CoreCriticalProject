@@ -85,14 +85,6 @@ class Render3dDraw : public ReplayDraw {
     render_ = render;
   }
 
- protected:
-  void scale_changed(float scale) override {
-    text_.set_scale(scale);
-    clear_text();
-  }
-
- public:
-
   void line(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c) override {
     if (!render_) return;
     const float dx = b.x - a.x, dy = b.y - a.y, length = std::sqrt(dx * dx + dy * dy);
@@ -138,6 +130,12 @@ class Render3dDraw : public ReplayDraw {
                                      vertex(left, top + t.h, 0xffffffffu, 0, 1)};
     render_->draw(platform::Primitive::kFan, v, 4, overlay_state(t.handle));
     return static_cast<float>(t.w);
+  }
+
+ protected:
+  void scale_changed(float scale) override {
+    text_.set_scale(scale);
+    clear_text();
   }
 
  private:
@@ -648,13 +646,12 @@ void Replay3dView::draw_overlay() {
     }
     SDL_FPoint label;
     if (s.projector.to_screen({m.pos.x, m.pos.y + kLabelMeters, m.pos.z}, &label)) {
-      const std::string& code = s.frame.last_decision[index].code;
-      const bool reason = s.overlays.on[kReasons] && m.standing && !code.empty();
-      labels.draw(s.draw, label.x - 4, label.y - 8, std::to_string(m.id), reason ? reason_short(code) : "");
+      labels.draw(s.draw, label.x - 4, label.y - 8, std::to_string(m.id),
+                  s.overlays.on[kReasons] ? doing_word(m) : "");
     }
   }
   draw_overlays(s.frame, s.overlays, s.selected, s.draw, s.projector);
-  draw_legend(s.overlays, s.draw);
+  if (!s.quit_box_open) draw_legend(s.overlays, s.draw);  // the box's notice takes the corner
   draw_panel(*s.log, s.frame, s.selected, s.screen_w, s.draw);
   draw_bar(s.clock, s.overlays, s.screen_w, s.screen_h, s.draw);
   if (s.quit_box_open) s.draw.text("paused: the quit box is open", 8, 8);

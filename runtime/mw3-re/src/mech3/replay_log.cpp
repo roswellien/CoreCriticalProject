@@ -125,6 +125,7 @@ bool read_pose(const Json& m, MechPose* out, int* skipped) {
   if (m.contains("ai")) {
     const Json& ai = m.at("ai");
     p.order = ai.value("order", "");
+    p.goal_rule = ai.value("goal_rule", "");
     p.has_goal = ai.contains("goal");
     if (p.has_goal) p.goal = vec3(ai.at("goal"));
     p.at = ai.value("at", -1);

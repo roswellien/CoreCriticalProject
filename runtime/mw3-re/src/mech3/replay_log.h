@@ -75,6 +75,9 @@ struct MechPose {
   bool standing = true;
   int target = -1;
   std::string order;  // "hunt", "fight", "other" or "" (no AI)
+  // While hunting, the goal it is after this frame: "contact", "last_seen"
+  // or "fallback" (zai_hunt.h, HuntRule); "" otherwise.
+  std::string goal_rule;
   bool has_goal = false;
   Vec3 goal;
   int at = -1;  // the waypoint index in its latest route, -1 with none

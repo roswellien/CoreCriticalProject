@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <string>
@@ -27,6 +28,14 @@ extern const SDL_FColor kSideColor[2];
 
 std::string clock_text(float seconds);
 
+// The viewers' text and box size: 1 on a screen 720 pixels tall, growing
+// with its height, in steps of a quarter (so dragging a window's edge doesn't
+// rebuild every text on each frame), from 1 to 3.
+inline float ui_scale_for_height(float screen_height) {
+  const float scale = std::clamp(screen_height / 720.0f, 1.0f, 3.0f);
+  return std::floor(scale * 4.0f) / 4.0f;
+}
+
 // The few shapes the viewers' shared parts draw, in screen pixels.
 class ReplayDraw {
  public:
@@ -44,7 +53,7 @@ class ReplayDraw {
   // tall, growing with the screen's height, so a 1080-line frame isn't read
   // at a 720-line size. Set once a frame, before drawing.
   void set_scale_for_height(float screen_height) {
-    const float wanted = std::clamp(screen_height / 720.0f, 1.0f, 3.0f);
+    const float wanted = ui_scale_for_height(screen_height);
     if (wanted == scale_) return;
     scale_ = wanted;
     scale_changed(scale_);
@@ -104,14 +113,21 @@ struct Overlays {
 void draw_overlays(const mech3::replay::Frame& frame, const Overlays& overlays, int selected, ReplayDraw& draw,
                    const Projector& projector);
 
-// A decision reason code from the log (docs/arena.md, "What the replay
-// viewers read") in a few plain words, for the labels: "chasing".
-std::string reason_short(const std::string& code);
-// The same as a sentence, for the panel: "chasing an enemy its radar sees".
-std::string reason_sentence(const std::string& code);
+// What a mech is doing in this frame, in one word for its label: chasing,
+// searching or roaming while it hunts (its goal rule, logged every state
+// line), fighting under the game's own combat AI, "" with no AI or when
+// destroyed.
+std::string doing_word(const mech3::replay::MechPose& m);
+// The same as a sentence, for the panel.
+std::string doing_sentence(const mech3::replay::MechPose& m);
+// A decision line's reason code (docs/arena.md, "What the replay viewers
+// read") as a sentence. Decisions are only logged when the order or target
+// changes, so this is the mech's last change, not what it does now.
+std::string change_sentence(const std::string& code);
 
-// The key to the overlays' colors at the top left, when overlays.legend is on.
-void draw_legend(const Overlays& overlays, ReplayDraw& draw);
+// The key to the overlays' colors at the top left from `top` down, when
+// overlays.legend is on.
+void draw_legend(const Overlays& overlays, ReplayDraw& draw, float top = 10);
 
 // Each mech's label, its id and its decision word, kept from landing on one
 // already drawn this frame: a label that would overlap moves down a line
@@ -133,7 +149,9 @@ void draw_panel(const mech3::replay::ReplayLog& log, const mech3::replay::Frame&
 // The seek bar along the bottom, and where a press on it seeks to.
 void draw_bar(const ReplayClock& clock, const Overlays& overlays, float screen_width, float screen_height,
               ReplayDraw& draw);
-inline float bar_top(float screen_height) { return screen_height - kSeekBarHeight; }
+// The bar grows with the text in it (ui_scale_for_height).
+inline float bar_height(float screen_height) { return kSeekBarHeight * ui_scale_for_height(screen_height); }
+inline float bar_top(float screen_height) { return screen_height - bar_height(screen_height); }
 
 const mech3::replay::MechPose* pose_of(const mech3::replay::Frame& frame, int id);
 
@@ -165,14 +183,6 @@ class SdlRendererDraw : public ReplayDraw {
   void open_text() { text_renderer_.open(); }
   SDL_Renderer* renderer() const { return renderer_; }
 
- protected:
-  void scale_changed(float scale) override {
-    text_renderer_.set_scale(scale);
-    clear_text();
-  }
-
- public:
-
   void line(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c) override;
   void circle(SDL_FPoint center, float radius, const SDL_FColor& fill) override;
   void rect(const SDL_FRect& r, const SDL_FColor& fill) override;
@@ -181,6 +191,12 @@ class SdlRendererDraw : public ReplayDraw {
   void arrow(SDL_FPoint from, SDL_FPoint dir, float length, const SDL_FColor& c);
   // A thin wedge from `from` toward screen direction `yaw`, `half_angle` each side.
   void cone(SDL_FPoint from, float yaw, float half_angle, float length, const SDL_FColor& c);
+
+ protected:
+  void scale_changed(float scale) override {
+    text_renderer_.set_scale(scale);
+    clear_text();
+  }
 
  private:
   void set(const SDL_FColor& c);
