@@ -16,6 +16,7 @@
 #include "gamez/zerror/zerr.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "platform/file_position.h"
 #include "gamez/zutil/zutl_zip.h"
 
 namespace zrdr {
@@ -58,7 +59,7 @@ Node* alloc_list(int32_t count) {
 namespace {
 // Ours, while an archive's entry is read (load): where the archive's own data ends (its table's start). -1: a
 // bare file, the original's read with no bound at all (the differential test's, the text files').
-long g_data_end = -1;
+int64_t g_data_end = -1;
 int g_depth = 0;
 bool g_broken = false;  // a count, a string or nesting no file could hold: the entry is not read
 bool g_short = false;   // the archive's data ran out under a list: its items from there on are empty ones
@@ -68,7 +69,10 @@ bool g_odd = false;     // a word that is no node type was met (read on, as the 
 // edit gone wrong, not a list. And the nesting limit of 64 used below: the deepest shipped entry nests 10
 // (c1's objectives.zrd), so 64 is far past any real file and only stops a runaway.
 constexpr int32_t kShortListMost = 4096;
-bool room(std::FILE* file, long bytes) { return g_data_end < 0 || std::ftell(file) + bytes <= g_data_end; }
+bool room(std::FILE* file, int64_t bytes) {
+  const int64_t at = platform::file_position::tell(file);
+  return at >= 0 && (g_data_end < 0 || (at <= g_data_end && bytes <= g_data_end - at));
+}
 
 // Ours, the graceful read (FIX (bug), `fixed`): what a hand-edited entry gets instead of the exe's read of
 // whatever follows. A list that runs past its entry into the next entries' nodes is read on (the exe's way,
@@ -78,31 +82,31 @@ bool room(std::FILE* file, long bytes) { return g_data_end < 0 || std::ftell(fil
 enum NoteKind { kNone, kRanOut, kBadWord, kBadCount, kBadString, kNesting };
 struct Stop {
   NoteKind kind = kNone;
-  long at = 0;          // bytes into the entry
+  int64_t at = 0;       // bytes into the entry
   int32_t value = 0;    // the word, the count or the string's length
-  long list_at = -1;    // the list it cut short: where, what it said, what it holds
+  int64_t list_at = -1; // the list it cut short: where, what it said, what it holds
   int32_t said = 0, held = 0;
 };
 struct Tail {
   bool is = false;      // a list's items ran past its entry's end
   bool read = false;    // and a node was read from there (the entries after it)
-  long list_at = 0;
+  int64_t list_at = 0;
   int32_t said = 0, held = 0;
 };
-long g_entry_start = 0, g_entry_end = -1;
+int64_t g_entry_start = 0, g_entry_end = -1;
 bool g_stop = false, g_drop = false;
 Stop g_stopped;
 Tail g_tail;
 std::vector<mech3::ModWarning> g_notes;
 
-void stop(NoteKind kind, long at, int32_t value) {
+void stop(NoteKind kind, int64_t at, int32_t value) {
   if (!g_stop) g_stopped = Stop{kind, at - g_entry_start, value, -1, 0, 0};
   g_stop = true;
   g_drop = true;  // what was being read is no node: its list ends before it
 }
 
 uint32_t read_graceful(std::FILE* file, Node* node) {
-  const long at = std::ftell(file);
+  const int64_t at = platform::file_position::tell(file);
   node->type = Int, node->i = 0;
   if (g_stop || !room(file, 4)) {
     stop(kRanOut, at, 0);
@@ -121,7 +125,7 @@ uint32_t read_graceful(std::FILE* file, Node* node) {
       if (!room(file, 4)) return stop(kRanOut, at, 0), total;
       read4(file, &length);
       if (length < 0 || !room(file, length)) return stop(kBadString, at, length), total;
-      std::fseek(file, at + 4, SEEK_SET);
+      platform::file_position::seek(file, at + 4, SEEK_SET);
       node->type = String;
       return zutl_zar::read_string(file, &node->s) + total;
     }
@@ -129,9 +133,9 @@ uint32_t read_graceful(std::FILE* file, Node* node) {
       int32_t count = 0;
       if (!room(file, 4)) return stop(kRanOut, at, 0), total;
       total += read4(file, &count);
-      const long left = g_data_end - std::ftell(file);
+      const int64_t left = g_data_end - platform::file_position::tell(file);
       if (g_depth >= 64) return stop(kNesting, at, count), total;
-      if (count < 0 || (static_cast<long>(count) - 1 > left / 8 && count > kShortListMost)) return stop(kBadCount, at, count), total;
+      if (count < 0 || (static_cast<int64_t>(count) - 1 > left / 8 && count > kShortListMost)) return stop(kBadCount, at, count), total;
       node->type = List;
       node->list = alloc_list(count);
       node->list[0].type = Int;
@@ -139,7 +143,7 @@ uint32_t read_graceful(std::FILE* file, Node* node) {
       ++g_depth;
       for (int32_t i = 1; i < count; ++i) {
         // This list's items have run past its own entry: the entries after it are its tail.
-        const bool beyond = std::ftell(file) >= g_entry_end;
+        const bool beyond = platform::file_position::tell(file) >= g_entry_end;
         if (!g_tail.is && beyond) g_tail = Tail{true, false, at - g_entry_start, count - 1, i - 1};
         g_drop = false;
         total += read_graceful(file, &node->list[i]);
@@ -171,9 +175,10 @@ void make_notes(bool none) {
   const Stop& s = g_stopped;
   const bool tail = g_tail.is && g_tail.read;
   // What to change in the file for a list that says more items than there are: its count's own place.
-  const auto count_fix = [&](long list_at, int32_t said, int32_t held) {
-    std::snprintf(b, sizeof b, "set the list's count (the four bytes %ld bytes into the entry) to %d (%s and the count itself), or add the "
-                  "%s that %s missing", list_at + 4, held + 1, plural(held, "item").c_str(), plural(said - held, "item").c_str(),
+  const auto count_fix = [&](int64_t list_at, int32_t said, int32_t held) {
+    std::snprintf(b, sizeof b, "set the list's count (the four bytes %lld bytes into the entry) to %d (%s and the count itself), or add the "
+                  "%s that %s missing", static_cast<long long>(list_at + 4), held + 1, plural(held, "item").c_str(),
+                  plural(said - held, "item").c_str(),
                   said - held == 1 ? "is" : "are");
     return std::string(b);
   };
@@ -181,7 +186,8 @@ void make_notes(bool none) {
   const bool tail_ran_out = tail && g_stop && s.kind == kRanOut && s.list_at == g_tail.list_at;
   if (tail) {
     mech3::ModWarning w;
-    std::snprintf(b, sizeof b, "its list %ld bytes into the entry says %s and the entry holds %d", g_tail.list_at,
+    std::snprintf(b, sizeof b, "its list %lld bytes into the entry says %s and the entry holds %d",
+                  static_cast<long long>(g_tail.list_at),
                   plural(g_tail.said, "item").c_str(), g_tail.held);
     w.wrong = b;
     if (tail_ran_out) {
@@ -202,26 +208,30 @@ void make_notes(bool none) {
   mech3::ModWarning w;
   switch (s.kind) {
     case kBadWord:
-      std::snprintf(b, sizeof b, "a value that is not a node type (%d; the types are 1 a whole number, 2 a decimal, 3 a text, 4 a list) %ld bytes into the entry", s.value, s.at);
+      std::snprintf(b, sizeof b, "a value that is not a node type (%d; the types are 1 a whole number, 2 a decimal, 3 a text, 4 a list) %lld bytes into the entry",
+                    s.value, static_cast<long long>(s.at));
       w.original = "keeps the value as a node of no kind and reads on from the next four bytes, out of step (seen in the emulator): "
                    "what it reads after that is chance, and it can crash when this entry is loaded";
       break;
     case kBadCount:
-      std::snprintf(b, sizeof b, "a list count of %d, %ld bytes into the entry, that no file could hold", s.value, s.at);
+      std::snprintf(b, sizeof b, "a list count of %d, %lld bytes into the entry, that no file could hold", s.value,
+                    static_cast<long long>(s.at));
       w.original = "asks for memory for that many items, gets none, and writes there all the same: a likely crash when this "
                    "entry is loaded (seen in the emulator)";
       break;
     case kBadString:
-      std::snprintf(b, sizeof b, "a text said to be %d bytes long, %ld bytes into the entry, which runs past the archive's data", s.value, s.at);
+      std::snprintf(b, sizeof b, "a text said to be %d bytes long, %lld bytes into the entry, which runs past the archive's data",
+                    s.value, static_cast<long long>(s.at));
       w.original = "asks for that much memory and reads to the end of the file; when the memory is refused (seen in the emulator "
                    "for 2 GB) it writes there all the same: a likely crash when this entry is loaded";
       break;
     case kNesting:
-      std::snprintf(b, sizeof b, "lists nested more than 64 deep, %ld bytes into the entry", s.at);
+      std::snprintf(b, sizeof b, "lists nested more than 64 deep, %lld bytes into the entry", static_cast<long long>(s.at));
       w.original = "has no limit and reads them all";
       break;
     default:
-      std::snprintf(b, sizeof b, "the archive's data ends %ld bytes into the entry, before the entry's lists are full", s.at);
+      std::snprintf(b, sizeof b, "the archive's data ends %lld bytes into the entry, before the entry's lists are full",
+                    static_cast<long long>(s.at));
       w.original = "reads on through the archive's index and past the end of the file, taking whatever is there as items: it "
                    "usually gets by, and can crash";
       w.wrong = b;  // before the fix's words take the buffer
@@ -232,7 +242,8 @@ void make_notes(bool none) {
   if (tail && s.list_at == g_tail.list_at) {
     w.wrong += " (the same list, still short of its items)";
   } else if (s.list_at >= 0) {
-    std::snprintf(b, sizeof b, " (its list %ld bytes into the entry says %s and holds %d)", s.list_at, plural(s.said, "item").c_str(), s.held);
+    std::snprintf(b, sizeof b, " (its list %lld bytes into the entry says %s and holds %d)",
+                  static_cast<long long>(s.list_at), plural(s.said, "item").c_str(), s.held);
     w.wrong += b;
   }
   w.did = none ? "nothing of the entry can be read, so it is treated as not there" : "reads what comes before it; the rest of the entry is left out";
@@ -268,7 +279,7 @@ uint32_t read_node(std::FILE* file, Node* node) {
       return total + (node->type == Int ? read4(file, &node->i) : read4(file, &node->f));
     case String:
       if (g_data_end >= 0) {  // its length first: the string whole inside the archive's data
-        const long at = std::ftell(file);
+        const int64_t at = platform::file_position::tell(file);
         int32_t length = -1;
         if (room(file, 4)) read4(file, &length);
         if (length < 0 || !room(file, length)) {
@@ -276,7 +287,7 @@ uint32_t read_node(std::FILE* file, Node* node) {
           node->type = Int, node->i = 0;
           return total;
         }
-        std::fseek(file, at, SEEK_SET);
+        platform::file_position::seek(file, at, SEEK_SET);
       }
       return zutl_zar::read_string(file, &node->s) + total;
     case List: {
@@ -288,10 +299,10 @@ uint32_t read_node(std::FILE* file, Node* node) {
       }
       total += read4(file, &count);
       if (g_data_end >= 0) {
-        const long left = g_data_end - std::ftell(file);
+        const int64_t left = g_data_end - platform::file_position::tell(file);
         // A count the data left cannot hold: a small one is a list short of its items (they are read as far
         // as the data goes, the rest empty); a large one no file could hold, and is not allocated.
-        const bool fits = static_cast<long>(count) - 1 <= left / 8;
+        const bool fits = static_cast<int64_t>(count) - 1 <= left / 8;
         if (count < 0 || (!fits && count > kShortListMost) || g_depth >= 64) {
           g_broken = true;
           count = 0;
@@ -685,7 +696,7 @@ bool balanced(std::FILE* f) {
         break;
     }
   }
-  std::fseek(f, 0, SEEK_SET);
+  platform::file_position::seek(f, 0, SEEK_SET);
   return depth == 0;
 }
 
@@ -904,7 +915,7 @@ std::string text_error(std::FILE* f) {
   }
   if (why.empty() && quote) why = "line " + std::to_string(quote_line) + ": a quote never closed";
   if (why.empty() && !open.empty()) why = "line " + std::to_string(open.front()) + ": a '(' never closed";
-  std::fseek(f, 0, SEEK_SET);
+  platform::file_position::seek(f, 0, SEEK_SET);
   return why;
 }
 
@@ -997,11 +1008,11 @@ Node* load(const char* path) {
     if (Node* root = mod_copy(*a, g_fname)) return upgrades::reference::loaded(g_fname, root);  // ours: the reference test's observer
     Node* root = new_nodes(List, 1);
     g_data_end = zutl_zar::data_end(*a), g_depth = 0, g_broken = false, g_short = false, g_odd = false;
-    const long start = std::ftell(f);
-    g_entry_start = start, g_entry_end = start + static_cast<long>(length);
+    const int64_t start = platform::file_position::tell(f);
+    g_entry_start = start, g_entry_end = start + static_cast<int64_t>(length);
     g_stop = g_drop = false, g_stopped = Stop{}, g_tail = Tail{}, g_notes.clear();
     read_node(f, root);
-    const long end = std::ftell(f);
+    const int64_t end = platform::file_position::tell(f);
     g_data_end = -1;
     if (zfix::options().fixed) {  // ours, the graceful read: said in plain words, the entry kept with what it has
       const bool none = g_stop && g_drop;  // the entry's own first node was none
@@ -1021,9 +1032,9 @@ Node* load(const char* path) {
                   a->path, g_fname);
     } else if (g_odd) {
       std::printf("mw3: %s: its entry %s has a word that is no node type; read on, as the original does\n", a->path, g_fname);
-    } else if (end - start > static_cast<long>(length)) {
-      std::printf("mw3: %s: its entry %s says more items than it holds; the %ld bytes after it read as its tail, as the original does\n",
-                  a->path, g_fname, end - start - static_cast<long>(length));
+    } else if (end - start > static_cast<int64_t>(length)) {
+      std::printf("mw3: %s: its entry %s says more items than it holds; the %lld bytes after it read as its tail, as the original does\n",
+                  a->path, g_fname, static_cast<long long>(end - start - static_cast<int64_t>(length)));
     }
     if (g_load_hook) g_load_hook(a->path, g_fname, root);
     return upgrades::reference::loaded(g_fname, root);

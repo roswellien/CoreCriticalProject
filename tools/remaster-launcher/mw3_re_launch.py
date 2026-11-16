@@ -26,9 +26,8 @@ _PREVIEW_DRAW_DISTANCES = (800, 1200, 1600)
 _PREVIEW_HUDS = ("original", "core-critical")
 _PREVIEW_GEOMETRY = ("legacy", "partial")
 _RUNTIME_MODEL_STATUSES = ("runtime-ready", "runtime-candidate")
-# The native runtime stores pack file offsets in signed 32-bit values, so a file of 2 GiB or more
-# (today the shared-mech texture bank) cannot be loaded; such a pack is left out and reported.
-_NATIVE_FILE_LIMIT = 2 ** 31
+# Texture table offsets are unsigned 32-bit values, so native packs can be at most 4 GiB.
+_NATIVE_FILE_LIMIT = 2 ** 32
 
 
 def plan_json(raw):
@@ -233,8 +232,8 @@ def _environment_pack_skip_reason(root):
         size = entry.get("bytes") if type(entry) is dict else None
         if type(size) is not int or size < 0:
             raise ValueError(f"Map pack file table is invalid: {root}")
-        if size >= _NATIVE_FILE_LIMIT:
-            return f"{name} is {size} bytes; the native runtime loads files under 2 GiB"
+        if size > _NATIVE_FILE_LIMIT:
+            return f"{name} is {size} bytes; native texture offsets support files up to 4 GiB"
     return None
 
 

@@ -315,12 +315,20 @@ class NativePreviewPlanTests(unittest.TestCase):
     # directory run on Windows; validation-only tests below run everywhere.
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_oversized_map_pack_is_reported_not_loaded(self):
-        large = self.environment_pack("shared", largest=2 ** 31)
+        large = self.environment_pack("shared", largest=2 ** 32 + 1)
         result = self.plan(self.request(environment_packs=[large]))
         self.assertTrue(result["ok"])
         self.assertNotIn("--cc-environment-pack", result["argv"])
         self.assertEqual([item["root"] for item in result["skipped_packs"]], [large])
-        self.assertIn("2 GiB", result["skipped_packs"][0]["reason"])
+        self.assertIn("4 GiB", result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_four_gib_map_pack_remains_loadable(self):
+        maximum = self.environment_pack("maximum", largest=2 ** 32)
+        result = self.plan(self.request(environment_packs=[maximum]))
+        self.assertTrue(result["ok"])
+        self.assertIn("--cc-environment-pack", result["argv"])
+        self.assertEqual(result["skipped_packs"], [])
 
     # The owner's MW5 and updated-MW3 packs both supply Avatar, Firefly, Owens and Strider; the
     # runtime refuses a second model or normal map for one chassis, so the first pack must win.
