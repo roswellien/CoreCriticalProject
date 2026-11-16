@@ -458,7 +458,8 @@ Frame ReplayLog::frame_at(float t) const {
       const float from_was = was.phase + was.cps * (t - before.t);
       pose.phase = wrap01(from_was);
       for (const MechPose& next : after.mechs) {
-        if (next.id != was.id || !next.has_phase || &after == &before) continue;
+        // Another clip on the next line (walk to run, say) has its own loop.
+        if (next.id != was.id || !next.has_phase || next.anim != was.anim || &after == &before) continue;
         const float from_next = next.phase - next.cps * (after.t - t);
         float gap = std::fmod(from_next - from_was, 1.0f);
         if (gap > 0.5f) gap -= 1.0f;

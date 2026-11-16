@@ -856,7 +856,12 @@ int program(int argc, char** argv) {
   }
   if (!a.shot.empty()) a.hidden = true;
   mech3::mods_program_version() = MW3_VERSION;  // game_version= in mod.txt (upgrades/mods/mod_needs.h)
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK)) {
+  // Ours (#287): a hidden arena run has no player, so it opens no controllers.
+  // DirectInput's start with a force feedback wheel's driver attached (a
+  // Logitech G920) deadlocked one hidden run in seven while starting up.
+  const bool hidden_arena = a.hidden && !a.watch.arena_path.empty();
+  const SDL_InitFlags controllers = hidden_arena ? 0 : SDL_INIT_JOYSTICK;
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | controllers)) {
     sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
     return 1;
   }
