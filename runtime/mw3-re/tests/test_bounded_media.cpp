@@ -16,6 +16,12 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#include <io.h>
+#include <windows.h>
+#include <winioctl.h>
+#endif
+
 #include "check.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zimage/zimg_texture.h"
@@ -45,6 +51,21 @@ std::string scratch(const char* name) {
   fs::create_directories(d, ec);
   return d;
 }
+
+struct DirectoryGuard {
+  fs::path path;
+  ~DirectoryGuard() {
+    std::error_code ec;
+    fs::remove_all(path, ec);
+  }
+};
+
+struct BankOverrideGuard {
+  std::shared_ptr<const zutl::BankOverrides> previous;
+  explicit BankOverrideGuard(std::shared_ptr<const zutl::BankOverrides> banks)
+      : previous(zutl::set_bank_overrides(std::move(banks))) {}
+  ~BankOverrideGuard() { zutl::set_bank_overrides(std::move(previous)); }
+};
 uint32_t u32(const std::vector<uint8_t>& d, size_t at) {
   uint32_t v = 0;
   if (at + 4 <= d.size()) std::memcpy(&v, &d[at], 4);
@@ -671,11 +692,24 @@ TEST(bounded_gamez_texture_directory_mips) {
 
 TEST(large_texture_bank_seek_uses_64_bit_positions) {
   const fs::path directory = scratch("large_texture_bank");
+  const DirectoryGuard directory_guard{directory};
   const fs::path bank_path = directory / "rmechtex.zbd";
   constexpr uint32_t texture_offset = 0x80000020u;
   std::FILE* file = std::fopen(bank_path.string().c_str(), "wb+");
   EXPECT(file != nullptr);
   if (!file) return;
+
+#if defined(_WIN32)
+  const auto os_handle = _get_osfhandle(_fileno(file));
+  DWORD bytes_returned = 0;
+  if (os_handle == -1 ||
+      !DeviceIoControl(reinterpret_cast<HANDLE>(os_handle), FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0,
+                       &bytes_returned, nullptr)) {
+    std::printf("  SKIPPED large_texture_bank_seek_uses_64_bit_positions: could not mark test file sparse\n");
+    std::fclose(file);
+    return;
+  }
+#endif
 
   uint8_t header[24]{};
   const uint32_t has_entries = 1;
@@ -700,7 +734,6 @@ TEST(large_texture_bank_seek_uses_64_bit_positions) {
           std::fwrite(texture, 1, sizeof texture, file) == sizeof texture;
   const bool closed = std::fclose(file) == 0;
   if (!wrote || !closed) {
-    std::remove(bank_path.string().c_str());
     EXPECT(false);
     return;
   }
@@ -709,8 +742,8 @@ TEST(large_texture_bank_seek_uses_64_bit_positions) {
   static std::string bank_dir;
   bank_dir = "zbd/";
   zimg::state().dir = bank_dir.c_str();
-  auto previous = zutl::set_bank_overrides(
-      std::make_shared<const zutl::BankOverrides>(zutl::BankOverrides{{"zbd/rmechtex.zbd", bank_path.string()}}));
+  BankOverrideGuard bank_override_guard(std::make_shared<const zutl::BankOverrides>(
+      zutl::BankOverrides{{"zbd/rmechtex.zbd", bank_path.string()}}));
   zimg::Library library{};
   std::snprintf(library.name, sizeof library.name, "%s", "rmechtex.zbd");
   library.needs_resolve = false;
@@ -725,6 +758,4 @@ TEST(large_texture_bank_seek_uses_64_bit_positions) {
   std::free(library.entries);
   free_palettes();
   zimg::state() = zimg::State{};
-  zutl::set_bank_overrides(std::move(previous));
-  fs::remove_all(directory);
 }

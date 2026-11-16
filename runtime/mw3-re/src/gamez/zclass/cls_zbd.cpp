@@ -679,9 +679,10 @@ std::FILE* open_zbd(const char* path, ZbdHeader* header, ZbdReadContext* proof) 
     std::fclose(f);
     return nullptr;
   }
-  if (source_size > (int64_t{1} << 32)) {
-    std::printf("mw3: %s: file is %lld bytes; files over 4 GiB are not supported, not read\n", path,
-                static_cast<long long>(source_size));
+  if (source_size >= (int64_t{1} << 31)) {
+    std::printf(
+        "mw3: %s: file is %lld bytes; signed 32-bit ZBD offsets support files under 2 GiB, not read\n", path,
+        static_cast<long long>(source_size));
     std::fclose(f);
     return nullptr;
   }

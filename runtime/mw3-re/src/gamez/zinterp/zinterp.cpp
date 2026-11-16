@@ -763,10 +763,11 @@ bool open_archive(Interp& in, const char* name) {
     in.archive.f = nullptr;
     return false;
   }
-  constexpr int64_t kMaxScriptArchiveBytes = int64_t{1} << 32;
-  if (size > kMaxScriptArchiveBytes) {
-    std::printf("mw3: %s: file is %lld bytes; script archives over 4 GiB are not supported, not read\n", where.c_str(),
-                static_cast<long long>(size));
+  constexpr int64_t kMaxScriptArchiveBytes = int64_t{1} << 31;
+  if (size >= kMaxScriptArchiveBytes) {
+    std::printf(
+        "mw3: %s: file is %lld bytes; signed 32-bit script offsets support files under 2 GiB, not read\n",
+        where.c_str(), static_cast<long long>(size));
     std::fclose(f);
     in.archive.f = nullptr;
     return false;

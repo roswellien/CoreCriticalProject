@@ -60,9 +60,8 @@ void destroy(Archive& a) {
 bool open(Archive& a, const char* path) {
   a.file = zutl::open(path, "rb");  // FIX (A): the mounts (zutl_path.h), not CreateFileA on a Windows path
   if (!a.file) return false;
-  bool ok = read_table(a);
   a.path = strdup(path);
-  return ok;
+  return read_table(a);
 }
 
 // Mech3.exe 1.2 @ 0x005767b0
@@ -93,7 +92,13 @@ bool read_table(Archive& a) {
 }
 
 // Ours (zReader's bound): the table sits at the file's end, 0x94 bytes an entry, then the version and the count.
-int64_t data_end(const Archive& a) { return a.file ? file_size(a.file) - 8 - static_cast<int64_t>(a.count) * 0x94 : 0; }
+int64_t data_end(const Archive& a) {
+  if (!a.file || a.count < 0) return 0;
+  const int64_t size = file_size(a.file);
+  const int64_t table_size = 8 + static_cast<int64_t>(a.count) * 0x94;
+  if (size < table_size) return 0;
+  return size - table_size;
+}
 
 // Mech3.exe 1.2 @ 0x00576690: grows to at least count + 1, doubling.
 void reserve(Archive& a, int count) {
@@ -168,10 +173,15 @@ uint32_t read(Archive& a, int index, void* buffer, uint32_t* size) {
 uint32_t read_string(std::FILE* file, char** out) {
   int32_t length = 0;
   uint32_t total = read_bytes(file, &length, 4);
-  const int64_t left = file_size(file) - platform::file_position::tell(file);
-  const size_t size = length < 0 ? 0 : length > left ? static_cast<size_t>(left) : static_cast<size_t>(length);
+  const int64_t size_on_disk = file_size(file);
+  const int64_t position = platform::file_position::tell(file);
+  const int64_t left = size_on_disk < 0 || position < 0 || position > size_on_disk ? 0 : size_on_disk - position;
+  const size_t size = length < 0 ? 0
+                                 : static_cast<int64_t>(length) > left ? static_cast<size_t>(left)
+                                                                      : static_cast<size_t>(length);
   char* s = static_cast<char*>(std::malloc(size + 1));
   *out = s;
+  if (!s) return total;
   std::memset(s, 0, size + 1);
   if (size > 0) total += read_bytes(file, s, static_cast<uint32_t>(size));
   return total;
