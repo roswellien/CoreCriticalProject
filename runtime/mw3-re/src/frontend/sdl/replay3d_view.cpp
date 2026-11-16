@@ -182,6 +182,27 @@ bool is_fly_key(SDL_Scancode code) {
   }
 }
 
+// The shots in flight. The puppets play the fire and impact effects, but the
+// game draws a beam and a round's model from its weapon object, which a
+// replay has none of; so beams are drawn as lines and rounds as dots, always,
+// whatever overlays are on.
+void draw_shots(const Frame& frame, Render3dDraw& draw, const GameProjector& projector) {
+  const SDL_FColor beam_core = ui_color(255, 245, 230), beam_glow = ui_color(255, 90, 60);
+  for (const auto& beam : frame.beams) {
+    SDL_FPoint a, b;
+    if (!projector.to_screen(beam.from, &a) || !projector.to_screen(beam.to, &b)) continue;
+    // A glow either side of a bright core, a pixel apart.
+    draw.line({a.x, a.y - 1}, {b.x, b.y - 1}, beam_glow);
+    draw.line({a.x, a.y + 1}, {b.x, b.y + 1}, beam_glow);
+    draw.line(a, b, beam_core);
+  }
+  const SDL_FColor round_color = ui_color(255, 220, 120);
+  for (const auto& round : frame.rounds) {
+    SDL_FPoint p;
+    if (projector.to_screen(round.pos, &p)) draw.rect({p.x - 2, p.y - 2, 4, 4}, round_color);
+  }
+}
+
 }  // namespace
 
 struct Replay3dView::State {
@@ -201,6 +222,9 @@ struct Replay3dView::State {
   float real_dt = 0, real_elapsed = 0;
   float posed_t = -1;  // the replay time the puppets show, -1 before the first
   bool started = false, quit_box_open = false, seek_pending = false;
+  // Ours, in place of the game's quit box: that one is 640x480 art scaled up
+  // to the window, so it shows blurred and blocky at a modern size.
+  bool confirm_open = false;
 
   std::map<int, std::unique_ptr<Puppet>> puppets;  // by mech id
   Frame frame;
@@ -288,7 +312,8 @@ void Replay3dView::start() {
 
 void Replay3dView::before_lists(bool quit_box_open) {
   State& s = *s_;
-  s.quit_box_open = quit_box_open;
+  s.quit_box_open = quit_box_open || s.confirm_open;
+  quit_box_open = s.quit_box_open;
   for (const auto& apply : s.next_frame) apply();
   s.next_frame.clear();
   // Every seek (keys, the bar, the script) lands before this frame's step:
@@ -439,7 +464,15 @@ void Replay3dView::draw_overlay() {
   draw_overlays(s.frame, s.overlays, s.draw, s.projector);
   draw_panel(*s.log, s.frame, s.selected, s.screen_w, s.draw);
   draw_bar(s.clock, s.overlays, s.screen_w, s.screen_h, s.draw);
-  if (s.quit_box_open) s.draw.text("paused: the quit box is open", 8, 8);
+  draw_shots(s.frame, s.draw, s.projector);
+  if (s.confirm_open) {
+    const SDL_FRect box{s.screen_w / 2 - 150, s.screen_h / 2 - 40, 300, 80};
+    s.draw.rect(box, ui_color(20, 24, 28));
+    s.draw.text("Quit the replay?", box.x + 20, box.y + 18);
+    s.draw.text("Y: quit     N or Esc: go back", box.x + 20, box.y + 46, {200, 200, 200, 255});
+  } else if (s.quit_box_open) {
+    s.draw.text("paused: the quit box is open", 8, 8);
+  }
   if (!s.pending_shot.empty() && s.render) {
     // The renderer keeps the path's pointer until the frame is shown.
     s.shot_in_flight = s.pending_shot;
@@ -488,7 +521,20 @@ void Replay3dView::State::pick(float window_x, float window_y) {
 
 bool Replay3dView::handle(const SDL_Event& e) {
   State& s = *s_;
-  if (!s.started || s.quit_box_open) return false;
+  if (!s.started) return false;
+  if (s.confirm_open) {
+    // The box takes every key and click while it is up.
+    if (e.type == SDL_EVENT_KEY_DOWN) {
+      if (e.key.key == SDLK_Y) {
+        if (s.request_quit) s.request_quit();
+      } else if (e.key.key == SDLK_N || e.key.key == SDLK_ESCAPE) {
+        s.confirm_open = false;
+      }
+    }
+    return e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+           e.type == SDL_EVENT_MOUSE_BUTTON_UP || e.type == SDL_EVENT_MOUSE_MOTION || e.type == SDL_EVENT_MOUSE_WHEEL;
+  }
+  if (s.quit_box_open) return false;
   switch (e.type) {
     case SDL_EVENT_KEY_DOWN:
       if (is_fly_key(e.key.scancode)) {
@@ -510,7 +556,12 @@ bool Replay3dView::handle(const SDL_Event& e) {
           s.pending_shot = (std::filesystem::path(s.log_path_dir) / name).string();
           return true;
         }
-        default: return false;  // Escape and the rest: the game's (no command fires, plan step 7)
+        case SDLK_ESCAPE:
+          s.confirm_open = true;
+          if (s.looking)
+            if (SDL_Window* w = SDL_GetWindowFromID(e.key.windowID)) SDL_SetWindowRelativeMouseMode(w, false);
+          return true;
+        default: return false;  // the rest: the game's (no command fires, plan step 7)
       }
     case SDL_EVENT_KEY_UP:
       if (!is_fly_key(e.key.scancode)) return false;
@@ -532,7 +583,9 @@ bool Replay3dView::handle(const SDL_Event& e) {
       return true;
     case SDL_EVENT_MOUSE_MOTION:
       if (s.looking) {
-        s.yaw += e.motion.xrel * kLookRate;
+        // Yaw grows toward +x, which is the camera's left (fly()'s right is -x
+        // at yaw 0), so a mouse moved right turns it the other way.
+        s.yaw -= e.motion.xrel * kLookRate;
         s.pitch = std::clamp(s.pitch + e.motion.yrel * kLookRate, -1.5f, 1.5f);
         s.follow_id = -1;
       }

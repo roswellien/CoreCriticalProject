@@ -48,7 +48,9 @@ int action_kind(const std::string& name) {
 void set_phase(MechAnim* anim, float phase, float cps, float dt) {
   if (!anim) return;
   anim->rate = cps * anim->loop_time;
-  if (anim->rate > 0.0f) anim->t = phase * anim->loop_time / anim->rate - dt;
+  // Walking backward runs the clip at a negative rate; t then counts down
+  // the same way, so rate * t still lands on the phase.
+  if (anim->rate != 0.0f) anim->t = phase * anim->loop_time / anim->rate - dt;
   else anim->t = phase * anim->loop_time;  // still: the advance is a no-op on rate * t
   if (auto* blend = dynamic_cast<BlendAnim*>(anim)) {
     set_phase(blend->a, phase, cps, dt);
