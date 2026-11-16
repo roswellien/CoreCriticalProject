@@ -94,13 +94,15 @@ public sealed class NativeGameRunner
     public Process Launch(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string>? log = null)
     {
         var session = Path.Combine(_dataRoot, "sessions", Guid.NewGuid().ToString("N"));
+        // Guards the pending-log buffer shared by process reader threads and the launch thread.
+        var logLock = new object();
         Directory.CreateDirectory(session);
         var logPath = Path.Combine(session, "mw3-re.log");
         var pendingLog = new List<string>();
         var logCreated = false;
         void Log(string line)
         {
-            lock (session)
+            lock (logLock)
             {
                 if (!logCreated) pendingLog.Add(line);
                 else File.AppendAllText(logPath, line + Environment.NewLine);
@@ -113,7 +115,7 @@ public sealed class NativeGameRunner
 
         void PublishLog()
         {
-            lock (session)
+            lock (logLock)
             {
                 if (!logCreated)
                 {

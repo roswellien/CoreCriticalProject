@@ -946,13 +946,13 @@ namespace MW3RemasterLauncher
             if (automatic)
             {
                 MessageBox.Show(summary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
-                    "MW3-RE stopped (exit " + exitCode + ")", MessageBoxButton.OK, MessageBoxImage.Error);
+                    (_settingsMgr.Current.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE") + " stopped (exit " + exitCode + ")", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             else
             {
                 var choice = MessageBox.Show(this,
                     summary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
-                    "MW3-RE stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                    (_settingsMgr.Current.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE") + " stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
 
