@@ -41,8 +41,6 @@ const void* g_zoom_visual_camera = nullptr;
 
 constexpr uint32_t kActive = 4, kTreeValid = 0x80000, kOverride = 0x800000;
 constexpr uint32_t kDrawn = 0x80000000u, kUnk25 = 0x2000000;
-constexpr int32_t kTilerRingCapacity = 128;
-constexpr int32_t kTilerCellsPerRing = 64;
 const float kOnes[3] = {1.0f, 1.0f, 1.0f};
 const float kZeros[3] = {};
 const float kNullOffset[3] = {};   // 0x0063d870, never written
@@ -1169,13 +1167,18 @@ int render_cells(Node* world, Node* camera_node, Camera* cam) {
         uint8_t* f = p.fades + 0x44 * i;
         float fl[16];
         std::memcpy(fl, f + 4, sizeof fl);  // +0x04..+0x40
+        const float distance_scale = visual_distance_scale(
+            g_walk.camera->get<float>(0xb4), g_visual_far_request,
+            g_walk.camera == g_visual_camera);
+        const SquaredFadeRange fade_range = scale_squared_fade_range(
+            fl[12], fl[13], fl[14], distance_scale);
         const float* cpos = zmth::view().camera.m + 9;  // 0x0073fc24
         const float dx = cpos[0] - fl[9], dy = cpos[1] - fl[10], dz = cpos[2] - fl[11];
         const float d2 = (dx * dx + dy * dy) + dz * dz;
         float o;
-        if (!(d2 > fl[12])) o = 1.0f;
-        else if (!(d2 < fl[13])) o = 0.0f;
-        else o = (fl[13] - d2) * fl[14];
+        if (!(d2 > fade_range.near_squared)) o = 1.0f;
+        else if (!(d2 < fade_range.far_squared)) o = 0.0f;
+        else o = (fade_range.far_squared - d2) * fade_range.interpolation_factor;
         if (!(o > 0.0f)) continue;
         if (o < 1.0f) {
           g_walk.opacity[++g_walk.opacity_top] = o;

@@ -22,6 +22,21 @@ inline float visual_distance_scale(float authored_far, unsigned requested_far,
          authored_far;
 }
 
+struct SquaredFadeRange {
+  float near_squared;
+  float far_squared;
+  float interpolation_factor;
+};
+
+inline SquaredFadeRange scale_squared_fade_range(float near_squared,
+                                                 float far_squared,
+                                                 float interpolation_factor,
+                                                 float distance_scale) {
+  const float scale_squared = distance_scale * distance_scale;
+  return {near_squared * scale_squared, far_squared * scale_squared,
+          interpolation_factor / scale_squared};
+}
+
 inline bool visual_far_corners_need_update(bool clip_changed, float render_far,
                                            float cached_corner_z) {
   return clip_changed || cached_corner_z != -render_far;

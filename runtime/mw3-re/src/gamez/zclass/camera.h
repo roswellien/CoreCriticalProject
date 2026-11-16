@@ -55,13 +55,15 @@ struct WalkColor {                 // 0x0060bc28, 0x10 bytes
   float rgb[3];
   float weight;
 };
+constexpr int32_t kTilerRingCapacity = 128;
+constexpr int32_t kTilerCellsPerRing = 64;
 struct ScreenRing {                // host-owned render storage; original was 50 rings x 30 cells
   struct Cell {                    // preserves the 0x18-byte cell record
     int32_t x, z;                  // +0x00 / +0x04  the stored cell
     int32_t wrapped;               // +0x08  outside the grid: drawn by moving the camera
     float dx, dz;                  // +0x0c / +0x10  that move (only when wrapped)
     uint32_t mask;                 // +0x14  planes the cell's sphere crosses
-  } cell[64];
+  } cell[kTilerCellsPerRing];
   int32_t count = 0;
 };
 struct SceneWalk {
@@ -90,7 +92,7 @@ struct SceneWalk {
   void (*post)(Node* node) = nullptr;  // [0x005ea514]  node +0x2c bit 0x40
   uint32_t listener_frame = 0;     // 0x0060be28
   float listener_last[3] = {};     // 0x0060be30
-  ScreenRing rings[128] = {};      // host-owned render storage for extended view ranges
+  ScreenRing rings[kTilerRingCapacity] = {};  // host-owned render storage for extended view ranges
   float view_points[6][3] = {};    // 0x007365c0  the camera's footprint (the hull reuses one more)
   int32_t view_count = 0;          // 0x0073662c
 };
