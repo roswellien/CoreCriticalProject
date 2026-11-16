@@ -43,7 +43,7 @@
 //   --nosound            no audio device (a silent DirectSound stand-in)
 //   --hidden             keep the window hidden
 //   --windowed           a window, not fullscreen (also --window, or windowed=1 in mw3.cfg)
-//   --cc-vulkan          experimental Windows Vulkan/DXGI backend (requires a window)
+//   --cc-vulkan          experimental Windows Vulkan/DXGI backend
 //   --cc-vulkan-wsi      experimental Vulkan swapchain on an SDL surface
 //   --cc-aa MODE         off, fxaa, ssaa2 or ssaa4 on the Core Critical backend
 //   --cc-af LEVEL        1, 2, 4, 8 or 16 on the Core Critical backend
@@ -1185,8 +1185,6 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   if (a.backend == sdlfe::RendererBackend::sdl &&
       (a.quality.antialiasing != "off" || a.quality.anisotropy != "1" || !a.cc_assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
-  if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
-    return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
   auto selected_assets = a.cc_assets;
   if (!selected_assets.environment_packs.empty())
     std::fprintf(stderr, "Environment packs requested: %zu\n",
@@ -2213,8 +2211,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           if (g_net_pass) g_net_pass();
         };
       // Ours: Alt+Enter, and the game's sounds silent while the window is away.
-      if (a.backend == sdlfe::RendererBackend::sdl)
-        pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
+      pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
       if (auto* s = dynamic_cast<sdlfe::SdlSoundOutput*>(sound.get())) pump.focus_changed = [s](bool on) { s->set_focused(on); };
       if (!debug && !launch && (a.frames > 0 || !a.shot.empty()))
         pump.should_quit = [&] { return (a.frames > 0 && menu_frames >= a.frames) || (!a.shot.empty() && menu_frames > a.shot_frame); };

@@ -258,6 +258,51 @@ void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
   }
 }
 
+void check_fullscreen_resize(SDL_Window *window,
+                             sdlfe::RendererBackend backend) {
+  auto renderer = make_check_renderer(window, backend);
+  renderer->set_viewport(0, 0, 32, 32);
+  renderer->clear(true, 0, 0, 0);
+  renderer->begin_scene();
+  quad(*renderer, 0, 32, .5f, 0xff204080);
+  renderer->end_scene();
+  require(SDL_ShowWindow(window) && SDL_SyncWindow(window), SDL_GetError());
+
+  auto present_after_window_change = [&] {
+    const auto before = renderer->presentation_count();
+    for (int attempt = 0;
+         attempt < 30 && renderer->presentation_count() == before; ++attempt) {
+      SDL_PumpEvents();
+      renderer->present();
+      SDL_Delay(10);
+    }
+    require(renderer->presentation_count() > before,
+            "Changed Vulkan presentation target did not present");
+  };
+
+  // Match SdlWindow::switch_fullscreen: finish renderer work before SDL can
+  // synchronously resize the window and its Vulkan/DXGI presentation target.
+  renderer->drain();
+  require(SDL_SetWindowFullscreen(window, true) && SDL_SyncWindow(window),
+          SDL_GetError());
+  SDL_PumpEvents();
+  int fullscreen_width = 0, fullscreen_height = 0;
+  SDL_GetWindowSizeInPixels(window, &fullscreen_width, &fullscreen_height);
+  require((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0 &&
+              fullscreen_width > 32 && fullscreen_height > 32,
+          "The fullscreen fixture did not reach a desktop-sized drawable");
+  present_after_window_change();
+
+  renderer->drain();
+  require(SDL_SetWindowFullscreen(window, false) &&
+              SDL_SetWindowSize(window, 64, 48) && SDL_SyncWindow(window),
+          SDL_GetError());
+  SDL_PumpEvents();
+  require((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) == 0,
+          "The fullscreen fixture did not return to windowed mode");
+  present_after_window_change();
+}
+
 } // namespace
 
 namespace {
@@ -2604,6 +2649,8 @@ int main(int argc, char **argv) {
       check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
     }
+    if (native_wsi || material_check)
+      check_fullscreen_resize(window, backend);
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;
