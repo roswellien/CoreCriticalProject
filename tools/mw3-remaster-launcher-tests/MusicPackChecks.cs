@@ -84,7 +84,7 @@ static class MusicPackChecks
             if (MusicPack.StageForNative(manager.GetActivePackDirectories(), changedWrite) != 2)
                 throw new Exception("Could not stage tracks for changed-file preservation check.");
             var changedTrack = Path.Combine(changedWrite, "music", "track02.wav");
-            File.Delete(changedTrack); // Model an editor replacing the hard link with a user-owned file.
+            File.Delete(changedTrack); // Model an editor replacing the staged copy with a user-owned file.
             File.WriteAllText(changedTrack, "user replaced launcher-staged track");
             MusicPack.StageForNative(Array.Empty<string>(), changedWrite);
             if (File.ReadAllText(changedTrack) != "user replaced launcher-staged track" ||

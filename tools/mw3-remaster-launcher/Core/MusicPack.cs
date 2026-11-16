@@ -1,5 +1,4 @@
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -15,8 +14,6 @@ public static class MusicPack
 
     private sealed record StagedTrack(string FileName, long Bytes, string Sha256, string PackId, string PackVersion);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateHardLinkW(string fileName, string existingFileName, IntPtr securityAttributes);
 
     private static JsonObject ReadVerifiedInputs(string directory, PackManifest manifest, JsonNode? decoder)
     {
@@ -120,8 +117,7 @@ public static class MusicPack
                         var temporary = Path.Combine(musicDirectory, $".track{number:00}.{Guid.NewGuid():N}.tmp");
                         try
                         {
-                            if (!OperatingSystem.IsWindows() || !CreateHardLinkW(temporary, source, IntPtr.Zero))
-                                File.Copy(source, temporary);
+                            File.Copy(source, temporary);
                             File.Move(temporary, destination, true);
                             ++staged;
                             log?.Invoke($"MW3-RE launcher-staged soundtrack track {number:00} updated from pack {manifest.Id} {manifest.Version}.");
@@ -136,8 +132,9 @@ public static class MusicPack
                 continue;
             }
 
-            if (!OperatingSystem.IsWindows() || !CreateHardLinkW(destination, source, IntPtr.Zero))
-                File.Copy(source, destination);
+            // A copy, not a hard link: a player editing the profile track must not change the installed,
+            // hash-verified pack file.
+            File.Copy(source, destination);
             ++staged;
             owned[track.FileName] = currentRecord;
             log?.Invoke($"MW3-RE soundtrack track {number:00} staged in the profile music folder.");
