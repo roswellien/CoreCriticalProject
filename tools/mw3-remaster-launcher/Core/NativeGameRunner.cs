@@ -105,7 +105,10 @@ public sealed class NativeGameRunner
                 if (!logCreated) pendingLog.Add(line);
                 else File.AppendAllText(logPath, line + Environment.NewLine);
             }
-            log?.Invoke(line);
+            // Lines arrive on process reader threads; a failing UI callback must not stop the
+            // game's output from reaching the session log.
+            try { log?.Invoke(line); }
+            catch (Exception error) { Debug.WriteLine("Native log callback failed: " + error.Message); }
         }
 
         void PublishLog()
