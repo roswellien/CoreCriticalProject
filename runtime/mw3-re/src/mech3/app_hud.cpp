@@ -217,7 +217,11 @@ struct ProgramHudHooks : HudHooks {
     if (auto* mv = dynamic_cast<HudMfdView*>(zv)) return mfd_view(*mv);
     const HudZView& v = zv->view;
     if (!v.hardware) return;
-    if (zcls::Node* c = node(v.camera)) ++view_draws, zcls::render_world(c, 0);
+    if (zcls::Node* c = node(v.camera)) {
+      ++view_draws;
+      const zvid::ProducerPurposeScope producer_view(platform::ProducerPurpose::WorldZoom);
+      zcls::render_world(c, 0);
+    }
   }
   // Mech3.exe 1.2 @ 0x00442900: the camera 13 m before the HUD's mech (its
   // local -z, [0x005e3a08]) at 1.25 times its centroid's height over its

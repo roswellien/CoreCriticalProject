@@ -1653,6 +1653,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 
 #include "geometry_checks.inc"
 #include "scene_binding_checks.inc"
+#include "producer_view_checks.inc"
 #include "parallax_checks.inc"
 #include "platform_checks.inc"
 #include "prepared_gpu_checks.inc"
@@ -2145,7 +2146,8 @@ void check_renderer_bridge_config() {
 int main(int argc, char **argv) {
   bool geometry_check = false, ultrawide_check = false;
   bool native_wsi = false, quality_check = false, prepared_check = false,
-       material_check = false, scene_bindings_check = false, pom_check = false;
+       material_check = false, scene_bindings_check = false, pom_check = false,
+       producer_view_check = false;
   sdlfe::CoreCriticalQuality quality;
   for (int i = 1; i < argc; ++i) {
     const std::string_view option(argv[i]);
@@ -2159,6 +2161,8 @@ int main(int argc, char **argv) {
       geometry_check = true;
     else if (option == "--scene-bindings")
       scene_bindings_check = true;
+    else if (option == "--producer-view")
+      producer_view_check = true;
     else if (option == "--pom")
       pom_check = true;
     else if (option == "--ultrawide")
@@ -2171,7 +2175,7 @@ int main(int argc, char **argv) {
       quality_check = true;
     } else {
       std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] "
-                           "[--prepared|--materials|--scene-bindings|--pom] "
+                           "[--prepared|--materials|--scene-bindings|--producer-view|--pom] "
                            "[--quality MODE]\n");
       return 1;
     }
@@ -2263,7 +2267,9 @@ int main(int argc, char **argv) {
     const auto backend = native_wsi
                              ? sdlfe::RendererBackend::core_critical_wsi
                              : sdlfe::RendererBackend::core_critical_dxgi;
-    if (scene_bindings_check)
+    if (producer_view_check)
+      check_producer_views(window, backend);
+    else if (scene_bindings_check)
       check_scene_bindings(window, backend);
     else if (pom_check) {
       check_owned_rigid_capture(window, backend);

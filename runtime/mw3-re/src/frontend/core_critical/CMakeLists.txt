@@ -155,6 +155,8 @@ add_test(NAME mw3ccvulkan_thread_dxgi COMMAND mw3ccvulkan_checks --render-thread
 add_test(NAME mw3ccvulkan_thread_wsi COMMAND mw3ccvulkan_checks --render-thread --wsi)
 add_test(NAME mw3ccvulkan_scene_bindings_wsi COMMAND mw3ccvulkan_checks --wsi --scene-bindings)
 add_test(NAME mw3ccvulkan_scene_bindings_thread COMMAND mw3ccvulkan_checks --render-thread --wsi --scene-bindings)
+add_test(NAME mw3ccvulkan_producer_view_wsi COMMAND mw3ccvulkan_checks --wsi --producer-view)
+add_test(NAME mw3ccvulkan_producer_view_thread COMMAND mw3ccvulkan_checks --render-thread --wsi --producer-view)
 add_test(NAME mw3ccvulkan_thread_geometry COMMAND mw3ccvulkan_checks --render-thread --wsi --geometry)
 add_test(NAME mw3ccvulkan_thread_material COMMAND mw3ccvulkan_checks --render-thread --wsi --materials --quality fxaa)
 add_test(NAME mw3ccvulkan_ultrawide_dxgi COMMAND mw3ccvulkan_checks --ultrawide)

@@ -1168,6 +1168,7 @@ void horizon_follow() {
 // parent's world matrix when it has one parent.
 int render_subtree(Node* camera_node, Node* node, int32_t hw) {
   if (!node || !camera_node) return 1;
+  const zvid::ProducerWorldScope producer_view(true);
   zmth::Mat34 local;
   zmth::push(&local);
   Camera* cam = cam_of(camera_node);
@@ -1240,6 +1241,7 @@ int camera_draw_flares(Camera* cam, int32_t from) {
 // The Direct3D frame's 3D part: LoD scale, lights, camera, horizon,
 // viewport, zones, then the scene walk between BeginScene and EndScene.
 int render_world(Node* camera_node, int32_t after) {
+  zvid::ProducerWorldScope producer_view;
   zmth::check_stack_at_frame();  // FIX (bug), ours (W59): one imbalance cannot carry
   zmth::Mat34 local;
   zmth::push(&local);
@@ -1261,6 +1263,7 @@ int render_world(Node* camera_node, int32_t after) {
   camera_update(camera_node);
   horizon_follow();
   zmod::set_camera(g_walk.camera);
+  producer_view.begin_emission();
   zmod::world_update_lights(world);
   if (g_hooks.world_sounds) g_hooks.world_sounds(g_hooks.ctx, world);
   if (zmod::shadows_on()) {
@@ -1292,6 +1295,7 @@ int render_world(Node* camera_node, int32_t after) {
   if (g_hooks.begin_scene) g_hooks.begin_scene(g_hooks.ctx);
   render_scene(world, camera_node, g_walk.camera);
   if (g_hooks.puffers) g_hooks.puffers(g_hooks.ctx);
+  producer_view.end_emission();
   zmth::pop();
   if (g_hooks.flush_transparent) g_hooks.flush_transparent(g_hooks.ctx);
   if (after && g_hooks.after_scene) g_hooks.after_scene(g_hooks.ctx, ztimer::state().dt);

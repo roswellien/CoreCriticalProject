@@ -699,6 +699,8 @@ add_executable(mw3tests
   tests/test_bounded_media.cpp
   tests/test_hooks.cpp
   tests/place_survey.cpp
+  tests/producer_view_header_contract.cpp
+  tests/test_producer_view.cpp
 )
 if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)

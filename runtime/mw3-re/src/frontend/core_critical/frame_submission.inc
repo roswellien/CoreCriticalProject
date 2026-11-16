@@ -1,5 +1,7 @@
 public:
 void flush() override {
+    // Abandoned CPU prefixes must never be submitted by drain/present/destruct.
+    if (producer_failed_) return;
     if (scene_.order.empty()) {
         if (!scene_.draws.empty() || !scene_.clears.empty() ||
             !scene_.vertices.empty())
@@ -37,6 +39,13 @@ void flush() override {
             throw std::runtime_error(
                 "Render packet contains a live shadow callback");
     }
+    std::uint64_t packet_id = 0;
+    if (producer_observer_) {
+      if (producer_packet_id_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::runtime_error("Producer packet observation identity exhausted");
+      packet_id = ++producer_packet_id_;
+      observe_producer_packet(scene_, packet_id, local_active_);
+    }
     resident_width_ = scene_.width;
     resident_height_ = scene_.height;
     // Track the last ordered upload, not the worker's mutable Vulkan cache.
@@ -46,7 +55,7 @@ void flush() override {
     if (local_active_) {
       auto packet = std::make_shared<vk::Scene>(std::move(scene_));
       pending_local_packets_.push_back(
-          PendingLocalPacket{std::move(packet), initialize, local_bytes});
+          PendingLocalPacket{std::move(packet), initialize, local_bytes, packet_id});
       pending_local_bytes_ += local_bytes;
       scene_ = {};
       std::lock_guard<std::mutex> lock(recycle_mutex_);
@@ -64,9 +73,10 @@ void flush() override {
         auto packet = std::make_shared<vk::Scene>(std::move(scene_));
         const auto bytes = packet_bytes(*packet);
         worker_->post(
-            [this, packet, initialize] {
+            [this, packet, initialize, packet_id] {
                 {
                     CpuInterval interval(cpu_profile_ ? &worker_render_ticks_ : nullptr);
+                    observe_worker_packet(*packet, packet_id);
                     renderer_->render(*packet, initialize, false);
                 }
                 recycle_scene(*packet);
@@ -81,6 +91,7 @@ void flush() override {
             recycled_scenes_.pop_back();
         }
     } else {
+        observe_worker_packet(scene_, packet_id);
         renderer_->render(scene_, initialize, false);
         recycle_scene(scene_);
     }
@@ -99,10 +110,12 @@ private:
     std::shared_ptr<vk::Scene> packet;
     bool initialize;
     std::size_t bytes;
+    std::uint64_t producer_packet_id;
   };
   std::vector<PendingLocalPacket> pending_local_packets_;
   std::size_t pending_local_bytes_{};
   void complete_local_light_packets() {
+    if (producer_failed_) return;
     // Detach the batch before posting: an exception must not cause a later
     // drain/destructor to replay packets already submitted to the worker.
     auto packets = std::move(pending_local_packets_);
@@ -111,13 +124,15 @@ private:
     for (const auto &pending : packets) {
       auto packet = pending.packet;
       const bool initialize = pending.initialize;
+      const auto packet_id = pending.producer_packet_id;
       local_lights_attach(*packet);
       if (worker_) {
         worker_->post(
-            [this, packet, initialize] {
+            [this, packet, initialize, packet_id] {
               {
                 CpuInterval interval(cpu_profile_ ? &worker_render_ticks_
                                                   : nullptr);
+                observe_worker_packet(*packet, packet_id);
                 renderer_->render(*packet, initialize, false);
               }
               recycle_scene(*packet);
@@ -126,6 +141,7 @@ private:
             },
             pending.bytes);
       } else {
+        observe_worker_packet(*packet, packet_id);
         renderer_->render(*packet, initialize, false);
         recycle_scene(*packet);
         std::lock_guard<std::mutex> lock(recycle_mutex_);

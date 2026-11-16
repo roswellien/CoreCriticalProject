@@ -7,6 +7,7 @@
 #include "frontend/sdl/sdl_render3d.h"
 #include "renderer/original_rigid_capture.hpp"
 #include "renderer/renderer_bridge_config.hpp"
+#include "producer_view_test_hook.hpp"
 
 namespace cc_mw3_re {
 
@@ -44,6 +45,7 @@ public:
   virtual AssetStatistics asset_statistics() const = 0;
   virtual cc::geometry::Statistics geometry_statistics() const = 0;
   virtual SceneBindingStatistics scene_binding_statistics() { return {}; }
+  virtual bool observe_producer_views(testing::ProducerViewObserver*) { return false; }
 };
 
 RendererBridgeConfig configure_bridge(
