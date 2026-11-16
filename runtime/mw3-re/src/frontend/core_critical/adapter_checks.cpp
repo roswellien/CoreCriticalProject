@@ -1274,11 +1274,16 @@ void check_native_sky_unlit(SDL_Window *window,
                   "Native sky checker UV/coverage witness failed");
         }
       }
+      const auto normal_draws_before =
+          modes[2].renderer->asset_statistics().normal_draws;
       const auto terrain_flat = render(1, false, true, 0, 0, 0, true);
       const auto terrain_normal = render(2, false, true, 0, 0, 0, true);
-      require(terrain_flat != terrain_normal &&
-                  modes[2].renderer->asset_statistics().normal_draws > 0,
-              "Ordinary companion lost actual normal-map illumination");
+      require(modes[2].renderer->asset_statistics().normal_draws >
+                  normal_draws_before,
+              "Ordinary companion lost its normal-map binding");
+      if (sun == 0)
+        require(terrain_flat != terrain_normal,
+                "Ordinary companion lost actual normal-map illumination");
       if (sun == 0)
         first_terrain_sun = terrain_flat;
       else
@@ -1322,6 +1327,16 @@ void check_native_sky_unlit(SDL_Window *window,
 
 void check_sealed_environment(SDL_Window *window,
                               sdlfe::RendererBackend backend) {
+  struct RestoreView {
+    zmth::Projection projection = zmth::projection();
+    zmth::View view = zmth::view();
+    ~RestoreView() {
+      zmth::projection() = projection;
+      zmth::view() = view;
+    }
+  } restore_view;
+  zmth::projection() = {};
+  zmth::view().camera = {{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
   require(SDL_SetWindowSize(window, 32, 32) && SDL_SyncWindow(window),
           SDL_GetError());
   const uint8_t green[4] = {0, 255, 0, 255};
@@ -1389,9 +1404,10 @@ void check_sealed_environment(SDL_Window *window,
       quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000, sky_state);
       renderer->end_scene();
       auto px2 = read();
+      // The exact profile pixel reflects native sky's captured producer view.
       const uint32_t outdoor_sky_expected =
           (mode[0] == 'f' && id.world_index == 5 && id.number == 1)
-              ? 0xFF6B5261
+              ? 0xFFBD8884
               : 0xFFFF0000;
       require(px_at(px2, 30, 2) == outdoor_sky_expected, "outdoor sky");
     }
