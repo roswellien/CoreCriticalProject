@@ -1,4 +1,5 @@
 #include "mech3/app_hooks.h"
+#include "gamez/zrender/zrndr_blit.h"
 
 #include <cstdio>
 #include <cstring>
@@ -400,9 +401,13 @@ void Engine::screen_tint(uint16_t colour, Handle rect, double alpha) {
 void Engine::replace_with_exit() { app().replace(app().state(4), 0); }
 bool Engine::main_menu_background(zimg::Texture** image, uint8_t* moving) {
   MainMenu* m = main_menu();
-  if (!m) return false;
+  if (!m) {
+    zrndr::set_menu_background_source(nullptr);
+    return false;
+  }
   *image = m->background.image;
   *moving = m->background.moving;
+  zrndr::set_menu_background_source(*image);
   return true;
 }
 uint8_t Engine::mission_running() { return states().core.active_; }

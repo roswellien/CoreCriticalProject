@@ -38,6 +38,7 @@ public sealed record Mw3RePreviewOptions
     public string Geometry { get; init; } = "partial";
     public IReadOnlyList<string> ModelPacks { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> UiPacks { get; init; } = Array.Empty<string>();
     public bool DynamicLighting { get; init; }
     public bool Headlights { get; init; }
     public string? HeadlightBindings { get; init; }
@@ -113,6 +114,7 @@ public static class Mw3ReLaunchRequest
         var preview = options.Preview!;
         ArgumentNullException.ThrowIfNull(preview.ModelPacks);
         ArgumentNullException.ThrowIfNull(preview.EnvironmentPacks);
+        ArgumentNullException.ThrowIfNull(preview.UiPacks);
         var request = new JsonObject
         {
             ["schema_version"] = 4, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
@@ -129,6 +131,7 @@ public static class Mw3ReLaunchRequest
                 ["hud_text"] = preview.HudText, ["geometry"] = preview.Geometry,
                 ["model_packs"] = Paths(preview.ModelPacks),
                 ["environment_packs"] = Paths(preview.EnvironmentPacks),
+                ["ui_packs"] = Paths(preview.UiPacks),
                 ["dynamic_lighting"] = preview.DynamicLighting,
                 ["headlights"] = preview.Headlights,
                 ["headlight_bindings"] = preview.HeadlightBindings,

@@ -1,6 +1,7 @@
 """Exercise the native-only, non-executing argv boundary with authored paths."""
 
 import copy
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -383,6 +384,30 @@ class NativePreviewPlanTests(unittest.TestCase):
                                "registry": "environment/environment.json"}})
         return os.path.join(self.root, name)
 
+    def menu_pack(self, name="menu", tamper=False):
+        background = struct.pack("<8sIIII", b"MWHDBG1\0", 4, 2, 2, 1) + bytes(range(24))
+        registry = json.dumps({"schema_version": 2, "payload_profile": "prepared-ui-v1",
+                               "kind": "menu", "sprites": {},
+                               "background": "ui/background.mwhd"}).encode()
+        background_path = self.write(f"{name}/ui/background.mwhd", background)
+        registry_path = self.write(f"{name}/ui/ui.json", registry)
+        files = {}
+        for relative, path, file_format in (
+                ("ui/background.mwhd", background_path, "MWHDBG1"),
+                ("ui/ui.json", registry_path, None)):
+            with open(path, "rb") as stream:
+                payload = stream.read()
+            files[relative] = {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            if file_format:
+                files[relative]["format"] = file_format
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": files,
+            "native_payload": {"profile": "prepared-ui-v1", "registry": "ui/ui.json"}})
+        if tamper:
+            with open(background_path, "r+b") as stream:
+                stream.seek(-1, os.SEEK_END)
+                stream.write(b"x")
+        return os.path.join(self.root, name)
+
     def request(self, **preview):
         return {
             "schema_version": 4, "engine": "mw3-re", "runtime_root": "C:/Runtime",
@@ -423,6 +448,24 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertNotIn("--cc-draw-distance", result["argv"])
         self.assertIn("--cc-environment-packs-explicit", result["argv"])
         self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_menu_background_pack_is_hash_checked_and_emitted(self):
+        pack = self.menu_pack()
+        result = self.plan(self.request(hud="core-critical", ui_packs=[pack]))
+        background = os.path.join(pack, "ui", "background.mwhd")
+        self.assertIn("--cc-menu-background", result["argv"])
+        self.assertEqual(result["argv"].index("--cc-menu-background") + 1,
+                         result["argv"].index(background))
+        self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_tampered_menu_background_is_reported_and_left_off(self):
+        pack = self.menu_pack(tamper=True)
+        result = self.plan(self.request(hud="core-critical", ui_packs=[pack]))
+        self.assertNotIn("--cc-menu-background", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
+        self.assertIn("integrity failure", result["skipped_packs"][0]["reason"])
 
     # The planner accepts only Windows paths, so tests that read real packs from a temporary
     # directory run on Windows; validation-only tests below run everywhere.

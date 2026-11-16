@@ -47,6 +47,7 @@ add_library(mw3core STATIC
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
+  src/platform/prepared_menu_background.cpp
   src/crt/msvc_math.cpp
   src/crt/msvc_rand.cpp
   src/crt/msvc_string.cpp
@@ -638,6 +639,12 @@ if(MSVC)
   target_compile_options(mw3prepared_checks PRIVATE /EHsc)
 endif()
 add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
+add_executable(mw3menu_background_checks tests/test_prepared_menu_background.cpp)
+target_link_libraries(mw3menu_background_checks PRIVATE mw3core)
+if(MSVC)
+  target_compile_options(mw3menu_background_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3menu_background_checks COMMAND mw3menu_background_checks)
 add_library(mw3ground_export STATIC tools/analysis/ground_targets.cpp)
 target_include_directories(mw3ground_export PRIVATE third_party)
 target_link_libraries(mw3ground_export PUBLIC mw3core)

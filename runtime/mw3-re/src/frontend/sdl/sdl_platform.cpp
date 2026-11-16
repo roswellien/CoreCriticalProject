@@ -14,6 +14,7 @@
 #include <algorithm>
 
 #include "frontend/sdl/sdl_input.h"
+#include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zgame/zgameapp.h"
 #include "gamez/zsound/zsnd_cd.h"
 #include "gamez/zutil/zfix.h"
@@ -239,10 +240,10 @@ bool SdlScreen2D::layer_empty(const uint16_t* pixels, int width, int height, int
   return true;
 }
 
-void SdlScreen2D::draw_layer(int width, int height, bool blend) {
+void SdlScreen2D::draw_layer(int width, int height, bool blend, bool sharp) {
   platform::DrawState s;
   s.texture = texture_, s.address_u = s.address_v = 3;
-  s.depth_write = false, s.depth_always = true, s.blend = blend, s.sharp = true;
+  s.depth_write = false, s.depth_always = true, s.blend = blend, s.sharp = sharp;
   const float w = static_cast<float>(width), h = static_cast<float>(height);
   const platform::TLVertex quad[4] = {{0, 0, 1, 1, 0xffffffffu, 0xff000000u, 0, 0},
                                       {w, 0, 1, 1, 0xffffffffu, 0xff000000u, 1, 0},
@@ -256,7 +257,32 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend) {
 void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) {
   if (!render_ || width <= 0 || height <= 0) return;
   ++frames;
-  upload(pixels, width, height, pitch, rgb565, false, 0);
+  bool menu_background_shown = false;
+  if (menu_background_) {
+    unsigned output_width = unsigned(width), output_height = unsigned(height);
+    int window_width = width, window_height = height;
+    if (hud_window_) SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
+    const double fit = std::min({double(window_width) / width, double(window_height) / height, 4.5});
+    if (fit >= 1.0) {
+      output_width = unsigned(std::lround(width * fit));
+      output_height = unsigned(std::lround(height * fit));
+      if (platform::compose_menu_background(*menu_background_, zrndr::menu_background_source(),
+                                            zrndr::menu_background_blits(), pixels, width, height,
+                                            pitch, rgb565, output_width, output_height, &menu_composed_)) {
+        const auto* composed_bytes = reinterpret_cast<const uint8_t*>(menu_composed_.data());
+        if (texture_ < 0 || tw_ != int(output_width) || th_ != int(output_height)) {
+          if (texture_ >= 0) render_->release_texture(texture_);
+          texture_ = render_->create_texture(int(output_width), int(output_height), composed_bytes, 1);
+          if (texture_ < 0) throw std::runtime_error("Menu HD background texture allocation failed");
+          tw_ = int(output_width), th_ = int(output_height);
+        } else {
+          render_->update_texture(texture_, int(output_width), int(output_height), composed_bytes);
+        }
+        menu_background_shown = true;
+      }
+    }
+  }
+  if (!menu_background_shown) upload(pixels, width, height, pitch, rgb565, false, 0);
   // FIX (B), playtest W22: the 3D's viewport back after the layer. On a canvas
   // (16:9 past mode 10) the menus' 853x480 left on it made the mission after
   // the pause draw the frame's top-left corner over the whole window.
@@ -264,7 +290,7 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   render_->viewport(&vx, &vy, &vw, &vh);
   render_->set_viewport(0, 0, width, height);
   render_->clear(true, 0, 0, 0);
-  draw_layer(width, height, false);
+  draw_layer(width, height, false, !menu_background_shown);
   render_->present();
   render_->set_viewport(vx, vy, vw, vh);
 }
@@ -277,6 +303,9 @@ SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_W
     if (!render_) throw std::runtime_error("Core Critical HUD requires a renderer");
     hud_ = std::make_unique<GpuHud>(*render_, options);
   }
+  if (!options.menu_background.empty())
+    menu_background_ = std::make_unique<platform::MenuBackgroundImage>(
+        platform::load_menu_background(options.menu_background));
 }
 SdlScreen2D::~SdlScreen2D() = default;
 void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height, int pitch) {

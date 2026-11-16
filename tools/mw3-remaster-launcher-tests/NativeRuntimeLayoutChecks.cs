@@ -723,6 +723,37 @@ static class NativeRuntimeLayoutChecks
             var shared = Path.Combine(packs, "shared");
             Directory.CreateDirectory(shared);
             File.WriteAllText(Path.Combine(shared, "pack.json"), """{"schema_version":2,"files":{"environment/rmechtex.zbd":{"bytes":5000000000,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
+            var menu = Path.Combine(packs, "menu");
+            Directory.CreateDirectory(Path.Combine(menu, "ui"));
+            var background = new byte[48];
+            Encoding.ASCII.GetBytes("MWHDBG1\0").CopyTo(background, 0);
+            BitConverter.GetBytes(4u).CopyTo(background, 8);
+            BitConverter.GetBytes(2u).CopyTo(background, 12);
+            BitConverter.GetBytes(2u).CopyTo(background, 16);
+            BitConverter.GetBytes(1u).CopyTo(background, 20);
+            for (var index = 24; index < background.Length; index++) background[index] = (byte)index;
+            File.WriteAllBytes(Path.Combine(menu, "ui", "background.mwhd"), background);
+            var registry = """{"schema_version":2,"payload_profile":"prepared-ui-v1","kind":"menu","sprites":{},"background":"ui/background.mwhd"}""";
+            File.WriteAllText(Path.Combine(menu, "ui", "ui.json"), registry);
+            var registryBytes = File.ReadAllBytes(Path.Combine(menu, "ui", "ui.json"));
+            File.WriteAllText(Path.Combine(menu, "pack.json"), JsonSerializer.Serialize(new
+            {
+                schema_version = 2,
+                id = "com.mw3remaster.menu",
+                files = new Dictionary<string, object>
+                {
+                    ["ui/background.mwhd"] = new { bytes = background.Length, sha256 = Convert.ToHexString(SHA256.HashData(background)), format = "MWHDBG1" },
+                    ["ui/ui.json"] = new { bytes = registryBytes.Length, sha256 = Convert.ToHexString(SHA256.HashData(registryBytes)) }
+                },
+                native_payload = new
+                {
+                    profile = "prepared-ui-v1", registry = "ui/ui.json", path_base = "pack-root",
+                    required_capabilities = new Dictionary<string, int> { ["ui-artwork"] = 1 },
+                    required_formats = new[] { "MWHDBG1" }
+                }
+            }));
+            if (!NativeGameRunner.SelectUiPacks(new[] { menu }).SequenceEqual(new[] { Path.GetFullPath(menu) }))
+                throw new Exception("Enabled menu UI pack was not projected to the native planner.");
 
             if (NativeGameRunner.WindowModeForSettings("windowed") != Mw3ReWindowMode.Windowed ||
                 NativeGameRunner.WindowModeForSettings("fullscreen") != Mw3ReWindowMode.Fullscreen ||
@@ -732,17 +763,19 @@ static class NativeRuntimeLayoutChecks
             var options = new Mw3RePlanningOptions
             {
                 Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
-                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
+                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared }, UiPacks = new[] { menu } }
             };
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
+                wire["preview"]!["ui_packs"]![0]!.GetValue<string>() != menu ||
                 wire["visuals"]!["pom"]!.GetValue<bool>() != true)
                 throw new Exception("Native preview projection lost its schema, distance or POM.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
-                "--cc-hud-text", "1", "--cc-geometry", "partial",
+                "--cc-hud-text", "1", "--cc-menu-background", Path.Combine(menu, "ui", "background.mwhd"),
+                "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
                 "--cc-environment-pack", map };
