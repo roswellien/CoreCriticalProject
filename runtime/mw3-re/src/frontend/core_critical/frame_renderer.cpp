@@ -1866,6 +1866,9 @@ private:
   // Declared after renderer_: join before destroying the backend, including
   // unwinding. Only the producer accesses textures and builds the next scene.
   std::unique_ptr<RenderWorker> worker_;
+  // Submission number of the last queued resident present (0 = none), so the producer keeps at
+  // most one presented frame in flight.
+  std::size_t last_present_job_ = 0;
   std::mutex recycle_mutex_;
   std::vector<vk::Scene> recycled_scenes_;
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;

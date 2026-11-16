@@ -2,6 +2,8 @@
 #include "frontend/core_critical/render_worker.hpp"
 
 #include <atomic>
+#include <thread>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <string>
@@ -179,6 +181,31 @@ void failure_cancels_barrier() {
 }
 } // namespace
 
+// The presenter keeps one frame in flight by waiting for the previous present's submission number.
+// wait_for_job must return only after that job (and every earlier one) has run, and must not wait
+// for jobs submitted after it.
+void numbered_wait() {
+    RenderWorker worker(8, 1024);
+    std::atomic<bool> release_first{false};
+    std::atomic<int> finished{0};
+    const auto first = worker.post_numbered([&] {
+        while (!release_first.load()) std::this_thread::yield();
+        finished.fetch_add(1);
+    });
+    const auto second = worker.post_numbered([&] { finished.fetch_add(1); });
+    require(second == first + 1, "Submission numbers are not consecutive");
+    std::thread releaser([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        release_first.store(true);
+    });
+    worker.wait_for_job(first);
+    require(finished.load() >= 1, "wait_for_job returned before its job ran");
+    releaser.join();
+    worker.wait_for_job(second);
+    require(finished.load() == 2, "wait_for_job did not cover the later job");
+    worker.wait_for_job(first); // an already-finished job returns at once
+}
+
 int main() {
     try {
         native_staging_bounds();
@@ -187,6 +214,7 @@ int main() {
         bounded_queue(1, 100); // Job limit binds even when bytes would fit.
         floating_point();
         failure_cancels_barrier();
+        numbered_wait();
         std::puts("Render worker ownership, bounds, FP and failure checks passed");
         return 0;
     } catch (const std::exception &error) {
