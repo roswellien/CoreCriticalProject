@@ -34,6 +34,57 @@ TEST(view_distance_policy_and_authored_clip) {
   EXPECT(camera.get<float>(0xb4) == 800.0f);
 }
 
+TEST(view_distance_scales_render_lod_ranges_only) {
+  struct Case {
+    unsigned requested_far;
+    float expected_scale;
+  };
+  constexpr Case cases[] = {{800, 1.0f}, {1200, 1.5f}, {1600, 2.0f}};
+  constexpr float authored_tree_lod_far = 400.0f;
+  for (const auto& test : cases) {
+    const float scale =
+        zcls::visual_distance_scale(800.0f, test.requested_far, true);
+    EXPECT(scale == test.expected_scale);
+    EXPECT(zcls::visual_distance_scale(800.0f, test.requested_far, false) ==
+           1.0f);
+    EXPECT(zcls::visual_distance_scale(1800.0f, test.requested_far, true) ==
+           1.0f);
+    EXPECT(authored_tree_lod_far * scale == 400.0f * test.expected_scale);
+  }
+  EXPECT(zcls::visual_distance_scale(0.0f, 1600, true) == 1.0f);
+
+  EXPECT(zcls::visual_far_corners_need_update(true, 800.0f, 0.0f));
+  EXPECT(zcls::visual_far_corners_need_update(false, 1200.0f, -800.0f));
+  EXPECT(!zcls::visual_far_corners_need_update(false, 1200.0f, -1200.0f));
+  EXPECT(zcls::visual_far_corners_need_update(false, 800.0f, -1200.0f));
+
+  zcls::Camera camera{};
+  camera.put(0xb4, 800.0f);
+  (void)zcls::visual_distance_scale(camera.get<float>(0xb4), 1600, true);
+  EXPECT(camera.get<float>(0xb4) == 800.0f);
+}
+
+TEST(view_distance_scales_partition_fade_ranges) {
+  constexpr float near_squared = 25.0f;
+  constexpr float far_squared = 100.0f;
+  constexpr float interpolation_factor = 1.0f / 75.0f;
+
+  const float world_scale = zcls::visual_distance_scale(800.0f, 1600, true);
+  const zcls::SquaredFadeRange expanded = zcls::scale_squared_fade_range(
+      near_squared, far_squared, interpolation_factor, world_scale);
+  EXPECT(expanded.near_squared == 100.0f);
+  EXPECT(expanded.far_squared == 400.0f);
+  EXPECT(std::abs(expanded.interpolation_factor - 1.0f / 300.0f) < 1e-8f);
+
+  const float other_camera_scale =
+      zcls::visual_distance_scale(800.0f, 1600, false);
+  const zcls::SquaredFadeRange unchanged = zcls::scale_squared_fade_range(
+      near_squared, far_squared, interpolation_factor, other_camera_scale);
+  EXPECT(unchanged.near_squared == near_squared);
+  EXPECT(unchanged.far_squared == far_squared);
+  EXPECT(unchanged.interpolation_factor == interpolation_factor);
+}
+
 TEST(view_distance_scoped_fog) {
   const zmod::Fog saved = zmod::fog();
   zmod::Fog initial{};
@@ -80,18 +131,19 @@ TEST(view_distance_scoped_fog) {
 }
 
 TEST(view_distance_tiler_capacity) {
-  zcls::SceneWalk walk{};
+  static zcls::SceneWalk walk{};
   const size_t ring_capacity = std::size(walk.rings);
   const size_t cells_per_ring = std::size(walk.rings[0].cell);
-  EXPECT(ring_capacity >= 100);
-  EXPECT(cells_per_ring >= 60);
-  for (size_t ring = 0; ring < 100; ++ring) {
-    for (size_t cell = 0; cell < 60; ++cell) {
+  EXPECT(ring_capacity == 128);
+  EXPECT(cells_per_ring == 64);
+  for (size_t ring = 0; ring < ring_capacity; ++ring) {
+    walk.rings[ring].count = 0;
+    for (size_t cell = 0; cell < cells_per_ring; ++cell) {
       auto& output = walk.rings[ring].cell[walk.rings[ring].count++];
       output.x = static_cast<int32_t>(ring);
       output.z = static_cast<int32_t>(cell);
     }
-    EXPECT(walk.rings[ring].count == 60);
+    EXPECT(walk.rings[ring].count == static_cast<int32_t>(cells_per_ring));
   }
 }
 
