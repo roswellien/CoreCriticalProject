@@ -2427,6 +2427,66 @@ void check_renderer_bridge_config() {
           "temporal_inputs propagation mismatch");
   require(cfg_dxgi.fixture_lights == false,
           "fixture_lights propagation mismatch");
+  sdlfe::CoreCriticalAssets local_light_assets{};
+  local_light_assets.dynamic_lighting_explicit = true;
+  local_light_assets.dynamic_lighting = true;
+  local_light_assets.effect_lights = true;
+  local_light_assets.effect_light_catalog = "effects.bin";
+  local_light_assets.fixture_lights = true;
+  local_light_assets.mech_headlights = true;
+  local_light_assets.stock_headlights = "stock-headlights.bin";
+  local_light_assets.headlight_bindings = "headlights.txt";
+  auto local_light_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, local_light_assets);
+  require(local_light_config.sun && local_light_config.effect_lights &&
+              local_light_config.fixture_lights &&
+              local_light_config.mech_headlights &&
+              local_light_config.effect_light_catalog == "effects.bin" &&
+              local_light_config.stock_headlights == "stock-headlights.bin" &&
+              local_light_config.headlight_bindings == "headlights.txt",
+          "explicit local-light launch options did not reach renderer config");
+  const auto local_settings =
+      mw34::effects::settings(local_light_config, true);
+  require(local_settings.enabled && local_settings.fixtures,
+          "effect-light settings ignored the renderer launch config");
+  struct RestoreLightEnvironment {
+    struct Value {
+      const char *name;
+      std::optional<std::string> previous;
+    } values[6];
+
+    explicit RestoreLightEnvironment(const std::array<const char *, 6> &names) {
+      for (std::size_t i = 0; i < names.size(); ++i) {
+        values[i].name = names[i];
+        if (const char *value = std::getenv(names[i]))
+          values[i].previous = value;
+      }
+    }
+
+    ~RestoreLightEnvironment() {
+      for (const auto &value : values)
+        local_light_test_env(value.name,
+                             value.previous ? value.previous->c_str() : nullptr);
+    }
+  } restore_light_environment({"MW34_EFFECT_LIGHTS", "MW34_FIXTURE_LIGHTS",
+                               "MW34_MECH_HEADLIGHTS", "MW34_EFFECT_LIGHT_CATALOG",
+                               "MW34_STOCK_HEADLIGHTS", "MW34_HEADLIGHT_BINDINGS"});
+  local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+  local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
+  local_light_test_env("MW34_MECH_HEADLIGHTS", "1");
+  local_light_test_env("MW34_EFFECT_LIGHT_CATALOG", "diagnostic-effects.bin");
+  local_light_test_env("MW34_STOCK_HEADLIGHTS", "diagnostic-headlights.bin");
+  local_light_test_env("MW34_HEADLIGHT_BINDINGS", "diagnostic-bindings.txt");
+  local_light_assets.dynamic_lighting = false;
+  auto disabled_light_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, local_light_assets);
+  require(!disabled_light_config.sun && !disabled_light_config.effect_lights &&
+              !disabled_light_config.fixture_lights &&
+              !disabled_light_config.mech_headlights &&
+              disabled_light_config.effect_light_catalog.empty() &&
+              disabled_light_config.stock_headlights.empty() &&
+              disabled_light_config.headlight_bindings.empty(),
+          "explicit disabled dynamic-light setting retained diagnostic lights");
   require(cfg_dxgi.shadow_batch == false, "shadow_batch propagation mismatch");
 
   auto cfg_wsi = cc_mw3_re::configure_bridge(

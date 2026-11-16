@@ -1927,7 +1927,34 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
         "--cc-pom 1 requires a Core Critical Vulkan backend");
   if (assets.pom && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
-  auto config = RendererBridgeConfig::from_diagnostic_env();
+  auto config = RendererBridgeConfig::from_diagnostic_env(
+      !assets.dynamic_lighting_explicit);
+  if (assets.dynamic_lighting_explicit) {
+    // The launcher's explicit choice owns this run, including the diagnostic
+    // environment fallback, so stale development variables cannot re-enable it.
+    config.sun = assets.dynamic_lighting;
+    config.effect_lights = false;
+    config.effect_light_catalog.clear();
+    config.fixture_lights = false;
+    config.mech_headlights = false;
+    config.stock_headlights.clear();
+    config.headlight_bindings.clear();
+  }
+  const bool dynamic_lighting_allowed =
+      !assets.dynamic_lighting_explicit || assets.dynamic_lighting;
+  if (assets.effect_lights && dynamic_lighting_allowed) {
+    config.effect_lights = true;
+    config.effect_light_catalog = assets.effect_light_catalog;
+  }
+  if (assets.dynamic_lighting_explicit)
+    config.fixture_lights = assets.fixture_lights && dynamic_lighting_allowed;
+  else if (assets.fixture_lights)
+    config.fixture_lights = true;
+  if (assets.mech_headlights && dynamic_lighting_allowed) {
+    config.mech_headlights = true;
+    config.stock_headlights = assets.stock_headlights;
+    config.headlight_bindings = assets.headlight_bindings;
+  }
   config.parallax_materials = assets.pom;
   if (assets.environment) {
     std::fprintf(stderr,
@@ -1996,7 +2023,8 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   };
   config.sun_azimuth = number(assets.sun_azimuth, -360.0f, 360.0f);
   config.sun_elevation = number(assets.sun_elevation, 1.0f, 89.0f);
-  config.sun = assets.lighting != "off" || assets.geometry != "legacy";
+  if (!assets.dynamic_lighting_explicit)
+    config.sun = assets.lighting != "off" || assets.geometry != "legacy";
   config.sun_normals = (assets.lighting == "normal");
   config.sun_shadows = false;
   config.normal_maps_enabled = (assets.lighting == "normal");

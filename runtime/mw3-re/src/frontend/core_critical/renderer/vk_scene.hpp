@@ -285,8 +285,8 @@ public:
         surface_source(std::move(source)), quality_settings(quality),
         use_gpu_models(models), lighting_settings(lighting),
         use_native_geometry(native_geometry), bridge_config(std::move(config)),
-        effects_settings(mw34::effects::from_config(
-            bridge_config, lighting_settings.enabled)) {
+        effects_settings(mw34::effects::settings(
+            bridge_config, bridge_config.sun)) {
     if (surface_source.create) {
       bridge_config.dxgi_present = false;
     }
