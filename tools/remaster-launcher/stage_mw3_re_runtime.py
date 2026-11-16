@@ -1739,7 +1739,7 @@ def produce(args):
         for member in inventory.members:
             basename = Path(member.relative).name.lower()
             if member.relative.startswith("bin/") and basename not in (
-                    "mw3.exe", "sdl3.dll", "sdl3_ttf.dll", "sdl3_sound.dll") and not _CRT.match(basename):
+                    "mw3.exe", "mw3indeo.exe", "sdl3.dll", "sdl3_ttf.dll", "sdl3_sound.dll") and not _CRT.match(basename):
                 raise ValueError("Unexpected application DLL escapes the bounded native recipe")
         stage_inventory(inventory, paths["output"])
         marker.unlink()
