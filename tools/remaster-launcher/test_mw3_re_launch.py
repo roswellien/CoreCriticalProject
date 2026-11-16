@@ -264,6 +264,9 @@ class NativePreviewPlanTests(unittest.TestCase):
             "preview": preview,
         }
 
+    # The planner accepts only Windows paths, so tests that read real packs from a temporary
+    # directory run on Windows; validation-only tests below run everywhere.
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_complete_preview_argv_order_and_absolute_pack_paths(self):
         models, training = self.model_pack(), self.environment_pack()
         result = self.plan(self.request(draw_distance=1200, hud="core-critical", hud_text=True,
@@ -289,6 +292,9 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertNotIn("--cc-draw-distance", result["argv"])
         self.assertEqual(result["skipped_packs"], [])
 
+    # The planner accepts only Windows paths, so tests that read real packs from a temporary
+    # directory run on Windows; validation-only tests below run everywhere.
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_oversized_map_pack_is_reported_not_loaded(self):
         large = self.environment_pack("shared", largest=2 ** 31)
         result = self.plan(self.request(environment_packs=[large]))
@@ -308,6 +314,9 @@ class NativePreviewPlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.plan(request)
 
+    # The planner accepts only Windows paths, so tests that read real packs from a temporary
+    # directory run on Windows; validation-only tests below run everywhere.
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_pack_problems_fail_the_whole_plan(self):
         escape = self.model_pack("escape", models=[{"id": "strider", "backend": "native",
             "status": "runtime-ready", "environment": {"MW34_STRIDER_MESH": "../outside.bin",
@@ -322,6 +331,9 @@ class NativePreviewPlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.plan(self.request(environment_packs=[self.model_pack("mechs-as-map")]))
 
+    # The planner accepts only Windows paths, so tests that read real packs from a temporary
+    # directory run on Windows; validation-only tests below run everywhere.
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_bushwacker_close_mesh_uses_its_historical_key(self):
         pack = self.model_pack("bush", models=[{"id": "bushwacker", "backend": "native", "status": "runtime-ready",
             "environment": {"MW34_BUSHWACKER_TEST": "payload/mesh0.bin", "MW34_BUSHWACKER_TEXTURES": "payload/tex0.bin",
