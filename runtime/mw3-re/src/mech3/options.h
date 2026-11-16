@@ -91,6 +91,9 @@ enum GameOption : uint32_t {
 };
 
 Options& options();
+// Ours (#289): the 3D replay's mission plays at the screen's shape, whatever
+// mode is saved, and the saved mode is kept (load_options, save_options).
+void set_replay_screen(bool on);
 
 // The calls the setters make into code not ported yet.
 class OptionsHooks : public zgame::Unported {

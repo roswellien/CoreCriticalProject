@@ -137,6 +137,7 @@ extern "C" const char mw3_version_tag[] = "MW3-PROGRAM-VERSION:" MW3_VERSION;
 #include "frontend/sdl/sdl_mods.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
+#include "mech3/options.h"
 #include "mech3/app_keys.h"
 #include "mech3/pilot.h"
 #include "mech3/app_mech.h"
@@ -1307,8 +1308,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   window.set_fullscreen(!a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
   // FIX (B): a first start's mission at the desktop's size; checks and shots keep 640x480.
   // MW3_FIRST_START=1 keeps it on in a check (sdl_first_start_takes_the_desktop).
+  // The 3D replay, scripted ones too, plays at the screen's shape (options.cpp).
+  mech3::set_replay_screen(!a.watch.replay3d_path.empty());
   window.set_first_start_desktop((!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
-                                 std::getenv("MW3_FIRST_START") != nullptr);
+                                 !a.watch.replay3d_path.empty() || std::getenv("MW3_FIRST_START") != nullptr);
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;

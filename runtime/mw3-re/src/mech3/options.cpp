@@ -17,6 +17,14 @@ Options g_options;
 OptionsHooks g_default_hooks;
 OptionsHooks* g_hooks = &g_default_hooks;
 
+// Ours (#289): the saved mission mode a 3D replay replaced, put back to save.
+struct SavedScreen {
+  bool replaced = false;
+  int32_t mode = 0, w = 0, h = 0;
+};
+SavedScreen g_saved_screen;
+bool g_replay_screen = false;  // set_replay_screen
+
 uint32_t& word() { return g_options.game_options; }
 void set_bit(uint32_t bit, bool on) { word() = on ? (word() | bit) : (word() & ~bit); }
 
@@ -37,6 +45,7 @@ bool node_float(const zrdr::Node* n, float* out) {
 }  // namespace
 
 Options& options() { return g_options; }
+void set_replay_screen(bool on) { g_replay_screen = on; }
 void set_options_hooks(OptionsHooks* hooks) { g_hooks = hooks ? hooks : &g_default_hooks; }
 OptionsHooks& options_hooks() { return *g_hooks; }
 
@@ -763,6 +772,16 @@ int32_t load_options(const char* path) {
   g_hooks->controls_set_defaults();
   o.default_cmd_map = zreg::find("DefaultCmdMap");
   zreg::read_all();
+  // Ours (#289): the 3D replay plays at the screen's shape, whatever mode a
+  // player or an earlier hidden run saved; the saved mode is put back before
+  // the save (save_options), so watching a replay changes no setting.
+  if (g_replay_screen) {
+    int32_t w = 0, h = 0;
+    if (zfix::options().any_resolution && g_hooks->first_start_screen(&w, &h)) {
+      g_saved_screen = {true, o.in_game_vmode, o.screen_w, o.screen_h};
+      o.in_game_vmode = kCustomVMode, o.screen_w = w, o.screen_h = h;
+    }
+  }
   // FIX (bug): a saved name without its 0 ran past the buffer (fixes.md).
   const std::string ctl(o.active_ctl_cfg, strnlen(o.active_ctl_cfg, sizeof o.active_ctl_cfg));
   g_hooks->controls_load(ctl.c_str());
@@ -777,6 +796,10 @@ int32_t load_options(const char* path) {
 
 // Mech3.exe 1.2 @ 0x0040cb20, from the app's destructor 0x0047fab0.
 void save_options() {
+  if (g_saved_screen.replaced) {
+    Options& o = options();
+    o.in_game_vmode = g_saved_screen.mode, o.screen_w = g_saved_screen.w, o.screen_h = g_saved_screen.h;
+  }
   controls_write_settings();  // FIX (bug), W40: zreg::write_all with the kept map
   g_hooks->controls_free();
 }
