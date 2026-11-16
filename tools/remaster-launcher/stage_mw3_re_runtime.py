@@ -645,8 +645,11 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
     placeholder = [replace(member, sha256="0" * 64) for member in members]
     generated, provisional_id = _metadata(placeholder, components, source_commit, builder, tool_hash,
                                           observation, checked_generated)
-    _budget(members, generated)
-    _descriptor(_pins(placeholder, generated), source_commit, builder, provisional_id)
+    # The provisional checks must include the generated resources (the headlight catalog) that the
+    # final inventory pins, or a size or path problem would only surface after hashing.
+    provisional_generated = (*generated, *checked_generated)
+    _budget(members, provisional_generated)
+    _descriptor(_pins(placeholder, provisional_generated), source_commit, builder, provisional_id)
     pinned = []
     for member in members:
         digest = file_hash(member.source)

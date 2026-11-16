@@ -45,8 +45,9 @@ def read_bindings(source: str) -> dict[str, int]:
             continue
         chassis = member.removeprefix("mech_").removesuffix(".flt")
         mapping[chassis] = stock_id
-    has_elemental = any(stock_id == ELEMENTAL_STOCK_ID for stock_id in mapping.values())
-    if len(mapping) != PROFILE_LIMIT or has_elemental:
+    # The Elemental is skipped above; also refuse a table that names it as a mech under another id.
+    elemental_listed_twice = "elemental" in mapping
+    if len(mapping) != PROFILE_LIMIT or elemental_listed_twice:
         raise ValueError("Runtime binding table does not describe 18 non-Elemental stock mechs")
     return mapping
 
@@ -97,7 +98,6 @@ def _lamp(lamp: object, profile_name: str) -> bytes:
         raise ValueError(profile_name + " lamp fields do not match the source schema")
     result = bytearray()
     light_id = lamp["id"]
-    _text(light_id, "lamp id", 31, r"[a-z0-9_-]+")
     result.extend(_string(light_id, "lamp id", 31, r"[a-z0-9_-]+"))
     if lamp["space"] != "guest_node":
         raise ValueError(profile_name + " original lamp must use guest_node space")
