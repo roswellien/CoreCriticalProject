@@ -43,8 +43,10 @@ class ReplayDraw {
   virtual void line(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c) = 0;
   virtual void circle(SDL_FPoint center, float radius, const SDL_FColor& fill) = 0;
   virtual void rect(const SDL_FRect& r, const SDL_FColor& fill) = 0;
-  // Draws `s` with its top-left at (x, y); returns its width.
-  virtual float text(const std::string& s, float x, float y, SDL_Color c = {235, 235, 235, 255}) = 0;
+  // Draws `s` with its top-left at (x, y), `size` times its usual size (the
+  // cached texture stretched, so sizes cost no new textures); returns its width.
+  virtual float text(const std::string& s, float x, float y, SDL_Color c = {235, 235, 235, 255},
+                     float size = 1.0f) = 0;
   // Dashes along a-b, built from line().
   void dashed(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c, float dash = 6.0f);
   void cross(SDL_FPoint center, float size, const SDL_FColor& c);
@@ -80,6 +82,10 @@ class Projector {
 struct ReplayClock {
   static constexpr float kMinSpeed = 0.25f, kMaxSpeed = 8.0f;
   static constexpr float kJumpSeconds = 5.0f;
+  // Seconds played past the log's end, a short still pause: the match itself
+  // records 5 s after its result (arena.cpp, kAftermathSeconds), so the fall
+  // and burn are in the log; past its end everything stands still.
+  static constexpr float kEndHoldSeconds = 2.0f;
   float t = 0, speed = 1, duration = 0;
   bool playing = true;
 
@@ -135,7 +141,9 @@ void draw_legend(const Overlays& overlays, ReplayDraw& draw, float top = 10);
 class LabelPlacer {
  public:
   // Draws the label with its top left nearest (x, y) that is free.
-  void draw(ReplayDraw& draw, float x, float y, const std::string& id, const std::string& reason);
+  // `size` scales the text (the 3D view: smaller for a mech farther away).
+  void draw(ReplayDraw& draw, float x, float y, const std::string& id, const std::string& reason,
+            float size = 1.0f);
 
  private:
   std::vector<SDL_FRect> taken_;
@@ -186,7 +194,8 @@ class SdlRendererDraw : public ReplayDraw {
   void line(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c) override;
   void circle(SDL_FPoint center, float radius, const SDL_FColor& fill) override;
   void rect(const SDL_FRect& r, const SDL_FColor& fill) override;
-  float text(const std::string& s, float x, float y, SDL_Color c = {235, 235, 235, 255}) override;
+  float text(const std::string& s, float x, float y, SDL_Color c = {235, 235, 235, 255},
+             float size = 1.0f) override;
   void outline(const SDL_FRect& r, const SDL_FColor& c);
   void arrow(SDL_FPoint from, SDL_FPoint dir, float length, const SDL_FColor& c);
   // A thin wedge from `from` toward screen direction `yaw`, `half_angle` each side.

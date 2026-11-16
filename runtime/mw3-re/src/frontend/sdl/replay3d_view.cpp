@@ -45,6 +45,8 @@ constexpr float kMaxListStep = 0.1f;
 constexpr float kLegKillLookahead = 0.25f;
 constexpr float kRingMeters = 6.0f;    // the side ring at each mech's feet
 constexpr float kLabelMeters = 13.0f;  // the id label above each mech
+constexpr float kLabelNearPixels = 160.0f;  // a mech this tall on a 720-line screen gets full-size text
+constexpr float kLabelMinSize = 0.55f;      // the smallest a far mech's label gets
 constexpr float kFollowBack = 25.0f, kFollowUp = 8.0f, kFollowAim = 6.0f;
 constexpr float kPickPixels = 40.0f;
 constexpr float kLookRate = 0.004f;  // radians per mouse count, as the debug fly camera
@@ -117,7 +119,8 @@ class Render3dDraw : public ReplayDraw {
                                      vertex(r.x + r.w, r.y + r.h, col), vertex(r.x, r.y + r.h, col)};
     render_->draw(platform::Primitive::kFan, v, 4, overlay_state(-1));
   }
-  float text(const std::string& s, float x, float y, SDL_Color c = {235, 235, 235, 255}) override {
+  float text(const std::string& s, float x, float y, SDL_Color c = {235, 235, 235, 255},
+             float size = 1.0f) override {
     if (!render_ || !text_.ready() || s.empty()) return 0;
     const std::string key = s + "#" + std::to_string(c.r) + "," + std::to_string(c.g) + "," + std::to_string(c.b);
     auto found = cache_.find(key);
@@ -128,11 +131,12 @@ class Render3dDraw : public ReplayDraw {
     }
     const Uploaded& t = found->second;
     const float left = std::round(x), top = std::round(y);
-    const platform::TLVertex v[4] = {vertex(left, top, 0xffffffffu, 0, 0), vertex(left + t.w, top, 0xffffffffu, 1, 0),
-                                     vertex(left + t.w, top + t.h, 0xffffffffu, 1, 1),
-                                     vertex(left, top + t.h, 0xffffffffu, 0, 1)};
+    const float w = static_cast<float>(t.w) * size, h = static_cast<float>(t.h) * size;
+    const platform::TLVertex v[4] = {vertex(left, top, 0xffffffffu, 0, 0), vertex(left + w, top, 0xffffffffu, 1, 0),
+                                     vertex(left + w, top + h, 0xffffffffu, 1, 1),
+                                     vertex(left, top + h, 0xffffffffu, 0, 1)};
     render_->draw(platform::Primitive::kFan, v, 4, overlay_state(t.handle));
-    return static_cast<float>(t.w);
+    return w;
   }
 
  protected:
@@ -306,7 +310,7 @@ Replay3dView::Replay3dView(const mech3::replay::ReplayRun& run, FrameRenderer* r
   s.log = &run.log();
   s.render = render;
   s.request_quit = std::move(request_quit);
-  s.clock.duration = s.log->duration();
+  s.clock.duration = s.log->duration() + ReplayClock::kEndHoldSeconds;
   s.scripted = !script_path.empty();
   if (s.scripted) s.script_read = s.script.load(script_path);
   s.screenshot_dir = script_path.empty() ? std::string(".") : std::filesystem::path(script_path).parent_path().string();
@@ -648,10 +652,17 @@ void Replay3dView::draw_overlay() {
         prev = p, prev_ok = ok;
       }
     }
-    SDL_FPoint label;
+    // The label's size follows how big the mech looks: the screen height of
+    // the 13 m from its feet to the label, against kLabelNearPixels for
+    // full size, held between kLabelMinSize and 1, so far labels shrink and
+    // each reads as its own mech's.
+    SDL_FPoint label, feet;
     if (s.projector.to_screen({m.pos.x, m.pos.y + kLabelMeters, m.pos.z}, &label)) {
+      float size = 1.0f;
+      if (s.projector.to_screen(m.pos, &feet))
+        size = std::clamp((feet.y - label.y) / (kLabelNearPixels * s.draw.scale()), kLabelMinSize, 1.0f);
       labels.draw(s.draw, label.x - 4, label.y - 8, std::to_string(m.id),
-                  s.overlays.on[kReasons] ? doing_word(m) : "");
+                  s.overlays.on[kReasons] ? doing_word(m) : "", size);
     }
   }
   draw_overlays(s.frame, s.overlays, s.selected, s.draw, s.projector);

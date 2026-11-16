@@ -73,11 +73,16 @@ struct MechPose {
   float action_elapsed = 0;
   float heat = 0;
   bool standing = true;
+  bool firing = false;  // shot in (t - kFiringWindow, t]; set by frame_at
   int target = -1;
   std::string order;  // "hunt", "fight", "other" or "" (no AI)
   // While hunting, the goal it is after this frame: "contact", "last_seen"
   // or "fallback" (zai_hunt.h, HuntRule); "" otherwise.
   std::string goal_rule;
+  // Under the stock fight, the game's combat state (arena_log.cpp,
+  // stock_move_name): "close", "circle", "orbit", "veer", "station",
+  // "follow", "hop", "return" or "end"; "" otherwise or in older logs.
+  std::string move;
   bool has_goal = false;
   Vec3 goal;
   int at = -1;  // the waypoint index in its latest route, -1 with none
@@ -140,6 +145,8 @@ bool parse_pose(const std::string& record_text, MechPose* out);
 
 // How long a shot streak or a hit spark stays drawn.
 constexpr float kRecent = 0.3f;
+// How long after its last shot a mech still counts as firing (the labels).
+constexpr float kFiringWindow = 2.0f;
 
 class ReplayLog {
  public:
@@ -197,6 +204,7 @@ class ReplayLog {
   std::string map_;
   std::vector<MechInfo> mechs_;
   float duration_ = 0;
+  bool has_end_ = false;  // the log has its end line (duration_ is its time)
   std::vector<State> states_;
   std::vector<Event> fire_;  // shots and hits, by time
   std::map<int, float> round_end_at_;

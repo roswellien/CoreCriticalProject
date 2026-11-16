@@ -197,9 +197,16 @@ Controls:
 - With no mech selected, who aims at whom is drawn (orange lines) and each
   mech's planned route faintly (yellow), with a word beside each mech's id
   for what it is doing this moment:
-  chasing (an enemy its radar knows of, seen now or remembered), searching
-  (going to where it last saw one), roaming (no enemy known: the map's
-  middle), fighting (the game's own combat AI has it). Click a mech to see
+  first how it moves: closing in (walking at an enemy its radar knows of,
+  seen now or remembered), searching (going to where it last saw one),
+  roaming (no enemy known: the map's middle), or, once the game's own
+  combat AI has taken over (only after the game's attack checks pass), its
+  move: moving to range, circling, orbiting, veering, holding range,
+  following, jump dodge, heading back or breaking off; then ", firing" when
+  it shot in the last 2 seconds. A mech closing in can shoot too, so
+  "closing in, firing" at close range is normal. The panel says which AI
+  is steering. In the 3D view a farther mech's label is drawn smaller.
+  Click a mech to see
   its own picture: its planned route bright (the big dot its next
   waypoint), its goal (a white X), its radar contacts (green, solid
   detected now, dashed remembered) and its target, with the others' target

@@ -91,8 +91,10 @@ TEST(replay_v2_round_trip_and_phase_wrap) {
   EXPECT(std::abs(m.phase - 0.9f) < 1e-3f);
   // 0.12 s: 0.96 run on, 0.66 run back, a fifth of the way: 0.90.
   EXPECT(std::abs(log.frame_at(0.12f).mechs[0].phase - 0.9f) < 1e-3f);
-  // After the last line it runs on alone and wraps: 0.9 + 3 * 0.05 = 0.05.
-  EXPECT(std::abs(log.frame_at(8.05f).mechs[0].phase - 0.05f) < 1e-3f);
+  // Past the end line (8.0) the gait holds still: no walking in place.
+  const mech3::replay::MechPose past_end = log.frame_at(9.0f).mechs[0];
+  EXPECT(std::abs(past_end.phase - log.frame_at(8.0f).mechs[0].phase) < 1e-4f);
+  EXPECT(past_end.cps == 0.0f && past_end.speed == 0.0f);
   EXPECT(log.skipped() == 0);
   const Frame hit = log.frame_at(2.1f);
   bool found = false;

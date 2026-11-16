@@ -272,11 +272,8 @@ TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {
       return -1.0f;
     return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[2] - b[2]) * (a[2] - b[2]));
   };
-  const auto one_down = [] {
-    for (const auto& entry : mech3::arena::arena_mechs())
-      if (!arena_counts::standing(entry.mech)) return true;
-    return false;
-  };
+  // Until the result is out: a side down, then the aftermath.
+  const auto one_down = [] { return mech3::arena::arena_result().decided; };
   const int three_minutes = 3 * 60 * 1000 / 16;  // the fake clock's 16 ms frames
   const auto run = arena_headless_run(
       json, three_minutes,
@@ -342,8 +339,8 @@ TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {
   EXPECT(shot_lines == arena_counts::shots(0) + arena_counts::shots(1));
   EXPECT(hit_lines == arena_counts::hits(0) + arena_counts::hits(1));
   EXPECT(destroyed_lines == result.lost[0] + result.lost[1]);
-  // A state line every 0.1 s of the match, give or take the last.
-  EXPECT(std::abs(states - static_cast<int>(result.time / 0.1f)) <= 2);
+  // A state line every 0.1 s of the match and its aftermath, give or take the last.
+  EXPECT(std::abs(states - static_cast<int>((result.time + mech3::arena::kAftermathSeconds) / 0.1f)) <= 2);
   if (log.complete) {
     const auto& end = log.records.back();
     EXPECT(end.value("winner", "") == (result.winner == 0 ? "A" : result.winner == 1 ? "B" : "draw"));

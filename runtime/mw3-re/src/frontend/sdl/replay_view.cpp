@@ -247,7 +247,7 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
   Viewer v;
   v.log = &log;
   v.log_path = log_path;
-  v.clock.duration = log.duration();
+  v.clock.duration = log.duration() + ReplayClock::kEndHoldSeconds;
   float box[4];
   log.bounds(box);
   v.terrain = mech3::replay::build_terrain(log.map(), box);

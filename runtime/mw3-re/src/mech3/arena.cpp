@@ -34,6 +34,7 @@ bool g_started = false;
 float g_start_time = 0;
 int64_t g_seed = 0;
 Result g_result;
+Result g_pending;  // the result once settled, published after the aftermath (arena_tick)
 bool g_fail_ended = false;  // a match that could not start has been ended (fail_start)
 bool g_headless = false;    // --hidden with no screenshots: nothing is drawn
 int g_viewed = -1;          // the bot the spectator's view follows (an index into g_mechs), -1 for none
@@ -137,6 +138,7 @@ void set_arena_setup(const Setup* setup) {
   g_started = false;
   // The last match's result stays readable after it is cleared; a new one starts blank.
   if (setup) g_result = Result{};
+  g_pending = Result{};
 }
 
 const Result& arena_result() { return g_result; }
@@ -201,23 +203,36 @@ void arena_tick() {
   }
   const float match_time = world().time - g_start_time;
   log_match_frame(match_time, g_mechs);
+
+  // After the result is settled, the match runs on kAftermathSeconds more,
+  // still logged, so a replay shows the last mech fall and burn and the
+  // others stop, before the result is published and the run ends (the run
+  // exits once g_result.decided is set; watch_launch.cpp).
+  if (g_pending.decided) {
+    if (match_time < g_pending.time + kAftermathSeconds) return;
+    g_result = g_pending;
+    std::printf("%s\n", arena_result_line(g_result).c_str());
+    std::fflush(stdout);
+    Result logged = g_result;
+    logged.time = match_time;  // the end line marks where the log stops
+    log_match_end(logged);
+    end_stock_match();
+    return;
+  }
+
   const bool out_of_time = match_time >= static_cast<float>(g_setup->minutes) * 60.0f;
   const bool side_wiped_out = standing[0] == 0 || standing[1] == 0;
   if (!side_wiped_out && !out_of_time) return;
 
-  g_result.decided = true;
-  g_result.time = match_time;
-  g_result.lost[0] = lost[0];
-  g_result.lost[1] = lost[1];
+  g_pending.decided = true;
+  g_pending.time = match_time;
+  g_pending.lost[0] = lost[0];
+  g_pending.lost[1] = lost[1];
   // Elimination and the time limit both come down to who has more standing:
   // a wiped-out side has none.
-  if (standing[0] > standing[1]) g_result.winner = 0;
-  else if (standing[1] > standing[0]) g_result.winner = 1;
-  else g_result.winner = -1;
-  std::printf("%s\n", arena_result_line(g_result).c_str());
-  std::fflush(stdout);
-  log_match_end(g_result);
-  end_stock_match();
+  if (standing[0] > standing[1]) g_pending.winner = 0;
+  else if (standing[1] > standing[0]) g_pending.winner = 1;
+  else g_pending.winner = -1;
 }
 const Setup* arena_setup() { return g_setup; }
 
@@ -323,6 +338,7 @@ void arena_start() {
   g_mechs.clear();
   g_names.clear();
   g_result = Result{};
+  g_pending = Result{};
   g_started = false;
   if (!g_setup || g_setup->sides[0].empty()) return;
   // Only an arena run is changed from here on: a stock mission keeps its own

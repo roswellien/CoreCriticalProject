@@ -158,8 +158,27 @@ const char* hunt_rule_name(const ai::HuntState& hunt) {
   return "unknown";
 }
 
-// The order a mech's brain is running: its own hunt, the stock fight, or
-// another of the game's.
+// Which of the game's own combat states (zai_attack.h) a mech is in, for the
+// log's "move": the attack closes in (FightState), then takes the move its
+// pilot's mode picks; the manoeuvre and the attack's three closing orders
+// come around it. Null for a state that is not one of them.
+const char* stock_move_name(const ai::BehaviourState* state) {
+  if (dynamic_cast<const ai::FightState*>(state)) return "close";
+  if (dynamic_cast<const ai::CircleState*>(state)) return "circle";
+  if (dynamic_cast<const ai::OrbitState*>(state)) return "orbit";
+  if (dynamic_cast<const ai::VeerState*>(state)) return "veer";
+  if (dynamic_cast<const ai::StationState*>(state)) return "station";
+  if (dynamic_cast<const ai::FollowState*>(state)) return "follow";
+  if (dynamic_cast<const ai::ManoeuvreState*>(state)) return "hop";  // brake, face a target, hop on the jets
+  if (dynamic_cast<const ai::AttackReturnState*>(state)) return "return";
+  if (dynamic_cast<const ai::AttackRearmState*>(state) || dynamic_cast<const ai::AttackEndState*>(state) ||
+      dynamic_cast<const ai::AfterManoeuvreState*>(state))
+    return "end";
+  return nullptr;
+}
+
+// The order a mech's brain is running: its own hunt, the stock fight (with
+// the combat state it is in), or another of the game's.
 nlohmann::json ai_record(const Mech* mech) {
   nlohmann::json ai = nlohmann::json::object();
   const ai::BehaviourState* state = current_order(mech).state;
@@ -168,8 +187,9 @@ nlohmann::json ai_record(const Mech* mech) {
     ai["order"] = "hunt";
     ai["goal_rule"] = hunt_rule_name(*hunt);
     ai["goal"] = {rounded(hunt->goal.at[0]), rounded(hunt->goal.at[1]), rounded(hunt->goal.at[2])};
-  } else if (dynamic_cast<const ai::FightState*>(state)) {
+  } else if (const char* move = stock_move_name(state)) {
     ai["order"] = "fight";
+    ai["move"] = move;
   } else {
     ai["order"] = "other";
   }

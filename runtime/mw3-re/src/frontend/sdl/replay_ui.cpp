@@ -108,28 +108,71 @@ float distance(const Vec3& a, const Vec3& b) {
 }
 }  // namespace
 
+// Two parts: how it moves (who steers it), then "firing" when it shot in the
+// last kFiringWindow seconds. A hunting mech can shoot too (zai_brain.cpp:
+// its volleys run whenever it is not handed to the combat AI).
+namespace {
+// The game's combat states (zai_attack.h) as a player says them: a short word
+// for the label, a sentence for the panel.
+struct StockMove {
+  const char* code;
+  const char* word;
+  const char* sentence;
+};
+const StockMove kStockMoves[] = {
+    {"close", "moving to range", "walking to its pilot's firing range of the target, backing off if too near"},
+    {"circle", "circling", "circling the target, keeping its distance"},
+    {"orbit", "orbiting", "orbiting the target at its pilot's set distance, switching direction each time"},
+    {"veer", "veering", "veering around the target"},
+    {"station", "holding range", "holding its distance from the target, backing up when too near"},
+    {"follow", "following", "following the target"},
+    {"hop", "jump dodge", "braking, turning to face an enemy and hopping on its jump jets"},
+    {"return", "heading back", "attack over: walking back to where it left its path"},
+    {"end", "breaking off", "attack over: rearming and handing back"},
+};
+const StockMove* stock_move(const std::string& code) {
+  for (const StockMove& s : kStockMoves)
+    if (code == s.code) return &s;
+  return nullptr;
+}
+}  // namespace
+
 std::string doing_word(const MechPose& m) {
   if (!m.standing) return "";
-  if (m.order == "fight") return "fighting";
-  if (m.order != "hunt") return "";
-  if (m.goal_rule == "contact") return "chasing";
-  if (m.goal_rule == "last_seen") return "searching";
-  if (m.goal_rule == "fallback") return "roaming";
-  return "hunting";
+  std::string move;
+  if (m.order == "fight") {
+    const StockMove* s = stock_move(m.move);
+    move = s ? s->word : "fighting";
+  }
+  else if (m.order != "hunt") move = "";
+  else if (m.goal_rule == "contact") move = "closing in";
+  else if (m.goal_rule == "last_seen") move = "searching";
+  else if (m.goal_rule == "fallback") move = "roaming";
+  else move = "hunting";
+  if (!m.firing) return move;
+  return move.empty() ? "firing" : move + ", firing";
 }
 
 std::string doing_sentence(const MechPose& m) {
   if (!m.standing) return "nothing: destroyed";
-  if (m.order == "fight") return "fighting, under the game's own combat AI";
+  const std::string fire = m.firing ? ", and firing" : "";
+  if (m.order == "fight") {
+    const StockMove* s = stock_move(m.move);
+    return std::string("game's combat AI: ") + (s ? s->sentence : "fighting") + fire;
+  }
   if (m.order == "hunt") {
     // The hunt goes for the nearest enemy its radar knows of, seen now or
-    // remembered (zai_hunt.cpp), so "knows of", not "sees".
-    if (m.goal_rule == "contact") return "chasing an enemy its radar knows of";
-    if (m.goal_rule == "last_seen") return "going to where it last saw an enemy";
-    if (m.goal_rule == "fallback") return "no enemy known: heading for the map's middle";
-    return "hunting";
+    // remembered (zai_hunt.cpp), so "knows of", not "sees". It hands over to
+    // the game's combat AI only when the game's attack checks pass (range,
+    // its timers and damage taken; zai_brain.cpp, engage_checks).
+    if (m.goal_rule == "contact")
+      return "closing in on an enemy its radar knows of" + fire +
+             " (the game's combat AI takes over once its attack checks pass)";
+    if (m.goal_rule == "last_seen") return "going to where it last saw an enemy" + fire;
+    if (m.goal_rule == "fallback") return "no enemy known: heading for the map's middle" + fire;
+    return "hunting" + fire;
   }
-  return m.order.empty() ? "nothing (no AI)" : "another stock order";
+  return (m.order.empty() ? "nothing (no AI)" : "another stock order") + fire;
 }
 
 std::string change_sentence(const std::string& code) {
@@ -156,7 +199,7 @@ void draw_legend(const Overlays& overlays, ReplayDraw& draw, float top) {
       {kTarget, kTargetColor, "2 target: the enemy it aims at"},
       {kGoal, kGoalColor, "3 goal: where it is going (X)"},
       {kContacts, kContactColor, "4 radar: solid sees now, dashed remembers"},
-      {kReasons, ui_color(255, 230, 140), "5 doing: chasing, searching, roaming, fighting"},
+      {kReasons, ui_color(255, 230, 140), "5 doing: what it is doing, then firing"},
   };
   const float s = draw.scale();
   const float x = 10, y = top, line_h = 17 * s, w = 330 * s, pad = 8 * s;
@@ -173,8 +216,9 @@ void draw_legend(const Overlays& overlays, ReplayDraw& draw, float top) {
   draw.text("H hides this key", x + pad, y + 6 * s + line_h * (std::size(rows) + 1), {170, 170, 170, 255});
 }
 
-void LabelPlacer::draw(ReplayDraw& draw, float x, float y, const std::string& id, const std::string& reason) {
-  const float s = draw.scale();
+void LabelPlacer::draw(ReplayDraw& draw, float x, float y, const std::string& id, const std::string& reason,
+                       float size) {
+  const float s = draw.scale() * size;
   // The text's size before drawing it: about 7 pixels a character at scale 1
   // (the 14-pixel font), with a little room around.
   const std::string whole = reason.empty() ? id : id + " " + reason;
@@ -188,8 +232,8 @@ void LabelPlacer::draw(ReplayDraw& draw, float x, float y, const std::string& id
   constexpr int kMaxShifts = 4;
   for (int shift = 0; shift < kMaxShifts && overlaps(at); ++shift) at.y += h;
   taken_.push_back(at);
-  const float id_width = draw.text(id, at.x, at.y);
-  if (!reason.empty()) draw.text(reason, at.x + id_width + 4 * s, at.y, {255, 230, 140, 255});
+  const float id_width = draw.text(id, at.x, at.y, {235, 235, 235, 255}, size);
+  if (!reason.empty()) draw.text(reason, at.x + id_width + 4 * s, at.y, {255, 230, 140, 255}, size);
 }
 
 void draw_overlays(const Frame& frame, const Overlays& overlays, int selected, ReplayDraw& draw,
@@ -415,7 +459,7 @@ void SdlRendererDraw::cone(SDL_FPoint from, float yaw, float half_angle, float l
   SDL_RenderGeometry(renderer_, nullptr, v, 3, nullptr, 0);
 }
 
-float SdlRendererDraw::text(const std::string& s, float x, float y, SDL_Color c) {
+float SdlRendererDraw::text(const std::string& s, float x, float y, SDL_Color c, float size) {
   if (!text_renderer_.ready() || s.empty()) return 0;
   if (cache_.size() > 2000) clear_text();  // a long replay's labels; rebuilt as needed
   const std::string key = s + "#" + std::to_string(c.r) + "," + std::to_string(c.g) + "," + std::to_string(c.b);
@@ -429,6 +473,7 @@ float SdlRendererDraw::text(const std::string& s, float x, float y, SDL_Color c)
   }
   float w = 0, h = 0;
   SDL_GetTextureSize(tex, &w, &h);
+  w *= size, h *= size;
   const SDL_FRect dst = {std::round(x), std::round(y), w, h};
   SDL_RenderTexture(renderer_, tex, nullptr, &dst);
   return w;

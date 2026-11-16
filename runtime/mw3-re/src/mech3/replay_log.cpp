@@ -126,6 +126,7 @@ bool read_pose(const Json& m, MechPose* out, int* skipped) {
     const Json& ai = m.at("ai");
     p.order = ai.value("order", "");
     p.goal_rule = ai.value("goal_rule", "");
+    p.move = ai.value("move", "");
     p.has_goal = ai.contains("goal");
     if (p.has_goal) p.goal = vec3(ai.at("goal"));
     p.at = ai.value("at", -1);
@@ -356,6 +357,7 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
   }
   derive_from_states();
   if (!ended) duration_ = states_.empty() ? 0.0f : states_.back().t;
+  has_end_ = ended;
   return true;
 }
 
@@ -455,8 +457,13 @@ Frame ReplayLog::frame_at(float t) const {
     // rate, or, with no phase in the log, from the distance walked.
     // With a later line, the phase blends toward that line's phase run back
     // to now, so a mech speeding up doesn't pop at each line.
+    // Past the end line nothing moves, so the gait holds where the log left
+    // it instead of walking in place. A log without one (stopped early)
+    // runs its last line's gait on.
+    const float gait_t = has_end_ ? std::min(t, duration_) : t;
+    if (t > gait_t) pose.speed = 0, pose.cps = 0;
     if (pose.has_phase) {
-      const float from_was = was.phase + was.cps * (t - before.t);
+      const float from_was = was.phase + was.cps * (gait_t - before.t);
       pose.phase = wrap01(from_was);
       for (const MechPose& next : after.mechs) {
         // Another clip on the next line (walk to run, say) has its own loop.
@@ -516,6 +523,14 @@ Frame ReplayLog::frame_at(float t) const {
   const auto recent_from = std::upper_bound(fire_.begin(), fire_.end(), t - kRecent,
                                             [](float value, const Event& e) { return value < e.t; });
   for (auto e = recent_from; e != fire_.end() && e->t <= t; ++e) frame.recent.push_back(*e);
+
+  // Who shot in (t - kFiringWindow, t].
+  const auto firing_from = std::upper_bound(fire_.begin(), fire_.end(), t - kFiringWindow,
+                                            [](float value, const Event& e) { return value < e.t; });
+  for (auto e = firing_from; e != fire_.end() && e->t <= t; ++e)
+    if (e->type == "shot")
+      for (MechPose& m : frame.mechs)
+        if (m.id == e->id) m.firing = true;
   return frame;
 }
 

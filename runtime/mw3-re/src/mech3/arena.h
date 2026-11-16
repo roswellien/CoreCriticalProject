@@ -69,6 +69,10 @@ struct Result {
   int lost[2] = {};  // mechs destroyed per side
   bool failed = false;  // the match could not start (no spawn spots, no bot made); the run exits 1
 };
+// The result is set (decided) kAftermathSeconds after the frame that settles
+// it, the match logged on meanwhile so a replay shows the last fall; its
+// time stays the settling frame's.
+inline constexpr float kAftermathSeconds = 5.0f;
 const Result& arena_result();
 // Game seconds since the first Core frame (the log's and the result's clock);
 // 0 before a match starts.
