@@ -194,12 +194,21 @@ Controls:
 - Space plays or pauses (at the end, plays again from the start); Left and
   Right jump 5 seconds; `<` and `>` (the `,` and `.` keys) halve or double
   the speed, 0.25x to 8x; click or drag the bar at the bottom to seek.
-- 1 to 5 switch the overlays: 1 routes, 2 target lines, 3 hunt goals,
-  4 radar contacts (solid detected now, dashed known but not detected),
-  5 the last decision reason under each mech.
-- Click a mech for its panel: chassis, side, heat, target, order, last
-  reason and each part's armor and internal structure; click elsewhere to
-  close it. F12 saves the window as `replay-<time>.bmp` beside the log;
+- With no mech selected, only who shoots whom is drawn (orange lines), with
+  a word under each mech for its last decision: chasing (an enemy its radar
+  sees), searching (where it last saw one), roaming (no enemy known: the
+  map's middle), fighting (the game's own combat AI has it), new target,
+  lost target. Click a mech to see its own picture: its planned route
+  (yellow, the big dot its next waypoint), its goal (a white X), its radar
+  contacts (green, solid detected now, dashed remembered) and its target,
+  with the others' target lines faint.
+- 1 to 5 switch those lines: 1 route, 2 target, 3 goal, 4 radar, 5 the
+  decision words. H shows or hides the key to the colors at the top left.
+- The selected mech's panel says in sentences what it is doing and why,
+  who it shoots at and how far, where it is going, what its radar holds,
+  its heat, and only the parts that took damage (armor and structure left);
+  click elsewhere to close it. Text and boxes grow with the window's
+  height. F12 saves the window as `replay-<time>.bmp` beside the log;
   Escape closes the viewer.
 
 `--replay-script FILE` drives the viewer from a file of commands, in a hidden

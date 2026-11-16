@@ -85,6 +85,14 @@ class Render3dDraw : public ReplayDraw {
     render_ = render;
   }
 
+ protected:
+  void scale_changed(float scale) override {
+    text_.set_scale(scale);
+    clear_text();
+  }
+
+ public:
+
   void line(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c) override {
     if (!render_) return;
     const float dx = b.x - a.x, dy = b.y - a.y, length = std::sqrt(dx * dx + dy * dy);
@@ -617,6 +625,7 @@ void Replay3dView::draw_overlay() {
   s.draw.begin_frame(zvid::render3d());
   const float* rect = zmod::draw_state().point_rect;
   if (rect[2] > rect[0]) s.screen_w = rect[2] + 1, s.screen_h = rect[3] + 1;
+  s.draw.set_scale_for_height(s.screen_h);
 
   // Side rings and id labels, then the shared overlays, panel and bar.
   for (const MechPose& m : s.frame.mechs) {
@@ -637,10 +646,11 @@ void Replay3dView::draw_overlay() {
     }
     SDL_FPoint label;
     if (s.projector.to_screen({m.pos.x, m.pos.y + kLabelMeters, m.pos.z}, &label)) {
-      s.draw.text(std::to_string(m.id), label.x - 4, label.y - 8);
+      const float id_width = s.draw.text(std::to_string(m.id), label.x - 4, label.y - 8);
       const size_t index = static_cast<size_t>(&m - s.frame.mechs.data());
       if (s.overlays.on[kReasons] && m.standing && !s.frame.last_decision[index].code.empty())
-        s.draw.text(reason_short(s.frame.last_decision[index].code), label.x + 8, label.y - 8, {255, 230, 140, 255});
+        s.draw.text(reason_short(s.frame.last_decision[index].code), label.x + id_width + 2, label.y - 8,
+                    {255, 230, 140, 255});
     }
   }
   draw_overlays(s.frame, s.overlays, s.selected, s.draw, s.projector);

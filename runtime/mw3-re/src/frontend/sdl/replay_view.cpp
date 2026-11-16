@@ -289,6 +289,7 @@ int run_replay(const std::string& log_path, const std::string& script_path) {
       }
       SDL_GetRenderOutputSize(renderer, &w, &h);
       v.camera.width = static_cast<float>(w), v.camera.height = static_cast<float>(h);
+      paint.set_scale_for_height(v.camera.height);
       paint.rect({0, 0, v.camera.width, v.camera.height}, ui_color(70, 70, 70));  // gray ground when there is no terrain
       draw_world(v, frame, paint);
       if (!v.terrain.error.empty()) {

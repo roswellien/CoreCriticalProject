@@ -7,6 +7,7 @@
 // lands on it).
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <string>
@@ -38,6 +39,24 @@ class ReplayDraw {
   // Dashes along a-b, built from line().
   void dashed(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c, float dash = 6.0f);
   void cross(SDL_FPoint center, float size, const SDL_FColor& c);
+
+  // How big the text and the boxes around it are: 1 on a screen 720 pixels
+  // tall, growing with the screen's height, so a 1080-line frame isn't read
+  // at a 720-line size. Set once a frame, before drawing.
+  void set_scale_for_height(float screen_height) {
+    const float wanted = std::clamp(screen_height / 720.0f, 1.0f, 3.0f);
+    if (wanted == scale_) return;
+    scale_ = wanted;
+    scale_changed(scale_);
+  }
+  float scale() const { return scale_; }
+
+ protected:
+  // The text's size follows the scale (its cache is rebuilt at the new size).
+  virtual void scale_changed(float) {}
+
+ private:
+  float scale_ = 1.0f;
 };
 
 // World to screen. False when the point is not on the screen side of the
@@ -114,8 +133,10 @@ class TextRenderer {
   ~TextRenderer();
   TextRenderer(const TextRenderer&) = delete;
   TextRenderer& operator=(const TextRenderer&) = delete;
+  static constexpr float kBaseSize = 14.0f;  // pixels at scale 1
   void open();
   bool ready() const { return font_ != nullptr; }
+  void set_scale(float scale);  // the font at kBaseSize * scale
   // A new surface the caller destroys, or null.
   SDL_Surface* render(const std::string& s, SDL_Color c) const;
 
@@ -131,6 +152,14 @@ class SdlRendererDraw : public ReplayDraw {
   ~SdlRendererDraw() override;
   void open_text() { text_renderer_.open(); }
   SDL_Renderer* renderer() const { return renderer_; }
+
+ protected:
+  void scale_changed(float scale) override {
+    text_renderer_.set_scale(scale);
+    clear_text();
+  }
+
+ public:
 
   void line(SDL_FPoint a, SDL_FPoint b, const SDL_FColor& c) override;
   void circle(SDL_FPoint center, float radius, const SDL_FColor& fill) override;

@@ -144,18 +144,19 @@ void draw_legend(const Overlays& overlays, ReplayDraw& draw) {
       {kContacts, kContactColor, "4 radar: solid sees now, dashed remembers"},
       {kReasons, ui_color(255, 230, 140), "5 reason: why it last changed course"},
   };
-  const float x = 10, y = 10, line_h = 17, w = 330;
-  const float h = 12 + line_h * (std::size(rows) + 2);
+  const float s = draw.scale();
+  const float x = 10, y = 10, line_h = 17 * s, w = 330 * s, pad = 8 * s;
+  const float h = 12 * s + line_h * (std::size(rows) + 2);
   draw.rect({x, y, w, h}, ui_color(0, 0, 0, 170));
   for (size_t i = 0; i < std::size(rows); ++i) {
-    const float row_y = y + 6 + line_h * i;
+    const float row_y = y + 6 * s + line_h * i;
     const SDL_FColor c = overlays.on[rows[i].overlay] ? rows[i].color : ui_color(120, 120, 120);
-    draw.rect({x + 8, row_y + 6, 14, 3}, c);
-    draw.text(rows[i].text, x + 28, row_y, overlays.on[rows[i].overlay] ? SDL_Color{235, 235, 235, 255}
-                                                                        : SDL_Color{130, 130, 130, 255});
+    draw.rect({x + pad, row_y + 6 * s, 14 * s, 3 * s}, c);
+    draw.text(rows[i].text, x + 28 * s, row_y, overlays.on[rows[i].overlay] ? SDL_Color{235, 235, 235, 255}
+                                                                            : SDL_Color{130, 130, 130, 255});
   }
-  draw.text("Click a mech for its full picture", x + 8, y + 6 + line_h * std::size(rows));
-  draw.text("H hides this key", x + 8, y + 6 + line_h * (std::size(rows) + 1), {170, 170, 170, 255});
+  draw.text("Click a mech for its full picture", x + pad, y + 6 * s + line_h * std::size(rows));
+  draw.text("H hides this key", x + pad, y + 6 * s + line_h * (std::size(rows) + 1), {170, 170, 170, 255});
 }
 
 void draw_overlays(const Frame& frame, const Overlays& overlays, int selected, ReplayDraw& draw,
@@ -257,10 +258,11 @@ void draw_panel(const ReplayLog& log, const Frame& frame, int selected, float sc
                   part.internal * 100, part.destroyed ? "  DESTROYED" : "");
     lines.push_back(buf);
   }
-  const float w = 380, line_h = 17, h = 12 + line_h * lines.size();
+  const float s = draw.scale();
+  const float w = 400 * s, line_h = 17 * s, h = 12 * s + line_h * lines.size();
   const float x = screen_width - w - 10, y = 10;
   draw.rect({x, y, w, h}, ui_color(0, 0, 0, 190));
-  for (size_t i = 0; i < lines.size(); ++i) draw.text(lines[i], x + 8, y + 6 + line_h * i);
+  for (size_t i = 0; i < lines.size(); ++i) draw.text(lines[i], x + 8 * s, y + 6 * s + line_h * i);
 }
 
 void draw_bar(const ReplayClock& clock, const Overlays& overlays, float screen_width, float screen_height,
@@ -276,7 +278,7 @@ void draw_bar(const ReplayClock& clock, const Overlays& overlays, float screen_w
   draw.text(buf, 8, top + 7);
   std::string on;
   for (int i = 0; i < kOverlays; ++i) on += overlays.on[i] ? static_cast<char>('1' + i) : '-';
-  draw.text("overlays " + on, w - 120, top + 7);
+  draw.text("overlays " + on, w - 130 * draw.scale(), top + 7);
 }
 
 // --- Text -----------------------------------------------------------------
@@ -295,8 +297,12 @@ void TextRenderer::open() {
                                           "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                                           "/usr/share/fonts/TTF/DejaVuSans.ttf"};
   for (const std::string& path : tries)
-    if (!path.empty() && (font_ = TTF_OpenFont(path.c_str(), 14.0f)) != nullptr) return;
+    if (!path.empty() && (font_ = TTF_OpenFont(path.c_str(), kBaseSize)) != nullptr) return;
   std::fprintf(stderr, "mw3: replay: no font found, drawing without text\n");
+}
+
+void TextRenderer::set_scale(float scale) {
+  if (font_) TTF_SetFontSize(font_, kBaseSize * scale);
 }
 
 SDL_Surface* TextRenderer::render(const std::string& s, SDL_Color c) const {
