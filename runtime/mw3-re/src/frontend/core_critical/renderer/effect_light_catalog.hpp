@@ -26,6 +26,30 @@ struct Emitter {
   std::array<float, 3> color{};
 };
 using Catalog = std::map<materials::SurfaceKey, Emitter>;
+inline constexpr std::size_t max_catalog_entries = 8192;
+
+// Compose validated sources without modifying either input. Equal definitions
+// may share a material key; conflicting definitions have no implicit priority.
+inline Catalog merge_catalogs(const Catalog &base, const Catalog &additional) {
+  if (base.size() > max_catalog_entries)
+    throw std::runtime_error("Combined effect-light material catalog exceeds limit");
+  Catalog merged = base;
+  for (const auto &[key, emitter] : additional) {
+    const auto found = merged.find(key);
+    if (found != merged.end()) {
+      const auto &prior = found->second;
+      if (prior.kind != emitter.kind || prior.radius != emitter.radius ||
+          prior.intensity != emitter.intensity || prior.lifetime != emitter.lifetime ||
+          prior.color != emitter.color)
+        throw std::runtime_error("Conflicting effect-light material catalog entry");
+      continue;
+    }
+    if (merged.size() == max_catalog_entries)
+      throw std::runtime_error("Combined effect-light material catalog exceeds limit");
+    merged.emplace(key, emitter);
+  }
+  return merged;
+}
 
 inline Catalog read_catalog(std::istream &f) {
   auto fail = [] {
@@ -58,7 +82,7 @@ inline Catalog read_catalog(std::istream &f) {
   if (std::memcmp(magic, "MWFX1\0\0\0", 8))
     fail();
   unsigned count = u32();
-  if (!count || count > 8192)
+  if (!count || count > max_catalog_entries)
     fail();
   Catalog out;
   for (unsigned i = 0; i < count; ++i) {

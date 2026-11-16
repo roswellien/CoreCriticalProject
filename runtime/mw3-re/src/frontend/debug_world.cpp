@@ -117,6 +117,7 @@ std::string world_load(const std::string& mission, const std::string& variant, p
   t.count = 0, t.group = 0;
   zmod::materials() = zmod::MaterialTable{};
   zmod::models() = zmod::ModelPool{};
+  zcls::fixture_pool_retire();
   zcls::nodes() = zcls::NodePool{};
   zcls::nodes().free_head = -1;
   zcls::lists() = zcls::Lists{};

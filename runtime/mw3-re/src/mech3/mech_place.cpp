@@ -109,6 +109,7 @@ void Vehicle::entity_moved() {
   zmth::Vec3 f{-transform[6], 0.0f, -transform[8]};     // 0x005a86e0
   zmth::normalize(f);
   forward = {f.x, f.y, f.z};
+  zcls::fixture_vehicle_pose(n, active, transform);
 }
 
 // Mech3.exe 1.2 @ 0x005a8000 (zEntity3d): turned by +0x58 over dt (a half

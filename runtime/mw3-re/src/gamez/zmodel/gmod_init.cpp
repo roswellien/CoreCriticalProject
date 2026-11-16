@@ -60,6 +60,7 @@ int model_set_scroll(Model* m, int on, float u, float v) {
   std::memcpy(m->header + 8, &f, 4);
   std::memcpy(m->header + 0x2c, &v, 4);
   std::memcpy(m->header + 0x28, &u, 4);
+  m->fixture_revision.reset();
   return 0;
 }
 

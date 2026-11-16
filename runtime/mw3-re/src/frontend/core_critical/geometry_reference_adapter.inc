@@ -4,7 +4,8 @@ void emit_reference_geometry(
     const ::platform::ModelDrawContext &context,
     const ::platform::prepared::Matrix &camera,
     const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog,
-    const std::vector<NativeGroundRangeAdmission> &admissions) {
+    const std::vector<NativeGroundRangeAdmission> &admissions,
+    bool native_fixture_source = true) {
   const auto normal_matrix = mw34::sun::normal_matrix(camera);
   const auto camera_to_world =
       mw34::donor::product(world, mw34::donor::inverse(camera));
@@ -110,6 +111,9 @@ void emit_reference_geometry(
     draw.count = unsigned(normals->size());
     draw.lit_normals = std::move(normals);
     if (draw.count) {
+      if (native_fixture_source)
+        apply_fixture_observation(draw, capture_fixture_range(resource, context, range,
+                                                              material.texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
     }

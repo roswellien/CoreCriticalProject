@@ -530,6 +530,7 @@ int32_t vehicle_damage(BasicVehicle& v, Handle weapon, uint32_t unused, float am
   VehicleControls& c = *v.controls;
   if (h.controls_destroyed(c)) {
     v.active = false;
+    zcls::fixture_vehicle_state(static_cast<zcls::Node*>(v.node), false);
     v.engine.entry = nullptr;  // 0x004adb40
     return 0;
   }
@@ -593,6 +594,7 @@ void vehicle_die(BasicVehicle& v) {
   VehBasicHooks& h = *g_hooks;
   VehicleControls& c = *v.controls;
   v.active = false;
+  zcls::fixture_vehicle_state(static_cast<zcls::Node*>(v.node), false);
   v.engine.entry = nullptr;  // 0x004adb40
   c.health = 0.0f;
   c.state = 4;

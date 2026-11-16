@@ -1961,7 +1961,8 @@ struct WiredMissionHooks : MissionHooks {
   // zClass's reset 0x004f8f70 and zModel's 0x00526800: fresh pools and the
   // draw table ([0x0074a2e0] = 0x0053f2e0 on Direct3D).
   void classes_reset() override {
-    zcls::nodes() = zcls::NodePool{};
+    zcls::fixture_pool_retire();
+  zcls::nodes() = zcls::NodePool{};
     zcls::nodes().free_head = -1;
     zcls::lists() = zcls::Lists{};
     zmth::reset_stack();

@@ -36,6 +36,9 @@ struct Material {                  // 0x2c bytes
   uint32_t file_cycle;             // the file's stale pointer (the exe's +0x24 without a
                                    // cycle; 0 on materials made at run time)
   int16_t prev, next;              // +0x28, +0x2a
+  // Host-only, lazy and per material. Shared native models share this exact
+  // mapping lifetime; unrelated materials keep their own retained sources.
+  mutable std::shared_ptr<const int> fixture_revision;
 };
 
 constexpr int32_t kMaterialBlock = 1000;  // 0x005edd50

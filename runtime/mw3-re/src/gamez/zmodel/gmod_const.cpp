@@ -416,6 +416,7 @@ void cycle_reset(Model* m) {
   Material* mat = m->polygons[0].material;
   Cycle* c = mat->cycle;
   if (!c) return;
+  mat->fixture_revision.reset();
   c->index = 0.0f;
   mat->texture = c->textures[0];
 }
@@ -428,6 +429,7 @@ void cycle_set_frame(Model* m, int32_t n) {
   const int32_t count = static_cast<int32_t>(c->texture_count);
   if (n >= count) n = n % count;
   else if (n < 0) n = 0;
+  mat->fixture_revision.reset();
   mat->texture = c->textures[n];
   c->index = static_cast<float>(n);
 }

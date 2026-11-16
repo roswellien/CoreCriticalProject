@@ -198,6 +198,11 @@ int32_t render_object3d(Node* node, int32_t mode) {
         if (!g_walk.recompute) recomputed = 1, g_walk.recompute = 1;
       }
     }
+    // Copy the already-composed matrix; no extra transform evaluation.
+    const auto& fixture_stack = zmth::matrix_stack();
+    if (!fixture_stack.overflow && fixture_stack.top >= 0 &&
+        fixture_stack.top < zmth::kStackDepth && fixture_stack.slot[fixture_stack.top])
+      fixture_observe_world(node, fixture_stack.slot[fixture_stack.top]->m);
     int32_t caster = 0, saved_shadows = 0, overlay = 0, opacity = 0, color = 0;
     if (is_caster(node)) {
       caster = 1;
@@ -880,6 +885,7 @@ int camera_matrices(Node* node, Camera* d, const float* offset) {
 // caller leaves its child (or cell node) count there, so a node is culled
 // only when it has a sibling; the world's own children get 2 (0x004f6c29).
 void render_node(Node* node, int32_t siblings) {
+  FixtureWalkScope fixture_scope(node);
   if (!zmod::zone_visible(node->raw[0x30])) return;
   if ((nu(node, 0x2c) & 0x20) && g_walk.pre) g_walk.pre(node);
   const bool horizon = g_walk.camera && node == g_walk.camera->nodes[2];
