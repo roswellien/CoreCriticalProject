@@ -72,7 +72,7 @@ public static class MusicPack
                 {
                     var number = track!["cd_track"]!.GetValue<int>();
                     var source = track["source"]!.GetValue<string>();
-                    return (Number: number, Source: source, FileName: $"track{number:00}{Path.GetExtension(source)}");
+                    return (Number: number, Source: source, FileName: $"track{number:00}{Path.GetExtension(source).ToLowerInvariant()}");
                 }).ToList();
         // A launcher-staged file the enabled pack no longer supplies under the same name is removed. A file
         // that cannot be removed now (for example still open) stays recorded and is retried next launch.
