@@ -614,7 +614,7 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
             lowered = name.lower()
             if re.fullmatch(r"(?:api|ext)-ms-win-[a-z0-9-]+\.dll", lowered):
                 continue
-            if re.match(r"(?:vcruntime|msvcp|concrt|vccorlib).*d\.dll$", lowered) or lowered in ("sdl3d.dll", "sdl3_ttfd.dll"):
+            if re.match(r"(?:vcruntime|msvcp|concrt|vccorlib).*d\.dll$", lowered) or lowered in ("sdl3d.dll", "sdl3_ttfd.dll", "sdl3_soundd.dll"):
                 raise ValueError("Debug runtime dependencies are not Release payloads")
             crt = _CRT.match(name) is not None
             dependency = _dll(name, (crt_root,) if crt else roots)
