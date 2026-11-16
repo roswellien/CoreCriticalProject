@@ -1,8 +1,8 @@
 #pragma once
 // #289: the replay puppet's checks inside a running arena
 // match. They live in test_replay_game.cpp, which can include the mech
-// headers (test_program.cpp's own Handle type clashes with them); the arena
-// harness in test_program.cpp calls frame() from each Core frame.
+// headers (test_arena_game.cpp's own Handle type clashes with them); the arena
+// harness in test_arena_game.cpp calls frame() from each Core frame.
 #include <memory>
 
 namespace replay_game {

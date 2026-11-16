@@ -21,8 +21,11 @@
 
 namespace mech3::arena {
 
+// All of the arena's state, for the match a run plays (one at a time). The
+// file then reads in order: the view helpers, the session, the setup and
+// switches, the frame tick, the match's start, and ArenaRun.
 namespace {
-const Setup* g_setup = nullptr;
+const Setup* g_setup = nullptr;  // the run's setup; null outside an arena run
 std::vector<ArenaMech> g_mechs;
 // The bots' names, kept for the match: a mech may hold its name's pointer.
 std::deque<std::string> g_names;
@@ -31,6 +34,9 @@ bool g_started = false;
 float g_start_time = 0;
 int64_t g_seed = 0;
 Result g_result;
+bool g_fail_ended = false;  // a match that could not start has been ended (fail_start)
+bool g_headless = false;    // --hidden with no screenshots: nothing is drawn
+int g_viewed = -1;          // the bot the spectator's view follows (an index into g_mechs), -1 for none
 
 // The map's 16 spawn spots (remote_0 .. remote_15): their places and yaws.
 // False when the map lacks one (the setup check refuses such maps, so only a
@@ -59,9 +65,6 @@ float squared_distance(const float a[3], const float b[3]) {
   for (int axis = 0; axis < 3; ++axis) sum += (a[axis] - b[axis]) * (a[axis] - b[axis]);
   return sum;
 }
-
-// The bot the spectator's view follows (an index into g_mechs), -1 for none.
-int g_viewed = -1;
 
 // The view on g_mechs[index]: the godseye camera (3) on it, and the HUD's
 // player pointer (world().player) with it, never the mission player. The
@@ -140,9 +143,6 @@ const Result& arena_result() { return g_result; }
 void set_arena_seed(int64_t seed) { g_seed = seed; }
 int64_t arena_seed() { return g_seed; }
 
-namespace {
-bool g_headless = false;
-}  // namespace
 void set_arena_headless(bool on) { g_headless = on; }
 bool arena_headless() { return g_headless && g_setup != nullptr; }
 float arena_match_time() { return g_started ? world().time - g_start_time : 0.0f; }
@@ -176,7 +176,6 @@ void end_stock_match() {
 // while the Core state is being entered, and the run's end is watched from
 // Core's frames (mw3_main.cpp), so the match is ended on its first frame
 // (arena_tick).
-bool g_fail_ended = false;
 void fail_start(const char* why) {
   std::fprintf(stderr, "mw3: arena: %s; the match cannot start\n", why);
   g_result = Result{};

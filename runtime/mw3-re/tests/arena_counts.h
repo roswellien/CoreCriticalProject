@@ -2,9 +2,9 @@
 
 #include <nlohmann-json/json.hpp>
 
-// #287: what the headless arena runs in test_program.cpp count about a
+// #287: what the headless arena runs in test_arena_game.cpp count about a
 // match's mechs. Defined in test_arena.cpp, which can include mech.h (the
-// program tests' own Handle type clashes with it).
+// arena game tests' own Handle type clashes with it).
 
 namespace mech3 {
 struct Mech;

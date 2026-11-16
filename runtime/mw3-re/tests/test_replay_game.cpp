@@ -1,5 +1,5 @@
 // #289: the replay puppet against a live arena mech. Called
-// from the arena harness in test_program.cpp (replay_game.h says why).
+// from the arena harness in test_arena_game.cpp (replay_game.h says why).
 #include <algorithm>
 #include <chrono>
 #include <cmath>
