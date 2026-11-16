@@ -126,6 +126,8 @@ void checks() {
         context.*member += .01f;
         miss();
     }
+    context.opacity = .75f;
+    miss();
     ++viewport[0];
     miss();
     ++width;
@@ -176,6 +178,21 @@ void checks() {
     miss();
     require(!get()->draw.model && get()->clipped_triangles > 0,
             "Clipped cache fixture did not clip");
+    auto alpha_batch = batch;
+    alpha_batch.vertices[0][2] = .05f;
+    auto alpha_source = source;
+    alpha_source.batch = &alpha_batch;
+    alpha_source.deformed.clear();
+    auto alpha_context = context;
+    alpha_context.opacity = .375f;
+    const auto alpha_submission = cc::prepare_draw(
+        alpha_source, alpha_context, viewport, width, height, geometry, false);
+    require(alpha_submission.draw.key.blend && alpha_submission.draw.count > 0,
+            "Fractional opacity did not blend a clipped prepared draw");
+    platform::TLVertex alpha_vertex{};
+    std::memcpy(&alpha_vertex, alpha_submission.vertices.data(), sizeof(alpha_vertex));
+    require((alpha_vertex.diffuse >> 24) == 96,
+            "CPU staged prepared alpha did not include node opacity");
     auto owned =
         cache.get(source, context, viewport, width, height, geometry, lighting, nullptr, false);
     same(*owned, reference());
@@ -584,6 +601,80 @@ void check_prepared_models_surface_materials() {
         require(draw.batches[0].surface_material->metallic == 0.0f, "Default metallic mismatch");
         require(draw.batches[0].surface_material->material_name == "authored",
                 "material_name mismatch");
+
+        auto fading_context = context;
+        fading_context.opacity = 0.375f;
+        const auto fading_draw = models.draw(fading_context);
+        require(fading_draw.replace && fading_draw.batches.size() == 1,
+                "Fractional node opacity declined the prepared model draw");
+        const auto fading_submission = cc_mw3_re::prepare_draw(
+            fading_draw.batches[0], fading_context, {0, 0, 64, 64}, 64, 64,
+            std::make_shared<mw34::vkscene::ModelGeometry>(), false);
+        require(fading_submission.draw.key.blend && fading_submission.draw.key.src == 5 &&
+                    fading_submission.draw.key.dst == 6 && !fading_submission.draw.key.zwrite &&
+                    [&] {
+                        float opacity{};
+                        const auto bits = fading_submission.draw.push.mode[3];
+                        std::memcpy(&opacity, &bits, sizeof(opacity));
+                        return opacity == fading_context.opacity;
+                    }(),
+                "Prepared fade did not select source-alpha blending with native opacity");
+
+        std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> world_root(zcls::object3d_create(),
+                                                                       zcls::tree_destroy);
+        require(world_root && zcls::node_remove_child(root.get(), control) == 0 &&
+                    zcls::object3d_add_child(world_root.get(), control) == 0,
+                "Detached source subtree setup failed");
+        control->model = &model;
+        control->source_model_vertices = count;
+        auto detached_context = context;
+        detached_context.node = control;
+        const auto detached_draw = models.draw(detached_context);
+        control->model = nullptr;
+        require(detached_draw.replace && detached_draw.batches.size() == 1,
+                "Prepared binding was lost when a detached part crossed into the world tree");
+        zcls::node_remove_child(world_root.get(), control);
+        require(zcls::object3d_add_child(root.get(), control) == 0,
+                "Detached source subtree restore failed");
+    }
+
+    // The original root is renamed to "deadmech" during death. Its visual
+    // identity must still resolve the root-owned prepared batch.
+    {
+        const auto root_mesh_path = temp_dir / "root_mesh.bin";
+        std::ofstream(root_mesh_path, std::ios::binary)
+            << prepared_fixture::mesh(2, 0xffffffff, {0, 0, 1}, false, false, false, "actor",
+                                      "actor");
+        auto root_options = options;
+        root_options.models[0].mesh = root_mesh_path.string();
+        cc_mw3_re::PreparedModels root_models(
+            root_options, mat_binding("authored", "0", mat_path));
+
+        root->model = &model;
+        root->source_model_vertices = count;
+        root->source_asset_root_name = "actor";
+        zcls::node_set_name(root.get(), "deadmech");
+        auto dead_context = context;
+        dead_context.node = root.get();
+        const auto dead_draw = root_models.draw(dead_context);
+        root->model = nullptr;
+        zcls::node_set_name(root.get(), "actor");
+        root->source_asset_root_name.clear();
+        require(dead_draw.replace && dead_draw.batches.size() == 1,
+                "Prepared root batch was lost when death renamed the mech node");
+    }
+
+    // A recognized mech asset uses the available prepared LOD when its exact
+    // full or distance payload was not selected.
+    {
+        asset->name = "mech_authored_1.flt";
+        cc_mw3_re::PreparedModels nearest_lod(options);
+        require(nearest_lod.has_binding(context),
+                "Prepared LOD fallback was not exposed to the render adapter");
+        const auto fallback_draw = nearest_lod.draw(context);
+        require(fallback_draw.replace && fallback_draw.batches.size() == 1,
+                "Unbound distance LOD did not use its closest prepared model");
+        asset->name = "mech_authored.flt";
     }
 
     // 1b. Positive test: PreparedModels version 4 mesh donor_headlight_socket with ancestry
@@ -721,6 +812,59 @@ void check_prepared_models_donor_toe_admission() {
         return assets;
     };
     unsigned cases = 0;
+
+    // A detached donor limb has no torso placement frame. It must retain its
+    // native geometry instead of entering donor_pose and throwing.
+    {
+        write(mesh_path, prepared_fixture::build_valid_v4_mesh("", "larm", "larm"));
+        auto assets = options();
+        prepared_fixture::DonorTree tree("", false);
+        auto world = std::unique_ptr<zcls::Node, int (*)(zcls::Node *)>(
+            zcls::object3d_create(), zcls::tree_destroy);
+        auto *limb = tree.controls.at("larm");
+        require(world && zcls::node_remove_child(tree.root.get(), limb) == 0 &&
+                    zcls::object3d_add_child(world.get(), limb) == 0,
+                "Detached donor limb fixture setup failed");
+        limb->model = &tree.model;
+        limb->source_model_vertices = 3;
+        auto context = tree.context();
+        context.node = limb;
+        cc_mw3_re::PreparedModels models(assets);
+        const auto draw = models.draw(context);
+        limb->model = nullptr;
+        require(!draw.replace && draw.batches.empty(),
+                "Detached donor limb without torso did not decline cleanly");
+        ++cases;
+    }
+
+    // A close-LOD request may use the selected distance mesh only when all of
+    // that donor's references exist in the live hierarchy.
+    {
+        const std::string toe = "rtoe02";
+        write(mesh_path, prepared_fixture::build_valid_v4_mesh(toe));
+        auto assets = options();
+        prepared_fixture::DonorTree tree(toe, false);
+        tree.asset->name = "mech_authored.flt";
+        cc_mw3_re::PreparedModels models(assets);
+        const auto draw = models.draw(tree.context());
+        require(!draw.replace && draw.batches.empty(),
+                "LOD fallback with unresolved donor toe did not decline cleanly");
+        ++cases;
+    }
+
+    // A BWMESH4 fallback with a complete live donor hierarchy remains usable.
+    {
+        write(mesh_path, prepared_fixture::build_valid_v4_mesh());
+        auto assets = options();
+        prepared_fixture::DonorTree tree("", false);
+        tree.asset->name = "mech_authored.flt";
+        cc_mw3_re::PreparedModels models(assets);
+        const auto draw = models.draw(tree.context());
+        require(draw.replace && draw.batches.size() == 1,
+                "Complete BWMESH4 LOD fallback was declined");
+        ++cases;
+    }
+
     for (const std::string toe : {"ltoe01", "ltoe02", "ltoe03", "rtoe01", "rtoe02", "rtoe03"}) {
         const double foot_x = toe.front() == 'l' ? -.5 : .5;
         const auto bytes = prepared_fixture::build_valid_v4_mesh(
@@ -826,6 +970,21 @@ void check_prepared_models_donor_toe_admission() {
                 "Rejected donor admission mutated native source state");
         ++cases;
     };
+    auto reject_payload = [&](const sdlfe::CoreCriticalAssets &assets,
+                              prepared_fixture::DonorTree &tree, const char *message) {
+        const auto raw = tree.raw_state();
+        const auto counts = tree.asset->nodes;
+        std::string error;
+        try {
+            cc_mw3_re::PreparedModels models(assets);
+            (void)models.draw(tree.context());
+        } catch (const std::runtime_error &failure) { error = failure.what(); }
+        require(error.find(message) != std::string::npos,
+                "Malformed donor payload did not reject at admission");
+        require(raw == tree.raw_state() && counts == tree.asset->nodes,
+                "Rejected donor payload admission mutated native source state");
+        ++cases;
+    };
     const std::string toe = "rtoe02";
     const auto valid = prepared_fixture::build_valid_v4_mesh(toe, "control", "panel", .6);
     write(mesh_path, valid);
@@ -859,7 +1018,7 @@ void check_prepared_models_donor_toe_admission() {
             toe, "control", "panel", .6, .2, -.1, rest));
         prepared_fixture::DonorTree tree(toe, false);
         // The real payload parser rejects a bone whose rest reference was removed.
-        reject(options(), tree, "bone names an unknown source control");
+        reject_payload(options(), tree, "bone names an unknown source control");
     }
     write(mesh_path, valid);
     {

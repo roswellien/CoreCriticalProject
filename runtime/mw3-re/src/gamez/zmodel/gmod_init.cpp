@@ -5,6 +5,7 @@
 #pragma STDC FP_CONTRACT OFF
 
 #include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/visual_distance.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zclass/window.h"
 #include "gamez/zmath/zmth_matrix.h"
@@ -97,7 +98,7 @@ void set_camera(zcls::Camera* camera) {
   ds.camera_data = reinterpret_cast<const float*>(camera->raw);
   ClipPlanes& c = ds.clip;
   c.near_z = camera->get<float>(0xb0);
-  c.far_z = camera->get<float>(0xb4);
+  c.far_z = zcls::visual_far_for_render(camera, camera->get<float>(0xb4));
   int32_t x = 0, y = 0, wd = 0, ht = 0;
   if (zcls::window_origin(camera->nodes[1], &x, &y)) x = 0, y = 0;
   if (zcls::window_size(camera->nodes[1], &wd, &ht)) wd = w.screen_w, ht = w.screen_h;
@@ -116,7 +117,7 @@ void set_camera(zcls::Camera* camera) {
   ds.point_rect[2] = fr - 0.001f, ds.point_rect[3] = fb - 0.001f;
   zmth::set_projection(fx, fy, static_cast<float>(wd) * 0.5f, static_cast<float>(ht) * 0.5f,
                        camera->get<float>(0x1d4), camera->get<float>(0x1d8), camera->get<float>(0xb0),
-                       camera->get<float>(0xb4));
+                       c.far_z);
   zmth::set_fov(camera->get<float>(0xe8), camera->get<float>(0xec));
   zvid::set_producer_camera_rect(x, y, wd, ht);
 }

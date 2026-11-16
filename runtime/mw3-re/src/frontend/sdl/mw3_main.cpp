@@ -43,7 +43,7 @@
 //   --nosound            no audio device (a silent DirectSound stand-in)
 //   --hidden             keep the window hidden
 //   --windowed           a window, not fullscreen (also --window, or windowed=1 in mw3.cfg)
-//   --cc-vulkan          experimental Windows Vulkan/DXGI backend (requires a window)
+//   --cc-vulkan          experimental Windows Vulkan/DXGI backend
 //   --cc-vulkan-wsi      experimental Vulkan swapchain on an SDL surface
 //   --cc-aa MODE         off, fxaa, ssaa2 or ssaa4 on the Core Critical backend
 //   --cc-af LEVEL        1, 2, 4, 8 or 16 on the Core Critical backend
@@ -108,6 +108,7 @@
 #include "frontend/sdl/sdl_input.h"
 #include "frontend/sdl/sdl_music.h"
 #include "frontend/sdl/sdl_platform.h"
+#include "frontend/sdl/draw_distance_option.h"
 #include "frontend/sdl/sdl_sound.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "frontend/sdl/sdl_vfw.h"
@@ -189,6 +190,7 @@ struct Args {
   std::string cfg_install;  // mw3.cfg's install= (the command line's wins)
   std::string cfg_mw1_game;  // mw3.cfg's mw1_game= (ours: the launcher's MechWarrior 1989 folder)
   std::string cfg_joystick, cfg_joystick_axes;  // mw3.cfg's joystick=, joystick_axes= (ours, W54: sdl_input.h)
+  bool cfg_joystick_disabled = false;
   int wide_menus = -1, cfg_wide_menus = -1;  // --wide-menus / --no-wide-menus, mw3.cfg's widemenus= (ours)
   bool debug_camera = false;  // --debug-camera (ours, docs/editor.md S4): the game editor anywhere; developers only
   std::vector<std::string> assets;
@@ -314,9 +316,12 @@ void usage() {
       "    [--cc-environment-pack DIR]...\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
+      "    [--cc-dynamic-lighting 0|1] [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
+      "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
+      "    [--cc-draw-distance 800|1200|1600 (default 800)]\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
@@ -483,6 +488,16 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
+    else if (s == "--cc-draw-distance") {
+      if (!next(1)) {
+        std::fprintf(stderr, "--cc-draw-distance requires 800, 1200 or 1600\n");
+        return false;
+      }
+      if (!sdlfe::parse_draw_distance(argv[++i], &a.quality.draw_distance)) {
+        std::fprintf(stderr, "--cc-draw-distance supports only 800, 1200 or 1600\n");
+        return false;
+      }
+    }
     else if (s == "--cc-textures" && next(1)) a.cc_assets.textures = argv[++i];
     else if (s == "--cc-lighting" && next(1)) a.cc_assets.lighting = argv[++i];
     else if (s == "--cc-pom") {
@@ -516,6 +531,28 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-sun" && next(2)) {
       a.cc_assets.sun_explicit = true;
       a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
+    } else if (s == "--cc-dynamic-lighting" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-dynamic-lighting supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.dynamic_lighting_explicit = true;
+      a.cc_assets.dynamic_lighting = value == "1";
+    } else if (s == "--cc-effect-lights" && next(1)) {
+      a.cc_assets.effect_lights = true;
+      a.cc_assets.effect_light_catalog = argv[++i];
+    } else if (s == "--cc-fixture-lights" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-fixture-lights supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.fixture_lights = value == "1";
+    } else if (s == "--cc-mech-headlights" && next(2)) {
+      a.cc_assets.mech_headlights = true;
+      a.cc_assets.stock_headlights = argv[++i];
+      a.cc_assets.headlight_bindings = argv[++i];
     } else if (s == "--cc-environment-pack" && next(1)) {
       a.cc_assets.environment_packs.push_back(argv[++i]);
     } else if (s == "--cc-model-materials" && next(3)) {
@@ -611,7 +648,11 @@ void read_config(const std::string& dir, Args& a) {
     else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
     else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
     else if (line.rfind("mod=", 0) == 0) a.cfg_mods.push_back(line.substr(4));
-    else if (line.rfind("joystick=", 0) == 0) a.cfg_joystick = line.substr(9);
+    else if (line.rfind("joystick=", 0) == 0) {
+      a.cfg_joystick = line.substr(9);
+      a.cfg_joystick_disabled = sdlfe::joystick_selection_disabled(a.cfg_joystick);
+      if (a.cfg_joystick_disabled) a.cfg_joystick.clear();
+    }
     else if (line.rfind("joystick_axes=", 0) == 0) a.cfg_joystick_axes = line.substr(14);
     else if (line == "windowed=1") a.windowed = true;
     else if (upgrades::read_line(line, a.cfg_upgrades)) {
@@ -1219,8 +1260,6 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   if (a.backend == sdlfe::RendererBackend::sdl &&
       (a.quality.antialiasing != "off" || a.quality.anisotropy != "1" || !a.cc_assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
-  if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
-    return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
   auto selected_assets = a.cc_assets;
   if (!selected_assets.environment_packs.empty())
     std::fprintf(stderr, "Environment packs requested: %zu\n",
@@ -1252,6 +1291,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     return 1;
   }
   sdlfe::SdlInput input;
+  input.joystick_disabled = a.cfg_joystick_disabled;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)
   input.window = window.sdl();
@@ -2253,8 +2293,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           if (g_net_pass) g_net_pass();
         };
       // Ours: Alt+Enter, and the game's sounds silent while the window is away.
-      if (a.backend == sdlfe::RendererBackend::sdl)
-        pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
+      pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
       if (auto* s = dynamic_cast<sdlfe::SdlSoundOutput*>(sound.get())) pump.focus_changed = [s](bool on) { s->set_focused(on); };
       if (!debug && !launch && (a.frames > 0 || !a.shot.empty()))
         pump.should_quit = [&] { return (a.frames > 0 && menu_frames >= a.frames) || (!a.shot.empty() && menu_frames > a.shot_frame); };

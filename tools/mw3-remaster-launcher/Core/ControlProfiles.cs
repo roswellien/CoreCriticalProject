@@ -96,6 +96,14 @@ public sealed class ControlProfiles
         if (added) Save(doc);
         return doc;
     }
+    /// <summary>Read the selected layout for launch without seeding or changing user controls.</summary>
+    public ControlDocument LoadForLaunch()
+    {
+        if (!File.Exists(Store)) return new();
+        var doc = Read<ControlDocument>(Store);
+        Validate(doc);
+        return doc;
+    }
     public void Save(ControlDocument doc)
     {
         Validate(doc);

@@ -10,6 +10,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmath/zmth_vector.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "platform/file_position.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -63,14 +64,15 @@ bool Part::attach(Script* s, const Part* share) {
 
 // Mech3.exe 1.2 @ 0x005aa6d0. Flags: 8 translations, 2 velocities (never
 // in motion.zbd), 4 rotations.
-bool Part::read(std::FILE* f, long end) {
+bool Part::read(std::FILE* f, int64_t end) {
   zutl_zar::read_string(f, &name);
   const uint32_t n = script->frame_count + 1;
   uint32_t flags = 0;
   read4(f, &flags);
   if (end >= 0) {  // ours: the keys within the entry
     const uint64_t need = ((flags & 8) ? 12ull : 0) + ((flags & 2) ? 12ull : 0) + ((flags & 4) ? 16ull : 0);
-    if (std::ftell(f) > end || need * n > static_cast<uint64_t>(end - std::ftell(f))) return false;
+    const int64_t at = platform::file_position::tell(f);
+    if (at < 0 || at > end || need * n > static_cast<uint64_t>(end - at)) return false;
   }
   if (flags & 8) std::fread(translations, 1, n * 12, f);
   if (flags & 2) {
@@ -96,7 +98,7 @@ void Script::set_loop_time(float t) {
 }
 
 // Mech3.exe 1.2 @ 0x005a9c70. Read through the archive's file, not checked.
-bool Script::read(std::FILE* f, long end) {
+bool Script::read(std::FILE* f, int64_t end) {
   uint32_t version = 0;
   read4(f, &version);
   if (version != kVersion) return false;
@@ -104,7 +106,8 @@ bool Script::read(std::FILE* f, long end) {
   read4(f, &frame_count);
   read4(f, &part_count);
   if (end >= 0) {  // ours: every part at least a name's length and its flags; a frame's keys
-    const uint64_t left = std::ftell(f) > end ? 0 : static_cast<uint64_t>(end - std::ftell(f));
+    const int64_t at = platform::file_position::tell(f);
+    const uint64_t left = at < 0 || at > end ? 0 : static_cast<uint64_t>(end - at);
     if (frame_count == 0 || static_cast<uint64_t>(part_count) * 8 > left ||
         static_cast<uint64_t>(frame_count) + 1 > left / 12 || !(loop_time > 0.0f)) {
       part_count = 0;

@@ -20,6 +20,24 @@ struct Fog {
   float density = 0;               // 0x0074a260
 };
 Fog& fog();
+// Render paths may use a camera-scoped copy. Interpreter/gameplay accessors
+// continue to read fog() and never observe the extended visual interval.
+const Fog& render_fog();
+
+class ScopedRenderFog {
+ public:
+  ScopedRenderFog(float authored_far, float visual_far);
+  ~ScopedRenderFog();
+  ScopedRenderFog(const ScopedRenderFog&) = delete;
+  ScopedRenderFog& operator=(const ScopedRenderFog&) = delete;
+
+ private:
+  Fog* previous_ = nullptr;
+  float previous_scale_ = 1.0f;
+  float previous_far_ = 0.0f;
+  bool active_ = false;
+  Fog copy_{};
+};
 
 void fog_set_on(int32_t on);           // 0x00526b80
 void fog_set_linear(int32_t linear);   // 0x00526ce0

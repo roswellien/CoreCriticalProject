@@ -62,6 +62,6 @@ void main() {
     screenPos = screen;
     gl_PointSize = 1.0;
     uvPerspective = uvAffine = uv;
-    colorSmooth = colorFlat = vec4(rgb, 1.0);
+    colorSmooth = colorFlat = vec4(rgb, uintBitsToFloat(draw.mode.w));
     specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0);
 }

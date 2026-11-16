@@ -402,7 +402,7 @@ bool submit_geometry(zcls::Node &node) {
     context.overlay = draw_state().overlay != 0;
     context.source_vertices = model.count(0x14);
     context.source_polygons = model.count(0x10);
-    const auto &source_fog = fog();
+    const auto &source_fog = render_fog();
     cc::geometry::Fog fog_state;
     fog_state.enabled = source_fog.on != 0;
     std::copy_n(source_fog.color, 3, fog_state.color.begin());
@@ -414,7 +414,7 @@ bool submit_geometry(zcls::Node &node) {
     // registration and all native vertex/polygon loops, retaining effect-bearing
     // producers until their side effects have an explicit GPU contract.
     if (context.ordinary && !context.morphing && !context.overlay && !model.count(0x1c) &&
-        !draw_state().second_pass && context.opacity == 1.f &&
+        !draw_state().second_pass &&
         renderer->submit_prepared_geometry(context, fog_state) ==
             cc::geometry::Submission::submitted)
       return true;

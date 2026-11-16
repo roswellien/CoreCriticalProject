@@ -45,7 +45,7 @@ FogCalc& fog_calc() { return g_calc; }
 
 // Mech3.exe 1.2 @ 0x00555640
 float fog_sphere(const float centre[3], float radius) {
-  const Fog& f = fog();
+  const Fog& f = render_fog();
   const float s = approx_sqrt(horizontal_sq(centre));
   const float farthest = s + radius;
   if (!(farthest > f.near_range)) return 0.0f;
@@ -66,7 +66,7 @@ float fog_sphere(const float centre[3], float radius) {
 }
 
 float fog_at(const float v[3]) {
-  const Fog& f = fog();
+  const Fog& f = render_fog();
   const float d2 = horizontal_sq(v);
   if (!(d2 > f.near_sq)) return 0.0f;
   const double y_exact = world_y(v);
@@ -84,7 +84,7 @@ float fog_at(const float v[3]) {
 
 // Mech3.exe 1.2 @ 0x00555a70. Walks the vertices last to first.
 int32_t fog_vertices(int32_t count) {
-  const Fog& f = fog();
+  const Fog& f = render_fog();
   int32_t any = 0;
   for (int32_t i = count - 1; i >= 0; --i) {
     g_calc.factor[i] = fog_at(g_calc.verts[i]);

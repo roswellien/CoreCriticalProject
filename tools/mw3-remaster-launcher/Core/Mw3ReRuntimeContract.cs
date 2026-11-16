@@ -15,6 +15,7 @@ public sealed class Mw3ReRuntimeContract
     private readonly string profileRelativePath;
     private readonly long profileBytes;
     private readonly string profileSha256;
+    private readonly IReadOnlyDictionary<string, string> declaredFiles;
 
     public string Root { get; }
     public string Executable { get; }
@@ -40,11 +41,17 @@ public sealed class Mw3ReRuntimeContract
         SourceCommit = sourceCommit;
         BuildId = buildId;
         Builder = builder;
+        declaredFiles = new ReadOnlyDictionary<string, string>(
+            new Dictionary<string, string>(paths, StringComparer.Ordinal));
         Roles = new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(roles, StringComparer.Ordinal));
         Dependencies = Array.AsReadOnly(dependencies.ToArray());
         Capabilities = new ReadOnlyDictionary<string, IReadOnlyList<int>>(capabilities.ToDictionary(
             pair => pair.Key, pair => (IReadOnlyList<int>)Array.AsReadOnly(pair.Value.ToArray()), StringComparer.Ordinal));
     }
+
+    /// <summary>Return a path from the integrity-checked runtime closure.</summary>
+    public string? FindDeclaredFile(string relativePath) =>
+        declaredFiles.TryGetValue(relativePath, out var path) ? path : null;
 
     /// <summary>Read planning text from one bounded snapshot checked against its original raw pin.</summary>
     internal string ReadPinnedPlanningProfile()

@@ -63,11 +63,12 @@ public:
     append(context.fy_near);
     append(context.cx);
     append(context.cy);
+    append(context.opacity);
     append(viewport);
     append(width);
     append(height);
     append(lighting);
-    append(zmod::fog());
+    append(zmod::render_fog());
     append(zmod::fog_calc().camera_to_world);
     const int rounding = std::fegetround();
     append(rounding);
@@ -130,7 +131,7 @@ private:
   static_assert(sizeof(zmod::Fog) == 56);
   using Signature =
       std::array<unsigned char,
-                 2 * sizeof(::platform::prepared::Matrix) + 7 * sizeof(float) +
+                 2 * sizeof(::platform::prepared::Matrix) + 8 * sizeof(float) +
                      sizeof(std::array<int, 4>) + 2 * sizeof(unsigned) +
                      sizeof(bool) + sizeof(zmod::Fog) +
                      sizeof(zmod::FogCalc::camera_to_world) + sizeof(int) +

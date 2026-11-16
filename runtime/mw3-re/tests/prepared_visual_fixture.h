@@ -45,7 +45,9 @@ struct Bytes {
 };
 inline std::string mesh(unsigned version, uint32_t color = 0xffffffff,
                         std::array<float, 3> normal = {0, 0, 1}, bool mirrored_uv = false,
-                        bool degenerate_uv = false, bool rank_one_uv = false) {
+                        bool degenerate_uv = false, bool rank_one_uv = false,
+                        const std::string &batch_owner = "control",
+                        const std::string &batch_visibility = "panel") {
     Bytes out;
     out.value = std::string("BWMESH") + char('0' + version) + '\0';
     out.u32(1);
@@ -62,9 +64,9 @@ inline std::string mesh(unsigned version, uint32_t color = 0xffffffff,
         out.name("control");
         out.matrix();
     }
-    out.name("control");
+    out.name(batch_owner.c_str());
     if (version != 1)
-        out.name("panel");
+        out.name(batch_visibility.c_str());
     const int placements = version == 3 ? 1 : version == 5 ? 2 : version == 6 ? 3 : 0;
     for (int i = 0; i < placements; ++i) {
         out.name("control");

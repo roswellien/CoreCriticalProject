@@ -36,6 +36,7 @@
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zrender/zrndr_flare.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 #include "gamez/zvideo/zvid_format.h"
 
 namespace zint {
@@ -264,7 +265,7 @@ std::FILE* open_on_path(const std::string& dirs, const char* name, const char* m
   return zutl::open(name, mode);
 }
 
-void includes_push(Interp& in, ScriptFile* f, long pos, uint8_t binary) {  // 0x00595da0
+void includes_push(Interp& in, ScriptFile* f, int64_t pos, uint8_t binary) {  // 0x00595da0
   in.includes.push_back({f, pos, binary, f->end, f->what});
 }
 
@@ -488,8 +489,8 @@ bool read_line(Interp& in, ScriptFile* f, char* line) {
     if (std::fread(&size, 4, 1, f->f) != 1 || size > 0x100000) size = 0;
     // Ours (docs/modding.md, M3): a line past the script's end ends it, said.
     if (size != 0 && f->end >= 0) {
-      const long at = std::ftell(f->f);
-      if (at < 0 || at + 4 > f->end || static_cast<long>(size) > f->end - at - 4) {
+      const int64_t at = platform::file_position::tell(f->f);
+      if (at < 0 || at + 4 > f->end || static_cast<int64_t>(size) > f->end - at - 4) {
         std::printf("mw3: %s is broken (a line past its end), read up to it\n", f->what.c_str());
         size = 0;
         f->cut = true;
@@ -593,7 +594,7 @@ void tokenize(Interp& in, char* line) {
 bool source(Interp& in, const char* name) {
   ScriptFile* f = nullptr;
   bool binary = false;
-  if (in.file) includes_push(in, in.file, std::ftell(in.file->f), in.binary);
+  if (in.file) includes_push(in, in.file, platform::file_position::tell(in.file->f), in.binary);
   if (g_globals.use_archive && open_archive(in, in.archive_name.c_str())) {
     if ((f = archive_find(in, name))) binary = true;
   }
@@ -612,7 +613,7 @@ bool source(Interp& in, const char* name) {
   Include top;
   if (includes_pop(in, &top)) {
     in.file = top.file;
-    std::fseek(top.file->f, top.pos, SEEK_SET);
+    platform::file_position::seek(top.file->f, top.pos, SEEK_SET);
     top.file->end = top.end, top.file->what = top.what;  // ours (M3)
     in.binary = top.binary;
     return r;
@@ -751,9 +752,26 @@ bool open_archive(Interp& in, const char* name) {
   in.archive = ScriptFile{};
   in.archive.f = f;
   if (!f) return false;
-  std::fseek(f, 0, SEEK_END);  // ours (M3): the scripts' bound
-  const long size = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
+  if (platform::file_position::seek(f, 0, SEEK_END) != 0) {
+    std::fclose(f);
+    in.archive.f = nullptr;
+    return false;
+  }
+  const int64_t size = platform::file_position::tell(f);
+  if (size < 0 || platform::file_position::seek(f, 0, SEEK_SET) != 0) {
+    std::fclose(f);
+    in.archive.f = nullptr;
+    return false;
+  }
+  constexpr int64_t kMaxScriptArchiveBytes = int64_t{1} << 31;
+  if (size >= kMaxScriptArchiveBytes) {
+    std::printf(
+        "mw3: %s: file is %lld bytes; signed 32-bit script offsets support files under 2 GiB, not read\n",
+        where.c_str(), static_cast<long long>(size));
+    std::fclose(f);
+    in.archive.f = nullptr;
+    return false;
+  }
   uint32_t head[2];
   int32_t count = 0;
   bool ok = std::fread(head, 8, 1, f) == 1 && head[0] == 0x08971119 && head[1] == 7 &&
@@ -805,15 +823,15 @@ ScriptFile* archive_find(Interp& in, const char* name) {
   // Ours (docs/modding.md, M3): a script starts past the directory and runs
   // to the next one's start or the file's end; one outside the file is not
   // the archive's (the exe seeks there and reads what it finds).
-  const long start = in.dir[idx].offset, table = 12 + static_cast<long>(in.entry_count) * 0x80;
+  const int64_t start = in.dir[idx].offset, table = 12 + static_cast<int64_t>(in.entry_count) * 0x80;
   if (in.archive_size >= 0 && (start < table || start >= in.archive_size)) {
     std::printf("mw3: %s: script %s is broken (its offset past the file), not read\n", in.archive_where.c_str(), in.dir[idx].name);
     return nullptr;
   }
-  long end = in.archive_size;
+  int64_t end = in.archive_size;
   for (int32_t i = 0; i < in.entry_count; ++i)
     if (in.dir[i].offset > start && in.dir[i].offset < end) end = in.dir[i].offset;
-  if (std::fseek(in.archive.f, in.dir[idx].offset, SEEK_SET) != 0) return nullptr;
+  if (platform::file_position::seek(in.archive.f, in.dir[idx].offset, SEEK_SET) != 0) return nullptr;
   in.archive.eof = in.archive.err = false;
   in.archive.end = end;
   in.archive.cut = false;

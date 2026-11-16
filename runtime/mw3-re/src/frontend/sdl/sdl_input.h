@@ -41,6 +41,7 @@ std::string axis_slots_text(const int slots[8], int sdl_axes);
 // Which attached device a start opens, with no joystick= in mw3.cfg: a
 // gamepad, else one with 2 axes and 4 buttons or more, else any.
 int joystick_rank(bool gamepad, int axes, int buttons);
+bool joystick_selection_disabled(const std::string& value);
 
 class SdlInput : public platform::Input {
  public:
@@ -56,6 +57,7 @@ class SdlInput : public platform::Input {
   // W54 (ours): mw3.cfg's joystick= (a part of the device's name, any case:
   // that one, else the best ranked) and joystick_axes= (the axis map, else
   // the device's HID descriptor, then kKnownSticks, then SDL's packed order).
+  bool joystick_disabled = false;  // mw3.cfg's joystick=none disables device selection
   std::string joystick_want, joystick_axes;
   // The axis usages of the open stick's HID descriptor, empty when it cannot
   // be read (tests replace it; read_hid_usages by default).

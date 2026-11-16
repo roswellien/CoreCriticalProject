@@ -10,13 +10,13 @@ static class GraphicsPreferencesChecks
         try
         {
             var settings=new SettingsManager(root,root);
-            if(settings.Current.InitialSetupCompleted || settings.Current.DynamicLighting || settings.Current.Shadows || settings.Current.Headlights)
+            if(settings.Current.InitialSetupCompleted || settings.Current.DynamicLighting || settings.Current.Shadows || settings.Current.Headlights || settings.Current.DrawDistance != 800)
                 throw new Exception("Fresh setup must start with stock lighting and remain incomplete");
             settings.Current.ActivePacks.Add("test.keep-pack");
             settings.Save();
             if(new SettingsManager(root,root).Current.InitialSetupCompleted)
                 throw new Exception("Saving/cancelling defaults completed first-run setup");
-            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,2400,0,true,true,true);
+            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true,true);
             choice.ApplyTo(settings.Current);
             settings.Current.InitialSetupCompleted=true;
             settings.Save();
@@ -41,11 +41,14 @@ static class GraphicsPreferencesChecks
             try{(choice with{AnisotropicFiltering=3}).ApplyTo(loaded);throw new Exception("Unsupported AF accepted");}
             catch(InvalidOperationException){}
             if(JsonSerializer.Serialize(loaded)!=before)throw new Exception("Failed graphics validation partially changed settings");
+            try{(choice with{DrawDistance=2400}).ApplyTo(loaded);throw new Exception("Unsupported scenery distance accepted");}
+            catch(InvalidOperationException){}
+            if(JsonSerializer.Serialize(loaded)!=before)throw new Exception("Failed scenery validation partially changed settings");
             // Legacy installations keep their choices and do not reopen first-run setup.
-            File.WriteAllText(settings.SettingsPath,"{\"Width\":3440,\"Height\":1440,\"WindowMode\":\"windowed\",\"AntiAliasing\":\"2\",\"ActivePacks\":[\"test.existing\"]}");
+            File.WriteAllText(settings.SettingsPath,"{\"Width\":3440,\"Height\":1440,\"WindowMode\":\"windowed\",\"AntiAliasing\":\"2\",\"DrawDistance\":3200,\"ActivePacks\":[\"test.existing\"]}");
             loaded=new SettingsManager(root,root).Current;
             if(!loaded.InitialSetupCompleted || loaded.Width!=3440 || loaded.AntiAliasing!="2" ||
-               !loaded.ActivePacks.Contains("test.existing") || loaded.DynamicLighting || loaded.Shadows || loaded.Headlights)
+               loaded.DrawDistance!=1600 || !loaded.ActivePacks.Contains("test.existing") || loaded.DynamicLighting || loaded.Shadows || loaded.Headlights)
                 throw new Exception("Existing launcher settings were reset by setup migration");
             Console.WriteLine("First-run graphics validation, persistence, cancellation marker and legacy preference preservation passed.");
         }

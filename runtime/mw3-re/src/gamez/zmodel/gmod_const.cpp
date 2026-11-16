@@ -12,6 +12,7 @@
 #include "crt/msvc_math.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/cls_zbd.h"
+#include "platform/file_position.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zmodel/gmod_strip.h"
@@ -78,7 +79,7 @@ Model* reread_model(std::FILE* f, int32_t index, zcls::ZbdReadContext* proof) {
       index >= 0 && index < size && proof->expected.model_slots.count(std::uint32_t(index)),
       "reread model selector is not admitted");
   if (size == 0 || size <= index) return nullptr;
-  const auto seek_record = std::fseek(f, static_cast<long>(index) * 0x60, SEEK_CUR);
+  const auto seek_record = platform::file_position::seek(f, static_cast<int64_t>(index) * 0x60, SEEK_CUR);
   if (proof) proof->require(seek_record == 0, "reread model record seek failed");
   uint8_t raw[0x60];
   if (proof) proof->span(f, sizeof raw);
@@ -92,7 +93,7 @@ Model* reread_model(std::FILE* f, int32_t index, zcls::ZbdReadContext* proof) {
   uint32_t offset;
   std::memcpy(&offset, raw + 0x5c, 4);
   if (proof && proof->strict()) proof->require(offset <= proof->section_end, "reread model offset outside section");
-  const auto seek_payload = std::fseek(f, static_cast<long>(offset), SEEK_SET);
+  const auto seek_payload = platform::file_position::seek(f, offset, SEEK_SET);
   if (proof) proof->require(seek_payload == 0, "reread model payload seek failed");
   if (read_model_data(f, *m, proof) == 0) {
     if (strips() && (!proof || !proof->strict())) strip_model(*m, 0x7fffffff, 4);

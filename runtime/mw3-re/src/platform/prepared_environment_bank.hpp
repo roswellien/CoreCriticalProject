@@ -88,16 +88,17 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
       fail(what + ": truncated/short read at " + std::to_string(at));
   };
 
-  // Expected file size must hold before and after validation; byte domain is
-  // INT32_MAX.
+  // Expected file size must hold before and after validation. Entry offsets
+  // are unsigned 32-bit values, so EOF may be one byte past UINT32_MAX.
   const std::uint64_t file_size = file_size_now();
   if (file_size != expected_bytes)
     fail("file size " + std::to_string(file_size) + " != expected_bytes " +
          std::to_string(expected_bytes));
-  if (file_size >
-      static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))
+  constexpr std::uint64_t kMaxAddressableFileBytes =
+      static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1;
+  if (file_size > kMaxAddressableFileBytes)
     fail("file size " + std::to_string(file_size) +
-         " exceeds INT32_MAX byte domain");
+         " exceeds the 4 GiB unsigned 32-bit offset domain");
 
   // ---- 24-byte file header ----
   if (file_size < 24)

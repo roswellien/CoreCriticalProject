@@ -2,6 +2,11 @@
 // differential test cannot reach (the original crashes or hangs there).
 #include <cstdio>
 #include <cstring>
+#include <array>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 #include "check.h"
@@ -9,6 +14,8 @@
 #include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/controls_cfg.h"
+#include "gamez/zutil/zutl_reg.h"
+#include "platform/reg_file.h"
 
 namespace {
 const std::string kDir = std::string(MW3_TEST_TMP) + "/test_controls";
@@ -27,6 +34,28 @@ void write(const char* path, const std::string& text) {
   std::fwrite(text.data(), 1, text.size(), f);
   std::fclose(f);
 }
+
+std::string hex_value(const uint8_t* bytes, size_t size, const std::string& eol, bool wrapped) {
+  std::ostringstream out;
+  out << "hex:";
+  for (size_t i = 0; i < size; ++i) {
+    if (i) out << ',';
+    if (wrapped && i && i % 24 == 0) out << "\\" << eol << "  ";
+    out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(bytes[i]);
+  }
+  return out.str();
+}
+
+class SettingsMapHost final : public zin::Host {
+ public:
+  explicit SettingsMapHost(uint32_t* map) : map_(map) {}
+  uint32_t* settings_block(const char* name, uint32_t size) override {
+    return std::strcmp(name, "DefaultCmdMap") == 0 && size == 167 * sizeof(uint32_t) ? map_ : nullptr;
+  }
+
+ private:
+  uint32_t* map_;
+};
 
 std::string parse(const std::string& text) {
   write("parse.zrd", text);
@@ -94,6 +123,74 @@ TEST(controls_stock_axes_and_missing_files) {
   EXPECT(mech3::axis_table().stock == 1);
   mech3::controls_load("keys\\nothing.zrd");  // no file: nothing changes
   EXPECT(mech3::axis_table().stock == 1 && zin::key1_of(0x3d) == 0x39);
+}
+
+TEST(launcher_settings_and_control_preset_match_runtime_readers) {
+  struct EolCase { const char* eol; bool wrapped; };
+  for (const EolCase fixture : {EolCase{"\r\n", true}, EolCase{"\r\n", false},
+                                EolCase{"\n", true}, EolCase{"\n", false}}) {
+    fresh();
+    zreg::shutdown();
+    const std::string eol = fixture.eol;
+    uint32_t map[167] = {};
+    const uint32_t command_binding = zin::pack(0x2c, 0x33, 4, 2);
+    map[0x3d] = command_binding;
+    std::array<uint8_t, sizeof map> map_bytes{};
+    std::memcpy(map_bytes.data(), map, sizeof map);
+    std::array<uint8_t, 260> active_bytes{};
+    const std::string active_path = "keys\\CC-runtime-fixture.zrd";
+    std::memcpy(active_bytes.data(), active_path.c_str(), active_path.size() + 1);
+
+    const std::string reg_path = kDir + "/settings.reg";
+    std::filesystem::create_directories(kDir);
+    {
+      std::ofstream reg(reg_path, std::ios::binary);
+      reg << "Windows Registry Editor Version 5.00" << eol << eol
+          << "[HKEY_CURRENT_USER\\SOFTWARE\\MicroProse\\MechWarrior 3\\1.0]" << eol
+          << "\"DefaultCmdMap\"=" << hex_value(map_bytes.data(), map_bytes.size(), eol, fixture.wrapped) << eol
+          << "\"ActiveCtlCfg\"=" << hex_value(active_bytes.data(), active_bytes.size(), eol, fixture.wrapped) << eol;
+    }
+    platform::RegFile settings(reg_path);
+    zreg::init("MicroProse", "MechWarrior 3", "1.0", zreg::Machine{}, 0);
+    zreg::set_settings(&settings);
+    auto* map_entry = zreg::create("DefaultCmdMap", zreg::kBuffer, sizeof map, zreg::kUser,
+                                   reinterpret_cast<uint8_t*>(map));
+    uint8_t active_read[260] = {};
+    zreg::create("ActiveCtlCfg", zreg::kBuffer, sizeof active_read, zreg::kUser, active_read);
+    EXPECT(map_entry != nullptr);
+
+    SettingsMapHost host(map);
+    zin::reset_state();
+    zin::set_host(&host);
+    zin::init(0xa7, "DefaultCmdMap");
+    EXPECT(zreg::read_all() == 1);
+    EXPECT(map[0x3d] == zin::pack(0x2c, 0x33, 4, 2));
+    EXPECT(zin::key1_of(0x3d) == 0x2c && zin::key2_of(0x3d) == 0x33 &&
+           zin::joy_of(0x3d) == 4 && zin::mouse_of(0x3d) == 2);
+
+    const std::string active_from_registry(reinterpret_cast<char*>(active_read));
+    EXPECT(active_from_registry == active_path);  // ActiveCtlCfg already contains the keys\ prefix.
+    write("keys\\CC-runtime-fixture.zrd",
+          "(\n KEYS ((CMD_TRIGGER1 keya(0x2c) keyb(0x33) joybtn(0x4) mousebtn(0x2)))\n"
+          " AXES ((Throttle joystick(Z) slope(-0.5) intercept(0.5) deadzone(0.05))\n"
+          "       (Twist joystick(Rz) slope(-1) intercept(0) deadzone(0))\n"
+          "       (Pitch joystick(Y) slope(1) intercept(0) deadzone(0))\n"
+          "       (LR joystick(X) slope(-1) intercept(0) deadzone(0)))\n)\n");
+    mech3::controls_setup() = mech3::ControlsSetup{};
+    mech3::controls_setup_calls() = mech3::ControlsSetupCalls{};
+    mech3::axis_table() = mech3::AxisTable{};
+    EXPECT(mech3::controls_set_defaults() == 1);
+    mech3::controls_load(active_from_registry.c_str());
+    EXPECT(zin::key1_of(0x3d) == 0x2c && zin::key2_of(0x3d) == 0x33 &&
+           zin::joy_of(0x3d) == 4 && zin::mouse_of(0x3d) == 2);
+    EXPECT(mech3::axis_table().axes[0].source == 3 && mech3::axis_table().axes[0].scale == -0.5f &&
+           mech3::axis_table().axes[0].offset == 0.5f && mech3::axis_table().axes[0].deadzone == 0.05f);
+    EXPECT(mech3::axis_table().axes[1].source == 6 && mech3::axis_table().axes[2].source == 2 &&
+           mech3::axis_table().axes[3].source == 1);
+    zin::set_host(nullptr);
+    zreg::set_settings(nullptr);
+    zreg::shutdown();
+  }
 }
 
 TEST(controls_file_fixes_skip_what_crashed_the_original) {

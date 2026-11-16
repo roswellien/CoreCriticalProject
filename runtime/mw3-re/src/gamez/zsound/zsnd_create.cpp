@@ -9,6 +9,7 @@
 #include "gamez/zerror/zerr.h"
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 #include "gamez/zutil/zutl_zar.h"
 
 namespace zsnd {
@@ -126,9 +127,15 @@ int32_t wave_read_file(Wave& w) {
   if (w.path.empty()) return 0;
   std::FILE* f = zutl::open(w.path.c_str(), "rb");
   if (!f) return 0;
-  std::fseek(f, 0, SEEK_END);  // 0x005760b0
-  const long size = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
+  if (platform::file_position::seek(f, 0, SEEK_END) != 0) {
+    std::fclose(f);
+    return 0;
+  }
+  const int64_t size = platform::file_position::tell(f);
+  if (size < 0 || platform::file_position::seek(f, 0, SEEK_SET) != 0) {
+    std::fclose(f);
+    return 0;
+  }
   w.bytes.assign(size > 0 ? static_cast<size_t>(size) : 0, 0);
   if (!w.bytes.empty() && std::fread(w.bytes.data(), w.bytes.size(), 1, f) != 1) {
     // fread's count is not checked by the original; a short read leaves zeros.

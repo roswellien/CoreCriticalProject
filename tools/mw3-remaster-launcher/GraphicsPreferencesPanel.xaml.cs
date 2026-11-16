@@ -23,8 +23,8 @@ public partial class GraphicsPreferencesPanel : UserControl
             Select(ComboResolution, resolution);
             Select(ComboAA, settings.AntiAliasing == "1" ? "off" : settings.AntiAliasing);
             Select(ComboAF, settings.AnisotropicFiltering.ToString());
-            Select(ComboDrawDist, settings.DrawDistance.ToString());
-            Select(ComboFog, settings.FogDistance.ToString());
+            var drawDistance = settings.DrawDistance is 2400 or 3200 ? 1600 : settings.DrawDistance;
+            Select(ComboDrawDist, drawDistance.ToString());
             ChkDynamicLighting.IsChecked = settings.DynamicLighting;
             ChkHeadlights.IsChecked = settings.Headlights;
             ChkHeadlights.IsEnabled = settings.DynamicLighting;
@@ -40,7 +40,7 @@ public partial class GraphicsPreferencesPanel : UserControl
         if (parts.Length != 2 || !int.TryParse(parts[0], out var width) || !int.TryParse(parts[1], out var height))
             throw new InvalidOperationException("Choose a display resolution.");
         var result = new GraphicsPreferences(width, height, Value(ComboWindowMode), Value(ComboAA),
-            int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)), int.Parse(Value(ComboFog)),
+            int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)),
             ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true, ChkHeadlights.IsChecked == true);
         result.Validate();
         return result;

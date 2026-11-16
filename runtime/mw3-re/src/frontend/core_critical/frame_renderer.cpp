@@ -1313,7 +1313,41 @@ private:
     draw.count = drawn;
     draw.texture =
         state.texture < 0 ? -1 : int(bind_texture(state.texture, state.sharp));
-    if (lighting_.enabled && state.texture >= 0) {
+    // Built from this draw's owned producer view (projection/camera/viewport above), never
+    // from the live global camera, so queued draws keep the view they were recorded with.
+    auto capture_tl_view = [&]() {
+      auto tl = std::make_shared<mw34::sun::Tl>();
+      const auto &proj = projection;
+      if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
+          viewport[2] > 0 && viewport[3] > 0) {
+        tl->projection = {
+            proj.near_z,
+            proj.fx_near * float(scene_.width) / float(viewport[2]),
+            proj.fy_near * float(scene_.height) / float(viewport[3]),
+            (proj.cx - float(viewport[0])) * float(scene_.width) /
+                float(viewport[2]),
+            (proj.cy - float(viewport[1])) * float(scene_.height) /
+                float(viewport[3]),
+            proj.far_z > 0 ? proj.far_z : 1000.0f};
+        const float *m = camera;
+        tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
+                            m[7], m[10], m[2], m[5], m[8], m[11]};
+      } else {
+        tl->projection = {1.0f,
+                          float(scene_.width),
+                          float(scene_.height),
+                          float(scene_.width) * .5f,
+                          float(scene_.height) * .5f,
+                          1000.0f};
+        tl->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+      }
+      return tl;
+    };
+    // Native sky keeps its unlit TL material role. The owned view is only
+    // for intentional campaign/profile sky shading in apply_atmosphere.
+    if (lighting_.enabled && state.native_sky)
+      draw.sky_view = capture_tl_view();
+    if (lighting_.enabled && !state.native_sky && state.texture >= 0) {
       const auto &tex_entry = textures_.at(state.texture);
       const auto key = tex_entry.surface_key;
       const auto epoch = tex_entry.group_load_epoch;
@@ -1328,32 +1362,8 @@ private:
         } else {
           draw.normal_texture = -1;
         }
-        auto tl = std::make_shared<mw34::sun::Tl>();
+        draw.sun_tl = capture_tl_view();
         const auto &proj = projection;
-        if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
-            viewport[2] > 0 && viewport[3] > 0) {
-          tl->projection = {
-              proj.near_z,
-              proj.fx_near * float(scene_.width) / float(viewport[2]),
-              proj.fy_near * float(scene_.height) / float(viewport[3]),
-              (proj.cx - float(viewport[0])) * float(scene_.width) /
-                  float(viewport[2]),
-              (proj.cy - float(viewport[1])) * float(scene_.height) /
-                  float(viewport[3]),
-              proj.far_z > 0 ? proj.far_z : 1000.0f};
-          const float *m = camera;
-          tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
-                              m[7], m[10], m[2], m[5], m[8], m[11]};
-        } else {
-          tl->projection = {1.0f,
-                            float(scene_.width),
-                            float(scene_.height),
-                            float(scene_.width) * .5f,
-                            float(scene_.height) * .5f,
-                            1000.0f};
-          tl->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-        }
-        draw.sun_tl = std::move(tl);
         if (lighting_.normals) {
           draw.surface_parameters =
               deferred_surface_parameters(key, state.texture);
@@ -1458,6 +1468,10 @@ private:
           (!draw.sun_tl ||
            (previous.sun_tl->camera_world == draw.sun_tl->camera_world &&
             previous.sun_tl->projection == draw.sun_tl->projection)) &&
+          bool(previous.sky_view) == bool(draw.sky_view) &&
+          (!draw.sky_view ||
+           (previous.sky_view->camera_world == draw.sky_view->camera_world &&
+            previous.sky_view->projection == draw.sky_view->projection)) &&
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
@@ -1913,7 +1927,33 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
         "--cc-pom 1 requires a Core Critical Vulkan backend");
   if (assets.pom && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
-  auto config = RendererBridgeConfig::from_diagnostic_env();
+  auto config = RendererBridgeConfig::from_diagnostic_env(
+      !assets.dynamic_lighting_explicit);
+  if (assets.dynamic_lighting_explicit) {
+    // The launcher's explicit choice owns this run, including the diagnostic
+    // environment fallback, so stale development variables cannot re-enable it.
+    config.effect_lights = false;
+    config.effect_light_catalog.clear();
+    config.fixture_lights = false;
+    config.mech_headlights = false;
+    config.stock_headlights.clear();
+    config.headlight_bindings.clear();
+  }
+  const bool dynamic_lighting_allowed =
+      !assets.dynamic_lighting_explicit || assets.dynamic_lighting;
+  if (assets.effect_lights && dynamic_lighting_allowed) {
+    config.effect_lights = true;
+    config.effect_light_catalog = assets.effect_light_catalog;
+  }
+  if (assets.dynamic_lighting_explicit)
+    config.fixture_lights = assets.fixture_lights && dynamic_lighting_allowed;
+  else if (assets.fixture_lights)
+    config.fixture_lights = true;
+  if (assets.mech_headlights && dynamic_lighting_allowed) {
+    config.mech_headlights = true;
+    config.stock_headlights = assets.stock_headlights;
+    config.headlight_bindings = assets.headlight_bindings;
+  }
   config.parallax_materials = assets.pom;
   if (assets.environment) {
     std::fprintf(stderr,
@@ -1937,6 +1977,11 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.geometry_debug_normals = assets.geometry_debug_normals;
 
   // Quality
+  if (quality.draw_distance != 800 && quality.draw_distance != 1200 &&
+      quality.draw_distance != 1600)
+    throw std::runtime_error(
+        "--cc-draw-distance supports only 800, 1200 or 1600");
+  config.draw_distance = quality.draw_distance;
   config.antialiasing = quality.antialiasing;
   config.anisotropy = quality.anisotropy;
   if (quality.antialiasing == "fxaa") {
@@ -1981,6 +2026,19 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.sun_normals = (assets.lighting == "normal");
   config.sun_shadows = false;
   config.normal_maps_enabled = (assets.lighting == "normal");
+
+  if (!config.sun &&
+      (config.effect_lights || config.fixture_lights || config.mech_headlights)) {
+    std::fprintf(stderr,
+                 "Dynamic lights requested without sun lighting; effect, "
+                 "fixture, and mech headlights are disabled\n");
+    config.effect_lights = false;
+    config.effect_light_catalog.clear();
+    config.fixture_lights = false;
+    config.mech_headlights = false;
+    config.stock_headlights.clear();
+    config.headlight_bindings.clear();
+  }
 
   // Other defaults
   config.fixture_shadows = false;

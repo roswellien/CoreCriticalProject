@@ -243,6 +243,14 @@ TEST(sdl_input_scancodes_map_to_dik_codes) {
   EXPECT(dik_from_scancode(SDL_SCANCODE_F20) == 0);
 }
 
+TEST(read_config_joystick_none_is_case_insensitive) {
+  EXPECT(sdlfe::joystick_selection_disabled("none"));
+  EXPECT(sdlfe::joystick_selection_disabled("None"));
+  EXPECT(sdlfe::joystick_selection_disabled("NONE"));
+  EXPECT(!sdlfe::joystick_selection_disabled("none "));
+  EXPECT(!sdlfe::joystick_selection_disabled("auto"));
+}
+
 namespace {
 SDL_Event key(SDL_Scancode s, bool down, bool repeat = false) {
   SDL_Event e{};
@@ -363,6 +371,12 @@ TEST(sdl_joystick_axes_from_the_t16000m_descriptor) {
   EXPECT(sdlfe::axis_slots_from_usages({0x30, 0x31, 0x36, 0x37, 0x38}, 5, s) && s[6] == 2 && s[7] == 3);
   EXPECT(sdlfe::joystick_rank(true, 6, 15) > sdlfe::joystick_rank(false, 4, 12) &&
          sdlfe::joystick_rank(false, 4, 12) > sdlfe::joystick_rank(false, 1, 2));
+}
+
+TEST(sdl_joystick_can_be_disabled_by_profile) {
+  sdlfe::SdlInput input;
+  input.joystick_disabled = true;
+  EXPECT(!input.open(platform::Input::kJoystick));
 }
 
 TEST(sdl_input_t16000m_twist_reaches_rz) {

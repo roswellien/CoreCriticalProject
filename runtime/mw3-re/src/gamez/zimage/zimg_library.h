@@ -65,7 +65,7 @@ struct Library {             // 0xac bytes
   bool needs_resolve;        // +0xa8
   bool r_prefix;             // +0xa9
   bool missing;              // +0xaa
-  long size = -1;            // ours (docs/modding.md, M3): the file's, bounding the table and textures
+  int64_t size = -1;         // ours (docs/modding.md, M3): the file's, bounding the table and textures
 };
 
 struct State {
@@ -97,7 +97,7 @@ const std::vector<mech3::ModWarning>& load_notes();
 
 // 0x00517f80. Ours (docs/modding.md, M3): with `end`, a texture whose sizes
 // or buffers the bytes up to it cannot hold is refused (null), not read.
-Texture* read_texture(std::FILE* f, long end = -1);
+Texture* read_texture(std::FILE* f, int64_t end = -1);
 int read_info(std::FILE* f, Texture& t);                // 0x00517d80
 int read_data(std::FILE* f, Texture& t, int bytes);     // 0x00517df0
 int bytes_per_pixel(const Texture& t);                  // 0x00517c20

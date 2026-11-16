@@ -30,7 +30,7 @@ ENVIRONMENT_POLICY = "mw3-re-explicit-windows-native-bootstrap-v2"
 _TOOL_NAMES = {"git": "git.exe", "cmake": "cmake.exe", "ninja": "ninja.exe",
                "clang_cl": "clang-cl.exe", "glslang": "glslangValidator.exe",
                "dxc": "dxc.exe", "dumpbin": "dumpbin.exe"}
-_DIRECTORIES = ("source", "vs", "sdl3", "sdl3_ttf", "archive_prefix", "crt_root",
+_DIRECTORIES = ("source", "vs", "sdl3", "sdl3_ttf", "sdl3_sound", "archive_prefix", "crt_root",
                 "vulkan_headers", "ttf_notices")
 _WINDOWS_KEYS = ("SystemRoot", "WINDIR", "SystemDrive", "COMSPEC", "ProgramFiles",
                  "ProgramFiles(x86)", "ProgramW6432", "ProgramData", "OS",
@@ -504,7 +504,8 @@ def _json(value):
     return encoded
 
 
-def _metadata(members, components, source_commit, builder, tool_hash, observation=None):
+def _metadata(members, components, source_commit, builder, tool_hash, observation=None,
+              generated_files=()):
     profile = _json(dict(schema_version=1, engine="mw3-re", purpose="planning-defaults", options=dict(
         renderer="vulkan-wsi", width=1280, height=720, aa="fxaa", af=16,
         window_mode="windowed", render_thread=True, lighting="off")))
@@ -514,6 +515,8 @@ def _metadata(members, components, source_commit, builder, tool_hash, observatio
     if len(index) > MAX_METADATA_BYTES:
         raise ValueError("Staging notice index exceeds its budget")
     artifacts = {member.relative: dict(bytes=member.bytes, sha256=member.sha256) for member in members}
+    for relative, data in generated_files:
+        artifacts[relative] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
     for relative, data in (("profile.json", profile), ("THIRD-PARTY.txt", index)):
         artifacts[relative] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
     build_id = "observed-" + hashlib.sha256(_json(artifacts)).hexdigest()
@@ -547,7 +550,7 @@ def _descriptor(pins, source_commit, builder, build_id):
 
 
 def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, components,
-                   source_commit, builder, environment, observation=None):
+                   source_commit, builder, environment, observation=None, generated_files=()):
     """Plan a bounded closure from explicit selected inputs; do not create or copy payloads."""
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or not _ID.fullmatch(builder) or builder.endswith("."):
         raise ValueError("Invalid observational source or builder identity")
@@ -579,7 +582,16 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
             covered.add(name)
     if covered != set(notices):
         raise ValueError("Notice inventory does not match its component index")
+    if not isinstance(generated_files, (tuple, list)):
+        raise ValueError("Generated staging files must be a sequence")
     reserved = {name.casefold() for name in _GENERATED | {"runtime.json", ".incomplete", ".runtime.json.pending"}}
+    checked_generated = []
+    for relative, data in generated_files:
+        _relative(relative)
+        if (relative.casefold() in reserved or not isinstance(data, bytes) or not data):
+            raise ValueError("Invalid or duplicate generated staging file")
+        reserved.add(relative.casefold())
+        checked_generated.append((relative, data))
     members = []
     def add(source, relative):
         _relative(relative)
@@ -614,7 +626,7 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
             lowered = name.lower()
             if re.fullmatch(r"(?:api|ext)-ms-win-[a-z0-9-]+\.dll", lowered):
                 continue
-            if re.match(r"(?:vcruntime|msvcp|concrt|vccorlib).*d\.dll$", lowered) or lowered in ("sdl3d.dll", "sdl3_ttfd.dll"):
+            if re.match(r"(?:vcruntime|msvcp|concrt|vccorlib).*d\.dll$", lowered) or lowered in ("sdl3d.dll", "sdl3_ttfd.dll", "sdl3_soundd.dll"):
                 raise ValueError("Debug runtime dependencies are not Release payloads")
             crt = _CRT.match(name) is not None
             dependency = _dll(name, (crt_root,) if crt else roots)
@@ -631,16 +643,22 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
     if _identity(dumpbin) != tool_identity or file_hash(dumpbin) != tool_hash:
         raise ValueError("Selected inspection tool changed")
     placeholder = [replace(member, sha256="0" * 64) for member in members]
-    generated, provisional_id = _metadata(placeholder, components, source_commit, builder, tool_hash, observation)
-    _budget(members, generated)
-    _descriptor(_pins(placeholder, generated), source_commit, builder, provisional_id)
+    generated, provisional_id = _metadata(placeholder, components, source_commit, builder, tool_hash,
+                                          observation, checked_generated)
+    # The provisional checks must include the generated resources (the headlight catalog) that the
+    # final inventory pins, or a size or path problem would only surface after hashing.
+    provisional_generated = (*generated, *checked_generated)
+    _budget(members, provisional_generated)
+    _descriptor(_pins(placeholder, provisional_generated), source_commit, builder, provisional_id)
     pinned = []
     for member in members:
         digest = file_hash(member.source)
         if _identity(member.source) != member.identity:
             raise ValueError("Source changed during inventory")
         pinned.append(replace(member, sha256=digest))
-    generated, build_id = _metadata(pinned, components, source_commit, builder, tool_hash, observation)
+    generated, build_id = _metadata(pinned, components, source_commit, builder, tool_hash,
+                                    observation, checked_generated)
+    generated = (*generated, *checked_generated)
     _budget(pinned, generated)
     return Inventory(tuple(pinned), generated, (*roots, crt_root), source_commit, builder, build_id)
 
@@ -1072,6 +1090,17 @@ def _load_json(path, limit=MAX_METADATA_BYTES):
         raise ValueError("Invalid build metadata") from None
 
 
+def _distribution_version(cmake_directory, name):
+    match = re.search(r'set\(PACKAGE_VERSION "([0-9.]+)"\)',
+                      _small_text(cmake_directory / (name + "ConfigVersion.cmake")))
+    if not match:
+        raise ValueError("Missing selected SDL distribution version")
+    version = match[1]
+    if name == "SDL3_sound" and version != "3.2.0":
+        raise ValueError("Selected SDL3_sound package is not the pinned 3.2.0 release")
+    return version
+
+
 def _notice_inputs(paths, source_commit):
     native = paths["source"] / "runtime/mw3-re"
     notices = {}
@@ -1089,14 +1118,14 @@ def _notice_inputs(paths, source_commit):
             notices[relative] = _regular(path)
             inputs["notice/" + relative] = path
         components.append(dict(name=name, version=version, source=source, notices=list(files)))
+
     component("mw3-re", "observed-source", source_commit, {"LICENSE.txt": native / "LICENSE"})
     distributions = {}
-    for key, name in (("sdl3", "SDL3"), ("sdl3_ttf", "SDL3_ttf")):
+    for key, name in (("sdl3", "SDL3"), ("sdl3_ttf", "SDL3_ttf"),
+                      ("sdl3_sound", "SDL3_sound")):
         cmake = paths[key]
         distribution = cmake.parent
-        match = re.search(r'set\(PACKAGE_VERSION "([0-9.]+)"\)', _small_text(cmake / (name + "ConfigVersion.cmake")))
-        if not match:
-            raise ValueError("Missing selected SDL distribution version")
+        version = _distribution_version(cmake, name)
         library = _regular(distribution / "lib/x64" / (name + ".dll"))
         _pe(library, library=True)
         inputs[key + "/dll"] = library
@@ -1108,9 +1137,9 @@ def _notice_inputs(paths, source_commit):
                     inputs[key + "/" + path.relative_to(distribution).as_posix()] = _regular(path)
                     if len(inputs) > MAX_MEMBERS:
                         raise ValueError("Excessive selected dependency inventory")
-        component(name.lower(), match[1], "pending-observed-sdk-identity",
+        component(name.lower(), version, "pending-observed-sdk-identity",
                   {"licenses/" + name.lower().replace("_", "-") + "/LICENSE.txt": distribution / "LICENSE.txt"})
-        distributions[key] = (match[1], library.parent, library)
+        distributions[key] = (version, library.parent, library)
     qualification_path = paths["ttf_notices"] / "component-source-map.json"
     qualification = _load_json(qualification_path)
     inputs["ttf-notices/component-source-map.json"] = qualification_path
@@ -1188,7 +1217,7 @@ def _notice_inputs(paths, source_commit):
     for path, expected_hash in qualification_checks:
         if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash) or file_hash(path) != expected_hash:
             raise ValueError("Selected qualified notice/DLL hash mismatch")
-    for name in ("sdl3", "sdl3_ttf"):
+    for name in ("sdl3", "sdl3_ttf", "sdl3_sound"):
         next(item for item in components if item["name"] == name)["source"] = "sha256:" + file_hash(distributions[name][2])
     for name, key in (("libarchive", "archive_lib"), ("zlib", "zlib_lib"), ("xz", "lzma_lib")):
         next(item for item in components if item["name"] == name)["source"] = "selected-static-input-sha256:" + file_hash(paths[key])
@@ -1265,6 +1294,16 @@ def configure_arguments(paths, derived, source, build):
     command = [paths["cmake"], "-S", source, "-B", build, "-G", "Ninja"]
     command.extend("-D" + name + "=" + str(value).replace("\\", "/") for name, value in cache.items())
     return command, cache
+
+
+def _native_cmake_options(paths):
+    return dict(MW3_PACKAGE="ON", MW3_CORE_CRITICAL_VULKAN="ON",
+                CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound="FALSE", SDL3_DIR=paths["sdl3"],
+                SDL3_ttf_DIR=paths["sdl3_ttf"], SDL3_sound_DIR=paths["sdl3_sound"],
+                MW3_VULKAN_HEADERS=paths["vulkan_headers"], GLSLANG=paths["glslang"], DXC=paths["dxc"],
+                LIBARCHIVE_INCLUDE=paths["archive_prefix"] / "include",
+                LIBARCHIVE_LIB=paths["archive_lib"], MW3_Z_LIB=paths["zlib_lib"],
+                MW3_LZMA_LIB=paths["lzma_lib"])
 
 
 def _cache(path):
@@ -1346,7 +1385,7 @@ def _validate_edges(paths, environment, allowed_system, build, *, target="mw3"):
     allowed = (paths["source"], build, paths["clang_cl"].parent.parent, *allowed_system)
     if target != "mw3":
         allowed += (configured_source,)
-    allowed += tuple(paths[name].parent for name in ("sdl3", "sdl3_ttf") if name in paths)
+    allowed += tuple(paths[name].parent for name in ("sdl3", "sdl3_ttf", "sdl3_sound") if name in paths)
     allowed += tuple(paths[name] for name in ("archive_prefix", "vulkan_headers") if name in paths)
     library_search = (build, *( _directory(value) for value in environment["LIB"].split(";")))
     def path_allowed(path, *, directory=False):
@@ -1485,9 +1524,14 @@ def _validate_configured(paths, derived, cache, expected, baseline_flags, build,
     main = [entry["command"] for entry in commands
             if Path(entry["file"]).as_posix().endswith("/src/frontend/sdl/mw3_main.cpp")]
     renderer = [entry for entry in commands if Path(entry["file"]).as_posix().endswith("/src/frontend/core_critical/frame_renderer.cpp")]
+    # CMake defines MW3_HAVE_SDL_SOUND privately on the mw3sdl library, so it shows on the music decoder's
+    # unit, not on mw3_main.cpp.
+    music = [entry["command"] for entry in commands
+             if Path(entry["file"]).as_posix().endswith("/src/frontend/sdl/sdl_music.cpp")]
     if (len(main) != 1 or not renderer or "CC_MW3_RE_ADAPTER=1" not in main[0]
             or "MW3_HAVE_LIBARCHIVE=1" not in main[0] or "LIBARCHIVE_STATIC" not in main[0]
-            or any(token in main[0] for token in ("MW3_GAME_DIR", "MW3_ASSETS_DIR", "MW3_HAVE_SDL_SOUND"))):
+            or len(music) != 1 or "MW3_HAVE_SDL_SOUND=1" not in music[0]
+            or any(token in main[0] for token in ("MW3_GAME_DIR", "MW3_ASSETS_DIR"))):
         raise ValueError("Native compile definitions do not match the package/Vulkan/archive recipe")
     resource = _small_text(build / "mw3.rc")
     if (source_identity["describe"] in ("", "unknown") or not source_identity["build_count"].isdigit()
@@ -1529,11 +1573,18 @@ def produce(args):
     tools_before = _tool_observations(tools, environment, paths["build"].parent)
     source_before = _source_identity(paths["source"], paths["git"], environment, args.commit)
     notices, components, inputs, distributions = _notice_inputs(paths, args.commit)
+    from build_stock_headlights import build_catalog
+    placement_json = paths["source"] / "games/mw3/headlights/original-mounts.json"
+    binding_header = (paths["source"] /
+        "runtime/mw3-re/src/frontend/core_critical/renderer/headlight_original_binding.hpp")
+    stock_headlight_catalog = build_catalog(placement_json, binding_header)
     if not 1 <= len(source_before["describe"]) <= 256:
         raise ValueError("Observed native version exceeds the bounded component index")
     components[0]["version"] = source_before["describe"]
     inputs.update({"selected-tool/" + name: path for name, path in derived.items()})
     inputs.update({"selected-bootstrap/" + name: path for name, path in bootstrap_inputs.items()})
+    inputs["source/games/mw3/headlights/original-mounts.json"] = placement_json
+    inputs["source/runtime/mw3-re/src/frontend/core_critical/renderer/headlight_original_binding.hpp"] = binding_header
     inputs_before = _observe_inputs(inputs)
     with _producer_ownership():
         build = paths["build"]
@@ -1543,13 +1594,7 @@ def produce(args):
         fixture, baseline_flags = build_qualification_fixture(paths, derived, environment, build / "qualification")
         lookup = qualify_git_lookup(paths["source"], args.commit, paths, environment, fixture, build / "git-lookup")
         command, expected = configure_arguments(paths, derived, paths["source"] / "runtime/mw3-re", build)
-        selected = dict(MW3_PACKAGE="ON", MW3_CORE_CRITICAL_VULKAN="ON",
-                        CMAKE_DISABLE_FIND_PACKAGE_SDL3_sound="TRUE", SDL3_DIR=paths["sdl3"],
-                        SDL3_ttf_DIR=paths["sdl3_ttf"], MW3_VULKAN_HEADERS=paths["vulkan_headers"],
-                        GLSLANG=paths["glslang"], DXC=paths["dxc"],
-                        LIBARCHIVE_INCLUDE=paths["archive_prefix"] / "include",
-                        LIBARCHIVE_LIB=paths["archive_lib"], MW3_Z_LIB=paths["zlib_lib"],
-                        MW3_LZMA_LIB=paths["lzma_lib"])
+        selected = _native_cmake_options(paths)
         expected.update(selected)
         command.extend("-D" + name + "=" + str(value).replace("\\", "/") for name, value in selected.items())
         _query_codemodel(build)
@@ -1573,19 +1618,22 @@ def produce(args):
                            toolchain_versions={name: environment[name] for name in
                                                ("VCToolsVersion", "WindowsSDKVersion", "UCRTVersion") if name in environment},
                            recipe=dict(platform="windows-x64", configuration="Release", package=True,
-                                       core_critical_vulkan=True, sdl3_sound=False, crt="MultiThreadedDLL",
+                                       core_critical_vulkan=True, sdl3_sound="3.2.0", crt="MultiThreadedDLL",
                                        launcher_artwork=[], flags=baseline_flags),
                            tools_pre=tools_before, tools_post=tools_after,
                            inputs_pre=inputs_before, inputs_post=inputs_after, git_lookup=lookup,
                            configured_dependencies=edges)
         inventory = make_inventory(executable=executable,
-            release_roots=[distributions["sdl3"][1], distributions["sdl3_ttf"][1]],
+            release_roots=[distributions["sdl3"][1], distributions["sdl3_ttf"][1],
+                           distributions["sdl3_sound"][1]],
             crt_root=paths["crt_root"], dumpbin=paths["dumpbin"], notices=notices,
             components=components, source_commit=args.commit, builder="mw3-re-recipe-v1",
-            environment=environment, observation=observation)
+            environment=environment, observation=observation,
+            generated_files=(("resources/stock-headlights.bin", stock_headlight_catalog),))
         for member in inventory.members:
             basename = Path(member.relative).name.lower()
-            if member.relative.startswith("bin/") and basename not in ("mw3.exe", "sdl3.dll", "sdl3_ttf.dll") and not _CRT.match(basename):
+            if member.relative.startswith("bin/") and basename not in (
+                    "mw3.exe", "sdl3.dll", "sdl3_ttf.dll", "sdl3_sound.dll") and not _CRT.match(basename):
                 raise ValueError("Unexpected application DLL escapes the bounded native recipe")
         stage_inventory(inventory, paths["output"])
         marker.unlink()

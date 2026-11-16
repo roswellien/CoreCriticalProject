@@ -218,6 +218,7 @@ struct ProgramHudHooks : HudHooks {
     const HudZView& v = zv->view;
     if (!v.hardware) return;
     if (zcls::Node* c = node(v.camera)) {
+      zcls::ScopedZoomVisualFar visual_far_scope(c->data);
       ++view_draws;
       const zvid::ProducerPurposeScope producer_view(platform::ProducerPurpose::WorldZoom);
       zcls::render_world(c, 0);
