@@ -201,7 +201,9 @@ public sealed class NativeGameRunner
                 StockHeadlightCatalog = contract.FindDeclaredFile("resources/stock-headlights.bin")
             }
         };
-        var request = Mw3ReLaunchRequest.Create(contract, options, validation.GameDirectory, _dataRoot, ProfileId);
+        var indeoCodec = GameInstallation.FindVerifiedIndeoCodec(validation.GameDirectory, _dataRoot);
+        var request = Mw3ReLaunchRequest.Create(contract, options, validation.GameDirectory, _dataRoot,
+            ProfileId, indeoCodec);
         var plan = RunPlanner(python, planner, request);
         if (!plan.RootElement.GetProperty("ok").GetBoolean())
         {
@@ -216,6 +218,10 @@ public sealed class NativeGameRunner
                 log(feature + item.GetProperty("root").GetString() + " (" +
                     item.GetProperty("reason").GetString() + ")");
             }
+        if (plan.RootElement.TryGetProperty("skipped_features", out var skippedFeatures))
+            foreach (var item in skippedFeatures.EnumerateArray())
+                log(item.GetProperty("feature").GetString() + " unavailable; " +
+                    item.GetProperty("reason").GetString());
         // Two enabled mech packs can both supply a chassis; the earlier pack in the list keeps it.
         if (plan.RootElement.TryGetProperty("overridden_models", out var overridden))
             foreach (var item in overridden.EnumerateArray())

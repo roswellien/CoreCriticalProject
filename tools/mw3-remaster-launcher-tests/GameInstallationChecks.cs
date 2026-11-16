@@ -79,6 +79,15 @@ static class GameInstallationChecks
         foreach (var optional in new[] { "zbd/c1/texture.zbd", "zbd/t1/texture1.zbd", "zbd/c4/texture2.zbd", "zbd/rmechtexs.zbd" })
             if (closure.Contains(optional)) throw new Exception("An unused texture tier was required: " + optional);
 
+        // A provider placed by the original-input relocation is usable only after its pinned
+        // size and SHA-256 match. The authored bytes here must stay unavailable to MW3-RE.
+        var providers = Path.Combine(root, "provider-install");
+        var invalidCodec = PackStorage.Resolve(providers, "native-inputs/Ir50_32.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(invalidCodec)!);
+        File.WriteAllText(invalidCodec, "not the original codec");
+        if (GameInstallation.FindVerifiedIndeoCodec(providers, Path.Combine(root, "data")) != null)
+            throw new Exception("An invalid relocated Indeo codec passed identity validation.");
+
         // Authored retail layout: no medium software textures and no low-fidelity sound bank.
         var install = Path.Combine(root, "retail-install");
         GameInstallation.ContentFile Authored(string source, string target, bool write = true)

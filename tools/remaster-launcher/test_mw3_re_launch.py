@@ -78,6 +78,22 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 self.assertEqual(result["argv"], without_window)
                 self.assertEqual(request, before)
 
+    def test_verified_indeo_path_is_emitted_and_missing_codec_is_reported(self):
+        plan = self.planner()
+        verified = plan(dict(self.request(), indeo_codec="D:/Original MW3/native-inputs/Ir50_32.dll"))
+        self.assertTrue(verified["ok"])
+        index = verified["argv"].index("--indeo-codec")
+        self.assertEqual(verified["argv"][index + 1], "D:\\Original MW3\\native-inputs\\Ir50_32.dll")
+        self.assertEqual(verified["skipped_features"], [])
+
+        missing = plan(self.request())
+        self.assertNotIn("--indeo-codec", missing["argv"])
+        self.assertEqual(len(missing["skipped_features"]), 1)
+        self.assertEqual(missing["skipped_features"][0]["feature"], "Indeo movies")
+        self.assertIn("imported-file fallback", missing["skipped_features"][0]["reason"])
+        with self.assertRaisesRegex(ValueError, "path component"):
+            plan(dict(self.request(), indeo_codec="D:/Original MW3/../Ir50_32.dll"))
+
     def test_schema_three_optional_pom_and_schema_two_identity(self):
         plan = self.planner()
         baseline = plan(self.request())
@@ -224,6 +240,10 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                      "--windowed", "--cc-aa", "ssaa2", "--cc-af", "8", "--cc-render-thread", "1",
                      "--cc-lighting", "normal", "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é"],
             "working_directory": "C:\\Runtime\\bin",
+            "skipped_features": [{
+                "feature": "Indeo movies",
+                "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
+            }],
         })
         self.assertEqual(request, before)
         self.assertEqual(dict(os.environ), environment)

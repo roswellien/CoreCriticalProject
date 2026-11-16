@@ -13,6 +13,7 @@ _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
+_OPTIONAL_FIELDS = frozenset({"indeo_codec"})
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -356,7 +357,9 @@ def plan_launch(request):
     schema = request.get("schema_version")
     if type(schema) is not int or schema not in (2, 3, 4):
         raise ValueError("Unsupported native request schema")
-    allowed = {2: _FIELDS, 3: _FIELDS | {"visuals"}, 4: _FIELDS | {"visuals", "preview"}}[schema]
+    allowed = {2: _FIELDS | _OPTIONAL_FIELDS,
+               3: _FIELDS | _OPTIONAL_FIELDS | {"visuals"},
+               4: _FIELDS | _OPTIONAL_FIELDS | {"visuals", "preview"}}[schema]
     if not _FIELDS.issubset(request) or not set(request).issubset(allowed):
         raise ValueError("Missing or unknown native request fields")
     pom = False
@@ -392,6 +395,8 @@ def plan_launch(request):
     executable = _windows_path(request["executable"], directory=False)
     game = _windows_path(request["game_dir"])
     write = _windows_path(request["write_dir"])
+    codec_value = request.get("indeo_codec")
+    codec = _windows_path(codec_value, directory=False) if codec_value is not None else None
     for asset in request["assets"]:
         _windows_path(asset)
     if executable == runtime or not executable.is_relative_to(runtime):
@@ -422,6 +427,14 @@ def plan_launch(request):
         "--cc-aa", _AA[request["aa"]], "--cc-af", str(request["af"]),
         "--cc-render-thread", "1" if request["render_thread"] else "0", "--cc-lighting", request["lighting"],
     ]
+    skipped_features = []
+    if codec is None:
+        skipped_features.append({
+            "feature": "Indeo movies",
+            "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
+        })
+    else:
+        argv.extend(("--indeo-codec", str(codec)))
     if preview is not None:
         argv.extend(("--cc-dynamic-lighting", "1" if preview["dynamic_lighting"] else "0"))
     if pom:
@@ -495,7 +508,8 @@ def plan_launch(request):
                     argv.extend(("--cc-mech-headlights", str(stock_headlights), binding_path))
     for asset in request["assets"]:
         argv.extend(("--assets", asset))
-    result = {"ok": True, "argv": argv, "working_directory": str(executable.parent)}
+    result = {"ok": True, "argv": argv, "working_directory": str(executable.parent),
+              "skipped_features": skipped_features}
     if preview is not None:
         result["skipped_packs"] = skipped
         result["overridden_models"] = overridden_models
