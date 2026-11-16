@@ -61,6 +61,9 @@ class VisualRenderScope {
     const float authored_far = camera->get<float>(0xb4);
     const float expanded = visual_far(authored_far, g_visual_far_request, true);
     if (!(expanded > authored_far)) return;
+    camera_ = camera;
+    far_state_ = capture_visual_far_camera_state(camera->floats(0xc4),
+                                                camera->floats(0x108));
     previous_camera_ = g_visual_camera;
     previous_far_ = g_visual_far;
     g_visual_camera = camera;
@@ -70,12 +73,16 @@ class VisualRenderScope {
   }
   ~VisualRenderScope() {
     if (active_) {
+      restore_visual_far_camera_state(camera_->floats(0xc4),
+                                      camera_->floats(0x108), far_state_);
       g_visual_camera = previous_camera_;
       g_visual_far = previous_far_;
     }
   }
 
  private:
+  Camera* camera_ = nullptr;
+  VisualFarCameraState far_state_{};
   const void* previous_camera_ = nullptr;
   float previous_far_ = 0.0f;
   bool active_ = false;

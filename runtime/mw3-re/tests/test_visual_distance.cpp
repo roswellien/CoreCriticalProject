@@ -128,6 +128,24 @@ TEST(view_distance_scales_render_lod_ranges_only) {
   EXPECT(camera.get<float>(0xb4) == 800.0f);
 }
 
+TEST(view_distance_restores_render_camera_far_state) {
+  std::array<float, 3> far_plane{1.0f, 2.0f, 3.0f};
+  std::array<float, 12> far_corners{};
+  for (size_t i = 0; i < far_corners.size(); ++i)
+    far_corners[i] = static_cast<float>(i) - 6.0f;
+  const auto saved = zcls::capture_visual_far_camera_state(
+      far_plane.data(), far_corners.data());
+
+  far_plane = {10.0f, 20.0f, 30.0f};
+  far_corners.fill(1200.0f);
+  zcls::restore_visual_far_camera_state(far_plane.data(), far_corners.data(),
+                                       saved);
+
+  EXPECT((far_plane == std::array<float, 3>{1.0f, 2.0f, 3.0f}));
+  for (size_t i = 0; i < far_corners.size(); ++i)
+    EXPECT(far_corners[i] == static_cast<float>(i) - 6.0f);
+}
+
 TEST(view_distance_scales_partition_fade_ranges) {
   constexpr float near_squared = 25.0f;
   constexpr float far_squared = 100.0f;
