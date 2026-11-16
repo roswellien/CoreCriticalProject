@@ -33,8 +33,12 @@ public static class LauncherPaths
         foreach (var directory in Directory.GetDirectories(sessions).OrderByDescending(Directory.GetLastWriteTimeUtc))
         {
             PackStorage.EnsureNoLinks(directory);
-            var log = Path.Combine(directory, "launcher.log");
-            if (File.Exists(log)) return log;
+            // Remaster sessions write launcher.log; Native preview sessions write native-preview.log.
+            foreach (var name in new[] { "launcher.log", "native-preview.log" })
+            {
+                var log = Path.Combine(directory, name);
+                if (File.Exists(log)) return log;
+            }
         }
         return null;
     }

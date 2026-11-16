@@ -1070,11 +1070,20 @@ namespace MW3RemasterLauncher
             }
         }
 
+        /// <summary>The newer of this session's Remaster and Native preview logs, else the latest on disk.</summary>
+        private string? CurrentLaunchLog()
+        {
+            var logs = new[] { _gameRunner.LastLogPath, _previewRunner.LastLogPath }
+                .Where(path => path != null && File.Exists(path))
+                .OrderByDescending(path => File.GetLastWriteTimeUtc(path!));
+            return logs.FirstOrDefault() ?? LauncherPaths.LatestLaunchLog();
+        }
+
         private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                var log = _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog();
+                var log = CurrentLaunchLog();
                 var folder = log == null ? LauncherPaths.SessionsRoot : Path.GetDirectoryName(log)!;
                 Directory.CreateDirectory(folder);
                 Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
@@ -1117,7 +1126,7 @@ namespace MW3RemasterLauncher
             {
                 var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
                 var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
-                var launchLog = _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog();
+                var launchLog = CurrentLaunchLog();
                 var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
                 PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
                     launchLog, _basePath, hardwareInventory);

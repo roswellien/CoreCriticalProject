@@ -202,21 +202,24 @@ public sealed class NativePreviewRunner
         foreach (var argument in new[] { "-I", "-c", Script, Path.GetDirectoryName(planner)! })
             start.ArgumentList.Add(argument);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("The planner did not start.");
+        // Read both pipes asynchronously so the timeout below can still fire if the planner hangs;
+        // a blocking read would keep the launch (and its update gate) waiting forever.
+        var output = process.StandardOutput.ReadToEndAsync();
+        var errors = process.StandardError.ReadToEndAsync();
         process.StandardInput.Write(request);
         process.StandardInput.Close();
-        var errors = process.StandardError.ReadToEndAsync();
-        var output = process.StandardOutput.ReadToEnd();
         if (!process.WaitForExit(30000))
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException("The Native preview planner did not finish.");
         }
+        process.WaitForExit(); // Let the asynchronous readers reach end of stream.
         if (process.ExitCode != 0)
         {
             // The planner reports invalid choices as a ValueError on its last error line.
             var last = errors.Result.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
             throw new InvalidOperationException("The Native preview settings were refused: " + (last ?? "planner error"));
         }
-        return JsonDocument.Parse(output);
+        return JsonDocument.Parse(output.Result);
     }
 }
