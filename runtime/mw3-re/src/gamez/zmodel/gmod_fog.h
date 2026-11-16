@@ -34,6 +34,7 @@ class ScopedRenderFog {
  private:
   Fog* previous_ = nullptr;
   float previous_scale_ = 1.0f;
+  float previous_far_ = 0.0f;
   bool active_ = false;
   Fog copy_{};
 };

@@ -114,7 +114,8 @@ TEST(view_distance_nested_fog_and_setters) {
     EXPECT(zmod::render_fog().far_range == 1400.0f);
     {
       zmod::ScopedRenderFog zoom(800.0f, 1200.0f);
-      EXPECT(zmod::render_fog().far_range == 1050.0f);  // 700 x 1.5, not 700 x 2 x 1.5
+      // 700 x 1.5 = 1050 (not 700 x 2 x 1.5) reaches the 1200 view's cover band, so it covers the edge.
+      EXPECT(zmod::render_fog().near_range == 1000.0f && zmod::render_fog().far_range == 1200.0f);
       zmod::fog_set_far(800.0f);
       zmod::fog_set_on(0);
       EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
@@ -125,6 +126,47 @@ TEST(view_distance_nested_fog_and_setters) {
   }
   EXPECT(&zmod::render_fog() == &zmod::fog());
   EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
+  zmod::fog() = saved;
+}
+
+// Linear fog that reaches the edge of an extended view covers where world geometry ends: full at
+// the visual far plane, starting about 200 units before it at 1200 and 100 units before it at
+// 1600. Fog that ends well short of the edge keeps its scaled interval. The authored fog that
+// gameplay reads never changes.
+TEST(view_distance_fog_covers_geometry_edge) {
+  const zmod::Fog saved = zmod::fog();
+  zmod::Fog edge{};
+  edge.on = 1;
+  edge.linear = 1;
+  edge.near_range = 300.0f;
+  edge.far_range = 800.0f;
+  edge.inv_range = 1.0f / 500.0f;
+  zmod::fog() = edge;
+  {
+    zmod::ScopedRenderFog scope(800.0f, 1200.0f);
+    const zmod::Fog& render = zmod::render_fog();
+    EXPECT(render.near_range == 1000.0f && render.far_range == 1200.0f);
+    EXPECT(render.near_sq == 1000000.0f && render.far_sq == 1440000.0f);
+    EXPECT(render.inv_range == 1.0f / 200.0f);
+  }
+  {
+    zmod::ScopedRenderFog scope(800.0f, 1600.0f);
+    EXPECT(zmod::render_fog().near_range == 1500.0f && zmod::render_fog().far_range == 1600.0f);
+  }
+  EXPECT(zmod::fog().near_range == 300.0f && zmod::fog().far_range == 800.0f);
+  // Fog authored beyond the original far plane still ends at the visual far plane.
+  zmod::fog().far_range = 950.0f;
+  {
+    zmod::ScopedRenderFog scope(800.0f, 1200.0f);
+    EXPECT(zmod::render_fog().near_range == 1000.0f && zmod::render_fog().far_range == 1200.0f);
+  }
+  // A deliberately foggy map (fog ends at 300 of 800) keeps its proportionally scaled interval.
+  zmod::fog().near_range = 50.0f;
+  zmod::fog().far_range = 300.0f;
+  {
+    zmod::ScopedRenderFog scope(800.0f, 1600.0f);
+    EXPECT(zmod::render_fog().near_range == 100.0f && zmod::render_fog().far_range == 600.0f);
+  }
   zmod::fog() = saved;
 }
 
