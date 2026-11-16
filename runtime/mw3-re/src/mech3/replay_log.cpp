@@ -474,6 +474,14 @@ Frame ReplayLog::frame_at(float t) const {
   return frame;
 }
 
+std::vector<Event> ReplayLog::fire_between(float after, float until) const {
+  std::vector<Event> out;
+  const auto from = std::upper_bound(fire_.begin(), fire_.end(), after,
+                                     [](float value, const Event& e) { return value < e.t; });
+  for (auto e = from; e != fire_.end() && e->t <= until; ++e) out.push_back(*e);
+  return out;
+}
+
 std::vector<Vec3> ReplayLog::trail(int id, float t, float seconds) const {
   std::vector<Vec3> points;
   const auto from = std::lower_bound(states_.begin(), states_.end(), t - seconds,

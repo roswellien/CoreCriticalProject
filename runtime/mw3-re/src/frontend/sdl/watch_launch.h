@@ -20,6 +20,9 @@ class State;
 // at the place in the start its block had.
 namespace sdlfe {
 
+class SdlPump;
+class FrameRenderer;
+
 // The watch options as parsed.
 struct WatchArgs {
   // --arena SETUP.json, an AI bot match on the setup's map, hosted
@@ -63,6 +66,12 @@ bool open_watch_session(WatchArgs& w, int seed, int frame_ms, bool headless);
 
 // The watch run's hooks off and its session shut, before SDL goes.
 void close_watch(WatchArgs& w);
+
+// --replay3d, once the window and the pump exist: the 3D view made, set as
+// the replay's hooks and put ahead of the game's input. False (exit 2) when
+// its script can't be read. watch_detach() undoes it before the window goes.
+bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render);
+void watch_detach(SdlPump& pump);
 
 // --arena and --replay3d: respawn off (a downed mech stays down) and the
 // host a spectator with no mech.

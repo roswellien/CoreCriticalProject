@@ -155,6 +155,9 @@ class ReplayLog {
   // The part ids a mech had lost by t (destroyed or gone from its state
   // lines), in the order they went.
   std::vector<int> parts_lost_by(int id, float t) const;
+  // The shots and hits (round ends included) with after < t <= until, by
+  // time: what the 3D view starts effects for, frame by frame.
+  std::vector<Event> fire_between(float after, float until) const;
   // Values skipped as out of range (a damaged or hand-made log).
   int skipped() const { return skipped_; }
   // Every position the log holds (mechs, rounds, beams, routes, goals), as

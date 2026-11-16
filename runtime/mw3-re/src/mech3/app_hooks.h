@@ -669,6 +669,8 @@ class Engine : public zgame::AppHooks {
   virtual void replay_start() {}
   virtual void replay_before_lists() {}
   virtual void replay_after_lists() {}
+  virtual void replay_camera() {}  // after the view's frame placed the camera: the replay's camera wins
+  virtual void replay_draw() {}    // over the HUD, under the quit box: the replay's overlays and bar
   virtual uint32_t network_lobby_active() { return unported("0x00586ce0", {}) & 0xff; }
   virtual Handle message_box_new(const char* file, const char* name) {  // new(0x12688)
     return unported("0x0048dfe0", {file, name});

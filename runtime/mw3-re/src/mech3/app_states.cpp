@@ -488,7 +488,10 @@ void zoom_pass(Engine& en, Handle veh) {
 }
 void world_tick(Engine& en) {
   // Ours (#289): a 3D replay simulates nothing; only its camera runs.
-  if (en.replay_on()) return en.camera_update();
+  if (en.replay_on()) {
+    en.camera_update();
+    return en.replay_camera();
+  }
   en.sensors_update();
   en.missions_update(0x6098d0, en.frame_dt());
   en.pilot_update(en.pilot(), en.frame_dt());
@@ -668,6 +671,7 @@ bool CoreState::draw_hardware(Handle veh, bool flag) {
   en.video_begin_3d();
   hud(en);
   hud_static(en, veh);
+  if (en.replay_on()) en.replay_draw();  // ours (#289): the replay's overlays and bar
   // FIX (A), playtest W44/W46: the quit box (the exe's update after the frame,
   // 0x00481e70) draws here, with the HUD's 2D, else nothing showed it.
   en.vcall(message_box_, 0x00, {zgame::bits(en.frame_dt())});

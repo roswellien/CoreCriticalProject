@@ -2,7 +2,10 @@
 
 #include <cstdio>
 
+#include "frontend/sdl/replay3d_view.h"
 #include "frontend/sdl/replay_view.h"
+#include "frontend/sdl/sdl_platform.h"
+#include "mech3/replay_hooks.h"
 #include "gamez/zgame/zgameapp.h"
 #include "mech3/app_states.h"
 #include "mech3/mission.h"
@@ -98,6 +101,31 @@ bool open_watch_session(WatchArgs& w, int seed, int frame_ms, bool headless) {
 void close_watch(WatchArgs& w) {
   w.arena.reset();
   w.replay3d.reset();
+}
+
+namespace {
+std::unique_ptr<Replay3dView> g_view;  // --replay3d's, between watch_attach and watch_detach
+}  // namespace
+
+bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render) {
+  if (!w.replay3d) return true;
+  g_view = std::make_unique<Replay3dView>(*w.replay3d, render, w.replay_script, [&pump] { pump.post_quit(); });
+  std::string message;
+  if (!g_view->ready(&message)) {
+    std::fprintf(stderr, "mw3: %s\n", message.c_str());
+    g_view.reset();
+    return false;
+  }
+  mech3::set_replay_hooks(g_view.get());
+  pump.intercept = [](const SDL_Event& e) { return g_view && g_view->handle(e); };
+  return true;
+}
+
+void watch_detach(SdlPump& pump) {
+  if (!g_view) return;
+  pump.intercept = nullptr;
+  if (mech3::replay_hooks() == g_view.get()) mech3::set_replay_hooks(nullptr);
+  g_view.reset();  // its puppets freed and its text textures released while the renderer lives
 }
 
 void watch_seat(const WatchArgs& w, mech3::MultiplayerGame* game, mech3::GameEngine::Launch* launch) {

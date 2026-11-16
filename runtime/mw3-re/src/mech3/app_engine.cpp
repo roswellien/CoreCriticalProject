@@ -606,6 +606,13 @@ void GameEngine::replay_before_lists() {
 void GameEngine::replay_after_lists() {
   if (ReplayHooks* replay = replay_hooks()) replay->after_lists();
 }
+void GameEngine::replay_camera() {
+  ReplayHooks* replay = replay_hooks();
+  if (replay && camera_) replay->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
+}
+void GameEngine::replay_draw() {
+  if (ReplayHooks* replay = replay_hooks()) replay->draw_overlay();
+}
 uint32_t GameEngine::key_state(int32_t key) { return zin::key_state(key); }
 void GameEngine::input_clear() { zin::kbd_reset(); }
 void GameEngine::input_reset() { zin::reset(); }

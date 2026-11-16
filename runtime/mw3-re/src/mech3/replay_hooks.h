@@ -14,6 +14,10 @@
 //    quit fade keep real time;
 //  - of the world's tick only the camera runs: no sensors, missions or pilot;
 //  - the quit box's fade to the lobby ends the program instead.
+namespace zcls {
+struct Node;
+}
+
 namespace mech3 {
 
 class ReplayHooks {
@@ -29,6 +33,11 @@ class ReplayHooks {
   virtual void after_lists() = 0;
   // The quit box answered yes: end the program, not fade to the lobby.
   virtual void quit() = 0;
+  // In the world's tick, after the view's frame placed `camera` (the
+  // mission's camera node): the replay's own camera written over it.
+  virtual void place_camera(zcls::Node* camera) { (void)camera; }
+  // The hardware frame's 2D pass, over the HUD and under the quit box.
+  virtual void draw_overlay() {}
 };
 
 void set_replay_hooks(ReplayHooks* hooks);

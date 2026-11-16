@@ -162,6 +162,9 @@ class SdlPump : public platform::MessagePump {
   bool stays_active = false;
   // Ours: Alt+Enter, swallowed before the game sees the Enter.
   std::function<void()> toggle_fullscreen;
+  // Ours (#289): a layer ahead of the game's input (mw3 --replay3d's
+  // controls); true when it took the event.
+  std::function<bool(const SDL_Event&)> intercept;
 
   void handle(const SDL_Event& e);  // public for the tests
 
