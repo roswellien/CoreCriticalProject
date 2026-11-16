@@ -19,6 +19,7 @@
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 #include "gamez/zutil/zutl_zar.h"
 #include "gamez/zutil/zutl_zip.h"
 #include "platform/sha256.hpp"
@@ -31,12 +32,13 @@ namespace {
 // class, a tree deeper than 64, or an index past its array mark the read
 // broken; the caller refuses it. Without an end (-1) the reads are the
 // original's.
-long g_end = -1;
+int64_t g_end = -1;
 bool g_broken = false;
 // Whether `bytes` more fit before the end; false (and broken) when not.
 bool fits(std::FILE* f, uint64_t bytes) {
   if (g_end < 0) return true;
-  if (g_broken || static_cast<uint64_t>(g_end - std::ftell(f)) < bytes || std::ftell(f) > g_end) g_broken = true;
+  const int64_t at = platform::file_position::tell(f);
+  if (g_broken || at < 0 || at > g_end || static_cast<uint64_t>(g_end - at) < bytes) g_broken = true;
   return !g_broken;
 }
 
@@ -49,14 +51,14 @@ T* read_array(std::FILE* f, uint32_t count, uint32_t size) {
 }
 
 // Digest the archive member, including bytes beyond what the tree parser uses.
-std::string member_sha256(std::FILE* file, long start, uint32_t remaining) {
+std::string member_sha256(std::FILE* file, int64_t start, uint32_t remaining) {
   std::fpos_t saved;
   if (!file || start < 0 || std::ferror(file) || std::feof(file) ||
       std::fgetpos(file, &saved) != 0) return {};
 
   platform::integrity::Sha256 hash;
   std::array<unsigned char, 8192> buffer;
-  bool complete = std::fseek(file, start, SEEK_SET) == 0;
+  bool complete = platform::file_position::seek(file, start, SEEK_SET) == 0;
   while (complete && remaining != 0) {
     const auto count = std::min<std::size_t>(remaining, buffer.size());
     complete = std::fread(buffer.data(), 1, count, file) == count;
@@ -142,7 +144,7 @@ bool mechlib_read_materials(MechLib& lib) {
   std::FILE* f = from_mod ? scratch->file : zutl_zar::seek(lib.archive, zutl_zar::find(lib.archive, "materials"), &length);
   if (from_mod) length = static_cast<uint32_t>(json.size());
   if (!f) return false;
-  g_end = std::ftell(f) + static_cast<long>(length), g_broken = false;
+  g_end = platform::file_position::tell(f) + static_cast<int64_t>(length), g_broken = false;
   uint32_t count = 0;
   if (fits(f, 4)) std::fread(&count, 4, 1, f);
   if (!fits(f, static_cast<uint64_t>(count) * 0x28)) count = 0;
@@ -180,8 +182,8 @@ Node* mechlib_load(MechLib& lib, const char* name) {
   const int index = from_mod ? -1 : zutl_zar::find(lib.archive, name);
   std::FILE* f = from_mod ? scratch->file : zutl_zar::seek(lib.archive, index, &length);
   if (from_mod) length = static_cast<uint32_t>(json.size());
-  const long start = !from_mod && f ? std::ftell(f) : -1;
-  if (f) g_end = std::ftell(f) + static_cast<long>(length), g_broken = false;
+  const int64_t start = !from_mod && f ? platform::file_position::tell(f) : -1;
+  if (f) g_end = platform::file_position::tell(f) + static_cast<int64_t>(length), g_broken = false;
   Node* root = read_tree(lib.reader, f, nullptr);
   g_end = -1;
   // Ours: a broken tree, or one whose polygons name a material the library

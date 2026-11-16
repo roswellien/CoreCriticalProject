@@ -1,6 +1,7 @@
 #include "gamez/zclass/cls_zbd.h"
 #include "gamez/zutil/zutl_zip.h"
 #include "upgrades/json/gamez_json.h"
+#include "platform/file_position.h"
 
 #include <cstdio>
 #include <memory>
@@ -87,7 +88,7 @@ void ZbdReadContext::allocate(std::uint64_t bytes) {
 }
 void ZbdReadContext::span(std::FILE* stream, std::uint64_t bytes, bool allocation) {
   if (!strict()) return;
-  const long position = std::ftell(stream);
+  const int64_t position = platform::file_position::tell(stream);
   require(position >= 0 && std::uint64_t(position) <= section_end &&
               bytes <= section_end - std::uint64_t(position), "source section span exceeded");
   if (allocation) allocate(bytes);
@@ -262,7 +263,7 @@ std::FILE* freeze_source(std::FILE* input, ZbdReadContext& proof,
     proof.require(false, "source snapshot cannot preserve input state");
     return input;
   }
-  const auto position = std::ftell(input);
+  const int64_t position = platform::file_position::tell(input);
   auto* frozen = proof.snapshot_factory ? proof.snapshot_factory() : proof_temporary_file();
   if (!frozen || position < 0) {
     if (frozen) std::fclose(frozen);
@@ -271,7 +272,7 @@ std::FILE* freeze_source(std::FILE* input, ZbdReadContext& proof,
   }
   platform::integrity::Sha256 hash;
   std::array<unsigned char, 65536> bytes;
-  bool complete = std::fseek(input, 0, SEEK_SET) == 0;
+  bool complete = platform::file_position::seek(input, 0, SEEK_SET) == 0;
   length = 0;
   while (complete) {
     const auto count = std::fread(bytes.data(), 1, bytes.size(), input);
@@ -304,7 +305,7 @@ std::FILE* freeze_source(std::FILE* input, ZbdReadContext& proof,
     return input;
   }
   frozen = readonly_snapshot(frozen);
-  if (!frozen || std::fseek(frozen, position, SEEK_SET) != 0) {
+  if (!frozen || platform::file_position::seek(frozen, position, SEEK_SET) != 0) {
     if (frozen) std::fclose(frozen);
     const bool restored = std::fsetpos(input, &saved) == 0;
     std::clearerr(input);
@@ -322,8 +323,8 @@ void source_push_front(int list, Node* node, ZbdReadContext* proof) {
     proof->allocate(std::uint64_t(lists().chunk_size) * sizeof(ListItem));
   push_front(list, node);
 }
-int source_seek(std::FILE* stream, long offset, int origin, ZbdReadContext* proof) {
-  const auto result = std::fseek(stream, offset, origin);
+int source_seek(std::FILE* stream, int64_t offset, int origin, ZbdReadContext* proof) {
+  const auto result = platform::file_position::seek(stream, offset, origin);
   if (proof) proof->require(result == 0, "source section seek failed");
   return result;
 }
@@ -667,6 +668,23 @@ std::FILE* open_zbd(const char* path, ZbdHeader* header, ZbdReadContext* proof) 
     throw;
   }
   if (!f) return nullptr;
+  if (platform::file_position::seek(f, 0, SEEK_END) != 0) {
+    std::printf("mw3: %s: cannot determine file size, not read\n", path);
+    std::fclose(f);
+    return nullptr;
+  }
+  const int64_t source_size = platform::file_position::tell(f);
+  if (source_size < 0 || platform::file_position::seek(f, 0, SEEK_SET) != 0) {
+    std::printf("mw3: %s: cannot determine file size, not read\n", path);
+    std::fclose(f);
+    return nullptr;
+  }
+  if (source_size > (int64_t{1} << 32)) {
+    std::printf("mw3: %s: file is %lld bytes; files over 4 GiB are not supported, not read\n", path,
+                static_cast<long long>(source_size));
+    std::fclose(f);
+    return nullptr;
+  }
   int line;
   const char* msg;
   if (std::fread(header, sizeof *header, 1, f) != 1) {
@@ -796,12 +814,12 @@ int reread(Node* node, int32_t recurse) {
     return 1;
   }
   if (selected && !selected->failed) {
-    const auto saved = std::ftell(f);
+    const int64_t saved = platform::file_position::tell(f);
     std::int32_t material_size{};
-    const bool ok = std::fseek(f, h.materials_offset, SEEK_SET) == 0 &&
+    const bool ok = saved >= 0 && platform::file_position::seek(f, h.materials_offset, SEEK_SET) == 0 &&
                     std::fread(&material_size, 4, 1, f) == 1 &&
                     material_size >= 0 && material_size <= 32000;
-    std::fseek(f, saved, SEEK_SET);
+    if (saved >= 0) platform::file_position::seek(f, saved, SEEK_SET);
     selected->require(ok, "reread source material table unavailable");
     if (ok) selected->material_count = material_size;
   }

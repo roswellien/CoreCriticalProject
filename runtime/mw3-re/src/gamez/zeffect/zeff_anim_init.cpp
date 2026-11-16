@@ -15,6 +15,7 @@
 #include "gamez/zclass/light.h"
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zclass/sound.h"
 #include "gamez/zerror/zerr.h"
@@ -38,9 +39,10 @@ AnimHooks g_hooks{};
 
 // Ours (docs/modding.md, M3): the bytes left in the file, so a count or a
 // size from a broken copy is refused before it is allocated.
-long g_file_end = -1;
+int64_t g_file_end = -1;
 bool fits(std::FILE* f, uint64_t bytes) {
-  return g_file_end < 0 || (std::ftell(f) <= g_file_end && bytes <= static_cast<uint64_t>(g_file_end - std::ftell(f)));
+  const int64_t at = platform::file_position::tell(f);
+  return g_file_end < 0 || (at >= 0 && at <= g_file_end && bytes <= static_cast<uint64_t>(g_file_end - at));
 }
 
 // `count` records of T read with one fread, as the exe does.
@@ -257,7 +259,7 @@ int anim_read_zbd() {
     std::vector<uint8_t> base;
     char buf[1 << 15];
     for (size_t got; (got = std::fread(buf, 1, sizeof buf, f)) > 0;) base.insert(base.end(), buf, buf + got);
-    std::fseek(f, 0, SEEK_SET);
+    platform::file_position::seek(f, 0, SEEK_SET);
     static std::set<std::string> said;
     std::vector<std::string> notes;
     // With the world up: the mods' node files read first, then each def file
@@ -291,9 +293,13 @@ int anim_read_zbd() {
       }
     }
   }
-  std::fseek(f, 0, SEEK_END);
-  g_file_end = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
+  if (platform::file_position::seek(f, 0, SEEK_END) != 0 ||
+      (g_file_end = platform::file_position::tell(f)) < 0 ||
+      platform::file_position::seek(f, 0, SEEK_SET) != 0) {
+    std::fclose(f);
+    g_file_end = -1;
+    return -1;
+  }
   // Ours: a broken copy is refused whole (the log names it) and the world has
   // no animations; the exe left what it had read in place, half bound.
   bool header_ok = false;

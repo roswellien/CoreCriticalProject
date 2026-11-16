@@ -10,8 +10,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "check.h"
@@ -22,6 +24,7 @@
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "platform/file_position.h"
 #include "mech3/mods.h"
 #include "platform/silent_sound.h"
 
@@ -664,4 +667,64 @@ TEST(bounded_gamez_texture_directory_mips) {
               out_of_range, refused, kept, read_ok, inside);
   EXPECT(out_of_range > 100 && refused == out_of_range && kept == refused && inside == read_ok);
   zimg::textures().count = 0;
+}
+
+TEST(large_texture_bank_seek_uses_64_bit_positions) {
+  const fs::path directory = scratch("large_texture_bank");
+  const fs::path bank_path = directory / "rmechtex.zbd";
+  constexpr uint32_t texture_offset = 0x80000020u;
+  std::FILE* file = std::fopen(bank_path.string().c_str(), "wb+");
+  EXPECT(file != nullptr);
+  if (!file) return;
+
+  uint8_t header[24]{};
+  const uint32_t has_entries = 1;
+  const int32_t texture_count = 1;
+  std::memcpy(header + 4, &has_entries, sizeof has_entries);
+  std::memcpy(header + 12, &texture_count, sizeof texture_count);
+  bool wrote = std::fwrite(header, 1, sizeof header, file) == sizeof header;
+
+  uint8_t entry[40]{};
+  std::memcpy(entry, "large", 5);
+  std::memcpy(entry + 32, &texture_offset, sizeof texture_offset);
+  const int32_t no_palette = -1;
+  std::memcpy(entry + 36, &no_palette, sizeof no_palette);
+  wrote = wrote && std::fwrite(entry, 1, sizeof entry, file) == sizeof entry;
+
+  uint8_t texture[18]{};
+  texture[0] = zimg::kTwoBytes;
+  const int16_t dimension = 1;
+  std::memcpy(texture + 4, &dimension, sizeof dimension);
+  std::memcpy(texture + 6, &dimension, sizeof dimension);
+  wrote = wrote && platform::file_position::seek(file, texture_offset, SEEK_SET) == 0 &&
+          std::fwrite(texture, 1, sizeof texture, file) == sizeof texture;
+  const bool closed = std::fclose(file) == 0;
+  if (!wrote || !closed) {
+    std::remove(bank_path.string().c_str());
+    EXPECT(false);
+    return;
+  }
+
+  zimg::state() = zimg::State{};
+  static std::string bank_dir;
+  bank_dir = "zbd/";
+  zimg::state().dir = bank_dir.c_str();
+  auto previous = zutl::set_bank_overrides(
+      std::make_shared<const zutl::BankOverrides>(zutl::BankOverrides{{"zbd/rmechtex.zbd", bank_path.string()}}));
+  zimg::Library library{};
+  std::snprintf(library.name, sizeof library.name, "%s", "rmechtex.zbd");
+  library.needs_resolve = false;
+  zimg::Texture* loaded = zimg::open(library) ? zimg::load(library, "large") : nullptr;
+  EXPECT(loaded != nullptr);
+  if (loaded) {
+    EXPECT(loaded->pixel_count == 1);
+    EXPECT(static_cast<const uint16_t*>(loaded->pixels)[0] == 0);
+    zimg::free_texture(loaded);
+  }
+  zimg::close(library);
+  std::free(library.entries);
+  free_palettes();
+  zimg::state() = zimg::State{};
+  zutl::set_bank_overrides(std::move(previous));
+  fs::remove_all(directory);
 }

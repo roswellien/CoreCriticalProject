@@ -12,6 +12,7 @@
 
 #include "gamez/zerror/zerr.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "platform/file_position.h"
 #include "gamez/zutil/zutl_zip.h"
 #include "gamez/zsiscript/si_script_json.h"
 
@@ -85,7 +86,7 @@ bool read_from(zutl_zar::Archive& a, zsis::Script& s, const char* name, bool* br
   uint32_t length = 0;
   std::FILE* f = zutl_zar::seek(a, i, &length);
   if (!f) return false;
-  const long end = std::ftell(f) + static_cast<long>(length);
+  const int64_t end = platform::file_position::tell(f) + static_cast<int64_t>(length);
   if (s.read(f, end)) return true;
   *broken = s.part_count == 0 && !s.parts;
   return false;
@@ -113,7 +114,7 @@ bool motion_from_mod(zsis::Script& s, const char* name) {
     std::vector<uint8_t> entry;
     if (got > 0 && zsis::motion_from_json(text, &entry, &why)) {
       zutl_zip::ScratchFile t(entry.data(), entry.size());
-      const bool ok = t.file && s.read(t.file, static_cast<long>(entry.size()));
+      const bool ok = t.file && s.read(t.file, static_cast<int64_t>(entry.size()));
       if (ok) {
         if (said.insert(what + "\n").second) std::printf("mw3: mod: %s instead of %s's motion\n", what.c_str(), g_motions_game_path.c_str());
         return true;
