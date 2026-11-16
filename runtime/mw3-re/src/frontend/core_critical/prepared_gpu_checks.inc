@@ -185,11 +185,12 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
         options.lighting = "normal";
         auto renderer = make_check_renderer(window, backend, {}, options);
         renderer->set_viewport(0, 0, 64, 64);
-        for (unsigned scenario = 0; scenario < 6; ++scenario) {
+        for (unsigned scenario = 0; scenario < 7; ++scenario) {
             matrix[2] = scenario == 5 ? 1.5f : 0;
             matrix[9] = scenario == 1 ? .5f : 0;
             matrix[11] = scenario == 3 ? 8.f : 0;
             context.clip_near = scenario == 4 ? 3.f : 1.f;
+            context.damage_tint_weight = scenario == 6 ? .6f : 0.f;
             cc::geometry::Fog fog;
             fog.enabled = scenario == 2;
             fog.color = {0, 0, 1};
@@ -205,7 +206,7 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
             int width{}, height{};
             require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
                     "GPU prepared packet lost its extent");
-            if (expected.size() < 6)
+            if (expected.size() < 7)
                 expected.push_back(pixels);
             else {
                 require(pixels.size() == expected[scenario].size(),
@@ -219,16 +220,18 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
             }
         }
         const auto statistics = renderer->asset_statistics();
-        require(statistics.early_prepared_models == 6 && !statistics.prepared_cpu_fallback_batches,
+        require(statistics.early_prepared_models == 7 && !statistics.prepared_cpu_fallback_batches,
                 "Early prepared submission used an unreported CPU fallback");
         if (std::string_view(mode) == "partial")
             require(
-                statistics.gpu_prepared_vertices == 18 && statistics.geometry_uploads == 1 &&
-                    statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 6,
+                statistics.gpu_prepared_vertices == 21 && statistics.geometry_uploads == 1 &&
+                    statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 7,
                 "GPU prepared vertices still use CPU clipping or lost immutable material draws");
     }
     require(expected[0] != expected[1] && expected[0] != expected[2],
             "Prepared reference did not exercise motion or fog");
+    require(expected[6] != expected[0],
+            "Prepared model lost its per-node damage tint");
     for (unsigned scenario : {3U, 4U})
         require(std::all_of(expected[scenario].begin(), expected[scenario].end(),
                             [](auto pixel) { return (pixel & 0xffffff) == 0; }),

@@ -123,6 +123,10 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     draw.push.target[1] = float(scene_.height);
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     draw.push.mode[0] = 2U | 4U | (fog.enabled && !geometry_debug_ ? 16U : 0U);
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.fog[3] = context.damage_tint_weight;
+    }
     draw.push.mode[1] = 4U | (2U << 8);
     draw.push.mode[2] = 2U | (2U << 8);
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};

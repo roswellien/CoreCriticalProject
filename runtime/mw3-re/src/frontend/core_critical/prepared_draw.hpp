@@ -128,6 +128,9 @@ prepare_draw(const PreparedBatchDraw &source,
   if (!(context.near_z > 0) || !(context.far_z > context.near_z))
     throw std::runtime_error(
         "Prepared model requires valid native clip planes");
+  if (!std::isfinite(context.damage_tint_weight) || context.damage_tint_weight < 0.f ||
+      context.damage_tint_weight > 1.f)
+    throw std::runtime_error("Prepared model has an invalid native tint weight");
   const auto camera = matrix_rows(source.camera);
   const auto normal_matrix =
       lighting ? mw34::sun::normal_matrix(source.camera) : camera;
@@ -193,6 +196,10 @@ prepare_draw(const PreparedBatchDraw &source,
   std::copy(std::begin(zmod::render_fog().color), std::end(zmod::render_fog().color),
             draw.push.fog);
   draw.push.mode[0] = 2U | 4U | (zmod::render_fog().on ? 16U : 0U);
+  if (context.damage_tint_weight > 0.f) {
+    draw.push.mode[0] |= 128U;
+    draw.push.fog[3] = context.damage_tint_weight;
+  }
   draw.push.mode[1] = 4U | (2U << 8);
   draw.push.mode[2] = 2;
   draw.scissor = {{0, 0}, {width, height}};

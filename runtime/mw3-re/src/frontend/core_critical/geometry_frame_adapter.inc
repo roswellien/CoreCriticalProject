@@ -127,6 +127,10 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     draw.push.mode[0] = 2U | (material.texture >= 0 ? 4U : 0U) |
                         (fog.enabled && !geometry_debug_ ? 16U : 0U);
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.fog[3] = context.damage_tint_weight;
+    }
     draw.push.mode[1] = material.texture >= 0 ? 4U | (2U << 8) : 2U;
     draw.push.mode[2] = material.texture >= 0 ? 2U | (2U << 8) : 2U;
     draw.push.mode[3] = 0x80000000U; // Modern two-sided normal orientation.
