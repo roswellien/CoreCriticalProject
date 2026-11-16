@@ -168,8 +168,13 @@ def _pack_payload(root, profile):
     return manifest, payload
 
 
-def _model_pack_arguments(root):
+def _model_pack_arguments(root, taken=None):
     """Turn a prepared-native-v1 mech pack into --cc-model/--cc-model-normals arguments.
+
+    `taken` maps each chassis already supplied by an earlier enabled pack to that pack's root. Such a
+    chassis is left out of this pack, the same "first chassis wins" rule as prepared_mech_packs.py,
+    because the native runtime refuses a second model or normal map for one chassis and level.
+    Returns the arguments and the chassis this pack lost to earlier packs.
 
     The registry lists models; each keeps its file paths in an "environment" table using the
     names MW34_<ID>_MESH, MW34_<ID>_TEXTURES and MW34_<ID>_NORMALS, with LOD1_ after <ID> for
@@ -184,6 +189,8 @@ def _model_pack_arguments(root):
     if type(models) is not list or len(models) > _MAX_REGISTRY_MODELS:
         raise ValueError(f"Invalid mech pack registry: {root}")
     arguments = []
+    overridden = []
+    taken = {} if taken is None else taken
     for model in models:
         if type(model) is not dict:
             raise ValueError(f"Invalid mech pack registry entry: {root}")
@@ -193,6 +200,10 @@ def _model_pack_arguments(root):
         files = model.get("environment")
         if type(chassis) is not str or re.fullmatch(r"[a-z0-9]+", chassis) is None or type(files) is not dict:
             raise ValueError(f"Invalid mech pack registry entry: {root}")
+        if chassis in taken:
+            overridden.append({"chassis": chassis, "kept_from": taken[chassis]})
+            continue
+        supplied = False
         for level, infix in ((0, ""), (1, "LOD1_")):
             prefix = f"MW34_{chassis.upper()}_{infix}"
             # Same rule as prepared_mech_packs.py: the Bushwacker close mesh keeps its historical
@@ -206,7 +217,10 @@ def _model_pack_arguments(root):
             normals = files.get(prefix + "NORMALS")
             if normals is not None:
                 arguments += ["--cc-model-normals", chassis, str(level), _pack_member(root, normals)]
-    return arguments
+            supplied = True
+        if supplied:
+            taken[chassis] = root
+    return arguments, overridden
 
 
 def _environment_pack_skip_reason(root):
@@ -331,6 +345,7 @@ def plan_launch(request):
     if pom:
         argv.extend(("--cc-pom", "1"))
     skipped = []
+    overridden_models = []
     if preview is not None:
         # 800 is the original range, so it adds no argument and older runtimes stay compatible.
         if preview["draw_distance"] != 800:
@@ -341,8 +356,11 @@ def plan_launch(request):
             argv.extend(("--cc-hud-text", "1" if preview["hud_text"] else "0"))
         if preview["geometry"] is not None:
             argv.extend(("--cc-geometry", preview["geometry"]))
+        supplied_chassis = {}
         for pack in preview["model_packs"]:
-            argv.extend(_model_pack_arguments(pack))
+            arguments, overridden = _model_pack_arguments(pack, supplied_chassis)
+            argv.extend(arguments)
+            overridden_models.extend({"root": pack, **item} for item in overridden)
         for pack in preview["environment_packs"]:
             reason = _environment_pack_skip_reason(pack)
             if reason is None:
@@ -354,4 +372,5 @@ def plan_launch(request):
     result = {"ok": True, "argv": argv, "working_directory": str(executable.parent)}
     if preview is not None:
         result["skipped_packs"] = skipped
+        result["overridden_models"] = overridden_models
     return result

@@ -322,6 +322,27 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual([item["root"] for item in result["skipped_packs"]], [large])
         self.assertIn("2 GiB", result["skipped_packs"][0]["reason"])
 
+    # The owner's MW5 and updated-MW3 packs both supply Avatar, Firefly, Owens and Strider; the
+    # runtime refuses a second model or normal map for one chassis, so the first pack must win.
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_chassis_in_two_packs_comes_from_the_first(self):
+        first = self.model_pack("first")
+        second = self.model_pack("second", models=[
+            {"id": "strider", "backend": "native", "status": "runtime-ready", "environment": {
+                "MW34_STRIDER_MESH": "payload/solo-mesh.bin", "MW34_STRIDER_TEXTURES": "payload/solo-tex.bin",
+                "MW34_STRIDER_NORMALS": "payload/nrm0.bin"}},
+            {"id": "thor", "backend": "native", "status": "runtime-ready", "environment": {
+                "MW34_THOR_MESH": "payload/mesh0.bin", "MW34_THOR_TEXTURES": "payload/tex0.bin"}}])
+        result = self.plan(self.request(model_packs=[first, second]))
+        self.assertTrue(result["ok"])
+        argv = result["argv"]
+        model_levels = [(argv[i + 1], argv[i + 2]) for i, item in enumerate(argv) if item == "--cc-model"]
+        normal_levels = [(argv[i + 1], argv[i + 2]) for i, item in enumerate(argv) if item == "--cc-model-normals"]
+        self.assertEqual(model_levels, [("strider", "0"), ("strider", "1"), ("owens", "0"), ("thor", "0")])
+        self.assertEqual(normal_levels, [("strider", "0"), ("strider", "1")])
+        self.assertNotIn(os.path.join(second, "payload", "solo-mesh.bin"), argv)
+        self.assertEqual(result["overridden_models"], [{"root": second, "chassis": "strider", "kept_from": first}])
+
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},
                         {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},
