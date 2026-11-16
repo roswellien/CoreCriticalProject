@@ -62,8 +62,7 @@ namespace MW3RemasterLauncher
         private readonly PackManager _packMgr;
         private readonly string _dataRoot;
         private PackManager? _libraryPackMgr;
-        private readonly GameRunner _gameRunner;
-        private readonly NativePreviewRunner _previewRunner;
+        private readonly NativeGameRunner _nativeGameRunner;
         private readonly D7VkRunner _d7vkRunner;
         private bool _isInitializing = true;
 
@@ -93,11 +92,7 @@ namespace MW3RemasterLauncher
             _packMgr = new PackManager(_dataRoot);
             CmbPackGame.ItemsSource = GameCatalog.Games;
             CmbPackGame.SelectedValue = GameCatalog.Mw3;
-            _gameRunner = new GameRunner(_basePath, _dataRoot);
-            _previewRunner = new NativePreviewRunner(_basePath, _dataRoot);
-            // Only installs that ship the MW3-RE preview runtime show its button.
-            BtnLaunchNativePreview.Visibility = _previewRunner.FindRuntimeRoot() == null
-                ? Visibility.Collapsed : Visibility.Visible;
+            _nativeGameRunner = new NativeGameRunner(_basePath, _dataRoot);
             _d7vkRunner = new D7VkRunner(_basePath, _dataRoot);
 
             Loaded += MainWindow_Loaded;
@@ -168,8 +163,8 @@ namespace MW3RemasterLauncher
                 TxtStatusReady.Text = "GAME STATUS: READY";
                 TxtStatusReady.Foreground = (System.Windows.Media.Brush)FindResource("BrushAmber");
                 BorderGameMissingAlert.Visibility = Visibility.Collapsed;
-                BtnLaunchGame.Content = !string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile)
-                    ? "▶  PLAY MW3-RE PROFILE" : _settingsMgr.Current.EngineMode == "d7vk" ? "▶  LAUNCH ORIGINAL (D7VK)" : "▶  LAUNCH REMASTER";
+                BtnLaunchGame.Content = _settingsMgr.Current.EngineMode == "d7vk"
+                    ? "\u25B6  LAUNCH ORIGINAL (D7VK)" : "\u25B6  PLAY";
                 BtnLaunchGame.IsEnabled = true;
                 try
                 {
@@ -262,7 +257,7 @@ namespace MW3RemasterLauncher
                 PanelD7vkGraphics.Visibility = isD7Vk ? Visibility.Visible : Visibility.Collapsed;
             }
 
-            // Remaster options
+            // MW3-RE options
             DisplayGraphics.Load(s);
             ChkCdAudio.IsChecked = s.LocalCdAudio;
             ChkAutomaticUpdateChecks.IsChecked = s.AutomaticUpdateChecks;
@@ -304,25 +299,25 @@ namespace MW3RemasterLauncher
 
             if (TxtHeaderMode != null)
             {
-                TxtHeaderMode.Text = isD7Vk ? "ORIGINAL (D7VK VULKAN)" : "NATIVE REMASTER";
+                TxtHeaderMode.Text = isD7Vk ? "ORIGINAL (D7VK VULKAN)" : "MW3-RE NATIVE";
             }
             if (TxtHeroBadge != null)
             {
-                TxtHeroBadge.Text = isD7Vk ? "ORIGINAL MECH3.EXE + D7VK VULKAN" : "NATIVE VULKAN RECOMPILATION";
+                TxtHeroBadge.Text = isD7Vk ? "ORIGINAL MECH3.EXE + D7VK VULKAN" : "MW3-RE NATIVE";
             }
             if (TxtHeroTitle != null)
             {
-                TxtHeroTitle.Text = isD7Vk ? "MechWarrior 3 (Original Engine)" : "MechWarrior 3 Remastered";
+                TxtHeroTitle.Text = isD7Vk ? "MechWarrior 3 (Original Engine)" : "MechWarrior 3 (MW3-RE)";
             }
             if (TxtHeroDesc != null)
             {
                 TxtHeroDesc.Text = isD7Vk
                     ? "Original 1999 game executable running through isolated DirectDraw Vulkan wrapper with widescreen FOV injection, MSAA, and 30 FPS physics lock."
-                    : "Original MW3 content with Vulkan rendering, ultrawide output, optional dynamic lighting, and your selected content packs.";
+                    : "Native MW3-RE engine with Vulkan rendering, your enabled mech and map packs, and configurable scenery distance.";
             }
             if (BtnLaunchGame != null && BtnLaunchGame.IsEnabled)
             {
-                BtnLaunchGame.Content = isD7Vk ? "▶  LAUNCH ORIGINAL (D7VK)" : "▶  LAUNCH REMASTER";
+                BtnLaunchGame.Content = isD7Vk ? "▶  LAUNCH ORIGINAL (D7VK)" : "▶  PLAY";
             }
 
             if (PanelSummaryRemaster != null && PanelSummaryD7vk != null)
@@ -341,7 +336,7 @@ namespace MW3RemasterLauncher
                 };
                 TxtSummaryResolution.Text = $"{s.Width}x{s.Height} ({modeLabel})";
                 TxtSummaryAA.Text = $"{s.AntiAliasing.ToUpperInvariant()} AA, {s.AnisotropicFiltering}x AF";
-                TxtSummaryDrawDist.Text = $"{s.DrawDistance}m ({(s.DrawDistance >= 2400 ? "Epic Distance" : "Standard")})";
+                TxtSummaryDrawDist.Text = $"{s.DrawDistance}m scenery distance";
 
                 var activeCount = _packMgr.Packs.Count(p => p.IsEnabled);
                 TxtSummaryPacks.Text = $"{activeCount} of {_packMgr.Packs.Count} Packs Active";
@@ -557,7 +552,7 @@ namespace MW3RemasterLauncher
                     try
                     {
                         if (Process.GetProcessesByName("entry_commandline").Length > 0)
-                            throw new InvalidOperationException("Close the Remaster game before removing content packs.");
+                            throw new InvalidOperationException("Close MW3-RE before removing content packs.");
                         _packMgr.UninstallPack(pack);
                     }
                     catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot uninstall pack", MessageBoxButton.OK, MessageBoxImage.Error); return; }
@@ -662,7 +657,7 @@ namespace MW3RemasterLauncher
                 try
                 {
                     if (Process.GetProcessesByName("entry_commandline").Length > 0)
-                        throw new InvalidOperationException("Close the Remaster game before changing installed versions.");
+                        throw new InvalidOperationException("Close MW3-RE before changing installed versions.");
                     _packMgr.RollbackPack(pack);
                     UpdateSummaryDisplay();
                 }
@@ -806,171 +801,112 @@ namespace MW3RemasterLauncher
         private async void BtnLaunchGame_Click(object sender, RoutedEventArgs e)
         {
             if (_assetInstallActive || _nativeSessionActive || _launchPreparing) return;
-            // Capture UI choices before background validation/preparation. The
-            // activity animation and window remain responsive during file checks.
-            var s = System.Text.Json.JsonSerializer.Deserialize<LauncherSettings>(
+            var settings = System.Text.Json.JsonSerializer.Deserialize<LauncherSettings>(
                 System.Text.Json.JsonSerializer.Serialize(_settingsMgr.Current))!;
 
-            if (s.EngineMode == "d7vk")
+            if (settings.EngineMode == "d7vk")
             {
                 try
                 {
-                SetLaunchPreparing(true);
-                BtnLaunchGame.IsEnabled = false;
-                var val = await System.Threading.Tasks.Task.Run(() => _d7vkRunner.Validate());
-                if (!val.IsValid)
-                {
-                    SetLaunchPreparing(false);
-                    BtnLaunchGame.IsEnabled = true;
-                    MessageBox.Show($"Cannot launch Original Game with D7VK:\n\n{val.StatusMessage}\n\n" +
-                                    "Please ensure Python 3 is installed and the D7VK wrapper components exist in local/work-ahead/mw3-d7vk-wrapper.",
-                                    "D7VK Wrapper Launch Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                    BtnLaunchGame.IsEnabled = false;
-                    BtnLaunchGame.Content = "●  GAME RUNNING (D7VK)...";
-                    TxtStatusReady.Text = "GAME STATUS: ORIGINAL MECH3 (D7VK) RUNNING";
-
-                    if (_packMgr.Packs.Any(p => p.IsEnabled && p.SchemaVersion == 2))
-                        throw new InvalidOperationException("Prepared native mech packs require the Remaster engine. Disable them before launching D7VK.");
-                    var proc = await System.Threading.Tasks.Task.Run(() => _d7vkRunner.LaunchGame(s, log =>
-                    {
-                        System.Diagnostics.Debug.WriteLine(log);
-                    }));
-                    SetLaunchPreparing(false);
-
-                    proc.EnableRaisingEvents = true;
-                    _ = ObserveD7VkCompletionAsync(proc);
-                }
-                catch (Exception ex)
-                {
-                    SetLaunchPreparing(false);
-                    BtnLaunchGame.IsEnabled = true;
-                    BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
-                    MessageBox.Show($"Failed to launch Original Game (D7VK Wrapper):\n\n{ex.Message}", "Launch Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
-            else
-            {
-                var validation = GameValidator.Validate(_settingsMgr.Current.GamePath);
-                if (!validation.IsValid)
-                {
-                    BtnBrowseGamePath_Click(sender, e);
-                    return;
-                }
-
-                try
-                {
-                    var activeDirs = _packMgr.GetActivePackDirectories();
-                    SettingControl_Changed(sender, e);
-                    var launchSettings = System.Text.Json.JsonSerializer.Deserialize<LauncherSettings>(
-                        System.Text.Json.JsonSerializer.Serialize(_settingsMgr.Current))!;
-                    _nativeSessionActive = true;
                     SetLaunchPreparing(true);
                     BtnLaunchGame.IsEnabled = false;
-                    BtnInstallPack.IsEnabled = false;
-                    ListPacks.IsEnabled = false;
-                    BtnLaunchGame.Content = "●  PREPARING REMASTER...";
-                    TxtStatusReady.Text = "GAME STATUS: PREPARING ASSETS";
-                    TxtStartupProgress.Text = "Checking content…";
-                    var proc = await System.Threading.Tasks.Task.Run(() => _gameRunner.LaunchGame(launchSettings, activeDirs, line =>
+                    var validation = await System.Threading.Tasks.Task.Run(() => _d7vkRunner.Validate());
+                    if (!validation.IsValid)
                     {
-                        if (line.StartsWith("Startup: ", StringComparison.Ordinal))
-                            Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                if (!_nativeSessionActive) return;
-                                TxtStartupProgress.Text = line[9..].Replace(
-                                    " First startup can take several minutes depending on your PC and storage speed.", "",
-                                    StringComparison.Ordinal);
-                                BtnLaunchGame.Content = "●  PREPARING REMASTER...";
-                            }));
-                        if (line.StartsWith("Native Remaster PID ") || line.StartsWith("MW3-RE PID "))
-                            Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                if (!_nativeSessionActive) return;
-                                SetLaunchPreparing(false);
-                                BtnLaunchGame.Content = line.StartsWith("MW3-RE PID ") ? "●  MW3-RE RUNNING..." : "●  GAME RUNNING (REMASTER)...";
-                                TxtStatusReady.Text = line.StartsWith("MW3-RE PID ") ? "GAME STATUS: MW3-RE PROFILE RUNNING" : "GAME STATUS: REMASTER HOST RUNNING";
-                                TxtStartupProgress.Text = "The game process has started.";
-                            }));
-                    }));
-                    if (proc == null) throw new InvalidOperationException("The game launch did not start.");
-                    _ = ObserveNativeCompletionAsync(proc);
-                }
-                catch (Exception ex)
-                {
-                    ResetNativeLaunchControls();
-                    TxtStatusReady.Text = "⚠ LAUNCH FAILED — OPEN LOGS FOR DETAILS";
-                    MessageBox.Show($"Failed to launch MechWarrior 3 Remaster:\n\n{ex.Message}\n\nUse Open Logs or Export Report under Settings & Steam.", "Launch Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
-        }
+                        SetLaunchPreparing(false);
+                        BtnLaunchGame.IsEnabled = true;
+                        MessageBox.Show($"Cannot launch Original Game with D7VK:\n\n{validation.StatusMessage}\n\n" +
+                                        "Please ensure Python 3 is installed and the D7VK wrapper components exist in local/work-ahead/mw3-d7vk-wrapper.",
+                                        "D7VK Wrapper Launch Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
 
-        private async void BtnLaunchNativePreview_Click(object sender, RoutedEventArgs e)
-        {
-            if (_assetInstallActive || _nativeSessionActive || _launchPreparing) return;
-            var validation = GameValidator.Validate(_settingsMgr.Current.GamePath);
-            if (!validation.IsValid)
+                    BtnLaunchGame.Content = "\u25CF  GAME RUNNING...";
+                    TxtStatusReady.Text = "GAME STATUS: ORIGINAL MECH3 (D7VK) RUNNING";
+                    if (_packMgr.Packs.Any(pack => pack.IsEnabled && pack.SchemaVersion == 2))
+                        throw new InvalidOperationException("Prepared native mech packs require MW3-RE. Disable them before launching D7VK.");
+                    var process = await System.Threading.Tasks.Task.Run(() =>
+                        _d7vkRunner.LaunchGame(settings, line => Debug.WriteLine(line)));
+                    SetLaunchPreparing(false);
+                    process.EnableRaisingEvents = true;
+                    _ = ObserveD7VkCompletionAsync(process);
+                }
+                catch (Exception error)
+                {
+                    SetLaunchPreparing(false);
+                    BtnLaunchGame.IsEnabled = true;
+                    BtnLaunchGame.Content = "\u25B6  LAUNCH ORIGINAL (D7VK)";
+                    MessageBox.Show($"Failed to launch Original Game (D7VK Wrapper):\n\n{error.Message}",
+                        "Launch Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                return;
+            }
+
+            var gameValidation = GameValidator.Validate(settings.GamePath);
+            if (!gameValidation.IsValid)
             {
                 BtnBrowseGamePath_Click(sender, e);
                 return;
             }
+
             try
             {
-                var activeDirs = _packMgr.GetActivePackDirectories();
                 SettingControl_Changed(sender, e);
-                var launchSettings = System.Text.Json.JsonSerializer.Deserialize<LauncherSettings>(
+                settings = System.Text.Json.JsonSerializer.Deserialize<LauncherSettings>(
                     System.Text.Json.JsonSerializer.Serialize(_settingsMgr.Current))!;
+                var activeDirectories = _packMgr.GetActivePackDirectories();
                 _nativeSessionActive = true;
                 SetLaunchPreparing(true);
                 BtnLaunchGame.IsEnabled = false;
-                BtnLaunchNativePreview.IsEnabled = false;
                 BtnInstallPack.IsEnabled = false;
                 ListPacks.IsEnabled = false;
-                TxtStatusReady.Text = "GAME STATUS: STARTING NATIVE PREVIEW";
-                TxtStartupProgress.Text = "Checking the Native preview runtime…";
-                var proc = await System.Threading.Tasks.Task.Run(() => _previewRunner.Launch(launchSettings, activeDirs, line =>
-                {
-                    if (line.StartsWith("Scenery distance ", StringComparison.Ordinal) ||
-                        line.StartsWith("Pack left out: ", StringComparison.Ordinal))
-                        Dispatcher.BeginInvoke(new Action(() => TxtStartupProgress.Text = line));
-                    if (line.StartsWith("MW3-RE PID ", StringComparison.Ordinal))
-                        Dispatcher.BeginInvoke(new Action(() =>
-                        {
-                            if (!_nativeSessionActive) return;
-                            SetLaunchPreparing(false);
-                            BtnLaunchNativePreview.Content = "●  NATIVE PREVIEW RUNNING...";
-                            TxtStatusReady.Text = "GAME STATUS: NATIVE PREVIEW RUNNING";
-                        }));
-                }));
-                _ = ObserveNativePreviewCompletionAsync(proc);
+                BtnLaunchGame.Content = "\u25CF  PREPARING MW3-RE...";
+                TxtStatusReady.Text = "GAME STATUS: STARTING MW3-RE";
+                TxtStartupProgress.Text = "Checking the MW3-RE runtime...";
+                var process = await System.Threading.Tasks.Task.Run(() =>
+                    _nativeGameRunner.Launch(settings, activeDirectories, line =>
+                    {
+                        if (line.StartsWith("Scenery distance ", StringComparison.Ordinal) ||
+                            line.StartsWith("Pack left out: ", StringComparison.Ordinal))
+                            Dispatcher.BeginInvoke(new Action(() => TxtStartupProgress.Text = line));
+                        if (line.StartsWith("MW3-RE PID ", StringComparison.Ordinal))
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                if (!_nativeSessionActive) return;
+                                SetLaunchPreparing(false);
+                                BtnLaunchGame.Content = "\u25CF  GAME RUNNING...";
+                                TxtStatusReady.Text = "GAME STATUS: MW3-RE RUNNING";
+                                TxtStartupProgress.Text = "The game process has started.";
+                            }));
+                    }));
+                _ = ObserveNativeGameCompletionAsync(process);
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
                 ResetNativeLaunchControls();
-                TxtStatusReady.Text = "⚠ NATIVE PREVIEW FAILED — OPEN LOGS FOR DETAILS";
-                MessageBox.Show($"Failed to start the Native preview:\n\n{ex.Message}", "Native preview",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                TxtStatusReady.Text = "\u26A0 LAUNCH FAILED - OPEN LOGS FOR DETAILS";
+                MessageBox.Show($"Failed to launch MW3-RE:\n\n{error.Message}\n\nUse Open Logs or Export Report under Settings & Steam.",
+                    "Launch Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
-        private async System.Threading.Tasks.Task ObserveNativePreviewCompletionAsync(Process process)
+        private async System.Threading.Tasks.Task ObserveNativeGameCompletionAsync(Process process)
         {
             try
             {
                 var exit = await GameRunner.WaitForCompletionAsync(process);
                 ResetNativeLaunchControls();
-                TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ NATIVE PREVIEW ENDED WITH AN ERROR";
+                TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "\u26A0 MW3-RE ENDED WITH AN ERROR";
                 if (exit != 0)
-                    await HandleCrashReportAsync(exit, _previewRunner.LastLogPath);
+                    await HandleCrashReportAsync(exit, _nativeGameRunner.LastLogPath);
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
                 ResetNativeLaunchControls();
-                TxtStatusReady.Text = "⚠ COULD NOT READ GAME EXIT STATUS";
-                MessageBox.Show(ex.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
+                TxtStatusReady.Text = "\u26A0 COULD NOT READ GAME EXIT STATUS";
+                MessageBox.Show(error.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+            finally { process.Dispose(); }
         }
 
         private void ResetNativeLaunchControls()
@@ -978,31 +914,9 @@ namespace MW3RemasterLauncher
             _nativeSessionActive = false;
             SetLaunchPreparing(false);
             BtnLaunchGame.IsEnabled = true;
-            BtnLaunchNativePreview.IsEnabled = true;
-            BtnLaunchNativePreview.Content = "▶  PLAY NATIVE PREVIEW";
             BtnInstallPack.IsEnabled = true;
             ListPacks.IsEnabled = true;
-            BtnLaunchGame.Content = string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile)
-                ? "▶  LAUNCH REMASTER" : "▶  PLAY MW3-RE PROFILE";
-        }
-
-        private async System.Threading.Tasks.Task ObserveNativeCompletionAsync(Process process)
-        {
-            try
-            {
-                var exit = await GameRunner.WaitForCompletionAsync(process);
-                ResetNativeLaunchControls();
-                TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ LAUNCH OR GAME FAILED";
-                if (exit != 0)
-                    await HandleCrashReportAsync(exit, _gameRunner.LastLogPath);
-            }
-            catch (Exception ex)
-            {
-                ResetNativeLaunchControls();
-                TxtStatusReady.Text = "⚠ COULD NOT READ GAME EXIT STATUS";
-                MessageBox.Show(ex.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally { process.Dispose(); }
+            BtnLaunchGame.Content = "\u25B6  PLAY";
         }
 
         private async Task ObserveD7VkCompletionAsync(Process process)
@@ -1032,13 +946,13 @@ namespace MW3RemasterLauncher
             if (automatic)
             {
                 MessageBox.Show(summary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
-                    "Remaster stopped (exit " + exitCode + ")", MessageBoxButton.OK, MessageBoxImage.Error);
+                    (_settingsMgr.Current.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE") + " stopped (exit " + exitCode + ")", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             else
             {
                 var choice = MessageBox.Show(this,
                     summary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
-                    "Remaster stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                    (_settingsMgr.Current.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE") + " stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
 
@@ -1070,10 +984,10 @@ namespace MW3RemasterLauncher
             }
         }
 
-        /// <summary>The newer of this session's Remaster and Native preview logs, else the latest on disk.</summary>
+        /// <summary>The current MW3-RE or D7VK session log, else the latest on disk.</summary>
         private string? CurrentLaunchLog()
         {
-            var logs = new[] { _gameRunner.LastLogPath, _previewRunner.LastLogPath }
+            var logs = new[] { _nativeGameRunner.LastLogPath, _d7vkRunner.LastLogPath }
                 .Where(path => path != null && File.Exists(path))
                 .OrderByDescending(path => File.GetLastWriteTimeUtc(path!));
             return logs.FirstOrDefault() ?? LauncherPaths.LatestLaunchLog();

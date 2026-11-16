@@ -704,12 +704,17 @@ static class NativeRuntimeLayoutChecks
             Directory.CreateDirectory(shared);
             File.WriteAllText(Path.Combine(shared, "pack.json"), """{"schema_version":2,"files":{"environment/rmechtex.zbd":{"bytes":3126526488,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
 
+            if (NativeGameRunner.WindowModeForSettings("windowed") != Mw3ReWindowMode.Windowed ||
+                NativeGameRunner.WindowModeForSettings("fullscreen") != Mw3ReWindowMode.Fullscreen ||
+                NativeGameRunner.WindowModeForSettings("fullscreen_windowed") != Mw3ReWindowMode.Borderless)
+                throw new Exception("Saved window mode did not reach the MW3-RE planner mode.");
+
             var options = new Mw3RePlanningOptions
             {
                 Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
                 Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
             };
-            var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativePreviewRunner.ProfileId);
+            var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
                 wire["visuals"]!["pom"]!.GetValue<bool>() != true)
@@ -728,15 +733,15 @@ static class NativeRuntimeLayoutChecks
 
             // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
             var original = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
-                { Preview = options.Preview with { DrawDistance = 800 } }, "D:/Original MW3", dataRoot, NativePreviewRunner.ProfileId));
+                { Preview = options.Preview with { DrawDistance = 800 } }, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
             if (original["argv"]!.AsArray().Any(value => value!.GetValue<string>() == "--cc-draw-distance"))
                 throw new Exception("Original scenery distance added a preview argument.");
             var refused = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
-                { Preview = options.Preview with { DrawDistance = 2400 } }, "D:/Original MW3", dataRoot, NativePreviewRunner.ProfileId));
+                { Preview = options.Preview with { DrawDistance = 2400 } }, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
             if (refused["validation_error"]?.GetValue<bool>() != true) throw new Exception("Planner accepted an unsupported preview distance.");
 
-            if (NativePreviewRunner.PreviewDrawDistance(3200, out var reduced) != 1600 || !reduced ||
-                NativePreviewRunner.PreviewDrawDistance(1200, out reduced) != 1200 || reduced)
+            if (NativeGameRunner.PreviewDrawDistance(3200, out var reduced) != 1600 || !reduced ||
+                NativeGameRunner.PreviewDrawDistance(1200, out reduced) != 1200 || reduced)
                 throw new Exception("Saved scenery distance was not mapped to the preview range.");
             // Unknown saved choices are refused before any process starts.
             static void Refused(Action action)
@@ -745,9 +750,9 @@ static class NativeRuntimeLayoutChecks
                 catch (InvalidOperationException) { return; }
                 throw new Exception("Native preview accepted an unknown saved choice.");
             }
-            Refused(() => NativePreviewRunner.PreviewDrawDistance(1000, out _));
-            if (NativePreviewRunner.PreviewAntialiasing("fxaa") != Mw3ReAntialiasing.Fxaa) throw new Exception("Saved FXAA was remapped.");
-            Refused(() => NativePreviewRunner.PreviewAntialiasing("msaa"));
+            Refused(() => NativeGameRunner.PreviewDrawDistance(1000, out _));
+            if (NativeGameRunner.PreviewAntialiasing("fxaa") != Mw3ReAntialiasing.Fxaa) throw new Exception("Saved FXAA was remapped.");
+            Refused(() => NativeGameRunner.PreviewAntialiasing("msaa"));
             if (Directory.Exists(dataRoot)) throw new Exception("Planning unexpectedly created a write directory.");
             Console.WriteLine("Native preview typed request -> actual Python planner pack translation passed; no game process.");
         }

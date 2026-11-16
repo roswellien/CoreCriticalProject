@@ -33,8 +33,8 @@ public static class LauncherPaths
         foreach (var directory in Directory.GetDirectories(sessions).OrderByDescending(Directory.GetLastWriteTimeUtc))
         {
             PackStorage.EnsureNoLinks(directory);
-            // Remaster sessions write launcher.log; Native preview sessions write native-preview.log.
-            foreach (var name in new[] { "launcher.log", "native-preview.log" })
+            // Older sessions use launcher.log/native-preview.log; MW3-RE sessions use mw3-re.log.
+            foreach (var name in new[] { "mw3-re.log", "launcher.log", "native-preview.log" })
             {
                 var log = Path.Combine(directory, name);
                 if (File.Exists(log)) return log;
