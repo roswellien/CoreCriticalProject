@@ -56,6 +56,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -502,10 +503,34 @@ public:
   void detach_editor() override {
     require_editor_producer();
     if (!editor_source_ && !editor_present_active_) return;
-    drain(); // Completes retained light packets, then joins all renderer jobs.
-    renderer_->detach_editor();
+
+    // A failed worker makes drain() rethrow its stored exception. Still retire
+    // the editor while its borrowed CPU owner and Vulkan context are alive.
+    std::exception_ptr failure;
+    try {
+      drain(); // Completes retained light packets, then joins all renderer jobs.
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    try {
+      if (renderer_)
+        renderer_->detach_editor();
+    } catch (...) {
+      if (!failure)
+        failure = std::current_exception();
+    }
     editor_present_active_ = false;
     editor_source_ = nullptr;
+    if (failure) {
+      try {
+        std::rethrow_exception(failure);
+      } catch (const std::exception &error) {
+        std::fprintf(stderr, "Core editor best-effort detach: %s\n", error.what());
+      } catch (...) {
+        std::fprintf(stderr, "Core editor best-effort detach: non-standard exception\n");
+      }
+      std::fflush(stderr);
+    }
   }
   std::uint64_t presentation_count() const override {
     if (worker_)
