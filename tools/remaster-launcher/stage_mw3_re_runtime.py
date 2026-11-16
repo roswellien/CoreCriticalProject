@@ -1066,7 +1066,8 @@ def build_indeo_helper(source, build, vs, environment):
     identities = {name: (_identity(path), file_hash(path)) for name, path in tools.items()}
     output = build / "mw3indeo.exe"
     obj = build / "mw3indeo.obj"
-    command = [compiler, "/Bv", "/nologo", "/std:c++17", "/O2", "/MT", "/EHsc", "/W3",
+    # No /nologo: the banner ("... for x86") is how the selected compiler proves its target.
+    command = [compiler, "/Bv", "/std:c++17", "/O2", "/MT", "/EHsc", "/W3",
                "/I", source / "src", source / "tools/indeo/mw3indeo.cpp",
                "/Fo" + str(obj), "/Fe:" + str(output), "/link", "/SUBSYSTEM:WINDOWS",
                "/ENTRY:mainCRTStartup", "/MANIFEST:EMBED", "/MANIFESTINPUT:" +
