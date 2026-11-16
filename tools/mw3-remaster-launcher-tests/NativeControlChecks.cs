@@ -77,6 +77,23 @@ internal static class NativeControlChecks
             Check(log.Any(line => line.Contains("preserved the latest in-game controls")),
                 "An in-game control edit was not reported when updating the restore baseline.");
 
+            // An in-game edit of only the key map must not replace the other value's baseline with the
+            // launcher's applied preset path.
+            doc.ActiveId = profile.Id;
+            store.Save(doc);
+            NativeControls.PrepareLaunch(root, write, game, settings, log.Add);
+            var appliedThirdTime = File.ReadAllText(settingsPath);
+            var playerMapOnly = "\"DefaultCmdMap\"=hex:" + string.Join(',', Enumerable.Repeat("fd", 167 * sizeof(uint)));
+            var mapOnlyEdit = string.Join("\r\n", appliedThirdTime.Split("\r\n")
+                .Where(row => !row.StartsWith("\"DefaultCmdMap\"=", StringComparison.Ordinal))) + "\r\n" + playerMapOnly + "\r\n";
+            File.WriteAllText(settingsPath, mapOnlyEdit);
+            doc.ActiveId = null;
+            store.Save(doc);
+            NativeControls.PrepareLaunch(root, write, game, settings, log.Add);
+            var singleEditRestore = File.ReadAllText(settingsPath);
+            Check(singleEditRestore.Contains(playerMapOnly) && singleEditRestore.Contains(playerConfig),
+                "An in-game edit of one control value replaced the other value's restore baseline.");
+
             settings.DirectInputJoystickProductName = "Test Flight Stick";
             NativeControls.PrepareLaunch(root, write, game, settings, log.Add);
             Check(File.ReadAllText(Path.Combine(write, "mw3.cfg")).Contains("joystick=Test Flight Stick"),
@@ -98,8 +115,10 @@ internal static class NativeControlChecks
             store.Save(new ControlDocument { Profiles = [profile], ActiveId = profile.Id });
             new ControllerProfiles(root).Save(controller);
             NativeControls.PrepareLaunch(root, write, game, settings, log.Add);
-            var controllerPreset = Directory.GetFiles(Path.Combine(write, "keys"), "CC-*.zrd")
-                .Select(File.ReadAllText).Single(text => text.Contains("joystick(Y)"));
+            // Earlier steps leave other launcher presets in the profile; the controller launch wrote the newest.
+            var controllerPreset = File.ReadAllText(Directory.GetFiles(Path.Combine(write, "keys"), "CC-*.zrd")
+                .OrderByDescending(File.GetLastWriteTimeUtc).First());
+            Check(controllerPreset.Contains("joystick(Y)"), "The controller launch did not write its axis preset.");
             Check(controllerPreset.Contains("CMD_JJ_UP keya("), "Controller button action was not projected.");
             Check(controllerPreset.Contains("joybtn(0x1)"), "Controller button slot was not projected.");
             Check(controllerPreset.Contains("Throttle joystick(Y) slope(-0.5) intercept(0.5)"), "Controller throttle affine mapping was incorrect.");

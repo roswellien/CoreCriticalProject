@@ -398,11 +398,13 @@ public static class NativeControls
         if (restore.LastAppliedDefaultMap.Length == 0 && restore.LastAppliedActiveConfig.Length == 0) return false;
         var currentMap = FindValue(lines, DefaultMap);
         var currentConfig = FindValue(lines, ActiveConfig);
-        if (EquivalentValue(currentMap, restore.LastAppliedDefaultMap) &&
-            EquivalentValue(currentConfig, restore.LastAppliedActiveConfig)) return false;
-        restore.DefaultMap = currentMap;
-        restore.ActiveConfig = currentConfig;
-        return true;
+        // Each value is the player's own only if it differs from what the launcher applied; an unchanged
+        // value still holds the launcher's layout, so its pre-launcher baseline must stay as it was.
+        var mapEditedInGame = !EquivalentValue(currentMap, restore.LastAppliedDefaultMap);
+        var configEditedInGame = !EquivalentValue(currentConfig, restore.LastAppliedActiveConfig);
+        if (mapEditedInGame) restore.DefaultMap = currentMap;
+        if (configEditedInGame) restore.ActiveConfig = currentConfig;
+        return mapEditedInGame || configEditedInGame;
     }
 
     private static bool EquivalentValue(string[] left, string[] right) => NormalizeValue(left) == NormalizeValue(right);
