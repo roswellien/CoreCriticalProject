@@ -1044,6 +1044,282 @@ void check_terrain_surface_normals(SDL_Window *window,
   }
 }
 
+// Authored TL geometry only: each planar face has an independent diagonal.
+// A real current-epoch keyed upload is essential: unkeyed sky never reached
+// the defective ordinary-surface branch and would give a false RED control.
+void check_native_sky_unlit(SDL_Window *window,
+                            sdlfe::RendererBackend backend) {
+  using Hook = cc_mw3_re::testing::RigidCaptureTestHook;
+  struct Restore {
+    zmth::Projection projection = zmth::projection();
+    zmth::View view = zmth::view();
+    mw34::materials::SurfaceKey key{};
+    bool had_key = mw34::materials::get_active_surface_key(&key);
+    std::fenv_t fp{};
+    SDL_Window *window;
+    int width{}, height{};
+    explicit Restore(SDL_Window *w) : window(w) {
+      std::fegetenv(&fp);
+      SDL_GetWindowSize(window, &width, &height);
+    }
+    ~Restore() {
+      zmth::projection() = projection;
+      zmth::view() = view;
+      if (had_key)
+        mw34::materials::set_active_surface_key(key);
+      else
+        mw34::materials::clear_active_surface_key();
+      SDL_SetWindowSize(window, width, height);
+      SDL_SyncWindow(window);
+      std::fesetenv(&fp);
+    }
+  } restore(window);
+  std::vector<uint32_t> checker(64);
+  for (int y = 0; y < 8; ++y)
+    for (int x = 0; x < 8; ++x)
+      checker[y * 8 + x] = ((x / 2 + y / 2) & 1) ? 0xffe0e0e0 : 0xff303030;
+  const mw34::materials::SurfaceKey key{
+      8, 8, 1, mw34::materials::normal_hash(checker.data(), checker.size() * 4)};
+  require(key.hash != 0, "Sky fixture has no surface identity");
+  unsigned cases = 0;
+  for (const auto extent : {std::array<int, 2>{64, 48},
+                            std::array<int, 2>{86, 36}}) {
+    const int width = extent[0], height = extent[1];
+    require(SDL_SetWindowSize(window, width, height) && SDL_SyncWindow(window),
+            SDL_GetError());
+    // Both view axes vary, including yaw/pitch; projection variant 2 differs
+    // ONLY in projection, to catch incomplete adjacent-draw compatibility.
+    auto set_view = [&](int variant) {
+      zmth::projection() = {};
+      auto &p = zmth::projection();
+      p.near_z = 1;
+      p.far_z = 100;
+      p.fx_near = float(width) * (variant == 2 ? .24f : .7f);
+      p.fy_near = float(height) * (variant == 2 ? 1.1f : .7f);
+      p.cx = float(width) * .5f;
+      p.cy = float(height) * (variant == 2 ? .2f : .5f);
+      zmth::view().camera = {{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
+      if (variant == 1)
+        zmth::view().camera = {{.8f, .36f, -.48f, 0, .8f, .6f,
+                               .6f, -.48f, .64f, 3, 4, 5}};
+    };
+    auto poison_view = [&] {
+      set_view(1);
+      zmth::projection().cx = -1000;
+      zmth::view().camera.m[9] = 900;
+    };
+    auto face = [&](int side, bool white) {
+      const float left = float(width) * (side ? .5f : .08f);
+      const float right = float(width) * (side ? .92f : .5f);
+      const float top = float(height) * .12f, bottom = float(height) * .88f;
+      const float a = side ? .25f : .125f, b = side ? .1f : .25f;
+      const uint32_t colors[] = {0xff80c060, 0xffc080a0,
+                                 0xff6080c0, 0xffc0a080};
+      auto color = [&](int vertex) {
+        return white ? 0xffffffffu : colors[(vertex + side) % 4];
+      };
+      return std::array<platform::TLVertex, 4>{{
+          {left, top, a, a, color(0), 0xff000000, 0, 0},
+          {right, top, b, b, color(1), 0xd0000000, 1, 0},
+          {right, bottom, b, b, color(2), 0xb0000000, 1, 1},
+          {left, bottom, a, a, color(3), 0xe0000000, 0, 1}}};
+    };
+    const uint32_t background = 0xff07111b;
+    std::vector<uint32_t> first_terrain_sun;
+    for (int sun = 0; sun != 2; ++sun) {
+      struct Mode {
+        std::unique_ptr<cc_mw3_re::VulkanFrameRenderer> renderer;
+        int texture;
+      } modes[3];
+      const char *names[] = {"off", "flat", "normal"};
+      for (int m = 0; m != 3; ++m) {
+        sdlfe::CoreCriticalAssets assets;
+        assets.lighting = names[m];
+        assets.sun_azimuth = sun ? "90" : "-90";
+        assets.sun_elevation = "35";
+        assets.sun_explicit = true;
+        modes[m].renderer = make_check_renderer(window, backend, {}, assets);
+        auto &r = *modes[m].renderer;
+        r.set_viewport(0, 0, width, height);
+        mw34::materials::set_active_surface_key(key);
+        modes[m].texture = r.create_named_texture(
+            "authored-unlit-sky", 8, 8,
+            reinterpret_cast<const uint8_t *>(checker.data()), 1);
+        mw34::materials::clear_active_surface_key();
+        // Actual normal-cache admission; the ordinary companion must use it.
+        mw34::materials::WorldNormalCache::TextureRecord normal{};
+        normal.name = "authored-sky-companion-normal";
+        normal.width = normal.height = 1;
+        normal.pixels32 = {0xffd980d9};
+        normal.hash = mw34::materials::normal_hash(normal.pixels32.data(), 4);
+        Hook::seed_authored_normal(r, key, std::move(normal));
+        require(Hook::group_epoch(r) != 0,
+                "Sky fixture has no current texture epoch");
+      }
+      // A negative face index omits that side. Separate submissions are also
+      // the independent reference for combined, differently viewed sky draws.
+      auto render = [&](int mode, bool sky, bool textured, int diagonal,
+                        int left_view, int right_view, bool white = false,
+                        bool profile = false, bool poison = true) {
+        auto &r = *modes[mode].renderer;
+        r.mission_changed(profile ? platform::MissionIdentity{5, 1}
+                                  : platform::MissionIdentity{});
+        set_view(0);
+        r.clear(true, 7, 17, 27);
+        r.begin_scene();
+        for (int side = 0; side != 2; ++side) {
+          const int view = side ? right_view : left_view;
+          if (view < 0)
+            continue;
+          set_view(view);
+          auto vertices = face(side, white);
+          platform::DrawState state;
+          state.texture = textured ? modes[mode].texture : -1;
+          state.native_sky = sky;
+          state.address_u = state.address_v = 3;
+          // Fog factor/alpha are deliberately present in the TL bytes; the
+          // identity comparisons cover the same fixed-function operations.
+          state.fog = true;
+          state.alpha_modulate = sky;
+          const int order[2][4] = {{0, 1, 2, 3}, {1, 2, 3, 0}};
+          platform::TLVertex ordered[4];
+          for (int i = 0; i != 4; ++i)
+            ordered[i] = vertices[order[diagonal][i]];
+          platform::TLVertex original[4];
+          std::memcpy(original, ordered, sizeof ordered);
+          r.draw(platform::Primitive::kFan, ordered, 4, state);
+          require(!std::memcmp(ordered, original, sizeof ordered),
+                  "Sky submission changed authored TL vertices");
+          if (poison)
+            poison_view();
+        }
+        if (profile && left_view >= 0 && right_view >= 0 &&
+            left_view != right_view) {
+          const auto observation = r.scene_binding_statistics();
+          require(observation.supported && observation.draws == 2,
+                  "Differently viewed adjacent sky draws merged");
+        }
+        r.end_scene();
+        std::vector<uint32_t> pixels;
+        int w{}, h{};
+        require(r.read_back(&pixels, &w, &h) && w == width && h == height &&
+                    pixels.size() == std::size_t(width * height),
+                "Native unlit sky readback failed");
+        ++cases;
+        return pixels;
+      };
+      for (int camera = 0; camera != 2; ++camera) {
+        for (int diagonal = 0; diagonal != 2; ++diagonal) {
+          const auto off = render(0, true, true, diagonal, camera, camera);
+          const auto flat = render(1, true, true, diagonal, camera, camera);
+          const auto normal = render(2, true, true, diagonal, camera, camera);
+          require(off == flat && off == normal,
+                  "Native unlit sky acquired ordinary surface sun/normal lighting");
+          require(modes[2].renderer->asset_statistics().normal_draws == 0,
+                  "Native sky bound an ordinary surface normal map");
+          const auto white =
+              render(0, true, true, diagonal, camera, camera, true);
+          require(off != white, "Sky off reference lost nonwhite vertex RGB");
+          // Analytic barycentric witnesses use the actual chosen diagonal,
+          // perspective rhw and UV, without reproducing a lighting shader.
+          unsigned bright_count = 0, dark_count = 0;
+          unsigned long bright_sum = 0, dark_sum = 0;
+          for (int side = 0; side != 2; ++side) {
+            const auto v = face(side, false);
+            const int triangles[2][6] = {{0, 1, 2, 0, 2, 3},
+                                         {1, 2, 3, 1, 3, 0}};
+            for (int y = 2; y < height - 2; ++y)
+              for (int x = 2; x < width - 2; ++x)
+                for (int t = 0; t != 2; ++t) {
+                  const auto &a = v[triangles[diagonal][t * 3]];
+                  const auto &b = v[triangles[diagonal][t * 3 + 1]];
+                  const auto &c = v[triangles[diagonal][t * 3 + 2]];
+                  // The native TL shader applies the D3D half-pixel offset:
+                  // framebuffer pixel (x,y) samples original TL (x,y).
+                  const float px = float(x), py = float(y);
+                  const float area = (b.sy - c.sy) * (a.sx - c.sx) +
+                                     (c.sx - b.sx) * (a.sy - c.sy);
+                  const float wa = ((b.sy - c.sy) * (px - c.sx) +
+                                    (c.sx - b.sx) * (py - c.sy)) / area;
+                  const float wb = ((c.sy - a.sy) * (px - c.sx) +
+                                    (a.sx - c.sx) * (py - c.sy)) / area;
+                  const float wc = 1 - wa - wb;
+                  if (std::min({wa, wb, wc}) < .08f)
+                    continue;
+                  const float q = wa * a.rhw + wb * b.rhw + wc * c.rhw;
+                  const float u = (wa * a.rhw * a.tu + wb * b.rhw * b.tu +
+                                   wc * c.rhw * c.tu) / q;
+                  const float z = (wa * a.rhw * a.tv + wb * b.rhw * b.tv +
+                                   wc * c.rhw * c.tv) / q;
+                  const float cell_u = u * 4, cell_v = z * 4;
+                  const float fu = cell_u - int(cell_u), fv = cell_v - int(cell_v);
+                  if (fu < .3f || fu > .7f || fv < .3f || fv > .7f)
+                    continue;
+                  const uint32_t pixel = off[y * width + x];
+                  require(pixel != background,
+                          "Sky analytic interior witness is blank");
+                  const unsigned sum = (pixel & 255) + ((pixel >> 8) & 255) +
+                                       ((pixel >> 16) & 255);
+                  if ((int(cell_u) + int(cell_v)) & 1) {
+                    ++bright_count;
+                    bright_sum += sum;
+                  } else {
+                    ++dark_count;
+                    dark_sum += sum;
+                  }
+                }
+          }
+          require(bright_count && dark_count &&
+                      bright_sum / bright_count > dark_sum / dark_count + 80,
+                  "Native sky checker UV/coverage witness failed");
+        }
+      }
+      const auto terrain_flat = render(1, false, true, 0, 0, 0, true);
+      const auto terrain_normal = render(2, false, true, 0, 0, 0, true);
+      require(terrain_flat != terrain_normal &&
+                  modes[2].renderer->asset_statistics().normal_draws > 0,
+              "Ordinary companion lost actual normal-map illumination");
+      if (sun == 0)
+        first_terrain_sun = terrain_flat;
+      else
+        require(first_terrain_sun != terrain_flat,
+                "Ordinary terrain became insensitive to sun direction");
+      if (sun == 0) {
+        for (int mode : {1, 2}) {
+          for (bool textured : {true, false}) {
+            const auto neutral = render(mode, true, textured, 0, 0, 0);
+            const auto profile = render(mode, true, textured, 0, 0, 0, false, true);
+            require(profile != neutral,
+                    "Intentional campaign sky-only profile no longer shades sky");
+            for (int second_view : {1, 2}) {
+              const auto left = render(mode, true, textured, 0, 0, -1, false, true);
+              const auto right =
+                  render(mode, true, textured, 0, -1, second_view, false, true);
+              const auto right_base =
+                  render(mode, true, textured, 0, -1, 0, false, true);
+              require(right != right_base,
+                      "Profile sky view/projection pixel witness is insensitive");
+              const auto combined =
+                  render(mode, true, textured, 0, 0, second_view, false, true);
+              const auto unpoisoned =
+                  render(mode, true, textured, 0, 0, second_view, false, true, false);
+              require(combined == unpoisoned,
+                      "Sky retained a borrowed producer view after submission");
+              for (int y = 0; y < height; ++y)
+                for (int x = 0; x < width; ++x)
+                  require(combined[y * width + x] ==
+                              (x < width / 2 ? left : right)[y * width + x],
+                          "Combined sky views differ from isolated profile "
+                          "references");
+            }
+          }
+        }
+      }
+    }
+  }
+  std::fprintf(stderr, "[NATIVE_SKY_UNLIT] pixel_cases=%u\n", cases);
+}
+
 void check_sealed_environment(SDL_Window *window,
                               sdlfe::RendererBackend backend) {
   require(SDL_SetWindowSize(window, 32, 32) && SDL_SyncWindow(window),
@@ -1647,6 +1923,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   zmod::fog() = saved_fog;
   if (materials) {
     check_terrain_surface_normals(window, backend);
+    check_native_sky_unlit(window, backend);
   }
 }
 } // namespace
