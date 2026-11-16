@@ -1,12 +1,15 @@
 #include "frontend/sdl/sdl_input.h"
 
 #include "gamez/zutil/zutl_reg.h"
+#include "platform/sha256.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 
 namespace sdlfe {
@@ -253,13 +256,21 @@ std::vector<uint16_t> read_hid_usages(SDL_Joystick* j) {
 // mw3.cfg's joystick= by name, else the best ranked, the first of a rank;
 // each device found is logged.
 bool SdlInput::open_joystick() {
-  if (joystick_disabled) {
+  if (joystick_disabled && controller_profile_path.empty()) {
     std::printf("mw3: joystick disabled by mw3.cfg\n");
     return false;
   }
   int n = 0;
   SDL_JoystickID* ids = SDL_GetJoysticks(&n);
-  int best = -1, best_rank = -1, wanted = -1;
+  int best = -1, best_rank = -1, wanted = -1, profile_match = -1;
+  if (!controller_profile_path.empty() && !controller_config_) {
+    std::error_code error;
+    const auto bytes = std::filesystem::file_size(controller_profile_path, error);
+    if (error || bytes > 16384) throw std::runtime_error("Controller profile is missing or too large");
+    std::ifstream config_file(controller_profile_path, std::ios::binary);
+    if (!config_file) throw std::runtime_error("Cannot open controller profile");
+    controller_config_ = std::make_unique<ControllerProfileConfig>(ControllerProfileConfig::read(config_file));
+  }
   for (int i = 0; ids && i < n; ++i) {
     SDL_Joystick* j = SDL_OpenJoystick(ids[i]);
     if (!j) continue;
@@ -274,22 +285,97 @@ bool SdlInput::open_joystick() {
     const int rank = joystick_rank(pad, axes, buttons);
     if (rank > best_rank) best = i, best_rank = rank;
     if (wanted < 0 && has_text(name, joystick_want)) wanted = i;
+    if (controller_config_ && pad) {
+      SDL_Gamepad* candidate = SDL_OpenGamepad(ids[i]);
+      if (candidate) {
+        const std::string key = controller_key(ids[i], candidate);
+        std::string unique_key = key;
+        for (int other = 0; other < n; ++other) {
+          if (other == i) continue;
+          if (!SDL_IsGamepad(ids[other])) continue;
+          SDL_Gamepad* other_pad = SDL_OpenGamepad(ids[other]);
+          if (other_pad) {
+            const bool duplicate = controller_key(ids[other], other_pad) == key;
+            SDL_CloseGamepad(other_pad);
+            if (duplicate) {
+              platform::integrity::Sha256 hash;
+              const std::string unique = key + ":" + std::to_string(ids[i]);
+              hash.update(unique.data(), unique.size());
+              unique_key = hash.hex();
+              std::transform(unique_key.begin(), unique_key.end(), unique_key.begin(),
+                             [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+              break;
+            }
+          }
+        }
+        if (unique_key == controller_config_->device) profile_match = i;
+        SDL_CloseGamepad(candidate);
+      }
+    }
     SDL_CloseJoystick(j);
   }
   if (!joystick_want.empty() && wanted < 0 && n > 0)
     std::printf("mw3: joystick=%s matches no device: the best one taken\n", joystick_want.c_str());
-  const int pick = wanted >= 0 ? wanted : best;
+  if (joystick_disabled && profile_match < 0)
+    std::printf("mw3: joystick disabled by mw3.cfg; no saved controller identity matched\n");
+  const int pick = profile_match >= 0 ? profile_match : joystick_disabled ? -1 : wanted >= 0 ? wanted : best;
   if (pick >= 0) {
     if (SDL_IsGamepad(ids[pick])) pad_ = SDL_OpenGamepad(ids[pick]);
     joy_ = pad_ ? SDL_GetGamepadJoystick(pad_) : SDL_OpenJoystick(ids[pick]);
     if (joy_) {
       id_ = ids[pick], guid_ = SDL_GetJoystickGUID(joy_);
-      std::printf("mw3: joystick %d opened (%s)\n", pick, wanted >= 0 ? "mw3.cfg's joystick=" : n > 1 ? "the best ranked" : "the only one");
+      const char* selection = profile_match >= 0 ? "controller profile identity"
+                                : wanted >= 0 ? "mw3.cfg's joystick=" : n > 1 ? "the best ranked" : "the only one";
+      std::printf("mw3: joystick %d opened (%s)\n", pick, selection);
       map_axes();
+      if (controller_config_ && profile_match < 0)
+        std::printf("mw3: saved controller identity was not found; using the existing joystick selection\n");
     }
   }
   SDL_free(ids);
   return joy_ != nullptr;
+}
+
+std::string SdlInput::controller_key(SDL_JoystickID id, SDL_Gamepad* pad) const {
+  const SDL_GUID guid = SDL_GetGamepadGUIDForID(id);
+  std::string identity;
+  identity.reserve(128);
+  static constexpr char digits[] = "0123456789ABCDEF";
+  for (uint8_t byte : guid.data) {
+    identity.push_back(digits[byte >> 4]);
+    identity.push_back(digits[byte & 15]);
+  }
+  const char* serial_value = SDL_GetGamepadSerial(pad);
+  const char* path_value = SDL_GetGamepadPath(pad);
+  const std::string serial = serial_value ? serial_value : "";
+  const std::string path = path_value ? path_value : "";
+  identity += ":" + (serial.empty() ? path : serial);
+  if (serial.empty() && path.empty()) identity += ":session:" + std::to_string(id);
+  platform::integrity::Sha256 hash;
+  hash.update(identity.data(), identity.size());
+  std::string key = hash.hex();
+  std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  return key;
+}
+
+void SdlInput::poll_controller() {
+  if (!controller_config_ || !pad_) return;
+  SDL_UpdateJoysticks();
+  ControllerSample sample;
+  for (size_t i = 0; i < sample.axes.size(); ++i)
+    sample.axes[i] = SDL_GetGamepadAxis(pad_, static_cast<SDL_GamepadAxis>(i));
+  for (size_t i = 0; i < sample.buttons.size(); ++i)
+    sample.buttons[i] = SDL_GetGamepadButton(pad_, static_cast<SDL_GamepadButton>(i));
+  sample.connected = SDL_GamepadConnected(pad_);
+  sample.focused = focused_ && !muted();
+  controller_state_.update(*controller_config_, sample);
+}
+
+uint32_t SdlInput::command_state(int32_t command) {
+  if (!controller_config_ || (!joy_ && !unplugged_) || command < 0 ||
+      command >= static_cast<int32_t>(controller_state_.actions.size()))
+    return 0;
+  return controller_state_.actions[static_cast<size_t>(command)];
 }
 
 // The axis map (W54): a gamepad's is DirectInput's XInput layout (pad_axis);
@@ -337,6 +423,7 @@ bool SdlInput::open(Device d) {
 
 void SdlInput::close(Device d) {
   opened_[d] = acquired_[d] = false;
+  if (d == kJoystick && controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
   if (d == kJoystick && pad_) SDL_CloseGamepad(pad_), pad_ = nullptr, joy_ = nullptr;
   if (d == kJoystick && joy_) SDL_CloseJoystick(joy_), joy_ = nullptr;
   if (d == kJoystick) unplugged_ = false;
@@ -576,10 +663,12 @@ int32_t SdlInput::joystick_state(platform::JoyState* out) {
   if (!opened_[kJoystick]) return kNotAcquired;
   if (!joy_) {
     if (!unplugged_) return kNotAcquired;
+    if (controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
     neutral(out);
     return acquired_[kJoystick] ? 0 : kNotAcquired;
   }
   SDL_UpdateJoysticks();  // Poll (IDirectInputDevice2 +0x64)
+  poll_controller();
   *out = platform::JoyState{};
   int32_t* axes[8] = {&out->x, &out->y, &out->z, &out->rx, &out->ry, &out->rz, &out->slider[0], &out->slider[1]};
   for (int i = 0; i < 8; ++i) {
@@ -587,7 +676,14 @@ int32_t SdlInput::joystick_state(platform::JoyState* out) {
     // its dead zone (DIPROP_DEADZONE, 1/10000 of the range) around the centre.
     const int k = slot_[i];
     if (k < 0) continue;  // an axis the device lacks stays 0 in DIJOYSTATE2
-    const double c0 = pad_ ? pad_axis(i) : (SDL_GetJoystickAxis(joy_, k) + 32768) / 65535.0 * 2.0 - 1.0;
+    double c0 = pad_ ? pad_axis(i) : (SDL_GetJoystickAxis(joy_, k) + 32768) / 65535.0 * 2.0 - 1.0;
+    if (controller_config_ && pad_) {
+      const int profile_axis = i == 0 ? 0 : i == 1 ? 1 : i == 3 ? 2 : i == 4 ? 3 : -1;
+      if (profile_axis >= 0) {
+        const short raw = SDL_GetGamepadAxis(pad_, static_cast<SDL_GamepadAxis>(profile_axis));
+        c0 = controller_config_->calibration[static_cast<size_t>(profile_axis)].adjust(raw, false);
+      }
+    }
     double c = c0;
     const double dz = deadzone_[i] / 10000.0;
     c = std::fabs(c) <= dz ? 0.0 : (c - std::copysign(dz, c)) / (1.0 - dz);
@@ -722,6 +818,7 @@ void SdlInput::on_event(const SDL_Event& e) {
         if (pad_) SDL_CloseGamepad(pad_), pad_was_ = true;
         else SDL_CloseJoystick(joy_), pad_was_ = false;
         pad_ = nullptr, joy_ = nullptr, unplugged_ = true;
+        if (controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
       }
       break;
     case SDL_EVENT_JOYSTICK_ADDED:  // the same device back: read again, its map kept

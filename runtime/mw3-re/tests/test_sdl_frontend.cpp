@@ -251,6 +251,78 @@ TEST(read_config_joystick_none_is_case_insensitive) {
   EXPECT(!sdlfe::joystick_selection_disabled("auto"));
 }
 
+TEST(controller_profile_v1_calibrates_axes_and_emits_zin_command_states) {
+  std::ostringstream text;
+  text << "CC_MW3_CONTROLLER_V1\n" << std::string(64, 'A') << '\n';
+  for (int i = 0; i < 6; ++i)
+    text << (i >= 4 ? "0 0 32767 0.1 2 0\n" : "-32768 0 32767 0.1 2 0\n");
+  for (int i = 0; i < 26; ++i) text << (i == 25 ? 166 : i == 0 ? 12 : 0) << (i == 25 ? '\n' : ' ');
+  text << "20 61\n1 0 2 3\n-1 1 1 1\n0.25\n";
+  std::istringstream source(text.str());
+  const auto config = sdlfe::ControllerProfileConfig::read(source);
+  EXPECT(config.device == std::string(64, 'A'));
+  EXPECT(config.calibration[0].adjust(0, false) == 0);
+  EXPECT(config.calibration[0].adjust(32767, false) == 1);
+  EXPECT(config.calibration[0].adjust(-32768, false) == -1);
+  auto curved = config.calibration[0];
+  curved.deadzone = 0, curved.response = 2;
+  EXPECT(std::abs(curved.adjust(16384, false) - .25) < .0001);
+  curved.inverted = true;
+  EXPECT(curved.adjust(32767, false) == -1);
+  auto calibrated_trigger = config.calibration[4];
+  EXPECT(calibrated_trigger.adjust(0, true) == 0);
+  EXPECT(calibrated_trigger.adjust(32767, true) == 1);
+  auto offset_axis = config.calibration[0];
+  offset_axis.minimum = -30000, offset_axis.center = 1000, offset_axis.maximum = 30000;
+  offset_axis.deadzone = 0, offset_axis.response = 1;
+  EXPECT(offset_axis.adjust(1000, false) == 0 && offset_axis.adjust(30000, false) == 1);
+
+  sdlfe::ControllerState state;
+  sdlfe::ControllerSample sample;
+  sample.connected = sample.focused = true;
+  state.update(config, sample);  // neutral release arms the physical controls
+  EXPECT(state.armed && state.connected);
+  sample.buttons[0] = true;
+  sample.buttons[25] = true;
+  sample.axes[1] = 32767;
+  sample.axes[4] = 10000;
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kPressed && state.actions[20] == 0 && state.actions[166] == zin::kPressed);
+  sample.axes[4] = 20000;
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kHeld && state.actions[20] == zin::kPressed);
+  EXPECT(state.actions[166] == zin::kHeld);
+  EXPECT(state.analog[0] == -1);
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kHeld && state.actions[20] == zin::kHeld);
+  sample.buttons[0] = false;
+  sample.buttons[25] = false;
+  sample.axes[4] = 0;
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kReleased && state.actions[20] == zin::kReleased);
+
+  struct OverlayInput final : platform::Input {
+    uint32_t action = 0;
+    bool open(Device) override { return true; }
+    void close(Device) override {}
+    int32_t acquire(Device) override { return 0; }
+    int32_t unacquire(Device) override { return 0; }
+    int32_t keyboard_data(platform::KeyEvent*, uint32_t*) override { return 0; }
+    int32_t mouse_state(platform::MouseState*) override { return 0; }
+    int32_t joystick_state(platform::JoyState*) override { return 0; }
+    uint32_t command_state(int32_t command) override { return command == 12 ? action : 0; }
+  } input;
+  zin::reset_state();
+  zin::set_input(&input);
+  zin::init(167, "controller overlay test");
+  input.action = zin::kPressed;
+  EXPECT(zin::command(12) == zin::kPressed);
+  input.action = zin::kReleased;
+  EXPECT(zin::command(12) == zin::kReleased);
+  zin::shutdown();
+  zin::reset_state();
+}
+
 namespace {
 SDL_Event key(SDL_Scancode s, bool down, bool repeat = false) {
   SDL_Event e{};

@@ -161,6 +161,9 @@ public sealed class NativeGameRunner
 
         var root = FindRuntimeRoot() ?? throw new FileNotFoundException("This installation has no MW3-RE runtime.");
         var contract = Mw3ReRuntimeContract.ReadStructure(root);
+        var controllerProfile = new ControllerProfiles(_dataRoot).Load();
+        if (controllerProfile.Enabled && !contract.SupportsControllerProfiles)
+            throw new InvalidOperationException("The installed MW3-RE runtime does not support controller profiles.");
         var planner = Path.Combine(_basePath, PlannerFolder, "mw3_re_launch.py");
         if (!File.Exists(planner)) throw new FileNotFoundException("The MW3-RE planner is missing.", planner);
         var python = NativeRuntimeLayout.FindInstalled(_basePath, _dataRoot)?.Python
@@ -220,6 +223,13 @@ public sealed class NativeGameRunner
                     " left out; using the one from " + item.GetProperty("kept_from").GetString());
 
         var argv = plan.RootElement.GetProperty("argv").EnumerateArray().Select(item => item.GetString()!).ToList();
+        if (controllerProfile.Enabled)
+        {
+            string controllerPath = NativeControls.ControllerProfilePath(writeDirectory);
+            if (!File.Exists(controllerPath))
+                throw new InvalidOperationException("The enabled controller profile was not exported for this session.");
+            argv.AddRange(NativeControls.ControllerArguments(controllerProfile, controllerPath));
+        }
         // Music is optional: a broken or locked soundtrack file must not stop the game from starting.
         try
         {

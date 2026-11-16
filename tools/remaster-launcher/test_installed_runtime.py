@@ -234,7 +234,7 @@ def native_stage_tests(inputs):
             producer.stage_inventory(inventory, self.output)
             descriptor = json.loads((self.output / "runtime.json").read_text(encoding="utf-8"))
             self.assertEqual(descriptor["roles"], dict(executable="bin/mw3.exe", profile="profile.json"))
-            self.assertEqual(descriptor["capabilities"], {})
+            self.assertEqual(descriptor["capabilities"], {"controller-profile": [1]})
             self.assertIn("bin/mw34_normal_hash.dll", descriptor["dependencies"])
             self.assertTrue(any(name.lower().startswith("bin/vcruntime") for name in descriptor["files"]))
             physical = {path.relative_to(self.output).as_posix() for path in self.output.rglob("*") if path.is_file()}
