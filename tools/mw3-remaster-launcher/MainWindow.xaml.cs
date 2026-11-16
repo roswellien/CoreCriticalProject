@@ -164,7 +164,7 @@ namespace MW3RemasterLauncher
                 TxtStatusReady.Foreground = (System.Windows.Media.Brush)FindResource("BrushAmber");
                 BorderGameMissingAlert.Visibility = Visibility.Collapsed;
                 BtnLaunchGame.Content = _settingsMgr.Current.EngineMode == "d7vk"
-                    ? "\u25B6  LAUNCH ORIGINAL (D7VK)" : "\u25B6  PLAY";
+                    ? "\u25B6  LAUNCH ORIGINAL (D7VK)" : PlayCaption();
                 BtnLaunchGame.IsEnabled = true;
                 try
                 {
@@ -317,7 +317,7 @@ namespace MW3RemasterLauncher
             }
             if (BtnLaunchGame != null && BtnLaunchGame.IsEnabled)
             {
-                BtnLaunchGame.Content = isD7Vk ? "▶  LAUNCH ORIGINAL (D7VK)" : "▶  PLAY";
+                BtnLaunchGame.Content = isD7Vk ? "▶  LAUNCH ORIGINAL (D7VK)" : PlayCaption();
             }
 
             if (PanelSummaryRemaster != null && PanelSummaryD7vk != null)
@@ -798,6 +798,10 @@ namespace MW3RemasterLauncher
             }
         }
 
+        /// <summary>Play starts MW3-RE; a selected modular content profile launches that profile instead.</summary>
+        private string PlayCaption() => string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile)
+            ? "▶  PLAY" : "▶  PLAY MW3-RE PROFILE";
+
         private async void BtnLaunchGame_Click(object sender, RoutedEventArgs e)
         {
             if (_assetInstallActive || _nativeSessionActive || _launchPreparing) return;
@@ -916,7 +920,7 @@ namespace MW3RemasterLauncher
             BtnLaunchGame.IsEnabled = true;
             BtnInstallPack.IsEnabled = true;
             ListPacks.IsEnabled = true;
-            BtnLaunchGame.Content = "\u25B6  PLAY";
+            BtnLaunchGame.Content = PlayCaption();
         }
 
         private async Task ObserveD7VkCompletionAsync(Process process)
