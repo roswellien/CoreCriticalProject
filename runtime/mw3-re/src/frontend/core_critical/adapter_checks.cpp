@@ -2428,6 +2428,8 @@ void check_renderer_bridge_config() {
   require(cfg_dxgi.fixture_lights == false,
           "fixture_lights propagation mismatch");
   sdlfe::CoreCriticalAssets local_light_assets{};
+  local_light_assets.lighting = "normal";
+  local_light_assets.geometry = "gpu";
   local_light_assets.dynamic_lighting_explicit = true;
   local_light_assets.dynamic_lighting = true;
   local_light_assets.effect_lights = true;
@@ -2480,13 +2482,35 @@ void check_renderer_bridge_config() {
   local_light_assets.dynamic_lighting = false;
   auto disabled_light_config = cc_mw3_re::configure_bridge(
       sdlfe::RendererBackend::core_critical_wsi, {}, local_light_assets);
-  require(!disabled_light_config.sun && !disabled_light_config.effect_lights &&
+  require(disabled_light_config.sun && !disabled_light_config.effect_lights &&
               !disabled_light_config.fixture_lights &&
               !disabled_light_config.mech_headlights &&
               disabled_light_config.effect_light_catalog.empty() &&
               disabled_light_config.stock_headlights.empty() &&
               disabled_light_config.headlight_bindings.empty(),
-          "explicit disabled dynamic-light setting retained diagnostic lights");
+          "explicit disabled dynamic lighting changed sun or retained local lights");
+  sdlfe::CoreCriticalAssets no_sun_light_assets{};
+  no_sun_light_assets.dynamic_lighting_explicit = true;
+  no_sun_light_assets.dynamic_lighting = true;
+  no_sun_light_assets.effect_lights = true;
+  no_sun_light_assets.effect_light_catalog = "effects.bin";
+  no_sun_light_assets.fixture_lights = true;
+  no_sun_light_assets.mech_headlights = true;
+  no_sun_light_assets.stock_headlights = "stock-headlights.bin";
+  no_sun_light_assets.headlight_bindings = "headlights.txt";
+  const auto no_sun_light_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, no_sun_light_assets);
+  require(!no_sun_light_config.sun && !no_sun_light_config.effect_lights &&
+              !no_sun_light_config.fixture_lights &&
+              !no_sun_light_config.mech_headlights &&
+              no_sun_light_config.effect_light_catalog.empty() &&
+              no_sun_light_config.stock_headlights.empty() &&
+              no_sun_light_config.headlight_bindings.empty(),
+          "local lights remained enabled without the sun pipeline");
+  const auto no_sun_effect_settings =
+      mw34::effects::settings(no_sun_light_config, false);
+  require(!no_sun_effect_settings.enabled && !no_sun_effect_settings.fixtures,
+          "local-light settings enabled effects without the sun pipeline");
   require(cfg_dxgi.shadow_batch == false, "shadow_batch propagation mismatch");
 
   auto cfg_wsi = cc_mw3_re::configure_bridge(

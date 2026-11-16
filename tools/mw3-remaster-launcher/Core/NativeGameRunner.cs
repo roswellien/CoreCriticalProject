@@ -172,6 +172,7 @@ public sealed class NativeGameRunner
         var activePacks = activeModDirs.ToList();
         var (models, environments) = SelectPreviewPacks(activePacks);
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
+        Directory.CreateDirectory(writeDirectory);
         var headlightBindings = new HeadlightBindings(_dataRoot)
             .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
         var options = new Mw3RePlanningOptions
@@ -218,7 +219,6 @@ public sealed class NativeGameRunner
                     " left out; using the one from " + item.GetProperty("kept_from").GetString());
 
         var argv = plan.RootElement.GetProperty("argv").EnumerateArray().Select(item => item.GetString()!).ToList();
-        Directory.CreateDirectory(writeDirectory);
         // Music is optional: a broken or locked soundtrack file must not stop the game from starting.
         try
         {

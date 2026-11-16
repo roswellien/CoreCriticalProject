@@ -467,6 +467,22 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual({item["feature"] for item in result["skipped_packs"]},
                          {"effect_lights", "fixture_lights", "mech_headlights"})
 
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_missing_declared_effect_catalog_is_reported_as_skipped(self):
+        from pathlib import Path
+        environment = self.lighting_environment_pack()
+        (Path(environment) / "environment" / "effects.bin").unlink()
+        result = self.plan(self.request(environment_packs=[environment],
+                                        dynamic_lighting=True))
+        self.assertTrue(result["ok"])
+        self.assertIn("--cc-environment-pack", result["argv"])
+        self.assertNotIn("--cc-effect-lights", result["argv"])
+        skipped = [item for item in result["skipped_packs"]
+                   if item.get("feature") == "effect_lights"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["root"], environment)
+        self.assertIn("unavailable", skipped[0]["reason"])
+
     @unittest.skipUnless(os.name == "nt", "runtime catalog paths are Windows paths")
     def test_stock_effect_catalog_fallback_must_be_declared_under_runtime(self):
         from pathlib import Path

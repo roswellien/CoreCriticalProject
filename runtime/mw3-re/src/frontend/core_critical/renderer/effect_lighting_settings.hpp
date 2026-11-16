@@ -14,6 +14,7 @@ struct Settings {
 
 inline Settings settings(const cc_mw3_re::RendererBridgeConfig &cfg,
                          bool sun_enabled) {
+  // sun_enabled is the active sun pipeline state, including mission policy.
   Settings v;
   v.enabled = cfg.effect_lights;
   v.fixtures = cfg.fixture_lights;

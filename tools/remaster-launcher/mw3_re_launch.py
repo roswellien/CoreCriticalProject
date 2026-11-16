@@ -252,12 +252,15 @@ def _effect_catalog(root):
     files = manifest.get("files")
     if type(member) is not str or type(files) is not dict or member not in files:
         return None, "environment pack has no declared effect-light catalog"
-    path = _pack_member(root, member)
-    size = Path(path).stat().st_size
-    if size < 12 or size > 12 + 48 * 8192:
-        return None, "effect-light catalog has an invalid size"
-    with open(path, "rb") as stream:
-        header = stream.read(12)
+    try:
+        path = _pack_member(root, member)
+        size = Path(path).stat().st_size
+        if size < 12 or size > 12 + 48 * 8192:
+            return None, "effect-light catalog has an invalid size"
+        with open(path, "rb") as stream:
+            header = stream.read(12)
+    except (OSError, ValueError) as error:
+        return None, f"effect-light catalog is unavailable: {error}"
     if len(header) != 12 or header[:8] != b"MWFX1\0\0\0":
         return None, "effect-light catalog has an invalid MWFX1 header"
     count = int.from_bytes(header[8:12], "little")

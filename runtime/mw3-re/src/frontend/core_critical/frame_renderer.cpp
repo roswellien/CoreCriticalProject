@@ -1932,7 +1932,6 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   if (assets.dynamic_lighting_explicit) {
     // The launcher's explicit choice owns this run, including the diagnostic
     // environment fallback, so stale development variables cannot re-enable it.
-    config.sun = assets.dynamic_lighting;
     config.effect_lights = false;
     config.effect_light_catalog.clear();
     config.fixture_lights = false;
@@ -2023,11 +2022,23 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   };
   config.sun_azimuth = number(assets.sun_azimuth, -360.0f, 360.0f);
   config.sun_elevation = number(assets.sun_elevation, 1.0f, 89.0f);
-  if (!assets.dynamic_lighting_explicit)
-    config.sun = assets.lighting != "off" || assets.geometry != "legacy";
+  config.sun = assets.lighting != "off" || assets.geometry != "legacy";
   config.sun_normals = (assets.lighting == "normal");
   config.sun_shadows = false;
   config.normal_maps_enabled = (assets.lighting == "normal");
+
+  if (!config.sun &&
+      (config.effect_lights || config.fixture_lights || config.mech_headlights)) {
+    std::fprintf(stderr,
+                 "Dynamic lights requested without sun lighting; effect, "
+                 "fixture, and mech headlights are disabled\n");
+    config.effect_lights = false;
+    config.effect_light_catalog.clear();
+    config.fixture_lights = false;
+    config.mech_headlights = false;
+    config.stock_headlights.clear();
+    config.headlight_bindings.clear();
+  }
 
   // Other defaults
   config.fixture_shadows = false;
