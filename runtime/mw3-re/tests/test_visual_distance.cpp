@@ -94,3 +94,36 @@ TEST(view_distance_tiler_capacity) {
     EXPECT(walk.rings[ring].count == 60);
   }
 }
+
+// The HUD zoom view renders inside the main world render, so its fog scope nests. Each scope
+// must scale the authored fog by its own ratio, and fog set during a scope (a world node pushes
+// fog while being drawn) must reach both the authored state and every active copy.
+TEST(view_distance_nested_fog_and_setters) {
+  const zmod::Fog saved = zmod::fog();
+  zmod::Fog initial{};
+  initial.on = 1;
+  initial.linear = 1;
+  initial.near_range = 100.0f;
+  initial.near_sq = 10000.0f;
+  initial.far_range = 700.0f;
+  initial.far_sq = 490000.0f;
+  initial.inv_range = 1.0f / 600.0f;
+  zmod::fog() = initial;
+  {
+    zmod::ScopedRenderFog world(800.0f, 1600.0f);
+    EXPECT(zmod::render_fog().far_range == 1400.0f);
+    {
+      zmod::ScopedRenderFog zoom(800.0f, 1200.0f);
+      EXPECT(zmod::render_fog().far_range == 1050.0f);  // 700 x 1.5, not 700 x 2 x 1.5
+      zmod::fog_set_far(800.0f);
+      zmod::fog_set_on(0);
+      EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
+      EXPECT(zmod::render_fog().far_range == 1200.0f && zmod::render_fog().on == 0);
+    }
+    // The outer copy follows what was set while the zoom scope was active.
+    EXPECT(zmod::render_fog().far_range == 1600.0f && zmod::render_fog().on == 0);
+  }
+  EXPECT(&zmod::render_fog() == &zmod::fog());
+  EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
+  zmod::fog() = saved;
+}

@@ -10,7 +10,30 @@ namespace zmod {
 
 namespace {
 Fog g_fog;
+// The innermost active extended-view copy and its far ratio; null/1 at the original range.
 Fog* g_render_fog = nullptr;
+float g_render_scale = 1.0f;
+
+// Stretch only the distance interval by the visual/authored far ratio. On/off, mode, colour and
+// the altitude taper stay as authored. Always built from the authored fog, never from an outer
+// copy, so the HUD zoom view (drawn inside the main world render) is not scaled twice.
+Fog scaled_fog(const Fog& source, float scale) {
+  Fog copy = source;
+  copy.near_range *= scale;
+  copy.near_sq = copy.near_range * copy.near_range;
+  copy.far_range *= scale;
+  copy.far_sq = copy.far_range * copy.far_range;
+  const float range = copy.far_range - copy.near_range;
+  if (range != 0.0f) copy.inv_range = 1.0f / range;
+  if (!copy.linear) copy.density /= scale;
+  return copy;
+}
+
+// Setters always write the authored state (as the original game does); an active copy then
+// follows it, so gameplay readers and the render copy never disagree.
+void refresh_render_fog() {
+  if (g_render_fog) *g_render_fog = scaled_fog(g_fog, g_render_scale);
+}
 }  // namespace
 
 Fog& fog() { return g_fog; }
@@ -19,34 +42,43 @@ const Fog& render_fog() { return g_render_fog ? *g_render_fog : g_fog; }
 ScopedRenderFog::ScopedRenderFog(float authored_far, float visual_far) {
   if (!(authored_far > 0.0f) || !(visual_far > authored_far)) return;
   previous_ = g_render_fog;
-  copy_ = render_fog();
-  const float scale = visual_far / authored_far;
-  copy_.near_range *= scale;
-  copy_.near_sq = copy_.near_range * copy_.near_range;
-  copy_.far_range *= scale;
-  copy_.far_sq = copy_.far_range * copy_.far_range;
-  const float range = copy_.far_range - copy_.near_range;
-  if (range != 0.0f) copy_.inv_range = 1.0f / range;
-  if (!copy_.linear) copy_.density /= scale;
+  previous_scale_ = g_render_scale;
+  g_render_scale = visual_far / authored_far;
+  copy_ = scaled_fog(g_fog, g_render_scale);
   g_render_fog = &copy_;
+  active_ = true;
 }
 
 ScopedRenderFog::~ScopedRenderFog() {
-  if (previous_ || g_render_fog == &copy_) g_render_fog = previous_;
+  if (!active_) return;
+  g_render_fog = previous_;
+  g_render_scale = previous_scale_;
+  // Fog set while this inner scope was active must reach the outer copy too.
+  refresh_render_fog();
 }
 
 // Mech3.exe 1.2 @ 0x00526b80
-void fog_set_on(int32_t on) { (g_render_fog ? g_render_fog : &g_fog)->on = on; }
+void fog_set_on(int32_t on) {
+  g_fog.on = on;
+  refresh_render_fog();
+}
 
 // Mech3.exe 1.2 @ 0x00526ce0
-void fog_set_linear(int32_t linear) { g_fog.linear = linear; }
+void fog_set_linear(int32_t linear) {
+  g_fog.linear = linear;
+  refresh_render_fog();
+}
 
 // Mech3.exe 1.2 @ 0x00526cd0
-void fog_set_density(float density) { g_fog.density = density; }
+void fog_set_density(float density) {
+  g_fog.density = density;
+  refresh_render_fog();
+}
 
 // Mech3.exe 1.2 @ 0x00526cf0
 void fog_set_color(const float rgb[3]) {
   for (int i = 0; i < 3; ++i) g_fog.color[i] = rgb[i];
+  refresh_render_fog();
   zrndr::device_fog_color(rgb);
 }
 
@@ -55,6 +87,7 @@ void fog_set_near(float range) {
   g_fog.near_range = range;
   g_fog.near_sq = range * range;
   if (g_fog.far_range - range != 0.0f) g_fog.inv_range = 1.0f / (g_fog.far_range - range);
+  refresh_render_fog();
 }
 
 // Mech3.exe 1.2 @ 0x00526c00
@@ -62,18 +95,21 @@ void fog_set_far(float range) {
   g_fog.far_range = range;
   g_fog.far_sq = range * range;
   if (range - g_fog.near_range != 0.0f) g_fog.inv_range = 1.0f / (range - g_fog.near_range);
+  refresh_render_fog();
 }
 
 // Mech3.exe 1.2 @ 0x00526c50
 void fog_set_alt_high(float alt) {
   g_fog.alt_high = alt;
   if (alt - g_fog.alt_low != 0.0f) g_fog.inv_alt = 1.0f / (alt - g_fog.alt_low);
+  refresh_render_fog();
 }
 
 // Mech3.exe 1.2 @ 0x00526c90
 void fog_set_alt_low(float alt) {
   g_fog.alt_low = alt;
   if (g_fog.alt_high - alt != 0.0f) g_fog.inv_alt = 1.0f / (g_fog.alt_high - alt);
+  refresh_render_fog();
 }
 
 // Mech3.exe 1.2 @ 0x00526de0
