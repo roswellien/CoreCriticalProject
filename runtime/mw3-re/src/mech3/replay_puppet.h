@@ -34,13 +34,21 @@ class Puppet {
   // 1/240 s is used: the skis divide by it). `live` is a play forward (not a
   // seek): a part lost now flies off with the game's own effects, and a
   // mech destroyed now plays its death effect; a seek only hides lost parts.
-  void set(const MechPose& pose, const std::vector<int>& lost, float dt, bool live = false);
+  // `leg_kill`: the mech dies of a lost thigh (the log shows it a state line
+  // later), which the game shows with the limb's own explosion, not the
+  // torso's death effect.
+  void set(const MechPose& pose, const std::vector<int>& lost, float dt, bool live = false, bool leg_kill = false);
+  // Whether a seek to `pose` needs the mech made again: a part it lost is
+  // back (`lost` no longer lists it), or it stands again after its death
+  // effect played.
+  bool needs_rebuild(const MechPose& pose, const std::vector<int>& lost) const;
   // Deleted and made again at `pose` (a seek backward, where lost parts
   // must come back).
   bool rebuild(const MechPose& pose, std::string* error);
 
   Mech* mech() const { return mech_; }
-  // The part ids this puppet has taken off.
+  // The part ids this puppet has taken off, each once (a lost arm's hand,
+  // and a thigh's calf and foot, with it).
   const std::vector<int>& detached() const { return detached_; }
 
   // Whether the game takes off the part `id` when it is destroyed: arms and
@@ -54,6 +62,7 @@ class Puppet {
   void free_mech();
   void place(const MechPose& pose);
   void detach(int id);
+  void mark_detached(int id);
   void blow_off(int id);
   void explode(const std::string& action);
   void stop_effects();
@@ -69,6 +78,8 @@ class Puppet {
   std::vector<int> detached_;
   bool limp_started_ = false;
   bool was_standing_ = true;  // for the death effect: played once, as it falls
+  bool exploded_ = false;     // the death effect has played (needs_rebuild)
+  std::vector<int> handled_;  // the logged lost ids taken off so far (needs_rebuild)
 };
 
 }  // namespace mech3::replay

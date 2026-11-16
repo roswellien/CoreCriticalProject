@@ -203,8 +203,8 @@ Controls:
   its own picture: its planned route bright (the big dot its next
   waypoint), its goal (a white X), its radar contacts (green, solid
   detected now, dashed remembered) and its target, with the others' target
-  lines faint. Once the selected mech is destroyed, every line is full
-  again.
+  lines and every other route faint. Once the selected mech is destroyed,
+  the target lines are full again and the routes all faint.
 - 1 to 5 switch those lines: 1 route, 2 target, 3 goal, 4 radar, 5 the
   doing words. H shows or hides the key to the colors at the top left.
 - The selected mech's panel says in sentences what it is doing now, its
@@ -241,7 +241,9 @@ say, torso and arm aims), and each logged shot and hit starts that weapon's
 own fire or impact effect and sound. An arm or leg lost while the replay
 plays is blown off by the game's own code: it flies away as debris with its
 explosion and leaves a smoking stump; a mech destroyed while it plays bursts
-with the game's death effect for its fall (forward, backward or a collapse).
+with the game's death effect for its fall (forward, backward or a collapse),
+except a mech killed by a lost leg, which the game shows with the leg's
+explosion alone. The Elemental's lost parts are only hidden.
 None of it deals damage. A seek past a loss only hides the lost part.
 Version 1 logs play too, with a walk guessed from the distance moved.
 

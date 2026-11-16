@@ -40,6 +40,9 @@ using mech3::replay::Vec3;
 // frame: a slow frame or a fast replay speed runs them in pieces no longer
 // than this, as the game's own frame would, so no effect jumps ahead.
 constexpr float kMaxListStep = 0.1f;
+// How far ahead a death looks for a thigh lost with it: the log's state lines
+// are 0.1 s apart (arena_log.cpp), so two of them.
+constexpr float kLegKillLookahead = 0.25f;
 constexpr float kRingMeters = 6.0f;    // the side ring at each mech's feet
 constexpr float kLabelMeters = 13.0f;  // the id label above each mech
 constexpr float kFollowBack = 25.0f, kFollowUp = 8.0f, kFollowAim = 6.0f;
@@ -408,14 +411,19 @@ void Replay3dView::State::pose() {
     const MechPose* p = pose_of(frame, id);
     if (!p) continue;
     const std::vector<int> lost = log->parts_lost_by(id, t);
-    // Parts come back only by making the mech again (Puppet::rebuild).
-    const auto detachable = std::count_if(lost.begin(), lost.end(), Puppet::detachable);
-    if (seeked && static_cast<size_t>(detachable) < puppet->detached().size()) {
+    // Parts come back, and a death is undone, only by making the mech again.
+    if (seeked && puppet->needs_rebuild(*p, lost)) {
       std::string error;
       if (!puppet->rebuild(*p, &error)) std::fprintf(stderr, "mw3: replay3d: mech %d: %s\n", id, error.c_str());
     }
     const bool live = !first && !seeked;
-    puppet->set(*p, lost, live ? t - posed_t : 1.0f / 60, live);
+    // A thigh's loss shows in the state line after the death: looked for a
+    // little ahead, so a leg kill gets the limb's explosion alone.
+    bool leg_kill = false;
+    if (live && !p->standing)
+      for (const int part : log->parts_lost_by(id, t + kLegKillLookahead))
+        if ((part == 4 || part == 5) && std::find(lost.begin(), lost.end(), part) == lost.end()) leg_kill = true;
+    puppet->set(*p, lost, live ? t - posed_t : 1.0f / 60, live, leg_kill);
   }
   if (!first && !seeked && t > posed_t)
     for (const Event& e : log->fire_between(posed_t, t)) start_effects(e);

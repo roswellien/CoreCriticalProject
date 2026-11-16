@@ -6,6 +6,7 @@
 
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/object3d.h"
+#include "gamez/zeffect/zeff_anim_run.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "mech3/app_mech.h"
 #include "mech3/mech.h"
@@ -106,14 +107,20 @@ void Puppet::stop_effects() {
     if (effect && f.stop_effect) f.stop_effect(effect);
     effect = nullptr;
   };
+  // The end callback is cleared first: a stopped effect can stay held, and a
+  // later stop (the mission's end) would call back into the freed part.
+  const auto forget = [&](Handle& effect) {
+    if (effect) zeff::anim_set_callback(static_cast<zeff::AnimDef*>(effect), nullptr, nullptr);
+    stop(effect);
+  };
   for (MechPart* part : mech_->parts) {
     if (!part) continue;
-    stop(part->debris_effect);
-    stop(part->trail_effect);
+    forget(part->debris_effect);
+    forget(part->trail_effect);
   }
   if (mech_->torso) {
-    stop(mech_->torso->death_effect);
-    stop(mech_->torso->death_effect2);
+    forget(mech_->torso->death_effect);
+    forget(mech_->torso->death_effect2);
   }
 }
 
@@ -152,6 +159,8 @@ bool Puppet::make(const MechPose& start, std::string* error) {
   detached_.clear();
   limp_started_ = false;
   was_standing_ = start.standing;
+  exploded_ = false;
+  handled_.clear();
   place(start);
   return true;
 }
@@ -183,7 +192,18 @@ void Puppet::detach(int id) {
   if (!part || !part->node) return;
   zcls::node_set_active(static_cast<zcls::Node*>(part->node), 0);
   part->destroyed = true;
-  detached_.push_back(id);
+  mark_detached(id);
+}
+
+void Puppet::mark_detached(int id) {
+  if (std::find(detached_.begin(), detached_.end(), id) == detached_.end()) detached_.push_back(id);
+}
+
+bool Puppet::needs_rebuild(const MechPose& pose, const std::vector<int>& lost) const {
+  if (exploded_ && pose.standing) return true;
+  for (const int id : handled_)
+    if (std::find(lost.begin(), lost.end(), id) == lost.end()) return true;
+  return false;
 }
 
 // A limb lost while the replay plays: the game's own destroy (mech_parts.cpp),
@@ -196,24 +216,29 @@ void Puppet::detach(int id) {
 void Puppet::blow_off(int id) {
   MechPart* part = part_by_id(*mech_, id);
   if (!part || part->destroyed) {  // gone with its arm or thigh already
-    detached_.push_back(id);
+    mark_detached(id);
+    return;
+  }
+  // The Elemental's parts kill it as they go (on_part_destroyed runs its
+  // Torso::destroy and die()), so its parts are only hidden.
+  constexpr int32_t kElementalRoster = 7;  // mech_names.cpp: "elemental"
+  const bool flies = (id == kLeftArm || id == kRightArm || id == kLeftThigh || id == kRightThigh);
+  if (roster_ == kElementalRoster || !flies) {
+    detach(id);  // a hand, calf or foot alone: hidden, as the game has no effect for it
     return;
   }
   const int variant = id % 2;
   if (id == kLeftArm || id == kRightArm) {
     part->destroy(variant, 1);
-    detached_.push_back(id + 7);  // its hand (9, 10) went with it
-  } else if (auto* leg = dynamic_cast<Leg*>(part); leg && (id == kLeftThigh || id == kRightThigh)) {
+    mark_detached(id + 7);  // its hand (9, 10) went with it
+  } else if (auto* leg = dynamic_cast<Leg*>(part)) {
     if (leg->foot && leg->foot->node) zcls::node_set_active(static_cast<zcls::Node*>(leg->foot->node), 0);
     leg->MechPart::destroy(variant, 1);
     if (leg->foot) leg->foot->lose_contents(), leg->foot->detach();
     if (leg->calf) leg->calf->lose_contents(), leg->calf->detach();
-    detached_.push_back(id + 7), detached_.push_back(id + 9);  // its calf (11, 12) and foot (13, 14)
-  } else {
-    detach(id);  // a hand, calf or foot alone: hidden, as the game has no effect for it
-    return;
+    mark_detached(id + 7), mark_detached(id + 9);  // its calf (11, 12) and foot (13, 14)
   }
-  detached_.push_back(id);
+  mark_detached(id);
 }
 
 // A mech destroyed while the replay plays: Torso::destroy's death effect, by
@@ -227,22 +252,31 @@ void Puppet::explode(const std::string& action) {
   DamageCalls& calls = damage_calls();
   if (calls.node_set_name) calls.node_set_name(m.node, "deadmech");  // as the game names a wreck
   if (!def || !calls.spawn_effect_at) return;
+  // A replay played again from the start shows the death again: the last
+  // one's effect is stopped first, so only one is ever held.
+  if (Handle& last = m.torso->death_effect2; last) {
+    zeff::anim_set_callback(static_cast<zeff::AnimDef*>(last), nullptr, nullptr);
+    if (free_calls().stop_effect) free_calls().stop_effect(last);
+    last = nullptr;
+  }
   m.torso->death_effect2 = calls.spawn_effect_at(def, m.node, 0.0f, 0.0f, 0.0f);
+  exploded_ = true;
   // Cleared when it ends, as the game's own (so stop_effects never stops a
   // finished one).
   if (m.torso->death_effect2 && calls.on_effect_end) calls.on_effect_end(m.torso->death_effect2, *m.torso);
 }
 
-void Puppet::set(const MechPose& pose, const std::vector<int>& lost, float dt, bool live) {
+void Puppet::set(const MechPose& pose, const std::vector<int>& lost, float dt, bool live, bool leg_kill) {
   if (!mech_) return;
   Mech& m = *mech_;
   dt = std::max(dt, kMinStep);
   std::vector<int> newly_lost;
-  for (const int id : lost)
-    if (detachable(id) && std::find(detached_.begin(), detached_.end(), id) == detached_.end()) {
-      if (live) newly_lost.push_back(id);  // flown off once posed, below
-      else detach(id);
-    }
+  for (const int id : lost) {
+    if (!detachable(id) || std::find(handled_.begin(), handled_.end(), id) != handled_.end()) continue;
+    handled_.push_back(id);
+    if (live) newly_lost.push_back(id);  // flown off once posed, below
+    else if (std::find(detached_.begin(), detached_.end(), id) == detached_.end()) detach(id);
+  }
 
   place(pose);
   m.vec_3c = m.push = m.impulse = mech3::Vec3{0, 0, 0};
@@ -272,8 +306,13 @@ void Puppet::set(const MechPose& pose, const std::vector<int>& lost, float dt, b
   // The log wins over root motion.
   place(pose);
   // Posed first, so the debris and effects start where the limb is drawn.
-  for (const int id : newly_lost) blow_off(id);
-  if (live && was_standing_ && !pose.standing) explode(pose.action);
+  // An arm's or thigh's blow_off marks its hand, calf and foot, which the log
+  // lists too: those are skipped here.
+  for (const int id : newly_lost)
+    if (std::find(detached_.begin(), detached_.end(), id) == detached_.end()) blow_off(id);
+  // The game's death effect is the torso's (Torso::destroy); a mech killed
+  // by a lost thigh (Leg::destroy) has only the limb's explosion.
+  if (live && was_standing_ && !pose.standing && !leg_kill) explode(pose.action);
   was_standing_ = pose.standing;
   m.jet_effects(pose.jumping);
 }

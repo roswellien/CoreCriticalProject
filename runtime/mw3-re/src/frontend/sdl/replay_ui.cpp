@@ -152,7 +152,7 @@ void draw_legend(const Overlays& overlays, ReplayDraw& draw, float top) {
     const char* text;
   };
   const Row rows[] = {
-      {kRoute, kRouteColor, "1 route: its planned path (big dot: next)"},
+      {kRoute, kRouteColor, "1 route: planned path (bright when selected)"},
       {kTarget, kTargetColor, "2 target: the enemy it aims at"},
       {kGoal, kGoalColor, "3 goal: where it is going (X)"},
       {kContacts, kContactColor, "4 radar: solid sees now, dashed remembers"},
