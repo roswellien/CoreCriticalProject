@@ -292,7 +292,7 @@ static class NativeRuntimeLayoutChecks
             // Quota rejection must precede opening the deliberately absent payload.
             RejectDescriptor(json =>
             {
-                json["dependencies"] = new JsonArray("absent.bin");
+                json["dependencies"] = new JsonArray("absent.bin", "bin/SDL3_sound.dll");
                 json["files"]!.AsObject().Remove("support.txt");
                 json["files"]!["absent.bin"] = new JsonObject { ["bytes"] = 4294967296L, ["sha256"] = new string('0', 64) };
             }, "size");
@@ -349,7 +349,7 @@ static class NativeRuntimeLayoutChecks
             {
                 RejectDescriptor(json =>
                 {
-                    json["dependencies"] = new JsonArray("linked/support.txt");
+                    json["dependencies"] = new JsonArray("linked/support.txt", "bin/SDL3_sound.dll");
                     json["files"]!["linked/support.txt"] = json["files"]!["support.txt"]!.DeepClone();
                     json["files"]!.AsObject().Remove("support.txt");
                 }, "link");
