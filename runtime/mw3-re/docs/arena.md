@@ -34,7 +34,7 @@ mw3 GAME_DIR --arena setup.json --seed 7 --frame-ms 33 --hidden -nofmv
 ```
 
 `--seed` and `--frame-ms` are required, so a match log can be repeated; the
-seed is a whole number, 0 or more. The host is a spectator with no mech;
+seed is a whole number from 0 to 2147483647. The host is a spectator with no mech;
 nothing is bound to a socket and nothing leaves the process. A match plays
 without sound, watched or not. Every bot walks the grid (the Improved AI
 upgrade) whatever `mw3.cfg` says, so a setup and seed play the same match on

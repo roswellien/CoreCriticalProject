@@ -269,12 +269,15 @@ struct Replay3dView::State {
 
   // Lets go of every held key and the mouse look (its captured pointer too),
   // for when the releases can't reach handle(): the quit box takes the input,
-  // or the window loses focus.
-  void release_input() {
+  // or `window` loses focus. Without a window (the quit box), the one with
+  // the mouse or keyboard is used.
+  void release_input(SDL_Window* window = nullptr) {
     std::fill(std::begin(held), std::end(held), false);
-    if (looking)
-      if (SDL_Window* w = SDL_GetMouseFocus() ? SDL_GetMouseFocus() : SDL_GetKeyboardFocus())
-        SDL_SetWindowRelativeMouseMode(w, false);
+    if (looking) {
+      if (!window) window = SDL_GetMouseFocus();
+      if (!window) window = SDL_GetKeyboardFocus();
+      if (window) SDL_SetWindowRelativeMouseMode(window, false);
+    }
     looking = seeking = false;
   }
 
@@ -686,7 +689,7 @@ bool Replay3dView::handle(const SDL_Event& e) {
   State& s = *s_;
   if (!s.started) return false;
   if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-    s.release_input();
+    s.release_input(SDL_GetWindowFromID(e.window.windowID));
     return false;  // the game's own handling of it goes on
   }
   if (s.quit_box_open) return false;

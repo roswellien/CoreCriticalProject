@@ -799,6 +799,7 @@ void save_options() {
   if (g_saved_screen.replaced) {
     Options& o = options();
     o.in_game_vmode = g_saved_screen.mode, o.screen_w = g_saved_screen.w, o.screen_h = g_saved_screen.h;
+    g_saved_screen = SavedScreen{};  // put back once; a later load starts fresh
   }
   controls_write_settings();  // FIX (bug), W40: zreg::write_all with the kept map
   g_hooks->controls_free();

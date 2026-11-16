@@ -172,17 +172,26 @@ void end_stock_match() {
 }
 
 // A match that cannot start still ends, with an error, so an unattended
-// batch of runs never waits on it.
+// batch of runs never waits on it. It is only marked here: arena_start runs
+// while the Core state is being entered, and the run's end is watched from
+// Core's frames (mw3_main.cpp), so the match is ended on its first frame
+// (arena_tick).
+bool g_fail_ended = false;
 void fail_start(const char* why) {
   std::fprintf(stderr, "mw3: arena: %s; the match cannot start\n", why);
   g_result = Result{};
   g_result.decided = true, g_result.failed = true;
-  end_stock_match();
+  g_fail_ended = false;
 }
 }  // namespace
 
 // Ours (#287)
 void arena_tick() {
+  if (g_setup && g_result.failed && !g_fail_ended) {
+    g_fail_ended = true;
+    end_stock_match();
+    return;
+  }
   if (!g_setup || !g_started || g_result.decided || g_mechs.empty()) return;
   view_follow();
   int standing[kSides] = {};
@@ -256,14 +265,8 @@ std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a
 void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, ai::AiParams* params) {
   std::memcpy(params->raw, bot.params.data(), bot.params.size());
   // The preset's pilot name and radio voice; AiParams frees both.
-  const auto copy = [](const std::string& text) -> char* {
-    if (text.empty()) return nullptr;
-    char* out = static_cast<char*>(std::malloc(text.size() + 1));
-    if (out) std::memcpy(out, text.c_str(), text.size() + 1);
-    return out;
-  };
-  std::free(params->pilot), params->pilot = copy(bot.pilot);
-  std::free(params->sound_tag), params->sound_tag = copy(bot.voice);
+  std::free(params->pilot), params->pilot = bot.pilot.empty() ? nullptr : strdup(bot.pilot.c_str());
+  std::free(params->sound_tag), params->sound_tag = bot.voice.empty() ? nullptr : strdup(bot.voice.c_str());
   params->put<float>(0x08, pos[0]);
   params->put<float>(0x0c, pos[1]);
   params->put<float>(0x10, pos[2]);

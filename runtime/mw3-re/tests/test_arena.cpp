@@ -675,6 +675,22 @@ TEST(arena_bot_params_change_only_the_arena_fields) {
   EXPECT(other_bytes_differ == 0);
 }
 
+// The preset's pilot name and radio voice reach the bot's params, replacing
+// any the params held; a preset without them leaves none.
+TEST(arena_bot_params_carry_the_pilot_and_voice) {
+  Bot bot;
+  bot.pilot = "Dominic Paine", bot.voice = "dom";
+  const float pos[3] = {};
+  mech3::ai::AiParams params;
+  params.pilot = strdup("old pilot"), params.sound_tag = strdup("old voice");
+  arena_bot_params(bot, 0, pos, 0.0f, &params);
+  EXPECT(params.pilot && std::strcmp(params.pilot, "Dominic Paine") == 0);
+  EXPECT(params.sound_tag && std::strcmp(params.sound_tag, "dom") == 0);
+  Bot silent;
+  arena_bot_params(silent, 0, pos, 0.0f, &params);
+  EXPECT(!params.pilot && !params.sound_tag);
+}
+
 namespace {
 // #289 step 2: a small hand-written log with every line type the replay reads.
 std::string replay_test_log(bool with_end) {
