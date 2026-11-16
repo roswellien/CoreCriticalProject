@@ -1,5 +1,9 @@
 # MW3-RE: playing the owner's HD MP4 cutscenes in game (research, 2026-11-16)
 
+> **Update 2026-11-16, after the owner's answers (section 9):** the owner requires cross-platform playback, so the
+> Windows-only Media Foundation recommendation in sections 1 and 3.4 is superseded. Section 9 records the decisions and the
+> revised decoder recommendation (FFmpeg shared libraries, already built and bundled by `tools/deps/build_deps.sh`).
+
 Read-only research. Nothing was built or run, and no game was started. No long job was running (python and claude
 processes only, no ffmpeg or cmake). Paths are relative to `runtime/mw3-re/` unless they start with `tools/` or are
 marked `develop:`. The launcher planner and runtime contract are not in this checkout, so I read them from
@@ -152,6 +156,56 @@ Acceptance:
   `ffmpeg -f lavfi -i testsrc2=s=320x240:r=24:d=2 -f lavfi -i sine=f=440:r=22050:d=2 -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 t.mp4`.
   Cases: a fake decoder backend; frame-pick logic by cursor; manifest and limits validation; planner and capability checks (`tools/remaster-launcher/test_mw3_re_launch.py`, develop); fallback logs; the dummy audio driver plus `--movie` style runs.
 - **Real session only:** A/V sync on the 182 s intro, skip, alt-tab, borderless/fullscreen at 3440x1440, DXGI interop and render thread, hardware decode, an N edition, long-run memory.
+
+## 9. Owner decisions and revised recommendation (2026-11-16)
+
+**Decisions (answers to section 6).**
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | One pack for the Cinematics window and in-game? | **Yes.** |
+| 2 | Is Windows-only decoding acceptable? | **No.** Cross-platform (Windows, macOS, Linux) is required. |
+| 3 | HD movies without the original AVIs or the importer files? | **Yes.** The design already serves a synthetic stream by AVI name, so neither the importer files nor the Indeo helper is needed for replaced movies. |
+| 4 | One invalid clip? | **Only that clip falls back** to the original; the rest of the pack plays. |
+| 5 | Repeat frames when 24 fps meets a faster display? | Asked what it looks like; see below. |
+
+**What question 2 changes.** Media Foundation is Windows-only, so it can no longer be the only backend. Checked against the repo:
+- `third_party/` holds only `enet imgui miniupnpc miniz nlohmann-json pl_mpeg`. `pl_mpeg` decodes MPEG-1 only.
+- `tools/deps/build_deps.sh mac|linux|win` already builds **FFmpeg 8.1.2 (LGPL 2.1, shared)** from source for all three platforms,
+  with a pinned tarball, and the releases bundle its libraries for `mw3import` (`docs/deps.md`, `docs/release.md`). Today it is
+  configured with only what the importer uses (the AVI demuxer and what it needs), and `mw3` itself does not link it.
+- `docs/legal.md` says nothing about codecs or patents. H.264 is patent-encumbered, so shipping a software H.264 decoder in the
+  game is an owner or legal decision for any public release. The pack manifests currently say private playtest only.
+
+**Format options for cross-platform playback.**
+
+| Option | Pack files | Decoder in the game | Pros | Cons |
+|---|---|---|---|---|
+| **A. Keep H.264 + AAC MP4 (recommended)** | The owner's files, unchanged | FFmpeg shared libs, configure widened to the H.264 and AAC decoders, MP4 demuxer, scaler and resampler | One pack and one decode path on all platforms. No re-encode, so no quality loss. The Windows launcher window (WPF `MediaElement`) keeps playing the same files, as decision 1 needs. The FFmpeg build and bundle pipeline already exists. | Ships FFmpeg libraries with the game (the release already bundles them for the importer). H.264 patent question for distribution. |
+| B. VP9 + Opus (WebM) | Re-encoded from the lossy H.264 (generation loss) | Same FFmpeg libs, native decoders only | Royalty-free. Same plumbing as A. Smaller files (my guess, 30-40%). | Windows `MediaElement` cannot play it without extensions, so the launcher window needs another player. Re-encode quality loss. |
+| C. MPEG-1 + MP2 | Re-encoded, large | `pl_mpeg`, already vendored | No new dependency, no patent question. | Roughly 1.5 GB for the pack (my estimate), visibly lower quality, two lossy generations. Launcher window cannot play it. |
+| D. AV1 + Opus | Re-encoded | dav1d + libopus + a container library | Best compression, royalty-free. | Two new dependencies, `MediaElement` needs the AV1 extension. Not worth it now. |
+| Media Foundation (Windows) | Unchanged H.264 | OS decoder | Nothing to ship. | Windows only. May be added later as an optional hardware-accelerated path; not needed. |
+
+**Revised recommendation: option A**, with the codec behind the decoder interface so switching to B costs only a re-encode and a
+different FFmpeg configure line. The decoder interface, host integration, HD layer, planner and launcher design in sections 1-7
+are unchanged. Changes to the plan:
+- Task 1 becomes an FFmpeg backend (demux, decode, scale to RGBA, resample audio to PCM16 at the movie's rate), 3-5 days.
+- New task: widen `build_deps.sh`'s FFmpeg configure, link it into `mw3`, bundle and pin the libraries in the release and in
+  `stage_mw3_re_runtime.py` (the staging recipe allows only a fixed DLL set), add the licence notices, 2-3 days.
+- Estimated total about **18-28 developer-days** (was 16-24). The first spike (one clip at full resolution with audio) is still
+  3-5 days, on one platform first.
+- The N-edition probe in section 3.4 is no longer needed, because the game ships its own decoder.
+
+**Question 5: what repeating frames looks like.** A 24 fps frame lasts 41.7 ms. On a **60 Hz** display (the owner's display is
+3440x1440 at 60 Hz) each refresh is 16.7 ms, so frames are shown for 2 or 3 refreshes in turn (33 ms, then 50 ms). That uneven
+rhythm ("3:2 pulldown") shows as a faint judder on slow, steady camera pans. It is invisible on 120, 144 and 240 Hz displays (an exact
+multiple) and with variable refresh. The original movies were 15 fps, which fits 60 Hz evenly (4 refreshes each), so the
+upgrade is smoother in frame rate but with a slightly uneven rhythm. Options:
+- **Repeat frames** (the plan): sharp and cheap, judder as described.
+- **Blend neighbouring frames:** removes the judder but softens and ghosts motion.
+- **Match the display rate:** only on variable-refresh displays.
+Recommendation: repeat frames, no blending, no setting. Revisit only if it bothers in play.
 
 ## 8. Evidence list
 
