@@ -34,6 +34,36 @@ TEST(view_distance_policy_and_authored_clip) {
   EXPECT(camera.get<float>(0xb4) == 800.0f);
 }
 
+TEST(view_distance_scales_render_lod_ranges_only) {
+  struct Case {
+    unsigned requested_far;
+    float expected_scale;
+  };
+  constexpr Case cases[] = {{800, 1.0f}, {1200, 1.5f}, {1600, 2.0f}};
+  constexpr float authored_tree_lod_far = 400.0f;
+  for (const auto& test : cases) {
+    const float scale =
+        zcls::visual_distance_scale(800.0f, test.requested_far, true);
+    EXPECT(scale == test.expected_scale);
+    EXPECT(zcls::visual_distance_scale(800.0f, test.requested_far, false) ==
+           1.0f);
+    EXPECT(zcls::visual_distance_scale(1800.0f, test.requested_far, true) ==
+           1.0f);
+    EXPECT(authored_tree_lod_far * scale == 400.0f * test.expected_scale);
+  }
+  EXPECT(zcls::visual_distance_scale(0.0f, 1600, true) == 1.0f);
+
+  EXPECT(zcls::visual_far_corners_need_update(true, 800.0f, 0.0f));
+  EXPECT(zcls::visual_far_corners_need_update(false, 1200.0f, -800.0f));
+  EXPECT(!zcls::visual_far_corners_need_update(false, 1200.0f, -1200.0f));
+  EXPECT(zcls::visual_far_corners_need_update(false, 800.0f, -1200.0f));
+
+  zcls::Camera camera{};
+  camera.put(0xb4, 800.0f);
+  (void)zcls::visual_distance_scale(camera.get<float>(0xb4), 1600, true);
+  EXPECT(camera.get<float>(0xb4) == 800.0f);
+}
+
 TEST(view_distance_scoped_fog) {
   const zmod::Fog saved = zmod::fog();
   zmod::Fog initial{};

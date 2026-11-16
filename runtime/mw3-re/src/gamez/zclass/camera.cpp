@@ -347,6 +347,10 @@ int32_t render_lod(Node* node, int32_t mode) {
   uint32_t flags = node->flags();
   if (!(flags & kActive)) return 0;
   auto* d = static_cast<Lod*>(node->data);
+  const float distance_scale = visual_distance_scale(
+      g_walk.camera->get<float>(0xb4), g_visual_far_request,
+      g_walk.camera == g_visual_camera);
+  const float distance_scale_squared = distance_scale * distance_scale;
   flags &= ~kUnk25;
   node->set_flags(flags);
   auto ret0 = [&]() {
@@ -355,8 +359,8 @@ int32_t render_lod(Node* node, int32_t mode) {
   };
   if (d->get<int32_t>(0) == 0) {
     const float d2 = g_walk.lod[g_walk.lod_level].d2;
-    if (d2 < d->get<float>(4)) return 0;
-    if (!(d2 < d->get<float>(0xc))) return 0;
+    if (d2 < d->get<float>(4) * distance_scale_squared) return 0;
+    if (!(d2 < d->get<float>(0xc) * distance_scale_squared)) return 0;
   }
   if ((nu(node, 0x2c) & 1) || g_walk.recompute || !(flags & kTreeValid)) {
     refresh_sphere(node);
@@ -370,16 +374,16 @@ int32_t render_lod(Node* node, int32_t mode) {
     const float dx = pos[0] - e.centre[0], dy = pos[1] - e.centre[1], dz = pos[2] - e.centre[2];
     const float d2 = (dx * dx + dy * dy) + dz * dz;
     e.d2 = g_walk.camera->get<float>(0xd4) * d2;
-    if (e.d2 < d->get<float>(4)) return ret0();
-    if (!(e.d2 < d->get<float>(0xc))) return ret0();
+    if (e.d2 < d->get<float>(4) * distance_scale_squared) return ret0();
+    if (!(e.d2 < d->get<float>(0xc) * distance_scale_squared)) return ret0();
   }
   const float dist = approx_sqrt(e.d2);
-  float far_v = d->get<float>(8);
+  float far_v = d->get<float>(8) * distance_scale;
   float dc = dist > far_v ? far_v : dist;
   auto grow = [&](int on, int len, int k, float* s) {
     if (!(d->get<float>(on) > 0.01f)) return;  // 0x005cdb54
     scaled = 1;
-    const float l = d->get<float>(len);
+    const float l = d->get<float>(len) * distance_scale;
     const float t = far_v - l;
     if (dc > t)
       *s = 1.0f - ((t - dc) * (d->get<float>(k) - 1.0f)) / l;
@@ -395,12 +399,12 @@ int32_t render_lod(Node* node, int32_t mode) {
   }
   float fade = 1.0f;
   if (d->get<float>(0x40) > 0.01f) {
-    const float l = d->get<float>(0x3c);
+    const float l = d->get<float>(0x3c) * distance_scale;
     if (far_v - l < dc) faded = 1, fade = (far_v - dc) / l;
   }
   if (d->get<float>(0x38) > 0.01f) {
-    const float l = d->get<float>(0x34);
-    const float nr = approx_sqrt(d->get<float>(4));
+    const float l = d->get<float>(0x34) * distance_scale;
+    const float nr = approx_sqrt(d->get<float>(4)) * distance_scale;
     if (dc < nr) dc = nr;
     if (nr + l > dc) {
       const float o = (dc - nr) / l;
@@ -420,10 +424,11 @@ int32_t render_lod(Node* node, int32_t mode) {
     node->set_flags(node->flags() | kDrawn);
     push_mask(mask);
     if (d->get<int32_t>(0x48)) {
-      const float t = d->get<float>(0xc) - d->get<float>(0x4c);
+      const float t = (d->get<float>(0xc) - d->get<float>(0x4c)) * distance_scale_squared;
+      const float far_squared = d->get<float>(0xc) * distance_scale_squared;
       const float d2 = g_walk.lod[g_walk.lod_level].d2;
       g_walk.morph = 1;
-      g_walk.morph_factor = t < d2 ? (d2 - t) / (d->get<float>(0xc) - t) : 0.0f;
+      g_walk.morph_factor = t < d2 ? (d2 - t) / (far_squared - t) : 0.0f;
     }
     if (node->child_count() > 0) {
       ++g_walk.lod_level;
@@ -871,7 +876,8 @@ int camera_update(Node* node) {
 }
 
 // Mech3.exe 1.2 @ 0x004f41b0. The local planes are rebuilt when the fov
-// changed (+0x138), the far corners when clip or fov changed (+0xf8):
+// changed (+0x138), the far corners when clip or fov changed (+0xf8) or the
+// render-only far differs from its cached corner depth:
 // (a, b, -far), (-a, b, -far), (a, -b, -far), (-a, -b, -far) with
 // a = tan(h/2) far, b = -tan(v/2) far, after the origin at +0xfc.
 int camera_update_offset(Node* node, const float* offset) {
@@ -885,10 +891,15 @@ int camera_update_offset(Node* node, const float* offset) {
   }
   d->put<int32_t>(0x184, 0);
   zmod::camera_world_planes(d);
-  if (d->get<int32_t>(0xf8)) {
-    d->put<int32_t>(0xf8, 0);
+  const bool clip_changed = d->get<int32_t>(0xf8) != 0;
+  const float authored_far = d->get<float>(0xb4);
+  const float far_z = visual_far_for_render(d, authored_far);
+  // The first far corner stores -far at +0x110. Track it so a render-only
+  // extension is restored to the authored footprint when its scope ends.
+  if (visual_far_corners_need_update(clip_changed, far_z,
+                                     d->get<float>(0x110))) {
+    if (clip_changed) d->put<int32_t>(0xf8, 0);
     d->put<uint32_t>(0xfc, 0), d->put<uint32_t>(0x100, 0), d->put<uint32_t>(0x104, 0);
-    const float far_z = visual_far_for_render(d, d->get<float>(0xb4));
     const float a = static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xe8) * 0.5f)) * far_z);
     const float b = -static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xec) * 0.5f)) * far_z);
     const float c = -far_z;
