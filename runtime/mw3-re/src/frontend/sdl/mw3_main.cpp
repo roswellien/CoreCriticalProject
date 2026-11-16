@@ -187,6 +187,7 @@ struct Args {
   std::string cfg_install;  // mw3.cfg's install= (the command line's wins)
   std::string cfg_mw1_game;  // mw3.cfg's mw1_game= (ours: the launcher's MechWarrior 1989 folder)
   std::string cfg_joystick, cfg_joystick_axes;  // mw3.cfg's joystick=, joystick_axes= (ours, W54: sdl_input.h)
+  bool cfg_joystick_disabled = false;
   int wide_menus = -1, cfg_wide_menus = -1;  // --wide-menus / --no-wide-menus, mw3.cfg's widemenus= (ours)
   bool debug_camera = false;  // --debug-camera (ours, docs/editor.md S4): the game editor anywhere; developers only
   std::vector<std::string> assets;
@@ -625,7 +626,11 @@ void read_config(const std::string& dir, Args& a) {
     else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
     else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
     else if (line.rfind("mod=", 0) == 0) a.cfg_mods.push_back(line.substr(4));
-    else if (line.rfind("joystick=", 0) == 0) a.cfg_joystick = line.substr(9);
+    else if (line.rfind("joystick=", 0) == 0) {
+      a.cfg_joystick = line.substr(9);
+      a.cfg_joystick_disabled = sdlfe::joystick_selection_disabled(a.cfg_joystick);
+      if (a.cfg_joystick_disabled) a.cfg_joystick.clear();
+    }
     else if (line.rfind("joystick_axes=", 0) == 0) a.cfg_joystick_axes = line.substr(14);
     else if (line == "windowed=1") a.windowed = true;
     else if (upgrades::read_line(line, a.cfg_upgrades)) {
@@ -1240,6 +1245,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     return 1;
   }
   sdlfe::SdlInput input;
+  input.joystick_disabled = a.cfg_joystick_disabled;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)
   input.window = window.sdl();

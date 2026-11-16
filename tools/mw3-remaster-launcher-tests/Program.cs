@@ -131,7 +131,7 @@ if (args.Length == 2 && args[0] == "--preview-controller")
 
 if (args.Length == 1 && args[0] == "--controls-only")
 {
-    ControlProfileChecks.Run(); return;
+    ControlProfileChecks.Run(); NativeControlChecks.Run(); return;
 }
 if (args.Length == 3 && args[0] == "--preview-controls")
 {
@@ -409,6 +409,7 @@ GameValidatorChecks.Run();
 OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
 ControlProfileChecks.Run();
+NativeControlChecks.Run();
 ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
