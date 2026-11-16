@@ -93,6 +93,21 @@ class RenderWorker {
         drain();
         return future.get();
     }
+    // Jobs run in submission order, so a job is finished once the completed count reaches its
+    // 1-based submission number. post_numbered() returns that number; wait_for_job() blocks until
+    // the job has run (or the worker has failed, which rethrows like drain()).
+    std::size_t post_numbered(std::function<void()> function, std::size_t bytes = 0) {
+        post(std::move(function), bytes);
+        std::lock_guard<std::mutex> lock(mutex_);
+        return statistics_.submitted;
+    }
+    void wait_for_job(std::size_t job_number) {
+        if (std::this_thread::get_id() == thread_.get_id())
+            throw std::logic_error("Render worker cannot wait on itself");
+        std::unique_lock<std::mutex> lock(mutex_);
+        wait(lock, [&] { return failure_ || statistics_.completed >= job_number; });
+        check_failure();
+    }
     void drain() {
         if (std::this_thread::get_id() == thread_.get_id())
             throw std::logic_error("Render worker cannot wait on itself");
