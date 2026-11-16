@@ -3,8 +3,8 @@
 This checklist is the maintainer's ordered release path. It uses the committed
 launcher builders and update-catalog tool; interactive review, installed tests,
 Cloudflare uploads and feed promotion are written steps. Only the maintainer's
-account publishes. Keep credentials, local dependency outputs, precompiled
-runtime inputs and release artifacts outside Git.
+account publishes. Keep credentials, local dependency outputs, MW3-RE runtime
+inputs and release artifacts outside Git.
 
 ## Launcher release
 
@@ -17,14 +17,14 @@ runtime inputs and release artifacts outside Git.
 
 2. **Supply the build inputs.** Use Windows with the .NET SDK required by the
    launcher project, Inno Setup 7 (`ISCC.exe`), and the Windows SDK SignTool.
-   Supply the MW3-RE runtime directory staged by
-   `tools/remaster-launcher/stage_mw3_re_runtime.py`; include its `runtime.json`
-   receipt. The runtime is generated output and stays local. The release builder
-   validates it before packaging. The maintainer also supplies, outside the
-   clone, the update signing PEM and key ID, plus Azure Artifact Signing's
-   SignTool Dlib and metadata file and its locally authenticated signing
-   credentials. Never commit any private key, signing metadata with credentials,
-   or token. The legacy precompiled Remaster runtime is no longer shipped.
+   Stage the MW3-RE runtime directory with
+   `tools/remaster-launcher/stage_mw3_re_runtime.py` (its --help lists inputs);
+   include its `runtime.json` receipt. The runtime is generated output and stays
+   local. The release builder validates it before packaging. The maintainer also
+   supplies, outside the clone, the update signing PEM and key ID, plus Azure
+   Artifact Signing's SignTool Dlib and metadata file and its locally authenticated
+   signing credentials. Never commit any private key, signing metadata with
+   credentials, or token.
 
    If the MW3-RE runtime changes and existing players need an update, package
    it with the committed `tools/native-preparation/build_native_update.py`,

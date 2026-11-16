@@ -14,6 +14,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Compiler = [IO.Path]::GetFullPath($Compiler)
+if ($PreparationBundle -and $NativePreviewDirectory) { throw 'Choose source preparation or the MW3-RE runtime, not both' }
 if (!(Test-Path -LiteralPath $Compiler -PathType Leaf)) { throw 'Select an installed Inno Setup ISCC.exe compiler. No compiler is downloaded or installed by this build.' }
 if ($InstallerVersion -notmatch '^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$') { throw 'Invalid installer version' }
 $id = [Guid]::Parse($InstallerId).ToString().ToUpperInvariant()
@@ -45,7 +46,7 @@ foreach ($name in @('Core Critical Launcher.exe','hostfxr.dll','SDL3.dll','SDL3-
 }
 # A fresh publication only: the MW3-RE runtime and planner are copied in below, never reused.
 foreach ($name in @('Runtime','user','native-inputs','NativePreview','Planner')) {
-    if (Test-Path -LiteralPath (Join-Path $PublishDirectory $name)) { throw "This launcher-only installer must not package private runtime or player inputs: $name" }
+    if (Test-Path -LiteralPath (Join-Path $PublishDirectory $name)) { throw "Use a fresh launcher publication; it must not already contain: $name" }
 }
 if ($NativePreviewDirectory) {
     $NativePreviewDirectory = [IO.Path]::GetFullPath($NativePreviewDirectory)
