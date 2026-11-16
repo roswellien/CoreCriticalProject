@@ -67,6 +67,7 @@ struct Result {
   int winner = -1;  // 0 side A, 1 side B, -1 a draw
   float time = 0;   // seconds of game time from the first Core frame
   int lost[2] = {};  // mechs destroyed per side
+  bool failed = false;  // the match could not start (no spawn spots, no bot made); the run exits 1
 };
 const Result& arena_result();
 // Game seconds since the first Core frame (the log's and the result's clock);

@@ -223,10 +223,12 @@ bool read_arena_game_files(Setup* setup, std::string* error) {
       zrdr::Node* value = tree->find(bot.preset.record.c_str());
       if (!value) return fail(error, field + ": no record \"" + bot.preset.record + "\" in " + reader);
       // parse reads the record as a mission start does (ranges squared, the
-      // yaw in radians); only its raw block is kept.
+      // yaw in radians); its raw block, pilot and voice are kept.
       ai::AivRecord record;
       record.parse(value, bot.preset.record.c_str());
       std::memcpy(bot.params.data(), record.raw, bot.params.size());
+      bot.pilot = record.pilot ? record.pilot : "";
+      bot.voice = record.sound_tag ? record.sound_tag : "";
       bot.params_read = true;
     }
   }

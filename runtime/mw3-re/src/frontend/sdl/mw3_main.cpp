@@ -137,6 +137,7 @@ extern "C" const char mw3_version_tag[] = "MW3-PROGRAM-VERSION:" MW3_VERSION;
 #include "frontend/sdl/sdl_mods.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
+#include "mech3/arena.h"
 #include "mech3/options.h"
 #include "mech3/app_keys.h"
 #include "mech3/pilot.h"
@@ -2315,6 +2316,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
       if (!sdlfe::watch_attach(a.watch, pump, window.render())) return 2;  // --replay3d's view (ours, #289)
       result = app.run(pump);
+      // An arena match that could not start exits 1 (arena.h, Result::failed).
+      if (result == 0 && !a.watch.arena_path.empty() && mech3::arena::arena_result().failed) result = 1;
       sdlfe::watch_detach(pump);
       window.render()->drain();
       if (!frame_ms.empty()) {  // --frame-times: the frames' wall times

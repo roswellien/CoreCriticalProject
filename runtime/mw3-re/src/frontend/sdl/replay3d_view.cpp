@@ -73,8 +73,12 @@ class Render3dDraw : public ReplayDraw {
  public:
   ~Render3dDraw() override { clear_text(); }
   void open_text() { text_.open(); }
-  void set_render(platform::Render3D* render) {
-    if (render != render_) clear_text();
+  // Called once at the start of each frame's overlay. A full text cache is
+  // emptied here, never inside text(): draws are only recorded until the end
+  // of the scene, so freeing a texture mid-frame drew the text already queued
+  // that frame as white boxes.
+  void begin_frame(platform::Render3D* render) {
+    if (render != render_ || cache_.size() > kTextCacheMax) clear_text();
     render_ = render;
   }
 
@@ -109,7 +113,6 @@ class Render3dDraw : public ReplayDraw {
   }
   float text(const std::string& s, float x, float y, SDL_Color c = {235, 235, 235, 255}) override {
     if (!render_ || !text_.ready() || s.empty()) return 0;
-    if (cache_.size() > kTextCacheMax) clear_text();
     const std::string key = s + "#" + std::to_string(c.r) + "," + std::to_string(c.g) + "," + std::to_string(c.b);
     auto found = cache_.find(key);
     if (found == cache_.end()) {
@@ -261,6 +264,17 @@ struct Replay3dView::State {
   std::map<std::string, LiveBeam> live_beams;
   std::map<int, LiveRound> live_rounds;
 
+  // Lets go of every held key and the mouse look (its captured pointer too),
+  // for when the releases can't reach handle(): the quit box takes the input,
+  // or the window loses focus.
+  void release_input() {
+    std::fill(std::begin(held), std::end(held), false);
+    if (looking)
+      if (SDL_Window* w = SDL_GetMouseFocus() ? SDL_GetMouseFocus() : SDL_GetKeyboardFocus())
+        SDL_SetWindowRelativeMouseMode(w, false);
+    looking = seeking = false;
+  }
+
   void pose();
   void sync_shots(float dt);
   void free_round(LiveRound& r);
@@ -335,11 +349,7 @@ void Replay3dView::before_lists(bool quit_box_open) {
   // Every seek (keys, the bar, the script) lands before this frame's step:
   // a clock away from the shown time is one, however long the frame was.
   s.seek_pending = s.posed_t >= 0 && s.clock.t != s.posed_t;
-  if (quit_box_open) {
-    // The box takes the input: keys released under it never reach handle().
-    std::fill(std::begin(s.held), std::end(s.held), false);
-    s.looking = s.seeking = false;
-  }
+  if (quit_box_open) s.release_input();
   s.real_elapsed = frame_elapsed(&s.last_ns, s.scripted);
   // The replay pauses under the quit box; the lists then run on a 0 step.
   const float moved = quit_box_open ? 0.0f : s.clock.step(s.real_elapsed, s.seeking);
@@ -565,7 +575,7 @@ void Replay3dView::place_camera(zcls::Node* camera) {
 void Replay3dView::draw_overlay() {
   State& s = *s_;
   if (!s.started) return;
-  s.draw.set_render(zvid::render3d());
+  s.draw.begin_frame(zvid::render3d());
   const float* rect = zmod::draw_state().point_rect;
   if (rect[2] > rect[0]) s.screen_w = rect[2] + 1, s.screen_h = rect[3] + 1;
 
@@ -646,7 +656,12 @@ void Replay3dView::State::pick(float window_x, float window_y) {
 
 bool Replay3dView::handle(const SDL_Event& e) {
   State& s = *s_;
-  if (!s.started || s.quit_box_open) return false;
+  if (!s.started) return false;
+  if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+    s.release_input();
+    return false;  // the game's own handling of it goes on
+  }
+  if (s.quit_box_open) return false;
   switch (e.type) {
     case SDL_EVENT_KEY_DOWN:
       if (is_fly_key(e.key.scancode)) {

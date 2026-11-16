@@ -36,6 +36,9 @@ struct Bot {
   // (an AivRecord keeps a reference on the mission's aiv.zrd).
   std::array<uint8_t, ai::AiParams::kEnd> params = {};
   bool params_read = false;
+  // The record's pilot name and radio voice (AiParams::pilot, sound_tag), kept
+  // as text for the same reason; empty when the record has none.
+  std::string pilot, voice;
 };
 
 constexpr int kSides = 2;

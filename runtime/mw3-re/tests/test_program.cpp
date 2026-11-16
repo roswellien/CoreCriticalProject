@@ -22646,6 +22646,11 @@ TEST(arena_bot_params_match_the_preset_headless) {
                       expected.raw[off]);
           ++mismatched;
         }
+      // The preset's pilot name and radio voice reach the bot too.
+      const auto same_text = [](const char* a, const char* b) {
+        return (!a && !b) || (a && b && std::strcmp(a, b) == 0);
+      };
+      if (!same_text(live->pilot, expected.pilot) || !same_text(live->sound_tag, expected.sound_tag)) ++mismatched;
       if (live->team() != entry.side + 1 || live->get<int32_t>(0x3c) != 1 || live->get<int32_t>(0x88) != 1 ||
           live->get<int32_t>(0x8c) != 0 || (live->raw[0xcd] & 3) != 0)
         ++wrong_side;

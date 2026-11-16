@@ -709,10 +709,15 @@ LogRead read_arena_log(const std::string& path) {
     }
     read.records.push_back(std::move(record));
   }
+  // A line's type, or "" when it has none or a type that isn't text (a
+  // damaged log must be refused with a message, never throw).
+  const auto type_of = [](const nlohmann::json& record) -> std::string {
+    const auto it = record.find("type");
+    return it != record.end() && it->is_string() ? it->get<std::string>() : std::string();
+  };
   const nlohmann::json* start = read.records.empty() ? nullptr : &read.records.front();
-  const bool has_version = start && start->value("type", "") == "start" && start->contains("version") &&
-                           (*start)["version"].is_number_integer();
-  const bool has_start = start && start->value("type", "") == "start";
+  const bool has_start = start && type_of(*start) == "start";
+  const bool has_version = has_start && start->contains("version") && (*start)["version"].is_number_integer();
   if (!has_start) {
     read.error = "no readable start line (empty or damaged log)";
   } else if (!has_version) {
@@ -727,7 +732,7 @@ LogRead read_arena_log(const std::string& path) {
     read.records.clear();
     return read;
   }
-  read.complete = read.records.back().value("type", "") == "end";
+  read.complete = type_of(read.records.back()) == "end";
   return read;
 }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <string>
@@ -156,6 +157,30 @@ std::string arena_result_line(const Result& result) {
   return line;
 }
 
+namespace {
+// Ends the multiplayer match the arena runs in, so the run can exit. The stock
+// end (net_mech_tick) would end it again when its clock runs out: it is marked
+// ended already, with its exit time never reached.
+void end_stock_match() {
+  const NetCalls& calls = net_calls();
+  if (NetGameFields* game = calls.game ? calls.game() : nullptr) {
+    if (game->end_state) *game->end_state = 3;
+    if (game->end_time) *game->end_time = 3.4e38f;
+  }
+  if (calls.game_over) calls.game_over();
+  else net_game_over();
+}
+
+// A match that cannot start still ends, with an error, so an unattended
+// batch of runs never waits on it.
+void fail_start(const char* why) {
+  std::fprintf(stderr, "mw3: arena: %s; the match cannot start\n", why);
+  g_result = Result{};
+  g_result.decided = true, g_result.failed = true;
+  end_stock_match();
+}
+}  // namespace
+
 // Ours (#287)
 void arena_tick() {
   if (!g_setup || !g_started || g_result.decided || g_mechs.empty()) return;
@@ -184,16 +209,7 @@ void arena_tick() {
   std::printf("%s\n", arena_result_line(g_result).c_str());
   std::fflush(stdout);
   log_match_end(g_result);
-
-  // The stock end (net_mech_tick) would end the match again when its clock
-  // runs out: marked ended already, with its exit time never reached.
-  const NetCalls& calls = net_calls();
-  if (NetGameFields* game = calls.game ? calls.game() : nullptr) {
-    if (game->end_state) *game->end_state = 3;
-    if (game->end_time) *game->end_time = 3.4e38f;
-  }
-  if (calls.game_over) calls.game_over();
-  else net_game_over();
+  end_stock_match();
 }
 const Setup* arena_setup() { return g_setup; }
 
@@ -239,6 +255,15 @@ std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a
 // ally or enemy (AiTarget::set_team).
 void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, ai::AiParams* params) {
   std::memcpy(params->raw, bot.params.data(), bot.params.size());
+  // The preset's pilot name and radio voice; AiParams frees both.
+  const auto copy = [](const std::string& text) -> char* {
+    if (text.empty()) return nullptr;
+    char* out = static_cast<char*>(std::malloc(text.size() + 1));
+    if (out) std::memcpy(out, text.c_str(), text.size() + 1);
+    return out;
+  };
+  std::free(params->pilot), params->pilot = copy(bot.pilot);
+  std::free(params->sound_tag), params->sound_tag = copy(bot.voice);
   params->put<float>(0x08, pos[0]);
   params->put<float>(0x0c, pos[1]);
   params->put<float>(0x10, pos[2]);
@@ -306,10 +331,7 @@ void arena_start() {
   g_start_time = world().time;
 
   float pos[kSpawnSpots][3], yaw[kSpawnSpots];
-  if (!read_spawn_spots(pos, yaw)) {
-    std::fprintf(stderr, "mw3: arena: the map's spawn spots could not be read\n");
-    return;
-  }
+  if (!read_spawn_spots(pos, yaw)) return fail_start("the map's spawn spots could not be read");
   float fallback[3];
   spawn_spots_mean(pos, fallback);
   ai::HuntNet* net = ai::make_hunt_net(fallback);
@@ -349,6 +371,9 @@ void arena_start() {
   // Every mech at the same detail, whatever its distance from the view
   // (mech_lod.h, LodCalls::same_detail_for_all).
   lod_calls().same_detail_for_all = true;
+  int made[kSides] = {};
+  for (const ArenaMech& entry : g_mechs) ++made[entry.side];
+  if (made[0] == 0 || made[1] == 0) return fail_start("a side has no bot that could be made");
   g_started = true;
   if (!g_mechs.empty()) view_follow();
   log_match_start(*g_setup, g_mechs);

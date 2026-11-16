@@ -120,6 +120,17 @@ TEST(replay_v2_phase_runs_back_when_walking_backward) {
   EXPECT(m.cps < 0.0f && std::abs(m.phase - 0.4f) < 1e-3f);
 }
 
+// A line whose type isn't text, first or last, refuses the log with a message:
+// the reader must not throw.
+TEST(replay_refuses_a_type_that_is_not_text) {
+  ReplayLog first, last;
+  std::string error;
+  EXPECT(!load(&first, "replay_type_first", R"({"type":5})" "\n", &error) && !error.empty());
+  error.clear();
+  const std::string text = kStart + state(0, mech(0, 0, false, kPhased, kParts)) + R"({"type":5})" "\n";
+  EXPECT(!load(&last, "replay_type_last", text, &error) && error.find("damaged line") != std::string::npos);
+}
+
 // The same frame whatever was asked before it.
 TEST(replay_v2_seek_order_does_not_matter) {
   ReplayLog log;
