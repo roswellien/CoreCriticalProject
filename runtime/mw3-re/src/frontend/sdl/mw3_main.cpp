@@ -308,7 +308,7 @@ void usage() {
       "    [--mission NAME [--valve-map DIR] | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] [--vehicle-ahead M [--vehicle-hold]] [--field-base-ahead M] [--turret-ahead M] [--mech-ahead M] [--dialog FILE NAME]\n"
       "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--hurt F@N] [--win N] [--lose N] [--lab-mech N]\n"
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
-      "    [--cc-environment-pack DIR]...\n"
+      "    [--cc-environment-pack DIR]... [--cc-environment-packs-explicit]\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
       "    [--cc-dynamic-lighting 0|1] [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
@@ -548,6 +548,8 @@ bool parse(int argc, char** argv, Args& a) {
       a.cc_assets.headlight_bindings = argv[++i];
     } else if (s == "--cc-environment-pack" && next(1)) {
       a.cc_assets.environment_packs.push_back(argv[++i]);
+    } else if (s == "--cc-environment-packs-explicit") {
+      a.cc_assets.environment_packs_explicit = true;
     } else if (s == "--cc-model-materials" && next(3)) {
       sdlfe::PreparedMaterialBinding binding;
       binding.chassis = argv[++i], binding.lod = argv[++i],

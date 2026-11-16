@@ -429,6 +429,10 @@ def plan_launch(request):
     skipped = []
     overridden_models = []
     if preview is not None:
+        # Schema 4 is the launcher's explicit selection boundary, even when no
+        # environment packs are enabled. Prevent stale diagnostic catalogs from
+        # silently supplying normal maps outside that selection.
+        argv.append("--cc-environment-packs-explicit")
         # 800 is the original range, so it adds no argument and older runtimes stay compatible.
         if preview["draw_distance"] != 800:
             argv.extend(("--cc-draw-distance", str(preview["draw_distance"])))

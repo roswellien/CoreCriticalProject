@@ -1929,6 +1929,13 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   auto config = RendererBridgeConfig::from_diagnostic_env(
       !assets.dynamic_lighting_explicit);
+  config.environment_packs_explicit = assets.environment_packs_explicit;
+  if (assets.environment_packs_explicit) {
+    // The launcher's selected environment packs own normal-map inputs. Stale
+    // development paths must not add catalogs outside that selection.
+    config.surface_normal_catalog.clear();
+    config.world_normal_manifest.clear();
+  }
   if (assets.dynamic_lighting_explicit) {
     // The launcher's explicit choice owns this run, including the diagnostic
     // environment fallback, so stale development variables cannot re-enable it.

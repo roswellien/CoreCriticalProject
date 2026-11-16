@@ -67,6 +67,7 @@ struct RendererBridgeConfig {
   std::string world_normal_manifest;
   std::vector<std::string> environment_authored_manifests,
       environment_world_manifests;
+  bool environment_packs_explicit{false};
   std::string native_material_sidecar;
   std::string native_material_asset_id;
   bool trace_native_bindings{false};

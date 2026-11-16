@@ -316,7 +316,8 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
         self.assertEqual(result["argv"][17:], [
-            "--cc-dynamic-lighting", "0", "--cc-pom", "1", "--cc-draw-distance", "1200",
+            "--cc-dynamic-lighting", "0",
+            "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200",
             "--cc-hud", "core-critical", "--cc-hud-text", "1",
             "--cc-geometry", "partial",
             "--cc-model", "strider", "0", payload("mesh0"), payload("tex0"),
@@ -332,6 +333,7 @@ class NativePreviewPlanTests(unittest.TestCase):
         result = self.plan(self.request())
         self.assertTrue(result["ok"])
         self.assertNotIn("--cc-draw-distance", result["argv"])
+        self.assertIn("--cc-environment-packs-explicit", result["argv"])
         self.assertEqual(result["skipped_packs"], [])
 
     # The planner accepts only Windows paths, so tests that read real packs from a temporary
