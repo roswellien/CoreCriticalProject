@@ -73,8 +73,10 @@ surface and a native Vulkan swapchain. This route selects a graphics queue
 that can present to that surface before creating scene resources. It requires
 Vulkan 1.1 and surface/swapchain support, without DXGI interop. A failure reports
 the surface or device error. The two Core Critical routes are explicit choices;
-omitting both switches selects the upstream renderer. Both trials require a
-window and bypass the launcher. Fullscreen toggling is disabled during the trial.
+omitting both switches selects the upstream renderer. Both trials bypass the
+launcher and support the default borderless desktop-sized fullscreen mode,
+`--windowed`, `--window WxH`, and Alt+Enter toggling between fullscreen and a
+window. The rendered frame is fitted into the current presentation target.
 
 The native WSI fixture checks scene operations, hidden/minimized readiness,
 restore, and repeated swapchain resizing on a desktop with a Vulkan device.
