@@ -17,9 +17,12 @@ Run stage_mw3_re_runtime.py --help for the required, explicit recipe-v1 inputs
 for an owned Windows x64 Release/Vulkan build. Use a clean tracked integration
 commit, pre-existing qualified dependencies and new build/payload directories
 outside the checkout. The command constructs a sanitized VS/SDK environment,
-qualifies selected tools, builds only mw3, and stages its checked DLL/notice
-closure and pinned planning defaults. It stops on missing prerequisites; it
-never downloads dependencies or installs, activates or runs the payload.
+qualifies selected tools, builds only mw3 with the explicitly selected SDL3_sound
+3.2.0 SDK, and stages its checked DLL/notice closure and pinned planning defaults.
+SDL3_sound's Zlib license is included under `licenses/sdl3-sound/`; the recipe
+hashes its selected SDK files and pins the staged DLL in `runtime.json`. It stops
+on missing prerequisites; it never downloads dependencies or installs, activates
+or runs the payload.
 The pinned witness records local pre/post observations, not authenticated source
 binding, consumer readiness or release approval. Writable mw3.cfg stays untouched.
 
