@@ -13,15 +13,30 @@ Fog g_fog;
 // The innermost active extended-view copy and its far ratio; null/1 at the original range.
 Fog* g_render_fog = nullptr;
 float g_render_scale = 1.0f;
+float g_render_far = 0.0f;  // the active copy's visual far plane; 0 at the original range
+
+// How far before the visual far plane linear fog must already have started. World geometry stops
+// at that plane, and the owner's playtests found it pops in visibly unless the fog begins about
+// 200 units before it at 1200 and about 100 units before it at 1600.
+float fog_cover_band(float visual_far) { return visual_far > 1200.0f ? 100.0f : 200.0f; }
 
 // Stretch only the distance interval by the visual/authored far ratio. On/off, mode, colour and
 // the altitude taper stay as authored. Always built from the authored fog, never from an outer
 // copy, so the HUD zoom view (drawn inside the main world render) is not scaled twice.
-Fog scaled_fog(const Fog& source, float scale) {
+Fog scaled_fog(const Fog& source, float scale, float visual_far) {
   Fog copy = source;
   copy.near_range *= scale;
-  copy.near_sq = copy.near_range * copy.near_range;
   copy.far_range *= scale;
+  // Linear fog that reaches the edge of the view must hide where world geometry ends: it is full
+  // at the visual far plane and starts at the cover band before it. A mission whose fog already
+  // ends well short of the edge (a deliberately foggy map) keeps its own scaled interval.
+  const float cover_start = visual_far - fog_cover_band(visual_far);
+  const bool fog_reaches_edge = copy.far_range >= cover_start;
+  if (copy.linear && fog_reaches_edge) {
+    copy.near_range = cover_start;
+    copy.far_range = visual_far;
+  }
+  copy.near_sq = copy.near_range * copy.near_range;
   copy.far_sq = copy.far_range * copy.far_range;
   const float range = copy.far_range - copy.near_range;
   // A collapsed interval keeps the inverse its setters left behind (as the original does); scale
@@ -37,7 +52,7 @@ Fog scaled_fog(const Fog& source, float scale) {
 // Setters always write the authored state (as the original game does); an active copy then
 // follows it, so gameplay readers and the render copy never disagree.
 void refresh_render_fog() {
-  if (g_render_fog) *g_render_fog = scaled_fog(g_fog, g_render_scale);
+  if (g_render_fog) *g_render_fog = scaled_fog(g_fog, g_render_scale, g_render_far);
 }
 }  // namespace
 
@@ -48,8 +63,10 @@ ScopedRenderFog::ScopedRenderFog(float authored_far, float visual_far) {
   if (!(authored_far > 0.0f) || !(visual_far > authored_far)) return;
   previous_ = g_render_fog;
   previous_scale_ = g_render_scale;
+  previous_far_ = g_render_far;
   g_render_scale = visual_far / authored_far;
-  copy_ = scaled_fog(g_fog, g_render_scale);
+  g_render_far = visual_far;
+  copy_ = scaled_fog(g_fog, g_render_scale, g_render_far);
   g_render_fog = &copy_;
   active_ = true;
 }
@@ -58,6 +75,7 @@ ScopedRenderFog::~ScopedRenderFog() {
   if (!active_) return;
   g_render_fog = previous_;
   g_render_scale = previous_scale_;
+  g_render_far = previous_far_;
   // Fog set while this inner scope was active must reach the outer copy too.
   refresh_render_fog();
 }
