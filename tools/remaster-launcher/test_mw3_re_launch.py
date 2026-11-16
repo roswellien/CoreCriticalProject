@@ -253,7 +253,9 @@ class NativePreviewPlanTests(unittest.TestCase):
     def model_pack(self, name="mechs", models=None, profile="prepared-native-v1"):
         """Build a pack in the installed layout: pack.json plus models/models.json and payload files."""
         for payload in ("mesh0", "tex0", "nrm0", "mesh1", "tex1", "nrm1", "solo-mesh", "solo-tex"):
-            self.write(f"{name}/payload/{payload}.bin", "x")
+            relative = f"{name}/payload/{payload}.bin"
+            if not os.path.exists(os.path.join(self.root, *relative.split("/"))):
+                self.write(relative, "x")
         if models is None:
             models = [
                 {"id": "strider", "backend": "native", "status": "runtime-candidate", "environment": {
@@ -270,6 +272,43 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.write(f"{name}/pack.json", {"schema_version": 2, "native_payload": {
             "profile": profile, "registry": "models/models.json", "path_base": "pack-root"}})
         return os.path.join(self.root, name)
+
+    def surface_sidecar(self, asset_id):
+        from surface_materials import (
+            mesh_uv_identity,
+            pack_surface_materials,
+            texture_batch_materials,
+        )
+        from test_surface_materials import _make_bwmesh1, _make_bwtex1
+
+        mesh = _make_bwmesh1()
+        textures = _make_bwtex1()
+        sidecar = pack_surface_materials(
+            asset_id=asset_id,
+            mesh_uv_hash=mesh_uv_identity(mesh),
+            batch_materials=texture_batch_materials(textures),
+            records=[],
+        )
+        return mesh, textures, sidecar
+
+    def add_surface_material(self, name, chassis, level=0, sidecar=None):
+        infix = "LOD1_" if level == 1 else ""
+        stem = f"{name}/payload"
+        mesh_name = f"mesh{level}"
+        texture_name = f"tex{level}"
+        if sidecar is None:
+            lod_name = "distance" if level == 1 else "close"
+            mesh, textures, sidecar = self.surface_sidecar(f"{chassis}:{lod_name}")
+        else:
+            mesh, textures, sidecar = sidecar
+        mesh_path = self.write(f"{stem}/{mesh_name}.bin", mesh)
+        texture_path = self.write(f"{stem}/{texture_name}.bin", textures)
+        material_path = self.write(f"{stem}/materials{level}.bin", sidecar)
+        return {
+            f"MW34_{chassis.upper()}_{infix}MESH": f"payload/{mesh_name}.bin",
+            f"MW34_{chassis.upper()}_{infix}TEXTURES": f"payload/{texture_name}.bin",
+            f"MW34_{chassis.upper()}_{infix}SURFACE_MATERIALS": f"payload/materials{level}.bin",
+        }
 
     def environment_pack(self, name="training", largest=1024):
         self.write(f"{name}/pack.json", {"schema_version": 2, "files": {
@@ -375,6 +414,55 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual(normal_levels, [("strider", "0"), ("strider", "1")])
         self.assertNotIn(os.path.join(second, "payload", "solo-mesh.bin"), argv)
         self.assertEqual(result["overridden_models"], [{"root": second, "chassis": "strider", "kept_from": first}])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_surface_materials_are_emitted_for_each_lod_and_first_chassis_wins(self):
+        first_model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                       "environment": {}}
+        first_model["environment"].update(self.add_surface_material("first", "strider", 0))
+        first_model["environment"].update(self.add_surface_material("first", "strider", 1))
+        first = self.model_pack("first", [first_model])
+        second_model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                        "environment": {}}
+        second_model["environment"].update(self.add_surface_material("second", "strider", 0))
+        second = self.model_pack("second", [second_model])
+
+        result = self.plan(self.request(model_packs=[first, second]))
+        argv = result["argv"]
+        material_bindings = [
+            (argv[index + 1], argv[index + 2], argv[index + 3])
+            for index, argument in enumerate(argv)
+            if argument == "--cc-model-materials"
+        ]
+        self.assertEqual(material_bindings, [
+            ("strider", "0", os.path.join(first, "payload", "materials0.bin")),
+            ("strider", "1", os.path.join(first, "payload", "materials1.bin")),
+        ])
+        self.assertEqual(result["skipped_packs"], [])
+        self.assertEqual(result["overridden_models"], [
+            {"root": second, "chassis": "strider", "kept_from": first},
+        ])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_invalid_surface_material_sidecar_is_reported_and_left_off(self):
+        model = {"id": "strider", "backend": "native", "status": "runtime-ready",
+                 "environment": {}}
+        bindings = self.add_surface_material("invalid", "strider")
+        bindings["MW34_STRIDER_SURFACE_MATERIALS"] = "payload/not-bwsfm1.bin"
+        self.write("invalid/payload/not-bwsfm1.bin", b"not a sidecar")
+        model["environment"].update(bindings)
+        pack = self.model_pack("invalid", [model])
+
+        result = self.plan(self.request(model_packs=[pack]))
+        self.assertTrue(result["ok"])
+        self.assertIn("--cc-model", result["argv"])
+        self.assertNotIn("--cc-model-materials", result["argv"])
+        skipped = [item for item in result["skipped_packs"]
+                   if item.get("feature") == "surface_materials"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual((skipped[0]["root"], skipped[0]["chassis"], skipped[0]["lod"]),
+                         (pack, "strider", "0"))
+        self.assertIn("invalid", skipped[0]["reason"].lower())
 
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},

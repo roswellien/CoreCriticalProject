@@ -7,6 +7,7 @@ and bounded lighting-catalog headers it is given, read-only, to turn installed p
 from pathlib import Path, PureWindowsPath
 import json
 import re
+import struct
 
 
 _FIELDS = frozenset({
@@ -172,16 +173,17 @@ def _pack_payload(root, profile):
 
 
 def _model_pack_arguments(root, taken=None):
-    """Turn a prepared-native-v1 mech pack into --cc-model/--cc-model-normals arguments.
+    """Turn a prepared-native-v1 mech pack into prepared-model CLI arguments.
 
     `taken` maps each chassis already supplied by an earlier enabled pack to that pack's root. Such a
     chassis is left out of this pack, the same "first chassis wins" rule as prepared_mech_packs.py,
     because the native runtime refuses a second model or normal map for one chassis and level.
-    Returns the arguments and the chassis this pack lost to earlier packs.
+    Returns arguments, chassis lost to earlier packs, and skipped optional materials.
 
     The registry lists models; each keeps its file paths in an "environment" table using the
     names MW34_<ID>_MESH, MW34_<ID>_TEXTURES and MW34_<ID>_NORMALS, with LOD1_ after <ID> for
     the distance model. A level of detail is emitted only when both its mesh and textures exist.
+    Optional BWSFM1 sidecars use MW34_<ID>[_LOD1]_SURFACE_MATERIALS keys.
     Alternative liveries (*_SKIN_*) are not part of this preview.
     """
     _, payload = _pack_payload(root, "prepared-native-v1")
@@ -193,6 +195,7 @@ def _model_pack_arguments(root, taken=None):
         raise ValueError(f"Invalid mech pack registry: {root}")
     arguments = []
     overridden = []
+    skipped_materials = []
     taken = {} if taken is None else taken
     for model in models:
         if type(model) is not dict:
@@ -209,21 +212,57 @@ def _model_pack_arguments(root, taken=None):
         supplied = False
         for level, infix in ((0, ""), (1, "LOD1_")):
             prefix = f"MW34_{chassis.upper()}_{infix}"
+            material_key = prefix + "SURFACE_MATERIALS"
             # Same rule as prepared_mech_packs.py: the Bushwacker close mesh keeps its historical
             # MW34_BUSHWACKER_TEST name.
             mesh_name = "TEST" if chassis == "bushwacker" and level == 0 else "MESH"
             mesh, textures = files.get(prefix + mesh_name), files.get(prefix + "TEXTURES")
             if mesh is None or textures is None:
+                if material_key in files:
+                    skipped_materials.append({
+                        "chassis": chassis,
+                        "lod": str(level),
+                        "reason": "surface-material sidecar requires its matching mesh and textures",
+                    })
                 continue
             arguments += ["--cc-model", chassis, str(level), _pack_member(root, mesh),
                           _pack_member(root, textures)]
             normals = files.get(prefix + "NORMALS")
             if normals is not None:
                 arguments += ["--cc-model-normals", chassis, str(level), _pack_member(root, normals)]
+            if material_key in files:
+                try:
+                    from surface_materials import (
+                        MAX_SIDECAR_BYTES,
+                        mesh_uv_identity_file,
+                        read_surface_materials_file,
+                        texture_batch_materials_file,
+                    )
+
+                    material_path = _pack_member(root, files[material_key])
+                    if Path(material_path).stat().st_size > MAX_SIDECAR_BYTES:
+                        raise ValueError("BWSFM1 sidecar exceeds its size limit")
+                    mesh_path = _pack_member(root, mesh)
+                    texture_path = _pack_member(root, textures)
+                    asset_lod = "close" if level == 0 else "distance"
+                    read_surface_materials_file(
+                        material_path,
+                        expected_asset_id=f"{chassis}:{asset_lod}",
+                        expected_mesh_uv_hash=mesh_uv_identity_file(Path(mesh_path)),
+                        expected_batch_materials=texture_batch_materials_file(
+                            Path(texture_path)),
+                    )
+                    arguments += ["--cc-model-materials", chassis, str(level), material_path]
+                except (OSError, ValueError, OverflowError, struct.error) as error:
+                    skipped_materials.append({
+                        "chassis": chassis,
+                        "lod": str(level),
+                        "reason": f"surface-material sidecar is missing or invalid: {error}",
+                    })
             supplied = True
         if supplied:
             taken[chassis] = root
-    return arguments, overridden
+    return arguments, overridden, skipped_materials
 
 
 def _environment_pack_skip_reason(root):
@@ -444,9 +483,12 @@ def plan_launch(request):
             argv.extend(("--cc-geometry", preview["geometry"]))
         supplied_chassis = {}
         for pack in preview["model_packs"]:
-            arguments, overridden = _model_pack_arguments(pack, supplied_chassis)
+            arguments, overridden, skipped_materials = _model_pack_arguments(
+                pack, supplied_chassis)
             argv.extend(arguments)
             overridden_models.extend({"root": pack, **item} for item in overridden)
+            skipped.extend({"root": pack, "feature": "surface_materials", **item}
+                           for item in skipped_materials)
         effect_catalog = None
         effect_catalog_problem = None
         for pack in preview["environment_packs"]:
