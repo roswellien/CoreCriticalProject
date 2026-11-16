@@ -222,3 +222,26 @@ TEST(replay_skips_bad_values) {
   EXPECT(f.recent.size() == 1 && !f.recent[0].has_at);
   EXPECT(log.skipped() == 6);  // anim, part 99, far mech, action, voice, hit point
 }
+
+// Infinite or out-of-range angles, phases, rates and blend weights never
+// reach the game's animation code (an infinite phase indexed past a clip's
+// keys), nor an infinite muzzle the effects.
+TEST(replay_resets_non_finite_values) {
+  std::string text = kStart;
+  // 1e39 is past a float's range: the reader's float is infinite.
+  const std::string bad_anim = R"({"index":2,"t":0.5,"phase":1e39,"cps":-5,"weight":7,"limp":-1})";
+  std::string bad = mech(0, 0, false, bad_anim, kParts);
+  bad.replace(bad.find(R"("heading":0)"), 11, R"("heading":1e39)");
+  text += state(0, bad);
+  text += R"({"type":"shot","t":0.0,"id":0,"weapon":"AC","muzzle":[1e39,0,0],"dir":[0,0,1]})" "\n";
+  ReplayLog log;
+  std::string error;
+  EXPECT(load(&log, "replay_non_finite", text, &error));
+  const Frame f = log.frame_at(0.0f);
+  EXPECT(f.mechs.size() == 1);
+  const auto& m = f.mechs[0];
+  EXPECT(std::isfinite(m.heading) && m.heading == 0.0f);
+  EXPECT(m.phase == 0.0f && m.cps == 0.0f && m.weight == 0.0f);
+  EXPECT(f.recent.size() == 1 && f.recent[0].muzzle.x == 0.0f);
+  EXPECT(log.skipped() == 5);  // heading, phase, cps, weight, muzzle
+}

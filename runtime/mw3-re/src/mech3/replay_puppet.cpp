@@ -82,8 +82,15 @@ std::unique_ptr<Puppet> Puppet::create(const std::string& chassis, int side, con
   return puppet;
 }
 
-Puppet::~Puppet() {
-  if (mech_) mech_free_in_play(mech_);
+Puppet::~Puppet() { free_mech(); }
+
+// The jet flame first: Mech::release stops the mech's sounds but not that
+// effect, which would go on updating the freed jet node.
+void Puppet::free_mech() {
+  if (!mech_) return;
+  mech_->jet_effects(false);
+  mech_free_in_play(mech_);
+  mech_ = nullptr;
 }
 
 bool Puppet::make(const MechPose& start, std::string* error) {
@@ -125,8 +132,7 @@ bool Puppet::make(const MechPose& start, std::string* error) {
 }
 
 bool Puppet::rebuild(const MechPose& pose, std::string* error) {
-  if (mech_) mech_free_in_play(mech_);
-  mech_ = nullptr;
+  free_mech();
   return make(pose, error);
 }
 

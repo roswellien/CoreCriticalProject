@@ -49,6 +49,7 @@ class Puppet {
  private:
   Puppet() = default;
   bool make(const MechPose& start, std::string* error);
+  void free_mech();
   void place(const MechPose& pose);
   void detach(int id);
   void play_action(const MechPose& pose, float dt);

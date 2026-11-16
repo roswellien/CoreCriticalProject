@@ -130,6 +130,27 @@ bool read_pose(const Json& m, MechPose* out, int* skipped) {
     p.at = ai.value("at", -1);
     for (const Json& c : list(ai, "contacts")) p.contacts.push_back({c.value("id", -1), c.value("seen", false)});
   }
+  // What reaches the game's animation code: an infinite or NaN angle, phase
+  // or rate would index the clip's keys far out of range (a read past the
+  // array), so each out-of-range value is reset and counted.
+  const auto keep = [&](float* v, float lo, float hi, float fallback) {
+    if (std::isfinite(*v) && *v >= lo && *v <= hi) return;
+    *v = fallback;
+    ++*skipped;
+  };
+  constexpr float kMaxAngle = 100.0f;  // radians; the game's own stay within a few turns
+  keep(&p.heading, -kMaxAngle, kMaxAngle, 0.0f);
+  keep(&p.twist, -kMaxAngle, kMaxAngle, 0.0f);
+  keep(&p.pitch, -kMaxAngle, kMaxAngle, 0.0f);
+  keep(&p.speed, -1000.0f, 1000.0f, 0.0f);
+  for (int i = 0; i < 2; ++i) {
+    keep(&p.arm_yaw[i], -kMaxAngle, kMaxAngle, 0.0f);
+    keep(&p.arm_pitch[i], -kMaxAngle, kMaxAngle, 0.0f);
+  }
+  keep(&p.phase, 0.0f, 1.0f, 0.0f);
+  keep(&p.cps, 0.0f, 100.0f, 0.0f);
+  keep(&p.weight, 0.0f, 1.0f, 0.0f);
+  keep(&p.heat, -1e6f, 1e6f, 0.0f);
   return true;
 }
 
@@ -145,6 +166,13 @@ Event read_event(const Json& r, int* skipped) {
   e.beam = r.value("beam", false);
   e.muzzle = vec3(r.value("muzzle", Json()));
   e.dir = vec3(r.value("dir", Json()));
+  // The 3D view starts effects at these: never past the world or infinite.
+  const bool dir_ok = std::isfinite(e.dir.x) && std::isfinite(e.dir.y) && std::isfinite(e.dir.z) &&
+                      std::abs(e.dir.x) <= 2 && std::abs(e.dir.y) <= 2 && std::abs(e.dir.z) <= 2;
+  if (r.contains("muzzle") && (!in_world(e.muzzle) || !dir_ok)) {
+    e.muzzle = {}, e.dir = {};
+    ++*skipped;
+  }
   e.code = r.value("code", "");
   e.target = r.value("target", -1);
   if (r.contains("at")) {

@@ -35,7 +35,6 @@ using mech3::replay::ReplayLog;
 using mech3::replay::Vec3;
 
 constexpr float kMaxListStep = 0.1f;   // the action lists' longest replay step (plan step 7)
-constexpr float kSeekJump = 0.5f;      // a forward move longer than this is a seek, not play
 constexpr float kRingMeters = 6.0f;    // the side ring at each mech's feet
 constexpr float kLabelMeters = 13.0f;  // the id label above each mech
 constexpr float kFollowBack = 25.0f, kFollowUp = 8.0f, kFollowAim = 6.0f;
@@ -200,7 +199,7 @@ struct Replay3dView::State {
   uint64_t last_ns = 0;
   float real_dt = 0, real_elapsed = 0;
   float posed_t = -1;  // the replay time the puppets show, -1 before the first
-  bool started = false, quit_box_open = false;
+  bool started = false, quit_box_open = false, seek_pending = false;
 
   std::map<int, std::unique_ptr<Puppet>> puppets;  // by mech id
   Frame frame;
@@ -291,6 +290,14 @@ void Replay3dView::before_lists(bool quit_box_open) {
   s.quit_box_open = quit_box_open;
   for (const auto& apply : s.next_frame) apply();
   s.next_frame.clear();
+  // Every seek (keys, the bar, the script) lands before this frame's step:
+  // a clock away from the shown time is one, however long the frame was.
+  s.seek_pending = s.posed_t >= 0 && s.clock.t != s.posed_t;
+  if (quit_box_open) {
+    // The box takes the input: keys released under it never reach handle().
+    std::fill(std::begin(s.held), std::end(s.held), false);
+    s.looking = s.seeking = false;
+  }
   s.real_elapsed = frame_elapsed(&s.last_ns, s.scripted);
   // The replay pauses under the quit box; the lists then run on a 0 step.
   const float moved = quit_box_open ? 0.0f : s.clock.step(s.real_elapsed, s.seeking);
@@ -314,11 +321,10 @@ void Replay3dView::after_lists() {
 void Replay3dView::State::pose() {
   const float t = clock.t;
   frame = log->frame_at(t);
-  // A seek: back in time, or forward further than a frame plays. The
-  // puppets are set straight to the new time and no effect starts for the
-  // span skipped.
+  // A seek (seek_pending): the puppets are set straight to the new time and
+  // no effect starts for the span skipped.
   const bool first = posed_t < 0;
-  const bool seeked = !first && (t < posed_t || t - posed_t > kSeekJump);
+  const bool seeked = !first && (seek_pending || t < posed_t);
   for (auto& [id, puppet] : puppets) {
     const MechPose* p = pose_of(frame, id);
     if (!p) continue;
