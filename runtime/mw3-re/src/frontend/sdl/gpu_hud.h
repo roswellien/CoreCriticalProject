@@ -11,7 +11,7 @@ namespace sdlfe {
 class FrameRenderer;
 struct HudOptions {
   std::string mode = "original";
-  std::string artwork;
+  std::vector<std::string> artwork;
   bool text = true;
 };
 // An instance-owned HUD draw list. The original canvas remains a CPU shadow

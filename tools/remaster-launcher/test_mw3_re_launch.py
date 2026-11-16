@@ -1,6 +1,7 @@
 """Exercise the native-only, non-executing argv boundary with authored paths."""
 
 import copy
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -366,6 +367,28 @@ class NativePreviewPlanTests(unittest.TestCase):
             "native_payload": {"profile": "prepared-environment-v1"}})
         return os.path.join(self.root, name)
 
+    def ui_pack(self, name="menu", kind="menu", background=True):
+        sprite = "0123456789abcdef"
+        relative = f"ui/sprites/{sprite}.rgba"
+        image = b"MW3H" + struct.pack("<IIffff", 1, 1, 0.0, 0.0, 1.0, 1.0) + bytes((1, 2, 3, 255))
+        self.write(f"{name}/{relative}", image)
+        registry = {"schema_version": 2, "payload_profile": "prepared-ui-v1", "kind": kind,
+                    "sprites": {sprite: relative},
+                    "background": "ui/background.mwhd" if background else None}
+        self.write(f"{name}/ui/ui.json", registry)
+        registry_bytes = json.dumps(registry).encode("utf-8")
+        files = {relative: {"bytes": len(image), "sha256": hashlib.sha256(image).hexdigest(), "format": "MW3H-v1"},
+                 "ui/ui.json": {"bytes": len(registry_bytes), "sha256": hashlib.sha256(registry_bytes).hexdigest()}}
+        if background:
+            background_bytes = b"MWHDBG1\0" + struct.pack("<IIII", 1, 1, 1, 1) + bytes(3)
+            self.write(f"{name}/ui/background.mwhd", background_bytes)
+            files["ui/background.mwhd"] = {"bytes": len(background_bytes),
+                                             "sha256": hashlib.sha256(background_bytes).hexdigest(),
+                                             "format": "MWHDBG1"}
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": files, "native_payload": {
+            "profile": "prepared-ui-v1", "registry": "ui/ui.json", "path_base": "pack-root"}})
+        return os.path.join(self.root, name)
+
     def lighting_environment_pack(self, name="lighting"):
         entry = struct.pack("<IIIIQ6f", 1, 1, 1, 1, 123, 1.0, 1.0, 0.5, 1.0, 1.0, 1.0)
         effect = b"MWFX1\0\0\0" + (1).to_bytes(4, "little") + entry
@@ -423,6 +446,28 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertNotIn("--cc-draw-distance", result["argv"])
         self.assertIn("--cc-environment-packs-explicit", result["argv"])
         self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_ui_sprite_packs_route_to_native_artwork_and_menu_background_is_skipped(self):
+        hud = self.ui_pack("hud", "hud", background=False)
+        menu = self.ui_pack("menu", "menu", background=True)
+        result = self.plan(self.request(hud="core-critical", ui_packs=[hud, menu]))
+        argv = result["argv"]
+        self.assertEqual(argv.count("--cc-hud-artwork"), 2)
+        self.assertEqual([argv[i + 1] for i, value in enumerate(argv) if value == "--cc-hud-artwork"],
+                         [hud, menu])
+        skipped = result["skipped_packs"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["feature"], "menu_hd_background")
+        self.assertIn("no native menu-background", skipped[0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_missing_ui_pack_is_reported_without_artwork_argv(self):
+        missing = os.path.join(self.root, "absent-ui-pack")
+        result = self.plan(self.request(hud="core-critical", ui_packs=[missing]))
+        self.assertNotIn("--cc-hud-artwork", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
+        self.assertIn("missing", result["skipped_packs"][0]["reason"])
 
     # The planner accepts only Windows paths, so tests that read real packs from a temporary
     # directory run on Windows; validation-only tests below run everywhere.
@@ -625,7 +670,8 @@ class NativePreviewPlanTests(unittest.TestCase):
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},
                         {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},
-                        {"model_packs": "C:/one"}, {"unknown": 1}, {"model_packs": ["relative/pack"]}):
+                        {"model_packs": "C:/one"}, {"ui_packs": "C:/one"}, {"unknown": 1},
+                        {"model_packs": ["relative/pack"]}, {"ui_packs": ["relative/pack"]}):
             with self.subTest(preview=preview), self.assertRaises(ValueError):
                 self.plan(self.request(**preview))
         request = self.request()

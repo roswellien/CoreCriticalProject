@@ -71,12 +71,26 @@ public sealed class NativeGameRunner
         {
             var root = Path.GetFullPath(PackStorage.CanonicalPackRoot(directory));
             var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
-            // Music, interface and cinematic packs use separate launcher content steps.
+            // UI packs are selected separately; music and cinematic packs use other content steps.
             if (manifest.SchemaVersion != 2) continue;
             if (manifest.NativePayload?.Profile == "prepared-native-v1") models.Add(root);
             else if (manifest.NativePayload?.Profile == "prepared-environment-v1") environments.Add(root);
         }
         return (models, environments);
+    }
+
+    /// <summary>Return enabled prepared UI packs for the native planner to validate and route.</summary>
+    public static List<string> SelectUiPacks(IEnumerable<string> activeModDirs)
+    {
+        var result = new List<string>();
+        foreach (var directory in activeModDirs)
+        {
+            var root = Path.GetFullPath(PackStorage.CanonicalPackRoot(directory));
+            var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
+            if (manifest.SchemaVersion == 2 && manifest.NativePayload?.Profile == UiPack.Profile)
+                result.Add(root);
+        }
+        return result;
     }
 
     /// <summary>Map the saved antialiasing text to the planner's typed choice.</summary>
@@ -174,6 +188,7 @@ public sealed class NativeGameRunner
         if (reduced) log($"Scenery distance {settings.DrawDistance} is not supported; using {drawDistance}.");
         var activePacks = activeModDirs.ToList();
         var (models, environments) = SelectPreviewPacks(activePacks);
+        var uiPacks = SelectUiPacks(activePacks);
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
         Directory.CreateDirectory(writeDirectory);
         NativeControls.PrepareLaunch(_dataRoot, writeDirectory, validation.GameDirectory, settings, log);
@@ -194,6 +209,9 @@ public sealed class NativeGameRunner
                 DrawDistance = drawDistance,
                 ModelPacks = models,
                 EnvironmentPacks = environments,
+                UiPacks = uiPacks,
+                Hud = "core-critical",
+                HudText = true,
                 DynamicLighting = settings.DynamicLighting,
                 Headlights = settings.Headlights && settings.DynamicLighting,
                 HeadlightBindings = headlightBindings,

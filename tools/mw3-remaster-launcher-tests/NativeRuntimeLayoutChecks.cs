@@ -723,6 +723,36 @@ static class NativeRuntimeLayoutChecks
             var shared = Path.Combine(packs, "shared");
             Directory.CreateDirectory(shared);
             File.WriteAllText(Path.Combine(shared, "pack.json"), """{"schema_version":2,"files":{"environment/rmechtex.zbd":{"bytes":5000000000,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
+            var ui = Path.Combine(packs, "menu-ui");
+            Directory.CreateDirectory(Path.Combine(ui, "ui", "sprites"));
+            var spriteBytes = new byte[32];
+            "MW3H"u8.CopyTo(spriteBytes);
+            BitConverter.GetBytes(1u).CopyTo(spriteBytes, 4); BitConverter.GetBytes(1u).CopyTo(spriteBytes, 8);
+            BitConverter.GetBytes(0f).CopyTo(spriteBytes, 12); BitConverter.GetBytes(0f).CopyTo(spriteBytes, 16);
+            BitConverter.GetBytes(1f).CopyTo(spriteBytes, 20); BitConverter.GetBytes(1f).CopyTo(spriteBytes, 24);
+            spriteBytes[28] = 1; spriteBytes[31] = 255;
+            File.WriteAllBytes(Path.Combine(ui, "ui", "sprites", "0123456789abcdef.rgba"), spriteBytes);
+            var backgroundBytes = "MWHDBG1\0"u8.ToArray().Concat(new byte[]
+                { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 }).ToArray();
+            File.WriteAllBytes(Path.Combine(ui, "ui", "background.mwhd"), backgroundBytes);
+            var registryBytes = Encoding.UTF8.GetBytes("""{"schema_version":2,"payload_profile":"prepared-ui-v1","kind":"menu","sprites":{"0123456789abcdef":"ui/sprites/0123456789abcdef.rgba"},"background":"ui/background.mwhd"}""");
+            File.WriteAllBytes(Path.Combine(ui, "ui", "ui.json"), registryBytes);
+            File.WriteAllText(Path.Combine(ui, "pack.json"), JsonSerializer.Serialize(new
+            {
+                schema_version = 2, game_id = "mw3", id = "test.menu-ui", name = "Test menu UI",
+                files = new Dictionary<string, object>
+                {
+                    ["ui/ui.json"] = new
+                    { bytes = registryBytes.Length, sha256 = Convert.ToHexString(SHA256.HashData(registryBytes)).ToLowerInvariant() },
+                    ["ui/sprites/0123456789abcdef.rgba"] = new
+                    { bytes = spriteBytes.Length, sha256 = Convert.ToHexString(SHA256.HashData(spriteBytes)).ToLowerInvariant(), format = "MW3H-v1" },
+                    ["ui/background.mwhd"] = new
+                    { bytes = backgroundBytes.Length, sha256 = Convert.ToHexString(SHA256.HashData(backgroundBytes)).ToLowerInvariant(), format = "MWHDBG1" }
+                },
+                native_payload = new { profile = "prepared-ui-v1", registry = "ui/ui.json", path_base = "pack-root" }
+            }));
+            if (!NativeGameRunner.SelectUiPacks(new[] { ui }).SequenceEqual(new[] { Path.GetFullPath(ui) }))
+                throw new Exception("Enabled prepared UI packs were not selected for native planning.");
 
             if (NativeGameRunner.WindowModeForSettings("windowed") != Mw3ReWindowMode.Windowed ||
                 NativeGameRunner.WindowModeForSettings("fullscreen") != Mw3ReWindowMode.Fullscreen ||
@@ -732,7 +762,11 @@ static class NativeRuntimeLayoutChecks
             var options = new Mw3RePlanningOptions
             {
                 Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
-                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
+                Preview = new Mw3RePreviewOptions
+                {
+                    DrawDistance = 1200, ModelPacks = new[] { mechs },
+                    EnvironmentPacks = new[] { map, shared }, UiPacks = new[] { ui }
+                }
             };
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
@@ -742,13 +776,14 @@ static class NativeRuntimeLayoutChecks
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
-                "--cc-hud-text", "1", "--cc-geometry", "partial",
+                "--cc-hud-text", "1", "--cc-hud-artwork", ui, "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
                 "--cc-environment-pack", map };
             if (!planned["ok"]!.GetValue<bool>() || !argv.Skip(argv.Count - expectedTail.Length).SequenceEqual(expectedTail) ||
-                planned["skipped_packs"]!.AsArray().Count != 1 ||
-                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared)
+                planned["skipped_packs"]!.AsArray().Count != 2 ||
+                !planned["skipped_packs"]!.AsArray().Any(item => item!["root"]!.GetValue<string>() == shared) ||
+                !planned["skipped_packs"]!.AsArray().Any(item => item!["feature"]!.GetValue<string>() == "menu_hd_background"))
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
 
             // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
