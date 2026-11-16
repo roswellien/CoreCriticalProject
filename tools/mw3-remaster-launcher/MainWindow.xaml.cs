@@ -63,6 +63,7 @@ namespace MW3RemasterLauncher
         private readonly string _dataRoot;
         private PackManager? _libraryPackMgr;
         private readonly GameRunner _gameRunner;
+        private readonly NativePreviewRunner _previewRunner;
         private readonly D7VkRunner _d7vkRunner;
         private bool _isInitializing = true;
 
@@ -93,6 +94,10 @@ namespace MW3RemasterLauncher
             CmbPackGame.ItemsSource = GameCatalog.Games;
             CmbPackGame.SelectedValue = GameCatalog.Mw3;
             _gameRunner = new GameRunner(_basePath, _dataRoot);
+            _previewRunner = new NativePreviewRunner(_basePath, _dataRoot);
+            // Only installs that ship the MW3-RE preview runtime show its button.
+            BtnLaunchNativePreview.Visibility = _previewRunner.FindRuntimeRoot() == null
+                ? Visibility.Collapsed : Visibility.Visible;
             _d7vkRunner = new D7VkRunner(_basePath, _dataRoot);
 
             Loaded += MainWindow_Loaded;
@@ -902,11 +907,79 @@ namespace MW3RemasterLauncher
             }
         }
 
+        private async void BtnLaunchNativePreview_Click(object sender, RoutedEventArgs e)
+        {
+            if (_assetInstallActive || _nativeSessionActive || _launchPreparing) return;
+            var validation = GameValidator.Validate(_settingsMgr.Current.GamePath);
+            if (!validation.IsValid)
+            {
+                BtnBrowseGamePath_Click(sender, e);
+                return;
+            }
+            try
+            {
+                var activeDirs = _packMgr.GetActivePackDirectories();
+                SettingControl_Changed(sender, e);
+                var launchSettings = System.Text.Json.JsonSerializer.Deserialize<LauncherSettings>(
+                    System.Text.Json.JsonSerializer.Serialize(_settingsMgr.Current))!;
+                _nativeSessionActive = true;
+                SetLaunchPreparing(true);
+                BtnLaunchGame.IsEnabled = false;
+                BtnLaunchNativePreview.IsEnabled = false;
+                BtnInstallPack.IsEnabled = false;
+                ListPacks.IsEnabled = false;
+                TxtStatusReady.Text = "GAME STATUS: STARTING NATIVE PREVIEW";
+                TxtStartupProgress.Text = "Checking the Native preview runtime…";
+                var proc = await System.Threading.Tasks.Task.Run(() => _previewRunner.Launch(launchSettings, activeDirs, line =>
+                {
+                    if (line.StartsWith("Scenery distance ", StringComparison.Ordinal) ||
+                        line.StartsWith("Pack left out: ", StringComparison.Ordinal))
+                        Dispatcher.BeginInvoke(new Action(() => TxtStartupProgress.Text = line));
+                    if (line.StartsWith("MW3-RE PID ", StringComparison.Ordinal))
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            if (!_nativeSessionActive) return;
+                            SetLaunchPreparing(false);
+                            BtnLaunchNativePreview.Content = "●  NATIVE PREVIEW RUNNING...";
+                            TxtStatusReady.Text = "GAME STATUS: NATIVE PREVIEW RUNNING";
+                        }));
+                }));
+                _ = ObserveNativePreviewCompletionAsync(proc);
+            }
+            catch (Exception ex)
+            {
+                ResetNativeLaunchControls();
+                TxtStatusReady.Text = "⚠ NATIVE PREVIEW FAILED — OPEN LOGS FOR DETAILS";
+                MessageBox.Show($"Failed to start the Native preview:\n\n{ex.Message}", "Native preview",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private async System.Threading.Tasks.Task ObserveNativePreviewCompletionAsync(Process process)
+        {
+            try
+            {
+                var exit = await GameRunner.WaitForCompletionAsync(process);
+                ResetNativeLaunchControls();
+                TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ NATIVE PREVIEW ENDED WITH AN ERROR";
+                if (exit != 0)
+                    await HandleCrashReportAsync(exit, _previewRunner.LastLogPath);
+            }
+            catch (Exception ex)
+            {
+                ResetNativeLaunchControls();
+                TxtStatusReady.Text = "⚠ COULD NOT READ GAME EXIT STATUS";
+                MessageBox.Show(ex.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void ResetNativeLaunchControls()
         {
             _nativeSessionActive = false;
             SetLaunchPreparing(false);
             BtnLaunchGame.IsEnabled = true;
+            BtnLaunchNativePreview.IsEnabled = true;
+            BtnLaunchNativePreview.Content = "▶  PLAY NATIVE PREVIEW";
             BtnInstallPack.IsEnabled = true;
             ListPacks.IsEnabled = true;
             BtnLaunchGame.Content = string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile)
@@ -997,11 +1070,20 @@ namespace MW3RemasterLauncher
             }
         }
 
+        /// <summary>The newer of this session's Remaster and Native preview logs, else the latest on disk.</summary>
+        private string? CurrentLaunchLog()
+        {
+            var logs = new[] { _gameRunner.LastLogPath, _previewRunner.LastLogPath }
+                .Where(path => path != null && File.Exists(path))
+                .OrderByDescending(path => File.GetLastWriteTimeUtc(path!));
+            return logs.FirstOrDefault() ?? LauncherPaths.LatestLaunchLog();
+        }
+
         private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                var log = _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog();
+                var log = CurrentLaunchLog();
                 var folder = log == null ? LauncherPaths.SessionsRoot : Path.GetDirectoryName(log)!;
                 Directory.CreateDirectory(folder);
                 Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
@@ -1044,7 +1126,7 @@ namespace MW3RemasterLauncher
             {
                 var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
                 var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
-                var launchLog = _gameRunner.LastLogPath ?? LauncherPaths.LatestLaunchLog();
+                var launchLog = CurrentLaunchLog();
                 var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
                 PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
                     launchLog, _basePath, hardwareInventory);

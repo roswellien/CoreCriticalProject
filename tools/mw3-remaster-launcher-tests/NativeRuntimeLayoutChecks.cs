@@ -210,6 +210,7 @@ static class NativeRuntimeLayoutChecks
             var type = typeof(Mw3ReRuntimeContract);
             var contract = Mw3ReRuntimeContract.ReadStructure(root);
             CheckMw3ReRequestProjection(contract);
+            CheckNativePreviewProjection(contract);
             CheckPinnedProfileSnapshot(root);
             CheckMw3RePlanningProfile(root);
             if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
@@ -677,6 +678,79 @@ static class NativeRuntimeLayoutChecks
             throw new Exception("Actual Python argv did not preserve the typed native request.");
         if (Directory.Exists(expectedWrite)) throw new Exception("Planning unexpectedly created a write directory.");
         Console.WriteLine("Typed native JSON -> isolated actual Python argv planner passed; no game process.");
+    }
+
+    private static void CheckNativePreviewProjection(Mw3ReRuntimeContract contract)
+    {
+        // Authored packs in the installed layout; the actual Python planner reads them.
+        var packs = Path.Combine(Path.GetTempPath(), "MW3 preview packs " + Guid.NewGuid().ToString("N"));
+        var dataRoot = Path.Combine(Path.GetTempPath(), "MW3 preview writes " + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var mechs = Path.Combine(packs, "mechs");
+            Directory.CreateDirectory(Path.Combine(mechs, "payload"));
+            Directory.CreateDirectory(Path.Combine(mechs, "models"));
+            foreach (var name in new[] { "mesh", "tex", "nrm" }) File.WriteAllText(Path.Combine(mechs, "payload", name + ".bin"), "x");
+            File.WriteAllText(Path.Combine(mechs, "pack.json"), """{"schema_version":2,"native_payload":{"profile":"prepared-native-v1","registry":"models/models.json","path_base":"pack-root"}}""");
+            File.WriteAllText(Path.Combine(mechs, "models", "models.json"), """{"schema_version":2,"models":[{"id":"owens","backend":"native","status":"runtime-ready","environment":{"MW34_OWENS_MESH":"payload/mesh.bin","MW34_OWENS_TEXTURES":"payload/tex.bin","MW34_OWENS_NORMALS":"payload/nrm.bin"}}]}""");
+            var map = Path.Combine(packs, "training");
+            Directory.CreateDirectory(map);
+            File.WriteAllText(Path.Combine(map, "pack.json"), """{"schema_version":2,"files":{"environment/a.zbd":{"bytes":10,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
+            var shared = Path.Combine(packs, "shared");
+            Directory.CreateDirectory(shared);
+            File.WriteAllText(Path.Combine(shared, "pack.json"), """{"schema_version":2,"files":{"environment/rmechtex.zbd":{"bytes":3126526488,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
+
+            var options = new Mw3RePlanningOptions
+            {
+                Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
+                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
+            };
+            var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativePreviewRunner.ProfileId);
+            var wire = JsonNode.Parse(json)!;
+            if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
+                wire["visuals"]!["pom"]!.GetValue<bool>() != true)
+                throw new Exception("Native preview projection lost its schema, distance or POM.");
+            var planned = RunMw3RePlanner(json);
+            var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+            var expectedTail = new[] { "--cc-pom", "1", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
+                "--cc-hud-text", "1", "--cc-geometry", "partial",
+                "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
+                "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
+                "--cc-environment-pack", map };
+            if (!planned["ok"]!.GetValue<bool>() || !argv.Skip(argv.Count - expectedTail.Length).SequenceEqual(expectedTail) ||
+                planned["skipped_packs"]!.AsArray().Count != 1 ||
+                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared)
+                throw new Exception("Native preview request did not reach the planner's pack translation intact.");
+
+            // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
+            var original = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
+                { Preview = options.Preview with { DrawDistance = 800 } }, "D:/Original MW3", dataRoot, NativePreviewRunner.ProfileId));
+            if (original["argv"]!.AsArray().Any(value => value!.GetValue<string>() == "--cc-draw-distance"))
+                throw new Exception("Original scenery distance added a preview argument.");
+            var refused = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
+                { Preview = options.Preview with { DrawDistance = 2400 } }, "D:/Original MW3", dataRoot, NativePreviewRunner.ProfileId));
+            if (refused["validation_error"]?.GetValue<bool>() != true) throw new Exception("Planner accepted an unsupported preview distance.");
+
+            if (NativePreviewRunner.PreviewDrawDistance(3200, out var reduced) != 1600 || !reduced ||
+                NativePreviewRunner.PreviewDrawDistance(1200, out reduced) != 1200 || reduced)
+                throw new Exception("Saved scenery distance was not mapped to the preview range.");
+            // Unknown saved choices are refused before any process starts.
+            static void Refused(Action action)
+            {
+                try { action(); }
+                catch (InvalidOperationException) { return; }
+                throw new Exception("Native preview accepted an unknown saved choice.");
+            }
+            Refused(() => NativePreviewRunner.PreviewDrawDistance(1000, out _));
+            if (NativePreviewRunner.PreviewAntialiasing("fxaa") != Mw3ReAntialiasing.Fxaa) throw new Exception("Saved FXAA was remapped.");
+            Refused(() => NativePreviewRunner.PreviewAntialiasing("msaa"));
+            if (Directory.Exists(dataRoot)) throw new Exception("Planning unexpectedly created a write directory.");
+            Console.WriteLine("Native preview typed request -> actual Python planner pack translation passed; no game process.");
+        }
+        finally
+        {
+            if (Directory.Exists(packs)) Directory.Delete(packs, true);
+        }
     }
 
     private static void CheckMw3RePomProjection(string root, JsonObject paired)

@@ -6,6 +6,8 @@ param(
     [string]$InstallerVersion = '1.0.28-preview',
     [string]$PreparationBundle = '',
     [string]$RuntimeDirectory = '',
+    # Optional MW3-RE Native preview runtime staged by tools/remaster-launcher/stage_mw3_re_runtime.py.
+    [string]$NativePreviewDirectory = '',
     [string]$WindowsSignTool = '',
     [string]$SigningDlib = '',
     [string]$SigningMetadata = '',
@@ -46,7 +48,7 @@ if ($RuntimeDirectory -and !(Test-Path -LiteralPath (Join-Path $PublishDirectory
 foreach ($name in @('Core Critical Launcher.exe','hostfxr.dll','SDL3.dll','SDL3-LICENSE.txt','Tools/Unshield/unshield.exe','Tools/Unshield/provenance.json')) {
     if (!(Test-Path -LiteralPath (Join-Path $PublishDirectory $name) -PathType Leaf)) { throw "Incomplete launcher publication: $name" }
 }
-foreach ($name in @('Runtime','user','native-inputs')) {
+foreach ($name in @('Runtime','user','native-inputs','NativePreview','Planner')) {
     if (Test-Path -LiteralPath (Join-Path $PublishDirectory $name)) { throw "This launcher-only installer must not package private runtime or player inputs: $name" }
 }
 if ($RuntimeDirectory) {
@@ -57,6 +59,28 @@ if ($RuntimeDirectory) {
     if ($runtimeManifest.precompiled_runtime_version -ne 1) { throw 'Explicit precompiled runtime marker required' }
     Copy-Item -LiteralPath $RuntimeDirectory -Destination (Join-Path $PublishDirectory 'Runtime') -Recurse
 }
+if ($NativePreviewDirectory) {
+    $NativePreviewDirectory = [IO.Path]::GetFullPath($NativePreviewDirectory)
+    $previewManifest = Get-Content -LiteralPath (Join-Path $NativePreviewDirectory 'runtime.json') -Raw | ConvertFrom-Json
+    if ($previewManifest.schema_version -ne 2 -or $previewManifest.engine -ne 'mw3-re') { throw 'The Native preview needs an MW3-RE schema 2 runtime.json' }
+    Copy-Item -LiteralPath $NativePreviewDirectory -Destination (Join-Path $PublishDirectory 'NativePreview') -Recurse
+    # The launcher runs this planner; it is the only producer of MW3-RE arguments.
+    $planner = Join-Path $PSScriptRoot '../remaster-launcher/mw3_re_launch.py'
+    New-Item -ItemType Directory -Path (Join-Path $PublishDirectory 'Planner') | Out-Null
+    Copy-Item -LiteralPath $planner -Destination (Join-Path $PublishDirectory 'Planner/mw3_re_launch.py')
+}
+function Test-NativePreviewPins([string]$Root) {
+    # runtime.json pins every file by size and SHA-256; the launcher refuses a runtime whose bytes differ.
+    $manifest = Get-Content -LiteralPath (Join-Path $Root 'runtime.json') -Raw | ConvertFrom-Json
+    foreach ($entry in $manifest.files.PSObject.Properties) {
+        $path = Join-Path $Root $entry.Name
+        if ((Get-Item -LiteralPath $path).Length -ne [long]$entry.Value.bytes -or
+            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne ([string]$entry.Value.sha256).ToUpperInvariant()) {
+            throw "Native preview file differs from its runtime.json pin: $($entry.Name)"
+        }
+    }
+}
+if ($NativePreviewDirectory) { Test-NativePreviewPins (Join-Path $PublishDirectory 'NativePreview') }
 if ($PreparationBundle) {
     $PreparationBundle = [IO.Path]::GetFullPath($PreparationBundle)
     & dotnet run --project (Join-Path $PSScriptRoot '../mw3-remaster-launcher-tests/LauncherChecks.csproj') -c Release "--property:BaseOutputPath=$checksOutput" -- --verify-bundled-preparation $PreparationBundle
@@ -74,7 +98,9 @@ if ($WindowsSignTool -or $SigningDlib -or $SigningMetadata) {
     foreach ($signingPath in @($WindowsSignTool,$SigningDlib,$SigningMetadata)) {
         if (!$signingPath -or !(Test-Path -LiteralPath $signingPath -PathType Leaf)) { throw 'Provide all three Windows signing inputs' }
     }
-    $peFiles=@(Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File | Where-Object { $_.Extension -in @('.exe','.dll','.pyd') } | Select-Object -ExpandProperty FullName)
+    # Native preview binaries stay as staged: signing would change bytes pinned by its runtime.json.
+    $previewRoot = Join-Path $PublishDirectory 'NativePreview'
+    $peFiles=@(Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File | Where-Object { $_.Extension -in @('.exe','.dll','.pyd') -and !$_.FullName.StartsWith($previewRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) } | Select-Object -ExpandProperty FullName)
     & (Join-Path $PSScriptRoot 'sign_windows.ps1') -File $peFiles -SignTool $WindowsSignTool -Dlib $SigningDlib -Metadata $SigningMetadata -ReceiptPath (Join-Path $OutputDirectory 'application-signatures.json')
 }
 & dotnet run --project (Join-Path $PSScriptRoot '../mw3-remaster-launcher-tests/LauncherChecks.csproj') -c Release "--property:BaseOutputPath=$checksOutput" -- --verify-media-tools (Join-Path $PublishDirectory 'Tools/Unshield')
@@ -84,6 +110,7 @@ if ($RuntimeDirectory) {
     & dotnet run --project (Join-Path $PSScriptRoot '../mw3-remaster-launcher-tests/LauncherChecks.csproj') -c Release "--property:BaseOutputPath=$checksOutput" -- --validate-runtime (Join-Path $PublishDirectory 'Runtime')
     if ($LASTEXITCODE) { throw 'Published runtime changed during signing; refresh its pins before packaging' }
 }
+if ($NativePreviewDirectory) { Test-NativePreviewPins (Join-Path $PublishDirectory 'NativePreview') }
 $arguments = @('/Qp',('/O'+$OutputDirectory),('/DPublishDirectory='+$PublishDirectory),
     ('/DMyAppVersion='+$InstallerVersion),('/DInstallerAppId={{'+$id+'}'),(Join-Path $PSScriptRoot 'installer.iss'))
 if ($PreparationBundle) { $arguments = @('/DSourcePreparationIncluded=1') + $arguments }
@@ -111,6 +138,8 @@ if ($WindowsSignTool) {
     native_runtime_generation_complete = [bool]$RuntimeDirectory
     precompiled_runtime_included = [bool]$RuntimeDirectory
     source_preparation_included = [bool]$PreparationBundle
+    native_preview_included = [bool]$NativePreviewDirectory
+    native_preview_source_commit = $(if ($NativePreviewDirectory) { [string]$previewManifest.provenance.source_commit } else { $null })
     windows_signed = [bool]$WindowsSignTool
     clean_windows_verified = $false
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'installer-build.json')

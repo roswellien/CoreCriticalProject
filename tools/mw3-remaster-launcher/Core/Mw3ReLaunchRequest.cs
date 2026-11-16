@@ -21,6 +21,23 @@ public sealed record Mw3RePlanningOptions
     public Mw3ReLighting Lighting { get; init; } = Mw3ReLighting.Off;
     public bool Pom { get; init; } = false;
     public IReadOnlyList<string> Assets { get; init; } = Array.Empty<string>();
+    /// <summary>Native preview choices; when set, the request uses wire schema 4.</summary>
+    public Mw3RePreviewOptions? Preview { get; init; }
+}
+
+/// <summary>
+/// Player choices for the labelled Native preview launch (wire schema 4). The Python planner
+/// reads the pack folders and turns them into game arguments; C# only passes typed values.
+/// </summary>
+public sealed record Mw3RePreviewOptions
+{
+    /// <summary>Scenery/view distance: 800 is the original game's range; 1200 and 1600 extend it.</summary>
+    public int DrawDistance { get; init; } = 800;
+    public string Hud { get; init; } = "core-critical";
+    public bool HudText { get; init; } = true;
+    public string Geometry { get; init; } = "partial";
+    public IReadOnlyList<string> ModelPacks { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>Project an integrity snapshot into wire data; only Python translates it into argv.</summary>
@@ -58,6 +75,11 @@ public static class Mw3ReLaunchRequest
             Mw3ReLighting.Off => "off", Mw3ReLighting.Flat => "flat", Mw3ReLighting.Normal => "normal",
             _ => throw new InvalidDataException("Unknown native lighting.")
         };
+        // The preview ships its planner with the launcher, so it has no pinned planner roles to check;
+        // the planner still refuses POM without normal lighting.
+        if (options.Preview != null)
+            return CreatePreview(contract, options, gameDirectory, dataRoot, id, renderer, antialiasing,
+                windowMode, lighting);
         // This pinned combined runtime/planner claim is observational, not trusted execution admission.
         if (options.Pom && (options.Lighting != Mw3ReLighting.Normal ||
             !contract.Capabilities.TryGetValue("pom", out var versions) || !versions.Contains(1) ||
@@ -77,4 +99,35 @@ public static class Mw3ReLaunchRequest
         if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };
         return GameRunner.SerializeLaunchProfile(request);
     }
+
+    private static string CreatePreview(Mw3ReRuntimeContract contract, Mw3RePlanningOptions options,
+        string gameDirectory, string dataRoot, string id, string renderer, string antialiasing,
+        string windowMode, string lighting)
+    {
+        var preview = options.Preview!;
+        ArgumentNullException.ThrowIfNull(preview.ModelPacks);
+        ArgumentNullException.ThrowIfNull(preview.EnvironmentPacks);
+        var request = new JsonObject
+        {
+            ["schema_version"] = 4, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
+            ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
+            ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
+            ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
+            ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,
+            ["render_thread"] = options.RenderThread, ["lighting"] = lighting,
+            ["assets"] = new JsonArray(options.Assets.Select(asset => (JsonNode?)JsonValue.Create(asset)).ToArray()),
+            ["preview"] = new JsonObject
+            {
+                ["draw_distance"] = preview.DrawDistance, ["hud"] = preview.Hud,
+                ["hud_text"] = preview.HudText, ["geometry"] = preview.Geometry,
+                ["model_packs"] = Paths(preview.ModelPacks),
+                ["environment_packs"] = Paths(preview.EnvironmentPacks)
+            }
+        };
+        if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };
+        return GameRunner.SerializeLaunchProfile(request);
+    }
+
+    private static JsonArray Paths(IEnumerable<string> paths) =>
+        new(paths.Select(path => (JsonNode?)JsonValue.Create(path)).ToArray());
 }
