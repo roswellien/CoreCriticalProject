@@ -207,6 +207,36 @@ upgrade is smoother in frame rate but with a slightly uneven rhythm. Options:
 - **Match the display rate:** only on variable-refresh displays.
 Recommendation: repeat frames, no blending, no setting. Revisit only if it bothers in play.
 
+### 9.1 Refresh-rate independence: 30 Hz up to 240 Hz (owner requirement)
+
+The owner's monitor is 144 Hz (Windows currently reports the desktop at 60 Hz, which would be a setting), and the game must adapt
+all the way down to 30 Hz displays. The design already allows this, but it becomes an explicit requirement and test:
+
+- **Frame choice is a pure function of the media clock.** Each time the game flips, show the newest decoded frame whose
+  timestamp is at or before the sound cursor (the clock). It never depends on the display's refresh rate or the game loop's rate,
+  so it adapts to any display without a setting, and audio stays the master.
+- **No frame is dropped while the display rate is at least the video rate** (24 fps). Below that (or during a stall) the player skips
+  ahead to the newest frame so the picture stays on the clock. It never slows the audio.
+- **A slow decoder never slows the clock.** If decoding falls behind (a weak CPU), drop non-reference frames, then skip ahead.
+- **Acceptance test (asset-free):** a unit test of the pure frame-picking function over simulated refresh rates from 30 to 240 Hz plus a
+  stalled-flip case, asserting no frame is shown before its timestamp, none is dropped at 30 Hz or above, and the longest hold stays
+  within the table below.
+
+Simulated hold times for a 24 fps clip (refreshes each frame stays on screen, over 20 s):
+
+| Display | Frame holds | Visible effect | Max video lateness |
+|---|---|---|---|
+| 30 Hz | 1 refresh 75%, 2 refreshes 25% | Every fourth frame stays twice as long (33 vs 67 ms): a regular hitch six times a second, the roughest case | 25 ms |
+| 48 / 72 / 120 / 144 / 240 Hz | exactly 2 / 3 / 5 / 6 / 10 | None (exact multiples) | 0 ms |
+| 50 Hz | 2 refreshes 92%, 3 refreshes 8% | Faint | 18 ms |
+| 60 Hz | 2 and 3 alternating | Faint judder on slow pans | 8 ms |
+| 75 / 90 / 100 / 165 Hz | mostly 3, 4, 4, 7 with an occasional longer or shorter hold | Faint, irregular | 5-12 ms |
+
+Video appears at most 25 ms after its timestamp, below the roughly 45 ms at which audio leading video becomes noticeable, so lip-sync
+holds at every rate. Predicting the flip time when choosing the frame would shave this further. Frame blending would smooth the
+30 Hz hitch at the price of softer motion; keep the pure function mode-aware so a blend mode can be added later, but ship
+repeat-only.
+
 ## 8. Evidence list
 
 - `docs/fmv.md:13-33` callers and blocks [C]; `:73-77` skip keys [C]; `:159-178` movie action, not-found [C]; `:248-262` the sound sets the frame [C]; `:321-334` importer files [C]; `:366-388` Indeo helper and fallback log [C]; `:442-453,517-519` wide screen and canvas sizes [C]
