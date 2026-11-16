@@ -197,6 +197,11 @@ public sealed class NativeGameRunner
         if (plan.RootElement.TryGetProperty("skipped_packs", out var skipped))
             foreach (var item in skipped.EnumerateArray())
                 log("Pack left out: " + item.GetProperty("root").GetString() + " (" + item.GetProperty("reason").GetString() + ")");
+        // Two enabled mech packs can both supply a chassis; the earlier pack in the list keeps it.
+        if (plan.RootElement.TryGetProperty("overridden_models", out var overridden))
+            foreach (var item in overridden.EnumerateArray())
+                log("Mech " + item.GetProperty("chassis").GetString() + " from " + item.GetProperty("root").GetString() +
+                    " left out; using the one from " + item.GetProperty("kept_from").GetString());
 
         var argv = plan.RootElement.GetProperty("argv").EnumerateArray().Select(item => item.GetString()!).ToList();
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
