@@ -113,6 +113,9 @@ struct ControllerState {
     if (!available) {
       armed = false;
       trigger_down.fill(false);
+      // A throttle stop latched before focus or device loss must not hold the throttle at zero
+      // after the controller comes back.
+      throttle_stopped = false;
     } else if (!armed && neutral) {
       armed = true;
     }
