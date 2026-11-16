@@ -40,7 +40,8 @@ class RenderWorker {
     RenderWorker(const RenderWorker &) = delete;
     RenderWorker &operator=(const RenderWorker &) = delete;
 
-    void post(std::function<void()> function, std::size_t bytes = 0) {
+    // Returns the job's 1-based submission number, taken under the same lock that queues it.
+    std::size_t post(std::function<void()> function, std::size_t bytes = 0) {
         if (std::this_thread::get_id() == thread_.get_id())
             throw std::logic_error("Render worker cannot enqueue onto itself");
         Job job{std::move(function), bytes, {}};
@@ -68,6 +69,7 @@ class RenderWorker {
         statistics_.peak_jobs = std::max(statistics_.peak_jobs, outstanding_);
         statistics_.peak_bytes = std::max(statistics_.peak_bytes, outstanding_bytes_);
         changed_.notify_all();
+        return statistics_.submitted;
     }
 
     template <class Function> auto call(Function function) -> decltype(function()) {
@@ -97,9 +99,7 @@ class RenderWorker {
     // 1-based submission number. post_numbered() returns that number; wait_for_job() blocks until
     // the job has run (or the worker has failed, which rethrows like drain()).
     std::size_t post_numbered(std::function<void()> function, std::size_t bytes = 0) {
-        post(std::move(function), bytes);
-        std::lock_guard<std::mutex> lock(mutex_);
-        return statistics_.submitted;
+        return post(std::move(function), bytes);
     }
     void wait_for_job(std::size_t job_number) {
         if (std::this_thread::get_id() == thread_.get_id())
