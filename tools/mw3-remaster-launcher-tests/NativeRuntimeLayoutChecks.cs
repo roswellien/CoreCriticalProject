@@ -702,7 +702,7 @@ static class NativeRuntimeLayoutChecks
             File.WriteAllText(Path.Combine(map, "pack.json"), """{"schema_version":2,"files":{"environment/a.zbd":{"bytes":10,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
             var shared = Path.Combine(packs, "shared");
             Directory.CreateDirectory(shared);
-            File.WriteAllText(Path.Combine(shared, "pack.json"), """{"schema_version":2,"files":{"environment/rmechtex.zbd":{"bytes":3126526488,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
+            File.WriteAllText(Path.Combine(shared, "pack.json"), """{"schema_version":2,"files":{"environment/rmechtex.zbd":{"bytes":5000000000,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
 
             if (NativeGameRunner.WindowModeForSettings("windowed") != Mw3ReWindowMode.Windowed ||
                 NativeGameRunner.WindowModeForSettings("fullscreen") != Mw3ReWindowMode.Fullscreen ||

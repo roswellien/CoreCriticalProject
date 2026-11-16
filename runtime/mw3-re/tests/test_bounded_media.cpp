@@ -18,8 +18,16 @@
 
 #if defined(_WIN32)
 #include <io.h>
+// Lean windows.h: its RPC headers define `small` (a name this file uses) and min/max.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <winioctl.h>
+#undef small
 #endif
 
 #include "check.h"
