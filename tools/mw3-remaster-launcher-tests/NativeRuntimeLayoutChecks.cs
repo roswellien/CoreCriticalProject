@@ -513,11 +513,15 @@ static class NativeRuntimeLayoutChecks
             else
             {
                 var expectedWrite = Path.Combine(dataRoot, "mw3-re", "profiles", "profile-a");
+                // MW3-RE is desktop fullscreen by default; only a windowed choice adds window arguments.
+                var window = expected.WindowMode == Mw3ReWindowMode.Windowed
+                    ? new[] { "--window", expected.Width + "x" + expected.Height, "--windowed" }
+                    : Array.Empty<string>();
                 var argv = new[] { contract.Executable, "--install", "D:/Original MW3", "--write-dir", expectedWrite,
-                    "--cc-vulkan-wsi", "--window", expected.Width + "x" + expected.Height, "--windowed",
+                    "--cc-vulkan-wsi" }.Concat(window).Concat(new[] {
                     "--cc-aa", aa, "--cc-af", expected.AnisotropicFiltering.ToString(),
                     "--cc-render-thread", expected.RenderThread ? "1" : "0", "--cc-lighting",
-                    original["options"]!["lighting"]!.GetValue<string>() };
+                    original["options"]!["lighting"]!.GetValue<string>() }).ToArray();
                 if (!planned["ok"]!.GetValue<bool>() ||
                     !planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).SequenceEqual(argv) ||
                     planned["working_directory"]!.GetValue<string>() != Path.GetDirectoryName(contract.Executable))
@@ -544,7 +548,7 @@ static class NativeRuntimeLayoutChecks
                 ("borderless", Mw3ReWindowMode.Borderless)
             })
                 RoundTrip(Encoding.UTF8.GetBytes(Changed("window_mode", JsonSerializer.Serialize(value))),
-                    defaults with { WindowMode = choice }, "fxaa", choice != Mw3ReWindowMode.Windowed);
+                    defaults with { WindowMode = choice }, "fxaa");
             foreach (var (value, choice) in new[]
             {
                 ("off", Mw3ReLighting.Off), ("flat", Mw3ReLighting.Flat), ("normal", Mw3ReLighting.Normal)
