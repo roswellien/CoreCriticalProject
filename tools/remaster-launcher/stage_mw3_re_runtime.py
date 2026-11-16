@@ -545,7 +545,8 @@ def _pins(members, generated):
 def _descriptor(pins, source_commit, builder, build_id):
     roles = dict(executable="bin/mw3.exe", profile="profile.json")
     return _json(dict(schema_version=2, engine="mw3-re", roles=roles,
-        dependencies=sorted(set(pins) - set(roles.values())), files=pins, capabilities={},
+        dependencies=sorted(set(pins) - set(roles.values())), files=pins,
+        capabilities={"controller-profile": [1]},
         provenance=dict(source_commit=source_commit, build_id=build_id, builder=builder)))
 
 

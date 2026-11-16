@@ -203,7 +203,11 @@ static class NativeRuntimeLayoutChecks
                 ["roles"] = new JsonObject { ["executable"] = "bin/mw3.exe", ["profile"] = "profile.json" },
                 ["dependencies"] = new JsonArray("support.txt", "bin/SDL3_sound.dll"), ["files"] = pins,
                 ["provenance"] = new JsonObject { ["source_commit"] = new string('a', 40), ["build_id"] = "authored-build", ["builder"] = "fixture" },
-                ["capabilities"] = new JsonObject { ["authored-capability"] = new JsonArray(1, 2) }
+                ["capabilities"] = new JsonObject
+                {
+                    ["authored-capability"] = new JsonArray(1, 2),
+                    ["controller-profile"] = new JsonArray(1)
+                }
             };
             File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
             var before = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
@@ -214,6 +218,8 @@ static class NativeRuntimeLayoutChecks
             CheckNativePreviewProjection(contract);
             CheckPinnedProfileSnapshot(root);
             CheckMw3RePlanningProfile(root);
+            if (!contract.SupportsControllerProfiles)
+                throw new Exception("Runtime controller-profile capability was not recognized.");
             if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
                 throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
             if (!contract.Dependencies.Contains("bin/SDL3_sound.dll", StringComparer.Ordinal))
@@ -233,6 +239,12 @@ static class NativeRuntimeLayoutChecks
             RejectMutation(() => ((IDictionary<string, string>)contract.Roles)["profile"] = "changed.json");
             RejectMutation(() => ((IList<string>)contract.Dependencies).Clear());
             RejectMutation(() => ((IList<int>)contract.Capabilities["authored-capability"]).Add(7));
+            var noControllerCapability = descriptor.DeepClone().AsObject();
+            noControllerCapability["capabilities"]!.AsObject().Remove("controller-profile");
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(noControllerCapability));
+            if (Mw3ReRuntimeContract.ReadStructure(root).SupportsControllerProfiles)
+                throw new Exception("A runtime without controller capability was marked compatible.");
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
             void RejectDescriptor(Action<JsonObject> change, string reason = "")
             {
                 var candidate = descriptor.DeepClone().AsObject();

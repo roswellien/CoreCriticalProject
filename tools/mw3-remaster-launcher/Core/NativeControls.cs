@@ -24,6 +24,25 @@ public static class NativeControls
         public string[] LastAppliedActiveConfig { get; set; } = [];
     }
 
+    public static string? ExportControllerProfile(string dataRoot, string profileDirectory, ControllerProfile profile)
+    {
+        if (!profile.Enabled) return null;
+        var path = ControllerProfilePath(profileDirectory);
+        ControlProfiles.AtomicWrite(path, ControllerProfiles.Export(profile,
+            ControllerCalibration.Load(dataRoot, profile.DeviceKey)));
+        return path;
+    }
+
+    public static string ControllerProfilePath(string profileDirectory) =>
+        Path.Combine(profileDirectory, "mw3-controller.txt");
+
+    public static IReadOnlyList<string> ControllerArguments(ControllerProfile profile, string? path)
+    {
+        if (!profile.Enabled) return Array.Empty<string>();
+        if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("Enabled controller profile has no exported file.");
+        return ["--cc-controller", path];
+    }
+
     public static void PrepareLaunch(string dataRoot, string writeDirectory, string gameDirectory,
         LauncherSettings settings, Action<string> log)
     {
@@ -74,10 +93,15 @@ public static class NativeControls
             if (activePreset == null || !ReadAxisRows(activePreset).Any())
                 activePreset = ReadDefaultPreset(writeDirectory, gameDirectory);
             if (activePreset == null || !ReadAxisRows(activePreset).Any()) activePreset = DefaultAxesPreset();
-            var controllerPreset = ControllerPreset(dataRoot, selected, controllerProfile, log);
+            var controllerPreset = ControllerPreset(selected, controllerProfile);
+            if (controllerProfile.Enabled)
+            {
+                _ = ExportControllerProfile(dataRoot, writeDirectory, controllerProfile);
+                log("Applied the full saved controller profile through MW3-RE's native controller input path.");
+            }
             var preset = controllerPreset == null
                 ? ControlProfiles.Preset(selected, activePreset)
-                : ControlProfiles.Preset(selected, MergeControllerAxes(activePreset, controllerPreset));
+                : ControlProfiles.Preset(selected, controllerPreset);
             var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(preset)))[..20];
             var relative = @"keys\CC-" + hash + ".zrd";
             var target = Path.Combine(writeDirectory, "keys", "CC-" + hash + ".zrd");
@@ -120,31 +144,10 @@ public static class NativeControls
             log("Selected joystick by its DirectInput product name in this MW3-RE profile; duplicate product names select the first match.");
     }
 
-    private static string? ControllerPreset(string dataRoot, ControlProfile selected, ControllerProfile controller,
-        Action<string> log)
+    private static string? ControllerPreset(ControlProfile selected, ControllerProfile controller)
     {
         if (!controller.Enabled) return null;
-        log("MW3-RE applies the controller layout's first 15 button mappings and four stick assignments. " +
-            "Trigger mappings, buttons 16 through 26, calibration response curves and calibrated center/range " +
-            "are not representable by the original game control file.");
-        log("The saved SDL controller identity cannot be matched exactly by MW3-RE; confirm the selected " +
-            "DirectInput product name resolves to the same device.");
-        var calibration = ControllerCalibration.Load(dataRoot, controller.DeviceKey);
         foreach (var action in ControlProfiles.Actions) selected.Bindings[action.Name].Joystick = 0;
-        for (var button = 0; button < 15; button++)
-        {
-            var command = controller.Buttons[button];
-            if (command == 0) continue;
-            var action = ControlProfiles.Actions.FirstOrDefault(item => item.Command == command);
-            if (action == null) continue;
-            selected.Bindings[action.Name].Joystick = button + 1;
-        }
-
-        var unsupportedButtons = controller.Buttons.Skip(15).Count(command => command != 0);
-        if (unsupportedButtons > 0)
-            log($"Controller layout has {unsupportedButtons} assigned buttons beyond MW3's 15-button control-file limit; those bindings are not applied.");
-        if (controller.Triggers.Any(command => command != 0))
-            log("Controller trigger-to-action bindings are not applied: MW3-RE's original control file has no trigger threshold mapping.");
 
         var axisByControl = new[] { 0, 2, 3, 1 }; // throttle, twist, pitch, turn
         var names = new[] { "Throttle", "Twist", "Pitch", "LR" };
@@ -155,15 +158,12 @@ public static class NativeControls
             var controllerAxis = controller.Axes[axisByControl[i]];
             if (controllerAxis < 0) continue;
             if (controllerAxis >= sourceNames.Length)
-            {
-                log($"Controller axis index {controllerAxis} for {names[i]} is unsupported by MW3's four-axis control file and was not applied.");
-                continue;
-            }
+                throw new InvalidDataException("Validated controller profile contains an unsupported stick axis.");
             var source = sourceNames[controllerAxis];
-            var sourceIndex = controllerAxis switch { 0 => 0, 1 => 1, 2 => 3, _ => 4 };
-            var axis = calibration.Axes[sourceIndex];
-            var sensitivity = controller.Scale[axisByControl[i]] * (axis.Inverted ? -1 : 1);
-            var deadzone = axis.Deadzone;
+            // SDL input applies calibration, deadzone, response and inversion. This
+            // legacy .zrd row only routes the selected source and applies sensitivity.
+            var sensitivity = controller.Scale[axisByControl[i]];
+            const double deadzone = 0;
             // AxisBinding::value is slope * source + intercept. Throttle maps
             // the normalized stick range to the game's 1-to-0 throttle range.
             var slope = (i == 0 ? 0.5f : 1.0f) * sensitivity;
@@ -172,8 +172,6 @@ public static class NativeControls
                 .Append(slope.ToString("R", CultureInfo.InvariantCulture)).Append(") intercept(")
                 .Append(intercept.ToString("R", CultureInfo.InvariantCulture)).Append(") deadzone(")
                 .Append(deadzone.ToString("R", CultureInfo.InvariantCulture)).AppendLine("))");
-            if (axis.Response != 1 || axis.Center != 0 || axis.Minimum != -32768 || axis.Maximum != 32767)
-                log($"Controller calibration for {source} uses response/center/range values that MW3's original axis format cannot represent; only deadzone and inversion are applied.");
         }
         axes.Append("  )\n)\n");
         return axes.ToString();
@@ -275,16 +273,6 @@ public static class NativeControls
         "    (Twist joystick(Rz) slope(-1) intercept(0) deadzone(0))\n" +
         "    (Pitch joystick(Y) slope(1) intercept(0) deadzone(0))\n" +
         "    (LR joystick(X) slope(-1) intercept(0) deadzone(0))\n  )\n)\n";
-
-    private static string MergeControllerAxes(string activePreset, string controllerPreset)
-    {
-        var axes = ReadAxisRows(activePreset).ToDictionary(AxisName, StringComparer.Ordinal);
-        foreach (var row in ReadAxisRows(controllerPreset)) axes[AxisName(row)] = row;
-        var names = new[] { "Throttle", "Twist", "Pitch", "LR" };
-        return "(\n  KEYS ()\n  AXES (\n" +
-            string.Join("\n", names.Where(axes.ContainsKey).Select(name => "    " + axes[name])) +
-            "\n  )\n)\n";
-    }
 
     private static IEnumerable<string> ReadAxisRows(string preset)
     {

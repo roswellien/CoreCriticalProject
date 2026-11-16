@@ -26,6 +26,8 @@ public sealed class Mw3ReRuntimeContract
     public IReadOnlyDictionary<string, string> Roles { get; }
     public IReadOnlyList<string> Dependencies { get; }
     public IReadOnlyDictionary<string, IReadOnlyList<int>> Capabilities { get; }
+    public bool SupportsControllerProfiles => Capabilities.TryGetValue("controller-profile", out var versions) &&
+        versions.Contains(1);
 
     private Mw3ReRuntimeContract(string root, Dictionary<string, string> roles,
         List<string> dependencies, Dictionary<string, IReadOnlyList<int>> capabilities,
