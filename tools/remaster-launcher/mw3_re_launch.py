@@ -6,7 +6,9 @@ and bounded lighting-catalog headers it is given, read-only, to turn installed p
 
 from pathlib import Path, PureWindowsPath
 import json
+import math
 import re
+import struct
 
 
 _FIELDS = frozenset({
@@ -32,6 +34,309 @@ _PREVIEW_GEOMETRY = ("legacy", "partial")
 _RUNTIME_MODEL_STATUSES = ("runtime-ready", "runtime-candidate")
 # Texture table offsets are unsigned 32-bit values, so native packs can be at most 4 GiB.
 _NATIVE_FILE_LIMIT = 2 ** 32
+
+# BWSFM1 model sidecars are validated here as well as by the authoring tools because the
+# packaged launcher runs this file with Python isolated mode and ships no sibling modules.
+_MAX_MESH_BATCHES = 256
+_MAX_TEXTURE_BATCHES = 4096
+_MAX_TEXTURE_MATERIALS = 64
+_MAX_IDENTIFIER_BYTES = 4096
+_MAX_MATERIAL_NAME_BYTES = 31
+_MAX_SURFACE_RECORDS = 4096
+_MAX_SURFACE_IMAGES = 512
+_MAX_SURFACE_DIMENSION = 4096
+MAX_SIDECAR_BYTES = 256 * 1024 * 1024
+_NO_SURFACE_MATERIAL = 0xFFFFFFFF
+_NO_SURFACE_IMAGE = 0xFFFFFFFF
+_ROLE_HEIGHT = 1
+_ROLE_THICKNESS = 2
+_ADDRESS_MODES = (1, 2, 3)
+_SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+\Z")
+_SAFE_MATERIAL_NAME = re.compile(r"[A-Za-z0-9_.-]{1,31}\Z")
+
+
+def _planner_identifier(value, label, maximum=_MAX_IDENTIFIER_BYTES):
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Invalid {label}")
+    encoded = value.encode("utf-8")
+    if (len(encoded) > maximum or "\0" in value or ".." in value or "/" in value or
+            "\\" in value or not _SAFE_IDENTIFIER.fullmatch(value)):
+        raise ValueError(f"Invalid {label}: {value!r}")
+    return encoded
+
+
+def _planner_material_name(value):
+    if (not isinstance(value, str) or ".." in value or
+            not _SAFE_MATERIAL_NAME.fullmatch(value)):
+        raise ValueError(f"Invalid surface material name: {value!r}")
+    return value.encode("ascii")
+
+
+def _planner_f32(value, label, low, high):
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise ValueError(f"Nonfinite {label}")
+    rounded = struct.unpack("<f", struct.pack("<f", float(value)))[0]
+    if not math.isfinite(rounded) or not low <= rounded <= high:
+        raise ValueError(f"Out-of-range {label}: {value}")
+    return rounded
+
+
+def _mesh_uv_identity_file(path):
+    """Hash batch counts and vertex streams using the BWSFM1 mesh identity contract."""
+    with Path(path).open("rb") as stream:
+        def take(size):
+            chunk = stream.read(size)
+            if len(chunk) != size:
+                raise ValueError("Truncated mesh payload for UV identity")
+            return chunk
+
+        magic = take(8)
+        donor = magic == b"BWMESH4\0"
+        anchored = magic == b"BWMESH6\0"
+        layered = anchored or magic == b"BWMESH5\0"
+        placement = layered or magic == b"BWMESH3\0"
+        visibility = donor or placement or magic == b"BWMESH2\0"
+        if not visibility and magic != b"BWMESH1\0":
+            raise ValueError("Unsupported mesh payload format for UV identity")
+        count = struct.unpack("<I", take(4))[0]
+        if not 1 <= count <= _MAX_MESH_BATCHES:
+            raise ValueError("Invalid mesh batch count for UV identity")
+        if donor:
+            bones, refs, flags = struct.unpack("<III", take(12))
+            if not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 3:
+                raise ValueError("Invalid donor rig header in mesh payload")
+            take(40)
+            for _ in range(bones):
+                take(32 + 32 + 4 + 128)
+            for _ in range(refs):
+                take(32 + 128)
+
+        value = 0xCBF29CE484222325
+        for byte in struct.pack("<I", count):
+            value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        for _ in range(count):
+            take(32)
+            if visibility:
+                take(32)
+            if placement:
+                take(32 + 12)
+            if layered:
+                take(32 + 12)
+            if anchored:
+                take(32 + 12)
+            donor_bone = struct.unpack("<I", take(4))[0] if donor else 0
+            vertex_count, _color = struct.unpack("<II", take(8))
+            if not 1 <= vertex_count <= 65535 or vertex_count % 3:
+                raise ValueError("Invalid mesh vertex count for UV identity")
+            vertices = take(vertex_count * 32)
+            if donor and donor_bone == 0xFFFFFFFF:
+                take(vertex_count * 4)
+            for byte in struct.pack("<I", vertex_count):
+                value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+            for byte in vertices:
+                value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        if stream.read(1):
+            raise ValueError("Trailing mesh payload data")
+        return value
+
+
+def _texture_batch_materials_file(path):
+    """Read BWTEX1 batch bindings and material names with bounded streaming reads."""
+    with Path(path).open("rb") as stream:
+        def take(size):
+            chunk = stream.read(size)
+            if len(chunk) != size:
+                raise ValueError("Truncated BWTEX1 payload")
+            return chunk
+
+        if take(8) != b"BWTEX1\0\0":
+            raise ValueError("Expected BWTEX1 payload")
+        batches, count = struct.unpack("<II", take(8))
+        if not 1 <= batches <= _MAX_TEXTURE_BATCHES or not 1 <= count <= _MAX_TEXTURE_MATERIALS:
+            raise ValueError("Invalid BWTEX1 batch/material counts")
+        bindings = struct.unpack("<" + "I" * batches, take(batches * 4))
+        if any(index >= count for index in bindings):
+            raise ValueError("Invalid BWTEX1 material binding index")
+        names = []
+        for _ in range(count):
+            raw_name = take(32)
+            if not raw_name[0] or raw_name[31]:
+                raise ValueError("Invalid BWTEX1 material name")
+            name = raw_name.split(b"\0", 1)[0].decode("ascii")
+            if ".." in name or not _SAFE_MATERIAL_NAME.fullmatch(name):
+                raise ValueError("Unsafe BWTEX1 material name")
+            width, height, _image_hash = struct.unpack("<IIQ", take(16))
+            if not 1 <= width <= _MAX_SURFACE_DIMENSION or not 1 <= height <= _MAX_SURFACE_DIMENSION:
+                raise ValueError("Invalid BWTEX1 dimensions")
+            remaining = width * height * 2
+            while remaining:
+                chunk = take(min(remaining, 1024 * 1024))
+                remaining -= len(chunk)
+            names.append(name)
+        if stream.read(1):
+            raise ValueError("Trailing BWTEX1 data")
+        return [names[index] for index in bindings]
+
+
+def read_surface_materials_file(path, *, expected_asset_id=None, expected_mesh_uv_hash=None,
+                                expected_batch_materials=None, max_bytes=MAX_SIDECAR_BYTES):
+    """Validate the bounded BWSFM1 sidecar contract needed by the isolated launcher planner."""
+    if type(max_bytes) is not int or not 0 < max_bytes <= MAX_SIDECAR_BYTES:
+        raise ValueError("Invalid surface material budget")
+    with Path(path).open("rb") as stream:
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("Surface material sidecar exceeds size budget")
+    if expected_asset_id is not None:
+        _planner_identifier(expected_asset_id, "expected_asset_id")
+    if expected_batch_materials is not None:
+        if not isinstance(expected_batch_materials, list) or not 1 <= len(expected_batch_materials) <= _MAX_TEXTURE_BATCHES:
+            raise ValueError("Invalid expected_batch_materials")
+        for material_name in expected_batch_materials:
+            _planner_material_name(material_name)
+
+    offset = 0
+
+    def take(size):
+        nonlocal offset
+        if size < 0 or offset + size > len(data):
+            raise ValueError("Truncated surface material sidecar")
+        value = data[offset:offset + size]
+        offset += size
+        return value
+
+    def u32():
+        return struct.unpack("<I", take(4))[0]
+
+    def text(label, limit):
+        length = u32()
+        if not 1 <= length <= limit:
+            raise ValueError(f"Invalid {label} length")
+        raw = take(length)
+        if b"\0" in raw:
+            raise ValueError(f"Embedded NUL in {label}")
+        try:
+            decoded = raw.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(f"Invalid UTF-8 in {label}") from error
+        if label == "material_name":
+            _planner_material_name(decoded)
+        else:
+            _planner_identifier(decoded, label, limit)
+        return decoded
+
+    if take(8) != b"BWSFM1\0\0":
+        raise ValueError("Unsupported surface material magic")
+    version, batch_count, record_count, image_count, mesh_uv_hash = struct.unpack("<IIIIQ", take(24))
+    if version != 1:
+        raise ValueError(f"Unsupported surface material version: {version}")
+    if (not 1 <= batch_count <= _MAX_TEXTURE_BATCHES or record_count > _MAX_SURFACE_RECORDS or
+            image_count > _MAX_SURFACE_IMAGES):
+        raise ValueError("Invalid surface material counts")
+    if expected_mesh_uv_hash is not None and mesh_uv_hash != expected_mesh_uv_hash:
+        raise ValueError("Surface material mesh/UV compatibility hash mismatch")
+    if expected_batch_materials is not None and len(expected_batch_materials) != batch_count:
+        raise ValueError("Surface material batch count mismatch")
+    bindings = struct.unpack("<" + "I" * batch_count, take(batch_count * 4))
+    if any(index != _NO_SURFACE_MATERIAL and index >= record_count for index in bindings):
+        raise ValueError("Surface material batch binding out of range")
+
+    records = []
+    previous_key = None
+    for _ in range(record_count):
+        asset_id = text("asset_id", _MAX_IDENTIFIER_BYTES)
+        if expected_asset_id is not None and asset_id != expected_asset_id:
+            raise ValueError("Surface material asset_id mismatch")
+        material_name = text("material_name", _MAX_MATERIAL_NAME_BYTES)
+        key = (asset_id.encode("utf-8"), material_name.encode("ascii"))
+        if previous_key is not None and key <= previous_key:
+            raise ValueError("Duplicate or unsorted surface material record")
+        previous_key = key
+        fields = struct.unpack("<IIfffIffffIIfffffffffffff", take(100))
+        (height_index, thickness_index, height_reference, height_amplitude, max_displacement,
+         tessellation_cap, scale_u, scale_v, offset_u, offset_v, address_u, address_v,
+         atlas_min_u, atlas_min_v, atlas_max_u, atlas_max_v, sss_participation,
+         tint_r, tint_g, tint_b, sss_radius, thickness_scale, roughness, reflectivity,
+         metallic) = fields
+        if height_index != _NO_SURFACE_IMAGE and height_index >= image_count:
+            raise ValueError("height_image index out of range")
+        if thickness_index != _NO_SURFACE_IMAGE and thickness_index >= image_count:
+            raise ValueError("thickness_image index out of range")
+        _planner_f32(height_reference, "height_reference", 0.0, 1.0)
+        _planner_f32(height_amplitude, "height_amplitude", -16.0, 16.0)
+        _planner_f32(max_displacement, "max_displacement", 0.0, 16.0)
+        if max_displacement < abs(height_amplitude):
+            raise ValueError("max_displacement < abs(height_amplitude)")
+        if height_index == _NO_SURFACE_IMAGE and (height_amplitude != 0.0 or max_displacement != 0.0):
+            raise ValueError("Non-zero height parameters without height_image")
+        if not 1 <= tessellation_cap <= 8 or (height_index == _NO_SURFACE_IMAGE and tessellation_cap != 1):
+            raise ValueError("Invalid tessellation_cap")
+        for value, label in ((scale_u, "uv_scale[0]"), (scale_v, "uv_scale[1]")):
+            _planner_f32(value, label, -1024.0, 1024.0)
+        if scale_u == 0.0 or scale_v == 0.0:
+            raise ValueError("Zero uv_scale component")
+        _planner_f32(offset_u, "uv_offset[0]", -1024.0, 1024.0)
+        _planner_f32(offset_v, "uv_offset[1]", -1024.0, 1024.0)
+        if address_u not in _ADDRESS_MODES or address_v not in _ADDRESS_MODES:
+            raise ValueError("Invalid UV address mode")
+        for value in (atlas_min_u, atlas_min_v, atlas_max_u, atlas_max_v):
+            _planner_f32(value, "atlas_rect", 0.0, 1.0)
+        if not atlas_min_u < atlas_max_u or not atlas_min_v < atlas_max_v:
+            raise ValueError("Invalid atlas_rect bounds")
+        _planner_f32(sss_participation, "sss_participation", 0.0, 1.0)
+        for value in (tint_r, tint_g, tint_b):
+            _planner_f32(value, "sss_tint", 0.0, 1.0)
+        _planner_f32(sss_radius, "sss_radius", 0.0, 16.0)
+        _planner_f32(thickness_scale, "thickness_scale", 0.0, 16.0)
+        if sss_participation == 0.0 and (sss_radius != 0.0 or thickness_scale != 0.0 or
+                                         thickness_index != _NO_SURFACE_IMAGE):
+            raise ValueError("SSS parameters set while sss_participation is zero")
+        for value, label in ((roughness, "roughness"), (reflectivity, "reflectivity"),
+                             (metallic, "metallic")):
+            _planner_f32(value, label, 0.0, 1.0)
+        records.append({"material_name": material_name, "height_image": height_index,
+                        "thickness_image": thickness_index})
+
+    images = []
+    previous_name = None
+    decoded_total = 0
+    for _ in range(image_count):
+        image_name = text("image_name", _MAX_IDENTIFIER_BYTES)
+        image_key = image_name.encode("utf-8")
+        if previous_name is not None and image_key <= previous_name:
+            raise ValueError("Duplicate or unsorted surface material image name")
+        previous_name = image_key
+        role, width, height, expected_hash = struct.unpack("<IIIQ", take(20))
+        if (role not in (_ROLE_HEIGHT, _ROLE_THICKNESS) or
+                not 1 <= width <= _MAX_SURFACE_DIMENSION or
+                not 1 <= height <= _MAX_SURFACE_DIMENSION):
+            raise ValueError("Invalid surface material image header")
+        byte_count = width * height * 4
+        if decoded_total + byte_count > max_bytes:
+            raise ValueError("Surface material decoded images exceed budget")
+        decoded_total += byte_count
+        pixels = take(byte_count)
+        actual_hash = 0xCBF29CE484222325
+        for byte in pixels:
+            actual_hash = ((actual_hash ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        if actual_hash != expected_hash:
+            raise ValueError("Surface material image hash mismatch")
+        images.append(role)
+    if offset != len(data):
+        raise ValueError("Trailing surface material data")
+    for record in records:
+        height_index = record["height_image"]
+        if height_index != _NO_SURFACE_IMAGE and images[height_index] != _ROLE_HEIGHT:
+            raise ValueError("height_image references a non-height image")
+        thickness_index = record["thickness_image"]
+        if thickness_index != _NO_SURFACE_IMAGE and images[thickness_index] != _ROLE_THICKNESS:
+            raise ValueError("thickness_image references a non-thickness image")
+    if expected_batch_materials is not None:
+        for batch_index, record_index in enumerate(bindings):
+            if (record_index != _NO_SURFACE_MATERIAL and
+                    records[record_index]["material_name"] != expected_batch_materials[batch_index]):
+                raise ValueError("Surface material binding disagrees with batch albedo material")
+    return {"version": version, "mesh_uv_hash": mesh_uv_hash, "bindings": list(bindings)}
 
 
 def plan_json(raw):
@@ -172,16 +477,17 @@ def _pack_payload(root, profile):
 
 
 def _model_pack_arguments(root, taken=None):
-    """Turn a prepared-native-v1 mech pack into --cc-model/--cc-model-normals arguments.
+    """Turn a prepared-native-v1 mech pack into prepared-model CLI arguments.
 
     `taken` maps each chassis already supplied by an earlier enabled pack to that pack's root. Such a
     chassis is left out of this pack, the same "first chassis wins" rule as prepared_mech_packs.py,
     because the native runtime refuses a second model or normal map for one chassis and level.
-    Returns the arguments and the chassis this pack lost to earlier packs.
+    Returns arguments, chassis lost to earlier packs, and skipped optional materials.
 
     The registry lists models; each keeps its file paths in an "environment" table using the
     names MW34_<ID>_MESH, MW34_<ID>_TEXTURES and MW34_<ID>_NORMALS, with LOD1_ after <ID> for
     the distance model. A level of detail is emitted only when both its mesh and textures exist.
+    Optional BWSFM1 sidecars use MW34_<ID>[_LOD1]_SURFACE_MATERIALS keys.
     Alternative liveries (*_SKIN_*) are not part of this preview.
     """
     _, payload = _pack_payload(root, "prepared-native-v1")
@@ -193,6 +499,7 @@ def _model_pack_arguments(root, taken=None):
         raise ValueError(f"Invalid mech pack registry: {root}")
     arguments = []
     overridden = []
+    skipped_materials = []
     taken = {} if taken is None else taken
     for model in models:
         if type(model) is not dict:
@@ -209,21 +516,51 @@ def _model_pack_arguments(root, taken=None):
         supplied = False
         for level, infix in ((0, ""), (1, "LOD1_")):
             prefix = f"MW34_{chassis.upper()}_{infix}"
+            material_key = prefix + "SURFACE_MATERIALS"
             # Same rule as prepared_mech_packs.py: the Bushwacker close mesh keeps its historical
             # MW34_BUSHWACKER_TEST name.
             mesh_name = "TEST" if chassis == "bushwacker" and level == 0 else "MESH"
             mesh, textures = files.get(prefix + mesh_name), files.get(prefix + "TEXTURES")
+            material_member = files.get(material_key)
             if mesh is None or textures is None:
+                if isinstance(material_member, str) and material_member:
+                    skipped_materials.append({
+                        "chassis": chassis,
+                        "lod": str(level),
+                        "reason": "surface-material sidecar requires its matching mesh and textures",
+                    })
                 continue
             arguments += ["--cc-model", chassis, str(level), _pack_member(root, mesh),
                           _pack_member(root, textures)]
             normals = files.get(prefix + "NORMALS")
             if normals is not None:
                 arguments += ["--cc-model-normals", chassis, str(level), _pack_member(root, normals)]
+            if isinstance(material_member, str) and material_member:
+                try:
+                    material_path = _pack_member(root, material_member)
+                    if Path(material_path).stat().st_size > MAX_SIDECAR_BYTES:
+                        raise ValueError("BWSFM1 sidecar exceeds its size limit")
+                    mesh_path = _pack_member(root, mesh)
+                    texture_path = _pack_member(root, textures)
+                    asset_lod = "close" if level == 0 else "distance"
+                    read_surface_materials_file(
+                        material_path,
+                        expected_asset_id=f"{chassis}:{asset_lod}",
+                        expected_mesh_uv_hash=_mesh_uv_identity_file(Path(mesh_path)),
+                        expected_batch_materials=_texture_batch_materials_file(
+                            Path(texture_path)),
+                    )
+                    arguments += ["--cc-model-materials", chassis, str(level), material_path]
+                except (OSError, ValueError, OverflowError, struct.error, TypeError) as error:
+                    skipped_materials.append({
+                        "chassis": chassis,
+                        "lod": str(level),
+                        "reason": f"surface-material sidecar is missing or invalid: {error}",
+                    })
             supplied = True
         if supplied:
             taken[chassis] = root
-    return arguments, overridden
+    return arguments, overridden, skipped_materials
 
 
 def _environment_pack_skip_reason(root):
@@ -444,9 +781,12 @@ def plan_launch(request):
             argv.extend(("--cc-geometry", preview["geometry"]))
         supplied_chassis = {}
         for pack in preview["model_packs"]:
-            arguments, overridden = _model_pack_arguments(pack, supplied_chassis)
+            arguments, overridden, skipped_materials = _model_pack_arguments(
+                pack, supplied_chassis)
             argv.extend(arguments)
             overridden_models.extend({"root": pack, **item} for item in overridden)
+            skipped.extend({"root": pack, "feature": "surface_materials", **item}
+                           for item in skipped_materials)
         effect_catalog = None
         effect_catalog_problem = None
         for pack in preview["environment_packs"]:
