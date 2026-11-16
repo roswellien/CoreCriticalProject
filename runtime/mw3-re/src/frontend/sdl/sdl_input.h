@@ -41,6 +41,7 @@ std::string axis_slots_text(const int slots[8], int sdl_axes);
 // Which attached device a start opens, with no joystick= in mw3.cfg: a
 // gamepad, else one with 2 axes and 4 buttons or more, else any.
 int joystick_rank(bool gamepad, int axes, int buttons);
+bool joystick_selection_disabled(const std::string& value);
 
 class SdlInput : public platform::Input {
  public:

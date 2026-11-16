@@ -628,7 +628,7 @@ void read_config(const std::string& dir, Args& a) {
     else if (line.rfind("mod=", 0) == 0) a.cfg_mods.push_back(line.substr(4));
     else if (line.rfind("joystick=", 0) == 0) {
       a.cfg_joystick = line.substr(9);
-      a.cfg_joystick_disabled = a.cfg_joystick == "none";
+      a.cfg_joystick_disabled = sdlfe::joystick_selection_disabled(a.cfg_joystick);
       if (a.cfg_joystick_disabled) a.cfg_joystick.clear();
     }
     else if (line.rfind("joystick_axes=", 0) == 0) a.cfg_joystick_axes = line.substr(14);

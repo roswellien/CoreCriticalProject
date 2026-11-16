@@ -222,6 +222,14 @@ std::string axis_slots_text(const int slots[8], int sdl_axes) {
 
 int joystick_rank(bool gamepad, int axes, int buttons) { return gamepad ? 2 : axes >= 2 && buttons >= 4 ? 1 : 0; }
 
+bool joystick_selection_disabled(const std::string& value) {
+  if (value.size() != 4) return false;
+  constexpr char kNone[] = "none";
+  for (size_t i = 0; i < value.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(value[i])) != kNone[i]) return false;
+  return true;
+}
+
 std::vector<uint16_t> read_hid_usages(SDL_Joystick* j) {
   std::vector<uint16_t> out;
   const uint16_t vendor = SDL_GetJoystickVendor(j), product = SDL_GetJoystickProduct(j);

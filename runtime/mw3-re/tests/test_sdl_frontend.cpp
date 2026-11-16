@@ -243,6 +243,14 @@ TEST(sdl_input_scancodes_map_to_dik_codes) {
   EXPECT(dik_from_scancode(SDL_SCANCODE_F20) == 0);
 }
 
+TEST(read_config_joystick_none_is_case_insensitive) {
+  EXPECT(sdlfe::joystick_selection_disabled("none"));
+  EXPECT(sdlfe::joystick_selection_disabled("None"));
+  EXPECT(sdlfe::joystick_selection_disabled("NONE"));
+  EXPECT(!sdlfe::joystick_selection_disabled("none "));
+  EXPECT(!sdlfe::joystick_selection_disabled("auto"));
+}
+
 namespace {
 SDL_Event key(SDL_Scancode s, bool down, bool repeat = false) {
   SDL_Event e{};
