@@ -78,6 +78,17 @@ static class MusicPackChecks
                 File.Exists(Path.Combine(mp3Write, "music", "track02.wav")) ||
                 File.ReadAllText(userMp3) != "player mp3")
                 throw new Exception("Soundtrack staging shadowed a player's lower-priority track.");
+            // The same when the player adds their file after the launcher already staged that track.
+            var laterWrite = Path.Combine(root, "native-profile-later-user-mp3");
+            if (MusicPack.StageForNative(manager.GetActivePackDirectories(), laterWrite) != 2)
+                throw new Exception("Soundtrack staging did not stage a fresh profile.");
+            var laterMp3 = Path.Combine(laterWrite, "music", "track02.mp3");
+            File.WriteAllText(laterMp3, "player mp3 added later");
+            MusicPack.StageForNative(manager.GetActivePackDirectories(), laterWrite);
+            if (File.Exists(Path.Combine(laterWrite, "music", "track02.wav")) ||
+                File.ReadAllText(laterMp3) != "player mp3 added later" ||
+                !File.Exists(Path.Combine(laterWrite, "music", "track03.wav")))
+                throw new Exception("A staged track kept shadowing a player's track added later.");
             var conflictingWrite = Path.Combine(root, "native-profile-with-user-music");
             var userMusic = Path.Combine(conflictingWrite, "music", "track02.wav");
             Directory.CreateDirectory(Path.GetDirectoryName(userMusic)!);

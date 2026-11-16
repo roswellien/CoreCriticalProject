@@ -110,6 +110,19 @@ public static class MusicPack
                 if (playerFile != null)
                 {
                     log?.Invoke($"MW3-RE soundtrack track {number:00} was left out because {playerFile} is the player's own.");
+                    // A copy staged before the player added their file would still win the runtime's lookup.
+                    foreach (var stale in extensions.Select(item => $"track{number:00}{item}").Where(owned.ContainsKey).ToArray())
+                    {
+                        try
+                        {
+                            File.Delete(Path.Combine(musicDirectory, stale));
+                            owned.Remove(stale);
+                        }
+                        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                        {
+                            log?.Invoke($"MW3-RE launcher-staged soundtrack {stale} could not be removed yet: {error.Message}");
+                        }
+                    }
                     continue;
                 }
                 try
@@ -120,7 +133,7 @@ public static class MusicPack
                             Convert.ToHexString(SHA256.HashData(sourceStream)).ToLowerInvariant(),
                             manifest!.Id, manifest.Version);
                     PackStorage.EnsureNoLinks(destination);
-                    if (File.Exists(destination) && FilesMatch(source, destination))
+                    if (File.Exists(destination) && FileMatchesRecord(destination, currentRecord))
                     {
                         log?.Invoke($"MW3-RE soundtrack track {number:00} is already current.");
                         owned[track.FileName] = currentRecord;
@@ -154,7 +167,9 @@ public static class MusicPack
         finally
         {
             // Recorded even after a failure, so files staged earlier in this pass stay launcher-owned.
-            if (Directory.Exists(musicDirectory)) WriteStagedRecord(recordPath, owned.Values);
+            // No record is created in a music folder the launcher never staged into.
+            var recordNeeded = owned.Count > 0 || File.Exists(recordPath);
+            if (Directory.Exists(musicDirectory) && recordNeeded) WriteStagedRecord(recordPath, owned.Values);
         }
         return staged;
     }
@@ -224,16 +239,6 @@ public static class MusicPack
         {
             if (File.Exists(temporary)) File.Delete(temporary);
         }
-    }
-
-    private static bool FilesMatch(string first, string second)
-    {
-        var firstInfo = new FileInfo(first);
-        var secondInfo = new FileInfo(second);
-        if (firstInfo.Length != secondInfo.Length) return false;
-        using var firstStream = File.OpenRead(first);
-        using var secondStream = File.OpenRead(second);
-        return CryptographicOperations.FixedTimeEquals(SHA256.HashData(firstStream), SHA256.HashData(secondStream));
     }
 
     public static JsonObject ReadInputs(string directory, PackManifest manifest, JsonNode? decoder = null)
