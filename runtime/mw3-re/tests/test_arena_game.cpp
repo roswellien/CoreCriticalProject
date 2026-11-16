@@ -256,6 +256,30 @@ TEST(arena_bot_params_match_the_preset_headless) {
   EXPECT(mechs_seen == 4 && mismatched == 0 && wrong_side == 0 && bots_marked == 4);
 }
 
+// #287 runner: a setup's loadout reaches the bot (+0xbc, so create_ai_mech
+// builds that config) and the log's start line.
+TEST(arena_bot_gets_the_setup_loadout_headless) {
+  if (!have_game()) return;
+  const std::string thor1 =
+      R"({"mech": "thor", "loadout": 1, "preset": {"world": "c1", "mission": "ia1", "record": "Enemy_01"}})";
+  int live_loadout = -1;
+  const auto run = arena_headless_run(
+      R"({"map": "c1mp1", "minutes": 10, "out": "arena-out", "sides": [[)" + thor1 + "], [" +
+          arena_bot_json("madcat") + "]]}",
+      3, [&](int frame) {
+        if (frame != 1) return;
+        for (const auto& entry : mech3::arena::arena_mechs())
+          if (entry.id == 0)
+            if (const mech3::ai::AiParams* p = mech3::arena::arena_brain_params(entry.mech))
+              live_loadout = p->get<int32_t>(0xbc);
+      });
+  EXPECT(run.setup_read);
+  EXPECT(live_loadout == 1);
+  const mech3::arena::LogRead log = mech3::arena::read_arena_log(run.log_path);
+  EXPECT(!log.records.empty() && log.records.front()["sides"][0][0].value("loadout", -1) == 1 &&
+         log.records.front()["sides"][1][0].value("loadout", -1) == 0);
+}
+
 // #287: a 1v1 on c1mp1 for up to three minutes of game time: the two bots
 // leave their spots, meet and fire on each other.
 TEST(arena_1v1_c1mp1_bots_meet_and_fire_headless) {

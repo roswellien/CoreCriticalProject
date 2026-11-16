@@ -12,7 +12,9 @@
 #include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "mech3/mech_config.h"
 #include "mech3/mech_names.h"
+#include "mech3/mech_reader.h"
 #include "mech3/mission.h"
 #include "mech3/zrdraiv.h"
 
@@ -49,10 +51,6 @@ bool is_reader_mission(const std::string& m) {
   return m.rfind('m', 0) == 0 && all_digits(m, 1);
 }
 
-std::string reader_path(const std::string& world, const std::string& mission) {
-  return "zbd\\" + world + "\\reader" + mission + ".zbd";
-}
-
 bool fail(std::string* error, const std::string& message) {
   if (error) *error = message;
   return false;
@@ -85,21 +83,29 @@ bool parse_bot(const Json& j, const std::string& field, Bot* out, std::string* e
   if (out->mech < 0) return fail(error, field + ".mech: unknown mech \"" + out->mech_name + "\"");
   const auto preset = j.find("preset");
   if (preset == j.end()) return fail(error, field + ".preset: needs a pilot preset");
+  // Optional: which stock loadout (0 the first); the count is checked once the
+  // game files are mounted.
+  if (const auto loadout = j.find("loadout"); loadout != j.end()) {
+    if (!loadout->is_number_integer() || loadout->get<int64_t>() < 0 || loadout->get<int64_t>() > 15)
+      return fail(error, field + ".loadout: needs a whole number, 0 to 15");
+    out->loadout = static_cast<int32_t>(loadout->get<int64_t>());
+  }
   return parse_preset(*preset, field + ".preset", &out->preset, error);
 }
 
-// A self-contained aiv.zrd tree read from one reader archive, freed with it.
+}  // namespace
+
+std::string reader_path(const std::string& world, const std::string& mission) {
+  return "zbd\\" + world + "\\reader" + mission + ".zbd";
+}
+
 // zrdr::load can't be used: it reads from the game's open archives, which are
 // not open before launch, and aiv.zrd is one name in every reader.
-struct AivTree {
-  zrdr::Node* root = nullptr;
-  AivTree() = default;
-  AivTree(const AivTree&) = delete;
-  AivTree& operator=(const AivTree&) = delete;
-  ~AivTree() {
-    if (root) zrdr::free_node(root);
-  }
-  bool read(const std::string& reader) {
+AivTree::~AivTree() {
+  if (root) zrdr::free_node(root);
+}
+
+bool AivTree::read(const std::string& reader) {
     zutl_zar::Archive archive;
     zutl_zar::init(archive);
     if (!zutl_zar::open(archive, reader.c_str())) {
@@ -113,12 +119,37 @@ struct AivTree {
     }
     zutl_zar::destroy(archive);  // closes the file, frees the table and the path
     return root != nullptr;
-  }
-  // As the game's aiv_read_named finds it (zrdr::find, anywhere in the file).
-  zrdr::Node* find(const char* name) const { return root ? zrdr::find(root, name) : nullptr; }
-};
+}
 
-}  // namespace
+zrdr::Node* AivTree::find(const char* name) const { return root ? zrdr::find(root, name) : nullptr; }
+
+// Ours (#287): the definitions live in zbd\reader.zbd, which the game opens at
+// start-up (app.cpp); before that no archive is open and zrdr::load finds
+// nothing. So when none is open, that one is opened for the read and closed
+// again; the definition stays cached in mech_dfn's table for the game.
+const MechDfn* arena_mech_dfn(int32_t mech) {
+  if (!zrdr::state().archives.empty()) return mech_dfn(mech);
+  zrdr::init();
+  if (!zrdr::open_archive("zbd\\reader.zbd", false)) return nullptr;
+  const MechDfn* dfn = mech_dfn(mech);
+  zrdr::close_archives(true);
+  return dfn;
+}
+
+// Ours (#287): stock configs come first in the list (read_configurations, in
+// file order); a player's saved ones (player_made) are appended after them,
+// and the training ones are flagged.
+int32_t stock_loadout_count(int32_t mech) {
+  const MechDfn* dfn = arena_mech_dfn(mech);
+  if (!dfn || !dfn->configs) return -1;
+  int32_t count = 0;
+  for (const Config* c : dfn->configs->configs) {
+    if (!c || c->player_made) break;
+    if (c->training) break;
+    ++count;
+  }
+  return count;
+}
 
 // Ours (#289): whether the multiplayer map's reader ships in the game files.
 bool map_reader_ships(const std::string& dir, int32_t number) {
@@ -212,7 +243,16 @@ bool read_arena_game_files(Setup* setup, std::string* error) {
   for (int side = 0; side < kSides; ++side) {
     for (size_t i = 0; i < setup->sides[side].size(); ++i) {
       Bot& bot = setup->sides[side][i];
-      const std::string field = "sides[" + std::to_string(side) + "][" + std::to_string(i) + "].preset";
+      const std::string at = "sides[" + std::to_string(side) + "][" + std::to_string(i) + "]";
+      // Loadout 0 is every chassis' first stock one, so only another needs
+      // the definition read here; a setup without loadouts reads nothing new
+      // before launch (the in-process repeat test, arena_log_detail_*, showed
+      // an early read changes a later match in the same process).
+      const int32_t stock = bot.loadout == 0 ? 1 : stock_loadout_count(bot.mech);
+      if (bot.loadout >= stock)
+        return fail(error, at + ".loadout: " + std::to_string(bot.loadout) + " is not a stock loadout of " +
+                               bot.mech_name + " (it has " + std::to_string(stock < 0 ? 0 : stock) + ")");
+      const std::string field = at + ".preset";
       const std::string reader = reader_path(bot.preset.world, bot.preset.mission);
       std::unique_ptr<AivTree>& tree = readers[reader];
       if (!tree) {

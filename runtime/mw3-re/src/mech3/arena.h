@@ -106,7 +106,7 @@ constexpr int kAnchorChoices = 3;
 std::vector<int> arena_spawn_spots(const float spots[kSpawnSpots][3], int side_a, int side_b, int64_t seed);
 
 // A bot's AI params: the preset's, placed at `pos` facing `yaw` (the spawn
-// spot's), on team side + 1, with the chassis' first loadout (+0xbc = 0),
+// spot's), on team side + 1, with the setup's stock loadout (+0xbc, 0 the first),
 // engaging on (+0x3c = 1), always awake (+0x88 = 1: a stock pilot sleeps,
 // frozen, while its nearest enemy is past its sight range) and on any enemy,
 // not only the player (+0x8c = 0; zai_brain.cpp's wake-up check), and never

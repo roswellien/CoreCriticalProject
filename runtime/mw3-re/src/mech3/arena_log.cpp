@@ -484,6 +484,7 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
     nlohmann::json side = nlohmann::json::array();
     for (const Bot& bot : bots)
       side.push_back({{"mech", bot.mech_name},
+                      {"loadout", bot.loadout},
                       {"preset", {{"world", bot.preset.world}, {"mission", bot.preset.mission}, {"record", bot.preset.record}}}});
     sides.push_back(side);
   }

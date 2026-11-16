@@ -273,6 +273,41 @@ TEST(arena_setup_log_is_created_once) {
   EXPECT(text == "kept");  // the existing file left as it is
 }
 
+// #287 runner: a bot's stock loadout, 0 (the first) unless the setup names one.
+TEST(arena_setup_reads_a_bot_loadout) {
+  const auto bot = [](const std::string& loadout) {
+    return R"({"mech": "thor", )" + loadout + R"("preset": {"world": "c1", "mission": "mp1", "record": "remote_1"}})";
+  };
+  Setup s;
+  std::string error;
+  EXPECT(parse_arena_setup(setup_json("c1mp1", bot("")), &s, &error) && s.sides[0][0].loadout == 0);
+  EXPECT(parse_arena_setup(setup_json("c1mp1", bot(R"("loadout": 2, )")), &s, &error) && s.sides[0][0].loadout == 2);
+  EXPECT(starts_with(refused(setup_json("c1mp1", bot(R"("loadout": -1, )"))), "sides[0][0].loadout:"));
+  EXPECT(starts_with(refused(setup_json("c1mp1", bot(R"("loadout": "x", )"))), "sides[0][0].loadout:"));
+}
+
+// The loadout is checked against the chassis' stock ones in the game files.
+TEST(arena_setup_game_files_refuse_a_loadout_past_the_stock_ones) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  const int32_t stock = mech3::arena::stock_loadout_count(mech3::mech_index("thor"));
+  std::printf("  thor stock loadouts: %d\n", stock);
+  EXPECT(stock >= 2);
+  const auto bot = [](int loadout) {
+    return R"({"mech": "thor", "loadout": )" + std::to_string(loadout) +
+           R"(, "preset": {"world": "c1", "mission": "mp1", "record": "remote_1"}})";
+  };
+  Setup s;
+  std::string error;
+  EXPECT(parse_arena_setup(setup_json("c1mp1", bot(stock - 1)), &s, &error));
+  EXPECT(read_arena_game_files(&s, &error));
+  EXPECT(parse_arena_setup(setup_json("c1mp1", bot(stock)), &s, &error));
+  EXPECT(!read_arena_game_files(&s, &error));
+  EXPECT(error.find("is not a stock loadout of thor") != std::string::npos);
+}
+
 TEST(arena_setup_game_files_read_the_map_and_presets) {
   if (!have_game()) return;
   SavedMounts keep;

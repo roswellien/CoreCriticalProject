@@ -286,7 +286,7 @@ void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, a
   params->put<float>(0x10, pos[2]);
   params->put<float>(0x14, yaw);
   params->put<int32_t>(0x18, side + 1);  // AiParams::team()
-  params->put<int32_t>(0xbc, 0);         // the configuration create_ai_mech builds: the first
+  params->put<int32_t>(0xbc, bot.loadout);  // the configuration create_ai_mech builds: the setup's stock one
   params->put<int32_t>(0x3c, 1);         // may_engage's switch
   // Always awake (Brain::frame skips its sleep check at +0x88 == 1): a stock
   // pilot sleeps, and its mech stands frozen, while its nearest enemy is past

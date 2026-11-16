@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "gamez/zreader/zreader.h"
 #include "mech3/zai_params.h"
 
 // Ours, not the exe's (#287, docs/arena.md): the arena run's setup file and
@@ -14,6 +15,10 @@
 // is read game-free; the map's spawn spots and the pilot presets are read from
 // the player's own game files once the install is mounted, and the match log
 // is created last, so a refused run loads nothing and writes nothing.
+
+namespace mech3 {
+struct MechDfn;
+}
 
 namespace mech3::arena {
 
@@ -30,6 +35,11 @@ struct Preset {
 struct Bot {
   std::string mech_name;  // as the setup gives it
   int32_t mech = -1;      // mech_index(mech_name)
+  // Which of the chassis' stock loadouts it gets: an index into its config
+  // list (MechDfn::configs, AiParams +0xbc), 0 the first. Checked against the
+  // game files in read_arena_game_files: only the stock ones, never a
+  // player's saved loadout or a training one.
+  int32_t loadout = 0;
   Preset preset;
   // The preset record's AI params (AiParams::raw), filled by
   // read_arena_game_files. Raw bytes so the setup never holds a live record
@@ -61,6 +71,27 @@ bool split_map(const std::string& map, std::string* dir, int32_t* number);
 // Ours (#289): whether multiplayer map `number` of world `dir` has its reader
 // in the game files (the install mounted).
 bool map_reader_ships(const std::string& dir, int32_t number);
+// Ours (#287): how many stock loadouts the chassis has, the first of its
+// config list; -1 when its definition can't be read. Its loadouts are the
+// indices below that.
+int32_t stock_loadout_count(int32_t mech);
+// Ours (#287): the chassis' definition (mech_dfn), readable before launch too.
+const MechDfn* arena_mech_dfn(int32_t mech);
+
+// Ours (#287): one reader's aiv.zrd as a node tree, read straight from its
+// archive (the game's archives are not open before launch), freed with it.
+struct AivTree {
+  zrdr::Node* root = nullptr;
+  AivTree() = default;
+  AivTree(const AivTree&) = delete;
+  AivTree& operator=(const AivTree&) = delete;
+  ~AivTree();
+  bool read(const std::string& reader);
+  // As the game's aiv_read_named finds it (zrdr::find, anywhere in the file).
+  zrdr::Node* find(const char* name) const;
+};
+// "zbd\<world>\reader<mission>.zbd"
+std::string reader_path(const std::string& world, const std::string& mission);
 
 // Reads the setup's JSON text. False with *error naming the field (for
 // example "sides[1][0].mech: unknown mech \"notmech\"") on any bad value.
