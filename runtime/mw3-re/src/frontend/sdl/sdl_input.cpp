@@ -678,10 +678,32 @@ int32_t SdlInput::joystick_state(platform::JoyState* out) {
     if (k < 0) continue;  // an axis the device lacks stays 0 in DIJOYSTATE2
     double c0 = pad_ ? pad_axis(i) : (SDL_GetJoystickAxis(joy_, k) + 32768) / 65535.0 * 2.0 - 1.0;
     if (controller_config_ && pad_) {
-      const int profile_axis = i == 0 ? 0 : i == 1 ? 1 : i == 3 ? 2 : i == 4 ? 3 : -1;
-      if (profile_axis >= 0) {
-        const short raw = SDL_GetGamepadAxis(pad_, static_cast<SDL_GamepadAxis>(profile_axis));
-        c0 = controller_config_->calibration[static_cast<size_t>(profile_axis)].adjust(raw, false);
+      // The profile owns the gamepad axes only after its neutral, focused
+      // sample has armed. Before that, keep every mapped DI axis centred.
+      if (!controller_state_.connected) {
+        c0 = 0.0;
+      } else {
+        const auto calibrated_axis = [this](size_t calibration, SDL_GamepadAxis axis) {
+          return controller_config_->calibration[calibration].adjust(SDL_GetGamepadAxis(pad_, axis), false);
+        };
+        switch (k) {
+          case 0: c0 = calibrated_axis(0, SDL_GAMEPAD_AXIS_LEFTX); break;
+          case 1: c0 = calibrated_axis(1, SDL_GAMEPAD_AXIS_LEFTY); break;
+          case 2:  // DirectInput Z is left trigger minus right trigger.
+            {
+              const auto calibrated_trigger = [this](size_t calibration, SDL_GamepadAxis axis) {
+                const auto& profile_axis = controller_config_->calibration[calibration];
+                const double rest = profile_axis.inverted ? 1.0 : 0.0;
+                return profile_axis.adjust(SDL_GetGamepadAxis(pad_, axis), true) - rest;
+              };
+              c0 = calibrated_trigger(4, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) -
+                   calibrated_trigger(5, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+            }
+            break;
+          case 3: c0 = calibrated_axis(2, SDL_GAMEPAD_AXIS_RIGHTX); break;
+          case 4: c0 = calibrated_axis(3, SDL_GAMEPAD_AXIS_RIGHTY); break;
+          default: break;
+        }
       }
     }
     double c = c0;
@@ -792,6 +814,7 @@ void SdlInput::focus_lost() {
   held_at_loss_ = win_ && mission_ && !released_;
   activation_guard_ = false;
   focused_ = false;
+  if (controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
   if (win_) released_ = true;
   chord_held_ = SDL_KMOD_NONE, chord_armed_ = false;
   // FIX (A): what is let go while away never comes back as an event, and

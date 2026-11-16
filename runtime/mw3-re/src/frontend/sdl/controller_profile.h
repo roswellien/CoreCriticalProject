@@ -94,6 +94,7 @@ struct ControllerSample {
 struct ControllerState {
   std::array<unsigned, 167> actions{};
   std::array<double, 4> analog{};
+  std::array<bool, 2> trigger_down{};
   bool armed = false, connected = false, throttle_stopped = false;
 
   void update(const ControllerProfileConfig& config, const ControllerSample& sample) {
@@ -103,21 +104,37 @@ struct ControllerState {
     bool neutral = true;
     for (size_t i = 0; i < adjusted.size(); ++i) {
       adjusted[i] = config.calibration[i].adjust(sample.axes[i], i >= 4);
+      // Inversion maps a released trigger from 0 to 1; arm against physical rest.
       auto without_inversion = config.calibration[i];
       without_inversion.inverted = false;
       neutral = neutral && std::abs(without_inversion.adjust(sample.axes[i], i >= 4)) < .05;
-      neutral = neutral && (i < 4 || adjusted[i] < .05);
     }
     for (bool held : sample.buttons) neutral = neutral && !held;
-    if (!available) armed = false;
-    else if (!armed && neutral) armed = true;
+    if (!available) {
+      armed = false;
+      trigger_down.fill(false);
+    } else if (!armed && neutral) {
+      armed = true;
+    }
     connected = available && armed;
     analog.fill(0);
     if (connected) {
       for (size_t i = 0; i < sample.buttons.size(); ++i)
         if (sample.buttons[i] && config.buttons[i]) down[config.buttons[i]] = true;
-      for (size_t i = 0; i < config.triggers.size(); ++i)
-        if (adjusted[4 + i] >= config.threshold && config.triggers[i]) down[config.triggers[i]] = true;
+      for (size_t i = 0; i < config.triggers.size(); ++i) {
+        const bool inverted = config.calibration[4 + i].inverted;
+        const double press_edge = inverted ? 1.0 - config.threshold : config.threshold;
+        // Keep the legacy press edge, with a 0.05 release band to prevent
+        // trigger jitter from toggling a command on successive frames.
+        if (inverted) {
+          trigger_down[i] = trigger_down[i] ? adjusted[4 + i] <= press_edge + .05
+                                             : adjusted[4 + i] <= press_edge;
+        } else {
+          trigger_down[i] = trigger_down[i] ? adjusted[4 + i] >= press_edge - .05
+                                             : adjusted[4 + i] >= press_edge;
+        }
+        if (trigger_down[i] && config.triggers[i]) down[config.triggers[i]] = true;
+      }
       for (size_t i = 0; i < config.axes.size(); ++i)
         if (config.axes[i] >= 0) analog[i] = std::clamp(adjusted[config.axes[i]] * config.scale[i], -1.0, 1.0);
       if (down[27]) throttle_stopped = true;
