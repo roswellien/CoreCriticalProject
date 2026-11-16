@@ -848,17 +848,15 @@ public:
     fog_ = {red / 255.0f, green / 255.0f, blue / 255.0f};
   }
   void begin_scene() override {
-    if (!scene_.draws.empty())
-      flush();
-    complete_local_light_packets();
-    ensure_extent();
-    const bool hdr_enabled = window_hdr_enabled();
-    if (hdr_enabled != display_hdr_) {
-      drain();
-      display_hdr_ = hdr_enabled;
-      renderer_->update_lighting_settings(display_lighting());
-    }
+    begin_scene_housekeeping();
     local_lights_begin();
+  }
+  void begin_canvas_scene() override {
+    begin_scene_housekeeping();
+    // Finish the preceding world's packets before dropping its snapshot. A
+    // canvas has no world projection, but observed effects must survive it.
+    local_active_ = false;
+    local_native_.clear();
   }
   void end_scene() override {
     flush();
@@ -904,6 +902,19 @@ public:
   }
 
 private:
+  void begin_scene_housekeeping() {
+    if (!scene_.draws.empty())
+      flush();
+    complete_local_light_packets();
+    ensure_extent();
+    const bool hdr_enabled = window_hdr_enabled();
+    if (hdr_enabled != display_hdr_) {
+      drain();
+      display_hdr_ = hdr_enabled;
+      renderer_->update_lighting_settings(display_lighting());
+    }
+  }
+
   int32_t prepared_normal(const ::platform::prepared::NormalImage &image) {
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())

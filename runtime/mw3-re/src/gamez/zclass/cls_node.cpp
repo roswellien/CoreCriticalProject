@@ -16,6 +16,7 @@
 #include "gamez/zclass/sound.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmodel/gmod_const.h"
+#include "gamez/zmodel/gmod_light.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "platform/platform.h"
 
@@ -503,6 +504,7 @@ void delete_class_data(Node* node) {
     case 1: delete static_cast<Camera*>(node->data); break;
     case 2: {
       auto* w = static_cast<World*>(node->data);  // the lists a staying world kept (world_delete)
+      zmod::retire_world_lights(w);
       delete[] w->lights, delete[] w->light_data, delete[] w->sounds, delete[] w->sound_data;
       delete[] w->area_pending;
       delete w;
@@ -514,7 +516,10 @@ void delete_class_data(Node* node) {
     case 6: delete static_cast<Lod*>(node->data); break;
     case 7: delete static_cast<Seq*>(node->data); break;
     case 8: delete static_cast<Animate*>(node->data); break;
-    case 9: delete static_cast<Light*>(node->data); break;
+    case 9:
+      zmod::retire_light(node, static_cast<Light*>(node->data));
+      delete static_cast<Light*>(node->data);
+      break;
     case 10: delete static_cast<Sound*>(node->data); break;
     default: break;  // no class makes other data
   }

@@ -71,6 +71,9 @@ class FrameRenderer : public platform::Render3D {
     if (source) throw std::invalid_argument("renderer: editor attachment unsupported");
   }
   virtual void detach_editor() { attach_editor(nullptr); }
+  // Frontend canvases can be presented before a mission has a world camera.
+  // Backends without world-light snapshots retain their existing scene behavior.
+  virtual void begin_canvas_scene() { begin_scene(); }
   virtual void capture_next(const char* bmp_path) = 0;
   virtual void flush() = 0;
   virtual void viewport(int* x, int* y, int* w, int* h) const = 0;

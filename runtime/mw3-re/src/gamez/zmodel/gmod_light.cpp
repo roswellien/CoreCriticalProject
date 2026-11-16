@@ -20,6 +20,8 @@ namespace zmod {
 
 namespace {
 LightList g_list;
+// Host lifetime metadata, separate from the recovered LightList layout.
+const zcls::World* g_light_owner = nullptr;
 Clouds g_clouds;
 Lighting g_lighting;
 LightHooks g_hooks;
@@ -169,6 +171,7 @@ void use_device_light_output() {
 
 // Mech3.exe 1.2 @ 0x00543b60
 void build_light_list(zcls::Node** nodes, zcls::Light** data, int32_t count) {
+  g_light_owner = nullptr;
   LightList& L = g_list;
   L.nodes = nodes, L.data = data, L.in_count = count;
   L.count = 0, L.directed = -1;
@@ -208,11 +211,31 @@ void build_light_list(zcls::Node** nodes, zcls::Light** data, int32_t count) {
   }
 }
 
+void clear_light_list() {
+  g_list = {};
+  g_light_owner = nullptr;
+}
+
+void retire_world_lights(const zcls::World* world) {
+  if (world && g_light_owner == world) clear_light_list();
+}
+
+void retire_light(const zcls::Node* node, const zcls::Light* data) {
+  for (int32_t i = 0; i < g_list.count && i < LightList::kMax; ++i) {
+    const LightEntry& entry = g_list.list[i];
+    if ((node && entry.node == node) || (data && entry.data == data)) {
+      clear_light_list();
+      return;
+    }
+  }
+}
+
 // Mech3.exe 1.2 @ 0x004f2f30
 int32_t world_build_lights(zcls::Node* world, int32_t none) {
   auto* w = static_cast<zcls::World*>(world->data);
   build_light_list(w->lights, reinterpret_cast<zcls::Light**>(w->light_data),
                    none ? 0 : w->get<int32_t>(0xa0));
+  g_light_owner = w;
   return 0;
 }
 
