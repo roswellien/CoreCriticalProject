@@ -1,0 +1,2360 @@
+{
+  "annihilator": {
+    "original": {
+      "model_sha256": "dfbe906aa760ca81a294726e117d2fcebc889c831ce179db11ce9efc2750b6e8",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.7500730752944946,
+            2.7041540145874023,
+            -0.20919394493103027
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.7375575304031372,
+            2.733330726623535,
+            -0.18930411338806152
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.03814544528722763,
+            1.9132280349731445,
+            -3.0224530696868896
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-04",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.019751310348510742,
+            -0.1121673583984375,
+            -2.3997974395751953
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-05",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.01822352409362793,
+            -0.0970144271850586,
+            -2.3997974395751953
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "avatar": {
+    "original": {
+      "model_sha256": "be2bd3b285b83ba889e57ccfa198dbe70c87750665de9d97a5ad7112e7d3b79c",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.4317234456539154,
+            3.5212459564208984,
+            -1.4973410367965698
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.37343376874923706,
+            3.5184507369995117,
+            -1.500076174736023
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-03",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.14894342422485352,
+            -0.4845414161682129,
+            -4.10723876953125
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-04",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            0.3797175884246826,
+            -0.48429250717163086,
+            -1.3182737827301025
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-05",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.1875224113464355,
+            0.9999923706054688,
+            -1.1025503873825073
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-06",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.0912319421768188,
+            1.002899169921875,
+            -1.1031912565231323
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "blackhawk": {
+    "original": {
+      "model_sha256": "b6857e910bdcc0d841c0b5485c707f5124ff471d02726f842a1f202315014336",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.368324875831604,
+            1.1629981994628906,
+            -2.2592175006866455
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.3448694944381714,
+            1.1665611267089844,
+            -2.2635796070098877
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-03",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.8239414691925049,
+            -0.263883113861084,
+            -3.0093889236450195
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-04",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.8419609069824219,
+            -0.25153160095214844,
+            -2.9938716888427734
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "bushwacker": {
+    "original": {
+      "model_sha256": "439dcd024df0f945fab04eb4accf243f8ac90de53b8948e7354aa468961b8f21",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.7614766359329224,
+            1.358839988708496,
+            0.7384551167488098
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.381347417831421,
+            1.410348892211914,
+            0.8276732563972473
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.4171215295791626,
+            1.3681936264038086,
+            0.7546599507331848
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-04",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.7675752639770508,
+            1.3732986450195312,
+            0.7635024189949036
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-05",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.6032044887542725,
+            0.08683967590332031,
+            -2.4952409267425537
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-06",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.2460336685180664,
+            -0.7227931022644043,
+            -2.7262091636657715
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "hip_polys-07",
+          "space": "guest_node",
+          "attachment": "hip_polys",
+          "position": [
+            0.2673809826374054,
+            -0.2313237190246582,
+            -0.9902849197387695
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "hip_polys-08",
+          "space": "guest_node",
+          "attachment": "hip_polys",
+          "position": [
+            -0.1967942714691162,
+            -0.25307703018188477,
+            -0.9799127578735352
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "cauldron": {
+    "original": {
+      "model_sha256": "a4dce301b2d0c9a28ff25fac044589426883619bfe98d6edd3b3ab4b224d5d03",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.4429107904434204,
+            1.6692543029785156,
+            -0.6490088701248169
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.4306931495666504,
+            1.583143711090088,
+            -0.6967459917068481
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.027546482160687447,
+            0.5903477668762207,
+            -5.087496757507324
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rarm-04",
+          "space": "guest_node",
+          "attachment": "rarm",
+          "position": [
+            0.5575864315032959,
+            -0.7730517387390137,
+            -4.111001968383789
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "larm-05",
+          "space": "guest_node",
+          "attachment": "larm",
+          "position": [
+            -0.5460774898529053,
+            -0.7749180793762207,
+            -4.111003875732422
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "champion": {
+    "original": {
+      "model_sha256": "74efb31b9c633e46cf3f3c0122601b4b8b98f096ff5ac436fd7bcaeb57a8fac9",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.5481293201446533,
+            1.4972076416015625,
+            -2.664785385131836
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.5517547130584717,
+            1.459625244140625,
+            -2.657560348510742
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-03",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.556602954864502,
+            -0.3597531318664551,
+            -1.9074283838272095
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-04",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.5516672134399414,
+            -0.41008424758911133,
+            -2.2738683223724365
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "daishi": {
+    "original": {
+      "model_sha256": "9bb6dcc8b558bea64d764cdf055dd1f1347282cfdcce11edcc6d9366bc5df6dc",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.7272112369537354,
+            0.019236087799072266,
+            -1.4452906847000122
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.03751330077648163,
+            -0.07006263732910156,
+            -1.4432841539382935
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.680567741394043,
+            -0.07613515853881836,
+            -1.443146824836731
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-04",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.1382279396057129,
+            -0.9415082931518555,
+            -3.660311460494995
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-05",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.10345840454101562,
+            -0.9811491966247559,
+            -3.660311460494995
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "firefly": {
+    "original": {
+      "model_sha256": "3b3e8e1229ffcfa37aacfe84981c936e0c40e03fed0860683c00a359de188bc2",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.010036853142082691,
+            1.2635502815246582,
+            -0.3895922601222992
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.0893957614898682,
+            0.622626781463623,
+            -0.7795000672340393
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.1115546226501465,
+            0.6029276847839355,
+            -0.7795000672340393
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-04",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.41087478399276733,
+            -0.22475671768188477,
+            -2.4181413650512695
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-05",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.5349823832511902,
+            -0.26802778244018555,
+            -2.0499391555786133
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "madcat": {
+    "original": {
+      "model_sha256": "2a045eb890655ad5144a759e27a26880805d1d3ce96069613b688db5db6c3565",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.6327221989631653,
+            0.9792032241821289,
+            -2.7135136127471924
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.644949734210968,
+            0.9733781814575195,
+            -2.694424867630005
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-03",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.35364794731140137,
+            -0.25179576873779297,
+            -4.05949592590332
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-04",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.3121335506439209,
+            -0.36176300048828125,
+            -4.059492111206055
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "hip_polys-05",
+          "space": "guest_node",
+          "attachment": "hip_polys",
+          "position": [
+            0.0700061172246933,
+            0.2211599349975586,
+            -2.0180256366729736
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "orion": {
+    "original": {
+      "model_sha256": "7f6ac4f47a9ee40026637931f7d9392b6c1a2bc44b3ab86370ca639f353c22e0",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.366074562072754,
+            1.935537338256836,
+            -0.2513917088508606
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "hip_polys-02",
+          "space": "guest_node",
+          "attachment": "hip_polys",
+          "position": [
+            0.2791135311126709,
+            1.0298666954040527,
+            -1.083521842956543
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "hip_polys-03",
+          "space": "guest_node",
+          "attachment": "hip_polys",
+          "position": [
+            -0.6744097471237183,
+            1.0711450576782227,
+            -1.0835180282592773
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "owens": {
+    "original": {
+      "model_sha256": "9b23034b43287fd5e1d5be8c355e7aaff0ee4c78b56681258d8b70de77a8bb31",
+      "lamps": [
+        {
+          "id": "rarm-01",
+          "space": "guest_node",
+          "attachment": "rarm",
+          "position": [
+            0.8471300601959229,
+            0.21470403671264648,
+            -0.9079409837722778
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "larm-02",
+          "space": "guest_node",
+          "attachment": "larm",
+          "position": [
+            -0.8056650161743164,
+            0.19719362258911133,
+            -0.9079409837722778
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.841719925403595,
+            -0.16480016708374023,
+            -2.4657528400421143
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-04",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.8325362801551819,
+            -0.15683507919311523,
+            -2.4657528400421143
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-05",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.053970083594322205,
+            -0.7188634872436523,
+            -2.3399860858917236
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "puma": {
+    "original": {
+      "model_sha256": "446f1942773455351867117ff4fb719a4b9c2f5ef852288ff9bfa8b402ff6cdb",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.2315531969070435,
+            0.6922450065612793,
+            -1.0787116289138794
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.2260345220565796,
+            0.6702146530151367,
+            -0.9389086961746216
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.0187211986631155,
+            -0.07820844650268555,
+            -2.5361719131469727
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-04",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.39751553535461426,
+            -0.5052547454833984,
+            -0.8608313798904419
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-05",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.34454941749572754,
+            -0.5051229000091553,
+            -0.8608962297439575
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "shadowcat": {
+    "original": {
+      "model_sha256": "a80ac708ed7faea0465d34dbaf3a2f0ba7d361dd509151a082f78fd8b0da4e1f",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.4780949354171753,
+            2.1194424629211426,
+            -0.3139641582965851
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.10062222182750702,
+            2.09920597076416,
+            -0.49507835507392883
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.37208816409111023,
+            2.0976381301879883,
+            -0.5091125965118408
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-04",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.5955371856689453,
+            0.15225744247436523,
+            -2.759697675704956
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rarm-05",
+          "space": "guest_node",
+          "attachment": "rarm",
+          "position": [
+            0.38768696784973145,
+            -0.3792719841003418,
+            -1.992801547050476
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "strider": {
+    "original": {
+      "model_sha256": "5d4567cac5f6a2377c2ee3e5667a2ed2331f53d03e525c7560d7b0a229f0f96a",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.0827620029449463,
+            1.0688371658325195,
+            -2.33722186088562
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.0226672887802124,
+            1.0639114379882812,
+            -2.3647944927215576
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.1729897260665894,
+            -0.23621749877929688,
+            -1.8963954448699951
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-04",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.1985461711883545,
+            -0.2700815200805664,
+            -1.7535274028778076
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rarm-05",
+          "space": "guest_node",
+          "attachment": "rarm",
+          "position": [
+            0.3378027677536011,
+            -0.8941221237182617,
+            -0.6843534708023071
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "larm-06",
+          "space": "guest_node",
+          "attachment": "larm",
+          "position": [
+            -0.2500256299972534,
+            -0.8929600715637207,
+            -0.6848188638687134
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "sunder": {
+    "original": {
+      "model_sha256": "538b33bdd082e94b8e453abd7cf520e226267de29fd0bda52291085903441c21",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            1.4756311178207397,
+            2.590559482574463,
+            -0.9049351215362549
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -1.4260469675064087,
+            2.5551772117614746,
+            -0.9050877094268799
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-03",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            1.0045382976531982,
+            -0.1404104232788086,
+            -1.7022199630737305
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-04",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            0.20248007774353027,
+            0.29051876068115234,
+            -0.47301962971687317
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-05",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.18428421020507812,
+            0.29051876068115234,
+            -0.47301581501960754
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-06",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.011706260964274406,
+            1.2819733619689941,
+            -2.2184767723083496
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "supernova": {
+    "original": {
+      "model_sha256": "12f0b8f7ec7577bd6343ab47c54c5c2e597f58d36f09c91921cd33e667233dcd",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.9628693461418152,
+            0.9089474678039551,
+            -3.5966238975524902
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.8806287050247192,
+            0.9499092102050781,
+            -3.7489867210388184
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-03",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.030227024108171463,
+            -0.029819965362548828,
+            -5.233003616333008
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-04",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.7181735038757324,
+            -0.8764328956604004,
+            -4.332106590270996
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-05",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.6993341445922852,
+            -0.8959579467773438,
+            -4.275866508483887
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "thor": {
+    "original": {
+      "model_sha256": "d446e7ecd0e6c44a9ec5f5f025d848d5c4f25e6a1ff4913475a8ec7fb0f4e0c4",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.9546611309051514,
+            2.4689183235168457,
+            -1.4946415424346924
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.8684950470924377,
+            2.504711627960205,
+            -1.4846622943878174
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-03",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            -0.8703138828277588,
+            -0.13202524185180664,
+            -0.6276591420173645
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-04",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            0.54325270652771,
+            -0.9380674362182617,
+            -2.7042629718780518
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "hip_polys-05",
+          "space": "guest_node",
+          "attachment": "hip_polys",
+          "position": [
+            0.881047785282135,
+            0.6631855964660645,
+            -1.5153323411941528
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "hip_polys-06",
+          "space": "guest_node",
+          "attachment": "hip_polys",
+          "position": [
+            -0.7810413241386414,
+            0.6886720657348633,
+            -1.6019946336746216
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  },
+  "vulture": {
+    "original": {
+      "model_sha256": "16e1daee7cdb37d75ebbfca0c65a17fe3c57acdd0a791b017383b3fa8cc05038",
+      "lamps": [
+        {
+          "id": "torso_polys-01",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            0.4458734095096588,
+            0.9709944725036621,
+            -2.5273144245147705
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-02",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.40085041522979736,
+            0.9870514869689941,
+            -2.546891450881958
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "rhand-03",
+          "space": "guest_node",
+          "attachment": "rhand",
+          "position": [
+            -0.027730226516723633,
+            -0.5347800254821777,
+            -1.1751412153244019
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "lhand-04",
+          "space": "guest_node",
+          "attachment": "lhand",
+          "position": [
+            0.0038709640502929688,
+            -0.4962291717529297,
+            -1.1774910688400269
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        },
+        {
+          "id": "torso_polys-05",
+          "space": "guest_node",
+          "attachment": "torso_polys",
+          "position": [
+            -0.0061721946112811565,
+            0.09739398956298828,
+            -2.6447689533233643
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "color": [
+            1,
+            0.95,
+            0.85
+          ],
+          "intensity": 3,
+          "range": 92,
+          "inner_angle": 15,
+          "outer_angle": 25.5
+        }
+      ]
+    }
+  }
+}

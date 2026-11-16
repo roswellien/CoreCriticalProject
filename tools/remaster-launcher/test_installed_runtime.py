@@ -20,6 +20,23 @@ import test_prepared_environment_packs as environment_fixtures
 
 
 class InstalledPreparationTests(unittest.TestCase):
+    def test_generated_stock_headlights_are_in_metadata_and_runtime_pins(self):
+        import stage_mw3_re_runtime as producer
+
+        catalog = b"MWHDLT1\0authored-fixture"
+        generated = (("resources/stock-headlights.bin", catalog),)
+        components = [dict(name="fixture", version="1", source="authored",
+                           notices=["LICENSE.txt"])]
+        metadata, _ = producer._metadata([], components, "a" * 40, "fixture", "b" * 64,
+                                         generated_files=generated)
+        witness = json.loads(dict(metadata)["metadata/build-observation.json"])
+        pin = producer._pins([], generated)["resources/stock-headlights.bin"]
+        self.assertEqual(witness["artifacts"]["resources/stock-headlights.bin"], pin)
+        descriptor = json.loads(producer._descriptor(
+            producer._pins([], generated), "a" * 40, "fixture", "build"))
+        self.assertEqual(descriptor["files"]["resources/stock-headlights.bin"], pin)
+        self.assertIn("resources/stock-headlights.bin", descriptor["dependencies"])
+
     def test_sdl3_sound_recipe_pins_version_and_enables_selected_sdk(self):
         import stage_mw3_re_runtime as producer
 

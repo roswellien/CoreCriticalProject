@@ -504,7 +504,8 @@ def _json(value):
     return encoded
 
 
-def _metadata(members, components, source_commit, builder, tool_hash, observation=None):
+def _metadata(members, components, source_commit, builder, tool_hash, observation=None,
+              generated_files=()):
     profile = _json(dict(schema_version=1, engine="mw3-re", purpose="planning-defaults", options=dict(
         renderer="vulkan-wsi", width=1280, height=720, aa="fxaa", af=16,
         window_mode="windowed", render_thread=True, lighting="off")))
@@ -514,6 +515,8 @@ def _metadata(members, components, source_commit, builder, tool_hash, observatio
     if len(index) > MAX_METADATA_BYTES:
         raise ValueError("Staging notice index exceeds its budget")
     artifacts = {member.relative: dict(bytes=member.bytes, sha256=member.sha256) for member in members}
+    for relative, data in generated_files:
+        artifacts[relative] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
     for relative, data in (("profile.json", profile), ("THIRD-PARTY.txt", index)):
         artifacts[relative] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
     build_id = "observed-" + hashlib.sha256(_json(artifacts)).hexdigest()
@@ -547,7 +550,7 @@ def _descriptor(pins, source_commit, builder, build_id):
 
 
 def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, components,
-                   source_commit, builder, environment, observation=None):
+                   source_commit, builder, environment, observation=None, generated_files=()):
     """Plan a bounded closure from explicit selected inputs; do not create or copy payloads."""
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or not _ID.fullmatch(builder) or builder.endswith("."):
         raise ValueError("Invalid observational source or builder identity")
@@ -579,7 +582,16 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
             covered.add(name)
     if covered != set(notices):
         raise ValueError("Notice inventory does not match its component index")
+    if not isinstance(generated_files, (tuple, list)):
+        raise ValueError("Generated staging files must be a sequence")
     reserved = {name.casefold() for name in _GENERATED | {"runtime.json", ".incomplete", ".runtime.json.pending"}}
+    checked_generated = []
+    for relative, data in generated_files:
+        _relative(relative)
+        if (relative.casefold() in reserved or not isinstance(data, bytes) or not data):
+            raise ValueError("Invalid or duplicate generated staging file")
+        reserved.add(relative.casefold())
+        checked_generated.append((relative, data))
     members = []
     def add(source, relative):
         _relative(relative)
@@ -631,16 +643,22 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
     if _identity(dumpbin) != tool_identity or file_hash(dumpbin) != tool_hash:
         raise ValueError("Selected inspection tool changed")
     placeholder = [replace(member, sha256="0" * 64) for member in members]
-    generated, provisional_id = _metadata(placeholder, components, source_commit, builder, tool_hash, observation)
-    _budget(members, generated)
-    _descriptor(_pins(placeholder, generated), source_commit, builder, provisional_id)
+    generated, provisional_id = _metadata(placeholder, components, source_commit, builder, tool_hash,
+                                          observation, checked_generated)
+    # The provisional checks must include the generated resources (the headlight catalog) that the
+    # final inventory pins, or a size or path problem would only surface after hashing.
+    provisional_generated = (*generated, *checked_generated)
+    _budget(members, provisional_generated)
+    _descriptor(_pins(placeholder, provisional_generated), source_commit, builder, provisional_id)
     pinned = []
     for member in members:
         digest = file_hash(member.source)
         if _identity(member.source) != member.identity:
             raise ValueError("Source changed during inventory")
         pinned.append(replace(member, sha256=digest))
-    generated, build_id = _metadata(pinned, components, source_commit, builder, tool_hash, observation)
+    generated, build_id = _metadata(pinned, components, source_commit, builder, tool_hash,
+                                    observation, checked_generated)
+    generated = (*generated, *checked_generated)
     _budget(pinned, generated)
     return Inventory(tuple(pinned), generated, (*roots, crt_root), source_commit, builder, build_id)
 
@@ -1555,11 +1573,18 @@ def produce(args):
     tools_before = _tool_observations(tools, environment, paths["build"].parent)
     source_before = _source_identity(paths["source"], paths["git"], environment, args.commit)
     notices, components, inputs, distributions = _notice_inputs(paths, args.commit)
+    from build_stock_headlights import build_catalog
+    placement_json = paths["source"] / "games/mw3/headlights/original-mounts.json"
+    binding_header = (paths["source"] /
+        "runtime/mw3-re/src/frontend/core_critical/renderer/headlight_original_binding.hpp")
+    stock_headlight_catalog = build_catalog(placement_json, binding_header)
     if not 1 <= len(source_before["describe"]) <= 256:
         raise ValueError("Observed native version exceeds the bounded component index")
     components[0]["version"] = source_before["describe"]
     inputs.update({"selected-tool/" + name: path for name, path in derived.items()})
     inputs.update({"selected-bootstrap/" + name: path for name, path in bootstrap_inputs.items()})
+    inputs["source/games/mw3/headlights/original-mounts.json"] = placement_json
+    inputs["source/runtime/mw3-re/src/frontend/core_critical/renderer/headlight_original_binding.hpp"] = binding_header
     inputs_before = _observe_inputs(inputs)
     with _producer_ownership():
         build = paths["build"]
@@ -1603,7 +1628,8 @@ def produce(args):
                            distributions["sdl3_sound"][1]],
             crt_root=paths["crt_root"], dumpbin=paths["dumpbin"], notices=notices,
             components=components, source_commit=args.commit, builder="mw3-re-recipe-v1",
-            environment=environment, observation=observation)
+            environment=environment, observation=observation,
+            generated_files=(("resources/stock-headlights.bin", stock_headlight_catalog),))
         for member in inventory.members:
             basename = Path(member.relative).name.lower()
             if member.relative.startswith("bin/") and basename not in (

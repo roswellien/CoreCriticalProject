@@ -427,14 +427,12 @@ class NativePreviewPlanTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_dynamic_lighting_uses_enabled_pack_catalog_and_headlight_inputs(self):
         from pathlib import Path
+        from build_stock_headlights import build_catalog
         environment = self.lighting_environment_pack()
         runtime = Path(self.root, "runtime")
         resources = runtime / "resources"
         resources.mkdir(parents=True)
-        stock_headlight_catalog = (
-            b"MWHDLT1\0" + struct.pack("<III", 1, 0, 0) + struct.pack("<I", 64) +
-            b"0" * 64 + struct.pack("<II", 0, 0) + b"\x01" + bytes(31) + struct.pack("<I", 0)
-        )
+        stock_headlight_catalog = build_catalog()
         (resources / "stock-headlights.bin").write_bytes(stock_headlight_catalog)
         bindings = Path(self.root, "headlights.txt")
         bindings.write_text("CC_MW3_HEADLIGHTS_V1\n42 -1\n", encoding="ascii")
