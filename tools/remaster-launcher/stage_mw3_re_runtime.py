@@ -1506,9 +1506,13 @@ def _validate_configured(paths, derived, cache, expected, baseline_flags, build,
     main = [entry["command"] for entry in commands
             if Path(entry["file"]).as_posix().endswith("/src/frontend/sdl/mw3_main.cpp")]
     renderer = [entry for entry in commands if Path(entry["file"]).as_posix().endswith("/src/frontend/core_critical/frame_renderer.cpp")]
+    # CMake defines MW3_HAVE_SDL_SOUND privately on the mw3sdl library, so it shows on the music decoder's
+    # unit, not on mw3_main.cpp.
+    music = [entry["command"] for entry in commands
+             if Path(entry["file"]).as_posix().endswith("/src/frontend/sdl/sdl_music.cpp")]
     if (len(main) != 1 or not renderer or "CC_MW3_RE_ADAPTER=1" not in main[0]
             or "MW3_HAVE_LIBARCHIVE=1" not in main[0] or "LIBARCHIVE_STATIC" not in main[0]
-            or "MW3_HAVE_SDL_SOUND=1" not in main[0]
+            or len(music) != 1 or "MW3_HAVE_SDL_SOUND=1" not in music[0]
             or any(token in main[0] for token in ("MW3_GAME_DIR", "MW3_ASSETS_DIR"))):
         raise ValueError("Native compile definitions do not match the package/Vulkan/archive recipe")
     resource = _small_text(build / "mw3.rc")
