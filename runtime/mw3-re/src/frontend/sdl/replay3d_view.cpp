@@ -628,7 +628,9 @@ void Replay3dView::draw_overlay() {
   s.draw.set_scale_for_height(s.screen_h);
 
   // Side rings and id labels, then the shared overlays, panel and bar.
-  for (const MechPose& m : s.frame.mechs) {
+  LabelPlacer labels;
+  for (size_t index = 0; index < s.frame.mechs.size(); ++index) {
+    const MechPose& m = s.frame.mechs[index];
     const auto* info = s.log->info_of(m.id);
     const SDL_FColor side = kSideColor[info ? std::clamp(info->side, 0, 1) : 0];
     if (m.standing) {
@@ -646,11 +648,9 @@ void Replay3dView::draw_overlay() {
     }
     SDL_FPoint label;
     if (s.projector.to_screen({m.pos.x, m.pos.y + kLabelMeters, m.pos.z}, &label)) {
-      const float id_width = s.draw.text(std::to_string(m.id), label.x - 4, label.y - 8);
-      const size_t index = static_cast<size_t>(&m - s.frame.mechs.data());
-      if (s.overlays.on[kReasons] && m.standing && !s.frame.last_decision[index].code.empty())
-        s.draw.text(reason_short(s.frame.last_decision[index].code), label.x + id_width + 2, label.y - 8,
-                    {255, 230, 140, 255});
+      const std::string& code = s.frame.last_decision[index].code;
+      const bool reason = s.overlays.on[kReasons] && m.standing && !code.empty();
+      labels.draw(s.draw, label.x - 4, label.y - 8, std::to_string(m.id), reason ? reason_short(code) : "");
     }
   }
   draw_overlays(s.frame, s.overlays, s.selected, s.draw, s.projector);

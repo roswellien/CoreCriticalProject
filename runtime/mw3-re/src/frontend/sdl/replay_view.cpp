@@ -136,6 +136,7 @@ void draw_world(Viewer& v, const Frame& frame, SdlRendererDraw& paint) {
         paint.circle(cam.to_screen(hit->pos), 9, ui_color(255, 220, 80, 110));
     }
   }
+  LabelPlacer labels;
   for (size_t i = 0; i < frame.mechs.size(); ++i) {
     const MechPose& m = frame.mechs[i];
     const SDL_FPoint at = cam.to_screen(m.pos);
@@ -150,9 +151,9 @@ void draw_world(Viewer& v, const Frame& frame, SdlRendererDraw& paint) {
       paint.arrow(at, screen_direction(m.heading), 16, ui_color(255, 255, 255));  // where the legs walk
     }
     if (static_cast<int>(i) == v.selected) paint.outline({at.x - 10, at.y - 10, 20, 20}, ui_color(255, 255, 255));
-    paint.text(std::to_string(m.id), at.x + 8, at.y - 18);
-    if (v.overlays.on[kReasons] && m.standing && !frame.last_decision[i].code.empty())
-      paint.text(reason_short(frame.last_decision[i].code), at.x + 8, at.y + 4, {255, 230, 140, 255});
+    const std::string& code = frame.last_decision[i].code;
+    const bool reason = v.overlays.on[kReasons] && m.standing && !code.empty();
+    labels.draw(paint, at.x + 8, at.y - 18, std::to_string(m.id), reason ? reason_short(code) : "");
   }
 }
 

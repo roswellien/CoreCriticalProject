@@ -159,6 +159,25 @@ void draw_legend(const Overlays& overlays, ReplayDraw& draw) {
   draw.text("H hides this key", x + pad, y + 6 * s + line_h * (std::size(rows) + 1), {170, 170, 170, 255});
 }
 
+void LabelPlacer::draw(ReplayDraw& draw, float x, float y, const std::string& id, const std::string& reason) {
+  const float s = draw.scale();
+  // The text's size before drawing it: about 7 pixels a character at scale 1
+  // (the 14-pixel font), with a little room around.
+  const std::string whole = reason.empty() ? id : id + " " + reason;
+  const float w = 7.5f * s * static_cast<float>(whole.size()) + 4, h = 17 * s;
+  const auto overlaps = [&](const SDL_FRect& r) {
+    for (const SDL_FRect& t : taken_)
+      if (r.x < t.x + t.w && t.x < r.x + r.w && r.y < t.y + t.h && t.y < r.y + r.h) return true;
+    return false;
+  };
+  SDL_FRect at{x, y, w, h};
+  constexpr int kMaxShifts = 4;
+  for (int shift = 0; shift < kMaxShifts && overlaps(at); ++shift) at.y += h;
+  taken_.push_back(at);
+  const float id_width = draw.text(id, at.x, at.y);
+  if (!reason.empty()) draw.text(reason, at.x + id_width + 4 * s, at.y, {255, 230, 140, 255});
+}
+
 void draw_overlays(const Frame& frame, const Overlays& overlays, int selected, ReplayDraw& draw,
                    const Projector& projector) {
   const auto screen = [&](const Vec3& v, SDL_FPoint* out) { return projector.to_screen(v, out); };

@@ -113,6 +113,18 @@ std::string reason_sentence(const std::string& code);
 // The key to the overlays' colors at the top left, when overlays.legend is on.
 void draw_legend(const Overlays& overlays, ReplayDraw& draw);
 
+// Each mech's label, its id and its decision word, kept from landing on one
+// already drawn this frame: a label that would overlap moves down a line
+// (up to a few lines; mechs in a tight knot still crowd).
+class LabelPlacer {
+ public:
+  // Draws the label with its top left nearest (x, y) that is free.
+  void draw(ReplayDraw& draw, float x, float y, const std::string& id, const std::string& reason);
+
+ private:
+  std::vector<SDL_FRect> taken_;
+};
+
 // The selected mech's panel at the top right; `selected` is its index in the
 // frame, -1 for none.
 void draw_panel(const mech3::replay::ReplayLog& log, const mech3::replay::Frame& frame, int selected,
