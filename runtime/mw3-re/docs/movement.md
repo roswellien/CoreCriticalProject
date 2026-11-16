@@ -279,14 +279,16 @@ records, then vt+0xd0 on each when they finish. A mech's vt+0xc8
 budget of fully detailed mechs ([0x00605634]): 0 while the player's
 throttle (controls vt+0x1c) is 0, else 1, against a limit of 1 (0x005e2034).
 Its vt+0xd0 (0x0041e870) sets the detail bits +0x688 from the squared
-distance of its contact on the player (+0x98 +0x0c; 800 m with none):
+distance of its contact on the player (+0x98 +0x0c). The far threshold follows
+the selected scenery distance (800 m by default); without contact, the mech is
+treated as being at that far edge:
 
 | Distance | Bits | With the budget |
 |---|---|---|
 | under 75 m | 0x1c | -1 (all) |
 | under 250 m | 0x1c | 0x1d |
-| under 800 m, or the player's target | 0x10 | |
-| beyond | 0 | |
+| under the selected scenery distance, or the player's target | 0x10 | |
+| at or beyond the selected scenery distance, unless targeted | 0 | |
 
 The bits: 0 sounds (engine, walk, steps, power, eject), 1 toes, 2 the turn
 pivot, 3 landing effects, 4 the full gait and arm aim, 5 the lean. So an AI
