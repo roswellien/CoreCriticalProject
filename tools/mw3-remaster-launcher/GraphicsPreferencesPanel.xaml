@@ -44,18 +44,9 @@
                                     <!-- Scenery Draw Distance -->
                                     <TextBlock Text="Scenery Draw Distance:" FontWeight="SemiBold" Margin="0,0,0,6" />
                                     <ComboBox x:Name="ComboDrawDist" Margin="0,0,0,16" SelectionChanged="ControlChanged">
-                                        <ComboBoxItem Content="3200m - Horizon Maximum (Modern High-End)" Tag="3200" />
-                                        <ComboBoxItem Content="2400m - Epic Distance" Tag="2400" />
-                                        <ComboBoxItem Content="1600m - Extended Distance (Recommended)" Tag="1600" />
-                                        <ComboBoxItem Content="1200m - High Distance" Tag="1200" />
-                                        <ComboBoxItem Content="800m - Original 1999 Classic Distance" Tag="800" />
-                                    </ComboBox>
-
-                                    <!-- Horizon Fog Distance -->
-                                    <TextBlock Text="Atmospheric Horizon Fog:" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                    <ComboBox x:Name="ComboFog" Margin="0,0,0,24" SelectionChanged="ControlChanged">
-                                        <ComboBoxItem Content="Extended Horizon (1100m Fog Falloff)" Tag="1100" />
-                                        <ComboBoxItem Content="Original Fog Atmosphere (Classic Fog Density)" Tag="0" />
+                                        <ComboBoxItem Content="1600m - Extended" Tag="1600" />
+                                        <ComboBoxItem Content="1200m - High" Tag="1200" />
+                                        <ComboBoxItem Content="800m - Original (Default)" Tag="800" />
                                     </ComboBox>
 
         <CheckBox x:Name="ChkDynamicLighting" Content="Dynamic Lighting" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
