@@ -100,6 +100,18 @@ class App:
     def show_setup(self) -> None:
         self._show(SetupScreen(self.root, self, HOME / "setups"))
 
+    def reload_catalog(self) -> None:
+        """The game's lists made again (after a mod or game files changed)."""
+        self.root.configure(cursor="watch")
+        self.root.update()
+        try:
+            self.catalog = catalog_module.ensure_catalog(self.exe, self.game, HOME, force=True)
+        except (OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror("Arena runner", f"The game's lists could not be read.\n\n{error}")
+        finally:
+            self.root.configure(cursor="")
+        self.show_setup()
+
     def show_running(self, batch) -> None:
         self._show(RunningScreen(self.root, self, batch))
 

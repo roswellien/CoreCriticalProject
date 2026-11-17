@@ -110,6 +110,9 @@ class SetupScreen(ttk.Frame):
             side="left", padx=12
         )
         ttk.Button(row, text="Load setup", command=self._load_setup).pack(side="right")
+        ttk.Button(row, text="Reload game lists", command=self.app.reload_catalog).pack(
+            side="right", padx=(0, 18)
+        )
         ttk.Button(row, text="Save setup", command=self._save_setup).pack(side="right", padx=6)
 
     # --- the two sides ---------------------------------------------------

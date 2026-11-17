@@ -381,4 +381,5 @@ install, takes a few seconds and writes:
 
 The files hold the game's own data and stay on the player's machine. The
 runner keeps them in its folder and makes them again whenever `mw3.exe`
-changes.
+changes, or when its Reload game lists button is pressed (after a mod is
+turned on or off, or the game files change, which the exe can't show).

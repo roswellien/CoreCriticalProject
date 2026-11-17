@@ -63,10 +63,12 @@ def catalog_command(exe: Path, game: Path, folder: Path, write_dir: Path) -> lis
     return [str(exe), str(game), "--arena-catalog", str(folder), "--write-dir", str(write_dir)]
 
 
-def ensure_catalog(exe: Path, game: Path, cache: Path) -> Catalog:
-    """The cached catalog, made again first when the game build changed."""
+def ensure_catalog(exe: Path, game: Path, cache: Path, force: bool = False) -> Catalog:
+    """The cached catalog, made again first when the game build changed, or
+    when `force` asks (the window's Reload game lists: mods or game files
+    changed, which the exe's stamp can't see)."""
     folder = cache / "catalog"
-    if not catalog_is_current(folder, exe):
+    if force or not catalog_is_current(folder, exe):
         write_dir = cache / "catalog-write"
         write_dir.mkdir(parents=True, exist_ok=True)
         done = subprocess.run(
