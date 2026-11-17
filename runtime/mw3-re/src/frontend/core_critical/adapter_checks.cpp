@@ -34,6 +34,7 @@
 #include "renderer/surface_detail_bindings.hpp"
 #include "renderer/surface_materials.hpp"
 #include "renderer/vk_scene.hpp"
+#include "renderer/flare_alpha.hpp"
 #include "platform/sha256.hpp"
 #include <sstream>
 #include <limits>
@@ -1840,6 +1841,41 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   renderer->release_texture(named.texture);
   require(renderer->asset_statistics().named_textures == 2,
           "Named texture replacement was not recorded");
+
+  constexpr unsigned flare_size = 64;
+  std::vector<uint8_t> flare_source(flare_size * flare_size * 4, 255);
+  for (unsigned y = 0; y < flare_size; ++y)
+    for (unsigned x = 0; x < flare_size; ++x)
+      flare_source[(std::size_t(y) * flare_size + x) * 4 + 3] =
+          uint8_t((x * 3 + y * 5) % 256);
+  const auto named_uploads_before_flare =
+      renderer->asset_statistics().named_textures;
+  const auto flare = renderer->create_named_texture(
+      "lflare2", flare_size, flare_size, flare_source.data(), 1);
+  auto flare_state = cc_mw3_re::testing::named_texture_state(*renderer, flare);
+  require(flare_state.generated_rgba && flare_state.width == flare_size &&
+              flare_state.height == flare_size &&
+              flare_state.source_width == flare_size &&
+              flare_state.source_height == flare_size,
+          "Generated flare did not retain its source dimensions");
+  renderer->update_texture(flare, flare_size, flare_size, flare_source.data());
+  const auto expected_flare = mw34::flare::generate_rgba(
+      "lflare2", flare_size, flare_size, flare_source.data());
+  std::vector<uint32_t> expected_flare_pixels(flare_size * flare_size);
+  std::memcpy(expected_flare_pixels.data(), expected_flare.data(),
+              expected_flare.size());
+  flare_state = cc_mw3_re::testing::named_texture_state(*renderer, flare);
+  require(flare_state.generated_rgba && flare_state.width == flare_size &&
+              flare_state.height == flare_size &&
+              flare_state.source_width == flare_size &&
+              flare_state.source_height == flare_size &&
+              flare_state.pixels == expected_flare_pixels,
+          "Generated flare reload changed dimensions or pixels");
+  require(renderer->asset_statistics().named_textures ==
+              named_uploads_before_flare,
+          "Generated flare was counted as a prepared replacement upload");
+  renderer->release_texture(flare);
+
   renderer->reset_scene_resources();
   matrix[2] = matrix[9] = matrix[11] = 0;
   require(zcls::object3d_set_matrix(control, matrix) == 0,

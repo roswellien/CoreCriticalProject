@@ -655,6 +655,12 @@ public:
             native_fingerprint_evaluations_,
             deferred_material_admissions_};
   }
+  testing::NamedTextureTestState named_texture_state_for_test(
+      int32_t handle) const {
+    const auto &entry = textures_.at(std::size_t(handle));
+    return {entry.width, entry.height, entry.source_width, entry.source_height,
+            entry.generated_rgba, entry.pixels};
+  }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
 #include "prepared_gpu_adapter.inc"
@@ -1082,8 +1088,12 @@ public:
       auto &entry = textures_[handle];
       entry.generated_rgba = true;
       entry.name = name;
+      entry.source_width = unsigned(width);
+      entry.source_height = unsigned(height);
       entry.surface_key = active_key;
       entry.group_load_epoch = group_load_epoch_;
+      // Generated and plain named textures are excluded from the prepared
+      // replacement upload count.
       return handle;
     }
     if (!replacement) {
@@ -2264,6 +2274,14 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+testing::NamedTextureTestState testing::named_texture_state(
+    VulkanFrameRenderer &renderer, int32_t handle) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->named_texture_state_for_test(handle);
 }
 
 struct RigidCaptureTestAccess {
