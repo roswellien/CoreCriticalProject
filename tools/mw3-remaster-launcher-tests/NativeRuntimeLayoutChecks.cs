@@ -541,7 +541,8 @@ static class NativeRuntimeLayoutChecks
                     "--cc-vulkan-wsi" }.Concat(window).Concat(new[] {
                     "--cc-aa", aa, "--cc-af", expected.AnisotropicFiltering.ToString(),
                     "--cc-render-thread", expected.RenderThread ? "1" : "0", "--cc-lighting",
-                    original["options"]!["lighting"]!.GetValue<string>() }).ToArray();
+                    original["options"]!["lighting"]!.GetValue<string>(),
+                    "--cc-flare-style", "modern" }).ToArray();
                 if (!planned["ok"]!.GetValue<bool>() ||
                     !planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).SequenceEqual(argv) ||
                     planned["working_directory"]!.GetValue<string>() != Path.GetDirectoryName(contract.Executable))
@@ -692,10 +693,13 @@ static class NativeRuntimeLayoutChecks
         }
         Reject(() => Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "../escape"));
         Reject(() => Mw3ReLaunchRequest.Create(contract, options with { Renderer = (Mw3ReRenderer)99 }, "D:/Original MW3", dataRoot, "pilot-a"));
+        Reject(() => Mw3ReLaunchRequest.Create(contract, options with { FlareStyle = (Mw3ReFlareStyle)99 },
+            "D:/Original MW3", dataRoot, "pilot-a"));
         var planned = RunMw3RePlanner(json);
         var expected = new[] { contract.Executable, "--install", "D:/Original MW3", "--write-dir", expectedWrite,
             "--cc-vulkan-wsi", "--window", "1280x720", "--windowed", "--cc-aa", "ssaa2", "--cc-af", "8",
-            "--cc-render-thread", "0", "--cc-lighting", "normal", "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é" };
+            "--cc-render-thread", "0", "--cc-lighting", "normal", "--cc-flare-style", "modern",
+            "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é" };
         if (!planned["ok"]!.GetValue<bool>() ||
             !planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).SequenceEqual(expected) ||
             planned["working_directory"]!.GetValue<string>() != Path.GetDirectoryName(contract.Executable))
@@ -777,7 +781,7 @@ static class NativeRuntimeLayoutChecks
                 Width = 1280, Height = 720, WindowMode = "windowed", RenderThread = true,
                 AntiAliasing = "fxaa", AnisotropicFiltering = 16, DrawDistance = 1200,
                 DynamicLighting = true, Shadows = true,
-                WaterDetail = false, CloudDetail = false
+                WaterDetail = false, CloudDetail = false, FlareStyle = "original"
             };
             var options = NativeGameRunner.PlanningOptionsForSettings(settings, contract,
                 NativeGameRunner.PreviewDrawDistance(settings.DrawDistance, out _),
@@ -792,10 +796,13 @@ static class NativeRuntimeLayoutChecks
                 wire["preview"]!["water_detail"]!.GetValue<bool>() ||
                 wire["preview"]!["cloud_detail"]!.GetValue<bool>())
                 throw new Exception("Native preview projection lost its schema, distance, dynamic lighting, shadows, POM or detail choices.");
+            if (wire["flare_style"]!.GetValue<string>() != "original")
+                throw new Exception("Saved lens flare style did not reach the native preview request.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
             if (argv[argv.IndexOf("--cc-dynamic-lighting") + 1] != "1" ||
-                argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1")
+                argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1" ||
+                argv[argv.IndexOf("--cc-flare-style") + 1] != "original")
                 throw new Exception("Native launcher dynamic lighting and shadows choices did not reach the runtime argv.");
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
                 "--cc-hud-text", "1", "--cc-menu-background", Path.Combine(ui, "ui", "background.mwhd"),
