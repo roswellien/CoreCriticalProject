@@ -120,6 +120,82 @@ void check_gpu_donor_toes(SDL_Window *window, sdlfe::RendererBackend backend) {
         for (bool early : {false, true})
             submit(distance, early, true);
     }
+
+    const auto mixed_bytes = prepared_fixture::build_valid_v4_mesh(
+        "rtoe02", "control", "panel", .6, 0.2, -0.1, "", true);
+    std::istringstream mixed_input(mixed_bytes, std::ios::binary);
+    const auto mixed_mesh = platform::prepared::read_mesh(mixed_input);
+    require(mixed_mesh.batches.size() == 1 &&
+                mixed_mesh.batches[0].donor_bone == 0xffffffff &&
+                mixed_mesh.batches[0].donor_indices.size() == 3 &&
+                mixed_mesh.batches[0].donor_indices[0] !=
+                    mixed_mesh.batches[0].donor_indices[2],
+            "Mixed-bone prepared fixture did not encode per-vertex donor bones");
+    const auto mixed_mesh_hash =
+        mw34::materials::compute_mesh_uv_hash(mixed_mesh.batches, 0, 1);
+    std::ofstream(folder / "mesh.bin", std::ios::binary) << mixed_bytes;
+    std::ofstream(folder / "materials.bin", std::ios::binary)
+        << prepared_fixture::donor_materials(mixed_mesh_hash);
+    sdlfe::CoreCriticalAssets mixed_assets;
+    mixed_assets.geometry = "partial";
+    mixed_assets.lighting = "normal";
+    mixed_assets.pom = true;
+    mixed_assets.models.push_back({"authored", "1", (folder / "mesh.bin").u8string(),
+                                   (folder / "textures.bin").u8string()});
+    mixed_assets.normals.push_back({"authored", "1", (folder / "normals.bin").u8string()});
+    mixed_assets.materials.push_back({"authored", "1", (folder / "materials.bin").u8string()});
+    auto mixed_renderer = make_check_renderer(window, backend, {}, mixed_assets);
+    mixed_renderer->set_viewport(0, 0, 64, 64);
+    prepared_fixture::DonorTree mixed_distance("rtoe02", false);
+    producer_view_checks::Observer mixed_view_observer;
+    require(cc_mw3_re::testing::observe_producer_views(*mixed_renderer,
+                                                        &mixed_view_observer),
+            "Deformed prepared scissor observer unsupported");
+    ::platform::ProducerView zoom_view{};
+    zoom_view.present = true;
+    zoom_view.purpose = ::platform::ProducerPurpose::WorldZoom;
+    zoom_view.producer_generation = 1;
+    zoom_view.mission_epoch = 1;
+    zoom_view.canvas_available = true;
+    zoom_view.canvas = {10, 20, 128, 64};
+    zoom_view.camera_rect_available = true;
+    zoom_view.camera_rect = {18, 24, 32, 24};
+    const auto restore_view = mixed_renderer->exchange_producer_view(zoom_view);
+    struct MixedProducerViewCleanup {
+        cc_mw3_re::VulkanFrameRenderer& renderer;
+        const ::platform::ProducerViewRestoreToken& restore_view;
+        ~MixedProducerViewCleanup() noexcept {
+            renderer.restore_producer_view(restore_view);
+            try {
+                cc_mw3_re::testing::observe_producer_views(renderer, nullptr);
+            } catch (...) {
+            }
+        }
+    } mixed_cleanup{*mixed_renderer, restore_view};
+    mixed_distance.pose_foot();
+    mixed_renderer->clear(true, 0, 0, 0);
+    const auto fallback_before = mixed_renderer->asset_statistics()
+                                     .prepared_cpu_fallback_batches;
+    const auto mixed_context = mixed_distance.context();
+    mixed_renderer->begin_model_draw(mixed_context);
+    require(mixed_renderer->replaces_model_geometry(),
+            "Mixed-bone prepared draw lost replacement scope");
+    mixed_renderer->end_model_draw();
+    const auto mixed_statistics = mixed_renderer->asset_statistics();
+    require(mixed_statistics.prepared_cpu_fallback_batches > fallback_before,
+            "Deformed prepared batch did not use the partial CPU fallback");
+    std::vector<std::uint32_t> mixed_pixels;
+    int mixed_width{}, mixed_height{};
+    require(mixed_renderer->read_back(&mixed_pixels, &mixed_width, &mixed_height) &&
+                mixed_width == 64 && mixed_height == 64,
+            "Deformed prepared scissor lost its readback extent");
+    const auto mixed_rows = mixed_view_observer.rows(
+        producer_view_checks::Stage::packet, true);
+    require(std::any_of(mixed_rows.begin(), mixed_rows.end(), [](const auto& row) {
+              return row.scissor_offset == std::array<std::int32_t, 2>{4, 4} &&
+                     row.scissor_extent == std::array<std::uint32_t, 2>{16, 24};
+            }),
+            "Deformed prepared WorldZoom batch missed its camera scissor");
     std::fprintf(stderr, "[DONOR_TOE_GPU] cases=%u failures=0\n", cases);
 }
 
@@ -500,20 +576,17 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
         require(cc_mw3_re::testing::observe_producer_views(*renderer,
                                                             &view_observer),
                 "Prepared scissor observer unsupported");
-        ::platform::ProducerView zoom_view{};
-        zoom_view.present = true;
-        zoom_view.purpose = ::platform::ProducerPurpose::WorldZoom;
-        zoom_view.producer_generation = 1;
-        zoom_view.mission_epoch = 1;
-        zoom_view.canvas_available = true;
-        zoom_view.canvas = {10, 20, 128, 64};
-        zoom_view.camera_rect_available = true;
-        zoom_view.camera_rect = {18, 24, 32, 24};
-        const auto restore_view = renderer->exchange_producer_view(zoom_view);
+        zvid::set_producer_canvas_rect(10, 20, 128, 64);
+        zvid::set_producer_camera_rect(18, 24, 32, 24);
         renderer->clear(true, 0, 0, 0);
-        require(renderer->submit_prepared_geometry(context, {}) ==
-                    cc::geometry::Submission::submitted,
-                "Prepared WorldZoom geometry was not submitted");
+        {
+            producer_view_checks::Emission emission(
+                ::platform::ProducerPurpose::WorldZoom);
+            require(zvid::submit_prepared_geometry_for_current_view(
+                        renderer.get(), context, {}) ==
+                        cc::geometry::Submission::submitted,
+                    "Prepared WorldZoom geometry was not submitted");
+        }
         std::vector<std::uint32_t> scissor_pixels;
         int scissor_width{}, scissor_height{};
         require(renderer->read_back(&scissor_pixels, &scissor_width,
@@ -530,7 +603,6 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
                                          std::array<std::uint32_t, 2>{16, 24};
                             }),
                 "Prepared WorldZoom draw missed the mapped camera scissor");
-        renderer->restore_producer_view(restore_view);
         require(cc_mw3_re::testing::observe_producer_views(*renderer, nullptr),
                 "Prepared scissor observer removal failed");
         check_damage_tint_blend(window, backend, options, root.get(), panel);

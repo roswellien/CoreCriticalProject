@@ -419,10 +419,12 @@ bool submit_geometry(zcls::Node &node) {
     // registration and all native vertex/polygon loops, retaining effect-bearing
     // producers until their side effects have an explicit GPU contract.
     if (context.ordinary && !context.morphing && !context.overlay && !model.count(0x1c) &&
-        !draw_state().second_pass &&
-        renderer->submit_prepared_geometry(context, fog_state) ==
+        !draw_state().second_pass) {
+        if (zvid::submit_prepared_geometry_for_current_view(renderer, context,
+                                                             fog_state) ==
             cc::geometry::Submission::submitted)
-      return true;
+            return true;
+    }
     // Stock model packets do not carry sky state; keep the original TL producer.
     if (zvid::draw_state().native_sky) {
         // Static baking also indexes cached normals with vertex shading off.
@@ -446,7 +448,8 @@ bool submit_geometry(zcls::Node &node) {
         return unsupported();
     }
     const auto materials = copy_rigid_materials(model, *model.render_geometry);
-    if (renderer->submit_model_geometry(model.render_geometry, context, materials, fog_state) !=
+    if (zvid::submit_model_geometry_for_current_view(
+            renderer, model.render_geometry, context, materials, fog_state) !=
         cc::geometry::Submission::submitted)
         return unsupported();
     return true;

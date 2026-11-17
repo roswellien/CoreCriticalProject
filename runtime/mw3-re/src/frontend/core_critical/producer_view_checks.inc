@@ -376,6 +376,26 @@ void check_producer_views(SDL_Window* window, sdlfe::RendererBackend backend) {
     s.finish();
     ground_eye(window, backend, check);
   });
+  group("degenerate_zoom_scissor", [&] {
+    for (const bool zero_canvas : {true, false}) {
+      Session s(window, backend);
+      zvid::set_producer_canvas_rect(0, 0, zero_canvas ? 0 : 64,
+                                     zero_canvas ? 0 : 64);
+      zvid::set_producer_camera_rect(8, 8, zero_canvas ? 16 : 0,
+                                     zero_canvas ? 16 : 0);
+      {
+        Emission zoom(Purpose::WorldZoom);
+        s.immediate();
+      }
+      s.finish();
+      const auto rows = s.observer.rows(Stage::append);
+      check(rows.size() == 1 &&
+                rows[0].scissor_offset == std::array<std::int32_t, 2>{0, 0} &&
+                rows[0].scissor_extent == std::array<std::uint32_t, 2>{64, 64},
+            zero_canvas ? "ZERO_ZOOM_VIEWPORT_FULL_SCISSOR" :
+                          "ZERO_ZOOM_RECT_FULL_SCISSOR");
+    }
+  });
   group("native_geometry_zoom_scissor", [&] {
     float positions[]{-1, -1, 3, 1, -1, 3, 0, 1, 3};
     std::uint32_t indices[]{2, 1, 0};
@@ -401,12 +421,10 @@ void check_producer_views(SDL_Window* window, sdlfe::RendererBackend backend) {
       zvid::set_producer_camera_rect(18, 24, 32, 24);
       {
         Emission emission(Purpose::WorldZoom);
-        const auto restore = s.renderer->exchange_producer_view(
-            zvid::capture_producer_view());
-        check(s.renderer->submit_model_geometry(source, context, {material}, {}) ==
+        check(zvid::submit_model_geometry_for_current_view(
+                  s.renderer.get(), source, context, {material}, {}) ==
                   cc::geometry::Submission::submitted,
               "WORLD_ZOOM_RIGID_MODEL_NOT_SUBMITTED");
-        s.renderer->restore_producer_view(restore);
       }
       s.finish();
       const auto rows = s.observer.rows(Stage::packet, true);
@@ -584,6 +602,6 @@ void check_producer_views(SDL_Window* window, sdlfe::RendererBackend backend) {
       check(s.observer.rows(Stage::packet, true).size() == 2, "DESTRUCTOR_NO_REPLAY");
     }
   });
-  require(groups == 9 && total > 0, "B5 packet group inventory mismatch");
-  std::printf("B5_PACKET groups=9 failed=0 assertions=%u\n", total);
+  require(groups == 10 && total > 0, "B5 packet group inventory mismatch");
+  std::printf("B5_PACKET groups=10 failed=0 assertions=%u\n", total);
 }

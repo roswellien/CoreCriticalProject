@@ -1208,8 +1208,14 @@ private:
         producer_view_.camera_rect.width <= 0 ||
         producer_view_.camera_rect.height <= 0 ||
         scene_.width > std::uint32_t(std::numeric_limits<std::int32_t>::max()) ||
-        scene_.height > std::uint32_t(std::numeric_limits<std::int32_t>::max()))
-      throw std::runtime_error("Invalid WorldZoom scissor inputs");
+        scene_.height > std::uint32_t(std::numeric_limits<std::int32_t>::max())) {
+      static std::atomic_flag invalid_world_zoom_scissor_logged = ATOMIC_FLAG_INIT;
+      if (!invalid_world_zoom_scissor_logged.test_and_set())
+        std::fprintf(stderr,
+                     "Core renderer: invalid WorldZoom scissor inputs; "
+                     "using full scene (logged once)\n");
+      return full_scene;
+    }
 
     // Match canvas_to_render: transform both edges with integer truncation,
     // then derive the size. Mapping a size alone can grow fractional edges.
@@ -1805,6 +1811,7 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
+    draw.scissor = producer_scissor();
     const auto texture = prepared_texture(*source.texture);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
                            group_load_epoch_, textures_.at(texture).version);

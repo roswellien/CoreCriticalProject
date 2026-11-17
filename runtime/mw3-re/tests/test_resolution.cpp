@@ -45,7 +45,8 @@ struct ResolutionStateGuard {
   zmth::Projection projection = zmth::projection();
   zmod::DrawState draw_state = zmod::draw_state();
   zcls::Camera* camera = zcls::scene_walk().camera;
-  platform::ProducerView producer_view = zvid::capture_producer_view();
+  zvid::ProducerViewStateForTest producer_view =
+      zvid::capture_producer_view_state_for_test();
 
   ~ResolutionStateGuard() {
     ztwod::set_host(host);
@@ -159,6 +160,24 @@ struct HudZoomProjectionHost : ztwod::Host {
 };
 
 }  // namespace
+
+TEST(resolution_guard_restores_idle_producer_viewport) {
+  ResolutionStateGuard original;
+  zvid::set_producer_canvas_rect(3, 5, 320, 180);
+  zvid::set_producer_camera_rect(11, 13, 160, 90);
+  {
+    ResolutionStateGuard changed;
+    zvid::set_producer_canvas_rect(0, 0, 64, 64);
+    zvid::set_producer_camera_rect(0, 0, 32, 32);
+  }
+  const auto state = zvid::capture_producer_view_state_for_test();
+  EXPECT(!state.view.present);
+  EXPECT(state.canvas_available && state.canvas.x == 3 && state.canvas.y == 5 &&
+         state.canvas.width == 320 && state.canvas.height == 180);
+  EXPECT(state.camera_rect_available && state.camera_rect.x == 11 &&
+         state.camera_rect.y == 13 && state.camera_rect.width == 160 &&
+         state.camera_rect.height == 90);
+}
 
 TEST(resolution_original_modes_keep_their_sizes) {
   ResolutionStateGuard state;

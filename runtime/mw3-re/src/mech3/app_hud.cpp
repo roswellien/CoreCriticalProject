@@ -262,6 +262,7 @@ struct ProgramHudHooks : HudHooks {
   // alone through its camera (0x004f73f0) with the world's fog off
   // (0x004f23e0 on [0x00608c84]+4: 0, then 1).
   void view_draw_node(void* view, uint32_t nh) override {
+    const zvid::ProducerPurposeScope producer_view(platform::ProducerPurpose::WorldZoom);
     auto* v = static_cast<HudZoomView*>(view);
     v->panel.update(0.0f);
     zcls::Node* cam = node(v->view.camera);

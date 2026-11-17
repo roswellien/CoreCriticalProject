@@ -1293,6 +1293,19 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw,
                    bool use_requested_producer_purpose) {
   if (!node || !camera_node) return 1;
   zvid::ProducerWorldScope producer_view(!use_requested_producer_purpose);
+  struct EmissionScope {
+    zvid::ProducerWorldScope* producer_view = nullptr;
+
+    EmissionScope(zvid::ProducerWorldScope& scope, bool enabled) {
+      if (enabled) {
+        scope.begin_emission();
+        producer_view = &scope;
+      }
+    }
+    ~EmissionScope() noexcept {
+      if (producer_view) producer_view->end_emission();
+    }
+  };
   zmth::Mat34 local;
   zmth::push(&local);
   Camera* cam = cam_of(camera_node);
@@ -1311,7 +1324,7 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw,
   camera_update(camera_node);
   horizon_follow();
   zmod::set_camera(g_walk.camera);
-  if (use_requested_producer_purpose) producer_view.begin_emission();
+  EmissionScope emission(producer_view, use_requested_producer_purpose);
   zmod::world_update_lights(world);
   if (g_hooks.world_sounds) g_hooks.world_sounds(g_hooks.ctx, world);
   if (zmod::shadows_on()) {
@@ -1338,7 +1351,6 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw,
   if (g_hooks.flush_overlay) g_hooks.flush_overlay(g_hooks.ctx);
   if (g_hooks.draw_quad) g_hooks.draw_quad(g_hooks.ctx);
   if (g_hooks.end_scene) g_hooks.end_scene(g_hooks.ctx);
-  if (use_requested_producer_purpose) producer_view.end_emission();
   zmth::pop();
   return 0;
 }
