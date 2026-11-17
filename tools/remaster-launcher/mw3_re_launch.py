@@ -25,7 +25,7 @@ _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
 _PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
-                             "environment_packs", "dynamic_lighting", "headlights",
+                             "environment_packs", "dynamic_lighting", "shadows", "headlights",
                              "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
                              "stock_headlight_catalog"})
@@ -675,6 +675,7 @@ def _preview_choices(preview):
         "model_packs": [],
         "environment_packs": [],
         "dynamic_lighting": False,
+        "shadows": False,
         "headlights": False,
         "water_detail": False,
         "cloud_detail": False,
@@ -699,7 +700,7 @@ def _preview_choices(preview):
         packs = choices[field]
         if type(packs) is not list or len(packs) > _MAX_PREVIEW_PACKS:
             raise ValueError(f"Invalid native preview {field}")
-    for field in ("dynamic_lighting", "headlights", "water_detail", "cloud_detail"):
+    for field in ("dynamic_lighting", "shadows", "headlights", "water_detail", "cloud_detail"):
         if type(choices[field]) is not bool:
             raise ValueError(f"Native preview {field} selection must be Boolean")
     if choices["headlights"] and not choices["dynamic_lighting"]:
@@ -815,6 +816,10 @@ def plan_launch(request):
     detail_flag_indices = {}
     if preview is not None:
         argv.extend(("--cc-dynamic-lighting", "1" if preview["dynamic_lighting"] else "0"))
+        # Apply dependencies here so callers can preserve requested choices for suppression reports.
+        sun_shadows = (preview["shadows"] and preview["dynamic_lighting"] and
+                       request["lighting"] != "off")
+        argv.extend(("--cc-sun-shadows", "1" if sun_shadows else "0"))
         detail_flag_indices["water_detail"] = len(argv) + 1
         argv.extend(("--cc-water-detail", "1" if preview["water_detail"] else "0"))
         detail_flag_indices["cloud_detail"] = len(argv) + 1
@@ -834,6 +839,12 @@ def plan_launch(request):
         # environment packs are enabled. Prevent stale diagnostic catalogs from
         # silently supplying normal maps outside that selection.
         argv.append("--cc-environment-packs-explicit")
+        if preview["shadows"] and request["lighting"] == "off":
+            skipped.append({"root": str(runtime), "feature": "sun_shadows",
+                            "reason": "sun shadows require sun lighting"})
+        elif preview["shadows"] and not preview["dynamic_lighting"]:
+            skipped.append({"root": str(runtime), "feature": "sun_shadows",
+                            "reason": "sun shadows require dynamic lighting"})
         # 800 is the original range, so it adds no argument and older runtimes stay compatible.
         if preview["draw_distance"] != 800:
             argv.extend(("--cc-draw-distance", str(preview["draw_distance"])))

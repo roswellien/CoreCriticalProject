@@ -90,6 +90,39 @@ public sealed class NativeGameRunner
         _ => throw new InvalidOperationException("Unknown antialiasing setting: " + saved)
     };
 
+    /// <summary>Project saved choices and prepared inputs; the planner applies shadow dependencies.</summary>
+    public static Mw3RePlanningOptions PlanningOptionsForSettings(LauncherSettings settings,
+        Mw3ReRuntimeContract contract, int drawDistance, IReadOnlyList<string> models,
+        IReadOnlyList<string> environments, string? headlightBindings)
+    {
+        return new Mw3RePlanningOptions
+        {
+            Width = settings.Width,
+            Height = settings.Height,
+            Antialiasing = PreviewAntialiasing(settings.AntiAliasing),
+            AnisotropicFiltering = settings.AnisotropicFiltering,
+            WindowMode = WindowModeForSettings(settings.WindowMode),
+            RenderThread = settings.RenderThread,
+            Lighting = Mw3ReLighting.Normal,
+            Pom = true,
+            Preview = new Mw3RePreviewOptions
+            {
+                DrawDistance = drawDistance,
+                ModelPacks = models,
+                EnvironmentPacks = environments,
+                DynamicLighting = settings.DynamicLighting,
+                // Preserve the request so the planner can report why shadows were suppressed.
+                Shadows = settings.Shadows,
+                WaterDetail = settings.WaterDetail,
+                CloudDetail = settings.CloudDetail,
+                Headlights = settings.Headlights && settings.DynamicLighting,
+                HeadlightBindings = headlightBindings,
+                StockEffectCatalog = contract.FindDeclaredFile("resources/stock-effect-lights.bin"),
+                StockHeadlightCatalog = contract.FindDeclaredFile("resources/stock-headlights.bin")
+            }
+        };
+    }
+
     /// <summary>Plan and start one MW3-RE session; the caller owns the returned process.</summary>
     public Process Launch(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string>? log = null)
     {
@@ -179,30 +212,8 @@ public sealed class NativeGameRunner
         NativeControls.PrepareLaunch(_dataRoot, writeDirectory, validation.GameDirectory, settings, log);
         var headlightBindings = new HeadlightBindings(_dataRoot)
             .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
-        var options = new Mw3RePlanningOptions
-        {
-            Width = settings.Width,
-            Height = settings.Height,
-            Antialiasing = PreviewAntialiasing(settings.AntiAliasing),
-            AnisotropicFiltering = settings.AnisotropicFiltering,
-            WindowMode = WindowModeForSettings(settings.WindowMode),
-            RenderThread = settings.RenderThread,
-            Lighting = Mw3ReLighting.Normal,
-            Pom = true,
-            Preview = new Mw3RePreviewOptions
-            {
-                DrawDistance = drawDistance,
-                ModelPacks = models,
-                EnvironmentPacks = environments,
-                DynamicLighting = settings.DynamicLighting,
-                Headlights = settings.Headlights && settings.DynamicLighting,
-                WaterDetail = settings.WaterDetail,
-                CloudDetail = settings.CloudDetail,
-                HeadlightBindings = headlightBindings,
-                StockEffectCatalog = contract.FindDeclaredFile("resources/stock-effect-lights.bin"),
-                StockHeadlightCatalog = contract.FindDeclaredFile("resources/stock-headlights.bin")
-            }
-        };
+        var options = PlanningOptionsForSettings(settings, contract, drawDistance, models,
+            environments, headlightBindings);
         var indeoCodec = GameInstallation.FindVerifiedIndeoCodec(validation.GameDirectory, _dataRoot);
         var request = Mw3ReLaunchRequest.Create(contract, options, validation.GameDirectory, _dataRoot,
             ProfileId, indeoCodec);

@@ -59,6 +59,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -264,6 +265,14 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
   result.azimuth = number(options.sun_azimuth, -360, 360);
   result.elevation = number(options.sun_elevation, 1, 89);
   result.enabled = options.lighting != "off" || options.geometry != "legacy";
+  const auto diagnostic_config =
+      cc_mw3_re::RendererBridgeConfig::from_diagnostic_env(
+          false, !options.sun_shadows_explicit);
+  result.shadows = options.sun_shadows_explicit
+                       ? options.sun_shadows
+                       : diagnostic_config.sun_shadows;
+  if (options.lighting == "off")
+    result.shadows = false;
   if (options.lighting == "off" && options.geometry != "legacy") {
     result.strength = 0;
     result.ambient = 1;
@@ -506,10 +515,34 @@ public:
   void detach_editor() override {
     require_editor_producer();
     if (!editor_source_ && !editor_present_active_) return;
-    drain(); // Completes retained light packets, then joins all renderer jobs.
-    renderer_->detach_editor();
+
+    // A failed worker makes drain() rethrow its stored exception. Still retire
+    // the editor while its borrowed CPU owner and Vulkan context are alive.
+    std::exception_ptr failure;
+    try {
+      drain(); // Completes retained light packets, then joins all renderer jobs.
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    try {
+      if (renderer_)
+        renderer_->detach_editor();
+    } catch (...) {
+      if (!failure)
+        failure = std::current_exception();
+    }
     editor_present_active_ = false;
     editor_source_ = nullptr;
+    if (failure) {
+      try {
+        std::rethrow_exception(failure);
+      } catch (const std::exception &error) {
+        std::fprintf(stderr, "Core editor best-effort detach: %s\n", error.what());
+      } catch (...) {
+        std::fprintf(stderr, "Core editor best-effort detach: non-standard exception\n");
+      }
+      std::fflush(stderr);
+    }
   }
   std::uint64_t presentation_count() const override {
     if (worker_)
@@ -1959,7 +1992,7 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
           "Surface detail requires --cc-lighting normal");
   }
   auto config = RendererBridgeConfig::from_diagnostic_env(
-      !assets.dynamic_lighting_explicit);
+      !assets.dynamic_lighting_explicit, !assets.sun_shadows_explicit);
   config.environment_packs_explicit = assets.environment_packs_explicit;
   if (assets.environment_packs_explicit) {
     // The launcher's selected environment packs own normal-map inputs. Stale
@@ -1967,6 +2000,8 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.surface_normal_catalog.clear();
     config.world_normal_manifest.clear();
   }
+  if (assets.sun_shadows_explicit)
+    config.sun_shadows = assets.sun_shadows;
   if (assets.dynamic_lighting_explicit) {
     // The launcher's explicit choice owns this run, including the diagnostic
     // environment fallback, so stale development variables cannot re-enable it.
@@ -2066,8 +2101,13 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.sun_elevation = number(assets.sun_elevation, 1.0f, 89.0f);
   config.sun = assets.lighting != "off" || assets.geometry != "legacy";
   config.sun_normals = (assets.lighting == "normal");
-  config.sun_shadows = false;
   config.normal_maps_enabled = (assets.lighting == "normal");
+
+  if (assets.lighting == "off" && config.sun_shadows) {
+    std::fprintf(stderr,
+                 "Sun shadows requested without sun lighting; sun shadows are disabled\n");
+    config.sun_shadows = false;
+  }
 
   if (!config.sun &&
       (config.effect_lights || config.fixture_lights || config.mech_headlights)) {
