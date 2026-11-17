@@ -39,6 +39,7 @@ public sealed record Mw3RePreviewOptions
     public IReadOnlyList<string> ModelPacks { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();
     public bool DynamicLighting { get; init; }
+    public bool Shadows { get; init; }
     public bool Headlights { get; init; }
     public string? HeadlightBindings { get; init; }
     public string? StockEffectCatalog { get; init; }
@@ -130,6 +131,7 @@ public static class Mw3ReLaunchRequest
                 ["model_packs"] = Paths(preview.ModelPacks),
                 ["environment_packs"] = Paths(preview.EnvironmentPacks),
                 ["dynamic_lighting"] = preview.DynamicLighting,
+                ["shadows"] = preview.Shadows,
                 ["headlights"] = preview.Headlights,
                 ["headlight_bindings"] = preview.HeadlightBindings,
                 ["stock_effect_catalog"] = preview.StockEffectCatalog,

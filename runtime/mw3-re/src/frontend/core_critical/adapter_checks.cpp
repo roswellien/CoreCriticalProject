@@ -3,6 +3,7 @@
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/sdl_platform.h"
 #include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/camera.h"
 #include "gamez/zclass/cls_world.h"
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/cls_zbd.h"
@@ -11,6 +12,9 @@
 #include "gamez/zclass/object3d.h"
 #include "mech3/mech.h"
 #include "gamez/zmodel/gmod_init.h"
+#include "gamez/zmodel/gmod_draw.h"
+#include "gamez/zmodel/gmod_geometry.h"
+#include "gamez/zmodel/gmod_light.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
@@ -2455,9 +2459,9 @@ void check_renderer_bridge_config() {
     struct Value {
       const char *name;
       std::optional<std::string> previous;
-    } values[8];
+    } values[9];
 
-    explicit RestoreLightEnvironment(const std::array<const char *, 8> &names) {
+    explicit RestoreLightEnvironment(const std::array<const char *, 9> &names) {
       for (std::size_t i = 0; i < names.size(); ++i) {
         values[i].name = names[i];
         if (const char *value = std::getenv(names[i]))
@@ -2473,7 +2477,8 @@ void check_renderer_bridge_config() {
   } restore_light_environment({"MW34_EFFECT_LIGHTS", "MW34_FIXTURE_LIGHTS",
                                "MW34_MECH_HEADLIGHTS", "MW34_EFFECT_LIGHT_CATALOG",
                                "MW34_STOCK_HEADLIGHTS", "MW34_HEADLIGHT_BINDINGS",
-                               "MW34_SURFACE_NORMALS", "MW34_WORLD_NORMALS"});
+                               "MW34_SURFACE_NORMALS", "MW34_WORLD_NORMALS",
+                               "MW34_SUN_SHADOWS"});
   local_light_test_env("MW34_EFFECT_LIGHTS", "1");
   local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
   local_light_test_env("MW34_MECH_HEADLIGHTS", "1");
@@ -2490,6 +2495,48 @@ void check_renderer_bridge_config() {
               selected_environment_config.surface_normal_catalog.empty() &&
               selected_environment_config.world_normal_manifest.empty(),
           "explicit environment selection retained diagnostic normal catalogs");
+  local_light_test_env("MW34_SUN_SHADOWS", "1");
+  sdlfe::CoreCriticalAssets shadow_assets{};
+  shadow_assets.lighting = "normal";
+  shadow_assets.geometry = "gpu";
+  auto diagnostic_shadows = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(diagnostic_shadows.sun_shadows,
+          "MW34_SUN_SHADOWS diagnostic setting was not read");
+  shadow_assets.sun_shadows_explicit = true;
+  shadow_assets.sun_shadows = false;
+  const auto launcher_shadows_off = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(!launcher_shadows_off.sun_shadows,
+          "explicit launcher shadows off did not override MW34_SUN_SHADOWS=1");
+  local_light_test_env("MW34_SUN_SHADOWS", "0");
+  shadow_assets.sun_shadows = true;
+  const auto launcher_shadows_on = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(launcher_shadows_on.sun_shadows,
+          "explicit launcher shadows on did not override MW34_SUN_SHADOWS=0");
+  local_light_test_env("MW34_SUN_SHADOWS", "invalid");
+  shadow_assets.sun_shadows = false;
+  const auto explicit_shadows_invalid_env = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(!explicit_shadows_invalid_env.sun_shadows,
+          "explicit launcher shadows choice did not override an invalid diagnostic value");
+  shadow_assets.sun_shadows_explicit = false;
+  bool invalid_diagnostic_rejected = false;
+  try {
+    (void)cc_mw3_re::configure_bridge(sdlfe::RendererBackend::core_critical_wsi,
+                                      {}, shadow_assets);
+  } catch (const std::runtime_error &) {
+    invalid_diagnostic_rejected = true;
+  }
+  require(invalid_diagnostic_rejected,
+          "invalid MW34_SUN_SHADOWS diagnostic value was silently accepted");
+  local_light_test_env("MW34_SUN_SHADOWS", "1");
+  shadow_assets = {};
+  const auto shadows_without_sun = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(!shadows_without_sun.sun && !shadows_without_sun.sun_shadows,
+          "diagnostic sun shadows remained enabled without sun lighting");
   local_light_assets.dynamic_lighting = false;
   auto disabled_light_config = cc_mw3_re::configure_bridge(
       sdlfe::RendererBackend::core_critical_wsi, {}, local_light_assets);
