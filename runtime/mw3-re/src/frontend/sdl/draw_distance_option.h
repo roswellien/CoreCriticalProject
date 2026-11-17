@@ -1,6 +1,7 @@
 #pragma once
 
 #include <charconv>
+#include <system_error>
 #include <string_view>
 
 #include "gamez/zclass/visual_distance.h"

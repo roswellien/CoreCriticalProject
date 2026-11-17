@@ -5,6 +5,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_cull.h"
 #include "gamez/zmodel/gmod_draw.h"
+#include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_init.h"
 #include "gamez/zmodel/gmod_light.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
@@ -183,4 +184,50 @@ TEST(view_distance_restores_render_camera_far_state) {
     expect_far_state(fixture.camera, frame, kAuthoredFar);
   }
   EXPECT(fixture.observed_passes == 4);
+}
+
+TEST(default_visual_far_covers_only_full_viewport_fog) {
+  CameraFixture fixture;
+  EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node, 1.0f, 0.8f) == 0);
+  const zmod::Fog old_fog = zmod::fog();
+  zmod::fog_set_on(1);
+  zmod::fog_set_linear(1);
+  zmod::fog_set_near(300.0f);
+  zmod::fog_set_far(800.0f);
+  const zmod::Fog authored_fog = zmod::fog();
+  zcls::set_visual_far_request(800);
+
+  auto& hooks = zcls::world_render_hooks();
+  hooks.begin_scene = [](void* context) {
+    auto& fixture = *static_cast<CameraFixture*>(context);
+    ++fixture.observed_passes;
+    EXPECT(&zmod::render_fog() != &zmod::fog());
+    EXPECT(zmod::render_fog().near_range == 700.0f);
+    EXPECT(zmod::render_fog().far_range == 800.0f);
+    EXPECT(zmod::fog().on == 1);
+    EXPECT(zmod::fog().linear == 1);
+    EXPECT(zmod::fog().near_range == 300.0f);
+    EXPECT(zmod::fog().far_range == 800.0f);
+  };
+  EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+  EXPECT(&zmod::render_fog() == &zmod::fog());
+
+  fixture.window.put<int32_t>(8, zmod::walk_state().screen_w / 2);
+  fixture.window.put<int32_t>(12, zmod::walk_state().screen_h / 2);
+  hooks.begin_scene = [](void* context) {
+    auto& fixture = *static_cast<CameraFixture*>(context);
+    ++fixture.observed_passes;
+    EXPECT(&zmod::render_fog() == &zmod::fog());
+    EXPECT(zmod::render_fog().near_range == 300.0f);
+    EXPECT(zmod::render_fog().far_range == 800.0f);
+  };
+  {
+    zcls::ScopedZoomVisualFar zoom(&fixture.camera);
+    EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    EXPECT(&zmod::render_fog() == &zmod::fog());
+  }
+  EXPECT(fixture.observed_passes == 2);
+  EXPECT(zmod::fog().near_range == authored_fog.near_range);
+  EXPECT(zmod::fog().far_range == authored_fog.far_range);
+  zmod::fog() = old_fog;
 }

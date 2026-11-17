@@ -80,14 +80,18 @@ void update_plane_point(Camera* camera, int off, float distance) {
 class VisualRenderScope {
  public:
   VisualRenderScope(Camera* camera, Node* window) {
-    if (!full_display_viewport(window) && g_zoom_visual_camera != camera) return;
+    const bool full_viewport = full_display_viewport(window);
     const float authored_far = camera->get<float>(0xb4);
     if (g_visual_far_request <= kDefaultVisualFar) {
       // Cover the default world's edge without changing its geometry, clip or camera cache.
-      if (g_visual_far_request == kDefaultVisualFar && authored_far == kDefaultVisualFar)
+      const bool default_far = g_visual_far_request == kDefaultVisualFar &&
+                               authored_far == kDefaultVisualFar;
+      if (full_viewport && default_far)
         fog_.emplace(authored_far, authored_far);
       return;
     }
+    const bool zoom_camera = g_zoom_visual_camera == camera;
+    if (!full_viewport && !zoom_camera) return;
     const float expanded = visual_far(authored_far, g_visual_far_request, true);
     if (!(expanded > authored_far)) return;
     camera_ = camera;

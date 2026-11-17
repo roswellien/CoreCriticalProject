@@ -13,7 +13,7 @@ Fog g_fog;
 // The innermost active extended-view copy and its far ratio; null/1 at the original range.
 Fog* g_render_fog = nullptr;
 float g_render_scale = 1.0f;
-float g_render_far = 0.0f;  // the active copy's visual far plane; 0 at the original range
+float g_render_far = 0.0f;  // the active copy's visual far plane; 0 only when no scope is active
 
 // Stretch only the distance interval by the visual/authored far ratio. On/off, mode, colour and
 // the altitude taper stay as authored. Always built from the authored fog, never from an outer
