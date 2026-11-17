@@ -46,13 +46,6 @@ class ResultsScreen(ttk.Frame):
         ):
             self.table.heading(column, text=heading)
             self.table.column(column, width=width, anchor="w")
-        names = {
-            "A": "side A won",
-            "B": "side B won",
-            "draw": "draw",
-            "stuck": "stuck",
-            "running": "did not finish",
-        }
         for match, end in zip(batch.matches, ends, strict=True):
             lost = (end or {}).get("lost", ["-", "-"])
             time = summary.clock(summary.result_seconds(end)) if end else "-"
@@ -60,7 +53,7 @@ class ResultsScreen(ttk.Frame):
                 "",
                 "end",
                 iid=str(match.seed),
-                values=(match.seed, names[summary.outcome(end)], time, *lost),
+                values=(match.seed, summary.RESULT_WORDS[summary.outcome(end)], time, *lost),
             )
         self.table.pack(fill="x", pady=12)
         if batch.matches:
@@ -74,6 +67,18 @@ class ResultsScreen(ttk.Frame):
         )
         ttk.Button(buttons, text="Copy command", command=self._copy).pack(side="left")
         ttk.Button(buttons, text="New batch", command=app.show_setup).pack(side="right")
+        ttk.Label(
+            self,
+            text=(
+                "Pick a row, then Watch map (from above, with each bot's route, targets and "
+                "reasons) or Watch 3D (the game's own mechs and weapons). Copy command copies "
+                "the line that plays that exact match again. Stuck means no side won within "
+                "15 minutes."
+            ),
+            style="Muted.TLabel",
+            wraplength=1100,
+            justify="left",
+        ).pack(anchor="w", pady=(12, 0))
         self.note = ttk.Label(self, text=f"Logs and setup: {batch.folder}")
         self.note.pack(anchor="w", pady=(12, 0))
 

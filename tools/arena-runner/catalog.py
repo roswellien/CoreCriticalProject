@@ -51,6 +51,33 @@ def load_catalog(folder: Path) -> Catalog:
     return Catalog(folder, data["maps"], data["mechs"], data["presets"])
 
 
+def setup_problem(state: dict, catalog: Catalog) -> str:
+    """What a saved setup names that this game build lacks; "" when nothing.
+    A setup saved with another build or mod set may name a map, mech,
+    loadout or pilot this catalog doesn't have. Used by the window's Load
+    setup and by run_batch.py."""
+    if state["map"] not in {m["id"] for m in catalog.maps}:
+        return f"this game has no arena map {state['map']}"
+    if not 1 <= state["matches"] <= 10:  # batch.MIN_MATCHES, MAX_MATCHES
+        return f"{state['matches']} matches (1 to 10)"
+    pilots = {f"{p['world']}/{p['mission']}/{p['record']}" for p in catalog.presets}
+    mechs = {m["id"]: m for m in catalog.mechs}
+    if len(state["sides"]) != 2 or not all(1 <= len(side) <= 8 for side in state["sides"]):
+        return "each side needs 1 to 8 mechs"
+    for side in state["sides"]:
+        for bot in side:
+            mech = mechs.get(bot["mech"])
+            if not mech:
+                return f"this game has no mech {bot['mech']}"
+            if not 0 <= bot["loadout"] < len(mech["loadouts"]):
+                return f"{mech['name']} has no loadout {bot['loadout']}"
+            preset = bot["preset"]
+            key = f"{preset['world']}/{preset['mission']}/{preset['record']}"
+            if key not in pilots:
+                return f"this game has no pilot {key}"
+    return ""
+
+
 def catalog_is_current(folder: Path, exe: Path) -> bool:
     stamp = folder / STAMP_FILE
     if not stamp.exists() or not (folder / "catalog.json").exists():

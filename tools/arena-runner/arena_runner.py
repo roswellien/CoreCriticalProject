@@ -12,7 +12,6 @@ under runs/ beside it.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import tkinter as tk
 from pathlib import Path
@@ -23,24 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import catalog as catalog_module
 import theme
 from results_screen import ResultsScreen
+from runner_home import HOME, PILOTS, load_settings, save_settings
 from running_screen import RunningScreen
 from setup_screen import SetupScreen
-
-HOME = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "CoreCritical" / "arena-runner"
-SETTINGS = HOME / "settings.json"
-PILOTS = Path(__file__).resolve().parent / "pilots.json"
-
-
-def load_settings() -> dict:
-    try:
-        return json.loads(SETTINGS.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def save_settings(settings: dict) -> None:
-    HOME.mkdir(parents=True, exist_ok=True)
-    SETTINGS.write_text(json.dumps(settings, indent=1), encoding="utf-8")
 
 
 def ask_paths(root: tk.Tk, settings: dict) -> bool:
@@ -66,7 +50,7 @@ class App:
         self.screen: ttk.Frame | None = None
         root.title("Arena runner")
         theme.apply(root)
-        root.geometry("1180x820")
+        root.geometry("1180x900")  # the setup screen, with its how-to line, needs about 890
         self.settings = load_settings()
         if not ask_paths(root, self.settings):
             root.destroy()

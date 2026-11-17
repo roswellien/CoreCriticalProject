@@ -39,6 +39,17 @@ class RunningScreen(ttk.Frame):
         )
         self.results_button.pack(side="right")
         ttk.Button(top, text="Stop all", command=self._stop).pack(side="right", padx=8)
+        ttk.Label(
+            self,
+            text=(
+                "The matches run hidden, much faster than real time; each small map follows "
+                "one match as the game writes its log (blue side A, red side B). Click a "
+                "finished map to watch it. See results opens when every match is done."
+            ),
+            style="Muted.TLabel",
+            wraplength=1100,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 0))
 
         grid = ttk.Frame(self, padding=(0, 10))
         grid.pack(fill="both", expand=True)

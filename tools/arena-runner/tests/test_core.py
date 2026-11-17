@@ -17,7 +17,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import batch
+import catalog
 import live_log
+import run_batch
 import summary
 
 BOT = {
@@ -166,6 +168,57 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(
             summary.pilot_label(preset, {"c1/ia1/Enemy_01": "Early grunt"}, {}), "Early grunt"
         )
+
+
+class SetupCheckTest(unittest.TestCase):
+    CATALOG = catalog.Catalog(
+        Path("."),
+        maps=[{"id": "c1mp1"}],
+        mechs=[{"id": "thor", "name": "Thor", "loadouts": [{}, {}]}],
+        presets=[{"world": "c1", "mission": "ia1", "record": "Enemy_01"}],
+    )
+
+    def state(self, **change):
+        return {"map": "c1mp1", "matches": 2, "sides": [[dict(BOT)], [dict(BOT)]], **change}
+
+    def test_a_good_setup_passes(self):
+        self.assertEqual(catalog.setup_problem(self.state(), self.CATALOG), "")
+
+    def test_names_what_the_game_lacks(self):
+        other = dict(BOT, preset={"world": "c9", "mission": "m1", "record": "x"})
+        for state, problem in (
+            (self.state(map="c9mp9"), "no arena map c9mp9"),
+            (self.state(matches=11), "11 matches"),
+            (self.state(sides=[[dict(BOT)], []]), "1 to 8 mechs"),
+            (self.state(sides=[[dict(BOT, mech="atlas")], [dict(BOT)]]), "no mech atlas"),
+            (self.state(sides=[[dict(BOT, loadout=2)], [dict(BOT)]]), "no loadout 2"),
+            (self.state(sides=[[other], [dict(BOT)]]), "no pilot c9/m1/x"),
+        ):
+            self.assertIn(problem, catalog.setup_problem(state, self.CATALOG))
+
+    def test_the_example_setup_has_the_right_shape(self):
+        example = Path(__file__).resolve().parent.parent / "examples" / "2v2-c1mp1.json"
+        state = json.loads(example.read_text(encoding="utf-8"))
+        self.assertTrue(1 <= state["matches"] <= 10)
+        batch.setup_record(state["map"], state["sides"], Path("logs"))  # raises if wrong
+
+
+class RunBatchReportTest(unittest.TestCase):
+    def test_results_and_lines(self):
+        with tempfile.TemporaryDirectory() as folder:
+            b = batch.prepare_batch(
+                Path(folder), Path("mw3.exe"), Path("game"), "c1mp1", [[BOT], [BOT]],
+                [11, 22], None,
+            )  # fmt: skip
+            for m in b.matches:
+                m.exit_code = 0
+            results = run_batch.batch_results(b, [{"winner": "A", "t": 65, "lost": [0, 1]}, None])
+        self.assertEqual((results["wins_a"], results["wins_b"]), (1, 0))
+        self.assertEqual(results["matches"][0]["seconds"], 60)
+        self.assertEqual(results["matches"][1]["result"], "running")
+        lines = run_batch.report_lines(results)
+        self.assertIn("seed 11: side A won, time 1:00, lost A 0 B 1", lines[1])
+        self.assertIn("seed 22: did not finish, time -", lines[2])
 
 
 if __name__ == "__main__":

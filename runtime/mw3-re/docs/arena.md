@@ -313,18 +313,52 @@ or standard library may shuffle differently. The first match in a process can
 also differ from later ones with the same seed (#302); a fresh `mw3` run per
 match, as above, is not affected.
 
+## Testing an AI change
+
+The arena's purpose: measure whether a change to the AI makes bots fight
+better or worse, on many matches rather than one.
+
+1. Build `mw3` (building.md) on the code before the change, and keep that
+   `mw3.exe` aside; build again with the change.
+2. Pick a setup that exercises the change, for example equal sides so the
+   result turns on behavior, not mechs. Save it from the runner window, or
+   write it by hand (`tools/arena-runner/examples/`).
+3. Run the same setup on each build, a few batches of 10:
+   `python tools/arena-runner/run_batch.py SETUP.json --matches 10 --exe OLD/mw3.exe`,
+   then again with the new `mw3.exe`. Each match gets a fresh seed.
+4. Compare wins per side, draws, stuck matches and the average time to a
+   win (each batch's `results.json`). One batch of 10 swings by a few wins
+   by chance alone; trust a difference that holds across 30 or more
+   matches.
+5. Watch a few of the matches that changed in the replays (`--replay`,
+   `--replay3d`, or the window's results) to see why: the top-down view
+   draws each bot's route, targets and the reason for each decision.
+
+A change to one side only (say, a new pilot record) is tested the same way,
+with that side's bots changed in the setup rather than the build.
+
 ## Arena runner
 
 A developer window that sets up, runs and rewatches matches with no setup
 file or command typed (`tools/arena-runner/`, Python's tkinter, nothing to
-install):
+install), and a command-line twin for scripts and agents:
 
 ```sh
 python tools/arena-runner/arena_runner.py
+python tools/arena-runner/run_batch.py SETUP.json [--matches N] [--exe PATH --game DIR] [--json]
 ```
 
-The first start asks for the game folder and the built `mw3.exe` and keeps
-them in `%LOCALAPPDATA%/CoreCritical/arena-runner/settings.json`.
+The first start of either asks for (or takes `--exe` and `--game` for) the
+game folder and the built `mw3.exe` and keeps them in
+`%LOCALAPPDATA%/CoreCritical/arena-runner/settings.json`. Each screen of the
+window starts with a line on how to use it.
+
+`run_batch.py` runs the same batch the window does from a setup saved by
+the window's Save setup button, waits for every match, prints a line per
+match and the totals, and writes `results.json` (each match's seed, result,
+time, losses, log and command line) into the batch folder. It exits 0 when
+every match finished, 1 when one crashed or was stuck, and 2 when the setup
+or paths can't be used.
 
 - **Setup:** every arena map as a picture of its terrain; 1 to 10 matches,
   all started at once; and each side's mechs: the chassis (with the mech

@@ -10,6 +10,15 @@ STUCK_SECONDS = 15 * 60  # batch.STUCK_MINUTES: the setup's time limit
 AFTERMATH_SECONDS = 5
 
 
+RESULT_WORDS = {  # outcome() in plain words, for the results screen and run_batch.py
+    "A": "side A won",
+    "B": "side B won",
+    "draw": "draw",
+    "stuck": "stuck",
+    "running": "did not finish",
+}
+
+
 def result_seconds(end: dict) -> float:
     """The match's time as the game's own result line gives it: the end
     line's time less the aftermath."""
