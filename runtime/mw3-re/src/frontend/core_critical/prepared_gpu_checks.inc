@@ -153,8 +153,17 @@ void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
     walk.hidden_surface = walk.ring = walk.recompute = walk.overlay = walk.morph = 0;
     walk.opacity_top = walk.color_top = -1;
     zmod::walk_state() = {};
+    static bool force_green_tint = false;
     zmod::walk_state().draw = [](zcls::Node *node, std::uint32_t) -> int32_t {
         auto *renderer = zvid::render3d();
+        if (force_green_tint) {
+            auto &tint = zmod::lighting();
+            tint.tint[0] = 0.f;
+            tint.tint[1] = 1.f;
+            tint.tint[2] = 0.f;
+            tint.tint_weight = .3f;
+            tint.tint_on = 1;
+        }
         if (renderer->geometry_mode() != cc::geometry::Mode::legacy) {
             require(zmod::submit_geometry(*node), "Tint fixture missed the native geometry handoff");
             return 0;
@@ -174,8 +183,16 @@ void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
         context.cx = projection.cx;
         context.cy = projection.cy;
         context.opacity = zmod::draw_state().opacity;
-        if (zmod::lighting().tint_on)
+        if (zmod::lighting().tint_on) {
+            std::copy_n(zmod::lighting().tint, 3, context.damage_tint_rgb);
             context.damage_tint_weight = zmod::lighting().tint_weight;
+        }
+        if (force_green_tint) {
+            context.damage_tint_rgb[0] = 0.f;
+            context.damage_tint_rgb[1] = 1.f;
+            context.damage_tint_rgb[2] = 0.f;
+            context.damage_tint_weight = .3f;
+        }
         renderer->begin_model_draw(context);
         require(renderer->replaces_model_geometry(), "Tint fixture missed legacy prepared staging");
         renderer->end_model_draw();
@@ -210,12 +227,15 @@ void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
         auto renderer = make_check_renderer(window, backend, {}, options);
         renderer->set_viewport(0, 0, 64, 64);
         zvid::set_render3d(renderer.get());
-        const auto render = [&](bool portrait, float opacity = 1.f) {
+        const auto render = [&](bool portrait, float opacity = 1.f,
+                                bool green_tint = false) {
+            force_green_tint = green_tint;
             if (portrait) mech3::part_view_tint(part, true);
             zcls::object3d_set_opacity(panel, opacity);
             zcls::object3d_use_opacity(panel, opacity < 1.f);
             renderer->clear(true, 0, 0, 0);
             zcls::render_node(root, 1);
+            force_green_tint = false;
             require(!zmod::lighting().tint_on && walk.color_top == -1,
                     "Object walk leaked the HUD portrait lighting tint");
             if (portrait) mech3::part_view_tint(part, false);
@@ -229,6 +249,7 @@ void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
         };
         const auto baseline = render(false);
         const auto portrait = render(true);
+        const auto green_tint = render(true, 1.f, true);
         require(render(false) == baseline, "World draw inherited the preceding HUD portrait tint");
         require(render(true) == portrait, "Repeated HUD portrait changed after a world draw");
         const auto translucent = render(true, .375f);
@@ -261,6 +282,8 @@ void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
             if (!(baseline[index] & 0xffffff)) {
                 require_pixel(index, portrait[index], base, 0.f,
                               "Damage tint changed portrait background coverage");
+                require_pixel(index, green_tint[index], base, 0.f,
+                              "Green tint changed prepared background coverage");
                 require_pixel(index, translucent[index], base, 0.f,
                               "Damage tint changed translucent background coverage");
                 continue;
@@ -270,6 +293,10 @@ void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
                 base[0] * .4f + 153.f, base[1] * .4f, base[2] * .4f, base[3]};
             require_pixel(index, portrait[index], expected, 2.f,
                           "Portrait is not a 60 percent straight RGB red blend");
+            const std::array<float, 4> expected_green{
+                base[0] * .7f, base[1] * .7f + 76.5f, base[2] * .7f, base[3]};
+            require_pixel(index, green_tint[index], expected_green, 2.f,
+                          "Prepared model did not preserve its green 30 percent tint");
             // Black clear and source-alpha blending expose any tint-induced
             // alpha change even though the opaque target's alpha stays one.
             const std::array<float, 4> expected_translucent{
@@ -415,6 +442,18 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
             }
             require(rejected, "Prepared geometry adapter accepted an invalid tint weight");
         }
+        for (float channel : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                              std::numeric_limits<float>::infinity(), 1.1f}) {
+            context.damage_tint_rgb[1] = channel;
+            bool rejected = false;
+            try {
+                renderer->submit_prepared_geometry(context, {});
+            } catch (const std::runtime_error &error) {
+                rejected = std::string_view(error.what()) == "Model has an invalid native tint color";
+            }
+            require(rejected, "Prepared geometry adapter accepted an invalid tint color");
+        }
+        context.damage_tint_rgb[1] = 0.f;
         for (unsigned scenario = 0; scenario < 7; ++scenario) {
             matrix[2] = scenario == 5 ? 1.5f : 0;
             matrix[9] = scenario == 1 ? .5f : 0;

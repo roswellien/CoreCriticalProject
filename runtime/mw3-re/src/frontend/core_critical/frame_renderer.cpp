@@ -29,6 +29,7 @@
 #include "gamez/zmodel/gmod_geometry.h"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/native_fixture_sources.hpp"
+#include "renderer/fixture_observation_emission.hpp"
 #include "platform/prepared_visuals.h"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
@@ -2121,6 +2122,8 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   }
   config.dxgi_present = (backend != sdlfe::RendererBackend::core_critical_wsi);
   config.window_mode = "windowed";
+  // Tinted world draws reuse mode.z for tint weight; keeping world scale at
+  // 100% prevents them from entering coverage replay, where mode.z is alpha op.
   config.world_scale_percent = 100;
   config.remaster_width = 0;
   config.remaster_height = 0;
