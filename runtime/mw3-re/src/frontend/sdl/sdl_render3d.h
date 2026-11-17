@@ -47,6 +47,7 @@ struct CoreCriticalAssets {
   bool environment_packs_explicit = false;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
+  std::string flare_style = "modern";
   bool pom = false;
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
@@ -70,6 +71,7 @@ struct CoreCriticalAssets {
            !mech_headlights && effect_light_catalog.empty() &&
            stock_headlights.empty() && headlight_bindings.empty() &&
            !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&
+           flare_style == "modern" &&
            textures.empty() && models.empty() && normals.empty() &&
            materials.empty() && lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";

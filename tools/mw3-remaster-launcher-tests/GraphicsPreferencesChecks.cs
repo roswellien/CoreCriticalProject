@@ -11,13 +11,14 @@ static class GraphicsPreferencesChecks
         {
             var settings=new SettingsManager(root,root);
             if(settings.Current.InitialSetupCompleted || settings.Current.DynamicLighting || settings.Current.Shadows || settings.Current.Headlights ||
-               !settings.Current.WaterDetail || !settings.Current.CloudDetail || settings.Current.DrawDistance != 800)
+               !settings.Current.WaterDetail || !settings.Current.CloudDetail || settings.Current.DrawDistance != 800 ||
+               settings.Current.FlareStyle != "modern")
                 throw new Exception("Fresh setup must start with stock lighting and remain incomplete");
             settings.Current.ActivePacks.Add("test.keep-pack");
             settings.Save();
             if(new SettingsManager(root,root).Current.InitialSetupCompleted)
                 throw new Exception("Saving/cancelling defaults completed first-run setup");
-            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true,true,false,true);
+            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true,true,false,true,"original");
             choice.ApplyTo(settings.Current);
             settings.Current.InitialSetupCompleted=true;
             settings.Save();
@@ -50,6 +51,13 @@ static class GraphicsPreferencesChecks
             }
             catch(InvalidOperationException){}
             if(JsonSerializer.Serialize(loaded)!=before)throw new Exception("Failed scenery validation partially changed settings");
+            try
+            {
+                (choice with { FlareStyle = "smooth" }).ApplyTo(loaded);
+                throw new Exception("Unsupported lens flare style accepted");
+            }
+            catch(InvalidOperationException){}
+            if(JsonSerializer.Serialize(loaded)!=before)throw new Exception("Failed flare validation partially changed settings");
             var expectedDistances = new[] { 800, 1200, 1600, 2400, 3200 };
             var acceptedDistances = new List<int>();
             for (var distance = 0; distance <= NativeGameRunner.MaxDrawDistance + 1; ++distance)

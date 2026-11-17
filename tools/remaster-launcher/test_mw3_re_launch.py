@@ -26,7 +26,8 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
             "executable": "C:/Runtime/bin/mw3.exe", "game_dir": "D:/Original MW3",
             "write_dir": "E:/Data/mw3-re/profiles/default", "renderer": "vulkan-wsi",
             "width": 1280, "height": 720, "aa": "2", "af": 8, "window_mode": "windowed",
-            "render_thread": True, "lighting": "normal", "assets": ["F:/Mods Pack/alpha", "F:/Mods/é"],
+            "render_thread": True, "lighting": "normal", "flare_style": "modern",
+            "assets": ["F:/Mods Pack/alpha", "F:/Mods/é"],
         }
 
     def planner(self):
@@ -37,6 +38,8 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         plan = self.planner()
         valid = self.request()
         for key in valid:
+            if key == "flare_style":
+                continue
             missing = dict(valid)
             del missing[key]
             with self.subTest(missing=key), self.assertRaises(ValueError):
@@ -47,6 +50,7 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
             ("height", 479), ("height", 4321), ("af", True), ("af", 3), ("af", 32),
             ("render_thread", 1), ("aa", 2), ("aa", "msaa4"), ("window_mode", "maximized"),
             ("lighting", "unknown"), ("assets", ()), ("assets", [True]), ("assets", ["F:/a"] * 129),
+            ("flare_style", "smooth"), ("flare_style", True),
             ("extra", "no-silent-verbosity-option"),
         ]:
             request = dict(valid, **{key: value})
@@ -187,6 +191,20 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                     self.assertEqual(args[args.index("--cc-render-thread") + 1], "0")
                     self.assertNotIn("--nosound", args)
 
+    def test_flare_style_is_validated_and_defaults_to_modern(self):
+        plan = self.planner()
+        for style in ("modern", "original"):
+            request = dict(self.request(), flare_style=style)
+            args = plan(request)["argv"]
+            self.assertEqual(args[args.index("--cc-flare-style") + 1], style)
+        for invalid in ("smooth", "", True, None):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                plan(dict(self.request(), flare_style=invalid))
+        legacy_wire = self.request()
+        del legacy_wire["flare_style"]
+        args = plan(legacy_wire)["argv"]
+        self.assertEqual(args[args.index("--cc-flare-style") + 1], "modern")
+
     def test_all_path_components_precede_normalization(self):
         plan = self.planner()
         fields = ("runtime_root", "executable", "game_dir", "write_dir", "assets")
@@ -246,7 +264,8 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
             "argv": ["C:/Runtime/bin/mw3.exe", "--install", "D:/Original MW3", "--write-dir",
                      "E:/Data/mw3-re/profiles/default", "--cc-vulkan-wsi", "--window", "1280x720",
                      "--windowed", "--cc-aa", "ssaa2", "--cc-af", "8", "--cc-render-thread", "1",
-                     "--cc-lighting", "normal", "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é"],
+                     "--cc-lighting", "normal", "--cc-flare-style", "modern",
+                     "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é"],
             "working_directory": "C:\\Runtime\\bin",
             "skipped_features": [{
                 "feature": "Indeo movies",
@@ -255,7 +274,6 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         })
         self.assertEqual(request, before)
         self.assertEqual(dict(os.environ), environment)
-
 
 class NativePreviewPlanTests(unittest.TestCase):
     """Schema 4: the labelled Native preview reads small pack manifests and emits pack arguments."""
@@ -457,7 +475,7 @@ class NativePreviewPlanTests(unittest.TestCase):
         payload = lambda name: os.path.join(models, "payload", name + ".bin")
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
-        self.assertEqual(result["argv"][17:], [
+        self.assertEqual(result["argv"][19:], [
             "--cc-dynamic-lighting", "0", "--cc-sun-shadows", "0", "--cc-water-detail", "0",
             "--cc-cloud-detail", "0", "--cc-pom", "1", "--cc-environment-packs-explicit",
             "--cc-draw-distance", "1200",

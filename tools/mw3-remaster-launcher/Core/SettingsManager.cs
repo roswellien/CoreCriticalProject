@@ -16,6 +16,7 @@ namespace MW3RemasterLauncher.Core
         public string AntiAliasing { get; set; } = "fxaa"; // "off", "fxaa", "2", "4", "8"
         public int AnisotropicFiltering { get; set; } = 16; // 1, 2, 4, 8, 16
         public int DrawDistance { get; set; } = 800; // 800, 1200, 1600, 2400, 3200
+        public string FlareStyle { get; set; } = "modern"; // "modern" or "original"
         public int FogDistance { get; set; } = 1100; // Retained for settings-file compatibility.
         public bool LocalCdAudio { get; set; } = true;
         public string MusicTrack2 { get; set; } = string.Empty;

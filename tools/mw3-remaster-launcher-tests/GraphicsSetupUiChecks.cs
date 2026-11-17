@@ -57,6 +57,8 @@ static class GraphicsSetupUiChecks
                         var setup=app.Windows.OfType<GameSetupWindow>().FirstOrDefault();
                         if(setup==null)return;
                         var panel=(GraphicsPreferencesPanel)setup.FindName("SetupGraphics");
+                        panel.Load(new LauncherSettings { FlareStyle="original" });
+                        if(panel.Read().FlareStyle!="original")throw new Exception("Lens flare style selection was not displayed");
                         if(panel.Read().DynamicLighting||panel.Read().Shadows)throw new Exception("Fresh setup lighting is not stock");
                         var before=File.ReadAllBytes(manager.SettingsPath);
                         var next=(Button)setup.FindName("ContinueButton");
@@ -77,10 +79,10 @@ static class GraphicsSetupUiChecks
                             throw new Exception("Game files did not advance to graphics");
                         panel.Load(new LauncherSettings{Width=2560,Height=1440,WindowMode="windowed",
                             AntiAliasing="4",AnisotropicFiltering=8,DrawDistance=2400,FogDistance=0,
-                            DynamicLighting=true,Shadows=true});
+                            DynamicLighting=true,Shadows=true,FlareStyle="original"});
                         var selected=panel.Read();
                         if(selected.Width!=2560||selected.WindowMode!="windowed"||
-                           selected.AntiAliasing!="4"||selected.DrawDistance!=2400||
+                           selected.AntiAliasing!="4"||selected.DrawDistance!=2400||selected.FlareStyle!="original"||
                            selected.AnisotropicFiltering!=8||!selected.DynamicLighting||!selected.Shadows)
                             throw new Exception("Setup controls do not capture all graphics choices");
                         next.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -102,12 +104,13 @@ static class GraphicsSetupUiChecks
                         ((GraphicsPreferencesPanel)finish.FindName("SetupGraphics")).Load(
                             new LauncherSettings{Width=2560,Height=1440,WindowMode="windowed",
                                 AntiAliasing="4",AnisotropicFiltering=8,DrawDistance=2400,FogDistance=0,
-                                DynamicLighting=true,Shadows=true});
+                                DynamicLighting=true,Shadows=true,FlareStyle="original"});
                         next.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                         finish.UpdateLayout();Capture(finish,Path.Combine(root,"setup-optional-packs.png"));
                         next.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                         if(((Grid)finish.FindName("ReviewStep")).Visibility!=Visibility.Visible || finish.GameDirectory!=null ||
                            !((TextBlock)finish.FindName("ReviewGraphics")).Text.Contains("2560 × 1440") ||
+                           !((TextBlock)finish.FindName("ReviewGraphics")).Text.Contains("Lens flare alpha: Original") ||
                            !((TextBlock)finish.FindName("ReviewPacks")).Text.Contains("stock content"))
                             throw new Exception("Review did not show the selected choices before installation");
                         finish.UpdateLayout();Capture(finish,Path.Combine(root,"setup-review.png"));
@@ -119,7 +122,7 @@ static class GraphicsSetupUiChecks
                         if(app.Windows.OfType<GameSetupWindow>().Any())return;
                         var completed=new SettingsManager(root,root).Current;
                         var expected=new GraphicsPreferences(2560,1440,"windowed","4",8,
-                            2400,true,true);
+                            2400,true,true,FlareStyle:"original");
                         if(!completed.InitialSetupCompleted||GraphicsPreferences.From(completed)!=expected)
                             throw new Exception("Successful setup did not save all first-launch graphics choices");
                         var actual=(GraphicsPreferencesPanel)window.FindName("DisplayGraphics");
