@@ -214,13 +214,13 @@ struct ProgramHudHooks : HudHooks {
   // by 0x00442620) has its own, 0x00442900: its mech alone, from the front.
   void zview_render(void* view, float) override {
     auto* zv = static_cast<HudZoomView*>(view);
+    const zvid::ProducerPurposeScope producer_view(platform::ProducerPurpose::WorldZoom);
     if (auto* mv = dynamic_cast<HudMfdView*>(zv)) return mfd_view(*mv);
     const HudZView& v = zv->view;
     if (!v.hardware) return;
     if (zcls::Node* c = node(v.camera)) {
       zcls::ScopedZoomVisualFar visual_far_scope(c->data);
       ++view_draws;
-      const zvid::ProducerPurposeScope producer_view(platform::ProducerPurpose::WorldZoom);
       zcls::render_world(c, 0);
     }
   }
@@ -267,7 +267,9 @@ struct ProgramHudHooks : HudHooks {
     zcls::Node* cam = node(v->view.camera);
     zcls::Node* world = cam ? zcls::camera_world(cam) : nullptr;
     if (world) zcls::world_set_fog_type(world, 0);
-    if (cam && node(nh)) ++view_draws, ++node_draws, zcls::render_subtree(cam, node(nh), v->view.hardware);
+    if (cam && node(nh))
+      ++view_draws, ++node_draws,
+          zcls::render_subtree(cam, node(nh), v->view.hardware, true);
     if (world) zcls::world_set_fog_type(world, 1);
   }
   int node_draws = 0;  // for the reports

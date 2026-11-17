@@ -496,6 +496,43 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
                 statistics.gpu_prepared_vertices == 21 && statistics.geometry_uploads == 1 &&
                     statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 7,
                 "GPU prepared vertices still use CPU clipping or lost immutable material draws");
+        producer_view_checks::Observer view_observer;
+        require(cc_mw3_re::testing::observe_producer_views(*renderer,
+                                                            &view_observer),
+                "Prepared scissor observer unsupported");
+        ::platform::ProducerView zoom_view{};
+        zoom_view.present = true;
+        zoom_view.purpose = ::platform::ProducerPurpose::WorldZoom;
+        zoom_view.producer_generation = 1;
+        zoom_view.mission_epoch = 1;
+        zoom_view.canvas_available = true;
+        zoom_view.canvas = {10, 20, 128, 64};
+        zoom_view.camera_rect_available = true;
+        zoom_view.camera_rect = {18, 24, 32, 24};
+        const auto restore_view = renderer->exchange_producer_view(zoom_view);
+        renderer->clear(true, 0, 0, 0);
+        require(renderer->submit_prepared_geometry(context, {}) ==
+                    cc::geometry::Submission::submitted,
+                "Prepared WorldZoom geometry was not submitted");
+        std::vector<std::uint32_t> scissor_pixels;
+        int scissor_width{}, scissor_height{};
+        require(renderer->read_back(&scissor_pixels, &scissor_width,
+                                    &scissor_height) &&
+                    scissor_width == 64 && scissor_height == 64,
+                "Prepared WorldZoom scissor lost the scene extent");
+        const auto prepared_rows =
+            view_observer.rows(producer_view_checks::Stage::packet, true);
+        require(std::any_of(prepared_rows.begin(), prepared_rows.end(),
+                            [](const auto& row) {
+                              return row.scissor_offset ==
+                                         std::array<std::int32_t, 2>{4, 4} &&
+                                     row.scissor_extent ==
+                                         std::array<std::uint32_t, 2>{16, 24};
+                            }),
+                "Prepared WorldZoom draw missed the mapped camera scissor");
+        renderer->restore_producer_view(restore_view);
+        require(cc_mw3_re::testing::observe_producer_views(*renderer, nullptr),
+                "Prepared scissor observer removal failed");
         check_damage_tint_blend(window, backend, options, root.get(), panel);
         check_gpu_prepared_fade(window, backend, options, context, mode);
     }

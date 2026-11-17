@@ -84,7 +84,7 @@ void emit_reference_geometry(
         draw.push.mode[0] |= 512U;
     }
     draw.push.mode[3] = 0x80000000U;
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    draw.scissor = producer_scissor();
     auto normals = std::make_shared<std::vector<std::array<float, 3>>>();
     for (std::uint32_t triangle = range.first;
          triangle < range.first + range.count; triangle += 3) {

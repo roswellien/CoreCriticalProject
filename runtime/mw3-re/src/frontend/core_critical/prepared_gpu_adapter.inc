@@ -141,7 +141,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
       draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
       draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
     }
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    draw.scissor = producer_scissor();
     apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));

@@ -1286,8 +1286,13 @@ void horizon_follow() {
 // only `node` walked (0x004f5910 with 2: never culled alone), from its
 // parent's world matrix when it has one parent.
 int render_subtree(Node* camera_node, Node* node, int32_t hw) {
+  return render_subtree(camera_node, node, hw, false);
+}
+
+int render_subtree(Node* camera_node, Node* node, int32_t hw,
+                   bool use_requested_producer_purpose) {
   if (!node || !camera_node) return 1;
-  const zvid::ProducerWorldScope producer_view(true);
+  zvid::ProducerWorldScope producer_view(!use_requested_producer_purpose);
   zmth::Mat34 local;
   zmth::push(&local);
   Camera* cam = cam_of(camera_node);
@@ -1306,6 +1311,7 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
   camera_update(camera_node);
   horizon_follow();
   zmod::set_camera(g_walk.camera);
+  if (use_requested_producer_purpose) producer_view.begin_emission();
   zmod::world_update_lights(world);
   if (g_hooks.world_sounds) g_hooks.world_sounds(g_hooks.ctx, world);
   if (zmod::shadows_on()) {
@@ -1332,6 +1338,7 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
   if (g_hooks.flush_overlay) g_hooks.flush_overlay(g_hooks.ctx);
   if (g_hooks.draw_quad) g_hooks.draw_quad(g_hooks.ctx);
   if (g_hooks.end_scene) g_hooks.end_scene(g_hooks.ctx);
+  if (use_requested_producer_purpose) producer_view.end_emission();
   zmth::pop();
   return 0;
 }
