@@ -1,5 +1,6 @@
 #include "gamez/zclass/camera.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -40,6 +41,68 @@ unsigned g_visual_far_request = kDefaultVisualFar;
 const void* g_visual_camera = nullptr;
 float g_visual_far = 0.0f;
 const void* g_zoom_visual_camera = nullptr;
+zcls::VisualFarLogSink g_visual_far_log_sink = nullptr;
+
+struct VisualFarLogState {
+  unsigned requested_far;
+  float authored_far;
+  float expanded_far;
+  bool full_viewport;
+  int32_t window_width, window_height;
+  int32_t render_width, render_height;
+  bool extended_scope, default_fog_scope;
+  int32_t camera_class;
+  float fog_near, fog_far;
+  int32_t mission_linear, mission_on;
+};
+
+std::optional<VisualFarLogState> g_previous_visual_far_log_state;
+
+bool same_visual_far_log_state(const VisualFarLogState& left,
+                               const VisualFarLogState& right) {
+  return left.requested_far == right.requested_far &&
+         left.authored_far == right.authored_far &&
+         left.expanded_far == right.expanded_far &&
+         left.full_viewport == right.full_viewport &&
+         left.window_width == right.window_width &&
+         left.window_height == right.window_height &&
+         left.render_width == right.render_width &&
+         left.render_height == right.render_height &&
+         left.extended_scope == right.extended_scope &&
+         left.default_fog_scope == right.default_fog_scope &&
+         left.camera_class == right.camera_class &&
+         left.fog_near == right.fog_near && left.fog_far == right.fog_far &&
+         left.mission_linear == right.mission_linear &&
+         left.mission_on == right.mission_on;
+}
+
+void log_visual_far_state(const VisualFarLogState& state) {
+  if (g_previous_visual_far_log_state &&
+      same_visual_far_log_state(*g_previous_visual_far_log_state, state))
+    return;
+  g_previous_visual_far_log_state = state;
+  char line[256];
+  const char* camera_class = state.camera_class == 0 ? "main" :
+                             state.camera_class == 1 ? "zoom" : "other";
+  std::snprintf(line, sizeof line,
+                "mw3: view distance: requested %u, authored %.3g, expanded %.3g; "
+                "full viewport %d (window %dx%d, render %dx%d); "
+                "extended %d, default-800 fog-only %d; camera %s; "
+                "scoped fog %.3g..%.3g, mission fog linear %d on %d\n",
+                state.requested_far,
+                static_cast<double>(state.authored_far),
+                static_cast<double>(state.expanded_far), state.full_viewport,
+                state.window_width, state.window_height, state.render_width,
+                state.render_height, state.extended_scope,
+                state.default_fog_scope, camera_class,
+                static_cast<double>(state.fog_near),
+                static_cast<double>(state.fog_far), state.mission_linear,
+                state.mission_on);
+  if (g_visual_far_log_sink)
+    g_visual_far_log_sink(line);
+  else
+    std::printf("%s", line);
+}
 
 constexpr uint32_t kActive = 4, kTreeValid = 0x80000, kOverride = 0x800000;
 constexpr uint32_t kDrawn = 0x80000000u, kUnk25 = 0x2000000;
@@ -47,13 +110,13 @@ const float kOnes[3] = {1.0f, 1.0f, 1.0f};
 const float kZeros[3] = {};
 const float kNullOffset[3] = {};   // 0x0063d870, never written
 
-bool full_display_viewport(Node* window) {
-  int32_t x = 0, y = 0, width = 0, height = 0;
+bool full_display_viewport(Node* window, int32_t* width, int32_t* height) {
+  int32_t x = 0, y = 0;
   const mech3::Rect& render = mech3::render();
-  return render.w > 0 && render.h > 0 &&
-         !zcls::window_origin(window, &x, &y) &&
-         !zcls::window_size(window, &width, &height) && x == 0 && y == 0 &&
-         width == render.w && height == render.h;
+  const bool origin_valid = !zcls::window_origin(window, &x, &y);
+  const bool size_valid = !zcls::window_size(window, width, height);
+  return render.w > 0 && render.h > 0 && origin_valid && size_valid && x == 0 &&
+         y == 0 && *width == render.w && *height == render.h;
 }
 
 void update_far_corners(Camera* camera, float far_z) {
@@ -82,27 +145,51 @@ void update_plane_point(Camera* camera, int off, float distance) {
 class VisualRenderScope {
  public:
   VisualRenderScope(Camera* camera, Node* window) {
-    const bool full_viewport = full_display_viewport(window);
+    int32_t window_width = 0, window_height = 0;
+    const bool full_viewport =
+        full_display_viewport(window, &window_width, &window_height);
     const float authored_far = camera->get<float>(0xb4);
+    const mech3::Rect& render = mech3::render();
+    const bool zoom_camera = g_zoom_visual_camera == camera;
+    bool default_fog_scope = false;
+    float expanded_far = authored_far;
     if (g_visual_far_request <= kDefaultVisualFar) {
       // Cover the default world's edge without changing its geometry, clip or camera cache.
       const bool default_far = g_visual_far_request == kDefaultVisualFar &&
                                authored_far == kDefaultVisualFar;
-      if (full_viewport && default_far)
+      default_fog_scope = full_viewport && default_far;
+      if (default_fog_scope)
         fog_.emplace(authored_far, authored_far);
-      return;
+    } else if (full_viewport || zoom_camera) {
+      expanded_far = visual_far(authored_far, g_visual_far_request, true);
+      if (expanded_far > authored_far) {
+        camera_ = camera;
+        previous_camera_ = g_visual_camera;
+        previous_far_ = g_visual_far;
+        g_visual_camera = camera;
+        g_visual_far = expanded_far;
+        fog_.emplace(authored_far, expanded_far);
+        active_ = true;
+      }
     }
-    const bool zoom_camera = g_zoom_visual_camera == camera;
-    if (!full_viewport && !zoom_camera) return;
-    const float expanded = visual_far(authored_far, g_visual_far_request, true);
-    if (!(expanded > authored_far)) return;
-    camera_ = camera;
-    previous_camera_ = g_visual_camera;
-    previous_far_ = g_visual_far;
-    g_visual_camera = camera;
-    g_visual_far = expanded;
-    fog_.emplace(authored_far, expanded);
-    active_ = true;
+    const zmod::Fog& mission_fog = zmod::fog();
+    const zmod::Fog& scoped_fog = zmod::render_fog();
+    const int32_t camera_class = zoom_camera ? 1 : (full_viewport ? 0 : 2);
+    log_visual_far_state({g_visual_far_request,
+                          authored_far,
+                          active_ ? expanded_far : authored_far,
+                          full_viewport,
+                          window_width,
+                          window_height,
+                          render.w,
+                          render.h,
+                          active_,
+                          default_fog_scope,
+                          camera_class,
+                          scoped_fog.near_range,
+                          scoped_fog.far_range,
+                          mission_fog.linear,
+                          mission_fog.on});
   }
   ~VisualRenderScope() {
     if (active_) {
@@ -684,6 +771,12 @@ unsigned visual_far_request() { return g_visual_far_request; }
 float visual_far_for_render(const void* camera, float authored_far) {
   return camera == g_visual_camera ? g_visual_far : authored_far;
 }
+VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink) {
+  const VisualFarLogSink previous = g_visual_far_log_sink;
+  g_visual_far_log_sink = sink;
+  g_previous_visual_far_log_state.reset();
+  return previous;
+}
 ScopedZoomVisualFar::ScopedZoomVisualFar(const void* camera)
     : previous_camera_(g_zoom_visual_camera),
       active_(g_visual_far_request > kDefaultVisualFar) {
@@ -1135,6 +1228,30 @@ int pick_cells_virtual(Node* world, Camera* cam) {
     }
   }
   zmth::pop();
+  int32_t used_rings = 0;
+  int32_t max_cells = 0;
+  for (int32_t ring = 0; ring < kTilerRingCapacity; ++ring) {
+    const int32_t count = g_walk.rings[ring].count;
+    if (count > 0) used_rings = ring + 1;
+    if (count > max_cells) max_cells = count;
+  }
+  using Clock = std::chrono::steady_clock;
+  static Clock::time_point last_capacity_log{};
+  static int32_t last_logged_rings = -1;
+  static int32_t last_logged_cells = -1;
+  const Clock::time_point now = Clock::now();
+  // Four rings or eight cells avoids reporting small frame-to-frame jitter.
+  const bool meaningful_change =
+      last_logged_rings < 0 || std::abs(used_rings - last_logged_rings) >= 4 ||
+      std::abs(max_cells - last_logged_cells) >= 8;
+  if (meaningful_change &&
+      (last_logged_rings < 0 || now - last_capacity_log >= std::chrono::seconds(1))) {
+    std::printf("mw3: virtual view cells: rings %d/%d, max cells per ring %d/%d\n",
+                used_rings, kTilerRingCapacity, max_cells, kTilerCellsPerRing);
+    last_capacity_log = now;
+    last_logged_rings = used_rings;
+    last_logged_cells = max_cells;
+  }
   return 0;
 }
 

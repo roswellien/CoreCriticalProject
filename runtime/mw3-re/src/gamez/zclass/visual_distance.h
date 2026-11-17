@@ -68,6 +68,8 @@ inline bool visual_far_corners_need_update(bool clip_changed, float render_far,
 void set_visual_far_request(unsigned requested_far);
 unsigned visual_far_request();
 float visual_far_for_render(const void* camera, float authored_far);
+using VisualFarLogSink = void (*)(const char* line);
+VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink);
 
 class ScopedZoomVisualFar {
  public:

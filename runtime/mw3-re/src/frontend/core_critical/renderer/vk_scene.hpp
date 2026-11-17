@@ -17,6 +17,7 @@
 #include "capture_pixels.hpp"
 #include "frontend/sdl/cpu_interval.h"
 #include "frontend/core_critical/producer_view_test_hook.hpp"
+#include "gamez/zclass/visual_distance.h"
 #define VK_NO_PROTOTYPES
 #include "buffer_reserve.hpp"
 #include "camera_history.hpp"
@@ -3803,11 +3804,16 @@ private:
       aa_name = "4-sample SSAA";
     else if (grid.x == 2)
       aa_name = "2-sample SSAA";
-    if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1)
+    if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1 ||
+        bridge_config.draw_distance != zcls::kDefaultVisualFar)
       std::fprintf(
           stderr,
-          "Remaster quality: %s, %ux AF, samplerAnisotropy %u, GPU %s\n",
+          "Remaster quality: %s, %ux AF, samplerAnisotropy %u, draw distance %u "
+          "(fog start %.0f), GPU %s\n",
           aa_name, anisotropy(), enabled.samplerAnisotropy,
+          bridge_config.draw_distance,
+          static_cast<double>(zcls::fog_start_for_view_distance(
+              static_cast<float>(bridge_config.draw_distance))),
           device_name.c_str());
     if (bridge_config.seh_log) {
       VkPhysicalDeviceProperties diagnostic_props{};

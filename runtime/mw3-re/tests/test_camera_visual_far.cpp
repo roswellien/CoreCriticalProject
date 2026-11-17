@@ -12,10 +12,19 @@
 #include "mech3/options.h"
 
 #include <cmath>
+#include <cstddef>
+#include <iterator>
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace {
 constexpr float kAuthoredFar = 800.0f;
+std::vector<std::string> g_visual_far_log_lines;
+
+void capture_visual_far_log(const char* line) {
+  g_visual_far_log_lines.emplace_back(line);
+}
 
 struct CameraFrame {
   unsigned requested_far;
@@ -154,6 +163,9 @@ struct CameraFixture {
 
 TEST(view_distance_restores_render_camera_far_state) {
   CameraFixture fixture;
+  g_visual_far_log_lines.clear();
+  const zcls::VisualFarLogSink old_log_sink =
+      zcls::set_visual_far_log_sink(capture_visual_far_log);
   EXPECT(fixture.camera.get<float>(0x110) == 0.0f);
   for (int i = 0; i < 3; ++i) EXPECT(fixture.camera.floats(0xc4)[i] == 0.0f);
 
@@ -162,7 +174,8 @@ TEST(view_distance_restores_render_camera_far_state) {
       {1200, {80.0f, 45.0f, -40.0f}, 0.2f, 0.7f, 1.0f, 0.8f},
       {1600, {80.0f, 45.0f, -40.0f}, -0.1f, -0.5f, 0.9f, 0.6f},
       {800, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f}};
-  for (const auto& frame : frames) {
+  for (std::size_t frame_index = 0; frame_index < std::size(frames); ++frame_index) {
+    const auto& frame = frames[frame_index];
     fixture.frame = &frame;
     zcls::set_visual_far_request(frame.requested_far);
     EXPECT(zcls::camera_set_position(&fixture.camera_node, frame.position[0],
@@ -176,6 +189,9 @@ TEST(view_distance_restores_render_camera_far_state) {
     // render_world constructs the private scope BEFORE its camera_update call.
     // Check immediately on return, before another update could hide bad restoration.
     EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    // The first two frames share one logged state; each later request changes it once.
+    const std::size_t expected_log_count = frame_index < 2 ? 1 : frame_index;
+    EXPECT(g_visual_far_log_lines.size() == expected_log_count);
     EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == kAuthoredFar);
     expect_far_state(fixture.camera, frame, kAuthoredFar);
     EXPECT(!zcls::visual_far_corners_need_update(false, kAuthoredFar,
@@ -188,7 +204,24 @@ TEST(view_distance_restores_render_camera_far_state) {
     zmth::pop();
     expect_far_state(fixture.camera, frame, kAuthoredFar);
   }
+  EXPECT(g_visual_far_log_lines.size() == 3);
+  EXPECT(g_visual_far_log_lines.at(0).find(
+             "requested 1200, authored 800, expanded 1.2e+03") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(0).find(
+             "full viewport 1 (window 3440x1440, render 3440x1440)") !=
+         std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(0).find(
+             "extended 1, default-800 fog-only 0; camera main") !=
+         std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(1).find(
+             "requested 1600, authored 800, expanded 1.6e+03") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(2).find(
+             "requested 800, authored 800, expanded 800") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(2).find(
+             "extended 0, default-800 fog-only 1; camera main") !=
+         std::string::npos);
   EXPECT(fixture.observed_passes == 4);
+  zcls::set_visual_far_log_sink(old_log_sink);
 }
 
 TEST(default_visual_far_covers_only_full_viewport_fog) {
