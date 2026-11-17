@@ -5,6 +5,7 @@
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "renderer/normal_codec.hpp"
+#include "renderer/fixture_observation_emission.hpp"
 #include "renderer/surface_materials.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/geometry/resource.hpp"
@@ -63,10 +64,10 @@ void same(const cc_mw3_re::PreparedSubmission &a, const cc_mw3_re::PreparedSubmi
 }
 void checks() {
     const float tint_channels[3]{.3f, .7f, .123f};
-    const auto packed_tint = pack_damage_tint_rgb(tint_channels);
+    const auto packed_tint = cc_mw3_re::pack_damage_tint_rgb(tint_channels);
     for (unsigned channel = 0; channel < 3; ++channel) {
         const float decoded = float((packed_tint >> (channel * 8)) & 255U) / 255.f;
-        require(std::abs(decoded - tint_channels[channel]) <= .5f / 255.f,
+        require(std::abs(decoded - tint_channels[channel]) <= .5f / 255.f + 1e-6f,
                 "Packed tint color exceeded half an 8-bit channel step");
     }
     namespace cc = cc_mw3_re;
@@ -128,7 +129,7 @@ void checks() {
                 std::bit_cast<float>(tinted->draw.push.mode[2]) == .6f,
             "Prepared cache lost damage tint");
     auto emissive_tinted = *tinted;
-    emissive_tinted.draw.push.fog[3] = 1.4f;
+    cc_mw3_re::apply_fixture_observation_emission(emissive_tinted.draw.push.fog, .4f);
     require(emissive_tinted.draw.push.fog[3] > 1.f &&
                 std::bit_cast<float>(emissive_tinted.draw.push.mode[2]) == .6f,
             "Fixture emission overwrote the independent tint weight");
