@@ -785,6 +785,7 @@ static class NativeRuntimeLayoutChecks
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
+                wire["preview"]!["ui_packs"]![0]!.GetValue<string>() != ui ||
                 !wire["preview"]!["dynamic_lighting"]!.GetValue<bool>() ||
                 !wire["preview"]!["shadows"]!.GetValue<bool>() ||
                 wire["visuals"]!["pom"]!.GetValue<bool>() != true ||
@@ -797,20 +798,20 @@ static class NativeRuntimeLayoutChecks
                 argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1")
                 throw new Exception("Native launcher dynamic lighting and shadows choices did not reach the runtime argv.");
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
-                "--cc-hud-text", "1", "--cc-hud-artwork", ui, "--cc-geometry", "partial",
+                "--cc-hud-text", "1", "--cc-menu-background", Path.Combine(ui, "ui", "background.mwhd"),
+                "--cc-hud-artwork", ui, "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
                 "--cc-environment-pack", map };
             // This fixture has no effect-light catalog, so local lights are also skipped.
             if (!planned["ok"]!.GetValue<bool>() || !argv.Skip(argv.Count - expectedTail.Length).SequenceEqual(expectedTail) ||
-                planned["skipped_packs"]!.AsArray().Count != 4 ||
-                // Exact order: the menu pack is reported first, then the shared environment pack
-                // (no feature key), then the dynamic-lighting local-light skips.
-                planned["skipped_packs"]![0]!["feature"]?.GetValue<string>() != "menu_hd_background" ||
-                planned["skipped_packs"]![1]!["root"]!.GetValue<string>() != shared ||
-                planned["skipped_packs"]![1]!["feature"] != null ||
-                planned["skipped_packs"]![2]!["feature"]?.GetValue<string>() != "effect_lights" ||
-                planned["skipped_packs"]![3]!["feature"]?.GetValue<string>() != "fixture_lights")
+                planned["skipped_packs"]!.AsArray().Count != 3 ||
+                // Exact order: the shared environment pack (no feature key), then the
+                // dynamic-lighting local-light skips. The menu background is routed, not skipped.
+                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared ||
+                planned["skipped_packs"]![0]!["feature"] != null ||
+                planned["skipped_packs"]![1]!["feature"]?.GetValue<string>() != "effect_lights" ||
+                planned["skipped_packs"]![2]!["feature"]?.GetValue<string>() != "fixture_lights")
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
 
             var noUiOptions = options with

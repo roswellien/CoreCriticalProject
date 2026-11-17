@@ -412,6 +412,30 @@ class NativePreviewPlanTests(unittest.TestCase):
                                "registry": "environment/environment.json"}})
         return os.path.join(self.root, name)
 
+    def menu_pack(self, name="menu", tamper=False):
+        background = struct.pack("<8sIIII", b"MWHDBG1\0", 4, 2, 2, 1) + bytes(range(24))
+        registry = json.dumps({"schema_version": 2, "payload_profile": "prepared-ui-v1",
+                               "kind": "menu", "sprites": {},
+                               "background": "ui/background.mwhd"}).encode()
+        background_path = self.write(f"{name}/ui/background.mwhd", background)
+        registry_path = self.write(f"{name}/ui/ui.json", registry)
+        files = {}
+        for relative, path, file_format in (
+                ("ui/background.mwhd", background_path, "MWHDBG1"),
+                ("ui/ui.json", registry_path, None)):
+            with open(path, "rb") as stream:
+                payload = stream.read()
+            files[relative] = {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            if file_format:
+                files[relative]["format"] = file_format
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": files,
+            "native_payload": {"profile": "prepared-ui-v1", "registry": "ui/ui.json"}})
+        if tamper:
+            with open(background_path, "r+b") as stream:
+                stream.seek(-1, os.SEEK_END)
+                stream.write(b"x")
+        return os.path.join(self.root, name)
+
     def request(self, **preview):
         return {
             "schema_version": 4, "engine": "mw3-re", "runtime_root": "C:/Runtime",
@@ -455,13 +479,31 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual(result["argv"][result["argv"].index("--cc-sun-shadows") + 1], "0")
         self.assertEqual(result["skipped_packs"], [])
 
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_menu_background_pack_is_hash_checked_and_emitted(self):
+        pack = self.menu_pack()
+        result = self.plan(self.request(hud="core-critical", ui_packs=[pack]))
+        background = os.path.join(pack, "ui", "background.mwhd")
+        self.assertIn("--cc-menu-background", result["argv"])
+        self.assertEqual(result["argv"].index("--cc-menu-background") + 1,
+                         result["argv"].index(background))
+        self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_tampered_menu_background_is_reported_and_left_off(self):
+        pack = self.menu_pack(tamper=True)
+        result = self.plan(self.request(hud="core-critical", ui_packs=[pack]))
+        self.assertNotIn("--cc-menu-background", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
+        self.assertIn("integrity failure", result["skipped_packs"][0]["reason"])
+
     def test_no_ui_packs_leaves_hud_options_unset(self):
         result = self.plan(self.request())
         self.assertNotIn("--cc-hud", result["argv"])
         self.assertNotIn("--cc-hud-text", result["argv"])
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
-    def test_ui_sprite_packs_route_to_native_artwork_and_menu_background_is_skipped(self):
+    def test_ui_sprite_packs_route_to_native_artwork_and_menu_background(self):
         hud = self.ui_pack("hud", "hud", background=False)
         menu = self.ui_pack("menu", "menu", background=True)
         result = self.plan(self.request(hud="core-critical", ui_packs=[hud, menu]))
@@ -471,10 +513,10 @@ class NativePreviewPlanTests(unittest.TestCase):
             [argv[i + 1] for i, value in enumerate(argv) if value == "--cc-hud-artwork"],
             [hud, menu],
         )
-        skipped = result["skipped_packs"]
-        self.assertEqual(len(skipped), 1)
-        self.assertEqual(skipped[0]["feature"], "menu_hd_background")
-        self.assertIn("no native menu-background", skipped[0]["reason"])
+        background = os.path.join(menu, "ui", "background.mwhd")
+        self.assertEqual(argv.count("--cc-menu-background"), 1)
+        self.assertEqual(argv[argv.index("--cc-menu-background") + 1], background)
+        self.assertEqual(result["skipped_packs"], [])
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_identical_ui_identity_hashes_are_accepted_in_input_order(self):
@@ -531,13 +573,15 @@ class NativePreviewPlanTests(unittest.TestCase):
                 result = self.plan(self.request(hud="core-critical", ui_packs=[menu]))
                 self.assertTrue(result["ok"])
                 self.assertNotIn("--cc-hud-artwork", result["argv"])
-                self.assertEqual(len(result["skipped_packs"]), 1)
-                skipped = result["skipped_packs"][0]
-                self.assertEqual(skipped["root"], menu)
                 if background:
-                    self.assertEqual(skipped["feature"], "menu_hd_background")
-                    self.assertIn("no native menu-background", skipped["reason"])
+                    # A background-only menu pack is routed to the menu background alone.
+                    self.assertIn("--cc-menu-background", result["argv"])
+                    self.assertEqual(result["skipped_packs"], [])
                 else:
+                    self.assertNotIn("--cc-menu-background", result["argv"])
+                    self.assertEqual(len(result["skipped_packs"]), 1)
+                    skipped = result["skipped_packs"][0]
+                    self.assertEqual(skipped["root"], menu)
                     self.assertEqual(skipped["feature"], "ui_artwork")
                     self.assertIn("no available artwork", skipped["reason"])
 

@@ -936,10 +936,10 @@ def plan_launch(request):
                     width, height, source_width, source_height = struct.unpack("<IIII", header[8:])
                     if (not width or not height or not source_width or not source_height
                             or max(width, height, source_width, source_height) > 16384
+                            or width * source_height != height * source_width
                             or background_path.stat().st_size != 24 + 3 * width * height):
                         raise ValueError("menu background dimensions or length are invalid")
-                    skipped.append({"root": str(root), "feature": "menu_hd_background",
-                                    "reason": "MW3-RE has no native menu-background presentation route"})
+                    argv.extend(("--cc-menu-background", str(background_path)))
                 if not sprite_hashes:
                     if background is None:
                         raise ValueError("UI pack has no available artwork")

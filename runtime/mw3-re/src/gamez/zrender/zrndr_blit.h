@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 
 namespace zimg { struct Texture; }
 
@@ -19,6 +20,13 @@ struct Target2D {
 Target2D& target2d();
 
 struct BlitRect;
+struct MenuBackgroundBlit {
+  int32_t destination_x{}, destination_y{}, source_x{}, source_y{}, width{}, height{};
+};
+void set_menu_background_source(const zimg::Texture*);
+void begin_menu_background_frame();
+const zimg::Texture* menu_background_source();
+const std::vector<MenuBackgroundBlit>& menu_background_blits();
 // The SDL HUD adapter observes owned draw recipes while the native buffer is
 // still maintained for reads/grabs. It never receives guest addresses or state.
 class DrawObserver {

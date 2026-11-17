@@ -786,6 +786,7 @@ void GameEngine::video_lock() {
   zrndr::set_finish_target(buffer_.data(), width_, height_, width_ * 2);  // 0x00558290, as 0x00576de0 sets it
 }
 void GameEngine::video_clear(Handle) {
+  zrndr::begin_menu_background_frame();
   zrndr::observe_framebuffer_write(buffer_.data(), "frame clear");
   std::fill(buffer_.begin(), buffer_.end(), uint16_t{0});
 }

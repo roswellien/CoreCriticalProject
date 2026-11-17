@@ -9,6 +9,7 @@
 #include "frontend/sdl/sdl_render3d.h"
 #include "frontend/sdl/gpu_hud.h"
 #include "platform/platform.h"
+#include "platform/prepared_menu_background.h"
 
 namespace zgame { class App; }
 
@@ -89,14 +90,16 @@ class SdlScreen2D : public platform::Screen2D {
  private:
   void upload(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, bool keyed, uint16_t key,
               const uint8_t* alpha = nullptr, const uint16_t* colour = nullptr);
-  void draw_layer(int width, int height, bool blend);
+  void draw_layer(int width, int height, bool blend, bool sharp = true);
   FrameRenderer* render_;
   std::unique_ptr<GpuHud> hud_;
+  std::unique_ptr<platform::MenuBackgroundImage> menu_background_;
   SDL_Window* hud_window_{};
   const FrameShape* hud_shape_{};
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
   std::vector<uint8_t> rgba_;
+  std::vector<uint32_t> menu_composed_;
 };
 
 // GetTickCount from the game's start, and Sleep. With `frame_ms` (ours,

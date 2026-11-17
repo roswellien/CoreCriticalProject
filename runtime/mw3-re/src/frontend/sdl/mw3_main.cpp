@@ -336,6 +336,7 @@ void usage() {
       "    [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
       "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork PACK-ROOT]... [--cc-hud-text 0|1]\n"
+      "    [--cc-menu-background FILE]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600 (default 800)]\n"
@@ -497,6 +498,7 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-vulkan") a.backend = sdlfe::RendererBackend::core_critical_dxgi, a.no_launcher = true;
     else if (s == "--cc-hud" && next(1)) a.hud.mode = argv[++i], a.hud_mode_given = true;
     else if (s == "--cc-hud-artwork" && next(1)) a.hud.artwork.emplace_back(argv[++i]), a.hud_artwork_given = true;
+    else if (s == "--cc-menu-background" && next(1)) a.hud.menu_background = argv[++i];
     else if (s == "--cc-hud-text" && next(1)) {
       const std::string value = argv[++i];
       if (value != "0" && value != "1") return false;

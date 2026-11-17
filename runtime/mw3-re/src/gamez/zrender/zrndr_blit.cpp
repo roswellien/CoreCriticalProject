@@ -2,6 +2,8 @@
 // Original file unknown: between zreader.cpp and zrndr_draw.c.
 #include "gamez/zrender/zrndr_blit.h"
 
+#include <vector>
+
 #include "gamez/zimage/zimg_library.h"
 
 namespace zrndr {
@@ -9,6 +11,11 @@ namespace zrndr {
 namespace {
 Target2D g_target;
 DrawObserver* g_observer = nullptr;
+const zimg::Texture* g_menu_background = nullptr;
+std::vector<MenuBackgroundBlit> g_menu_background_blits;
+std::vector<MenuBackgroundBlit> g_recent_menu_background_blits;
+unsigned g_menu_background_age = 3;
+bool g_menu_background_draw_seen = false;
 class MuteObserver {
  public:
   MuteObserver() : saved_(g_observer) { g_observer = nullptr; }
@@ -76,6 +83,22 @@ void cover_opaque(uint16_t* dst) {
 }
 
 Target2D& target2d() { return g_target; }
+void set_menu_background_source(const zimg::Texture* source) {
+  g_menu_background = source;
+  g_menu_background_blits.clear();
+  g_recent_menu_background_blits.clear();
+  g_menu_background_age = 3;
+}
+void begin_menu_background_frame() {
+  g_menu_background_blits.clear();
+  g_menu_background_draw_seen = false;
+  if (g_menu_background_age < 3) ++g_menu_background_age;
+}
+const zimg::Texture* menu_background_source() { return g_menu_background; }
+const std::vector<MenuBackgroundBlit>& menu_background_blits() {
+  static const std::vector<MenuBackgroundBlit> empty;
+  return g_menu_background_age <= 2 ? g_recent_menu_background_blits : empty;
+}
 DrawObserver* draw_observer() { return g_observer; }
 void set_draw_observer(DrawObserver* value) { g_observer = value; }
 void observe_framebuffer_write(const void* target, const char* operation) {
@@ -138,6 +161,13 @@ void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const 
   } else {
     col = left - x + src->left;
     row = src->top + top - y;
+  }
+  if (img == g_menu_background && img->pixels && !img->palette && !img->alpha && width > 0 && rows > 0) {
+    if (!g_menu_background_draw_seen) g_menu_background_blits.clear();
+    g_menu_background_draw_seen = true;
+    g_menu_background_blits.push_back({left, top, col, row, width, rows});
+    g_recent_menu_background_blits = g_menu_background_blits;
+    g_menu_background_age = 0;
   }
   uint16_t* dst = reinterpret_cast<uint16_t*>(t.base) + (pitch * top + left);
   const bool full = left == 0 && x2 == t.width - 1 && pitch == stride;

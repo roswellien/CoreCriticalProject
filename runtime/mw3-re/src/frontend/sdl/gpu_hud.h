@@ -12,6 +12,7 @@ class FrameRenderer;
 struct HudOptions {
   std::string mode = "original";
   std::vector<std::string> artwork;
+  std::string menu_background;
   bool text = true;
 };
 // An instance-owned HUD draw list. The original canvas remains a CPU shadow
