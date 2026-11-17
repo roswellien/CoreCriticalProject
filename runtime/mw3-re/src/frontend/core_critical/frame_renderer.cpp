@@ -635,7 +635,8 @@ public:
                               surface_normals_.cache.pages.end(),
                               [](const auto &page) { return page.loaded; })),
             binding_rejected_mismatch_,
-            native_fingerprint_evaluations_};
+            native_fingerprint_evaluations_,
+            deferred_material_admissions_};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
@@ -1110,6 +1111,11 @@ public:
   void draw(Primitive primitive, const TLVertex *vertices, int count,
             const DrawState &state) override {
     require_producer_live();
+    if (state.blend && state.unsupported_blend)
+      throw std::runtime_error(
+          "Unsupported MW3 alpha blend factor pair: SRCBLEND=" +
+          std::to_string(state.source_blend) + " DESTBLEND=" +
+          std::to_string(state.destination_blend));
     // Only the explicitly marked 2D compositor may supply CPU vertices in
     // strict mode. Depth-always also occurs in 3D overlays, so it cannot
     // identify a HUD exemption.
@@ -1122,6 +1128,12 @@ public:
     }
     if (suppress_model_draws_)
       return;
+    if (state.texture >= 0 &&
+        std::size_t(state.texture) < textures_.size() &&
+        deferred_material_binding_ &&
+        validated_deferred_binding(textures_[state.texture].surface_key,
+                                   state.texture))
+      ++deferred_material_admissions_;
     local_lights_observe(vertices, count, state);
     append_draw(primitive, vertices, count, state,
                 state.sharp || (state.depth_always &&
@@ -1384,13 +1396,17 @@ private:
     // for intentional campaign/profile sky shading in apply_atmosphere.
     if (lighting_.enabled && state.native_sky)
       draw.sky_view = capture_tl_view();
+    // Fixed-function translucent effects and multiply passes retain their
+    // original unlit output. Applying the world sun equation to their texture
+    // and vertex colour turns emissive beams and flashes into dark shadows.
     if (lighting_.enabled && !state.native_sky && state.texture >= 0) {
       const auto &tex_entry = textures_.at(state.texture);
       const auto key = tex_entry.surface_key;
       const auto epoch = tex_entry.group_load_epoch;
       const auto tex_name = tex_entry.name;
       if (epoch == group_load_epoch_ && key.hash != 0) {
-        int norm_idx = lighting_.normals
+        const bool apply_sun_lighting = !state.blend && !state.multiply;
+        int norm_idx = lighting_.normals && apply_sun_lighting
                            ? deferred_surface_normal_index(key, state.texture)
                            : -1;
         if (norm_idx >= 0) {
@@ -1399,9 +1415,10 @@ private:
         } else {
           draw.normal_texture = -1;
         }
-        draw.sun_tl = capture_tl_view();
+        if (apply_sun_lighting)
+          draw.sun_tl = capture_tl_view();
         const auto &proj = projection;
-        if (lighting_.normals) {
+        if (lighting_.normals && apply_sun_lighting) {
           draw.surface_parameters =
               deferred_surface_parameters(key, state.texture);
           if (draw.surface_parameters[3] > .5f && proj.near_z > 0 &&
@@ -1411,9 +1428,11 @@ private:
             draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
           }
         }
-        auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
-            drawn, std::array<float, 3>{0, 0, 0});
-        draw.lit_normals = std::move(norms);
+        if (apply_sun_lighting) {
+          auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
+              drawn, std::array<float, 3>{0, 0, 0});
+          draw.lit_normals = std::move(norms);
+        }
         if (norm_idx >= 0 && !logged_first_normal_trace_) {
           logged_first_normal_trace_ = true;
           std::fprintf(
@@ -1462,8 +1481,8 @@ private:
     if (!hud)
       draw.sampler |= 0x10000U;
     draw.key = {uint8_t(state.blend || state.multiply),
-                uint8_t(state.multiply ? 1 : 5),
-                uint8_t(state.multiply ? 3 : 6),
+                uint8_t(state.multiply ? 1 : state.additive ? 2 : 5),
+                uint8_t(state.multiply ? 3 : state.additive ? 2 : 6),
                 1,
                 uint8_t(state.depth_always ? 8 : 7),
                 uint8_t(state.depth_write),
@@ -1952,6 +1971,7 @@ private:
   std::uint64_t group_load_epoch_{1};
   std::map<int, int32_t> surface_normal_textures_;
   bool logged_first_normal_trace_{false};
+  std::uint64_t deferred_material_admissions_{};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
       cpu_clipped_triangles_{}, named_textures_{};
   bool suppress_model_draws_{};
