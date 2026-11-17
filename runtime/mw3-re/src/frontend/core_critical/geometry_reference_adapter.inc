@@ -6,6 +6,7 @@ void emit_reference_geometry(
     const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog,
     const std::vector<NativeGroundRangeAdmission> &admissions,
     bool native_fixture_source = true) {
+  validate_damage_tint_weight(context.damage_tint_weight);
   const auto normal_matrix = mw34::sun::normal_matrix(camera);
   const auto camera_to_world =
       mw34::donor::product(world, mw34::donor::inverse(camera));

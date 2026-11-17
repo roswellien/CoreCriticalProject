@@ -11,6 +11,11 @@
 
 namespace cc_mw3_re {
 
+inline void validate_damage_tint_weight(float weight) {
+  if (!std::isfinite(weight) || weight < 0.f || weight > 1.f)
+    throw std::runtime_error("Model has an invalid native tint weight");
+}
+
 inline std::uint32_t prepared_opacity_bits(float opacity) {
   std::uint32_t bits{};
   static_assert(sizeof(bits) == sizeof(opacity));
@@ -128,9 +133,7 @@ prepare_draw(const PreparedBatchDraw &source,
   if (!(context.near_z > 0) || !(context.far_z > context.near_z))
     throw std::runtime_error(
         "Prepared model requires valid native clip planes");
-  if (!std::isfinite(context.damage_tint_weight) || context.damage_tint_weight < 0.f ||
-      context.damage_tint_weight > 1.f)
-    throw std::runtime_error("Prepared model has an invalid native tint weight");
+  validate_damage_tint_weight(context.damage_tint_weight);
   const auto camera = matrix_rows(source.camera);
   const auto normal_matrix =
       lighting ? mw34::sun::normal_matrix(source.camera) : camera;

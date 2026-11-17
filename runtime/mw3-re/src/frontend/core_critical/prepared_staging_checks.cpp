@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <type_traits>
 #if defined(_WIN32)
@@ -109,6 +110,34 @@ void checks() {
     const auto processed = profile.vertices;
     require(get() == first && cache.statistics().hits == 1 && profile.vertices == processed,
             "Unchanged prepared input was recomputed");
+    context.damage_tint_weight = .6f;
+    const auto tinted = get();
+    same(*tinted, reference());
+    require((tinted->draw.push.mode[0] & 128U) && tinted->draw.push.fog[3] == .6f,
+            "Prepared cache lost damage tint");
+    context.damage_tint_weight = 0.f;
+    same(*get(), *first);
+    require(!(get()->draw.push.mode[0] & 128U), "Prepared cache retained portrait tint");
+    context.damage_tint_weight = .6f;
+    same(*get(), *tinted);
+    context.damage_tint_weight = 1.f;
+    same(*get(), reference());
+    for (float weight : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                         std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1.1f}) {
+        context.damage_tint_weight = weight;
+        for (bool cached : {false, true}) {
+            bool rejected = false;
+            try {
+                if (cached) get();
+                else reference();
+            } catch (const std::runtime_error &error) {
+                rejected = std::string_view(error.what()) == "Model has an invalid native tint weight";
+            }
+            require(rejected, "Prepared staging/cache accepted an invalid tint weight");
+        }
+    }
+    context.damage_tint_weight = 0.f;
     const auto miss = [&] {
         const auto before = cache.statistics().misses;
         same(*get(), reference());

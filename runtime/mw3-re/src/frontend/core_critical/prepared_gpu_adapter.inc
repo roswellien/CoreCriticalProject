@@ -2,6 +2,7 @@ cc::geometry::Submission
 submit_prepared_geometry(const ::platform::ModelDrawContext &context,
                          const cc::geometry::Fog &fog) override {
   VisualFloatScope preserve;
+  validate_damage_tint_weight(context.damage_tint_weight);
   if (geometry_mode_ == cc::geometry::Mode::legacy ||
       !prepared_.has_binding(context))
     return cc::geometry::Submission::unsupported;
@@ -42,6 +43,7 @@ static cc::geometry::Fog prepared_fog() {
 void emit_gpu_prepared(const PreparedBatchDraw &source,
                        const ::platform::ModelDrawContext &context,
                        const cc::geometry::Fog &fog) {
+  validate_damage_tint_weight(context.damage_tint_weight);
   if (!source.deformed.empty())
     throw std::runtime_error(
         "GPU prepared geometry does not admit CPU-deformed vertices");

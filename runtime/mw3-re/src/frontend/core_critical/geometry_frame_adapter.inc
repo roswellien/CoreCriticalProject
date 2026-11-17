@@ -12,6 +12,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
                       const std::vector<cc::geometry::Material> &materials,
                       const cc::geometry::Fog &fog) override {
   VisualFloatScope preserve;
+  validate_damage_tint_weight(context.damage_tint_weight);
   if (geometry_mode_ == cc::geometry::Mode::legacy)
     return cc::geometry::Submission::unsupported;
   // Prepared replacements must retain their selected visual until their
