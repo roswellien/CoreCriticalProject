@@ -23,8 +23,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             Select(ComboResolution, resolution);
             Select(ComboAA, settings.AntiAliasing == "1" ? "off" : settings.AntiAliasing);
             Select(ComboAF, settings.AnisotropicFiltering.ToString());
-            var drawDistance = settings.DrawDistance is 2400 or 3200 ? 1600 : settings.DrawDistance;
-            Select(ComboDrawDist, drawDistance.ToString());
+            Select(ComboDrawDist, settings.DrawDistance.ToString());
             ChkDynamicLighting.IsChecked = settings.DynamicLighting;
             ChkHeadlights.IsChecked = settings.Headlights;
             ChkHeadlights.IsEnabled = settings.DynamicLighting;

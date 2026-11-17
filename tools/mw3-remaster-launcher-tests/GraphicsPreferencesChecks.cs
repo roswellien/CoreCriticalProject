@@ -43,14 +43,42 @@ static class GraphicsPreferencesChecks
             try{(choice with{AnisotropicFiltering=3}).ApplyTo(loaded);throw new Exception("Unsupported AF accepted");}
             catch(InvalidOperationException){}
             if(JsonSerializer.Serialize(loaded)!=before)throw new Exception("Failed graphics validation partially changed settings");
-            try{(choice with{DrawDistance=2400}).ApplyTo(loaded);throw new Exception("Unsupported scenery distance accepted");}
+            try
+            {
+                (choice with { DrawDistance = 1000 }).ApplyTo(loaded);
+                throw new Exception("Unsupported scenery distance accepted");
+            }
             catch(InvalidOperationException){}
             if(JsonSerializer.Serialize(loaded)!=before)throw new Exception("Failed scenery validation partially changed settings");
+            var expectedDistances = new[] { 800, 1200, 1600, 2400, 3200 };
+            var acceptedDistances = new List<int>();
+            for (var distance = 0; distance <= NativeGameRunner.MaxDrawDistance + 1; ++distance)
+            {
+                var graphicsAccepted = true;
+                try { (choice with { DrawDistance = distance }).Validate(); }
+                catch (InvalidOperationException) { graphicsAccepted = false; }
+                var nativeAccepted = true;
+                try
+                {
+                    var nativeDistance = NativeGameRunner.PreviewDrawDistance(distance,
+                        out var reduced);
+                    if (nativeDistance != distance || reduced)
+                        throw new Exception("Native scenery selection was reduced");
+                }
+                catch (InvalidOperationException) { nativeAccepted = false; }
+                if (graphicsAccepted != nativeAccepted)
+                    throw new Exception("Graphics and native scenery validation disagree");
+                if (graphicsAccepted) acceptedDistances.Add(distance);
+            }
+            if (!acceptedDistances.SequenceEqual(expectedDistances) ||
+                NativeGameRunner.MaxDrawDistance != 3200)
+                throw new Exception("Launcher scenery distances differ from the supported set");
             // Legacy installations keep their choices and do not reopen first-run setup.
             File.WriteAllText(settings.SettingsPath,"{\"Width\":3440,\"Height\":1440,\"WindowMode\":\"windowed\",\"AntiAliasing\":\"2\",\"DrawDistance\":3200,\"ActivePacks\":[\"test.existing\"]}");
             loaded=new SettingsManager(root,root).Current;
             if(!loaded.InitialSetupCompleted || loaded.Width!=3440 || loaded.AntiAliasing!="2" ||
-               loaded.DrawDistance!=1600 || !loaded.ActivePacks.Contains("test.existing") || loaded.DynamicLighting || loaded.Shadows || loaded.Headlights ||
+               loaded.DrawDistance!=3200 || !loaded.ActivePacks.Contains("test.existing") ||
+               loaded.DynamicLighting || loaded.Shadows || loaded.Headlights ||
                !loaded.WaterDetail || !loaded.CloudDetail)
                 throw new Exception("Existing launcher settings were reset by setup migration");
             Console.WriteLine("First-run graphics validation, persistence, cancellation marker and legacy preference preservation passed.");

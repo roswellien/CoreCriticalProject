@@ -173,7 +173,8 @@ struct Fixture {
   zmod::LightHooks old_light_hooks = zmod::light_hooks();
   zmod::Zones old_zones = zmod::zones();
   zmod::ViewPolygon old_polygon = zmod::view_polygon();
-  zcls::SceneWalk old_walk = zcls::scene_walk();
+  std::unique_ptr<zcls::SceneWalk> old_walk =
+      std::make_unique<zcls::SceneWalk>(zcls::scene_walk());
   zcls::WorldRenderHooks old_hooks = zcls::world_render_hooks();
   std::array<platform::TLVertex, 64> old_flat{};
   std::array<uint32_t, 64 * (6 + 2 * (1 + zmod::kShadowSets))> old_multi{};
@@ -206,7 +207,7 @@ struct Fixture {
     zmth::view().camera.m[0] = zmth::view().camera.m[4] = zmth::view().camera.m[8] = 1;
     zmth::reset_stack();
     zcls::world_render_hooks() = {};
-    zcls::scene_walk() = {};
+    zcls::scene_walk().reset();
     zmod::light_hooks() = {};
     zmod::draw_state().shadows = 0;
     zmod::zones().mode = 0;
@@ -227,7 +228,7 @@ struct Fixture {
     zmod::lighting() = old_lighting; zmod::light_list() = old_lights;
     zmod::light_hooks() = old_light_hooks; zmod::zones() = old_zones;
     zmod::view_polygon() = old_polygon;
-    zcls::scene_walk() = old_walk; zcls::world_render_hooks() = old_hooks;
+    zcls::scene_walk() = *old_walk; zcls::world_render_hooks() = old_hooks;
     zvid::set_render3d(old_renderer);
     std::fesetenv(&fp);
 #if defined(_M_X64) || defined(_M_IX86) || defined(__SSE__)

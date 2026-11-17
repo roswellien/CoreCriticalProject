@@ -15,7 +15,7 @@ namespace MW3RemasterLauncher.Core
         public bool Fullscreen { get; set; } = true;
         public string AntiAliasing { get; set; } = "fxaa"; // "off", "fxaa", "2", "4", "8"
         public int AnisotropicFiltering { get; set; } = 16; // 1, 2, 4, 8, 16
-        public int DrawDistance { get; set; } = 800; // 800, 1200, 1600
+        public int DrawDistance { get; set; } = 800; // 800, 1200, 1600, 2400, 3200
         public int FogDistance { get; set; } = 1100; // Retained for settings-file compatibility.
         public bool LocalCdAudio { get; set; } = true;
         public string MusicTrack2 { get; set; } = string.Empty;
@@ -88,7 +88,6 @@ namespace MW3RemasterLauncher.Core
                     var settings = JsonSerializer.Deserialize<LauncherSettings>(raw)
                         ?? throw new JsonException("Settings are empty.");
                     settings.ActivePacks ??= new List<string>();
-                    if (settings.DrawDistance is 2400 or 3200) settings.DrawDistance = 1600;
                     // Existing users have already configured their launcher.
                     // Newly saved first-run settings contain the explicit false
                     // marker, so cancelling setup does not count as completing it.

@@ -858,18 +858,31 @@ static class NativeRuntimeLayoutChecks
             if (!suppressedSettings.Shadows || suppressedSettings.DynamicLighting)
                 throw new Exception("Planning mutated the saved lighting choices.");
 
-            // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
+            // 800 keeps the original geometry range and needs no explicit argument.
             var original = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
                 { Preview = options.Preview with { DrawDistance = 800 } }, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
             if (original["argv"]!.AsArray().Any(value => value!.GetValue<string>() == "--cc-draw-distance"))
                 throw new Exception("Original scenery distance added a preview argument.");
+            foreach (var distance in new[] { 2400, 3200 })
+            {
+                var extended = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
+                    { Preview = options.Preview with { DrawDistance = distance } },
+                    "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
+                var extendedArguments = extended["argv"]!.AsArray()
+                    .Select(value => value!.GetValue<string>()).ToList();
+                var distanceIndex = extendedArguments.IndexOf("--cc-draw-distance");
+                if (distanceIndex < 0 || distanceIndex + 1 >= extendedArguments.Count ||
+                    extendedArguments[distanceIndex + 1] != distance.ToString())
+                    throw new Exception("Planner lost the extended scenery distance.");
+            }
             var refused = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
-                { Preview = options.Preview with { DrawDistance = 2400 } }, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
+                { Preview = options.Preview with { DrawDistance = 1000 } },
+                "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
             if (refused["validation_error"]?.GetValue<bool>() != true) throw new Exception("Planner accepted an unsupported preview distance.");
 
-            if (NativeGameRunner.PreviewDrawDistance(3200, out var reduced) != 1600 || !reduced ||
+            if (NativeGameRunner.PreviewDrawDistance(3200, out var reduced) != 3200 || reduced ||
                 NativeGameRunner.PreviewDrawDistance(1200, out reduced) != 1200 || reduced)
-                throw new Exception("Saved scenery distance was not mapped to the preview range.");
+                throw new Exception("Saved scenery distance was reduced for the native runtime.");
             // Unknown saved choices are refused before any process starts.
             static void Refused(Action action)
             {
@@ -878,6 +891,7 @@ static class NativeRuntimeLayoutChecks
                 throw new Exception("Native preview accepted an unknown saved choice.");
             }
             Refused(() => NativeGameRunner.PreviewDrawDistance(1000, out _));
+            Refused(() => NativeGameRunner.PreviewDrawDistance(4000, out _));
             if (NativeGameRunner.PreviewAntialiasing("fxaa") != Mw3ReAntialiasing.Fxaa) throw new Exception("Saved FXAA was remapped.");
             Refused(() => NativeGameRunner.PreviewAntialiasing("msaa"));
             if (Directory.Exists(dataRoot)) throw new Exception("Planning unexpectedly created a write directory.");

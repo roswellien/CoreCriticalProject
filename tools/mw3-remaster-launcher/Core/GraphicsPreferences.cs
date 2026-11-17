@@ -20,7 +20,7 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
             throw new InvalidOperationException("Choose a supported AA setting.");
         if (AnisotropicFiltering is not (1 or 2 or 4 or 8 or 16))
             throw new InvalidOperationException("Choose a supported AF setting.");
-        if (DrawDistance is not (800 or 1200 or 1600))
+        if (DrawDistance is not (800 or 1200 or 1600 or 2400 or 3200))
             throw new InvalidOperationException("Choose a supported scenery setting.");
     }
 

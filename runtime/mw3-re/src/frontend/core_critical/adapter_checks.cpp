@@ -2573,6 +2573,24 @@ void check_renderer_bridge_config() {
   require(cfg_dxgi.af_level == 16, "af_level propagation mismatch");
   require(cfg_dxgi.draw_distance == 1600,
           "draw-distance propagation mismatch");
+  for (const unsigned draw_distance : {2400u, 3200u}) {
+    auto extended_quality = quality;
+    extended_quality.draw_distance = draw_distance;
+    const auto extended_config = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, extended_quality, assets);
+    require(extended_config.draw_distance == draw_distance,
+            "extended draw-distance propagation mismatch");
+  }
+  auto invalid_quality = quality;
+  invalid_quality.draw_distance = 1000;
+  bool invalid_distance_rejected = false;
+  try {
+    (void)cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, invalid_quality, assets);
+  } catch (const std::runtime_error &) {
+    invalid_distance_rejected = true;
+  }
+  require(invalid_distance_rejected, "unsupported draw distance was accepted");
   require(cfg_dxgi.normal_maps_enabled == true,
           "normal_maps_enabled propagation mismatch");
   require(cfg_dxgi.prepared_cache == true,

@@ -30,8 +30,8 @@ _PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "mo
                              "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
                              "stock_headlight_catalog"})
-# 800 is the original game's scenery range; the preview runtime also accepts 1200 and 1600.
-_PREVIEW_DRAW_DISTANCES = (800, 1200, 1600)
+# Keep the planner in step with kViewDistanceOptions; 800 is the original scenery range.
+_PREVIEW_DRAW_DISTANCES = (800, 1200, 1600, 2400, 3200)
 _PREVIEW_HUDS = ("original", "core-critical")
 _PREVIEW_GEOMETRY = ("legacy", "partial")
 _RUNTIME_MODEL_STATUSES = ("runtime-ready", "runtime-candidate")
@@ -688,7 +688,7 @@ def _preview_choices(preview):
     choices.update(preview)
     distance = choices["draw_distance"]
     if type(distance) is not int or distance not in _PREVIEW_DRAW_DISTANCES:
-        raise ValueError("Native preview scenery distance must be 800, 1200 or 1600")
+        raise ValueError("Native preview scenery distance must be 800, 1200, 1600, 2400 or 3200")
     if choices["hud"] is not None and choices["hud"] not in _PREVIEW_HUDS:
         raise ValueError("Unknown native preview HUD")
     if choices["hud_text"] is not None:

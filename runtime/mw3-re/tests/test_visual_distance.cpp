@@ -62,15 +62,18 @@ TEST(view_distance_cli_options) {
   EXPECT(sdlfe::parse_draw_distance("800", &distance) && distance == 800);
   EXPECT(sdlfe::parse_draw_distance("1200", &distance) && distance == 1200);
   EXPECT(sdlfe::parse_draw_distance("1600", &distance) && distance == 1600);
-  EXPECT(!sdlfe::parse_draw_distance("2400", &distance));
-  EXPECT(!sdlfe::parse_draw_distance("3200", &distance));
+  EXPECT(sdlfe::parse_draw_distance("2400", &distance) && distance == 2400);
+  EXPECT(sdlfe::parse_draw_distance("3200", &distance) && distance == 3200);
+  EXPECT(!sdlfe::parse_draw_distance("1000", &distance));
+  EXPECT(!sdlfe::parse_draw_distance("0800", &distance));
+  EXPECT(!sdlfe::parse_draw_distance("", &distance));
   EXPECT(!sdlfe::parse_draw_distance("1200junk", &distance));
   EXPECT(!sdlfe::parse_draw_distance(nullptr, &distance));
 }
 
 TEST(view_distance_controls_far_mech_detail) {
-  constexpr unsigned distances[] = {799, 801, 1199, 1201, 1599, 1601};
-  constexpr unsigned settings[] = {800, 1200, 1600};
+  constexpr unsigned distances[] = {799, 801, 1199, 1201, 1599, 1601, 2399, 2401, 3199, 3201};
+  constexpr unsigned settings[] = {800, 1200, 1600, 2400, 3200};
   EXPECT(zcls::visual_far_request() == zcls::kDefaultVisualFar);
   for (const unsigned selected_far : settings) {
     for (const unsigned distance : distances) {
@@ -168,9 +171,15 @@ TEST(view_distance_scoped_fog) {
   initial.density = 0.75f;
   zmod::fog() = initial;
   {
+    zmod::Fog short_fog = initial;
+    short_fog.far_range = 600.0f;
+    short_fog.far_sq = 360000.0f;
+    short_fog.inv_range = 1.0f / 500.0f;
+    zmod::fog() = short_fog;
     zmod::ScopedRenderFog identity_scope(800.0f, 800.0f);
-    EXPECT(std::memcmp(&zmod::render_fog(), &initial, sizeof(initial)) == 0);
+    EXPECT(std::memcmp(&zmod::render_fog(), &short_fog, sizeof(short_fog)) == 0);
   }
+  zmod::fog() = initial;
   {
     zmod::ScopedRenderFog scope(800.0f, 1600.0f);
     const zmod::Fog& render = zmod::render_fog();
@@ -198,8 +207,8 @@ TEST(view_distance_tiler_capacity) {
   static zcls::SceneWalk walk{};
   const size_t ring_capacity = std::size(walk.rings);
   const size_t cells_per_ring = std::size(walk.rings[0].cell);
-  EXPECT(ring_capacity == 128);
-  EXPECT(cells_per_ring == 64);
+  EXPECT(ring_capacity == 256);
+  EXPECT(cells_per_ring == 128);
   for (size_t ring = 0; ring < ring_capacity; ++ring) {
     walk.rings[ring].count = 0;
     for (size_t cell = 0; cell < cells_per_ring; ++cell) {
@@ -230,8 +239,8 @@ TEST(view_distance_nested_fog_and_setters) {
     EXPECT(zmod::render_fog().far_range == 1400.0f);
     {
       zmod::ScopedRenderFog zoom(800.0f, 1200.0f);
-      // 700 x 1.5 = 1050 (not 700 x 2 x 1.5) reaches the 1200 view's cover band, so it covers the edge.
-      EXPECT(zmod::render_fog().near_range == 1000.0f && zmod::render_fog().far_range == 1200.0f);
+      // Scaling the authored 700 by 1.5 reaches the 1200 view's table start, covering the edge.
+      EXPECT(zmod::render_fog().near_range == 1050.0f && zmod::render_fog().far_range == 1200.0f);
       zmod::fog_set_far(800.0f);
       zmod::fog_set_on(0);
       EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
@@ -245,10 +254,8 @@ TEST(view_distance_nested_fog_and_setters) {
   zmod::fog() = saved;
 }
 
-// Linear fog that reaches the edge of an extended view covers where world geometry ends: full at
-// the visual far plane, starting about 200 units before it at 1200 and 100 units before it at
-// 1600. Fog that ends well short of the edge keeps its scaled interval. The authored fog that
-// gameplay reads never changes.
+// Linear fog at the geometry edge uses the playtested starts. Deliberately foggy maps keep
+// their scaled interval, and gameplay readers keep the authored fog.
 TEST(view_distance_fog_covers_geometry_edge) {
   const zmod::Fog saved = zmod::fog();
   zmod::Fog edge{};
@@ -261,20 +268,20 @@ TEST(view_distance_fog_covers_geometry_edge) {
   {
     zmod::ScopedRenderFog scope(800.0f, 1200.0f);
     const zmod::Fog& render = zmod::render_fog();
-    EXPECT(render.near_range == 1000.0f && render.far_range == 1200.0f);
-    EXPECT(render.near_sq == 1000000.0f && render.far_sq == 1440000.0f);
-    EXPECT(render.inv_range == 1.0f / 200.0f);
+    EXPECT(render.near_range == 1050.0f && render.far_range == 1200.0f);
+    EXPECT(render.near_sq == 1102500.0f && render.far_sq == 1440000.0f);
+    EXPECT(render.inv_range == 1.0f / 150.0f);
   }
   {
     zmod::ScopedRenderFog scope(800.0f, 1600.0f);
-    EXPECT(zmod::render_fog().near_range == 1500.0f && zmod::render_fog().far_range == 1600.0f);
+    EXPECT(zmod::render_fog().near_range == 1450.0f && zmod::render_fog().far_range == 1600.0f);
   }
   EXPECT(zmod::fog().near_range == 300.0f && zmod::fog().far_range == 800.0f);
   // Fog authored beyond the original far plane still ends at the visual far plane.
   zmod::fog().far_range = 950.0f;
   {
     zmod::ScopedRenderFog scope(800.0f, 1200.0f);
-    EXPECT(zmod::render_fog().near_range == 1000.0f && zmod::render_fog().far_range == 1200.0f);
+    EXPECT(zmod::render_fog().near_range == 1050.0f && zmod::render_fog().far_range == 1200.0f);
   }
   // A deliberately foggy map (fog ends at 300 of 800) keeps its proportionally scaled interval.
   zmod::fog().near_range = 50.0f;
@@ -283,6 +290,36 @@ TEST(view_distance_fog_covers_geometry_edge) {
     zmod::ScopedRenderFog scope(800.0f, 1600.0f);
     EXPECT(zmod::render_fog().near_range == 100.0f && zmod::render_fog().far_range == 600.0f);
   }
+  zmod::fog() = saved;
+}
+
+TEST(view_distance_exact_fog_start_table) {
+  constexpr zcls::ViewDistanceOption expected[] = {
+      {800, 700}, {1200, 1050}, {1600, 1450}, {2400, 2250}, {3200, 3050}};
+  EXPECT(std::size(zcls::kViewDistanceOptions) == std::size(expected));
+  const zmod::Fog saved = zmod::fog();
+  zmod::Fog edge{};
+  edge.on = 1;
+  edge.linear = 1;
+  edge.near_range = 300.0f;
+  edge.far_range = 800.0f;
+  zmod::fog() = edge;
+  for (size_t index = 0; index < std::size(zcls::kViewDistanceOptions); ++index) {
+    const auto& option = zcls::kViewDistanceOptions[index];
+    EXPECT(index < std::size(expected));
+    if (index >= std::size(expected)) continue;
+    EXPECT(option.view_distance == expected[index].view_distance);
+    EXPECT(option.fog_start == expected[index].fog_start);
+    EXPECT(zcls::is_supported_view_distance(option.view_distance));
+    const float visual_far = static_cast<float>(option.view_distance);
+    EXPECT(zcls::fog_start_for_view_distance(visual_far) == expected[index].fog_start);
+    zmod::ScopedRenderFog scope(800.0f, visual_far);
+    EXPECT(zmod::render_fog().near_range == expected[index].fog_start);
+    EXPECT(zmod::render_fog().far_range == visual_far);
+  }
+  EXPECT(!zcls::is_supported_view_distance(1000));
+  EXPECT(zcls::fog_start_for_view_distance(1000.0f) == 850.0f);
+  EXPECT(zmod::fog().near_range == edge.near_range && zmod::fog().far_range == edge.far_range);
   zmod::fog() = saved;
 }
 

@@ -21,7 +21,7 @@ public sealed class NativeGameRunner
     public const string PlannerFolder = "Planner";
     public const string ProfileId = "native-preview";
     /// <summary>The largest scenery distance the native runtime accepts in this release.</summary>
-    public const int MaxDrawDistance = 1600;
+    public const int MaxDrawDistance = 3200;
 
     private readonly string _basePath;
     private readonly string _dataRoot;
@@ -50,15 +50,15 @@ public sealed class NativeGameRunner
     }
 
     /// <summary>
-    /// MW3-RE supports 800, 1200 and 1600. Larger saved choices (made for the old runtime
-    /// engine) use 1600, and the caller is told so; smaller unknown values are refused.
+    /// MW3-RE supports 800, 1200, 1600, 2400 and 3200 without reducing saved choices.
+    /// Unknown values are refused before launch.
     /// </summary>
     public static int PreviewDrawDistance(int savedDrawDistance, out bool reduced)
     {
-        reduced = savedDrawDistance > MaxDrawDistance;
-        if (reduced) return MaxDrawDistance;
-        if (savedDrawDistance is not (800 or 1200 or 1600))
-            throw new InvalidOperationException("Choose a scenery distance of 800, 1200 or 1600 for MW3-RE.");
+        reduced = false;
+        if (savedDrawDistance is not (800 or 1200 or 1600 or 2400 or 3200))
+            throw new InvalidOperationException(
+                "Choose a scenery distance of 800, 1200, 1600, 2400 or 3200 for MW3-RE.");
         return savedDrawDistance;
     }
 
@@ -244,8 +244,7 @@ public sealed class NativeGameRunner
             ?? D7VkRunner.FindPythonExecutable(requirePython311: true)
             ?? throw new FileNotFoundException("MW3-RE needs Python 3.11 or newer.");
 
-        var drawDistance = PreviewDrawDistance(settings.DrawDistance, out var reduced);
-        if (reduced) log($"Scenery distance {settings.DrawDistance} is not supported; using {drawDistance}.");
+        var drawDistance = PreviewDrawDistance(settings.DrawDistance, out _);
         var activePacks = activeModDirs.ToList();
         var (models, environments) = SelectPreviewPacks(activePacks);
         var uiPacks = SelectUiPacks(activePacks, log);
