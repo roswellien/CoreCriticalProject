@@ -26,10 +26,28 @@ static class GraphicsPreferencesChecks
                !loaded.ActivePacks.SequenceEqual(new[]{"test.keep-pack"}))
                 throw new Exception("Setup graphics did not persist independently of pack selection");
             var headlightStore=new HeadlightBindings(root);
-            if(headlightStore.Load()!=new HeadlightBinding())throw new Exception("Headlights must start unbound");
+            if(headlightStore.Load()!=new HeadlightBinding())throw new Exception("Fresh headlight settings must default to L");
+            var nativeSession=Path.Combine(root,"headlight-native");
+            Directory.CreateDirectory(nativeSession);
+            if(headlightStore.WriteNativeBinding(nativeSession,true)==null ||
+               File.ReadAllText(Path.Combine(nativeSession,"mw3-headlights.txt"))!="CC_MW3_HEADLIGHTS_V1\n38 -1\n")
+                throw new Exception("Default headlight binding native file format changed");
+            var headlightPath=Path.Combine(root,"controls","mw3-headlights-v1.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(headlightPath)!);
+            // JsonSerializer.Serialize's default options have written Key since 5ca34624,
+            // including 0 for a clear; a missing Key means the binding was never set.
+            File.WriteAllText(headlightPath,"{\"Version\":1,\"Button\":-1}");
+            if(headlightStore.Load().Key!=0x26)throw new Exception("A legacy headlight file without Key must default to L");
+            var clearedBinding=new HeadlightBinding {Key=0,Button=-1};
+            headlightStore.Save(clearedBinding);
+            if(!File.ReadAllText(headlightPath).Contains("\"Key\": 0") || headlightStore.Load()!=clearedBinding ||
+               headlightStore.WriteNativeBinding(nativeSession,true)!=null)
+                throw new Exception("An explicitly cleared headlight binding did not persist");
             var headlightBinding=new HeadlightBinding {Key=0x223,Button=3};
             headlightStore.Save(headlightBinding);
-            if(headlightStore.Load()!=headlightBinding)throw new Exception("Headlight binding persistence");
+            if(headlightStore.Load()!=headlightBinding || headlightStore.WriteNativeBinding(nativeSession,true)==null ||
+               File.ReadAllText(Path.Combine(nativeSession,"mw3-headlights.txt"))!="CC_MW3_HEADLIGHTS_V1\n547 3\n")
+                throw new Exception("Saved headlight binding was changed or not written to the native file");
             (choice with {DynamicLighting=false}).ApplyTo(loaded);
             if(!loaded.Headlights)throw new Exception("Lighting off lost headlight preference");
             if(loaded.WaterDetail || !loaded.CloudDetail)throw new Exception("Surface detail choices did not persist");
