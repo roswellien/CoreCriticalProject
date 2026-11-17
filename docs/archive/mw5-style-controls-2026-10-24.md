@@ -21,10 +21,10 @@ MW3-specific adaptations shown in the editor:
   independent MW5 fire-group commands; MW3 has five groups, not six.
 - Middle mouse uses MW3 reticle zoom. Side buttons/wheel are not representable
   in the existing saved mouse-button format.
-- Right mouse/L freelook, M MASC, Z reverse. Standalone modifier keys cannot be
-  encoded as ordinary command keys by this editor.
+- Right mouse freelook, L headlight toggle, M MASC, Z reverse. Standalone
+  modifier keys cannot be encoded as ordinary command keys by this editor.
 - Ctrl + numpad 0 toggles the original torso mode, independently of held
-  right-mouse/L freelook. This mode is saved outside the key layout, so switching
+  right-mouse freelook. This mode is saved outside the key layout, so switching
   between MW3 and MW5 layouts does not reset it. Both factory layouts provide
   the toggle. The October 27 repair updates only an exact unmodified older MW5
   preset; custom names, bindings and cleared controls remain intact.
