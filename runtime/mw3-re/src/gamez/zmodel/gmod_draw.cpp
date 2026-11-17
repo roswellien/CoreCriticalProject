@@ -991,6 +991,8 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
       context.fx_near = projection.fx_near, context.fy_near = projection.fy_near;
       context.cx = projection.cx, context.cy = projection.cy;
       context.opacity = s.opacity;
+      const Lighting& tint = lighting();
+      if (tint.tint_on) context.damage_tint_weight = tint.tint_weight;
       context.ordinary = type == 0;
       context.morphing = morphing(m);
       context.overlay = s.overlay != 0;

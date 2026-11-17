@@ -4,6 +4,7 @@
 #include <cfenv>
 #include <cstdio>
 #include <stdexcept>
+#include <utility>
 
 #include "frontend/sdl/sdl_render3d.h"
 #include "gamez/zimage/zimg_library.h"
@@ -38,7 +39,26 @@ GpuHud::GpuHud(FrameRenderer& renderer, const HudOptions& options)
     : renderer_(renderer), options_(options) {
   if (options.mode != "core-critical")
     throw std::runtime_error("GPU HUD requires core-critical mode");
-  if (!options.artwork.empty()) artwork_ = platform::load_hud_artwork(options.artwork);
+  for (const auto& directory : options.artwork) {
+    auto loaded = platform::load_hud_artwork(directory);
+    for (auto& [identity, image] : loaded) {
+      const auto existing = artwork_.find(identity);
+      if (existing == artwork_.end()) {
+        artwork_.emplace(identity, std::move(image));
+        artwork_roots_.emplace(identity, directory);
+        continue;
+      }
+      const auto& prior = *existing->second;
+      const auto& incoming = *image;
+      if (prior.width != incoming.width || prior.height != incoming.height ||
+          prior.u0 != incoming.u0 || prior.v0 != incoming.v0 || prior.u1 != incoming.u1 ||
+          prior.v1 != incoming.v1 || prior.pixels != incoming.pixels) {
+        std::fprintf(stderr, "GPU HUD: conflicting identity %016llx; keeping %s, skipping %s\n",
+                     static_cast<unsigned long long>(identity), artwork_roots_.at(identity).c_str(),
+                     directory.c_str());
+      }
+    }
+  }
 }
 GpuHud::~GpuHud() {
   cancel();

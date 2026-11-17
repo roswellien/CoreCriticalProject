@@ -3,11 +3,12 @@ namespace MW3RemasterLauncher.Core;
 /// <summary>A validated graphics selection shared by setup and normal launch.</summary>
 public sealed record GraphicsPreferences(int Width, int Height, string WindowMode,
     string AntiAliasing, int AnisotropicFiltering, int DrawDistance,
-    bool DynamicLighting, bool Shadows, bool Headlights = false)
+    bool DynamicLighting, bool Shadows, bool Headlights = false,
+    bool WaterDetail = true, bool CloudDetail = true)
 {
     public static GraphicsPreferences From(LauncherSettings s) => new(s.Width, s.Height,
         s.WindowMode, s.AntiAliasing, s.AnisotropicFiltering, s.DrawDistance,
-        s.DynamicLighting, s.Shadows, s.Headlights);
+        s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail);
 
     public void Validate()
     {
@@ -31,5 +32,6 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
         s.AntiAliasing=AntiAliasing; s.AnisotropicFiltering=AnisotropicFiltering;
         s.DrawDistance=DrawDistance;
         s.DynamicLighting=DynamicLighting; s.Shadows=Shadows; s.Headlights=Headlights;
+        s.WaterDetail=WaterDetail; s.CloudDetail=CloudDetail;
     }
 }

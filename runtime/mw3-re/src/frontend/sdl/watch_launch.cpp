@@ -167,7 +167,7 @@ void watch_default_hud(const WatchArgs& w, bool mode_chosen, HudOptions* hud) {
   if (!local) return;
   const std::filesystem::path pack = std::filesystem::path(local) / "MW3Remaster/mods/com.mw3remaster.hud";
   std::error_code ec;
-  if (std::filesystem::is_directory(pack / "ui/sprites", ec)) hud->artwork = pack.string();
+  if (std::filesystem::is_directory(pack / "ui/sprites", ec)) hud->artwork.push_back(pack.string());
 }
 
 bool watch_run_over(const WatchArgs& w, const zgame::State* state) {
