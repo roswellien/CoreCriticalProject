@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import batch as batch_module
 import summary
+import theme
 
 THUMB_PIXELS = 150  # a map thumbnail's long side
 PICTURE_ZOOM = 3  # the mech lab's icons are about 40 pixels wide
@@ -91,7 +92,7 @@ class SetupScreen(ttk.Frame):
             self.images[f"map-{m['id']}"] = thumb
             button = tk.Radiobutton(
                 box, image=thumb, text=m["name"].title(), compound="top", variable=self.map_id,
-                value=m["id"], indicatoron=False, selectcolor="#2f6f5a", borderwidth=3,
+                value=m["id"], indicatoron=False, selectcolor=theme.ACCENT_DARK, borderwidth=3,
             )  # fmt: skip
             button.grid(row=i // MAP_COLUMNS, column=i % MAP_COLUMNS, padx=4, pady=4)
 
@@ -105,7 +106,9 @@ class SetupScreen(ttk.Frame):
             row, from_=batch_module.MIN_MATCHES, to=batch_module.MAX_MATCHES, width=4,
             textvariable=self.matches, state="readonly",
         ).pack(side="left", padx=6)  # fmt: skip
-        ttk.Button(row, text="Run", command=self._run).pack(side="left", padx=12)
+        ttk.Button(row, text="Run", style="Accent.TButton", command=self._run).pack(
+            side="left", padx=12
+        )
         ttk.Button(row, text="Load setup", command=self._load_setup).pack(side="right")
         ttk.Button(row, text="Save setup", command=self._save_setup).pack(side="right", padx=6)
 
@@ -205,9 +208,7 @@ class SetupScreen(ttk.Frame):
         self.chassis.bind("<<ComboboxSelected>>", lambda _e: self._edit("chassis"))
         self.loadout.bind("<<ComboboxSelected>>", lambda _e: self._edit("loadout"))
         self.pilot.bind("<<ComboboxSelected>>", lambda _e: self._edit("pilot"))
-        # A ttk frame has no background option; the window's own color reads the same.
-        background = ttk.Style().lookup("TFrame", "background")
-        self.details = tk.Text(box, height=7, width=70, relief="flat", background=background)
+        self.details = tk.Text(box, height=7, width=70, relief="flat", background=theme.BG)
         self.details.grid(row=2, column=1, columnspan=2, sticky="nw", pady=6)
         self.pilot_words = ttk.Label(box, wraplength=360, justify="left")
         self.pilot_words.grid(row=2, column=3, sticky="nw", pady=6)

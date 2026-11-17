@@ -21,6 +21,7 @@ from tkinter import filedialog, messagebox, ttk
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import catalog as catalog_module
+import theme
 from results_screen import ResultsScreen
 from running_screen import RunningScreen
 from setup_screen import SetupScreen
@@ -64,6 +65,7 @@ class App:
         self.root = root
         self.screen: ttk.Frame | None = None
         root.title("Arena runner")
+        theme.apply(root)
         root.geometry("1180x820")
         self.settings = load_settings()
         if not ask_paths(root, self.settings):
