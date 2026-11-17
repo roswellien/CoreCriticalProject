@@ -1,0 +1,13 @@
+{
+  "about": "The runner's short pilot list: shipped enemy records picked across the range of their numbers (attack range, aim error, break-off), each given a plain name. The summary line under each is built from the record's own numbers, so it stays true if a name ages. Key: world/mission/record.",
+  "pilots": {
+    "c1/ia1/Enemy_01": "Instant Action regular",
+    "c4/m3/supernova_01": "Sharpshooter",
+    "c4b/m6/supernova_01": "Careful veteran",
+    "c2/m1/thor_01": "Long-range gunner",
+    "c4/ia2/Enemy_10": "Trigger-happy",
+    "c4b/m4/daishi_01": "Point-blank brawler",
+    "c2/m1/strider_01": "Close-in skirmisher",
+    "c1/m1/owens_01": "Shaky rookie"
+  }
+}
