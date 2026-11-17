@@ -53,6 +53,29 @@ bool full_display_viewport(Node* window) {
          height == zmod::walk_state().screen_h;
 }
 
+void update_far_corners(Camera* camera, float far_z) {
+  camera->put<uint32_t>(0xfc, 0);
+  camera->put<uint32_t>(0x100, 0);
+  camera->put<uint32_t>(0x104, 0);
+  const float a = static_cast<float>(
+      std::tan(static_cast<double>(camera->get<float>(0xe8) * 0.5f)) * far_z);
+  const float b = -static_cast<float>(
+      std::tan(static_cast<double>(camera->get<float>(0xec) * 0.5f)) * far_z);
+  const float c = -far_z;
+  const float corners[12] = {a, b, c, -a, b, c, a, -b, c, -a, -b, c};
+  std::memcpy(camera->floats(0x108), corners, sizeof corners);
+}
+
+void update_plane_point(Camera* camera, int off, float distance) {
+  const float* dir = camera->floats(0x74);
+  const float* pos = camera->floats(0x2c);
+  float* point = camera->floats(off);
+  for (int i = 0; i < 3; ++i) {
+    point[i] = dir[i] * distance;
+    point[i] = point[i] + pos[i];
+  }
+}
+
 class VisualRenderScope {
  public:
   VisualRenderScope(Camera* camera, Node* window) {
@@ -61,6 +84,7 @@ class VisualRenderScope {
     const float authored_far = camera->get<float>(0xb4);
     const float expanded = visual_far(authored_far, g_visual_far_request, true);
     if (!(expanded > authored_far)) return;
+    camera_ = camera;
     previous_camera_ = g_visual_camera;
     previous_far_ = g_visual_far;
     g_visual_camera = camera;
@@ -72,10 +96,17 @@ class VisualRenderScope {
     if (active_) {
       g_visual_camera = previous_camera_;
       g_visual_far = previous_far_;
+      // The scope starts before camera_update: an entry snapshot can be zero
+      // or belong to the previous pose. Rebuild from the pose updated this frame.
+      // An enclosing scope on this camera still owns its render-only distance.
+      const float far_z = visual_far_for_render(camera_, camera_->get<float>(0xb4));
+      update_far_corners(camera_, far_z);
+      update_plane_point(camera_, 0xc4, far_z);
     }
   }
 
  private:
+  Camera* camera_ = nullptr;
   const void* previous_camera_ = nullptr;
   float previous_far_ = 0.0f;
   bool active_ = false;
@@ -897,21 +928,12 @@ int camera_update_offset(Node* node, const float* offset) {
   if (visual_far_corners_need_update(clip_changed, far_z,
                                      d->get<float>(0x110))) {
     if (clip_changed) d->put<int32_t>(0xf8, 0);
-    d->put<uint32_t>(0xfc, 0), d->put<uint32_t>(0x100, 0), d->put<uint32_t>(0x104, 0);
-    const float a = static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xe8) * 0.5f)) * far_z);
-    const float b = -static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xec) * 0.5f)) * far_z);
-    const float c = -far_z;
-    const float corners[12] = {a, b, c, -a, b, c, a, -b, c, -a, -b, c};
-    std::memcpy(d->floats(0x108), corners, sizeof corners);
+    update_far_corners(d, far_z);
   }
-  const float* dir = d->floats(0x74);
-  const float* pos = d->floats(0x2c);
   for (int off : {0xb8, 0xc4}) {
     const float k = off == 0xb8 ? d->get<float>(0xb0)
                                 : visual_far_for_render(d, d->get<float>(0xb4));
-    float* p = d->floats(off);
-    p[0] = dir[0] * k, p[1] = dir[1] * k, p[2] = dir[2] * k;
-    p[0] = p[0] + pos[0], p[1] = p[1] + pos[1], p[2] = p[2] + pos[2];
+    update_plane_point(d, off, k);
   }
   return 0;
 }

@@ -6,10 +6,10 @@
 #include "gamez/zmodel/gmod_fog.h"
 #include "mech3/mech_lod.h"
 
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 
 namespace {
