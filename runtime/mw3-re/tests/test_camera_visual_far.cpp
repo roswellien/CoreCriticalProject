@@ -9,6 +9,7 @@
 #include "gamez/zmodel/gmod_init.h"
 #include "gamez/zmodel/gmod_light.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "mech3/options.h"
 
 #include <cmath>
 #include <memory>
@@ -50,6 +51,7 @@ void expect_far_state(zcls::Camera& camera, const CameraFrame& frame, float far_
 // An empty authored partition exercises render_world's real VisualRenderScope
 // and camera_update without game assets, graphics output or test-only camera APIs.
 struct CameraFixture {
+  mech3::Rect old_render = mech3::render();
   unsigned old_far = zcls::visual_far_request();
   zmth::MatrixStack old_stack = zmth::matrix_stack();
   zmth::View old_view = zmth::view();
@@ -86,6 +88,8 @@ struct CameraFixture {
     zcls::scene_walk().reset();
     zcls::world_render_hooks() = {};
     zmod::walk_state() = {};
+    mech3::set_render_origin(0, 0);
+    mech3::set_render_size(3440, 1440);
     zmod::draw_state().shadows = 0;
     zmod::zones().mode = 0;
 
@@ -100,8 +104,8 @@ struct CameraFixture {
     camera.put(0xd8, 1.0f);
     camera.put(0xdc, 1.0f);
     EXPECT(zcls::camera_set_clip(&camera_node, 1.0f, kAuthoredFar) == 0);
-    window.put<int32_t>(8, zmod::walk_state().screen_w);
-    window.put<int32_t>(12, zmod::walk_state().screen_h);
+    window.put<int32_t>(8, 3440);
+    window.put<int32_t>(12, 1440);
     world.rows = rows;
     world.put(0x34, -2000.0f);
     world.put(0x38, -2000.0f);
@@ -134,6 +138,7 @@ struct CameraFixture {
     zcls::scene_walk() = *old_walk;
     zcls::world_render_hooks() = old_hooks;
     zmod::walk_state() = old_model_walk;
+    mech3::render() = old_render;
     zmod::draw_state() = old_draw;
     zmod::lighting() = old_lighting;
     zmod::light_list() = old_lights;
@@ -212,8 +217,37 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
   EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
   EXPECT(&zmod::render_fog() == &zmod::fog());
 
-  fixture.window.put<int32_t>(8, zmod::walk_state().screen_w / 2);
-  fixture.window.put<int32_t>(12, zmod::walk_state().screen_h / 2);
+  const CameraFrame expanded_frame = {1600, {10.0f, 30.0f, 20.0f},
+                                      0.0f, 0.0f, 1.0f, 0.8f};
+  fixture.frame = &expanded_frame;
+  zcls::set_visual_far_request(expanded_frame.requested_far);
+  hooks.begin_scene = [](void* context) {
+    auto& fixture = *static_cast<CameraFixture*>(context);
+    ++fixture.observed_passes;
+    EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == 1600.0f);
+    EXPECT(fixture.camera.get<float>(0x110) == -1600.0f);
+    EXPECT(zmod::draw_state().clip.far_z == 1600.0f);
+    EXPECT(zmod::render_fog().near_range ==
+           zcls::fog_start_for_view_distance(fixture.frame->requested_far));
+    EXPECT(zmod::render_fog().far_range == 1600.0f);
+  };
+  EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+  EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == kAuthoredFar);
+
+  fixture.window.put<int32_t>(8, 90);
+  fixture.window.put<int32_t>(12, 90);
+  hooks.begin_scene = [](void* context) {
+    auto& fixture = *static_cast<CameraFixture*>(context);
+    ++fixture.observed_passes;
+    EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == kAuthoredFar);
+    EXPECT(&zmod::render_fog() == &zmod::fog());
+  };
+  EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+  EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == kAuthoredFar);
+
+  zcls::set_visual_far_request(800);
+  fixture.window.put<int32_t>(8, 1720);
+  fixture.window.put<int32_t>(12, 720);
   hooks.begin_scene = [](void* context) {
     auto& fixture = *static_cast<CameraFixture*>(context);
     ++fixture.observed_passes;
@@ -226,7 +260,7 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
     EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
     EXPECT(&zmod::render_fog() == &zmod::fog());
   }
-  EXPECT(fixture.observed_passes == 2);
+  EXPECT(fixture.observed_passes == 4);
   EXPECT(zmod::fog().near_range == authored_fog.near_range);
   EXPECT(zmod::fog().far_range == authored_fog.far_range);
   zmod::fog() = old_fog;
