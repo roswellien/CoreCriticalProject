@@ -775,7 +775,7 @@ def plan_launch(request):
         argv.extend(("--indeo-codec", str(codec)))
     if preview is not None:
         argv.extend(("--cc-dynamic-lighting", "1" if preview["dynamic_lighting"] else "0"))
-        # Enforce the launcher dependency for callers that bypass NativeGameRunner too.
+        # Apply dependencies here so callers can preserve requested choices for suppression reports.
         sun_shadows = (preview["shadows"] and preview["dynamic_lighting"] and
                        request["lighting"] != "off")
         argv.extend(("--cc-sun-shadows", "1" if sun_shadows else "0"))

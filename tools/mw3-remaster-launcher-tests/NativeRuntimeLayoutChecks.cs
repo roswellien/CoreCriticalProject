@@ -729,12 +729,15 @@ static class NativeRuntimeLayoutChecks
                 NativeGameRunner.WindowModeForSettings("fullscreen_windowed") != Mw3ReWindowMode.Borderless)
                 throw new Exception("Saved window mode did not reach the MW3-RE planner mode.");
 
-            var options = new Mw3RePlanningOptions
+            var settings = new LauncherSettings
             {
-                Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
-                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, DynamicLighting = true, Shadows = true,
-                    ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
+                Width = 1280, Height = 720, WindowMode = "windowed", RenderThread = true,
+                AntiAliasing = "fxaa", AnisotropicFiltering = 16, DrawDistance = 1200,
+                DynamicLighting = true, Shadows = true
             };
+            var options = NativeGameRunner.PlanningOptionsForSettings(settings, contract,
+                NativeGameRunner.PreviewDrawDistance(settings.DrawDistance, out _),
+                new[] { mechs }, new[] { map, shared }, null);
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
@@ -760,6 +763,39 @@ static class NativeRuntimeLayoutChecks
                     .Select(item => item!["feature"]!.GetValue<string>())
                     .SequenceEqual(new[] { "effect_lights", "fixture_lights" }))
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
+
+            // Keep the saved request intact even when a dependency disables shadows for this launch.
+            var suppressedSettings = new LauncherSettings { Shadows = true, DynamicLighting = false };
+            var suppressedOptions = NativeGameRunner.PlanningOptionsForSettings(suppressedSettings,
+                contract, NativeGameRunner.PreviewDrawDistance(suppressedSettings.DrawDistance, out _),
+                Array.Empty<string>(), Array.Empty<string>(), null);
+            foreach (var lighting in new[] { Mw3ReLighting.Normal, Mw3ReLighting.Off })
+            {
+                var suppressedJson = Mw3ReLaunchRequest.Create(contract, suppressedOptions with
+                    { Lighting = lighting, Pom = lighting == Mw3ReLighting.Normal },
+                    "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
+                var suppressedWire = JsonNode.Parse(suppressedJson)!;
+                if (!suppressedWire["preview"]!["shadows"]!.GetValue<bool>() ||
+                    suppressedWire["preview"]!["dynamic_lighting"]!.GetValue<bool>())
+                    throw new Exception("Native settings projection erased the requested shadows or enabled dynamic lighting.");
+                var suppressedPlan = RunMw3RePlanner(suppressedJson);
+                var suppressedArgv = suppressedPlan["argv"]!.AsArray()
+                    .Select(value => value!.GetValue<string>()).ToList();
+                if (!suppressedPlan["ok"]!.GetValue<bool>() ||
+                    suppressedArgv[suppressedArgv.IndexOf("--cc-dynamic-lighting") + 1] != "0" ||
+                    suppressedArgv[suppressedArgv.IndexOf("--cc-sun-shadows") + 1] != "0")
+                    throw new Exception("Planner enabled shadows or dynamic lighting for a suppressed saved request.");
+                var shadowSkips = suppressedPlan["skipped_packs"]!.AsArray()
+                    .Where(item => item?["feature"]?.GetValue<string>() == "sun_shadows").ToList();
+                var expectedReason = lighting == Mw3ReLighting.Off
+                    ? "sun shadows require sun lighting" : "sun shadows require dynamic lighting";
+                if (shadowSkips.Count != 1 ||
+                    shadowSkips[0]!["root"]!.GetValue<string>() != contract.Root ||
+                    shadowSkips[0]!["reason"]!.GetValue<string>() != expectedReason)
+                    throw new Exception("Planner lost the sun_shadows suppression record for saved launcher choices.");
+            }
+            if (!suppressedSettings.Shadows || suppressedSettings.DynamicLighting)
+                throw new Exception("Planning mutated the saved lighting choices.");
 
             // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
             var original = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
