@@ -7,6 +7,7 @@
 //   mw3 [install-dir] [options] [-nofmv] [-seasick] [-cdN]
 //
 //   --install DIR        the MW3 folder, any version (default: mw3.cfg's install=, else searched, else asked: sdl_install.h)
+//   --indeo-codec FILE   the install's identity-checked Indeo 5 codec (the launcher supplies it)
 //   --install-from PATH  install from the disc first (ours, disc_install.h): a drive or folder, a .iso, or a
 //                        .cue/.bin (its audio tracks the music); --patch too makes it 1.2
 //     --install-to DIR   where (default: the write dir's install/); saved as mw3.cfg's install=
@@ -72,6 +73,7 @@
 #include <string>
 #include <vector>
 #include <exception>
+#include <typeinfo>
 
 #include "frontend/sdl/campaign_chain.h"
 #include "frontend/sdl/editor_imgui.h"
@@ -111,6 +113,7 @@
 #include "frontend/sdl/sdl_sound.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "frontend/sdl/sdl_vfw.h"
+#include "frontend/sdl/indeo_codec_path.h"
 #include "frontend/sdl/net_enet.h"
 #include "frontend/sdl/net_upnp.h"
 
@@ -157,6 +160,22 @@ extern "C" const char mw3_version_tag[] = "MW3-PROGRAM-VERSION:" MW3_VERSION;
 
 namespace {
 
+void log_loop_exception(std::exception_ptr failure) noexcept {
+  if (!failure) {
+    std::fprintf(stderr, "mw3: game loop failed with an empty exception\n");
+    std::fflush(stderr);
+    return;
+  }
+  try {
+    std::rethrow_exception(failure);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "mw3: game loop exception (%s): %s\n", typeid(error).name(), error.what());
+  } catch (...) {
+    std::fprintf(stderr, "mw3: game loop exception (non-standard C++ exception)\n");
+  }
+  std::fflush(stderr);
+}
+
 // What the player's game holds (--verbose): its mission, the store and the
 // mission's salvage together by item, the player's mech and loadout, the
 // lancemates.
@@ -183,7 +202,7 @@ struct Args {
   sdlfe::CoreCriticalQuality quality;
   sdlfe::CoreCriticalAssets cc_assets;
   SDL_Window* launcher_window = nullptr;  // the launcher's, for the game to take (one window; ours)
-  std::string install, write_dir, mission, variant, dialog_file, dialog_name, shot, movie;
+  std::string install, indeo_codec, write_dir, mission, variant, dialog_file, dialog_name, shot, movie;
   std::string cfg_install;  // mw3.cfg's install= (the command line's wins)
   std::string cfg_mw1_game;  // mw3.cfg's mw1_game= (ours: the launcher's MechWarrior 1989 folder)
   std::string cfg_joystick, cfg_joystick_axes;  // mw3.cfg's joystick=, joystick_axes= (ours, W54: sdl_input.h)
@@ -305,7 +324,7 @@ struct Args {
 
 void usage() {
   std::printf(
-      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] [--assets DIR]... [--write-dir DIR] [--version]\n"
+      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] [--indeo-codec FILE] [--assets DIR]... [--write-dir DIR] [--version]\n"
       "    [--mission NAME [--valve-map DIR] | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] [--vehicle-ahead M [--vehicle-hold]] [--field-base-ahead M] [--turret-ahead M] [--mech-ahead M] [--dialog FILE NAME]\n"
       "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--hurt F@N] [--win N] [--lose N] [--lab-mech N]\n"
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
@@ -339,6 +358,7 @@ bool parse(int argc, char** argv, Args& a) {
       std::exit(0);
     }
     else if (s == "--install" && next(1)) a.install = argv[++i];
+    else if (s == "--indeo-codec" && next(1)) a.indeo_codec = argv[++i];
     else if (s == "--assets" && next(1)) a.assets.emplace_back(argv[++i]);
     else if (s == "--write-dir" && next(1)) a.write_dir = argv[++i];
     else if (s == "--mod" && next(1)) a.mods.emplace_back(argv[++i]), a.mods_given = true;
@@ -815,17 +835,6 @@ std::string flat(const std::string& s) {
   return out;
 }
 
-// The install's Indeo 5 codec, any case.
-std::string codec_path(const std::string& install) {
-  std::error_code ec;
-  for (const auto& e : std::filesystem::directory_iterator(install, ec)) {
-    std::string n = e.path().filename().string();
-    for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (n == "ir50_32.dll") return e.path().string();
-  }
-  return {};
-}
-
 }  // namespace
 
 namespace {
@@ -1138,7 +1147,8 @@ int program(int argc, char** argv) {
   // 5 codec in the 32-bit helper (ours, FIX (A): sdl_vfw.h); the importer's
   // files only when it is missing or fails.
   std::unique_ptr<sdlfe::SdlVfwHelper> vfw;
-  const std::string helper = vfw_helper_path(a.vfw_helper), codec = codec_path(a.install);
+  const std::string helper = vfw_helper_path(a.vfw_helper);
+  const std::string codec = sdlfe::indeo_codec_path(a.install, a.indeo_codec);
   if (!helper.empty() && !codec.empty()) {
     vfw = std::make_unique<sdlfe::SdlVfwHelper>(helper, codec);
     const bool up = vfw->ready();
@@ -2296,7 +2306,14 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // A quit outside the Exit state returns through ExitInstance, as the exe's WM_QUIT does,
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
-      result = app.run(pump);
+      try {
+        result = app.run(pump);
+      } catch (...) {
+        // Report before OverlayOff and the renderer owners unwind. Their
+        // cleanup may encounter the same stored worker failure.
+        log_loop_exception(std::current_exception());
+        throw;
+      }
       window.render()->drain();
       if (!frame_ms.empty()) {  // --frame-times: the frames' wall times
         std::vector<double> s = frame_ms;

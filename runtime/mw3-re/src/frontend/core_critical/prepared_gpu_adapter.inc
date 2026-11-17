@@ -82,6 +82,9 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
                              group_load_epoch_, textures_.at(texture).version);
       draw.sampler |= 0x10000U;
       draw.push.mode[3] = 0; // Preserve prepared smooth-normal orientation.
+      // Prepared textures are RGB565 and alpha belongs to the source material,
+      // so take alpha from the staged diffuse, which already includes node opacity.
+      draw.push.mode[2] = 2U;
       apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       if (normal >= 0)
         draw.normal_texture = int(bind_texture(normal, false));
@@ -107,7 +110,8 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
         (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
         context.far_z};
     vk::Draw draw{};
-    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1, context.opacity >= 1.f, 0};
+    // Same key as prepare_draw: a fading node blends and skips depth writes.
+    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f, 1, 0};
     // Prepared model draws do not use mode.w for alpha testing.
     draw.push.mode[3] = prepared_opacity_bits(context.opacity);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
@@ -122,9 +126,11 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     draw.push.target[0] = float(scene_.width);
     draw.push.target[1] = float(scene_.height);
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
-    draw.push.mode[0] = 2U | 4U | (fog.enabled && !geometry_debug_ ? 16U : 0U);
+    // Flag 256 tells the shared native-geometry vertex shader that mode.w holds
+    // node opacity for this draw rather than a native normal-orientation marker.
+    draw.push.mode[0] = 2U | 4U | 256U | (fog.enabled && !geometry_debug_ ? 16U : 0U);
     draw.push.mode[1] = 4U | (2U << 8);
-    draw.push.mode[2] = 2U | (2U << 8);
+    draw.push.mode[2] = 2U; // Diffuse alpha: RGB565 textures carry none of their own.
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
     apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
     scene_.order.push_back({false, unsigned(scene_.draws.size())});

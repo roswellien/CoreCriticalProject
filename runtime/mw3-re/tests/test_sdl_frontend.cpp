@@ -70,6 +70,7 @@
 #include "frontend/sdl/sdl_sound.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "frontend/sdl/sdl_vfw.h"
+#include "frontend/sdl/indeo_codec_path.h"
 #include "mech3/app_movie.h"
 #include "mech3/movie_shape.h"
 #include "gamez/zmodel/gmod_fog.h"
@@ -8575,6 +8576,27 @@ TEST(sdl_editor_forms_click_through_imgui) {
               applied_under_modal, changed, asked, mech3::editor_forms().size());
   EXPECT(applied_under_modal == 1 && asked == 1 && !mech3::form_shown(&m));
   mech3::form_hide(&f);
+}
+
+TEST(sdl_indeo_codec_path_prefers_launcher_verified_path) {
+  namespace fs = std::filesystem;
+  const fs::path root = fs::path(MW3_TEST_TMP) / "indeo codec path";
+  const fs::path install = root / "game";
+  const fs::path staged = root / "native-inputs" / "Ir50_32.dll";
+  const fs::path root_codec = install / "Ir50_32.dll";
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  fs::create_directories(install, ec);
+  fs::create_directories(staged.parent_path(), ec);
+  std::ofstream(staged).put('v');
+  std::ofstream(root_codec).put('r');
+
+  EXPECT(sdlfe::indeo_codec_path(install.string(), staged.string()) == staged.string());
+  fs::remove(staged, ec);
+  EXPECT(sdlfe::indeo_codec_path(install.string(), staged.string()) == root_codec.string());
+  fs::remove(root_codec, ec);
+  EXPECT(sdlfe::indeo_codec_path(install.string(), staged.string()).empty());
+  fs::remove_all(root, ec);
 }
 
 #if !defined(_WIN32) && !defined(MW3_PM_SUITE)  // posix_spawn, waitpid; MechWarrior 3's c1 pages (not Pirate's Moon's suite)

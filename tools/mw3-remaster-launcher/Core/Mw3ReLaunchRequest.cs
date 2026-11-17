@@ -49,7 +49,7 @@ public sealed record Mw3RePreviewOptions
 public static class Mw3ReLaunchRequest
 {
     public static string Create(Mw3ReRuntimeContract contract, Mw3RePlanningOptions options,
-        string gameDirectory, string dataRoot, string profileId)
+        string gameDirectory, string dataRoot, string profileId, string? indeoCodec = null)
     {
         ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(options);
@@ -84,7 +84,7 @@ public static class Mw3ReLaunchRequest
         // the planner still refuses POM without normal lighting.
         if (options.Preview != null)
             return CreatePreview(contract, options, gameDirectory, dataRoot, id, renderer, antialiasing,
-                windowMode, lighting);
+                windowMode, lighting, indeoCodec);
         // This pinned combined runtime/planner claim is observational, not trusted execution admission.
         if (options.Pom && (options.Lighting != Mw3ReLighting.Normal ||
             !contract.Capabilities.TryGetValue("pom", out var versions) || !versions.Contains(1) ||
@@ -95,6 +95,7 @@ public static class Mw3ReLaunchRequest
         {
             ["schema_version"] = options.Pom ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
+            ["indeo_codec"] = indeoCodec,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,
@@ -107,7 +108,7 @@ public static class Mw3ReLaunchRequest
 
     private static string CreatePreview(Mw3ReRuntimeContract contract, Mw3RePlanningOptions options,
         string gameDirectory, string dataRoot, string id, string renderer, string antialiasing,
-        string windowMode, string lighting)
+        string windowMode, string lighting, string? indeoCodec)
     {
         var preview = options.Preview!;
         ArgumentNullException.ThrowIfNull(preview.ModelPacks);
@@ -116,6 +117,7 @@ public static class Mw3ReLaunchRequest
         {
             ["schema_version"] = 4, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
+            ["indeo_codec"] = indeoCodec,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,

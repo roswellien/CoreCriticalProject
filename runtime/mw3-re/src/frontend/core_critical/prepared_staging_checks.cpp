@@ -187,7 +187,9 @@ void checks() {
     alpha_context.opacity = .375f;
     const auto alpha_submission = cc::prepare_draw(
         alpha_source, alpha_context, viewport, width, height, geometry, false);
-    require(alpha_submission.draw.key.blend && alpha_submission.draw.count > 0,
+    require(alpha_submission.draw.key.blend && !alpha_submission.draw.key.zwrite &&
+                alpha_submission.draw.key.cull == 1 && !alpha_submission.draw.model &&
+                alpha_submission.draw.count > 0,
             "Fractional opacity did not blend a clipped prepared draw");
     platform::TLVertex alpha_vertex{};
     std::memcpy(&alpha_vertex, alpha_submission.vertices.data(), sizeof(alpha_vertex));
@@ -410,6 +412,11 @@ void check_prepared_models_surface_materials() {
     context.source_polygons = 1;
     context.model_to_camera = context.model_to_world = matrix.data();
     context.opacity = 1;
+    // The fading submission uses the native clip-plane contract, not just model binding.
+    context.near_z = context.clip_near = .1f;
+    context.far_z = 100;
+    context.fx_near = context.fy_near = 50;
+    context.cx = context.cy = 32;
 
     matrix[9] = 12;
     std::vector<std::uintptr_t> ancestry;
@@ -621,6 +628,10 @@ void check_prepared_models_surface_materials() {
             std::make_shared<mw34::vkscene::ModelGeometry>(), false);
         require(fading_submission.draw.key.blend && fading_submission.draw.key.src == 5 &&
                     fading_submission.draw.key.dst == 6 && !fading_submission.draw.key.zwrite &&
+                    fading_submission.draw.key.cull == 1 && fading_submission.draw.model &&
+                    fading_submission.draw.count == 3 &&
+                    !(fading_submission.draw.push.mode[0] & 32U) &&
+                    fading_submission.draw.push.mode[2] == 2U &&
                     [&] {
                         float opacity{};
                         const auto bits = fading_submission.draw.push.mode[3];
@@ -628,18 +639,24 @@ void check_prepared_models_surface_materials() {
                         return opacity == fading_context.opacity;
                     }(),
                 "Prepared fade did not select source-alpha blending with native opacity");
+        const auto opaque_submission = cc_mw3_re::prepare_draw(
+            draw.batches[0], context, {0, 0, 64, 64}, 64, 64,
+            std::make_shared<mw34::vkscene::ModelGeometry>(), false);
+        float opaque_opacity{};
+        const auto opaque_bits = opaque_submission.draw.push.mode[3];
+        std::memcpy(&opaque_opacity, &opaque_bits, sizeof(opaque_opacity));
+        require(!opaque_submission.draw.key.blend && opaque_submission.draw.key.zwrite &&
+                    opaque_submission.draw.key.cull == 1 && opaque_opacity == 1.f,
+                "Opaque prepared draw lost depth writes, culling or full opacity");
 
         std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> world_root(zcls::object3d_create(),
                                                                        zcls::tree_destroy);
         require(world_root && zcls::node_remove_child(root.get(), control) == 0 &&
                     zcls::object3d_add_child(world_root.get(), control) == 0,
                 "Detached source subtree setup failed");
-        control->model = &model;
-        control->source_model_vertices = count;
+        // The detached control still owns the batch, but panel submits its visible geometry.
         auto detached_context = context;
-        detached_context.node = control;
         const auto detached_draw = models.draw(detached_context);
-        control->model = nullptr;
         require(detached_draw.replace && detached_draw.batches.size() == 1,
                 "Prepared binding was lost when a detached part crossed into the world tree");
         zcls::node_remove_child(world_root.get(), control);

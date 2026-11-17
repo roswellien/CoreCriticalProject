@@ -191,8 +191,10 @@ static class NativeRuntimeLayoutChecks
             File.WriteAllText(Path.Combine(root, "profile.json"), "{\"authored\":true}");
             File.WriteAllText(Path.Combine(root, "support.txt"), "authored support closure");
             File.WriteAllText(Path.Combine(root, "bin", "SDL3_sound.dll"), "authored SDL3_sound dependency fixture");
+            File.WriteAllText(Path.Combine(root, "bin", "mw3indeo.exe"), "authored x86 helper pin fixture");
             var pins = new JsonObject();
-            foreach (var relative in new[] { "bin/mw3.exe", "profile.json", "support.txt", "bin/SDL3_sound.dll" })
+            foreach (var relative in new[] { "bin/mw3.exe", "profile.json", "support.txt", "bin/SDL3_sound.dll",
+                         "bin/mw3indeo.exe" })
             {
                 var bytes = File.ReadAllBytes(Path.Combine(root, relative));
                 pins[relative] = new JsonObject { ["bytes"] = bytes.Length, ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) };
@@ -201,7 +203,8 @@ static class NativeRuntimeLayoutChecks
             {
                 ["schema_version"] = 2, ["engine"] = "mw3-re",
                 ["roles"] = new JsonObject { ["executable"] = "bin/mw3.exe", ["profile"] = "profile.json" },
-                ["dependencies"] = new JsonArray("support.txt", "bin/SDL3_sound.dll"), ["files"] = pins,
+                ["dependencies"] = new JsonArray("support.txt", "bin/SDL3_sound.dll", "bin/mw3indeo.exe"),
+                ["files"] = pins,
                 ["provenance"] = new JsonObject { ["source_commit"] = new string('a', 40), ["build_id"] = "authored-build", ["builder"] = "fixture" },
                 ["capabilities"] = new JsonObject
                 {
@@ -224,6 +227,8 @@ static class NativeRuntimeLayoutChecks
                 throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
             if (!contract.Dependencies.Contains("bin/SDL3_sound.dll", StringComparer.Ordinal))
                 throw new Exception("Integrity snapshot did not retain the pinned SDL3_sound dependency.");
+            if (contract.FindDeclaredFile("bin/mw3indeo.exe") != Path.Combine(root, "bin", "mw3indeo.exe"))
+                throw new Exception("Integrity snapshot did not retain the pinned Indeo helper dependency.");
             if (Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length != before.Count ||
                 before.Any(pair => !File.Exists(pair.Key) || Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pair.Key))) != pair.Value))
                 throw new Exception("Integrity reading changed its input closure.");
@@ -304,7 +309,7 @@ static class NativeRuntimeLayoutChecks
             // Quota rejection must precede opening the deliberately absent payload.
             RejectDescriptor(json =>
             {
-                json["dependencies"] = new JsonArray("absent.bin", "bin/SDL3_sound.dll");
+                json["dependencies"] = new JsonArray("absent.bin", "bin/SDL3_sound.dll", "bin/mw3indeo.exe");
                 json["files"]!.AsObject().Remove("support.txt");
                 json["files"]!["absent.bin"] = new JsonObject { ["bytes"] = 4294967296L, ["sha256"] = new string('0', 64) };
             }, "size");
@@ -361,7 +366,7 @@ static class NativeRuntimeLayoutChecks
             {
                 RejectDescriptor(json =>
                 {
-                    json["dependencies"] = new JsonArray("linked/support.txt", "bin/SDL3_sound.dll");
+                    json["dependencies"] = new JsonArray("linked/support.txt", "bin/SDL3_sound.dll", "bin/mw3indeo.exe");
                     json["files"]!["linked/support.txt"] = json["files"]!["support.txt"]!.DeepClone();
                     json["files"]!.AsObject().Remove("support.txt");
                 }, "link");

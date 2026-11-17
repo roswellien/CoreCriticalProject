@@ -49,7 +49,11 @@ void main() {
     gl_PointSize = 1.0;
     screenPos = clipXY / max(w, 1e-20);
     uvPerspective = uvAffine = uv;
-    colorSmooth = colorFlat = vec4((draw.mode.x & 4u) != 0u ? vec3(1.0) : draw.factor.rgb, 1.0);
+    // Prepared draws set flag 256 and carry node opacity in mode.w. Native draws
+    // keep that word for two-sided normal orientation and stay opaque.
+    float alpha = 1.0;
+    if ((draw.mode.x & 256u) != 0u) alpha = uintBitsToFloat(draw.mode.w);
+    colorSmooth = colorFlat = vec4((draw.mode.x & 4u) != 0u ? vec3(1.0) : draw.factor.rgb, alpha);
     float fog = 0.0;
     if (sun.geometryFog1.z > 0.5) {
         float distanceFog = clamp((length(camera.xz) - sun.geometryFog0.x) * sun.geometryFog0.y, 0.0, 1.0);
