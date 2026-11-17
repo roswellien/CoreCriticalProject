@@ -126,7 +126,8 @@ layout(set=1,binding=1) uniform sampler2DShadow shadowMap;
 layout(set=2,binding=0) uniform sampler2D normalMap;
 layout(set=2,binding=1) uniform sampler2D heightMap;
 layout(location=0) out vec4 result;
-// mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test.
+// mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test,
+// 128 damage tint.
 // mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
 // mode.w alpha function | reference << 8.
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
@@ -471,6 +472,7 @@ void main() {
         rgb=mix(rgb,dustColor+sun.sunColor.rgb*dustScatter,clamp(sun.weather.z*(1.0-specular.a),0.0,0.72));
     }
     if(sun.ambient.w>0.5)rgb=n*0.5+0.5;
+    if ((flags & 128u) != 0u) rgb = mix(rgb, vec3(1.0, 0.0, 0.0), draw.fogColor.a);
     float alpha = operation(draw.mode.z).a;
     if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
     // Lift SDR shadows without moving black or the highlight endpoint.

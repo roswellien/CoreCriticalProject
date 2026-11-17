@@ -154,6 +154,8 @@ public sealed class NativeGameRunner
                 DynamicLighting = settings.DynamicLighting,
                 // Preserve the request so the planner can report why shadows were suppressed.
                 Shadows = settings.Shadows,
+                WaterDetail = settings.WaterDetail,
+                CloudDetail = settings.CloudDetail,
                 Headlights = settings.Headlights && settings.DynamicLighting,
                 HeadlightBindings = headlightBindings,
                 StockEffectCatalog = contract.FindDeclaredFile("resources/stock-effect-lights.bin"),

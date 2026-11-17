@@ -142,6 +142,7 @@ struct EnvironmentSelection {
   std::shared_ptr<mw34::materials::SurfaceDecodedBudget> surface_budget;
   std::map<std::string, std::string> banks;
   std::map<std::string, std::map<EnvironmentRole, std::string>> resources;
+  std::map<EnvironmentRole, std::string> detail_digests;
   std::map<std::string, MissionAmbientOverride> mission_ambient;
   std::map<std::string, MissionSkyOverride> mission_sky;
   std::map<std::string, MissionSkyGlowOverride> mission_sky_glow;

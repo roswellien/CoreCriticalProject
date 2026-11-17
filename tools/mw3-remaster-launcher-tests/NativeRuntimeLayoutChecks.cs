@@ -776,7 +776,8 @@ static class NativeRuntimeLayoutChecks
             {
                 Width = 1280, Height = 720, WindowMode = "windowed", RenderThread = true,
                 AntiAliasing = "fxaa", AnisotropicFiltering = 16, DrawDistance = 1200,
-                DynamicLighting = true, Shadows = true
+                DynamicLighting = true, Shadows = true,
+                WaterDetail = false, CloudDetail = false
             };
             var options = NativeGameRunner.PlanningOptionsForSettings(settings, contract,
                 NativeGameRunner.PreviewDrawDistance(settings.DrawDistance, out _),
@@ -786,8 +787,10 @@ static class NativeRuntimeLayoutChecks
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
                 !wire["preview"]!["dynamic_lighting"]!.GetValue<bool>() ||
                 !wire["preview"]!["shadows"]!.GetValue<bool>() ||
-                wire["visuals"]!["pom"]!.GetValue<bool>() != true)
-                throw new Exception("Native preview projection lost its schema, distance, dynamic lighting, shadows or POM.");
+                wire["visuals"]!["pom"]!.GetValue<bool>() != true ||
+                wire["preview"]!["water_detail"]!.GetValue<bool>() ||
+                wire["preview"]!["cloud_detail"]!.GetValue<bool>())
+                throw new Exception("Native preview projection lost its schema, distance, dynamic lighting, shadows, POM or detail choices.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
             if (argv[argv.IndexOf("--cc-dynamic-lighting") + 1] != "1" ||
@@ -801,11 +804,13 @@ static class NativeRuntimeLayoutChecks
             // This fixture has no effect-light catalog, so local lights are also skipped.
             if (!planned["ok"]!.GetValue<bool>() || !argv.Skip(argv.Count - expectedTail.Length).SequenceEqual(expectedTail) ||
                 planned["skipped_packs"]!.AsArray().Count != 4 ||
-                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared ||
-                !planned["skipped_packs"]!.AsArray().Skip(1)
-                    .Select(item => item!["feature"]!.GetValue<string>())
-                    .OrderBy(feature => feature, StringComparer.Ordinal)
-                    .SequenceEqual(new[] { "effect_lights", "fixture_lights", "menu_hd_background" }))
+                // Exact order: the menu pack is reported first, then the shared environment pack
+                // (no feature key), then the dynamic-lighting local-light skips.
+                planned["skipped_packs"]![0]!["feature"]?.GetValue<string>() != "menu_hd_background" ||
+                planned["skipped_packs"]![1]!["root"]!.GetValue<string>() != shared ||
+                planned["skipped_packs"]![1]!["feature"] != null ||
+                planned["skipped_packs"]![2]!["feature"]?.GetValue<string>() != "effect_lights" ||
+                planned["skipped_packs"]![3]!["feature"]?.GetValue<string>() != "fixture_lights")
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
 
             var noUiOptions = options with

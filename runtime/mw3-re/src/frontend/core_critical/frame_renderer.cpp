@@ -28,6 +28,9 @@
 #include "gamez/zmodel/gmod_geometry.h"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/native_fixture_sources.hpp"
+#include "platform/prepared_visuals.h"
+#include "platform/sha256.hpp"
+#include "renderer/surface_detail_bindings.hpp"
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -471,7 +474,8 @@ public:
     // Admit catalog paths and headers before native mission callbacks start.
     // World pixel payloads remain lazy; failures here reach the window's normal
     // initialization error boundary instead of unwinding legacy game loaders.
-    if (lighting_.normals)
+    if (lighting_.normals || bridge_config_.water_detail ||
+        bridge_config_.cloud_detail)
       surface_normals_load();
     local_lights_load();
     initialize_renderer();
@@ -1434,6 +1438,22 @@ private:
         }
       }
     }
+    if (state.texture >= 0 &&
+        (bridge_config_.water_detail || bridge_config_.cloud_detail)) {
+      // draw is value-initialized per submission, so no earlier draw can leak
+      // a detail role/image; a miss preserves this draw's ordinary normal map.
+      surface_normals_load();
+      const auto &key = textures_.at(std::size_t(state.texture)).surface_key;
+      if (const auto *binding = mw34::detail::find_binding(
+              surface_normals_.detail_bindings, key, scene_.detail_settings)) {
+        draw.detail_role = binding->role;
+        if (binding->normal_index < 0)
+          throw std::runtime_error(
+              "Validated surface detail role lost its normal image");
+        draw.normal_texture = int(bind_texture(
+            surface_normal_texture(binding->normal_index), false));
+      }
+    }
     const bool sharp = state.sharp && state.texture >= 0 &&
                        !textures_.at(state.texture).held_copy;
     draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
@@ -1758,6 +1778,9 @@ private:
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
+    scene_.detail_settings = surface_detail_settings();
+    scene_.detail_time = mw34::detail::presentation_time(
+        detail_frame_++, bridge_config_.detail_fixed_time);
     if (scene_.width) {
       return;
     }
@@ -1940,6 +1963,7 @@ private:
   bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
   const bool cpu_profile_ = cpu_profile_requested();
   std::uint64_t render_ticks_{}, transport_ticks_{};
+  std::uint64_t detail_frame_{};
   std::uint64_t worker_render_ticks_{}, worker_present_ticks_{};
   std::uint64_t gpu_sharp_draws_{}, render_calls_{};
   std::uint64_t prepared_emit_ticks_{}, append_ticks_{};
@@ -1963,6 +1987,23 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
         "--cc-pom 1 requires a Core Critical Vulkan backend");
   if (assets.pom && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
+  const bool water_detail_requested =
+      assets.water_detail_explicit && assets.water_detail;
+  const bool cloud_detail_requested =
+      assets.cloud_detail_explicit && assets.cloud_detail;
+  if ((water_detail_requested || cloud_detail_requested) &&
+      assets.lighting != "normal") {
+    std::string flags;
+    if (water_detail_requested)
+      flags = "--cc-water-detail 1";
+    if (cloud_detail_requested) {
+      if (!flags.empty())
+        flags += " and ";
+      flags += "--cc-cloud-detail 1";
+    }
+    throw std::runtime_error("Surface detail (" + flags +
+                             ") requires --cc-lighting normal");
+  }
   auto config = RendererBridgeConfig::from_diagnostic_env(
       !assets.dynamic_lighting_explicit, !assets.sun_shadows_explicit);
   config.environment_packs_explicit = assets.environment_packs_explicit;
@@ -2000,6 +2041,10 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.headlight_bindings = assets.headlight_bindings;
   }
   config.parallax_materials = assets.pom;
+  // These explicit launch options own surface detail for this session. They
+  // are not inferred from development environment variables.
+  config.water_detail = assets.water_detail_explicit && assets.water_detail;
+  config.cloud_detail = assets.cloud_detail_explicit && assets.cloud_detail;
   if (assets.environment) {
     std::fprintf(stderr,
                  "Environment renderer catalogs: %zu authored, %zu world\n",

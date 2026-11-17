@@ -11,7 +11,7 @@ layout(location=5) flat in vec4 specularFlat;
 layout(set=0,binding=0) uniform sampler2D image;
 layout(location=0) out vec4 result;
 // mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test,
-// 64 premultiplied sharp 2D sampling (the native HUD/canvas).
+// 64 premultiplied sharp 2D sampling (the native HUD/canvas), 128 damage tint.
 // mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
 // mode.w alpha function | reference << 8.
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
@@ -65,6 +65,7 @@ void main() {
     }
     vec3 rgb = operation(draw.mode.y).rgb;
     float alpha = operation(draw.mode.z).a;
+    if ((flags & 128u) != 0u) rgb = mix(rgb, vec3(1.0, 0.0, 0.0), draw.fogColor.a);
     if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
     if ((flags & 16u) != 0u) rgb = mix(draw.fogColor.rgb, rgb, specular.a);
     if ((flags & 32u) != 0u) {

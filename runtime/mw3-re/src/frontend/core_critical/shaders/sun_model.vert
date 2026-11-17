@@ -63,5 +63,15 @@ void main() {
     gl_PointSize = 1.0;
     uvPerspective = uvAffine = uv;
     colorSmooth = colorFlat = vec4(rgb, uintBitsToFloat(draw.mode.w));
-    specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0);
+    float fog = 0.0;
+    if (sun.geometryFog1.z > 0.5) {
+        float distanceFog = clamp(
+            (length(camera.xz) - sun.geometryFog0.x) * sun.geometryFog0.y,
+            0.0, 1.0);
+        float altitudeFog = clamp(
+            1.0 - (worldPosition.y - sun.geometryFog0.z) * sun.geometryFog0.w,
+            0.0, 1.0);
+        fog = distanceFog * altitudeFog;
+    }
+    specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0 - fog);
 }

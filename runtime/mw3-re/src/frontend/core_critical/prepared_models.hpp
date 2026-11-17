@@ -59,6 +59,7 @@ class PreparedModels {
     struct Model {
         std::string source_asset;
         bool distance_lod{};
+        mutable bool warned_cross_lod_fallback{};
         ::platform::prepared::Mesh mesh;
         ::platform::prepared::Textures textures;
         ::platform::prepared::Normals normals;
