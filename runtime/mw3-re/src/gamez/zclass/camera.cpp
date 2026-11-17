@@ -28,6 +28,7 @@
 #include "gamez/zrender/zrndr_flare.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "mech3/options.h"
 
 namespace zcls {
 
@@ -48,10 +49,11 @@ const float kNullOffset[3] = {};   // 0x0063d870, never written
 
 bool full_display_viewport(Node* window) {
   int32_t x = 0, y = 0, width = 0, height = 0;
-  return !zcls::window_origin(window, &x, &y) &&
+  const mech3::Rect& render = mech3::render();
+  return render.w > 0 && render.h > 0 &&
+         !zcls::window_origin(window, &x, &y) &&
          !zcls::window_size(window, &width, &height) && x == 0 && y == 0 &&
-         width == zmod::walk_state().screen_w &&
-         height == zmod::walk_state().screen_h;
+         width == render.w && height == render.h;
 }
 
 void update_far_corners(Camera* camera, float far_z) {

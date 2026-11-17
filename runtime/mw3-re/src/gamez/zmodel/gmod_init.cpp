@@ -16,10 +16,12 @@
 #include "gamez/zutil/zutl_reg.h"
 #include "gamez/zrender/zrndr_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "mech3/options.h"
 
 namespace zmod {
 
 namespace {
+const char kFile[] = "C:\\zipper\\GameZMech3\\zModel\\gmod_init.c";
 WalkState g_walk{{}, 0, draw_model};
 
 void put_float(uint32_t& slot, float v) { std::memcpy(&slot, &v, 4); }
@@ -93,15 +95,23 @@ float fog_near() { return fog().near_range; }
 // (Direct3D +0.001; software adds 0.5 for pixel centres).
 void set_camera(zcls::Camera* camera) {
   WalkState& w = g_walk;
+  int32_t x = 0, y = 0, wd = 0, ht = 0;
+  if (zcls::window_origin(camera->nodes[1], &x, &y)) x = 0, y = 0;
+  if (zcls::window_size(camera->nodes[1], &wd, &ht)) {
+    const mech3::Rect& render = mech3::render();
+    if (render.w <= 0 || render.h <= 0) {
+      zerr::report(0x200, kFile, 0, "Cannot set camera without a valid render size.");
+      return;
+    }
+    wd = render.w;
+    ht = render.h;
+  }
   DrawState& ds = draw_state();
   w.camera = camera;
   ds.camera_data = reinterpret_cast<const float*>(camera->raw);
   ClipPlanes& c = ds.clip;
   c.near_z = camera->get<float>(0xb0);
   c.far_z = zcls::visual_far_for_render(camera, camera->get<float>(0xb4));
-  int32_t x = 0, y = 0, wd = 0, ht = 0;
-  if (zcls::window_origin(camera->nodes[1], &x, &y)) x = 0, y = 0;
-  if (zcls::window_size(camera->nodes[1], &wd, &ht)) wd = w.screen_w, ht = w.screen_h;
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
   const float fr = static_cast<float>(wd + x), fb = static_cast<float>(ht + y);
   if (zrndr::device_fog().active) {
