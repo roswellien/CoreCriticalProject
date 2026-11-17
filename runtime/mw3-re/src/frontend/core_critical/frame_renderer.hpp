@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "frontend/sdl/sdl_render3d.h"
 #include "renderer/original_rigid_capture.hpp"
@@ -16,8 +17,10 @@ struct QualityStatistics {
   std::uint64_t fxaa_passes{}, anisotropic_samplers{}, mip_levels{};
 };
 struct AssetStatistics {
-  std::uint64_t prepared_batches{}, gpu_model_draws{}, cpu_clipped_triangles{},
-      named_textures{};
+  std::uint64_t prepared_batches{}, gpu_model_draws{}, cpu_clipped_triangles{};
+  // Prepared replacement upload events only; plain and generated named
+  // textures are excluded.
+  std::uint64_t named_textures{};
   std::uint64_t geometry_uploads{};
   std::uint64_t lit_draws{}, normal_draws{};
   std::uint64_t retired_geometry_buffers{};
@@ -62,6 +65,14 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer(
     const sdlfe::CoreCriticalAssets &assets = {});
 
 namespace testing {
+struct NamedTextureTestState {
+  unsigned width{}, height{}, source_width{}, source_height{};
+  bool generated_rgba{};
+  std::vector<std::uint32_t> pixels;
+};
+NamedTextureTestState named_texture_state(VulkanFrameRenderer &renderer,
+                                          int32_t handle);
+
 // Exercise the real retained-packet rejection path without allocating a full
 // production allowance. Normal frontend construction always uses the native cap.
 std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
