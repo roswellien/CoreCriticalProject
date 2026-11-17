@@ -79,7 +79,8 @@ static class GraphicsSetupUiChecks
                             AntiAliasing="4",AnisotropicFiltering=8,DrawDistance=2400,FogDistance=0,
                             DynamicLighting=true,Shadows=true});
                         var selected=panel.Read();
-                        if(selected.Width!=2560||selected.WindowMode!="windowed"||selected.AntiAliasing!="4"||selected.DrawDistance!=1600||
+                        if(selected.Width!=2560||selected.WindowMode!="windowed"||
+                           selected.AntiAliasing!="4"||selected.DrawDistance!=2400||
                            selected.AnisotropicFiltering!=8||!selected.DynamicLighting||!selected.Shadows)
                             throw new Exception("Setup controls do not capture all graphics choices");
                         next.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -117,7 +118,8 @@ static class GraphicsSetupUiChecks
                     if(phase==3){
                         if(app.Windows.OfType<GameSetupWindow>().Any())return;
                         var completed=new SettingsManager(root,root).Current;
-                        var expected=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true);
+                        var expected=new GraphicsPreferences(2560,1440,"windowed","4",8,
+                            2400,true,true);
                         if(!completed.InitialSetupCompleted||GraphicsPreferences.From(completed)!=expected)
                             throw new Exception("Successful setup did not save all first-launch graphics choices");
                         var actual=(GraphicsPreferencesPanel)window.FindName("DisplayGraphics");

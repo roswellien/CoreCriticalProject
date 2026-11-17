@@ -117,7 +117,16 @@
                                     <!-- Engine Selection Switch -->
                                     <Border Background="#121717" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="3" Padding="3" Margin="0,0,0,12" HorizontalAlignment="Left">
                                         <StackPanel Orientation="Horizontal">
-                                            <RadioButton x:Name="RadioEngineRemaster" Content="★ MW3-RE NATIVE" Style="{StaticResource EngineToggleStyle}" IsChecked="True" Checked="EngineRadio_Checked" ToolTip="Native MW3-RE engine; uses your enabled mech and map packs; scenery choices are 800, 1200, or 1600." />
+                                            <RadioButton
+                                                x:Name="RadioEngineRemaster"
+                                                Content="★ MW3-RE NATIVE"
+                                                Style="{StaticResource EngineToggleStyle}"
+                                                IsChecked="True"
+                                                Checked="EngineRadio_Checked"
+                                                ToolTip="Native MW3-RE engine;
+                                                uses your enabled mech and map packs;
+                                                scenery choices are 800, 1200, 1600,
+                                                2400, or 3200." />
                                             <RadioButton x:Name="RadioEngineD7vk" Content="⚙ ORIGINAL GAME (D7VK)" Style="{StaticResource EngineToggleStyle}" Checked="EngineRadio_Checked" ToolTip="Original 1999 Mech3.exe running via D7VK DirectDraw/Vulkan wrapper with widescreen FOV fix and AI textures" />
                                         </StackPanel>
                                     </Border>
@@ -243,7 +252,16 @@
                                 <!-- Engine Mode Selector for Graphics -->
                                 <Border Background="#121717" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="3" Padding="3" Margin="0,0,0,20" HorizontalAlignment="Left">
                                     <StackPanel Orientation="Horizontal">
-                                        <RadioButton x:Name="RadioGfxRemaster" Content="★ MW3-RE NATIVE GRAPHICS" Style="{StaticResource EngineToggleStyle}" IsChecked="True" Checked="GfxEngineRadio_Checked" ToolTip="Native MW3-RE engine; uses your enabled mech and map packs; scenery choices are 800, 1200, or 1600." />
+                                        <RadioButton
+                                            x:Name="RadioGfxRemaster"
+                                            Content="★ MW3-RE NATIVE GRAPHICS"
+                                            Style="{StaticResource EngineToggleStyle}"
+                                            IsChecked="True"
+                                            Checked="GfxEngineRadio_Checked"
+                                            ToolTip="Native MW3-RE engine;
+                                            uses your enabled mech and map packs;
+                                            scenery choices are 800, 1200, 1600,
+                                            2400, or 3200." />
                                         <RadioButton x:Name="RadioGfxD7vk" Content="⚙ ORIGINAL D7VK WRAPPER GRAPHICS" Style="{StaticResource EngineToggleStyle}" Checked="GfxEngineRadio_Checked" />
                                     </StackPanel>
                                 </Border>

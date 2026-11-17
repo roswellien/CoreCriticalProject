@@ -10,6 +10,7 @@
 #include "gamez/zvideo/zvid_ddd3d.h"
 
 #include <cmath>
+#include <memory>
 
 namespace {
 constexpr float kAuthoredFar = 800.0f;
@@ -52,7 +53,8 @@ struct CameraFixture {
   zmth::MatrixStack old_stack = zmth::matrix_stack();
   zmth::View old_view = zmth::view();
   zmth::Projection old_projection = zmth::projection();
-  zcls::SceneWalk old_walk = zcls::scene_walk();
+  std::unique_ptr<zcls::SceneWalk> old_walk =
+      std::make_unique<zcls::SceneWalk>(zcls::scene_walk());
   zcls::WorldRenderHooks old_hooks = zcls::world_render_hooks();
   zmod::WalkState old_model_walk = zmod::walk_state();
   zmod::DrawState old_draw = zmod::draw_state();
@@ -80,7 +82,7 @@ struct CameraFixture {
     }
     zvid::set_render3d(nullptr);
     zmth::reset_stack();
-    zcls::scene_walk() = {};
+    zcls::scene_walk().reset();
     zcls::world_render_hooks() = {};
     zmod::walk_state() = {};
     zmod::draw_state().shadows = 0;
@@ -128,7 +130,7 @@ struct CameraFixture {
     zmth::matrix_stack() = old_stack;
     zmth::view() = old_view;
     zmth::projection() = old_projection;
-    zcls::scene_walk() = old_walk;
+    zcls::scene_walk() = *old_walk;
     zcls::world_render_hooks() = old_hooks;
     zmod::walk_state() = old_model_walk;
     zmod::draw_state() = old_draw;

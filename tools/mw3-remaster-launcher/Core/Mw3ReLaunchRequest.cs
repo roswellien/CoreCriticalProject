@@ -31,7 +31,9 @@ public sealed record Mw3RePlanningOptions
 /// </summary>
 public sealed record Mw3RePreviewOptions
 {
-    /// <summary>Scenery/view distance: 800 is the original game's range; 1200 and 1600 extend it.</summary>
+    /// <summary>
+    /// Scenery/view distance: 800 is original; 1200, 1600, 2400 and 3200 extend it.
+    /// </summary>
     public int DrawDistance { get; init; } = 800;
     public string? Hud { get; init; } = "core-critical";
     public bool? HudText { get; init; } = true;

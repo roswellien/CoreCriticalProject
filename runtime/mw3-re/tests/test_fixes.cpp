@@ -7,6 +7,7 @@
 #include <string>
 #include <tuple>
 #include <map>
+#include <memory>
 #include <fstream>
 #include <filesystem>
 #include <vector>
@@ -2492,10 +2493,11 @@ TEST(native_light_lifetime_classes_reset_retires_pool_cache) {
   // classes_reset also clears these globals; retain the unrelated caller's
   // callbacks and remembered path even if a cache assertion fails.
   struct RestoreResetGlobals {
-    zcls::SceneWalk walk = zcls::scene_walk();
+    std::unique_ptr<zcls::SceneWalk> walk =
+        std::make_unique<zcls::SceneWalk>(zcls::scene_walk());
     char path_first = zcls::zbd_path()[0];
     ~RestoreResetGlobals() {
-      zcls::scene_walk() = walk;
+      zcls::scene_walk() = *walk;
       zcls::zbd_path()[0] = path_first;
     }
   } restore;

@@ -128,7 +128,7 @@ int sw_load(const char* path) {
   zrndr::software_format() = zrndr::SoftwareFormat{0xf800, 0x07e0, 8, 3, 3};
   zerr::set_sink(nullptr);
   const int r = zcls::read_zbd(path);
-  zcls::scene_walk() = zcls::SceneWalk{};
+  zcls::scene_walk().reset();
   zmod::walk_state() = zmod::WalkState{};
   zmod::walk_state().draw = record_draw;
   zmod::zones() = zmod::Zones{};

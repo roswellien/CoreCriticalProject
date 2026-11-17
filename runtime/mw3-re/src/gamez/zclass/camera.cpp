@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <optional>
 
 #pragma STDC FP_CONTRACT OFF
@@ -79,9 +80,14 @@ void update_plane_point(Camera* camera, int off, float distance) {
 class VisualRenderScope {
  public:
   VisualRenderScope(Camera* camera, Node* window) {
-    if (g_visual_far_request <= kDefaultVisualFar ||
-        (!full_display_viewport(window) && g_zoom_visual_camera != camera)) return;
+    if (!full_display_viewport(window) && g_zoom_visual_camera != camera) return;
     const float authored_far = camera->get<float>(0xb4);
+    if (g_visual_far_request <= kDefaultVisualFar) {
+      // Cover the default world's edge without changing its geometry, clip or camera cache.
+      if (g_visual_far_request == kDefaultVisualFar && authored_far == kDefaultVisualFar)
+        fog_.emplace(authored_far, authored_far);
+      return;
+    }
     const float expanded = visual_far(authored_far, g_visual_far_request, true);
     if (!(expanded > authored_far)) return;
     camera_ = camera;
@@ -655,6 +661,12 @@ void add_cell(int32_t ring, int32_t x, int32_t z, int32_t wrapped, float dx, flo
 
 Partition& cell_at(World* w, int32_t x, int32_t z) { return w->rows[z][x]; }
 }  // namespace
+
+void SceneWalk::reset() {
+  // SceneWalk is too large for a stack temporary; reconstruct it in place.
+  this->~SceneWalk();
+  new (this) SceneWalk();
+}
 
 SceneWalk& scene_walk() { return g_walk; }
 WorldRenderHooks& world_render_hooks() { return g_hooks; }

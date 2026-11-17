@@ -4,6 +4,7 @@
 #include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/visual_distance.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zinput/zinput.h"
 #include "gamez/zmath/zmth_matrix.h"
@@ -2067,10 +2068,9 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.geometry_debug_normals = assets.geometry_debug_normals;
 
   // Quality
-  if (quality.draw_distance != 800 && quality.draw_distance != 1200 &&
-      quality.draw_distance != 1600)
+  if (!zcls::is_supported_view_distance(quality.draw_distance))
     throw std::runtime_error(
-        "--cc-draw-distance supports only 800, 1200 or 1600");
+        "--cc-draw-distance supports only 800, 1200, 1600, 2400 or 3200");
   config.draw_distance = quality.draw_distance;
   config.antialiasing = quality.antialiasing;
   config.anisotropy = quality.anisotropy;

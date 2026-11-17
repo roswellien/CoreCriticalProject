@@ -28,7 +28,7 @@ param(
  [switch]$Vsync,
  [switch]$OriginalEdges,
  [ValidateRange(0,1000)][int]$MenuFps=0,
- [ValidateSet(0,800,1200,1600)][int]$DrawDistance=0,
+ [ValidateSet(0,800,1200,1600,2400,3200)][int]$DrawDistance=0,
  [ValidateRange(16,2000)][double]$ShadowRange=200,
  [ValidateRange(0,1)][double]$ShadowDarkness=1,
  [ValidateRange(0,1000000)][int]$Frames=0,

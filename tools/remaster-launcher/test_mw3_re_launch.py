@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -814,7 +815,7 @@ class NativePreviewPlanTests(unittest.TestCase):
                 self.assertEqual(len(skipped), 1)
 
     def test_invalid_choices_are_refused(self):
-        for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},
+        for preview in ({"draw_distance": 1000}, {"draw_distance": "1200"}, {"hud": "neon"},
                         {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},
                         {"model_packs": "C:/one"}, {"ui_packs": "C:/one"}, {"unknown": 1},
                         {"model_packs": ["relative/pack"]}):
@@ -861,8 +862,24 @@ class NativePreviewPlanTests(unittest.TestCase):
 
     def test_schema_four_json_round_trip(self):
         plan_json = importlib.import_module("mw3_re_launch").plan_json
-        result = plan_json(json.dumps(self.request(draw_distance=1600)))
-        self.assertEqual(result["argv"][result["argv"].index("--cc-draw-distance") + 1], "1600")
+        for distance in (1200, 1600, 2400, 3200):
+            with self.subTest(distance=distance):
+                result = plan_json(json.dumps(self.request(draw_distance=distance)))
+                argument_index = result["argv"].index("--cc-draw-distance") + 1
+                self.assertEqual(result["argv"][argument_index], str(distance))
+
+    def test_draw_distance_table_matches_runtime(self):
+        repository_root = Path(__file__).resolve().parents[2]
+        header = repository_root / "runtime/mw3-re/src/gamez/zclass/visual_distance.h"
+        source = header.read_text(encoding="utf-8")
+        table = re.search(r"kViewDistanceOptions\[\]\s*=\s*\{(.*?)\};", source, re.DOTALL)
+        self.assertIsNotNone(table, "Runtime view-distance table is missing")
+        pairs = [(int(distance), int(start)) for distance, start in
+                 re.findall(r"\{\s*(\d+)\s*,\s*(\d+)\s*\}", table.group(1))]
+        expected = [(800, 700), (1200, 1050), (1600, 1450), (2400, 2250), (3200, 3050)]
+        self.assertEqual(pairs, expected)
+        planner_distances = importlib.import_module("mw3_re_launch")._PREVIEW_DRAW_DISTANCES
+        self.assertEqual(planner_distances, tuple(distance for distance, _ in pairs))
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_dynamic_lighting_uses_enabled_pack_catalog_and_headlight_inputs(self):
