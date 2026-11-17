@@ -367,6 +367,34 @@ class NativePreviewPlanTests(unittest.TestCase):
             "native_payload": {"profile": "prepared-environment-v1"}})
         return os.path.join(self.root, name)
 
+    def ui_pack(self, name="menu", kind="menu", background=True, pixel=(1, 2, 3, 255),
+                sprite="0123456789abcdef"):
+        image = b"MW3H" + struct.pack("<IIffff", 1, 1, 0.0, 0.0, 1.0, 1.0) + bytes(pixel)
+        sprites = {}
+        files = {}
+        if sprite is not None:
+            relative = f"ui/sprites/{sprite}.rgba"
+            self.write(f"{name}/{relative}", image)
+            sprites[sprite] = relative
+            files[relative] = {"bytes": len(image), "sha256": hashlib.sha256(image).hexdigest(),
+                               "format": "MW3H-v1"}
+        registry = {"schema_version": 2, "payload_profile": "prepared-ui-v1", "kind": kind,
+                    "sprites": sprites,
+                    "background": "ui/background.mwhd" if background else None}
+        self.write(f"{name}/ui/ui.json", registry)
+        registry_bytes = json.dumps(registry).encode("utf-8")
+        files["ui/ui.json"] = {"bytes": len(registry_bytes),
+                               "sha256": hashlib.sha256(registry_bytes).hexdigest()}
+        if background:
+            background_bytes = b"MWHDBG1\0" + struct.pack("<IIII", 1, 1, 1, 1) + bytes(3)
+            self.write(f"{name}/ui/background.mwhd", background_bytes)
+            files["ui/background.mwhd"] = {"bytes": len(background_bytes),
+                                             "sha256": hashlib.sha256(background_bytes).hexdigest(),
+                                             "format": "MWHDBG1"}
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": files, "native_payload": {
+            "profile": "prepared-ui-v1", "registry": "ui/ui.json", "path_base": "pack-root"}})
+        return os.path.join(self.root, name)
+
     def lighting_environment_pack(self, name="lighting"):
         entry = struct.pack("<IIIIQ6f", 1, 1, 1, 1, 123, 1.0, 1.0, 0.5, 1.0, 1.0, 1.0)
         effect = b"MWFX1\0\0\0" + (1).to_bytes(4, "little") + entry
@@ -468,6 +496,129 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertNotIn("--cc-menu-background", result["argv"])
         self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
         self.assertIn("integrity failure", result["skipped_packs"][0]["reason"])
+
+    def test_no_ui_packs_leaves_hud_options_unset(self):
+        result = self.plan(self.request())
+        self.assertNotIn("--cc-hud", result["argv"])
+        self.assertNotIn("--cc-hud-text", result["argv"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_ui_sprite_packs_route_to_native_artwork_and_menu_background(self):
+        hud = self.ui_pack("hud", "hud", background=False)
+        menu = self.ui_pack("menu", "menu", background=True)
+        result = self.plan(self.request(hud="core-critical", ui_packs=[hud, menu]))
+        argv = result["argv"]
+        self.assertEqual(argv.count("--cc-hud-artwork"), 2)
+        self.assertEqual(
+            [argv[i + 1] for i, value in enumerate(argv) if value == "--cc-hud-artwork"],
+            [hud, menu],
+        )
+        background = os.path.join(menu, "ui", "background.mwhd")
+        self.assertEqual(argv.count("--cc-menu-background"), 1)
+        self.assertEqual(argv[argv.index("--cc-menu-background") + 1], background)
+        self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_identical_ui_identity_hashes_are_accepted_in_input_order(self):
+        hud = self.ui_pack("hud-identical", "hud", background=False)
+        menu = self.ui_pack("menu-identical", "menu", background=False)
+        result = self.plan(self.request(hud="core-critical", hud_text=True, ui_packs=[hud, menu]))
+        artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                   if value == "--cc-hud-artwork"]
+        self.assertEqual(artwork, [hud, menu])
+        self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_conflicting_ui_identity_keeps_first_pack_and_reports_later_pack(self):
+        first = self.ui_pack("hud-first", "hud", background=False)
+        second = self.ui_pack("menu-conflict", "menu", background=False, pixel=(9, 8, 7, 255))
+        result = self.plan(self.request(hud="core-critical", hud_text=True, ui_packs=[first, second]))
+        artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                   if value == "--cc-hud-artwork"]
+        self.assertEqual(artwork, [first])
+        self.assertEqual(result["skipped_packs"][0]["root"], second)
+        self.assertIn("0123456789abcdef", result["skipped_packs"][0]["reason"])
+        self.assertIn(first, result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_undeclared_ui_sprites_are_reported_and_not_routed(self):
+        first = self.ui_pack("hud-declared", "hud", background=False)
+        conflicting = (b"MW3H" + struct.pack("<IIffff", 1, 1, 0.0, 0.0, 1.0, 1.0)
+                       + bytes((9, 8, 7, 255)))
+        for name, sprite, background, extra in (
+                ("empty-registry", None, False, conflicting),
+                ("background-with-extra", None, True, conflicting),
+                ("undeclared-conflict", "1111111111111111", False, conflicting),
+                ("undeclared-malformed", "1111111111111111", False, b"not MW3H")):
+            with self.subTest(name=name):
+                second = self.ui_pack(name, "menu", background=background, sprite=sprite)
+                self.write(f"{name}/ui/sprites/0123456789abcdef.rgba", extra)
+                result = self.plan(self.request(hud="core-critical", ui_packs=[first, second]))
+                self.assertTrue(result["ok"])
+                artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                           if value == "--cc-hud-artwork"]
+                self.assertEqual(artwork, [first])
+                self.assertEqual(len(result["skipped_packs"]), 1)
+                skipped = result["skipped_packs"][0]
+                self.assertEqual(skipped["root"], second)
+                self.assertEqual(skipped["feature"], "ui_artwork")
+                self.assertIn("sprite directory does not match the registry", skipped["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_empty_ui_sprite_table_never_routes_artwork(self):
+        for background in (False, True):
+            with self.subTest(background=background):
+                menu = self.ui_pack(f"empty-sprites-{background}", "menu",
+                                    background=background, sprite=None)
+                result = self.plan(self.request(hud="core-critical", ui_packs=[menu]))
+                self.assertTrue(result["ok"])
+                self.assertNotIn("--cc-hud-artwork", result["argv"])
+                if background:
+                    # A background-only menu pack is routed to the menu background alone.
+                    self.assertIn("--cc-menu-background", result["argv"])
+                    self.assertEqual(result["skipped_packs"], [])
+                else:
+                    self.assertNotIn("--cc-menu-background", result["argv"])
+                    self.assertEqual(len(result["skipped_packs"]), 1)
+                    skipped = result["skipped_packs"][0]
+                    self.assertEqual(skipped["root"], menu)
+                    self.assertEqual(skipped["feature"], "ui_artwork")
+                    self.assertIn("no available artwork", skipped["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_duplicate_ui_kind_reports_later_pack(self):
+        first = self.ui_pack("hud-first", "hud", background=False)
+        second = self.ui_pack("hud-second", "hud", background=False, pixel=(9, 8, 7, 255))
+        result = self.plan(self.request(hud="core-critical", ui_packs=[first, second]))
+        artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                   if value == "--cc-hud-artwork"]
+        self.assertEqual(artwork, [first])
+        self.assertEqual(result["skipped_packs"][0]["root"], second)
+        self.assertIn("hud UI pack was already selected", result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_missing_ui_pack_is_reported_without_artwork_argv(self):
+        missing = os.path.join(self.root, "absent-ui-pack")
+        result = self.plan(self.request(hud="core-critical", ui_packs=[missing]))
+        self.assertNotIn("--cc-hud-artwork", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
+        self.assertIn("missing", result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_ui_pack_without_core_critical_hud_is_reported_and_skipped(self):
+        hud = self.ui_pack("hud-without-hud-mode", "hud", background=False)
+        result = self.plan(self.request(ui_packs=[hud]))
+        self.assertTrue(result["ok"])
+        self.assertNotIn("--cc-hud-artwork", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["root"], hud)
+        self.assertIn("requires the core-critical HUD", result["skipped_packs"][0]["reason"])
+
+    def test_invalid_ui_pack_path_is_reported_and_skipped(self):
+        result = self.plan(self.request(ui_packs=["relative/pack"]))
+        self.assertTrue(result["ok"])
+        self.assertNotIn("--cc-hud-artwork", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["root"], os.path.join("relative", "pack"))
+        self.assertIn("unreadable", result["skipped_packs"][0]["reason"])
 
     def test_sun_shadows_require_both_launcher_choices_and_sun_lighting(self):
         for shadows in (False, True):
@@ -709,7 +860,8 @@ class NativePreviewPlanTests(unittest.TestCase):
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},
                         {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},
-                        {"model_packs": "C:/one"}, {"unknown": 1}, {"model_packs": ["relative/pack"]}):
+                        {"model_packs": "C:/one"}, {"ui_packs": "C:/one"}, {"unknown": 1},
+                        {"model_packs": ["relative/pack"]}):
             with self.subTest(preview=preview), self.assertRaises(ValueError):
                 self.plan(self.request(**preview))
         request = self.request()
