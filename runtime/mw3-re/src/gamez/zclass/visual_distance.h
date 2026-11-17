@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 
 namespace zcls {
 
@@ -41,26 +40,6 @@ inline SquaredFadeRange scale_squared_fade_range(float near_squared,
 inline bool visual_far_corners_need_update(bool clip_changed, float render_far,
                                            float cached_corner_z) {
   return clip_changed || cached_corner_z != -render_far;
-}
-
-struct VisualFarCameraState {
-  std::array<float, 3> far_plane;
-  std::array<float, 12> far_corners;
-};
-
-inline VisualFarCameraState capture_visual_far_camera_state(
-    const float* far_plane, const float* far_corners) {
-  VisualFarCameraState state{};
-  std::copy_n(far_plane, state.far_plane.size(), state.far_plane.begin());
-  std::copy_n(far_corners, state.far_corners.size(), state.far_corners.begin());
-  return state;
-}
-
-inline void restore_visual_far_camera_state(
-    float* far_plane, float* far_corners,
-    const VisualFarCameraState& state) {
-  std::copy(state.far_plane.begin(), state.far_plane.end(), far_plane);
-  std::copy(state.far_corners.begin(), state.far_corners.end(), far_corners);
 }
 
 void set_visual_far_request(unsigned requested_far);
