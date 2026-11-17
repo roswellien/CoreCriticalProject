@@ -233,7 +233,8 @@ Json catalog_mechs(const std::filesystem::path& picture_dir) {
 Json preset_numbers(const ai::AivRecord& r) {
   const uint8_t flags = r.raw[0xcc];
   const auto root = [&](int off) { return std::round(std::sqrt(std::max(0.0f, r.get<float>(off)))); };
-  const auto plain = [&](int off) { return std::round(r.get<float>(off) * 100) / 100; };  // two places
+  // Two places, worked in double: a float 0.2 written as is reads 0.200000003.
+  const auto plain = [&](int off) { return std::round(static_cast<double>(r.get<float>(off)) * 100) / 100; };
   Json n = {{"sight_m", root(0x1c)},
             {"attack_m", root(0x20)},
             {"burst_s", plain(0x34)},
