@@ -64,6 +64,9 @@ char g_crash_reason[32];
 char g_rva_text[64];
 volatile LONG g_exception_in_progress = 0;
 HANDLE g_stderr_handle = INVALID_HANDLE_VALUE;
+// Keep dbghelp loaded for the process lifetime so the exception handler never
+// calls LoadLibrary or FreeLibrary while the loader lock may be held.
+HMODULE g_dbghelp = nullptr;
 using MiniDumpWriteDumpFunction = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
                                                 PMINIDUMP_EXCEPTION_INFORMATION,
                                                 PMINIDUMP_USER_STREAM_INFORMATION,
@@ -300,9 +303,10 @@ void crash_report_install(const std::string& program, const std::string& log, bo
       }
     }
   }
-  if (HMODULE dbghelp = LoadLibraryA("dbghelp.dll")) {
+  g_dbghelp = LoadLibraryA("dbghelp.dll");
+  if (g_dbghelp) {
     g_write_dump = reinterpret_cast<MiniDumpWriteDumpFunction>(
-        GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+        GetProcAddress(g_dbghelp, "MiniDumpWriteDump"));
   }
   SetUnhandledExceptionFilter(on_exception);
   std::signal(SIGABRT, on_abort);
