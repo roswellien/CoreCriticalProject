@@ -127,8 +127,9 @@ layout(set=2,binding=0) uniform sampler2D normalMap;
 layout(set=2,binding=1) uniform sampler2D heightMap;
 layout(location=0) out vec4 result;
 // mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test,
-// 128 damage tint.
-// mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
+// 128 damage tint; 512 selects the textured alpha source for tinted model draws.
+// Normally mode.y/z hold colour/alpha operations. With tint, mode.y packs RGB8
+// and mode.z stores the float weight; bit 512 retains textured alpha selection.
 // mode.w alpha function | reference << 8.
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
 vec4 diffuse, specular, texel;
@@ -282,13 +283,17 @@ vec3 surfaceBrdf(vec3 albedo, vec3 N, vec3 V, vec3 L, vec3 parameters) {
 }
 void main() {
     uint flags = draw.mode.x;
+    bool tinted = (flags & 128u) != 0u;
+    uint colorOperation = tinted ? (4u | (2u << 8)) : draw.mode.y;
+    uint alphaOperation = tinted ? ((flags & 512u) != 0u ? (2u | (2u << 8)) : 2u)
+                                 : draw.mode.z;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
     if(sun.skyBlend.w>2.99){ // Path debug: green per-frame TL terrain, blue GPU-kept world, magenta mech, yellow sky/haze-only.
         float k=sun.skyBlend.w-3.0;vec3 c=k<0.5?vec3(0.1,0.85,0.1):k<1.5?vec3(0.1,0.3,1.0):k<2.5?vec3(1.0,0.1,1.0):vec3(1.0,0.9,0.1);
-        float lum=dot(operation(draw.mode.y).rgb,vec3(0.333));result=vec4(c*(0.55+0.6*lum),1.0);return;
+        float lum=dot(operation(colorOperation).rgb,vec3(0.333));result=vec4(c*(0.55+0.6*lum),1.0);return;
     }
     if(sun.skyBlend.w>0.5&&sun.skyBlend.w<1.99){ // Sky debug: R dome, B horizon band, G haze-only, L lit; brightness = draw index.
         float k=fract(sun.skyBlend.w);
@@ -298,7 +303,7 @@ void main() {
         // Sealed maps have no natural sky. This also avoids evaluating
         // the valid interior horizon interval [0,0] through smoothstep.
         if(sun.skyTint.w>4.5&&sun.skyTint.w<5.5){
-            result=vec4(0.0,0.0,0.0,operation(draw.mode.z).a);return;
+            result=vec4(0.0,0.0,0.0,operation(alphaOperation).a);return;
         }
         vec3 v=skyRay();float side=skySide(v);vec3 haze=hazeColor(v),c=haze;
         if(sun.extra.w<2.5){
@@ -317,7 +322,7 @@ void main() {
                     base=mix(vec3(0.58,0.74,0.91),vec3(0.18,0.43,0.72),height);
                 base*=sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
             }else{
-                vec3 legacy=operation(draw.mode.y).rgb*sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
+                vec3 legacy=operation(colorOperation).rgb*sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
                 if(sun.detail.x>2.5)legacy*=cloudRelief(uv,v);
                 base=legacy;
             }
@@ -329,7 +334,7 @@ void main() {
             c=mix(haze,base,f);
             if(sun.skyBlend.w>1.99&&sun.skyBlend.w<2.99)c=vec3(clamp(v.y*2.0,0.0,1.0),side,f); // Debug 2: R view height, G sun side, B dome blend.
         }else if(sun.skyBlend.w>1.99&&sun.skyBlend.w<2.99)c=vec3(clamp(v.y*2.0,0.0,1.0),side,0.0);
-        result=vec4(skyDither(min(c,vec3(1.0))),operation(draw.mode.z).a);return;
+        result=vec4(skyDither(min(c,vec3(1.0))),operation(alphaOperation).a);return;
     }
     vec3 N;
     if(dot(worldNormal,worldNormal)<=1e-20){
@@ -400,11 +405,11 @@ void main() {
     // Original blended sprites retain their emission. Local lights use true
     // world positions, distinct from inverse-transpose normal coordinates.
     vec3 localLight=sun.detailMotion.w<0.0?vec3(0):effectIllumination(shadowPosition,n);
-    vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?
+    vec3 rgb = operation(colorOperation).rgb*(sun.extra.w>3.5?
         (sun.detailMotion.w<0.0?vec3(1):vec3(sun.detailMotion.w)+localLight):illumination+localLight);
     float fixtureEmissive = max(draw.fogColor.w - 1.0, 0.0);
     if(fixtureEmissive > 0.0){
-        vec3 baseCol = operation(draw.mode.y).rgb;
+        vec3 baseCol = operation(colorOperation).rgb;
         float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));
         float bulb = smoothstep(0.55, 0.9, lum);
         if(sun.emissionParams.x>0.5){
@@ -416,12 +421,12 @@ void main() {
         rgb += texel.rgb * (fixtureEmissive * bulb);
     }
 #else
-    vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?vec3(1.0):illumination);
+    vec3 rgb = operation(colorOperation).rgb*(sun.extra.w>3.5?vec3(1.0):illumination);
 #endif
     if(sun.surfaceParameters.w>.5 && sun.surfaceEye.w>.5){
         vec3 toEye=sun.surfaceEye.xyz-worldPosition;
         if(dot(toEye,toEye)>1e-12){
-            vec3 albedo=operation(draw.mode.y).rgb;
+            vec3 albedo=operation(colorOperation).rgb;
             vec3 response=surfaceBrdf(clamp(albedo,vec3(0),vec3(1)),n,
                 normalize(toEye),sun.direction.xyz,sun.surfaceParameters.xyz);
             // Replace only directional Lambert lighting. Preserve ambient,
@@ -472,8 +477,12 @@ void main() {
         rgb=mix(rgb,dustColor+sun.sunColor.rgb*dustScatter,clamp(sun.weather.z*(1.0-specular.a),0.0,0.72));
     }
     if(sun.ambient.w>0.5)rgb=n*0.5+0.5;
-    if ((flags & 128u) != 0u) rgb = mix(rgb, vec3(1.0, 0.0, 0.0), draw.fogColor.a);
-    float alpha = operation(draw.mode.z).a;
+    if (tinted) {
+        vec3 tint = vec3(draw.mode.y & 255u, (draw.mode.y >> 8) & 255u,
+                         (draw.mode.y >> 16) & 255u) / 255.0;
+        rgb = mix(rgb, tint, uintBitsToFloat(draw.mode.z));
+    }
+    float alpha = operation(alphaOperation).a;
     if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
     // Lift SDR shadows without moving black or the highlight endpoint.
     if (sun.weatherFog.z > 0.0 && sun.extra.w <= 1.5 &&

@@ -11,7 +11,9 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -60,6 +62,13 @@ void same(const cc_mw3_re::PreparedSubmission &a, const cc_mw3_re::PreparedSubmi
                 "Cached clipped normals changed");
 }
 void checks() {
+    const float tint_channels[3]{.3f, .7f, .123f};
+    const auto packed_tint = pack_damage_tint_rgb(tint_channels);
+    for (unsigned channel = 0; channel < 3; ++channel) {
+        const float decoded = float((packed_tint >> (channel * 8)) & 255U) / 255.f;
+        require(std::abs(decoded - tint_channels[channel]) <= .5f / 255.f,
+                "Packed tint color exceeded half an 8-bit channel step");
+    }
     namespace cc = cc_mw3_re;
     platform::prepared::Batch batch;
     batch.color = 0xffe08040;
@@ -110,15 +119,29 @@ void checks() {
     const auto processed = profile.vertices;
     require(get() == first && cache.statistics().hits == 1 && profile.vertices == processed,
             "Unchanged prepared input was recomputed");
+    context.damage_tint_rgb[0] = 1.f;
     context.damage_tint_weight = .6f;
     const auto tinted = get();
     same(*tinted, reference());
-    require((tinted->draw.push.mode[0] & 128U) && tinted->draw.push.fog[3] == .6f,
+    require((tinted->draw.push.mode[0] & 128U) &&
+                tinted->draw.push.mode[1] == 0x000000ffU &&
+                std::bit_cast<float>(tinted->draw.push.mode[2]) == .6f,
             "Prepared cache lost damage tint");
+    auto emissive_tinted = *tinted;
+    emissive_tinted.draw.push.fog[3] = 1.4f;
+    require(emissive_tinted.draw.push.fog[3] > 1.f &&
+                std::bit_cast<float>(emissive_tinted.draw.push.mode[2]) == .6f,
+            "Fixture emission overwrote the independent tint weight");
     context.damage_tint_weight = 0.f;
+    context.damage_tint_rgb[0] = 0.f;
     same(*get(), *first);
     require(!(get()->draw.push.mode[0] & 128U), "Prepared cache retained portrait tint");
     context.damage_tint_weight = .6f;
+    const auto zero_rgb_tint = get();
+    require(zero_rgb_tint->draw.push.mode[1] == 0U &&
+                zero_rgb_tint->draw.push.mode[1] != tinted->draw.push.mode[1],
+            "Prepared cache reused a tint draw after RGB changed");
+    context.damage_tint_rgb[0] = 1.f;
     same(*get(), *tinted);
     context.damage_tint_weight = 1.f;
     same(*get(), reference());
@@ -138,6 +161,21 @@ void checks() {
         }
     }
     context.damage_tint_weight = 0.f;
+    for (float channel : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                          std::numeric_limits<float>::infinity(), 1.1f}) {
+        context.damage_tint_rgb[1] = channel;
+        for (bool cached : {false, true}) {
+            bool rejected = false;
+            try {
+                if (cached) get();
+                else reference();
+            } catch (const std::runtime_error &error) {
+                rejected = std::string_view(error.what()) == "Model has an invalid native tint color";
+            }
+            require(rejected, "Prepared staging/cache accepted an invalid tint color");
+        }
+    }
+    context.damage_tint_rgb[1] = 0.f;
     const auto miss = [&] {
         const auto before = cache.statistics().misses;
         same(*get(), reference());

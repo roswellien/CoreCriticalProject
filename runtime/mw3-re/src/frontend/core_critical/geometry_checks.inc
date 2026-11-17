@@ -67,6 +67,18 @@ std::vector<std::vector<std::uint32_t>> check_native_geometry(SDL_Window *window
         }
         require(rejected, "Native geometry adapter accepted an invalid tint weight");
     }
+    for (float channel : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                          std::numeric_limits<float>::infinity(), 1.1f}) {
+        context.damage_tint_rgb[1] = channel;
+        bool rejected = false;
+        try {
+            renderer->submit_model_geometry(source, context, {material}, {});
+        } catch (const std::runtime_error &error) {
+            rejected = std::string_view(error.what()) == "Model has an invalid native tint color";
+        }
+        require(rejected, "Native geometry adapter accepted an invalid tint color");
+    }
+    context.damage_tint_rgb[1] = 0.f;
     context.damage_tint_weight = 0.f;
     const auto frame = [&](const cc::geometry::Fog &fog = cc::geometry::Fog{}) {
         renderer->begin_scene();
@@ -85,6 +97,31 @@ std::vector<std::vector<std::uint32_t>> check_native_geometry(SDL_Window *window
     require(std::count_if(first.begin(), first.end(),
                           [](auto p) { return (p & 0x00ff0000) > 0x00800000; }) > 10,
             "Indexed native GPU geometry produced no red pixels");
+    material.color = 0xffffffff;
+    const auto untinted_white = frame();
+    context.damage_tint_rgb[0] = 0.f;
+    context.damage_tint_rgb[1] = 1.f;
+    context.damage_tint_rgb[2] = 0.f;
+    context.damage_tint_weight = .3f;
+    const auto green_tint = frame();
+    context.damage_tint_rgb[0] = 1.f;
+    context.damage_tint_rgb[1] = 0.f;
+    const auto red_tint = frame();
+    unsigned green_witnesses = 0;
+    for (std::size_t index = 0; index < untinted_white.size(); ++index) {
+        if (!(untinted_white[index] & 0x00ffffff))
+            continue;
+        require(green_tint[index] != untinted_white[index] &&
+                    green_tint[index] != red_tint[index],
+                "Green tint did not differ from untinted and red tint pixels");
+        require(((green_tint[index] >> 8) & 255) > ((green_tint[index] >> 16) & 255),
+                "Green tint pixel did not retain green greater than red");
+        ++green_witnesses;
+    }
+    require(green_witnesses > 10, "Green tint rendered no useful geometry witness");
+    context.damage_tint_weight = 0.f;
+    context.damage_tint_rgb[0] = context.damage_tint_rgb[1] = 0.f;
+    material.color = 0xffff0000;
     require(frame() == first &&
                 renderer->asset_statistics().geometry_uploads == (cpu_reference ? 0 : 1),
             "Immutable native geometry changed or reuploaded every frame");
@@ -122,7 +159,7 @@ std::vector<std::vector<std::uint32_t>> check_native_geometry(SDL_Window *window
     require(std::none_of(far.begin(), far.end(), [](auto p) { return (p & 0x00ffffff) != 0; }),
             "Hardware far clipping was omitted");
     const auto statistics = renderer->geometry_statistics();
-    require(statistics.submitted_models == 7 && !statistics.unsupported_models &&
+    require(statistics.submitted_models == 10 && !statistics.unsupported_models &&
                 (cpu_reference ? renderer->asset_statistics().cpu_clipped_triangles > 0
                                : renderer->asset_statistics().cpu_clipped_triangles == 0),
             "Native indexed geometry used an unreported CPU route");

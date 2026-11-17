@@ -11,8 +11,10 @@ layout(location=5) flat in vec4 specularFlat;
 layout(set=0,binding=0) uniform sampler2D image;
 layout(location=0) out vec4 result;
 // mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test,
-// 64 premultiplied sharp 2D sampling (the native HUD/canvas), 128 damage tint.
-// mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
+// 64 premultiplied sharp 2D sampling (the native HUD/canvas), 128 damage tint,
+// 512 selects the textured alpha source for tinted model draws.
+// Normally mode.y/z hold colour/alpha operations. With tint, mode.y packs RGB8
+// and mode.z stores the float weight; bit 512 retains textured alpha selection.
 // mode.w alpha function | reference << 8.
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
 vec4 diffuse, specular, texel;
@@ -63,9 +65,15 @@ void main() {
     } else {
         texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
     }
-    vec3 rgb = operation(draw.mode.y).rgb;
-    float alpha = operation(draw.mode.z).a;
-    if ((flags & 128u) != 0u) rgb = mix(rgb, vec3(1.0, 0.0, 0.0), draw.fogColor.a);
+    bool tinted = (flags & 128u) != 0u;
+    vec3 rgb = operation(tinted ? (4u | (2u << 8)) : draw.mode.y).rgb;
+    float alpha = operation(tinted ? ((flags & 512u) != 0u ? (2u | (2u << 8)) : 2u)
+                                   : draw.mode.z).a;
+    if (tinted) {
+        vec3 tint = vec3(draw.mode.y & 255u, (draw.mode.y >> 8) & 255u,
+                         (draw.mode.y >> 16) & 255u) / 255.0;
+        rgb = mix(rgb, tint, uintBitsToFloat(draw.mode.z));
+    }
     if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
     if ((flags & 16u) != 0u) rgb = mix(draw.fogColor.rgb, rgb, specular.a);
     if ((flags & 32u) != 0u) {

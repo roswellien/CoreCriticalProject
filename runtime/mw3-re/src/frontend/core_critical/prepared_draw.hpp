@@ -6,14 +6,26 @@
 #include "renderer/donor_retarget.hpp"
 #include "renderer/vk_scene.hpp"
 
+#include <bit>
 #include <cmath>
 #include <cstring>
 
 namespace cc_mw3_re {
 
-inline void validate_damage_tint_weight(float weight) {
+inline void validate_damage_tint(const ::platform::ModelDrawContext &context) {
+  for (float channel : context.damage_tint_rgb)
+    if (!std::isfinite(channel) || channel < 0.f || channel > 1.f)
+      throw std::runtime_error("Model has an invalid native tint color");
+  const float weight = context.damage_tint_weight;
   if (!std::isfinite(weight) || weight < 0.f || weight > 1.f)
     throw std::runtime_error("Model has an invalid native tint weight");
+}
+
+inline std::uint32_t pack_damage_tint_rgb(const float (&rgb)[3]) {
+  const auto channel = [](float value) {
+    return static_cast<std::uint32_t>(std::lround(value * 255.f));
+  };
+  return channel(rgb[0]) | (channel(rgb[1]) << 8) | (channel(rgb[2]) << 16);
 }
 
 inline std::uint32_t prepared_opacity_bits(float opacity) {
@@ -133,7 +145,7 @@ prepare_draw(const PreparedBatchDraw &source,
   if (!(context.near_z > 0) || !(context.far_z > context.near_z))
     throw std::runtime_error(
         "Prepared model requires valid native clip planes");
-  validate_damage_tint_weight(context.damage_tint_weight);
+  validate_damage_tint(context);
   const auto camera = matrix_rows(source.camera);
   const auto normal_matrix =
       lighting ? mw34::sun::normal_matrix(source.camera) : camera;
@@ -202,12 +214,13 @@ prepare_draw(const PreparedBatchDraw &source,
   std::copy(std::begin(zmod::render_fog().color), std::end(zmod::render_fog().color),
             draw.push.fog);
   draw.push.mode[0] = 2U | 4U | (zmod::render_fog().on ? 16U : 0U);
-  if (context.damage_tint_weight > 0.f) {
-    draw.push.mode[0] |= 128U;
-    draw.push.fog[3] = context.damage_tint_weight;
-  }
   draw.push.mode[1] = 4U | (2U << 8);
   draw.push.mode[2] = 2;
+  if (context.damage_tint_weight > 0.f) {
+    draw.push.mode[0] |= 128U;
+    draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
+    draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
+  }
   draw.scissor = {{0, 0}, {width, height}};
   auto normals = std::make_shared<std::vector<std::array<float, 3>>>();
   const auto append = [&](const PreparedVertex &vertex, bool project) {
