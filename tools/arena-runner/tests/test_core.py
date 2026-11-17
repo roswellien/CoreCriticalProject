@@ -64,9 +64,16 @@ class BatchTest(unittest.TestCase):
                 self.assertIn("--write-dir", m.command)
                 self.assertEqual(m.command[m.command.index("--seed") + 1], str(m.seed))
                 self.assertEqual(m.log.name, f"match-{m.seed}.jsonl")
-            self.assertIn(
-                "--replay3d", batch.replay_command(Path("x.exe"), Path("g"), Path("l"), True)
+            # A replay too gets its own write folder, a fresh one each time it opens.
+            log = b.matches[0].log
+            first = batch.prepare_replay(b.folder, log, True, settings, Path("x.exe"), Path("g"))
+            again = batch.prepare_replay(b.folder, log, True, settings, Path("x.exe"), Path("g"))
+            self.assertIn("--replay3d", first)
+            folder = Path(first[first.index("--write-dir") + 1])
+            self.assertEqual(
+                (folder / "settings.reg").read_text(encoding="utf-8"), "players settings"
             )
+            self.assertNotEqual(folder, Path(again[again.index("--write-dir") + 1]))
 
     def test_a_side_needs_one_to_eight(self):
         with self.assertRaises(ValueError):

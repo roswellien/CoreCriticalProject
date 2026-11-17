@@ -50,8 +50,37 @@ def match_command(exe: Path, game: Path, setup: Path, seed: int, write_dir: Path
     ]  # fmt: skip
 
 
-def replay_command(exe: Path, game: Path, log: Path, three_d: bool) -> list[str]:
-    return [str(exe), str(game), "--replay3d" if three_d else "--replay", str(log)]
+def replay_command(exe: Path, game: Path, log: Path, three_d: bool, write_dir: Path) -> list[str]:
+    return [
+        str(exe), str(game), "--replay3d" if three_d else "--replay", str(log),
+        "--write-dir", str(write_dir),
+    ]  # fmt: skip
+
+
+def prepare_replay(
+    batch_folder: Path, log: Path, three_d: bool, settings: Path | None, exe: Path, game: Path
+) -> list[str]:
+    """A replay's command with a write folder of its own, made from a copy of
+    the player's settings.reg, as each match has: two replays open at once
+    never write over each other's mw3.log, and none changes the player's files."""
+    kind = "3d" if three_d else "map"
+    write_dir = batch_folder / f"replay-{log.stem}-{kind}"
+    extra = 1
+    while write_dir.exists():  # the same replay opened again: a fresh folder
+        extra += 1
+        write_dir = batch_folder / f"replay-{log.stem}-{kind}-{extra}"
+    write_dir.mkdir(parents=True)
+    if settings and settings.exists():
+        shutil.copy2(settings, write_dir / "settings.reg")
+    return replay_command(exe, game, log, three_d, write_dir)
+
+
+def start_replay(batch: Batch, match: Match, three_d: bool, exe: Path, game: Path) -> None:
+    """Opens a finished match in the top-down or 3D replay, in its own folder."""
+    command = prepare_replay(
+        batch.folder, match.log, three_d, user_write_dir() / "settings.reg", exe, game
+    )
+    subprocess.Popen(command)
 
 
 def command_text(command: list[str]) -> str:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import tkinter as tk
 from tkinter import ttk
 
@@ -89,9 +88,7 @@ class ResultsScreen(ttk.Frame):
     def _watch(self, three_d: bool) -> None:
         match = self._match()
         if match and match.log.exists():
-            subprocess.Popen(
-                batch_module.replay_command(self.app.exe, self.app.game, match.log, three_d)
-            )
+            batch_module.start_replay(self.batch, match, three_d, self.app.exe, self.app.game)
 
     def _copy(self) -> None:
         """The match's exact command, its own write folder included, to rerun it."""

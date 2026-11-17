@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import subprocess
 import tkinter as tk
 from tkinter import ttk
 
@@ -133,6 +132,10 @@ class RunningScreen(ttk.Frame):
             return  # a replay reads a finished log
         menu = tk.Menu(self, tearoff=False)
         for label, three_d in (("Watch map", False), ("Watch 3D", True)):
-            command = batch_module.replay_command(self.app.exe, self.app.game, match.log, three_d)
-            menu.add_command(label=label, command=lambda c=command: subprocess.Popen(c))
+            menu.add_command(
+                label=label,
+                command=lambda d=three_d: batch_module.start_replay(
+                    self.batch, match, d, self.app.exe, self.app.game
+                ),
+            )
         menu.tk_popup(event.x_root, event.y_root)
