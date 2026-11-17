@@ -16,7 +16,7 @@ _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
-_OPTIONAL_FIELDS = frozenset({"indeo_codec"})
+_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style"})
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -756,6 +756,9 @@ def plan_launch(request):
                 disabled_detail.append(choice)
     if request["engine"] != "mw3-re" or request["renderer"] != "vulkan-wsi":
         raise ValueError("Unsupported native engine or renderer")
+    flare_style = request.get("flare_style", "modern")
+    if flare_style not in ("modern", "original"):
+        raise ValueError("Native flare style must be modern or original")
     for field, minimum, maximum in (("width", 640, 7680), ("height", 480, 4320)):
         if type(request[field]) is not int or not minimum <= request[field] <= maximum:
             raise ValueError("Unsupported native window dimensions")
@@ -806,6 +809,7 @@ def plan_launch(request):
         *_window_arguments(request["window_mode"], request["width"], request["height"]),
         "--cc-aa", _AA[request["aa"]], "--cc-af", str(request["af"]),
         "--cc-render-thread", "1" if request["render_thread"] else "0", "--cc-lighting", request["lighting"],
+        "--cc-flare-style", flare_style,
     ]
     skipped_features = []
     if codec is None:

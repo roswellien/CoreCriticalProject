@@ -20,6 +20,7 @@
 #include "render_worker.hpp"
 #include "renderer/campaign_sun_settings.hpp"
 #include "renderer/effect_light_observations.hpp"
+#include "renderer/flare_alpha.hpp"
 #include "renderer/effect_lighting_stage.inc"
 #include "renderer/geometry/reference.hpp"
 #include "renderer/headlight_original_binding.hpp"
@@ -289,6 +290,12 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
   return result;
 }
 
+bool parse_modern_flare_style(const sdlfe::CoreCriticalAssets &assets) {
+  if (assets.flare_style != "modern" && assets.flare_style != "original")
+    throw std::runtime_error("--cc-flare-style supports modern or original");
+  return assets.flare_style == "modern";
+}
+
 vk::Renderer::WindowSurface
 sdl_surface(SDL_Window *window,
             const std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
@@ -356,6 +363,8 @@ struct Texture {
   unsigned scene_index = no_binding;
   unsigned sharp_index = no_binding;
   bool held_copy{};
+  // Rebuild synthetic alpha from each original RGBA upload on named reload.
+  bool generated_rgba{};
   const ::platform::prepared::Image *replacement{};
   unsigned source_width{}, source_height{};
   std::vector<std::uint32_t> pixels;
@@ -457,6 +466,7 @@ public:
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
+        modern_flare_style_(parse_modern_flare_style(assets)),
         base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
         sun_explicit_(assets.sun_explicit),
         environment_(assets.environment),
@@ -644,6 +654,12 @@ public:
             binding_rejected_mismatch_,
             native_fingerprint_evaluations_,
             deferred_material_admissions_};
+  }
+  testing::NamedTextureTestState named_texture_state_for_test(
+      int32_t handle) const {
+    const auto &entry = textures_.at(std::size_t(handle));
+    return {entry.width, entry.height, entry.source_width, entry.source_height,
+            entry.generated_rgba, entry.pixels};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
@@ -1018,6 +1034,7 @@ public:
     mw34::materials::SurfaceKey source_key{};
     mw34::materials::get_active_surface_key(&source_key);
     std::vector<uint32_t> replacement;
+    std::vector<std::uint8_t> generated;
     if (entry.replacement) {
       if (!rgba || unsigned(width) != entry.source_width ||
           unsigned(height) != entry.source_height)
@@ -1029,6 +1046,14 @@ public:
       width = int(entry.width);
       height = int(entry.height);
       ++named_textures_;
+    } else if (entry.generated_rgba) {
+      if (!rgba || unsigned(width) != entry.source_width ||
+          unsigned(height) != entry.source_height)
+        throw std::runtime_error(
+            "Generated flare reload changed its source dimensions");
+      generated = mw34::flare::generate_rgba(entry.name, entry.width,
+                                             entry.height, rgba);
+      rgba = generated.data();
     }
     if (!rgba || unsigned(width) != entry.width ||
         unsigned(height) != entry.height) {
@@ -1051,6 +1076,26 @@ public:
     mw34::materials::SurfaceKey active_key{};
     mw34::materials::get_active_surface_key(&active_key);
     const auto *replacement = prepared_.named_texture(name);
+    const bool generate_flare = modern_flare_style_ && name &&
+                                mw34::flare::is_texture(name);
+    if (generate_flare) {
+      if (!rgba || width <= 0 || height <= 0 ||
+          unsigned(width) > texture_limit_ || unsigned(height) > texture_limit_)
+        throw std::runtime_error("Invalid mw3-re texture size or flare input");
+      const auto pixels = mw34::flare::generate_rgba(
+          name, unsigned(width), unsigned(height), rgba);
+      const auto handle = create_texture(width, height, pixels.data(), type);
+      auto &entry = textures_[handle];
+      entry.generated_rgba = true;
+      entry.name = name;
+      entry.source_width = unsigned(width);
+      entry.source_height = unsigned(height);
+      entry.surface_key = active_key;
+      entry.group_load_epoch = group_load_epoch_;
+      // Generated and plain named textures are excluded from the prepared
+      // replacement upload count.
+      return handle;
+    }
     if (!replacement) {
       int32_t handle = create_texture(width, height, rgba, type);
       auto &entry = textures_[handle];
@@ -1508,11 +1553,12 @@ private:
           queue = "overlay";
         std::fprintf(
             stderr,
-            "[FLARE_TEXTURE] slot=%d name=\"%s\" uploaded=%ux%u replacement=%s "
+            "[FLARE_TEXTURE] slot=%d name=\"%s\" uploaded=%ux%u replacement=%s %s "
             "half_size_screen_px=%g half_size_target_px=[%g,%g] sampler=0x%x "
             "queue=%s source=%ux%u viewport=%dx%d target=%ux%u hud=%d\n",
             flare.slot, entry.name.empty() ? "<unknown>" : entry.name.c_str(),
             entry.width, entry.height, entry.replacement ? "yes" : "no",
+            mw34::flare::generated_field(entry.generated_rgba),
             flare.half_size_pixels,
             flare.half_size_pixels * scene_.width / float(viewport[2]),
             flare.half_size_pixels * scene_.height / float(viewport[3]),
@@ -1956,6 +2002,7 @@ private:
   const bool native_wsi_;
   const vk::Renderer::Quality quality_;
   mw34::sun::Settings lighting_;
+  const bool modern_flare_style_;
   bool display_hdr_ = false;
   const mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
@@ -2227,6 +2274,14 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+testing::NamedTextureTestState testing::named_texture_state(
+    VulkanFrameRenderer &renderer, int32_t handle) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->named_texture_state_for_test(handle);
 }
 
 struct RigidCaptureTestAccess {

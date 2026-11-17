@@ -24,6 +24,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             Select(ComboAA, settings.AntiAliasing == "1" ? "off" : settings.AntiAliasing);
             Select(ComboAF, settings.AnisotropicFiltering.ToString());
             Select(ComboDrawDist, settings.DrawDistance.ToString());
+            Select(ComboFlareStyle, settings.FlareStyle);
             ChkDynamicLighting.IsChecked = settings.DynamicLighting;
             ChkHeadlights.IsChecked = settings.Headlights;
             ChkHeadlights.IsEnabled = settings.DynamicLighting;
@@ -44,7 +45,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)),
             ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true,
             ChkHeadlights.IsChecked == true, ChkWaterDetail.IsChecked == true,
-            ChkCloudDetail.IsChecked == true);
+            ChkCloudDetail.IsChecked == true, Value(ComboFlareStyle));
         result.Validate();
         return result;
     }
