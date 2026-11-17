@@ -868,8 +868,12 @@ void check_prepared_models_donor_toe_admission() {
     for (const std::string selected_lod : {"0", "1"}) {
         for (const bool missing_batch_frame : {false, true}) {
             const std::string toe = "rtoe02";
+            // Isolate each guard: the batch-only case needs a live rig reference,
+            // while the rig-only case needs every batch frame to be present.
+            const std::string rig_reference = missing_batch_frame ? "control" : toe;
+            const std::string batch_owner = missing_batch_frame ? toe : "control";
             write(mesh_path, prepared_fixture::build_valid_v4_mesh(
-                toe, missing_batch_frame ? toe : "control"));
+                rig_reference, batch_owner));
             auto assets = options("authored", selected_lod);
             prepared_fixture::DonorTree tree(toe, false);
             tree.asset->name = selected_lod == "0" ? "mech_authored_1.flt" : "mech_authored.flt";
