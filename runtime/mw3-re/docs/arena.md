@@ -369,7 +369,9 @@ install, takes a few seconds and writes:
   and every enemy pilot record in the game's mission readers with the numbers
   behind the runner's summary line.
 - `terrain/<map>.ppm` and `<map>.json`: the map from above as the top-down
-  replay draws it, at most 1024 pixels on its long side, and where it sits
+  replay draws it, framed on its 16 spawn spots with 300 m more each way (a
+  multiplayer map is a part of its campaign world, which shares its files),
+  at most 1024 pixels on its long side, and where it sits
   (`x0`, `z_top`, meters per pixel `cell`, `width`, `height`).
 - `mechs/<mech>.ppm`: the mech lab's green picture of each chassis
   (`icon_<mech>_green`); the Elemental has none.

@@ -92,9 +92,24 @@ std::string addon_map_name(const std::string& reader) {
   return name;
 }
 
-bool write_terrain(const std::string& map, const std::filesystem::path& dir, std::string* error) {
-  const float whole[4] = {1, 1, 0, 0};  // min > max: the whole world
-  replay::Terrain t = replay::build_terrain(map, whole);
+// A multiplayer map is a part of its campaign world (the same world files),
+// so the picture is framed on where its 16 spawn spots are, which spread over
+// the map's play area, with kMapMargin more each way (build_terrain adds its
+// own 100 m too).
+constexpr float kMapMargin = 300.0f;
+
+bool write_terrain(const std::string& map, const AivTree& reader, const std::filesystem::path& dir,
+                   std::string* error) {
+  float box[4] = {1e30f, 1e30f, -1e30f, -1e30f};
+  for (int spot = 0; spot < kSpawnSpots; ++spot) {
+    const std::string name = "remote_" + std::to_string(spot);
+    ai::AivRecord record;
+    record.parse(reader.find(name.c_str()), name.c_str());
+    const float x = record.get<float>(0x08), z = record.get<float>(0x10);  // the record's place
+    box[0] = std::min(box[0], x - kMapMargin), box[1] = std::min(box[1], z - kMapMargin);
+    box[2] = std::max(box[2], x + kMapMargin), box[3] = std::max(box[3], z + kMapMargin);
+  }
+  replay::Terrain t = replay::build_terrain(map, box);
   if (!t.error.empty() || t.width <= 0) {
     *error = map + ": " + (t.error.empty() ? "no terrain" : t.error);
     return false;
@@ -140,7 +155,7 @@ Json catalog_maps(const std::filesystem::path& terrain_dir, std::string* error) 
       std::string name = shipped_map_name(dir, n);
       if (name.empty()) name = addon_map_name(reader);
       if (name.empty()) name = id;
-      if (!write_terrain(id, terrain_dir, error)) return nullptr;
+      if (!write_terrain(id, tree, terrain_dir, error)) return nullptr;
       maps.push_back({{"id", id}, {"name", name}});
     }
   }
