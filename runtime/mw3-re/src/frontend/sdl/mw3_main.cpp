@@ -331,10 +331,8 @@ void usage() {
       "    [--cc-environment-pack DIR]... [--cc-environment-packs-explicit]\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
-      "    [--cc-dynamic-lighting 0|1] [--cc-sun-shadows 0|1]
-"
-      "    [--cc-water-detail 0|1] [--cc-cloud-detail 0|1]
-"
+      "    [--cc-dynamic-lighting 0|1] [--cc-sun-shadows 0|1]\n"
+      "    [--cc-water-detail 0|1] [--cc-cloud-detail 0|1]\n"
       "    [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
       "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
