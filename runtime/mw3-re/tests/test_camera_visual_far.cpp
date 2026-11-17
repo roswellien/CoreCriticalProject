@@ -26,6 +26,20 @@ void capture_visual_far_log(const char* line) {
   g_visual_far_log_lines.emplace_back(line);
 }
 
+struct VisualFarLogSinkGuard {
+  zcls::VisualFarLogSink previous_sink = nullptr;
+
+  VisualFarLogSinkGuard() {
+    g_visual_far_log_lines.clear();
+    previous_sink = zcls::set_visual_far_log_sink(capture_visual_far_log);
+  }
+
+  ~VisualFarLogSinkGuard() {
+    zcls::set_visual_far_log_sink(previous_sink);
+    g_visual_far_log_lines.clear();
+  }
+};
+
 struct CameraFrame {
   unsigned requested_far;
   float position[3];
@@ -163,9 +177,7 @@ struct CameraFixture {
 
 TEST(view_distance_restores_render_camera_far_state) {
   CameraFixture fixture;
-  g_visual_far_log_lines.clear();
-  const zcls::VisualFarLogSink old_log_sink =
-      zcls::set_visual_far_log_sink(capture_visual_far_log);
+  VisualFarLogSinkGuard log_sink_guard;
   EXPECT(fixture.camera.get<float>(0x110) == 0.0f);
   for (int i = 0; i < 3; ++i) EXPECT(fixture.camera.floats(0xc4)[i] == 0.0f);
 
@@ -221,7 +233,6 @@ TEST(view_distance_restores_render_camera_far_state) {
              "extended 0, default-800 fog-only 1; camera main") !=
          std::string::npos);
   EXPECT(fixture.observed_passes == 4);
-  zcls::set_visual_far_log_sink(old_log_sink);
 }
 
 TEST(default_visual_far_covers_only_full_viewport_fog) {
