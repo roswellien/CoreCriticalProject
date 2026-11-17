@@ -846,27 +846,36 @@ void check_prepared_models_donor_toe_admission() {
         ++cases;
     }
 
-    // A close-LOD request may use the selected distance mesh only when all of
-    // that donor's references exist in the live hierarchy.
-    {
-        const std::string toe = "rtoe02";
-        write(mesh_path, prepared_fixture::build_valid_v4_mesh(toe));
-        auto assets = options();
-        prepared_fixture::DonorTree tree(toe, false);
-        tree.asset->name = "mech_authored.flt";
-        cc_mw3_re::PreparedModels models(assets);
-        const auto draw = models.draw(tree.context());
-        require(!draw.replace && draw.batches.empty(),
-                "LOD fallback with unresolved donor toe did not decline cleanly");
-        ++cases;
+    // Both cross-LOD directions must decline before strict donor/batch binding
+    // when the selected geometry needs a frame absent from the live hierarchy.
+    for (const std::string selected_lod : {"0", "1"}) {
+        for (const bool missing_batch_frame : {false, true}) {
+            const std::string toe = "rtoe02";
+            write(mesh_path, prepared_fixture::build_valid_v4_mesh(
+                toe, missing_batch_frame ? toe : "control"));
+            auto assets = options("authored", selected_lod);
+            prepared_fixture::DonorTree tree(toe, false);
+            tree.asset->name = selected_lod == "0" ? "mech_authored_1.flt" : "mech_authored.flt";
+            const auto raw = tree.raw_state();
+            const auto counts = tree.asset->nodes;
+            const auto asset_name = tree.asset->name;
+            cc_mw3_re::PreparedModels models(assets);
+            const auto draw = models.draw(tree.context());
+            require(!draw.replace && draw.batches.empty(),
+                    "LOD fallback with unresolved donor/batch frame did not decline cleanly");
+            require(tree.raw_state() == raw && tree.asset->nodes == counts &&
+                        tree.asset->name == asset_name,
+                    "Declined LOD fallback mutated native source state");
+            ++cases;
+        }
     }
 
     // A BWMESH4 fallback with a complete live donor hierarchy remains usable.
-    {
+    for (const std::string selected_lod : {"0", "1"}) {
         write(mesh_path, prepared_fixture::build_valid_v4_mesh());
-        auto assets = options();
+        auto assets = options("authored", selected_lod);
         prepared_fixture::DonorTree tree("", false);
-        tree.asset->name = "mech_authored.flt";
+        tree.asset->name = selected_lod == "0" ? "mech_authored_1.flt" : "mech_authored.flt";
         cc_mw3_re::PreparedModels models(assets);
         const auto draw = models.draw(tree.context());
         require(draw.replace && draw.batches.size() == 1,
