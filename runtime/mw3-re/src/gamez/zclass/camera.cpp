@@ -1,5 +1,6 @@
 #include "gamez/zclass/camera.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -59,13 +60,23 @@ struct VisualFarLogState {
   int32_t mission_linear, mission_on;
 };
 
-std::optional<VisualFarLogState> g_previous_visual_far_log_state;
+std::array<std::optional<VisualFarLogState>, 3>
+    g_previous_visual_far_log_state_by_camera{};
+
+constexpr float kVisualFarLogFloatEpsilon = 0.5f;
+
+bool same_visual_far_log_float(float left, float right) {
+  if (left == right) return true;
+  if (std::isnan(left) || std::isnan(right))
+    return std::isnan(left) && std::isnan(right);
+  return std::abs(left - right) <= kVisualFarLogFloatEpsilon;
+}
 
 bool same_visual_far_log_state(const VisualFarLogState& left,
                                const VisualFarLogState& right) {
   return left.requested_far == right.requested_far &&
-         left.authored_far == right.authored_far &&
-         left.expanded_far == right.expanded_far &&
+         same_visual_far_log_float(left.authored_far, right.authored_far) &&
+         same_visual_far_log_float(left.expanded_far, right.expanded_far) &&
          left.full_viewport == right.full_viewport &&
          left.window_width == right.window_width &&
          left.window_height == right.window_height &&
@@ -74,20 +85,32 @@ bool same_visual_far_log_state(const VisualFarLogState& left,
          left.extended_scope == right.extended_scope &&
          left.default_fog_scope == right.default_fog_scope &&
          left.camera_class == right.camera_class &&
-         left.fog_near == right.fog_near && left.fog_far == right.fog_far &&
+         same_visual_far_log_float(left.fog_near, right.fog_near) &&
+         same_visual_far_log_float(left.fog_far, right.fog_far) &&
          left.mission_linear == right.mission_linear &&
          left.mission_on == right.mission_on;
 }
 
+void emit_visual_far_log_line(const char* line) {
+  if (g_visual_far_log_sink)
+    g_visual_far_log_sink(line);
+  else
+    std::printf("%s", line);
+}
+
 void log_visual_far_state(const VisualFarLogState& state) {
-  if (g_previous_visual_far_log_state &&
-      same_visual_far_log_state(*g_previous_visual_far_log_state, state))
+  if (state.camera_class < 0 ||
+      static_cast<std::size_t>(state.camera_class) >=
+          g_previous_visual_far_log_state_by_camera.size())
     return;
-  g_previous_visual_far_log_state = state;
-  char line[256];
+  auto& previous_state = g_previous_visual_far_log_state_by_camera[
+      static_cast<std::size_t>(state.camera_class)];
+  if (previous_state && same_visual_far_log_state(*previous_state, state))
+    return;
+  char line[512];
   const char* camera_class = state.camera_class == 0 ? "main" :
                              state.camera_class == 1 ? "zoom" : "other";
-  std::snprintf(line, sizeof line,
+  const int line_length = std::snprintf(line, sizeof line,
                 "mw3: view distance: requested %u, authored %.3g, expanded %.3g; "
                 "full viewport %d (window %dx%d, render %dx%d); "
                 "extended %d, default-800 fog-only %d; camera %s; "
@@ -101,10 +124,10 @@ void log_visual_far_state(const VisualFarLogState& state) {
                 static_cast<double>(state.fog_near),
                 static_cast<double>(state.fog_far), state.mission_linear,
                 state.mission_on);
-  if (g_visual_far_log_sink)
-    g_visual_far_log_sink(line);
-  else
-    std::printf("%s", line);
+  if (line_length < 0 || static_cast<std::size_t>(line_length) >= sizeof line)
+    return;
+  previous_state = state;
+  emit_visual_far_log_line(line);
 }
 
 constexpr uint32_t kActive = 4, kTreeValid = 0x80000, kOverride = 0x800000;
@@ -116,10 +139,12 @@ const float kNullOffset[3] = {};   // 0x0063d870, never written
 bool full_display_viewport(Node* window, int32_t* width, int32_t* height) {
   int32_t x = 0, y = 0;
   const mech3::Rect& render = mech3::render();
+  if (render.w <= 0 || render.h <= 0) return false;
   const bool origin_valid = !zcls::window_origin(window, &x, &y);
+  if (!origin_valid) return false;
   const bool size_valid = !zcls::window_size(window, width, height);
-  return render.w > 0 && render.h > 0 && origin_valid && size_valid && x == 0 &&
-         y == 0 && *width == render.w && *height == render.h;
+  return size_valid && x == 0 && y == 0 && *width == render.w &&
+         *height == render.h;
 }
 
 void update_far_corners(Camera* camera, float far_z) {
@@ -780,7 +805,8 @@ VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink) {
   // afterward, so this reset shares the render scope's game-thread contract.
   const VisualFarLogSink previous = g_visual_far_log_sink;
   g_visual_far_log_sink = sink;
-  g_previous_visual_far_log_state.reset();
+  for (auto& previous_state : g_previous_visual_far_log_state_by_camera)
+    previous_state.reset();
   return previous;
 }
 ScopedZoomVisualFar::ScopedZoomVisualFar(const void* camera)
@@ -1252,8 +1278,13 @@ int pick_cells_virtual(Node* world, Camera* cam) {
       std::abs(max_cells - last_logged_cells) >= 8;
   if (meaningful_change &&
       (last_logged_rings < 0 || now - last_capacity_log >= std::chrono::seconds(1))) {
-    std::printf("mw3: virtual view cells: rings %d/%d, max cells per ring %d/%d\n",
-                used_rings, kTilerRingCapacity, max_cells, kTilerCellsPerRing);
+    char line[128];
+    const int line_length = std::snprintf(
+        line, sizeof line,
+        "mw3: virtual view cells: rings %d/%d, max cells per ring %d/%d\n",
+        used_rings, kTilerRingCapacity, max_cells, kTilerCellsPerRing);
+    if (line_length >= 0 && static_cast<std::size_t>(line_length) < sizeof line)
+      emit_visual_far_log_line(line);
     last_capacity_log = now;
     last_logged_rings = used_rings;
     last_logged_cells = max_cells;
