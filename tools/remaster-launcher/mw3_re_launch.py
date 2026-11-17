@@ -842,6 +842,15 @@ def plan_launch(request):
                             or not all(math.isfinite(value) for value in (u0, v0, u1, v1))
                             or u0 < 0 or v0 < 0 or u1 > 1 or v1 > 1 or u0 >= u1 or v0 >= v1):
                         raise ValueError("UI sprite dimensions, length or UV coordinates are invalid")
+                # The runtime enumerates this directory, not the registry. Match its
+                # exact extension check so every loaded sprite has passed validation.
+                sprite_dir = root / "ui" / "sprites"
+                runtime_sprites = set()
+                if sprite_dir.is_dir():
+                    runtime_sprites = {f"ui/sprites/{path.name}" for path in sprite_dir.iterdir()
+                                       if path.suffix == ".rgba"}
+                if runtime_sprites != set(sprites.values()):
+                    raise ValueError("UI sprite directory does not match the registry")
                 if kind in ui_seen:
                     skipped.append({"root": str(root), "feature": "ui_artwork",
                                     "reason": f"A {kind} UI pack was already selected"})
@@ -869,8 +878,7 @@ def plan_launch(request):
                         raise ValueError("menu background dimensions or length are invalid")
                     skipped.append({"root": str(root), "feature": "menu_hd_background",
                                     "reason": "MW3-RE has no native menu-background presentation route"})
-                sprite_dir = root / "ui" / "sprites"
-                if not sprite_dir.is_dir() or not any(sprite_dir.glob("*.rgba")):
+                if not sprite_hashes:
                     if background is None:
                         raise ValueError("UI pack has no available artwork")
                 else:

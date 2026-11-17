@@ -6,6 +6,13 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "frontend/sdl/gpu_hud.h"
 #include "frontend/sdl/sdl_render3d.h"
@@ -27,6 +34,56 @@ int32_t fixed_random() {
 void require(bool value, const char* message) {
   if (!value) throw std::runtime_error(message);
 }
+#if defined(_WIN32)
+int fd_dup(int descriptor) { return _dup(descriptor); }
+int fd_dup2(int from, int to) { return _dup2(from, to); }
+int fd_number(std::FILE* file) { return _fileno(file); }
+void fd_close(int descriptor) { _close(descriptor); }
+#else
+int fd_dup(int descriptor) { return dup(descriptor); }
+int fd_dup2(int from, int to) { return dup2(from, to); }
+int fd_number(std::FILE* file) { return fileno(file); }
+void fd_close(int descriptor) { close(descriptor); }
+#endif
+// Restore stderr even when a HUD assertion throws, so failures remain visible.
+class StderrCapture {
+ public:
+  explicit StderrCapture(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    file_ = _wfopen(path.c_str(), L"w+b");
+#else
+    file_ = std::fopen(path.c_str(), "w+b");
+#endif
+    require(file_ != nullptr, "Cannot create HUD diagnostic capture");
+    std::fflush(stderr);
+    saved_ = fd_dup(fd_number(stderr));
+    if (saved_ < 0 || fd_dup2(fd_number(file_), fd_number(stderr)) < 0) {
+      if (saved_ >= 0) fd_close(saved_);
+      std::fclose(file_);
+      throw std::runtime_error("Cannot redirect HUD diagnostics");
+    }
+  }
+  ~StderrCapture() {
+    std::fflush(stderr);
+    fd_dup2(saved_, fd_number(stderr));
+    fd_close(saved_);
+    std::fclose(file_);
+  }
+  StderrCapture(const StderrCapture&) = delete;
+  StderrCapture& operator=(const StderrCapture&) = delete;
+  std::string text() {
+    require(std::fflush(stderr) == 0, "Cannot flush HUD diagnostics");
+    std::rewind(file_);
+    std::string result;
+    for (int c; (c = std::fgetc(file_)) != EOF;) result += static_cast<char>(c);
+    require(!std::ferror(file_), "Cannot read HUD diagnostics");
+    return result;
+  }
+
+ private:
+  std::FILE* file_{};
+  int saved_ = -1;
+};
 template <class Function>
 void rejects(Function function) {
   bool rejected = false;
@@ -120,7 +177,7 @@ void artwork_checks(const std::filesystem::path& directory) {
   bytes[27] = 0x7f;
   write(36);
   rejects([&] { platform::load_hud_artwork(directory); });
-  const uint16_t opaque[] = {0xf800, 0};
+  uint16_t opaque[] = {0xf800, 0};
   require(platform::hud_identity(2, 1, opaque, 2) == 0xdaa81911a07d967eULL,
           "Private HUD fingerprint contract changed");
   rejects([&] { platform::hud_identity(2, 2, opaque, 2); });
@@ -129,7 +186,7 @@ void artwork_checks(const std::filesystem::path& directory) {
   const auto second_root = directory / "second";
   std::filesystem::create_directories(first_root / "ui" / "sprites");
   std::filesystem::create_directories(second_root / "ui" / "sprites");
-  const auto sprite = "ui/sprites/0000000000000001.rgba";
+  const auto sprite = "ui/sprites/daa81911a07d967e.rgba";
   std::memcpy(bytes.data() + 12, uv, sizeof uv);
   write(bytes.size());
   std::filesystem::copy_file(path, first_root / sprite);
@@ -139,8 +196,31 @@ void artwork_checks(const std::filesystem::path& directory) {
   Recorder recorder;
   sdlfe::HudOptions options;
   options.mode = "core-critical";
+  options.text = false;
   options.artwork = {first_root.string(), second_root.string()};
-  sdlfe::GpuHud hud(recorder, options);
+  StderrCapture diagnostics(directory / "conflict.log");
+  {
+    sdlfe::GpuHud hud(recorder, options);
+    std::array<uint16_t, 2> shadow{};
+    zimg::Texture source{};
+    source.width = source.width_again = 2;
+    source.height = 1;
+    source.pixels = opaque;
+    source.flags = zimg::kTwoBytes;
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), 2, 1, 4, 6};
+    hud.begin(shadow.data(), 2, 1, 4, 3);
+    zrndr::blit16(&source, 0, 0, 0, nullptr);
+    require(hud.finish(), "Conflicting HUD artwork did not draw");
+    require(recorder.images == std::vector<std::vector<uint32_t>>{{0x80193264, 0}},
+            "Conflicting HUD artwork did not keep the first pack's pixels");
+    require(recorder.draws.size() == 1 && recorder.draws[0].state.texture == 0,
+            "Conflicting HUD artwork did not draw the uploaded winning texture");
+    zrndr::target2d() = {};
+  }
+  const auto expected = "GPU HUD: conflicting identity daa81911a07d967e; keeping " +
+                        first_root.string() + ", skipping " + second_root.string();
+  require(diagnostics.text().find(expected) != std::string::npos,
+          "Conflicting HUD artwork did not report the identity and winning/skipped packs");
 }
 void drawing_checks() {
   Recorder recorder;

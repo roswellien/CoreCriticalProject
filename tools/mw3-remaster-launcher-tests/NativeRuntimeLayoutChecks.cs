@@ -756,10 +756,16 @@ static class NativeRuntimeLayoutChecks
             var unreadableUi = Path.Combine(packs, "unreadable-ui");
             Directory.CreateDirectory(unreadableUi);
             File.WriteAllText(Path.Combine(unreadableUi, "pack.json"), "not json");
-            var unreadableUiReports = new List<string>();
-            if (NativeGameRunner.SelectUiPacks(new[] { unreadableUi }, unreadableUiReports.Add).Count != 0 ||
-                unreadableUiReports.Count != 1 || !unreadableUiReports[0].Contains("could not be read", StringComparison.Ordinal))
-                throw new Exception("Unreadable pack was not reported as skipped.");
+            foreach (var invalidUi in new[] { unreadableUi, "invalid\0ui-pack" })
+            {
+                var unreadableUiReports = new List<string>();
+                if (!NativeGameRunner.SelectUiPacks(new[] { invalidUi, ui }, unreadableUiReports.Add)
+                        .SequenceEqual(new[] { Path.GetFullPath(ui) }) ||
+                    unreadableUiReports.Count != 1 ||
+                    !unreadableUiReports[0].Contains("could not be read", StringComparison.Ordinal) ||
+                    !unreadableUiReports[0].Contains(invalidUi, StringComparison.Ordinal))
+                    throw new Exception("Unreadable pack was not reported as skipped or stopped later UI selection.");
+            }
 
             if (NativeGameRunner.WindowModeForSettings("windowed") != Mw3ReWindowMode.Windowed ||
                 NativeGameRunner.WindowModeForSettings("fullscreen") != Mw3ReWindowMode.Fullscreen ||

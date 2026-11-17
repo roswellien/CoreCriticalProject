@@ -367,18 +367,24 @@ class NativePreviewPlanTests(unittest.TestCase):
             "native_payload": {"profile": "prepared-environment-v1"}})
         return os.path.join(self.root, name)
 
-    def ui_pack(self, name="menu", kind="menu", background=True, pixel=(1, 2, 3, 255)):
-        sprite = "0123456789abcdef"
-        relative = f"ui/sprites/{sprite}.rgba"
+    def ui_pack(self, name="menu", kind="menu", background=True, pixel=(1, 2, 3, 255),
+                sprite="0123456789abcdef"):
         image = b"MW3H" + struct.pack("<IIffff", 1, 1, 0.0, 0.0, 1.0, 1.0) + bytes(pixel)
-        self.write(f"{name}/{relative}", image)
+        sprites = {}
+        files = {}
+        if sprite is not None:
+            relative = f"ui/sprites/{sprite}.rgba"
+            self.write(f"{name}/{relative}", image)
+            sprites[sprite] = relative
+            files[relative] = {"bytes": len(image), "sha256": hashlib.sha256(image).hexdigest(),
+                               "format": "MW3H-v1"}
         registry = {"schema_version": 2, "payload_profile": "prepared-ui-v1", "kind": kind,
-                    "sprites": {sprite: relative},
+                    "sprites": sprites,
                     "background": "ui/background.mwhd" if background else None}
         self.write(f"{name}/ui/ui.json", registry)
         registry_bytes = json.dumps(registry).encode("utf-8")
-        files = {relative: {"bytes": len(image), "sha256": hashlib.sha256(image).hexdigest(), "format": "MW3H-v1"},
-                 "ui/ui.json": {"bytes": len(registry_bytes), "sha256": hashlib.sha256(registry_bytes).hexdigest()}}
+        files["ui/ui.json"] = {"bytes": len(registry_bytes),
+                               "sha256": hashlib.sha256(registry_bytes).hexdigest()}
         if background:
             background_bytes = b"MWHDBG1\0" + struct.pack("<IIII", 1, 1, 1, 1) + bytes(3)
             self.write(f"{name}/ui/background.mwhd", background_bytes)
@@ -489,6 +495,49 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual(result["skipped_packs"][0]["root"], second)
         self.assertIn("0123456789abcdef", result["skipped_packs"][0]["reason"])
         self.assertIn(first, result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_undeclared_ui_sprites_are_reported_and_not_routed(self):
+        first = self.ui_pack("hud-declared", "hud", background=False)
+        conflicting = (b"MW3H" + struct.pack("<IIffff", 1, 1, 0.0, 0.0, 1.0, 1.0)
+                       + bytes((9, 8, 7, 255)))
+        for name, sprite, background, extra in (
+                ("empty-registry", None, False, conflicting),
+                ("background-with-extra", None, True, conflicting),
+                ("undeclared-conflict", "1111111111111111", False, conflicting),
+                ("undeclared-malformed", "1111111111111111", False, b"not MW3H")):
+            with self.subTest(name=name):
+                second = self.ui_pack(name, "menu", background=background, sprite=sprite)
+                self.write(f"{name}/ui/sprites/0123456789abcdef.rgba", extra)
+                result = self.plan(self.request(hud="core-critical", ui_packs=[first, second]))
+                self.assertTrue(result["ok"])
+                artwork = [result["argv"][i + 1] for i, value in enumerate(result["argv"])
+                           if value == "--cc-hud-artwork"]
+                self.assertEqual(artwork, [first])
+                self.assertEqual(len(result["skipped_packs"]), 1)
+                skipped = result["skipped_packs"][0]
+                self.assertEqual(skipped["root"], second)
+                self.assertEqual(skipped["feature"], "ui_artwork")
+                self.assertIn("sprite directory does not match the registry", skipped["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_empty_ui_sprite_table_never_routes_artwork(self):
+        for background in (False, True):
+            with self.subTest(background=background):
+                menu = self.ui_pack(f"empty-sprites-{background}", "menu",
+                                    background=background, sprite=None)
+                result = self.plan(self.request(hud="core-critical", ui_packs=[menu]))
+                self.assertTrue(result["ok"])
+                self.assertNotIn("--cc-hud-artwork", result["argv"])
+                self.assertEqual(len(result["skipped_packs"]), 1)
+                skipped = result["skipped_packs"][0]
+                self.assertEqual(skipped["root"], menu)
+                if background:
+                    self.assertEqual(skipped["feature"], "menu_hd_background")
+                    self.assertIn("no native menu-background", skipped["reason"])
+                else:
+                    self.assertEqual(skipped["feature"], "ui_artwork")
+                    self.assertIn("no available artwork", skipped["reason"])
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_duplicate_ui_kind_reports_later_pack(self):

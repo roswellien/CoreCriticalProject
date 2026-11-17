@@ -106,7 +106,7 @@ public sealed class NativeGameRunner
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or
                 JsonException or ArgumentException or NotSupportedException)
             {
-                log?.Invoke("Pack left out; UI pack could not be read: " + Path.GetFullPath(directory) +
+                log?.Invoke("Pack left out; UI pack could not be read: " + directory +
                     " (" + error.Message + ")");
             }
         }
