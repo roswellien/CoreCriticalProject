@@ -212,13 +212,31 @@ class RunBatchReportTest(unittest.TestCase):
             )  # fmt: skip
             for m in b.matches:
                 m.exit_code = 0
-            results = run_batch.batch_results(b, [{"winner": "A", "t": 65, "lost": [0, 1]}, None])
+            ends = [{"winner": "A", "t": 65, "lost": [0, 1]}, None]
+            results = run_batch.batch_results(b, ends, Path("e"), Path("g"), Path("s"))
         self.assertEqual((results["wins_a"], results["wins_b"]), (1, 0))
+        self.assertFalse(results["matches"][0]["stopped"])
         self.assertEqual(results["matches"][0]["seconds"], 60)
         self.assertEqual(results["matches"][1]["result"], "running")
         lines = run_batch.report_lines(results)
         self.assertIn("seed 11: side A won, time 1:00, lost A 0 B 1", lines[1])
         self.assertIn("seed 22: did not finish, time -", lines[2])
+
+    def test_paths_never_default_to_the_current_folder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            exe = Path(folder) / "mw3.exe"
+            exe.write_bytes(b"")
+            # Only --exe and nothing stored: the game folder is missing, not ".".
+            self.assertIn("--game", run_batch.find_paths(str(exe), None, {}))
+            self.assertIn("--exe", run_batch.find_paths(None, folder, {}))
+            self.assertIn("no mw3.exe", run_batch.find_paths(folder, folder, {}))
+            found = run_batch.find_paths(None, None, {"exe": str(exe), "game": folder})
+            self.assertEqual(found, (exe.resolve(), Path(folder).resolve()))
+
+    def test_a_missing_loadout_is_the_first(self):
+        bot = {k: v for k, v in BOT.items() if k != "loadout"}
+        state = {"map": "c1mp1", "matches": 1, "sides": [[bot], [bot]]}
+        self.assertEqual(catalog.setup_problem(state, SetupCheckTest.CATALOG), "")
 
 
 if __name__ == "__main__":

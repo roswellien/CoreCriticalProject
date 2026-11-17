@@ -318,18 +318,29 @@ match, as above, is not affected.
 The arena's purpose: measure whether a change to the AI makes bots fight
 better or worse, on many matches rather than one.
 
-1. Build `mw3` (building.md) on the code before the change, and keep that
-   `mw3.exe` aside; build again with the change.
+1. Build `mw3` (building.md; on Windows with this repo's presets the
+   program lands in the build folder's `Release/mw3.exe`) on the code
+   before the change, and copy that `mw3.exe` aside; build again with the
+   change. The game folder is a MechWarrior 3 1.2 install.
 2. Pick a setup that exercises the change, for example equal sides so the
-   result turns on behavior, not mechs. Save it from the runner window, or
-   write it by hand (`tools/arena-runner/examples/`).
-3. Run the same setup on each build, a few batches of 10:
-   `python tools/arena-runner/run_batch.py SETUP.json --matches 10 --exe OLD/mw3.exe`,
-   then again with the new `mw3.exe`. Each match gets a fresh seed.
+   result turns on behavior, not mechs. Copy
+   `tools/arena-runner/examples/2v2-c1mp1.json` and edit it, or save one
+   from the runner window. This is the runner's setup, not the game's
+   `--arena` file above: `map`, `matches` (1 to 10) and `sides`, two lists
+   of 1 to 8 bots, each `{"mech", "loadout", "preset": {"world", "mission",
+   "record"}}`. The ids the game offers are in the runner's
+   `catalog/catalog.json` (below).
+3. Run the same setup on each build, a few batches of 10 (a 4v4 batch of
+   10 takes a few seconds to a minute):
+   `python tools/arena-runner/run_batch.py SETUP.json --matches 10 --exe OLD/mw3.exe --game GAME_DIR`,
+   then again with `--exe NEW/mw3.exe`. Each match gets a fresh seed, so
+   the two builds play different matches; compare totals, not seeds.
 4. Compare wins per side, draws, stuck matches and the average time to a
-   win (each batch's `results.json`). One batch of 10 swings by a few wins
-   by chance alone; trust a difference that holds across 30 or more
-   matches.
+   win, from each batch's `results.json` (in
+   `%LOCALAPPDATA%/CoreCritical/arena-runner/runs/<date-time>/`; the path is
+   the first line printed). One batch of 10 swings by a few wins by chance
+   alone; add up batches and trust a difference that holds across 30 or
+   more matches.
 5. Watch a few of the matches that changed in the replays (`--replay`,
    `--replay3d`, or the window's results) to see why: the top-down view
    draws each bot's route, targets and the reason for each decision.
@@ -345,20 +356,33 @@ install), and a command-line twin for scripts and agents:
 
 ```sh
 python tools/arena-runner/arena_runner.py
-python tools/arena-runner/run_batch.py SETUP.json [--matches N] [--exe PATH --game DIR] [--json]
+python tools/arena-runner/run_batch.py SETUP.json [--matches N] [--exe PATH --game DIR] [--timeout MINUTES] [--json]
 ```
 
-The first start of either asks for (or takes `--exe` and `--game` for) the
-game folder and the built `mw3.exe` and keeps them in
+Both are tested on Windows only. The window asks for the game folder and
+the built `mw3.exe` on its first start; `run_batch.py` needs `--exe` and
+`--game` the first time. Both keep them in
 `%LOCALAPPDATA%/CoreCritical/arena-runner/settings.json`. Each screen of the
-window starts with a line on how to use it.
+window has a line on how to use it.
 
-`run_batch.py` runs the same batch the window does from a setup saved by
-the window's Save setup button, waits for every match, prints a line per
-match and the totals, and writes `results.json` (each match's seed, result,
-time, losses, log and command line) into the batch folder. It exits 0 when
-every match finished, 1 when one crashed or was stuck, and 2 when the setup
-or paths can't be used.
+`run_batch.py` runs the same batch the window does from the runner's setup
+file (see "Testing an AI change"), waits for every match, prints a line per
+match and the totals (or, with `--json`, the results file), and writes
+`results.json` into the batch folder:
+
+- `folder`, `exe`, `game`, `setup`, `map`: what ran, and where.
+- `wins_a`, `wins_b`, `draws`, `stuck`, `average_seconds_to_a_win` (null
+  with no win).
+- `matches`: per match, `seed`, `result` (`A`, `B`, `draw`, `stuck`, or
+  `running` when it never reached a result), `seconds` to the result,
+  `lost` (mechs lost by A and B), `exit_code`, `stopped`, `log` and
+  `command` (the line that plays it again).
+
+It exits 0 when every match reached a result (stuck counts: it is a
+measured outcome), 1 when one crashed, was stopped by Ctrl+C or passed
+`--timeout` (20 minutes, a guard against a hung game; every match still
+going is then stopped), and 2 when the setup or paths can't be used.
+Errors go to stderr.
 
 - **Setup:** every arena map as a picture of its terrain; 1 to 10 matches,
   all started at once; and each side's mechs: the chassis (with the mech
