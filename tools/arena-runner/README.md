@@ -28,12 +28,13 @@ python tools/arena-runner/run_batch.py tools/arena-runner/examples/2v2-c1mp1.jso
 The runner's setup file (not the game's own `--arena` setup) names the map,
 how many matches (1 to 10, all run at once) and each side's mechs (1 to 8),
 each with a chassis, the index of one of its stock loadouts and a pilot
-record (`world/mission/record`). `run_batch.py` prints one line per match and writes
-`results.json` into the batch folder; its keys and exit codes are in the
-guide. The window's
-Save setup writes one; [examples/](examples/) has one to copy. The lists of
-maps, mechs, loadouts and pilots the game offers are in `catalog/catalog.json`
-in the same folder, written by `mw3 GAME_DIR --arena-catalog DIR` the first
-time either tool runs.
+record (`world/mission/record`). The window's Save setup writes one;
+[examples/](examples/) has one to copy. The lists of maps, mechs, loadouts
+and pilots the game offers are in `catalog/catalog.json` in the same
+folder, written by `mw3 GAME_DIR --arena-catalog DIR` the first time either
+tool runs.
+
+`run_batch.py` prints one line per match and writes `results.json` into the
+batch folder; its keys and exit codes are in the guide.
 
 Tests: `python -m unittest discover tools/arena-runner/tests`.

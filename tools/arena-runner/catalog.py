@@ -61,7 +61,8 @@ def setup_problem(state: dict, catalog: Catalog) -> str:
     setup and by run_batch.py."""
     if state["map"] not in {m["id"] for m in catalog.maps}:
         return f"this game has no arena map {state['map']}"
-    if not batch.MIN_MATCHES <= state["matches"] <= batch.MAX_MATCHES:
+    matches = state["matches"]
+    if not isinstance(matches, int) or not batch.MIN_MATCHES <= matches <= batch.MAX_MATCHES:
         return f"{state['matches']} matches ({batch.MIN_MATCHES} to {batch.MAX_MATCHES})"
     pilots = {summary.preset_key(p) for p in catalog.presets}
     mechs = {m["id"]: m for m in catalog.mechs}

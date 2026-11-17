@@ -297,6 +297,9 @@ class SetupScreen(ttk.Frame):
         try:
             state = json.loads(Path(path).read_text(encoding="utf-8"))
             problem = catalog_module.setup_problem(state, self.catalog)
+            for side in state["sides"]:
+                for bot in side:
+                    bot.setdefault("loadout", 0)  # a hand-written setup may leave it out
         except (OSError, ValueError, KeyError, TypeError) as error:
             problem = f"it can't be read ({error})"
         if problem:

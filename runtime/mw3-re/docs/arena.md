@@ -318,20 +318,21 @@ match, as above, is not affected.
 The arena's purpose: measure whether a change to the AI makes bots fight
 better or worse, on many matches rather than one.
 
-1. Build `mw3` (building.md; on Windows with this repo's presets the
-   program lands in the build folder's `Release/mw3.exe`) on the code
-   before the change, and copy that `mw3.exe` aside; build again with the
-   change. The game folder is a MechWarrior 3 1.2 install.
+1. Build `mw3` (building.md: `build/mw3.exe` after its cmake lines;
+   windows.md: `build-win/mw3.exe` after `tools/windows/build.cmd`; a
+   Visual Studio build puts it in `Release/` inside its build folder) on
+   the code before the change, and copy that `mw3.exe` aside; build again
+   with the change. The game folder is a MechWarrior 3 1.2 install.
 2. Pick a setup that exercises the change, for example equal sides so the
    result turns on behavior, not mechs. Copy
    `tools/arena-runner/examples/2v2-c1mp1.json` and edit it, or save one
    from the runner window. This is the runner's setup, not the game's
    `--arena` file above: `map`, `matches` (1 to 10) and `sides`, two lists
    of 1 to 8 bots, each `{"mech", "loadout", "preset": {"world", "mission",
-   "record"}}`. The ids the game offers are in the runner's
+   "record"}}` (`loadout` may be left out for the first). The ids the game offers are in the runner's
    `catalog/catalog.json` (below).
 3. Run the same setup on each build, a few batches of 10 (a 4v4 batch of
-   10 takes a few seconds to a minute):
+   10 took 11 seconds on a Ryzen 7 9800X3D):
    `python tools/arena-runner/run_batch.py SETUP.json --matches 10 --exe OLD/mw3.exe --game GAME_DIR`,
    then again with `--exe NEW/mw3.exe`. Each match gets a fresh seed, so
    the two builds play different matches; compare totals, not seeds.
@@ -379,7 +380,7 @@ match and the totals (or, with `--json`, the results file), and writes
   `command` (the line that plays it again).
 
 It exits 0 when every match reached a result (stuck counts: it is a
-measured outcome), 1 when one crashed, was stopped by Ctrl+C or passed
+measured outcome), 1 when one crashed before its result, was stopped by Ctrl+C or passed
 `--timeout` (20 minutes, a guard against a hung game; every match still
 going is then stopped), and 2 when the setup or paths can't be used.
 Errors go to stderr.

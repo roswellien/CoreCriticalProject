@@ -189,6 +189,7 @@ class SetupCheckTest(unittest.TestCase):
         for state, problem in (
             (self.state(map="c9mp9"), "no arena map c9mp9"),
             (self.state(matches=11), "11 matches"),
+            (self.state(matches=2.5), "2.5 matches"),
             (self.state(sides=[[dict(BOT)], []]), "1 to 8 mechs"),
             (self.state(sides=[[dict(BOT, mech="atlas")], [dict(BOT)]]), "no mech atlas"),
             (self.state(sides=[[dict(BOT, loadout=2)], [dict(BOT)]]), "no loadout 2"),
@@ -230,6 +231,8 @@ class RunBatchReportTest(unittest.TestCase):
             self.assertIn("--game", run_batch.find_paths(str(exe), None, {}))
             self.assertIn("--exe", run_batch.find_paths(None, folder, {}))
             self.assertIn("no mw3.exe", run_batch.find_paths(folder, folder, {}))
+            missing = str(Path(folder) / "none")
+            self.assertIn("no game folder", run_batch.find_paths(str(exe), missing, {}))
             found = run_batch.find_paths(None, None, {"exe": str(exe), "game": folder})
             self.assertEqual(found, (exe.resolve(), Path(folder).resolve()))
 

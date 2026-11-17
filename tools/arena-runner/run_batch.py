@@ -136,22 +136,28 @@ def main() -> int:
     if isinstance(found, str):
         return fail(found)
     exe, game = found
+    setup = args.setup.resolve()
+    try:  # before the catalog, which can take a while on a first run
+        state = json.loads(setup.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return fail(f"that setup can't be read: {error}")
+    if args.matches is not None:
+        state["matches"] = args.matches
+
     try:
         catalog = catalog_module.ensure_catalog(exe, game, HOME)
-    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
         return fail(f"the game's lists could not be read with {exe} and {game}:\n{error}")
     if args.exe or args.game:  # kept only once they proved to work
         settings.update(exe=str(exe), game=str(game))
         save_settings(settings)
 
-    setup = args.setup.resolve()
     try:
-        state = json.loads(setup.read_text(encoding="utf-8"))
-        if args.matches is not None:
-            state["matches"] = args.matches
         problem = catalog_module.setup_problem(state, catalog)
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        problem = f"it can't be read (missing or wrong {error})"
+    except KeyError as error:
+        problem = f"it has no field {error}"
+    except (TypeError, AttributeError) as error:
+        problem = f"a field has the wrong kind of value ({error})"
     if problem:
         return fail(f"that setup can't be used: {problem}")
 
