@@ -33,13 +33,17 @@ public sealed record Mw3RePreviewOptions
 {
     /// <summary>Scenery/view distance: 800 is the original game's range; 1200 and 1600 extend it.</summary>
     public int DrawDistance { get; init; } = 800;
-    public string Hud { get; init; } = "core-critical";
-    public bool HudText { get; init; } = true;
+    public string? Hud { get; init; } = "core-critical";
+    public bool? HudText { get; init; } = true;
     public string Geometry { get; init; } = "partial";
     public IReadOnlyList<string> ModelPacks { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> UiPacks { get; init; } = Array.Empty<string>();
     public bool DynamicLighting { get; init; }
+    public bool Shadows { get; init; }
     public bool Headlights { get; init; }
+    public bool WaterDetail { get; init; } = true;
+    public bool CloudDetail { get; init; } = true;
     public string? HeadlightBindings { get; init; }
     public string? StockEffectCatalog { get; init; }
     public string? StockHeadlightCatalog { get; init; }
@@ -113,6 +117,7 @@ public static class Mw3ReLaunchRequest
         var preview = options.Preview!;
         ArgumentNullException.ThrowIfNull(preview.ModelPacks);
         ArgumentNullException.ThrowIfNull(preview.EnvironmentPacks);
+        ArgumentNullException.ThrowIfNull(preview.UiPacks);
         var request = new JsonObject
         {
             ["schema_version"] = 4, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
@@ -129,8 +134,12 @@ public static class Mw3ReLaunchRequest
                 ["hud_text"] = preview.HudText, ["geometry"] = preview.Geometry,
                 ["model_packs"] = Paths(preview.ModelPacks),
                 ["environment_packs"] = Paths(preview.EnvironmentPacks),
+                ["ui_packs"] = Paths(preview.UiPacks),
                 ["dynamic_lighting"] = preview.DynamicLighting,
+                ["shadows"] = preview.Shadows,
                 ["headlights"] = preview.Headlights,
+                ["water_detail"] = preview.WaterDetail,
+                ["cloud_detail"] = preview.CloudDetail,
                 ["headlight_bindings"] = preview.HeadlightBindings,
                 ["stock_effect_catalog"] = preview.StockEffectCatalog,
                 ["stock_headlight_catalog"] = preview.StockHeadlightCatalog

@@ -123,6 +123,222 @@ void check_gpu_donor_toes(SDL_Window *window, sdlfe::RendererBackend backend) {
     std::fprintf(stderr, "[DONOR_TOE_GPU] cases=%u failures=0\n", cases);
 }
 
+void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
+                             sdlfe::CoreCriticalAssets options, zcls::Node *root,
+                             zcls::Node *panel) {
+    // Use the real object walk and geometry producer: a context built by the test
+    // alone would miss a leaked global tint or uncleared portrait blend flag.
+    struct NativeState {
+        std::unique_ptr<zcls::SceneWalk> scene = std::make_unique<zcls::SceneWalk>(zcls::scene_walk());
+        zmod::WalkState walk = zmod::walk_state();
+        zmod::DrawState draw = zmod::draw_state();
+        zmod::Lighting lighting = zmod::lighting();
+        zmod::Fog fog = zmod::fog();
+        zmth::MatrixStack stack = zmth::matrix_stack();
+        zmth::Projection projection = zmth::projection();
+        platform::Render3D *renderer = zvid::render3d();
+        ~NativeState() {
+            zvid::set_render3d(renderer);
+            zcls::scene_walk() = *scene;
+            zmod::walk_state() = walk;
+            zmod::draw_state() = draw;
+            zmod::lighting() = lighting;
+            zmod::fog() = fog;
+            zmth::matrix_stack() = stack;
+            zmth::projection() = projection;
+        }
+    } saved;
+    auto &walk = zcls::scene_walk();
+    walk.camera = nullptr;
+    walk.hidden_surface = walk.ring = walk.recompute = walk.overlay = walk.morph = 0;
+    walk.opacity_top = walk.color_top = -1;
+    zmod::walk_state() = {};
+    zmod::walk_state().draw = [](zcls::Node *node, std::uint32_t) -> int32_t {
+        auto *renderer = zvid::render3d();
+        if (renderer->geometry_mode() != cc::geometry::Mode::legacy) {
+            require(zmod::submit_geometry(*node), "Tint fixture missed the native geometry handoff");
+            return 0;
+        }
+        // This fixture has no original polygon/vertex buffers. Supply the same
+        // context as gmod_draw for the legacy prepared staging/shader route.
+        platform::ModelDrawContext context;
+        context.node = node;
+        context.ordinary = true;
+        context.model_to_world = zmth::matrix_stack().below().m;
+        context.model_to_camera = zmth::matrix_stack().matrix().m;
+        const auto &projection = zmth::projection();
+        context.near_z = context.clip_near = projection.near_z;
+        context.far_z = projection.far_z;
+        context.fx_near = projection.fx_near;
+        context.fy_near = projection.fy_near;
+        context.cx = projection.cx;
+        context.cy = projection.cy;
+        context.opacity = zmod::draw_state().opacity;
+        if (zmod::lighting().tint_on)
+            context.damage_tint_weight = zmod::lighting().tint_weight;
+        renderer->begin_model_draw(context);
+        require(renderer->replaces_model_geometry(), "Tint fixture missed legacy prepared staging");
+        renderer->end_model_draw();
+        return 0;
+    };
+    zmth::Mat34 matrix{{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
+    zmth::matrix_stack() = {};
+    zmth::matrix_stack().slot[0] = zmth::matrix_stack().slot[1] = &matrix;
+    zmth::matrix_stack().top = 1;
+    zmth::projection() = {};
+    auto &projection = zmth::projection();
+    projection.near_z = 1;
+    projection.far_z = 5;
+    projection.fx_near = projection.fy_near = 20;
+    projection.cx = projection.cy = 32;
+    zmod::draw_state() = {};
+    zmod::draw_state().clip.near_z = 1;
+    zmod::fog().on = 0;
+    zmod::set_tint(nullptr, 0.f);
+    mech3::MechPart part;
+    part.node = panel;
+    part.internal = 0.f;
+    const auto geometry_mode = options.geometry;
+    for (const char *lighting : {"off", "normal"}) {
+        if (std::string_view(lighting) == "off" && geometry_mode != "cpu-reference")
+            continue; // One legacy witness; the sun shader covers both modern routes below.
+        options.lighting = lighting;
+        options.geometry = std::string_view(lighting) == "off" ? "legacy" : geometry_mode;
+        // The sun shader's normal view bypasses SDR shadow lifting after the
+        // tint, so its readback is a direct witness of the straight RGB blend.
+        options.geometry_debug_normals = std::string_view(lighting) == "normal";
+        auto renderer = make_check_renderer(window, backend, {}, options);
+        renderer->set_viewport(0, 0, 64, 64);
+        zvid::set_render3d(renderer.get());
+        const auto render = [&](bool portrait, float opacity = 1.f) {
+            if (portrait) mech3::part_view_tint(part, true);
+            zcls::object3d_set_opacity(panel, opacity);
+            zcls::object3d_use_opacity(panel, opacity < 1.f);
+            renderer->clear(true, 0, 0, 0);
+            zcls::render_node(root, 1);
+            require(!zmod::lighting().tint_on && walk.color_top == -1,
+                    "Object walk leaked the HUD portrait lighting tint");
+            if (portrait) mech3::part_view_tint(part, false);
+            require(!(static_cast<zcls::Object3d *>(panel->data)->get<uint32_t>(0) & 4),
+                    "Portrait cleanup left the world mech blend enabled");
+            std::vector<std::uint32_t> pixels;
+            int width{}, height{};
+            require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
+                    "Damage tint blend lost its readback extent");
+            return pixels;
+        };
+        const auto baseline = render(false);
+        const auto portrait = render(true);
+        require(render(false) == baseline, "World draw inherited the preceding HUD portrait tint");
+        require(render(true) == portrait, "Repeated HUD portrait changed after a world draw");
+        const auto translucent = render(true, .375f);
+        const auto rgba = [](std::uint32_t pixel) -> std::array<float, 4> {
+            return {float((pixel >> 16) & 255), float((pixel >> 8) & 255),
+                    float(pixel & 255), float(pixel >> 24)};
+        };
+        const auto require_pixel = [&](std::size_t index, std::uint32_t pixel,
+                                       const std::array<float, 4> &expected,
+                                       float rgb_tolerance, const char *reason) {
+            const auto actual = rgba(pixel);
+            if (std::abs(actual[0] - expected[0]) <= rgb_tolerance &&
+                std::abs(actual[1] - expected[1]) <= rgb_tolerance &&
+                std::abs(actual[2] - expected[2]) <= rgb_tolerance && actual[3] == expected[3])
+                return;
+            char message[768];
+            std::snprintf(message, sizeof message,
+                          "%s: geometry=%s lighting=%s pixel=(%zu,%zu) "
+                          "measured RGBA=(%.0f,%.0f,%.0f,%.0f) "
+                          "expected RGBA=(%.3f,%.3f,%.3f,%.0f) "
+                          "baseline=0x%08x RGB tolerance=%.0f alpha tolerance=0",
+                          reason, options.geometry.c_str(), lighting, index % 64, index / 64,
+                          actual[0], actual[1], actual[2], actual[3], expected[0], expected[1],
+                          expected[2], expected[3], unsigned(baseline[index]), rgb_tolerance);
+            throw std::runtime_error(message);
+        };
+        unsigned covered = 0;
+        for (std::size_t index = 0; index < baseline.size(); ++index) {
+            const auto base = rgba(baseline[index]);
+            if (!(baseline[index] & 0xffffff)) {
+                require_pixel(index, portrait[index], base, 0.f,
+                              "Damage tint changed portrait background coverage");
+                require_pixel(index, translucent[index], base, 0.f,
+                              "Damage tint changed translucent background coverage");
+                continue;
+            }
+            ++covered;
+            const std::array<float, 4> expected{
+                base[0] * .4f + 153.f, base[1] * .4f, base[2] * .4f, base[3]};
+            require_pixel(index, portrait[index], expected, 2.f,
+                          "Portrait is not a 60 percent straight RGB red blend");
+            // Black clear and source-alpha blending expose any tint-induced
+            // alpha change even though the opaque target's alpha stays one.
+            const std::array<float, 4> expected_translucent{
+                expected[0] * .375f, expected[1] * .375f, expected[2] * .375f, base[3]};
+            require_pixel(index, translucent[index], expected_translucent, 2.f,
+                          "Damage tint changed fractional alpha or blended RGB");
+        }
+        require(covered > 10, "Damage tint blend rendered no useful model witness");
+        zvid::set_render3d(saved.renderer);
+    }
+    zcls::object3d_set_opacity(panel, 1.f);
+    zcls::object3d_use_opacity(panel, 0);
+}
+
+// A destroyed mech fades through native node opacity (mech_dead dead_fade).
+// Over a black clear with SRCALPHA/INVSRCALPHA blending, a fading draw must
+// equal the opaque image scaled by its opacity, and zero opacity must leave only
+// the clear. Before the fade fix, both prepared routes drew the fade opaque.
+// The sun renderer skips its SDR shadow lift for blended draws only, so lit
+// output is not proportional; the normal debug view bypasses the lift for both.
+void check_gpu_prepared_fade(SDL_Window *window, sdlfe::RendererBackend backend,
+                             sdlfe::CoreCriticalAssets options,
+                             platform::ModelDrawContext context, const char *mode) {
+    options.geometry_debug_normals = true;
+    const auto renderer_owner = make_check_renderer(window, backend, {}, options);
+    auto &renderer = *renderer_owner;
+    renderer.set_viewport(0, 0, 64, 64);
+    std::array<float, 12> matrix{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    context.model_to_camera = context.model_to_world = matrix.data();
+    context.clip_near = 1;
+    const auto render = [&](float opacity) {
+        context.opacity = opacity;
+        renderer.clear(true, 0, 0, 0);
+        require(renderer.submit_prepared_geometry(context, {}) ==
+                    cc::geometry::Submission::submitted,
+                "Fading prepared model was not admitted at the early handoff");
+        std::vector<std::uint32_t> pixels;
+        int width{}, height{};
+        require(renderer.read_back(&pixels, &width, &height) && width == 64 && height == 64,
+                "Fading prepared packet lost its extent");
+        return pixels;
+    };
+    const auto opaque = render(1.f);
+    unsigned covered = 0;
+    for (const auto pixel : opaque)
+        if (pixel & 0xffffff)
+            ++covered;
+    require(covered > 10, "Prepared fade check rendered no useful opaque witness");
+    for (const float opacity : {.375f, 0.f}) {
+        const auto faded = render(opacity);
+        for (std::size_t index = 0; index < faded.size(); ++index)
+            for (unsigned shift : {0U, 8U, 16U}) {
+                // The CPU-reference route stages opacity as 8-bit diffuse alpha
+                // (96/255 for 0.375); two levels covers that and output rounding.
+                const float expected_channel = float((opaque[index] >> shift) & 255) * opacity;
+                const float measured_channel = float((faded[index] >> shift) & 255);
+                if (std::abs(measured_channel - expected_channel) > 2.f) {
+                    char message[256];
+                    std::snprintf(message, sizeof message,
+                                  "Prepared fade ignored node opacity: geometry=%s opacity=%.3f "
+                                  "pixel=(%zu,%zu) opaque=0x%08x faded=0x%08x",
+                                  mode, opacity, index % 64, index / 64, unsigned(opaque[index]),
+                                  unsigned(faded[index]));
+                    throw std::runtime_error(message);
+                }
+            }
+    }
+}
+
 void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
     const auto folder = std::filesystem::temp_directory_path() /
                         ("cc-gpu-prepared-" + std::to_string(SDL_GetPerformanceCounter()));
@@ -157,6 +373,8 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
     zmod::Model model{};
     const std::uint32_t count = 3;
     std::memcpy(model.header + 0x14, &count, sizeof count);
+    const std::uint32_t polygons = 1;
+    std::memcpy(model.header + 0x10, &polygons, sizeof polygons);
     panel->model = &model;
     panel->source_model_vertices = count;
     struct ModelPointer {
@@ -185,11 +403,24 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
         options.lighting = "normal";
         auto renderer = make_check_renderer(window, backend, {}, options);
         renderer->set_viewport(0, 0, 64, 64);
-        for (unsigned scenario = 0; scenario < 6; ++scenario) {
+        for (float weight : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                             std::numeric_limits<float>::infinity(),
+                             -std::numeric_limits<float>::infinity(), 1.1f}) {
+            context.damage_tint_weight = weight;
+            bool rejected = false;
+            try {
+                renderer->submit_prepared_geometry(context, {});
+            } catch (const std::runtime_error &error) {
+                rejected = std::string_view(error.what()) == "Model has an invalid native tint weight";
+            }
+            require(rejected, "Prepared geometry adapter accepted an invalid tint weight");
+        }
+        for (unsigned scenario = 0; scenario < 7; ++scenario) {
             matrix[2] = scenario == 5 ? 1.5f : 0;
             matrix[9] = scenario == 1 ? .5f : 0;
             matrix[11] = scenario == 3 ? 8.f : 0;
             context.clip_near = scenario == 4 ? 3.f : 1.f;
+            context.damage_tint_weight = scenario == 6 ? .6f : 0.f;
             cc::geometry::Fog fog;
             fog.enabled = scenario == 2;
             fog.color = {0, 0, 1};
@@ -205,7 +436,7 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
             int width{}, height{};
             require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
                     "GPU prepared packet lost its extent");
-            if (expected.size() < 6)
+            if (expected.size() < 7)
                 expected.push_back(pixels);
             else {
                 require(pixels.size() == expected[scenario].size(),
@@ -219,16 +450,20 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
             }
         }
         const auto statistics = renderer->asset_statistics();
-        require(statistics.early_prepared_models == 6 && !statistics.prepared_cpu_fallback_batches,
+        require(statistics.early_prepared_models == 7 && !statistics.prepared_cpu_fallback_batches,
                 "Early prepared submission used an unreported CPU fallback");
         if (std::string_view(mode) == "partial")
             require(
-                statistics.gpu_prepared_vertices == 18 && statistics.geometry_uploads == 1 &&
-                    statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 6,
+                statistics.gpu_prepared_vertices == 21 && statistics.geometry_uploads == 1 &&
+                    statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 7,
                 "GPU prepared vertices still use CPU clipping or lost immutable material draws");
+        check_damage_tint_blend(window, backend, options, root.get(), panel);
+        check_gpu_prepared_fade(window, backend, options, context, mode);
     }
     require(expected[0] != expected[1] && expected[0] != expected[2],
             "Prepared reference did not exercise motion or fog");
+    require(expected[6] != expected[0],
+            "Prepared model lost its per-node damage tint");
     for (unsigned scenario : {3U, 4U})
         require(std::all_of(expected[scenario].begin(), expected[scenario].end(),
                             [](auto pixel) { return (pixel & 0xffffff) == 0; }),

@@ -40,8 +40,11 @@ struct DrawState {
   int32_t texture = -1;            // SetTexture(0, ...): a handle from create_texture, -1 none
   uint8_t address_u = 1;           // ADDRESSU: 1 WRAP, 3 CLAMP
   uint8_t address_v = 1;           // ADDRESSV
-  bool blend = false;              // ALPHABLENDENABLE with SRCALPHA / INVSRCALPHA
+  bool blend = false;              // ALPHABLENDENABLE
+  bool additive = false;           // SRCBLEND ONE, DESTBLEND ONE
   bool multiply = false;           // the shadow passes: SRCBLEND ZERO, DESTBLEND SRCCOLOR
+  bool unsupported_blend = false;  // Source/destination pair outside the modeled modes
+  int32_t source_blend = 5, destination_blend = 6;  // D3D factors retained for failure diagnostics
   bool depth_write = true;         // ZWRITEENABLE
   bool depth_always = false;       // ZFUNC ALWAYS (overlays), else GREATEREQUAL
   bool alpha_modulate = false;     // ALPHAOP MODULATE (transparent), else SELECTARG1
@@ -63,6 +66,7 @@ struct ModelDrawContext {
   const float* model_to_camera = nullptr;
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
+  float damage_tint_weight = 0;
   bool ordinary = false, morphing = false, overlay = false;
   uint32_t source_vertices = 0, source_polygons = 0;
 };

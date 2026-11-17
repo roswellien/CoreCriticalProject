@@ -11,7 +11,7 @@ namespace sdlfe {
 class FrameRenderer;
 struct HudOptions {
   std::string mode = "original";
-  std::string artwork;
+  std::vector<std::string> artwork;
   bool text = true;
 };
 // An instance-owned HUD draw list. The original canvas remains a CPU shadow
@@ -53,6 +53,7 @@ class GpuHud final : public zrndr::DrawObserver {
   FrameRenderer& renderer_;
   HudOptions options_;
   platform::HudArtwork artwork_;
+  std::map<uint64_t, std::string> artwork_roots_;
   std::map<const platform::HudImage*, Resource> resources_;
   std::map<const zimg::Texture*, Source> sources_;
   std::vector<platform::TLVertex> vertices_;

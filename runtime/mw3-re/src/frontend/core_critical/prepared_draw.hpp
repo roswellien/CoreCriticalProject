@@ -11,6 +11,11 @@
 
 namespace cc_mw3_re {
 
+inline void validate_damage_tint_weight(float weight) {
+  if (!std::isfinite(weight) || weight < 0.f || weight > 1.f)
+    throw std::runtime_error("Model has an invalid native tint weight");
+}
+
 inline std::uint32_t prepared_opacity_bits(float opacity) {
   std::uint32_t bits{};
   static_assert(sizeof(bits) == sizeof(opacity));
@@ -128,6 +133,7 @@ prepare_draw(const PreparedBatchDraw &source,
   if (!(context.near_z > 0) || !(context.far_z > context.near_z))
     throw std::runtime_error(
         "Prepared model requires valid native clip planes");
+  validate_damage_tint_weight(context.damage_tint_weight);
   const auto camera = matrix_rows(source.camera);
   const auto normal_matrix =
       lighting ? mw34::sun::normal_matrix(source.camera) : camera;
@@ -184,7 +190,10 @@ prepare_draw(const PreparedBatchDraw &source,
   auto &draw = result.draw;
   draw.texture = -1;
   draw.sampler = 3U | (1U << 4) | (1U << 8) | 0x10000U;
-  draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1, context.opacity >= 1.f, 0};
+  // Key order: blend, src, dst, zenable, zfunc, zwrite, cull, points. A fading
+  // node blends with SRCALPHA/INVSRCALPHA and skips depth writes, as the native
+  // flush_transparent pass does; cull stays D3DCULL_NONE either way.
+  draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f, 1, 0};
   // Prepared draws do not use alpha test in mode.w, so retain the native
   // per-node opacity there for the prepared vertex shader to apply to alpha.
   draw.push.mode[3] = prepared_opacity_bits(context.opacity);
@@ -193,6 +202,10 @@ prepare_draw(const PreparedBatchDraw &source,
   std::copy(std::begin(zmod::render_fog().color), std::end(zmod::render_fog().color),
             draw.push.fog);
   draw.push.mode[0] = 2U | 4U | (zmod::render_fog().on ? 16U : 0U);
+  if (context.damage_tint_weight > 0.f) {
+    draw.push.mode[0] |= 128U;
+    draw.push.fog[3] = context.damage_tint_weight;
+  }
   draw.push.mode[1] = 4U | (2U << 8);
   draw.push.mode[2] = 2;
   draw.scissor = {{0, 0}, {width, height}};

@@ -465,9 +465,9 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     const auto live = hierarchy(root);
     const auto requested_asset = mech_asset_key(node->source_asset->name);
     const auto selected_asset = mech_asset_key(selected->source_asset);
-    const bool distance_lod_fallback =
+    const bool cross_lod_fallback =
         requested_asset && selected_asset && requested_asset->chassis == selected_asset->chassis &&
-        !requested_asset->distance_lod && selected_asset->distance_lod;
+        requested_asset->distance_lod != selected_asset->distance_lod;
     const auto &references = selected->mesh.rig.references;
     const bool missing_live_rig_frame = std::any_of(
         references.begin(), references.end(), [&](const auto &reference) {
@@ -480,8 +480,20 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     // A detached subtree and a cross-LOD selection can legitimately lack frames
     // required by the selected geometry. Decide those cases before strict source
     // binding checks, which remain authoritative for exact attached models.
-    if ((!root->source_asset_root && (missing_live_rig_frame || missing_live_batch_frame)) ||
-        (distance_lod_fallback && (missing_live_rig_frame || missing_live_batch_frame)))
+    if (cross_lod_fallback && (missing_live_rig_frame || missing_live_batch_frame)) {
+        // Native distance geometry can be untextured. Report the declined
+        // replacement once per selected model instead of silently drawing it flat.
+        if (!selected->warned_cross_lod_fallback) {
+            std::fprintf(stderr,
+                         "Prepared model fallback: %s cannot use %s (missing live frames); "
+                         "retaining native geometry, which may be untextured. "
+                         "Load a matching prepared LOD.\n",
+                         node->source_asset->name.c_str(), selected->source_asset.c_str());
+            selected->warned_cross_lod_fallback = true;
+        }
+        return output;
+    }
+    if (!root->source_asset_root && (missing_live_rig_frame || missing_live_batch_frame))
         return output;
 
     for (size_t b = 0; b < selected->mesh.batches.size(); ++b) {

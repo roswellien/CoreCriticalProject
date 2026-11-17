@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <type_traits>
 #if defined(_WIN32)
@@ -109,6 +110,34 @@ void checks() {
     const auto processed = profile.vertices;
     require(get() == first && cache.statistics().hits == 1 && profile.vertices == processed,
             "Unchanged prepared input was recomputed");
+    context.damage_tint_weight = .6f;
+    const auto tinted = get();
+    same(*tinted, reference());
+    require((tinted->draw.push.mode[0] & 128U) && tinted->draw.push.fog[3] == .6f,
+            "Prepared cache lost damage tint");
+    context.damage_tint_weight = 0.f;
+    same(*get(), *first);
+    require(!(get()->draw.push.mode[0] & 128U), "Prepared cache retained portrait tint");
+    context.damage_tint_weight = .6f;
+    same(*get(), *tinted);
+    context.damage_tint_weight = 1.f;
+    same(*get(), reference());
+    for (float weight : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                         std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1.1f}) {
+        context.damage_tint_weight = weight;
+        for (bool cached : {false, true}) {
+            bool rejected = false;
+            try {
+                if (cached) get();
+                else reference();
+            } catch (const std::runtime_error &error) {
+                rejected = std::string_view(error.what()) == "Model has an invalid native tint weight";
+            }
+            require(rejected, "Prepared staging/cache accepted an invalid tint weight");
+        }
+    }
+    context.damage_tint_weight = 0.f;
     const auto miss = [&] {
         const auto before = cache.statistics().misses;
         same(*get(), reference());
@@ -187,7 +216,9 @@ void checks() {
     alpha_context.opacity = .375f;
     const auto alpha_submission = cc::prepare_draw(
         alpha_source, alpha_context, viewport, width, height, geometry, false);
-    require(alpha_submission.draw.key.blend && alpha_submission.draw.count > 0,
+    require(alpha_submission.draw.key.blend && !alpha_submission.draw.key.zwrite &&
+                alpha_submission.draw.key.cull == 1 && !alpha_submission.draw.model &&
+                alpha_submission.draw.count > 0,
             "Fractional opacity did not blend a clipped prepared draw");
     platform::TLVertex alpha_vertex{};
     std::memcpy(&alpha_vertex, alpha_submission.vertices.data(), sizeof(alpha_vertex));
@@ -410,6 +441,11 @@ void check_prepared_models_surface_materials() {
     context.source_polygons = 1;
     context.model_to_camera = context.model_to_world = matrix.data();
     context.opacity = 1;
+    // The fading submission uses the native clip-plane contract, not just model binding.
+    context.near_z = context.clip_near = .1f;
+    context.far_z = 100;
+    context.fx_near = context.fy_near = 50;
+    context.cx = context.cy = 32;
 
     matrix[9] = 12;
     std::vector<std::uintptr_t> ancestry;
@@ -621,6 +657,10 @@ void check_prepared_models_surface_materials() {
             std::make_shared<mw34::vkscene::ModelGeometry>(), false);
         require(fading_submission.draw.key.blend && fading_submission.draw.key.src == 5 &&
                     fading_submission.draw.key.dst == 6 && !fading_submission.draw.key.zwrite &&
+                    fading_submission.draw.key.cull == 1 && fading_submission.draw.model &&
+                    fading_submission.draw.count == 3 &&
+                    !(fading_submission.draw.push.mode[0] & 32U) &&
+                    fading_submission.draw.push.mode[2] == 2U &&
                     [&] {
                         float opacity{};
                         const auto bits = fading_submission.draw.push.mode[3];
@@ -628,18 +668,24 @@ void check_prepared_models_surface_materials() {
                         return opacity == fading_context.opacity;
                     }(),
                 "Prepared fade did not select source-alpha blending with native opacity");
+        const auto opaque_submission = cc_mw3_re::prepare_draw(
+            draw.batches[0], context, {0, 0, 64, 64}, 64, 64,
+            std::make_shared<mw34::vkscene::ModelGeometry>(), false);
+        float opaque_opacity{};
+        const auto opaque_bits = opaque_submission.draw.push.mode[3];
+        std::memcpy(&opaque_opacity, &opaque_bits, sizeof(opaque_opacity));
+        require(!opaque_submission.draw.key.blend && opaque_submission.draw.key.zwrite &&
+                    opaque_submission.draw.key.cull == 1 && opaque_opacity == 1.f,
+                "Opaque prepared draw lost depth writes, culling or full opacity");
 
         std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> world_root(zcls::object3d_create(),
                                                                        zcls::tree_destroy);
         require(world_root && zcls::node_remove_child(root.get(), control) == 0 &&
                     zcls::object3d_add_child(world_root.get(), control) == 0,
                 "Detached source subtree setup failed");
-        control->model = &model;
-        control->source_model_vertices = count;
+        // The detached control still owns the batch, but panel submits its visible geometry.
         auto detached_context = context;
-        detached_context.node = control;
         const auto detached_draw = models.draw(detached_context);
-        control->model = nullptr;
         require(detached_draw.replace && detached_draw.batches.size() == 1,
                 "Prepared binding was lost when a detached part crossed into the world tree");
         zcls::node_remove_child(world_root.get(), control);
@@ -846,27 +892,40 @@ void check_prepared_models_donor_toe_admission() {
         ++cases;
     }
 
-    // A close-LOD request may use the selected distance mesh only when all of
-    // that donor's references exist in the live hierarchy.
-    {
-        const std::string toe = "rtoe02";
-        write(mesh_path, prepared_fixture::build_valid_v4_mesh(toe));
-        auto assets = options();
-        prepared_fixture::DonorTree tree(toe, false);
-        tree.asset->name = "mech_authored.flt";
-        cc_mw3_re::PreparedModels models(assets);
-        const auto draw = models.draw(tree.context());
-        require(!draw.replace && draw.batches.empty(),
-                "LOD fallback with unresolved donor toe did not decline cleanly");
-        ++cases;
+    // Both cross-LOD directions must decline before strict donor/batch binding
+    // when the selected geometry needs a frame absent from the live hierarchy.
+    for (const std::string selected_lod : {"0", "1"}) {
+        for (const bool missing_batch_frame : {false, true}) {
+            const std::string toe = "rtoe02";
+            // Isolate each guard: the batch-only case needs a live rig reference,
+            // while the rig-only case needs every batch frame to be present.
+            const std::string rig_reference = missing_batch_frame ? "control" : toe;
+            const std::string batch_owner = missing_batch_frame ? toe : "control";
+            write(mesh_path, prepared_fixture::build_valid_v4_mesh(
+                rig_reference, batch_owner));
+            auto assets = options("authored", selected_lod);
+            prepared_fixture::DonorTree tree(toe, false);
+            tree.asset->name = selected_lod == "0" ? "mech_authored_1.flt" : "mech_authored.flt";
+            const auto raw = tree.raw_state();
+            const auto counts = tree.asset->nodes;
+            const auto asset_name = tree.asset->name;
+            cc_mw3_re::PreparedModels models(assets);
+            const auto draw = models.draw(tree.context());
+            require(!draw.replace && draw.batches.empty(),
+                    "LOD fallback with unresolved donor/batch frame did not decline cleanly");
+            require(tree.raw_state() == raw && tree.asset->nodes == counts &&
+                        tree.asset->name == asset_name,
+                    "Declined LOD fallback mutated native source state");
+            ++cases;
+        }
     }
 
     // A BWMESH4 fallback with a complete live donor hierarchy remains usable.
-    {
+    for (const std::string selected_lod : {"0", "1"}) {
         write(mesh_path, prepared_fixture::build_valid_v4_mesh());
-        auto assets = options();
+        auto assets = options("authored", selected_lod);
         prepared_fixture::DonorTree tree("", false);
-        tree.asset->name = "mech_authored.flt";
+        tree.asset->name = selected_lod == "0" ? "mech_authored_1.flt" : "mech_authored.flt";
         cc_mw3_re::PreparedModels models(assets);
         const auto draw = models.draw(tree.context());
         require(draw.replace && draw.batches.size() == 1,

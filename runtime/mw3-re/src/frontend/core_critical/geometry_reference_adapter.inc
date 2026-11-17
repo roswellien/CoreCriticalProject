@@ -6,6 +6,7 @@ void emit_reference_geometry(
     const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog,
     const std::vector<NativeGroundRangeAdmission> &admissions,
     bool native_fixture_source = true) {
+  validate_damage_tint_weight(context.damage_tint_weight);
   const auto normal_matrix = mw34::sun::normal_matrix(camera);
   const auto camera_to_world =
       mw34::donor::product(world, mw34::donor::inverse(camera));
@@ -63,7 +64,9 @@ void emit_reference_geometry(
       draw.surface_eye = surface_eye;
     draw.sampler = 3U | unsigned(material.address_u) << 4 |
                    unsigned(material.address_v) << 8;
-    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1,
+    // Native flush_transparent draws fractional-opacity polygons without
+    // writing depth. Only prepared reference draws reach this with opacity < 1.
+    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f,
                 std::uint8_t(range.two_sided ? 1 : 3), 0};
     draw.sun_tl = view;
     draw.push.target[0] = float(scene_.width);
@@ -71,6 +74,10 @@ void emit_reference_geometry(
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     draw.push.mode[0] = 2U | (material.texture >= 0 ? 4U : 0U) |
                         (fog.enabled && !geometry_debug_ ? 16U : 0U);
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.fog[3] = context.damage_tint_weight;
+    }
     draw.push.mode[1] = material.texture >= 0 ? 4U | (2U << 8) : 2U;
     draw.push.mode[2] = material.texture >= 0 ? 2U | (2U << 8) : 2U;
     draw.push.mode[3] = 0x80000000U;

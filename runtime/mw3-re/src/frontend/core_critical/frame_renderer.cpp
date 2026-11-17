@@ -28,6 +28,9 @@
 #include "gamez/zmodel/gmod_geometry.h"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/native_fixture_sources.hpp"
+#include "platform/prepared_visuals.h"
+#include "platform/sha256.hpp"
+#include "renderer/surface_detail_bindings.hpp"
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -56,6 +59,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -261,6 +265,14 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
   result.azimuth = number(options.sun_azimuth, -360, 360);
   result.elevation = number(options.sun_elevation, 1, 89);
   result.enabled = options.lighting != "off" || options.geometry != "legacy";
+  const auto diagnostic_config =
+      cc_mw3_re::RendererBridgeConfig::from_diagnostic_env(
+          false, !options.sun_shadows_explicit);
+  result.shadows = options.sun_shadows_explicit
+                       ? options.sun_shadows
+                       : diagnostic_config.sun_shadows;
+  if (options.lighting == "off")
+    result.shadows = false;
   if (options.lighting == "off" && options.geometry != "legacy") {
     result.strength = 0;
     result.ambient = 1;
@@ -467,7 +479,8 @@ public:
     // Admit catalog paths and headers before native mission callbacks start.
     // World pixel payloads remain lazy; failures here reach the window's normal
     // initialization error boundary instead of unwinding legacy game loaders.
-    if (lighting_.normals)
+    if (lighting_.normals || bridge_config_.water_detail ||
+        bridge_config_.cloud_detail)
       surface_normals_load();
     local_lights_load();
     initialize_renderer();
@@ -507,10 +520,34 @@ public:
   void detach_editor() override {
     require_editor_producer();
     if (!editor_source_ && !editor_present_active_) return;
-    drain(); // Completes retained light packets, then joins all renderer jobs.
-    renderer_->detach_editor();
+
+    // A failed worker makes drain() rethrow its stored exception. Still retire
+    // the editor while its borrowed CPU owner and Vulkan context are alive.
+    std::exception_ptr failure;
+    try {
+      drain(); // Completes retained light packets, then joins all renderer jobs.
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    try {
+      if (renderer_)
+        renderer_->detach_editor();
+    } catch (...) {
+      if (!failure)
+        failure = std::current_exception();
+    }
     editor_present_active_ = false;
     editor_source_ = nullptr;
+    if (failure) {
+      try {
+        std::rethrow_exception(failure);
+      } catch (const std::exception &error) {
+        std::fprintf(stderr, "Core editor best-effort detach: %s\n", error.what());
+      } catch (...) {
+        std::fprintf(stderr, "Core editor best-effort detach: non-standard exception\n");
+      }
+      std::fflush(stderr);
+    }
   }
   std::uint64_t presentation_count() const override {
     if (worker_)
@@ -603,7 +640,8 @@ public:
                               surface_normals_.cache.pages.end(),
                               [](const auto &page) { return page.loaded; })),
             binding_rejected_mismatch_,
-            native_fingerprint_evaluations_};
+            native_fingerprint_evaluations_,
+            deferred_material_admissions_};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
@@ -1078,6 +1116,11 @@ public:
   void draw(Primitive primitive, const TLVertex *vertices, int count,
             const DrawState &state) override {
     require_producer_live();
+    if (state.blend && state.unsupported_blend)
+      throw std::runtime_error(
+          "Unsupported MW3 alpha blend factor pair: SRCBLEND=" +
+          std::to_string(state.source_blend) + " DESTBLEND=" +
+          std::to_string(state.destination_blend));
     // Only the explicitly marked 2D compositor may supply CPU vertices in
     // strict mode. Depth-always also occurs in 3D overlays, so it cannot
     // identify a HUD exemption.
@@ -1090,6 +1133,12 @@ public:
     }
     if (suppress_model_draws_)
       return;
+    if (state.texture >= 0 &&
+        std::size_t(state.texture) < textures_.size() &&
+        deferred_material_binding_ &&
+        validated_deferred_binding(textures_[state.texture].surface_key,
+                                   state.texture))
+      ++deferred_material_admissions_;
     local_lights_observe(vertices, count, state);
     append_draw(primitive, vertices, count, state,
                 state.sharp || (state.depth_always &&
@@ -1352,13 +1401,17 @@ private:
     // for intentional campaign/profile sky shading in apply_atmosphere.
     if (lighting_.enabled && state.native_sky)
       draw.sky_view = capture_tl_view();
+    // Fixed-function translucent effects and multiply passes retain their
+    // original unlit output. Applying the world sun equation to their texture
+    // and vertex colour turns emissive beams and flashes into dark shadows.
     if (lighting_.enabled && !state.native_sky && state.texture >= 0) {
       const auto &tex_entry = textures_.at(state.texture);
       const auto key = tex_entry.surface_key;
       const auto epoch = tex_entry.group_load_epoch;
       const auto tex_name = tex_entry.name;
       if (epoch == group_load_epoch_ && key.hash != 0) {
-        int norm_idx = lighting_.normals
+        const bool apply_sun_lighting = !state.blend && !state.multiply;
+        int norm_idx = lighting_.normals && apply_sun_lighting
                            ? deferred_surface_normal_index(key, state.texture)
                            : -1;
         if (norm_idx >= 0) {
@@ -1367,9 +1420,10 @@ private:
         } else {
           draw.normal_texture = -1;
         }
-        draw.sun_tl = capture_tl_view();
+        if (apply_sun_lighting)
+          draw.sun_tl = capture_tl_view();
         const auto &proj = projection;
-        if (lighting_.normals) {
+        if (lighting_.normals && apply_sun_lighting) {
           draw.surface_parameters =
               deferred_surface_parameters(key, state.texture);
           if (draw.surface_parameters[3] > .5f && proj.near_z > 0 &&
@@ -1379,9 +1433,11 @@ private:
             draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
           }
         }
-        auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
-            drawn, std::array<float, 3>{0, 0, 0});
-        draw.lit_normals = std::move(norms);
+        if (apply_sun_lighting) {
+          auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
+              drawn, std::array<float, 3>{0, 0, 0});
+          draw.lit_normals = std::move(norms);
+        }
         if (norm_idx >= 0 && !logged_first_normal_trace_) {
           logged_first_normal_trace_ = true;
           std::fprintf(
@@ -1404,6 +1460,22 @@ private:
               vertices[0].sx, vertices[0].sy, vertices[0].sz, vertices[0].rhw,
               vertices[0].tu, vertices[0].tv);
         }
+      }
+    }
+    if (state.texture >= 0 &&
+        (bridge_config_.water_detail || bridge_config_.cloud_detail)) {
+      // draw is value-initialized per submission, so no earlier draw can leak
+      // a detail role/image; a miss preserves this draw's ordinary normal map.
+      surface_normals_load();
+      const auto &key = textures_.at(std::size_t(state.texture)).surface_key;
+      if (const auto *binding = mw34::detail::find_binding(
+              surface_normals_.detail_bindings, key, scene_.detail_settings)) {
+        draw.detail_role = binding->role;
+        if (binding->normal_index < 0)
+          throw std::runtime_error(
+              "Validated surface detail role lost its normal image");
+        draw.normal_texture = int(bind_texture(
+            surface_normal_texture(binding->normal_index), false));
       }
     }
     const bool sharp = state.sharp && state.texture >= 0 &&
@@ -1449,8 +1521,8 @@ private:
       }
     }
     draw.key = {uint8_t(state.blend || state.multiply),
-                uint8_t(state.multiply ? 1 : 5),
-                uint8_t(state.multiply ? 3 : 6),
+                uint8_t(state.multiply ? 1 : state.additive ? 2 : 5),
+                uint8_t(state.multiply ? 3 : state.additive ? 2 : 6),
                 1,
                 uint8_t(state.depth_always ? 8 : 7),
                 uint8_t(state.depth_write),
@@ -1765,6 +1837,9 @@ private:
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
+    scene_.detail_settings = surface_detail_settings();
+    scene_.detail_time = mw34::detail::presentation_time(
+        detail_frame_++, bridge_config_.detail_fixed_time);
     if (scene_.width) {
       return;
     }
@@ -1940,6 +2015,7 @@ private:
   // Stop after four distinct flare textures, with no growing set or log spam.
   std::array<LoggedFlareTexture, 4> logged_flare_textures_{};
   std::size_t logged_flare_count_{};
+  std::uint64_t deferred_material_admissions_{};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
       cpu_clipped_triangles_{}, named_textures_{};
   bool suppress_model_draws_{};
@@ -1951,6 +2027,7 @@ private:
   bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
   const bool cpu_profile_ = cpu_profile_requested();
   std::uint64_t render_ticks_{}, transport_ticks_{};
+  std::uint64_t detail_frame_{};
   std::uint64_t worker_render_ticks_{}, worker_present_ticks_{};
   std::uint64_t gpu_sharp_draws_{}, render_calls_{};
   std::uint64_t prepared_emit_ticks_{}, append_ticks_{};
@@ -1974,8 +2051,25 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
         "--cc-pom 1 requires a Core Critical Vulkan backend");
   if (assets.pom && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
+  const bool water_detail_requested =
+      assets.water_detail_explicit && assets.water_detail;
+  const bool cloud_detail_requested =
+      assets.cloud_detail_explicit && assets.cloud_detail;
+  if ((water_detail_requested || cloud_detail_requested) &&
+      assets.lighting != "normal") {
+    std::string flags;
+    if (water_detail_requested)
+      flags = "--cc-water-detail 1";
+    if (cloud_detail_requested) {
+      if (!flags.empty())
+        flags += " and ";
+      flags += "--cc-cloud-detail 1";
+    }
+    throw std::runtime_error("Surface detail (" + flags +
+                             ") requires --cc-lighting normal");
+  }
   auto config = RendererBridgeConfig::from_diagnostic_env(
-      !assets.dynamic_lighting_explicit);
+      !assets.dynamic_lighting_explicit, !assets.sun_shadows_explicit);
   config.environment_packs_explicit = assets.environment_packs_explicit;
   if (assets.environment_packs_explicit) {
     // The launcher's selected environment packs own normal-map inputs. Stale
@@ -1983,6 +2077,8 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.surface_normal_catalog.clear();
     config.world_normal_manifest.clear();
   }
+  if (assets.sun_shadows_explicit)
+    config.sun_shadows = assets.sun_shadows;
   if (assets.dynamic_lighting_explicit) {
     // The launcher's explicit choice owns this run, including the diagnostic
     // environment fallback, so stale development variables cannot re-enable it.
@@ -2009,6 +2105,10 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.headlight_bindings = assets.headlight_bindings;
   }
   config.parallax_materials = assets.pom;
+  // These explicit launch options own surface detail for this session. They
+  // are not inferred from development environment variables.
+  config.water_detail = assets.water_detail_explicit && assets.water_detail;
+  config.cloud_detail = assets.cloud_detail_explicit && assets.cloud_detail;
   if (assets.environment) {
     std::fprintf(stderr,
                  "Environment renderer catalogs: %zu authored, %zu world\n",
@@ -2078,8 +2178,13 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.sun_elevation = number(assets.sun_elevation, 1.0f, 89.0f);
   config.sun = assets.lighting != "off" || assets.geometry != "legacy";
   config.sun_normals = (assets.lighting == "normal");
-  config.sun_shadows = false;
   config.normal_maps_enabled = (assets.lighting == "normal");
+
+  if (assets.lighting == "off" && config.sun_shadows) {
+    std::fprintf(stderr,
+                 "Sun shadows requested without sun lighting; sun shadows are disabled\n");
+    config.sun_shadows = false;
+  }
 
   if (!config.sun &&
       (config.effect_lights || config.fixture_lights || config.mech_headlights)) {
