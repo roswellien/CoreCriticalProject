@@ -50,6 +50,8 @@ void main() {
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
+    // Tinted world draws store their blend weight in mode.z, but renderer setup
+    // pins world scale to 100%, so they never enter this coverage replay pass.
     float alpha = operation(draw.mode.z).a;
     if ((flags & 32u) != 0u) {
         uint f = draw.mode.w & 255u;

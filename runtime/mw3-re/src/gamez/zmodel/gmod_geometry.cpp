@@ -398,7 +398,10 @@ bool submit_geometry(zcls::Node &node) {
     context.cy = projection.cy;
     context.opacity = draw_state().opacity;
     const Lighting& tint = lighting();
-    if (tint.tint_on) context.damage_tint_weight = tint.tint_weight;
+    if (tint.tint_on) {
+      std::copy_n(tint.tint, 3, context.damage_tint_rgb);
+      context.damage_tint_weight = tint.tint_weight;
+    }
     context.ordinary = model.count(0) == 0;
     context.morphing = model.count(0x20) != 0;
     context.overlay = draw_state().overlay != 0;

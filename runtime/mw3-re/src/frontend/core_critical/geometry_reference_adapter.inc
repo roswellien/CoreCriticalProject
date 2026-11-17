@@ -6,7 +6,7 @@ void emit_reference_geometry(
     const ::platform::prepared::Matrix &world, const cc::geometry::Fog &fog,
     const std::vector<NativeGroundRangeAdmission> &admissions,
     bool native_fixture_source = true) {
-  validate_damage_tint_weight(context.damage_tint_weight);
+  validate_damage_tint(context);
   const auto normal_matrix = mw34::sun::normal_matrix(camera);
   const auto camera_to_world =
       mw34::donor::product(world, mw34::donor::inverse(camera));
@@ -74,12 +74,15 @@ void emit_reference_geometry(
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     draw.push.mode[0] = 2U | (material.texture >= 0 ? 4U : 0U) |
                         (fog.enabled && !geometry_debug_ ? 16U : 0U);
-    if (context.damage_tint_weight > 0.f) {
-      draw.push.mode[0] |= 128U;
-      draw.push.fog[3] = context.damage_tint_weight;
-    }
     draw.push.mode[1] = material.texture >= 0 ? 4U | (2U << 8) : 2U;
     draw.push.mode[2] = material.texture >= 0 ? 2U | (2U << 8) : 2U;
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
+      draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
+      if (material.texture >= 0)
+        draw.push.mode[0] |= 512U;
+    }
     draw.push.mode[3] = 0x80000000U;
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
     auto normals = std::make_shared<std::vector<std::array<float, 3>>>();
