@@ -429,7 +429,7 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
         self.assertEqual(result["argv"][17:], [
-            "--cc-dynamic-lighting", "0",
+            "--cc-dynamic-lighting", "0", "--cc-sun-shadows", "0",
             "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200",
             "--cc-hud", "core-critical", "--cc-hud-text", "1",
             "--cc-geometry", "partial",
@@ -447,6 +447,7 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertNotIn("--cc-draw-distance", result["argv"])
         self.assertIn("--cc-environment-packs-explicit", result["argv"])
+        self.assertEqual(result["argv"][result["argv"].index("--cc-sun-shadows") + 1], "0")
         self.assertEqual(result["skipped_packs"], [])
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
@@ -466,6 +467,45 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertNotIn("--cc-menu-background", result["argv"])
         self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
         self.assertIn("integrity failure", result["skipped_packs"][0]["reason"])
+
+    def test_sun_shadows_require_both_launcher_choices_and_sun_lighting(self):
+        for shadows in (False, True):
+            for dynamic_lighting in (False, True):
+                with self.subTest(shadows=shadows, dynamic_lighting=dynamic_lighting):
+                    result = self.plan(self.request(
+                        shadows=shadows, dynamic_lighting=dynamic_lighting))
+                    argv = result["argv"]
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(argv[argv.index("--cc-sun-shadows") + 1],
+                                     "1" if shadows and dynamic_lighting else "0")
+                    # Dynamic lighting can separately report missing local-light catalogs.
+                    shadow_skips = [item for item in result["skipped_packs"]
+                                    if item.get("feature") == "sun_shadows"]
+                    expected_skips = []
+                    if shadows and not dynamic_lighting:
+                        expected_skips.append({
+                            "root": "C:\\Runtime", "feature": "sun_shadows",
+                            "reason": "sun shadows require dynamic lighting",
+                        })
+                    self.assertEqual(shadow_skips, expected_skips)
+
+        for dynamic_lighting in (False, True):
+            with self.subTest(lighting="off", dynamic_lighting=dynamic_lighting):
+                without_sun = self.plan(dict(
+                    self.request(shadows=True, dynamic_lighting=dynamic_lighting),
+                    lighting="off", visuals={"pom": False}))
+                no_sun_argv = without_sun["argv"]
+                self.assertEqual(no_sun_argv[no_sun_argv.index("--cc-sun-shadows") + 1], "0")
+                shadow_skips = [item for item in without_sun["skipped_packs"]
+                                if item.get("feature") == "sun_shadows"]
+                self.assertEqual(shadow_skips, [{
+                    "root": "C:\\Runtime", "feature": "sun_shadows",
+                    "reason": "sun shadows require sun lighting",
+                }])
+
+        for value in (0, 1, 1.0, "true", None, [], {}):
+            with self.subTest(shadows=value), self.assertRaises(ValueError):
+                self.plan(self.request(shadows=value))
 
     # The planner accepts only Windows paths, so tests that read real packs from a temporary
     # directory run on Windows; validation-only tests below run everywhere.

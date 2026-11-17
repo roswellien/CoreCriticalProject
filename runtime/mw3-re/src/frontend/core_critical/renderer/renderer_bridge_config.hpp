@@ -90,7 +90,8 @@ struct RendererBridgeConfig {
   std::string sky_debug;
   std::string sun_shadow_audit;
 
-  static RendererBridgeConfig from_diagnostic_env(bool include_local_lights = true) {
+  static RendererBridgeConfig from_diagnostic_env(bool include_local_lights = true,
+                                                   bool include_sun_shadows = true) {
     RendererBridgeConfig cfg;
     auto read_env_bool = [](const char *name, bool fallback) {
       const char *value = std::getenv(name);
@@ -118,6 +119,8 @@ struct RendererBridgeConfig {
       if (const char *path = std::getenv("MW34_EFFECT_LIGHT_CATALOG"))
         cfg.effect_light_catalog = path;
     }
+    if (include_sun_shadows)
+      cfg.sun_shadows = read_env_bool("MW34_SUN_SHADOWS", false);
     if (const char *path = std::getenv("MW34_NATIVE_MATERIALS"))
       cfg.native_material_sidecar = path;
     if (const char *id = std::getenv("MW34_NATIVE_MATERIAL_ID"))
