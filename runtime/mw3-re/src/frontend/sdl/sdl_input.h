@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "frontend/sdl/sdl_fit.h"
+#include "frontend/sdl/controller_profile.h"
 #include "gamez/zinput/zinput.h"
 #include "platform/platform.h"
 
@@ -59,6 +60,9 @@ class SdlInput : public platform::Input {
   // the device's HID descriptor, then kKnownSticks, then SDL's packed order).
   bool joystick_disabled = false;  // mw3.cfg's joystick=none disables device selection
   std::string joystick_want, joystick_axes;
+  // Optional launcher-exported CC_MW3_CONTROLLER_V1 profile. A matching SDL
+  // identity takes precedence over mw3.cfg's name/best-ranked selection.
+  std::string controller_profile_path;
   // The axis usages of the open stick's HID descriptor, empty when it cannot
   // be read (tests replace it; read_hid_usages by default).
   std::function<std::vector<uint16_t>(SDL_Joystick*)> hid_usages;
@@ -72,6 +76,7 @@ class SdlInput : public platform::Input {
   int32_t joystick_set_range(uint32_t ofs, int32_t min, int32_t max) override;
   int32_t joystick_get_range(uint32_t ofs, int32_t* min, int32_t* max) override;
   int32_t joystick_set_deadzone(uint32_t ofs, uint32_t dz) override;
+  uint32_t command_state(int32_t command) override;
 
   // The window an exclusive mouse captures (relative mouse mode, as
   // DirectInput's DISCL_EXCLUSIVE hides and holds the cursor). Held or not,
@@ -151,6 +156,8 @@ class SdlInput : public platform::Input {
   void capture(bool on);
   int axis_count() const;
   bool open_joystick();
+  std::string controller_key(SDL_JoystickID id, SDL_Gamepad* pad) const;
+  void poll_controller();
   void map_axes();
   void neutral(platform::JoyState* out) const;
   double pad_axis(int i) const;
@@ -211,6 +218,8 @@ class SdlInput : public platform::Input {
   bool pad_was_ = false;    // it was opened as a gamepad
   platform::JoyState last_;  // the last live read
   bool tried_ = false;      // zInput asked for a joystick
+  std::unique_ptr<ControllerProfileConfig> controller_config_;
+  ControllerState controller_state_;
 };
 
 // The default hid_usages: the device's HID descriptor through SDL_hid, only

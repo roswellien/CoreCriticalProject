@@ -7,6 +7,7 @@
 //   mw3 [install-dir] [options] [-nofmv] [-seasick] [-cdN]
 //
 //   --install DIR        the MW3 folder, any version (default: mw3.cfg's install=, else searched, else asked: sdl_install.h)
+//   --indeo-codec FILE   the install's identity-checked Indeo 5 codec (the launcher supplies it)
 //   --install-from PATH  install from the disc first (ours, disc_install.h): a drive or folder, a .iso, or a
 //                        .cue/.bin (its audio tracks the music); --patch too makes it 1.2
 //     --install-to DIR   where (default: the write dir's install/); saved as mw3.cfg's install=
@@ -112,6 +113,7 @@
 #include "frontend/sdl/sdl_sound.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "frontend/sdl/sdl_vfw.h"
+#include "frontend/sdl/indeo_codec_path.h"
 #include "frontend/sdl/net_enet.h"
 #include "frontend/sdl/net_upnp.h"
 
@@ -186,10 +188,11 @@ struct Args {
   sdlfe::CoreCriticalQuality quality;
   sdlfe::CoreCriticalAssets cc_assets;
   SDL_Window* launcher_window = nullptr;  // the launcher's, for the game to take (one window; ours)
-  std::string install, write_dir, mission, variant, dialog_file, dialog_name, shot, movie;
+  std::string install, indeo_codec, write_dir, mission, variant, dialog_file, dialog_name, shot, movie;
   std::string cfg_install;  // mw3.cfg's install= (the command line's wins)
   std::string cfg_mw1_game;  // mw3.cfg's mw1_game= (ours: the launcher's MechWarrior 1989 folder)
   std::string cfg_joystick, cfg_joystick_axes;  // mw3.cfg's joystick=, joystick_axes= (ours, W54: sdl_input.h)
+  std::string controller_profile;  // --cc-controller FILE (launcher-exported CC_MW3_CONTROLLER_V1)
   bool cfg_joystick_disabled = false;
   int wide_menus = -1, cfg_wide_menus = -1;  // --wide-menus / --no-wide-menus, mw3.cfg's widemenus= (ours)
   bool debug_camera = false;  // --debug-camera (ours, docs/editor.md S4): the game editor anywhere; developers only
@@ -309,11 +312,11 @@ struct Args {
 
 void usage() {
   std::printf(
-      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] [--assets DIR]... [--write-dir DIR] [--version]\n"
+      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] [--indeo-codec FILE] [--assets DIR]... [--write-dir DIR] [--version]\n"
       "    [--mission NAME [--valve-map DIR] | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] [--vehicle-ahead M [--vehicle-hold]] [--field-base-ahead M] [--turret-ahead M] [--mech-ahead M] [--dialog FILE NAME]\n"
       "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--hurt F@N] [--win N] [--lose N] [--lab-mech N]\n"
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
-      "    [--cc-environment-pack DIR]...\n"
+      "    [--cc-environment-pack DIR]... [--cc-environment-packs-explicit]\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
       "    [--cc-dynamic-lighting 0|1] [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
@@ -322,6 +325,7 @@ void usage() {
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600 (default 800)]\n"
+      "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
@@ -343,6 +347,7 @@ bool parse(int argc, char** argv, Args& a) {
       std::exit(0);
     }
     else if (s == "--install" && next(1)) a.install = argv[++i];
+    else if (s == "--indeo-codec" && next(1)) a.indeo_codec = argv[++i];
     else if (s == "--assets" && next(1)) a.assets.emplace_back(argv[++i]);
     else if (s == "--write-dir" && next(1)) a.write_dir = argv[++i];
     else if (s == "--mod" && next(1)) a.mods.emplace_back(argv[++i]), a.mods_given = true;
@@ -486,6 +491,8 @@ bool parse(int argc, char** argv, Args& a) {
       a.hud.text = value == "1", a.hud_text_given = true;
     }
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
+    else if (s == "--cc-controller" && next(1)) a.controller_profile = argv[++i];
+    else if (s == "--cc-controller") return false;
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
     else if (s == "--cc-draw-distance") {
@@ -555,6 +562,8 @@ bool parse(int argc, char** argv, Args& a) {
       a.cc_assets.headlight_bindings = argv[++i];
     } else if (s == "--cc-environment-pack" && next(1)) {
       a.cc_assets.environment_packs.push_back(argv[++i]);
+    } else if (s == "--cc-environment-packs-explicit") {
+      a.cc_assets.environment_packs_explicit = true;
     } else if (s == "--cc-model-materials" && next(3)) {
       sdlfe::PreparedMaterialBinding binding;
       binding.chassis = argv[++i], binding.lod = argv[++i],
@@ -829,17 +838,6 @@ std::string flat(const std::string& s) {
     if (c != ' ' || out.empty() || out.back() != ' ') out += c;
   }
   return out;
-}
-
-// The install's Indeo 5 codec, any case.
-std::string codec_path(const std::string& install) {
-  std::error_code ec;
-  for (const auto& e : std::filesystem::directory_iterator(install, ec)) {
-    std::string n = e.path().filename().string();
-    for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (n == "ir50_32.dll") return e.path().string();
-  }
-  return {};
 }
 
 }  // namespace
@@ -1171,7 +1169,8 @@ int program(int argc, char** argv) {
   // 5 codec in the 32-bit helper (ours, FIX (A): sdl_vfw.h); the importer's
   // files only when it is missing or fails.
   std::unique_ptr<sdlfe::SdlVfwHelper> vfw;
-  const std::string helper = vfw_helper_path(a.vfw_helper), codec = codec_path(a.install);
+  const std::string helper = vfw_helper_path(a.vfw_helper);
+  const std::string codec = sdlfe::indeo_codec_path(a.install, a.indeo_codec);
   if (!helper.empty() && !codec.empty()) {
     vfw = std::make_unique<sdlfe::SdlVfwHelper>(helper, codec);
     const bool up = vfw->ready();
@@ -1293,6 +1292,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlInput input;
   input.joystick_disabled = a.cfg_joystick_disabled;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
+  input.controller_profile_path = a.controller_profile;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)
   input.window = window.sdl();
   int focus_at = 0, focus_passes = 0;  // MW3_FOCUS_AT (checks)

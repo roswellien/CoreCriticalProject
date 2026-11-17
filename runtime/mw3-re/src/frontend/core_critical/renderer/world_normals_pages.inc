@@ -14,6 +14,8 @@ void surface_normals_load_world(mw34::materials::WorldNormalCache &cache) {
   }
   if (selected)
     return;
+  if (bridge_config_.environment_packs_explicit)
+    return;
   const std::string found = zutl::find("environment/world.txt");
   if (!found.empty()) {
     cache.load_world_manifest(std::filesystem::u8path(found));

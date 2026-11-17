@@ -2455,9 +2455,9 @@ void check_renderer_bridge_config() {
     struct Value {
       const char *name;
       std::optional<std::string> previous;
-    } values[6];
+    } values[8];
 
-    explicit RestoreLightEnvironment(const std::array<const char *, 6> &names) {
+    explicit RestoreLightEnvironment(const std::array<const char *, 8> &names) {
       for (std::size_t i = 0; i < names.size(); ++i) {
         values[i].name = names[i];
         if (const char *value = std::getenv(names[i]))
@@ -2472,13 +2472,24 @@ void check_renderer_bridge_config() {
     }
   } restore_light_environment({"MW34_EFFECT_LIGHTS", "MW34_FIXTURE_LIGHTS",
                                "MW34_MECH_HEADLIGHTS", "MW34_EFFECT_LIGHT_CATALOG",
-                               "MW34_STOCK_HEADLIGHTS", "MW34_HEADLIGHT_BINDINGS"});
+                               "MW34_STOCK_HEADLIGHTS", "MW34_HEADLIGHT_BINDINGS",
+                               "MW34_SURFACE_NORMALS", "MW34_WORLD_NORMALS"});
   local_light_test_env("MW34_EFFECT_LIGHTS", "1");
   local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
   local_light_test_env("MW34_MECH_HEADLIGHTS", "1");
   local_light_test_env("MW34_EFFECT_LIGHT_CATALOG", "diagnostic-effects.bin");
   local_light_test_env("MW34_STOCK_HEADLIGHTS", "diagnostic-headlights.bin");
   local_light_test_env("MW34_HEADLIGHT_BINDINGS", "diagnostic-bindings.txt");
+  local_light_test_env("MW34_SURFACE_NORMALS", "diagnostic-surface.txt");
+  local_light_test_env("MW34_WORLD_NORMALS", "diagnostic-world.txt");
+  auto selected_environment_assets = local_light_assets;
+  selected_environment_assets.environment_packs_explicit = true;
+  const auto selected_environment_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, selected_environment_assets);
+  require(selected_environment_config.environment_packs_explicit &&
+              selected_environment_config.surface_normal_catalog.empty() &&
+              selected_environment_config.world_normal_manifest.empty(),
+          "explicit environment selection retained diagnostic normal catalogs");
   local_light_assets.dynamic_lighting = false;
   auto disabled_light_config = cc_mw3_re::configure_bridge(
       sdlfe::RendererBackend::core_critical_wsi, {}, local_light_assets);
@@ -2531,6 +2542,10 @@ void check_renderer_bridge_config() {
   require(!pom_assets.empty(), "Explicit POM must make assets nonempty");
   pom_assets.pom = false;
   require(pom_assets.empty(), "POM off must preserve empty assets");
+  pom_assets.environment_packs_explicit = true;
+  require(!pom_assets.empty(),
+          "Explicit empty environment-pack selection must reach the renderer");
+  pom_assets.environment_packs_explicit = false;
 
   struct PomCase {
     sdlfe::RendererBackend backend;

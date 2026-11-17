@@ -138,6 +138,9 @@ class Input {
   virtual int32_t keyboard_data(KeyEvent* out, uint32_t* count) = 0;
   virtual int32_t mouse_state(MouseState* out) = 0;    // GetDeviceState(0x10)
   virtual int32_t joystick_state(JoyState* out) = 0;   // Poll, then GetDeviceState(0x110)
+  // Additional profile buttons/triggers share the command state queried by
+  // keyboard and joystick bindings. Most input backends have no overlay.
+  virtual uint32_t command_state(int32_t) { return 0; }
 
   // SetCooperativeLevel's DISCL_ flags (1 exclusive, 2 non-exclusive, 4
   // foreground, 8 background): the keyboard 10, the mouse the game's input

@@ -264,6 +264,14 @@ public static class GameInstallation
         return FindOriginalInput(Media.ProviderFiles.Single(p => Path.GetFileName(p.Target) == "MSVCRT.DLL"), gameDirectory, dataRoot);
     }
 
+    /// <summary>Find the original Indeo decoder only after its pinned identity has been verified.</summary>
+    public static string? FindVerifiedIndeoCodec(string gameDirectory, string dataRoot)
+    {
+        var pin = Media.ProviderFiles.Single(p => Path.GetFileName(p.Target).Equals(
+            "Ir50_32.dll", StringComparison.OrdinalIgnoreCase));
+        return FindOriginalInput(pin, gameDirectory, dataRoot);
+    }
+
     private static string? FindOriginalInput(ContentFile pin, string gameDirectory, string dataRoot)
     {
         var name = Path.GetFileName(pin.Target);

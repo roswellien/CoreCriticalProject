@@ -44,6 +44,7 @@ struct PreparedMaterialBinding {
 };
 struct CoreCriticalAssets {
   std::vector<std::string> environment_packs;
+  bool environment_packs_explicit = false;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
   bool pom = false;
@@ -59,7 +60,8 @@ struct CoreCriticalAssets {
   bool effect_lights = false, fixture_lights = false, mech_headlights = false;
   std::string effect_light_catalog, stock_headlights, headlight_bindings;
   bool empty() const {
-    return environment_packs.empty() && !environment && !sun_explicit &&
+    return environment_packs.empty() && !environment_packs_explicit &&
+           !environment && !sun_explicit &&
            !dynamic_lighting_explicit && !effect_lights && !fixture_lights &&
            !mech_headlights && effect_light_catalog.empty() &&
            stock_headlights.empty() && headlight_bindings.empty() &&

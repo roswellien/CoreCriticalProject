@@ -260,6 +260,7 @@ uint32_t command(int32_t cmd) {
   if (k2) s |= key_state(static_cast<int32_t>(k2));
   const uint32_t j = joy_of(cmd);
   if (j != 0 && j < 0xb) s |= joy_button(static_cast<int32_t>(j));
+  if (state().di) s |= state().di->command_state(cmd);
   const MouseInfo* m = mouse_info();
   switch (mouse_of(cmd)) {
     case 1: return s | m->left;

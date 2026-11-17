@@ -435,6 +435,15 @@ void check_prepared_models_surface_materials() {
         return std::vector<cc_mw3_re::PreparedMaterialBinding>{{c, l, p.string()}};
     };
 
+    // The launcher stores explicit --cc-model-materials selections on the
+    // runtime options object consumed by FrameRenderer.
+    options.materials.push_back({"authored", "0", mat_path.string()});
+    cc_mw3_re::PreparedModels launcher_selected(options, options.materials);
+    const auto launcher_draw = launcher_selected.draw(context);
+    require(launcher_draw.batches.size() == 1 &&
+                launcher_draw.batches[0].surface_material != nullptr,
+            "Core Critical runtime options did not bind the selected surface materials");
+
     // A resolved height image survives both its source model collection and a
     // queued draw copy. Neither a borrowed pack index nor host texture slot can
     // establish that ownership.

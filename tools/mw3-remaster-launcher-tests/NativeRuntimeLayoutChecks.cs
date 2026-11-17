@@ -191,8 +191,10 @@ static class NativeRuntimeLayoutChecks
             File.WriteAllText(Path.Combine(root, "profile.json"), "{\"authored\":true}");
             File.WriteAllText(Path.Combine(root, "support.txt"), "authored support closure");
             File.WriteAllText(Path.Combine(root, "bin", "SDL3_sound.dll"), "authored SDL3_sound dependency fixture");
+            File.WriteAllText(Path.Combine(root, "bin", "mw3indeo.exe"), "authored x86 helper pin fixture");
             var pins = new JsonObject();
-            foreach (var relative in new[] { "bin/mw3.exe", "profile.json", "support.txt", "bin/SDL3_sound.dll" })
+            foreach (var relative in new[] { "bin/mw3.exe", "profile.json", "support.txt", "bin/SDL3_sound.dll",
+                         "bin/mw3indeo.exe" })
             {
                 var bytes = File.ReadAllBytes(Path.Combine(root, relative));
                 pins[relative] = new JsonObject { ["bytes"] = bytes.Length, ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) };
@@ -201,9 +203,14 @@ static class NativeRuntimeLayoutChecks
             {
                 ["schema_version"] = 2, ["engine"] = "mw3-re",
                 ["roles"] = new JsonObject { ["executable"] = "bin/mw3.exe", ["profile"] = "profile.json" },
-                ["dependencies"] = new JsonArray("support.txt", "bin/SDL3_sound.dll"), ["files"] = pins,
+                ["dependencies"] = new JsonArray("support.txt", "bin/SDL3_sound.dll", "bin/mw3indeo.exe"),
+                ["files"] = pins,
                 ["provenance"] = new JsonObject { ["source_commit"] = new string('a', 40), ["build_id"] = "authored-build", ["builder"] = "fixture" },
-                ["capabilities"] = new JsonObject { ["authored-capability"] = new JsonArray(1, 2) }
+                ["capabilities"] = new JsonObject
+                {
+                    ["authored-capability"] = new JsonArray(1, 2),
+                    ["controller-profile"] = new JsonArray(1)
+                }
             };
             File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
             var before = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
@@ -214,10 +221,14 @@ static class NativeRuntimeLayoutChecks
             CheckNativePreviewProjection(contract);
             CheckPinnedProfileSnapshot(root);
             CheckMw3RePlanningProfile(root);
+            if (!contract.SupportsControllerProfiles)
+                throw new Exception("Runtime controller-profile capability was not recognized.");
             if (contract.Root != Path.GetFullPath(root) || contract.Executable != Path.Combine(root, "bin", "mw3.exe"))
                 throw new Exception("Integrity snapshot did not preserve its root/executable identity.");
             if (!contract.Dependencies.Contains("bin/SDL3_sound.dll", StringComparer.Ordinal))
                 throw new Exception("Integrity snapshot did not retain the pinned SDL3_sound dependency.");
+            if (contract.FindDeclaredFile("bin/mw3indeo.exe") != Path.Combine(root, "bin", "mw3indeo.exe"))
+                throw new Exception("Integrity snapshot did not retain the pinned Indeo helper dependency.");
             if (Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length != before.Count ||
                 before.Any(pair => !File.Exists(pair.Key) || Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pair.Key))) != pair.Value))
                 throw new Exception("Integrity reading changed its input closure.");
@@ -233,6 +244,12 @@ static class NativeRuntimeLayoutChecks
             RejectMutation(() => ((IDictionary<string, string>)contract.Roles)["profile"] = "changed.json");
             RejectMutation(() => ((IList<string>)contract.Dependencies).Clear());
             RejectMutation(() => ((IList<int>)contract.Capabilities["authored-capability"]).Add(7));
+            var noControllerCapability = descriptor.DeepClone().AsObject();
+            noControllerCapability["capabilities"]!.AsObject().Remove("controller-profile");
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(noControllerCapability));
+            if (Mw3ReRuntimeContract.ReadStructure(root).SupportsControllerProfiles)
+                throw new Exception("A runtime without controller capability was marked compatible.");
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
             void RejectDescriptor(Action<JsonObject> change, string reason = "")
             {
                 var candidate = descriptor.DeepClone().AsObject();
@@ -292,7 +309,7 @@ static class NativeRuntimeLayoutChecks
             // Quota rejection must precede opening the deliberately absent payload.
             RejectDescriptor(json =>
             {
-                json["dependencies"] = new JsonArray("absent.bin", "bin/SDL3_sound.dll");
+                json["dependencies"] = new JsonArray("absent.bin", "bin/SDL3_sound.dll", "bin/mw3indeo.exe");
                 json["files"]!.AsObject().Remove("support.txt");
                 json["files"]!["absent.bin"] = new JsonObject { ["bytes"] = 4294967296L, ["sha256"] = new string('0', 64) };
             }, "size");
@@ -349,7 +366,7 @@ static class NativeRuntimeLayoutChecks
             {
                 RejectDescriptor(json =>
                 {
-                    json["dependencies"] = new JsonArray("linked/support.txt", "bin/SDL3_sound.dll");
+                    json["dependencies"] = new JsonArray("linked/support.txt", "bin/SDL3_sound.dll", "bin/mw3indeo.exe");
                     json["files"]!["linked/support.txt"] = json["files"]!["support.txt"]!.DeepClone();
                     json["files"]!.AsObject().Remove("support.txt");
                 }, "link");
@@ -724,7 +741,7 @@ static class NativeRuntimeLayoutChecks
                 throw new Exception("Native preview projection lost its schema, distance or POM.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
-            var expectedTail = new[] { "--cc-pom", "1", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
+            var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
                 "--cc-hud-text", "1", "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),

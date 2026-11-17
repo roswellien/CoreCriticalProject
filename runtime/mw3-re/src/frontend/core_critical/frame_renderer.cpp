@@ -1866,6 +1866,9 @@ private:
   // Declared after renderer_: join before destroying the backend, including
   // unwinding. Only the producer accesses textures and builds the next scene.
   std::unique_ptr<RenderWorker> worker_;
+  // Submission number of the last queued resident present (0 = none), so the producer keeps at
+  // most one presented frame in flight.
+  std::size_t last_present_job_ = 0;
   std::mutex recycle_mutex_;
   std::vector<vk::Scene> recycled_scenes_;
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
@@ -1929,6 +1932,13 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   auto config = RendererBridgeConfig::from_diagnostic_env(
       !assets.dynamic_lighting_explicit);
+  config.environment_packs_explicit = assets.environment_packs_explicit;
+  if (assets.environment_packs_explicit) {
+    // The launcher's selected environment packs own normal-map inputs. Stale
+    // development paths must not add catalogs outside that selection.
+    config.surface_normal_catalog.clear();
+    config.world_normal_manifest.clear();
+  }
   if (assets.dynamic_lighting_explicit) {
     // The launcher's explicit choice owns this run, including the diagnostic
     // environment fallback, so stale development variables cannot re-enable it.

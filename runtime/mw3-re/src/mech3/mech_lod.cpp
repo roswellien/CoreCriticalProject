@@ -2,6 +2,7 @@
 
 #include "mech3/mech_parts.h"
 #include "mech3/weapon.h"
+#include "gamez/zclass/visual_distance.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -13,7 +14,6 @@ int32_t g_spent = 0;               // [0x00605634]
 constexpr int32_t kLimit = 1;      // [0x005e2034]
 constexpr float kNear = 5625.0f;   // 0x005bcd30: 75 m squared
 constexpr float kMid = 62500.0f;   // 0x005bcd34: 250 m
-constexpr float kFar = 640000.0f;  // 0x005bcd38: 800 m, also with no contact
 }  // namespace
 
 LodCalls& lod_calls() { return g_calls; }
@@ -27,8 +27,9 @@ void lod_budget(Mech& player) {
 
 // Mech3.exe 1.2 @ 0x0041e870. Within 75 m the first mech in the frame's
 // budget gets everything (-1), the rest 0x1c; within 250 m 0x1d with the
-// budget (the sounds' bit 0 among them), else 0x1c; within 800 m, or the
-// player's target, 0x10 (the gait only); beyond, 0. The budget is spent
+// budget (the sounds' bit 0 among them), else 0x1c; within the selected
+// scenery distance (800 m by default), or the player's target, 0x10; beyond,
+// 0. The budget is spent
 // only while the player stands still, so an AI mech is heard only then
 // (docs/discoveries.md).
 int lod_update(Mech& m) {
@@ -39,7 +40,13 @@ int lod_update(Mech& m) {
     return g_calls.controls_answer ? g_calls.controls_answer(m) : 1;
   }
   if (&m != player) {
-    const float d = m.player_contact ? m.player_contact->dist2 : kFar;
+    const float selected_far = static_cast<float>(zcls::visual_far_request());
+    const float far_squared = selected_far * selected_far;
+    // The owner-approved extension replaces 0x005bcd38's original
+    // 640000.0f (800 m squared) far threshold. Its default remains 800 m.
+    // Using the selected edge for no contact preserves the original strict
+    // comparison result: no contact has no far-detail bits.
+    const float d = m.player_contact ? m.player_contact->dist2 : far_squared;
     const bool targeted = player && player->target && g_calls.player_target && g_calls.player_target(*player) == &m;
     if (d < kNear && g_spent < kLimit) {
       m.detail = 0xffffffffu;
@@ -49,7 +56,7 @@ int lod_update(Mech& m) {
       if (g_spent < kLimit) ++g_spent, bits = 0x1d;
       m.detail = bits;
     } else {
-      m.detail = (d < kFar || targeted) ? 0x10u : 0u;
+      m.detail = (d < far_squared || targeted) ? 0x10u : 0u;
     }
     const MechData& data = *m.pilot;
     if (!targeted && m.x690 == 0 && data.range_sq[0] < d) {

@@ -1,8 +1,9 @@
-"""Own a fresh Windows/x64 native build and stage a local observational payload.
+"""Own Windows/x64 and x86 native builds and stage a local observational payload.
 
 Recipe v1 requires explicit existing tools, dependencies, clean tracked source
-and fresh owned destinations. It runs authored tool-qualification probes and
-builds only the native mw3 target. The payload is not installed or executed.
+and fresh owned destinations. It runs authored tool-qualification probes,
+builds mw3 and the 32-bit Indeo helper, and stages their checked dependency
+closure. The payload is not installed or executed.
 Observed pre/post identities do not authenticate the build or admit its consumers.
 """
 from __future__ import annotations
@@ -250,12 +251,12 @@ def _budget(members, generated=()):
         raise ValueError("Staging inventory exceeds its member or byte budget")
 
 
-def _pe(path, *, library):
-    """Check the narrow Windows/x64 image requirement, not a general PE validator."""
+def _pe(path, *, library, architecture="x64"):
+    """Check the narrow Windows PE image requirement, not a general PE validator."""
     with _regular(path).open("rb") as stream:
         dos = stream.read(64)
         if len(dos) != 64 or dos[:2] != b"MZ":
-            raise ValueError("Expected an x64 PE image")
+            raise ValueError("Expected an " + architecture + " PE image")
         offset = struct.unpack_from("<I", dos, 60)[0]
         if not 64 <= offset <= 1024 * 1024:
             raise ValueError("Invalid PE header offset")
@@ -266,8 +267,11 @@ def _pe(path, *, library):
     machine = struct.unpack_from("<H", header, 4)[0]
     flags = struct.unpack_from("<H", header, 22)[0]
     magic = struct.unpack_from("<H", header, 24)[0]
-    if machine != 0x8664 or magic != 0x20b or not flags & 2 or bool(flags & 0x2000) != library:
-        raise ValueError("Expected an x64 executable or application DLL")
+    expected = {"x64": (0x8664, 0x20b), "x86": (0x14c, 0x10b)}
+    if (architecture not in expected or (machine, magic) != expected[architecture]
+            or not flags & 2 or bool(flags & 0x2000) != library):
+        expected_architecture = "x64" if architecture == "x64" else architecture
+        raise ValueError("Expected an " + expected_architecture + " executable or application DLL")
 
 
 def _parse_dependents(text):
@@ -490,6 +494,14 @@ def _system32():
     return _directory(buffer.value)
 
 
+def _syswow64(system32):
+    root = Path(system32).parent
+    candidate = root / "SysWOW64"
+    if os.name != "nt" or not candidate.is_dir():
+        raise ValueError("Cannot locate the Windows x86 system directory")
+    return _directory(candidate)
+
+
 def _dll(name, roots):
     matches = [entry for root in roots for entry in root.iterdir() if entry.name.casefold() == name.casefold()]
     if len(matches) > 1:
@@ -545,12 +557,14 @@ def _pins(members, generated):
 def _descriptor(pins, source_commit, builder, build_id):
     roles = dict(executable="bin/mw3.exe", profile="profile.json")
     return _json(dict(schema_version=2, engine="mw3-re", roles=roles,
-        dependencies=sorted(set(pins) - set(roles.values())), files=pins, capabilities={},
+        dependencies=sorted(set(pins) - set(roles.values())), files=pins,
+        capabilities={"controller-profile": [1]},
         provenance=dict(source_commit=source_commit, build_id=build_id, builder=builder)))
 
 
 def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, components,
-                   source_commit, builder, environment, observation=None, generated_files=()):
+                   source_commit, builder, environment, observation=None, generated_files=(),
+                   additional_images=()):
     """Plan a bounded closure from explicit selected inputs; do not create or copy payloads."""
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or not _ID.fullmatch(builder) or builder.endswith("."):
         raise ValueError("Invalid observational source or builder identity")
@@ -607,21 +621,33 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
         members.append(Member(relative, source, observed[2], observed))
         _budget(members)
     add(executable, "bin/mw3.exe")
+    checked_images = []
+    for image in additional_images:
+        if (not isinstance(image, (tuple, list)) or len(image) != 3
+                or image[2] not in ("x86", "x64")):
+            raise ValueError("Invalid additional native executable")
+        source, relative, architecture = image
+        if architecture != "x86" or relative != "bin/mw3indeo.exe":
+            raise ValueError("Only the qualified x86 Indeo helper may extend this runtime")
+        add(source, relative)
+        checked_images.append((Path(source), architecture))
     for relative, source in notices.items():
         if relative != "LICENSE.txt" and not relative.startswith("licenses/"):
             raise ValueError("Invalid staged notice location")
         add(source, relative)
     system32 = _system32()
-    pending = [executable]
+    system_wow64 = _syswow64(system32)
+    architectures = {executable: "x64", **dict(checked_images)}
+    pending = list(architectures.items())
     visited = set()
     tool_identity = _identity(dumpbin)
     tool_hash = file_hash(dumpbin)
     while pending:
-        image = pending.pop()
+        image, architecture = pending.pop()
         if image in visited:
             continue
         visited.add(image)
-        _pe(image, library=image != executable)
+        _pe(image, library=image not in architectures, architecture=architecture)
         for name in _inspect(image, dumpbin, environment):
             lowered = name.lower()
             if re.fullmatch(r"(?:api|ext)-ms-win-[a-z0-9-]+\.dll", lowered):
@@ -633,13 +659,14 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
             if dependency is None:
                 if crt:
                     raise ValueError("Missing app-local CRT dependency")
-                if _dll(name, (system32,)) is not None:
+                system_roots = (system32,) if architecture == "x64" else (system_wow64,)
+                if _dll(name, system_roots) is not None:
                     continue
                 raise ValueError("Missing application dependency")
             relative = "bin/" + dependency.name
             if relative.casefold() not in {member.relative.casefold() for member in members}:
                 add(dependency, relative)
-                pending.append(dependency)
+                pending.append((dependency, architecture))
     if _identity(dumpbin) != tool_identity or file_hash(dumpbin) != tool_hash:
         raise ValueError("Selected inspection tool changed")
     placeholder = [replace(member, sha256="0" * 64) for member in members]
@@ -997,6 +1024,80 @@ def build_environment(vs, tools, scratch, *, source=None, parent=None, bootstrap
     environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="NUL", GIT_OPTIONAL_LOCKS="0")
     environment["NoDefaultCurrentDirectoryInExePath"] = "1"
     return environment, derived, (vs, kits, system[1])
+
+
+def build_indeo_helper(source, build, vs, environment):
+    """Build and qualify the 32-bit stock-movie helper from the selected VS/SDK inputs."""
+    source = _directory(source)
+    build = _directory(build)
+    vs = _directory(vs)
+    toolset = environment.get("VCToolsVersion")
+    sdk_version = environment.get("WindowsSDKVersion", "").rstrip("\\/")
+    sdk_lib_version = environment.get("WindowsSDKLibVersion", "").rstrip("\\/")
+    if not re.fullmatch(r"14\.[1-9][0-9]*\.[0-9]+", toolset or ""):
+        raise ValueError("Selected x86 helper toolset version is invalid")
+    if (not re.fullmatch(r"10\.[0-9.]+", sdk_version) or sdk_lib_version != sdk_version):
+        raise ValueError("Selected x86 helper Windows SDK version is invalid")
+
+    vc = _directory(vs / "VC/Tools/MSVC" / toolset)
+    sdk = _directory(Path(environment["WindowsSdkDir"]))
+    compiler = _regular(vc / "bin/Hostx64/x86/cl.exe")
+    linker = _regular(vc / "bin/Hostx64/x86/link.exe")
+    selected_sdk = _directory(sdk / "Lib" / sdk_version)
+    include_directories = [
+        _directory(vc / "include"),
+        _directory(sdk / "Include" / sdk_version / "ucrt"),
+        _directory(sdk / "Include" / sdk_version / "shared"),
+        _directory(sdk / "Include" / sdk_version / "um"),
+    ]
+    library_directories = [
+        _directory(vc / "lib/x86"),
+        _directory(selected_sdk / "ucrt/x86"),
+        _directory(selected_sdk / "um/x86"),
+    ]
+    helper_environment = dict(environment)
+    helper_environment["INCLUDE"] = ";".join(map(str, include_directories))
+    helper_environment["LIB"] = ";".join(map(str, library_directories))
+    helper_environment["LIBPATH"] = ";".join(map(str, library_directories))
+    helper_environment["PATH"] = ";".join(
+        [str(compiler.parent), str(linker.parent), environment["PATH"]])
+
+    tools = {"compiler": compiler, "linker": linker}
+    identities = {name: (_identity(path), file_hash(path)) for name, path in tools.items()}
+    output = build / "mw3indeo.exe"
+    obj = build / "mw3indeo.obj"
+    # No /nologo: the banner ("... for x86") is how the selected compiler proves its target.
+    command = [compiler, "/Bv", "/std:c++17", "/O2", "/MT", "/EHsc", "/W3",
+               "/I", source / "src", source / "tools/indeo/mw3indeo.cpp",
+               "/Fo" + str(obj), "/Fe:" + str(output), "/link", "/SUBSYSTEM:WINDOWS",
+               "/ENTRY:mainCRTStartup", "/MANIFEST:EMBED", "/MANIFESTINPUT:" +
+               str(source / "tools/windows/utf8.manifest"), "vfw32.lib", "msvfw32.lib",
+               "avifil32.lib", "psapi.lib", "user32.lib"]
+    build_output = _run(command, helper_environment, build, timeout=180).decode("utf-8", errors="replace")
+    version_match = re.search(
+        r"Microsoft \(R\) C/C\+\+ Optimizing Compiler Version [^\r\n]+ for x86", build_output)
+    if version_match is None:
+        raise ValueError("Selected x86 C++ compiler did not identify itself as x86")
+    _pe(output, library=False, architecture="x86")
+    for name, path in tools.items():
+        if (_identity(path), file_hash(path)) != identities[name]:
+            raise ValueError("Selected x86 helper tool changed during build")
+
+    witness = {
+        "platform": "windows-x86",
+        "toolchain": {
+            "toolset": toolset,
+            "windows_sdk": sdk_version,
+            "compiler": dict(path="VC/Tools/MSVC/" + toolset + "/bin/Hostx64/x86/cl.exe",
+                             bytes=identities["compiler"][0][2], sha256=identities["compiler"][1],
+                             version=version_match.group(0)),
+            "linker": dict(path="VC/Tools/MSVC/" + toolset + "/bin/Hostx64/x86/link.exe",
+                           bytes=identities["linker"][0][2], sha256=identities["linker"][1]),
+        },
+        "output": dict(path="bin/mw3indeo.exe", bytes=output.stat().st_size,
+                       sha256=file_hash(output)),
+    }
+    return output, witness
 
 
 def _source_identity(source, git, environment, expected_commit, *, require_clean=True):
@@ -1606,6 +1707,8 @@ def produce(args):
              environment, build, timeout=3600, log=build / "build.log")
         executable = _regular(build / "mw3.exe")
         _pe(executable, library=False)
+        indeo_helper, indeo_observation = build_indeo_helper(
+            paths["source"] / "runtime/mw3-re", build, paths["vs"], environment)
         source_after = _source_identity(paths["source"], paths["git"], environment, args.commit)
         tools_after = _tool_observations(tools, environment, build)
         inputs_after = _observe_inputs(inputs)
@@ -1616,12 +1719,14 @@ def produce(args):
         observation = dict(source=source_before, environment_policy=ENVIRONMENT_POLICY,
                            bootstrap_profile=bootstrap_profile,
                            toolchain_versions={name: environment[name] for name in
-                                               ("VCToolsVersion", "WindowsSDKVersion", "UCRTVersion") if name in environment},
+                                               ("VisualStudioVersion", "VCToolsVersion", "WindowsSDKVersion", "UCRTVersion")
+                                               if name in environment},
                            recipe=dict(platform="windows-x64", configuration="Release", package=True,
                                        core_critical_vulkan=True, sdl3_sound="3.2.0", crt="MultiThreadedDLL",
                                        launcher_artwork=[], flags=baseline_flags),
                            tools_pre=tools_before, tools_post=tools_after,
                            inputs_pre=inputs_before, inputs_post=inputs_after, git_lookup=lookup,
+                           indeo_helper=indeo_observation,
                            configured_dependencies=edges)
         inventory = make_inventory(executable=executable,
             release_roots=[distributions["sdl3"][1], distributions["sdl3_ttf"][1],
@@ -1629,11 +1734,12 @@ def produce(args):
             crt_root=paths["crt_root"], dumpbin=paths["dumpbin"], notices=notices,
             components=components, source_commit=args.commit, builder="mw3-re-recipe-v1",
             environment=environment, observation=observation,
+            additional_images=((indeo_helper, "bin/mw3indeo.exe", "x86"),),
             generated_files=(("resources/stock-headlights.bin", stock_headlight_catalog),))
         for member in inventory.members:
             basename = Path(member.relative).name.lower()
             if member.relative.startswith("bin/") and basename not in (
-                    "mw3.exe", "sdl3.dll", "sdl3_ttf.dll", "sdl3_sound.dll") and not _CRT.match(basename):
+                    "mw3.exe", "mw3indeo.exe", "sdl3.dll", "sdl3_ttf.dll", "sdl3_sound.dll") and not _CRT.match(basename):
                 raise ValueError("Unexpected application DLL escapes the bounded native recipe")
         stage_inventory(inventory, paths["output"])
         marker.unlink()

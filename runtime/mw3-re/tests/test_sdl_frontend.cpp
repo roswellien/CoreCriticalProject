@@ -58,6 +58,7 @@
 #include "frontend/sdl/launcher.h"
 #include "frontend/sdl/launcher_notes.h"
 #include "frontend/sdl/log_start.h"
+#include "platform/sha256.hpp"
 #include "frontend/sdl/text_fit.h"
 #include <SDL3_ttf/SDL_ttf.h>
 #include "frontend/sdl/sdl_force.h"
@@ -69,6 +70,7 @@
 #include "frontend/sdl/sdl_sound.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "frontend/sdl/sdl_vfw.h"
+#include "frontend/sdl/indeo_codec_path.h"
 #include "mech3/app_movie.h"
 #include "mech3/movie_shape.h"
 #include "gamez/zmodel/gmod_fog.h"
@@ -249,6 +251,240 @@ TEST(read_config_joystick_none_is_case_insensitive) {
   EXPECT(sdlfe::joystick_selection_disabled("NONE"));
   EXPECT(!sdlfe::joystick_selection_disabled("none "));
   EXPECT(!sdlfe::joystick_selection_disabled("auto"));
+}
+
+TEST(controller_profile_v1_calibrates_axes_and_emits_zin_command_states) {
+  std::ostringstream text;
+  text << "CC_MW3_CONTROLLER_V1\n" << std::string(64, 'A') << '\n';
+  for (int i = 0; i < 6; ++i)
+    text << (i >= 4 ? "0 0 32767 0.1 2 0\n" : "-32768 0 32767 0.1 2 0\n");
+  for (int i = 0; i < 26; ++i) text << (i == 25 ? 166 : i == 0 ? 12 : 0) << (i == 25 ? '\n' : ' ');
+  text << "20 61\n1 0 2 3\n-1 1 1 1\n0.25\n";
+  std::istringstream source(text.str());
+  const auto config = sdlfe::ControllerProfileConfig::read(source);
+  EXPECT(config.device == std::string(64, 'A'));
+  EXPECT(config.calibration[0].adjust(0, false) == 0);
+  EXPECT(config.calibration[0].adjust(32767, false) == 1);
+  EXPECT(config.calibration[0].adjust(-32768, false) == -1);
+  auto curved = config.calibration[0];
+  curved.deadzone = 0, curved.response = 2;
+  EXPECT(std::abs(curved.adjust(16384, false) - .25) < .0001);
+  curved.inverted = true;
+  EXPECT(curved.adjust(32767, false) == -1);
+  auto calibrated_trigger = config.calibration[4];
+  EXPECT(calibrated_trigger.adjust(0, true) == 0);
+  EXPECT(calibrated_trigger.adjust(32767, true) == 1);
+  auto offset_axis = config.calibration[0];
+  offset_axis.minimum = -30000, offset_axis.center = 1000, offset_axis.maximum = 30000;
+  offset_axis.deadzone = 0, offset_axis.response = 1;
+  EXPECT(offset_axis.adjust(1000, false) == 0 && offset_axis.adjust(30000, false) == 1);
+
+  sdlfe::ControllerState state;
+  sdlfe::ControllerSample sample;
+  sample.connected = sample.focused = true;
+  state.update(config, sample);  // neutral release arms the physical controls
+  EXPECT(state.armed && state.connected);
+  sample.buttons[0] = true;
+  sample.buttons[25] = true;
+  sample.axes[1] = 32767;
+  sample.axes[4] = 10000;
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kPressed && state.actions[20] == 0 && state.actions[166] == zin::kPressed);
+  sample.axes[4] = 20000;
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kHeld && state.actions[20] == zin::kPressed);
+  EXPECT(state.actions[166] == zin::kHeld);
+  EXPECT(state.analog[0] == -1);
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kHeld && state.actions[20] == zin::kHeld);
+  sample.buttons[0] = false;
+  sample.buttons[25] = false;
+  sample.axes[4] = 0;
+  state.update(config, sample);
+  EXPECT(state.actions[12] == zin::kReleased && state.actions[20] == zin::kReleased);
+
+  // A throttle stop (command 27) latched before the controller is lost must not keep the throttle at
+  // zero after it reconnects and re-arms.
+  auto stop_config = config;
+  stop_config.buttons[1] = 27;
+  sdlfe::ControllerState stop_state;
+  sdlfe::ControllerSample stop_sample;
+  stop_sample.connected = stop_sample.focused = true;
+  stop_state.update(stop_config, stop_sample);  // arm
+  stop_sample.buttons[1] = true;
+  stop_sample.axes[1] = 32767;
+  stop_state.update(stop_config, stop_sample);
+  EXPECT(stop_state.throttle_stopped && stop_state.analog[0] == 0);
+  stop_sample = {};
+  stop_state.update(stop_config, stop_sample);  // controller lost
+  EXPECT(!stop_state.throttle_stopped);
+  stop_sample.connected = stop_sample.focused = true;
+  stop_state.update(stop_config, stop_sample);  // back, neutral: re-arms
+  stop_sample.axes[1] = 32767;
+  stop_state.update(stop_config, stop_sample);
+  EXPECT(stop_state.analog[0] == -1);
+
+  auto inverted_config = config;
+  inverted_config.triggers[0] = 61;
+  inverted_config.calibration[4].inverted = true;
+  sdlfe::ControllerState inverted_state;
+  sdlfe::ControllerSample inverted_sample;
+  inverted_sample.connected = inverted_sample.focused = true;
+  inverted_state.update(inverted_config, inverted_sample);
+  EXPECT(inverted_state.armed && inverted_state.connected);
+  inverted_sample.axes[4] = 20000;  // clears the configured deadzone and response curve
+  inverted_state.update(inverted_config, inverted_sample);
+  EXPECT(inverted_state.actions[61] == zin::kPressed);
+  inverted_sample.axes[4] = 0;
+  inverted_state.update(inverted_config, inverted_sample);
+  EXPECT(inverted_state.actions[61] == zin::kReleased);
+
+  sdlfe::ControllerState hysteresis_state;
+  auto hysteresis_config = config;
+  hysteresis_config.calibration[4].deadzone = 0;
+  hysteresis_config.calibration[4].response = 1;
+  sdlfe::ControllerSample hysteresis_sample;
+  hysteresis_sample.connected = hysteresis_sample.focused = true;
+  hysteresis_state.update(hysteresis_config, hysteresis_sample);
+  hysteresis_sample.axes[4] = 8200;
+  hysteresis_state.update(hysteresis_config, hysteresis_sample);
+  EXPECT(hysteresis_state.actions[20] == zin::kPressed);
+  hysteresis_sample.axes[4] = 7000;  // below press edge, inside the 0.05 release band
+  hysteresis_state.update(hysteresis_config, hysteresis_sample);
+  EXPECT(hysteresis_state.actions[20] == zin::kHeld);
+  hysteresis_sample.axes[4] = 6000;
+  hysteresis_state.update(hysteresis_config, hysteresis_sample);
+  EXPECT(hysteresis_state.actions[20] == zin::kReleased);
+
+  struct OverlayInput final : platform::Input {
+    uint32_t action = 0;
+    bool open(Device) override { return true; }
+    void close(Device) override {}
+    int32_t acquire(Device) override { return 0; }
+    int32_t unacquire(Device) override { return 0; }
+    int32_t keyboard_data(platform::KeyEvent*, uint32_t*) override { return 0; }
+    int32_t mouse_state(platform::MouseState*) override { return 0; }
+    int32_t joystick_state(platform::JoyState*) override { return 0; }
+    uint32_t command_state(int32_t command) override { return command == 12 ? action : 0; }
+  } input;
+  struct OverlayHost final : zin::Host {
+    void client_size(int32_t* width, int32_t* height) override { *width = 640, *height = 480; }
+  } host;
+  zin::reset_state();
+  zin::set_input(&input);
+  zin::set_host(&host);
+  zin::init(167, "controller overlay test");
+  EXPECT(zin::start(1, 0) == 0);
+  input.action = zin::kPressed;
+  EXPECT(zin::command(12) == zin::kPressed);
+  input.action = zin::kReleased;
+  EXPECT(zin::command(12) == zin::kReleased);
+  zin::stop();
+  zin::shutdown();
+  zin::set_input(nullptr);
+  zin::set_host(nullptr);
+  zin::reset_state();
+}
+
+// Defined with the other SDL test helpers below; this test needs it to deliver device removal.
+namespace {
+void pump(sdlfe::SdlInput& in);
+}  // namespace
+
+TEST(sdl_input_profile_drives_real_command_and_joystick_state) {
+  EXPECT(SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD));
+  SDL_VirtualJoystickDesc d;
+  SDL_INIT_INTERFACE(&d);
+  d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+  d.naxes = SDL_GAMEPAD_AXIS_COUNT;
+  d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+  d.name = "mw3 profile path test pad";
+  const SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
+  EXPECT(id != 0 && SDL_IsGamepad(id));
+  SDL_Joystick* virtual_joystick = SDL_OpenJoystick(id);
+  EXPECT(virtual_joystick != nullptr);
+
+  SDL_GUID guid = SDL_GetGamepadGUIDForID(id);
+  std::string identity;
+  static constexpr char digits[] = "0123456789ABCDEF";
+  for (uint8_t byte : guid.data) {
+    identity.push_back(digits[byte >> 4]);
+    identity.push_back(digits[byte & 15]);
+  }
+  SDL_Gamepad* gamepad = SDL_OpenGamepad(id);
+  EXPECT(gamepad != nullptr);
+  const char* serial = SDL_GetGamepadSerial(gamepad);
+  const char* path = SDL_GetGamepadPath(gamepad);
+  const std::string serial_text = serial ? serial : "";
+  const std::string path_text = path ? path : "";
+  identity += ":" + (serial_text.empty() ? path_text : serial_text);
+  if (serial_text.empty() && path_text.empty()) identity += ":session:" + std::to_string(id);
+  SDL_CloseGamepad(gamepad);
+  platform::integrity::Sha256 digest;
+  digest.update(identity.data(), identity.size());
+  std::string device = digest.hex();
+  std::transform(device.begin(), device.end(), device.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+
+  const std::filesystem::path profile_path =
+      std::filesystem::path(MW3_TEST_TMP) / "sdl_controller_profile_v1.txt";
+  std::filesystem::create_directories(profile_path.parent_path());
+  {
+    std::ofstream profile(profile_path, std::ios::binary);
+    profile << "CC_MW3_CONTROLLER_V1\n" << device << '\n';
+    for (int axis = 0; axis < 6; ++axis)
+      profile << (axis >= 4 ? "0 0 32767 0 1 " : "-32768 0 32767 0 1 ") << (axis == 4 ? 1 : 0) << '\n';
+    for (int button = 0; button < 26; ++button) profile << "0 ";
+    profile << "\n61 62\n1 0 2 3\n-1 1 1 1\n0.25\n";
+    EXPECT(profile.good());
+  }
+
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, -32768);
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, -32768);
+  sdlfe::SdlInput input;
+  input.controller_profile_path = profile_path.string();
+  EXPECT(input.open(platform::Input::kJoystick));
+  EXPECT(input.acquire(platform::Input::kJoystick) == 0);
+  for (uint32_t axis = 0; axis < 5; ++axis) {
+    EXPECT(input.joystick_set_range(4 * axis, -1000, 1000) == 0);
+  }
+  platform::JoyState state{};
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFTX, 32767);
+  EXPECT(input.joystick_state(&state) == 0);
+  EXPECT(state.x == 0 && input.command_state(61) == 0);  // unarmed profile axes are gated
+
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFTX, 0);
+  input.joystick_state(&state);  // neutral sample arms
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFTX, 32767);
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_RIGHTX, 32767);
+  input.joystick_state(&state);
+  EXPECT(state.x == 1000 && state.rx == 1000);
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 32767);
+  input.joystick_state(&state);
+  EXPECT(state.z == -1000 && input.command_state(61) == zin::kPressed);
+
+  SDL_Event focus{};
+  focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+  input.on_event(focus);
+  EXPECT(input.command_state(61) == zin::kReleased);
+  input.joystick_state(&state);
+  EXPECT(state.x == 0 && state.z == 0);
+
+  focus.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+  input.on_event(focus);
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, -32768);
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFTX, 0);
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_RIGHTX, 0);
+  input.joystick_state(&state);
+  SDL_SetJoystickVirtualAxis(virtual_joystick, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 32767);
+  input.joystick_state(&state);
+  EXPECT(input.command_state(61) == zin::kPressed);
+  SDL_CloseJoystick(virtual_joystick);
+  SDL_DetachVirtualJoystick(id);
+  pump(input);
+  EXPECT(input.command_state(61) == zin::kReleased);
+  input.close(platform::Input::kJoystick);
+  std::filesystem::remove(profile_path);
 }
 
 namespace {
@@ -8340,6 +8576,27 @@ TEST(sdl_editor_forms_click_through_imgui) {
               applied_under_modal, changed, asked, mech3::editor_forms().size());
   EXPECT(applied_under_modal == 1 && asked == 1 && !mech3::form_shown(&m));
   mech3::form_hide(&f);
+}
+
+TEST(sdl_indeo_codec_path_prefers_launcher_verified_path) {
+  namespace fs = std::filesystem;
+  const fs::path root = fs::path(MW3_TEST_TMP) / "indeo codec path";
+  const fs::path install = root / "game";
+  const fs::path staged = root / "native-inputs" / "Ir50_32.dll";
+  const fs::path root_codec = install / "Ir50_32.dll";
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  fs::create_directories(install, ec);
+  fs::create_directories(staged.parent_path(), ec);
+  std::ofstream(staged).put('v');
+  std::ofstream(root_codec).put('r');
+
+  EXPECT(sdlfe::indeo_codec_path(install.string(), staged.string()) == staged.string());
+  fs::remove(staged, ec);
+  EXPECT(sdlfe::indeo_codec_path(install.string(), staged.string()) == root_codec.string());
+  fs::remove(root_codec, ec);
+  EXPECT(sdlfe::indeo_codec_path(install.string(), staged.string()).empty());
+  fs::remove_all(root, ec);
 }
 
 #if !defined(_WIN32) && !defined(MW3_PM_SUITE)  // posix_spawn, waitpid; MechWarrior 3's c1 pages (not Pirate's Moon's suite)

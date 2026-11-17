@@ -234,7 +234,7 @@ def native_stage_tests(inputs):
             producer.stage_inventory(inventory, self.output)
             descriptor = json.loads((self.output / "runtime.json").read_text(encoding="utf-8"))
             self.assertEqual(descriptor["roles"], dict(executable="bin/mw3.exe", profile="profile.json"))
-            self.assertEqual(descriptor["capabilities"], {})
+            self.assertEqual(descriptor["capabilities"], {"controller-profile": [1]})
             self.assertIn("bin/mw34_normal_hash.dll", descriptor["dependencies"])
             self.assertTrue(any(name.lower().startswith("bin/vcruntime") for name in descriptor["files"]))
             physical = {path.relative_to(self.output).as_posix() for path in self.output.rglob("*") if path.is_file()}
@@ -261,7 +261,11 @@ def native_stage_tests(inputs):
             self.assertEqual(planned, dict(ok=True, working_directory=str(self.output / "bin"),
                 argv=[str(self.output / "bin/mw3.exe"), "--install", str(game), "--write-dir", expected_write,
                       "--cc-vulkan-wsi", "--window", "1280x720", "--windowed", "--cc-aa", "fxaa",
-                      "--cc-af", "16", "--cc-render-thread", "1", "--cc-lighting", "off"]))
+                      "--cc-af", "16", "--cc-render-thread", "1", "--cc-lighting", "off"],
+                skipped_features=[{
+                    "feature": "Indeo movies",
+                    "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
+                }]))
             profile_path = self.output / "profile.json"
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             profile["options"]["aa"] = "8"
@@ -912,6 +916,68 @@ def native_recipe_tests(inputs):
                 path.write_bytes(changed)
                 with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Expected an x64"):
                     producer._pe(path, library=False)
+
+        def test_x86_helper_pe_is_distinct_from_the_x64_game_image(self):
+            image = bytearray(90)
+            image[:2] = b"MZ"
+            image[60:64] = (64).to_bytes(4, "little")
+            image[64:68] = b"PE\0\0"
+            image[68:70] = (0x14c).to_bytes(2, "little")
+            image[86:88] = (2).to_bytes(2, "little")
+            image[88:90] = (0x10b).to_bytes(2, "little")
+            helper = self.root / "mw3indeo.exe"
+            helper.write_bytes(image)
+            producer._pe(helper, library=False, architecture="x86")
+            with self.assertRaisesRegex(ValueError, "Expected an x64"):
+                producer._pe(helper, library=False)
+
+        def test_x86_helper_closure_uses_only_the_windows_x86_system_directory(self):
+            image = bytearray(90)
+            image[:2] = b"MZ"
+            image[60:64] = (64).to_bytes(4, "little")
+            image[64:68] = b"PE\0\0"
+            image[68:70] = (0x14c).to_bytes(2, "little")
+            image[86:88] = (2).to_bytes(2, "little")
+            image[88:90] = (0x10b).to_bytes(2, "little")
+            helper = self.root / "mw3indeo.exe"
+            helper.write_bytes(image)
+
+            def inventory_with_helper():
+                release = self.root / "x86-helper-release"
+                release.mkdir(exist_ok=True)
+                executable = release / "mw34_native_stage_fixture.exe"
+                shutil.copyfile(inputs.native_stage_fixture_exe, executable)
+                notice = self.root / "x86-helper-LICENSE.txt"
+                notice.write_text("Authored fixture notice; not a native-game distribution.\n",
+                                  encoding="utf-8")
+                return producer.make_inventory(
+                    executable=executable,
+                    release_roots=[release],
+                    crt_root=Path(inputs.crt_root),
+                    dumpbin=Path(inputs.dumpbin),
+                    notices={"LICENSE.txt": notice},
+                    components=[dict(name="authored-stage-fixture", version="1",
+                                     source="project-authored-test", notices=["LICENSE.txt"])],
+                    source_commit="a" * 40,
+                    builder="authored-stage-fixture",
+                    environment=self.environment,
+                    additional_images=((helper, "bin/mw3indeo.exe", "x86"),))
+
+            def inspect(path, _dumpbin, _environment):
+                return ["kernel32.dll"] if path == helper else []
+
+            with patch.object(producer, "_inspect", side_effect=inspect):
+                inventory = inventory_with_helper()
+            paths = {member.relative: member.source for member in inventory.members}
+            self.assertEqual(paths["bin/mw3indeo.exe"], helper)
+            self.assertNotIn("bin/kernel32.dll", paths)
+
+            def missing_x86_import(path, _dumpbin, _environment):
+                return ["mw34_missing_x86.dll"] if path == helper else []
+
+            with patch.object(producer, "_inspect", side_effect=missing_x86_import):
+                with self.assertRaisesRegex(ValueError, "Missing application dependency"):
+                    inventory_with_helper()
 
         def test_recipe_destinations_and_cpu_are_rejected_before_mutation(self):
             from argparse import Namespace

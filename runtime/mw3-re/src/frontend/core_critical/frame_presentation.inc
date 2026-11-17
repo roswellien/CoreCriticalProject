@@ -101,7 +101,13 @@ void present() override {
       if (renderer_->resident_presents)
         resident_draws_.store(renderer_->draws);
     } else if (worker_) {
-      worker_->post(present);
+      // A flip is also the simulation's visible-frame boundary. With up to eight queued jobs the
+      // game could run several frames ahead of the image on screen, so hits and deaths appeared
+      // before their projectiles visibly arrived. Keep at most one presented frame in flight: wait
+      // for the previous present before queueing this one, so rendering still overlaps the next
+      // game frame but the screen is never more than one frame behind the simulation.
+      if (last_present_job_ != 0) worker_->wait_for_job(last_present_job_);
+      last_present_job_ = worker_->post_numbered(present);
     } else {
       present();
     }

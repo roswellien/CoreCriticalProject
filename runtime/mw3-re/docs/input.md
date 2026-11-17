@@ -559,6 +559,58 @@ the Windows files compiled with mingw. **Not run:** anything on Windows; the
 cause above is from reading SDL's source, and the next stuck run's log lines
 will say whether it is the one.
 
+## Launcher controller profiles
+
+`--cc-controller FILE` reads the launcher's UTF-8 whitespace format
+`CC_MW3_CONTROLLER_V1`. It contains the 64-character uppercase SDL device key;
+six rows of `minimum center maximum deadzone response inverted` values (four
+stick axes, then two triggers); 26 command IDs for SDL gamepad buttons; two
+trigger command IDs; four physical stick-axis assignments in throttle,
+steering, torso-yaw, torso-pitch order (`-1` is unbound); four sensitivities;
+and the trigger threshold. Command ID zero is unbound. Numbers use the
+invariant decimal format. Extra fields, malformed numbers, unsupported command
+IDs, invalid calibration and incomplete ranges fail the launch visibly.
+
+Calibration normalizes stick values around `center`, using `maximum-center` on
+the positive side and `center-minimum` on the negative side; triggers use
+`(raw-center)/(maximum-center)` clamped to 0..1. Both clamp stick values to
+-1..1, remove and renormalize the deadzone, then apply `sign(value) *
+pow(abs(value), response)`. Inversion negates a stick or replaces a trigger
+value with `1-value`. The four axis assignments choose source indices 0..3 or
+-1, then each selected source is routed into throttle, steering, torso yaw or
+torso pitch and multiplied by its sensitivity.
+
+The legacy hook required a connected, focused device and armed only after all
+sticks and triggers were neutral and all buttons released. Losing focus or the
+device reset arming. Each mapped command exposed `1` on its press poll, `2`
+while held, `4` on release and `0` while up; duplicate bindings to one command
+were coalesced. Triggers used the calibrated value and `>= threshold`. The
+legacy hook also held its analog throttle at zero while command 27 was down,
+until the selected throttle source returned within 0.05 of neutral. MW3-RE sends
+command 27 through normal `zin` command state and leaves that command's effect
+to MW3's existing control code.
+
+The SDL key is SHA-256 over the uppercase hexadecimal SDL gamepad GUID, a
+colon, and its serial or device path. When neither serial nor path exists, the
+launcher's key also includes its SDL instance ID; duplicate identities include
+that ID as well.
+The runtime prefers an exact key match. If no device matches, it follows the
+existing `mw3.cfg` name selection and best-ranked-device fallback.
+
+While the option is active, SDL owns button and trigger command state through
+`zin::command`; launcher `.zrd` joystick button bindings are cleared. SDL
+applies each physical axis's calibrated center/range, deadzone, response curve
+and inversion before the `.zrd` source routing and sensitivity are applied.
+The generated `.zrd` contains only the selected axis routing and sensitivity,
+with its deadzone set to zero; it does not repeat calibration. Keyboard and
+mouse bindings remain in the normal `zin` map. If the option is absent, the
+existing joystick path and `.zrd` behavior remain in effect.
+
+The controller math, text parser, `zin::command` overlay and launcher file/argv
+projection have authored-fixture checks. A real controller run is still needed
+to confirm physical SDL identity stability, focus/reconnect behavior, trigger
+rest values and in-game feel.
+
 ## Open
 
 - The controls screen (0x0042be10 ..), which uses read_key and the wait

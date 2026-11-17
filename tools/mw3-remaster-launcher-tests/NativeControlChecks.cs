@@ -119,13 +119,20 @@ internal static class NativeControlChecks
             var controllerPreset = File.ReadAllText(Directory.GetFiles(Path.Combine(write, "keys"), "CC-*.zrd")
                 .OrderByDescending(File.GetLastWriteTimeUtc).First());
             Check(controllerPreset.Contains("joystick(Y)"), "The controller launch did not write its axis preset.");
-            Check(controllerPreset.Contains("CMD_JJ_UP keya("), "Controller button action was not projected.");
-            Check(controllerPreset.Contains("joybtn(0x1)"), "Controller button slot was not projected.");
-            Check(controllerPreset.Contains("Throttle joystick(Y) slope(-0.5) intercept(0.5)"), "Controller throttle affine mapping was incorrect.");
+            Check(controllerPreset.Contains("CMD_JJ_UP keya("), "Controller action row was not retained.");
+            Check(controllerPreset.Contains("joybtn(0x0)"), "A controller button could be applied twice through the .zrd map.");
+            Check(controllerPreset.Contains("Throttle joystick(Y) slope(-0.5) intercept(0.5) deadzone(0)"), "Controller axis routing or sensitivity was incorrect.");
             var triggerLine = controllerPreset.Split('\n').Single(row => row.Contains("(CMD_TRIGGER1 ", StringComparison.Ordinal));
             Check(triggerLine.Contains("joybtn(0x0)", StringComparison.Ordinal),
                 "A joystick binding from the saved key profile survived controller projection.");
-            Check(log.Any(line => line.Contains("Trigger mappings")), "Unsupported controller mappings were not reported.");
+            var controllerPath = NativeControls.ControllerProfilePath(write);
+            Check(File.Exists(controllerPath) && File.ReadAllText(controllerPath).StartsWith("CC_MW3_CONTROLLER_V1\n"),
+                "The full controller profile was not exported into the runtime profile.");
+            Check(NativeControls.ControllerArguments(controller, controllerPath).SequenceEqual(new[] { "--cc-controller", controllerPath }),
+                "The native controller option or exported file argument was missing.");
+            Check(log.Any(line => line.Contains("full saved controller profile")) &&
+                !log.Any(line => line.Contains("unsupported", StringComparison.OrdinalIgnoreCase)),
+                "The supported controller profile was still reported as unsupported.");
         }
         finally
         {
