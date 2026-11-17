@@ -177,6 +177,32 @@ inline void validate_lights(const effects::Uniform &u) {
 
 using Mat34 = std::array<float, 12>;
 
+// A bad affine transform only disables tiled-light culling for its draw. Keep
+// the report state per renderer so repeated degenerate draws cannot flood logs.
+template <typename CameraBuilder, typename Reporter>
+[[nodiscard]] inline bool try_affine_camera_or_all_lights(
+    Mat34 &camera, unsigned &draw_view, unsigned all_effect_lights,
+    bool &fallback_reported, CameraBuilder &&build_camera, Reporter &&report) {
+  try {
+    camera = build_camera();
+    return true;
+  } catch (const std::exception &error) {
+    draw_view = all_effect_lights;
+    if (!fallback_reported) {
+      report(error.what());
+      fallback_reported = true;
+    }
+    return false;
+  } catch (...) {
+    draw_view = all_effect_lights;
+    if (!fallback_reported) {
+      report("non-standard affine exception");
+      fallback_reported = true;
+    }
+    return false;
+  }
+}
+
 // Row-major 3x4 affine: [ r00 r01 r02 tx ; r10 r11 r12 ty ; r20 r21 r22 tz ]
 // index = row*4 + col
 
