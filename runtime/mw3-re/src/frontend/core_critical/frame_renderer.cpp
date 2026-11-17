@@ -351,6 +351,11 @@ struct Texture {
   std::uint64_t group_load_epoch{0};
 };
 
+struct LoggedFlareTexture {
+  std::string name;
+  int32_t handle = -1;
+};
+
 std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
                                    const uint8_t *source = nullptr,
                                    unsigned source_width = 0,
@@ -1408,6 +1413,41 @@ private:
                    (state.sharp && !sharp ? 0U : 3U);
     if (!hud)
       draw.sampler |= 0x10000U;
+    const auto flare = state.flare_diagnostic;
+    if (flare.slot >= 0 && flare.slot < 4 && state.texture >= 0 &&
+        logged_flare_count_ < logged_flare_textures_.size()) {
+      const auto &entry = textures_.at(state.texture);
+      const auto end = logged_flare_textures_.begin() + logged_flare_count_;
+      const auto logged = std::find_if(
+          logged_flare_textures_.begin(), end,
+          [&](const LoggedFlareTexture &key) {
+            if (entry.name.empty())
+              return key.name.empty() && key.handle == state.texture;
+            return key.name == entry.name;
+          });
+      if (logged == end) {
+        logged_flare_textures_[logged_flare_count_++] = {entry.name, state.texture};
+        const char *queue = "immediate";
+        if (state.queue == ::platform::DrawQueue::Transparent)
+          queue = "transparent";
+        else if (state.queue == ::platform::DrawQueue::Overlay)
+          queue = "overlay";
+        std::fprintf(
+            stderr,
+            "[FLARE_TEXTURE] slot=%d name=\"%s\" uploaded=%ux%u replacement=%s "
+            "half_size_screen_px=%g half_size_target_px=[%g,%g] sampler=0x%x "
+            "queue=%s source=%ux%u viewport=%dx%d target=%ux%u hud=%d\n",
+            flare.slot, entry.name.empty() ? "<unknown>" : entry.name.c_str(),
+            entry.width, entry.height, entry.replacement ? "yes" : "no",
+            flare.half_size_pixels,
+            flare.half_size_pixels * scene_.width / float(viewport[2]),
+            flare.half_size_pixels * scene_.height / float(viewport[3]),
+            draw.sampler, queue,
+            entry.replacement ? entry.source_width : entry.width,
+            entry.replacement ? entry.source_height : entry.height,
+            viewport[2], viewport[3], scene_.width, scene_.height, int(hud));
+      }
+    }
     draw.key = {uint8_t(state.blend || state.multiply),
                 uint8_t(state.multiply ? 1 : 5),
                 uint8_t(state.multiply ? 3 : 6),
@@ -1896,6 +1936,10 @@ private:
   std::uint64_t group_load_epoch_{1};
   std::map<int, int32_t> surface_normal_textures_;
   bool logged_first_normal_trace_{false};
+  // Names survive handle reuse/reloads; unknown names use the upload handle.
+  // Stop after four distinct flare textures, with no growing set or log spam.
+  std::array<LoggedFlareTexture, 4> logged_flare_textures_{};
+  std::size_t logged_flare_count_{};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
       cpu_clipped_triangles_{}, named_textures_{};
   bool suppress_model_draws_{};
