@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 
 #include <csignal>
+#include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +18,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <dbghelp.h>
+#include <io.h>
 #include <process.h>
 #else
 #include <limits.h>
@@ -35,12 +39,34 @@ namespace {
 
 char g_program[64] = "mw3";
 char g_tail[1024] = "";  // the box's text after the reason
+#if defined(_WIN32)
+void crash_log(const char* format, ...) {
+  char line[2048];
+  va_list arguments;
+  va_start(arguments, format);
+  const int length = std::vsnprintf(line, sizeof line, format, arguments);
+  va_end(arguments);
+  if (length <= 0) return;
+  const intptr_t raw_handle = _get_osfhandle(2);
+  if (raw_handle == -1) return;
+  DWORD written = 0;
+  if (!WriteFile(reinterpret_cast<HANDLE>(raw_handle), line,
+                 static_cast<DWORD>(length < static_cast<int>(sizeof line) ? length : sizeof line - 1),
+                 &written, nullptr))
+    return;
+}
+
+char g_log[1024] = "";
+#endif
 bool g_box = false;
 bool g_test = false;
 
 void set_text(const std::string& program, const std::string& log) {
   std::snprintf(g_program, sizeof g_program, "%s", program.c_str());
   std::snprintf(g_tail, sizeof g_tail, ".\n\nThe log is %s\nPlease include it if you report this.", log.c_str());
+#if defined(_WIN32)
+  std::snprintf(g_log, sizeof g_log, "%s", log.c_str());
+#endif
 }
 
 [[noreturn]] void on_terminate() {
@@ -58,7 +84,6 @@ void set_text(const std::string& program, const std::string& log) {
 #if defined(_WIN32)
 
 void say_crash(const char* reason) {
-  std::fflush(stderr);
   Sleep(100);  // the log's thread passes this on (run_log.cpp)
   if (g_test) _exit(70);
   char text[1200];
@@ -68,10 +93,88 @@ void say_crash(const char* reason) {
 }
 
 LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
-  std::fprintf(stderr, "%s: crashed: exception 0x%08lx at %p\n", g_program, e->ExceptionRecord->ExceptionCode,
-               e->ExceptionRecord->ExceptionAddress);
+  if (e && e->ExceptionRecord) {
+    const auto exception_address = reinterpret_cast<uintptr_t>(e->ExceptionRecord->ExceptionAddress);
+    const auto module_base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+    const uintptr_t rva = module_base && exception_address >= module_base
+                              ? exception_address - module_base
+                              : 0;
+    crash_log("%s: crashed: exception 0x%08lx at %p module base %p RVA 0x%llx\n", g_program,
+              e->ExceptionRecord->ExceptionCode, e->ExceptionRecord->ExceptionAddress,
+              reinterpret_cast<void*>(module_base), static_cast<unsigned long long>(rva));
+    if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+        e->ExceptionRecord->NumberParameters >= 2) {
+      const ULONG_PTR access = e->ExceptionRecord->ExceptionInformation[0];
+      const char* access_name = "unknown";
+      if (access == 0) access_name = "read";
+      else if (access == 1) access_name = "write";
+      else if (access == 8) access_name = "execute";
+      crash_log("%s: access violation: %s (%llu) target %p\n", g_program, access_name,
+                static_cast<unsigned long long>(access),
+                reinterpret_cast<void*>(e->ExceptionRecord->ExceptionInformation[1]));
+    }
+    if (e->ContextRecord) {
+#if defined(_M_X64) || defined(__x86_64__)
+      crash_log("%s: registers: RIP=%p RAX=%p RBX=%p RCX=%p RDX=%p\n", g_program,
+                reinterpret_cast<void*>(e->ContextRecord->Rip),
+                reinterpret_cast<void*>(e->ContextRecord->Rax),
+                reinterpret_cast<void*>(e->ContextRecord->Rbx),
+                reinterpret_cast<void*>(e->ContextRecord->Rcx),
+                reinterpret_cast<void*>(e->ContextRecord->Rdx));
+#else
+      crash_log("%s: registers: context is not x64\n", g_program);
+#endif
+    }
+
+    char dump_path[MAX_PATH + 16] = "";
+    if (g_log[0]) {
+      std::snprintf(dump_path, sizeof dump_path, "%s", g_log);
+      char* separator = std::strrchr(dump_path, '\\');
+      char* slash = std::strrchr(dump_path, '/');
+      if (slash && (!separator || slash > separator)) separator = slash;
+      if (separator) separator[1] = '\0';
+      else dump_path[0] = '\0';
+    }
+    const size_t directory_length = std::strlen(dump_path);
+    if (directory_length + sizeof("crash.dmp") <= sizeof dump_path) {
+      std::memcpy(dump_path + directory_length, "crash.dmp", sizeof("crash.dmp"));
+      crash_log("%s: minidump path: %s\n", g_program, dump_path);
+      HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
+      if (dbghelp) {
+        using MiniDumpWriteDumpFunction = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
+                                                        PMINIDUMP_EXCEPTION_INFORMATION,
+                                                        PMINIDUMP_USER_STREAM_INFORMATION,
+                                                        PMINIDUMP_CALLBACK_INFORMATION);
+        auto write_dump = reinterpret_cast<MiniDumpWriteDumpFunction>(
+            GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+        if (write_dump) {
+          HANDLE file = CreateFileA(dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+          if (file != INVALID_HANDLE_VALUE) {
+            MINIDUMP_EXCEPTION_INFORMATION exception_info{};
+            exception_info.ThreadId = GetCurrentThreadId();
+            exception_info.ExceptionPointers = e;
+            exception_info.ClientPointers = FALSE;
+            if (write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal,
+                           &exception_info, nullptr, nullptr))
+              crash_log("%s: minidump: %s\n", g_program, dump_path);
+            else
+              crash_log("%s: minidump failed: %s\n", g_program, dump_path);
+            CloseHandle(file);
+          } else
+            crash_log("%s: could not create minidump: %s\n", g_program, dump_path);
+        } else
+          crash_log("%s: dbghelp has no MiniDumpWriteDump entry point\n", g_program);
+        FreeLibrary(dbghelp);
+      } else
+        crash_log("%s: could not load dbghelp.dll for minidump\n", g_program);
+    }
+  } else {
+    crash_log("%s: crashed: exception details unavailable\n", g_program);
+  }
   char reason[32];
-  std::snprintf(reason, sizeof reason, "exception 0x%08lx", e->ExceptionRecord->ExceptionCode);
+  std::snprintf(reason, sizeof reason, "exception 0x%08lx",
+                e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0ul);
   say_crash(reason);
   return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -79,7 +182,7 @@ LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
 // abort() (an uncaught exception's end too) never reaches the filter above: the
 // CRT raises this and exits with 3.
 void on_abort(int) {
-  std::fprintf(stderr, "%s: crashed: aborted\n", g_program);
+  crash_log("%s: crashed: aborted\n", g_program);
   say_crash("aborted");
   _exit(3);
 }

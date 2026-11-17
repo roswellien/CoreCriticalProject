@@ -407,6 +407,27 @@ void compositor_replaces_only_background_pixels() {
           "Downscaled menu output was not completely written within its requested size");
 }
 
+void compositor_rejects_null_or_unreadable_sources_before_access() {
+  platform::MenuBackgroundImage image;
+  image.width = 1;
+  image.height = 1;
+  image.source_width = 1;
+  image.source_height = 1;
+  image.rgb.resize(3);
+  const std::vector<zrndr::MenuBackgroundBlit> blits{{0, 0, 0, 0, 1, 1}};
+  const std::vector<zrndr::MenuBackgroundBlit> no_blits;
+  const uint16_t pixel = 0;
+  std::vector<uint32_t> output;
+  require(!platform::compose_menu_background(image, nullptr, blits, &pixel, 1, 1, 2, true, 1, 1,
+                                             &output),
+          "Menu background composition accepted a null source");
+
+  const auto* stale_source = reinterpret_cast<const zimg::Texture*>(uintptr_t{1});
+  require(!platform::compose_menu_background(image, stale_source, no_blits, &pixel, 1, 1, 2, true,
+                                             1, 1, &output),
+          "Empty menu blits accessed an unreadable source instead of failing");
+}
+
 void cached_menu_texture_action_recreates_texture_on_cache_hit() {
   using Action = platform::PreparedMenuTextureAction;
   require(platform::prepared_menu_texture_action(true, false, 0, 0, 4, 2) == Action::kCreate,
@@ -631,6 +652,7 @@ int main() {
   reader_rejects_unknown_format();
   reader_rejects_truncated_payload();
   compositor_replaces_only_background_pixels();
+  compositor_rejects_null_or_unreadable_sources_before_access();
   compositor_matches_independent_reference_for_all_output_scales();
   cached_menu_texture_action_recreates_texture_on_cache_hit();
   compositor_writes_every_pixel_at_the_capped_height();
