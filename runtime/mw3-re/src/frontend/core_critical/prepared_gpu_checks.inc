@@ -284,6 +284,61 @@ void check_damage_tint_blend(SDL_Window *window, sdlfe::RendererBackend backend,
     zcls::object3d_use_opacity(panel, 0);
 }
 
+// A destroyed mech fades through native node opacity (mech_dead dead_fade).
+// Over a black clear with SRCALPHA/INVSRCALPHA blending, a fading draw must
+// equal the opaque image scaled by its opacity, and zero opacity must leave only
+// the clear. Before the fade fix, both prepared routes drew the fade opaque.
+// The sun renderer skips its SDR shadow lift for blended draws only, so lit
+// output is not proportional; the normal debug view bypasses the lift for both.
+void check_gpu_prepared_fade(SDL_Window *window, sdlfe::RendererBackend backend,
+                             sdlfe::CoreCriticalAssets options,
+                             platform::ModelDrawContext context, const char *mode) {
+    options.geometry_debug_normals = true;
+    const auto renderer_owner = make_check_renderer(window, backend, {}, options);
+    auto &renderer = *renderer_owner;
+    renderer.set_viewport(0, 0, 64, 64);
+    std::array<float, 12> matrix{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    context.model_to_camera = context.model_to_world = matrix.data();
+    context.clip_near = 1;
+    const auto render = [&](float opacity) {
+        context.opacity = opacity;
+        renderer.clear(true, 0, 0, 0);
+        require(renderer.submit_prepared_geometry(context, {}) ==
+                    cc::geometry::Submission::submitted,
+                "Fading prepared model was not admitted at the early handoff");
+        std::vector<std::uint32_t> pixels;
+        int width{}, height{};
+        require(renderer.read_back(&pixels, &width, &height) && width == 64 && height == 64,
+                "Fading prepared packet lost its extent");
+        return pixels;
+    };
+    const auto opaque = render(1.f);
+    unsigned covered = 0;
+    for (const auto pixel : opaque)
+        if (pixel & 0xffffff)
+            ++covered;
+    require(covered > 10, "Prepared fade check rendered no useful opaque witness");
+    for (const float opacity : {.375f, 0.f}) {
+        const auto faded = render(opacity);
+        for (std::size_t index = 0; index < faded.size(); ++index)
+            for (unsigned shift : {0U, 8U, 16U}) {
+                // The CPU-reference route stages opacity as 8-bit diffuse alpha
+                // (96/255 for 0.375); two levels covers that and output rounding.
+                const float expected_channel = float((opaque[index] >> shift) & 255) * opacity;
+                const float measured_channel = float((faded[index] >> shift) & 255);
+                if (std::abs(measured_channel - expected_channel) > 2.f) {
+                    char message[256];
+                    std::snprintf(message, sizeof message,
+                                  "Prepared fade ignored node opacity: geometry=%s opacity=%.3f "
+                                  "pixel=(%zu,%zu) opaque=0x%08x faded=0x%08x",
+                                  mode, opacity, index % 64, index / 64, unsigned(opaque[index]),
+                                  unsigned(faded[index]));
+                    throw std::runtime_error(message);
+                }
+            }
+    }
+}
+
 void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
     const auto folder = std::filesystem::temp_directory_path() /
                         ("cc-gpu-prepared-" + std::to_string(SDL_GetPerformanceCounter()));
@@ -403,6 +458,7 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
                     statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 7,
                 "GPU prepared vertices still use CPU clipping or lost immutable material draws");
         check_damage_tint_blend(window, backend, options, root.get(), panel);
+        check_gpu_prepared_fade(window, backend, options, context, mode);
     }
     require(expected[0] != expected[1] && expected[0] != expected[2],
             "Prepared reference did not exercise motion or fog");

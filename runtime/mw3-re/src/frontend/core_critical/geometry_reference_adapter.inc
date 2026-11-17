@@ -64,7 +64,9 @@ void emit_reference_geometry(
       draw.surface_eye = surface_eye;
     draw.sampler = 3U | unsigned(material.address_u) << 4 |
                    unsigned(material.address_v) << 8;
-    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1,
+    // Native flush_transparent draws fractional-opacity polygons without
+    // writing depth. Only prepared reference draws reach this with opacity < 1.
+    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f,
                 std::uint8_t(range.two_sided ? 1 : 3), 0};
     draw.sun_tl = view;
     draw.push.target[0] = float(scene_.width);
