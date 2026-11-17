@@ -54,6 +54,7 @@ struct ModelDrawContext {
   const float* model_to_camera = nullptr;
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
+  float damage_tint_weight = 0;
   bool ordinary = false, morphing = false, overlay = false;
   uint32_t source_vertices = 0, source_polygons = 0;
 };
