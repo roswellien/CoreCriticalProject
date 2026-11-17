@@ -12,7 +12,7 @@ public static class ControlPresets
             Id = Mw5Id, Name = "MW5-style (MW3)",
             Description = "MW5-style keyboard layout adapted for MW3. WASD movement; X stop; C/F center torso/legs; R/T target; V camera. " +
                 "1–5 select a weapon group; left mouse fires it. MW3 has no sixth group or direct multi-group firing. " +
-                "Middle mouse zooms; right mouse or L uses freelook; M uses MASC; Z reverses throttle. " +
+                "Middle mouse zooms; right mouse uses freelook; L toggles headlights; M uses MASC; Z reverses throttle. " +
                 TorsoModeHint +
                 "Numpad 2–9 sets 20–90% throttle; Numpad 0 sets full. Numpad 1, side buttons and wheel are unsupported here. " +
                 "Other unmapped actions remain unassigned. Mouse axes and sensitivity stay unchanged.",
@@ -44,7 +44,7 @@ public static class ControlPresets
         Key("CMD_SHUTDOWN", 0x19); Key("CMD_SHUT_OVER", 0x18); // P / O.
         Key("CMD_MASC", 0x32); // M: standalone Alt cannot be encoded as a command key.
         Key("CMD_CYCLE_CAM", 0x2f); // V.
-        Key("CMD_FREELOOK", 0x26); p.Bindings["CMD_FREELOOK"].Mouse = 2; // L / right mouse.
+        p.Bindings["CMD_FREELOOK"].Mouse = 2; // Right mouse; L is the default headlight toggle.
         Key("CMD_TOGGLE_TMODE", 0x252); // Ctrl + numpad 0: independent of held freelook.
         p.Bindings["CMD_RETICULE_ZOOM"].Mouse = 3;
         Key("CMD_TARGET_CURSOR", 0x13); // R.
@@ -60,13 +60,23 @@ public static class ControlPresets
 
     public static bool IsUnmodifiedLegacyMw5(ControlProfile profile)
     {
-        var legacy = Mw5();
-        legacy.Description = legacy.Description.Replace(TorsoModeHint, "", StringComparison.Ordinal);
-        legacy.Bindings["CMD_TOGGLE_TMODE"].Primary = 0;
-        return profile.Id == legacy.Id && profile.Name == legacy.Name &&
-            profile.Description == legacy.Description && profile.Bindings.Count == legacy.Bindings.Count &&
-            legacy.Bindings.All(pair => profile.Bindings.TryGetValue(pair.Key, out var binding) &&
-                binding.Primary == pair.Value.Primary && binding.Secondary == pair.Value.Secondary &&
-                binding.Mouse == pair.Value.Mouse && binding.Joystick == pair.Value.Joystick);
+        var previous = Mw5();
+        previous.Description = previous.Description.Replace(
+            "right mouse uses freelook; L toggles headlights;", "right mouse or L uses freelook;",
+            StringComparison.Ordinal);
+        previous.Bindings["CMD_FREELOOK"].Primary = 0x26;
+        if (Matches(profile, previous)) return true;
+
+        // The original factory profile predates the torso-mode addition.
+        previous.Description = previous.Description.Replace(TorsoModeHint, "", StringComparison.Ordinal);
+        previous.Bindings["CMD_TOGGLE_TMODE"].Primary = 0;
+        return Matches(profile, previous);
     }
+
+    private static bool Matches(ControlProfile profile, ControlProfile expected) =>
+        profile.Id == expected.Id && profile.Name == expected.Name &&
+        profile.Description == expected.Description && profile.Bindings.Count == expected.Bindings.Count &&
+        expected.Bindings.All(pair => profile.Bindings.TryGetValue(pair.Key, out var binding) &&
+            binding.Primary == pair.Value.Primary && binding.Secondary == pair.Value.Secondary &&
+            binding.Mouse == pair.Value.Mouse && binding.Joystick == pair.Value.Joystick);
 }
