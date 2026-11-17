@@ -770,6 +770,8 @@ void check_terrain_surface_normals(SDL_Window *window,
   }
 
   std::vector<uint32_t> flat_pixels;
+  std::vector<uint32_t> flat_blended_pixels;
+  std::vector<uint32_t> flat_additive_pixels;
   // Flat lighting control: normal_draws == 0
   {
     auto flat_options = options;
@@ -793,6 +795,27 @@ void check_terrain_surface_normals(SDL_Window *window,
             "Flat lighting produced non-zero normal draws");
     require(flat_renderer->asset_statistics().world_normal_decoded_bytes == 0,
             "Flat lighting decoded a world normal page");
+
+    auto blended_state = flat_state;
+    blended_state.blend = true;
+    flat_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*flat_renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(flat_renderer->read_back(&flat_blended_pixels, &width, &height),
+            "Could not read back blended effect fixture");
+    require(flat_blended_pixels[32 * width + 32] == 0xff228b22,
+            "Blended effect did not preserve its bright texture colour");
+
+    auto additive_state = flat_state;
+    additive_state.blend = true;
+    additive_state.additive = true;
+    flat_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*flat_renderer, 0, 64, .5f, 0xffffffff, additive_state);
+    require(flat_renderer->read_back(&flat_additive_pixels, &width, &height),
+            "Could not read back additive effect fixture");
+    require(flat_additive_pixels != flat_blended_pixels,
+            "Additive effect blend did not preserve ONE/ONE output");
+    require(flat_additive_pixels[32 * width + 32] == 0xff42cb82,
+            "Additive effect did not retain its bright ONE/ONE colour");
   }
 
   // Off lighting control: normal_draws == 0
@@ -815,6 +838,25 @@ void check_terrain_surface_normals(SDL_Window *window,
             "Off lighting produced non-zero normal draws");
     require(off_renderer->asset_statistics().world_normal_decoded_bytes == 0,
             "Off lighting decoded a world normal page");
+
+    auto blended_state = off_state;
+    blended_state.blend = true;
+    off_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*off_renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(off_renderer->read_back(&pixels, &width, &height),
+            "Could not read back unlit blended effect fixture");
+    require(pixels == flat_blended_pixels,
+            "Sun lighting changed translucent effect colour");
+
+    auto additive_state = off_state;
+    additive_state.blend = true;
+    additive_state.additive = true;
+    off_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*off_renderer, 0, 64, .5f, 0xffffffff, additive_state);
+    require(off_renderer->read_back(&pixels, &width, &height),
+            "Could not read back unlit additive effect fixture");
+    require(pixels == flat_additive_pixels,
+            "Sun lighting changed additive effect colour");
   }
   // Optional content absent: normal mode is neutral, not a synthetic pack.
 #if defined(_WIN32)
@@ -1007,7 +1049,9 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Transparent readback failed");
     const auto after_transparent = checked_renderer->asset_statistics();
-    require(after_transparent.normal_draws > before_deferred.normal_draws &&
+    require(after_transparent.deferred_material_admissions >
+                    before_deferred.deferred_material_admissions &&
+                after_transparent.normal_draws == before_deferred.normal_draws &&
                 after_transparent.binding_rejected_mismatch ==
                     before_deferred.binding_rejected_mismatch,
             "Transparent queue lost qualified material admission");
@@ -1015,7 +1059,10 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Overlay readback failed");
     const auto after_deferred = checked_renderer->asset_statistics();
-    require(after_deferred.normal_draws > after_transparent.normal_draws &&
+    // Overlay draws are blended too, so (like the transparent queue above) they keep their
+    // receipt but are deliberately not sun-lit; admission is what normal_draws cannot show.
+    require(after_deferred.deferred_material_admissions >
+                    after_transparent.deferred_material_admissions &&
                 after_deferred.binding_rejected_mismatch ==
                     before_deferred.binding_rejected_mismatch,
             "Overlay queue lost qualified material admission");

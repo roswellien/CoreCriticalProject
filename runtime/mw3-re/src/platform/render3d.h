@@ -33,8 +33,10 @@ struct DrawState {
   int32_t texture = -1;            // SetTexture(0, ...): a handle from create_texture, -1 none
   uint8_t address_u = 1;           // ADDRESSU: 1 WRAP, 3 CLAMP
   uint8_t address_v = 1;           // ADDRESSV
-  bool blend = false;              // ALPHABLENDENABLE with SRCALPHA / INVSRCALPHA
+  bool blend = false;              // ALPHABLENDENABLE
+  bool additive = false;           // SRCBLEND ONE, DESTBLEND ONE
   bool multiply = false;           // the shadow passes: SRCBLEND ZERO, DESTBLEND SRCCOLOR
+  bool unsupported_blend = false;  // Source/destination pair outside the modeled modes
   bool depth_write = true;         // ZWRITEENABLE
   bool depth_always = false;       // ZFUNC ALWAYS (overlays), else GREATEREQUAL
   bool alpha_modulate = false;     // ALPHAOP MODULATE (transparent), else SELECTARG1

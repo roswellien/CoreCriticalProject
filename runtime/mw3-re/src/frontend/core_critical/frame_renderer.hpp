@@ -27,6 +27,8 @@ struct AssetStatistics {
   std::uint64_t world_normal_decoded_bytes{}, world_normal_peak_decoded_bytes{},
       world_normal_loaded_pages{};
   std::uint64_t binding_rejected_mismatch{}, native_fingerprint_evaluations{};
+  // Draw-time deferred receipt checks, independent of whether sun lighting runs.
+  std::uint64_t deferred_material_admissions{};
 };
 
 // Read-only authored-check observation, sampled on the producer after the

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 
 namespace sdlfe {
 namespace {
@@ -65,13 +66,17 @@ fragment float4 fs_flat(Out in [[stage_in]], constant F& f [[buffer(0)]]) {
 )";
 
 uint32_t key_of(const platform::DrawState& s, bool textured) {
-  return textured | s.blend << 1 | s.multiply << 2 | s.depth_write << 3 | s.depth_always << 4 | s.wireframe << 5;
+  return textured | s.blend << 1 | s.multiply << 2 | s.depth_write << 3 |
+         s.depth_always << 4 | s.wireframe << 5 | s.additive << 6;
 }
 
 bool same(const platform::DrawState& a, const platform::DrawState& b) {
-  return a.texture == b.texture && a.address_u == b.address_u && a.address_v == b.address_v && a.blend == b.blend &&
-         a.multiply == b.multiply && a.depth_write == b.depth_write && a.depth_always == b.depth_always &&
-         a.alpha_modulate == b.alpha_modulate && a.fog == b.fog && a.wireframe == b.wireframe && a.sharp == b.sharp;
+  return a.texture == b.texture && a.address_u == b.address_u &&
+         a.address_v == b.address_v && a.blend == b.blend &&
+         a.multiply == b.multiply && a.additive == b.additive && a.depth_write == b.depth_write &&
+         a.depth_always == b.depth_always &&
+         a.alpha_modulate == b.alpha_modulate && a.fog == b.fog &&
+         a.wireframe == b.wireframe && a.sharp == b.sharp;
 }
 
 #if defined(MW3_HAVE_DXIL)
@@ -174,7 +179,10 @@ SDL_GPUGraphicsPipeline* SdlRender3D::pipeline(const platform::DrawState& s, boo
     if (s.multiply) {  // SRCBLEND ZERO, DESTBLEND SRCCOLOR
       ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
       ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_COLOR;
-    } else {           // SRCALPHA, INVSRCALPHA
+    } else if (s.additive) {  // ONE, ONE
+      ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+      ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    } else {                  // SRCALPHA, INVSRCALPHA
       ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
       ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
     }
@@ -299,6 +307,8 @@ void SdlRender3D::begin_scene() {
 // Fans as (0, i, i+1), strips with alternating order, points as tiny quads.
 void SdlRender3D::draw(platform::Primitive type, const platform::TLVertex* v, int count,
                        const platform::DrawState& state) {
+  if (state.blend && state.unsupported_blend)
+    throw std::runtime_error("Unsupported MW3 alpha blend factor pair");
   if (count < 1) return;
   const auto first = static_cast<uint32_t>(vertices_.size());
   if (type == platform::Primitive::kFan) {
