@@ -280,13 +280,43 @@ class SetupScreen(ttk.Frame):
         )
         if not path:
             return
-        state = json.loads(Path(path).read_text(encoding="utf-8"))
+        try:
+            state = json.loads(Path(path).read_text(encoding="utf-8"))
+            problem = self._setup_problem(state)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            problem = f"it can't be read ({error})"
+        if problem:
+            messagebox.showerror("Arena runner", f"That setup can't be used: {problem}.")
+            return
         self.map_id.set(state["map"])
         self.matches.set(state["matches"])
         self.sides = state["sides"]
         self.selected = (0, 0)
         self._refresh_lists()
         self._load_editor()
+
+    def _setup_problem(self, state: dict) -> str:
+        """What a saved setup names that this game build lacks; "" when nothing.
+        A setup saved with another build or mod set may name a map, mech,
+        loadout or pilot this catalog doesn't have."""
+        if state["map"] not in {m["id"] for m in self.catalog.maps}:
+            return f"this game has no arena map {state['map']}"
+        if not batch_module.MIN_MATCHES <= state["matches"] <= batch_module.MAX_MATCHES:
+            return f"{state['matches']} matches (1 to 10)"
+        pilots = {summary.preset_key(p) for _, p in self.pilots}
+        mechs = {m["id"]: m for m in self.catalog.mechs}
+        if len(state["sides"]) != 2 or not all(1 <= len(side) <= 8 for side in state["sides"]):
+            return "each side needs 1 to 8 mechs"
+        for side in state["sides"]:
+            for bot in side:
+                mech = mechs.get(bot["mech"])
+                if not mech:
+                    return f"this game has no mech {bot['mech']}"
+                if not 0 <= bot["loadout"] < len(mech["loadouts"]):
+                    return f"{mech['name']} has no loadout {bot['loadout']}"
+                if summary.preset_key(bot["preset"]) not in pilots:
+                    return f"this game has no pilot {summary.preset_key(bot['preset'])}"
+        return ""
 
     def _run(self) -> None:
         seeds = batch_module.new_seeds(self.matches.get())

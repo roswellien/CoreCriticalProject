@@ -67,6 +67,7 @@ class Match:
     command: list[str]
     process: subprocess.Popen | None = None
     exit_code: int | None = None
+    stopped: bool = False  # ended by Stop all, not by the game
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Batch:
         for m in self.running():
             m.process.kill()
             m.exit_code = m.process.wait()
+            m.stopped = True
 
 
 def prepare_batch(
@@ -93,8 +95,13 @@ def prepare_batch(
     settings: Path | None, now: datetime | None = None,
 ) -> Batch:  # fmt: skip
     """The batch's folder, setup file and per-match write folders; nothing started."""
-    folder = runs / (now or datetime.now().astimezone()).strftime("%Y%m%d-%H%M%S")  # local time
-    folder.mkdir(parents=True, exist_ok=False)
+    stamp = (now or datetime.now().astimezone()).strftime("%Y%m%d-%H%M%S")  # local time
+    folder = runs / stamp
+    extra = 1
+    while folder.exists():  # two batches in one second: never share a folder
+        extra += 1
+        folder = runs / f"{stamp}-{extra}"
+    folder.mkdir(parents=True)
     out = folder / "logs"
     setup = folder / "setup.json"
     setup.write_text(json.dumps(setup_record(map_id, sides, out), indent=1), encoding="utf-8")

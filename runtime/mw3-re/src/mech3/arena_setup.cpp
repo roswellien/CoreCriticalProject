@@ -106,19 +106,19 @@ AivTree::~AivTree() {
 }
 
 bool AivTree::read(const std::string& reader) {
-    zutl_zar::Archive archive;
-    zutl_zar::init(archive);
-    if (!zutl_zar::open(archive, reader.c_str())) {
-      zutl_zar::destroy(archive);
-      return false;
-    }
-    uint32_t length = 0;
-    if (std::FILE* f = zutl_zar::seek(archive, zutl_zar::find(archive, "aiv.zrd"), &length)) {
-      root = zrdr::new_nodes(zrdr::List, 1);
-      zrdr::read_node(f, root);
-    }
-    zutl_zar::destroy(archive);  // closes the file, frees the table and the path
-    return root != nullptr;
+  zutl_zar::Archive archive;
+  zutl_zar::init(archive);
+  if (!zutl_zar::open(archive, reader.c_str())) {
+    zutl_zar::destroy(archive);
+    return false;
+  }
+  uint32_t length = 0;
+  if (std::FILE* f = zutl_zar::seek(archive, zutl_zar::find(archive, "aiv.zrd"), &length)) {
+    root = zrdr::new_nodes(zrdr::List, 1);
+    zrdr::read_node(f, root);
+  }
+  zutl_zar::destroy(archive);  // closes the file, frees the table and the path
+  return root != nullptr;
 }
 
 zrdr::Node* AivTree::find(const char* name) const { return root ? zrdr::find(root, name) : nullptr; }

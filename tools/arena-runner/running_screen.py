@@ -85,14 +85,13 @@ class RunningScreen(ttk.Frame):
                 )
         result = summary.outcome(log.end)
         if result == "running":
-            failed = match.exit_code not in (None, 0)
-            text = (
-                f"seed {match.seed}: did not start (exit {match.exit_code})"
-                if failed
-                else (
-                    f"seed {match.seed}: {summary.clock(log.t)}, standing A {log.standing(0)} B {log.standing(1)}"
-                )
-            )
+            if match.stopped:
+                text = f"seed {match.seed}: stopped at {summary.clock(log.t)}"
+            elif match.exit_code not in (None, 0):
+                text = f"seed {match.seed}: did not start (exit {match.exit_code})"
+            else:
+                standing = f"standing A {log.standing(0)} B {log.standing(1)}"
+                text = f"seed {match.seed}: {summary.clock(log.t)}, {standing}"
         else:
             names = {
                 "A": "side A won",
