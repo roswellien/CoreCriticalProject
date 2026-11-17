@@ -26,6 +26,15 @@ bool compose_menu_background(const MenuBackgroundImage& image, const zimg::Textu
                              bool rgb565, unsigned output_width, unsigned output_height,
                              std::vector<uint32_t>* output);
 
+enum class PreparedMenuTextureAction { kCreate, kUpdate, kReuse };
+
+// Keep the GPU texture synchronized with the cached CPU composition. A cache
+// hit only allows reuse when the texture still exists at the composed size.
+PreparedMenuTextureAction prepared_menu_texture_action(bool cache_hit, bool texture_exists,
+                                                       int texture_width, int texture_height,
+                                                       unsigned output_width,
+                                                       unsigned output_height);
+
 // Reuses composition scratch storage and worker threads across frames, and
 // retains the last output while every input that affects it remains identical.
 class PreparedMenuBackgroundComposer {

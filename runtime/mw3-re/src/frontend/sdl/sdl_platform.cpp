@@ -222,6 +222,10 @@ void SdlScreen2D::upload(const uint16_t* pixels, int width, int height, int pitc
   } else {
     render_->update_texture(texture_, width, height, rgba_.data());
   }
+  // Overlay uploads share texture_ with the cached HD menu background. Even
+  // an equal-sized upload replaces its contents, so the next menu frame must
+  // rebuild the composer cache before it can reuse this texture.
+  menu_composer_.invalidate_cache();
 }
 
 bool SdlScreen2D::layer_empty(const uint16_t* pixels, int width, int height, int pitch, uint16_t key) {
@@ -280,12 +284,14 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
           &cache_hit);
       if (composed) {
         const auto* composed_bytes = reinterpret_cast<const uint8_t*>(menu_composed_.data());
-        if (!cache_hit && (texture_ < 0 || tw_ != int(output_width) || th_ != int(output_height))) {
+        const auto texture_action = platform::prepared_menu_texture_action(
+            cache_hit, texture_ >= 0, tw_, th_, output_width, output_height);
+        if (texture_action == platform::PreparedMenuTextureAction::kCreate) {
           if (texture_ >= 0) render_->release_texture(texture_);
           texture_ = render_->create_texture(int(output_width), int(output_height), composed_bytes, 1);
           if (texture_ < 0) throw std::runtime_error("Menu HD background texture allocation failed");
           tw_ = int(output_width), th_ = int(output_height);
-        } else if (!cache_hit) {
+        } else if (texture_action == platform::PreparedMenuTextureAction::kUpdate) {
           render_->update_texture(texture_, int(output_width), int(output_height), composed_bytes);
         }
         menu_background_shown = true;

@@ -372,6 +372,16 @@ bool compose_menu_background(const MenuBackgroundImage& image, const zimg::Textu
                                       output_width, output_height, output, nullptr);
 }
 
+PreparedMenuTextureAction prepared_menu_texture_action(bool cache_hit, bool texture_exists,
+                                                       int texture_width, int texture_height,
+                                                       unsigned output_width,
+                                                       unsigned output_height) {
+  if (!texture_exists || texture_width != int(output_width) ||
+      texture_height != int(output_height))
+    return PreparedMenuTextureAction::kCreate;
+  return cache_hit ? PreparedMenuTextureAction::kReuse : PreparedMenuTextureAction::kUpdate;
+}
+
 struct PreparedMenuBackgroundComposer::Impl {
   ComposeScratch scratch;
   std::vector<uint16_t> previous_frame;

@@ -2,7 +2,9 @@
 #include "gamez/zrender/zrndr_blit.h"
 #include "platform/prepared_menu_background.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -85,6 +87,65 @@ void compositor_replaces_only_background_pixels() {
           "HD background sample was not used for a matching source pixel");
   require(output[3] == 0xffffffffu && output[7] == 0xffffffffu,
           "Native menu artwork changed where it differs from the background");
+
+  require(platform::compose_menu_background(image, &source, blits, frame.data(), 2, 1, 4, true,
+                                            1, 1, &output),
+          "Menu background composition rejected a smaller output size");
+  require(output.size() == 1 && output[0] == 0xffffffffu,
+          "Downscaled menu output was not completely written within its requested size");
+}
+
+void cached_menu_texture_action_recreates_texture_on_cache_hit() {
+  using Action = platform::PreparedMenuTextureAction;
+  require(platform::prepared_menu_texture_action(true, false, 0, 0, 4, 2) == Action::kCreate,
+          "A cache hit reused a missing menu texture instead of recreating it");
+  require(platform::prepared_menu_texture_action(true, true, 2, 1, 4, 2) == Action::kCreate,
+          "A cache hit reused a menu texture with stale dimensions");
+  require(platform::prepared_menu_texture_action(true, true, 4, 2, 4, 2) == Action::kReuse,
+          "A matching menu texture was needlessly uploaded on a cache hit");
+  require(platform::prepared_menu_texture_action(false, true, 4, 2, 4, 2) == Action::kUpdate,
+          "A changed composition did not request a texture upload");
+}
+
+void compositor_writes_every_pixel_at_the_capped_height() {
+  constexpr unsigned source_width = 4;
+  constexpr unsigned source_height = 2160;
+  const unsigned window_width = source_width;
+  const unsigned window_height = source_height;
+  const double fit = std::min({double(window_width) / source_width,
+                               double(window_height) / source_height, 4.5});
+  const double compose_scale = std::min(fit, 1080.0 / source_height);
+  const unsigned output_width = std::max(1u, unsigned(std::lround(source_width * compose_scale)));
+  const unsigned output_height = std::max(1u, unsigned(std::lround(source_height * compose_scale)));
+  require(output_width == 2 && output_height == 1080,
+          "The height cap no longer preserves the uniform fit scale");
+
+  platform::MenuBackgroundImage image;
+  image.width = source_width;
+  image.height = source_height;
+  image.source_width = source_width;
+  image.source_height = source_height;
+  image.rgb.resize(size_t(image.width) * image.height * 3);
+  std::vector<uint16_t> source_pixels(size_t(source_width) * source_height, 0);
+  zimg::Texture source{};
+  source.width = int(source_width);
+  source.height = int(source_height);
+  source.width_again = int(source_width);
+  source.pixels = source_pixels.data();
+  std::vector<uint16_t> frame(size_t(source_width) * source_height, 0xffff);
+  const std::vector<zrndr::MenuBackgroundBlit> blits{
+      {0, 0, 0, 0, int(source_width), int(source_height)}};
+  std::vector<uint32_t> output(size_t(output_width) * output_height, 0x12345678u);
+
+  require(platform::compose_menu_background(image, &source, blits, frame.data(),
+                                            int(source_width), int(source_height),
+                                            int(source_width * 2), true, output_width,
+                                            output_height, &output),
+          "Menu background composition rejected a cap-sized output smaller than the source");
+  require(output.size() == size_t(output_width) * output_height,
+          "Capped output size changed during composition");
+  for (uint32_t pixel : output)
+    require(pixel == 0xffffffffu, "Capped output left a pixel unwritten or wrote out of bounds");
 }
 
 void cached_composition_matches_fresh_and_invalidates_inputs() {
@@ -141,5 +202,7 @@ int main() {
   reader_rejects_unknown_format();
   reader_rejects_truncated_payload();
   compositor_replaces_only_background_pixels();
+  cached_menu_texture_action_recreates_texture_on_cache_hit();
+  compositor_writes_every_pixel_at_the_capped_height();
   cached_composition_matches_fresh_and_invalidates_inputs();
 }
