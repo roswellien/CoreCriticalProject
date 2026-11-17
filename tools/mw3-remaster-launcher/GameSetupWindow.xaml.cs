@@ -97,11 +97,17 @@ public partial class GameSetupWindow : Window
             : "Verify existing installation: " + ExistingPath.Text.Trim();
         var windowMode = g.WindowMode switch { "fullscreen_windowed" => "Borderless fullscreen", "fullscreen" => "Fullscreen exclusive", _ => "Windowed" };
         var aa = g.AntiAliasing switch { "off" or "1" => "Off", "fxaa" => "FXAA", _ => g.AntiAliasing + "x SSAA" };
-        var flareStyle = g.FlareStyle == "modern" ? "Smooth" : "Original";
-        ReviewGraphics.Text = $"{g.Width} × {g.Height} · {windowMode}\nAA: {aa} · AF: {g.AnisotropicFiltering}x\nDraw distance: {g.DrawDistance}m\nLens flare alpha: {flareStyle}\nDynamic Lighting: {(g.DynamicLighting ? "On" : "Off")} · Headlights: {(g.Headlights && g.DynamicLighting ? "On" : "Off")} · Shadows: {(g.Shadows && g.DynamicLighting ? "On" : "Off")}\nWater Detail: {(g.WaterDetail ? "On" : "Off")} · Cloud Detail: {(g.CloudDetail ? "On" : "Off")}";
+        ReviewGraphics.Text = $"{g.Width} × {g.Height} · {windowMode}\nAA: {aa} · AF: {g.AnisotropicFiltering}x\nDraw distance: {g.DrawDistance}m\n{LensFlareStyleReviewText(g.FlareStyle)}\nDynamic Lighting: {(g.DynamicLighting ? "On" : "Off")} · Headlights: {(g.Headlights && g.DynamicLighting ? "On" : "Off")} · Shadows: {(g.Shadows && g.DynamicLighting ? "On" : "Off")}\nWater Detail: {(g.WaterDetail ? "On" : "Off")} · Cloud Detail: {(g.CloudDetail ? "On" : "Off")}";
         ReviewPacks.Text = SelectedPacks.Length == 0 ? "None — start with stock content." : string.Join(Environment.NewLine, SelectedPacks.Select(Path.GetFileName));
         ContinueButton.Content = fromMedia ? "Install game" : "Verify and finish setup";
     }
+
+    public static string LensFlareStyleReviewText(string flareStyle) => "Lens flare alpha: " + (flareStyle switch
+    {
+        "modern" => "Smooth",
+        "original" => "Original",
+        _ => $"Invalid ({flareStyle})"
+    });
 
     private void BrowseExisting(object sender, RoutedEventArgs e)
     {

@@ -58,6 +58,12 @@ static class GraphicsPreferencesChecks
             }
             catch(InvalidOperationException){}
             if(JsonSerializer.Serialize(loaded)!=before)throw new Exception("Failed flare validation partially changed settings");
+            try
+            {
+                (choice with { FlareStyle = "future" }).Validate();
+                throw new Exception("Unknown lens flare style accepted");
+            }
+            catch (InvalidOperationException) { }
             var expectedDistances = new[] { 800, 1200, 1600, 2400, 3200 };
             var acceptedDistances = new List<int>();
             for (var distance = 0; distance <= NativeGameRunner.MaxDrawDistance + 1; ++distance)

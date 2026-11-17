@@ -38,6 +38,16 @@ static class GraphicsSetupUiChecks
 
     public static void Run(string root,string game)
     {
+        var flareStyleReviewCases = new[]
+        {
+            (Value: "modern", Expected: "Lens flare alpha: Smooth"),
+            (Value: "original", Expected: "Lens flare alpha: Original"),
+            (Value: "future", Expected: "Lens flare alpha: Invalid (future)")
+        };
+        foreach (var (value, expected) in flareStyleReviewCases)
+            if (GameSetupWindow.LensFlareStyleReviewText(value) != expected)
+                throw new Exception($"Lens flare review text for '{value}' was not '{expected}'");
+
         root=Path.GetFullPath(root);Directory.CreateDirectory(root);
         var manager=new SettingsManager(root,root);
         manager.Current.GamePath=Path.GetFullPath(game);
