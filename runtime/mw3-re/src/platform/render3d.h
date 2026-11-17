@@ -27,6 +27,13 @@ static_assert(sizeof(TLVertex) == 0x20, "TLVertex must match D3DTLVERTEX");
 
 enum class Primitive : uint8_t { kPoints = 1, kStrip = 5, kFan = 6 };  // D3DPRIMITIVETYPE values used
 
+// Host-only diagnostic values; no native texture or vertex layout is changed.
+enum class DrawQueue : uint8_t { Immediate, Transparent, Overlay };
+struct FlareSpriteDiagnostic {
+  int32_t slot = -1;
+  float half_size_pixels = 0;  // before clipping, in the producer's screen pixels
+};
+
 // The render and texture-stage states the draw functions set (section 4).
 struct DrawState {
   bool native_sky{};
@@ -47,6 +54,8 @@ struct DrawState {
   bool color_select = false;       // COLOROP SELECTARG1: the texture's colour alone (shadow passes)
   uint8_t texcoord = 0;            // TEXCOORDINDEX: which UV set of a draw_multi vertex
   bool sharp = false;              // ours: the 2D layer, a texel a game pixel, premultiplied, scaled sharp
+  FlareSpriteDiagnostic flare_diagnostic{};
+  DrawQueue queue = DrawQueue::Immediate;
 };
 
 // A synchronous model-producer view, valid until end_model_draw(). Matrices use

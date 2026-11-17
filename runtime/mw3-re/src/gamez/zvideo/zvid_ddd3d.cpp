@@ -36,6 +36,8 @@ TransparentQueue g_queue;
 OverlayList g_overlay;
 bool g_transparent_sky[TransparentQueue::kMaxPolys];
 bool g_overlay_sky[OverlayList::kMax];
+platform::FlareSpriteDiagnostic g_transparent_flares[TransparentQueue::kMaxPolys];
+platform::FlareSpriteDiagnostic g_overlay_flares[OverlayList::kMax];
 platform::Render3D *g_render = nullptr;
 platform::ProducerView g_transparent_views[TransparentQueue::kMaxPolys];
 platform::ProducerView g_overlay_views[OverlayList::kMax];
@@ -62,11 +64,13 @@ void clear_producer_transport(bool failed) noexcept {
     g_transparent_views[i] = {};
     g_transparent_materials[i].reset();
     g_transparent_sky[i] = false;
+    g_transparent_flares[i] = {};
   }
   for (int32_t i = 0; i < OverlayList::kMax; ++i) {
     g_overlay_views[i] = {};
     g_overlay_materials[i].reset();
     g_overlay_sky[i] = false;
+    g_overlay_flares[i] = {};
   }
   g_queue.count = g_queue.vertex_count = 0;
   g_overlay.count = 0;
@@ -217,8 +221,15 @@ void set_texture(const D3DTexture* t) { g_draw.texture = t ? t->handle : -1; }
 // no HRESULT, so the original's failure reports (0x00580550) go.
 void dispatch_bound_primitive(platform::Render3D* receiver, int32_t primitive,
                               const TLVertex* verts, int32_t count,
-                              const platform::DrawState& state) {
-  if (receiver) receiver->draw(static_cast<platform::Primitive>(primitive), verts, count, state);
+                              const platform::DrawState& state,
+                              platform::DrawQueue queue = platform::DrawQueue::Immediate,
+                              platform::FlareSpriteDiagnostic flare = {}) {
+  if (!receiver) return;
+  auto emitted = state;
+  emitted.queue = queue;
+  emitted.flare_diagnostic =
+      queue == platform::DrawQueue::Immediate ? state.flare_diagnostic : flare;
+  receiver->draw(static_cast<platform::Primitive>(primitive), verts, count, emitted);
 }
 
 template <typename Dispatch>
@@ -403,6 +414,7 @@ OverlayPoly* overlay_slot(int32_t type, int32_t count, const D3DTexture* texture
       ? g_render->capture_deferred_material_binding(texture->handle) : nullptr;
   g_overlay_views[o.count] = view;
   g_overlay_sky[o.count] = sky;
+  g_overlay_flares[o.count] = g_draw.flare_diagnostic;
   g_overlay_materials[o.count] = std::move(material);
   OverlayPoly& p = o.polys[o.count++];
   p.type = type;
@@ -562,6 +574,12 @@ void producer_mission_changed(const platform::MissionIdentity& identity) noexcep
 }
 
 TransparentQueue& transparent_queue() { return g_queue; }
+
+FlareDiagnosticScope::FlareDiagnosticScope(int32_t slot, float half_size_pixels)
+    : previous_(g_draw.flare_diagnostic) {
+  g_draw.flare_diagnostic = {slot, half_size_pixels};
+}
+FlareDiagnosticScope::~FlareDiagnosticScope() { g_draw.flare_diagnostic = previous_; }
 OverlayList& overlay_list() { return g_overlay; }
 TintQuad& tint_quad() { return g_tint; }
 
@@ -626,6 +644,7 @@ TLVertex* queue_transparent(int32_t primitive, int32_t count, const D3DTexture* 
       ? g_render->capture_deferred_material_binding(texture->handle) : nullptr;
   g_transparent_views[q.count] = view;
   g_transparent_sky[q.count] = sky;
+  g_transparent_flares[q.count] = g_draw.flare_diagnostic;
   g_transparent_materials[q.count] = std::move(material);
   TransparentPoly& p = q.polys[q.count++];
   p.primitive = primitive;
@@ -976,13 +995,15 @@ void flush_transparent() {
       set_address(p.texture);
     }
     set_texture(p.texture);
-    dispatch_bound_primitive(receiver, p.primitive, p.verts, p.count, g_draw);
+    dispatch_bound_primitive(receiver, p.primitive, p.verts, p.count, g_draw,
+                             platform::DrawQueue::Transparent, g_transparent_flares[q.order[n]]);
   }
   if (s.alpha_blend != 0) set_render_state(27, 0), s.alpha_blend = 0;
   if (s.z_write != 1) set_render_state(14, 1), s.z_write = 1;
   for (uint32_t i = 0; i < q.count; ++i) {
     g_transparent_views[i] = {};
     g_transparent_sky[i] = false;
+    g_transparent_flares[i] = {};
   }
   q.count = 0;
   q.vertex_count = 0;
@@ -1028,7 +1049,8 @@ void flush_overlay() {
           }
           set_address(t);
         }
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         if (s.alpha_blend != 0) set_render_state(27, 0), s.alpha_blend = 0;
         if (s.z_write != 1) set_render_state(14, 1), s.z_write = 1;
         break;
@@ -1037,7 +1059,8 @@ void flush_overlay() {
       case 3:
         set_texture(nullptr);
         set_shade(1);
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         break;
       case 4:
         set_shade(1);
@@ -1047,7 +1070,8 @@ void flush_overlay() {
           set_texture_stage_state(4, t->type == 2 ? 2 : 4);
         }
         set_address(t);
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         break;
       case 5:
       case 6:
@@ -1055,7 +1079,8 @@ void flush_overlay() {
         set_texture(t);
         if (s.alpha_op != 2) s.alpha_op = 2, set_texture_stage_state(4, 2);
         set_address(t);
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         break;
       default:
         break;
@@ -1065,6 +1090,7 @@ void flush_overlay() {
   for (int32_t i = 0; i < o.count; ++i) {
     g_overlay_views[i] = {};
     g_overlay_sky[i] = false;
+    g_overlay_flares[i] = {};
   }
   o.count = 0;
   } catch (...) {

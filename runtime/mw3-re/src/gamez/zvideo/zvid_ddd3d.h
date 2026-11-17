@@ -20,6 +20,17 @@ namespace zvid {
 
 using TLVertex = platform::TLVertex;  // D3DTLVERTEX, FVF 0x1c4
 
+// Labels only the synchronous flare sprite call. Deferred queues copy the value.
+class FlareDiagnosticScope {
+ public:
+  FlareDiagnosticScope(int32_t slot, float half_size_pixels);
+  ~FlareDiagnosticScope();
+  FlareDiagnosticScope(const FlareDiagnosticScope&) = delete;
+  FlareDiagnosticScope& operator=(const FlareDiagnosticScope&) = delete;
+ private:
+  platform::FlareSpriteDiagnostic previous_;
+};
+
 // A caller labels one world invocation. An untyped nested walk cannot inherit it.
 class ProducerPurposeScope {
  public:

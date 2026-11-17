@@ -13,6 +13,8 @@
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_init.h"
 #include "gamez/zmodel/gmod_light.h"
+#include "gamez/zrender/zrndr_draw.h"
+#include "gamez/zrender/zrndr_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 
 #include <array>
@@ -377,6 +379,78 @@ TEST(b5_view_immediate_scope) {
       f.sink.observed[before+1].state.multiply && !f.sink.observed[before+1].view.draw_state_fog,
       "MULTI_IMMEDIATE_OWNED");
   c.check(!f.sink.current.present && f.sink.restores == f.sink.exchanges, "IMMEDIATE_PRIOR_RESTORED");
+}
+
+TEST(flare_diagnostic_survives_sorted_queues_and_restores_scope) {
+  Fixture f;
+  zvid::D3DTexture texture{};
+  texture.handle = 7;
+  texture.type = 4;
+  {
+    const zvid::FlareDiagnosticScope outer(0, 16);
+    EXPECT(f.queue(10, .75f, &texture) != nullptr);
+    {
+      const zvid::FlareDiagnosticScope inner(1, 8);
+      EXPECT(f.queue(20, .25f, &texture) != nullptr);
+      zvid::draw_textured_white(3, &texture, 0, .5f, 1);
+    }
+    EXPECT(zvid::draw_state().flare_diagnostic.slot == 0);
+    EXPECT(bits(zvid::draw_state().flare_diagnostic.half_size_pixels, 16));
+  }
+  EXPECT(zvid::draw_state().flare_diagnostic.slot == -1);
+  // Flush under a different live label: the queue must retain each producer's
+  // value and attach the actual queue, rather than inheriting this scope.
+  {
+    const zvid::FlareDiagnosticScope unrelated(3, 99);
+    zvid::flush_transparent();
+    zvid::flush_overlay();
+  }
+  EXPECT(f.sink.observed.size() == 3);
+  if (f.sink.observed.size() == 3) {
+    const auto &near_draw = f.sink.observed[0];
+    const auto &far_draw = f.sink.observed[1];
+    const auto &overlay = f.sink.observed[2];
+    EXPECT(bits(near_draw.vertices[0].sx, 20) && bits(far_draw.vertices[0].sx, 10));
+    EXPECT(near_draw.state.flare_diagnostic.slot == 1 && far_draw.state.flare_diagnostic.slot == 0);
+    EXPECT(bits(near_draw.state.flare_diagnostic.half_size_pixels, 8));
+    EXPECT(bits(far_draw.state.flare_diagnostic.half_size_pixels, 16));
+    EXPECT(near_draw.state.queue == platform::DrawQueue::Transparent);
+    EXPECT(far_draw.state.queue == platform::DrawQueue::Transparent);
+    EXPECT(overlay.state.queue == platform::DrawQueue::Overlay);
+    EXPECT(overlay.state.flare_diagnostic.slot == 1);
+  }
+  EXPECT(f.queue(30) != nullptr);
+  zvid::flush_transparent();
+  EXPECT(f.sink.observed.back().state.flare_diagnostic.slot == -1);
+  f.point();
+  EXPECT(f.sink.observed.back().state.queue == platform::DrawQueue::Immediate);
+  EXPECT(f.sink.observed.back().state.flare_diagnostic.slot == -1);
+  try {
+    const zvid::FlareDiagnosticScope failing(2, 24);
+    throw std::runtime_error("scope unwind");
+  } catch (const std::runtime_error&) {}
+  EXPECT(zvid::draw_state().flare_diagnostic.slot == -1);
+}
+
+TEST(flare_sprite_clipping_is_distinct_from_unavailable_device) {
+  Fixture f;
+  const int32_t old_active = zrndr::device_fog().active;
+  zrndr::device_fog().active = 1;
+  auto &clip = zmod::draw_state().clip;
+  const float edge = 100;
+  clip.side_04 = clip.side_08 = 0;
+  std::memcpy(&clip.side_1c, &edge, sizeof(edge));
+  std::memcpy(&clip.side_20, &edge, sizeof(edge));
+  const float positions[][3] = {{110, 50, .99f}, {-11, 50, .99f},
+                                 {50, 110, .99f}, {50, -11, .99f}};
+  for (const auto &position : positions)
+    EXPECT(zrndr::draw_sprite(position, nullptr, 10, .5f, 0) == zrndr::SpriteDrawResult::Clipped);
+  const float center[3] = {50, 50, .99f};
+  EXPECT(zrndr::draw_sprite(center, nullptr, .5f, .5f, 0) == zrndr::SpriteDrawResult::Clipped);
+  zrndr::device_fog().active = 0;
+  EXPECT(zrndr::draw_sprite(center, nullptr, 10, .5f, 0) == zrndr::SpriteDrawResult::Unavailable);
+  zrndr::device_fog().active = old_active;
+  EXPECT(f.sink.observed.empty() && zvid::transparent_queue().count == 0);
 }
 
 TEST(b5_view_canvas_camera) {
