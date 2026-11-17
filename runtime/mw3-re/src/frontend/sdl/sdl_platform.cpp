@@ -307,7 +307,7 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
       const auto now = std::chrono::steady_clock::now();
       const double report_seconds =
           std::chrono::duration<double>(now - report_start).count();
-      if (report_seconds >= 1.0) {
+      if (report_seconds >= 1.0 && report_frames != 0) {
         std::fprintf(stderr,
                      "mw3: menu background %.3f ms/frame, %ux%u, threads=%u, cache hit %.1f%% "
                      "(%u/%u)\n",

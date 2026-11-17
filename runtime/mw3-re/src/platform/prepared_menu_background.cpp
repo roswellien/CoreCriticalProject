@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <functional>
 #include <limits>
@@ -15,6 +16,123 @@
 #include "gamez/zrender/zrndr_blit.h"
 
 namespace platform {
+namespace detail {
+struct MenuBackgroundWorkers::Impl {
+  explicit Impl(unsigned requested_worker_count) {
+    const unsigned available = std::max(1u, std::thread::hardware_concurrency());
+    const unsigned count = requested_worker_count == 0
+                              ? std::min(7u, available - 1)
+                              : std::min(7u, requested_worker_count);
+    try {
+      for (unsigned index = 0; index < count; ++index)
+        workers.emplace_back([this, index] { worker_loop(index); });
+    } catch (...) {
+      stop_workers();
+      throw;
+    }
+  }
+
+  ~Impl() { stop_workers(); }
+
+  unsigned thread_count() const { return static_cast<unsigned>(workers.size()) + 1; }
+
+  void run(unsigned row_count, const std::function<void(unsigned, unsigned)>& render_rows) {
+    if (workers.empty() || row_count < 128) {
+      render_rows(0, row_count);
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      task = render_rows;
+      rows = row_count;
+      remaining = workers.size();
+      first_exception = nullptr;
+      ++generation;
+    }
+    ready.notify_all();
+
+    try {
+      render_rows(0, row_count / thread_count());
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (!first_exception) first_exception = std::current_exception();
+    }
+
+    std::unique_lock<std::mutex> lock(mutex);
+    finished.wait(lock, [this] { return remaining == 0; });
+    const std::exception_ptr failure = first_exception;
+    first_exception = nullptr;
+    task = {};
+    lock.unlock();
+    if (failure) std::rethrow_exception(failure);
+  }
+
+ private:
+  void stop_workers() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      stopping = true;
+      ++generation;
+    }
+    ready.notify_all();
+    for (auto& worker : workers)
+      if (worker.joinable()) worker.join();
+  }
+
+  void worker_loop(unsigned index) {
+    size_t seen_generation = 0;
+    for (;;) {
+      std::function<void(unsigned, unsigned)> current_task;
+      unsigned first_row = 0, last_row = 0;
+      std::exception_ptr failure;
+      try {
+        std::unique_lock<std::mutex> lock(mutex);
+        ready.wait(lock, [this, seen_generation] {
+          return stopping || generation != seen_generation;
+        });
+        if (stopping) return;
+        seen_generation = generation;
+        current_task = task;
+        first_row = rows * (index + 1) / thread_count();
+        last_row = rows * (index + 2) / thread_count();
+      } catch (...) {
+        failure = std::current_exception();
+      }
+      if (!failure) {
+        try {
+          current_task(first_row, last_row);
+        } catch (...) {
+          failure = std::current_exception();
+        }
+      }
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (failure && !first_exception) first_exception = failure;
+        if (--remaining == 0) finished.notify_one();
+      }
+    }
+  }
+
+  std::vector<std::thread> workers;
+  std::mutex mutex;
+  std::condition_variable ready, finished;
+  std::function<void(unsigned, unsigned)> task;
+  std::exception_ptr first_exception;
+  unsigned rows = 0;
+  size_t remaining = 0, generation = 0;
+  bool stopping = false;
+};
+
+MenuBackgroundWorkers::MenuBackgroundWorkers(unsigned worker_count)
+    : impl_(std::make_unique<Impl>(worker_count)) {}
+MenuBackgroundWorkers::~MenuBackgroundWorkers() = default;
+void MenuBackgroundWorkers::run(
+    unsigned row_count, const std::function<void(unsigned, unsigned)>& render_rows) {
+  impl_->run(row_count, render_rows);
+}
+unsigned MenuBackgroundWorkers::thread_count() const { return impl_->thread_count(); }
+}  // namespace detail
+
 namespace {
 uint32_t word(const uint8_t* bytes) {
   return uint32_t(bytes[0]) | uint32_t(bytes[1]) << 8 | uint32_t(bytes[2]) << 16 |
@@ -52,96 +170,14 @@ uint32_t sample(const MenuBackgroundImage& image, double x, double y) {
 
 struct SourcePixel { int x{-1}, y{-1}; };
 
-class MenuBackgroundWorkers {
- public:
-  MenuBackgroundWorkers() {
-    const unsigned available = std::max(1u, std::thread::hardware_concurrency());
-    const unsigned count = std::min(7u, available - 1);
-    try {
-      for (unsigned index = 0; index < count; ++index)
-        workers_.emplace_back([this, index] { worker_loop(index); });
-    } catch (...) {
-      stop_workers();
-      throw;
-    }
-  }
-
-  ~MenuBackgroundWorkers() { stop_workers(); }
-
-  unsigned thread_count() const { return static_cast<unsigned>(workers_.size()) + 1; }
-
-  void run(unsigned row_count, const std::function<void(unsigned, unsigned)>& render_rows) {
-    if (workers_.empty() || row_count < 128) {
-      render_rows(0, row_count);
-      return;
-    }
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      task_ = render_rows;
-      row_count_ = row_count;
-      remaining_ = workers_.size();
-      ++generation_;
-    }
-    ready_.notify_all();
-    render_rows(0, row_count / thread_count());
-    std::unique_lock<std::mutex> lock(mutex_);
-    finished_.wait(lock, [this] { return remaining_ == 0; });
-    task_ = {};
-  }
-
- private:
-  void stop_workers() {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      stopping_ = true;
-      ++generation_;
-    }
-    ready_.notify_all();
-    for (auto& worker : workers_)
-      if (worker.joinable()) worker.join();
-  }
-
-  void worker_loop(unsigned index) {
-    size_t seen_generation = 0;
-    for (;;) {
-      std::function<void(unsigned, unsigned)> task;
-      unsigned first_row = 0, last_row = 0;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        ready_.wait(lock, [this, seen_generation] {
-          return stopping_ || generation_ != seen_generation;
-        });
-        if (stopping_) return;
-        seen_generation = generation_;
-        task = task_;
-        first_row = row_count_ * (index + 1) / thread_count();
-        last_row = row_count_ * (index + 2) / thread_count();
-      }
-      task(first_row, last_row);
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (--remaining_ == 0) finished_.notify_one();
-      }
-    }
-  }
-
-  std::vector<std::thread> workers_;
-  std::mutex mutex_;
-  std::condition_variable ready_, finished_;
-  std::function<void(unsigned, unsigned)> task_;
-  unsigned row_count_ = 0;
-  size_t remaining_ = 0, generation_ = 0;
-  bool stopping_ = false;
-};
-
 struct ComposeScratch {
   std::vector<SourcePixel> source_at;
   std::vector<uint8_t> kind;
   std::vector<float> actual, expected, added, gain;
-  std::unique_ptr<MenuBackgroundWorkers> workers;
+  std::unique_ptr<detail::MenuBackgroundWorkers> workers;
 
   void run(unsigned rows, const std::function<void(unsigned, unsigned)>& render_rows) {
-    if (!workers) workers = std::make_unique<MenuBackgroundWorkers>();
+    if (!workers) workers = std::make_unique<detail::MenuBackgroundWorkers>();
     workers->run(rows, render_rows);
   }
 

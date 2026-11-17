@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -9,6 +10,24 @@
 #include "gamez/zrender/zrndr_blit.h"
 
 namespace platform {
+
+namespace detail {
+// Internal row worker pool, exposed so asset-free tests can inject render failures.
+class MenuBackgroundWorkers {
+ public:
+  explicit MenuBackgroundWorkers(unsigned worker_count = 0);
+  ~MenuBackgroundWorkers();
+  MenuBackgroundWorkers(const MenuBackgroundWorkers&) = delete;
+  MenuBackgroundWorkers& operator=(const MenuBackgroundWorkers&) = delete;
+
+  void run(unsigned row_count, const std::function<void(unsigned, unsigned)>& render_rows);
+  unsigned thread_count() const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+}  // namespace detail
 
 struct MenuBackgroundImage {
   unsigned width{}, height{}, source_width{}, source_height{};
