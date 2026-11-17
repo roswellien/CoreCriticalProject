@@ -69,14 +69,48 @@ public sealed class NativeGameRunner
         var environments = new List<string>();
         foreach (var directory in activeModDirs)
         {
-            var root = Path.GetFullPath(PackStorage.CanonicalPackRoot(directory));
-            var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
-            // Music, interface and cinematic packs use separate launcher content steps.
+            string root;
+            PackManifest manifest;
+            try
+            {
+                root = Path.GetFullPath(PackStorage.CanonicalPackRoot(directory));
+                manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or
+                ArgumentException or NotSupportedException)
+            {
+                // An unreadable optional pack must not prevent the native session from starting.
+                continue;
+            }
+            // UI packs are selected separately; music and cinematic packs use other content steps.
             if (manifest.SchemaVersion != 2) continue;
             if (manifest.NativePayload?.Profile == "prepared-native-v1") models.Add(root);
             else if (manifest.NativePayload?.Profile == "prepared-environment-v1") environments.Add(root);
         }
         return (models, environments);
+    }
+
+    /// <summary>Return enabled prepared UI packs for the native planner to validate and route.</summary>
+    public static List<string> SelectUiPacks(IEnumerable<string> activeModDirs, Action<string>? log = null)
+    {
+        var result = new List<string>();
+        foreach (var directory in activeModDirs)
+        {
+            try
+            {
+                var root = Path.GetFullPath(PackStorage.CanonicalPackRoot(directory));
+                var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
+                if (manifest.SchemaVersion == 2 && manifest.NativePayload?.Profile == UiPack.Profile)
+                    result.Add(root);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                JsonException or ArgumentException or NotSupportedException)
+            {
+                log?.Invoke("Pack left out; UI pack could not be read: " + directory +
+                    " (" + error.Message + ")");
+            }
+        }
+        return result;
     }
 
     /// <summary>Map the saved antialiasing text to the planner's typed choice.</summary>
@@ -93,8 +127,10 @@ public sealed class NativeGameRunner
     /// <summary>Project saved choices and prepared inputs; the planner applies shadow dependencies.</summary>
     public static Mw3RePlanningOptions PlanningOptionsForSettings(LauncherSettings settings,
         Mw3ReRuntimeContract contract, int drawDistance, IReadOnlyList<string> models,
-        IReadOnlyList<string> environments, string? headlightBindings)
+        IReadOnlyList<string> environments, string? headlightBindings,
+        IReadOnlyList<string>? uiPacks = null)
     {
+        var selectedUiPacks = uiPacks ?? Array.Empty<string>();
         return new Mw3RePlanningOptions
         {
             Width = settings.Width,
@@ -110,6 +146,11 @@ public sealed class NativeGameRunner
                 DrawDistance = drawDistance,
                 ModelPacks = models,
                 EnvironmentPacks = environments,
+                UiPacks = selectedUiPacks,
+                // The launcher has no HUD setting; UI artwork needs this HUD, otherwise the
+                // runtime profile's saved cc_hud and cc_hud_text settings must apply.
+                Hud = selectedUiPacks.Count > 0 ? "core-critical" : null,
+                HudText = selectedUiPacks.Count > 0 ? true : null,
                 DynamicLighting = settings.DynamicLighting,
                 // Preserve the request so the planner can report why shadows were suppressed.
                 Shadows = settings.Shadows,
@@ -207,13 +248,14 @@ public sealed class NativeGameRunner
         if (reduced) log($"Scenery distance {settings.DrawDistance} is not supported; using {drawDistance}.");
         var activePacks = activeModDirs.ToList();
         var (models, environments) = SelectPreviewPacks(activePacks);
+        var uiPacks = SelectUiPacks(activePacks, log);
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
         Directory.CreateDirectory(writeDirectory);
         NativeControls.PrepareLaunch(_dataRoot, writeDirectory, validation.GameDirectory, settings, log);
         var headlightBindings = new HeadlightBindings(_dataRoot)
             .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
         var options = PlanningOptionsForSettings(settings, contract, drawDistance, models,
-            environments, headlightBindings);
+            environments, headlightBindings, uiPacks);
         var indeoCodec = GameInstallation.FindVerifiedIndeoCodec(validation.GameDirectory, _dataRoot);
         var request = Mw3ReLaunchRequest.Create(contract, options, validation.GameDirectory, _dataRoot,
             ProfileId, indeoCodec);

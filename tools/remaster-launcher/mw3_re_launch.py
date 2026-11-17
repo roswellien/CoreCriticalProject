@@ -5,6 +5,7 @@ and bounded lighting-catalog headers it is given, read-only, to turn installed p
 """
 
 from pathlib import Path, PureWindowsPath
+import hashlib
 import json
 import math
 import re
@@ -25,8 +26,8 @@ _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
 _PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
-                             "environment_packs", "dynamic_lighting", "shadows", "headlights",
-                             "water_detail", "cloud_detail",
+                             "environment_packs", "ui_packs", "dynamic_lighting", "shadows",
+                             "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
                              "stock_headlight_catalog"})
 # 800 is the original game's scenery range; the preview runtime also accepts 1200 and 1600.
@@ -674,6 +675,7 @@ def _preview_choices(preview):
         "geometry": None,
         "model_packs": [],
         "environment_packs": [],
+        "ui_packs": [],
         "dynamic_lighting": False,
         "shadows": False,
         "headlights": False,
@@ -696,7 +698,7 @@ def _preview_choices(preview):
             raise ValueError("Native preview HUD text needs the core-critical HUD")
     if choices["geometry"] is not None and choices["geometry"] not in _PREVIEW_GEOMETRY:
         raise ValueError("Unknown native preview geometry mode")
-    for field in ("model_packs", "environment_packs"):
+    for field in ("model_packs", "environment_packs", "ui_packs"):
         packs = choices[field]
         if type(packs) is not list or len(packs) > _MAX_PREVIEW_PACKS:
             raise ValueError(f"Invalid native preview {field}")
@@ -790,7 +792,7 @@ def plan_launch(request):
             raise ValueError("Native write root overlaps a read-only input root")
     if preview is not None:
         for pack in preview["model_packs"] + preview["environment_packs"]:
-            root = _windows_path(pack)
+            root = Path(str(_windows_path(pack)))
             if write.is_relative_to(root) or root.is_relative_to(write):
                 raise ValueError("Native write root overlaps a preview pack")
     reasons = []
@@ -852,6 +854,103 @@ def plan_launch(request):
             argv.extend(("--cc-hud", preview["hud"]))
         if preview["hud_text"] is not None:
             argv.extend(("--cc-hud-text", "1" if preview["hud_text"] else "0"))
+        ui_seen = set()
+        ui_identities = {}
+        for pack in preview["ui_packs"]:
+            try:
+                root = Path(str(_windows_path(pack)))
+                if write.is_relative_to(root) or root.is_relative_to(write):
+                    skipped.append({"root": str(root), "feature": "ui_artwork",
+                                    "reason": "Native write root overlaps the UI pack"})
+                    continue
+                reason = _ui_pack_skip_reason(root)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                root = Path(str(pack))
+                reason = f"UI pack is unreadable: {error}"
+            if reason is not None:
+                skipped.append({"root": str(root), "feature": "ui_artwork", "reason": reason})
+                continue
+            if preview["hud"] != "core-critical":
+                skipped.append({"root": str(root), "feature": "ui_artwork",
+                                "reason": "UI artwork requires the core-critical HUD"})
+                continue
+            try:
+                manifest, payload = _pack_payload(root, "prepared-ui-v1")
+                registry_name = payload.get("registry")
+                registry_path = _verified_ui_member(root, manifest, registry_name)
+                registry = _read_pack_json(registry_path)
+                kind = registry["kind"]
+                if kind not in ("hud", "menu"):
+                    raise ValueError("unknown UI pack kind")
+                if registry.get("payload_profile") != "prepared-ui-v1" or registry.get("schema_version") != 2:
+                    raise ValueError("unsupported UI registry")
+                sprites = registry.get("sprites")
+                if type(sprites) is not dict or len(sprites) > 256:
+                    raise ValueError("invalid UI sprite table")
+                sprite_hashes = {}
+                for identity, relative in sprites.items():
+                    if (type(identity) is not str or re.fullmatch(r"[0-9a-f]{16}", identity) is None
+                            or relative != f"ui/sprites/{identity}.rgba"):
+                        raise ValueError("invalid UI sprite identity or path")
+                    sprite_path = _verified_ui_member(root, manifest, relative, "MW3H-v1")
+                    sprite_hashes[identity] = manifest["files"][relative]["sha256"].lower()
+                    with sprite_path.open("rb") as stream:
+                        header = stream.read(28)
+                    if len(header) != 28 or header[:4] != b"MW3H":
+                        raise ValueError("UI sprite header is missing or invalid")
+                    width, height, u0, v0, u1, v1 = struct.unpack("<IIffff", header[4:])
+                    if (not width or not height or width > 8192 or height > 8192
+                            or sprite_path.stat().st_size != 28 + 4 * width * height
+                            or not all(math.isfinite(value) for value in (u0, v0, u1, v1))
+                            or u0 < 0 or v0 < 0 or u1 > 1 or v1 > 1 or u0 >= u1 or v0 >= v1):
+                        raise ValueError("UI sprite dimensions, length or UV coordinates are invalid")
+                # The runtime enumerates this directory, not the registry. Match its
+                # exact extension check so every loaded sprite has passed validation.
+                sprite_dir = root / "ui" / "sprites"
+                runtime_sprites = set()
+                if sprite_dir.is_dir():
+                    runtime_sprites = {f"ui/sprites/{path.name}" for path in sprite_dir.iterdir()
+                                       if path.suffix == ".rgba"}
+                if runtime_sprites != set(sprites.values()):
+                    raise ValueError("UI sprite directory does not match the registry")
+                if kind in ui_seen:
+                    skipped.append({"root": str(root), "feature": "ui_artwork",
+                                    "reason": f"A {kind} UI pack was already selected"})
+                    continue
+                conflict = next((identity for identity, digest in sprite_hashes.items()
+                                 if identity in ui_identities and ui_identities[identity][0] != digest), None)
+                if conflict is not None:
+                    skipped.append({"root": str(root), "feature": "ui_artwork",
+                                    "reason": f"UI identity {conflict} conflicts with earlier pack "
+                                              f"{ui_identities[conflict][1]}"})
+                    continue
+                background = registry.get("background")
+                if background is not None:
+                    if kind != "menu" or background != "ui/background.mwhd":
+                        raise ValueError("unsupported menu background binding")
+                    background_path = _verified_ui_member(root, manifest, background, "MWHDBG1")
+                    with background_path.open("rb") as stream:
+                        header = stream.read(24)
+                    if len(header) != 24 or header[:8] != b"MWHDBG1\0":
+                        raise ValueError("menu background header is missing or invalid")
+                    width, height, source_width, source_height = struct.unpack("<IIII", header[8:])
+                    if (not width or not height or not source_width or not source_height
+                            or max(width, height, source_width, source_height) > 16384
+                            or background_path.stat().st_size != 24 + 3 * width * height):
+                        raise ValueError("menu background dimensions or length are invalid")
+                    skipped.append({"root": str(root), "feature": "menu_hd_background",
+                                    "reason": "MW3-RE has no native menu-background presentation route"})
+                if not sprite_hashes:
+                    if background is None:
+                        raise ValueError("UI pack has no available artwork")
+                else:
+                    argv.extend(("--cc-hud-artwork", str(root)))
+                    for identity, digest in sprite_hashes.items():
+                        ui_identities.setdefault(identity, (digest, str(root)))
+                ui_seen.add(kind)
+            except (OSError, AttributeError, KeyError, TypeError, json.JSONDecodeError, ValueError) as error:
+                skipped.append({"root": str(root), "feature": "ui_artwork",
+                                "reason": f"UI pack metadata is missing or invalid: {error}"})
         if preview["geometry"] is not None:
             argv.extend(("--cc-geometry", preview["geometry"]))
         supplied_chassis = {}
@@ -934,3 +1033,37 @@ def plan_launch(request):
         result["skipped_packs"] = skipped
         result["overridden_models"] = overridden_models
     return result
+
+
+def _ui_pack_skip_reason(root):
+    """Return a bounded failure reason for an unavailable prepared UI pack."""
+    manifest_path = root / "pack.json"
+    try:
+        if not root.is_dir() or not manifest_path.is_file():
+            return "UI pack directory or pack.json is missing"
+        _, payload = _pack_payload(root, "prepared-ui-v1")
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return f"UI pack manifest is invalid: {error}"
+    registry = payload.get("registry")
+    if registry != "ui/ui.json" or not (root / registry).is_file():
+        return "UI pack registry is missing or unsupported"
+    return None
+
+
+def _verified_ui_member(root, manifest, relative, expected_format=None):
+    """Check a UI resource against the installed pack's declared size, format and digest."""
+    path = Path(_pack_member(root, relative))
+    files = manifest.get("files")
+    metadata = files.get(relative) if type(files) is dict else None
+    if (type(metadata) is not dict or type(metadata.get("bytes")) is not int
+            or metadata["bytes"] != path.stat().st_size
+            or re.fullmatch(r"[0-9a-fA-F]{64}", metadata.get("sha256", "")) is None
+            or (expected_format is not None and metadata.get("format") != expected_format)):
+        raise ValueError(f"UI resource declaration is missing or invalid: {relative}")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    if digest.hexdigest().lower() != metadata["sha256"].lower():
+        raise ValueError(f"UI resource integrity failure: {relative}")
+    return path

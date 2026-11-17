@@ -723,6 +723,49 @@ static class NativeRuntimeLayoutChecks
             var shared = Path.Combine(packs, "shared");
             Directory.CreateDirectory(shared);
             File.WriteAllText(Path.Combine(shared, "pack.json"), """{"schema_version":2,"files":{"environment/rmechtex.zbd":{"bytes":5000000000,"sha256":"00"}},"native_payload":{"profile":"prepared-environment-v1"}}""");
+            var ui = Path.Combine(packs, "menu-ui");
+            Directory.CreateDirectory(Path.Combine(ui, "ui", "sprites"));
+            var spriteBytes = new byte[32];
+            "MW3H"u8.CopyTo(spriteBytes);
+            BitConverter.GetBytes(1u).CopyTo(spriteBytes, 4); BitConverter.GetBytes(1u).CopyTo(spriteBytes, 8);
+            BitConverter.GetBytes(0f).CopyTo(spriteBytes, 12); BitConverter.GetBytes(0f).CopyTo(spriteBytes, 16);
+            BitConverter.GetBytes(1f).CopyTo(spriteBytes, 20); BitConverter.GetBytes(1f).CopyTo(spriteBytes, 24);
+            spriteBytes[28] = 1; spriteBytes[31] = 255;
+            File.WriteAllBytes(Path.Combine(ui, "ui", "sprites", "0123456789abcdef.rgba"), spriteBytes);
+            var backgroundBytes = "MWHDBG1\0"u8.ToArray().Concat(new byte[]
+                { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 }).ToArray();
+            File.WriteAllBytes(Path.Combine(ui, "ui", "background.mwhd"), backgroundBytes);
+            var registryBytes = Encoding.UTF8.GetBytes("""{"schema_version":2,"payload_profile":"prepared-ui-v1","kind":"menu","sprites":{"0123456789abcdef":"ui/sprites/0123456789abcdef.rgba"},"background":"ui/background.mwhd"}""");
+            File.WriteAllBytes(Path.Combine(ui, "ui", "ui.json"), registryBytes);
+            File.WriteAllText(Path.Combine(ui, "pack.json"), JsonSerializer.Serialize(new
+            {
+                schema_version = 2, game_id = "mw3", id = "test.menu-ui", name = "Test menu UI",
+                files = new Dictionary<string, object>
+                {
+                    ["ui/ui.json"] = new
+                    { bytes = registryBytes.Length, sha256 = Convert.ToHexString(SHA256.HashData(registryBytes)).ToLowerInvariant() },
+                    ["ui/sprites/0123456789abcdef.rgba"] = new
+                    { bytes = spriteBytes.Length, sha256 = Convert.ToHexString(SHA256.HashData(spriteBytes)).ToLowerInvariant(), format = "MW3H-v1" },
+                    ["ui/background.mwhd"] = new
+                    { bytes = backgroundBytes.Length, sha256 = Convert.ToHexString(SHA256.HashData(backgroundBytes)).ToLowerInvariant(), format = "MWHDBG1" }
+                },
+                native_payload = new { profile = "prepared-ui-v1", registry = "ui/ui.json", path_base = "pack-root" }
+            }));
+            if (!NativeGameRunner.SelectUiPacks(new[] { ui }).SequenceEqual(new[] { Path.GetFullPath(ui) }))
+                throw new Exception("Enabled prepared UI packs were not selected for native planning.");
+            var unreadableUi = Path.Combine(packs, "unreadable-ui");
+            Directory.CreateDirectory(unreadableUi);
+            File.WriteAllText(Path.Combine(unreadableUi, "pack.json"), "not json");
+            foreach (var invalidUi in new[] { unreadableUi, "invalid\0ui-pack" })
+            {
+                var unreadableUiReports = new List<string>();
+                if (!NativeGameRunner.SelectUiPacks(new[] { invalidUi, ui }, unreadableUiReports.Add)
+                        .SequenceEqual(new[] { Path.GetFullPath(ui) }) ||
+                    unreadableUiReports.Count != 1 ||
+                    !unreadableUiReports[0].Contains("could not be read", StringComparison.Ordinal) ||
+                    !unreadableUiReports[0].Contains(invalidUi, StringComparison.Ordinal))
+                    throw new Exception("Unreadable pack was not reported as skipped or stopped later UI selection.");
+            }
 
             if (NativeGameRunner.WindowModeForSettings("windowed") != Mw3ReWindowMode.Windowed ||
                 NativeGameRunner.WindowModeForSettings("fullscreen") != Mw3ReWindowMode.Fullscreen ||
@@ -738,7 +781,7 @@ static class NativeRuntimeLayoutChecks
             };
             var options = NativeGameRunner.PlanningOptionsForSettings(settings, contract,
                 NativeGameRunner.PreviewDrawDistance(settings.DrawDistance, out _),
-                new[] { mechs }, new[] { map, shared }, null);
+                new[] { mechs }, new[] { map, shared }, null, new[] { ui });
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
@@ -754,18 +797,32 @@ static class NativeRuntimeLayoutChecks
                 argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1")
                 throw new Exception("Native launcher dynamic lighting and shadows choices did not reach the runtime argv.");
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
-                "--cc-hud-text", "1", "--cc-geometry", "partial",
+                "--cc-hud-text", "1", "--cc-hud-artwork", ui, "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
                 "--cc-environment-pack", map };
             // This fixture has no effect-light catalog, so local lights are also skipped.
             if (!planned["ok"]!.GetValue<bool>() || !argv.Skip(argv.Count - expectedTail.Length).SequenceEqual(expectedTail) ||
-                planned["skipped_packs"]!.AsArray().Count != 3 ||
-                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared ||
-                !planned["skipped_packs"]!.AsArray().Skip(1)
-                    .Select(item => item!["feature"]!.GetValue<string>())
-                    .SequenceEqual(new[] { "effect_lights", "fixture_lights" }))
+                planned["skipped_packs"]!.AsArray().Count != 4 ||
+                // Exact order: the menu pack is reported first, then the shared environment pack
+                // (no feature key), then the dynamic-lighting local-light skips.
+                planned["skipped_packs"]![0]!["feature"]?.GetValue<string>() != "menu_hd_background" ||
+                planned["skipped_packs"]![1]!["root"]!.GetValue<string>() != shared ||
+                planned["skipped_packs"]![1]!["feature"] != null ||
+                planned["skipped_packs"]![2]!["feature"]?.GetValue<string>() != "effect_lights" ||
+                planned["skipped_packs"]![3]!["feature"]?.GetValue<string>() != "fixture_lights")
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
+
+            var noUiOptions = options with
+            {
+                Preview = options.Preview! with { UiPacks = Array.Empty<string>(), Hud = null, HudText = null }
+            };
+            var noUiRequest = Mw3ReLaunchRequest.Create(contract, noUiOptions, "D:/Original MW3", dataRoot,
+                NativeGameRunner.ProfileId);
+            var noUiPlan = RunMw3RePlanner(noUiRequest);
+            var noUiArgv = noUiPlan["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+            if (noUiArgv.Contains("--cc-hud") || noUiArgv.Contains("--cc-hud-text"))
+                throw new Exception("No UI packs should leave saved MW3-RE HUD settings unset.");
 
             // Keep the saved request intact even when a dependency disables shadows for this launch.
             var suppressedSettings = new LauncherSettings { Shadows = true, DynamicLighting = false };

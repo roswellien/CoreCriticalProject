@@ -335,7 +335,7 @@ void usage() {
       "    [--cc-water-detail 0|1] [--cc-cloud-detail 0|1]\n"
       "    [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
       "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
-      "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
+      "    [--cc-hud original|core-critical] [--cc-hud-artwork PACK-ROOT]... [--cc-hud-text 0|1]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600 (default 800)]\n"
@@ -496,7 +496,7 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--no-import") a.no_import = true;
     else if (s == "--cc-vulkan") a.backend = sdlfe::RendererBackend::core_critical_dxgi, a.no_launcher = true;
     else if (s == "--cc-hud" && next(1)) a.hud.mode = argv[++i], a.hud_mode_given = true;
-    else if (s == "--cc-hud-artwork" && next(1)) a.hud.artwork = argv[++i], a.hud_artwork_given = true;
+    else if (s == "--cc-hud-artwork" && next(1)) a.hud.artwork.emplace_back(argv[++i]), a.hud_artwork_given = true;
     else if (s == "--cc-hud-text" && next(1)) {
       const std::string value = argv[++i];
       if (value != "0" && value != "1") return false;
@@ -674,7 +674,7 @@ void read_config(const std::string& dir, Args& a) {
     else if (line.rfind("mw1_game=", 0) == 0) a.cfg_mw1_game = zutl::path_from_config(line.substr(9));
     else if (line.rfind("assets=", 0) == 0) a.assets.push_back(line.substr(7));
     else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7);
-    else if (line.rfind("cc_hud_artwork=", 0) == 0 && !a.hud_artwork_given) a.hud.artwork = line.substr(15);
+    else if (line.rfind("cc_hud_artwork=", 0) == 0 && !a.hud_artwork_given) a.hud.artwork.emplace_back(line.substr(15));
     else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
     else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
     else if (line.rfind("mod=", 0) == 0) a.cfg_mods.push_back(line.substr(4));
