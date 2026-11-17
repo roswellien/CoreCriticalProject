@@ -131,10 +131,43 @@ void check_tiled_view_render() {
   renderer.render(reused);
   require(reused.color == expected,
           "Tiled asynchronous view buffers were reused before fence or retained stale lights");
+
+  auto degenerate = make_tiled_view_scene(true);
+  auto degenerate_camera = std::make_shared<sun::Tl>(*degenerate.draws[0].sun_tl);
+  degenerate_camera->camera_world[0] = 1e-8f;
+  degenerate.draws[0].sun_tl = degenerate_camera;
+  renderer.render(degenerate);
+  require(degenerate.color[first] != off.color[first],
+          "Degenerate tiled view did not preserve the draw through all-light fallback");
 }
 
 void check_tiled_view_budget() {
   using namespace mw34;
+  const std::array<float, 12> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+  auto degenerate = identity;
+  degenerate[0] = 1e-8f;
+  constexpr unsigned all_effect_lights = ~0u - 1;
+  bool fallback_reported = false;
+  unsigned fallback_logs = 0;
+  std::string fallback_reason;
+  for (unsigned repeat = 0; repeat < 3; ++repeat) {
+    auto draw_view = ~0u;
+    mw34::tiled::Mat34 camera{};
+    const bool prepared = tiled::try_affine_camera_or_all_lights(
+        camera, draw_view, all_effect_lights, fallback_reported,
+        [&] { return tiled::compose_affine(identity, tiled::inverse_affine(degenerate)); },
+        [&](const char *reason) {
+          ++fallback_logs;
+          fallback_reason = reason;
+        });
+    require(!prepared, "Degenerate tiled affine unexpectedly prepared a camera");
+    require(draw_view == all_effect_lights,
+            "Degenerate tiled affine did not select the all-light fallback");
+  }
+  require(fallback_logs == 1, "Repeated degenerate tiled draws logged more than once");
+  require(fallback_reason == "inverse_affine: result out of bounds",
+          "Near-degenerate tiled matrix did not exercise affine overflow handling");
+
   const auto unchanged_on_failure = [](tiled::ViewBudget &budget, uint64_t length) {
     const auto used = budget.used;
     const auto views = budget.views;
@@ -150,7 +183,6 @@ void check_tiled_view_budget() {
   }
   unchanged_on_failure(count, 260);
 
-  const std::array<float, 12> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
   const auto wide = tiled::make_view(identity, {1720, -720, 1720, 720}, 1, 100, 3440, 1440);
   tiled::ViewBudget legacy{128ULL * 1024 * 1024, 256};
   unsigned admitted = 0;
