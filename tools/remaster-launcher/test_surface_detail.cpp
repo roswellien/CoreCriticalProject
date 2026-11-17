@@ -39,8 +39,14 @@ int main(){try{
     _putenv_s("MW34_WATER_DETAIL_STRENGTH","1");_putenv_s("MW34_CLOUD_DETAIL_STRENGTH","1");
     require(legacy_sun_fixture_main()==0,"Existing sun fixtures failed");
     const auto first_live_frame = mw34::detail::presentation_time(41001);
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    const auto next_live_frame = mw34::detail::presentation_time(41002);
+    // Allow coarse clock ticks, but still reject a frozen presentation clock.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    auto next_live_frame = first_live_frame;
+    std::uint64_t frame = 41002;
+    while (next_live_frame <= first_live_frame && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        next_live_frame = mw34::detail::presentation_time(frame++);
+    }
     require(next_live_frame > first_live_frame,
             "Live detail presentation time did not advance between frames");
     DetailCaptureFixture{}.check();

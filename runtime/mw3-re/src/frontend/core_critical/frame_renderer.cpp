@@ -1440,6 +1440,8 @@ private:
     }
     if (state.texture >= 0 &&
         (bridge_config_.water_detail || bridge_config_.cloud_detail)) {
+      // draw is value-initialized per submission, so no earlier draw can leak
+      // a detail role/image; a miss preserves this draw's ordinary normal map.
       surface_normals_load();
       const auto &key = textures_.at(std::size_t(state.texture)).surface_key;
       if (const auto *binding = mw34::detail::find_binding(
@@ -1985,11 +1987,22 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
         "--cc-pom 1 requires a Core Critical Vulkan backend");
   if (assets.pom && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
-  if ((assets.water_detail_explicit && assets.water_detail) ||
-      (assets.cloud_detail_explicit && assets.cloud_detail)) {
-    if (assets.lighting != "normal")
-      throw std::runtime_error(
-          "Surface detail requires --cc-lighting normal");
+  const bool water_detail_requested =
+      assets.water_detail_explicit && assets.water_detail;
+  const bool cloud_detail_requested =
+      assets.cloud_detail_explicit && assets.cloud_detail;
+  if ((water_detail_requested || cloud_detail_requested) &&
+      assets.lighting != "normal") {
+    std::string flags;
+    if (water_detail_requested)
+      flags = "--cc-water-detail 1";
+    if (cloud_detail_requested) {
+      if (!flags.empty())
+        flags += " and ";
+      flags += "--cc-cloud-detail 1";
+    }
+    throw std::runtime_error("Surface detail (" + flags +
+                             ") requires --cc-lighting normal");
   }
   auto config = RendererBridgeConfig::from_diagnostic_env(
       !assets.dynamic_lighting_explicit, !assets.sun_shadows_explicit);

@@ -2980,9 +2980,7 @@ private:
         d.count = 0;
         continue;
       }
-      if ((sun.sky_shading ||
-           (d.detail_role == 3 &&
-            mw34::detail::enabled(3, s.detail_settings))) && view[at]) {
+      if ((sun.sky_shading || cloud_detail_draw) && view[at]) {
         d.sky = d.texture < 0 ? 2 : 1;
         d.sun_tl = view[at];
         if (d.sky_view)

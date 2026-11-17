@@ -2429,6 +2429,15 @@ void check_renderer_bridge_config() {
   require(legacy_uniform.detail == std::array<float, 4>{} &&
               legacy_uniform.detail_motion == std::array<float, 4>{},
           "disabled surface detail changed the legacy shader uniform path");
+  // A zero-only check cannot distinguish an untouched block from a cleared one.
+  legacy_uniform.detail = {1.f, 2.f, 3.f, 4.f};
+  legacy_uniform.detail_motion = {5.f, 6.f, 7.f, 8.f};
+  const auto preserved_detail = legacy_uniform.detail;
+  const auto preserved_motion = legacy_uniform.detail_motion;
+  mw34::detail::uniform(legacy_uniform, 1, detail_settings, 2.0);
+  require(legacy_uniform.detail == preserved_detail &&
+              legacy_uniform.detail_motion == preserved_motion,
+          "disabled surface detail overwrote existing uniform fields");
 
   // 1. Zero function-static env cache test
   require(mw34::detail::presentation_time(1, 10.5) == 10.5,
