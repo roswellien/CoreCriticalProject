@@ -79,7 +79,17 @@ A match log grows by every mech's state ten times a second: a few minutes of
 - `sides`: two lists of 1 to 8 bots. Each bot names a chassis (`mech`, the
   roster name) and a pilot preset: an AI record shipped in the game's files,
   named by its world, mission reader and record. Only the name goes in the
-  setup; the values are read from the player's own install.
+  setup; the values are read from the player's own install. A bot may also
+  give `loadout`, which of its chassis' stock loadouts it gets: 0 (the
+  first, and the default) up to one less than the count, in the order the
+  mech lab lists them (Primary, Alternate A ...). A player's saved loadouts
+  and the training ones can't be picked, so a setup plays the same on any
+  install.
+
+Whatever the preset says, a bot is awake from the start, engages any enemy,
+is no one's lancemate and starts powered up: a campaign record can start its
+mech shut down as an ambush (+0xcc bit 5) that only the mission's script
+would power up, and the arena runs no script (`arena_bot_params`).
 
 The seed picks where the sides start: one of the map's three most separated
 pairs of spawn spots, and which end each side takes. Each side then fills the
@@ -91,7 +101,8 @@ free spots nearest its end.
 written. Mechs are named by their index in setup order (side A first), and
 times are game seconds from the match's first frame.
 
-- `start`: the map, minutes, seed, frame time, the sides and the mech ids.
+- `start`: the map, minutes, seed, frame time, the sides (each bot with its
+  `loadout`) and the mech ids.
 - `state`: ten times a second, every mech's position, heading, speed, torso
   and arms, animation, whether it is jumping, fallen or standing, heat, part
   health, target and AI order.
@@ -298,3 +309,71 @@ seed, so neither side always sees the other a frame late; another compiler
 or standard library may shuffle differently. The first match in a process can
 also differ from later ones with the same seed (#302); a fresh `mw3` run per
 match, as above, is not affected.
+
+## Arena runner
+
+A developer window that sets up, runs and rewatches matches with no setup
+file or command typed (`tools/arena-runner/`, Python's tkinter, nothing to
+install):
+
+```sh
+python tools/arena-runner/arena_runner.py
+```
+
+The first start asks for the game folder and the built `mw3.exe` and keeps
+them in `%LOCALAPPDATA%/CoreCritical/arena-runner/settings.json`.
+
+- **Setup:** every arena map as a picture of its terrain; 1 to 10 matches,
+  all started at once; and each side's mechs: the chassis (with the mech
+  lab's picture of it), one of its stock loadouts (its weapons, ammo, armor,
+  speed, heat sinks and jump jets shown) and a pilot. Eight pilots come first
+  under plain names (`pilots.json`), then every enemy record in the game's
+  missions; each shows a line of what its numbers mean (attack range, bursts,
+  how long it presses an attack, when it breaks off, aim error). Setups can
+  be saved and loaded.
+- **Running:** one small map per match, its mechs drawn from the match log
+  as the game writes it, each tile showing its result when it ends. The
+  matches run hidden, many times faster than real time, so the maps are a
+  quick look; the replays are for watching. Stop all ends every match.
+- **Results:** wins per side, draws, stuck matches and the average time to a
+  win, and a row per match with its seed, result, time and losses, to open in
+  the top-down or 3D replay or to copy its command line.
+
+Each match gets its own random seed (all different in a batch, since a log
+is named by its seed) and runs until a side is wiped out. The setup's time
+limit is 15 minutes; a match still going then shows as stuck. Each match
+also runs with its own write folder, made from a copy of the player's
+`settings.reg`, so ten at once never race on the player's settings or
+`mw3.log`; its copied command line, with that folder, replays it byte for
+byte. The write folder is searched before the install, so files a mod left
+in the player's usual one are not seen by these matches.
+
+Batches are written to `%LOCALAPPDATA%/CoreCritical/arena-runner/runs/<date-time>/`:
+the setup, the logs and each match's write folder.
+
+### The catalog
+
+The window's lists come from the game itself, so they never drift from what
+that build can run:
+
+```sh
+mw3 GAME_DIR --arena-catalog DIR
+```
+
+It runs alone (not with `--arena`, `--replay` or `--replay3d`), needs only the
+install, takes a few seconds and writes:
+
+- `catalog.json`: the arena maps (those with 16 spawn spots) with the
+  lobby's names; every chassis with its stock loadouts (the mech lab's names,
+  weapons by part, ammo, armor, walk and run speed, heat sinks, jump jets);
+  and every enemy pilot record in the game's mission readers with the numbers
+  behind the runner's summary line.
+- `terrain/<map>.ppm` and `<map>.json`: the map from above as the top-down
+  replay draws it, at most 1024 pixels on its long side, and where it sits
+  (`x0`, `z_top`, meters per pixel `cell`, `width`, `height`).
+- `mechs/<mech>.ppm`: the mech lab's green picture of each chassis
+  (`icon_<mech>_green`); the Elemental has none.
+
+The files hold the game's own data and stay on the player's machine. The
+runner keeps them in its folder and makes them again whenever `mw3.exe`
+changes.
