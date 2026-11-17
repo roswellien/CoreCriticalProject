@@ -775,7 +775,9 @@ def plan_launch(request):
         argv.extend(("--indeo-codec", str(codec)))
     if preview is not None:
         argv.extend(("--cc-dynamic-lighting", "1" if preview["dynamic_lighting"] else "0"))
-        sun_shadows = preview["shadows"] and request["lighting"] != "off"
+        # Enforce the launcher dependency for callers that bypass NativeGameRunner too.
+        sun_shadows = (preview["shadows"] and preview["dynamic_lighting"] and
+                       request["lighting"] != "off")
         argv.extend(("--cc-sun-shadows", "1" if sun_shadows else "0"))
     if pom:
         argv.extend(("--cc-pom", "1"))
@@ -789,6 +791,9 @@ def plan_launch(request):
         if preview["shadows"] and request["lighting"] == "off":
             skipped.append({"root": str(runtime), "feature": "sun_shadows",
                             "reason": "sun shadows require sun lighting"})
+        elif preview["shadows"] and not preview["dynamic_lighting"]:
+            skipped.append({"root": str(runtime), "feature": "sun_shadows",
+                            "reason": "sun shadows require dynamic lighting"})
         # 800 is the original range, so it adds no argument and older runtimes stay compatible.
         if preview["draw_distance"] != 800:
             argv.extend(("--cc-draw-distance", str(preview["draw_distance"])))

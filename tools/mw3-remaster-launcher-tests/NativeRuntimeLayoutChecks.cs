@@ -732,27 +732,33 @@ static class NativeRuntimeLayoutChecks
             var options = new Mw3RePlanningOptions
             {
                 Antialiasing = Mw3ReAntialiasing.Fxaa, AnisotropicFiltering = 16, Lighting = Mw3ReLighting.Normal, Pom = true,
-                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, Shadows = true,
+                Preview = new Mw3RePreviewOptions { DrawDistance = 1200, DynamicLighting = true, Shadows = true,
                     ModelPacks = new[] { mechs }, EnvironmentPacks = new[] { map, shared } }
             };
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
+                !wire["preview"]!["dynamic_lighting"]!.GetValue<bool>() ||
                 !wire["preview"]!["shadows"]!.GetValue<bool>() ||
                 wire["visuals"]!["pom"]!.GetValue<bool>() != true)
-                throw new Exception("Native preview projection lost its schema, distance, shadows or POM.");
+                throw new Exception("Native preview projection lost its schema, distance, dynamic lighting, shadows or POM.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
-            if (argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1")
-                throw new Exception("Native launcher shadows choice did not reach the runtime argv.");
+            if (argv[argv.IndexOf("--cc-dynamic-lighting") + 1] != "1" ||
+                argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1")
+                throw new Exception("Native launcher dynamic lighting and shadows choices did not reach the runtime argv.");
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
                 "--cc-hud-text", "1", "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
                 "--cc-environment-pack", map };
+            // This fixture has no effect-light catalog, so local lights are also skipped.
             if (!planned["ok"]!.GetValue<bool>() || !argv.Skip(argv.Count - expectedTail.Length).SequenceEqual(expectedTail) ||
-                planned["skipped_packs"]!.AsArray().Count != 1 ||
-                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared)
+                planned["skipped_packs"]!.AsArray().Count != 3 ||
+                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared ||
+                !planned["skipped_packs"]!.AsArray().Skip(1)
+                    .Select(item => item!["feature"]!.GetValue<string>())
+                    .SequenceEqual(new[] { "effect_lights", "fixture_lights" }))
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
 
             // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
