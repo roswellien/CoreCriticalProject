@@ -30,6 +30,8 @@ public partial class GraphicsPreferencesPanel : UserControl
             ChkHeadlights.IsEnabled = settings.DynamicLighting;
             ChkShadows.IsChecked = settings.Shadows;
             ChkShadows.IsEnabled = settings.DynamicLighting;
+            ChkWaterDetail.IsChecked = settings.WaterDetail;
+            ChkCloudDetail.IsChecked = settings.CloudDetail;
         }
         finally { _loading = false; }
     }
@@ -41,7 +43,9 @@ public partial class GraphicsPreferencesPanel : UserControl
             throw new InvalidOperationException("Choose a display resolution.");
         var result = new GraphicsPreferences(width, height, Value(ComboWindowMode), Value(ComboAA),
             int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)),
-            ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true, ChkHeadlights.IsChecked == true);
+            ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true,
+            ChkHeadlights.IsChecked == true, ChkWaterDetail.IsChecked == true,
+            ChkCloudDetail.IsChecked == true);
         result.Validate();
         return result;
     }

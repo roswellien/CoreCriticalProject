@@ -55,5 +55,9 @@
         <TextBlock Text="Enables headlights on equipped mechs. Assign the toggle in Controls. Requires Dynamic Lighting; your choice is kept when lighting is off. Applies on the next launch." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
         <CheckBox x:Name="ChkShadows" Content="Shadows" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
         <TextBlock Text="Adds shadows from supported lights. Requires Dynamic Lighting; your choice is kept when lighting is off." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+        <CheckBox x:Name="ChkWaterDetail" Content="Water Detail" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
+        <TextBlock Text="MW3-RE adds animated water and shoreline surface detail when an enabled environment pack provides the maps. Off keeps the original surface shading." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+        <CheckBox x:Name="ChkCloudDetail" Content="Cloud Detail" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
+        <TextBlock Text="MW3-RE adds cloud surface detail when an enabled environment pack provides the map. Off keeps the original cloud shading." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
     </StackPanel>
 </UserControl>
