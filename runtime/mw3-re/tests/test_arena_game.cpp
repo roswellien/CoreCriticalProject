@@ -257,6 +257,29 @@ TEST(arena_bot_params_match_the_preset_headless) {
   EXPECT(mechs_seen == 4 && mismatched == 0 && wrong_side == 0 && bots_marked == 4);
 }
 
+// #287 runner: a campaign pilot whose record starts it powered down (c1 m1's
+// owens_01, an ambush; +0xcc bit 5) still hunts in the arena: no mission
+// script would ever power it up.
+TEST(arena_campaign_preset_bot_is_not_powered_down_headless) {
+  if (!have_game()) return;
+  const std::string owens =
+      R"({"mech": "thor", "preset": {"world": "c1", "mission": "m1", "record": "owens_01"}})";
+  const int five_seconds = 5 * 1000 / 16;
+  const auto run = arena_headless_run(
+      R"({"map": "c1mp1", "minutes": 10, "out": "arena-out", "sides": [[)" + owens + "], [" + owens + "]]}",
+      five_seconds, [](int) {});
+  EXPECT(run.setup_read);
+  const mech3::arena::LogRead log = mech3::arena::read_arena_log(run.log_path);
+  std::string order;
+  for (const auto& r : log.records)
+    if (r.value("type", "") == "state" && r.value("t", 0.0) > 3.0) {
+      order = r["mechs"][0]["ai"].value("order", "");
+      break;
+    }
+  std::printf("  campaign preset bot's order at 3 s: %s\n", order.c_str());
+  EXPECT(order == "hunt" || order == "fight");
+}
+
 // #287 runner: a setup's loadout reaches the bot (+0xbc, so create_ai_mech
 // builds that config) and the log's start line.
 TEST(arena_bot_gets_the_setup_loadout_headless) {

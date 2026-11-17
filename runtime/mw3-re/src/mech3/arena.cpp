@@ -299,6 +299,13 @@ void arena_bot_params(const Bot& bot, int side, const float pos[3], float yaw, a
   // A preset with bit 1 would have a bot fall in behind a player (the stock
   // follow) instead of hunting.
   params->raw[0xcd] = static_cast<uint8_t>(params->raw[0xcd] & ~0x3u);
+  // Never powered down at the start: +0xcc bit 5 (p12's second flag) makes
+  // create_ai_mech shut the mech down (player.cpp), a campaign ambush that
+  // the mission's script powers up later. The arena runs no script, so such
+  // a preset's bot would stand shut down all match (5 of the runner's 8
+  // short-list pilots did, 2026-11-16).
+  constexpr uint8_t kStartsPoweredDown = 0x20;
+  params->raw[0xcc] = static_cast<uint8_t>(params->raw[0xcc] & ~kStartsPoweredDown);
 }
 
 // Ours (#287)
