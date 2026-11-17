@@ -86,10 +86,60 @@ void compositor_replaces_only_background_pixels() {
   require(output[3] == 0xffffffffu && output[7] == 0xffffffffu,
           "Native menu artwork changed where it differs from the background");
 }
+
+void cached_composition_matches_fresh_and_invalidates_inputs() {
+  const auto path = fixture_path();
+  write_image(path);
+  const auto image = platform::load_menu_background(path);
+  std::filesystem::remove(path);
+
+  std::vector<uint16_t> source_pixels{0xf800, 0x07e0};
+  zimg::Texture source{};
+  source.width = 2;
+  source.height = 1;
+  source.width_again = 2;
+  source.pixels = source_pixels.data();
+  std::vector<uint16_t> frame{0xf800, 0xffff};
+  std::vector<zrndr::MenuBackgroundBlit> blits{{0, 0, 0, 0, 2, 1}};
+  platform::PreparedMenuBackgroundComposer composer;
+  std::vector<uint32_t> reused, reference;
+  bool cache_hit = false;
+  require(composer.compose(image, &source, blits, frame.data(), 2, 1, 4, true, 4, 2,
+                           &reused, &cache_hit) && !cache_hit,
+          "Initial cached composition did not compose");
+  const unsigned thread_count = composer.thread_count();
+  require(platform::compose_menu_background(image, &source, blits, frame.data(), 2, 1, 4, true,
+                                            4, 2, &reference) && reused == reference,
+          "Reusable scratch composition changed output from the fresh path");
+
+  require(composer.compose(image, &source, blits, frame.data(), 2, 1, 4, true, 4, 2,
+                           &reused, &cache_hit) && cache_hit,
+          "Unchanged menu frame missed the composition cache");
+  require(reused == reference, "Cache hit output differed from a fresh composition");
+
+  frame[1] ^= 0x001f;
+  require(composer.compose(image, &source, blits, frame.data(), 2, 1, 4, true, 4, 2,
+                           &reused, &cache_hit) && !cache_hit,
+          "Changed frame pixels did not invalidate the cache");
+  require(platform::compose_menu_background(image, &source, blits, frame.data(), 2, 1, 4, true,
+                                            4, 2, &reference) && reused == reference,
+          "Scratch reuse changed output after frame pixels changed");
+
+  blits[0].source_x = 1;
+  require(composer.compose(image, &source, blits, frame.data(), 2, 1, 4, true, 4, 2,
+                           &reused, &cache_hit) && !cache_hit,
+          "Changed menu background blits did not invalidate the cache");
+  require(platform::compose_menu_background(image, &source, blits, frame.data(), 2, 1, 4, true,
+                                            4, 2, &reference) && reused == reference,
+          "Scratch reuse changed output after menu blits changed");
+  require(composer.thread_count() == thread_count && thread_count <= 8,
+          "Menu background worker count changed between compositions");
+}
 }  // namespace
 
 int main() {
   reader_rejects_unknown_format();
   reader_rejects_truncated_payload();
   compositor_replaces_only_background_pixels();
+  cached_composition_matches_fresh_and_invalidates_inputs();
 }

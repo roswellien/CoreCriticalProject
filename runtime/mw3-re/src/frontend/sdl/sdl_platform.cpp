@@ -8,6 +8,7 @@
 #endif
 
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -264,25 +265,59 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
     if (hud_window_) SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
     const double fit = std::min({double(window_width) / width, double(window_height) / height, 4.5});
     if (fit >= 1.0) {
-      output_width = unsigned(std::lround(width * fit));
-      output_height = unsigned(std::lround(height * fit));
-      if (platform::compose_menu_background(*menu_background_, zrndr::menu_background_source(),
-                                            zrndr::menu_background_blits(), pixels, width, height,
-                                            pitch, rgb565, output_width, output_height, &menu_composed_)) {
+      // Keep the existing uniform fit while bounding CPU composition and upload size.
+      const double compose_scale = std::min(fit, 1080.0 / height);
+      output_width = std::max(1u, unsigned(std::lround(width * compose_scale)));
+      output_height = std::max(1u, unsigned(std::lround(height * compose_scale)));
+      static auto report_start = std::chrono::steady_clock::now();
+      static unsigned report_frames = 0, report_hits = 0;
+      static double report_milliseconds = 0.0;
+      const auto compose_start = std::chrono::steady_clock::now();
+      bool cache_hit = false;
+      const bool composed = menu_composer_.compose(
+          *menu_background_, zrndr::menu_background_source(), zrndr::menu_background_blits(),
+          pixels, width, height, pitch, rgb565, output_width, output_height, &menu_composed_,
+          &cache_hit);
+      if (composed) {
         const auto* composed_bytes = reinterpret_cast<const uint8_t*>(menu_composed_.data());
-        if (texture_ < 0 || tw_ != int(output_width) || th_ != int(output_height)) {
+        if (!cache_hit && (texture_ < 0 || tw_ != int(output_width) || th_ != int(output_height))) {
           if (texture_ >= 0) render_->release_texture(texture_);
           texture_ = render_->create_texture(int(output_width), int(output_height), composed_bytes, 1);
           if (texture_ < 0) throw std::runtime_error("Menu HD background texture allocation failed");
           tw_ = int(output_width), th_ = int(output_height);
-        } else {
+        } else if (!cache_hit) {
           render_->update_texture(texture_, int(output_width), int(output_height), composed_bytes);
         }
         menu_background_shown = true;
+      } else {
+        menu_composer_.invalidate_cache();
+      }
+      const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - compose_start)
+                                   .count();
+      ++report_frames;
+      report_hits += cache_hit;
+      report_milliseconds += elapsed_ms;
+      const auto now = std::chrono::steady_clock::now();
+      const double report_seconds =
+          std::chrono::duration<double>(now - report_start).count();
+      if (report_seconds >= 1.0) {
+        std::fprintf(stderr,
+                     "mw3: menu background %.3f ms/frame, %ux%u, threads=%u, cache hit %.1f%% "
+                     "(%u/%u)\n",
+                     report_milliseconds / report_frames, output_width, output_height,
+                     menu_composer_.thread_count(), 100.0 * report_hits / report_frames,
+                     report_hits, report_frames);
+        report_start = now;
+        report_frames = report_hits = 0;
+        report_milliseconds = 0.0;
       }
     }
   }
-  if (!menu_background_shown) upload(pixels, width, height, pitch, rgb565, false, 0);
+  if (!menu_background_shown) {
+    menu_composer_.invalidate_cache();
+    upload(pixels, width, height, pitch, rgb565, false, 0);
+  }
   // FIX (B), playtest W22: the 3D's viewport back after the layer. On a canvas
   // (16:9 past mode 10) the menus' 853x480 left on it made the mission after
   // the pause draw the frame's top-left corner over the whole window.
