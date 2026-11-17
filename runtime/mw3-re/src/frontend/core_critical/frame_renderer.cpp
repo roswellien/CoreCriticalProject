@@ -1047,12 +1047,12 @@ public:
       height = int(entry.height);
       ++named_textures_;
     } else if (entry.generated_rgba) {
-      if (!rgba || unsigned(width) != entry.width ||
-          unsigned(height) != entry.height)
+      if (!rgba || unsigned(width) != entry.source_width ||
+          unsigned(height) != entry.source_height)
         throw std::runtime_error(
             "Generated flare reload changed its source dimensions");
-      generated = mw34::flare::generate_rgba(entry.name, unsigned(width),
-                                             unsigned(height), rgba);
+      generated = mw34::flare::generate_rgba(entry.name, entry.width,
+                                             entry.height, rgba);
       rgba = generated.data();
     }
     if (!rgba || unsigned(width) != entry.width ||
@@ -1553,12 +1553,12 @@ private:
           queue = "overlay";
         std::fprintf(
             stderr,
-            "[FLARE_TEXTURE] slot=%d name=\"%s\" uploaded=%ux%u replacement=%s generated=%s "
+            "[FLARE_TEXTURE] slot=%d name=\"%s\" uploaded=%ux%u replacement=%s %s "
             "half_size_screen_px=%g half_size_target_px=[%g,%g] sampler=0x%x "
             "queue=%s source=%ux%u viewport=%dx%d target=%ux%u hud=%d\n",
             flare.slot, entry.name.empty() ? "<unknown>" : entry.name.c_str(),
             entry.width, entry.height, entry.replacement ? "yes" : "no",
-            entry.generated_rgba ? "yes" : "no",
+            mw34::flare::generated_field(entry.generated_rgba),
             flare.half_size_pixels,
             flare.half_size_pixels * scene_.width / float(viewport[2]),
             flare.half_size_pixels * scene_.height / float(viewport[3]),

@@ -1858,23 +1858,53 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
               flare_state.source_width == flare_size &&
               flare_state.source_height == flare_size,
           "Generated flare did not retain its source dimensions");
+  const auto first_generation_pixels = flare_state.pixels;
   renderer->update_texture(flare, flare_size, flare_size, flare_source.data());
-  const auto expected_flare = mw34::flare::generate_rgba(
-      "lflare2", flare_size, flare_size, flare_source.data());
-  std::vector<uint32_t> expected_flare_pixels(flare_size * flare_size);
-  std::memcpy(expected_flare_pixels.data(), expected_flare.data(),
-              expected_flare.size());
   flare_state = cc_mw3_re::testing::named_texture_state(*renderer, flare);
   require(flare_state.generated_rgba && flare_state.width == flare_size &&
               flare_state.height == flare_size &&
               flare_state.source_width == flare_size &&
               flare_state.source_height == flare_size &&
-              flare_state.pixels == expected_flare_pixels,
+              flare_state.pixels == first_generation_pixels,
           "Generated flare reload changed dimensions or pixels");
+  bool rejected_changed_flare_source = false;
+  try {
+    renderer->update_texture(flare, flare_size + 1, flare_size,
+                             flare_source.data());
+  } catch (const std::runtime_error &error) {
+    rejected_changed_flare_source =
+        std::string_view(error.what()) ==
+        "Generated flare reload changed its source dimensions";
+  }
+  require(rejected_changed_flare_source,
+          "Generated flare reload did not reject changed source dimensions");
   require(renderer->asset_statistics().named_textures ==
               named_uploads_before_flare,
           "Generated flare was counted as a prepared replacement upload");
   renderer->release_texture(flare);
+
+  auto original_flare_assets = sdlfe::CoreCriticalAssets{};
+  original_flare_assets.flare_style = "original";
+  auto original_flare_renderer =
+      make_check_renderer(window, backend, {}, original_flare_assets);
+  const auto original_flare = original_flare_renderer->create_named_texture(
+      "lflare2", flare_size, flare_size, flare_source.data(), 1);
+  auto original_flare_state = cc_mw3_re::testing::named_texture_state(
+      *original_flare_renderer, original_flare);
+  std::vector<uint32_t> original_flare_pixels(flare_size * flare_size);
+  std::memcpy(original_flare_pixels.data(), flare_source.data(),
+              flare_source.size());
+  require(!original_flare_state.generated_rgba &&
+              original_flare_state.pixels == original_flare_pixels,
+          "Original flare style changed uploaded source bytes");
+  original_flare_renderer->update_texture(
+      original_flare, flare_size, flare_size, flare_source.data());
+  original_flare_state = cc_mw3_re::testing::named_texture_state(
+      *original_flare_renderer, original_flare);
+  require(!original_flare_state.generated_rgba &&
+              original_flare_state.pixels == original_flare_pixels,
+          "Original flare reload generated or changed source bytes");
+  original_flare_renderer->release_texture(original_flare);
 
   renderer->reset_scene_resources();
   matrix[2] = matrix[9] = matrix[11] = 0;

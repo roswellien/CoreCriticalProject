@@ -11,6 +11,10 @@
 
 namespace mw34::flare {
 
+inline const char *generated_field(bool generated) {
+  return generated ? "generated=yes" : "generated=no";
+}
+
 inline bool is_texture(std::string_view name) {
   if (name.size() != 7 || name[0] != 'l' || name[1] != 'f' ||
       name[2] != 'l' || name[3] != 'a' || name[4] != 'r' ||

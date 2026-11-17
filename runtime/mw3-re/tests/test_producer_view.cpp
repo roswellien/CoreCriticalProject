@@ -72,6 +72,10 @@ bool same_record(const ProducerView& a, const ProducerView& b) {
 }
 
 TEST(b5_flare_alpha_generation) {
+  EXPECT(std::string_view(mw34::flare::generated_field(true)) ==
+         "generated=yes");
+  EXPECT(std::string_view(mw34::flare::generated_field(false)) ==
+         "generated=no");
   constexpr unsigned size = 512;
   std::vector<std::uint8_t> ring(std::size_t(size) * size * 4, 255);
   std::array<bool, 256> source_levels{};
@@ -111,7 +115,7 @@ TEST(b5_flare_alpha_generation) {
     }
   const auto distinct = std::count(levels.begin(), levels.end(), true);
   const auto original_distinct = std::count(source_levels.begin(), source_levels.end(), true);
-  EXPECT(double(equal_neighbors) / comparisons < 0.95);
+  EXPECT(double(equal_neighbors) / comparisons < 0.90);
   EXPECT(distinct > 32);
   EXPECT(distinct > original_distinct + 8);
   EXPECT(peak == 94);
