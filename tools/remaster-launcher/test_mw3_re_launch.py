@@ -755,11 +755,24 @@ class NativePreviewPlanTests(unittest.TestCase):
     def test_headlights_cannot_be_selected_without_dynamic_lighting(self):
         with self.assertRaisesRegex(ValueError, "require dynamic lighting"):
             self.plan(self.request(headlights=True))
-        with self.assertRaisesRegex(ValueError, "surface detail requires normal lighting"):
-            self.plan(dict(self.request(water_detail=True), lighting="off", visuals={"pom": False}))
+        for lighting in ("off", "flat"):
+            result = self.plan(dict(self.request(water_detail=True, cloud_detail=True),
+                                    lighting=lighting, visuals={"pom": False}))
+            self.assertEqual(result["argv"][result["argv"].index("--cc-water-detail") + 1], "0")
+            self.assertEqual(result["argv"][result["argv"].index("--cc-cloud-detail") + 1], "0")
+            disabled = {item["feature"]: item for item in result["skipped_packs"]}
+            self.assertEqual(set(disabled), {"water_detail", "cloud_detail"})
+            self.assertTrue(all("requires normal lighting" in item["reason"]
+                                for item in disabled.values()))
         for field, value in (("water_detail", 1), ("cloud_detail", "true")):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, "must be Boolean"):
                 self.plan(self.request(**{field: value}))
+
+    def test_surface_detail_does_not_relax_the_pom_lighting_requirement(self):
+        request = self.request(water_detail=True)
+        request["lighting"] = "flat"
+        with self.assertRaisesRegex(ValueError, "Native POM requires normal lighting"):
+            self.plan(request)
 
     def detail_environment_pack(self, name, roles):
         detail = {}
@@ -810,6 +823,15 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual(water_only_argv[water_only_argv.index("--cc-water-detail") + 1], "0")
         self.assertTrue(any(item.get("feature") == "water_detail"
                             for item in water_only_result["skipped_packs"]))
+
+    def test_missing_detail_roles_without_environment_packs_report_runtime_fallback(self):
+        result = self.plan(self.request(water_detail=True, environment_packs=[]))
+        argv = result["argv"]
+        self.assertEqual(argv[argv.index("--cc-water-detail") + 1], "0")
+        skipped = [item for item in result["skipped_packs"]
+                   if item.get("feature") == "water_detail"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["root"], "C:\\Runtime")
 
 
 if __name__ == "__main__":

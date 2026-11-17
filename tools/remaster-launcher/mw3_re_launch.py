@@ -745,8 +745,12 @@ def plan_launch(request):
     if pom and request["lighting"] != "normal":
         raise ValueError("Native POM requires normal lighting")
     preview = _preview_choices(request.get("preview", {})) if schema == 4 else None
-    if preview and (preview["water_detail"] or preview["cloud_detail"]) and request["lighting"] != "normal":
-        raise ValueError("Native surface detail requires normal lighting")
+    disabled_detail = []
+    if preview is not None and request["lighting"] != "normal":
+        for choice in ("water_detail", "cloud_detail"):
+            if preview[choice]:
+                preview[choice] = False
+                disabled_detail.append(choice)
     if request["engine"] != "mw3-re" or request["renderer"] != "vulkan-wsi":
         raise ValueError("Unsupported native engine or renderer")
     for field, minimum, maximum in (("width", 640, 7680), ("height", 480, 4320)):
@@ -808,13 +812,22 @@ def plan_launch(request):
         })
     else:
         argv.extend(("--indeo-codec", str(codec)))
+    detail_flag_indices = {}
     if preview is not None:
         argv.extend(("--cc-dynamic-lighting", "1" if preview["dynamic_lighting"] else "0"))
+        detail_flag_indices["water_detail"] = len(argv) + 1
         argv.extend(("--cc-water-detail", "1" if preview["water_detail"] else "0"))
+        detail_flag_indices["cloud_detail"] = len(argv) + 1
         argv.extend(("--cc-cloud-detail", "1" if preview["cloud_detail"] else "0"))
     if pom:
         argv.extend(("--cc-pom", "1"))
     skipped = []
+    for choice in disabled_detail:
+        skipped.append({
+            "root": str(runtime),
+            "feature": choice,
+            "reason": f"{choice.replace('_', ' ')} requires normal lighting",
+        })
     overridden_models = []
     if preview is not None:
         # Schema 4 is the launcher's explicit selection boundary, even when no
@@ -868,7 +881,7 @@ def plan_launch(request):
                 else:
                     root, reason = str(runtime), f"no enabled environment pack provides the {missing_role} detail map"
                 skipped.append({"root": root, "feature": label, "reason": reason})
-                argv[argv.index("--cc-water-detail" if choice == "water_detail" else "--cc-cloud-detail") + 1] = "0"
+                argv[detail_flag_indices[choice]] = "0"
         if preview["dynamic_lighting"]:
             if effect_catalog is None:
                 effect_catalog = _stock_effect_catalog(preview["stock_effect_catalog"])

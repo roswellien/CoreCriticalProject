@@ -36,22 +36,13 @@ inline void register_catalog(Bindings &bindings,
   }
 }
 
-inline unsigned role_for(const Bindings &bindings,
-                         const mw34::materials::SurfaceKey &key,
-                         const Settings &settings) {
+inline const Binding *find_binding(
+    const Bindings &bindings, const mw34::materials::SurfaceKey &key,
+    const Settings &settings) {
   const auto found = bindings.find(key);
   return found != bindings.end() && enabled(found->second.role, settings)
-             ? found->second.role
-             : 0;
-}
-
-inline int normal_index_for(const Bindings &bindings,
-                            const mw34::materials::SurfaceKey &key,
-                            const Settings &settings) {
-  const auto found = bindings.find(key);
-  return found != bindings.end() && enabled(found->second.role, settings)
-             ? found->second.normal_index
-             : -1;
+             ? &found->second
+             : nullptr;
 }
 
 } // namespace mw34::detail

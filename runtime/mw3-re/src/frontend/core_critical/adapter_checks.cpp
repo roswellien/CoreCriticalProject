@@ -2396,26 +2396,31 @@ void check_renderer_bridge_config() {
   mw34::detail::register_catalog(detail_bindings, cloud_catalog, 3, 9);
   mw34::detail::Settings detail_settings;
   detail_settings.water = true;
-  require(mw34::detail::role_for(detail_bindings, water_key, detail_settings) == 1 &&
-              mw34::detail::normal_index_for(detail_bindings, water_key,
-                                             detail_settings) == 7,
+  const auto *water_binding =
+      mw34::detail::find_binding(detail_bindings, water_key, detail_settings);
+  require(water_binding && water_binding->role == 1 &&
+              water_binding->normal_index == 7,
           "exact water surface identity did not bind its detail role/image");
   detail_settings.clouds = true;
-  require(mw34::detail::role_for(detail_bindings, surf_key, detail_settings) == 2 &&
-              mw34::detail::role_for(detail_bindings, cloud_key, detail_settings) == 3,
+  const auto *surf_binding =
+      mw34::detail::find_binding(detail_bindings, surf_key, detail_settings);
+  const auto *cloud_binding =
+      mw34::detail::find_binding(detail_bindings, cloud_key, detail_settings);
+  require(surf_binding && surf_binding->role == 2 && cloud_binding &&
+              cloud_binding->role == 3,
           "surf/cloud catalog identities did not bind their detail roles");
   detail_settings.water = false;
-  require(mw34::detail::role_for(detail_bindings, water_key, detail_settings) == 0 &&
-              mw34::detail::normal_index_for(detail_bindings, water_key,
-                                             detail_settings) == -1,
+  require(!mw34::detail::find_binding(detail_bindings, water_key,
+                                      detail_settings),
           "disabled water detail retained its role or image");
+  require(!mw34::detail::find_binding(
+              detail_bindings,
+              mw34::materials::SurfaceKey{64, 64, 1, 0x9999}, detail_settings),
+          "unmatched texture identity was not inferred as water");
   detail_settings.water = true;
-  require(mw34::detail::role_for(detail_bindings,
-                                 mw34::materials::SurfaceKey{64, 64, 1, 0x9999},
-                                 detail_settings) == 0,
-          "unmatched texture identity was inferred as water");
   mw34::sun::Uniform detail_uniform{};
-  mw34::detail::uniform(detail_uniform, 1, detail_settings, 2.0);
+  mw34::detail::uniform(detail_uniform, water_binding->role, detail_settings,
+                        2.0);
   require(detail_uniform.detail[0] == 1.0f && detail_uniform.detail[1] > 0,
           "enabled detail role did not reach the shader uniform path");
   detail_settings.water = false;

@@ -2,6 +2,8 @@
 #define main legacy_sun_fixture_main
 #include "test_sun_lighting.cpp"
 #undef main
+#include <chrono>
+#include <thread>
 struct DetailCaptureFixture:CaptureFixture {
     enum {WideWorld=1,WideZoom=2,D3DPT_POINTLIST=1,D3DRENDERSTATE_ZENABLE=7,
           D3DRENDERSTATE_ZWRITEENABLE=14,D3DRENDERSTATE_ALPHATESTENABLE=15,
@@ -36,6 +38,11 @@ int main(){try{
     _putenv_s("MW34_WATER_DETAIL_SCALE","0.2");
     _putenv_s("MW34_WATER_DETAIL_STRENGTH","1");_putenv_s("MW34_CLOUD_DETAIL_STRENGTH","1");
     require(legacy_sun_fixture_main()==0,"Existing sun fixtures failed");
+    const auto first_live_frame = mw34::detail::presentation_time(41001);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    const auto next_live_frame = mw34::detail::presentation_time(41002);
+    require(next_live_frame > first_live_frame,
+            "Live detail presentation time did not advance between frames");
     DetailCaptureFixture{}.check();
     Renderer r;
     auto image=[&](unsigned role,double time,bool mask,bool cloud=false,float uv_offset=0,bool split_mask=false){

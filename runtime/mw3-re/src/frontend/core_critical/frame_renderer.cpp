@@ -1409,16 +1409,14 @@ private:
         (bridge_config_.water_detail || bridge_config_.cloud_detail)) {
       surface_normals_load();
       const auto &key = textures_.at(std::size_t(state.texture)).surface_key;
-      const auto detail_settings = surface_detail_settings();
-      draw.detail_role = mw34::detail::role_for(
-          surface_normals_.detail_bindings, key, detail_settings);
-      if (draw.detail_role) {
-        const int index = mw34::detail::normal_index_for(
-            surface_normals_.detail_bindings, key, detail_settings);
-        if (index < 0)
+      if (const auto *binding = mw34::detail::find_binding(
+              surface_normals_.detail_bindings, key, scene_.detail_settings)) {
+        draw.detail_role = binding->role;
+        if (binding->normal_index < 0)
           throw std::runtime_error(
               "Validated surface detail role lost its normal image");
-        draw.normal_texture = int(bind_texture(surface_normal_texture(index), false));
+        draw.normal_texture = int(bind_texture(
+            surface_normal_texture(binding->normal_index), false));
       }
     }
     const bool sharp = state.sharp && state.texture >= 0 &&
@@ -1745,12 +1743,12 @@ private:
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
     }
-    if (scene_.width) {
-      return;
-    }
     scene_.detail_settings = surface_detail_settings();
     scene_.detail_time = mw34::detail::presentation_time(
         detail_frame_++, bridge_config_.detail_fixed_time);
+    if (scene_.width) {
+      return;
+    }
     int width = 0, height = 0;
     if (native_wsi_ && window_state_tracker_) {
       const auto state = window_state_tracker_->sample_and_get();

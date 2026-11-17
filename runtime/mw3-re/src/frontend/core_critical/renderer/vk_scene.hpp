@@ -2958,15 +2958,14 @@ private:
       const bool cloud_detail_draw =
           d.detail_role == 3 && mw34::detail::enabled(3, s.detail_settings);
       if (d.model ||
-          (!d.native_sky && (d.sun_tl || d.key.blend) &&
-           !cloud_detail_draw) ||
+          (!d.native_sky && (d.sun_tl || d.key.blend)) ||
           !d.count ||
           (d.texture >= 0 && !sun.sky_active && !sun.sky_shading &&
            !sun.suppress_sky) ||
           (d.texture < 0 && !sun.haze_active && !sun.sky_shading &&
            !sun.suppress_sky))
         continue;
-      const bool distant = d.native_sky || cloud_detail_draw || mw34::sky::backdrop(
+      const bool distant = d.native_sky || mw34::sky::backdrop(
           s.vertices.data() + size_t(d.first) * 32, size_t(d.count) * 32,
           d.detail_role, d.texture >= 0, d.key.zwrite != 0);
       if (!distant) {
