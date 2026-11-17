@@ -57,6 +57,7 @@
 #include "frontend/sdl/font_search.h"
 #include "frontend/sdl/launcher.h"
 #include "frontend/sdl/launcher_notes.h"
+#include "frontend/sdl/crash_report.h"
 #include "frontend/sdl/log_start.h"
 #include "platform/sha256.hpp"
 #include "frontend/sdl/text_fit.h"
@@ -102,6 +103,30 @@
 
 #include <cstdio>
 #include <map>
+
+TEST(crash_report_rva_requires_address_inside_image) {
+  uintptr_t rva = 99;
+  EXPECT(sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1000, &rva));
+  EXPECT(rva == 0);
+  EXPECT(sdlfe::crash_report_address_rva(0x1000, 0x200, 0x11ff, &rva));
+  EXPECT(rva == 0x1ff);
+  EXPECT(!sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1200, &rva));
+  EXPECT(!sdlfe::crash_report_address_rva(0x1000, 0x200, 0x0fff, &rva));
+  EXPECT(rva == 0x1ff);
+  char outside_text[64];
+  sdlfe::crash_report_format_rva(outside_text, sizeof outside_text, false, rva);
+  EXPECT(std::strcmp(outside_text, "outside mw3.exe image") == 0);
+  EXPECT(!sdlfe::crash_report_address_rva(0, 0x200, 0x1000, &rva));
+  EXPECT(!sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1000, nullptr));
+}
+
+TEST(crash_report_rva_format_identifies_outside_addresses) {
+  char text[64];
+  sdlfe::crash_report_format_rva(text, sizeof text, true, 0x12ab);
+  EXPECT(std::strcmp(text, "RVA 0x12ab") == 0);
+  sdlfe::crash_report_format_rva(text, sizeof text, false, 0);
+  EXPECT(std::strcmp(text, "outside mw3.exe image") == 0);
+}
 
 // The Upgrades page's settings (ours, upgrades/settings; docs/upgrades-sort.md):
 // mw3.cfg's five keys, 1.0.x's bugfixes= read once as all five and replaced by

@@ -505,7 +505,11 @@ bool PreparedMenuBackgroundComposer::compose(
     int height, int pitch, bool rgb565, unsigned output_width, unsigned output_height,
     std::vector<uint32_t>* output, bool* cache_hit) {
   if (cache_hit) *cache_hit = false;
-  if (!output || !pixels || !source || width <= 0 || height <= 0 || pitch < int64_t(width) * 2)
+  if (!source || blits.empty()) {
+    invalidate_cache();
+    return false;
+  }
+  if (!output || !pixels || width <= 0 || height <= 0 || pitch < int64_t(width) * 2)
     return false;
   const auto& state = *impl_;
   const bool hit = state.valid && state.previous_image == &image &&

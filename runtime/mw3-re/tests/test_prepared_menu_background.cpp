@@ -511,6 +511,21 @@ void cached_composition_matches_fresh_and_invalidates_inputs() {
           "Unchanged menu frame missed the composition cache");
   require(reused == reference, "Cache hit output differed from a fresh composition");
 
+  require(!composer.compose(image, nullptr, blits, frame.data(), 2, 1, 4, true, 4, 2,
+                            &reused, &cache_hit) && !cache_hit,
+          "Cache validation accepted a null menu source");
+  require(composer.compose(image, &source, blits, frame.data(), 2, 1, 4, true, 4, 2,
+                           &reused, &cache_hit) && !cache_hit,
+          "Rejected null source left the composition cache valid");
+
+  const auto* stale_source = reinterpret_cast<const zimg::Texture*>(uintptr_t{1});
+  require(!composer.compose(image, stale_source, {}, frame.data(), 2, 1, 4, true, 4, 2,
+                            &reused, &cache_hit) && !cache_hit,
+          "Cache validation accessed a stale source with empty menu blits");
+  require(composer.compose(image, &source, blits, frame.data(), 2, 1, 4, true, 4, 2,
+                           &reused, &cache_hit) && !cache_hit,
+          "Rejected empty menu blits left the composition cache valid");
+
   frame[1] ^= 0x001f;
   require(composer.compose(image, &source, blits, frame.data(), 2, 1, 4, true, 4, 2,
                            &reused, &cache_hit) && !cache_hit,

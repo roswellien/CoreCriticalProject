@@ -19,7 +19,6 @@
 #endif
 #include <windows.h>
 #include <dbghelp.h>
-#include <io.h>
 #include <process.h>
 #else
 #include <limits.h>
@@ -35,23 +34,56 @@
 
 namespace sdlfe {
 
+bool crash_report_address_rva(uintptr_t module_base, size_t image_size, uintptr_t address,
+                              uintptr_t* rva) {
+  if (!rva || module_base == 0 || address < module_base || address - module_base >= image_size)
+    return false;
+  const uintptr_t offset = address - module_base;
+  *rva = offset;
+  return true;
+}
+
+size_t crash_report_format_rva(char* output, size_t capacity, bool inside_image, uintptr_t rva) {
+  if (!output || capacity == 0) return 0;
+  const int length = inside_image
+                         ? std::snprintf(output, capacity, "RVA 0x%llx",
+                                         static_cast<unsigned long long>(rva))
+                         : std::snprintf(output, capacity, "outside mw3.exe image");
+  return length > 0 ? static_cast<size_t>(length) : 0;
+}
+
 namespace {
 
 char g_program[64] = "mw3";
 char g_tail[1024] = "";  // the box's text after the reason
 #if defined(_WIN32)
+char g_crash_line[2048];
+char g_dump_path[MAX_PATH + 16];
+char g_crash_text[1200];
+char g_crash_reason[32];
+char g_rva_text[64];
+volatile LONG g_exception_in_progress = 0;
+HANDLE g_stderr_handle = INVALID_HANDLE_VALUE;
+using MiniDumpWriteDumpFunction = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
+                                                PMINIDUMP_EXCEPTION_INFORMATION,
+                                                PMINIDUMP_USER_STREAM_INFORMATION,
+                                                PMINIDUMP_CALLBACK_INFORMATION);
+MiniDumpWriteDumpFunction g_write_dump = nullptr;
+uintptr_t g_module_base = 0;
+size_t g_module_image_size = 0;
+
 void crash_log(const char* format, ...) {
-  char line[2048];
   va_list arguments;
   va_start(arguments, format);
-  const int length = std::vsnprintf(line, sizeof line, format, arguments);
+  const int length = std::vsnprintf(g_crash_line, sizeof g_crash_line, format, arguments);
   va_end(arguments);
   if (length <= 0) return;
-  const intptr_t raw_handle = _get_osfhandle(2);
-  if (raw_handle == -1) return;
+  if (g_stderr_handle == nullptr || g_stderr_handle == INVALID_HANDLE_VALUE) return;
   DWORD written = 0;
-  if (!WriteFile(reinterpret_cast<HANDLE>(raw_handle), line,
-                 static_cast<DWORD>(length < static_cast<int>(sizeof line) ? length : sizeof line - 1),
+  if (!WriteFile(g_stderr_handle, g_crash_line,
+                 static_cast<DWORD>(length < static_cast<int>(sizeof g_crash_line)
+                                        ? length
+                                        : sizeof g_crash_line - 1),
                  &written, nullptr))
     return;
 }
@@ -86,22 +118,26 @@ void set_text(const std::string& program, const std::string& log) {
 void say_crash(const char* reason) {
   Sleep(100);  // the log's thread passes this on (run_log.cpp)
   if (g_test) _exit(70);
-  char text[1200];
-  std::snprintf(text, sizeof text, "MechWarrior 3 crashed (%s)%s", reason, g_tail);
+  std::snprintf(g_crash_text, sizeof g_crash_text, "MechWarrior 3 crashed (%s)%s", reason,
+                g_tail);
   // Topmost: with no owner it could open behind a fullscreen game.
-  if (g_box) MessageBoxA(nullptr, text, "MechWarrior 3", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+  if (g_box)
+    MessageBoxA(nullptr, g_crash_text, "MechWarrior 3",
+                MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
 }
 
 LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
+  if (InterlockedCompareExchange(&g_exception_in_progress, 1, 0) != 0)
+    return EXCEPTION_EXECUTE_HANDLER;
   if (e && e->ExceptionRecord) {
     const auto exception_address = reinterpret_cast<uintptr_t>(e->ExceptionRecord->ExceptionAddress);
-    const auto module_base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
-    const uintptr_t rva = module_base && exception_address >= module_base
-                              ? exception_address - module_base
-                              : 0;
-    crash_log("%s: crashed: exception 0x%08lx at %p module base %p RVA 0x%llx\n", g_program,
+    uintptr_t rva = 0;
+    const bool inside_image = crash_report_address_rva(g_module_base, g_module_image_size,
+                                                        exception_address, &rva);
+    crash_report_format_rva(g_rva_text, sizeof g_rva_text, inside_image, rva);
+    crash_log("%s: crashed: exception 0x%08lx at %p module base %p %s\n", g_program,
               e->ExceptionRecord->ExceptionCode, e->ExceptionRecord->ExceptionAddress,
-              reinterpret_cast<void*>(module_base), static_cast<unsigned long long>(rva));
+              reinterpret_cast<void*>(g_module_base), g_rva_text);
     if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
         e->ExceptionRecord->NumberParameters >= 2) {
       const ULONG_PTR access = e->ExceptionRecord->ExceptionInformation[0];
@@ -126,56 +162,46 @@ LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
 #endif
     }
 
-    char dump_path[MAX_PATH + 16] = "";
+    g_dump_path[0] = '\0';
     if (g_log[0]) {
-      std::snprintf(dump_path, sizeof dump_path, "%s", g_log);
-      char* separator = std::strrchr(dump_path, '\\');
-      char* slash = std::strrchr(dump_path, '/');
+      std::snprintf(g_dump_path, sizeof g_dump_path, "%s", g_log);
+      char* separator = std::strrchr(g_dump_path, '\\');
+      char* slash = std::strrchr(g_dump_path, '/');
       if (slash && (!separator || slash > separator)) separator = slash;
       if (separator) separator[1] = '\0';
-      else dump_path[0] = '\0';
+      else g_dump_path[0] = '\0';
     }
-    const size_t directory_length = std::strlen(dump_path);
-    if (directory_length + sizeof("crash.dmp") <= sizeof dump_path) {
-      std::memcpy(dump_path + directory_length, "crash.dmp", sizeof("crash.dmp"));
-      crash_log("%s: minidump path: %s\n", g_program, dump_path);
-      HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
-      if (dbghelp) {
-        using MiniDumpWriteDumpFunction = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
-                                                        PMINIDUMP_EXCEPTION_INFORMATION,
-                                                        PMINIDUMP_USER_STREAM_INFORMATION,
-                                                        PMINIDUMP_CALLBACK_INFORMATION);
-        auto write_dump = reinterpret_cast<MiniDumpWriteDumpFunction>(
-            GetProcAddress(dbghelp, "MiniDumpWriteDump"));
-        if (write_dump) {
-          HANDLE file = CreateFileA(dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL, nullptr);
-          if (file != INVALID_HANDLE_VALUE) {
-            MINIDUMP_EXCEPTION_INFORMATION exception_info{};
-            exception_info.ThreadId = GetCurrentThreadId();
-            exception_info.ExceptionPointers = e;
-            exception_info.ClientPointers = FALSE;
-            if (write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal,
+    const size_t directory_length = std::strlen(g_dump_path);
+    if (directory_length + sizeof("crash.dmp") <= sizeof g_dump_path) {
+      std::memcpy(g_dump_path + directory_length, "crash.dmp", sizeof("crash.dmp"));
+      crash_log("%s: minidump path: %s\n", g_program, g_dump_path);
+      if (g_write_dump) {
+        HANDLE file = CreateFileA(g_dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+          MINIDUMP_EXCEPTION_INFORMATION exception_info{};
+          exception_info.ThreadId = GetCurrentThreadId();
+          exception_info.ExceptionPointers = e;
+          exception_info.ClientPointers = FALSE;
+          if (g_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal,
                            &exception_info, nullptr, nullptr))
-              crash_log("%s: minidump: %s\n", g_program, dump_path);
-            else
-              crash_log("%s: minidump failed: %s\n", g_program, dump_path);
-            CloseHandle(file);
-          } else
-            crash_log("%s: could not create minidump: %s\n", g_program, dump_path);
-        } else
-          crash_log("%s: dbghelp has no MiniDumpWriteDump entry point\n", g_program);
-        FreeLibrary(dbghelp);
-      } else
-        crash_log("%s: could not load dbghelp.dll for minidump\n", g_program);
+            crash_log("%s: minidump: %s\n", g_program, g_dump_path);
+          else
+            crash_log("%s: minidump failed: %s\n", g_program, g_dump_path);
+          CloseHandle(file);
+        } else {
+          crash_log("%s: could not create minidump: %s\n", g_program, g_dump_path);
+        }
+      } else {
+        crash_log("%s: dbghelp unavailable for minidump\n", g_program);
+      }
     }
   } else {
     crash_log("%s: crashed: exception details unavailable\n", g_program);
   }
-  char reason[32];
-  std::snprintf(reason, sizeof reason, "exception 0x%08lx",
+  std::snprintf(g_crash_reason, sizeof g_crash_reason, "exception 0x%08lx",
                 e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0ul);
-  say_crash(reason);
+  say_crash(g_crash_reason);
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -260,6 +286,24 @@ void crash_report_install(const std::string& program, const std::string& log, bo
   g_test = std::getenv("MW3_CRASH_TEST") != nullptr;
   std::set_terminate(on_terminate);
 #if defined(_WIN32)
+  g_stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
+  HMODULE executable = GetModuleHandle(nullptr);
+  if (executable) {
+    const auto* dos_header = reinterpret_cast<const IMAGE_DOS_HEADER*>(executable);
+    if (dos_header->e_magic == IMAGE_DOS_SIGNATURE && dos_header->e_lfanew > 0) {
+      const auto* nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+          reinterpret_cast<const unsigned char*>(executable) + dos_header->e_lfanew);
+      if (nt_headers->Signature == IMAGE_NT_SIGNATURE &&
+          nt_headers->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR_MAGIC) {
+        g_module_base = reinterpret_cast<uintptr_t>(executable);
+        g_module_image_size = nt_headers->OptionalHeader.SizeOfImage;
+      }
+    }
+  }
+  if (HMODULE dbghelp = LoadLibraryA("dbghelp.dll")) {
+    g_write_dump = reinterpret_cast<MiniDumpWriteDumpFunction>(
+        GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+  }
   SetUnhandledExceptionFilter(on_exception);
   std::signal(SIGABRT, on_abort);
 #else
