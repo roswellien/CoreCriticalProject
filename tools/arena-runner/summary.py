@@ -5,17 +5,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 STUCK_SECONDS = 15 * 60  # batch.STUCK_MINUTES: the setup's time limit
+# The game logs 5 more seconds after the result is settled (arena.h,
+# kAftermathSeconds), so a log's end line is that much later than the result.
+AFTERMATH_SECONDS = 5
+
+
+def result_seconds(end: dict) -> float:
+    """The match's time as the game's own result line gives it: the end
+    line's time less the aftermath."""
+    return max(0.0, end.get("t", 0.0) - AFTERMATH_SECONDS)
 
 
 def outcome(end: dict | None) -> str:
     """The match's result: A or B for a winner, draw when both sides fell
-    together, stuck when it reached its time limit, running with no end line."""
+    together, stuck when it reached its time limit (the game then names the
+    side with more mechs standing, but nobody won it), running with no end
+    line."""
     if end is None:
         return "running"
+    if result_seconds(end) >= STUCK_SECONDS:
+        return "stuck"
     winner = end.get("winner", "draw")
-    if winner in ("A", "B"):
-        return winner
-    return "stuck" if end.get("t", 0.0) >= STUCK_SECONDS else "draw"
+    return winner if winner in ("A", "B") else "draw"
 
 
 def clock(seconds: float) -> str:
@@ -48,7 +59,7 @@ def totals(ends: list[dict | None]) -> BatchTotals:
         elif result == "stuck":
             t.stuck += 1
         if result in ("A", "B"):
-            decided.append(end.get("t", 0.0))
+            decided.append(result_seconds(end))
     if decided:
         t.average_seconds = sum(decided) / len(decided)
     return t

@@ -111,7 +111,10 @@ times are game seconds from the match's first frame.
 - `hit`: a mech took damage, with the attacker and the amount.
 - `destroyed`: a mech was killed, counted when its death starts, not when its
   fall ends.
-- `end`: the winner, the time and the mechs lost per side.
+- `end`: the winner, the time and the mechs lost per side. The match is
+  logged for 5 more seconds after its result is settled (so a replay shows
+  the last mech fall and burn), so the `end` line's `t` is 5 s later than the
+  time in the printed `arena: winner ...` line.
 
 A run stopped early leaves a log with no `end` line; delete it before running
 the same seed again, since an existing log is never overwritten.

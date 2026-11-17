@@ -56,7 +56,7 @@ class ResultsScreen(ttk.Frame):
         }
         for match, end in zip(batch.matches, ends, strict=True):
             lost = (end or {}).get("lost", ["-", "-"])
-            time = summary.clock(end["t"]) if end else "-"
+            time = summary.clock(summary.result_seconds(end)) if end else "-"
             self.table.insert(
                 "",
                 "end",

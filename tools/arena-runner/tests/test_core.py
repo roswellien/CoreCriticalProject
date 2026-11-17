@@ -122,19 +122,25 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(summary.outcome(None), "running")
         self.assertEqual(summary.outcome({"winner": "B", "t": 90}), "B")
         self.assertEqual(summary.outcome({"winner": "draw", "t": 90}), "draw")
-        self.assertEqual(
-            summary.outcome({"winner": "draw", "t": summary.STUCK_SECONDS + 5}), "stuck"
-        )
+        limit = summary.STUCK_SECONDS + summary.AFTERMATH_SECONDS  # an end line's time
+        self.assertEqual(summary.outcome({"winner": "draw", "t": limit}), "stuck")
+        # At the time limit the game names the side with more mechs standing;
+        # nobody won that match, so it is stuck too.
+        self.assertEqual(summary.outcome({"winner": "A", "t": limit + 0.5}), "stuck")
+        # A win just short of the limit is a win, though its end line (the
+        # aftermath included) is past 15:00.
+        self.assertEqual(summary.outcome({"winner": "A", "t": summary.STUCK_SECONDS + 1}), "A")
 
     def test_totals_average_only_decided_matches(self):
         ends = [
-            {"winner": "A", "t": 60},
-            {"winner": "B", "t": 120},
+            {"winner": "A", "t": 65},  # 60 s to the result, 5 s of aftermath
+            {"winner": "B", "t": 125},
             {"winner": "draw", "t": 905},
+            {"winner": "A", "t": 905},
             None,
         ]
         t = summary.totals(ends)
-        self.assertEqual((t.wins_a, t.wins_b, t.draws, t.stuck), (1, 1, 0, 1))
+        self.assertEqual((t.wins_a, t.wins_b, t.draws, t.stuck), (1, 1, 0, 2))
         self.assertEqual(t.average_seconds, 90)
         self.assertEqual(summary.clock(150.4), "2:30")
 

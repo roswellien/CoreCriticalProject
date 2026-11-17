@@ -100,7 +100,7 @@ class RunningScreen(ttk.Frame):
                 "draw": "draw",
                 "stuck": "stuck (15 min)",
             }
-            text = f"seed {match.seed}: {names[result]} at {summary.clock(log.t)}"
+            text = f"seed {match.seed}: {names[result]} at {summary.clock(summary.result_seconds(log.end))}"
             canvas.configure(
                 highlightbackground=SIDE_COLORS[0 if result == "A" else 1]
                 if result in "AB"
