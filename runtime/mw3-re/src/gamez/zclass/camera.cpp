@@ -37,6 +37,9 @@ namespace {
 const char kFile[] = "C:\\zipper\\GameZMech3\\zClass\\Camera.c";
 SceneWalk g_walk;
 WorldRenderHooks g_hooks;
+// These render-scope and log-deduplication globals are game-thread state:
+// render_world is called by GameEngine::vcall and app_hud's zview_render;
+// FrameRenderer submission serializes the scene before RenderWorker::run.
 unsigned g_visual_far_request = kDefaultVisualFar;
 const void* g_visual_camera = nullptr;
 float g_visual_far = 0.0f;
@@ -772,6 +775,9 @@ float visual_far_for_render(const void* camera, float authored_far) {
   return camera == g_visual_camera ? g_visual_far : authored_far;
 }
 VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink) {
+  // Only VisualFarLogSinkGuard in test_camera_visual_far.cpp installs a sink;
+  // it does so before its render_world/camera_update calls and restores it
+  // afterward, so this reset shares the render scope's game-thread contract.
   const VisualFarLogSink previous = g_visual_far_log_sink;
   g_visual_far_log_sink = sink;
   g_previous_visual_far_log_state.reset();
