@@ -74,6 +74,7 @@ struct RendererBridgeConfig {
 
   // Surface Detail
   std::optional<double> detail_fixed_time{std::nullopt};
+  bool water_detail{false}, cloud_detail{false};
 
   // Temporal
   bool temporal_inputs{false};

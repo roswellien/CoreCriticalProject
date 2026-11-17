@@ -128,6 +128,14 @@ static class GraphicsSetupUiChecks
                     var display=(GraphicsPreferencesPanel)window.FindName("DisplayGraphics");
                     var lighting=(CheckBox)display.FindName("ChkDynamicLighting");
                     var shadows=(CheckBox)display.FindName("ChkShadows");
+                    var waterDetail=(CheckBox)display.FindName("ChkWaterDetail");
+                    var cloudDetail=(CheckBox)display.FindName("ChkCloudDetail");
+                    if(waterDetail.IsChecked!=true||cloudDetail.IsChecked!=true)
+                        throw new Exception("Surface detail did not default on in the graphics panel");
+                    waterDetail.IsChecked=false;
+                    if(new SettingsManager(root,root).Current.WaterDetail)
+                        throw new Exception("Water detail choice was not saved");
+                    waterDetail.IsChecked=true;
                     lighting.IsChecked=true;shadows.IsChecked=true;
                     var saved=new SettingsManager(root,root).Current;
                     if(!saved.DynamicLighting||!saved.Shadows)throw new Exception("Display choices were not saved");

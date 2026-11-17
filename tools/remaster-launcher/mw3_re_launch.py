@@ -27,7 +27,7 @@ _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
 _PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
                              "environment_packs", "ui_packs", "dynamic_lighting", "shadows",
-                             "headlights",
+                             "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
                              "stock_headlight_catalog"})
 # 800 is the original game's scenery range; the preview runtime also accepts 1200 and 1600.
@@ -609,6 +609,37 @@ def _effect_catalog(root):
     return path, None
 
 
+def _detail_catalog_problem(root, role):
+    """Return why a prepared environment pack has no usable detail map for one role."""
+    try:
+        manifest, payload = _pack_payload(root, "prepared-environment-v1")
+        if payload.get("registry") != "environment/environment.json":
+            return "environment pack has no supported detail registry"
+        registry = _read_pack_json(_pack_member(root, payload["registry"]))
+        detail = registry.get("detail") if type(registry) is dict else None
+        if type(detail) is not dict or role not in detail:
+            return f"environment pack does not provide the {role} detail map"
+        member = detail[role]
+        files = manifest.get("files")
+        entry = files.get(member) if type(member) is str and type(files) is dict else None
+        if type(entry) is not dict or entry.get("format") != "BWSNR2":
+            return f"{role} detail map is not declared as BWSNR2"
+        path = _pack_member(root, member)
+        size = Path(path).stat().st_size
+        if type(entry.get("bytes")) is not int or size != entry["bytes"] or size < 12 or size > 16 * 1024 * 1024:
+            return f"{role} detail map has an invalid size"
+        with open(path, "rb") as stream:
+            header = stream.read(12)
+        if len(header) != 12 or header[:8] != b"BWSNR2\0\0":
+            return f"{role} detail map has an invalid BWSNR2 header"
+        count = int.from_bytes(header[8:12], "little")
+        if not 0 < count <= 256:
+            return f"{role} detail map has an invalid surface count"
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return f"{role} detail map is unavailable: {error}"
+
+
 def _stock_effect_catalog(path):
     if not path or not Path(path).is_file():
         return None
@@ -648,6 +679,8 @@ def _preview_choices(preview):
         "dynamic_lighting": False,
         "shadows": False,
         "headlights": False,
+        "water_detail": False,
+        "cloud_detail": False,
         "headlight_bindings": None,
         "stock_effect_catalog": None,
         "stock_headlight_catalog": None,
@@ -671,7 +704,7 @@ def _preview_choices(preview):
         packs = choices[field]
         if type(packs) is not list or len(packs) > _MAX_PREVIEW_PACKS:
             raise ValueError(f"Invalid native preview {field}")
-    for field in ("dynamic_lighting", "shadows", "headlights"):
+    for field in ("dynamic_lighting", "shadows", "headlights", "water_detail", "cloud_detail"):
         if type(choices[field]) is not bool:
             raise ValueError(f"Native preview {field} selection must be Boolean")
     if choices["headlights"] and not choices["dynamic_lighting"]:
@@ -717,6 +750,12 @@ def plan_launch(request):
     if pom and request["lighting"] != "normal":
         raise ValueError("Native POM requires normal lighting")
     preview = _preview_choices(request.get("preview", {})) if schema == 4 else None
+    disabled_detail = []
+    if preview is not None and request["lighting"] != "normal":
+        for choice in ("water_detail", "cloud_detail"):
+            if preview[choice]:
+                preview[choice] = False
+                disabled_detail.append(choice)
     if request["engine"] != "mw3-re" or request["renderer"] != "vulkan-wsi":
         raise ValueError("Unsupported native engine or renderer")
     for field, minimum, maximum in (("width", 640, 7680), ("height", 480, 4320)):
@@ -778,15 +817,26 @@ def plan_launch(request):
         })
     else:
         argv.extend(("--indeo-codec", str(codec)))
+    detail_flag_indices = {}
     if preview is not None:
         argv.extend(("--cc-dynamic-lighting", "1" if preview["dynamic_lighting"] else "0"))
         # Apply dependencies here so callers can preserve requested choices for suppression reports.
         sun_shadows = (preview["shadows"] and preview["dynamic_lighting"] and
                        request["lighting"] != "off")
         argv.extend(("--cc-sun-shadows", "1" if sun_shadows else "0"))
+        detail_flag_indices["water_detail"] = len(argv) + 1
+        argv.extend(("--cc-water-detail", "1" if preview["water_detail"] else "0"))
+        detail_flag_indices["cloud_detail"] = len(argv) + 1
+        argv.extend(("--cc-cloud-detail", "1" if preview["cloud_detail"] else "0"))
     if pom:
         argv.extend(("--cc-pom", "1"))
     skipped = []
+    for choice in disabled_detail:
+        skipped.append({
+            "root": str(runtime),
+            "feature": choice,
+            "reason": f"{choice.replace('_', ' ')} requires normal lighting",
+        })
     overridden_models = []
     if preview is not None:
         # Schema 4 is the launcher's explicit selection boundary, even when no
@@ -883,6 +933,8 @@ def plan_launch(request):
                            for item in skipped_materials)
         effect_catalog = None
         effect_catalog_problem = None
+        detail_catalogs = {"water": None, "surf": None, "cloud": None}
+        detail_problems = {role: [] for role in detail_catalogs}
         for pack in preview["environment_packs"]:
             reason = _environment_pack_skip_reason(pack)
             if reason is None:
@@ -892,8 +944,24 @@ def plan_launch(request):
                     if effect_reason and effect_catalog_problem is None:
                         effect_catalog_problem = {"root": pack, "feature": "effect_lights",
                                                   "reason": effect_reason}
+                for role in detail_catalogs:
+                    problem = _detail_catalog_problem(pack, role)
+                    if problem is None:
+                        detail_catalogs[role] = pack
+                    else:
+                        detail_problems[role].append((pack, problem))
             else:
                 skipped.append({"root": pack, "reason": reason})
+        for choice, roles, label in (("water_detail", ("water", "surf"), "water_detail"),
+                                     ("cloud_detail", ("cloud",), "cloud_detail")):
+            if preview[choice] and not all(detail_catalogs[role] for role in roles):
+                missing_role = next(role for role in roles if not detail_catalogs[role])
+                if detail_problems[missing_role]:
+                    root, reason = detail_problems[missing_role][0]
+                else:
+                    root, reason = str(runtime), f"no enabled environment pack provides the {missing_role} detail map"
+                skipped.append({"root": root, "feature": label, "reason": reason})
+                argv[detail_flag_indices[choice]] = "0"
         if preview["dynamic_lighting"]:
             if effect_catalog is None:
                 effect_catalog = _stock_effect_catalog(preview["stock_effect_catalog"])

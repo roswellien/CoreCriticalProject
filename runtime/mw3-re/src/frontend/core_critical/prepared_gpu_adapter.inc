@@ -2,6 +2,7 @@ cc::geometry::Submission
 submit_prepared_geometry(const ::platform::ModelDrawContext &context,
                          const cc::geometry::Fog &fog) override {
   VisualFloatScope preserve;
+  validate_damage_tint_weight(context.damage_tint_weight);
   if (geometry_mode_ == cc::geometry::Mode::legacy ||
       !prepared_.has_binding(context))
     return cc::geometry::Submission::unsupported;
@@ -42,6 +43,7 @@ static cc::geometry::Fog prepared_fog() {
 void emit_gpu_prepared(const PreparedBatchDraw &source,
                        const ::platform::ModelDrawContext &context,
                        const cc::geometry::Fog &fog) {
+  validate_damage_tint_weight(context.damage_tint_weight);
   if (!source.deformed.empty())
     throw std::runtime_error(
         "GPU prepared geometry does not admit CPU-deformed vertices");
@@ -129,6 +131,10 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     // Flag 256 tells the shared native-geometry vertex shader that mode.w holds
     // node opacity for this draw rather than a native normal-orientation marker.
     draw.push.mode[0] = 2U | 4U | 256U | (fog.enabled && !geometry_debug_ ? 16U : 0U);
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.fog[3] = context.damage_tint_weight;
+    }
     draw.push.mode[1] = 4U | (2U << 8);
     draw.push.mode[2] = 2U; // Diffuse alpha: RGB565 textures carry none of their own.
     draw.scissor = {{0, 0}, {scene_.width, scene_.height}};

@@ -55,6 +55,19 @@ std::vector<std::vector<std::uint32_t>> check_native_geometry(SDL_Window *window
     auto source = make();
     cc::geometry::Material material;
     material.color = 0xffff0000;
+    for (float weight : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                         std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1.1f}) {
+        context.damage_tint_weight = weight;
+        bool rejected = false;
+        try {
+            renderer->submit_model_geometry(source, context, {material}, {});
+        } catch (const std::runtime_error &error) {
+            rejected = std::string_view(error.what()) == "Model has an invalid native tint weight";
+        }
+        require(rejected, "Native geometry adapter accepted an invalid tint weight");
+    }
+    context.damage_tint_weight = 0.f;
     const auto frame = [&](const cc::geometry::Fog &fog = cc::geometry::Fog{}) {
         renderer->begin_scene();
         renderer->clear(true, 0, 0, 0);

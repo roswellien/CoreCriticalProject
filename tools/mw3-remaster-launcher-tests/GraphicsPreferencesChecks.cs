@@ -10,13 +10,14 @@ static class GraphicsPreferencesChecks
         try
         {
             var settings=new SettingsManager(root,root);
-            if(settings.Current.InitialSetupCompleted || settings.Current.DynamicLighting || settings.Current.Shadows || settings.Current.Headlights || settings.Current.DrawDistance != 800)
+            if(settings.Current.InitialSetupCompleted || settings.Current.DynamicLighting || settings.Current.Shadows || settings.Current.Headlights ||
+               !settings.Current.WaterDetail || !settings.Current.CloudDetail || settings.Current.DrawDistance != 800)
                 throw new Exception("Fresh setup must start with stock lighting and remain incomplete");
             settings.Current.ActivePacks.Add("test.keep-pack");
             settings.Save();
             if(new SettingsManager(root,root).Current.InitialSetupCompleted)
                 throw new Exception("Saving/cancelling defaults completed first-run setup");
-            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true,true);
+            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true,true,false,true);
             choice.ApplyTo(settings.Current);
             settings.Current.InitialSetupCompleted=true;
             settings.Save();
@@ -31,6 +32,7 @@ static class GraphicsPreferencesChecks
             if(headlightStore.Load()!=headlightBinding)throw new Exception("Headlight binding persistence");
             (choice with {DynamicLighting=false}).ApplyTo(loaded);
             if(!loaded.Headlights)throw new Exception("Lighting off lost headlight preference");
+            if(loaded.WaterDetail || !loaded.CloudDetail)throw new Exception("Surface detail choices did not persist");
             foreach(var invalid in new[]{new HeadlightBinding{Key=0x43},new HeadlightBinding{Button=26},new HeadlightBinding{Version=2}})
             {
                 try{headlightStore.Save(invalid);throw new Exception("Invalid headlight binding accepted");}
@@ -48,7 +50,8 @@ static class GraphicsPreferencesChecks
             File.WriteAllText(settings.SettingsPath,"{\"Width\":3440,\"Height\":1440,\"WindowMode\":\"windowed\",\"AntiAliasing\":\"2\",\"DrawDistance\":3200,\"ActivePacks\":[\"test.existing\"]}");
             loaded=new SettingsManager(root,root).Current;
             if(!loaded.InitialSetupCompleted || loaded.Width!=3440 || loaded.AntiAliasing!="2" ||
-               loaded.DrawDistance!=1600 || !loaded.ActivePacks.Contains("test.existing") || loaded.DynamicLighting || loaded.Shadows || loaded.Headlights)
+               loaded.DrawDistance!=1600 || !loaded.ActivePacks.Contains("test.existing") || loaded.DynamicLighting || loaded.Shadows || loaded.Headlights ||
+               !loaded.WaterDetail || !loaded.CloudDetail)
                 throw new Exception("Existing launcher settings were reset by setup migration");
             Console.WriteLine("First-run graphics validation, persistence, cancellation marker and legacy preference preservation passed.");
         }

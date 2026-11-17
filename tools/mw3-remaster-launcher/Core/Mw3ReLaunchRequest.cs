@@ -42,6 +42,8 @@ public sealed record Mw3RePreviewOptions
     public bool DynamicLighting { get; init; }
     public bool Shadows { get; init; }
     public bool Headlights { get; init; }
+    public bool WaterDetail { get; init; } = true;
+    public bool CloudDetail { get; init; } = true;
     public string? HeadlightBindings { get; init; }
     public string? StockEffectCatalog { get; init; }
     public string? StockHeadlightCatalog { get; init; }
@@ -136,6 +138,8 @@ public static class Mw3ReLaunchRequest
                 ["dynamic_lighting"] = preview.DynamicLighting,
                 ["shadows"] = preview.Shadows,
                 ["headlights"] = preview.Headlights,
+                ["water_detail"] = preview.WaterDetail,
+                ["cloud_detail"] = preview.CloudDetail,
                 ["headlight_bindings"] = preview.HeadlightBindings,
                 ["stock_effect_catalog"] = preview.StockEffectCatalog,
                 ["stock_headlight_catalog"] = preview.StockHeadlightCatalog
