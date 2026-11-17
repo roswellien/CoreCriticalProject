@@ -62,6 +62,9 @@ class ProducerWorldScope {
 void set_producer_canvas_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available = true) noexcept;
 void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available = true) noexcept;
 platform::ProducerView capture_producer_view();
+// Test support only: restore the producer view record and the canvas/camera
+// metadata captured with it. Production code must use the scoped producer APIs.
+void restore_producer_view_for_test(const platform::ProducerView& view) noexcept;
 void producer_mission_changed(const platform::MissionIdentity& identity) noexcept;
 void reset_producer_transport() noexcept;
 void abandon_producer_transport() noexcept;

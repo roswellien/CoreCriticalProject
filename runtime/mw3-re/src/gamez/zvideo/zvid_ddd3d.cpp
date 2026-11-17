@@ -559,6 +559,14 @@ platform::ProducerView capture_producer_view() {
   result.camera_rect = g_producer_camera_rect;
   return result;
 }
+void restore_producer_view_for_test(const platform::ProducerView& view) noexcept {
+  g_emitting_view = view;
+  g_producer_mission = view.mission;
+  g_producer_canvas = view.canvas;
+  g_canvas_available = view.canvas_available;
+  g_producer_camera_rect = view.camera_rect;
+  g_camera_rect_available = view.camera_rect_available;
+}
 void invalidate_producer_transport(platform::Render3D* owner, bool failed) noexcept {
   if (owner && owner != g_render) return;
   clear_producer_transport(failed);

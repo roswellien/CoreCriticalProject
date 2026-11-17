@@ -34,8 +34,8 @@ struct FixOn {
   ~FixOn() { zfix::options().any_resolution = was; }
 };
 
-// Resolution tests change process-wide game and producer-view state. Keep the
-// complete snapshots so an early return or a failed assertion cannot leak it.
+// Restore options, hooks, host, projection, draw state, scene camera, and the
+// captured producer view with its canvas/camera metadata after each test.
 struct ResolutionStateGuard {
   mech3::Options options = mech3::options();
   zfix::Options fixes = zfix::options();
@@ -56,12 +56,7 @@ struct ResolutionStateGuard {
     zmod::draw_state() = draw_state;
     zmth::projection() = projection;
     zcls::scene_walk().camera = camera;
-    zvid::set_producer_canvas_rect(producer_view.canvas.x, producer_view.canvas.y,
-                                   producer_view.canvas.width, producer_view.canvas.height,
-                                   producer_view.canvas_available);
-    zvid::set_producer_camera_rect(producer_view.camera_rect.x, producer_view.camera_rect.y,
-                                   producer_view.camera_rect.width, producer_view.camera_rect.height,
-                                   producer_view.camera_rect_available);
+    zvid::restore_producer_view_for_test(producer_view);
   }
 };
 
