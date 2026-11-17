@@ -8,6 +8,7 @@
 #endif
 
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -221,6 +222,10 @@ void SdlScreen2D::upload(const uint16_t* pixels, int width, int height, int pitc
   } else {
     render_->update_texture(texture_, width, height, rgba_.data());
   }
+  // Overlay uploads share texture_ with the cached HD menu background. Even
+  // an equal-sized upload replaces its contents, so the next menu frame must
+  // rebuild the composer cache before it can reuse this texture.
+  menu_composer_.invalidate_cache();
 }
 
 bool SdlScreen2D::layer_empty(const uint16_t* pixels, int width, int height, int pitch, uint16_t key) {
@@ -244,11 +249,13 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend, bool sharp) {
   platform::DrawState s;
   s.texture = texture_, s.address_u = s.address_v = 3;
   s.depth_write = false, s.depth_always = true, s.blend = blend, s.sharp = sharp;
-  const float w = static_cast<float>(width), h = static_cast<float>(height);
-  const platform::TLVertex quad[4] = {{0, 0, 1, 1, 0xffffffffu, 0xff000000u, 0, 0},
-                                      {w, 0, 1, 1, 0xffffffffu, 0xff000000u, 1, 0},
-                                      {w, h, 1, 1, 0xffffffffu, 0xff000000u, 1, 1},
-                                      {0, h, 1, 1, 0xffffffffu, 0xff000000u, 0, 1}};
+  const auto rect = platform::menu_background_layer_rect(width, height);
+  const float right = rect.x + rect.width, bottom = rect.y + rect.height;
+  const platform::TLVertex quad[4] = {
+      {rect.x, rect.y, 1, 1, 0xffffffffu, 0xff000000u, 0, 0},
+      {right, rect.y, 1, 1, 0xffffffffu, 0xff000000u, 1, 0},
+      {right, bottom, 1, 1, 0xffffffffu, 0xff000000u, 1, 1},
+      {rect.x, bottom, 1, 1, 0xffffffffu, 0xff000000u, 0, 1}};
   render_->begin_canvas_scene();
   render_->draw(platform::Primitive::kFan, quad, 4, s);
   render_->end_scene();
@@ -259,30 +266,64 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   ++frames;
   bool menu_background_shown = false;
   if (menu_background_) {
-    unsigned output_width = unsigned(width), output_height = unsigned(height);
     int window_width = width, window_height = height;
     if (hud_window_) SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
-    const double fit = std::min({double(window_width) / width, double(window_height) / height, 4.5});
-    if (fit >= 1.0) {
-      output_width = unsigned(std::lround(width * fit));
-      output_height = unsigned(std::lround(height * fit));
-      if (platform::compose_menu_background(*menu_background_, zrndr::menu_background_source(),
-                                            zrndr::menu_background_blits(), pixels, width, height,
-                                            pitch, rgb565, output_width, output_height, &menu_composed_)) {
+    const auto output = platform::menu_background_output_size(width, height, window_width,
+                                                              window_height, 1080);
+    const unsigned output_width = output.width, output_height = output.height;
+    if (output.fit_scale >= 1.0) {
+      // Keep the existing uniform fit while bounding CPU composition and upload size.
+      static auto report_start = std::chrono::steady_clock::now();
+      static unsigned report_frames = 0, report_hits = 0;
+      static double report_milliseconds = 0.0;
+      const auto compose_start = std::chrono::steady_clock::now();
+      bool cache_hit = false;
+      const bool composed = menu_composer_.compose(
+          *menu_background_, zrndr::menu_background_source(), zrndr::menu_background_blits(),
+          pixels, width, height, pitch, rgb565, output_width, output_height, &menu_composed_,
+          &cache_hit);
+      if (composed) {
         const auto* composed_bytes = reinterpret_cast<const uint8_t*>(menu_composed_.data());
-        if (texture_ < 0 || tw_ != int(output_width) || th_ != int(output_height)) {
+        const auto texture_action = platform::prepared_menu_texture_action(
+            cache_hit, texture_ >= 0, tw_, th_, output_width, output_height);
+        if (texture_action == platform::PreparedMenuTextureAction::kCreate) {
           if (texture_ >= 0) render_->release_texture(texture_);
           texture_ = render_->create_texture(int(output_width), int(output_height), composed_bytes, 1);
           if (texture_ < 0) throw std::runtime_error("Menu HD background texture allocation failed");
           tw_ = int(output_width), th_ = int(output_height);
-        } else {
+        } else if (texture_action == platform::PreparedMenuTextureAction::kUpdate) {
           render_->update_texture(texture_, int(output_width), int(output_height), composed_bytes);
         }
         menu_background_shown = true;
+      } else {
+        menu_composer_.invalidate_cache();
+      }
+      const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - compose_start)
+                                   .count();
+      ++report_frames;
+      report_hits += cache_hit;
+      report_milliseconds += elapsed_ms;
+      const auto now = std::chrono::steady_clock::now();
+      const double report_seconds =
+          std::chrono::duration<double>(now - report_start).count();
+      if (report_seconds >= 1.0 && report_frames != 0) {
+        std::fprintf(stderr,
+                     "mw3: menu background %.3f ms/frame, %ux%u, threads=%u, cache hit %.1f%% "
+                     "(%u/%u)\n",
+                     report_milliseconds / report_frames, output_width, output_height,
+                     menu_composer_.thread_count(), 100.0 * report_hits / report_frames,
+                     report_hits, report_frames);
+        report_start = now;
+        report_frames = report_hits = 0;
+        report_milliseconds = 0.0;
       }
     }
   }
-  if (!menu_background_shown) upload(pixels, width, height, pitch, rgb565, false, 0);
+  if (!menu_background_shown) {
+    menu_composer_.invalidate_cache();
+    upload(pixels, width, height, pitch, rgb565, false, 0);
+  }
   // FIX (B), playtest W22: the 3D's viewport back after the layer. On a canvas
   // (16:9 past mode 10) the menus' 853x480 left on it made the mission after
   // the pause draw the frame's top-left corner over the whole window.

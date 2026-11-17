@@ -100,6 +100,7 @@ class SdlScreen2D : public platform::Screen2D {
   int tw_ = 0, th_ = 0;
   std::vector<uint8_t> rgba_;
   std::vector<uint32_t> menu_composed_;
+  platform::PreparedMenuBackgroundComposer menu_composer_;
 };
 
 // GetTickCount from the game's start, and Sleep. With `frame_ms` (ours,
