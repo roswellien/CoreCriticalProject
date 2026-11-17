@@ -262,6 +262,14 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
   result.azimuth = number(options.sun_azimuth, -360, 360);
   result.elevation = number(options.sun_elevation, 1, 89);
   result.enabled = options.lighting != "off" || options.geometry != "legacy";
+  const auto diagnostic_config =
+      cc_mw3_re::RendererBridgeConfig::from_diagnostic_env(
+          false, !options.sun_shadows_explicit);
+  result.shadows = options.sun_shadows_explicit
+                       ? options.sun_shadows
+                       : diagnostic_config.sun_shadows;
+  if (options.lighting == "off")
+    result.shadows = false;
   if (options.lighting == "off" && options.geometry != "legacy") {
     result.strength = 0;
     result.ambient = 1;
@@ -1956,7 +1964,7 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   if (assets.pom && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   auto config = RendererBridgeConfig::from_diagnostic_env(
-      !assets.dynamic_lighting_explicit);
+      !assets.dynamic_lighting_explicit, !assets.sun_shadows_explicit);
   config.environment_packs_explicit = assets.environment_packs_explicit;
   if (assets.environment_packs_explicit) {
     // The launcher's selected environment packs own normal-map inputs. Stale
@@ -1964,6 +1972,8 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.surface_normal_catalog.clear();
     config.world_normal_manifest.clear();
   }
+  if (assets.sun_shadows_explicit)
+    config.sun_shadows = assets.sun_shadows;
   if (assets.dynamic_lighting_explicit) {
     // The launcher's explicit choice owns this run, including the diagnostic
     // environment fallback, so stale development variables cannot re-enable it.
@@ -2059,8 +2069,13 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.sun_elevation = number(assets.sun_elevation, 1.0f, 89.0f);
   config.sun = assets.lighting != "off" || assets.geometry != "legacy";
   config.sun_normals = (assets.lighting == "normal");
-  config.sun_shadows = false;
   config.normal_maps_enabled = (assets.lighting == "normal");
+
+  if (assets.lighting == "off" && config.sun_shadows) {
+    std::fprintf(stderr,
+                 "Sun shadows requested without sun lighting; sun shadows are disabled\n");
+    config.sun_shadows = false;
+  }
 
   if (!config.sun &&
       (config.effect_lights || config.fixture_lights || config.mech_headlights)) {
