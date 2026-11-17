@@ -73,6 +73,7 @@
 #include <string>
 #include <vector>
 #include <exception>
+#include <typeinfo>
 
 #include "frontend/sdl/campaign_chain.h"
 #include "frontend/sdl/editor_imgui.h"
@@ -161,6 +162,22 @@ extern "C" const char mw3_version_tag[] = "MW3-PROGRAM-VERSION:" MW3_VERSION;
 #include "platform/silent_sound.h"
 
 namespace {
+
+void log_loop_exception(std::exception_ptr failure) noexcept {
+  if (!failure) {
+    std::fprintf(stderr, "mw3: game loop failed with an empty exception\n");
+    std::fflush(stderr);
+    return;
+  }
+  try {
+    std::rethrow_exception(failure);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "mw3: game loop exception (%s): %s\n", typeid(error).name(), error.what());
+  } catch (...) {
+    std::fprintf(stderr, "mw3: game loop exception (non-standard C++ exception)\n");
+  }
+  std::fflush(stderr);
+}
 
 // What the player's game holds (--verbose): its mission, the store and the
 // mission's salvage together by item, the player's mech and loadout, the
@@ -2346,7 +2363,14 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
       if (!sdlfe::watch_attach(a.watch, pump, window.render())) return 2;  // --replay3d's view (ours, #289)
-      result = app.run(pump);
+      try {
+        result = app.run(pump);
+      } catch (...) {
+        // Report before OverlayOff and the renderer owners unwind. Their
+        // cleanup may encounter the same stored worker failure.
+        log_loop_exception(std::current_exception());
+        throw;
+      }
       // An arena match that could not start exits 1 (arena.h, Result::failed).
       if (result == 0 && !a.watch.arena_path.empty() && mech3::arena::arena_result().failed) result = 1;
       sdlfe::watch_detach(pump);
