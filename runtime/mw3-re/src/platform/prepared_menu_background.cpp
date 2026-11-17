@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <fstream>
@@ -18,7 +19,9 @@
 namespace platform {
 namespace detail {
 struct MenuBackgroundWorkers::Impl {
-  explicit Impl(unsigned requested_worker_count) {
+  explicit Impl(unsigned requested_worker_count, WorkerWakeupHook worker_wakeup_hook,
+                void* worker_wakeup_context)
+      : worker_wakeup_hook(worker_wakeup_hook), worker_wakeup_context(worker_wakeup_context) {
     const unsigned available = std::max(1u, std::thread::hardware_concurrency());
     const unsigned count = requested_worker_count == 0
                               ? std::min(7u, available - 1)
@@ -43,7 +46,7 @@ struct MenuBackgroundWorkers::Impl {
     }
     {
       std::lock_guard<std::mutex> lock(mutex);
-      task = render_rows;
+      task = &render_rows;
       rows = row_count;
       remaining = workers.size();
       first_exception = nullptr;
@@ -51,19 +54,33 @@ struct MenuBackgroundWorkers::Impl {
     }
     ready.notify_all();
 
+    std::exception_ptr caller_failure;
     try {
       render_rows(0, row_count / thread_count());
     } catch (...) {
-      std::lock_guard<std::mutex> lock(mutex);
-      if (!first_exception) first_exception = std::current_exception();
+      caller_failure = std::current_exception();
     }
 
-    std::unique_lock<std::mutex> lock(mutex);
-    finished.wait(lock, [this] { return remaining == 0; });
-    const std::exception_ptr failure = first_exception;
-    first_exception = nullptr;
-    task = {};
-    lock.unlock();
+    std::exception_ptr wait_failure;
+    std::exception_ptr failure;
+    for (;;) {
+      try {
+        std::unique_lock<std::mutex> lock(mutex);
+        try {
+          finished.wait(lock, [this] { return remaining == 0; });
+        } catch (...) {
+          if (!wait_failure) wait_failure = std::current_exception();
+          continue;
+        }
+        failure = first_exception ? first_exception : caller_failure;
+        if (!failure) failure = wait_failure;
+        first_exception = nullptr;
+        task = nullptr;
+        break;
+      } catch (...) {
+        if (!wait_failure) wait_failure = std::current_exception();
+      }
+    }
     if (failure) std::rethrow_exception(failure);
   }
 
@@ -82,33 +99,49 @@ struct MenuBackgroundWorkers::Impl {
   void worker_loop(unsigned index) {
     size_t seen_generation = 0;
     for (;;) {
-      std::function<void(unsigned, unsigned)> current_task;
+      const std::function<void(unsigned, unsigned)>* current_task = nullptr;
       unsigned first_row = 0, last_row = 0;
       std::exception_ptr failure;
+      bool observed_generation = false;
       try {
         std::unique_lock<std::mutex> lock(mutex);
         ready.wait(lock, [this, seen_generation] {
           return stopping || generation != seen_generation;
         });
         if (stopping) return;
+        // Once this worker observes a generation, it must account for it even
+        // if the test hook or a later operation in this block throws.
         seen_generation = generation;
+        observed_generation = true;
+        if (worker_wakeup_hook) worker_wakeup_hook(worker_wakeup_context);
         current_task = task;
-        first_row = rows * (index + 1) / thread_count();
-        last_row = rows * (index + 2) / thread_count();
+        const std::uint64_t row_total = rows;
+        const std::uint64_t partition_count = workers.size() + 1;
+        first_row = static_cast<unsigned>(row_total * (index + 1) / partition_count);
+        last_row = static_cast<unsigned>(row_total * (index + 2) / partition_count);
       } catch (...) {
         failure = std::current_exception();
       }
-      if (!failure) {
+      if (!observed_generation) continue;
+      if (!failure && current_task) {
         try {
-          current_task(first_row, last_row);
+          (*current_task)(first_row, last_row);
         } catch (...) {
           failure = std::current_exception();
         }
       }
-      {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (failure && !first_exception) first_exception = failure;
-        if (--remaining == 0) finished.notify_one();
+
+      // A mutex acquisition can itself fail. Retry accounting until it can be
+      // committed; otherwise this observed generation would strand run().
+      for (;;) {
+        try {
+          std::lock_guard<std::mutex> lock(mutex);
+          if (failure && !first_exception) first_exception = failure;
+          if (--remaining == 0) finished.notify_one();
+          break;
+        } catch (...) {
+          if (!failure) failure = std::current_exception();
+        }
       }
     }
   }
@@ -116,15 +149,20 @@ struct MenuBackgroundWorkers::Impl {
   std::vector<std::thread> workers;
   std::mutex mutex;
   std::condition_variable ready, finished;
-  std::function<void(unsigned, unsigned)> task;
+  const std::function<void(unsigned, unsigned)>* task = nullptr;
   std::exception_ptr first_exception;
   unsigned rows = 0;
   size_t remaining = 0, generation = 0;
   bool stopping = false;
+  WorkerWakeupHook worker_wakeup_hook = nullptr;
+  void* worker_wakeup_context = nullptr;
 };
 
-MenuBackgroundWorkers::MenuBackgroundWorkers(unsigned worker_count)
-    : impl_(std::make_unique<Impl>(worker_count)) {}
+MenuBackgroundWorkers::MenuBackgroundWorkers(unsigned worker_count,
+                                             WorkerWakeupHook worker_wakeup_hook,
+                                             void* worker_wakeup_context)
+    : impl_(std::make_unique<Impl>(worker_count, worker_wakeup_hook,
+                                   worker_wakeup_context)) {}
 MenuBackgroundWorkers::~MenuBackgroundWorkers() = default;
 void MenuBackgroundWorkers::run(
     unsigned row_count, const std::function<void(unsigned, unsigned)>& render_rows) {

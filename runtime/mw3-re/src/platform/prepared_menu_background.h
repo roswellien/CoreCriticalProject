@@ -15,7 +15,11 @@ namespace detail {
 // Internal row worker pool, exposed so asset-free tests can inject render failures.
 class MenuBackgroundWorkers {
  public:
-  explicit MenuBackgroundWorkers(unsigned worker_count = 0);
+  using WorkerWakeupHook = void (*)(void*);
+
+  explicit MenuBackgroundWorkers(unsigned worker_count = 0,
+                                 WorkerWakeupHook worker_wakeup_hook = nullptr,
+                                 void* worker_wakeup_context = nullptr);
   ~MenuBackgroundWorkers();
   MenuBackgroundWorkers(const MenuBackgroundWorkers&) = delete;
   MenuBackgroundWorkers& operator=(const MenuBackgroundWorkers&) = delete;

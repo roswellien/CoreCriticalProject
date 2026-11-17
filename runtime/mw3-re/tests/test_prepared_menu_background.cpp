@@ -7,15 +7,61 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
 void require(bool condition, const char* message);
+
+template <typename Function>
+void run_with_watchdog(const char* test_name, Function test) {
+  std::mutex mutex;
+  std::condition_variable finished;
+  bool done = false;
+  std::exception_ptr failure;
+  std::thread test_thread([&] {
+    try {
+      test();
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      done = true;
+    }
+    finished.notify_one();
+  });
+
+  std::unique_lock<std::mutex> lock(mutex);
+  if (!finished.wait_for(lock, std::chrono::seconds(10), [&] { return done; })) {
+    std::fprintf(stderr, "Timed out waiting for pool test: %s\n", test_name);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+  }
+  lock.unlock();
+  test_thread.join();
+  if (failure) std::rethrow_exception(failure);
+}
+
+struct WakeupFailure {
+  std::atomic<bool> should_throw{true};
+};
+
+void fail_once_after_worker_wakeup(void* context) {
+  auto* failure = static_cast<WakeupFailure*>(context);
+  if (failure->should_throw.exchange(false, std::memory_order_relaxed))
+    throw std::runtime_error("injected post-wakeup failure");
+}
 
 float reference_channel_value(uint16_t pixel, int index, bool rgb565) {
   if (index == 0) return float((pixel >> (rgb565 ? 11 : 10)) & 31) * (255.f / 31);
@@ -485,21 +531,74 @@ void worker_pool_propagates_exceptions_and_recovers_for_the_next_run() {
   require(completed_rows == 512, "Worker pool did not complete a run after a worker exception");
 
   bool caller_exception_reached_caller = false;
+  std::atomic<unsigned> caller_failure_worker_rows{0};
   try {
-    workers.run(512, [](unsigned first_row, unsigned) {
+    workers.run(512, [&caller_failure_worker_rows](unsigned first_row, unsigned last_row) {
       if (first_row == 0) throw std::runtime_error("injected caller failure");
+      caller_failure_worker_rows.fetch_add(last_row - first_row, std::memory_order_relaxed);
     });
   } catch (const std::runtime_error& error) {
     caller_exception_reached_caller = std::string(error.what()) == "injected caller failure";
   }
   require(caller_exception_reached_caller,
           "Caller chunk exception was not rethrown after workers finished");
+  require(caller_failure_worker_rows > 0,
+          "Caller failure returned before the worker chunks finished");
 
   completed_rows = 0;
   workers.run(512, [&completed_rows](unsigned first_row, unsigned last_row) {
     completed_rows.fetch_add(last_row - first_row, std::memory_order_relaxed);
   });
   require(completed_rows == 512, "Worker pool did not complete a run after a caller exception");
+}
+
+void worker_pool_recovers_after_failure_immediately_after_wakeup() {
+  WakeupFailure injected_failure;
+  platform::detail::MenuBackgroundWorkers workers(2, fail_once_after_worker_wakeup,
+                                                   &injected_failure);
+  std::atomic<unsigned> completed_rows{0};
+  bool failure_reached_caller = false;
+  try {
+    workers.run(512, [&completed_rows](unsigned first_row, unsigned last_row) {
+      completed_rows.fetch_add(last_row - first_row, std::memory_order_relaxed);
+    });
+  } catch (const std::runtime_error& error) {
+    failure_reached_caller = std::string(error.what()) == "injected post-wakeup failure";
+  }
+  require(failure_reached_caller, "Post-wakeup worker failure was not rethrown on the caller");
+
+  for (unsigned iteration = 0; iteration < 5; ++iteration) {
+    completed_rows = 0;
+    workers.run(512, [&completed_rows](unsigned first_row, unsigned last_row) {
+      completed_rows.fetch_add(last_row - first_row, std::memory_order_relaxed);
+    });
+    require(completed_rows == 512,
+            "Pool did not account for exactly one full run after a post-wakeup failure");
+  }
+}
+
+void worker_pool_handles_single_worker_empty_and_inline_ranges() {
+  platform::detail::MenuBackgroundWorkers workers(1);
+  require(workers.thread_count() == 2, "Single-worker pool created the wrong thread count");
+  std::atomic<unsigned> completed_rows{0};
+  workers.run(256, [&completed_rows](unsigned first_row, unsigned last_row) {
+    completed_rows.fetch_add(last_row - first_row, std::memory_order_relaxed);
+  });
+  require(completed_rows == 256, "Single worker did not cover its full assigned range");
+
+  bool saw_empty_range = false;
+  workers.run(0, [&saw_empty_range](unsigned first_row, unsigned last_row) {
+    saw_empty_range = first_row == 0 && last_row == 0;
+  });
+  require(saw_empty_range, "Zero-row run did not use the inline empty range");
+
+  unsigned inline_first = 1, inline_last = 0;
+  workers.run(64, [&inline_first, &inline_last](unsigned first_row, unsigned last_row) {
+    inline_first = first_row;
+    inline_last = last_row;
+  });
+  require(inline_first == 0 && inline_last == 64,
+          "Short run was partitioned instead of using the inline range");
 }
 
 void menu_background_output_cap_preserves_fit_and_layer_rect() {
@@ -536,6 +635,14 @@ int main() {
   cached_menu_texture_action_recreates_texture_on_cache_hit();
   compositor_writes_every_pixel_at_the_capped_height();
   cached_composition_matches_fresh_and_invalidates_inputs();
-  worker_pool_propagates_exceptions_and_recovers_for_the_next_run();
+  run_with_watchdog("worker failures and recovery", [] {
+    worker_pool_propagates_exceptions_and_recovers_for_the_next_run();
+  });
+  run_with_watchdog("post-wakeup failure recovery", [] {
+    worker_pool_recovers_after_failure_immediately_after_wakeup();
+  });
+  run_with_watchdog("single worker and inline ranges", [] {
+    worker_pool_handles_single_worker_empty_and_inline_ranges();
+  });
   menu_background_output_cap_preserves_fit_and_layer_rect();
 }
