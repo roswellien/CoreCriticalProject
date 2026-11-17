@@ -475,7 +475,11 @@ class NativePreviewPlanTests(unittest.TestCase):
         payload = lambda name: os.path.join(models, "payload", name + ".bin")
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
-        self.assertEqual(result["argv"][19:], [
+        argv = result["argv"]
+        tail_start = argv.index("--cc-dynamic-lighting")
+        self.assertEqual(argv[argv.index("--cc-lighting") + 2:tail_start],
+                         ["--cc-flare-style", "modern"])
+        self.assertEqual(argv[tail_start:], [
             "--cc-dynamic-lighting", "0", "--cc-sun-shadows", "0", "--cc-water-detail", "0",
             "--cc-cloud-detail", "0", "--cc-pom", "1", "--cc-environment-packs-explicit",
             "--cc-draw-distance", "1200",
@@ -488,7 +492,7 @@ class NativePreviewPlanTests(unittest.TestCase):
             "--cc-model", "owens", "0", payload("solo-mesh"), payload("solo-tex"),
             "--cc-environment-pack", training,
         ])
-        self.assertEqual(result["argv"][16], "normal")
+        self.assertEqual(argv[16], "normal")
 
     def test_original_distance_adds_no_argument_and_defaults_apply(self):
         result = self.plan(self.request())
