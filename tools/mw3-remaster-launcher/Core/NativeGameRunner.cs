@@ -140,6 +140,12 @@ public sealed class NativeGameRunner
             WindowMode = WindowModeForSettings(settings.WindowMode),
             RenderThread = settings.RenderThread,
             Lighting = Mw3ReLighting.Normal,
+            FlareStyle = settings.FlareStyle switch
+            {
+                "modern" => Mw3ReFlareStyle.Modern,
+                "original" => Mw3ReFlareStyle.Original,
+                _ => throw new InvalidOperationException("Unknown lens flare style: " + settings.FlareStyle)
+            },
             Pom = true,
             Preview = new Mw3RePreviewOptions
             {

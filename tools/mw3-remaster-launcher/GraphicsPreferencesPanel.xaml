@@ -53,6 +53,13 @@
         <TextBlock Text="2400m and 3200m cost much more GPU time."
                    FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
 
+        <TextBlock Text="MW3-RE Lens Flare Alpha:" FontWeight="SemiBold" Margin="0,0,0,6" />
+        <ComboBox x:Name="ComboFlareStyle" Margin="0,0,0,6" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="Smooth (Recommended)" Tag="modern" />
+            <ComboBoxItem Content="Original" Tag="original" />
+        </ComboBox>
+        <TextBlock Text="Smooths the alpha edges of lflare1–4 while preserving their colors and shape. Original restores the source alpha." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+
         <CheckBox x:Name="ChkDynamicLighting" Content="Dynamic Lighting" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
         <TextBlock Text="Adds lighting from weapons and scene fixtures. Works with stock assets or enabled packs. Off retains original lighting. Applies on the next launch." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
         <CheckBox x:Name="ChkHeadlights" Content="Headlights" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
