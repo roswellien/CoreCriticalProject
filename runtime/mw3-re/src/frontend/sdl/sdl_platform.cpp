@@ -249,11 +249,13 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend, bool sharp) {
   platform::DrawState s;
   s.texture = texture_, s.address_u = s.address_v = 3;
   s.depth_write = false, s.depth_always = true, s.blend = blend, s.sharp = sharp;
-  const float w = static_cast<float>(width), h = static_cast<float>(height);
-  const platform::TLVertex quad[4] = {{0, 0, 1, 1, 0xffffffffu, 0xff000000u, 0, 0},
-                                      {w, 0, 1, 1, 0xffffffffu, 0xff000000u, 1, 0},
-                                      {w, h, 1, 1, 0xffffffffu, 0xff000000u, 1, 1},
-                                      {0, h, 1, 1, 0xffffffffu, 0xff000000u, 0, 1}};
+  const auto rect = platform::menu_background_layer_rect(width, height);
+  const float right = rect.x + rect.width, bottom = rect.y + rect.height;
+  const platform::TLVertex quad[4] = {
+      {rect.x, rect.y, 1, 1, 0xffffffffu, 0xff000000u, 0, 0},
+      {right, rect.y, 1, 1, 0xffffffffu, 0xff000000u, 1, 0},
+      {right, bottom, 1, 1, 0xffffffffu, 0xff000000u, 1, 1},
+      {rect.x, bottom, 1, 1, 0xffffffffu, 0xff000000u, 0, 1}};
   render_->begin_canvas_scene();
   render_->draw(platform::Primitive::kFan, quad, 4, s);
   render_->end_scene();
@@ -264,15 +266,13 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   ++frames;
   bool menu_background_shown = false;
   if (menu_background_) {
-    unsigned output_width = unsigned(width), output_height = unsigned(height);
     int window_width = width, window_height = height;
     if (hud_window_) SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
-    const double fit = std::min({double(window_width) / width, double(window_height) / height, 4.5});
-    if (fit >= 1.0) {
+    const auto output = platform::menu_background_output_size(width, height, window_width,
+                                                              window_height, 1080);
+    const unsigned output_width = output.width, output_height = output.height;
+    if (output.fit_scale >= 1.0) {
       // Keep the existing uniform fit while bounding CPU composition and upload size.
-      const double compose_scale = std::min(fit, 1080.0 / height);
-      output_width = std::max(1u, unsigned(std::lround(width * compose_scale)));
-      output_height = std::max(1u, unsigned(std::lround(height * compose_scale)));
       static auto report_start = std::chrono::steady_clock::now();
       static unsigned report_frames = 0, report_hits = 0;
       static double report_milliseconds = 0.0;

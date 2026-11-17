@@ -34,6 +34,25 @@ struct MenuBackgroundImage {
   std::vector<uint8_t> rgb;
 };
 
+struct MenuBackgroundOutputSize {
+  unsigned width{}, height{};
+  double fit_scale{}, compose_scale{};
+};
+
+struct MenuBackgroundLayerRect {
+  float x{}, y{}, width{}, height{};
+};
+
+// Output resolution follows the frame's uniform window fit, subject to an
+// optional height cap. A zero cap leaves the full fit uncapped.
+MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_height,
+                                                     int window_width, int window_height,
+                                                     unsigned maximum_height);
+
+// The composed texture is presented across the original frame rectangle,
+// independently of its CPU composition resolution.
+MenuBackgroundLayerRect menu_background_layer_rect(int frame_width, int frame_height);
+
 MenuBackgroundImage load_menu_background(const std::filesystem::path& path);
 
 // Reconstructs the original scrolling image under native controls, tint and

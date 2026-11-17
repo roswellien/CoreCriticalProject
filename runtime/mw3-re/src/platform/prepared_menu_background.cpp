@@ -212,6 +212,25 @@ bool same_frame(const uint16_t* pixels, int width, int height, int pitch,
 }
 }  // namespace
 
+MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_height,
+                                                     int window_width, int window_height,
+                                                     unsigned maximum_height) {
+  if (frame_width <= 0 || frame_height <= 0 || window_width <= 0 || window_height <= 0)
+    return {};
+  const double fit_scale = std::min({double(window_width) / frame_width,
+                                     double(window_height) / frame_height, 4.5});
+  const double cap_scale = maximum_height == 0 ? fit_scale
+                                                : double(maximum_height) / frame_height;
+  const double compose_scale = std::min(fit_scale, cap_scale);
+  return {std::max(1u, unsigned(std::lround(frame_width * compose_scale))),
+          std::max(1u, unsigned(std::lround(frame_height * compose_scale))), fit_scale,
+          compose_scale};
+}
+
+MenuBackgroundLayerRect menu_background_layer_rect(int frame_width, int frame_height) {
+  return {0.f, 0.f, float(frame_width), float(frame_height)};
+}
+
 MenuBackgroundImage load_menu_background(const std::filesystem::path& path) {
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input) throw std::runtime_error("Menu HD background unavailable: " + path.string());

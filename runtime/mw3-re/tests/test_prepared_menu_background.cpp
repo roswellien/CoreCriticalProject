@@ -501,6 +501,31 @@ void worker_pool_propagates_exceptions_and_recovers_for_the_next_run() {
   });
   require(completed_rows == 512, "Worker pool did not complete a run after a caller exception");
 }
+
+void menu_background_output_cap_preserves_fit_and_layer_rect() {
+  const auto capped = platform::menu_background_output_size(640, 480, 3440, 1440, 1080);
+  const auto uncapped = platform::menu_background_output_size(640, 480, 3440, 1440, 0);
+  require(capped.fit_scale == 3.0 && capped.compose_scale == 2.25 && capped.width == 1440 &&
+              capped.height == 1080,
+          "Ultrawide composition was not capped at 1080 with its aspect preserved");
+  require(uncapped.fit_scale == 3.0 && uncapped.compose_scale == 3.0 && uncapped.width == 1920 &&
+              uncapped.height == 1440,
+          "Uncapped ultrawide composition did not use the full frame fit");
+
+  const auto capped_rect = platform::menu_background_layer_rect(640, 480);
+  const auto uncapped_rect = platform::menu_background_layer_rect(640, 480);
+  require(capped_rect.x == uncapped_rect.x && capped_rect.y == uncapped_rect.y &&
+              capped_rect.width == uncapped_rect.width &&
+              capped_rect.height == uncapped_rect.height &&
+              capped_rect.x == 0.f && capped_rect.y == 0.f && capped_rect.width == 640.f &&
+              capped_rect.height == 480.f,
+          "Composition cap changed the layer's frame-sized destination rectangle");
+
+  const auto smaller_window = platform::menu_background_output_size(640, 480, 1280, 720, 1080);
+  require(smaller_window.fit_scale == 1.5 && smaller_window.compose_scale == 1.5 &&
+              smaller_window.width == 960 && smaller_window.height == 720,
+          "Smaller-window output did not follow the full fit");
+}
 }  // namespace
 
 int main() {
@@ -512,4 +537,5 @@ int main() {
   compositor_writes_every_pixel_at_the_capped_height();
   cached_composition_matches_fresh_and_invalidates_inputs();
   worker_pool_propagates_exceptions_and_recovers_for_the_next_run();
+  menu_background_output_cap_preserves_fit_and_layer_rect();
 }
