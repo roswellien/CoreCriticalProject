@@ -9,6 +9,7 @@ std::vector<VkDescriptorSet> tiledSets;
 std::vector<uint32_t> tiledOffsets;
 std::vector<VkDeviceSize> tiledLengths;
 bool tiledOverflowReported{};
+bool tiledAffineFallbackReported{};
 
 void init_tiled() {
   if (tiledPipeline)

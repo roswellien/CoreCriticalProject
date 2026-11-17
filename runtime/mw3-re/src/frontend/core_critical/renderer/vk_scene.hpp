@@ -1594,10 +1594,48 @@ private:
           const auto &d = s.draws[at];
           if (s.hud || s.frontend_canvas || d.sky || !sun_lit(d))
             continue;
-          const auto camera =
-              d.model ? mw34::tiled::compose_affine(d.model->camera,
-                                                    mw34::tiled::inverse_affine(d.model->sun_world))
-                      : mw34::tiled::inverse_affine(d.sun_tl->camera_world);
+          mw34::tiled::Mat34 camera{};
+          const auto report_affine_fallback = [&](const char *reason) {
+            const auto &matrix = d.model ? d.model->sun_world : d.sun_tl->camera_world;
+            const auto matrix_scale = [&](unsigned row) {
+              const double x = matrix[row * 4], y = matrix[row * 4 + 1],
+                           z = matrix[row * 4 + 2];
+              return std::sqrt(x * x + y * y + z * z);
+            };
+            std::fprintf(stderr,
+                         "Tiled lights: affine all-light fallback draw=%zu source=%s "
+                         "model_id=",
+                         at, d.model ? "model" : "TL");
+            if (d.model)
+              std::fprintf(stderr, "%llu", static_cast<unsigned long long>(d.model->geometry->key));
+            else
+              std::fprintf(stderr, "none");
+            std::fprintf(stderr,
+                         " model_name=unavailable scale=(%.6g,%.6g,%.6g) "
+                         "translation=(%.6g,%.6g,%.6g) matrix=[",
+                         matrix_scale(0), matrix_scale(1), matrix_scale(2), matrix[3], matrix[7],
+                         matrix[11]);
+            for (unsigned element = 0; element < matrix.size(); ++element)
+              std::fprintf(stderr, "%s%.6g", element ? "," : "", matrix[element]);
+            if (d.model) {
+              std::fprintf(stderr, "] camera=[");
+              for (unsigned element = 0; element < d.model->camera.size(); ++element)
+                std::fprintf(stderr, "%s%.6g", element ? "," : "",
+                             d.model->camera[element]);
+            }
+            std::fprintf(stderr, "] reason=%s\n", reason);
+          };
+          if (!mw34::tiled::try_affine_camera_or_all_lights(
+                  camera, tiledDrawViews[at], allEffectLights, tiledAffineFallbackReported,
+                  [&] {
+                    return d.model
+                               ? mw34::tiled::compose_affine(
+                                     d.model->camera,
+                                     mw34::tiled::inverse_affine(d.model->sun_world))
+                               : mw34::tiled::inverse_affine(d.sun_tl->camera_world);
+                  },
+                  report_affine_fallback))
+            continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
           const auto v = mw34::tiled::draw_view(camera, projection, width, height, rw, rh);
           auto found =
