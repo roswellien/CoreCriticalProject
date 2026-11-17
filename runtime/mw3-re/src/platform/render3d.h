@@ -37,6 +37,7 @@ struct DrawState {
   bool additive = false;           // SRCBLEND ONE, DESTBLEND ONE
   bool multiply = false;           // the shadow passes: SRCBLEND ZERO, DESTBLEND SRCCOLOR
   bool unsupported_blend = false;  // Source/destination pair outside the modeled modes
+  int32_t source_blend = 5, destination_blend = 6;  // D3D factors retained for failure diagnostics
   bool depth_write = true;         // ZWRITEENABLE
   bool depth_always = false;       // ZFUNC ALWAYS (overlays), else GREATEREQUAL
   bool alpha_modulate = false;     // ALPHAOP MODULATE (transparent), else SELECTARG1

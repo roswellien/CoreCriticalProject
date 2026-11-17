@@ -179,6 +179,8 @@ void set_render_state(int32_t state, int32_t value) {
     case 19:                                      // SRCBLEND: 5 SRCALPHA, 1 ZERO
     case 20:                                      // DESTBLEND: 6 INVSRCALPHA, 3 SRCCOLOR
       (state == 19 ? g_src_blend : g_dest_blend) = value;
+      d.source_blend = g_src_blend;
+      d.destination_blend = g_dest_blend;
       d.multiply = g_src_blend == 1 && g_dest_blend == 3;
       d.additive = g_src_blend == 2 && g_dest_blend == 2;
       d.unsupported_blend =

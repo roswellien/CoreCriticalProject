@@ -1100,7 +1100,10 @@ public:
             const DrawState &state) override {
     require_producer_live();
     if (state.blend && state.unsupported_blend)
-      throw std::runtime_error("Unsupported MW3 alpha blend factor pair");
+      throw std::runtime_error(
+          "Unsupported MW3 alpha blend factor pair: SRCBLEND=" +
+          std::to_string(state.source_blend) + " DESTBLEND=" +
+          std::to_string(state.destination_blend));
     // Only the explicitly marked 2D compositor may supply CPU vertices in
     // strict mode. Depth-always also occurs in 3D overlays, so it cannot
     // identify a HUD exemption.
@@ -1113,7 +1116,7 @@ public:
     }
     if (suppress_model_draws_)
       return;
-    if ((state.blend || state.multiply) && state.texture >= 0 &&
+    if (state.texture >= 0 &&
         std::size_t(state.texture) < textures_.size() &&
         deferred_material_binding_ &&
         validated_deferred_binding(textures_[state.texture].surface_key,
@@ -1390,7 +1393,8 @@ private:
       const auto epoch = tex_entry.group_load_epoch;
       const auto tex_name = tex_entry.name;
       if (epoch == group_load_epoch_ && key.hash != 0) {
-        int norm_idx = lighting_.normals
+        const bool apply_sun_lighting = !state.blend && !state.multiply;
+        int norm_idx = lighting_.normals && apply_sun_lighting
                            ? deferred_surface_normal_index(key, state.texture)
                            : -1;
         if (norm_idx >= 0) {
@@ -1399,7 +1403,6 @@ private:
         } else {
           draw.normal_texture = -1;
         }
-        const bool apply_sun_lighting = !state.blend && !state.multiply;
         if (apply_sun_lighting)
           draw.sun_tl = capture_tl_view();
         const auto &proj = projection;

@@ -772,7 +772,7 @@ void check_terrain_surface_normals(SDL_Window *window,
   std::vector<uint32_t> flat_pixels;
   std::vector<uint32_t> flat_blended_pixels;
   std::vector<uint32_t> flat_additive_pixels;
-  // Flat lighting control: normal_draws == 0
+  // Flat sun lighting control: normal maps are disabled, but the sun is on.
   {
     auto flat_options = options;
     flat_options.lighting = "flat";
@@ -846,7 +846,7 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(off_renderer->read_back(&pixels, &width, &height),
             "Could not read back unlit blended effect fixture");
     require(pixels == flat_blended_pixels,
-            "Sun lighting changed translucent effect colour");
+            "Flat sun lighting changed translucent effect colour");
 
     auto additive_state = off_state;
     additive_state.blend = true;
@@ -856,7 +856,41 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(off_renderer->read_back(&pixels, &width, &height),
             "Could not read back unlit additive effect fixture");
     require(pixels == flat_additive_pixels,
-            "Sun lighting changed additive effect colour");
+            "Flat sun lighting changed additive effect colour");
+  }
+
+  // Exercise the normal-enabled sun path too. The opaque control must be
+  // visibly lit so these comparisons cannot pass with lighting disabled.
+  {
+    const auto before_lit = renderer->asset_statistics();
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+    require(renderer->read_back(&pixels, &width, &height),
+            "Could not read back sun-lit opaque control");
+    const auto lit_control = renderer->asset_statistics();
+    require(lit_control.lit_draws > before_lit.lit_draws &&
+                lit_control.normal_draws > before_lit.normal_draws &&
+                pixels != flat_blended_pixels,
+            "Opaque control did not exercise visible sun and normal lighting");
+
+    auto blended_state = state;
+    blended_state.blend = true;
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(renderer->read_back(&pixels, &width, &height) &&
+                pixels == flat_blended_pixels,
+            "Normal-enabled sun lighting changed translucent effect colour");
+
+    blended_state.additive = true;
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(renderer->read_back(&pixels, &width, &height) &&
+                pixels == flat_additive_pixels,
+            "Normal-enabled sun lighting changed additive effect colour");
+    const auto after_effects = renderer->asset_statistics();
+    require(after_effects.lit_draws == lit_control.lit_draws &&
+                after_effects.normal_draws == lit_control.normal_draws,
+            "Blended effects entered the sun lighting pipeline");
   }
   // Optional content absent: normal mode is neutral, not a synthetic pack.
 #if defined(_WIN32)
@@ -1066,13 +1100,24 @@ void check_terrain_surface_normals(SDL_Window *window,
                 after_deferred.binding_rejected_mismatch ==
                     before_deferred.binding_rejected_mismatch,
             "Overlay queue lost qualified material admission");
+    platform::DrawState receipt_state;
+    receipt_state.texture = device_texture.handle;
+    checked_renderer->clear(true, 0, 0, 0);
+    checked_renderer->begin_deferred_material_draw(receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Opaque deferred admission readback failed");
+    const auto after_opaque = checked_renderer->asset_statistics();
+    require(after_opaque.deferred_material_admissions ==
+                after_deferred.deferred_material_admissions + 1,
+            "Opaque draw was excluded from deferred material admissions");
     // Same handle after an upload cannot reuse a previously admitted receipt.
     mw34::materials::set_active_surface_key(t1m1_terrain_key);
     checked_renderer->update_texture(device_texture.handle, 128, 128,
                                      green_data.data());
     mw34::materials::clear_active_surface_key();
-    platform::DrawState receipt_state;
-    receipt_state.texture = device_texture.handle;
     checked_renderer->begin_deferred_material_draw(receipt);
     checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
                            receipt_state);
@@ -1080,9 +1125,9 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Stale admission readback failed");
     require(checked_renderer->asset_statistics().normal_draws ==
-                    after_deferred.normal_draws &&
+                    after_opaque.normal_draws &&
                 checked_renderer->asset_statistics().binding_rejected_mismatch >
-                    after_deferred.binding_rejected_mismatch,
+                    after_opaque.binding_rejected_mismatch,
             "Deferred admission survived a same-handle upload");
     // A source mutation inside a model scope explicitly invalidates its hash.
     checked_renderer->begin_model_draw(model_context);

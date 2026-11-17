@@ -308,7 +308,10 @@ void SdlRender3D::begin_scene() {
 void SdlRender3D::draw(platform::Primitive type, const platform::TLVertex* v, int count,
                        const platform::DrawState& state) {
   if (state.blend && state.unsupported_blend)
-    throw std::runtime_error("Unsupported MW3 alpha blend factor pair");
+    throw std::runtime_error(
+        "Unsupported MW3 alpha blend factor pair: SRCBLEND=" +
+        std::to_string(state.source_blend) + " DESTBLEND=" +
+        std::to_string(state.destination_blend));
   if (count < 1) return;
   const auto first = static_cast<uint32_t>(vertices_.size());
   if (type == platform::Primitive::kFan) {
