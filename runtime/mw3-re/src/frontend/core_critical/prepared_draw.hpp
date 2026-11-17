@@ -184,7 +184,10 @@ prepare_draw(const PreparedBatchDraw &source,
   auto &draw = result.draw;
   draw.texture = -1;
   draw.sampler = 3U | (1U << 4) | (1U << 8) | 0x10000U;
-  draw.key = {context.opacity < 1.f, 5, 6, 1, 7, 1, context.opacity >= 1.f, 0};
+  // Key order: blend, src, dst, zenable, zfunc, zwrite, cull, points. A fading
+  // node blends with SRCALPHA/INVSRCALPHA and skips depth writes, as the native
+  // flush_transparent pass does; cull stays D3DCULL_NONE either way.
+  draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f, 1, 0};
   // Prepared draws do not use alpha test in mode.w, so retain the native
   // per-node opacity there for the prepared vertex shader to apply to alpha.
   draw.push.mode[3] = prepared_opacity_bits(context.opacity);
