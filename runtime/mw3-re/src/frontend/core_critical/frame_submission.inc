@@ -30,6 +30,9 @@ void flush() override {
     (void)packet_height_bytes(scene_);
     std::size_t local_bytes = 0;
     if (local_active_) {
+      // Compute the byte terms once per flush; the total is checked for overflow.
+      const auto terms = packet_byte_terms(scene_);
+      local_bytes = checked_packet_total(terms);
       if (staging_first_flush_pending_) {
         // First local-light flush after a mission change: whatever is still pending now would
         // be carried over from before the change. Record it and name the terms of this first
@@ -37,20 +40,23 @@ void flush() override {
         staging_first_flush_pending_ = false;
         staging_first_flush_bytes_ = pending_local_bytes_;
         staging_first_flush_packets_ = pending_local_packets_.size();
-        const auto first_terms = packet_byte_terms(scene_);
         std::fprintf(stderr,
                      "Local light staging first flush after mission change: pending packets=%zu "
-                     "pending_bytes=%zu; first packet total=%zu scene=%zu vertices=%zu "
-                     "color_depth=%zu draws=%zu textures=%zu texture_pixels=%zu geometry=%zu "
-                     "lit_normals=%zu height=%zu emissions=%zu budget=%zu\n",
+                     "pending_bytes=%zu recycled_scenes=%zu; first packet total=%zu scene=%zu "
+                     "vertices=%zu color_depth=%zu draws=%zu order=%zu textures=%zu "
+                     "texture_pixels=%zu geometry=%zu lit_normals=%zu height=%zu emissions=%zu "
+                     "clears=%zu budget=%zu\n",
                      staging_first_flush_packets_, staging_first_flush_bytes_,
-                     first_terms.total(), first_terms.scene, first_terms.vertices,
-                     first_terms.color_depth, first_terms.draws, first_terms.textures,
-                     first_terms.texture_pixels, first_terms.geometry, first_terms.lit_normals,
-                     first_terms.height_metadata + first_terms.height_packet,
-                     first_terms.emissions, local_staging_budget_);
+                     recycled_scene_count_for_test(), local_bytes, terms.scene, terms.vertices,
+                     terms.color_depth, terms.draws, terms.order, terms.textures,
+                     terms.texture_pixels, terms.geometry, terms.lit_normals,
+                     terms.height_metadata + terms.height_packet, terms.emissions, terms.clears,
+                     local_staging_budget_);
       }
-      local_bytes = packet_bytes(scene_);
+      // A single packet that could never fit even an EMPTY staging area is a real invariant
+      // failure: reject it before submitting any earlier packet.
+      if (!staging::fits(local_bytes, 0, local_staging_budget_))
+        throw std::runtime_error("Local light packet staging exceeds budget");
       if (!staging::fits(local_bytes, pending_local_bytes_, local_staging_budget_) &&
           !pending_local_packets_.empty()) {
         // The CPU staging area is full of earlier packets of this scene. Submit them now
@@ -59,7 +65,6 @@ void flush() override {
         // the lights attached to the earlier packets can be slightly older.
         const std::size_t early_packets = pending_local_packets_.size();
         const std::size_t early_pending_bytes = pending_local_bytes_;
-        const auto terms = packet_byte_terms(scene_);
         complete_local_light_packets();
         ++staging_early_completions_;
         const auto now = std::chrono::steady_clock::now();
@@ -71,24 +76,20 @@ void flush() override {
           std::fprintf(stderr,
                        "Local light staging: early completion packets=%zu pending_bytes=%zu "
                        "next_packet_bytes=%zu budget=%zu (earlier packets use the lights "
-                       "known so far)\n",
-                       early_packets, early_pending_bytes, local_bytes,
-                       local_staging_budget_);
-          std::fprintf(stderr,
-                       "Local light staging terms (next packet): scene=%zu vertices=%zu "
+                       "known so far); next packet terms: scene=%zu vertices=%zu "
                        "color_depth=%zu draws=%zu order=%zu textures=%zu texture_pixels=%zu "
                        "emissions=%zu geometry=%zu lit_normals=%zu height_metadata=%zu "
                        "clears=%zu height_packet=%zu (capacity based)\n",
+                       early_packets, early_pending_bytes, local_bytes, local_staging_budget_,
                        terms.scene, terms.vertices, terms.color_depth, terms.draws,
                        terms.order, terms.textures, terms.texture_pixels, terms.emissions,
                        terms.geometry, terms.lit_normals, terms.height_metadata,
                        terms.clears, terms.height_packet);
         }
       }
-      // A single packet that still does not fit in an empty staging area is a real
-      // invariant failure.
+      // After any early completion the packet must fit the (now empty or smaller) area.
       if (!staging::fits(local_bytes, pending_local_bytes_, local_staging_budget_))
-          throw std::runtime_error("Local light packet staging exceeds budget");
+        throw std::runtime_error("Local light packet staging exceeds budget");
       if (worker_)
         for (const auto &draw : scene_.draws)
           if (draw.shadow_valid)
@@ -139,7 +140,7 @@ void flush() override {
                 }
                 recycle_scene(*packet);
                 std::lock_guard<std::mutex> lock(recycle_mutex_);
-                recycled_scenes_.push_back(std::move(*packet));
+                store_recycled_scene(std::move(*packet));
             },
             bytes);
         scene_ = {};
@@ -204,7 +205,7 @@ private:
               }
               recycle_scene(*packet);
               std::lock_guard<std::mutex> lock(recycle_mutex_);
-              recycled_scenes_.push_back(std::move(*packet));
+              store_recycled_scene(std::move(*packet));
             },
             pending.bytes);
       } else {
@@ -212,7 +213,7 @@ private:
         renderer_->render(*packet, initialize, false);
         recycle_scene(*packet);
         std::lock_guard<std::mutex> lock(recycle_mutex_);
-        recycled_scenes_.push_back(std::move(*packet));
+        store_recycled_scene(std::move(*packet));
       }
     }
     packets.clear();
@@ -294,8 +295,22 @@ static PacketByteTerms packet_byte_terms(const vk::Scene &scene) {
   terms.height_packet = std::size_t(height_bytes);
   return terms;
 }
+// Sum the terms with an overflow check on every addition (the unchecked total() is only for
+// diagnostics that cannot wrap).
+static std::size_t checked_packet_total(const PacketByteTerms &terms) {
+  std::size_t total = 0;
+  for (const std::size_t term :
+       {terms.scene, terms.vertices, terms.color_depth, terms.draws, terms.order, terms.textures,
+        terms.texture_pixels, terms.emissions, terms.geometry, terms.lit_normals,
+        terms.height_metadata, terms.clears, terms.height_packet}) {
+    if (term > std::numeric_limits<std::size_t>::max() - total)
+      throw std::runtime_error("Packet byte count overflow");
+    total += term;
+  }
+  return total;
+}
 static std::size_t packet_bytes(const vk::Scene &scene) {
-  return packet_byte_terms(scene).total();
+  return checked_packet_total(packet_byte_terms(scene));
 }
 static std::uint64_t packet_height_bytes(const vk::Scene &scene) {
   std::vector<std::shared_ptr<const mw34::materials::HeightBinding>> bindings;
@@ -304,6 +319,26 @@ static std::uint64_t packet_height_bytes(const vk::Scene &scene) {
     if (draw.height_binding)
       bindings.push_back(draw.height_binding);
   return mw34::materials::height_binding_bytes(bindings);
+}
+// Bounded pool of recycled Scenes. A Scene keeps the capacity of its vectors, so an unbounded pool
+// would carry the largest earlier frames into every later packet (packet_bytes charges capacity).
+// Callers hold recycle_mutex_.
+static constexpr std::size_t recycled_scene_limit = 6;
+void store_recycled_scene(vk::Scene &&scene) {
+  if (recycled_scenes_.size() < recycled_scene_limit)
+    recycled_scenes_.push_back(std::move(scene));
+  // Otherwise drop it, which releases its retained capacity.
+}
+std::size_t recycled_scene_count_for_test() {
+  std::lock_guard<std::mutex> lock(recycle_mutex_);
+  return recycled_scenes_.size();
+}
+// Release every retained Scene capacity. Only call at a synchronized point, after the workers
+// have finished (mission change drains first).
+void release_recycled_scenes() {
+  std::lock_guard<std::mutex> lock(recycle_mutex_);
+  recycled_scenes_.clear();
+  recycled_scenes_.shrink_to_fit();
 }
 static void recycle_scene(vk::Scene &scene) {
     // Reuse hot submission storage, like the SDL renderer. Reset every

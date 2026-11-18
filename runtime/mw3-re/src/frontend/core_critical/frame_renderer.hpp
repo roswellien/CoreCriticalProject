@@ -77,6 +77,7 @@ struct StagingTestState {
   std::size_t peak_bytes{}, early_completions{}, early_log_lines{};
   // Pending bytes/packets seen at the first local-light flush after the last mission change.
   std::size_t first_flush_pending_bytes{}, first_flush_pending_packets{};
+  std::size_t recycled_scenes{}, retained_scene_bytes{};
 };
 StagingTestState staging_state(VulkanFrameRenderer &renderer);
 

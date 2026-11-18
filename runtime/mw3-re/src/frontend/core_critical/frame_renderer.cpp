@@ -656,9 +656,15 @@ public:
             native_fingerprint_evaluations_,
             deferred_material_admissions_};
   }
-  testing::StagingTestState staging_state_for_test() const {
+  // Capacity the current producer Scene retains from earlier packets (adopted from the pool).
+  std::size_t retained_scene_capacity_bytes() const {
+    const auto terms = packet_byte_terms(scene_);
+    return terms.vertices + terms.draws + terms.order + terms.textures + terms.clears;
+  }
+  testing::StagingTestState staging_state_for_test() {
     return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
-            staging_first_flush_bytes_, staging_first_flush_packets_};
+            staging_first_flush_bytes_, staging_first_flush_packets_,
+            recycled_scene_count_for_test(), retained_scene_capacity_bytes()};
   }
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
@@ -802,6 +808,12 @@ public:
       zvid::producer_mission_changed(identity);
     // Drain packets queued for the previous mission before switching state.
     drain();
+    // The workers are idle now: release the capacity that recycled Scenes (and the one drain may
+    // have adopted into scene_) kept from the previous mission, so this mission's packets are not
+    // charged for it.
+    scene_ = {};
+    invalidate_scene_bindings();
+    release_recycled_scenes();
     local_lights_clear();
     staging_early_logged_ = false;
     staging_first_flush_pending_ = true;
