@@ -1,5 +1,6 @@
 #include "gamez/zclass/camera.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -8,6 +9,7 @@
 #include <cstring>
 #include <new>
 #include <optional>
+#include <vector>
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -60,8 +62,13 @@ struct VisualFarLogState {
   int32_t mission_linear, mission_on;
 };
 
-std::array<std::optional<VisualFarLogState>, 3>
-    g_previous_visual_far_log_state_by_camera{};
+std::vector<VisualFarLogState> g_previous_visual_far_log_states;
+using VisualFarLogClock = std::chrono::steady_clock;
+std::array<VisualFarLogClock::time_point, zcls::kVisualFarLogLinesPerSecond>
+    g_visual_far_log_times{};
+std::size_t g_visual_far_log_count = 0;
+std::array<bool, 3> g_visual_far_camera_class_logged{};
+zcls::VisualFarLogNow g_visual_far_log_now = nullptr;
 
 constexpr float kVisualFarLogFloatEpsilon = 0.5f;
 
@@ -91,21 +98,57 @@ bool same_visual_far_log_state(const VisualFarLogState& left,
          left.mission_on == right.mission_on;
 }
 
-void emit_visual_far_log_line(const char* line) {
+bool emit_visual_far_log_line(const char* line, int32_t first_line_camera_class = -1) {
+  const VisualFarLogClock::time_point now =
+      g_visual_far_log_now ? g_visual_far_log_now() : VisualFarLogClock::now();
+  std::size_t recent_count = 0;
+  for (std::size_t i = 0; i < g_visual_far_log_count; ++i) {
+    if (now - g_visual_far_log_times[i] < std::chrono::seconds(1))
+      g_visual_far_log_times[recent_count++] = g_visual_far_log_times[i];
+  }
+  g_visual_far_log_count = recent_count;
+  const bool first_line_for_class =
+      first_line_camera_class >= 0 &&
+      static_cast<std::size_t>(first_line_camera_class) <
+          g_visual_far_camera_class_logged.size() &&
+      !g_visual_far_camera_class_logged[static_cast<std::size_t>(first_line_camera_class)];
+  std::size_t reserved_class_lines = 0;
+  for (bool logged : g_visual_far_camera_class_logged)
+    if (!logged) ++reserved_class_lines;
+  // Ordinary diagnostics leave one slot for every camera class not yet seen.
+  // This keeps the global cap while guaranteeing main, zoom and other each log once.
+  const std::size_t maximum_recent_lines =
+      first_line_for_class ? g_visual_far_log_times.size()
+                           : g_visual_far_log_times.size() - reserved_class_lines;
+  if (recent_count >= maximum_recent_lines) return false;
   if (g_visual_far_log_sink)
     g_visual_far_log_sink(line);
   else
     std::printf("%s", line);
+  g_visual_far_log_times[g_visual_far_log_count++] = now;
+  if (first_line_for_class)
+    g_visual_far_camera_class_logged[static_cast<std::size_t>(first_line_camera_class)] = true;
+  return true;
+}
+
+bool same_visual_far_log_slot(const VisualFarLogState& left,
+                              const VisualFarLogState& right) {
+  return left.camera_class == right.camera_class &&
+         left.window_width == right.window_width &&
+         left.window_height == right.window_height &&
+         left.render_width == right.render_width &&
+         left.render_height == right.render_height;
 }
 
 void log_visual_far_state(const VisualFarLogState& state) {
-  if (state.camera_class < 0 ||
-      static_cast<std::size_t>(state.camera_class) >=
-          g_previous_visual_far_log_state_by_camera.size())
-    return;
-  auto& previous_state = g_previous_visual_far_log_state_by_camera[
-      static_cast<std::size_t>(state.camera_class)];
-  if (previous_state && same_visual_far_log_state(*previous_state, state))
+  if (state.camera_class < 0 || state.camera_class >= 3) return;
+  const auto previous_state = std::find_if(
+      g_previous_visual_far_log_states.begin(), g_previous_visual_far_log_states.end(),
+      [&state](const VisualFarLogState& previous) {
+        return same_visual_far_log_slot(previous, state);
+      });
+  if (previous_state != g_previous_visual_far_log_states.end() &&
+      same_visual_far_log_state(*previous_state, state))
     return;
   char line[512];
   const char* camera_class = state.camera_class == 0 ? "main" :
@@ -126,8 +169,11 @@ void log_visual_far_state(const VisualFarLogState& state) {
                 state.mission_on);
   if (line_length < 0 || static_cast<std::size_t>(line_length) >= sizeof line)
     return;
-  previous_state = state;
-  emit_visual_far_log_line(line);
+  if (!emit_visual_far_log_line(line, state.camera_class)) return;
+  if (previous_state == g_previous_visual_far_log_states.end())
+    g_previous_visual_far_log_states.push_back(state);
+  else
+    *previous_state = state;
 }
 
 constexpr uint32_t kActive = 4, kTreeValid = 0x80000, kOverride = 0x800000;
@@ -805,18 +851,23 @@ VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink) {
   // afterward, so this reset shares the render scope's game-thread contract.
   const VisualFarLogSink previous = g_visual_far_log_sink;
   g_visual_far_log_sink = sink;
-  for (auto& previous_state : g_previous_visual_far_log_state_by_camera)
-    previous_state.reset();
+  g_previous_visual_far_log_states.clear();
+  g_visual_far_log_count = 0;
+  g_visual_far_camera_class_logged.fill(false);
+  return previous;
+}
+VisualFarLogNow set_visual_far_log_clock_for_testing(VisualFarLogNow now) {
+  const VisualFarLogNow previous = g_visual_far_log_now;
+  g_visual_far_log_now = now;
+  g_visual_far_log_count = 0;
   return previous;
 }
 ScopedZoomVisualFar::ScopedZoomVisualFar(const void* camera)
-    : previous_camera_(g_zoom_visual_camera),
-      active_(g_visual_far_request > kDefaultVisualFar) {
-  if (!active_) return;
+    : previous_camera_(g_zoom_visual_camera) {
   g_zoom_visual_camera = camera;
 }
 ScopedZoomVisualFar::~ScopedZoomVisualFar() {
-  if (active_) g_zoom_visual_camera = previous_camera_;
+  g_zoom_visual_camera = previous_camera_;
 }
 
 // Mech3.exe 1.2 @ 0x004f6c80 (ECX the camera, EDX the zone list). The ids
@@ -1283,11 +1334,12 @@ int pick_cells_virtual(Node* world, Camera* cam) {
         line, sizeof line,
         "mw3: virtual view cells: rings %d/%d, max cells per ring %d/%d\n",
         used_rings, kTilerRingCapacity, max_cells, kTilerCellsPerRing);
-    if (line_length >= 0 && static_cast<std::size_t>(line_length) < sizeof line)
-      emit_visual_far_log_line(line);
-    last_capacity_log = now;
-    last_logged_rings = used_rings;
-    last_logged_cells = max_cells;
+    if (line_length >= 0 && static_cast<std::size_t>(line_length) < sizeof line &&
+        emit_visual_far_log_line(line)) {
+      last_capacity_log = now;
+      last_logged_rings = used_rings;
+      last_logged_cells = max_cells;
+    }
   }
   return 0;
 }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 
 namespace zcls {
 
@@ -70,7 +72,12 @@ unsigned visual_far_request();
 float visual_far_for_render(const void* camera, float authored_far);
 using VisualFarLogSink = void (*)(const char* line);
 VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink);
+constexpr std::size_t kVisualFarLogLinesPerSecond = 4;
+using VisualFarLogNow = std::chrono::steady_clock::time_point (*)();
+// Test seam: supply deterministic time for rate-limit coverage; nullptr uses steady_clock.
+VisualFarLogNow set_visual_far_log_clock_for_testing(VisualFarLogNow now);
 
+// Tracks HUD zoom identity at every distance; camera extension stays request-gated.
 class ScopedZoomVisualFar {
  public:
   explicit ScopedZoomVisualFar(const void* camera);
@@ -80,7 +87,6 @@ class ScopedZoomVisualFar {
 
  private:
   const void* previous_camera_ = nullptr;
-  bool active_ = false;
 };
 
 }  // namespace zcls
