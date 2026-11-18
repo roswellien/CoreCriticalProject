@@ -1010,7 +1010,7 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
   {
     sdlfe::CoreCriticalAssets assets{};
     assets.lighting = "flat";
-    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
+    auto renderer = make_check_renderer(window, backend, {}, assets, 1024u * 1024u);
     producer_view_checks::Observer observer;
     require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
             "Staging fixture could not observe worker packets");
@@ -1036,8 +1036,10 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
         "Mission A did not leave retained Scene capacity: pool=" +
         std::to_string(populated.recycled_scenes) +
         " scene_bytes=" + std::to_string(populated.retained_scene_bytes);
-    require(populated.recycled_scenes > 0 || populated.retained_scene_bytes > 0,
-            pool_message.c_str());
+    // The roomy 1 MiB allowance lets all three packets complete together at end_scene, so three
+    // Scenes are recycled at once. The pool must hold them (the producer Scene may or may not
+    // have adopted one, depending on whether a render thread already recycled it).
+    require(populated.recycled_scenes > 0, pool_message.c_str());
     const auto early_before_b = populated.early_completions;
     const auto delivered_a = observer.rows(producer_view_checks::Stage::packet, true).size();
     renderer->begin_scene();

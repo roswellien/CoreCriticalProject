@@ -67,11 +67,8 @@ void flush() override {
         const std::size_t early_pending_bytes = pending_local_bytes_;
         complete_local_light_packets();
         ++staging_early_completions_;
-        const auto now = std::chrono::steady_clock::now();
-        if (!staging_early_logged_ ||
-            now - staging_early_log_time_ >= std::chrono::seconds(30)) {
+        if (!staging_early_logged_) {
           staging_early_logged_ = true;
-          staging_early_log_time_ = now;
           ++staging_early_log_lines_;
           std::fprintf(stderr,
                        "Local light staging: early completion packets=%zu pending_bytes=%zu "
@@ -174,7 +171,7 @@ private:
   std::vector<PendingLocalPacket> pending_local_packets_;
   std::size_t pending_local_bytes_{};
   // Staging pressure diagnostics (render-only): peak pending bytes, early completions of the
-  // pending packets and the bounded log line state (one per 30 s, reset on mission change).
+  // pending packets and the bounded log line state (one per mission).
   std::size_t staging_peak_bytes_{};
   bool staging_first_flush_pending_{true};
   std::size_t staging_first_flush_bytes_{}, staging_first_flush_packets_{};
@@ -268,13 +265,17 @@ static PacketByteTerms packet_byte_terms(const vk::Scene &scene) {
   for (const auto &texture : scene.textures)
     terms.texture_pixels += texture.pixels.capacity() * sizeof(uint16_t) +
                             texture.pixels32.capacity() * sizeof(uint32_t);
+  // A model drawn thousands of times shares one geometry (and one lit-normal array): charge each
+  // distinct allocation once per packet, not once per draw.
+  std::unordered_set<const void *> counted_geometry, counted_lit_normals;
   for (const auto &draw : scene.draws) {
     if (draw.model && draw.model->geometry) {
       const auto &geometry = *draw.model->geometry;
-      terms.geometry += geometry.vertices.capacity() * sizeof(vk::ModelVertex) +
-                        geometry.indices.capacity() * sizeof(uint32_t);
+      if (counted_geometry.insert(&geometry).second)
+        terms.geometry += geometry.vertices.capacity() * sizeof(vk::ModelVertex) +
+                          geometry.indices.capacity() * sizeof(uint32_t);
     }
-    if (draw.lit_normals)
+    if (draw.lit_normals && counted_lit_normals.insert(draw.lit_normals.get()).second)
       terms.lit_normals += draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
   }
   std::set<const mw34::materials::HeightBinding *> height_snapshots;
@@ -323,7 +324,7 @@ static std::uint64_t packet_height_bytes(const vk::Scene &scene) {
 // Bounded pool of recycled Scenes. A Scene keeps the capacity of its vectors, so an unbounded pool
 // would carry the largest earlier frames into every later packet (packet_bytes charges capacity).
 // Callers hold recycle_mutex_.
-static constexpr std::size_t recycled_scene_limit = 6;
+static constexpr std::size_t recycled_scene_limit = 8;
 void store_recycled_scene(vk::Scene &&scene) {
   if (recycled_scenes_.size() < recycled_scene_limit)
     recycled_scenes_.push_back(std::move(scene));

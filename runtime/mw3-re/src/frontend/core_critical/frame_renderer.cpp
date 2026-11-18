@@ -60,6 +60,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <cstdarg>
 #include <cmath>
 #include <chrono>
+#include <unordered_set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -659,7 +660,8 @@ public:
   // Capacity the current producer Scene retains from earlier packets (adopted from the pool).
   std::size_t retained_scene_capacity_bytes() const {
     const auto terms = packet_byte_terms(scene_);
-    return terms.vertices + terms.draws + terms.order + terms.textures + terms.clears;
+    return terms.vertices + terms.color_depth + terms.draws + terms.order + terms.textures +
+           terms.clears;
   }
   testing::StagingTestState staging_state_for_test() {
     return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
