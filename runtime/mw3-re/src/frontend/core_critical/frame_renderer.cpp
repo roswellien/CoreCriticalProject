@@ -59,6 +59,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <charconv>
 #include <cstdarg>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -655,6 +656,10 @@ public:
             native_fingerprint_evaluations_,
             deferred_material_admissions_};
   }
+  testing::StagingTestState staging_state_for_test() const {
+    return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
+            staging_first_flush_bytes_, staging_first_flush_packets_};
+  }
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
     const auto &entry = textures_.at(std::size_t(handle));
@@ -798,6 +803,8 @@ public:
     // Drain packets queued for the previous mission before switching state.
     drain();
     local_lights_clear();
+    staging_early_logged_ = false;
+    staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
@@ -878,6 +885,9 @@ public:
           "%zu peak bytes, %zu producer waits\n",
           statistics.submitted, statistics.completed, statistics.peak_jobs,
           statistics.peak_bytes, statistics.waits);
+      std::fprintf(stderr,
+                   "Local light staging: peak %zu bytes of %zu, %zu early completions\n",
+                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_);
       worker_.reset(); // All later summary reads and destruction belong to this
                        // thread.
     }
@@ -2329,6 +2339,13 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->staging_state_for_test();
 }
 
 testing::NamedTextureTestState testing::named_texture_state(

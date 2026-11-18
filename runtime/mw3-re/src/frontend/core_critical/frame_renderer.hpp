@@ -73,6 +73,13 @@ struct NamedTextureTestState {
 NamedTextureTestState named_texture_state(VulkanFrameRenderer &renderer,
                                           int32_t handle);
 
+struct StagingTestState {
+  std::size_t peak_bytes{}, early_completions{}, early_log_lines{};
+  // Pending bytes/packets seen at the first local-light flush after the last mission change.
+  std::size_t first_flush_pending_bytes{}, first_flush_pending_packets{};
+};
+StagingTestState staging_state(VulkanFrameRenderer &renderer);
+
 // Exercise the real retained-packet rejection path without allocating a full
 // production allowance. Normal frontend construction always uses the native cap.
 std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(

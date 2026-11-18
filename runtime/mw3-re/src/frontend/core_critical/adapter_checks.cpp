@@ -3047,8 +3047,10 @@ int main(int argc, char **argv) {
       check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
     }
-    if (native_wsi || material_check)
+    if (native_wsi || material_check) {
       check_fullscreen_resize(window, backend);
+      check_local_light_staging(window, backend);
+    }
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;
