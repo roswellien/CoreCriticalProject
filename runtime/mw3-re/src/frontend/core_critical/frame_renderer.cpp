@@ -811,6 +811,9 @@ public:
     // The workers are idle now: release the capacity that recycled Scenes (and the one drain may
     // have adopted into scene_) kept from the previous mission, so this mission's packets are not
     // charged for it.
+    // clear_producer_work(false) above already dropped the unsubmitted producer Scene and the
+    // pending packets (and ended any open scene state), so this only discards what drain() may
+    // have adopted from the pool: a mission change never discards unflushed draws here.
     scene_ = {};
     invalidate_scene_bindings();
     release_recycled_scenes();

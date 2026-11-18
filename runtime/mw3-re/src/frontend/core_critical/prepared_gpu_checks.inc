@@ -864,7 +864,9 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
        std::to_string(SDL_GetTicksNS()) + ".bin");
   struct Restore {
     std::function<void()> f;
-    ~Restore() { f(); }
+    ~Restore() {
+      if (f) f();
+    }
   } restore{[&] {
     zmth::projection() = old_projection;
     zmth::view() = old_view;
