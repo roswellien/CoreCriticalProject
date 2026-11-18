@@ -13,7 +13,8 @@ struct ViewDistanceOption {
   float fog_start;
 };
 
-// Owner playtests set these starts before the geometry cutoff to hide distant pop-in.
+// Single source for the altitude-independent edge band. Mission haze keeps its proportional
+// interval; these are also lower bounds on the strong-fog start when that interval exceeds the cut.
 constexpr ViewDistanceOption kViewDistanceOptions[] = {
     {800, 700}, {1200, 1050}, {1600, 1450}, {2400, 2250}, {3200, 3050}};
 

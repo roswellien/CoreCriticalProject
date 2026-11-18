@@ -11,12 +11,14 @@ layout(location=2) out vec4 colorSmooth;
 layout(location=3) flat out vec4 colorFlat;
 layout(location=4) out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
+layout(location=10) out vec4 fogFactors;
 layout(push_constant) uniform WorldPush {
     vec4 target; vec4 fogColor; vec4 factor; uvec4 mode;
     vec4 camera0; vec4 camera1; vec4 camera2; vec4 projection;
 } draw;
 vec4 unpack(uint c) { return vec4((c>>16)&255u,(c>>8)&255u,c&255u,c>>24)/255.0; }
 void main() {
+    fogFactors = vec4(0.0);
     vec4 p=vec4(position,1.0);
     precise vec3 camera=vec3(dot(draw.camera0,p),dot(draw.camera1,p),dot(draw.camera2,p));
     precise float rhw=draw.target.z/camera.z;

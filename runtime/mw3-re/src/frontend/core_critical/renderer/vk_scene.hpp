@@ -2981,11 +2981,8 @@ private:
                             view[at] && !d.model && !d.sun_tl && d.count &&
                             (d.push.mode[0] & 16);
       if (sun.haze_active && (d.native_sky || (d.push.mode[0] & 16))) {
-        for (unsigned i = 0; i < 3; ++i)
-          d.push.fog[i] =
-              sun.haze_manual
-                  ? sun.haze_color[i]
-                  : std::fmin(1.f, d.push.fog[i] * sun.haze_scale[i]);
+        const auto color = mw34::sun::fog_color(sun, {d.push.fog[0], d.push.fog[1], d.push.fog[2]});
+        std::copy(color.begin(), color.end(), d.push.fog);
         ++haze_draws;
       }
       if (routable && d.key.blend && !d.native_sky) {

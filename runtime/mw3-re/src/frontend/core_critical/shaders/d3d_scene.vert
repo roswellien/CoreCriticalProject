@@ -10,9 +10,11 @@ layout(location=2) out vec4 colorSmooth;
 layout(location=3) flat out vec4 colorFlat;
 layout(location=4) out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
+layout(location=10) out vec4 fogFactors;
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
 vec4 unpack(uint c) { return vec4((c >> 16) & 255u, (c >> 8) & 255u, c & 255u, c >> 24) / 255.0; }
 void main() {
+    fogFactors = vec4(0.0);
     // Direct3D pixel centres lie on integer coordinates; Vulkan's lie on half-integers (target.z = 0.5).
     float w = 1.0 / position.w;
     vec2 ndc = (position.xy + draw.target.z) / draw.target.xy * 2.0 - 1.0;

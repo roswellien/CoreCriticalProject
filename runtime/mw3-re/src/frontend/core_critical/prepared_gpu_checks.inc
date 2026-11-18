@@ -787,6 +787,64 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
                 statistics.gpu_prepared_vertices == 21 && statistics.geometry_uploads == 1 &&
                     statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 7,
                 "GPU prepared vertices still use CPU clipping or lost immutable material draws");
+        {
+            // Extend coverage after the original seven-scenario accounting checks above.
+            // Both prepared routes must fog high terrain even when mission fog is off.
+            const auto saved_context = context;
+            const auto saved_matrix = matrix;
+            std::array<float, 12> elevated_world{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 500, 0};
+            context.model_to_world = elevated_world.data();
+            context.damage_tint_weight = 0;
+            for (bool mission_on : {false, true}) {
+                cc::geometry::Fog edge;
+                edge.enabled = mission_on;
+                edge.color = {0, 0, 1};
+                edge.low_altitude = 80;
+                edge.inverse_altitude = 1.f / 20.f;
+                edge.edge_inverse_range = 1;
+                renderer->clear(true, 0, 0, 0);
+                require(renderer->submit_prepared_geometry(context, edge) ==
+                            cc::geometry::Submission::submitted,
+                        "Prepared edge-fog geometry was not submitted");
+                std::vector<std::uint32_t> pixels;
+                int width{}, height{};
+                require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
+                        "Prepared edge-fog readback extent changed");
+                unsigned witnesses = 0;
+                for (const auto pixel : pixels) {
+                    if (!(pixel & 0xffffff)) continue;
+                    require(pixel == 0xff0000ff,
+                            "Prepared high terrain escaped fully opaque edge fog");
+                    ++witnesses;
+                }
+                require(witnesses > 10, "Prepared edge fog rendered no geometry witness");
+            }
+            // Map the fixture's y == -1/+1 vertices to camera depths 3000/3400.
+            // This crosses the 3200 cut with unequal radii, unlike constant-fog fixtures.
+            matrix = {500, 0, 0, 0, 100, 200, 0, 0, 1, 0, 0, 3198};
+            context.far_z = 3200;
+            context.fx_near = 64;
+            context.fy_near = 3200;
+            cc::geometry::Fog crossing_edge;
+            crossing_edge.color = {0, 0, 1};
+            crossing_edge.edge_start = 3050;
+            crossing_edge.edge_inverse_range = 1.f / 150.f;
+            renderer->clear(true, 255, 0, 255);
+            require(renderer->submit_prepared_geometry(context, crossing_edge) ==
+                        cc::geometry::Submission::submitted,
+                    "Crossing prepared fog geometry was not submitted");
+            std::vector<std::uint32_t> crossing_pixels;
+            int crossing_width{}, crossing_height{};
+            require(renderer->read_back(&crossing_pixels, &crossing_width, &crossing_height) &&
+                        crossing_width == 64 && crossing_height == 64,
+                    "Crossing prepared fog readback extent changed");
+            const auto cut_pixel = crossing_pixels[31 * 64 + 32];
+            require((cut_pixel & 255) >= 247 && ((cut_pixel >> 8) & 255) <= 8 &&
+                        ((cut_pixel >> 16) & 255) <= 8,
+                    "Crossing prepared GPU/reference triangle exposed the far cut");
+            matrix = saved_matrix;
+            context = saved_context;
+        }
         producer_view_checks::Observer view_observer;
         require(cc_mw3_re::testing::observe_producer_views(*renderer,
                                                             &view_observer),

@@ -24,6 +24,15 @@ Fog& fog();
 // continue to read fog() and never observe the extended visual interval.
 const Fog& render_fog();
 
+// Separate from the original 0x38-byte Fog layout. Only a world render scope owns this band.
+struct RenderFogEdge {
+  float start = 0;
+  float inverse_range = 0;
+};
+RenderFogEdge render_fog_edge();
+bool render_fog_active();
+const float* render_fog_color();
+
 class ScopedRenderFog {
  public:
   ScopedRenderFog(float authored_far, float visual_far);

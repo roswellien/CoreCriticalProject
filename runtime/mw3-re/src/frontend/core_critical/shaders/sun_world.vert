@@ -10,6 +10,7 @@ layout(location=6) out vec3 worldNormal;
 layout(location=7) out vec3 worldPosition;
 layout(location=8) out vec3 shadowPosition;
 layout(location=9) noperspective out vec2 screenPos;
+layout(location=10) out vec4 fogFactors;
 layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
@@ -39,6 +40,7 @@ layout(push_constant) uniform WorldPush {
 } draw;
 vec4 unpack(uint c) { return vec4((c>>16)&255u,(c>>8)&255u,c&255u,c>>24)/255.0; }
 void main() {
+    fogFactors = vec4(0.0); // Original-mesh bridge retains its staged visibility.
     vec4 p=vec4(position,1.0);
     worldPosition=vec3(dot(sun.world0,p),dot(sun.world1,p),dot(sun.world2,p));
     shadowPosition=worldPosition;
