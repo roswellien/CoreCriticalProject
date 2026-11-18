@@ -59,6 +59,8 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <charconv>
 #include <cstdarg>
 #include <cmath>
+#include <chrono>
+#include <unordered_set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -655,6 +657,17 @@ public:
             native_fingerprint_evaluations_,
             deferred_material_admissions_};
   }
+  // Capacity the current producer Scene retains from earlier packets (adopted from the pool).
+  std::size_t retained_scene_capacity_bytes() const {
+    const auto terms = packet_byte_terms(scene_);
+    return terms.vertices + terms.color_depth + terms.draws + terms.order + terms.textures +
+           terms.clears;
+  }
+  testing::StagingTestState staging_state_for_test() {
+    return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
+            staging_first_flush_bytes_, staging_first_flush_packets_,
+            recycled_scene_count_for_test(), retained_scene_capacity_bytes()};
+  }
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
     const auto &entry = textures_.at(std::size_t(handle));
@@ -797,7 +810,18 @@ public:
       zvid::producer_mission_changed(identity);
     // Drain packets queued for the previous mission before switching state.
     drain();
+    // The workers are idle now: release the capacity that recycled Scenes (and the one drain may
+    // have adopted into scene_) kept from the previous mission, so this mission's packets are not
+    // charged for it.
+    // clear_producer_work(false) above already dropped the unsubmitted producer Scene and the
+    // pending packets (and ended any open scene state), so this only discards what drain() may
+    // have adopted from the pool: a mission change never discards unflushed draws here.
+    scene_ = {};
+    invalidate_scene_bindings();
+    release_recycled_scenes();
     local_lights_clear();
+    staging_early_logged_ = false;
+    staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
@@ -878,6 +902,9 @@ public:
           "%zu peak bytes, %zu producer waits\n",
           statistics.submitted, statistics.completed, statistics.peak_jobs,
           statistics.peak_bytes, statistics.waits);
+      std::fprintf(stderr,
+                   "Local light staging: peak %zu bytes of %zu, %zu early completions\n",
+                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_);
       worker_.reset(); // All later summary reads and destruction belong to this
                        // thread.
     }
@@ -2329,6 +2356,13 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->staging_state_for_test();
 }
 
 testing::NamedTextureTestState testing::named_texture_state(

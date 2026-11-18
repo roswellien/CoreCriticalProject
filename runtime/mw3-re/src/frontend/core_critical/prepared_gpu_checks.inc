@@ -833,3 +833,242 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
                 "Prepared depth rejection did not remove geometry");
     check_gpu_donor_toes(window, backend);
 }
+
+// The staging-pressure checks live in their own function so the --materials variants run them
+// (check_local_light_gpu only runs in the default variant). Defined after the producer-view
+// checks because it observes the worker packets.
+void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backend) {
+  // Local-light packet staging only runs while effect lights are enabled with a catalog and a
+  // valid world projection, so set up the same minimal environment as check_local_light_gpu.
+  const auto old_projection = zmth::projection();
+  const auto old_view = zmth::view();
+  struct Env {
+    const char *name;
+    std::optional<std::string> prior;
+    explicit Env(const char *n) : name(n) {
+      if (const char *v = std::getenv(n))
+        prior = v;
+    }
+    ~Env() { local_light_test_env(name, prior ? prior->c_str() : nullptr); }
+  } catalog_env("MW34_EFFECT_LIGHT_CATALOG"), enabled_env("MW34_EFFECT_LIGHTS");
+  // Unique across concurrent test processes: a random 64-bit nonce per call, a per-process counter
+  // and the tick count (the catalog file is removed by the Restore guard below).
+  static std::atomic<unsigned> staging_catalog_counter{0};
+  std::random_device staging_random;
+  const unsigned long long staging_nonce =
+      (static_cast<unsigned long long>(staging_random()) << 32) | staging_random();
+  const auto catalog_path =
+      std::filesystem::temp_directory_path() /
+      ("mw34-staging-" + std::to_string(staging_nonce) + "-" +
+       std::to_string(staging_catalog_counter.fetch_add(1)) + "-" +
+       std::to_string(SDL_GetTicksNS()) + ".bin");
+  struct Restore {
+    std::function<void()> f;
+    ~Restore() {
+      if (f) f();
+    }
+  } restore{[&] {
+    zmth::projection() = old_projection;
+    zmth::view() = old_view;
+    std::error_code ignored;
+    std::filesystem::remove(catalog_path, ignored);
+  }};
+  {
+    std::ofstream f(catalog_path, std::ios::binary);
+    auto u32 = [&](uint32_t n) {
+      for (unsigned i = 0; i < 4; ++i)
+        f.put(char(n >> (i * 8)));
+    };
+    auto scalar = [&](float n) {
+      uint32_t bits;
+      std::memcpy(&bits, &n, 4);
+      u32(bits);
+    };
+    f.write("MWFX1\0\0\0", 8);
+    u32(1);
+    u32(1);
+    u32(1);
+    u32(1);
+    u32(2);
+    u32(123);
+    u32(0);
+    scalar(10);
+    scalar(1);
+    scalar(1);
+    scalar(1);
+    scalar(1);
+    scalar(1);
+    f.flush();
+    require(bool(f), "Could not write the staging fixture catalog");
+  }
+  local_light_test_env("MW34_EFFECT_LIGHT_CATALOG", catalog_path.string().c_str());
+  local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+  zmth::projection() = {};
+  auto &projection = zmth::projection();
+  projection.near_z = 1;
+  projection.fx_near = projection.fy_near = 16;
+  projection.cx = projection.cy = 16;
+  projection.far_z = 100;
+  const float camera[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+  std::memcpy(zmth::view().camera.m, camera, sizeof camera);
+  struct ObserverCleanup {
+    cc_mw3_re::VulkanFrameRenderer &renderer;
+    ~ObserverCleanup() noexcept {
+      try {
+        cc_mw3_re::testing::observe_producer_views(renderer, nullptr);
+      } catch (...) {
+      }
+    }
+  };
+  const auto distinct_pixels = [](int index) {
+    return std::vector<uint8_t>(std::size_t(128) * 128 * 4, uint8_t(40 + index * 30));
+  };
+  // Staging pressure across SEVERAL packets of one scene must degrade instead of ending the game:
+  // when the next packet does not fit, the pending earlier packets are submitted early with the
+  // lights known so far. The 128 KiB allowance holds one 128-square RGBA payload packet but not
+  // two, so every flush after the first forces an early completion. Every packet must reach the
+  // worker exactly once and in producer order; a version that dropped earlier packets fails the
+  // packet-count and id-order checks below.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
+    producer_view_checks::Observer observer;
+    require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
+            "Staging fixture could not observe worker packets");
+    ObserverCleanup observer_cleanup{*renderer};
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    for (int packet = 0; packet < 4; ++packet) {
+      const auto pixels = distinct_pixels(packet);
+      platform::DrawState state{};
+      state.texture = renderer->create_texture(128, 128, pixels.data(), 1);
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+      renderer->flush();
+    }
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    const std::string pressure_message =
+        "Staging pressure did not complete earlier local-light packets early: early=" +
+        std::to_string(staging.early_completions) + " peak=" + std::to_string(staging.peak_bytes) +
+        " log_lines=" + std::to_string(staging.early_log_lines);
+    require(staging.early_completions >= 2, pressure_message.c_str());
+    require(staging.early_log_lines == 1,
+            "Early staging completions were not logged exactly once");
+    require(staging.peak_bytes > 0 && staging.peak_bytes <= 128u * 1024u,
+            "Staging peak left the allowance");
+    const auto delivered = observer.rows(producer_view_checks::Stage::packet, true);
+    require(delivered.size() == 4, "Early completion dropped or duplicated a staged packet");
+    for (std::size_t index = 1; index < delivered.size(); ++index)
+      require(delivered[index].packet > delivered[index - 1].packet,
+              "Early completion delivered packets out of producer order");
+  }
+
+  // A single packet that can never fit an empty allowance still throws, and does so before any
+  // earlier packet is submitted.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
+    producer_view_checks::Observer observer;
+    require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
+            "Staging fixture could not observe worker packets");
+    ObserverCleanup observer_cleanup{*renderer};
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    {
+      const auto pixels = distinct_pixels(0);
+      platform::DrawState little_state{};
+      little_state.texture = renderer->create_texture(128, 128, pixels.data(), 1);
+      quad(*renderer, 4, 28, .5f, 0xffffffff, little_state);
+      renderer->flush(); // one packet pending
+    }
+    const std::vector<uint8_t> big(std::size_t(256) * 256 * 4, 77);
+    platform::DrawState oversized{};
+    oversized.texture = renderer->create_texture(256, 256, big.data(), 1);
+    quad(*renderer, 4, 28, .5f, 0xffffffff, oversized);
+    bool threw = false;
+    try {
+      renderer->end_scene();
+    } catch (const std::runtime_error &error) {
+      threw = std::string(error.what()).find("staging exceeds budget") != std::string::npos;
+    }
+    require(threw, "An oversized single packet did not throw");
+    require(cc_mw3_re::testing::staging_state(*renderer).early_completions == 0,
+            "An oversized single packet submitted earlier packets before throwing");
+  }
+
+  // Nothing may be carried from one mission into the next. Mission A completes some packets
+  // (filling the recycled-scene pool) and leaves one more pending (flushed but never ended). The
+  // mission change must discard the pending packet without delivering it, release the pool, and
+  // mission B's first flush must start with an empty staging area.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets, 1024u * 1024u);
+    producer_view_checks::Observer observer;
+    require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
+            "Staging fixture could not observe worker packets");
+    ObserverCleanup observer_cleanup{*renderer};
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->mission_changed({5, 1});
+    renderer->clear(true, 0, 0, 0);
+    // Several packets in ONE scene, so several Scenes are recycled into the pool at once (the next
+    // scene adopts at most one of them).
+    renderer->begin_scene();
+    for (int packet = 0; packet < 3; ++packet) {
+      const auto pixels = distinct_pixels(packet);
+      platform::DrawState state{};
+      state.texture = renderer->create_texture(128, 128, pixels.data(), 1);
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+      renderer->flush();
+    }
+    renderer->end_scene();
+    renderer->drain();
+    // The retained capacity lives in the pool and in the producer Scene that adopted one.
+    const auto populated = cc_mw3_re::testing::staging_state(*renderer);
+    const std::string pool_message =
+        "Mission A did not leave retained Scene capacity: pool=" +
+        std::to_string(populated.recycled_scenes) +
+        " scene_bytes=" + std::to_string(populated.retained_scene_bytes);
+    // The roomy 1 MiB allowance lets all three packets complete together at end_scene, so three
+    // Scenes are recycled at once. The pool must hold them (the producer Scene may or may not
+    // have adopted one, depending on whether a render thread already recycled it).
+    require(populated.recycled_scenes > 0, pool_message.c_str());
+    const auto early_before_b = populated.early_completions;
+    const auto delivered_a = observer.rows(producer_view_checks::Stage::packet, true).size();
+    renderer->begin_scene();
+    const auto pending_pixels = distinct_pixels(3);
+    platform::DrawState pending_state{};
+    pending_state.texture = renderer->create_texture(128, 128, pending_pixels.data(), 1);
+    quad(*renderer, 4, 28, .5f, 0xffffffff, pending_state);
+    renderer->flush(); // mission A's packet left pending
+    renderer->mission_changed({5, 2});
+    const auto released = cc_mw3_re::testing::staging_state(*renderer);
+    require(released.recycled_scenes == 0 && released.retained_scene_bytes == 0,
+            "A mission change kept retained Scene capacity");
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    const auto second_pixels = distinct_pixels(4);
+    platform::DrawState second{};
+    second.texture = renderer->create_texture(128, 128, second_pixels.data(), 1);
+    quad(*renderer, 4, 28, .5f, 0xffffffff, second);
+    renderer->flush();
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    require(staging.first_flush_pending_bytes == 0 && staging.first_flush_pending_packets == 0,
+            "A mission change carried staged local-light packets into the next mission");
+    require(staging.early_completions == early_before_b,
+            "The second mission's first frame needed an early staging completion");
+    // Mission A's pending packet was discarded: only mission B's own packet was delivered.
+    require(observer.rows(producer_view_checks::Stage::packet, true).size() == delivered_a + 1,
+            "Mission A's discarded packet was delivered, or mission B's packet was lost");
+  }
+}

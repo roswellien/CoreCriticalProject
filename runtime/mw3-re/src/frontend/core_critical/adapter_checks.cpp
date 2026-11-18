@@ -49,12 +49,14 @@ bool get_active_surface_key(SurfaceKey *out);
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <string_view>
 
@@ -3049,6 +3051,10 @@ int main(int argc, char **argv) {
     }
     if (native_wsi || material_check)
       check_fullscreen_resize(window, backend);
+    // The staging checks write a temp effect-light catalog and set effect-light environment
+    // variables (restored by their guards), so they run only in the --materials variants.
+    if (material_check)
+      check_local_light_staging(window, backend);
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;
