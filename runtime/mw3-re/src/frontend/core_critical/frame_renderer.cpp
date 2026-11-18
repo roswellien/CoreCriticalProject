@@ -1238,6 +1238,55 @@ private:
       throw std::runtime_error("Invalid Core producer view provenance");
     // No numeric policy: original NaNs and stale inverses are owned data.
   }
+  VkRect2D producer_scissor(bool hud = false) const {
+    const VkRect2D full_scene{{0, 0}, {scene_.width, scene_.height}};
+    if (hud || !producer_view_.present ||
+        producer_view_.purpose != ::platform::ProducerPurpose::WorldZoom ||
+        !producer_view_.camera_rect_available)
+      return full_scene;
+
+    auto viewport = viewport_;
+    if (producer_view_.canvas_available)
+      viewport = {producer_view_.canvas.x, producer_view_.canvas.y,
+                  producer_view_.canvas.width, producer_view_.canvas.height};
+    if (viewport[2] <= 0 || viewport[3] <= 0 ||
+        producer_view_.camera_rect.width <= 0 ||
+        producer_view_.camera_rect.height <= 0 ||
+        scene_.width > std::uint32_t(std::numeric_limits<std::int32_t>::max()) ||
+        scene_.height > std::uint32_t(std::numeric_limits<std::int32_t>::max())) {
+      static std::atomic_flag invalid_world_zoom_scissor_logged = ATOMIC_FLAG_INIT;
+      if (!invalid_world_zoom_scissor_logged.test_and_set())
+        std::fprintf(stderr,
+                     "Core renderer: invalid WorldZoom scissor inputs; "
+                     "using full scene (logged once)\n");
+      return full_scene;
+    }
+
+    // Match canvas_to_render: transform both edges with integer truncation,
+    // then derive the size. Mapping a size alone can grow fractional edges.
+    const auto map_edge = [](std::int64_t coordinate, std::int32_t origin,
+                             std::uint32_t scene_extent,
+                             std::int32_t viewport_extent) {
+      return (coordinate - origin) * std::int64_t(scene_extent) /
+             viewport_extent;
+    };
+    const auto clamp_edge = [](std::int64_t edge, std::uint32_t extent) {
+      return std::clamp<std::int64_t>(edge, 0, extent);
+    };
+    const auto& rect = producer_view_.camera_rect;
+    const auto left = clamp_edge(
+        map_edge(rect.x, viewport[0], scene_.width, viewport[2]), scene_.width);
+    const auto top = clamp_edge(
+        map_edge(rect.y, viewport[1], scene_.height, viewport[3]), scene_.height);
+    const auto right = clamp_edge(
+        map_edge(std::int64_t(rect.x) + rect.width, viewport[0], scene_.width,
+                 viewport[2]), scene_.width);
+    const auto bottom = clamp_edge(
+        map_edge(std::int64_t(rect.y) + rect.height, viewport[1], scene_.height,
+                 viewport[3]), scene_.height);
+    return {{std::int32_t(left), std::int32_t(top)},
+            {std::uint32_t(right - left), std::uint32_t(bottom - top)}};
+  }
   void clear_producer_work(bool failed) noexcept {
     const auto previous_view = producer_view_;
     scene_ = {};
@@ -1274,6 +1323,9 @@ private:
     observation.packet = packet;
     observation.first = draw.first;
     observation.count = draw.count;
+    observation.scissor_offset = {draw.scissor.offset.x, draw.scissor.offset.y};
+    observation.scissor_extent = {draw.scissor.extent.width,
+                                  draw.scissor.extent.height};
     observation.sun_tl = bool(draw.sun_tl);
     observation.height_binding = bool(draw.height_binding);
     observation.surface_eye = draw.surface_eye;
@@ -1613,7 +1665,7 @@ private:
     draw.push.mode[2] = draw.texture < 0
                             ? 2 | diffuse
                             : (state.alpha_modulate ? 4 : 2) | texture;
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    draw.scissor = producer_scissor(hud);
     if (native_ground_draw_eligible(state, hud, depth_only, geometry_debug_,
                                     primitive == Primitive::kPoints))
       apply_fixture_observation(draw, deferred_fixture_observation(state.texture));
@@ -1805,6 +1857,8 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
+    draw.producer_view = producer_view_;
+    draw.scissor = producer_scissor();
     const auto texture = prepared_texture(*source.texture);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
                            group_load_epoch_, textures_.at(texture).version);
@@ -1820,6 +1874,7 @@ private:
       apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
+      observe_producer_draw(scene_.draws.back());
       ++prepared_batches_;
     }
   }

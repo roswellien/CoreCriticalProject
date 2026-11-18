@@ -21,6 +21,8 @@ struct ProducerViewObservation {
   ::platform::TLVertex first_vertex{};
   std::array<float, 12> camera_world{};
   std::array<float, 6> projection{};
+  std::array<std::int32_t, 2> scissor_offset{};
+  std::array<std::uint32_t, 2> scissor_extent{};
   std::array<float, 4> surface_eye{};
   std::uint64_t packet{};
   std::size_t scene_draws{}, pending_local_packets{};

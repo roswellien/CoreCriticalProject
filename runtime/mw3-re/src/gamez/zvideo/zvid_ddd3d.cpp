@@ -114,19 +114,6 @@ void validate_producer_view(const platform::ProducerView& view) {
   // No float is inspected here: neutral nonfinite/stale inverse bits are data.
 }
 
-struct ProducerBindingScope {
-  platform::Render3D* receiver;
-  platform::ProducerViewRestoreToken token{};
-  ProducerBindingScope(platform::Render3D* selected, const platform::ProducerView& view)
-      : receiver(selected) {
-    validate_producer_view(view);
-    if (receiver) token = receiver->exchange_producer_view(view);
-  }
-  ~ProducerBindingScope() noexcept {
-    if (receiver) receiver->restore_producer_view(token);
-  }
-};
-
 struct DeferredMaterialScope {
   platform::Render3D *renderer;
   DeferredMaterialScope(
@@ -482,6 +469,39 @@ ProducerPurposeScope::~ProducerPurposeScope() noexcept {
   if (epoch_ == g_producer_epoch) g_requested_purpose = previous_;
 }
 
+ProducerBindingScope::ProducerBindingScope(platform::Render3D* receiver)
+    : ProducerBindingScope(receiver, receiver ? capture_producer_view()
+                                               : platform::ProducerView{}) {}
+ProducerBindingScope::ProducerBindingScope(
+    platform::Render3D* receiver, const platform::ProducerView& view)
+    : receiver_(receiver) {
+  if (!receiver_) return;
+  validate_producer_view(view);
+  token_ = receiver_->exchange_producer_view(view);
+}
+ProducerBindingScope::~ProducerBindingScope() noexcept {
+  if (receiver_) receiver_->restore_producer_view(token_);
+}
+cc::geometry::Submission submit_prepared_geometry_for_current_view(
+    platform::Render3D* receiver,
+    const platform::ModelDrawContext& context,
+    const cc::geometry::Fog& fog) {
+  if (!receiver) return cc::geometry::Submission::unsupported;
+  const ProducerBindingScope producer_view(receiver);
+  return receiver->submit_prepared_geometry(context, fog);
+}
+cc::geometry::Submission submit_model_geometry_for_current_view(
+    platform::Render3D* receiver,
+    std::shared_ptr<const cc::geometry::Resource> source,
+    const platform::ModelDrawContext& context,
+    const std::vector<cc::geometry::Material>& materials,
+    const cc::geometry::Fog& fog) {
+  if (!receiver) return cc::geometry::Submission::unsupported;
+  const ProducerBindingScope producer_view(receiver);
+  return receiver->submit_model_geometry(std::move(source), context, materials,
+                                         fog);
+}
+
 ProducerWorldScope::ProducerWorldScope(bool force_original)
     : previous_(g_emitting_view), previous_request_(g_requested_purpose),
       purpose_(force_original ? platform::ProducerPurpose::Original : g_requested_purpose),
@@ -537,6 +557,16 @@ void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t heigh
   g_producer_camera_rect = {x, y, width, height};
   g_camera_rect_available = available;
 }
+ProducerViewStateForTest capture_producer_view_state_for_test() {
+  ProducerViewStateForTest state;
+  state.view = capture_producer_view();
+  state.mission = g_producer_mission;
+  state.canvas = g_producer_canvas;
+  state.canvas_available = g_canvas_available;
+  state.camera_rect = g_producer_camera_rect;
+  state.camera_rect_available = g_camera_rect_available;
+  return state;
+}
 platform::ProducerView capture_producer_view() {
   auto result = g_emitting_view;
   validate_producer_view(result);
@@ -558,6 +588,14 @@ platform::ProducerView capture_producer_view() {
   result.camera_rect_available = g_camera_rect_available;
   result.camera_rect = g_producer_camera_rect;
   return result;
+}
+void restore_producer_view_for_test(const ProducerViewStateForTest& state) noexcept {
+  g_emitting_view = state.view;
+  g_producer_mission = state.mission;
+  g_producer_canvas = state.canvas;
+  g_canvas_available = state.canvas_available;
+  g_producer_camera_rect = state.camera_rect;
+  g_camera_rect_available = state.camera_rect_available;
 }
 void invalidate_producer_transport(platform::Render3D* owner, bool failed) noexcept {
   if (owner && owner != g_render) return;

@@ -120,6 +120,297 @@ void check_gpu_donor_toes(SDL_Window *window, sdlfe::RendererBackend backend) {
         for (bool early : {false, true})
             submit(distance, early, true);
     }
+
+    const auto mixed_bytes = prepared_fixture::build_valid_v4_mesh(
+        "rtoe02", "control", "panel", .6, 0.2, -0.1, "", true);
+    std::istringstream mixed_input(mixed_bytes, std::ios::binary);
+    const auto mixed_mesh = platform::prepared::read_mesh(mixed_input);
+    require(mixed_mesh.batches.size() == 1 &&
+                mixed_mesh.batches[0].donor_bone == 0xffffffff &&
+                mixed_mesh.batches[0].donor_indices.size() == 3 &&
+                mixed_mesh.batches[0].donor_indices[0] !=
+                    mixed_mesh.batches[0].donor_indices[2],
+            "Mixed-bone prepared fixture did not encode per-vertex donor bones");
+    const auto mixed_mesh_hash =
+        mw34::materials::compute_mesh_uv_hash(mixed_mesh.batches, 0, 1);
+    std::ofstream(folder / "mesh.bin", std::ios::binary) << mixed_bytes;
+    std::ofstream(folder / "materials.bin", std::ios::binary)
+        << prepared_fixture::donor_materials(mixed_mesh_hash);
+    sdlfe::CoreCriticalAssets mixed_assets;
+    mixed_assets.geometry = "partial";
+    mixed_assets.lighting = "normal";
+    mixed_assets.pom = true;
+    mixed_assets.models.push_back({"authored", "1", (folder / "mesh.bin").u8string(),
+                                   (folder / "textures.bin").u8string()});
+    mixed_assets.normals.push_back({"authored", "1", (folder / "normals.bin").u8string()});
+    mixed_assets.materials.push_back({"authored", "1", (folder / "materials.bin").u8string()});
+    auto mixed_renderer = make_check_renderer(window, backend, {}, mixed_assets);
+    mixed_renderer->set_viewport(0, 0, 64, 64);
+    prepared_fixture::DonorTree mixed_distance("rtoe02", false);
+    producer_view_checks::Observer mixed_view_observer;
+    require(cc_mw3_re::testing::observe_producer_views(*mixed_renderer,
+                                                        &mixed_view_observer),
+            "Deformed prepared scissor observer unsupported");
+    struct MixedProducerViewCleanup {
+        cc_mw3_re::VulkanFrameRenderer& renderer;
+        ~MixedProducerViewCleanup() noexcept {
+            try {
+                cc_mw3_re::testing::observe_producer_views(renderer, nullptr);
+            } catch (...) {
+            }
+        }
+    } mixed_cleanup{*mixed_renderer};
+    mixed_distance.pose_foot();
+    mixed_renderer->clear(true, 0, 0, 0);
+    const auto fallback_before = mixed_renderer->asset_statistics()
+                                     .prepared_cpu_fallback_batches;
+    const auto previous_stack = zmth::matrix_stack();
+    const auto previous_projection = zmth::projection();
+    const auto previous_view = zmth::view();
+    const auto previous_draw_state = zmod::draw_state();
+    const auto previous_producer_state = zvid::capture_producer_view_state_for_test();
+    struct MixedModelStateCleanup {
+        zmth::MatrixStack stack;
+        zmth::Projection projection;
+        zmth::View view;
+        zmod::DrawState draw_state;
+        zvid::ProducerViewStateForTest producer_view;
+        ~MixedModelStateCleanup() {
+            zmth::matrix_stack() = stack;
+            zmth::projection() = projection;
+            zmth::view() = view;
+            zmod::draw_state() = draw_state;
+            zvid::restore_producer_view_for_test(producer_view);
+        }
+    } model_state_cleanup{previous_stack, previous_projection, previous_view,
+                         previous_draw_state, previous_producer_state};
+    const auto previous_renderer = zvid::render3d();
+    struct MixedRendererCleanup {
+        platform::Render3D* renderer;
+        ~MixedRendererCleanup() { zvid::set_render3d(renderer); }
+    } renderer_cleanup{previous_renderer};
+    zvid::set_render3d(mixed_renderer.get());
+    require(zvid::render3d() == mixed_renderer.get(),
+            "Mixed-bone production fixture did not install its renderer");
+    zmth::Mat34 model_to_world{{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
+    zmth::view().view = {{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
+    zmth::matrix_stack() = {};
+    zmth::matrix_stack().slot[0] = &model_to_world;
+    zmth::matrix_stack().slot[1] = &zmth::view().view;
+    zmth::matrix_stack().top = 1;
+    zmth::projection() = {};
+    zmth::projection().near_z = .1f;
+    zmth::projection().far_z = 10;
+    zmth::projection().fx_near = zmth::projection().fy_near = 50;
+    zmth::projection().cx = zmth::projection().cy = 32;
+    zmod::draw_state() = {};
+    zmod::draw_state().clip.near_z = .1f;
+    zvid::set_producer_canvas_rect(10, 20, 128, 64);
+    zvid::set_producer_camera_rect(18, 24, 32, 24);
+    ::platform::ProducerView expected_mixed_view{};
+    // The renderer must receive the producer view around begin_model_draw.
+    // Without that binding, the same deformed batch emits with a full-scene
+    // scissor even while the producer is inside a WorldZoom emission.
+    const auto unbound_fallback_before = mixed_renderer->asset_statistics()
+                                             .prepared_cpu_fallback_batches;
+    const auto unbound_appends_before = mixed_view_observer.rows(
+        producer_view_checks::Stage::append).size();
+    {
+        zvid::ProducerPurposeScope purpose(::platform::ProducerPurpose::WorldZoom);
+        zvid::ProducerWorldScope emission;
+        emission.begin_emission();
+        const auto context = mixed_distance.context();
+        mixed_renderer->begin_model_draw(context);
+        require(mixed_renderer->replaces_model_geometry(),
+                "Unbound mixed-bone control missed prepared replacement");
+        mixed_renderer->end_model_draw();
+        emission.end_emission();
+    }
+    require(mixed_renderer->asset_statistics().prepared_cpu_fallback_batches >
+                unbound_fallback_before,
+            "Unbound control did not reach the deformed prepared fallback");
+    std::vector<std::uint32_t> unbound_pixels;
+    int unbound_width{}, unbound_height{};
+    require(mixed_renderer->read_back(&unbound_pixels, &unbound_width,
+                                      &unbound_height) &&
+                unbound_width == 64 && unbound_height == 64,
+            "Unbound mixed-bone control lost its readback extent");
+    const auto unbound_rows = mixed_view_observer.rows(
+        producer_view_checks::Stage::packet, true);
+    const auto scissor_failure = [](const char* assertion,
+                                    const auto& rows,
+                                    std::array<std::int32_t, 2> expected_offset,
+                                    std::array<std::uint32_t, 2> expected_extent) {
+      std::ostringstream message;
+      message << assertion << ": observed_rows=" << rows.size()
+              << " expected_offset=(" << expected_offset[0] << ','
+              << expected_offset[1] << ") expected_extent=("
+              << expected_extent[0] << ',' << expected_extent[1] << ')';
+      const auto stage_name = [](producer_view_checks::Stage stage) {
+        switch (stage) {
+        case producer_view_checks::Stage::exchange: return "exchange";
+        case producer_view_checks::Stage::restore: return "restore";
+        case producer_view_checks::Stage::append: return "append";
+        case producer_view_checks::Stage::local_packet: return "local_packet";
+        case producer_view_checks::Stage::packet: return "packet";
+        case producer_view_checks::Stage::backend_group: return "backend_group";
+        case producer_view_checks::Stage::abandon: return "abandon";
+        case producer_view_checks::Stage::reset: return "reset";
+        }
+        return "unknown";
+      };
+      const auto purpose_name = [](auto purpose) {
+        switch (purpose) {
+        case ::platform::ProducerPurpose::Original: return "Original";
+        case ::platform::ProducerPurpose::MainWorld: return "MainWorld";
+        case ::platform::ProducerPurpose::WorldZoom: return "WorldZoom";
+        }
+        return "unknown";
+      };
+      for (std::size_t index = 0; index < rows.size(); ++index) {
+        const auto& row = rows[index];
+        message << " row[" << index << "]={stage=" << stage_name(row.stage)
+                << " packet=" << row.packet << " first=" << row.first
+                << " count=" << row.count
+                << " purpose=" << purpose_name(row.view.purpose)
+                << " present=" << row.view.present << " scissor_offset=("
+                << row.scissor_offset[0] << ',' << row.scissor_offset[1]
+                << ") scissor_extent=(" << row.scissor_extent[0] << ','
+                << row.scissor_extent[1] << ") camera_rect=("
+                << row.view.camera_rect.x << ',' << row.view.camera_rect.y << ','
+                << row.view.camera_rect.width << ','
+                << row.view.camera_rect.height
+                << ") camera_rect_available=" << row.view.camera_rect_available
+                << " canvas_rect=(" << row.view.canvas.x << ','
+                << row.view.canvas.y << ',' << row.view.canvas.width << ','
+                << row.view.canvas.height
+                << ") canvas_available=" << row.view.canvas_available << '}';
+      }
+      return message.str();
+    };
+    const auto unbound_appends = mixed_view_observer.rows(
+        producer_view_checks::Stage::append);
+    std::vector<producer_view_checks::Observation> unbound_draws;
+    if (unbound_appends_before <= unbound_appends.size())
+      unbound_draws.assign(unbound_appends.begin() + unbound_appends_before,
+                           unbound_appends.end());
+    const auto unbound_append_matches =
+        std::any_of(unbound_draws.begin(), unbound_draws.end(), [](const auto& row) {
+          return row.count != 0 && !row.view.present &&
+                 row.view.purpose == ::platform::ProducerPurpose::Original &&
+                 row.scissor_offset == std::array<std::int32_t, 2>{0, 0} &&
+                 row.scissor_extent == std::array<std::uint32_t, 2>{64, 64};
+        });
+    if (!unbound_append_matches)
+      require(false,
+              scissor_failure(
+                  "Unbound begin_model_draw did not append a full-scene draw with an empty view",
+                  unbound_draws, {0, 0}, {64, 64}).c_str());
+    const auto unbound_scissor_matches =
+        std::any_of(unbound_rows.begin(), unbound_rows.end(), [](const auto& row) {
+          return !row.view.present &&
+                 row.view.purpose == ::platform::ProducerPurpose::Original &&
+                 row.scissor_offset == std::array<std::int32_t, 2>{0, 0} &&
+                 row.scissor_extent == std::array<std::uint32_t, 2>{64, 64};
+        });
+    if (!unbound_scissor_matches)
+      require(false,
+              scissor_failure("Unbound begin_model_draw unexpectedly inherited the WorldZoom scissor",
+                              unbound_rows, {0, 0}, {64, 64}).c_str());
+    mixed_renderer->clear(true, 0, 0, 0);
+    const auto production_fallback_before = mixed_renderer->asset_statistics()
+                                                .prepared_cpu_fallback_batches;
+    const auto production_appends_before = mixed_view_observer.rows(
+        producer_view_checks::Stage::append).size();
+    {
+        zvid::ProducerPurposeScope purpose(::platform::ProducerPurpose::WorldZoom);
+        zvid::ProducerWorldScope emission;
+        emission.begin_emission();
+        expected_mixed_view = zvid::capture_producer_view();
+        require(expected_mixed_view.present &&
+                    expected_mixed_view.purpose ==
+                        ::platform::ProducerPurpose::WorldZoom &&
+                    expected_mixed_view.producer_generation != 0 &&
+                    expected_mixed_view.mission_epoch != 0 &&
+                    expected_mixed_view.canvas_available &&
+                    expected_mixed_view.camera_rect_available &&
+                    expected_mixed_view.mission.world_index ==
+                        previous_producer_state.mission.world_index &&
+                    expected_mixed_view.mission.number ==
+                        previous_producer_state.mission.number,
+                "Mixed-bone production fixture lost its WorldZoom producer view");
+        // The production caller (zmod::draw_model) wraps begin_model_draw in exactly this scope:
+        // a ProducerBindingScope on the installed renderer. The fixture uses the same scope class
+        // instead of a manual exchange; a full draw_model call needs a real model node whose
+        // prepared asset is registered, which this asset-free fixture does not build.
+        {
+            const auto context = mixed_distance.context();
+            const zvid::ProducerBindingScope producer_binding(mixed_renderer.get());
+            mixed_renderer->begin_model_draw(context);
+            require(mixed_renderer->replaces_model_geometry(),
+                    "Bound mixed-bone draw missed prepared replacement");
+            mixed_renderer->end_model_draw();
+        }
+        emission.end_emission();
+    }
+    const auto appended_draws = mixed_view_observer.rows(
+        producer_view_checks::Stage::append);
+    std::vector<producer_view_checks::Observation> production_draws;
+    if (production_appends_before <= appended_draws.size())
+      production_draws.assign(appended_draws.begin() + production_appends_before,
+                              appended_draws.end());
+    const auto production_append_matches =
+        std::any_of(production_draws.begin(), production_draws.end(),
+                    [&](const auto& row) {
+                      return row.count != 0 &&
+                             ::platform::same_producer_view_bits(
+                                 row.view, expected_mixed_view) &&
+                             row.scissor_offset ==
+                                 std::array<std::int32_t, 2>{4, 4} &&
+                             row.scissor_extent ==
+                                 std::array<std::uint32_t, 2>{16, 24};
+                    });
+    if (!production_append_matches)
+      require(false,
+              scissor_failure(
+                  "Deformed prepared WorldZoom draw missed its appended camera scissor",
+                  production_draws, {4, 4}, {16, 24}).c_str());
+    const auto mixed_statistics = mixed_renderer->asset_statistics();
+    require(mixed_statistics.prepared_cpu_fallback_batches > production_fallback_before &&
+                production_fallback_before > fallback_before,
+            "Deformed prepared batch did not use the partial CPU fallback");
+    std::vector<std::uint32_t> mixed_pixels;
+    int mixed_width{}, mixed_height{};
+    require(mixed_renderer->read_back(&mixed_pixels, &mixed_width, &mixed_height) &&
+                mixed_width == 64 && mixed_height == 64,
+            "Deformed prepared scissor lost its readback extent");
+    // read_back() flushes the retained Scene; drain() also waits for the worker
+    // packet observation before rows are copied below.
+    mixed_renderer->drain();
+    const auto observed_packets = mixed_view_observer.rows(
+        producer_view_checks::Stage::packet, true);
+    std::vector<producer_view_checks::Observation> mixed_rows;
+    std::copy_if(observed_packets.begin(), observed_packets.end(),
+                 std::back_inserter(mixed_rows), [&](const auto& row) {
+                   return std::any_of(
+                       production_draws.begin(), production_draws.end(),
+                       [&](const auto& draw) {
+                         return row.first == draw.first &&
+                                row.count == draw.count;
+                       });
+                 });
+    const auto mixed_scissor_matches =
+        std::any_of(mixed_rows.begin(), mixed_rows.end(), [&](const auto& row) {
+          return row.count != 0 &&
+                 ::platform::same_producer_view_bits(row.view,
+                                                      expected_mixed_view) &&
+                 row.scissor_offset == std::array<std::int32_t, 2>{4, 4} &&
+                 row.scissor_extent == std::array<std::uint32_t, 2>{16, 24};
+        });
+    if (!mixed_scissor_matches)
+      require(false,
+              scissor_failure("Deformed prepared WorldZoom batch missed its camera scissor",
+                              mixed_rows, {4, 4}, {16, 24}).c_str());
     std::fprintf(stderr, "[DONOR_TOE_GPU] cases=%u failures=0\n", cases);
 }
 
@@ -496,6 +787,39 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
                 statistics.gpu_prepared_vertices == 21 && statistics.geometry_uploads == 1 &&
                     statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 7,
                 "GPU prepared vertices still use CPU clipping or lost immutable material draws");
+        producer_view_checks::Observer view_observer;
+        require(cc_mw3_re::testing::observe_producer_views(*renderer,
+                                                            &view_observer),
+                "Prepared scissor observer unsupported");
+        zvid::set_producer_canvas_rect(10, 20, 128, 64);
+        zvid::set_producer_camera_rect(18, 24, 32, 24);
+        renderer->clear(true, 0, 0, 0);
+        {
+            producer_view_checks::Emission emission(
+                ::platform::ProducerPurpose::WorldZoom);
+            require(zvid::submit_prepared_geometry_for_current_view(
+                        renderer.get(), context, {}) ==
+                        cc::geometry::Submission::submitted,
+                    "Prepared WorldZoom geometry was not submitted");
+        }
+        std::vector<std::uint32_t> scissor_pixels;
+        int scissor_width{}, scissor_height{};
+        require(renderer->read_back(&scissor_pixels, &scissor_width,
+                                    &scissor_height) &&
+                    scissor_width == 64 && scissor_height == 64,
+                "Prepared WorldZoom scissor lost the scene extent");
+        const auto prepared_rows =
+            view_observer.rows(producer_view_checks::Stage::packet, true);
+        require(std::any_of(prepared_rows.begin(), prepared_rows.end(),
+                            [](const auto& row) {
+                              return row.scissor_offset ==
+                                         std::array<std::int32_t, 2>{4, 4} &&
+                                     row.scissor_extent ==
+                                         std::array<std::uint32_t, 2>{16, 24};
+                            }),
+                "Prepared WorldZoom draw missed the mapped camera scissor");
+        require(cc_mw3_re::testing::observe_producer_views(*renderer, nullptr),
+                "Prepared scissor observer removal failed");
         check_damage_tint_blend(window, backend, options, root.get(), panel);
         check_gpu_prepared_fade(window, backend, options, context, mode);
     }
