@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -72,7 +73,22 @@ struct Fog {
     bool enabled{};
     std::array<float, 3> color{};
     float near_range{}, inverse_range{}, low_altitude{}, inverse_altitude{};
+    float edge_start{}, edge_inverse_range{};
+    bool active() const { return enabled || edge_inverse_range > 0.f; }
 };
+
+// Float operations mirror both geometry vertex shaders. Edge fog has no altitude taper.
+inline float fog_amount(const Fog &fog, float distance, float height) {
+    float mission = 0.f;
+    if (fog.enabled) {
+        const float density = std::clamp((distance - fog.near_range) * fog.inverse_range, 0.f, 1.f);
+        const float altitude =
+            std::clamp(1.f - (height - fog.low_altitude) * fog.inverse_altitude, 0.f, 1.f);
+        mission = density * altitude;
+    }
+    const float edge = std::clamp((distance - fog.edge_start) * fog.edge_inverse_range, 0.f, 1.f);
+    return 1.f - (1.f - mission) * (1.f - edge);
+}
 
 struct Statistics {
     std::uint64_t submitted_models{}, skipped_vertices{}, skipped_polygons{}, unsupported_models{};

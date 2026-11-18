@@ -14,7 +14,8 @@ struct FogCalc {
 };
 FogCalc& fog_calc();
 // Read-only sample shared by native model vertices and optional visual geometry.
-// The caller decides whether fog is enabled; this does not send device state.
+// Outside render scopes the caller decides whether fog is enabled. Inside a scope,
+// mission on/off and the always-active edge term are evaluated here; no device state is sent.
 float fog_at(const float camera_vertex[3]);
 
 // ECX = the bounding sphere's camera-space centre, stack = its radius. The most

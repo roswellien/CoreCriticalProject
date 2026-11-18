@@ -32,11 +32,14 @@ static cc::geometry::Fog prepared_fog() {
   const auto &source = zmod::render_fog();
   cc::geometry::Fog fog;
   fog.enabled = source.on != 0;
-  std::copy_n(source.color, 3, fog.color.begin());
+  std::copy_n(zmod::render_fog_color(), 3, fog.color.begin());
   fog.near_range = source.near_range;
   fog.inverse_range = source.inv_range;
   fog.low_altitude = source.alt_low;
   fog.inverse_altitude = source.inv_alt;
+  const auto edge = zmod::render_fog_edge();
+  fog.edge_start = edge.start;
+  fog.edge_inverse_range = edge.inverse_range;
   return fog;
 }
 
@@ -106,7 +109,9 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     instance->geometry_near = context.clip_near;
     instance->geometry_fog0 = {fog.near_range, fog.inverse_range,
                                fog.low_altitude, fog.inverse_altitude};
-    instance->geometry_fog1 = {0, 0, fog.enabled ? 1.f : 0.f, 0};
+    // Reuse spare UBO components; push constants and SunLighting size stay unchanged.
+    instance->geometry_fog1 = {fog.edge_start, fog.edge_inverse_range,
+                               fog.enabled ? 1.f : 0.f, 0};
     instance->projection = {
         context.near_z,
         context.fx_near * scene_.width / viewport_[2],
@@ -133,7 +138,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     // Flag 256 tells the shared native-geometry vertex shader that mode.w holds
     // node opacity for this draw rather than a native normal-orientation marker.
-    draw.push.mode[0] = 2U | 4U | 256U | (fog.enabled && !geometry_debug_ ? 16U : 0U);
+    draw.push.mode[0] = 2U | 4U | 256U | (fog.active() && !geometry_debug_ ? 16U : 0U);
     draw.push.mode[1] = 4U | (2U << 8);
     draw.push.mode[2] = 2U; // Diffuse alpha: RGB565 textures carry none of their own.
     if (context.damage_tint_weight > 0.f) {

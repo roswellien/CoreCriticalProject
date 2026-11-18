@@ -72,6 +72,7 @@ public:
     append(height);
     append(lighting);
     append(zmod::render_fog());
+    append(zmod::render_fog_edge());
     append(zmod::fog_calc().camera_to_world);
     const int rounding = std::fegetround();
     append(rounding);
@@ -136,7 +137,7 @@ private:
       std::array<unsigned char,
                  2 * sizeof(::platform::prepared::Matrix) + 12 * sizeof(float) +
                      sizeof(std::array<int, 4>) + 2 * sizeof(unsigned) +
-                     sizeof(bool) + sizeof(zmod::Fog) +
+                     sizeof(bool) + sizeof(zmod::Fog) + sizeof(zmod::RenderFogEdge) +
                      sizeof(zmod::FogCalc::camera_to_world) + sizeof(int) +
                      sizeof(std::uint32_t)>;
   struct Entry {

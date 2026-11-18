@@ -189,12 +189,12 @@ void build_light_list(zcls::Node** nodes, zcls::Light** data, int32_t count) {
   L.any = L.count > 0;
   if (zrndr::device_fog().active) return;
   // The software renderer's colours.
-  const Fog& f = render_fog();
-  std::memcpy(L.sw_fog, f.color, 12);
+  const float* fog_color = render_fog_color();
+  std::memcpy(L.sw_fog, fog_color, 12);
   L.sw_one = 1.0f;
   if (L.directed < 0) {
     L.sw_dark = 0.0f;
-    std::memcpy(L.sw_color, f.color, 12);
+    std::memcpy(L.sw_color, fog_color, 12);
   } else {
     zcls::Light* d = L.list[L.directed].data;
     std::memcpy(L.sw_color, lvec(d, kColor), 12);
@@ -373,7 +373,7 @@ uint32_t model_needs(uint32_t model_flags, const float centre[3], float radius) 
   zmth::transform_points_to(reinterpret_cast<const zmth::Vec3*>(centre), reinterpret_cast<zmth::Vec3*>(c), 1);
   uint32_t needs = 0;
   int32_t lights = 0;
-  if (render_fog().on && (model_flags & 2) && double{fog_sphere(c, radius)} > 0.003921569) needs = 1;
+  if (render_fog_active() && (model_flags & 2) && double{fog_sphere(c, radius)} > 0.003921569) needs = 1;
   if ((*g_lighting.mask & 1) && g_list.any && (model_flags & 1)) {
     lights = lights_reaching(c, radius);
     if (lights > 0) needs |= 2;

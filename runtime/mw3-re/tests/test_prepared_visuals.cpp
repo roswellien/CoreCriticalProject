@@ -781,6 +781,20 @@ void checks() {
         require(zmod::fog_at(vertices[i]) == expected[i] &&
                     zmod::fog_calc().factor[i] == expected[i],
                 "Prepared/native fog sampling changed near/far or altitude semantics");
+    {
+        zmod::ScopedRenderFog scope(800.0f, 800.0f);
+        // POPIN-B deliberately revises the altitude-escape expectation: high terrain
+        // still escapes mission haze inside the clear region, but never escapes the edge.
+        const float elevated[][3] = {{0, 500, 600}, {0, 500, 700},
+                                      {0, 500, 750}, {0, 500, 800}};
+        const float edge_expected[] = {0, 0, .5f, 1};
+        zmod::fog_calc().verts = elevated;
+        require(zmod::fog_vertices(4) == 1, "Elevated terrain skipped edge fog");
+        for (unsigned i = 0; i < 4; ++i)
+            require(std::abs(zmod::fog_at(elevated[i]) - edge_expected[i]) < 1e-6f &&
+                        std::abs(zmod::fog_calc().factor[i] - edge_expected[i]) < 1e-6f,
+                    "Altitude escape leaked through the render edge band");
+    }
     zmod::fog() = saved_fog;
     zmod::fog_calc() = saved_calc;
 }

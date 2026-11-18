@@ -73,5 +73,8 @@ void main() {
             0.0, 1.0);
         fog = distanceFog * altitudeFog;
     }
+    // Same packed edge band as native_geometry.vert; no altitude dependence.
+    float edgeFog = clamp((length(camera.xz) - sun.geometryFog1.x) * sun.geometryFog1.y, 0.0, 1.0);
+    fog = 1.0 - (1.0 - fog) * (1.0 - edgeFog);
     specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0 - fog);
 }

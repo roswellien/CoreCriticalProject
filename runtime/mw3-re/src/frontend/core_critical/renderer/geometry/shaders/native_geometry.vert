@@ -60,5 +60,9 @@ void main() {
         float altitudeFog = clamp(1.0 - (worldPosition.y - sun.geometryFog0.z) * sun.geometryFog0.w, 0.0, 1.0);
         fog = distanceFog * altitudeFog;
     }
+    // geometryFog1.xy reuse spare components: edge start and inverse width.
+    // This term also covers fog-off missions and terrain above the mission altitude band.
+    float edgeFog = clamp((length(camera.xz) - sun.geometryFog1.x) * sun.geometryFog1.y, 0.0, 1.0);
+    fog = 1.0 - (1.0 - fog) * (1.0 - edgeFog);
     specularSmooth = specularFlat = vec4(0.0,0.0,0.0,1.0-fog);
 }

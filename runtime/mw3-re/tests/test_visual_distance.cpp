@@ -4,6 +4,8 @@
 #include "gamez/zclass/camera.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_fogcalc.h"
+#include "frontend/core_critical/renderer/geometry/resource.hpp"
 #include "mech3/mech_lod.h"
 
 #include <cmath>
@@ -239,8 +241,9 @@ TEST(view_distance_nested_fog_and_setters) {
     EXPECT(zmod::render_fog().far_range == 1400.0f);
     {
       zmod::ScopedRenderFog zoom(800.0f, 1200.0f);
-      // Scaling the authored 700 by 1.5 reaches the 1200 view's table start, covering the edge.
-      EXPECT(zmod::render_fog().near_range == 1050.0f && zmod::render_fog().far_range == 1200.0f);
+      // POPIN-A deliberately replaces #368's narrow interval with proportional mission haze.
+      EXPECT(zmod::render_fog().near_range == 150.0f && zmod::render_fog().far_range == 1050.0f);
+      EXPECT(zmod::render_fog_edge().start == 1050.0f);
       zmod::fog_set_far(800.0f);
       zmod::fog_set_on(0);
       EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
@@ -248,14 +251,16 @@ TEST(view_distance_nested_fog_and_setters) {
     }
     // The outer copy follows what was set while the zoom scope was active.
     EXPECT(zmod::render_fog().far_range == 1600.0f && zmod::render_fog().on == 0);
+    EXPECT(zmod::render_fog_edge().start == 1450.0f && zmod::render_fog_active());
   }
   EXPECT(&zmod::render_fog() == &zmod::fog());
+  EXPECT(zmod::render_fog_edge().inverse_range == 0.0f);
   EXPECT(zmod::fog().far_range == 800.0f && zmod::fog().on == 0);
   zmod::fog() = saved;
 }
 
-// Linear fog at the geometry edge uses the playtested starts. Deliberately foggy maps keep
-// their scaled interval, and gameplay readers keep the authored fog.
+// POPIN-A deliberately changes #368: the table no longer replaces proportional mission haze.
+// Only a mission interval beyond the cut is capped; POPIN-B independently covers the edge.
 TEST(view_distance_fog_covers_geometry_edge) {
   const zmod::Fog saved = zmod::fog();
   zmod::Fog edge{};
@@ -268,13 +273,13 @@ TEST(view_distance_fog_covers_geometry_edge) {
   {
     zmod::ScopedRenderFog scope(800.0f, 1200.0f);
     const zmod::Fog& render = zmod::render_fog();
-    EXPECT(render.near_range == 1050.0f && render.far_range == 1200.0f);
-    EXPECT(render.near_sq == 1102500.0f && render.far_sq == 1440000.0f);
-    EXPECT(render.inv_range == 1.0f / 150.0f);
+    EXPECT(render.near_range == 450.0f && render.far_range == 1200.0f);
+    EXPECT(render.near_sq == 202500.0f && render.far_sq == 1440000.0f);
+    EXPECT(render.inv_range == 1.0f / 750.0f);
   }
   {
     zmod::ScopedRenderFog scope(800.0f, 1600.0f);
-    EXPECT(zmod::render_fog().near_range == 1450.0f && zmod::render_fog().far_range == 1600.0f);
+    EXPECT(zmod::render_fog().near_range == 600.0f && zmod::render_fog().far_range == 1600.0f);
   }
   EXPECT(zmod::fog().near_range == 300.0f && zmod::fog().far_range == 800.0f);
   // Fog authored beyond the original far plane still ends at the visual far plane.
@@ -314,13 +319,84 @@ TEST(view_distance_exact_fog_start_table) {
     const float visual_far = static_cast<float>(option.view_distance);
     EXPECT(zcls::fog_start_for_view_distance(visual_far) == expected[index].fog_start);
     zmod::ScopedRenderFog scope(800.0f, visual_far);
-    EXPECT(zmod::render_fog().near_range == expected[index].fog_start);
+    EXPECT(zmod::render_fog().near_range == 300.0f * visual_far / 800.0f);
     EXPECT(zmod::render_fog().far_range == visual_far);
+    EXPECT(zmod::render_fog_edge().start == expected[index].fog_start);
+    EXPECT(zmod::render_fog_edge().inverse_range ==
+           1.0f / (visual_far - expected[index].fog_start));
   }
   EXPECT(!zcls::is_supported_view_distance(1000));
   EXPECT(zcls::fog_start_for_view_distance(1000.0f) == 850.0f);
   EXPECT(zmod::fog().near_range == edge.near_range && zmod::fog().far_range == edge.far_range);
   zmod::fog() = saved;
+}
+
+TEST(view_distance_proportional_haze_and_altitude_independent_edge) {
+  const zmod::Fog saved = zmod::fog();
+  const zmod::FogCalc saved_calc = zmod::fog_calc();
+  zmod::fog_calc() = {};
+  zmod::fog_calc().camera_to_world[1][1] = 1.0f;
+  // Independent hand-derived values: (800*r - 32)/(750 - 32), clamped.
+  constexpr float fractions[] = {0.4f, 0.7f, 0.95f, 1.0f};
+  constexpr float mission_density[] = {288.0f / 718.0f, 528.0f / 718.0f, 1.0f, 1.0f};
+  constexpr float edge_at_95[] = {0.6f, 0.6f, 7.0f / 15.0f, 0.2f, 0.0f};
+  for (bool altitude_band : {false, true}) {
+    for (bool mission_on : {false, true}) {
+      zmod::fog() = {};
+      zmod::fog_set_on(mission_on);
+      zmod::fog_set_linear(1);
+      zmod::fog_set_near(32.0f);
+      zmod::fog_set_far(750.0f);
+      zmod::fog_set_alt_low(altitude_band ? 80.0f : 1000.0f);
+      zmod::fog_set_alt_high(altitude_band ? 100.0f : 1001.0f);
+      const zmod::Fog authored = zmod::fog();
+      for (size_t option_index = 0; option_index < std::size(zcls::kViewDistanceOptions);
+           ++option_index) {
+        const float view_distance =
+            static_cast<float>(zcls::kViewDistanceOptions[option_index].view_distance);
+        zmod::ScopedRenderFog scope(800.0f, view_distance);
+        const auto& render = zmod::render_fog();
+        const auto edge = zmod::render_fog_edge();
+        EXPECT(render.near_range == 32.0f * (view_distance / 800.0f));
+        EXPECT(render.far_range == 750.0f * (view_distance / 800.0f));
+        EXPECT(std::memcmp(&zmod::fog(), &authored, sizeof(authored)) == 0);
+        cc::geometry::Fog reference;
+        reference.enabled = mission_on;
+        reference.near_range = render.near_range;
+        reference.inverse_range = render.inv_range;
+        reference.low_altitude = render.alt_low;
+        reference.inverse_altitude = render.inv_alt;
+        reference.edge_start = edge.start;
+        reference.edge_inverse_range = edge.inverse_range;
+        EXPECT(reference.active() && zmod::render_fog_active());
+        for (size_t sample = 0; sample < std::size(fractions); ++sample) {
+          const float distance = view_distance * fractions[sample];
+          const float expected_edge = sample == 3 ? 1.0f :
+              (sample == 2 ? edge_at_95[option_index] : 0.0f);
+          for (float height : {1.0f, 90.0f, 500.0f}) {
+            float altitude = 1.0f;
+            if (altitude_band && height == 90.0f) altitude = 0.5f;
+            if (altitude_band && height == 500.0f) altitude = 0.0f;
+            const float mission = mission_on ? mission_density[sample] * altitude : 0.0f;
+            const float expected = 1.0f - (1.0f - mission) * (1.0f - expected_edge);
+            const float vertex[] = {0.0f, height, distance};
+            EXPECT(std::abs(zmod::fog_at(vertex) - expected) < 2e-6f);
+            EXPECT(std::abs(zmod::fog_sphere(vertex, 0.0f) - expected) < 2e-6f);
+            EXPECT(zmod::fog_sphere(vertex, 10.0f) + 2e-6f >= expected);
+            EXPECT(std::abs(cc::geometry::fog_amount(reference, distance, height) - expected) < 2e-6f);
+            if (sample == 3) EXPECT(zmod::fog_at(vertex) == 1.0f);
+          }
+        }
+        // The ramp must be present even where proportional haze is already full below 80 m.
+        const float middle[] = {0.0f, 500.0f, (edge.start + view_distance) * 0.5f};
+        if (altitude_band || !mission_on)
+          EXPECT(std::abs(zmod::fog_at(middle) - 0.5f) < 2e-6f);
+      }
+    }
+  }
+  EXPECT(zmod::render_fog_edge().inverse_range == 0.0f);
+  zmod::fog() = saved;
+  zmod::fog_calc() = saved_calc;
 }
 
 // A collapsed near == far interval keeps its previous inverse range; the extended copy scales it.

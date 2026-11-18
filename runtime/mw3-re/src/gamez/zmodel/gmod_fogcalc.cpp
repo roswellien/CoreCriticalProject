@@ -1,5 +1,7 @@
 #include "gamez/zmodel/gmod_fogcalc.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "gamez/zmodel/gmod_fog.h"
@@ -39,12 +41,30 @@ float clamp01(double f) {
 }
 
 constexpr double kVisible = 0.003921569;  // 0x005ce548, 1/255
+
+float scoped_fog_amount(float distance, float height) {
+  const Fog& f = render_fog();
+  const RenderFogEdge edge = render_fog_edge();
+  float mission = 0.0f;
+  if (f.on) {
+    const float density = std::clamp((distance - f.near_range) * f.inv_range, 0.0f, 1.0f);
+    const float altitude = std::clamp(1.0f - (height - f.alt_low) * f.inv_alt, 0.0f, 1.0f);
+    mission = density * altitude;
+  }
+  const float cover = std::clamp((distance - edge.start) * edge.inverse_range, 0.0f, 1.0f);
+  return 1.0f - (1.0f - mission) * (1.0f - cover);
+}
 }  // namespace
 
 FogCalc& fog_calc() { return g_calc; }
 
 // Mech3.exe 1.2 @ 0x00555640
 float fog_sphere(const float centre[3], float radius) {
+  // Conservative admission: sample the farthest distance and lowest altitude, so an
+  // elevated sphere cannot skip its per-vertex edge fog. Unscoped original math stays exact.
+  if (render_fog_edge().inverse_range > 0.0f)
+    return scoped_fog_amount(std::hypot(centre[0], centre[2]) + radius,
+                             static_cast<float>(world_y(centre) - radius));
   const Fog& f = render_fog();
   const float s = approx_sqrt(horizontal_sq(centre));
   const float farthest = s + radius;
@@ -66,6 +86,10 @@ float fog_sphere(const float centre[3], float radius) {
 }
 
 float fog_at(const float v[3]) {
+  // Use the same Euclidean distance as GPU/reference geometry in the render-only scope.
+  // The original exponent approximation remains below for original/differential callers.
+  if (render_fog_edge().inverse_range > 0.0f)
+    return scoped_fog_amount(std::hypot(v[0], v[2]), static_cast<float>(world_y(v)));
   const Fog& f = render_fog();
   const float d2 = horizontal_sq(v);
   if (!(d2 > f.near_sq)) return 0.0f;
@@ -84,7 +108,6 @@ float fog_at(const float v[3]) {
 
 // Mech3.exe 1.2 @ 0x00555a70. Walks the vertices last to first.
 int32_t fog_vertices(int32_t count) {
-  const Fog& f = render_fog();
   int32_t any = 0;
   for (int32_t i = count - 1; i >= 0; --i) {
     g_calc.factor[i] = fog_at(g_calc.verts[i]);
@@ -93,7 +116,7 @@ int32_t fog_vertices(int32_t count) {
   if (!any) return 0;
   // The device colour push, without the device-up test of zrndr::device_fog_color.
   zrndr::DeviceFog& d = zrndr::device_fog();
-  for (int i = 0; i < 3; ++i) d.color[i] = f.color[i] * 255.0f;
+  for (int i = 0; i < 3; ++i) d.color[i] = render_fog_color()[i] * 255.0f;
   if (d.sent[0] != d.color[0] || d.sent[1] != d.color[1] || d.sent[2] != d.color[2]) {
     for (int i = 0; i < 3; ++i) d.sent[i] = d.color[i];
     if (d.send) d.send();

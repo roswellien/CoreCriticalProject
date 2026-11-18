@@ -282,7 +282,9 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
     auto& fixture = *static_cast<CameraFixture*>(context);
     ++fixture.observed_passes;
     EXPECT(&zmod::render_fog() != &zmod::fog());
-    EXPECT(zmod::render_fog().near_range == 700.0f);
+    // POPIN-A preserves the authored haze; POPIN-B owns #368's default edge band.
+    EXPECT(zmod::render_fog().near_range == 300.0f);
+    EXPECT(zmod::render_fog_edge().start == 700.0f);
     EXPECT(zmod::render_fog().far_range == 800.0f);
     EXPECT(zmod::fog().on == 1);
     EXPECT(zmod::fog().linear == 1);
@@ -303,7 +305,8 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
     EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == 1600.0f);
     EXPECT(fixture.camera.get<float>(0x110) == -1600.0f);
     EXPECT(zmod::draw_state().clip.far_z == 1600.0f);
-    EXPECT(zmod::render_fog().near_range ==
+    EXPECT(zmod::render_fog().near_range == 600.0f);
+    EXPECT(zmod::render_fog_edge().start ==
            zcls::fog_start_for_view_distance(fixture.frame->requested_far));
     EXPECT(zmod::render_fog().far_range == 1600.0f);
   };
@@ -339,10 +342,10 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
   EXPECT(fixture.observed_passes == 4);
   EXPECT(g_visual_far_log_lines.size() == 4);
   EXPECT(g_visual_far_log_lines.at(0).find(
-             "scoped fog 700..800, mission fog linear 1 on 1") !=
+             "scoped fog 300..800, mission fog linear 1 on 1") !=
          std::string::npos);
   EXPECT(g_visual_far_log_lines.at(1).find(
-             "scoped fog 1.45e+03..1.6e+03, mission fog linear 1 on 1") !=
+             "scoped fog 600..1.6e+03, mission fog linear 1 on 1") !=
          std::string::npos);
   EXPECT(g_visual_far_log_lines.at(3).find(
              "requested 800, authored 800, expanded 800") != std::string::npos);

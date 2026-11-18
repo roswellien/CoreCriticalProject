@@ -787,6 +787,39 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
                 statistics.gpu_prepared_vertices == 21 && statistics.geometry_uploads == 1 &&
                     statistics.cpu_clipped_triangles == 0 && statistics.normal_draws == 7,
                 "GPU prepared vertices still use CPU clipping or lost immutable material draws");
+        {
+            // Extend coverage after the original seven-scenario accounting checks above.
+            // Both prepared routes must fog high terrain even when mission fog is off.
+            const auto saved_context = context;
+            std::array<float, 12> elevated_world{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 500, 0};
+            context.model_to_world = elevated_world.data();
+            context.damage_tint_weight = 0;
+            for (bool mission_on : {false, true}) {
+                cc::geometry::Fog edge;
+                edge.enabled = mission_on;
+                edge.color = {0, 0, 1};
+                edge.low_altitude = 80;
+                edge.inverse_altitude = 1.f / 20.f;
+                edge.edge_inverse_range = 1;
+                renderer->clear(true, 0, 0, 0);
+                require(renderer->submit_prepared_geometry(context, edge) ==
+                            cc::geometry::Submission::submitted,
+                        "Prepared edge-fog geometry was not submitted");
+                std::vector<std::uint32_t> pixels;
+                int width{}, height{};
+                require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
+                        "Prepared edge-fog readback extent changed");
+                unsigned witnesses = 0;
+                for (const auto pixel : pixels) {
+                    if (!(pixel & 0xffffff)) continue;
+                    require(pixel == 0xff0000ff,
+                            "Prepared high terrain escaped fully opaque edge fog");
+                    ++witnesses;
+                }
+                require(witnesses > 10, "Prepared edge fog rendered no geometry witness");
+            }
+            context = saved_context;
+        }
         producer_view_checks::Observer view_observer;
         require(cc_mw3_re::testing::observe_producer_views(*renderer,
                                                             &view_observer),

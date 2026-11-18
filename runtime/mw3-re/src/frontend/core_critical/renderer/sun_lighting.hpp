@@ -50,6 +50,16 @@ struct Settings {
   float sdr_shadow_lift{0.f};
   float sdr_extra_shadow_lift{0.f};
 };
+// One colour selection for both mission haze and edge fog, including frame gaps.
+// Campaign lighting already owns this replacement; never change authored ZBD colours.
+inline std::array<float, 3> fog_color(const Settings &settings,
+                                      std::array<float, 3> authored) {
+  if (!settings.enabled || !settings.haze_active) return authored;
+  if (settings.haze_manual) return settings.haze_color;
+  for (unsigned channel = 0; channel < 3; ++channel)
+    authored[channel] = std::fmin(1.f, authored[channel] * settings.haze_scale[channel]);
+  return authored;
+}
 inline Settings display_ambient(Settings settings, bool lighting_mode_enabled,
                                 bool hdr_enabled) {
   if (settings.enabled && lighting_mode_enabled && !hdr_enabled) {
