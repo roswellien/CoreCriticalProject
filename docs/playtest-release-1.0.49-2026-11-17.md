@@ -46,7 +46,7 @@ The mission altitude taper remains authored. A separate linear edge amount ramps
 the table start to one at the cut, regardless of altitude or mission fog on/off. The combined
 amount is `1 - (1 - mission_amount) * (1 - edge_amount)`, so terrain at Y=500 cannot escape edge
 fog. Both terms use the same colour. Campaign lighting retains its existing sky-matched haze
-selection and also applies it to world-frame clears; lighting off retains the mission colour.
+selection (world-frame clears keep the mission colour); lighting off retains the mission colour.
 Above the horizon blend's lower boundary, fully fogged terrain still uses haze rather than the
 sky dome's elevation-dependent colour; the optional colour feather is not included here.
 
@@ -71,7 +71,7 @@ loaded by MW3-RE; that pack is left out and reported in the session log.
 - The prior playtest baseline had two independent non-author model reviews and passed CI. Its source
   passes the asset-free suite, GPU adapter checks (materials in four presentation/thread
   variants, geometry, prepared, producer view, POM) and the launcher runtime-layout checks.
-- Not yet verified: proportional haze, altitude-independent edge fog, sky-matched world clears
+- Not yet verified: proportional haze, altitude-independent edge fog
   and their new fixtures need coordinator builds, tests and independent review; owner gameplay
   at all five distances (pop-in and horizon appearance), signed installer build, clean-machine
   install and upgrade from 1.0.48 also remain unverified.
