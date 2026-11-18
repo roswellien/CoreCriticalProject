@@ -1857,6 +1857,7 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
+    draw.producer_view = producer_view_;
     draw.scissor = producer_scissor();
     const auto texture = prepared_texture(*source.texture);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
@@ -1873,6 +1874,7 @@ private:
       apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
+      observe_producer_draw(scene_.draws.back());
       ++prepared_batches_;
     }
   }

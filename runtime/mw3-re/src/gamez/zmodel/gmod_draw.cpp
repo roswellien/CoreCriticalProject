@@ -1000,6 +1000,7 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
       context.ordinary = type == 0;
       context.morphing = morphing(m);
       context.overlay = s.overlay != 0;
+      const zvid::ProducerBindingScope producer_view(renderer);
       scope.renderer = renderer;
       renderer->begin_model_draw(context);
     }

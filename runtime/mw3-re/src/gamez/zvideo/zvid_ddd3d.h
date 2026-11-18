@@ -90,6 +90,7 @@ void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t heigh
 platform::ProducerView capture_producer_view();
 struct ProducerViewStateForTest {
   platform::ProducerView view{};
+  platform::MissionIdentity mission{};
   platform::ProducerRect canvas{};
   platform::ProducerRect camera_rect{};
   bool canvas_available = false;

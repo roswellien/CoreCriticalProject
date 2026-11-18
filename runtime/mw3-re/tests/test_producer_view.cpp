@@ -857,3 +857,18 @@ TEST(b5_view_reset_abandon) {
   zvid::flush_transparent();
   c.check(bits(f.sink.observed.back().vertices[0].sx, 6), "RESET_REUSE_OWNED_VALUE");
 }
+
+TEST(b6_idle_snapshot_preserves_mission) {
+  CpuCase c(__func__);
+  Fixture f;
+  zvid::producer_mission_changed({4, 9});
+  const auto configured = zvid::capture_producer_view_state_for_test();
+  zvid::producer_mission_changed({});
+  zvid::restore_producer_view_for_test(configured);
+  {
+    Emission main(ProducerPurpose::MainWorld);
+    const auto view = zvid::capture_producer_view();
+    c.check(view.mission.world_index == 4 && view.mission.number == 9,
+            "IDLE_SNAPSHOT_PRESERVES_CONFIGURED_MISSION");
+  }
+}

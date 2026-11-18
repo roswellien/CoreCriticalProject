@@ -560,6 +560,7 @@ void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t heigh
 ProducerViewStateForTest capture_producer_view_state_for_test() {
   ProducerViewStateForTest state;
   state.view = capture_producer_view();
+  state.mission = g_producer_mission;
   state.canvas = g_producer_canvas;
   state.canvas_available = g_canvas_available;
   state.camera_rect = g_producer_camera_rect;
@@ -590,7 +591,7 @@ platform::ProducerView capture_producer_view() {
 }
 void restore_producer_view_for_test(const ProducerViewStateForTest& state) noexcept {
   g_emitting_view = state.view;
-  g_producer_mission = state.view.mission;
+  g_producer_mission = state.mission;
   g_producer_canvas = state.canvas;
   g_canvas_available = state.canvas_available;
   g_producer_camera_rect = state.camera_rect;
