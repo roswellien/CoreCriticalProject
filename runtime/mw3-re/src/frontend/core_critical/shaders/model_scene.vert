@@ -9,6 +9,7 @@ layout(location=2) noperspective out vec4 colorSmooth;
 layout(location=3) flat out vec4 colorFlat;
 layout(location=4) noperspective out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
+layout(location=10) out vec4 fogFactors;
 
 // First 64 bytes match the unmodified fragment shader's Push ABI.
 // target = (guestWidth, guestHeight, nearScale, nearClip).
@@ -28,6 +29,7 @@ layout(push_constant) uniform ModelPush {
 } draw;
 
 void main() {
+    fogFactors = vec4(0.0);
     vec4 p = vec4(position, 1.0);
     precise vec3 camera = vec3(dot(draw.camera0, p), dot(draw.camera1, p), dot(draw.camera2, p));
     vec3 n = vec3(dot(draw.camera0.xyz, normal), dot(draw.camera1.xyz, normal), dot(draw.camera2.xyz, normal));

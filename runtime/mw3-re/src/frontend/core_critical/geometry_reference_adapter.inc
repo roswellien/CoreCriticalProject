@@ -33,7 +33,7 @@ void emit_reference_geometry(
       const float height =
           float(world[4] * p[0] + world[5] * p[1] + world[6] * p[2] + world[7]);
       const float distance = std::hypot(vertex.camera[0], vertex.camera[2]);
-      vertex.visibility = 1.f - cc::geometry::fog_amount(fog, distance, height);
+      vertex.fog = cc::geometry::fog_factors(fog, distance, height);
     }
     vertices.push_back(vertex);
   }
@@ -94,6 +94,7 @@ void emit_reference_geometry(
       for (std::size_t corner = 2; corner < clipped.size(); ++corner) {
         for (std::size_t index : {std::size_t{0}, corner - 1, corner}) {
           const auto &vertex = clipped[index];
+          const float visibility = 1.f - cc::geometry::fog_amount(vertex.fog);
           const float depth = context.near_z / vertex.camera[2];
           TLVertex tl{
               vertex.camera[0] * view->projection[1] * depth +
@@ -106,7 +107,7 @@ void emit_reference_geometry(
                   (std::uint32_t(std::lround(
                        float((material.color >> 24) & 255U) * context.opacity))
                    << 24),
-              std::uint32_t(std::clamp(vertex.visibility * 255.f, 0.f, 255.f))
+              std::uint32_t(std::clamp(visibility * 255.f, 0.f, 255.f))
                   << 24,
               vertex.u,
               vertex.v};

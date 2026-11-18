@@ -13,6 +13,7 @@ layout(location=6) out vec3 worldNormal;
 layout(location=7) out vec3 worldPosition;
 layout(location=8) out vec3 shadowPosition;
 layout(location=9) noperspective out vec2 screenPos;
+layout(location=10) out vec4 fogFactors;
 layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
@@ -63,18 +64,12 @@ void main() {
     gl_PointSize = 1.0;
     uvPerspective = uvAffine = uv;
     colorSmooth = colorFlat = vec4(rgb, uintBitsToFloat(draw.mode.w));
-    float fog = 0.0;
+    fogFactors = vec4(0.0, 0.0, 0.0, 1.0);
     if (sun.geometryFog1.z > 0.5) {
-        float distanceFog = clamp(
-            (length(camera.xz) - sun.geometryFog0.x) * sun.geometryFog0.y,
-            0.0, 1.0);
-        float altitudeFog = clamp(
-            1.0 - (worldPosition.y - sun.geometryFog0.z) * sun.geometryFog0.w,
-            0.0, 1.0);
-        fog = distanceFog * altitudeFog;
+        fogFactors.x = (length(camera.xz) - sun.geometryFog0.x) * sun.geometryFog0.y;
+        fogFactors.y = 1.0 - (worldPosition.y - sun.geometryFog0.z) * sun.geometryFog0.w;
     }
     // Same packed edge band as native_geometry.vert; no altitude dependence.
-    float edgeFog = clamp((length(camera.xz) - sun.geometryFog1.x) * sun.geometryFog1.y, 0.0, 1.0);
-    fog = 1.0 - (1.0 - fog) * (1.0 - edgeFog);
-    specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0 - fog);
+    fogFactors.z = (length(camera.xz) - sun.geometryFog1.x) * sun.geometryFog1.y;
+    specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0);
 }

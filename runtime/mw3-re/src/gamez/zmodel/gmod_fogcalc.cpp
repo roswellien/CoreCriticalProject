@@ -43,6 +43,7 @@ float clamp01(double f) {
 constexpr double kVisible = 0.003921569;  // 0x005ce548, 1/255
 
 float scoped_fog_amount(float distance, float height) {
+  // Cylindrical fog distance is separate from whole-cell/centre cull selection.
   const Fog& f = render_fog();
   const RenderFogEdge edge = render_fog_edge();
   float mission = 0.0f;

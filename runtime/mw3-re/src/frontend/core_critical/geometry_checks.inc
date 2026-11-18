@@ -1,3 +1,5 @@
+#include "renderer/geometry/reference.hpp"
+
 std::array<float, 3> reference_haze_color(const mw34::sun::Settings &settings,
                                          const std::array<float, 3> &view) {
     // CPU mirror of sun_scene.frag's hazeColor, before target dithering/quantization.
@@ -224,6 +226,59 @@ void check_distance_fog(SDL_Window *window, sdlfe::RendererBackend backend) {
             }
         }
         require(pixel_sample == 160, "Distance fog fixture lost a scenario");
+        // Unequal radii and depths expose endpoint clamping: the old edge factors
+        // are 0/0/1, giving about half fog where the triangle reaches z == 3200.
+        const float crossing_positions[]{-500, -100, 3000, 500, -100, 3000, 0, 100, 3400};
+        const auto crossing = cc::geometry::register_resource(
+            crossing_positions, 3, nullptr, 0, {{3, indices, nullptr, nullptr, false, true}});
+        std::array<float, 12> camera{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+        std::array<float, 12> world{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 500, 0};
+        zmod::fog() = {};
+        zmod::ScopedRenderFog scope(800, 3200);
+        cc::geometry::Fog edge;
+        edge.color = {1, 1, 1};
+        edge.edge_start = 3050;
+        edge.edge_inverse_range = 1.f / 150.f;
+        std::vector<cc::geometry::ReferenceVertex> triangle(3);
+        for (unsigned index = 0; index < 3; ++index) {
+            auto &vertex = triangle[index];
+            std::copy_n(crossing_positions + index * 3, 3, vertex.camera.begin());
+            vertex.fog = cc::geometry::fog_factors(
+                edge, std::hypot(vertex.camera[0], vertex.camera[2]), vertex.camera[1] + 500);
+        }
+        const auto clipped = cc::geometry::clip_reference(triangle, 3200, false);
+        unsigned cut_vertices = 0;
+        for (const auto &vertex : clipped) {
+            if (vertex.camera[2] != 3200) continue;
+            require(cc::geometry::fog_amount(vertex.fog) == 1.f &&
+                        zmod::fog_at(vertex.camera.data()) == 1.f,
+                    "Crossing GPU-reference/CPU cut vertices retained visibility");
+            ++cut_vertices;
+        }
+        require(cut_vertices == 2, "Crossing fog fixture lost its cut vertices");
+        platform::ModelDrawContext context;
+        context.model_to_camera = camera.data();
+        context.model_to_world = world.data();
+        context.ordinary = true;
+        context.near_z = context.clip_near = 1;
+        context.far_z = 3200;
+        context.fx_near = 64;
+        // Magnify the y direction so row 15 is just inside the clipped edge.
+        context.fy_near = 3200;
+        context.cx = context.cy = 16;
+        renderer->begin_scene();
+        renderer->clear(true, 255, 0, 255);
+        require(renderer->submit_model_geometry(crossing, context, {material}, edge) ==
+                    cc::geometry::Submission::submitted,
+                "Crossing fog geometry was not submitted");
+        renderer->end_scene();
+        std::vector<std::uint32_t> pixels;
+        int width{}, height{};
+        require(renderer->read_back(&pixels, &width, &height) && width == 32 && height == 32,
+                "Crossing fog readback extent changed");
+        for (unsigned shift : {0U, 8U, 16U})
+            require(((pixels[15 * 32 + 16] >> shift) & 255) >= 247,
+                    "Crossing GPU/reference triangle exposed the far cut");
     }
     zmod::fog() = saved_fog;
     zmod::fog_calc() = saved_calc;

@@ -4,6 +4,7 @@
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "prepared_models.hpp"
 #include "renderer/donor_retarget.hpp"
+#include "renderer/geometry/resource.hpp"
 #include "renderer/vk_scene.hpp"
 
 #include <bit>
@@ -87,8 +88,8 @@ inline void apply_surface_material(mw34::vkscene::Draw &draw,
 }
 
 struct PreparedVertex {
-  std::array<float, 3> camera{}, normal{}, color{};
-  float visibility{}, u{}, v{};
+  std::array<float, 3> camera{}, normal{}, color{}, fog{};
+  float u{}, v{};
 };
 
 inline std::vector<PreparedVertex> clip_depth(std::vector<PreparedVertex> input,
@@ -110,9 +111,9 @@ inline std::vector<PreparedVertex> clip_depth(std::vector<PreparedVertex> input,
         vertex.camera[axis] = std::lerp(a.camera[axis], b.camera[axis], t);
         vertex.normal[axis] = std::lerp(a.normal[axis], b.normal[axis], t);
         vertex.color[axis] = std::lerp(a.color[axis], b.color[axis], t);
+        vertex.fog[axis] = std::lerp(a.fog[axis], b.fog[axis], t);
       }
       vertex.camera[2] = plane;
-      vertex.visibility = std::lerp(a.visibility, b.visibility, t);
       vertex.u = std::lerp(a.u, b.u, t);
       vertex.v = std::lerp(a.v, b.v, t);
       result.push_back(vertex);
@@ -152,6 +153,17 @@ prepare_draw(const PreparedBatchDraw &source,
   const auto &vertices =
       source.deformed.empty() ? source.batch->vertices : source.deformed;
   const float near_clip = std::max(context.near_z, context.clip_near);
+  const auto edge = zmod::render_fog_edge();
+  const bool scoped_fog = edge.inverse_range > 0.f;
+  const auto &mission_fog = zmod::render_fog();
+  cc::geometry::Fog fog;
+  fog.enabled = mission_fog.on != 0;
+  fog.near_range = mission_fog.near_range;
+  fog.inverse_range = mission_fog.inv_range;
+  fog.low_altitude = mission_fog.alt_low;
+  fog.inverse_altitude = mission_fog.inv_alt;
+  fog.edge_start = edge.start;
+  fog.edge_inverse_range = edge.inverse_range;
   bool gpu = source.deformed.empty();
   std::vector<PreparedVertex> staged;
   staged.reserve(vertices.size());
@@ -187,8 +199,15 @@ prepare_draw(const PreparedBatchDraw &source,
       for (unsigned channel = 0; channel < 3; ++channel)
         output.color[channel] = std::floor(
             float((source.batch->color >> (16 - channel * 8)) & 255) * light);
-      output.visibility =
-          zmod::render_fog_active() ? 1.f - zmod::fog_at(output.camera.data()) : 1.f;
+      if (scoped_fog) {
+        const auto &transform = zmod::fog_calc().camera_to_world;
+        const float height_world = static_cast<float>(
+            double{transform[0][1]} * output.camera[0] +
+            double{transform[1][1]} * output.camera[1] +
+            double{transform[2][1]} * output.camera[2] + transform[3][1]);
+        output.fog = cc::geometry::fog_factors(
+            fog, std::hypot(output.camera[0], output.camera[2]), height_world);
+      }
       output.u = vertex[6];
       output.v = vertex[7];
       gpu = gpu && output.camera[2] >= near_clip &&
@@ -230,9 +249,14 @@ prepare_draw(const PreparedBatchDraw &source,
     for (unsigned channel = 0; channel < 3; ++channel)
       color |= uint32_t(std::clamp(vertex.color[channel], 0.f, 255.f))
                << (16 - channel * 8);
-    const auto fog =
-        uint32_t(std::clamp(vertex.visibility * 255.f, 0.f, 255.f));
-    ::platform::TLVertex tl{0, 0, 0, 1, color, fog << 24, vertex.u, vertex.v};
+    // Unscoped callers retain fog_at's original approximation, sampled only after clipping.
+    float visibility = 1.f;
+    if (scoped_fog)
+      visibility -= cc::geometry::fog_amount(vertex.fog);
+    else if (zmod::render_fog_active())
+      visibility -= zmod::fog_at(vertex.camera.data());
+    const auto packed_visibility = uint32_t(std::clamp(visibility * 255.f, 0.f, 255.f));
+    ::platform::TLVertex tl{0, 0, 0, 1, color, packed_visibility << 24, vertex.u, vertex.v};
     if (project) {
       tl.rhw = tl.sz = context.near_z / vertex.camera[2];
       tl.sx = ((context.fx_near * vertex.camera[0]) * tl.rhw + context.cx -

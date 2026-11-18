@@ -206,6 +206,24 @@ TEST(view_distance_restores_render_camera_far_state) {
   CameraFixture fixture;
   VisualFarLogClockGuard clock_guard;
   VisualFarLogSinkGuard log_sink_guard;
+  zcls::world_render_hooks().begin_scene = [](void* context) {
+    auto& fixture = *static_cast<CameraFixture*>(context);
+    ++fixture.observed_passes;
+    const float render_far = static_cast<float>(fixture.frame->requested_far);
+    EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == render_far);
+    expect_far_state(fixture.camera, *fixture.frame, render_far);
+    constexpr zcls::ViewDistanceOption expected_edges[] = {
+        {800, 700}, {1200, 1050}, {1600, 1450}, {2400, 2250}, {3200, 3050}};
+    bool matched = false;
+    for (const auto& option : expected_edges) {
+      if (option.view_distance != fixture.frame->requested_far) continue;
+      EXPECT(zmod::render_fog_edge().start == option.fog_start);
+      EXPECT(zmod::render_fog_edge().inverse_range ==
+             1.0f / (render_far - option.fog_start));
+      matched = true;
+    }
+    EXPECT(matched);
+  };
   EXPECT(fixture.camera.get<float>(0x110) == 0.0f);
   for (int i = 0; i < 3; ++i) EXPECT(fixture.camera.floats(0xc4)[i] == 0.0f);
 
@@ -213,7 +231,9 @@ TEST(view_distance_restores_render_camera_far_state) {
       {1200, {10.0f, 30.0f, 20.0f}, 0.0f, 0.0f, 1.0f, 0.8f},
       {1200, {80.0f, 45.0f, -40.0f}, 0.2f, 0.7f, 1.0f, 0.8f},
       {1600, {80.0f, 45.0f, -40.0f}, -0.1f, -0.5f, 0.9f, 0.6f},
-      {800, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f}};
+      {800, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f},
+      {2400, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f},
+      {3200, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f}};
   for (std::size_t frame_index = 0; frame_index < std::size(frames); ++frame_index) {
     const auto& frame = frames[frame_index];
     fixture.frame = &frame;
@@ -245,7 +265,7 @@ TEST(view_distance_restores_render_camera_far_state) {
     zmth::pop();
     expect_far_state(fixture.camera, frame, kAuthoredFar);
   }
-  EXPECT(g_visual_far_log_lines.size() == 3);
+  EXPECT(g_visual_far_log_lines.size() == 5);
   EXPECT(g_visual_far_log_lines.at(0).find(
              "requested 1200, authored 800, expanded 1.2e+03") != std::string::npos);
   EXPECT(g_visual_far_log_lines.at(0).find(
@@ -261,7 +281,7 @@ TEST(view_distance_restores_render_camera_far_state) {
   EXPECT(g_visual_far_log_lines.at(2).find(
              "extended 0, default-800 fog-only 1; camera main") !=
          std::string::npos);
-  EXPECT(fixture.observed_passes == 4);
+  EXPECT(fixture.observed_passes == 6);
 }
 
 TEST(default_visual_far_covers_only_full_viewport_fog) {
@@ -306,8 +326,7 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
     EXPECT(fixture.camera.get<float>(0x110) == -1600.0f);
     EXPECT(zmod::draw_state().clip.far_z == 1600.0f);
     EXPECT(zmod::render_fog().near_range == 600.0f);
-    EXPECT(zmod::render_fog_edge().start ==
-           zcls::fog_start_for_view_distance(fixture.frame->requested_far));
+    EXPECT(zmod::render_fog_edge().start == 1450.0f);
     EXPECT(zmod::render_fog().far_range == 1600.0f);
   };
   EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);

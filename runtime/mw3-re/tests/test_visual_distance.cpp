@@ -6,13 +6,16 @@
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "frontend/core_critical/renderer/geometry/resource.hpp"
+#include "frontend/core_critical/renderer/geometry/reference.hpp"
 #include "mech3/mech_lod.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <vector>
 
 namespace {
 mech3::Mech* g_lod_test_target = nullptr;
@@ -415,4 +418,115 @@ TEST(view_distance_collapsed_fog_interval) {
   }
   EXPECT(zmod::fog().inv_range == 1.0f / 400.0f);
   zmod::fog() = saved;
+}
+
+TEST(view_distance_crossing_triangle_fog_at_cut) {
+  const zmod::Fog saved = zmod::fog();
+  const zmod::FogCalc saved_calc = zmod::fog_calc();
+  zmod::fog_calc() = {};
+  zmod::fog_calc().camera_to_world[1][1] = 1.0f;
+  constexpr zcls::ViewDistanceOption cases[] = {
+      {800, 700}, {1200, 1050}, {1600, 1450}, {2400, 2250}, {3200, 3050}};
+  for (const auto& test : cases) {
+    const float cut_depth = static_cast<float>(test.view_distance);
+    for (bool mission_on : {false, true}) {
+      zmod::fog() = {};
+      zmod::fog_set_on(mission_on);
+      zmod::fog_set_near(32.0f);
+      zmod::fog_set_far(750.0f);
+      zmod::fog_set_alt_low(80.0f);
+      zmod::fog_set_alt_high(100.0f);
+      zmod::ScopedRenderFog scope(800.0f, cut_depth);
+      const auto edge = zmod::render_fog_edge();
+      EXPECT(edge.start == test.fog_start);
+      EXPECT(edge.inverse_range == 1.0f / (cut_depth - test.fog_start));
+      cc::geometry::Fog reference;
+      reference.enabled = mission_on;
+      reference.near_range = zmod::render_fog().near_range;
+      reference.inverse_range = zmod::render_fog().inv_range;
+      reference.low_altitude = 80.0f;
+      reference.inverse_altitude = 1.0f / 20.0f;
+      reference.edge_start = test.fog_start;
+      reference.edge_inverse_range = edge.inverse_range;
+      // At 3200 these depths are exactly 3000/3400. The first crossing has x == 0,
+      // so interpolating the old endpoint-clamped fog gives exactly 0.5 at the cut.
+      std::vector<cc::geometry::ReferenceVertex> triangle(3);
+      triangle[0].camera = {0.0f, 400.0f, cut_depth - 200.0f};
+      triangle[1].camera = {100.0f, 400.0f, cut_depth - 200.0f};
+      triangle[2].camera = {0.0f, 600.0f, cut_depth + 200.0f};
+      for (auto& vertex : triangle)
+        vertex.fog = cc::geometry::fog_factors(
+            reference, std::hypot(vertex.camera[0], vertex.camera[2]), vertex.camera[1]);
+      const float previous_cut_fog =
+          0.5f * (cc::geometry::fog_amount(triangle[0].fog) +
+                  cc::geometry::fog_amount(triangle[2].fog));
+      EXPECT(previous_cut_fog == 0.5f);
+      const auto clipped = cc::geometry::clip_reference(triangle, cut_depth, false);
+      EXPECT(clipped.size() == 4);
+      unsigned cut_vertices = 0;
+      for (const auto& vertex : clipped) {
+        if (vertex.camera[2] != cut_depth) continue;
+        EXPECT(vertex.fog[2] >= 1.0f);
+        EXPECT(cc::geometry::fog_amount(vertex.fog) == 1.0f);
+        EXPECT(zmod::fog_at(vertex.camera.data()) == 1.0f);
+        ++cut_vertices;
+      }
+      EXPECT(cut_vertices == 2);
+      // The sphere centre is clear, but its farthest point reaches the cut;
+      // the conservative branch must retain per-vertex fog even above the altitude band.
+      const float centre[] = {0.0f, 500.0f, cut_depth - 200.0f};
+      EXPECT(zmod::fog_at(centre) == 0.0f);
+      EXPECT(zmod::fog_sphere(centre, 200.0f) == 1.0f);
+      const float middle[] = {0.0f, 500.0f, (test.fog_start + cut_depth) * 0.5f};
+      EXPECT(std::abs(zmod::fog_at(middle) - 0.5f) < 1e-6f);
+      // A clear centre above the mission band can still have a foggy sphere bottom.
+      const float altitude_centre[] = {0.0f, 110.0f, cut_depth * 0.4f};
+      const float scale = cut_depth / 800.0f;
+      const float expected_sphere = mission_on ?
+          0.5f * (288.0f * scale + 20.0f) / (718.0f * scale) : 0.0f;
+      EXPECT(zmod::fog_at(altitude_centre) == 0.0f);
+      EXPECT(std::abs(zmod::fog_sphere(altitude_centre, 20.0f) - expected_sphere) < 1e-6f);
+    }
+  }
+  // Mission distance must also remain unbounded until after interpolation.
+  cc::geometry::Fog mission;
+  mission.enabled = true;
+  mission.near_range = 3050.0f;
+  mission.inverse_range = 1.0f / 150.0f;
+  mission.low_altitude = 80.0f;
+  mission.inverse_altitude = 1.0f / 20.0f;
+  const auto first = cc::geometry::fog_factors(mission, 3000.0f, 0.0f);
+  const auto last = cc::geometry::fog_factors(mission, 3400.0f, 0.0f);
+  std::array<float, 3> cut{};
+  for (unsigned axis = 0; axis < 3; ++axis)
+    cut[axis] = first[axis] + 0.5f * (last[axis] - first[axis]);
+  EXPECT(cc::geometry::fog_amount(cut) == 1.0f);
+  EXPECT(0.5f * (cc::geometry::fog_amount(first) + cc::geometry::fog_amount(last)) == 0.5f);
+  zmod::fog() = saved;
+  zmod::fog_calc() = saved_calc;
+}
+
+TEST(view_distance_unscoped_fog_keeps_original_exponent_approximation) {
+  const zmod::Fog saved = zmod::fog();
+  const zmod::FogCalc saved_calc = zmod::fog_calc();
+  zmod::fog_calc() = {};
+  zmod::fog_calc().camera_to_world[1][1] = 1.0f;
+  zmod::fog() = {};
+  zmod::fog_set_on(1);
+  zmod::fog_set_near(100.0f);
+  zmod::fog_set_far(800.0f);
+  zmod::fog_set_alt_low(20.0f);
+  zmod::fog_set_alt_high(80.0f);
+  EXPECT(zmod::render_fog_edge().inverse_range == 0.0f);
+  // The original bit-exponent sqrt of 90000 is 303.78125, rather than hypot's 300.
+  const float ground[] = {0.0f, 0.0f, 300.0f};
+  const float middle[] = {0.0f, 50.0f, 300.0f};
+  const float above[] = {0.0f, 80.0f, 300.0f};
+  const float beyond[] = {0.0f, 0.0f, 900.0f};
+  EXPECT(std::abs(zmod::fog_at(ground) - 203.78125f / 700.0f) < 1e-7f);
+  EXPECT(std::abs(zmod::fog_at(middle) - 0.5f * 203.78125f / 700.0f) < 1e-7f);
+  EXPECT(zmod::fog_at(above) == 0.0f);
+  EXPECT(zmod::fog_at(beyond) == 1.0f);
+  zmod::fog() = saved;
+  zmod::fog_calc() = saved_calc;
 }

@@ -342,6 +342,29 @@ void checks() {
                         edge_cache.statistics().misses == 2,
                     "Prepared staging reused fog from another view-distance edge band");
         }
+        {
+            zmod::ScopedRenderFog scope(800, 3200);
+            edge_batch.vertices = {{-500, -100, 3000, 0, 0, 1, 0, 0},
+                                   {500, -100, 3000, 0, 0, 1, 1, 0},
+                                   {0, 100, 3400, 0, 0, 1, .5f, 1}};
+            edge_source.camera = mw34::donor::identity();
+            edge_context.far_z = 3200;
+            const auto crossing = cc::prepare_draw(edge_source, edge_context, viewport, width,
+                                                    height, geometry, false);
+            require(!crossing.draw.model && crossing.clipped_triangles == 2,
+                    "Crossing prepared fog fixture did not use CPU depth clipping");
+            unsigned cut_vertices = 0;
+            for (std::size_t offset = 0; offset < crossing.vertices.size();
+                 offset += sizeof(platform::TLVertex)) {
+                platform::TLVertex vertex;
+                std::memcpy(&vertex, crossing.vertices.data() + offset, sizeof vertex);
+                if (vertex.sz != 1.f / 3200.f) continue;
+                require((vertex.specular >> 24) == 0,
+                        "CPU prepared crossing retained visibility at the far cut");
+                ++cut_vertices;
+            }
+            require(cut_vertices == 3, "CPU prepared crossing lost its triangulated cut vertices");
+        }
         zmod::fog() = saved_fog;
     }
 }
