@@ -301,6 +301,27 @@ TEST(view_distance_fog_covers_geometry_edge) {
   zmod::fog() = saved;
 }
 
+// A fog-off mission inside a scope must still hand the edge term the authored fog colour:
+// scaled_fog copies the whole authored Fog (colour included) and fog_set_color refreshes the copy.
+TEST(view_distance_fog_off_scope_keeps_the_authored_colour) {
+  const zmod::Fog saved = zmod::fog();
+  zmod::fog_set_on(0);
+  const float authored_color[3] = {0.1f, 0.2f, 0.3f};
+  zmod::fog_set_color(authored_color);
+  {
+    zmod::ScopedRenderFog scope(800.0f, 1600.0f);
+    EXPECT(zmod::render_fog().on == 0);
+    EXPECT(zmod::render_fog_active());
+    for (int channel = 0; channel < 3; ++channel)
+      EXPECT(zmod::render_fog_color()[channel] == authored_color[channel]);
+    const float changed_color[3] = {0.4f, 0.5f, 0.6f};
+    zmod::fog_set_color(changed_color);
+    for (int channel = 0; channel < 3; ++channel)
+      EXPECT(zmod::render_fog_color()[channel] == changed_color[channel]);
+  }
+  zmod::fog() = saved;
+}
+
 TEST(view_distance_exact_fog_start_table) {
   constexpr zcls::ViewDistanceOption expected[] = {
       {800, 700}, {1200, 1050}, {1600, 1450}, {2400, 2250}, {3200, 3050}};
