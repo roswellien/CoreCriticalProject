@@ -1156,6 +1156,50 @@ public:
     scene_pending = true;
   }
   std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{};
+  void prepare_canvas_textures(const std::vector<TextureRef> &references) {
+      // No commands reference these allocations yet. Settle earlier GPU work
+      // before resizing shared staging storage or replacing an image.
+      if (!device)
+          init();
+      settle();
+      VkDeviceSize upload_bytes = 0;
+      for (const auto &reference : references)
+          upload_bytes += VkDeviceSize(reference.width) * reference.height * 4;
+      Buffer replacement;
+      std::vector<std::uint64_t> allocated_keys;
+      const auto release_buffer = [this](Buffer &buffer) {
+          if (buffer.buffer)
+              f.vkDestroyBuffer(device, buffer.buffer, nullptr);
+          if (buffer.memory)
+              f.vkFreeMemory(device, buffer.memory, nullptr);
+          buffer = {};
+      };
+      try {
+          // Keep the previous staging buffer usable if a larger optional upload fails.
+          if (texUpload.size < upload_bytes)
+              ensure(replacement, upload_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+          for (const auto &reference : references) {
+              auto &texture = textures[reference.key];
+              if (texture.image && texture.width == reference.width &&
+                  texture.height == reference.height) {
+                  continue;
+              }
+              destroy(texture);
+              // Track before create(): a failed allocation can own partial resources.
+              allocated_keys.push_back(reference.key);
+              create(texture, reference.width, reference.height);
+          }
+      } catch (...) {
+          for (const auto key : allocated_keys)
+              destroy(textures.at(key));
+          release_buffer(replacement);
+          throw;
+      }
+      if (replacement.buffer) {
+          release_buffer(texUpload);
+          texUpload = replacement;
+      }
+  }
   std::uint64_t emission_draw_records{}, emission_payloads{};
   // Query the actual scene/presenter device, avoiding a throwaway render device
   // when enhanced texture banks need dimensions beyond the original 256 cap.

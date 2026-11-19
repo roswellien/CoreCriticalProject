@@ -13,6 +13,7 @@ struct HudOptions {
   std::string mode = "original";
   std::vector<std::string> artwork;
   std::string menu_background;
+  std::string menu_background_renderer = "gpu";
   bool text = true;
   // Diagnostic only: count what the menu draws without changing it. Off by default.
   bool observe_menu = false;

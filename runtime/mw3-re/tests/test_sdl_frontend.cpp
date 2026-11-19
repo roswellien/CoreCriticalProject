@@ -44,6 +44,7 @@
 #include "mech3/patch_import.h"
 #include "frontend/sdl/sdl_update.h"
 #include "frontend/sdl/sdl_restart.h"
+#include "frontend/sdl/sdl_render3d.h"
 #include "gamez/zutil/zutl_zar.h"
 #include "upgrades/mods/ia_mods.h"
 #include "upgrades/mods/entry_archives.h"
@@ -1767,6 +1768,39 @@ TEST(sdl_layers_keep_the_3d_viewport) {
   screen.overlay_16(px.data(), 853, 480, 853 * 2, true, 0xf81f, nullptr, nullptr);
   read();
   EXPECT(v[0] == 0 && v[1] == 0 && v[2] == 1920 && v[3] == 1080);
+}
+
+// A failed texture upload must not hand out a valid texture handle (the caller would show
+// uninitialised memory instead of falling back), and a failed update must be reported.
+TEST(sdl_texture_upload_failure_is_reported) {
+  if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+    std::printf("SKIPPED sdl_texture_upload_failure_is_reported: no SDL video\n");
+    return;
+  }
+  sdlfe::SdlWindow window;
+  EXPECT(window.init(true));
+  window.create("mw3 upload failure test", 64, 64);
+  auto* sdl_render = dynamic_cast<sdlfe::SdlRender3D*>(window.render());
+  if (!sdl_render) {
+    std::printf("SKIPPED sdl_texture_upload_failure_is_reported: backend is not SdlRender3D\n");
+    return;
+  }
+  const std::vector<uint8_t> rgba(4 * 4 * 4, 255);
+  const int32_t good = sdl_render->create_texture(4, 4, rgba.data(), 1);
+  EXPECT(good >= 0);
+  sdlfe::SdlRender3D::fail_staging_for_test(true);
+  const int32_t failed = sdl_render->create_texture(4, 4, rgba.data(), 1);
+  bool update_threw = false;
+  try {
+    sdl_render->update_texture(good, 4, 4, rgba.data());
+  } catch (const std::exception&) {
+    update_threw = true;
+  }
+  sdlfe::SdlRender3D::fail_staging_for_test(false);
+  EXPECT(failed == -1);
+  EXPECT(update_threw);
+  const int32_t after = sdl_render->create_texture(4, 4, rgba.data(), 1);
+  EXPECT(after >= 0);  // staging works again once the failure clears
 }
 
 // Menu observation is diagnostic only: the CPU-composed 16-bit frame must
