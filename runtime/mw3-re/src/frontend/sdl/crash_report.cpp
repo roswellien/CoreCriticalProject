@@ -73,26 +73,45 @@ size_t crash_report_format_rva(char* output, size_t capacity, bool inside_image,
 
 CrashReportWaitOutcome crash_report_classify_wait_result(uint32_t wait_result) {
   if (wait_result == 0) return CrashReportWaitOutcome::completed;
+  if (wait_result == 1) return CrashReportWaitOutcome::worker_exited;
   if (wait_result == 258) return CrashReportWaitOutcome::timed_out;
   return CrashReportWaitOutcome::failed;
+}
+
+CrashReportEntry crash_report_try_enter(std::atomic<bool>& in_progress, bool on_worker) {
+  // The worker must never wait on itself, even if it fails before any request is captured.
+  if (on_worker) return CrashReportEntry::skip_worker;
+  bool expected = false;
+  if (in_progress.compare_exchange_strong(expected, true)) return CrashReportEntry::capture;
+  return CrashReportEntry::wait;
 }
 
 namespace {
 
 char g_program[64] = "mw3";
 char g_tail[1024] = "";  // the box's text after the reason
+bool g_box = false;
+bool g_test = false;
 #if defined(_WIN32)
-char g_crash_line[2048];
 char g_dump_path[MAX_PATH + 16];
-char g_crash_text[1200];
-char g_crash_reason[32];
-char g_rva_text[64];
-volatile LONG g_exception_in_progress = 0;
+// Handler admission must not acquire a library lock on an exhausted or faulting thread.
+static_assert(std::atomic<bool>::is_always_lock_free);
+std::atomic<bool> g_exception_in_progress{false};
+std::atomic<bool> g_dump_worker_stopping{false};
 HANDLE g_stderr_handle = INVALID_HANDLE_VALUE;
 HANDLE g_dump_request_event = nullptr;
 HANDLE g_dump_complete_event = nullptr;
 HANDLE g_dump_worker_thread = nullptr;
 bool g_dump_worker_available = false;
+DWORD g_dump_worker_thread_id = 0;
+DWORD g_installing_thread_id = 0;
+bool g_installed = false;
+LPTOP_LEVEL_EXCEPTION_FILTER g_previous_exception_filter = nullptr;
+using AbortHandler = void (*)(int);
+AbortHandler g_previous_abort_handler = SIG_DFL;
+std::terminate_handler g_previous_terminate_handler = nullptr;
+enum class CrashReportCause { exception, aborted, terminated };
+CrashReportCause g_report_cause = CrashReportCause::exception;
 EXCEPTION_RECORD g_dump_exception_record{};
 CONTEXT g_dump_context{};
 EXCEPTION_POINTERS g_dump_exception_pointers{};
@@ -109,30 +128,56 @@ uintptr_t g_module_base = 0;
 size_t g_module_image_size = 0;
 
 void crash_log(const char* format, ...);
-void dump_worker_log(const char* format, ...);
+void report_exception();
+void say_crash();
+void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause);
 
-DWORD WINAPI dump_worker(void*) {
-  for (;;) {
-    if (WaitForSingleObject(g_dump_request_event, INFINITE) != WAIT_OBJECT_0) return 1;
-    if (!g_write_dump) continue;
-
+void write_minidump() {
+  if (!g_write_dump) {
+    crash_log("%s: dbghelp unavailable for minidump\n", g_program);
+  } else if (!g_dump_path[0]) {
+    crash_log("%s: minidump path does not fit\n", g_program);
+  } else {
     HANDLE file = CreateFileA(g_dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-      dump_worker_log("%s: could not create minidump: %s\n", g_program, g_dump_path);
-      SetEvent(g_dump_complete_event);
-      continue;
+      crash_log("%s: could not create minidump: %s\n", g_program, g_dump_path);
+      return;
     }
     MINIDUMP_EXCEPTION_INFORMATION exception_info{};
     exception_info.ThreadId = g_dump_faulting_thread_id;
     exception_info.ExceptionPointers = &g_dump_exception_pointers;
     exception_info.ClientPointers = FALSE;
+    // Abort and a filter invocation without a context still get a dump of the live threads.
+    const bool have_context = g_dump_exception_pointers.ExceptionRecord &&
+                              g_dump_exception_pointers.ContextRecord;
     if (g_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal,
-                     &exception_info, nullptr, nullptr))
-      dump_worker_log("%s: minidump: %s\n", g_program, g_dump_path);
-    else
-      dump_worker_log("%s: minidump failed: %s\n", g_program, g_dump_path);
-    CloseHandle(file);
+                     have_context ? &exception_info : nullptr, nullptr, nullptr)) {
+      CloseHandle(file);
+      crash_log("%s: minidump: %s\n", g_program, g_dump_path);
+    } else {
+      CloseHandle(file);
+      crash_log("%s: minidump failed: %s\n", g_program, g_dump_path);
+    }
+  }
+}
+
+DWORD WINAPI dump_worker(void*) {
+  for (;;) {
+    if (WaitForSingleObject(g_dump_request_event, INFINITE) != WAIT_OBJECT_0) {
+      SetEvent(g_dump_complete_event);
+      return 1;
+    }
+    if (g_dump_worker_stopping.load()) {
+      SetEvent(g_dump_complete_event);
+      return 0;
+    }
+    // The stderr pipe/CRT can be blocked by the crash. Finish the dump before any logging, and
+    // keep all formatting, I/O and UI on this independent stack, including for stack overflow.
+    write_minidump();
+    report_exception();
+    // A test exits on the faulting thread, after this worker has published completion.
+    if (!g_test) say_crash();
     SetEvent(g_dump_complete_event);
   }
 }
@@ -141,8 +186,9 @@ void start_dump_worker() {
   g_dump_request_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
   g_dump_complete_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
   if (g_dump_request_event && g_dump_complete_event)
-    g_dump_worker_thread = CreateThread(nullptr, 256 * 1024, dump_worker, nullptr,
-                                        STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+    g_dump_worker_thread = CreateThread(nullptr, 1024 * 1024, dump_worker, nullptr,
+                                        STACK_SIZE_PARAM_IS_A_RESERVATION,
+                                        &g_dump_worker_thread_id);
   if (g_dump_worker_thread) {
     g_dump_worker_available = true;
     return;
@@ -156,53 +202,38 @@ void start_dump_worker() {
     g_dump_complete_event = nullptr;
   }
   g_write_dump = nullptr;
+  g_dump_worker_thread_id = 0;
   crash_log("%s: minidump worker unavailable; dump disabled\n", g_program);
 }
 
 void crash_log(const char* format, ...) {
-  va_list arguments;
-  va_start(arguments, format);
-  const int length = std::vsnprintf(g_crash_line, sizeof g_crash_line, format, arguments);
-  va_end(arguments);
-  if (length <= 0) return;
-  if (g_stderr_handle == nullptr || g_stderr_handle == INVALID_HANDLE_VALUE) return;
-  DWORD written = 0;
-  if (!WriteFile(g_stderr_handle, g_crash_line,
-                 static_cast<DWORD>(length < static_cast<int>(sizeof g_crash_line)
-                                        ? length
-                                        : sizeof g_crash_line - 1),
-                 &written, nullptr))
-    return;
-}
-
-void dump_worker_log(const char* format, ...) {
-  char line[512];
+  char line[2048];
   va_list arguments;
   va_start(arguments, format);
   const int length = std::vsnprintf(line, sizeof line, format, arguments);
   va_end(arguments);
-  if (length <= 0 || g_stderr_handle == nullptr || g_stderr_handle == INVALID_HANDLE_VALUE)
-    return;
+  if (length <= 0) return;
+  if (g_stderr_handle == nullptr || g_stderr_handle == INVALID_HANDLE_VALUE) return;
   DWORD written = 0;
-  WriteFile(g_stderr_handle, line,
-            static_cast<DWORD>(length < static_cast<int>(sizeof line) ? length : sizeof line - 1),
-            &written, nullptr);
+  if (!WriteFile(g_stderr_handle, line,
+                 static_cast<DWORD>(length < static_cast<int>(sizeof line) ? length : sizeof line - 1),
+                 &written, nullptr))
+    return;
 }
 
-char g_log[1024] = "";
 #endif
-bool g_box = false;
-bool g_test = false;
-
 void set_text(const std::string& program, const std::string& log) {
   std::snprintf(g_program, sizeof g_program, "%s", program.c_str());
   std::snprintf(g_tail, sizeof g_tail, ".\n\nThe log is %s\nPlease include it if you report this.", log.c_str());
-#if defined(_WIN32)
-  std::snprintf(g_log, sizeof g_log, "%s", log.c_str());
-#endif
 }
 
 [[noreturn]] void on_terminate() {
+#if defined(_WIN32)
+  // abort() itself can print to stderr before raising SIGABRT. Bypass it here so termination
+  // cannot block before reaching the shared guard and bounded worker wait.
+  request_crash_report(nullptr, CrashReportCause::terminated);
+  _exit(3);
+#else
   const char* what = "";
   try {
     if (auto e = std::current_exception()) std::rethrow_exception(e);
@@ -212,33 +243,48 @@ void set_text(const std::string& program, const std::string& log) {
   }
   std::fprintf(stderr, "%s: uncaught exception: %s\n", g_program, what);
   std::abort();  // the crash's report from here
+#endif
 }
 
 #if defined(_WIN32)
 
-void say_crash(const char* reason) {
+void say_crash() {
+  char text[1200];
+  char exception_reason[32];
+  const char* reason = "exception";
+  if (g_report_cause == CrashReportCause::aborted) reason = "aborted";
+  else if (g_report_cause == CrashReportCause::terminated) reason = "uncaught exception";
+  else if (g_dump_exception_pointers.ExceptionRecord) {
+    std::snprintf(exception_reason, sizeof exception_reason, "exception 0x%08lx",
+                  g_dump_exception_record.ExceptionCode);
+    reason = exception_reason;
+  }
   Sleep(100);  // the log's thread passes this on (run_log.cpp)
-  if (g_test) _exit(70);
-  std::snprintf(g_crash_text, sizeof g_crash_text, "MechWarrior 3 crashed (%s)%s", reason,
-                g_tail);
+  std::snprintf(text, sizeof text, "MechWarrior 3 crashed (%s)%s", reason, g_tail);
   // Topmost: with no owner it could open behind a fullscreen game.
   if (g_box)
-    MessageBoxA(nullptr, g_crash_text, "MechWarrior 3",
+    MessageBoxA(nullptr, text, "MechWarrior 3",
                 MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
 }
 
-LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
-  if (InterlockedCompareExchange(&g_exception_in_progress, 1, 0) != 0)
-    return EXCEPTION_EXECUTE_HANDLER;
-  if (e && e->ExceptionRecord) {
+void report_exception() {
+  if (g_report_cause != CrashReportCause::exception) {
+    const char* reason = g_report_cause == CrashReportCause::terminated ? "uncaught exception"
+                                                                     : "aborted";
+    crash_log("%s: crashed: %s\n", g_program, reason);
+    return;
+  }
+  const EXCEPTION_POINTERS* e = &g_dump_exception_pointers;
+  if (e->ExceptionRecord) {
     const auto exception_address = reinterpret_cast<uintptr_t>(e->ExceptionRecord->ExceptionAddress);
     uintptr_t rva = 0;
+    char rva_text[64];
     const bool inside_image = crash_report_address_rva(g_module_base, g_module_image_size,
                                                         exception_address, &rva);
-    crash_report_format_rva(g_rva_text, sizeof g_rva_text, inside_image, rva);
+    crash_report_format_rva(rva_text, sizeof rva_text, inside_image, rva);
     crash_log("%s: crashed: exception 0x%08lx at %p module base %p %s\n", g_program,
               e->ExceptionRecord->ExceptionCode, e->ExceptionRecord->ExceptionAddress,
-              reinterpret_cast<void*>(g_module_base), g_rva_text);
+              reinterpret_cast<void*>(g_module_base), rva_text);
     if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
         e->ExceptionRecord->NumberParameters >= 2) {
       const ULONG_PTR access = e->ExceptionRecord->ExceptionInformation[0];
@@ -262,49 +308,54 @@ LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
       crash_log("%s: registers: context is not x64\n", g_program);
 #endif
     }
-
-    const bool dump_path_ok = crash_report_dump_path(g_log, g_dump_path, sizeof g_dump_path);
-    if (dump_path_ok) {
-      crash_log("%s: minidump path: %s\n", g_program, g_dump_path);
-      if (g_dump_worker_available && e && e->ExceptionRecord) {
-        g_dump_exception_record = *e->ExceptionRecord;
-        g_dump_exception_record.ExceptionRecord = nullptr;
-        g_dump_exception_pointers.ExceptionRecord = &g_dump_exception_record;
-        if (e->ContextRecord) {
-          g_dump_context = *e->ContextRecord;
-          g_dump_exception_pointers.ContextRecord = &g_dump_context;
-        } else {
-          g_dump_exception_pointers.ContextRecord = nullptr;
-        }
-        g_dump_faulting_thread_id = GetCurrentThreadId();
-        if (ResetEvent(g_dump_complete_event) && SetEvent(g_dump_request_event)) {
-          const DWORD wait_result = WaitForSingleObject(g_dump_complete_event, 5000);
-          const CrashReportWaitOutcome outcome = crash_report_classify_wait_result(wait_result);
-          if (outcome == CrashReportWaitOutcome::timed_out)
-            crash_log("%s: minidump worker timed out\n", g_program);
-          else if (outcome == CrashReportWaitOutcome::failed)
-            crash_log("%s: minidump worker wait failed\n", g_program);
-        } else {
-          crash_log("%s: could not signal minidump worker\n", g_program);
-        }
-      } else {
-        crash_log("%s: minidump worker unavailable for minidump\n", g_program);
-      }
-    }
   } else {
     crash_log("%s: crashed: exception details unavailable\n", g_program);
   }
-  std::snprintf(g_crash_reason, sizeof g_crash_reason, "exception 0x%08lx",
-                e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0ul);
-  say_crash(g_crash_reason);
+}
+
+void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause) {
+  const DWORD thread_id = GetCurrentThreadId();
+  const CrashReportEntry entry = crash_report_try_enter(
+      g_exception_in_progress, thread_id == g_dump_worker_thread_id);
+  if (entry == CrashReportEntry::skip_worker || !g_dump_worker_available) return;
+  if (entry == CrashReportEntry::capture) {
+    // Only the winning thread writes this preallocated capture. The request event publishes it
+    // to the worker. Completion starts unsignalled at install and is never reset by a crash:
+    // another failing thread can safely start waiting even before the capture is published.
+    g_report_cause = cause;
+    if (exception && exception->ExceptionRecord) {
+      g_dump_exception_record = *exception->ExceptionRecord;
+      g_dump_exception_record.ExceptionRecord = nullptr;
+      g_dump_exception_pointers.ExceptionRecord = &g_dump_exception_record;
+    }
+    if (exception && exception->ContextRecord) {
+      g_dump_context = *exception->ContextRecord;
+      g_dump_exception_pointers.ContextRecord = &g_dump_context;
+    }
+    g_dump_faulting_thread_id = thread_id;
+    if (!SetEvent(g_dump_request_event)) {
+      SetEvent(g_dump_complete_event);
+      return;
+    }
+  }
+  // All SEH, abort and terminate entries share this bounded wait. In particular, abort cannot
+  // exit the process immediately while another thread is still writing the dump. A dead worker
+  // is observable without burning the full timeout, and never waits on itself.
+  const HANDLE handles[] = {g_dump_complete_event, g_dump_worker_thread};
+  const DWORD result = WaitForMultipleObjects(2, handles, FALSE, 5000);
+  const CrashReportWaitOutcome outcome = crash_report_classify_wait_result(result);
+  // There is deliberately no logging here: even an error/timeout must not touch the stderr pipe.
+  if (g_test && outcome == CrashReportWaitOutcome::completed) _exit(70);
+}
+
+LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
+  request_crash_report(e, CrashReportCause::exception);
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
-// abort() (an uncaught exception's end too) never reaches the filter above: the
-// CRT raises this and exits with 3.
+// abort() never reaches the SEH filter: the CRT raises SIGABRT and exits with 3.
 void on_abort(int) {
-  crash_log("%s: crashed: aborted\n", g_program);
-  say_crash("aborted");
+  request_crash_report(nullptr, CrashReportCause::aborted);
   _exit(3);
 }
 
@@ -378,7 +429,10 @@ void own_path() {
 bool crash_report_dump_prerequisites_present() {
 #if defined(_WIN32)
   HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
-  return dbghelp && GetProcAddress(dbghelp, "MiniDumpWriteDump");
+  if (!dbghelp) return false;
+  const bool present = GetProcAddress(dbghelp, "MiniDumpWriteDump") != nullptr;
+  FreeLibrary(dbghelp);
+  return present;
 #else
   return false;
 #endif
@@ -392,13 +446,55 @@ bool crash_report_dump_worker_ready() {
 #endif
 }
 
+#if defined(_WIN32)
+bool crash_report_uninstall_for_test() {
+  if (!g_installed) return true;
+  if (GetCurrentThreadId() != g_installing_thread_id || g_exception_in_progress.load())
+    return false;
+  if (g_dump_worker_thread) {
+    g_dump_worker_stopping.store(true);
+    if (!SetEvent(g_dump_request_event) ||
+        WaitForSingleObject(g_dump_worker_thread, 5000) != WAIT_OBJECT_0)
+      return false;
+    CloseHandle(g_dump_worker_thread);
+    CloseHandle(g_dump_request_event);
+    CloseHandle(g_dump_complete_event);
+  }
+  SetUnhandledExceptionFilter(g_previous_exception_filter);
+  std::signal(SIGABRT, g_previous_abort_handler);
+  std::set_terminate(g_previous_terminate_handler);
+  // Production keeps dbghelp loaded. Tests release it only after the worker is joined.
+  if (g_dbghelp) FreeLibrary(g_dbghelp);
+  g_dbghelp = nullptr;
+  g_write_dump = nullptr;
+  g_dump_worker_thread = nullptr;
+  g_dump_request_event = nullptr;
+  g_dump_complete_event = nullptr;
+  g_dump_worker_thread_id = 0;
+  g_dump_worker_available = false;
+  g_dump_worker_stopping.store(false);
+  g_dump_exception_pointers = {};
+  g_installed = false;
+  return true;
+}
+#endif
+
 void crash_report_install(const std::string& program, const std::string& log, bool box) {
+#if defined(_WIN32)
+  if (g_installed) return;
+#endif
   set_text(program, log);
   g_box = box && !std::getenv("MW3_LAUNCHER_WATCHES");
   g_test = std::getenv("MW3_CRASH_TEST") != nullptr;
-  std::set_terminate(on_terminate);
 #if defined(_WIN32)
+  g_installing_thread_id = GetCurrentThreadId();
   g_stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
+  // SetThreadStackGuarantee applies to this thread only: production installs on the main/game
+  // thread. Other threads still use the same minimal handoff, but need their own guarantee.
+  ULONG stack_guarantee = 64 * 1024;
+  if (!SetThreadStackGuarantee(&stack_guarantee))
+    crash_log("%s: could not reserve exception handler stack\n", g_program);
+  crash_report_dump_path(log.c_str(), g_dump_path, sizeof g_dump_path);
   HMODULE executable = GetModuleHandle(nullptr);
   if (executable) {
     const auto* dos_header = reinterpret_cast<const IMAGE_DOS_HEADER*>(executable);
@@ -417,11 +513,14 @@ void crash_report_install(const std::string& program, const std::string& log, bo
     g_write_dump = reinterpret_cast<MiniDumpWriteDumpFunction>(
         GetProcAddress(g_dbghelp, "MiniDumpWriteDump"));
   }
-  if (g_write_dump) start_dump_worker();
-  else crash_log("%s: dbghelp unavailable for minidump\n", g_program);
-  SetUnhandledExceptionFilter(on_exception);
-  std::signal(SIGABRT, on_abort);
+  // Even without dbghelp, use the independent stack for diagnostics and the message box.
+  start_dump_worker();
+  g_previous_exception_filter = SetUnhandledExceptionFilter(on_exception);
+  g_previous_abort_handler = std::signal(SIGABRT, on_abort);
+  g_previous_terminate_handler = std::set_terminate(on_terminate);
+  g_installed = true;
 #else
+  std::set_terminate(on_terminate);
   own_path();
 #ifdef MW3_HAVE_BACKTRACE
   void* first[1];

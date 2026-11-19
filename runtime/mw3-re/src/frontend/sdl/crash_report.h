@@ -1,23 +1,33 @@
 #pragma once
 // Ours, not original code (docs/program.md, The log): a crash says why, in the
 // log and in a message box, rather than the window just going away.
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace sdlfe {
 
-// Pure helpers shared with the crash-report tests.
+// Helpers shared with the crash-report tests.
 bool crash_report_address_rva(uintptr_t module_base, size_t image_size, uintptr_t address,
                               uintptr_t* rva);
 size_t crash_report_format_rva(char* output, size_t capacity, bool inside_image, uintptr_t rva);
 
-enum class CrashReportWaitOutcome { completed, timed_out, failed };
+enum class CrashReportWaitOutcome { completed, worker_exited, timed_out, failed };
+// Results from a Win32 wait on [completion event, worker thread], in that order.
 CrashReportWaitOutcome crash_report_classify_wait_result(uint32_t wait_result);
+enum class CrashReportEntry { capture, wait, skip_worker };
+// A single caller owns capture; later entries wait without touching the captured state.
+CrashReportEntry crash_report_try_enter(std::atomic<bool>& in_progress, bool on_worker);
 bool crash_report_dump_path(const char* log, char* output, size_t capacity);
-// True when dbghelp.dll and MiniDumpWriteDump can be loaded (the worker needs both).
+// True when dbghelp.dll and MiniDumpWriteDump can be loaded for minidump writing.
 bool crash_report_dump_prerequisites_present();
 bool crash_report_dump_worker_ready();
+#if defined(_WIN32)
+// Tests only: call on the installing thread with no crash handlers running. Restores handlers,
+// joins the idle worker and closes its resources. False leaves resources intact if joining fails.
+bool crash_report_uninstall_for_test();
+#endif
 
 // The handlers for a crash and for an uncaught exception. `log` is named in
 // the box; with `box` false only the log says it (hidden runs do not install

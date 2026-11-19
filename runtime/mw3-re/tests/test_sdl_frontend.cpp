@@ -17,6 +17,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <chrono>
 #include <csignal>
+#include <exception>
 #include <thread>
 #if !defined(_WIN32)
 #include <fcntl.h>
@@ -153,16 +155,93 @@ TEST(crash_report_wait_result_classifies_completion_timeout_and_failure) {
          sdlfe::CrashReportWaitOutcome::timed_out);
   EXPECT(sdlfe::crash_report_classify_wait_result(0xffffffffu) ==
          sdlfe::CrashReportWaitOutcome::failed);
+  EXPECT(sdlfe::crash_report_classify_wait_result(1) ==
+         sdlfe::CrashReportWaitOutcome::worker_exited);
+  // Abandoned mutex results are not completion: neither waited handle is a mutex.
+  EXPECT(sdlfe::crash_report_classify_wait_result(128) ==
+         sdlfe::CrashReportWaitOutcome::failed);
+}
+
+TEST(crash_report_guard_preserves_first_capture_and_skips_worker) {
+  std::atomic<bool> in_progress{false};
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, true) ==
+         sdlfe::CrashReportEntry::skip_worker);
+  EXPECT(!in_progress.load());
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, false) == sdlfe::CrashReportEntry::capture);
+  EXPECT(in_progress.load());
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, false) == sdlfe::CrashReportEntry::wait);
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, true) ==
+         sdlfe::CrashReportEntry::skip_worker);
+  EXPECT(in_progress.load());
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, false) == sdlfe::CrashReportEntry::wait);
+}
+
+TEST(crash_report_guard_allows_only_one_concurrent_capture) {
+  std::atomic<bool> in_progress{false};
+  std::atomic<bool> start{false};
+  std::atomic<int> captures{0};
+  std::atomic<int> waiters{0};
+  std::vector<std::thread> threads;
+  for (int index = 0; index < 8; ++index) {
+    threads.emplace_back([&] {
+      while (!start.load()) std::this_thread::yield();
+      const auto entry = sdlfe::crash_report_try_enter(in_progress, false);
+      if (entry == sdlfe::CrashReportEntry::capture) ++captures;
+      if (entry == sdlfe::CrashReportEntry::wait) ++waiters;
+    });
+  }
+  start.store(true);
+  for (std::thread& thread : threads) thread.join();
+  EXPECT(captures.load() == 1);
+  EXPECT(waiters.load() == 7);
 }
 
 #if defined(_WIN32)
+namespace {
+DWORD WINAPI crash_report_test_worker(void*) { return 0; }
+}  // namespace
+
+TEST(crash_report_wait_observes_dead_worker_and_prefers_completion) {
+  HANDLE completion = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  HANDLE worker = CreateThread(nullptr, 0, crash_report_test_worker, nullptr, 0, nullptr);
+  EXPECT(completion != nullptr);
+  EXPECT(worker != nullptr);
+  if (completion && worker) {
+    EXPECT(WaitForSingleObject(worker, 5000) == WAIT_OBJECT_0);
+    const HANDLE handles[] = {completion, worker};
+    EXPECT(sdlfe::crash_report_classify_wait_result(
+               WaitForMultipleObjects(2, handles, FALSE, 0)) ==
+           sdlfe::CrashReportWaitOutcome::worker_exited);
+    EXPECT(SetEvent(completion) != 0);
+    EXPECT(sdlfe::crash_report_classify_wait_result(
+               WaitForMultipleObjects(2, handles, FALSE, 0)) ==
+           sdlfe::CrashReportWaitOutcome::completed);
+  }
+  if (worker) CloseHandle(worker);
+  if (completion) CloseHandle(completion);
+}
+
 TEST(crash_report_install_starts_dump_worker_without_crashing) {
-  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
-  // Install deliberately leaves the worker unavailable when dbghelp, MiniDumpWriteDump, an event or
-  // the thread cannot be created; it must not crash either way. Expect a ready worker only when
-  // the loadable prerequisites are present.
-  if (sdlfe::crash_report_dump_prerequisites_present())
-    EXPECT(sdlfe::crash_report_dump_worker_ready());
+  const auto previous_filter = SetUnhandledExceptionFilter(nullptr);
+  SetUnhandledExceptionFilter(previous_filter);
+  const auto previous_abort = std::signal(SIGABRT, SIG_DFL);
+  std::signal(SIGABRT, previous_abort);
+  const auto previous_terminate = std::get_terminate();
+  // Repeat to catch stale stop events, handles and handler snapshots after teardown.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+    ULONG stack_guarantee = 0;  // zero queries the current thread's guarantee
+    EXPECT(SetThreadStackGuarantee(&stack_guarantee) != 0);
+    EXPECT(stack_guarantee >= 64 * 1024);
+    // Retain the prerequisite assertion; a missing API must not prevent diagnostics on the worker.
+    if (sdlfe::crash_report_dump_prerequisites_present())
+      EXPECT(sdlfe::crash_report_dump_worker_ready());
+    EXPECT(sdlfe::crash_report_uninstall_for_test());
+    EXPECT(!sdlfe::crash_report_dump_worker_ready());
+    EXPECT(SetUnhandledExceptionFilter(previous_filter) == previous_filter);
+    EXPECT(std::signal(SIGABRT, previous_abort) == previous_abort);
+    EXPECT(std::get_terminate() == previous_terminate);
+  }
 }
 #endif
 
