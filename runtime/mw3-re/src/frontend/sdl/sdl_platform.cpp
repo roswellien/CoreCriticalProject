@@ -564,11 +564,21 @@ SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_W
             // create_texture/update_texture expose no mip levels. Area-filter once
             // near the displayed size instead: a 480-high menu views half a 960-high
             // source canvas. Retain the full image for CPU composition and UV centres.
-            int window_width = 1920, window_height = 1080;
+            int window_width = 0, window_height = 0;
             if (hud_window_)
                 SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
+            int display_height = 0;
+            if (window_height <= 0) {
+                // Minimised or not yet sized: ask the display instead of capping the texture.
+                const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+                if (mode) display_height = mode->h;
+            }
             const auto image = platform::menu_background_upload_image(
-                *menu_background_, unsigned(std::max(1, window_height)) * 2);
+                *menu_background_, platform::menu_background_upload_height(
+                                       window_height, display_height, menu_background_->height));
+            // The GPU samples this filtered copy: the half texel in the UVs is its, not the full
+            // image's.
+            menu_gpu_composer_.set_bound_texture_size(image.width, image.height);
             std::vector<uint32_t> rgba(size_t(image.width) * image.height);
             for (size_t at = 0; at < rgba.size(); ++at)
                 rgba[at] = 0xff000000u | uint32_t(image.rgb[at * 3]) |

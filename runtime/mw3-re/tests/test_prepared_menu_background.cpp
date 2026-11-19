@@ -807,6 +807,24 @@ void upload_downsampling_averages_source_footprints() {
             "Menu upload lost fractional edge coverage while downsampling");
     require(platform::menu_background_upload_image(image, 12).rgb == saved,
             "Menu upload changed an image that needed no downsampling");
+    // A zero or unknown window height (minimised or not yet sized) must not cap the texture at a
+    // couple of pixels for the whole session: use the display height, else keep the full image.
+    require(platform::menu_background_upload_height(480, 1080, 960) == 960,
+            "A sized window did not give twice its height");
+    require(platform::menu_background_upload_height(0, 1080, 960) == 2160,
+            "A zero-height window did not fall back to the display height");
+    require(platform::menu_background_upload_height(-1, 0, 960) == 960,
+            "An unknown window and display did not keep the full image");
+    require(platform::menu_background_upload_image(
+                    image, platform::menu_background_upload_height(0, 0, image.height))
+                    .rgb == saved,
+            "A zero-height window filtered the image down instead of uploading it whole");
+    // The half texel belongs to the texture the GPU samples (the filtered copy), not the image.
+    const auto full_uv = platform::menu_background_uv_rect(image, 0, 0, 6, 4);
+    const auto bound_uv = platform::menu_background_uv_rect(image, 0, 0, 6, 4, 6, 4, 9, 6);
+    require(std::fabs(full_uv.u0 - .5f / 18.f) < 1e-6f && std::fabs(bound_uv.u0 - .5f / 9.f) < 1e-6f &&
+                std::fabs(bound_uv.v0 - .5f / 6.f) < 1e-6f,
+            "The UV half texel did not follow the bound texture's size");
 }
 
 void gpu_maps_share_classification_gain_cache_and_fallback() {
@@ -841,6 +859,16 @@ void gpu_maps_share_classification_gain_cache_and_fallback() {
   const auto expected_uv = platform::menu_background_uv_rect(image, 7, 6, 8, 8);
   require(layers.uv.u0 == expected_uv.u0 && layers.uv.v0 == expected_uv.v0,
           "GPU maps lost the game's wrapped scroll origin");
+  // Telling the composer the bound texture is a smaller filtered copy moves the half texel and
+  // drops the cached layers computed for the old size.
+  composer.set_bound_texture_size(8, 8);
+  require(prepare() && !hit, "A bound texture size change did not invalidate the cached layers");
+  const auto bound_uv = platform::menu_background_uv_rect(image, 7, 6, 8, 8, 8, 8, 8, 8);
+  require(layers.uv.u0 == bound_uv.u0 && layers.uv.v0 == bound_uv.v0 && layers.uv.u0 != expected_uv.u0,
+          "The GPU UV half texel ignored the bound texture size");
+  composer.set_bound_texture_size(0, 0);
+  require(prepare() && layers.uv.u0 == expected_uv.u0,
+          "Clearing the bound texture size did not restore the image's half texel");
   const auto* map_storage = layers.gain.data();
   require(prepare() && hit && layers.gain.data() == map_storage,
           "Unchanged GPU maps missed the cache or replaced retained storage");

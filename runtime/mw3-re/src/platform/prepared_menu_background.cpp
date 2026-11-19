@@ -302,7 +302,8 @@ MenuBackgroundLayerRect menu_background_cover_rect(int frame_width, int frame_he
 
 MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage &image, int64_t source_x,
                                              int64_t source_y, int frame_width, int frame_height,
-                                             unsigned game_width, unsigned game_height) {
+                                             unsigned game_width, unsigned game_height,
+                                             unsigned texture_width, unsigned texture_height) {
     if (!image.width || !image.height || !image.source_width || !image.source_height ||
         frame_width <= 0 || frame_height <= 0)
         throw std::invalid_argument(
@@ -318,10 +319,26 @@ MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage &image, i
     // ScrollImage advances at 60 original-game pixels/s on the 1280-wide basis.
     // Scale BOTH origin and span by master_width/game_width: 60 becomes 90 on a
     // 1920-wide master, with the same on-screen speed and a 1920-pixel wrap period.
-    const double u0 = double(wrap(source_x, game_width)) / game_width + .5 / image.width;
-    const double v0 = double(wrap(source_y, game_height)) / game_height + .5 / image.height;
+    if (!texture_width)
+        texture_width = image.width;
+    if (!texture_height)
+        texture_height = image.height;
+    const double u0 = double(wrap(source_x, game_width)) / game_width + .5 / texture_width;
+    const double v0 = double(wrap(source_y, game_height)) / game_height + .5 / texture_height;
     return {float(u0), float(v0), float(u0 + double(frame_width) / game_width),
             float(v0 + double(frame_height) / game_height)};
+}
+
+unsigned menu_background_upload_height(int window_height, int display_height,
+                                       unsigned image_height) {
+    // Twice the displayed height: a 480-high menu views half a 960-high source canvas. A zero or
+    // unknown window (minimised, or not yet sized at startup) must not shrink the texture for the
+    // whole session, so use the display's height, and failing that keep the full image.
+    if (window_height > 0)
+        return unsigned(window_height) * 2;
+    if (display_height > 0)
+        return unsigned(display_height) * 2;
+    return image_height;
 }
 
 MenuBackgroundImage menu_background_upload_image(const MenuBackgroundImage &image,
@@ -437,7 +454,8 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
                              const uint16_t* pixels, int width, int height, int pitch,
                              bool rgb565, unsigned output_width, unsigned output_height,
                              std::vector<uint32_t>* output, ComposeScratch* scratch,
-                             MenuBackgroundGpuLayers* layers = nullptr) {
+                             MenuBackgroundGpuLayers* layers = nullptr,
+                             unsigned bound_texture_width = 0, unsigned bound_texture_height = 0) {
   if ((!output && !layers) || !valid_menu_inputs(image, source, blits, pixels, width, height,
                                                pitch, output_width, output_height))
     return false;
@@ -564,7 +582,8 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
     }
     if (!have_origin) return true;
     layers->uv = menu_background_uv_rect(image, origin_x, origin_y, width, height,
-                                         unsigned(source->width), unsigned(source->height));
+                                         unsigned(source->width), unsigned(source->height),
+                                         bound_texture_width, bound_texture_height);
     layers->overlay.resize(frame_pixels);
     layers->gain.resize(frame_pixels);
     layers->added.resize(frame_pixels);
@@ -767,7 +786,8 @@ bool PreparedMenuBackgroundComposer::prepare(
   }
 
   if (!compose_menu_background_impl(image, source, blits, pixels, width, height, pitch, rgb565,
-                                    output_width, output_height, output, &impl_->scratch, layers)) {
+                                    output_width, output_height, output, &impl_->scratch, layers,
+                                    bound_texture_width_, bound_texture_height_)) {
     invalidate_cache();
     return false;
   }
@@ -805,6 +825,12 @@ bool PreparedMenuBackgroundComposer::prepare(
 }
 
 void PreparedMenuBackgroundComposer::invalidate_cache() { impl_->valid = false; }
+void PreparedMenuBackgroundComposer::set_bound_texture_size(unsigned width, unsigned height) {
+  if (width == bound_texture_width_ && height == bound_texture_height_) return;
+  bound_texture_width_ = width;
+  bound_texture_height_ = height;
+  impl_->valid = false;  // the cached layers carry UVs computed for the old texture size
+}
 unsigned PreparedMenuBackgroundComposer::thread_count() const {
   return impl_->scratch.thread_count();
 }
