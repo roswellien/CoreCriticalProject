@@ -5,6 +5,7 @@
 #include "check.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zutil/zfix.h"
+#include "gamez/zutil/ztimer.h"
 #include "mech3/briefing.h"
 #include "mech3/menu_ripple.h"
 #include "mech3/menu_widgets.h"
@@ -22,6 +23,7 @@ struct MenuMotion {
 // One second of the background, the title and a ripple at `fps`, hidden.
 MenuMotion menu_motion(float fps, bool per_second, int seconds = 1) {
   zfix::options().per_second = per_second;
+  ztimer::state().raw_dt = 0.0f;  // another test may have left a step behind; none means "use dt"
   MenuEngine e;
   zimg::Texture big{};
   big.width = 2000, big.height = 2000;
@@ -60,6 +62,24 @@ TEST(main_menu_moves_per_second) {
     EXPECT(m.scrolled >= 59 && m.scrolled <= 60);
     EXPECT(m.slid >= 58 && m.slid <= 60);
     EXPECT(m.ripple_seconds > 0.55f && m.ripple_seconds < 0.62f);  // 7 to 2 at 9 a second, the last frame drawn
+  }
+  // At 4 fps the game clock clamps its step to 0.125 s (half the real 0.25 s). The scroll reads the
+  // unclamped step, so it still moves 60 px a second.
+  {
+    zfix::options().per_second = true;
+    MenuEngine slow_engine;
+    zimg::Texture wide{};
+    wide.width = 2000, wide.height = 2000;
+    mech3::ScrollImage slow(slow_engine);
+    slow.image = &wide;
+    slow.flags |= ztwod::kHidden;
+    for (int frame = 0; frame < 4; ++frame) {
+      ztimer::state().raw_dt = 0.25f;  // the real step between presented frames
+      slow.update(0.125f);             // the clamped step the game clock hands out
+    }
+    ztimer::state().raw_dt = 0.0f;
+    slow.image = nullptr;
+    EXPECT(slow.view.left >= 59 && slow.view.left <= 60);
   }
   const MenuMotion raw = menu_motion(144.0f, false);
   EXPECT(raw.scrolled == 144 && raw.slid == 288);

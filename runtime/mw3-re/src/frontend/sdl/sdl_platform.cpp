@@ -459,10 +459,21 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
                   render_->update_texture(texture_, int(output_width), int(output_height),
                                           composed_bytes);
               }
+              if (texture_action != platform::PreparedMenuTextureAction::kReuse) {
+                  // The Vulkan renderer only stores the pixels here; the image is allocated at the
+                  // frame's flush, outside this try. Allocate it now so a failure falls back to
+                  // the native frame instead of escaping into the render worker.
+                  render_->prepare_canvas_textures({texture_});
+              }
               menu_background_shown = true;
           }
       } catch (...) {
           menu_composer_.invalidate_cache();
+          // The texture may be half made: drop it so the native frame path builds its own.
+          if (texture_ >= 0)
+              render_->release_texture(texture_);
+          texture_ = -1;
+          tw_ = th_ = 0;
       }
       if (!menu_background_shown)
           log_native_menu_fallback();

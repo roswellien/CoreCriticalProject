@@ -110,6 +110,8 @@ class SdlRender3D : public FrameRenderer {
   int32_t create_texture(int width, int height, const uint8_t* rgba, uint8_t type) override;
   void release_texture(int32_t handle) override;
   void update_texture(int32_t handle, int width, int height, const uint8_t* rgba) override;
+  // Tests only: make every texture staging map fail, as an exhausted device would.
+  static void fail_staging_for_test(bool fail);
   void set_viewport(int x, int y, int width, int height) override;
   void clear(bool color, uint8_t r, uint8_t g, uint8_t b) override;
   void begin_scene() override;
@@ -138,7 +140,8 @@ class SdlRender3D : public FrameRenderer {
   std::function<void(SDL_GPUCommandBuffer*, SDL_GPUTexture*, Uint32, Uint32)> overlay;
 
  private:
-  void upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);
+  // False when the staging buffer could not be created or mapped; nothing was uploaded then.
+  bool upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);
   struct Run {
     platform::DrawState state;
     uint32_t first, count;

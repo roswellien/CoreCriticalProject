@@ -377,7 +377,8 @@ void menu_background_checks(const std::filesystem::path& directory) {
     }
     void prepare_canvas_textures(const std::vector<int32_t> &textures) override {
         ++preflight_attempts;
-        require(textures.size() == 4, "Menu did not preflight its image and all three maps");
+        require(textures.size() == 4 || textures.size() == 1,
+                "Menu did not preflight its image and maps (GPU) or its composed texture (CPU)");
         if (throw_next_preflight) {
             throw_next_preflight = false;
             throw std::runtime_error("Synthetic deferred Vulkan texture allocation failure");
@@ -472,6 +473,23 @@ void menu_background_checks(const std::filesystem::path& directory) {
     screen.present_16(frame.data(), 8, 8, 16, true);
     require(cpu.images.size() == 1 && cpu.draws.size() == 1,
             "Explicit CPU mode did not retain the composed-texture path");
+  }
+  {
+    // The Vulkan renderer allocates a stored texture only at flush; the CPU compositor now forces
+    // that allocation inside its fallback scope. A deferred failure there must select the native
+    // frame, not escape present_16, and must not leave a half-made texture behind.
+    MenuRecorder deferred;
+    {
+      sdlfe::SdlScreen2D screen(&deferred, options);
+      deferred.throw_next_preflight = true;
+      present_preserving_float_state(screen);
+      require(deferred.preflight_attempts == 1,
+              "CPU compositor did not preflight its composed texture");
+      require(deferred.draws.size() == 1,
+              "A deferred CPU-compositor allocation failure did not present the native frame");
+    }
+    require(deferred.released.size() == deferred.images.size(),
+            "A deferred CPU-compositor failure leaked its texture");
   }
   options.menu_background_renderer = "gpu";
   frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));

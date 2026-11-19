@@ -5,6 +5,7 @@
 #include "mech3/mech_salvage.h"
 #include "mech3/pilot.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <map>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zfix.h"
+#include "gamez/zutil/ztimer.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -61,7 +63,10 @@ void ScrollImage::update(float dt) {
     // one pixel per presented frame, so its speed followed the frame rate). Off, once a frame.
     int32_t n = 1;
     if (zfix::options().per_second) {
-      steps_ += dt * kMenuBackgroundStepsPerSecond;
+      // The game clock clamps its step (default 0.125 s), which would slow the scroll below
+      // 8 fps and drop stalled time. The unclamped step keeps 60 px/s on every machine.
+      const float elapsed = std::max(dt, ztimer::state().raw_dt);
+      steps_ += elapsed * kMenuBackgroundStepsPerSecond;
       n = static_cast<int32_t>(steps_);
       steps_ -= static_cast<float>(n);
     }

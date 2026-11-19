@@ -231,15 +231,27 @@ int32_t SdlRender3D::create_texture(int width, int height, const uint8_t* rgba, 
   ti.width = width, ti.height = height, ti.layer_count_or_depth = 1, ti.num_levels = 1;
   SDL_GPUTexture* t = SDL_CreateGPUTexture(dev_, &ti);
   if (!t) return -1;
-  upload(t, width, height, rgba);
+  // A texture whose pixels never reached the GPU must not get a handle: the caller would show
+  // uninitialised memory instead of choosing its CPU fallback.
+  if (!upload(t, width, height, rgba)) {
+    SDL_ReleaseGPUTexture(dev_, t);
+    return -1;
+  }
   textures_.push_back(t);
   return static_cast<int32_t>(textures_.size() - 1);
 }
 
 void SdlRender3D::update_texture(int32_t h, int width, int height, const uint8_t* rgba) {
   if (h < 0 || h >= static_cast<int32_t>(textures_.size()) || !textures_[h]) return;
-  upload(textures_[h], width, height, rgba);
+  // There is no return value to carry the failure: throw, so the caller keeps its fallback.
+  if (!upload(textures_[h], width, height, rgba))
+    throw std::runtime_error("SDL GPU texture upload failed");
 }
+
+namespace {
+bool g_fail_staging_for_test = false;
+}  // namespace
+void SdlRender3D::fail_staging_for_test(bool fail) { g_fail_staging_for_test = fail; }
 
 // A staging buffer of at least `bytes`, mapped. Kept between calls (made per
 // call, they were a quarter of a frame; performance.md); mapping with cycle
@@ -251,13 +263,14 @@ void* SdlRender3D::map_staging(Staging& s, uint32_t bytes) {
     SDL_GPUTransferBufferCreateInfo tbi{SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, s.size, 0};
     s.buf = SDL_CreateGPUTransferBuffer(dev_, &tbi);
   }
+  if (g_fail_staging_for_test) return nullptr;
   return s.buf ? SDL_MapGPUTransferBuffer(dev_, s.buf, true) : nullptr;
 }
 
-void SdlRender3D::upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba) {
+bool SdlRender3D::upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba) {
   const auto size = static_cast<uint32_t>(width * height * 4);
   void* to = map_staging(tex_staging_, size);
-  if (!to) return;
+  if (!to) return false;
   std::memcpy(to, rgba, size);
   SDL_GPUTransferBuffer* tb = tex_staging_.buf;
   SDL_UnmapGPUTransferBuffer(dev_, tb);
@@ -269,6 +282,7 @@ void SdlRender3D::upload(SDL_GPUTexture* t, int width, int height, const uint8_t
   SDL_UploadToGPUTexture(copy, &src, &dst, false);
   SDL_EndGPUCopyPass(copy);
   SDL_SubmitGPUCommandBuffer(cmd);
+  return true;
 }
 
 void SdlRender3D::release_texture(int32_t h) {
