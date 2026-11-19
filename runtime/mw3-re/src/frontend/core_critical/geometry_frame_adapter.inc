@@ -1,3 +1,6 @@
+unsigned opaque_world_range() const override {
+  return scene_.frontend_canvas ? 0 : bridge_config_.draw_distance;
+}
 cc::geometry::Mode geometry_mode() const override { return geometry_mode_; }
 cc::geometry::Statistics geometry_statistics() const override {
   return geometry_statistics_;
@@ -110,6 +113,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     const auto &range = source->ranges[range_index];
     const auto &material = materials[range_index];
     vk::Draw draw{};
+    draw.producer_view = producer_view_;
     draw.geometry_debug_normals = geometry_debug_;
     auto material_instance = std::make_shared<vk::ModelInstance>(*instance);
     material_instance->color = material.color;

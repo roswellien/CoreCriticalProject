@@ -1,6 +1,9 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Output-resolution coverage replay for opaque reduced world submissions.
 // Preserve original texture alpha testing; expensive RGB shading is already in the input.
+#include "radial_visibility.glsl"
+layout(location=11) in vec4 radialEye;
 layout(location=0) in vec2 uvPerspective;
 layout(location=1) noperspective in vec2 uvAffine;
 layout(location=2) noperspective in vec4 colorSmooth;
@@ -45,7 +48,7 @@ vec4 operation(uint word) {
     if (op == 13u) return mix(b, a, texel.a);             // BLENDTEXTUREALPHA
     return mix(b, a, draw.factor.a);                      // BLENDFACTORALPHA (14)
 }
-void main() {
+void shadeScene() {
     uint flags = draw.mode.x;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
@@ -69,4 +72,10 @@ void main() {
     // Later full-resolution passes can use destination-alpha blend factors.
     // Only RGB comes from reconstruction; alpha follows the original fragment.
     result.a = alpha;
+}
+
+void main() {
+    vec4 visibility = radialVisibility(radialEye, ivec2(gl_FragCoord.xy), draw.mode.x);
+    shadeScene();
+    result.rgb = mix(visibility.rgb, result.rgb, visibility.a);
 }

@@ -1,7 +1,10 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Direct3D 6 fixed-function pixel stage for one texture stage: colour/alpha operation and arguments,
 // flat or Gouraud colour, perspective or affine texture coordinates, specular add, vertex fog (specular
 // alpha) and alpha test. Unmodelled states are refused on the host before a draw reaches this shader.
+#include "radial_visibility.glsl"
+layout(location=11) in vec4 radialEye;
 layout(location=0) in vec2 uvPerspective;
 layout(location=1) noperspective in vec2 uvAffine;
 layout(location=2) in vec4 colorSmooth;
@@ -48,7 +51,7 @@ vec4 operation(uint word) {
     if (op == 13u) return mix(b, a, texel.a);             // BLENDTEXTUREALPHA
     return mix(b, a, draw.factor.a);                      // BLENDFACTORALPHA (14)
 }
-void main() {
+void shadeScene() {
     uint flags = draw.mode.x;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
@@ -90,4 +93,10 @@ void main() {
         if (!pass) discard;
     }
     result = vec4(rgb, alpha);
+}
+
+void main() {
+    vec4 visibility = radialVisibility(radialEye, ivec2(gl_FragCoord.xy), draw.mode.x);
+    shadeScene();
+    result.rgb = mix(visibility.rgb, result.rgb, visibility.a);
 }

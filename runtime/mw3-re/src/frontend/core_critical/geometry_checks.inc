@@ -122,6 +122,237 @@ void check_campaign_fog_color() {
     }
 }
 
+// Each scene samples a small patch around the given sightline. Reversed
+// depth represents forward depth; deliberately unrelated texture RHWs prove
+// the range test uses the position, including on legacy clip-fallback TL.
+void check_radial_world_visibility() {
+    namespace vk = mw34::vkscene;
+    constexpr unsigned width = 640, height = 480;
+    constexpr unsigned range = 1600;
+    enum class Sample { world, sky, haze, crossing, layered, zoom };
+    std::vector<std::uint16_t> reference_color, reference_depth;
+    for (const unsigned scale : {100u, 75u}) {
+        cc_mw3_re::RendererBridgeConfig config;
+        config.draw_distance = range;
+        config.remaster_width = width;
+        config.remaster_height = height;
+        config.world_scale_percent = scale;
+        vk::Renderer renderer(vk::Renderer::ColorTarget::rgba8, {}, {1,1,1,false},
+                              false, {}, false, config);
+        auto sample = [&](float radius, float angle, Sample sample = Sample::world) {
+            vk::Scene scene{};
+            scene.width = width;
+            scene.height = height;
+            scene.has_depth = true;
+            scene.color.assign(width * height, 0x001f);
+            scene.depth.resize(width * height);
+            if (sample == Sample::zoom)
+                for (std::size_t i = 0; i < scene.color.size(); ++i)
+                    scene.color[i] = i % width < width/2 ? 0x07e0 : 0x001f;
+            // Start with a resident backdrop. A subsequent opaque batch
+            // exercises the actual high-resolution coverage replay at 75%.
+            renderer.render(scene, true, false);
+            vk::Draw draw{};
+            draw.count = 6;
+            draw.texture = -1;
+            draw.key = {0, 5, 6, 1, 7, 1, 1, 0};
+            draw.push.target[0] = width;
+            draw.push.target[1] = height;
+            draw.push.target[2] = .5f;
+            draw.push.mode[0] = 2;
+            draw.push.mode[1] = draw.push.mode[2] = 2;
+            draw.scissor = {{0,0}, {width,height}};
+            draw.native_sky = sample == Sample::sky;
+            draw.sky = sample == Sample::haze ? 3 : 0;
+            auto& view = draw.producer_view;
+            view.present = true;
+            view.purpose = ::platform::ProducerPurpose::MainWorld;
+            view.canvas_available = true;
+            view.canvas = {0, 0, width, height};
+            if (sample == Sample::zoom) {
+                view.purpose = ::platform::ProducerPurpose::WorldZoom;
+                view.camera_rect_available = true;
+                view.camera_rect = {int(width/4), int(height/4), int(width/2), int(height/2)};
+                draw.scissor = {{int(width/4), int(height/4)}, {width/2, height/2}};
+            }
+            auto& projection = view.projection;
+            projection.near_z = 8;
+            projection.fx_near = projection.fy_near = (sample == Sample::crossing || sample == Sample::layered) ? 20.f : 100000.f;
+            projection.cx = width * .5f - std::tan(angle) * projection.fx_near * projection.near_z;
+            projection.cy = height * .5f;
+            const float depth = projection.near_z / (radius * std::cos(angle));
+            const auto vertex = [depth](float x, float y, float rhw) {
+                return ::platform::TLVertex{x, y, depth, rhw, 0xffff0000, 0, 0, 0};
+            };
+            ::platform::TLVertex vertices[]{vertex(-1,-1,.4f), vertex(width,-1,.8f),
+                    vertex(width,height,.25f), vertex(-1,-1,.4f), vertex(width,height,.25f),
+                    vertex(-1,height,.5f)};
+            auto append = [&](bool sky, float z, std::uint32_t color) {
+                auto layer = draw;
+                layer.native_sky |= sky;
+                layer.first = unsigned(scene.vertices.size() / sizeof(::platform::TLVertex));
+                for (auto &v : vertices) {
+                    v.sz = z;
+                    v.diffuse = color;
+                }
+                const auto *bytes = reinterpret_cast<const unsigned char *>(vertices);
+                scene.vertices.insert(scene.vertices.end(), bytes, bytes + sizeof(vertices));
+                scene.order.push_back({false, unsigned(scene.draws.size())});
+                scene.draws.push_back(layer);
+            };
+            if (sample == Sample::layered) {
+                append(true, depth * .25f, 0xff00ff00);   // Two different authored sky regions.
+                scene.draws.back().scissor = {{0, 0}, {width/2, height}};
+                append(true, depth * .25f, 0xff0000ff);
+                scene.draws.back().scissor = {{int(width/2), 0}, {width/2, height}};
+                append(false, depth * .95f, 0xffffff00);  // A farther yellow surface.
+            }
+            append(false, depth, 0xffff0000);
+            renderer.render(scene, false, false);
+            renderer.fetch_resident(scene);
+            unsigned drawn = 0;
+            for (std::size_t i = 0; i < scene.depth.size(); ++i) {
+                if (sample == Sample::zoom) {
+                    const unsigned x = unsigned(i % width), y = unsigned(i / width);
+                    const bool inside = x >= width/4 && x < 3*width/4 && y >= height/4 && y < 3*height/4;
+                    const auto color = scene.color[i];
+                    if (inside) {
+                        ++drawn;
+                        require(scene.depth[i] && ((color >> 11) == 3 || (color >> 11) == 4) &&
+                            (x < width/2 ? ((color >> 5) & 63) >= 54 && !(color & 31) :
+                                           (color & 31) >= 27 && !(color & 0x07e0)),
+                            "Zoom fade did not sample its retained scissor backdrop");
+                    } else {
+                        require(!scene.depth[i] && color == (x < width/2 ? 0x07e0 : 0x001f),
+                                "Zoom backdrop changed pixels outside its scissor");
+                    }
+                } else if (sample == Sample::layered) {
+                    const float x = float(i % width) - projection.cx;
+                    const float y = float(i / width) - projection.cy;
+                    const float r = std::hypot(radius, x / (depth * projection.fx_near),
+                                                       y / (depth * projection.fy_near));
+                    const float fade = std::clamp((r / range - .8f) / .2f, 0.f, 1.f);
+                    const float remaining = 1.f - fade * fade * (3.f - 2.f * fade);
+                    const bool green = i % width < width/2;
+                    const auto color = scene.color[i];
+                    if (!(std::abs(int(color >> 11) - remaining * 31.f) <= 1.01f &&
+                            std::abs(int((color >> 5) & 63) - (green ? (1.f - remaining) * 63.f : 0.f)) <= 1.01f &&
+                            std::abs(int(color & 31) - (green ? 0.f : (1.f - remaining) * 31.f)) <= 1.01f)) {
+                        std::fprintf(stderr, "range fixture scale=%u pixel=%zu,%zu color=%x expected=%.3f depth=%u r=%.2f\n",
+                                     scale,i%width,i/width,color,remaining,scene.depth[i],r);
+                        require(false, "World sample did not fade continuously against its own sky pixel");
+                    }
+
+                    const auto foreground = scene.depth[(height / 2) * width + width / 2];
+                    const auto background = scene.depth[0];
+                    require(foreground > background && background > 0, "Layered sky depth was lost");
+                    if (std::abs(r - range) > .01f)
+                        require(std::abs(int(scene.depth[i]) - int(r < range ? foreground : background)) <= 1,
+                                "Smooth world fade wrote incorrect depth");
+                    drawn += r < range;
+                } else if (scene.depth[i]) {
+                    ++drawn;
+                    require(scene.color[i] == 0xf800, "Admitted world sample lost its surface color");
+                } else {
+                    require(scene.color[i] == 0x001f, "Culled world sample changed backdrop");
+                }
+            }
+            if (sample == Sample::layered) {
+                require(drawn > 0 && drawn < scene.depth.size(), "Layered fixture missed the fade boundary");
+                if (scale == 100) {
+                    reference_color = scene.color;
+                    reference_depth = scene.depth;
+                } else {
+                    require(scene.color == reference_color && scene.depth == reference_depth,
+                            "Reduced coverage changed color or depth along a varying radial boundary");
+                }
+            }
+            if (sample == Sample::crossing) {
+                require(scene.depth[(height / 2) * width + width / 2] && scene.depth[0] == 0,
+                        "Triangle with distant vertices lost its in-range interior");
+            }
+            return drawn;
+        };
+        for (float angle : {0.f, .7f}) {
+            require(sample(1150, angle) == width * height, "Near terrain lost radial coverage");
+            const unsigned retained = sample(1530, angle);
+            require(retained >= width * height * .115f && retained <= width * height * .135f, "1530 m coverage should be about 12 percent");
+            require(sample(1620, angle) == 0, "Beyond-range world geometry still writes depth");
+        }
+        require(sample(1800, .7f, Sample::sky) == width * height, "Native sky acquired a scenery cutoff");
+        require(sample(1800, .7f, Sample::haze) == 0,
+                "Haze-routed scenery beyond the radial range remained visible");
+        sample(1000, 0, Sample::crossing);
+        sample(1000, 0, Sample::layered);
+        require(sample(1530, 0, Sample::zoom) == width * height / 4, "Zoom scissor lost coverage");
+        require(scale == 100 || renderer.coverage_scenes > 0, "Reduced world coverage pass was skipped");
+        vk::Scene resized{};
+        resized.width = resized.height = 32;
+        resized.has_depth = true;
+        resized.color.resize(32 * 32);
+        resized.depth.resize(32 * 32);
+        renderer.render(resized);
+        sample(1000, 0, Sample::layered);  // Recreate both the guest and private targets.
+
+    }
+}
+
+// Exercise the actual model submission boundary, including the reference TL
+// fallback. A camera plane beyond 800 m isolates radial discard from clipping.
+void check_radial_model_views(SDL_Window *window, sdlfe::RendererBackend backend) {
+    const float positions[]{-500,-500,0, 500,-500,0, 0,500,0};
+    const std::uint32_t indices[]{2,1,0};
+    const auto resource = cc::geometry::register_resource(
+        positions, 3, nullptr, 0, {{3, indices, nullptr, nullptr, false, true}});
+    cc::geometry::Material material;
+    material.color = 0xffff0000;
+    for (const char *mode : {"partial", "cpu-reference"}) {
+        sdlfe::CoreCriticalAssets assets;
+        assets.geometry = mode;
+        auto renderer = make_check_renderer(window, backend, {}, assets);
+        renderer->set_viewport(0, 0, 32, 32);
+        auto sample = [&](float distance, platform::ProducerPurpose purpose) {
+            std::array<float,12> camera{1,0,0, 0,1,0, 0,0,1, 0,0,distance};
+            platform::ModelDrawContext context;
+            context.model_to_camera = context.model_to_world = camera.data();
+            context.ordinary = true;
+            context.near_z = context.clip_near = 1;
+            context.far_z = 1000;
+            context.fx_near = context.fy_near = context.cx = context.cy = 16;
+            const zvid::ProducerPurposeScope requested(purpose);
+            zvid::ProducerWorldScope world;
+            world.begin_emission();
+            auto view = zvid::capture_producer_view();
+            if (purpose != platform::ProducerPurpose::Original) {
+                view.canvas_available = true;
+                view.canvas = {0, 0, 32, 32};
+                view.projection.near_z = 1;
+                view.projection.fx_near = view.projection.fy_near = 16;
+                view.projection.cx = view.projection.cy = 16;
+            }
+            renderer->begin_scene();
+            renderer->clear(true, 0, 0, 255);
+            {
+                const zvid::ProducerBindingScope binding(renderer.get(), view);
+                require(renderer->submit_model_geometry(resource, context, {material}, {}) ==
+                        cc::geometry::Submission::submitted, "Radial model fixture was rejected");
+            }
+            renderer->end_scene();
+            std::vector<std::uint32_t> pixels;
+            int width{}, height{};
+            require(renderer->read_back(&pixels, &width, &height) && width == 32 && height == 32,
+                    "Radial model readback failed");
+            return pixels[16 * 32 + 16] & 0xffffffu;
+        };
+        for (auto purpose : {platform::ProducerPurpose::MainWorld, platform::ProducerPurpose::WorldZoom}) {
+            require(sample(560, purpose) == 0xff0000, "Near typed world model was lost");
+            require(sample(840, purpose) == 0x0000ff, "Distant typed world model wrote over the backdrop");
+        }
+        require(sample(840, platform::ProducerPurpose::Original) == 0xff0000,
+                "Untyped nested model acquired the world range");
+    }
+}
+
 void check_distance_fog(SDL_Window *window, sdlfe::RendererBackend backend) {
     const auto saved_fog = zmod::fog();
     const auto saved_calc = zmod::fog_calc();
