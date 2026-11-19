@@ -127,10 +127,14 @@ void ripple_at(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t ampli
     // button away from the screen's top-left corner).
     for (int32_t row = top; row < y + outer; ++row) {
       if (!(row > inner || row < -inner)) continue;
-      uint16_t* s = src + row * ps + left;
+      uint16_t* const row_start = src + row * ps + left;
+      uint16_t* s = row_start;
       const uint16_t* d = dst + row * pd + left;
       for (int32_t col = left; col < x + outer; ++col)
         if (col > inner || col < -inner) *s++ = *d++;
+      if (s > row_start)
+        observe_resolved_region(row_start, static_cast<uint32_t>(s - row_start), 1,
+                                static_cast<uint32_t>(t.pitch), "ripple");
     }
     return;
   }
@@ -157,11 +161,15 @@ void ripple_at(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t ampli
   const int32_t col0 = left <= c[0] ? c[0] : left;
   for (int32_t row = top > c[1] ? top : c[1]; row < row_end; ++row) {
     if (!(row > inner || row < -inner)) continue;
-    uint16_t* s = src + row * ps + col0;
+    uint16_t* const row_start = src + row * ps + col0;
+    uint16_t* s = row_start;
     const uint16_t* d = dst + row * pd + col0;
     const int32_t col_end = c[2] <= x + outer ? c[2] : x + outer;
     for (int32_t col = col0; col < col_end; ++col)
       if (col > inner || col < -inner) *s++ = *d++;
+    if (s > row_start)
+      observe_resolved_region(row_start, static_cast<uint32_t>(s - row_start), 1,
+                              static_cast<uint32_t>(t.pitch), "ripple");
   }
 }
 
@@ -173,7 +181,6 @@ RippleState& ripple_state() { return g_ripple; }
 void ripple(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t amplitude, float wavelength, float phase,
             const int32_t* clip, X87 precision) {
   if (!finish_target().base) return;
-  observe_framebuffer_write(finish_target().base, "ripple");
   if (precision == X87::k24) ripple_at<X87::k24>(x, y, inner, outer, amplitude, wavelength, phase, clip);
   else ripple_at<X87::k53>(x, y, inner, outer, amplitude, wavelength, phase, clip);
 }

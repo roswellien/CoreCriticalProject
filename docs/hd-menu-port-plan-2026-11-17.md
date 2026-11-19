@@ -145,6 +145,11 @@ background and menu hit regions must not acquire inconsistent policies.
   coordinates correspond within 8-bit quantization tolerance, rather than promising exact pixels.
 - **Art assets:** the owner's HD art candidates live in a local, untracked folder and are never
   committed.
+- **Menu layout (owner decision, 2026-11-19):** the menu keeps its 4:3 layout; the background fills
+  the full screen resolution; menu text scales with the 4:3 menu; the cursor scales with the menu.
+  These are recorded as named constants in `runtime/mw3-re/src/gamez/zrender/zrndr_blit.h`
+  (`kMenuKeepsFourByThreeLayout`, `kMenuBackgroundFillsScreen`, `kMenuTextScalesWithMenu`,
+  `kCursorUsesMenuLogicalTransform`).
 
 ## Order of work (priorities: no crashes first, then the HD menu at full speed on the GPU)
 

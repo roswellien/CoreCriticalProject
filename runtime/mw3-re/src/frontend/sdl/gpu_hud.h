@@ -1,5 +1,6 @@
 #pragma once
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -22,9 +23,14 @@ struct HudOptions {
 // for native reads; display uses owned GPU images and ordered primitives.
 class GpuHud final : public zrndr::DrawObserver {
  public:
+  static constexpr uint64_t kMaxFrameResolvedBytes = 32ULL * 1024 * 1024;
+  static constexpr uint64_t kMaxFrameResolvedRegions = 4096;
+  static constexpr size_t kMaxReasonKeys = 32;
+
   struct FrameStats {
     uint64_t images{};
     uint64_t text_hits{};
+    uint64_t resolved_regions{};
     bool fallback{};
     std::map<std::string, uint64_t> shadow_reasons;
   };
@@ -41,6 +47,8 @@ class GpuHud final : public zrndr::DrawObserver {
              const zrndr::BlitRect*) override;
   void pixel(const uint16_t* destination, uint16_t colour) override;
   void span(const uint16_t* destination, uint32_t count, uint16_t colour) override;
+  void resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
+                       uint32_t pitch_bytes, const char* operation) override;
   void framebuffer_write(const void* target, const char* operation) override;
 
  private:
@@ -58,14 +66,18 @@ class GpuHud final : public zrndr::DrawObserver {
     unsigned first, count;
     platform::Primitive primitive;
     bool sharp;
+    platform::TextureFilter filter{platform::TextureFilter::kDefault};
   };
   void begin_frame(const uint16_t* target, int width, int height, int pitch, int output_height,
                    bool observation_only);
   bool position(const uint16_t* pointer, int& x, int& y) const;
   int texture(const std::shared_ptr<const platform::HudImage>& image);
   void rectangle(float x0, float y0, float x1, float y1, uint32_t colour, int texture = -1,
-                 float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1);
-  void append(platform::TLVertex vertex, int texture, platform::Primitive primitive, bool sharp);
+                 float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1,
+                 platform::TextureFilter filter = platform::TextureFilter::kDefault);
+  void append(platform::TLVertex vertex, int texture, platform::Primitive primitive, bool sharp,
+              platform::TextureFilter filter = platform::TextureFilter::kDefault);
+  void record_shadow_reason(const char* operation);
   FrameRenderer& renderer_;
   HudOptions options_;
   platform::HudArtwork artwork_;
@@ -77,13 +89,17 @@ class GpuHud final : public zrndr::DrawObserver {
   const uint16_t* target_{};
   int width_{}, height_{}, pitch_{};
   float density_{1};
-  uint64_t frame_{}, layers_{}, images_{}, hits_{}, text_hits_{}, points_{}, spans_{};
+  uint64_t frame_{}, layers_{}, images_{}, hits_{}, text_hits_{}, points_{}, spans_{},
+      resolved_regions_{};
   uint64_t resource_bytes_{};
+  uint64_t frame_resolved_bytes_{};
+  uint64_t frame_resolved_regions_{};
   bool shadow_layer_{};
   bool observation_only_{};
   uint64_t observed_draws_{};
   FrameStats frame_stats_;
   uint64_t shadow_layers_{};
   std::map<std::string, uint64_t> shadow_reasons_;
+  std::set<std::string> logged_shadow_reasons_;
 };
 }  // namespace sdlfe
