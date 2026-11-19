@@ -38,9 +38,12 @@ namespace sdlfe {
 // crash.dmp. A bare log file name (no separator) means the current directory, so the result is
 // plain "crash.dmp". Returns false, with an empty result, when the path would not fit.
 bool crash_report_dump_path(const char* log, char* output, size_t capacity) {
-  if (!output || capacity == 0) return false;
+  return crash_report_sibling_path(log, "crash.dmp", output, capacity);
+}
+
+bool crash_report_sibling_path(const char* log, const char* name, char* output, size_t capacity) {
+  if (!output || capacity == 0 || !name) return false;
   output[0] = '\0';
-  const char* name = "crash.dmp";
   const size_t name_length = std::strlen(name);
   size_t directory_length = 0;
   if (log) {
@@ -204,6 +207,8 @@ void start_dump_worker() {
     g_dump_worker_thread = CreateThread(nullptr, 1024 * 1024, dump_worker, nullptr,
                                         STACK_SIZE_PARAM_IS_A_RESERVATION,
                                         &g_dump_worker_thread_id);
+  // Read the error now: the cleanup below calls CloseHandle, which can overwrite it.
+  const DWORD creation_error = GetLastError();
   if (g_dump_worker_thread) {
     g_dump_worker_available = true;
     return;
@@ -224,7 +229,7 @@ void start_dump_worker() {
   g_dump_worker_thread_id = 0;
   // Logged once: this runs only at install.
   crash_log("%s: minidump worker unavailable (error %lu); dump disabled\n", g_program,
-            GetLastError());
+            creation_error);
 }
 
 void crash_log(const char* format, ...) {
@@ -372,9 +377,14 @@ void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause)
     TerminateProcess(GetCurrentProcess(), 70);
   // The dump and log are written: keep the process alive until the user closes the box. A worker
   // that died ends this wait at once.
+  // The wait is bounded: a stuck worker, or a box hidden behind a frozen fullscreen game, must not
+  // keep a crashed process alive forever.
   if (outcome == CrashReportWaitOutcome::completed && g_box) {
     const HANDLE box_handles[] = {g_dump_box_done_event, g_dump_worker_thread};
-    WaitForMultipleObjects(2, box_handles, FALSE, INFINITE);
+    WaitForMultipleObjects(2, box_handles, FALSE, 120000);
+  } else if (outcome == CrashReportWaitOutcome::completed) {
+    // No box: a short grace so the log's tee thread can drain before the process ends.
+    Sleep(200);
   }
 }
 
@@ -531,12 +541,26 @@ void crash_report_install(const std::string& program, const std::string& log, bo
 #if defined(_WIN32)
   g_installing_thread_id = GetCurrentThreadId();
   g_exception_in_progress.store(false);
-  // A handle of our own on the log file, opened now: GetStdHandle(STD_ERROR_HANDLE) can later be
-  // a pipe the run log closes, and a late crash would then write into a recycled handle. Appending
-  // keeps the crash lines in the same log the user is asked to send.
-  g_stderr_handle = CreateFileA(log.c_str(), FILE_APPEND_DATA,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                                OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  // The crash lines go to their own file next to crash.dmp, opened now for append. The run log
+  // reopens mw3.log without append and a late crash could write into a recycled stderr handle, so
+  // neither can be trusted to keep these lines. The normal log gets one pointer line here.
+  char crash_text_path[MAX_PATH + 16];
+  if (crash_report_sibling_path(log.c_str(), "crash.txt", crash_text_path,
+                                sizeof crash_text_path)) {
+    g_stderr_handle = CreateFileA(crash_text_path, FILE_APPEND_DATA,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                  OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const DWORD open_error = GetLastError();
+    if (g_stderr_handle == INVALID_HANDLE_VALUE)
+      std::fprintf(stderr, "%s: crash report file could not be opened (error %lu): %s\n",
+                   g_program, open_error, crash_text_path);
+    else
+      std::fprintf(stderr, "%s: crash details, if any, are written to %s\n", g_program,
+                   crash_text_path);
+  } else {
+    std::fprintf(stderr, "%s: crash report file path does not fit; no crash text file\n",
+                 g_program);
+  }
   // SetThreadStackGuarantee applies to this thread only: production installs on the main/game
   // thread. Other threads still use the same minimal handoff, but need their own guarantee.
   ULONG stack_guarantee = 64 * 1024;

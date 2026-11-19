@@ -158,6 +158,10 @@ TEST(crash_report_dump_path_stays_next_to_the_log) {
   const std::string long_log = std::string(60, 'a') + "/mw3.log";
   EXPECT(!sdlfe::crash_report_dump_path(long_log.c_str(), path, sizeof path));
   EXPECT(path[0] == '\0');
+  // The crash text file sits next to the log too; a missing name is rejected.
+  EXPECT(sdlfe::crash_report_sibling_path("C:\\profiles\\mw3.log", "crash.txt", path, sizeof path));
+  EXPECT(std::strcmp(path, "C:\\profiles\\crash.txt") == 0);
+  EXPECT(!sdlfe::crash_report_sibling_path("mw3.log", nullptr, path, sizeof path));
 }
 
 TEST(crash_report_wait_result_classifies_completion_timeout_and_failure) {
