@@ -106,6 +106,9 @@ public:
       bytes +=
           sizeof(*value->draw.lit_normals) +
           value->draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
+    if (value->draw.raw_fog)
+      bytes += sizeof(*value->draw.raw_fog) +
+               value->draw.raw_fog->capacity() * sizeof(std::array<float, 4>);
     if (found != entries_.end()) {
       statistics_.bytes -= found->second.bytes;
       entries_.erase(found);

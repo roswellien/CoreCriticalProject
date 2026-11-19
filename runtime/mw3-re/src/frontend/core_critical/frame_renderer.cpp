@@ -1716,6 +1716,7 @@ private:
            (previous.sky_view->camera_world == draw.sky_view->camera_world &&
             previous.sky_view->projection == draw.sky_view->projection)) &&
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
+          bool(previous.raw_fog) == bool(draw.raw_fog) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
           previous.emission_index == draw.emission_index &&

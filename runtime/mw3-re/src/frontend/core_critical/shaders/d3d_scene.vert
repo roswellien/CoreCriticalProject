@@ -6,6 +6,7 @@ layout(location=0) in vec4 position;
 layout(location=1) in uint diffuse;
 layout(location=2) in uint specular;
 layout(location=3) in vec2 uv;
+layout(location=5) in vec4 rawFog;
 layout(location=0) out vec2 uvPerspective;
 layout(location=1) noperspective out vec2 uvAffine;
 layout(location=2) out vec4 colorSmooth;
@@ -16,7 +17,7 @@ layout(location=10) out vec4 fogFactors;
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; vec4 radialProjection; } draw;
 vec4 unpack(uint c) { return vec4((c >> 16) & 255u, (c >> 8) & 255u, c & 255u, c >> 24) / 255.0; }
 void main() {
-    fogFactors = vec4(0.0);
+    fogFactors = rawFog;
     // Direct3D pixel centres lie on integer coordinates; Vulkan's lie on half-integers (target.z = 0.5).
     float w = 1.0 / position.w;
     vec2 ndc = (position.xy + draw.target.z) / draw.target.xy * 2.0 - 1.0;

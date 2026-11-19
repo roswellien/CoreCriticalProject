@@ -510,6 +510,28 @@ void check_distance_fog(SDL_Window *window, sdlfe::RendererBackend backend) {
         for (unsigned shift : {0U, 8U, 16U})
             require(((pixels[15 * 32 + 16] >> shift) & 255) >= 247,
                     "Crossing GPU/reference triangle exposed the far cut");
+
+        // The far cut must not spread fog into the interior before the edge band.
+        // On the centreline y = (z - 2200) / 1200. This projection puts z == 2100
+        // at pixel (16, 16); packed endpoint visibility incorrectly fogs that pixel.
+        const float interior_positions[]{-1, -1, 1000, 1, -1, 1000, 0, 1, 3400};
+        const auto interior = cc::geometry::register_resource(
+            interior_positions, 3, nullptr, 0, {{3, indices, nullptr, nullptr, false, true}});
+        context.fx_near = context.fy_near = 16000;
+        context.cx = 16.5f;
+        context.cy = 16.5f + 16000.f / 25200.f;
+        require(cc::geometry::fog_amount(edge, 2100.f, 500.f - 1.f / 12.f) == 0.f,
+                "Interior fog fixture is not before the edge band");
+        renderer->begin_scene();
+        renderer->clear(true, 255, 0, 255);
+        require(renderer->submit_model_geometry(interior, context, {material}, edge) ==
+                    cc::geometry::Submission::submitted,
+                "Interior fog geometry was not submitted");
+        renderer->end_scene();
+        require(renderer->read_back(&pixels, &width, &height) && width == 32 && height == 32,
+                "Interior fog readback extent changed");
+        require((pixels[16 * 32 + 16] & 0xffffffU) == 0,
+                "GPU/reference interior pixel acquired fog before the edge band");
     }
     zmod::fog() = saved_fog;
     zmod::fog_calc() = saved_calc;

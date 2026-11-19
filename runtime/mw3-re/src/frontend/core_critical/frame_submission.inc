@@ -266,7 +266,7 @@ static PacketByteTerms packet_byte_terms(const vk::Scene &scene) {
                             texture.pixels32.capacity() * sizeof(uint32_t);
   // A model drawn thousands of times shares one geometry (and one lit-normal array): charge each
   // distinct allocation once per packet, not once per draw.
-  std::unordered_set<const void *> counted_geometry, counted_lit_normals;
+  std::unordered_set<const void *> counted_geometry, counted_lit_normals, counted_raw_fog;
   for (const auto &draw : scene.draws) {
     if (draw.model && draw.model->geometry) {
       const auto &geometry = *draw.model->geometry;
@@ -276,6 +276,9 @@ static PacketByteTerms packet_byte_terms(const vk::Scene &scene) {
     }
     if (draw.lit_normals && counted_lit_normals.insert(draw.lit_normals.get()).second)
       terms.lit_normals += draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
+    if (draw.raw_fog && counted_raw_fog.insert(draw.raw_fog.get()).second)
+      terms.geometry += sizeof(*draw.raw_fog) +
+                        draw.raw_fog->capacity() * sizeof(std::array<float, 4>);
   }
   std::set<const mw34::materials::HeightBinding *> height_snapshots;
   for (const auto &draw : scene.draws) {
