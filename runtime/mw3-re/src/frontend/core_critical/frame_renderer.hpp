@@ -85,9 +85,9 @@ struct StagingTestState {
 };
 StagingTestState staging_state(VulkanFrameRenderer &renderer);
 
-// The geometry and lit-normal terms and the checked total of one packet's byte count.
+// The geometry, lit-normal and raw-fog terms and the checked total of one packet's byte count.
 struct PacketByteBreakdown {
-  std::size_t geometry{}, lit_normals{}, total{};
+  std::size_t geometry{}, lit_normals{}, raw_fog{}, total{};
 };
 PacketByteBreakdown packet_byte_breakdown(const mw34::vkscene::Scene &scene);
 

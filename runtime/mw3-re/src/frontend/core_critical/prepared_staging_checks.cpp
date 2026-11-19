@@ -54,8 +54,11 @@ void same(const cc_mw3_re::PreparedSubmission &a, const cc_mw3_re::PreparedSubmi
                 "Cached model instance changed");
     }
     require(bool(a.draw.sun_tl) == bool(b.draw.sun_tl) &&
-                bool(a.draw.lit_normals) == bool(b.draw.lit_normals),
+                bool(a.draw.lit_normals) == bool(b.draw.lit_normals) &&
+                bool(a.draw.raw_fog) == bool(b.draw.raw_fog),
             "Cached clipping metadata changed");
+    if (a.draw.raw_fog)
+        require(*a.draw.raw_fog == *b.draw.raw_fog, "Cached raw fog changed");
     if (a.draw.sun_tl)
         require(a.draw.sun_tl->camera_world == b.draw.sun_tl->camera_world &&
                     a.draw.sun_tl->projection == b.draw.sun_tl->projection &&
@@ -287,7 +290,9 @@ void checks() {
             "Clipped budget fixture has no normal stream");
     const auto payload = clipped.vertices.capacity() + sizeof(cc::PreparedSubmission) +
                          sizeof(*clipped.draw.sun_tl) + sizeof(*clipped.draw.lit_normals) +
-                         clipped.draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
+                         clipped.draw.lit_normals->capacity() * sizeof(std::array<float, 3>) +
+                         sizeof(*clipped.draw.raw_fog) +
+                         clipped.draw.raw_fog->capacity() * sizeof(std::array<float, 4>);
     cc::PreparedDrawCache clipped_budget(payload - 1);
     clipped_budget.get(source, context, viewport, width, height, geometry, lighting);
     require(clipped_budget.statistics().entries == 0 && clipped_budget.statistics().bytes == 0,
@@ -364,6 +369,41 @@ void checks() {
                 ++cut_vertices;
             }
             require(cut_vertices == 3, "CPU prepared crossing lost its triangulated cut vertices");
+            edge_batch.vertices = {{-1, -1, 1000, 0, 0, 1, 0, 0},
+                                   {1, -1, 1000, 0, 0, 1, 1, 0},
+                                   {0, 1, 3400, 0, 0, 1, .5f, 1}};
+            const auto interior = cc::prepare_draw(edge_source, edge_context, viewport, width,
+                                                   height, geometry, false);
+            require(!interior.draw.model && interior.draw.raw_fog &&
+                        interior.draw.raw_fog->size() == interior.draw.count,
+                    "Prepared interior fixture lost its parallel raw fog stream");
+            bool negative_edge_factor = false;
+            for (const auto &factors : *interior.draw.raw_fog) {
+                require(factors[3] == 1.f && factors[0] == 0.f && factors[1] == 0.f,
+                        "Prepared fog-off fixture acquired mission fog");
+                negative_edge_factor = negative_edge_factor || factors[2] < -1.f;
+            }
+            require(negative_edge_factor,
+                    "Prepared interior edge factors were clamped before rasterisation");
+        }
+        zmod::fog_set_on(1);
+        zmod::fog_set_linear(1);
+        zmod::fog_set_near(32);
+        zmod::fog_set_far(750);
+        zmod::fog_set_alt_low(1000);
+        zmod::fog_set_alt_high(1001);
+        edge_source.deformed = {{-1, -1, 600, 0, 0, 1, 0, 0},
+                                {1, -1, 600, 0, 0, 1, 1, 0},
+                                {0, 1, 600, 0, 0, 1, .5f, 1}};
+        const auto unscoped = cc::prepare_draw(edge_source, edge_context, viewport, width, height,
+                                               geometry, false);
+        require(unscoped.draw.raw_fog && unscoped.draw.raw_fog->size() == 3,
+                "Unscoped prepared fog lost its raw visibility stream");
+        for (std::size_t index = 0; index < edge_source.deformed.size(); ++index) {
+            const auto &raw_fog = unscoped.draw.raw_fog->at(index);
+            const float visibility = 1.f - zmod::fog_at(edge_source.deformed[index].data());
+            require(raw_fog[3] == 2.f && raw_fog[0] == visibility,
+                    "Unscoped prepared fog changed fog_at's unquantised visibility");
         }
         zmod::fog() = saved_fog;
     }

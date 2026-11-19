@@ -881,6 +881,22 @@ if(SDL3_FOUND)
     if(MSVC)
       target_compile_options(mw3text PRIVATE /EHsc)
       target_compile_options(mw3 PRIVATE /EHsc)
+      if(WIN32)
+        # Preserve optimized code generation while keeping a PDB for crash RVA symbolization.
+        target_compile_options(mw3core PRIVATE /Zi)
+        target_compile_options(cc_geometry_resources PRIVATE /Zi)
+        target_compile_options(mw3sdl PRIVATE /Zi)
+        target_compile_options(enet PRIVATE /Zi)
+        target_compile_options(miniupnpc PRIVATE /Zi)
+        target_compile_options(mw3imgui PRIVATE /Zi)
+        target_compile_options(mw3text PRIVATE /Zi)
+        target_compile_options(mw3 PRIVATE /Zi)
+        if(MW3_CORE_CRITICAL_VULKAN)
+          target_compile_options(mw3ccvulkan PRIVATE /Zi)
+        endif()
+        target_link_options(mw3 PRIVATE /DEBUG /OPT:REF /OPT:ICF
+                            "/PDB:$<TARGET_FILE_DIR:mw3>/mw3.pdb")
+      endif()
     endif()
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
@@ -966,6 +982,7 @@ if(SDL3_FOUND)
       tests/test_log_start.cpp
       src/frontend/sdl/sdl_update.cpp
       src/frontend/sdl/sdl_restart.cpp
+      src/frontend/sdl/crash_report.cpp
       src/frontend/sdl/win_cmdline.cpp
       tests/test_net_enet.cpp
       tests/test_net_upnp.cpp

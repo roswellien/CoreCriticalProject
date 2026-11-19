@@ -17,6 +17,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <chrono>
 #include <csignal>
+#include <exception>
 #include <thread>
 #if !defined(_WIN32)
 #include <fcntl.h>
@@ -58,6 +60,7 @@
 #include "frontend/sdl/font_search.h"
 #include "frontend/sdl/launcher.h"
 #include "frontend/sdl/launcher_notes.h"
+#include "frontend/sdl/crash_report.h"
 #include "frontend/sdl/log_start.h"
 #include "platform/sha256.hpp"
 #include "frontend/sdl/text_fit.h"
@@ -103,6 +106,218 @@
 
 #include <cstdio>
 #include <map>
+
+TEST(crash_report_rva_requires_address_inside_image) {
+  uintptr_t rva = 99;
+  EXPECT(sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1000, &rva));
+  EXPECT(rva == 0);
+  EXPECT(sdlfe::crash_report_address_rva(0x1000, 0x200, 0x11ff, &rva));
+  EXPECT(rva == 0x1ff);
+  EXPECT(!sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1200, &rva));
+  EXPECT(!sdlfe::crash_report_address_rva(0x1000, 0x200, 0x0fff, &rva));
+  EXPECT(rva == 0x1ff);
+  char outside_text[64];
+  sdlfe::crash_report_format_rva(outside_text, sizeof outside_text, false, rva);
+  EXPECT(std::strcmp(outside_text, "outside mw3.exe image") == 0);
+  EXPECT(!sdlfe::crash_report_address_rva(0, 0x200, 0x1000, &rva));
+  EXPECT(!sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1000, nullptr));
+}
+
+TEST(crash_report_rva_format_identifies_outside_addresses) {
+  char text[64];
+  sdlfe::crash_report_format_rva(text, sizeof text, true, 0x12ab);
+  EXPECT(std::strcmp(text, "RVA 0x12ab") == 0);
+  sdlfe::crash_report_format_rva(text, sizeof text, false, 0);
+  EXPECT(std::strcmp(text, "outside mw3.exe image") == 0);
+}
+
+TEST(crash_report_format_rva_rejects_truncation_and_zero_capacity) {
+  char text[8];
+  EXPECT(sdlfe::crash_report_format_rva(text, 0, true, 0x12ab) == 0);
+  // "RVA 0x12ab" needs 11 bytes with the terminator, so 8 truncates: failure with an empty result.
+  text[0] = 'x';
+  EXPECT(sdlfe::crash_report_format_rva(text, sizeof text, true, 0x12ab) == 0);
+  EXPECT(text[0] == '\0');
+  char fits[16];
+  EXPECT(sdlfe::crash_report_format_rva(fits, sizeof fits, true, 0x12ab) == 10);
+  EXPECT(std::strcmp(fits, "RVA 0x12ab") == 0);
+}
+
+TEST(crash_report_dump_path_stays_next_to_the_log) {
+  char path[64];
+  EXPECT(sdlfe::crash_report_dump_path("C:\\profiles\\mw3.log", path, sizeof path));
+  EXPECT(std::strcmp(path, "C:\\profiles\\crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("dir/sub/mw3.log", path, sizeof path));
+  EXPECT(std::strcmp(path, "dir/sub/crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("mw3.log", path, sizeof path));
+  EXPECT(std::strcmp(path, "crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("C:\\profiles\\", path, sizeof path));
+  EXPECT(std::strcmp(path, "C:\\profiles\\crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("", path, sizeof path));
+  EXPECT(std::strcmp(path, "crash.dmp") == 0);
+  // A path whose directory leaves no room for crash.dmp is rejected and leaves an empty result.
+  const std::string long_log = std::string(60, 'a') + "/mw3.log";
+  EXPECT(!sdlfe::crash_report_dump_path(long_log.c_str(), path, sizeof path));
+  EXPECT(path[0] == '\0');
+  // The crash text file sits next to the log too; a missing name is rejected.
+  EXPECT(sdlfe::crash_report_sibling_path("C:\\profiles\\mw3.log", "crash.txt", path, sizeof path));
+  EXPECT(std::strcmp(path, "C:\\profiles\\crash.txt") == 0);
+  EXPECT(!sdlfe::crash_report_sibling_path("mw3.log", nullptr, path, sizeof path));
+}
+
+TEST(crash_report_wait_result_classifies_completion_timeout_and_failure) {
+  EXPECT(sdlfe::crash_report_classify_wait_result(0) ==
+         sdlfe::CrashReportWaitOutcome::completed);
+  EXPECT(sdlfe::crash_report_classify_wait_result(258) ==
+         sdlfe::CrashReportWaitOutcome::timed_out);
+  EXPECT(sdlfe::crash_report_classify_wait_result(0xffffffffu) ==
+         sdlfe::CrashReportWaitOutcome::failed);
+  EXPECT(sdlfe::crash_report_classify_wait_result(1) ==
+         sdlfe::CrashReportWaitOutcome::worker_exited);
+  // Abandoned mutex results are not completion: neither waited handle is a mutex.
+  EXPECT(sdlfe::crash_report_classify_wait_result(128) ==
+         sdlfe::CrashReportWaitOutcome::failed);
+}
+
+TEST(crash_report_guard_preserves_first_capture_and_skips_worker) {
+  std::atomic<bool> in_progress{false};
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, true) ==
+         sdlfe::CrashReportEntry::skip_worker);
+  EXPECT(!in_progress.load());
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, false) == sdlfe::CrashReportEntry::capture);
+  EXPECT(in_progress.load());
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, false) == sdlfe::CrashReportEntry::wait);
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, true) ==
+         sdlfe::CrashReportEntry::skip_worker);
+  EXPECT(in_progress.load());
+  EXPECT(sdlfe::crash_report_try_enter(in_progress, false) == sdlfe::CrashReportEntry::wait);
+}
+
+TEST(crash_report_guard_allows_only_one_concurrent_capture) {
+  std::atomic<bool> in_progress{false};
+  std::atomic<bool> start{false};
+  std::atomic<int> captures{0};
+  std::atomic<int> waiters{0};
+  std::vector<std::thread> threads;
+  for (int index = 0; index < 8; ++index) {
+    threads.emplace_back([&] {
+      while (!start.load()) std::this_thread::yield();
+      const auto entry = sdlfe::crash_report_try_enter(in_progress, false);
+      if (entry == sdlfe::CrashReportEntry::capture) ++captures;
+      if (entry == sdlfe::CrashReportEntry::wait) ++waiters;
+    });
+  }
+  start.store(true);
+  for (std::thread& thread : threads) thread.join();
+  EXPECT(captures.load() == 1);
+  EXPECT(waiters.load() == 7);
+}
+
+#if defined(_WIN32)
+namespace {
+DWORD WINAPI crash_report_test_worker(void*) { return 0; }
+}  // namespace
+
+TEST(crash_report_wait_observes_dead_worker_and_prefers_completion) {
+  HANDLE completion = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  HANDLE worker = CreateThread(nullptr, 0, crash_report_test_worker, nullptr, 0, nullptr);
+  EXPECT(completion != nullptr);
+  EXPECT(worker != nullptr);
+  if (completion && worker) {
+    EXPECT(WaitForSingleObject(worker, 5000) == WAIT_OBJECT_0);
+    const HANDLE handles[] = {completion, worker};
+    EXPECT(sdlfe::crash_report_classify_wait_result(
+               WaitForMultipleObjects(2, handles, FALSE, 0)) ==
+           sdlfe::CrashReportWaitOutcome::worker_exited);
+    EXPECT(SetEvent(completion) != 0);
+    EXPECT(sdlfe::crash_report_classify_wait_result(
+               WaitForMultipleObjects(2, handles, FALSE, 0)) ==
+           sdlfe::CrashReportWaitOutcome::completed);
+  }
+  if (worker) CloseHandle(worker);
+  if (completion) CloseHandle(completion);
+}
+
+// A non-exception request (abort, terminate) after an earlier SEH capture, uninstall and reinstall
+// must not report the earlier capture's exception record or context.
+TEST(crash_report_capture_pointers_do_not_survive_reinstall) {
+  EXCEPTION_RECORD record{};
+  record.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+  CONTEXT context{};
+  EXCEPTION_POINTERS seh{&record, &context};
+  bool has_record = false, has_context = false;
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  EXPECT(sdlfe::crash_report_store_capture_for_test(&seh, &has_record, &has_context));
+  EXPECT(has_record && has_context);
+  EXPECT(sdlfe::crash_report_uninstall_for_test());
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  EXPECT(sdlfe::crash_report_store_capture_for_test(nullptr, &has_record, &has_context));
+  EXPECT(!has_record && !has_context);
+  // A second non-exception request straight after an SEH one, without a reinstall, is clean too.
+  EXPECT(sdlfe::crash_report_store_capture_for_test(&seh, &has_record, &has_context));
+  EXPECT(sdlfe::crash_report_store_capture_for_test(nullptr, &has_record, &has_context));
+  EXPECT(!has_record && !has_context);
+  EXPECT(sdlfe::crash_report_uninstall_for_test());
+}
+
+// A worker failure also signals completion (to release waiters); it must not read as a report.
+TEST(crash_report_failed_worker_does_not_count_as_a_written_report) {
+  using sdlfe::CrashReportWaitOutcome;
+  EXPECT(sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::completed, false));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::completed, true));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::timed_out, false));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::worker_exited, false));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::failed, false));
+}
+
+// If the worker cannot start, install must leave the previous handlers in place (a silent crash
+// under our handlers would lose the reason and the dialog).
+TEST(crash_report_failed_worker_start_keeps_previous_handlers) {
+  const auto previous_filter = SetUnhandledExceptionFilter(nullptr);
+  SetUnhandledExceptionFilter(previous_filter);
+  const auto previous_abort = std::signal(SIGABRT, SIG_DFL);
+  std::signal(SIGABRT, previous_abort);
+  const auto previous_terminate = std::get_terminate();
+  sdlfe::crash_report_fail_worker_start_for_test(true);
+  // Twice: a failed start must leave no stale module or handle state for the next attempt.
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  EXPECT(!sdlfe::crash_report_dump_worker_ready());
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  sdlfe::crash_report_fail_worker_start_for_test(false);
+  EXPECT(!sdlfe::crash_report_dump_worker_ready());
+  EXPECT(SetUnhandledExceptionFilter(previous_filter) == previous_filter);
+  EXPECT(std::signal(SIGABRT, previous_abort) == previous_abort);
+  EXPECT(std::get_terminate() == previous_terminate);
+  EXPECT(sdlfe::crash_report_uninstall_for_test());  // nothing was installed: a no-op that succeeds
+  // And a normal install straight after the failed ones works (no stale module or handle state).
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  if (sdlfe::crash_report_dump_prerequisites_present()) EXPECT(sdlfe::crash_report_dump_worker_ready());
+  EXPECT(sdlfe::crash_report_uninstall_for_test());
+}
+
+TEST(crash_report_install_starts_dump_worker_without_crashing) {
+  const auto previous_filter = SetUnhandledExceptionFilter(nullptr);
+  SetUnhandledExceptionFilter(previous_filter);
+  const auto previous_abort = std::signal(SIGABRT, SIG_DFL);
+  std::signal(SIGABRT, previous_abort);
+  const auto previous_terminate = std::get_terminate();
+  // Repeat to catch stale stop events, handles and handler snapshots after teardown.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+    ULONG stack_guarantee = 0;  // zero queries the current thread's guarantee
+    EXPECT(SetThreadStackGuarantee(&stack_guarantee) != 0);
+    EXPECT(stack_guarantee >= 64 * 1024);
+    // Retain the prerequisite assertion; a missing API must not prevent diagnostics on the worker.
+    if (sdlfe::crash_report_dump_prerequisites_present())
+      EXPECT(sdlfe::crash_report_dump_worker_ready());
+    EXPECT(sdlfe::crash_report_uninstall_for_test());
+    EXPECT(!sdlfe::crash_report_dump_worker_ready());
+    EXPECT(SetUnhandledExceptionFilter(previous_filter) == previous_filter);
+    EXPECT(std::signal(SIGABRT, previous_abort) == previous_abort);
+    EXPECT(std::get_terminate() == previous_terminate);
+  }
+}
+#endif
 
 // The Upgrades page's settings (ours, upgrades/settings; docs/upgrades-sort.md):
 // mw3.cfg's five keys, 1.0.x's bugfixes= read once as all five and replaced by

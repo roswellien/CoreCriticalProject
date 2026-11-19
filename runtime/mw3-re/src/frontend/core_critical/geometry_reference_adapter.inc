@@ -83,6 +83,7 @@ void emit_reference_geometry(
     draw.push.mode[3] = 0x80000000U;
     draw.scissor = producer_scissor();
     auto normals = std::make_shared<std::vector<std::array<float, 3>>>();
+    auto raw_fog = std::make_shared<std::vector<std::array<float, 4>>>();
     for (std::uint32_t triangle = range.first;
          triangle < range.first + range.count; triangle += 3) {
       std::vector<cc::geometry::ReferenceVertex> clipped{
@@ -116,12 +117,16 @@ void emit_reference_geometry(
           scene_.vertices.insert(scene_.vertices.end(), bytes,
                                  bytes + sizeof tl);
           normals->push_back(vertex.normal);
+          raw_fog->push_back({vertex.fog[0], vertex.fog[1], vertex.fog[2], 1.f});
         }
         ++cpu_clipped_triangles_;
       }
     }
     draw.count = unsigned(normals->size());
     draw.lit_normals = std::move(normals);
+    // Every append above uses project == true (this is the CPU-clipped branch), so no vertex can
+    // skip its raw fog entry: raw_fog.size() always equals the draw's count.
+    draw.raw_fog = std::move(raw_fog);
     if (draw.count) {
       if (native_fixture_source)
         apply_fixture_observation(draw, capture_fixture_range(resource, context, range,

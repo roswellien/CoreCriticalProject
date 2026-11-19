@@ -253,7 +253,11 @@ bool valid_menu_inputs(const MenuBackgroundImage& image, const zimg::Texture* so
                        const std::vector<zrndr::MenuBackgroundBlit>& blits,
                        const uint16_t* pixels, int width, int height, int pitch,
                        unsigned output_width, unsigned output_height) {
-    return pixels && source && !source->palette && !source->alpha && source->pixels &&
+    // Empty blits are checked before the source is read: after a menu closes, the registered
+    // source pointer can be stale (#375), and an empty blit list is the signal that no menu
+    // background is live, so nothing may dereference the source in that case.
+    return !blits.empty() && pixels && source && !source->palette && !source->alpha &&
+           source->pixels &&
            image.width && image.height && image.source_width && image.source_height &&
            std::max({image.width, image.height, image.source_width, image.source_height}) <=
                16384 &&
@@ -264,7 +268,7 @@ bool valid_menu_inputs(const MenuBackgroundImage& image, const zimg::Texture* so
            source->width_again >= source->width && width > 0 && height > 0 &&
            pitch >= int64_t(width) * 2 && pitch % 2 == 0 &&
            uint64_t(width) * height <= 16ull * 1024 * 1024 && output_width && output_height &&
-           uint64_t(output_width) * output_height <= 16ull * 1024 * 1024 && !blits.empty();
+           uint64_t(output_width) * output_height <= 16ull * 1024 * 1024;
 }
 }  // namespace
 

@@ -931,6 +931,24 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
             "Distinct geometries were not charged separately");
     require(shared_many.total >= shared_many.geometry + shared_many.lit_normals,
             "The packet total is smaller than its named terms");
+    // A raw-fog stream shared by many draws is charged once, and the checked total includes it
+    // (staging admission and render-worker queue charging use that total).
+    const auto raw_fog = std::make_shared<const std::vector<std::array<float, 4>>>(64);
+    const auto fog_scene = [&](std::size_t draws, bool with_fog) {
+      mw34::vkscene::Scene scene;
+      scene.draws.resize(draws);
+      if (with_fog)
+        for (auto &draw : scene.draws)
+          draw.raw_fog = raw_fog;
+      return cc_mw3_re::testing::packet_byte_breakdown(scene);
+    };
+    const auto no_fog = fog_scene(2, false);
+    const auto shared_fog = fog_scene(2, true);
+    const auto one_fog = fog_scene(1, true);
+    require(no_fog.raw_fog == 0 && shared_fog.raw_fog > 0 && shared_fog.raw_fog == one_fog.raw_fog,
+            "A shared raw-fog stream was not charged exactly once");
+    require(shared_fog.total == no_fog.total + shared_fog.raw_fog,
+            "The packet total left out the raw-fog bytes");
   }
   // Local-light packet staging only runs while effect lights are enabled with a catalog and a
   // valid world projection, so set up the same minimal environment as check_local_light_gpu.
