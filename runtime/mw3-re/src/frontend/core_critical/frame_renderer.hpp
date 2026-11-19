@@ -10,6 +10,10 @@
 #include "renderer/renderer_bridge_config.hpp"
 #include "producer_view_test_hook.hpp"
 
+namespace mw34::vkscene {
+struct Scene;
+}
+
 namespace cc_mw3_re {
 
 struct QualityStatistics {
@@ -80,6 +84,12 @@ struct StagingTestState {
   std::size_t recycled_scenes{}, retained_scene_bytes{};
 };
 StagingTestState staging_state(VulkanFrameRenderer &renderer);
+
+// The geometry and lit-normal terms and the checked total of one packet's byte count.
+struct PacketByteBreakdown {
+  std::size_t geometry{}, lit_normals{}, total{};
+};
+PacketByteBreakdown packet_byte_breakdown(const mw34::vkscene::Scene &scene);
 
 // Exercise the real retained-packet rejection path without allocating a full
 // production allowance. Normal frontend construction always uses the native cap.
