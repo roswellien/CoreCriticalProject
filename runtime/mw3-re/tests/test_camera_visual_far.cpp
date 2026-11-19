@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -588,4 +589,80 @@ TEST(view_distance_log_floats_tolerate_animation_and_nan) {
   EXPECT(g_visual_far_log_lines.size() == 3);
 
   zmod::fog() = old_fog;
+}
+
+TEST(view_distance_selected_cell_reports_stationary_yaw_transition) {
+  CameraFixture fixture;
+  VisualFarLogSinkGuard sink;
+  struct RestoreSelector {
+    ~RestoreSelector() { zcls::set_world_cell_trace(std::getenv("MW3_TRACE_WORLD_CELL")); }
+  } restore_selector;
+  CameraFrame frame = {800, {0.0f, 20.0f, 0.0f}, 0.0f, 0.0f, 1.6f, 0.8f};
+  fixture.frame = &frame;
+  // A five-by-five grid with negative Z running forward. The selected cell's
+  // small elevated bound is beyond the centre far plane but inside it after yaw.
+  auto& world = fixture.world;
+  world.put<int32_t>(0x50, 1);
+  world.put<int32_t>(0x54, 5);
+  world.put<int32_t>(0x58, 5);
+  world.put<float>(0x34, -1000.0f);
+  world.put<float>(0x38, 1000.0f);
+  world.put<float>(0x64, 400.0f);
+  world.put<float>(0x68, -400.0f);
+  world.put<float>(0x6c, 200.0f);
+  world.put<float>(0x70, -200.0f);
+  world.put<float>(0x74, 1.0f / 400.0f);
+  world.put<float>(0x78, -1.0f / 400.0f);
+  world.put<float>(0x7c, -283.0f);
+  world.put<int32_t>(0x88, 5);
+  world.put<int32_t>(0x8c, 5);
+  for (int z = 0; z < 5; ++z) {
+    for (int x = 0; x < 5; ++x) {
+      auto& p = fixture.partitions[z * 5 + x];
+      p.put<uint32_t>(4, 1);
+      p.put<float>(8, -1000.0f + 400.0f * x);
+      p.put<float>(0xc, 1000.0f - 400.0f * z);
+    }
+  }
+  auto& watched = fixture.partitions[4 * 5 + 2];
+  watched.put<uint32_t>(0, 0x100);
+  watched.put<float>(0x2c, 20.0f);
+  watched.put<float>(0x30, -850.0f);
+  watched.put<float>(0x34, 6.0f);
+  zcls::set_visual_far_request(800);
+  EXPECT(zcls::camera_set_position(&fixture.camera_node, 0, 20, 0) == 0);
+  EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node, 1.6f, 0.8f) == 0);
+  auto render_at = [&](float yaw) {
+    frame.yaw = yaw;
+    EXPECT(zcls::camera_set_rotation(&fixture.camera_node, 0, yaw, 0) == 0);
+    EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    for (const auto& ring : zcls::scene_walk().rings) {
+      for (int i = 0; i < ring.count; ++i) {
+        const auto& cell = ring.cell[i];
+        if (cell.x == 2 && cell.z == 4 && !cell.wrapped) return true;
+      }
+    }
+    return false;
+  };
+  auto count_lines = [&](const char* text) {
+    return std::count_if(g_visual_far_log_lines.begin(), g_visual_far_log_lines.end(),
+        [&](const std::string& line) { return line.find(text) != std::string::npos; });
+  };
+  zcls::set_world_cell_trace("2,4junk");
+  EXPECT(!render_at(0));
+  EXPECT(count_lines("mw3: world cell") == 0);
+  zcls::set_world_cell_trace("2,4");
+  EXPECT(!render_at(0));
+  EXPECT(!render_at(0));
+  EXPECT(count_lines("world cell (2,4) sphere plane=0x20") == 1);
+  EXPECT(count_lines("depth=850.00") == 1);
+  EXPECT(render_at(0.65f));
+  EXPECT(count_lines("world cell (2,4) selected") == 1);
+  {
+    zcls::ScopedZoomVisualFar zoom_scope(&fixture.camera);
+    EXPECT(!render_at(0));
+  }
+  EXPECT(count_lines("mw3: world cell") == 2);
+  EXPECT(!render_at(3.0f));
+  EXPECT(count_lines("world cell (2,4) outside-enumeration") == 1);
 }
