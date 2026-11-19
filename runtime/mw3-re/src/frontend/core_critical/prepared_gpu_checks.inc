@@ -896,6 +896,42 @@ void check_gpu_prepared(SDL_Window *window, sdlfe::RendererBackend backend) {
 // (check_local_light_gpu only runs in the default variant). Defined after the producer-view
 // checks because it observes the worker packets.
 void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backend) {
+  // Per-packet byte accounting: a shared geometry / lit-normal allocation is charged once, however
+  // many draws use it, and K distinct allocations are charged K times; the total is the checked sum
+  // of the named terms. Counting per draw (the previous behaviour) fails the one-copy check.
+  {
+    const auto make_instance = [](std::size_t vertices, std::size_t indices) {
+      auto geometry = std::make_shared<mw34::vkscene::ModelGeometry>();
+      geometry->vertices.resize(vertices);
+      geometry->indices.resize(indices);
+      auto instance = std::make_shared<mw34::vkscene::ModelInstance>();
+      instance->geometry = geometry;
+      return instance;
+    };
+    const auto normals = std::make_shared<const std::vector<std::array<float, 3>>>(64);
+    const auto one_scene = [&](std::size_t draws, std::size_t distinct) {
+      mw34::vkscene::Scene scene;
+      std::vector<std::shared_ptr<mw34::vkscene::ModelInstance>> instances;
+      for (std::size_t index = 0; index < distinct; ++index)
+        instances.push_back(make_instance(100, 300));
+      scene.draws.resize(draws);
+      for (std::size_t draw = 0; draw < draws; ++draw) {
+        scene.draws[draw].model = instances[draw % distinct];
+        scene.draws[draw].lit_normals = normals;
+      }
+      return cc_mw3_re::testing::packet_byte_breakdown(scene);
+    };
+    const auto single = one_scene(1, 1);
+    const auto shared_many = one_scene(50, 1);
+    const auto three = one_scene(50, 3);
+    require(single.geometry > 0 && single.lit_normals > 0, "Breakdown fixture counted no bytes");
+    require(shared_many.geometry == single.geometry && shared_many.lit_normals == single.lit_normals,
+            "A shared geometry or lit-normal allocation was charged once per draw");
+    require(three.geometry == 3 * single.geometry && three.lit_normals == single.lit_normals,
+            "Distinct geometries were not charged separately");
+    require(shared_many.total >= shared_many.geometry + shared_many.lit_normals,
+            "The packet total is smaller than its named terms");
+  }
   // Local-light packet staging only runs while effect lights are enabled with a catalog and a
   // valid world projection, so set up the same minimal environment as check_local_light_gpu.
   const auto old_projection = zmth::projection();
