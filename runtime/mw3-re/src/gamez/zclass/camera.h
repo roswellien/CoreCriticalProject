@@ -150,4 +150,8 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw,
 int camera_draw_flares(Camera* camera, int32_t from);
 int render_world(Node* camera_node, int32_t after);  // 0x004f7030 ECX camera node, EDX
 
+// Reconfigure the optional MW3_TRACE_WORLD_CELL=x,z diagnostic (game thread).
+// A null or malformed selector disables it.
+void set_world_cell_trace(const char* selector);
+
 }  // namespace zcls

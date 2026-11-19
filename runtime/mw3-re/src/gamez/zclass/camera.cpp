@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cfenv>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -9,6 +11,8 @@
 #include <cstring>
 #include <new>
 #include <optional>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 #pragma STDC FP_CONTRACT OFF
@@ -48,6 +52,31 @@ const void* g_visual_camera = nullptr;
 float g_visual_far = 0.0f;
 const void* g_zoom_visual_camera = nullptr;
 zcls::VisualFarLogSink g_visual_far_log_sink = nullptr;
+
+struct WorldCellTrace {
+  int32_t x{}, z{};
+  bool enabled{};
+  const World* last_world{};
+  std::string_view last_decision;
+  uint32_t last_plane{};
+  unsigned lines{};
+};
+
+WorldCellTrace parse_world_cell(const char* selector) {
+  WorldCellTrace trace;
+  if (!selector) return trace;
+  const char* end = selector + std::strlen(selector);
+  const auto x = std::from_chars(selector, end, trace.x);
+  if (x.ec != std::errc{} || x.ptr == end || *x.ptr != ',') return trace;
+  const auto z = std::from_chars(x.ptr + 1, end, trace.z);
+  trace.enabled = z.ec == std::errc{} && z.ptr == end;
+  return trace;
+}
+
+WorldCellTrace& world_cell_trace() {
+  static WorldCellTrace trace = parse_world_cell(std::getenv("MW3_TRACE_WORLD_CELL"));
+  return trace;
+}
 
 struct VisualFarLogState {
   unsigned requested_far;
@@ -814,20 +843,74 @@ void footprint(Camera* cam, int line, float* min_x, float* max_x, float* min_z, 
   *max_z = mz;
 }
 
-void add_cell(int32_t ring, int32_t x, int32_t z, int32_t wrapped, float dx, float dz, uint32_t mask,
+bool add_cell(int32_t ring, int32_t x, int32_t z, int32_t wrapped, float dx, float dz, uint32_t mask,
               int line_rings, int line_cells) {
-  if (ring >= kTilerRingCapacity)
-    return fill_rect_error(line_rings, "Error: Diamond tiler ring capacity exceeded.");
+  if (ring >= kTilerRingCapacity) {
+    fill_rect_error(line_rings, "Error: Diamond tiler ring capacity exceeded.");
+    return false;
+  }
   ScreenRing& r = g_walk.rings[ring];
-  if (r.count >= kTilerCellsPerRing)
-    return fill_rect_error(line_cells, "Error: Diamond tiler cell capacity exceeded.");
+  if (r.count >= kTilerCellsPerRing) {
+    fill_rect_error(line_cells, "Error: Diamond tiler cell capacity exceeded.");
+    return false;
+  }
   ScreenRing::Cell& c = r.cell[r.count++];
   c.x = x, c.z = z, c.mask = mask, c.wrapped = wrapped;
   if (wrapped) c.dx = dx, c.dz = dz;
+  return true;
+}
+
+void log_cell_decision(WorldCellTrace& trace, const World* world, Camera* camera,
+                       const int32_t rect[4], const char* decision, uint32_t plane,
+                       const Partition* partition = nullptr, int32_t px = 0, int32_t pz = 0,
+                       float dx = 0, float dz = 0) {
+  if (trace.lines >= 256 || (trace.last_world == world && trace.last_decision == decision &&
+                             trace.last_plane == plane)) return;
+  // Diagnostic math and float-to-text conversions must preserve the scene walk's FP state.
+  std::fenv_t saved;
+  if (std::feholdexcept(&saved) != 0) return;
+  const float* eye = camera->floats(0x2c);
+  char details[320] = "";
+  if (partition) {
+    const bool bounded = (partition->get<uint32_t>(0) & 0x100) != 0;
+    const float x = dx + (bounded ? partition->get<float>(0x28)
+                                   : world->get<float>(0x6c) + partition->get<float>(8));
+    const float y = bounded ? partition->get<float>(0x2c) : 0.0f;
+    const float z = dz + (bounded ? partition->get<float>(0x30)
+                                   : world->get<float>(0x70) + partition->get<float>(0xc));
+    const float radius = bounded ? partition->get<float>(0x34) : -world->get<float>(0x7c);
+    const float* forward = camera->floats(0x74);
+    const float depth = (x - eye[0]) * forward[0] + (y - eye[1]) * forward[1] +
+                        (z - eye[2]) * forward[2];
+    std::snprintf(details, sizeof details,
+                  " grid=(%d,%d) offset=(%.2f,%.2f) centre=(%.2f,%.2f,%.2f)"
+                  " radius=%.2f depth=%.2f",
+                  px, pz, dx, dz, x, y, z, radius, depth);
+  }
+  char line[640];
+  const int n = std::snprintf(line, sizeof line,
+      "mw3: world cell (%d,%d) %s plane=0x%x rect=(%d,%d)..(%d,%d)"
+      " eye=(%.2f,%.2f,%.2f) yaw_rad=%.5f far=%.2f%s\n",
+      trace.x, trace.z, decision, plane, rect[0], rect[1], rect[2], rect[3],
+      eye[0], eye[1], eye[2], camera->get<float>(0x3c),
+      visual_far_for_render(camera, camera->get<float>(0xb4)), details);
+  if (n >= 0 && static_cast<std::size_t>(n) < sizeof line) {
+    if (g_visual_far_log_sink) g_visual_far_log_sink(line);
+    else std::printf("%s", line);
+    trace.last_world = world;
+    trace.last_decision = decision;
+    trace.last_plane = plane;
+    ++trace.lines;
+  }
+  std::fesetenv(&saved);
 }
 
 Partition& cell_at(World* w, int32_t x, int32_t z) { return w->rows[z][x]; }
 }  // namespace
+
+void set_world_cell_trace(const char* selector) {
+  world_cell_trace() = parse_world_cell(selector);
+}
 
 void SceneWalk::reset() {
   // SceneWalk is too large for a stack temporary; reconstruct it in place.
@@ -1286,29 +1369,59 @@ int pick_cells_virtual(Node* world, Camera* cam) {
   world_cell_wrapped(world, &x1, max_x, max_z, &z1, &c, &e, &inside);
   if (z0 > z1) std::swap(z0, z1);  // (the exe also swaps the unused wrapped rows)
   const uint32_t cam_mask = cell_at(w, wx, wz).get<uint32_t>(4);
-  for (int32_t x = x0; x <= x1; ++x) {
-    for (int32_t z = z0; z <= z1; ++z) {
-      int32_t px, pz;
-      world_wrap_cell(world, x, z, &px, &pz, &inside);
-      const int32_t wrapped = inside == 0;
-      float dx = 0.0f, dz = 0.0f;
-      if (wrapped) {
-        dx = static_cast<float>(x - px) * w->get<float>(0x64);
-        dz = static_cast<float>(z - pz) * w->get<float>(0x68);
+  WorldCellTrace& trace = world_cell_trace();
+  const int32_t rect[] = {x0, z0, x1, z1};
+  // Compile out the selected-cell observer in the normal per-cell loop.
+  auto pick = [&](auto tracing) {
+    for (int32_t x = x0; x <= x1; ++x) {
+      for (int32_t z = z0; z <= z1; ++z) {
+        int32_t px, pz;
+        world_wrap_cell(world, x, z, &px, &pz, &inside);
+        const int32_t wrapped = inside == 0;
+        float dx = 0.0f, dz = 0.0f;
+        if (wrapped) {
+          dx = static_cast<float>(x - px) * w->get<float>(0x64);
+          dz = static_cast<float>(z - pz) * w->get<float>(0x68);
+        }
+        Partition& p = cell_at(w, px, pz);
+        auto record = [&](const char* decision, uint32_t plane = 0) {
+          if constexpr (decltype(tracing)::value) {
+            if (trace.x == x && trace.z == z)
+              log_cell_decision(trace, w, cam, rect, decision, plane, &p, px, pz, dx, dz);
+          }
+        };
+        if (!(p.get<uint32_t>(4) & cam_mask)) {
+          record("partition-mask");
+          continue;
+        }
+        const float pt[3] = {(p.get<float>(8) + w->get<float>(0x6c)) + dx, 0.0f,
+                             (p.get<float>(0xc) + w->get<float>(0x70)) + dz};
+        if (!zmod::inside_view_polygon(pt, w->get<float>(0x7c))) {
+          record("footprint");
+          continue;
+        }
+        uint32_t mask = 0x3f;
+        uint32_t r = 0;
+        if (!wrapped)
+          r = (p.get<uint32_t>(0) & 0x100) ? zmod::cull_sphere(p.floats(0x28), &mask, p.get<float>(0x34))
+                                           : zmod::cull_sphere(pt, &mask, -w->get<float>(0x7c));
+        if (r) {
+          record("sphere", r);
+          continue;
+        }
+        const bool added = add_cell(std::abs(z - cz) + std::abs(x - cx), px, pz, wrapped, dx, dz, mask, 0x1459, 0x1453);
+        record(added ? "selected" : "capacity");
       }
-      Partition& p = cell_at(w, px, pz);
-      if (!(p.get<uint32_t>(4) & cam_mask)) continue;
-      const float pt[3] = {(p.get<float>(8) + w->get<float>(0x6c)) + dx, 0.0f,
-                           (p.get<float>(0xc) + w->get<float>(0x70)) + dz};
-      if (!zmod::inside_view_polygon(pt, w->get<float>(0x7c))) continue;
-      uint32_t mask = 0x3f;
-      uint32_t r = 0;
-      if (!wrapped)
-        r = (p.get<uint32_t>(0) & 0x100) ? zmod::cull_sphere(p.floats(0x28), &mask, p.get<float>(0x34))
-                                         : zmod::cull_sphere(pt, &mask, -w->get<float>(0x7c));
-      if (r) continue;
-      add_cell(std::abs(z - cz) + std::abs(x - cx), px, pz, wrapped, dx, dz, mask, 0x1459, 0x1453);
     }
+  };
+  int32_t width = 0, height = 0;
+  if (trace.enabled && cam != g_zoom_visual_camera &&
+      full_display_viewport(cam->nodes[1], &width, &height)) {
+    if (trace.x < x0 || trace.x > x1 || trace.z < z0 || trace.z > z1)
+      log_cell_decision(trace, w, cam, rect, "outside-enumeration", 0);
+    pick(std::true_type{});
+  } else {
+    pick(std::false_type{});
   }
   zmth::pop();
   int32_t used_rings = 0;
