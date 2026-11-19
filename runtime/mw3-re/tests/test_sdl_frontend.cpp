@@ -237,6 +237,28 @@ TEST(crash_report_wait_observes_dead_worker_and_prefers_completion) {
   if (completion) CloseHandle(completion);
 }
 
+// A non-exception request (abort, terminate) after an earlier SEH capture, uninstall and reinstall
+// must not report the earlier capture's exception record or context.
+TEST(crash_report_capture_pointers_do_not_survive_reinstall) {
+  EXCEPTION_RECORD record{};
+  record.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+  CONTEXT context{};
+  EXCEPTION_POINTERS seh{&record, &context};
+  bool has_record = false, has_context = false;
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  EXPECT(sdlfe::crash_report_store_capture_for_test(&seh, &has_record, &has_context));
+  EXPECT(has_record && has_context);
+  EXPECT(sdlfe::crash_report_uninstall_for_test());
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  EXPECT(sdlfe::crash_report_store_capture_for_test(nullptr, &has_record, &has_context));
+  EXPECT(!has_record && !has_context);
+  // A second non-exception request straight after an SEH one, without a reinstall, is clean too.
+  EXPECT(sdlfe::crash_report_store_capture_for_test(&seh, &has_record, &has_context));
+  EXPECT(sdlfe::crash_report_store_capture_for_test(nullptr, &has_record, &has_context));
+  EXPECT(!has_record && !has_context);
+  EXPECT(sdlfe::crash_report_uninstall_for_test());
+}
+
 TEST(crash_report_install_starts_dump_worker_without_crashing) {
   const auto previous_filter = SetUnhandledExceptionFilter(nullptr);
   SetUnhandledExceptionFilter(previous_filter);

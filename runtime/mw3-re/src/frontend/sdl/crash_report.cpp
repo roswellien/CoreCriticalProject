@@ -341,6 +341,22 @@ void report_exception() {
   }
 }
 
+// Fills the preallocated capture. Both pointers are cleared first: an abort or terminate request
+// carries no exception, and must not report an earlier capture's record or context.
+void store_capture(const EXCEPTION_POINTERS* exception, CrashReportCause cause) {
+  g_report_cause = cause;
+  g_dump_exception_pointers = {};
+  if (exception && exception->ExceptionRecord) {
+    g_dump_exception_record = *exception->ExceptionRecord;
+    g_dump_exception_record.ExceptionRecord = nullptr;
+    g_dump_exception_pointers.ExceptionRecord = &g_dump_exception_record;
+  }
+  if (exception && exception->ContextRecord) {
+    g_dump_context = *exception->ContextRecord;
+    g_dump_exception_pointers.ContextRecord = &g_dump_context;
+  }
+}
+
 void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause) {
   const DWORD thread_id = GetCurrentThreadId();
   const CrashReportEntry entry = crash_report_try_enter(
@@ -350,16 +366,7 @@ void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause)
     // Only the winning thread writes this preallocated capture. The request event publishes it
     // to the worker. Completion starts unsignalled at install and is never reset by a crash:
     // another failing thread can safely start waiting even before the capture is published.
-    g_report_cause = cause;
-    if (exception && exception->ExceptionRecord) {
-      g_dump_exception_record = *exception->ExceptionRecord;
-      g_dump_exception_record.ExceptionRecord = nullptr;
-      g_dump_exception_pointers.ExceptionRecord = &g_dump_exception_record;
-    }
-    if (exception && exception->ContextRecord) {
-      g_dump_context = *exception->ContextRecord;
-      g_dump_exception_pointers.ContextRecord = &g_dump_context;
-    }
+    store_capture(exception, cause);
     g_dump_faulting_thread_id = thread_id;
     if (!SetEvent(g_dump_request_event)) {
       SetEvent(g_dump_complete_event);
@@ -491,6 +498,15 @@ bool crash_report_dump_worker_ready() {
 }
 
 #if defined(_WIN32)
+bool crash_report_store_capture_for_test(const EXCEPTION_POINTERS* exception, bool* has_record,
+                                         bool* has_context) {
+  if (!g_installed || !has_record || !has_context) return false;
+  store_capture(exception, exception ? CrashReportCause::exception : CrashReportCause::aborted);
+  *has_record = g_dump_exception_pointers.ExceptionRecord != nullptr;
+  *has_context = g_dump_exception_pointers.ContextRecord != nullptr;
+  return true;
+}
+
 bool crash_report_uninstall_for_test() {
   if (!g_installed) return true;
   if (GetCurrentThreadId() != g_installing_thread_id || g_exception_in_progress.load())
@@ -524,6 +540,8 @@ bool crash_report_uninstall_for_test() {
   g_dump_worker_available = false;
   g_dump_worker_stopping.store(false);
   g_dump_exception_pointers = {};
+  g_dump_exception_record = {};
+  g_dump_context = {};
   // Per-crash state: a later install starts from a clean guard.
   g_exception_in_progress.store(false);
   g_installed = false;

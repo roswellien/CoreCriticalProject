@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <string>
 
+#if defined(_WIN32)
+struct _EXCEPTION_POINTERS;  // global scope: the Windows type, not a new one in sdlfe
+#endif
 namespace sdlfe {
 
 // Helpers shared with the crash-report tests.
@@ -26,6 +29,10 @@ bool crash_report_sibling_path(const char* log, const char* name, char* output, 
 bool crash_report_dump_prerequisites_present();
 bool crash_report_dump_worker_ready();
 #if defined(_WIN32)
+// Tests only: fills the capture as a crash request would (null exception = abort or terminate)
+// and reports whether it now points at an exception record and a context. False when not installed.
+bool crash_report_store_capture_for_test(const struct _EXCEPTION_POINTERS* exception,
+                                         bool* has_record, bool* has_context);
 // Tests only: call on the installing thread with no crash handlers running. Restores handlers,
 // joins the idle worker and closes its resources. False leaves resources intact if joining fails.
 bool crash_report_uninstall_for_test();
