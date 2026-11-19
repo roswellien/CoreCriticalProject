@@ -12,6 +12,10 @@ bool crash_report_address_rva(uintptr_t module_base, size_t image_size, uintptr_
                               uintptr_t* rva);
 size_t crash_report_format_rva(char* output, size_t capacity, bool inside_image, uintptr_t rva);
 
+enum class CrashReportWaitOutcome { completed, timed_out, failed };
+CrashReportWaitOutcome crash_report_classify_wait_result(uint32_t wait_result);
+bool crash_report_dump_worker_ready();
+
 // The handlers for a crash and for an uncaught exception. `log` is named in
 // the box; with `box` false only the log says it (hidden runs do not install
 // this at all; MW3_LAUNCHER_WATCHES: the launcher shows the box, see

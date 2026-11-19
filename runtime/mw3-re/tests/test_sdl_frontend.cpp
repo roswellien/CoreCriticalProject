@@ -128,6 +128,22 @@ TEST(crash_report_rva_format_identifies_outside_addresses) {
   EXPECT(std::strcmp(text, "outside mw3.exe image") == 0);
 }
 
+TEST(crash_report_wait_result_classifies_completion_timeout_and_failure) {
+  EXPECT(sdlfe::crash_report_classify_wait_result(0) ==
+         sdlfe::CrashReportWaitOutcome::completed);
+  EXPECT(sdlfe::crash_report_classify_wait_result(258) ==
+         sdlfe::CrashReportWaitOutcome::timed_out);
+  EXPECT(sdlfe::crash_report_classify_wait_result(0xffffffffu) ==
+         sdlfe::CrashReportWaitOutcome::failed);
+}
+
+#if defined(_WIN32)
+TEST(crash_report_install_starts_dump_worker_without_crashing) {
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  EXPECT(sdlfe::crash_report_dump_worker_ready());
+}
+#endif
+
 // The Upgrades page's settings (ours, upgrades/settings; docs/upgrades-sort.md):
 // mw3.cfg's five keys, 1.0.x's bugfixes= read once as all five and replaced by
 // them, --original all five off with nothing saved and the always-on fixes

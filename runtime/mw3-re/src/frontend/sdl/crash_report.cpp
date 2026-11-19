@@ -52,6 +52,12 @@ size_t crash_report_format_rva(char* output, size_t capacity, bool inside_image,
   return length > 0 ? static_cast<size_t>(length) : 0;
 }
 
+CrashReportWaitOutcome crash_report_classify_wait_result(uint32_t wait_result) {
+  if (wait_result == 0) return CrashReportWaitOutcome::completed;
+  if (wait_result == 258) return CrashReportWaitOutcome::timed_out;
+  return CrashReportWaitOutcome::failed;
+}
+
 namespace {
 
 char g_program[64] = "mw3";
@@ -64,6 +70,14 @@ char g_crash_reason[32];
 char g_rva_text[64];
 volatile LONG g_exception_in_progress = 0;
 HANDLE g_stderr_handle = INVALID_HANDLE_VALUE;
+HANDLE g_dump_request_event = nullptr;
+HANDLE g_dump_complete_event = nullptr;
+HANDLE g_dump_worker_thread = nullptr;
+bool g_dump_worker_available = false;
+EXCEPTION_RECORD g_dump_exception_record{};
+CONTEXT g_dump_context{};
+EXCEPTION_POINTERS g_dump_exception_pointers{};
+DWORD g_dump_faulting_thread_id = 0;
 // Keep dbghelp loaded for the process lifetime so the exception handler never
 // calls LoadLibrary or FreeLibrary while the loader lock may be held.
 HMODULE g_dbghelp = nullptr;
@@ -74,6 +88,57 @@ using MiniDumpWriteDumpFunction = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_
 MiniDumpWriteDumpFunction g_write_dump = nullptr;
 uintptr_t g_module_base = 0;
 size_t g_module_image_size = 0;
+
+void crash_log(const char* format, ...);
+void dump_worker_log(const char* format, ...);
+
+DWORD WINAPI dump_worker(void*) {
+  for (;;) {
+    if (WaitForSingleObject(g_dump_request_event, INFINITE) != WAIT_OBJECT_0) return 1;
+    if (!g_write_dump) continue;
+
+    HANDLE file = CreateFileA(g_dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+      dump_worker_log("%s: could not create minidump: %s\n", g_program, g_dump_path);
+      SetEvent(g_dump_complete_event);
+      continue;
+    }
+    MINIDUMP_EXCEPTION_INFORMATION exception_info{};
+    exception_info.ThreadId = g_dump_faulting_thread_id;
+    exception_info.ExceptionPointers = &g_dump_exception_pointers;
+    exception_info.ClientPointers = FALSE;
+    if (g_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal,
+                     &exception_info, nullptr, nullptr))
+      dump_worker_log("%s: minidump: %s\n", g_program, g_dump_path);
+    else
+      dump_worker_log("%s: minidump failed: %s\n", g_program, g_dump_path);
+    CloseHandle(file);
+    SetEvent(g_dump_complete_event);
+  }
+}
+
+void start_dump_worker() {
+  g_dump_request_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+  g_dump_complete_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  if (g_dump_request_event && g_dump_complete_event)
+    g_dump_worker_thread = CreateThread(nullptr, 256 * 1024, dump_worker, nullptr,
+                                        STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+  if (g_dump_worker_thread) {
+    g_dump_worker_available = true;
+    return;
+  }
+  if (g_dump_request_event) {
+    CloseHandle(g_dump_request_event);
+    g_dump_request_event = nullptr;
+  }
+  if (g_dump_complete_event) {
+    CloseHandle(g_dump_complete_event);
+    g_dump_complete_event = nullptr;
+  }
+  g_write_dump = nullptr;
+  crash_log("%s: minidump worker unavailable; dump disabled\n", g_program);
+}
 
 void crash_log(const char* format, ...) {
   va_list arguments;
@@ -89,6 +154,20 @@ void crash_log(const char* format, ...) {
                                         : sizeof g_crash_line - 1),
                  &written, nullptr))
     return;
+}
+
+void dump_worker_log(const char* format, ...) {
+  char line[512];
+  va_list arguments;
+  va_start(arguments, format);
+  const int length = std::vsnprintf(line, sizeof line, format, arguments);
+  va_end(arguments);
+  if (length <= 0 || g_stderr_handle == nullptr || g_stderr_handle == INVALID_HANDLE_VALUE)
+    return;
+  DWORD written = 0;
+  WriteFile(g_stderr_handle, line,
+            static_cast<DWORD>(length < static_cast<int>(sizeof line) ? length : sizeof line - 1),
+            &written, nullptr);
 }
 
 char g_log[1024] = "";
@@ -178,25 +257,29 @@ LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
     if (directory_length + sizeof("crash.dmp") <= sizeof g_dump_path) {
       std::memcpy(g_dump_path + directory_length, "crash.dmp", sizeof("crash.dmp"));
       crash_log("%s: minidump path: %s\n", g_program, g_dump_path);
-      if (g_write_dump) {
-        HANDLE file = CreateFileA(g_dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                  FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file != INVALID_HANDLE_VALUE) {
-          MINIDUMP_EXCEPTION_INFORMATION exception_info{};
-          exception_info.ThreadId = GetCurrentThreadId();
-          exception_info.ExceptionPointers = e;
-          exception_info.ClientPointers = FALSE;
-          if (g_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal,
-                           &exception_info, nullptr, nullptr))
-            crash_log("%s: minidump: %s\n", g_program, g_dump_path);
-          else
-            crash_log("%s: minidump failed: %s\n", g_program, g_dump_path);
-          CloseHandle(file);
+      if (g_dump_worker_available && e && e->ExceptionRecord) {
+        g_dump_exception_record = *e->ExceptionRecord;
+        g_dump_exception_record.ExceptionRecord = nullptr;
+        g_dump_exception_pointers.ExceptionRecord = &g_dump_exception_record;
+        if (e->ContextRecord) {
+          g_dump_context = *e->ContextRecord;
+          g_dump_exception_pointers.ContextRecord = &g_dump_context;
         } else {
-          crash_log("%s: could not create minidump: %s\n", g_program, g_dump_path);
+          g_dump_exception_pointers.ContextRecord = nullptr;
+        }
+        g_dump_faulting_thread_id = GetCurrentThreadId();
+        if (ResetEvent(g_dump_complete_event) && SetEvent(g_dump_request_event)) {
+          const DWORD wait_result = WaitForSingleObject(g_dump_complete_event, 5000);
+          const CrashReportWaitOutcome outcome = crash_report_classify_wait_result(wait_result);
+          if (outcome == CrashReportWaitOutcome::timed_out)
+            crash_log("%s: minidump worker timed out\n", g_program);
+          else if (outcome == CrashReportWaitOutcome::failed)
+            crash_log("%s: minidump worker wait failed\n", g_program);
+        } else {
+          crash_log("%s: could not signal minidump worker\n", g_program);
         }
       } else {
-        crash_log("%s: dbghelp unavailable for minidump\n", g_program);
+        crash_log("%s: minidump worker unavailable for minidump\n", g_program);
       }
     }
   } else {
@@ -283,6 +366,14 @@ void own_path() {
 
 }  // namespace
 
+bool crash_report_dump_worker_ready() {
+#if defined(_WIN32)
+  return g_dump_worker_available;
+#else
+  return false;
+#endif
+}
+
 void crash_report_install(const std::string& program, const std::string& log, bool box) {
   set_text(program, log);
   g_box = box && !std::getenv("MW3_LAUNCHER_WATCHES");
@@ -308,6 +399,8 @@ void crash_report_install(const std::string& program, const std::string& log, bo
     g_write_dump = reinterpret_cast<MiniDumpWriteDumpFunction>(
         GetProcAddress(g_dbghelp, "MiniDumpWriteDump"));
   }
+  if (g_write_dump) start_dump_worker();
+  else crash_log("%s: dbghelp unavailable for minidump\n", g_program);
   SetUnhandledExceptionFilter(on_exception);
   std::signal(SIGABRT, on_abort);
 #else
