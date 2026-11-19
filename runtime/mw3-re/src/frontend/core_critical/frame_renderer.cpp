@@ -665,7 +665,7 @@ public:
   }
   static testing::PacketByteBreakdown packet_byte_breakdown_for_test(const vk::Scene &scene) {
     const auto terms = packet_byte_terms(scene);
-    return {terms.geometry, terms.lit_normals, checked_packet_total(terms)};
+    return {terms.geometry, terms.lit_normals, terms.raw_fog, checked_packet_total(terms)};
   }
   testing::StagingTestState staging_state_for_test() {
     return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
@@ -1716,6 +1716,7 @@ private:
            (previous.sky_view->camera_world == draw.sky_view->camera_world &&
             previous.sky_view->projection == draw.sky_view->projection)) &&
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
+          bool(previous.raw_fog) == bool(draw.raw_fog) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
           previous.emission_index == draw.emission_index &&
@@ -1731,6 +1732,15 @@ private:
                                  draw.lit_normals->begin(),
                                  draw.lit_normals->end());
           previous.lit_normals = std::move(merged_normals);
+        }
+        // Raw fog is attached only to CPU-clipped prepared draws, which are pushed directly and
+        // never built here, so today this branch cannot see two raw-fog draws. Merge it exactly
+        // like the normals anyway: a merged draw whose raw_fog stayed short would throw
+        // "Clipped raw-fog range mismatch" at submit.
+        if (previous.raw_fog && draw.raw_fog) {
+          auto merged_fog = std::make_shared<std::vector<std::array<float, 4>>>(*previous.raw_fog);
+          merged_fog->insert(merged_fog->end(), draw.raw_fog->begin(), draw.raw_fog->end());
+          previous.raw_fog = std::move(merged_fog);
         }
         previous.count += drawn;
         observe_producer_draw(previous);

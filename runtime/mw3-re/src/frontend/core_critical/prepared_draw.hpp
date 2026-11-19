@@ -241,6 +241,7 @@ prepare_draw(const PreparedBatchDraw &source,
   }
   draw.scissor = {{0, 0}, {width, height}};
   auto normals = std::make_shared<std::vector<std::array<float, 3>>>();
+  auto raw_fog = std::make_shared<std::vector<std::array<float, 4>>>();
   const auto append = [&](const PreparedVertex &vertex, bool project) {
     const auto opacity = std::clamp(context.opacity, 0.f, 1.f);
     const auto alpha = std::uint32_t(std::lround(
@@ -258,6 +259,10 @@ prepare_draw(const PreparedBatchDraw &source,
     const auto packed_visibility = uint32_t(std::clamp(visibility * 255.f, 0.f, 255.f));
     ::platform::TLVertex tl{0, 0, 0, 1, color, packed_visibility << 24, vertex.u, vertex.v};
     if (project) {
+      if (scoped_fog)
+        raw_fog->push_back({vertex.fog[0], vertex.fog[1], vertex.fog[2], 1.f});
+      else
+        raw_fog->push_back({visibility, 0.f, 0.f, 2.f});
       tl.rhw = tl.sz = context.near_z / vertex.camera[2];
       tl.sx = ((context.fx_near * vertex.camera[0]) * tl.rhw + context.cx -
                viewport[0]) *
@@ -302,6 +307,8 @@ prepare_draw(const PreparedBatchDraw &source,
         ++result.clipped_triangles;
       }
     }
+    // Every vertex above was appended with project == true, so raw_fog.size() equals the count.
+    draw.raw_fog = std::move(raw_fog);
     if (lighting) {
       auto view = std::make_shared<mw34::sun::Tl>();
       view->camera_world = matrix_rows(mw34::donor::product(

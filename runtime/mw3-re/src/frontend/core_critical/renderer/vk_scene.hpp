@@ -175,6 +175,9 @@ struct Draw {
   // Camera-space smooth normals for CPU-clipped/deformed TL geometry.
   // Owned until submission; never retained as immutable model cache entries.
   std::shared_ptr<const std::vector<std::array<float, 3>>> lit_normals{};
+  // Parallel TL fog stream: xyz are unclamped factors when w == 1;
+  // x is unquantised legacy visibility when w == 2. Zero w uses packed alpha.
+  std::shared_ptr<const std::vector<std::array<float, 4>>> raw_fog{};
   unsigned char sky{};
   std::shared_ptr<const mw34::sun::Tl> sky_view{};
   std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
@@ -1429,6 +1432,21 @@ private:
 
     if (!s.vertices.empty())
       std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
+    const auto vertex_count = s.vertices.size() / 32;
+    ensure(fogBuffer, std::max<VkDeviceSize>(vertex_count * 16, 16),
+           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    // Zero only what this submission can fetch: ensure() keeps the largest allocation, so clearing
+    // fogBuffer.size would rewrite a past peak on every small HUD or clear-only frame.
+    std::memset(fogBuffer.mapped, 0, size_t(std::max<VkDeviceSize>(vertex_count * 16, 16)));
+    for (const auto &draw : s.draws) {
+      if (!draw.raw_fog)
+        continue;
+      if (draw.raw_fog->size() != draw.count || draw.first > vertex_count ||
+          draw.count > vertex_count - draw.first)
+        throw std::runtime_error("Clipped raw-fog range mismatch");
+      std::memcpy(static_cast<unsigned char *>(fogBuffer.mapped) + size_t(draw.first) * 16,
+                  draw.raw_fog->data(), size_t(draw.count) * 16);
+    }
     if (lighting_settings.enabled) {
       const auto count = s.vertices.size() / 32;
       ensure(normalBuffer, std::max<VkDeviceSize>(count * 12, 12),
@@ -2255,6 +2273,10 @@ private:
           ++world_gpu_draws;
       } else { // A model draw binds its own VBO; ordinary TL draws must restore
                // theirs.
+        // Every ordinary TL pipeline reads the raw fog at binding 2. Binding 0 is covered below:
+        // it holds vertexBuffer from the start of the pass, and boundVertices forces a rebind
+        // after any model draw replaced it, so only an already-bound vertexBuffer is skipped.
+        f.vkCmdBindVertexBuffers(cmd, 2, 1, &fogBuffer.buffer, &zero);
         if (lit) {
           const VkBuffer buffers[2]{vertexBuffer.buffer, normalBuffer.buffer};
           const VkDeviceSize offsets[2]{0, 0};
@@ -2648,7 +2670,7 @@ private:
   VkQueue queue{};
   unsigned family{}, width{}, height{}, descriptorCapacity{};
   bool rgba{};
-  Buffer upload, readback, vertexBuffer, normalBuffer, texUpload, sunBuffer,
+  Buffer upload, readback, vertexBuffer, normalBuffer, fogBuffer, texUpload, sunBuffer,
       effectBuffer;
   VkDeviceSize sunStride{};
   VkDescriptorSetLayout sunSetLayout{}, normalSetLayout{};
@@ -4385,6 +4407,10 @@ private:
          {1, 0, VK_FORMAT_R32_UINT, 16},
          {2, 0, VK_FORMAT_R32_UINT, 20},
          {3, 0, VK_FORMAT_R32G32_SFLOAT, 24}}};
+    const std::array<VkVertexInputBindingDescription, 2> fog_bindings{
+        {vb, {2, 16, VK_VERTEX_INPUT_RATE_VERTEX}}};
+    const std::array<VkVertexInputAttributeDescription, 5> fog_attributes{
+        {va[0], va[1], va[2], va[3], {5, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0}}};
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     const std::array<VkVertexInputAttributeDescription, 3> ma{
@@ -4400,24 +4426,32 @@ private:
          {2, 1, VK_FORMAT_R32_UINT, 20},
          {3, 1, VK_FORMAT_R32G32_SFLOAT, 24},
          {4, 0, VK_FORMAT_R32G32B32_SFLOAT, 12}}};
-    const std::array<VkVertexInputBindingDescription, 2> tb{
+    const std::array<VkVertexInputBindingDescription, 3> tb{
         {{0, 32, VK_VERTEX_INPUT_RATE_VERTEX},
-         {1, 12, VK_VERTEX_INPUT_RATE_VERTEX}}};
-    const std::array<VkVertexInputAttributeDescription, 5> ta{
-        {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0}}};
+         {1, 12, VK_VERTEX_INPUT_RATE_VERTEX},
+         {2, 16, VK_VERTEX_INPUT_RATE_VERTEX}}};
+    const std::array<VkVertexInputAttributeDescription, 6> ta{
+        {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0},
+         {5, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0}}};
     const bool lit_tl = lit && !model;
-    vi.vertexBindingDescriptionCount = world || lit_tl ? 2 : 1;
+    // The count must follow the SAME order as the pointer below, and come from the chosen array:
+    // a world draw can also be lit_tl, and its two-element array must not be read as three.
+    vi.vertexBindingDescriptionCount = world    ? uint32_t(wb.size())
+                                       : lit_tl ? uint32_t(tb.size())
+                                       : model  ? 1u
+                                                : uint32_t(fog_bindings.size());
     vi.pVertexBindingDescriptions = world    ? wb.data()
                                     : lit_tl ? tb.data()
-                                             : &vb;
-    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5 : 4)
-                                         : model  ? 3
-                                         : lit_tl ? 5
-                                                  : 4;
+                                    : model  ? &vb
+                                             : fog_bindings.data();
+    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5u : 4u)
+                                         : model  ? 3u
+                                         : lit_tl ? uint32_t(ta.size())
+                                                  : uint32_t(fog_attributes.size());
     vi.pVertexAttributeDescriptions = world    ? wa.data()
                                       : model  ? ma.data()
                                       : lit_tl ? ta.data()
-                                               : va.data();
+                                               : fog_attributes.data();
     VkPipelineInputAssemblyStateCreateInfo ia{};
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     ia.topology = k.points ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
@@ -4948,7 +4982,7 @@ private:
       f.vkDestroyFence(device, presentFence, nullptr);
     if (presentPool)
       f.vkDestroyCommandPool(device, presentPool, nullptr);
-    for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer,
+    for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer, &fogBuffer,
                       &texUpload, &presentUpload, &sunBuffer, &effectBuffer, &height_upload})
       if (b->buffer) {
         f.vkDestroyBuffer(device, b->buffer, nullptr);

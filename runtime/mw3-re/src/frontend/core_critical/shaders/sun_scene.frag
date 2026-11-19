@@ -292,7 +292,9 @@ void shadeScene() {
                                  : draw.mode.z;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
-    if (fogFactors.w > 0.5) {
+    if (fogFactors.w > 1.5) {
+        specular.a = clamp(fogFactors.x, 0.0, 1.0);
+    } else if (fogFactors.w > 0.5) {
         // Clamp after interpolation, independently of flat colour/texture modes.
         // Keep specular alpha in range before texture arguments, weather and fog use it.
         vec3 amounts = clamp(fogFactors.xyz, 0.0, 1.0);
