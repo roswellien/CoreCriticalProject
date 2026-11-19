@@ -527,6 +527,11 @@ void check_distance_fog(SDL_Window *window, sdlfe::RendererBackend backend) {
         require(renderer->submit_model_geometry(interior, context, {material}, edge) ==
                     cc::geometry::Submission::submitted,
                 "Interior fog geometry was not submitted");
+        // A second, identical raw-fog draw right after the first (the case draw coalescing looks
+        // at): the scene must still submit and read back, with the same black interior pixel.
+        require(renderer->submit_model_geometry(interior, context, {material}, edge) ==
+                    cc::geometry::Submission::submitted,
+                "Second consecutive raw-fog geometry was not submitted");
         renderer->end_scene();
         require(renderer->read_back(&pixels, &width, &height) && width == 32 && height == 32,
                 "Interior fog readback extent changed");

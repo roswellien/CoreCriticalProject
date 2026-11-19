@@ -1733,6 +1733,15 @@ private:
                                  draw.lit_normals->end());
           previous.lit_normals = std::move(merged_normals);
         }
+        // Raw fog is attached only to CPU-clipped prepared draws, which are pushed directly and
+        // never built here, so today this branch cannot see two raw-fog draws. Merge it exactly
+        // like the normals anyway: a merged draw whose raw_fog stayed short would throw
+        // "Clipped raw-fog range mismatch" at submit.
+        if (previous.raw_fog && draw.raw_fog) {
+          auto merged_fog = std::make_shared<std::vector<std::array<float, 4>>>(*previous.raw_fog);
+          merged_fog->insert(merged_fog->end(), draw.raw_fog->begin(), draw.raw_fog->end());
+          previous.raw_fog = std::move(merged_fog);
+        }
         previous.count += drawn;
         observe_producer_draw(previous);
         return;

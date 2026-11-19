@@ -124,6 +124,8 @@ void emit_reference_geometry(
     }
     draw.count = unsigned(normals->size());
     draw.lit_normals = std::move(normals);
+    // Every append above uses project == true (this is the CPU-clipped branch), so no vertex can
+    // skip its raw fog entry: raw_fog.size() always equals the draw's count.
     draw.raw_fog = std::move(raw_fog);
     if (draw.count) {
       if (native_fixture_source)

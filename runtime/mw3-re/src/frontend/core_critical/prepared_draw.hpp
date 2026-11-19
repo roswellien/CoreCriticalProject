@@ -307,6 +307,7 @@ prepare_draw(const PreparedBatchDraw &source,
         ++result.clipped_triangles;
       }
     }
+    // Every vertex above was appended with project == true, so raw_fog.size() equals the count.
     draw.raw_fog = std::move(raw_fog);
     if (lighting) {
       auto view = std::make_shared<mw34::sun::Tl>();
