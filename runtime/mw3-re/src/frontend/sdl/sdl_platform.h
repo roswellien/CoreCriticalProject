@@ -109,6 +109,7 @@ class SdlScreen2D : public platform::Screen2D {
   std::vector<uint32_t> menu_composed_;
   platform::PreparedMenuBackgroundComposer menu_composer_;
   bool menu_observation_active_{};
+  bool menu_observation_enabled_{};
   std::chrono::steady_clock::time_point menu_report_start_{};
   uint64_t menu_report_frames_{}, menu_report_images_{}, menu_report_text_hits_{},
       menu_report_fallbacks_{};

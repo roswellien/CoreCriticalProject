@@ -1557,7 +1557,10 @@ TEST(sdl_layers_keep_the_3d_viewport) {
 // Menu observation is diagnostic only: the CPU-composed 16-bit frame must
 // produce the same present_16 output with a supported draw list.
 TEST(sdl_menu_observation_keeps_present_output) {
-  if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) return;
+  if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+    std::printf("SKIPPED sdl_menu_observation_keeps_present_output: no SDL video\n");
+    return;
+  }
   sdlfe::SdlWindow window;
   EXPECT(window.init(true));
   window.create("mw3 menu observation test", 640, 480);
@@ -1565,8 +1568,16 @@ TEST(sdl_menu_observation_keeps_present_output) {
   sdlfe::HudOptions options;
   options.mode = "core-critical";
   options.text = false;
+  options.observe_menu = true;
   sdlfe::SdlScreen2D screen(window.render(), options, window.sdl(), &window.shape());
+  // Observation is opt-in: a screen built without observe_menu must not install the observer.
+  sdlfe::HudOptions off_options = options;
+  off_options.observe_menu = false;
+  sdlfe::SdlScreen2D off_screen(window.render(), off_options, window.sdl(), &window.shape());
   std::vector<uint16_t> pixels(640 * 480, 0x1234);
+  off_screen.begin_menu_observation(pixels.data(), 640, 480, 640 * 2);
+  EXPECT(!zrndr::draw_observer());
+  std::vector<uint16_t> unused;
   uint16_t image_pixels[] = {0xf800, 0x07e0, 0x001f, 0xffff};
   zimg::Texture image{};
   image.width = image.width_again = 2;
@@ -1585,7 +1596,10 @@ TEST(sdl_menu_observation_keeps_present_output) {
     return window.render()->read_back(output, &width, &height) && width == 640 && height == 480;
   };
   std::vector<uint32_t> baseline, observed, fallback;
-  if (!present(false, false, &baseline)) return;
+  if (!present(false, false, &baseline)) {
+    std::printf("SKIPPED sdl_menu_observation_keeps_present_output: no readback\n");
+    return;
+  }
   EXPECT(present(true, false, &observed));
   EXPECT(observed == baseline);
   EXPECT(present(true, true, &fallback));

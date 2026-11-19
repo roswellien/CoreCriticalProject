@@ -14,6 +14,8 @@ struct HudOptions {
   std::vector<std::string> artwork;
   std::string menu_background;
   bool text = true;
+  // Diagnostic only: count what the menu draws without changing it. Off by default.
+  bool observe_menu = false;
 };
 // An instance-owned HUD draw list. The original canvas remains a CPU shadow
 // for native reads; display uses owned GPU images and ordered primitives.
@@ -30,7 +32,7 @@ class GpuHud final : public zrndr::DrawObserver {
   ~GpuHud() override;
   void begin(const uint16_t* target, int width, int height, int pitch, int output_height);
   // Records menu coverage without uploading textures or submitting GPU draws.
-  void begin_observation(const uint16_t* target, int width, int height, int pitch, int output_height);
+  bool begin_observation(const uint16_t* target, int width, int height, int pitch, int output_height);
   bool finish();
   void cancel();
   const FrameStats& frame_stats() const { return frame_stats_; }

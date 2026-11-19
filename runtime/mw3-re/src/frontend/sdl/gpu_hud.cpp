@@ -78,9 +78,15 @@ GpuHud::~GpuHud() {
 void GpuHud::begin(const uint16_t* target, int width, int height, int pitch, int output_height) {
   begin_frame(target, width, height, pitch, output_height, false);
 }
-void GpuHud::begin_observation(const uint16_t* target, int width, int height, int pitch,
+bool GpuHud::begin_observation(const uint16_t* target, int width, int height, int pitch,
                                int output_height) {
+  // Observation is a diagnostic: it never throws and never competes for the draw observer.
+  // When another target already owns it, or the target is unusable, skip this frame.
+  if (zrndr::draw_observer() || !target || width <= 0 || height <= 0 || width > 8192 ||
+      height > 8192 || pitch < int64_t(width) * 2)
+    return false;
   begin_frame(target, width, height, pitch, output_height, true);
+  return true;
 }
 void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitch,
                          int output_height, bool observation_only) {
@@ -123,6 +129,7 @@ void GpuHud::cancel() {
   vertices_.clear();
   commands_.clear();
   observation_only_ = false;
+  frame_stats_ = {};
 }
 bool GpuHud::finish() {
   if (!target_) return false;
@@ -130,7 +137,7 @@ bool GpuHud::finish() {
   zrndr::set_draw_observer(nullptr);
   target_ = nullptr;
   if (shadow_layer_) {
-    ++shadow_layers_;
+    if (!observation_only_) ++shadow_layers_;
     frame_stats_.fallback = true;
     vertices_.clear();
     commands_.clear();
@@ -138,8 +145,9 @@ bool GpuHud::finish() {
     return false;
   }
   if (observation_only_) {
+    // An empty frame (nothing drawn) is not a fallback: only a shadow reason is.
     const bool observed = observed_draws_ != 0;
-    frame_stats_.fallback = !observed;
+    frame_stats_.fallback = false;
     observation_only_ = false;
     vertices_.clear();
     commands_.clear();
@@ -171,7 +179,15 @@ bool GpuHud::finish() {
 }
 void GpuHud::framebuffer_write(const void* target, const char* operation) {
   int x, y;
-  if (shadow_layer_ || !position(static_cast<const uint16_t*>(target), x, y)) return;
+  if (!position(static_cast<const uint16_t*>(target), x, y)) return;
+  if (observation_only_) {
+    // Observation keeps counting every reason after the first, and stays out of the
+    // in-mission lifetime counters and their first-use log line.
+    shadow_layer_ = true;
+    ++frame_stats_.shadow_reasons[operation];
+    return;
+  }
+  if (shadow_layer_) return;
   shadow_layer_ = true;
   ++frame_stats_.shadow_reasons[operation];
   const auto count = ++shadow_reasons_[operation];
@@ -222,7 +238,7 @@ bool GpuHud::position(const uint16_t* pointer, int& x, int& y) const {
 }
 void GpuHud::pixel(const uint16_t* destination, uint16_t colour) {
   int x, y;
-  if (shadow_layer_ || !position(destination, x, y)) return;
+  if ((shadow_layer_ && !observation_only_) || !position(destination, x, y)) return;
   if (zrndr::target2d().format != 6) {
     framebuffer_write(target_, "RGB555 target");
     return;
@@ -256,7 +272,7 @@ void GpuHud::pixel(const uint16_t* destination, uint16_t colour) {
 }
 void GpuHud::span(const uint16_t* destination, uint32_t count, uint16_t colour) {
   int x, y;
-  if (shadow_layer_ || !position(destination, x, y) || !count) return;
+  if ((shadow_layer_ && !observation_only_) || !position(destination, x, y) || !count) return;
   if (zrndr::target2d().format != 6) {
     framebuffer_write(target_, "RGB555 target");
     return;
@@ -282,7 +298,7 @@ void GpuHud::span(const uint16_t* destination, uint32_t count, uint16_t colour) 
 }
 void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t key,
                    const zrndr::BlitRect* crop) {
-  if (shadow_layer_ || !target_ ||
+  if ((shadow_layer_ && !observation_only_) || !target_ ||
       zrndr::target2d().base != reinterpret_cast<const uint8_t*>(target_))
     return;
   if (zrndr::target2d().format != 6) {
@@ -313,9 +329,12 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
   bottom = std::min(bottom, top + height_ - destination_y);
   if (right <= left || bottom <= top) return;
   if (observation_only_) {
-    for (int row = 0; row < source->height; ++row)
-      for (int column = 0; column < source->width; ++column) {
-        const size_t at = size_t(row) * source->width_again + column;
+    // Only the visible crop is checked, and no text is rasterised or cached: observation
+    // must stay cheap because it runs for every menu blit.
+    FloatScope observation_scope;
+    for (int64_t row = top; row < bottom; ++row)
+      for (int64_t column = left; column < right; ++column) {
+        const size_t at = size_t(row) * source->width_again + size_t(column);
         unsigned index = source->palette ? static_cast<const uint8_t*>(source->pixels)[at] : 0;
         if (source->palette && index >= unsigned(source->palette_count)) {
           framebuffer_write(target_, "invalid image palette");
@@ -336,19 +355,7 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
           return;
         }
       }
-    if (options_.text) {
-      try {
-        if (ztwod::host().hud_text_image(source, density_, key)) {
-          ++text_hits_;
-          ++frame_stats_.text_hits;
-        }
-      } catch (...) {
-        framebuffer_write(target_, "text observer failure");
-        return;
-      }
-    }
     ++observed_draws_;
-    ++images_;
     ++frame_stats_.images;
     return;
   }
@@ -410,14 +417,10 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
   }
   const float du = (selected->u1 - selected->u0) / source->width,
               dv = (selected->v1 - selected->v0) / source->height;
-  if (observation_only_) {
-    ++observed_draws_;
-  } else {
-    rectangle(float(destination_x), float(destination_y), float(destination_x + right - left),
-              float(destination_y + bottom - top), 0xffffffffu, texture(selected),
-              selected->u0 + left * du, selected->v0 + top * dv, selected->u0 + right * du,
-              selected->v0 + bottom * dv);
-  }
+  rectangle(float(destination_x), float(destination_y), float(destination_x + right - left),
+            float(destination_y + bottom - top), 0xffffffffu, texture(selected),
+            selected->u0 + left * du, selected->v0 + top * dv, selected->u0 + right * du,
+            selected->v0 + bottom * dv);
   ++images_;
   ++frame_stats_.images;
 }

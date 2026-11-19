@@ -338,6 +338,7 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
 
 SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_Window* window, const FrameShape* shape)
     : render_(render), hud_window_(window), hud_shape_(shape) {
+  menu_observation_enabled_ = options.observe_menu;
   if (options.mode != "original" && options.mode != "core-critical")
     throw std::runtime_error("--cc-hud supports original or core-critical");
   if (options.mode == "core-critical") {
@@ -367,7 +368,8 @@ void SdlScreen2D::cancel_overlay_16() {
 }
 void SdlScreen2D::begin_menu_observation(const uint16_t* target, int width, int height, int pitch) {
   cancel_menu_observation();
-  if (!hud_) return;
+  // Off unless --cc-menu-observe: observing scans every menu blit, which the normal game must not pay for.
+  if (!hud_ || !menu_observation_enabled_) return;
   int output_height = height;
   if (hud_window_) {
     int output_width = 0;
@@ -375,7 +377,9 @@ void SdlScreen2D::begin_menu_observation(const uint16_t* target, int width, int 
     if (hud_shape_ && hud_shape_->fit && hud_shape_->frame_w > 0)
       output_height = std::min(output_height, int(int64_t(output_width) * hud_shape_->frame_h / hud_shape_->frame_w));
   }
-  hud_->begin_observation(target, width, height, pitch, output_height);
+  // A false result means another target owns the draw observer or this target is unusable:
+  // skip observing this frame rather than throwing out of the engine's frame clear.
+  if (!hud_->begin_observation(target, width, height, pitch, output_height)) return;
   menu_observation_active_ = true;
   if (menu_report_start_ == std::chrono::steady_clock::time_point{})
     menu_report_start_ = std::chrono::steady_clock::now();
@@ -388,13 +392,15 @@ void SdlScreen2D::cancel_menu_observation() noexcept {
 void SdlScreen2D::finish_menu_observation() noexcept {
   if (!menu_observation_active_) return;
   menu_observation_active_ = false;
-  bool supported = false;
+  bool observer_failed = false;
   try {
-    supported = hud_ && hud_->finish();
+    if (hud_) hud_->finish();
   } catch (const std::exception& error) {
+    observer_failed = true;
     if (hud_) hud_->cancel();
     std::fprintf(stderr, "mw3: menu observer failed; using native presentation: %s\n", error.what());
   } catch (...) {
+    observer_failed = true;
     if (hud_) hud_->cancel();
     std::fprintf(stderr, "mw3: menu observer failed; using native presentation\n");
   }
@@ -405,7 +411,8 @@ void SdlScreen2D::finish_menu_observation() noexcept {
     menu_report_text_hits_ += hud_->frame_stats().text_hits;
     for (const auto& [reason, count] : hud_->frame_stats().shadow_reasons)
       menu_report_shadow_reasons_[reason] += count;
-    menu_report_fallbacks_ += !supported || hud_->frame_stats().fallback;
+    // An empty frame is not a fallback; only a failure or a recorded shadow reason is.
+    menu_report_fallbacks_ += observer_failed || hud_->frame_stats().fallback;
     const auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration<double>(now - menu_report_start_).count() < 1.0 ||
         menu_report_frames_ == 0)
