@@ -128,13 +128,14 @@ background and menu hit regions must not acquire inconsistent policies.
 - **Wrap width:** the scroll wraps at the HD image's own width: 1920 source pixels for the wide
   master, and 1280 original-game pixels (the full 5760-wide master at 4.5x) for the existing
   master.
-- **Scroll speed:** the ORIGINAL game's speed. **Source facts:** the native host steps the menu
-  scroll by 1 px per 30 fps step (`menu_widgets.h:27`, `frames_due` in `menu_widgets.cpp:29` with
-  the zfix per-second constant), which is 30 px/s. The figure "about 60 px/s" comes only from the
-  previous runtime's menu patch (`tools/remaster-launcher/apply_menu_hd.py` and
-  `tools/remaster-launcher/apply_menu_scroll_time.py`). The GPU background PR must confirm the
-  speed against the original Mech3.exe behaviour at its native rate before it chooses the
-  constant, and record the answer here.
+- **Scroll speed (owner decision, 2026-11-19):** a FIXED 60 px/s per axis, in source pixels of the
+  original 1280x960 image, from elapsed time and independent of the presented frame rate. This is what
+  the original looked like at 60 Hz and what the previous runtime patch did. **Source facts:** the
+  original 0x40A210 moves the view 1 px per presented frame with no time basis (about 143 px/s at
+  144 fps), the port previously stepped once per 1/30 s (30 px/s), and the "about 60 px/s" figure came
+  from `tools/remaster-launcher/apply_menu_scroll_time.py`. `ScrollImage::update` now steps 60 times a
+  second (`menu_widgets.cpp`, `main_menu_moves_per_second`); the CPU and GPU paths read the same view
+  rectangle, so they match.
 - **Art assets:** the owner's HD art candidates live in a local, untracked folder and are never
   committed.
 
