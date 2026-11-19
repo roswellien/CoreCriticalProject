@@ -19,6 +19,9 @@ size_t crash_report_format_rva(char* output, size_t capacity, bool inside_image,
 enum class CrashReportWaitOutcome { completed, worker_exited, timed_out, failed };
 // Results from a Win32 wait on [completion event, worker thread], in that order.
 CrashReportWaitOutcome crash_report_classify_wait_result(uint32_t wait_result);
+// A report counts as written only when the wait completed AND the worker did not fail: a failed
+// worker also signals completion (so waiters are released), which must not read as success.
+bool crash_report_report_was_written(CrashReportWaitOutcome outcome, bool worker_failed);
 enum class CrashReportEntry { capture, wait, skip_worker };
 // A single caller owns capture; later entries wait without touching the captured state.
 CrashReportEntry crash_report_try_enter(std::atomic<bool>& in_progress, bool on_worker);
@@ -28,6 +31,8 @@ bool crash_report_sibling_path(const char* log, const char* name, char* output, 
 // True when dbghelp.dll and MiniDumpWriteDump can be loaded for minidump writing.
 bool crash_report_dump_prerequisites_present();
 bool crash_report_dump_worker_ready();
+// Tests only: make the next install fail to start its worker, as a resource shortage would.
+void crash_report_fail_worker_start_for_test(bool fail);
 #if defined(_WIN32)
 // Tests only: fills the capture as a crash request would (null exception = abort or terminate)
 // and reports whether it now points at an exception record and a context. False when not installed.

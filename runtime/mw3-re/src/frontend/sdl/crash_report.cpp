@@ -87,6 +87,10 @@ CrashReportWaitOutcome crash_report_classify_wait_result(uint32_t wait_result) {
   return CrashReportWaitOutcome::failed;
 }
 
+bool crash_report_report_was_written(CrashReportWaitOutcome outcome, bool worker_failed) {
+  return outcome == CrashReportWaitOutcome::completed && !worker_failed;
+}
+
 CrashReportEntry crash_report_try_enter(std::atomic<bool>& in_progress, bool on_worker) {
   // The worker must never wait on itself, even if it fails before any request is captured.
   if (on_worker) return CrashReportEntry::skip_worker;
@@ -107,6 +111,10 @@ char g_dump_path[MAX_PATH + 16];
 static_assert(std::atomic<bool>::is_always_lock_free);
 std::atomic<bool> g_exception_in_progress{false};
 std::atomic<bool> g_dump_worker_stopping{false};
+// Set when the worker could not serve a request. It also signals completion so waiters are
+// released, so the waiters must look at this flag before treating completion as success.
+std::atomic<bool> g_dump_worker_failed{false};
+bool g_fail_worker_start_for_test = false;
 HANDLE g_stderr_handle = INVALID_HANDLE_VALUE;
 HANDLE g_dump_request_event = nullptr;
 HANDLE g_dump_complete_event = nullptr;
@@ -177,6 +185,7 @@ void write_minidump() {
 DWORD WINAPI dump_worker(void*) {
   for (;;) {
     if (WaitForSingleObject(g_dump_request_event, INFINITE) != WAIT_OBJECT_0) {
+      g_dump_worker_failed.store(true);
       SetEvent(g_dump_complete_event);
       SetEvent(g_dump_box_done_event);
       return 1;
@@ -186,10 +195,11 @@ DWORD WINAPI dump_worker(void*) {
       SetEvent(g_dump_box_done_event);
       return 0;
     }
-    // The stderr pipe/CRT can be blocked by the crash. Finish the dump before any logging, and
-    // keep all formatting, I/O and UI on this independent stack, including for stack overflow.
-    write_minidump();
+    // The crash reason goes to crash.txt first: it is one small write to our own file handle, and a
+    // slow or blocked minidump must not be able to cost it. All formatting, I/O and UI stay on this
+    // independent stack, including for stack overflow.
     report_exception();
+    write_minidump();
     // Completion means "dump and log are written". It is published BEFORE the message box, so
     // the faulting thread's bounded wait never expires while the box is open.
     SetEvent(g_dump_complete_event);
@@ -203,7 +213,8 @@ void start_dump_worker() {
   g_dump_request_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
   g_dump_complete_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
   g_dump_box_done_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-  if (g_dump_request_event && g_dump_complete_event && g_dump_box_done_event)
+  if (g_dump_request_event && g_dump_complete_event && g_dump_box_done_event &&
+      !g_fail_worker_start_for_test)
     g_dump_worker_thread = CreateThread(nullptr, 1024 * 1024, dump_worker, nullptr,
                                         STACK_SIZE_PARAM_IS_A_RESERVATION,
                                         &g_dump_worker_thread_id);
@@ -250,7 +261,17 @@ void crash_log(const char* format, ...) {
 #endif
 void set_text(const std::string& program, const std::string& log) {
   std::snprintf(g_program, sizeof g_program, "%s", program.c_str());
+#if defined(_WIN32)
+  // The exception address, RVA and registers are in crash.txt next to the log, not in the log.
+  char crash_text_path[MAX_PATH + 16] = "";
+  crash_report_sibling_path(log.c_str(), "crash.txt", crash_text_path, sizeof crash_text_path);
+  std::snprintf(g_tail, sizeof g_tail,
+                ".\n\nThe log is %s\nThe crash details are in %s\nPlease include both (and crash.dmp "
+                "next to them) if you report this.",
+                log.c_str(), crash_text_path);
+#else
   std::snprintf(g_tail, sizeof g_tail, ".\n\nThe log is %s\nPlease include it if you report this.", log.c_str());
+#endif
 }
 
 [[noreturn]] void on_terminate() {
@@ -369,6 +390,7 @@ void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause)
     store_capture(exception, cause);
     g_dump_faulting_thread_id = thread_id;
     if (!SetEvent(g_dump_request_event)) {
+      g_dump_worker_failed.store(true);
       SetEvent(g_dump_complete_event);
       return;
     }
@@ -380,16 +402,17 @@ void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause)
   const DWORD result = WaitForMultipleObjects(2, handles, FALSE, 5000);
   const CrashReportWaitOutcome outcome = crash_report_classify_wait_result(result);
   // There is deliberately no logging here: even an error/timeout must not touch the stderr pipe.
-  if (g_test && outcome == CrashReportWaitOutcome::completed)
-    TerminateProcess(GetCurrentProcess(), 70);
+  const bool report_written =
+      crash_report_report_was_written(outcome, g_dump_worker_failed.load());
+  if (g_test && report_written) TerminateProcess(GetCurrentProcess(), 70);
   // The dump and log are written: keep the process alive until the user closes the box. A worker
   // that died ends this wait at once.
   // The wait is bounded: a stuck worker, or a box hidden behind a frozen fullscreen game, must not
   // keep a crashed process alive forever.
-  if (outcome == CrashReportWaitOutcome::completed && g_box) {
+  if (report_written && g_box) {
     const HANDLE box_handles[] = {g_dump_box_done_event, g_dump_worker_thread};
     WaitForMultipleObjects(2, box_handles, FALSE, 120000);
-  } else if (outcome == CrashReportWaitOutcome::completed) {
+  } else if (report_written) {
     // No box: a short grace so the log's tee thread can drain before the process ends.
     Sleep(200);
   }
@@ -489,6 +512,14 @@ bool crash_report_dump_prerequisites_present() {
 #endif
 }
 
+void crash_report_fail_worker_start_for_test(bool fail) {
+#if defined(_WIN32)
+  g_fail_worker_start_for_test = fail;
+#else
+  (void)fail;
+#endif
+}
+
 bool crash_report_dump_worker_ready() {
 #if defined(_WIN32)
   return g_dump_worker_available;
@@ -539,6 +570,7 @@ bool crash_report_uninstall_for_test() {
   g_dump_worker_thread_id = 0;
   g_dump_worker_available = false;
   g_dump_worker_stopping.store(false);
+  g_dump_worker_failed.store(false);
   g_dump_exception_pointers = {};
   g_dump_exception_record = {};
   g_dump_context = {};
@@ -605,6 +637,17 @@ void crash_report_install(const std::string& program, const std::string& log, bo
   }
   // Even without dbghelp, use the independent stack for diagnostics and the message box.
   start_dump_worker();
+  if (!g_dump_worker_available) {
+    // Without the worker every crash request would return at once and the process would crash
+    // silently under our handlers. Keep whatever handlers were there instead; the failure was
+    // logged once above.
+    std::fprintf(stderr, "%s: crash reporting not installed (no dump worker); previous handlers kept\n",
+                 g_program);
+    if (g_stderr_handle != nullptr && g_stderr_handle != INVALID_HANDLE_VALUE)
+      CloseHandle(g_stderr_handle);
+    g_stderr_handle = INVALID_HANDLE_VALUE;
+    return;
+  }
   g_previous_exception_filter = SetUnhandledExceptionFilter(on_exception);
   g_previous_abort_handler = std::signal(SIGABRT, on_abort);
   g_previous_terminate_handler = std::set_terminate(on_terminate);

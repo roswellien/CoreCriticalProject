@@ -259,6 +259,34 @@ TEST(crash_report_capture_pointers_do_not_survive_reinstall) {
   EXPECT(sdlfe::crash_report_uninstall_for_test());
 }
 
+// A worker failure also signals completion (to release waiters); it must not read as a report.
+TEST(crash_report_failed_worker_does_not_count_as_a_written_report) {
+  using sdlfe::CrashReportWaitOutcome;
+  EXPECT(sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::completed, false));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::completed, true));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::timed_out, false));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::worker_exited, false));
+  EXPECT(!sdlfe::crash_report_report_was_written(CrashReportWaitOutcome::failed, false));
+}
+
+// If the worker cannot start, install must leave the previous handlers in place (a silent crash
+// under our handlers would lose the reason and the dialog).
+TEST(crash_report_failed_worker_start_keeps_previous_handlers) {
+  const auto previous_filter = SetUnhandledExceptionFilter(nullptr);
+  SetUnhandledExceptionFilter(previous_filter);
+  const auto previous_abort = std::signal(SIGABRT, SIG_DFL);
+  std::signal(SIGABRT, previous_abort);
+  const auto previous_terminate = std::get_terminate();
+  sdlfe::crash_report_fail_worker_start_for_test(true);
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  sdlfe::crash_report_fail_worker_start_for_test(false);
+  EXPECT(!sdlfe::crash_report_dump_worker_ready());
+  EXPECT(SetUnhandledExceptionFilter(previous_filter) == previous_filter);
+  EXPECT(std::signal(SIGABRT, previous_abort) == previous_abort);
+  EXPECT(std::get_terminate() == previous_terminate);
+  EXPECT(sdlfe::crash_report_uninstall_for_test());  // nothing was installed: a no-op that succeeds
+}
+
 TEST(crash_report_install_starts_dump_worker_without_crashing) {
   const auto previous_filter = SetUnhandledExceptionFilter(nullptr);
   SetUnhandledExceptionFilter(previous_filter);
