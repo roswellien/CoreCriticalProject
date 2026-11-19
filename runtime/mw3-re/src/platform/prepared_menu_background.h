@@ -55,11 +55,12 @@ struct MenuBackgroundUvRect {
 // cropped by the render target. Invalid dimensions are rejected.
 MenuBackgroundLayerRect menu_background_cover_rect(int frame_width, int frame_height,
                                                     int output_width, int output_height);
-// Source offsets are in original-image pixels. The half-HD-texel offset
+// Source offsets and spans use the supplied game texture dimensions, or the
+// image's source dimensions when omitted. The half-HD-texel offset
 // matches sample()'s integer-centered bilinear convention on GPU samplers.
-MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage& image,
-                                             int64_t source_x, int64_t source_y,
-                                             int frame_width, int frame_height);
+MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage &image, int64_t source_x,
+                                             int64_t source_y, int frame_width, int frame_height,
+                                             unsigned game_width = 0, unsigned game_height = 0);
 // Extend the recorded scroll mapping outside its original destination, so a
 // covering background cannot crop/move native controls or their correction maps.
 MenuBackgroundUvRect menu_background_extend_uv(const MenuBackgroundUvRect& uv,
@@ -89,6 +90,10 @@ MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_
 MenuBackgroundLayerRect menu_background_layer_rect(int frame_width, int frame_height);
 
 MenuBackgroundImage load_menu_background(const std::filesystem::path& path);
+// Area filtering suppresses scrolling shimmer without requiring a mipmap API.
+// The original image remains available to the CPU compositor.
+MenuBackgroundImage menu_background_upload_image(const MenuBackgroundImage &image,
+                                                 unsigned maximum_height);
 
 // Reconstructs the original scrolling image under native controls, tint and
 // glow pixels. The result is presentation state and never touches simulation

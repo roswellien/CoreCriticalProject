@@ -354,16 +354,34 @@ void menu_background_checks(const std::filesystem::path& directory) {
    public:
     unsigned updates = 0;
     unsigned creation_attempts = 0;
+    unsigned preflight_attempts = 0;
     bool fail_next_texture = false;
+    bool throw_next_texture = false;
+    bool throw_next_preflight = false;
+    int dimension_limit = 16384;
     const sdlfe::FrameShape* shape = nullptr;
     void set_shape(const sdlfe::FrameShape* value) override { shape = value; }
     int32_t create_texture(int width, int height, const uint8_t* pixels, uint8_t type) override {
       ++creation_attempts;
+      if (width > dimension_limit || height > dimension_limit)
+          throw std::runtime_error("Synthetic device texture size limit");
+      if (throw_next_texture) {
+          throw_next_texture = false;
+          throw std::runtime_error("Synthetic texture allocation failure");
+      }
       if (fail_next_texture) {
         fail_next_texture = false;
         return -1;
       }
       return Recorder::create_texture(width, height, pixels, type);
+    }
+    void prepare_canvas_textures(const std::vector<int32_t> &textures) override {
+        ++preflight_attempts;
+        require(textures.size() == 4, "Menu did not preflight its image and all three maps");
+        if (throw_next_preflight) {
+            throw_next_preflight = false;
+            throw std::runtime_error("Synthetic deferred Vulkan texture allocation failure");
+        }
     }
     void update_texture(int32_t handle, int width, int height, const uint8_t* pixels) override {
       auto& image = images.at(size_t(handle));
@@ -398,11 +416,23 @@ void menu_background_checks(const std::filesystem::path& directory) {
   shape.fit = true;
   shape.frame_w = shape.frame_h = 8;
   MenuRecorder recorder;
+  const auto present_preserving_float_state = [&](sdlfe::SdlScreen2D &screen) {
+      std::fenv_t saved;
+      std::fegetenv(&saved);
+      std::fesetround(FE_DOWNWARD);
+      std::feclearexcept(FE_ALL_EXCEPT);
+      std::feraiseexcept(FE_INVALID | FE_DIVBYZERO);
+      const int flags = std::fetestexcept(FE_ALL_EXCEPT);
+      screen.present_16(frame.data(), 8, 8, 16, true);
+      require(std::fegetround() == FE_DOWNWARD && std::fetestexcept(FE_ALL_EXCEPT) == flags,
+              "Menu presentation changed guest rounding or exception flags");
+      std::fesetenv(&saved);
+  };
   {
     sdlfe::SdlScreen2D screen(&recorder, options, nullptr, &shape);
     require(recorder.images.size() == 1 && recorder.images[0].size() == 256,
             "HD menu image was not uploaded once during screen construction");
-    screen.present_16(frame.data(), 8, 8, 16, true);
+    present_preserving_float_state(screen);
     require(recorder.images.size() == 4 && recorder.updates == 0 && recorder.draws.size() == 4,
             "GPU menu did not upload three frame-sized maps and draw four passes");
     require(recorder.shape == &shape && recorder.x == 3 && recorder.y == 4 &&
@@ -419,9 +449,12 @@ void menu_background_checks(const std::filesystem::path& directory) {
     screen.present_16(frame.data(), 8, 8, 16, true);
     require(recorder.images.size() == 4 && recorder.updates == 0,
             "Unchanged GPU menu uploaded textures on a cache hit");
-    rejects([&] { screen.present_16(frame.data(), 8, 8, 15, true); });
+    const auto draws_before_invalid_stride = recorder.draws.size();
+    screen.present_16(frame.data(), 8, 8, 15, true);
+    require(recorder.draws.size() == draws_before_invalid_stride,
+            "Menu read an invalid native stride instead of rejecting it without throwing");
     frame[0] = 0xf81f;
-    screen.present_16(frame.data(), 8, 8, 16, true);
+    present_preserving_float_state(screen);
     require(recorder.images.size() == 4 && recorder.updates == 3,
             "Changed GPU menu failed to update its maps or uploaded the immutable HD image");
     const auto before_fallback = recorder.draws.size();
@@ -459,7 +492,77 @@ void menu_background_checks(const std::filesystem::path& directory) {
     require(unavailable.released.size() == unavailable.images.size(),
             "Unavailable GPU menu leaked partial texture resources");
   }
+  for (int failure_kind : {0, 1, 2, 3}) {
+      MenuRecorder throwing;
+      throwing.throw_next_texture = failure_kind == 0;
+      if (failure_kind == 3)
+          throwing.dimension_limit = 12;
+      {
+          sdlfe::SdlScreen2D screen(&throwing, options);
+          throwing.throw_next_texture = failure_kind == 1;
+          throwing.throw_next_preflight = failure_kind == 2;
+          present_preserving_float_state(screen);
+          require(throwing.draws.size() == 1 && throwing.images.back().size() == 64,
+                  "Throwing or over-limit menu allocation did not select the CPU compositor");
+          const auto attempts = throwing.creation_attempts;
+          const auto preflights = throwing.preflight_attempts;
+          present_preserving_float_state(screen);
+          require(throwing.creation_attempts == attempts &&
+                      throwing.preflight_attempts == preflights,
+                  "Menu retried a failed allocation instead of retaining the CPU fallback");
+      }
+      require(throwing.released.size() == throwing.images.size(),
+              "Throwing GPU menu allocation leaked partial resources");
+  }
+  for (const char *mode : {"cpu", "gpu"}) {
+      options.menu_background_renderer = mode;
+      MenuRecorder invalid;
+      {
+          sdlfe::SdlScreen2D screen(&invalid, options);
+          source.height = 7;
+          present_preserving_float_state(screen);
+          require(invalid.draws.size() == 1 &&
+                      invalid.images.back()[0] == sdlfe::SdlScreen2D::rgba(frame[0], true),
+                  "Mismatched menu inputs threw or failed to present the native frame");
+          source.height = 8;
+          source.alpha = reinterpret_cast<uint8_t *>(frame.data());
+          present_preserving_float_state(screen);
+          require(invalid.draws.size() == 2 &&
+                      invalid.images.back()[0] == sdlfe::SdlScreen2D::rgba(frame[0], true),
+                  "Invalid menu input layout failed to retain native presentation");
+          source.alpha = nullptr;
+      }
+  }
+  // A narrow fitted menu exposes a surround even without a real SDL window.
+  // Unsupported gain forces fallback while the GPU image is still available.
+  shape.frame_w = 4;
+  frame.fill(uint16_t((14 << 11) | (29 << 5) | 14));
+  std::vector<uint32_t> cpu_pixels;
+  std::vector<platform::TLVertex> cpu_vertices;
+  for (const char *mode : {"cpu", "gpu"}) {
+      options.menu_background_renderer = mode;
+      MenuRecorder fallback;
+      sdlfe::SdlScreen2D screen(&fallback, options, nullptr, &shape);
+      present_preserving_float_state(screen);
+      require(fallback.draws.size() == 1,
+              "GPU fallback painted a first-blit surround absent from requested CPU mode");
+      if (cpu_pixels.empty()) {
+          cpu_pixels = fallback.images.back();
+          cpu_vertices = fallback.draws.front().vertices;
+      } else {
+          require(cpu_pixels == fallback.images.back(),
+                  "GPU fallback changed CPU composition pixels");
+          const auto &vertices = fallback.draws.front().vertices;
+          for (size_t index = 0; index < vertices.size(); ++index)
+              require(vertices[index].sx == cpu_vertices[index].sx &&
+                          vertices[index].sy == cpu_vertices[index].sy,
+                      "GPU fallback fitted its frame differently from requested CPU mode");
+      }
+  }
   zrndr::set_menu_background_source(nullptr);
+  zrndr::target2d() = {};
+}
+
 void observation_checks() {
   Recorder recorder;
   sdlfe::HudOptions options;

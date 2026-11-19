@@ -1031,6 +1031,33 @@ public:
     viewport_ = {x, y, width, height};
   }
 
+  void prepare_canvas_textures(const std::vector<int32_t> &handles) override {
+      std::vector<vk::TextureRef> references;
+      for (const auto handle : handles) {
+          const auto &entry = textures_.at(handle);
+          references.push_back({std::uint64_t(handle) * 2 + 2,
+                                entry.version,
+                                entry.width,
+                                entry.height,
+                                vk::TexFormat::rgba8888,
+                                {},
+                                {}});
+      }
+      const auto prepare = [this, &references] {
+          // Return the failure as data: letting it escape a worker job permanently
+          // stops that worker, including the CPU compositor's subsequent uploads.
+          try {
+              renderer_->prepare_canvas_textures(references);
+              return std::exception_ptr{};
+          } catch (...) {
+              return std::current_exception();
+          }
+      };
+      const auto failure = worker_ ? worker_->call(prepare) : prepare();
+      if (failure)
+          std::rethrow_exception(failure);
+  }
+
   int32_t create_texture(int width, int height, const uint8_t *rgba,
                          uint8_t) override {
     if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||

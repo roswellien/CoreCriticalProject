@@ -91,6 +91,9 @@ class FrameRenderer : public platform::Render3D {
   virtual void begin_canvas_scene() { begin_scene(); }
   virtual void capture_next(const char* bmp_path) = 0;
   virtual void flush() = 0;
+  // Optional canvases must discover deferred texture allocation failures before
+  // submitting draws, so their CPU fallback can still use the render worker.
+  virtual void prepare_canvas_textures(const std::vector<int32_t> &) {}
   virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
   virtual void set_shape(const FrameShape* shape) = 0;
 };

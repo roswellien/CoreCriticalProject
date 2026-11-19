@@ -253,16 +253,18 @@ bool valid_menu_inputs(const MenuBackgroundImage& image, const zimg::Texture* so
                        const std::vector<zrndr::MenuBackgroundBlit>& blits,
                        const uint16_t* pixels, int width, int height, int pitch,
                        unsigned output_width, unsigned output_height) {
-  return pixels && source && !source->palette && !source->alpha && source->pixels &&
-         image.width && image.height && image.source_width && image.source_height &&
-         std::max({image.width, image.height, image.source_width, image.source_height}) <= 16384 &&
-         uint64_t(image.width) * image.source_height == uint64_t(image.height) * image.source_width &&
-         uint64_t(image.width) * image.height * 3 == image.rgb.size() &&
-         source->width == int(image.source_width) && source->height == int(image.source_height) &&
-         source->width_again >= source->width && width > 0 && height > 0 &&
-         pitch >= int64_t(width) * 2 && pitch % 2 == 0 &&
-         uint64_t(width) * height <= 16ull * 1024 * 1024 && output_width && output_height &&
-         uint64_t(output_width) * output_height <= 16ull * 1024 * 1024 && !blits.empty();
+    return pixels && source && !source->palette && !source->alpha && source->pixels &&
+           image.width && image.height && image.source_width && image.source_height &&
+           std::max({image.width, image.height, image.source_width, image.source_height}) <=
+               16384 &&
+           uint64_t(image.width) * image.source_height ==
+               uint64_t(image.height) * image.source_width &&
+           uint64_t(image.width) * image.height * 3 == image.rgb.size() && source->width > 0 &&
+           source->width <= 16384 && source->height == int(image.source_height) &&
+           source->width_again >= source->width && width > 0 && height > 0 &&
+           pitch >= int64_t(width) * 2 && pitch % 2 == 0 &&
+           uint64_t(width) * height <= 16ull * 1024 * 1024 && output_width && output_height &&
+           uint64_t(output_width) * output_height <= 16ull * 1024 * 1024 && !blits.empty();
 }
 }  // namespace
 
@@ -298,22 +300,76 @@ MenuBackgroundLayerRect menu_background_cover_rect(int frame_width, int frame_he
           float(covered_width), float(covered_height)};
 }
 
-MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage& image,
-                                             int64_t source_x, int64_t source_y,
-                                             int frame_width, int frame_height) {
-  if (!image.width || !image.height || !image.source_width || !image.source_height ||
-      frame_width <= 0 || frame_height <= 0)
-    throw std::invalid_argument("Menu UV rectangle requires positive image and frame dimensions");
-  const auto wrap = [](int64_t value, unsigned extent) {
-    const int64_t remainder = value % int64_t(extent);
-    return remainder < 0 ? remainder + extent : remainder;
-  };
-  const double u0 = double(wrap(source_x, image.source_width)) / image.source_width +
-                    .5 / image.width;
-  const double v0 = double(wrap(source_y, image.source_height)) / image.source_height +
-                    .5 / image.height;
-  return {float(u0), float(v0), float(u0 + double(frame_width) / image.source_width),
-          float(v0 + double(frame_height) / image.source_height)};
+MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage &image, int64_t source_x,
+                                             int64_t source_y, int frame_width, int frame_height,
+                                             unsigned game_width, unsigned game_height) {
+    if (!image.width || !image.height || !image.source_width || !image.source_height ||
+        frame_width <= 0 || frame_height <= 0)
+        throw std::invalid_argument(
+            "Menu UV rectangle requires positive image and frame dimensions");
+    const auto wrap = [](int64_t value, unsigned extent) {
+        const int64_t remainder = value % int64_t(extent);
+        return remainder < 0 ? remainder + extent : remainder;
+    };
+    if (!game_width)
+        game_width = image.source_width;
+    if (!game_height)
+        game_height = image.source_height;
+    // ScrollImage advances at 60 original-game pixels/s on the 1280-wide basis.
+    // Scale BOTH origin and span by master_width/game_width: 60 becomes 90 on a
+    // 1920-wide master, with the same on-screen speed and a 1920-pixel wrap period.
+    const double u0 = double(wrap(source_x, game_width)) / game_width + .5 / image.width;
+    const double v0 = double(wrap(source_y, game_height)) / game_height + .5 / image.height;
+    return {float(u0), float(v0), float(u0 + double(frame_width) / game_width),
+            float(v0 + double(frame_height) / game_height)};
+}
+
+MenuBackgroundImage menu_background_upload_image(const MenuBackgroundImage &image,
+                                                 unsigned maximum_height) {
+    if (!maximum_height || !image.width || !image.height ||
+        uint64_t(image.width) * image.height * 3 != image.rgb.size())
+        throw std::invalid_argument("Menu upload requires a valid image and height limit");
+    if (image.height <= maximum_height)
+        return image;
+    MenuBackgroundImage filtered;
+    filtered.height = maximum_height;
+    filtered.width = std::max(1u, unsigned(uint64_t(image.width) * maximum_height / image.height));
+    filtered.source_width = image.source_width;
+    filtered.source_height = image.source_height;
+    filtered.rgb.resize(size_t(filtered.width) * filtered.height * 3);
+    // Integer overlap weights average each complete source footprint, including
+    // fractional edge texels; point sampling here would retain the shimmer.
+    const uint64_t total_weight = uint64_t(image.width) * image.height;
+    for (unsigned y = 0; y < filtered.height; ++y) {
+        const uint64_t top = uint64_t(y) * image.height;
+        const uint64_t bottom = top + image.height;
+        for (unsigned x = 0; x < filtered.width; ++x) {
+            const uint64_t left = uint64_t(x) * image.width;
+            const uint64_t right = left + image.width;
+            uint64_t sums[3]{};
+            for (unsigned source_y = unsigned(top / filtered.height);
+                 uint64_t(source_y) * filtered.height < bottom; ++source_y) {
+                const uint64_t row_weight =
+                    std::min(bottom, uint64_t(source_y + 1) * filtered.height) -
+                    std::max(top, uint64_t(source_y) * filtered.height);
+                for (unsigned source_x = unsigned(left / filtered.width);
+                     uint64_t(source_x) * filtered.width < right; ++source_x) {
+                    const uint64_t weight =
+                        row_weight * (std::min(right, uint64_t(source_x + 1) * filtered.width) -
+                                      std::max(left, uint64_t(source_x) * filtered.width));
+                    for (unsigned channel_index = 0; channel_index < 3; ++channel_index)
+                        sums[channel_index] +=
+                            image.rgb[(size_t(source_y) * image.width + source_x) * 3 +
+                                      channel_index] *
+                            weight;
+                }
+            }
+            for (unsigned channel_index = 0; channel_index < 3; ++channel_index)
+                filtered.rgb[(size_t(y) * filtered.width + x) * 3 + channel_index] =
+                    uint8_t((sums[channel_index] + total_weight / 2) / total_weight);
+        }
+    }
+    return filtered;
 }
 
 const char* menu_background_gpu_status_name(MenuBackgroundGpuStatus status) {
@@ -507,7 +563,8 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
       }
     }
     if (!have_origin) return true;
-    layers->uv = menu_background_uv_rect(image, origin_x, origin_y, width, height);
+    layers->uv = menu_background_uv_rect(image, origin_x, origin_y, width, height,
+                                         unsigned(source->width), unsigned(source->height));
     layers->overlay.resize(frame_pixels);
     layers->gain.resize(frame_pixels);
     layers->added.resize(frame_pixels);
@@ -570,17 +627,17 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
         const uint16_t pixel = frame[size_t(y) * pitch_pixels + x];
         const auto position = source_at[at];
         if (position.x >= 0 && kind[at] != 0) {
-          const double hy = (position.y + sub_y) * double(image.height) / image.source_height;
-          const double sub_x = fx - x;
-          const double sx = (position.x + sub_x) * double(image.width) / image.source_width;
-          const uint32_t color = sample(image, sx, hy);
-          uint8_t channels[3] = {uint8_t(color), uint8_t(color >> 8), uint8_t(color >> 16)};
-          for (int channel_index = 0; channel_index < 3; ++channel_index) {
-            const float correction = kind[at] == 1 ? gain[at * 3 + channel_index] : 1.f;
-            channels[channel_index] = uint8_t(std::clamp(
-                channels[channel_index] * correction + added[at * 3 + channel_index] + .5f, 0.f,
-                255.f));
-          }
+            const double hy = (position.y + sub_y) * double(image.height) / source->height;
+            const double sub_x = fx - x;
+            const double sx = (position.x + sub_x) * double(image.width) / source->width;
+            const uint32_t color = sample(image, sx, hy);
+            uint8_t channels[3] = {uint8_t(color), uint8_t(color >> 8), uint8_t(color >> 16)};
+            for (int channel_index = 0; channel_index < 3; ++channel_index) {
+                const float correction = kind[at] == 1 ? gain[at * 3 + channel_index] : 1.f;
+                channels[channel_index] = uint8_t(std::clamp(
+                    channels[channel_index] * correction + added[at * 3 + channel_index] + .5f, 0.f,
+                    255.f));
+            }
           (*output)[size_t(oy) * output_width + ox] = pack(channels[0], channels[1], channels[2]);
         } else {
           (*output)[size_t(oy) * output_width + ox] = pack(
@@ -682,6 +739,8 @@ bool PreparedMenuBackgroundComposer::prepare(
     invalidate_cache();
     return false;
   }
+  // Scrolling changes blits and native pixels, so classification currently
+  // misses this whole-frame cache on each scrolling frame, even with UV-only uploads.
   const auto& state = *impl_;
   const bool hit = state.valid && state.previous_image == &image &&
                    state.previous_image_data == image.rgb.data() &&
