@@ -665,7 +665,7 @@ public:
   }
   static testing::PacketByteBreakdown packet_byte_breakdown_for_test(const vk::Scene &scene) {
     const auto terms = packet_byte_terms(scene);
-    return {terms.geometry, terms.lit_normals, checked_packet_total(terms)};
+    return {terms.geometry, terms.lit_normals, terms.raw_fog, checked_packet_total(terms)};
   }
   testing::StagingTestState staging_state_for_test() {
     return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,

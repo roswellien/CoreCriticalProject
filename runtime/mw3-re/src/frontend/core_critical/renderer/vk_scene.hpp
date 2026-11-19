@@ -1435,7 +1435,9 @@ private:
     const auto vertex_count = s.vertices.size() / 32;
     ensure(fogBuffer, std::max<VkDeviceSize>(vertex_count * 16, 16),
            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    std::memset(fogBuffer.mapped, 0, size_t(fogBuffer.size));
+    // Zero only what this submission can fetch: ensure() keeps the largest allocation, so clearing
+    // fogBuffer.size would rewrite a past peak on every small HUD or clear-only frame.
+    std::memset(fogBuffer.mapped, 0, size_t(std::max<VkDeviceSize>(vertex_count * 16, 16)));
     for (const auto &draw : s.draws) {
       if (!draw.raw_fog)
         continue;

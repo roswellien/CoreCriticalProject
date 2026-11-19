@@ -306,7 +306,7 @@ static std::size_t checked_packet_total(const PacketByteTerms &terms) {
   std::size_t total = 0;
   for (const std::size_t term :
        {terms.scene, terms.vertices, terms.color_depth, terms.draws, terms.order, terms.textures,
-        terms.texture_pixels, terms.emissions, terms.geometry, terms.lit_normals,
+        terms.texture_pixels, terms.emissions, terms.geometry, terms.lit_normals, terms.raw_fog,
         terms.height_metadata, terms.clears, terms.height_packet}) {
     if (term > std::numeric_limits<std::size_t>::max() - total)
       throw std::runtime_error("Packet byte count overflow");
