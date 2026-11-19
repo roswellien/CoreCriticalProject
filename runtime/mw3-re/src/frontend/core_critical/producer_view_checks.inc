@@ -354,9 +354,87 @@ void check_producer_views(SDL_Window* window, sdlfe::RendererBackend backend) {
           "CAPTURED_CANVAS_MAPPING");
     check(rows[0].sun_tl && rows[0].projection[1] == 16 &&
               rows[0].camera_world[3] == 7, "POISONED_VIEW_VALUE");
+    // This is a buffered 2D overlay draw, which spans the scene even during a
+    // WorldZoom emission; only the zoom camera's 3D geometry gets the zoom rect.
+    check(rows[0].scissor_offset == std::array<std::int32_t, 2>{0, 0} &&
+              rows[0].scissor_extent == std::array<std::uint32_t, 2>{64, 64},
+          "ZOOM_OVERLAY_FULL_SCISSOR");
     check(::platform::same_producer_view_bits(rows[0].view, expected), "ZOOM_VIEW_OWNED");
+    { Emission main_world(Purpose::MainWorld); s.immediate(); }
+    auto main_rows = s.observer.rows(Stage::append);
+    check(main_rows.back().scissor_offset == std::array<std::int32_t, 2>{0, 0} &&
+              main_rows.back().scissor_extent == std::array<std::uint32_t, 2>{64, 64},
+          "MAIN_WORLD_FULL_SCISSOR");
+    ::platform::DrawState hud_state{};
+    hud_state.sharp = true;
+    { Emission zoom(Purpose::WorldZoom);
+      s.renderer->draw(::platform::Primitive::kFan, s.vertices, 3, hud_state); }
+    auto hud_rows = s.observer.rows(Stage::append);
+    check(hud_rows.back().scissor_offset == std::array<std::int32_t, 2>{0, 0} &&
+              hud_rows.back().scissor_extent == std::array<std::uint32_t, 2>{64, 64},
+          "HUD_FULL_SCISSOR");
     s.finish();
     ground_eye(window, backend, check);
+  });
+  group("degenerate_zoom_scissor", [&] {
+    for (const bool zero_canvas : {true, false}) {
+      Session s(window, backend);
+      zvid::set_producer_canvas_rect(0, 0, zero_canvas ? 0 : 64,
+                                     zero_canvas ? 0 : 64);
+      zvid::set_producer_camera_rect(8, 8, zero_canvas ? 16 : 0,
+                                     zero_canvas ? 16 : 0);
+      {
+        Emission zoom(Purpose::WorldZoom);
+        s.immediate();
+      }
+      s.finish();
+      const auto rows = s.observer.rows(Stage::append);
+      check(rows.size() == 1 &&
+                rows[0].scissor_offset == std::array<std::int32_t, 2>{0, 0} &&
+                rows[0].scissor_extent == std::array<std::uint32_t, 2>{64, 64},
+            zero_canvas ? "ZERO_ZOOM_VIEWPORT_FULL_SCISSOR" :
+                          "ZERO_ZOOM_RECT_FULL_SCISSOR");
+    }
+  });
+  group("native_geometry_zoom_scissor", [&] {
+    float positions[]{-1, -1, 3, 1, -1, 3, 0, 1, 3};
+    std::uint32_t indices[]{2, 1, 0};
+    const auto source = cc::geometry::register_resource(
+        positions, 3, nullptr, 0,
+        {{3, indices, nullptr, nullptr, false, true}});
+    cc::geometry::Material material;
+    material.color = 0xffffffff;
+    const float transform[]{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    ::platform::ModelDrawContext context{};
+    context.model_to_world = context.model_to_camera = transform;
+    context.near_z = context.clip_near = 1;
+    context.far_z = 100;
+    context.fx_near = context.fy_near = 32;
+    context.cx = context.cy = 32;
+    context.ordinary = true;
+    context.opacity = 1;
+    for (const char* geometry : {"partial", "cpu-reference"}) {
+      sdlfe::CoreCriticalAssets assets;
+      assets.geometry = geometry;
+      Session s(window, backend, assets);
+      zvid::set_producer_canvas_rect(10, 20, 128, 64);
+      zvid::set_producer_camera_rect(18, 24, 32, 24);
+      {
+        Emission emission(Purpose::WorldZoom);
+        check(zvid::submit_model_geometry_for_current_view(
+                  s.renderer.get(), source, context, {material}, {}) ==
+                  cc::geometry::Submission::submitted,
+              "WORLD_ZOOM_RIGID_MODEL_NOT_SUBMITTED");
+      }
+      s.finish();
+      const auto rows = s.observer.rows(Stage::packet, true);
+      check(std::any_of(rows.begin(), rows.end(), [](const Observation& row) {
+              return row.scissor_offset == std::array<std::int32_t, 2>{4, 4} &&
+                     row.scissor_extent == std::array<std::uint32_t, 2>{16, 24};
+            }),
+            geometry[0] == 'p' ? "GPU_GEOMETRY_ZOOM_SCISSOR" :
+                                 "REFERENCE_GEOMETRY_ZOOM_SCISSOR");
+    }
   });
   group("neutral_numeric_fallback", [&] {
     Session s(window, backend);
@@ -524,6 +602,6 @@ void check_producer_views(SDL_Window* window, sdlfe::RendererBackend backend) {
       check(s.observer.rows(Stage::packet, true).size() == 2, "DESTRUCTOR_NO_REPLAY");
     }
   });
-  require(groups == 8 && total > 0, "B5 packet group inventory mismatch");
-  std::printf("B5_PACKET groups=8 failed=0 assertions=%u\n", total);
+  require(groups == 10 && total > 0, "B5 packet group inventory mismatch");
+  std::printf("B5_PACKET groups=10 failed=0 assertions=%u\n", total);
 }

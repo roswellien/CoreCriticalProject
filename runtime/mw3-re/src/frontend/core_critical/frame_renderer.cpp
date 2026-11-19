@@ -59,6 +59,8 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <charconv>
 #include <cstdarg>
 #include <cmath>
+#include <chrono>
+#include <unordered_set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -655,6 +657,17 @@ public:
             native_fingerprint_evaluations_,
             deferred_material_admissions_};
   }
+  // Capacity the current producer Scene retains from earlier packets (adopted from the pool).
+  std::size_t retained_scene_capacity_bytes() const {
+    const auto terms = packet_byte_terms(scene_);
+    return terms.vertices + terms.color_depth + terms.draws + terms.order + terms.textures +
+           terms.clears;
+  }
+  testing::StagingTestState staging_state_for_test() {
+    return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
+            staging_first_flush_bytes_, staging_first_flush_packets_,
+            recycled_scene_count_for_test(), retained_scene_capacity_bytes()};
+  }
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
     const auto &entry = textures_.at(std::size_t(handle));
@@ -797,7 +810,18 @@ public:
       zvid::producer_mission_changed(identity);
     // Drain packets queued for the previous mission before switching state.
     drain();
+    // The workers are idle now: release the capacity that recycled Scenes (and the one drain may
+    // have adopted into scene_) kept from the previous mission, so this mission's packets are not
+    // charged for it.
+    // clear_producer_work(false) above already dropped the unsubmitted producer Scene and the
+    // pending packets (and ended any open scene state), so this only discards what drain() may
+    // have adopted from the pool: a mission change never discards unflushed draws here.
+    scene_ = {};
+    invalidate_scene_bindings();
+    release_recycled_scenes();
     local_lights_clear();
+    staging_early_logged_ = false;
+    staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
@@ -878,6 +902,9 @@ public:
           "%zu peak bytes, %zu producer waits\n",
           statistics.submitted, statistics.completed, statistics.peak_jobs,
           statistics.peak_bytes, statistics.waits);
+      std::fprintf(stderr,
+                   "Local light staging: peak %zu bytes of %zu, %zu early completions\n",
+                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_);
       worker_.reset(); // All later summary reads and destruction belong to this
                        // thread.
     }
@@ -1238,6 +1265,55 @@ private:
       throw std::runtime_error("Invalid Core producer view provenance");
     // No numeric policy: original NaNs and stale inverses are owned data.
   }
+  VkRect2D producer_scissor(bool hud = false) const {
+    const VkRect2D full_scene{{0, 0}, {scene_.width, scene_.height}};
+    if (hud || !producer_view_.present ||
+        producer_view_.purpose != ::platform::ProducerPurpose::WorldZoom ||
+        !producer_view_.camera_rect_available)
+      return full_scene;
+
+    auto viewport = viewport_;
+    if (producer_view_.canvas_available)
+      viewport = {producer_view_.canvas.x, producer_view_.canvas.y,
+                  producer_view_.canvas.width, producer_view_.canvas.height};
+    if (viewport[2] <= 0 || viewport[3] <= 0 ||
+        producer_view_.camera_rect.width <= 0 ||
+        producer_view_.camera_rect.height <= 0 ||
+        scene_.width > std::uint32_t(std::numeric_limits<std::int32_t>::max()) ||
+        scene_.height > std::uint32_t(std::numeric_limits<std::int32_t>::max())) {
+      static std::atomic_flag invalid_world_zoom_scissor_logged = ATOMIC_FLAG_INIT;
+      if (!invalid_world_zoom_scissor_logged.test_and_set())
+        std::fprintf(stderr,
+                     "Core renderer: invalid WorldZoom scissor inputs; "
+                     "using full scene (logged once)\n");
+      return full_scene;
+    }
+
+    // Match canvas_to_render: transform both edges with integer truncation,
+    // then derive the size. Mapping a size alone can grow fractional edges.
+    const auto map_edge = [](std::int64_t coordinate, std::int32_t origin,
+                             std::uint32_t scene_extent,
+                             std::int32_t viewport_extent) {
+      return (coordinate - origin) * std::int64_t(scene_extent) /
+             viewport_extent;
+    };
+    const auto clamp_edge = [](std::int64_t edge, std::uint32_t extent) {
+      return std::clamp<std::int64_t>(edge, 0, extent);
+    };
+    const auto& rect = producer_view_.camera_rect;
+    const auto left = clamp_edge(
+        map_edge(rect.x, viewport[0], scene_.width, viewport[2]), scene_.width);
+    const auto top = clamp_edge(
+        map_edge(rect.y, viewport[1], scene_.height, viewport[3]), scene_.height);
+    const auto right = clamp_edge(
+        map_edge(std::int64_t(rect.x) + rect.width, viewport[0], scene_.width,
+                 viewport[2]), scene_.width);
+    const auto bottom = clamp_edge(
+        map_edge(std::int64_t(rect.y) + rect.height, viewport[1], scene_.height,
+                 viewport[3]), scene_.height);
+    return {{std::int32_t(left), std::int32_t(top)},
+            {std::uint32_t(right - left), std::uint32_t(bottom - top)}};
+  }
   void clear_producer_work(bool failed) noexcept {
     const auto previous_view = producer_view_;
     scene_ = {};
@@ -1274,6 +1350,9 @@ private:
     observation.packet = packet;
     observation.first = draw.first;
     observation.count = draw.count;
+    observation.scissor_offset = {draw.scissor.offset.x, draw.scissor.offset.y};
+    observation.scissor_extent = {draw.scissor.extent.width,
+                                  draw.scissor.extent.height};
     observation.sun_tl = bool(draw.sun_tl);
     observation.height_binding = bool(draw.height_binding);
     observation.surface_eye = draw.surface_eye;
@@ -1613,7 +1692,7 @@ private:
     draw.push.mode[2] = draw.texture < 0
                             ? 2 | diffuse
                             : (state.alpha_modulate ? 4 : 2) | texture;
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    draw.scissor = producer_scissor(hud);
     if (native_ground_draw_eligible(state, hud, depth_only, geometry_debug_,
                                     primitive == Primitive::kPoints))
       apply_fixture_observation(draw, deferred_fixture_observation(state.texture));
@@ -1805,6 +1884,8 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
+    draw.producer_view = producer_view_;
+    draw.scissor = producer_scissor();
     const auto texture = prepared_texture(*source.texture);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
                            group_load_epoch_, textures_.at(texture).version);
@@ -1820,6 +1901,7 @@ private:
       apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
+      observe_producer_draw(scene_.draws.back());
       ++prepared_batches_;
     }
   }
@@ -2274,6 +2356,13 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->staging_state_for_test();
 }
 
 testing::NamedTextureTestState testing::named_texture_state(

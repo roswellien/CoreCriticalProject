@@ -1,3 +1,289 @@
+#include "renderer/geometry/reference.hpp"
+
+std::array<float, 3> reference_haze_color(const mw34::sun::Settings &settings,
+                                         const std::array<float, 3> &view) {
+    // CPU mirror of sun_scene.frag's hazeColor, before target dithering/quantization.
+    const auto uniform = mw34::sun::uniform({}, settings);
+    const auto &direction = uniform.direction;
+    const float view_length = std::hypot(view[0], view[2]);
+    const float sun_length = std::hypot(direction[0], direction[2]);
+    float side = .5f;
+    if (view_length >= 1e-5f && sun_length >= 1e-5f)
+        side = std::clamp(.5f + .5f * (view[0] * direction[0] + view[2] * direction[2]) /
+                                     (view_length * sun_length), 0.f, 1.f);
+    const float angle = std::acos(std::clamp(view[0] * direction[0] + view[1] * direction[1] +
+                                               view[2] * direction[2], -1.f, 1.f));
+    const float glow = settings.glow_strength *
+        (std::exp(-angle * settings.glow_focus) +
+         .35f * side * side * side * std::exp(-std::max(view[1], 0.f) * 4.f));
+    auto result = mw34::sun::fog_color(settings, {.125f, .125f, .188f});
+    for (unsigned channel = 0; channel < 3; ++channel)
+        result[channel] = result[channel] * (settings.anti_haze + side * (1.f - settings.anti_haze)) +
+                          settings.glow_color[channel] * glow * .6f;
+    return result;
+}
+
+void check_campaign_fog_color() {
+    namespace vk = mw34::vkscene;
+    mw34::sun::Settings base;
+    base.enabled = true;
+    auto campaign = mw34::campaign::mission_sun_settings(
+        base, mw34::campaign::resolve_mission_lighting("c3m3"), true, false);
+    // Isolate distance haze from weather effects, keeping the real campaign haze/sky settings.
+    campaign.dust_intensity = campaign.valley_fog_density = campaign.heat_shimmer = 0;
+    campaign.rain_wetness = campaign.lava_glow = 0;
+    constexpr std::array<float, 3> authored{.125f, .125f, .188f};
+    require(mw34::sun::fog_color(base, authored) == authored,
+            "Lighting without an atmosphere profile changed the ZBD colour");
+    const auto haze = reference_haze_color(campaign, {0, 0, 1});
+    require(campaign.haze_manual && campaign.haze_color == std::array<float, 3>{.42f, .25f, .22f},
+            "c3m3 campaign haze fixture changed");
+    for (bool lighting_on : {false, true}) {
+        auto settings = campaign;
+        settings.enabled = lighting_on;
+        vk::Renderer renderer(vk::Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true, settings);
+        const auto selected = mw34::sun::fog_color(settings, authored);
+        require(selected == (lighting_on ? campaign.haze_color : authored),
+                "Campaign lighting colour selection lost its ZBD fallback");
+        std::uint16_t full_fog_pixel = 0;
+        std::uint64_t expected_haze_draws = 0;
+        for (float fraction : {.4f, .7f, 1.f}) {
+            cc::geometry::Fog fog;
+            fog.enabled = true;
+            fog.near_range = 48;
+            fog.inverse_range = 1.f / 1077.f;
+            fog.low_altitude = 80;
+            fog.inverse_altitude = 1.f / 20.f;
+            fog.edge_start = 1050;
+            fog.edge_inverse_range = 1.f / 150.f;
+            const float distance = fog.near_range + fraction * 1077.f;
+            const float amount = cc::geometry::fog_amount(fog, distance, 1.f);
+            require(std::abs(amount - fraction) < 2e-6f,
+                    "Proportional haze did not retain its linear density");
+            vk::Scene scene{};
+            scene.width = scene.height = 32;
+            scene.has_depth = true;
+            scene.color.resize(32 * 32);
+            scene.depth.resize(32 * 32);
+            scene.clears.push_back({3, {authored[0], authored[1], authored[2], 1}, 0,
+                                    {{{0, 0}, {32, 32}}}});
+            scene.order.push_back({true, 0});
+            const auto visibility = std::uint32_t(std::lround((1.f - amount) * 255.f)) << 24;
+            const platform::TLVertex vertices[]{
+                {0, 0, .5f, .5f, 0xff000000, visibility, 0, 0},
+                {32, 0, .5f, .5f, 0xff000000, visibility, 0, 0},
+                {32, 32, .5f, .5f, 0xff000000, visibility, 0, 0},
+                {0, 0, .5f, .5f, 0xff000000, visibility, 0, 0},
+                {32, 32, .5f, .5f, 0xff000000, visibility, 0, 0},
+                {0, 32, .5f, .5f, 0xff000000, visibility, 0, 0}};
+            const auto *bytes = reinterpret_cast<const unsigned char *>(vertices);
+            scene.vertices.assign(bytes, bytes + sizeof vertices);
+            vk::Draw draw{};
+            draw.count = 6;
+            draw.texture = -1;
+            draw.key = {0, 5, 6, 1, 7, 1, 1, 0};
+            draw.push.target[0] = draw.push.target[1] = 32;
+            draw.push.target[2] = .5f;
+            std::copy(authored.begin(), authored.end(), draw.push.fog);
+            draw.push.mode[0] = 2U | 16U;
+            draw.push.mode[1] = draw.push.mode[2] = 2U;
+            draw.scissor = {{0, 0}, {32, 32}};
+            auto view = std::make_shared<mw34::sun::Tl>();
+            view->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+            view->projection = {1, 16, 16, 16, 16, 800};
+            draw.sun_tl = view;
+            scene.draws.push_back(draw);
+            scene.order.push_back({false, 0});
+            renderer.render(scene);
+            if (lighting_on) ++expected_haze_draws;
+            require(std::equal(selected.begin(), selected.end(), scene.draws[0].push.fog),
+                    "Atmosphere did not apply the campaign/ZBD colour to push.fog");
+            require(renderer.haze_draws == expected_haze_draws,
+                    "Campaign haze draw routing changed");
+            const auto pixel = scene.color[16 * 32 + 16];
+            const std::array<float, 3> rgb{float((pixel >> 11) & 31) / 31.f,
+                                          float((pixel >> 5) & 63) / 63.f, float(pixel & 31) / 31.f};
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                const float expected = (lighting_on ? haze[channel] : authored[channel]) * amount;
+                // One 5-bit step + sky dither (half a 5-bit step), RGBA8 rounding,
+                // and the vertex visibility byte together fit inside .055 linear RGB.
+                require(std::abs(rgb[channel] - expected) < .055f,
+                        "Fogged pixel differs from CPU hazeColor/amount beyond dither precision");
+            }
+            if (lighting_on && fraction == 1.f) {
+                full_fog_pixel = pixel;
+                // At view.y == 0 < horizon_low, the actual dome must equal full haze.
+                scene.draws[0].sky = 1;
+                renderer.render(scene);
+                require(scene.color[16 * 32 + 16] == full_fog_pixel,
+                        "Fully fogged geometry did not match the below-horizon dome");
+            }
+        }
+    }
+}
+
+void check_distance_fog(SDL_Window *window, sdlfe::RendererBackend backend) {
+    const auto saved_fog = zmod::fog();
+    const auto saved_calc = zmod::fog_calc();
+    zmod::fog_calc() = {};
+    zmod::fog_calc().camera_to_world[1][1] = 1.f;
+    // All three vertices have horizontal radius 1 (the base uses a 3-4-5 triangle).
+    // Scaling the camera transform therefore gives constant fog over the whole triangle,
+    // allowing an independent numerical pixel check rather than just GPU/reference agreement.
+    const float positions[]{-.6f, -.6f, .8f, .6f, -.6f, .8f, 0.f, .6f, 1.f};
+    const std::uint32_t indices[]{2, 1, 0};
+    const auto source = cc::geometry::register_resource(
+        positions, 3, nullptr, 0, {{3, indices, nullptr, nullptr, false, true}});
+    cc::geometry::Material material;
+    material.color = 0xff000000;
+    constexpr float fractions[]{.4f, .7f, .95f, 1.f};
+    constexpr float mission_density[]{288.f / 718.f, 528.f / 718.f, 1.f, 1.f};
+    constexpr float edge_at_95[]{.6f, .6f, 7.f / 15.f, .2f, 0.f};
+    std::vector<std::uint32_t> gpu_pixels;
+    for (bool cpu_reference : {false, true}) {
+        sdlfe::CoreCriticalAssets options;
+        options.geometry = cpu_reference ? "cpu-reference" : "partial";
+        auto renderer = make_check_renderer(window, backend, {}, options);
+        renderer->set_viewport(0, 0, 32, 32);
+        std::size_t pixel_sample = 0;
+        for (bool altitude_band : {false, true}) {
+            for (bool mission_on : {false, true}) {
+                zmod::fog() = {};
+                zmod::fog_set_on(mission_on);
+                zmod::fog_set_linear(1);
+                zmod::fog_set_near(32.f);
+                zmod::fog_set_far(750.f);
+                zmod::fog_set_alt_low(altitude_band ? 80.f : 1000.f);
+                zmod::fog_set_alt_high(altitude_band ? 100.f : 1001.f);
+                for (std::size_t option_index = 0;
+                     option_index < std::size(zcls::kViewDistanceOptions); ++option_index) {
+                    const float view_distance =
+                        float(zcls::kViewDistanceOptions[option_index].view_distance);
+                    zmod::ScopedRenderFog scope(800.f, view_distance);
+                    const auto &render = zmod::render_fog();
+                    const auto edge = zmod::render_fog_edge();
+                    cc::geometry::Fog fog;
+                    fog.enabled = mission_on;
+                    fog.color = {1, 1, 1};
+                    fog.near_range = render.near_range;
+                    fog.inverse_range = render.inv_range;
+                    fog.low_altitude = render.alt_low;
+                    fog.inverse_altitude = render.inv_alt;
+                    fog.edge_start = edge.start;
+                    fog.edge_inverse_range = edge.inverse_range;
+                    for (std::size_t sample = 0; sample < std::size(fractions); ++sample) {
+                        const float distance = view_distance * fractions[sample];
+                        const float expected_edge = sample == 3 ? 1.f :
+                            (sample == 2 ? edge_at_95[option_index] : 0.f);
+                        for (float height : {1.f, 500.f}) {
+                            const float mission = mission_on && (!altitude_band || height < 80.f)
+                                                      ? mission_density[sample] : 0.f;
+                            const float expected = 1.f - (1.f - mission) * (1.f - expected_edge);
+                            const float vertex[]{0.f, height, distance};
+                            require(std::abs(zmod::fog_at(vertex) - expected) < 2e-6f &&
+                                        std::abs(cc::geometry::fog_amount(fog, distance, height) -
+                                                 expected) < 2e-6f,
+                                    "CPU/reference distance fog differs from the numerical fixture");
+                            std::array<float, 12> camera{distance, 0, 0, 0, distance, 0,
+                                                         0, 0, distance, 0, 0, 0};
+                            std::array<float, 12> world{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, height, 0};
+                            platform::ModelDrawContext context;
+                            context.model_to_camera = camera.data();
+                            context.model_to_world = world.data();
+                            context.ordinary = true;
+                            context.near_z = context.clip_near = 1;
+                            context.far_z = view_distance + 1;
+                            context.fx_near = context.fy_near = 16;
+                            context.cx = context.cy = 16;
+                            renderer->begin_scene();
+                            // Magenta makes a missing/culled black triangle fail at amount zero.
+                            renderer->clear(true, 255, 0, 255);
+                            require(renderer->submit_model_geometry(source, context, {material}, fog) ==
+                                        cc::geometry::Submission::submitted,
+                                    "Distance fog geometry was not submitted");
+                            renderer->end_scene();
+                            std::vector<std::uint32_t> pixels;
+                            int width{}, height_pixels{};
+                            require(renderer->read_back(&pixels, &width, &height_pixels) &&
+                                        width == 32 && height_pixels == 32,
+                                    "Distance fog readback extent changed");
+                            const auto pixel = pixels[16 * 32 + 16];
+                            for (unsigned shift : {0U, 8U, 16U})
+                                require(std::abs(float((pixel >> shift) & 255) - expected * 255.f) <= 8.f,
+                                        "GPU/reference fog amount differs beyond RGB565 precision");
+                            if (!cpu_reference)
+                                gpu_pixels.push_back(pixel);
+                            else {
+                                for (unsigned shift : {0U, 8U, 16U})
+                                    require(std::abs(int((pixel >> shift) & 255) -
+                                                     int((gpu_pixels.at(pixel_sample) >> shift) & 255)) <= 8,
+                                            "GPU/reference distance fog pixel mismatch");
+                            }
+                            ++pixel_sample;
+                        }
+                    }
+                }
+            }
+        }
+        require(pixel_sample == 160, "Distance fog fixture lost a scenario");
+        // Unequal radii and depths expose endpoint clamping: the old edge factors
+        // are 0/0/1, giving about half fog where the triangle reaches z == 3200.
+        const float crossing_positions[]{-500, -100, 3000, 500, -100, 3000, 0, 100, 3400};
+        const auto crossing = cc::geometry::register_resource(
+            crossing_positions, 3, nullptr, 0, {{3, indices, nullptr, nullptr, false, true}});
+        std::array<float, 12> camera{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+        std::array<float, 12> world{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 500, 0};
+        zmod::fog() = {};
+        zmod::ScopedRenderFog scope(800, 3200);
+        cc::geometry::Fog edge;
+        edge.color = {1, 1, 1};
+        edge.edge_start = 3050;
+        edge.edge_inverse_range = 1.f / 150.f;
+        std::vector<cc::geometry::ReferenceVertex> triangle(3);
+        for (unsigned index = 0; index < 3; ++index) {
+            auto &vertex = triangle[index];
+            std::copy_n(crossing_positions + index * 3, 3, vertex.camera.begin());
+            vertex.fog = cc::geometry::fog_factors(
+                edge, std::hypot(vertex.camera[0], vertex.camera[2]), vertex.camera[1] + 500);
+        }
+        const auto clipped = cc::geometry::clip_reference(triangle, 3200, false);
+        unsigned cut_vertices = 0;
+        for (const auto &vertex : clipped) {
+            if (vertex.camera[2] != 3200) continue;
+            require(cc::geometry::fog_amount(vertex.fog) == 1.f &&
+                        zmod::fog_at(vertex.camera.data()) == 1.f,
+                    "Crossing GPU-reference/CPU cut vertices retained visibility");
+            ++cut_vertices;
+        }
+        require(cut_vertices == 2, "Crossing fog fixture lost its cut vertices");
+        platform::ModelDrawContext context;
+        context.model_to_camera = camera.data();
+        context.model_to_world = world.data();
+        context.ordinary = true;
+        context.near_z = context.clip_near = 1;
+        context.far_z = 3200;
+        context.fx_near = 64;
+        // Magnify the y direction so row 15 is just inside the clipped edge.
+        context.fy_near = 3200;
+        context.cx = context.cy = 16;
+        renderer->begin_scene();
+        renderer->clear(true, 255, 0, 255);
+        require(renderer->submit_model_geometry(crossing, context, {material}, edge) ==
+                    cc::geometry::Submission::submitted,
+                "Crossing fog geometry was not submitted");
+        renderer->end_scene();
+        std::vector<std::uint32_t> pixels;
+        int width{}, height{};
+        require(renderer->read_back(&pixels, &width, &height) && width == 32 && height == 32,
+                "Crossing fog readback extent changed");
+        for (unsigned shift : {0U, 8U, 16U})
+            require(((pixels[15 * 32 + 16] >> shift) & 255) >= 247,
+                    "Crossing GPU/reference triangle exposed the far cut");
+    }
+    zmod::fog() = saved_fog;
+    zmod::fog_calc() = saved_calc;
+}
+
 void check_strict_geometry(SDL_Window *window, sdlfe::RendererBackend backend) {
     sdlfe::CoreCriticalAssets options;
     options.geometry = "gpu";

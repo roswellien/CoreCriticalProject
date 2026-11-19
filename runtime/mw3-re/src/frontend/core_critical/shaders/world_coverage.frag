@@ -7,6 +7,7 @@ layout(location=2) noperspective in vec4 colorSmooth;
 layout(location=3) flat in vec4 colorFlat;
 layout(location=4) noperspective in vec4 specularSmooth;
 layout(location=5) flat in vec4 specularFlat;
+layout(location=10) in vec4 fogFactors;
 layout(set=0,binding=0) uniform sampler2D image;
 layout(set=0,binding=1) uniform sampler2D reconstructedWorld;
 layout(location=0) out vec4 result;
@@ -48,6 +49,10 @@ void main() {
     uint flags = draw.mode.x;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
+    if (fogFactors.w > 0.5) {
+        vec3 amounts = clamp(fogFactors.xyz, 0.0, 1.0);
+        specular.a = (1.0 - amounts.x * amounts.y) * (1.0 - amounts.z);
+    }
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
     // Tinted world draws store their blend weight in mode.z, but renderer setup

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -72,7 +73,28 @@ struct Fog {
     bool enabled{};
     std::array<float, 3> color{};
     float near_range{}, inverse_range{}, low_altitude{}, inverse_altitude{};
+    float edge_start{}, edge_inverse_range{};
+    bool active() const { return enabled || edge_inverse_range > 0.f; }
 };
+
+// Keep the three linear factors separate and unclamped through clipping/interpolation.
+// Clamping a crossing triangle's endpoints first leaves visibility at the far cut.
+inline std::array<float, 3> fog_factors(const Fog &fog, float distance, float height) {
+    return {fog.enabled ? (distance - fog.near_range) * fog.inverse_range : 0.f,
+            fog.enabled ? 1.f - (height - fog.low_altitude) * fog.inverse_altitude : 0.f,
+            (distance - fog.edge_start) * fog.edge_inverse_range};
+}
+
+inline float fog_amount(const std::array<float, 3> &factors) {
+    const float mission = std::clamp(factors[0], 0.f, 1.f) * std::clamp(factors[1], 0.f, 1.f);
+    const float edge = std::clamp(factors[2], 0.f, 1.f);
+    return 1.f - (1.f - mission) * (1.f - edge);
+}
+
+// Float operations mirror the geometry shaders, with clamping at the final sample.
+inline float fog_amount(const Fog &fog, float distance, float height) {
+    return fog_amount(fog_factors(fog, distance, height));
+}
 
 struct Statistics {
     std::uint64_t submitted_models{}, skipped_vertices{}, skipped_polygons{}, unsupported_models{};

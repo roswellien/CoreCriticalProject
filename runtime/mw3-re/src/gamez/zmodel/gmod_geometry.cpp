@@ -410,19 +410,24 @@ bool submit_geometry(zcls::Node &node) {
     const auto &source_fog = render_fog();
     cc::geometry::Fog fog_state;
     fog_state.enabled = source_fog.on != 0;
-    std::copy_n(source_fog.color, 3, fog_state.color.begin());
+    std::copy_n(render_fog_color(), 3, fog_state.color.begin());
     fog_state.near_range = source_fog.near_range;
     fog_state.inverse_range = source_fog.inv_range;
     fog_state.low_altitude = source_fog.alt_low;
     fog_state.inverse_altitude = source_fog.inv_alt;
+    const auto edge = render_fog_edge();
+    fog_state.edge_start = edge.start;
+    fog_state.edge_inverse_range = edge.inverse_range;
     // Prepared assets own their materials. Admit their rigid draw before stock
     // registration and all native vertex/polygon loops, retaining effect-bearing
     // producers until their side effects have an explicit GPU contract.
     if (context.ordinary && !context.morphing && !context.overlay && !model.count(0x1c) &&
-        !draw_state().second_pass &&
-        renderer->submit_prepared_geometry(context, fog_state) ==
+        !draw_state().second_pass) {
+        if (zvid::submit_prepared_geometry_for_current_view(renderer, context,
+                                                             fog_state) ==
             cc::geometry::Submission::submitted)
-      return true;
+            return true;
+    }
     // Stock model packets do not carry sky state; keep the original TL producer.
     if (zvid::draw_state().native_sky) {
         // Static baking also indexes cached normals with vertex shading off.
@@ -446,7 +451,8 @@ bool submit_geometry(zcls::Node &node) {
         return unsupported();
     }
     const auto materials = copy_rigid_materials(model, *model.render_geometry);
-    if (renderer->submit_model_geometry(model.render_geometry, context, materials, fog_state) !=
+    if (zvid::submit_model_geometry_for_current_view(
+            renderer, model.render_geometry, context, materials, fog_state) !=
         cc::geometry::Submission::submitted)
         return unsupported();
     return true;

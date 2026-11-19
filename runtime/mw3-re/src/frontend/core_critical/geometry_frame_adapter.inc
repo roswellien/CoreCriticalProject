@@ -92,7 +92,8 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
   instance->geometry_near = context.clip_near;
   instance->geometry_fog0 = {fog.near_range, fog.inverse_range,
                              fog.low_altitude, fog.inverse_altitude};
-  instance->geometry_fog1 = {0, 0, fog.enabled ? 1.f : 0.f, 0};
+  instance->geometry_fog1 = {fog.edge_start, fog.edge_inverse_range,
+                             fog.enabled ? 1.f : 0.f, 0};
   instance->projection = {
       context.near_z,
       context.fx_near * scene_.width / viewport_[2],
@@ -127,7 +128,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     draw.push.target[1] = float(scene_.height);
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     draw.push.mode[0] = 2U | (material.texture >= 0 ? 4U : 0U) |
-                        (fog.enabled && !geometry_debug_ ? 16U : 0U);
+                        (fog.active() && !geometry_debug_ ? 16U : 0U);
     draw.push.mode[1] = material.texture >= 0 ? 4U | (2U << 8) : 2U;
     draw.push.mode[2] = material.texture >= 0 ? 2U | (2U << 8) : 2U;
     if (context.damage_tint_weight > 0.f) {
@@ -138,7 +139,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
         draw.push.mode[0] |= 512U;
     }
     draw.push.mode[3] = 0x80000000U; // Modern two-sided normal orientation.
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    draw.scissor = producer_scissor();
     apply_fixture_observation(draw, capture_fixture_range(*source, context, range, material.texture));
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));

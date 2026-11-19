@@ -8,6 +8,7 @@ layout(location=2) in vec4 colorSmooth;
 layout(location=3) flat in vec4 colorFlat;
 layout(location=4) in vec4 specularSmooth;
 layout(location=5) flat in vec4 specularFlat;
+layout(location=10) in vec4 fogFactors;
 layout(set=0,binding=0) uniform sampler2D image;
 layout(location=0) out vec4 result;
 // mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test,
@@ -51,6 +52,11 @@ void main() {
     uint flags = draw.mode.x;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
+    if (fogFactors.w > 0.5) {
+        // Native geometry shares this unlit fragment path. Clamp before any consumer.
+        vec3 amounts = clamp(fogFactors.xyz, 0.0, 1.0);
+        specular.a = (1.0 - amounts.x * amounts.y) * (1.0 - amounts.z);
+    }
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     if ((flags & 64u) != 0u) {
         // Match SDL's sharp layer sampling at the quad's actual output density.

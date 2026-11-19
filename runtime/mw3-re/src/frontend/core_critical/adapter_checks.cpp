@@ -19,6 +19,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_fogcalc.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "renderer/campaign_environment_policy.hpp"
@@ -49,12 +50,16 @@ bool get_active_surface_key(SurfaceKey *out);
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <string_view>
 
@@ -3018,6 +3023,8 @@ int main(int argc, char **argv) {
     else if (ultrawide_check)
       check_ultrawide(window, backend);
     else if (geometry_check) {
+      check_campaign_fog_color();
+      check_distance_fog(window, backend);
       check_owned_rigid_capture(window, backend);
       check_strict_geometry(window, backend);
       const auto gpu = check_native_geometry(window, backend);
@@ -3049,6 +3056,10 @@ int main(int argc, char **argv) {
     }
     if (native_wsi || material_check)
       check_fullscreen_resize(window, backend);
+    // The staging checks write a temp effect-light catalog and set effect-light environment
+    // variables (restored by their guards), so they run only in the --materials variants.
+    if (material_check)
+      check_local_light_staging(window, backend);
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;

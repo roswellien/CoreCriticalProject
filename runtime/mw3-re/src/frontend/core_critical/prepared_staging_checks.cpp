@@ -306,6 +306,67 @@ void checks() {
     same(*get(), reference());
     require(!first->vertices.empty() && !owned->vertices.empty(),
             "Eviction invalidated an owned result");
+    {
+        // Identical authored fog and geometry can still have different edge bands.
+        // This fails if the new render-only band is omitted from the cache signature.
+        const auto saved_fog = zmod::fog();
+        zmod::fog() = {};
+        platform::prepared::Batch edge_batch;
+        edge_batch.color = 0xffffffff;
+        edge_batch.vertices = {{-1, -1, 0, 0, 0, 1, 0, 0},
+                               {1, -1, 0, 0, 0, 1, 1, 0},
+                               {0, 1, 0, 0, 0, 1, .5f, 1}};
+        cc::PreparedBatchDraw edge_source;
+        edge_source.batch = &edge_batch;
+        edge_source.camera = edge_source.world = mw34::donor::identity();
+        edge_source.camera[11] = 750;
+        platform::ModelDrawContext edge_context;
+        edge_context.near_z = edge_context.clip_near = 1;
+        edge_context.far_z = 800;
+        edge_context.fx_near = edge_context.fy_near = 20;
+        edge_context.cx = edge_context.cy = 32;
+        cc::PreparedDrawCache edge_cache;
+        const auto stage_edge = [&] {
+            return edge_cache.get(edge_source, edge_context, viewport, width, height, geometry, false);
+        };
+        std::shared_ptr<const cc::PreparedSubmission> default_cover;
+        {
+            zmod::ScopedRenderFog scope(800, 800);
+            default_cover = stage_edge();
+        }
+        {
+            zmod::ScopedRenderFog scope(800, 1200);
+            const auto extended_cover = stage_edge();
+            require(extended_cover != default_cover &&
+                        extended_cover->vertices != default_cover->vertices &&
+                        edge_cache.statistics().misses == 2,
+                    "Prepared staging reused fog from another view-distance edge band");
+        }
+        {
+            zmod::ScopedRenderFog scope(800, 3200);
+            edge_batch.vertices = {{-500, -100, 3000, 0, 0, 1, 0, 0},
+                                   {500, -100, 3000, 0, 0, 1, 1, 0},
+                                   {0, 100, 3400, 0, 0, 1, .5f, 1}};
+            edge_source.camera = mw34::donor::identity();
+            edge_context.far_z = 3200;
+            const auto crossing = cc::prepare_draw(edge_source, edge_context, viewport, width,
+                                                    height, geometry, false);
+            require(!crossing.draw.model && crossing.clipped_triangles == 2,
+                    "Crossing prepared fog fixture did not use CPU depth clipping");
+            unsigned cut_vertices = 0;
+            for (std::size_t offset = 0; offset < crossing.vertices.size();
+                 offset += sizeof(platform::TLVertex)) {
+                platform::TLVertex vertex;
+                std::memcpy(&vertex, crossing.vertices.data() + offset, sizeof vertex);
+                if (vertex.sz != 1.f / 3200.f) continue;
+                require((vertex.specular >> 24) == 0,
+                        "CPU prepared crossing retained visibility at the far cut");
+                ++cut_vertices;
+            }
+            require(cut_vertices == 3, "CPU prepared crossing lost its triangulated cut vertices");
+        }
+        zmod::fog() = saved_fog;
+    }
 }
 
 static std::filesystem::path make_private_staging_dir(const char *prefix) {

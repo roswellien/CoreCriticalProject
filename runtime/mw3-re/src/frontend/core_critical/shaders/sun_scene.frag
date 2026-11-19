@@ -13,6 +13,7 @@ layout(location=6) in vec3 worldNormal;
 layout(location=7) in vec3 worldPosition;
 layout(location=8) in vec3 shadowPosition;
 layout(location=9) noperspective in vec2 screenPos;
+layout(location=10) in vec4 fogFactors;
 layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
@@ -289,6 +290,12 @@ void main() {
                                  : draw.mode.z;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
+    if (fogFactors.w > 0.5) {
+        // Clamp after interpolation, independently of flat colour/texture modes.
+        // Keep specular alpha in range before texture arguments, weather and fog use it.
+        vec3 amounts = clamp(fogFactors.xyz, 0.0, 1.0);
+        specular.a = (1.0 - amounts.x * amounts.y) * (1.0 - amounts.z);
+    }
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
     if(sun.skyBlend.w>2.99){ // Path debug: green per-frame TL terrain, blue GPU-kept world, magenta mech, yellow sky/haze-only.

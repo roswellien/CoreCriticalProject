@@ -11,11 +11,59 @@
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "mech3/options.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <iterator>
+#include <limits>
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace {
 constexpr float kAuthoredFar = 800.0f;
+std::vector<std::string> g_visual_far_log_lines;
+std::chrono::steady_clock::time_point g_visual_far_test_now{};
+
+std::chrono::steady_clock::time_point visual_far_test_clock_now() {
+  return g_visual_far_test_now;
+}
+
+void advance_visual_far_test_clock() {
+  g_visual_far_test_now += std::chrono::seconds(1);
+}
+
+void capture_visual_far_log(const char* line) {
+  g_visual_far_log_lines.emplace_back(line);
+}
+
+struct VisualFarLogSinkGuard {
+  zcls::VisualFarLogSink previous_sink = nullptr;
+
+  VisualFarLogSinkGuard() {
+    g_visual_far_log_lines.clear();
+    previous_sink = zcls::set_visual_far_log_sink(capture_visual_far_log);
+  }
+
+  ~VisualFarLogSinkGuard() {
+    zcls::set_visual_far_log_sink(previous_sink);
+    g_visual_far_log_lines.clear();
+  }
+};
+
+struct VisualFarLogClockGuard {
+  zcls::VisualFarLogNow previous_clock = nullptr;
+
+  VisualFarLogClockGuard() {
+    g_visual_far_test_now = {};
+    previous_clock = zcls::set_visual_far_log_clock_for_testing(visual_far_test_clock_now);
+  }
+
+  ~VisualFarLogClockGuard() {
+    zcls::set_visual_far_log_clock_for_testing(previous_clock);
+  }
+};
 
 struct CameraFrame {
   unsigned requested_far;
@@ -71,8 +119,8 @@ struct CameraFixture {
   zcls::Camera camera{};
   zcls::Window window{};
   zcls::World world{};
-  zcls::Partition partition{};
-  zcls::Partition* rows[1] = {&partition};
+  zcls::Partition partitions[25]{};
+  zcls::Partition* rows[5]{};
   const CameraFrame* frame = nullptr;
   int observed_passes = 0;
 
@@ -101,6 +149,8 @@ struct CameraFixture {
     world_node.data = &world;
     camera.nodes[0] = &world_node;
     camera.nodes[1] = &window_node;
+    for (std::size_t row = 0; row < std::size(rows); ++row)
+      rows[row] = &partitions[row * std::size(rows)];
     camera.put(0xd8, 1.0f);
     camera.put(0xdc, 1.0f);
     EXPECT(zcls::camera_set_clip(&camera_node, 1.0f, kAuthoredFar) == 0);
@@ -154,6 +204,26 @@ struct CameraFixture {
 
 TEST(view_distance_restores_render_camera_far_state) {
   CameraFixture fixture;
+  VisualFarLogClockGuard clock_guard;
+  VisualFarLogSinkGuard log_sink_guard;
+  zcls::world_render_hooks().begin_scene = [](void* context) {
+    auto& fixture = *static_cast<CameraFixture*>(context);
+    ++fixture.observed_passes;
+    const float render_far = static_cast<float>(fixture.frame->requested_far);
+    EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == render_far);
+    expect_far_state(fixture.camera, *fixture.frame, render_far);
+    constexpr zcls::ViewDistanceOption expected_edges[] = {
+        {800, 700}, {1200, 1050}, {1600, 1450}, {2400, 2250}, {3200, 3050}};
+    bool matched = false;
+    for (const auto& option : expected_edges) {
+      if (option.view_distance != fixture.frame->requested_far) continue;
+      EXPECT(zmod::render_fog_edge().start == option.fog_start);
+      EXPECT(zmod::render_fog_edge().inverse_range ==
+             1.0f / (render_far - option.fog_start));
+      matched = true;
+    }
+    EXPECT(matched);
+  };
   EXPECT(fixture.camera.get<float>(0x110) == 0.0f);
   for (int i = 0; i < 3; ++i) EXPECT(fixture.camera.floats(0xc4)[i] == 0.0f);
 
@@ -161,8 +231,11 @@ TEST(view_distance_restores_render_camera_far_state) {
       {1200, {10.0f, 30.0f, 20.0f}, 0.0f, 0.0f, 1.0f, 0.8f},
       {1200, {80.0f, 45.0f, -40.0f}, 0.2f, 0.7f, 1.0f, 0.8f},
       {1600, {80.0f, 45.0f, -40.0f}, -0.1f, -0.5f, 0.9f, 0.6f},
-      {800, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f}};
-  for (const auto& frame : frames) {
+      {800, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f},
+      {2400, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f},
+      {3200, {-20.0f, 25.0f, 60.0f}, 0.1f, 0.3f, 0.9f, 0.6f}};
+  for (std::size_t frame_index = 0; frame_index < std::size(frames); ++frame_index) {
+    const auto& frame = frames[frame_index];
     fixture.frame = &frame;
     zcls::set_visual_far_request(frame.requested_far);
     EXPECT(zcls::camera_set_position(&fixture.camera_node, frame.position[0],
@@ -175,7 +248,11 @@ TEST(view_distance_restores_render_camera_far_state) {
     }
     // render_world constructs the private scope BEFORE its camera_update call.
     // Check immediately on return, before another update could hide bad restoration.
+    if (frame_index >= 2) advance_visual_far_test_clock();
     EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    // The first two frames share one logged state; each later request changes it once.
+    const std::size_t expected_log_count = frame_index < 2 ? 1 : frame_index;
+    EXPECT(g_visual_far_log_lines.size() == expected_log_count);
     EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == kAuthoredFar);
     expect_far_state(fixture.camera, frame, kAuthoredFar);
     EXPECT(!zcls::visual_far_corners_need_update(false, kAuthoredFar,
@@ -188,11 +265,29 @@ TEST(view_distance_restores_render_camera_far_state) {
     zmth::pop();
     expect_far_state(fixture.camera, frame, kAuthoredFar);
   }
-  EXPECT(fixture.observed_passes == 4);
+  EXPECT(g_visual_far_log_lines.size() == 5);
+  EXPECT(g_visual_far_log_lines.at(0).find(
+             "requested 1200, authored 800, expanded 1.2e+03") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(0).find(
+             "full viewport 1 (window 3440x1440, render 3440x1440)") !=
+         std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(0).find(
+             "extended 1, default-800 fog-only 0; camera main") !=
+         std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(1).find(
+             "requested 1600, authored 800, expanded 1.6e+03") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(2).find(
+             "requested 800, authored 800, expanded 800") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(2).find(
+             "extended 0, default-800 fog-only 1; camera main") !=
+         std::string::npos);
+  EXPECT(fixture.observed_passes == 6);
 }
 
 TEST(default_visual_far_covers_only_full_viewport_fog) {
   CameraFixture fixture;
+  VisualFarLogClockGuard clock_guard;
+  VisualFarLogSinkGuard log_sink_guard;
   EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node, 1.0f, 0.8f) == 0);
   const zmod::Fog old_fog = zmod::fog();
   zmod::fog_set_on(1);
@@ -207,7 +302,9 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
     auto& fixture = *static_cast<CameraFixture*>(context);
     ++fixture.observed_passes;
     EXPECT(&zmod::render_fog() != &zmod::fog());
-    EXPECT(zmod::render_fog().near_range == 700.0f);
+    // POPIN-A preserves the authored haze; POPIN-B owns #368's default edge band.
+    EXPECT(zmod::render_fog().near_range == 300.0f);
+    EXPECT(zmod::render_fog_edge().start == 700.0f);
     EXPECT(zmod::render_fog().far_range == 800.0f);
     EXPECT(zmod::fog().on == 1);
     EXPECT(zmod::fog().linear == 1);
@@ -219,6 +316,7 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
 
   const CameraFrame expanded_frame = {1600, {10.0f, 30.0f, 20.0f},
                                       0.0f, 0.0f, 1.0f, 0.8f};
+  advance_visual_far_test_clock();
   fixture.frame = &expanded_frame;
   zcls::set_visual_far_request(expanded_frame.requested_far);
   hooks.begin_scene = [](void* context) {
@@ -227,8 +325,8 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
     EXPECT(zcls::visual_far_for_render(&fixture.camera, kAuthoredFar) == 1600.0f);
     EXPECT(fixture.camera.get<float>(0x110) == -1600.0f);
     EXPECT(zmod::draw_state().clip.far_z == 1600.0f);
-    EXPECT(zmod::render_fog().near_range ==
-           zcls::fog_start_for_view_distance(fixture.frame->requested_far));
+    EXPECT(zmod::render_fog().near_range == 600.0f);
+    EXPECT(zmod::render_fog_edge().start == 1450.0f);
     EXPECT(zmod::render_fog().far_range == 1600.0f);
   };
   EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
@@ -261,7 +359,233 @@ TEST(default_visual_far_covers_only_full_viewport_fog) {
     EXPECT(&zmod::render_fog() == &zmod::fog());
   }
   EXPECT(fixture.observed_passes == 4);
+  EXPECT(g_visual_far_log_lines.size() == 4);
+  EXPECT(g_visual_far_log_lines.at(0).find(
+             "scoped fog 300..800, mission fog linear 1 on 1") !=
+         std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(1).find(
+             "scoped fog 600..1.6e+03, mission fog linear 1 on 1") !=
+         std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(3).find(
+             "requested 800, authored 800, expanded 800") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(3).find("camera zoom") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(3).find(
+             "scoped fog 300..800, mission fog linear 1 on 1") !=
+         std::string::npos);
   EXPECT(zmod::fog().near_range == authored_fog.near_range);
   EXPECT(zmod::fog().far_range == authored_fog.far_range);
+  zmod::fog() = old_fog;
+}
+
+TEST(view_distance_log_deduplicates_each_camera_class) {
+  CameraFixture fixture;
+  VisualFarLogClockGuard clock_guard;
+  VisualFarLogSinkGuard log_sink_guard;
+  const CameraFrame frame = {1200, {10.0f, 30.0f, 20.0f},
+                             0.0f, 0.0f, 1.0f, 0.8f};
+
+  auto render_frame = [&](unsigned requested_far, bool zoom, int32_t viewport_width,
+                          int32_t viewport_height) {
+    CameraFrame active_frame = frame;
+    active_frame.requested_far = requested_far;
+    fixture.frame = &active_frame;
+    zcls::set_visual_far_request(requested_far);
+    EXPECT(zcls::camera_set_position(&fixture.camera_node, active_frame.position[0],
+        active_frame.position[1], active_frame.position[2]) == 0);
+    EXPECT(zcls::camera_set_rotation(&fixture.camera_node, active_frame.pitch,
+        active_frame.yaw, 0.0f) == 0);
+    EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node,
+        active_frame.horizontal_fov, active_frame.vertical_fov) == 0);
+    fixture.window.put<int32_t>(8, viewport_width);
+    fixture.window.put<int32_t>(12, viewport_height);
+    if (zoom) {
+      zcls::ScopedZoomVisualFar zoom_scope(&fixture.camera);
+      EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    } else {
+      EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    }
+  };
+
+  render_frame(1200, false, 3440, 1440);
+  render_frame(1200, true, 3440, 1440);
+  render_frame(1200, false, 3440, 1440);
+  render_frame(1200, true, 3440, 1440);
+  EXPECT(g_visual_far_log_lines.size() == 2);
+  EXPECT(g_visual_far_log_lines.at(0).find("camera main") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(1).find("camera zoom") != std::string::npos);
+
+  advance_visual_far_test_clock();
+  render_frame(1600, false, 3440, 1440);
+  render_frame(1600, true, 3440, 1440);
+  render_frame(1600, false, 3440, 1440);
+  render_frame(1600, true, 3440, 1440);
+  EXPECT(g_visual_far_log_lines.size() == 4);
+
+  advance_visual_far_test_clock();
+  render_frame(800, false, 90, 90);
+  render_frame(800, false, 90, 90);
+  EXPECT(g_visual_far_log_lines.size() == 5);
+  render_frame(800, false, 1720, 720);
+  render_frame(800, false, 1720, 720);
+  EXPECT(g_visual_far_log_lines.size() == 6);
+  EXPECT(g_visual_far_log_lines.at(4).find("camera other") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(4).find("window 90x90") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(5).find("window 1720x720") != std::string::npos);
+}
+
+TEST(view_distance_log_rate_cap_is_deterministic_and_preserves_camera_classes) {
+  CameraFixture fixture;
+  VisualFarLogClockGuard clock_guard;
+  VisualFarLogSinkGuard log_sink_guard;
+  const CameraFrame frame = {1200, {10.0f, 30.0f, 20.0f},
+                             0.0f, 0.0f, 1.0f, 0.8f};
+  auto render_frame = [&](unsigned requested_far, bool zoom, int32_t viewport_width,
+                          int32_t viewport_height) {
+    CameraFrame active_frame = frame;
+    active_frame.requested_far = requested_far;
+    fixture.frame = &active_frame;
+    zcls::set_visual_far_request(requested_far);
+    EXPECT(zcls::camera_set_position(&fixture.camera_node, active_frame.position[0],
+        active_frame.position[1], active_frame.position[2]) == 0);
+    EXPECT(zcls::camera_set_rotation(&fixture.camera_node, active_frame.pitch,
+        active_frame.yaw, 0.0f) == 0);
+    EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node,
+        active_frame.horizontal_fov, active_frame.vertical_fov) == 0);
+    fixture.window.put<int32_t>(8, viewport_width);
+    fixture.window.put<int32_t>(12, viewport_height);
+    if (zoom) {
+      zcls::ScopedZoomVisualFar zoom_scope(&fixture.camera);
+      EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    } else {
+      EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    }
+  };
+
+  // Unseen classes reserve two slots while main-camera states attempt to flood.
+  render_frame(1200, false, 3440, 1440);
+  for (int index = 0; index < 40; ++index)
+    render_frame(index % 2 == 0 ? 1600 : 800, false, 3440, 1440);
+  EXPECT(g_visual_far_log_lines.size() == 2);
+
+  // Both new classes still get their first line, filling the four-line cap.
+  render_frame(800, true, 90, 90);
+  render_frame(800, false, 90, 90);
+  EXPECT(g_visual_far_log_lines.size() == zcls::kVisualFarLogLinesPerSecond);
+  EXPECT(g_visual_far_log_lines.at(0).find("camera main") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(2).find("camera zoom") != std::string::npos);
+  EXPECT(g_visual_far_log_lines.at(3).find("camera other") != std::string::npos);
+
+  // Four distinct main-camera states fit in one fresh window and all are logged.
+  advance_visual_far_test_clock();
+  const unsigned main_requests[] = {1200, 1600, 800, 1200};
+  for (unsigned requested_far : main_requests)
+    render_frame(requested_far, false, 3440, 1440);
+  EXPECT(g_visual_far_log_lines.size() ==
+         2 * zcls::kVisualFarLogLinesPerSecond);
+
+  // Alternating states beyond the cap cannot add lines in the same window.
+  for (int index = 0; index < 40; ++index)
+    render_frame(index % 2 == 0 ? 1600 : 800, false, 3440, 1440);
+  EXPECT(g_visual_far_log_lines.size() ==
+         2 * zcls::kVisualFarLogLinesPerSecond);
+
+  // At the rolling-window boundary, a new main-camera state is admitted again.
+  advance_visual_far_test_clock();
+  render_frame(1600, false, 3440, 1440);
+  EXPECT(g_visual_far_log_lines.size() ==
+         2 * zcls::kVisualFarLogLinesPerSecond + 1);
+}
+
+TEST(view_distance_virtual_tiler_usage_line_is_logged) {
+  CameraFixture fixture;
+  VisualFarLogSinkGuard log_sink_guard;
+  const CameraFrame frame = {800, {0.0f, 30.0f, 0.0f}, 0.0f, 0.0f, 1.0f, 0.8f};
+  fixture.frame = &frame;
+  EXPECT(zcls::camera_set_position(&fixture.camera_node, 0.0f, 30.0f, 0.0f) == 0);
+  EXPECT(zcls::camera_set_rotation(&fixture.camera_node, 0.0f, 0.0f, 0.0f) == 0);
+  EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node, 1.0f, 0.8f) == 0);
+  zcls::set_visual_far_request(800);
+  EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+  fixture.window.put<int32_t>(8, 90);
+  fixture.window.put<int32_t>(12, 90);
+  {
+    zcls::ScopedZoomVisualFar zoom_scope(&fixture.camera);
+    EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+  }
+  EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+
+  fixture.world.put<int32_t>(0x50, 1);
+  fixture.world.put<int32_t>(0x54, 5);
+  fixture.world.put<int32_t>(0x58, 5);
+  fixture.world.put<int32_t>(0x5c, 0);
+  fixture.world.put<int32_t>(0x60, 0);
+  fixture.world.put<float>(0x34, -2000.0f);
+  fixture.world.put<float>(0x38, -2000.0f);
+  fixture.world.put<float>(0x44, 2000.0f);
+  fixture.world.put<float>(0x48, 2000.0f);
+  fixture.world.put<float>(0x64, 4000.0f);
+  fixture.world.put<float>(0x68, 4000.0f);
+  fixture.world.put<float>(0x6c, -2000.0f);
+  fixture.world.put<float>(0x70, -2000.0f);
+  fixture.world.put<float>(0x74, 1.0f / 800.0f);
+  fixture.world.put<float>(0x78, 1.0f / 800.0f);
+  fixture.world.put<int32_t>(0x88, 5);
+  fixture.world.put<int32_t>(0x8c, 5);
+  for (int32_t row = 0; row < 5; ++row) {
+    for (int32_t column = 0; column < 5; ++column) {
+      auto& partition = fixture.partitions[row * 5 + column];
+      partition.put<uint32_t>(4, 1);
+      partition.put<float>(8, static_cast<float>(column * 800 + 400));
+      partition.put<float>(0xc, static_cast<float>(row * 800 + 400));
+    }
+  }
+  fixture.window.put<int32_t>(8, 3440);
+  fixture.window.put<int32_t>(12, 1440);
+  EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+  EXPECT(std::any_of(g_visual_far_log_lines.begin(), g_visual_far_log_lines.end(),
+      [](const std::string& line) {
+        return line.find("mw3: virtual view cells: rings ") == 0 &&
+               line.find("max cells per ring ") != std::string::npos;
+      }));
+}
+
+TEST(view_distance_log_floats_tolerate_animation_and_nan) {
+  CameraFixture fixture;
+  VisualFarLogClockGuard clock_guard;
+  VisualFarLogSinkGuard log_sink_guard;
+  const zmod::Fog old_fog = zmod::fog();
+  const CameraFrame frame = {800, {10.0f, 30.0f, 20.0f},
+                             0.0f, 0.0f, 1.0f, 0.8f};
+  zmod::fog_set_on(1);
+  zmod::fog_set_linear(0);
+  zmod::fog_set_far(700.0f);
+  fixture.frame = &frame;
+  EXPECT(zcls::camera_set_position(&fixture.camera_node, frame.position[0],
+      frame.position[1], frame.position[2]) == 0);
+  EXPECT(zcls::camera_set_rotation(&fixture.camera_node, frame.pitch,
+      frame.yaw, 0.0f) == 0);
+  EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node,
+      frame.horizontal_fov, frame.vertical_fov) == 0);
+  zcls::set_visual_far_request(800);
+
+  auto render_frame = [&]() {
+    EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+  };
+
+  zmod::fog_set_near(300.0f);
+  render_frame();
+  zmod::fog_set_near(300.25f);
+  render_frame();
+  EXPECT(g_visual_far_log_lines.size() == 1);
+  zmod::fog_set_near(300.75f);
+  render_frame();
+  EXPECT(g_visual_far_log_lines.size() == 2);
+  const float not_a_number = std::numeric_limits<float>::quiet_NaN();
+  advance_visual_far_test_clock();
+  zmod::fog_set_near(not_a_number);
+  render_frame();
+  render_frame();
+  EXPECT(g_visual_far_log_lines.size() == 3);
+
   zmod::fog() = old_fog;
 }
