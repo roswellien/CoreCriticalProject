@@ -83,6 +83,9 @@ class Screen2D {
   virtual ~Screen2D() = default;
   virtual void begin_overlay_16(const uint16_t*, int, int, int) {}
   virtual void cancel_overlay_16() {}
+  virtual void begin_menu_observation(const uint16_t*, int, int, int) {}
+  virtual void cancel_menu_observation() noexcept {}
+  virtual void finish_menu_observation() noexcept {}
   virtual void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) = 0;
   // FIX (A): the back buffer locked over a Direct3D frame (0x00576d00 /
   // 0x00576d60): what the 2D code drew into the 16-bit layer goes over the
