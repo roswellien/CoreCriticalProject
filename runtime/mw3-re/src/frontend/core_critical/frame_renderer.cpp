@@ -663,6 +663,10 @@ public:
     return terms.vertices + terms.color_depth + terms.draws + terms.order + terms.textures +
            terms.clears;
   }
+  static testing::PacketByteBreakdown packet_byte_breakdown_for_test(const vk::Scene &scene) {
+    const auto terms = packet_byte_terms(scene);
+    return {terms.geometry, terms.lit_normals, checked_packet_total(terms)};
+  }
   testing::StagingTestState staging_state_for_test() {
     return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
             staging_first_flush_bytes_, staging_first_flush_packets_,
@@ -2358,6 +2362,9 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
 }
 
+testing::PacketByteBreakdown testing::packet_byte_breakdown(const mw34::vkscene::Scene &scene) {
+    return FrameRenderer::packet_byte_breakdown_for_test(scene);
+}
 testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) {
     auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
     if (!typed)
