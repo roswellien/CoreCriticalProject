@@ -4434,15 +4434,20 @@ private:
         {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0},
          {5, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0}}};
     const bool lit_tl = lit && !model;
-    vi.vertexBindingDescriptionCount = lit_tl ? 3 : (world || !model ? 2 : 1);
+    // The count must follow the SAME order as the pointer below, and come from the chosen array:
+    // a world draw can also be lit_tl, and its two-element array must not be read as three.
+    vi.vertexBindingDescriptionCount = world    ? uint32_t(wb.size())
+                                       : lit_tl ? uint32_t(tb.size())
+                                       : model  ? 1u
+                                                : uint32_t(fog_bindings.size());
     vi.pVertexBindingDescriptions = world    ? wb.data()
                                     : lit_tl ? tb.data()
                                     : model  ? &vb
                                              : fog_bindings.data();
-    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5 : 4)
-                                         : model  ? 3
-                                         : lit_tl ? 6
-                                                  : 5;
+    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5u : 4u)
+                                         : model  ? 3u
+                                         : lit_tl ? uint32_t(ta.size())
+                                                  : uint32_t(fog_attributes.size());
     vi.pVertexAttributeDescriptions = world    ? wa.data()
                                       : model  ? ma.data()
                                       : lit_tl ? ta.data()
