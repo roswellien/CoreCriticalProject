@@ -35,11 +35,43 @@ class DrawObserver {
   virtual void image(const zimg::Texture*, int32_t x, int32_t y, uint16_t key, const BlitRect*) = 0;
   virtual void pixel(const uint16_t* destination, uint16_t colour) = 0;
   virtual void span(const uint16_t* destination, uint32_t count, uint16_t colour) = 0;
+  virtual void resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
+                               uint32_t pitch_bytes, const char* operation) {
+    (void)width, (void)height, (void)pitch_bytes;
+    framebuffer_write(destination, operation);
+  }
   virtual void framebuffer_write(const void* target, const char* operation) = 0;
 };
 DrawObserver* draw_observer();
 void set_draw_observer(DrawObserver*);
 void observe_framebuffer_write(const void* target, const char* operation);
+void observe_resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
+                             uint32_t pitch_bytes, const char* operation);
+
+// HD menu presentation policy (owner decisions, 2026-11-19). The original
+// menus were authored for a 4:3 screen, so their controls, text and cursor
+// stay in that 4:3 layout and scale together with it; only the background
+// image fills the whole output resolution (cover scaling, no pillarbox).
+// Keeping text and the cursor on the menu's scale is what keeps visible
+// controls and hit testing in agreement at any window size.
+inline constexpr bool kMenuKeepsFourByThreeLayout = true;
+inline constexpr bool kMenuBackgroundFillsScreen = true;
+inline constexpr bool kMenuTextScalesWithMenu = true;
+// Cursor draws and restores share the menu's logical coordinate space so
+// hotspot offsets, screen-edge clipping and hit testing agree. Setting this
+// false (a physical-pixel cursor) is not implemented and falls back visibly.
+inline constexpr bool kCursorUsesMenuLogicalTransform = true;
+
+class ScopedMuteDrawObserver {
+ public:
+  ScopedMuteDrawObserver();
+  ~ScopedMuteDrawObserver();
+  ScopedMuteDrawObserver(const ScopedMuteDrawObserver&) = delete;
+  ScopedMuteDrawObserver& operator=(const ScopedMuteDrawObserver&) = delete;
+
+ private:
+  DrawObserver* saved_;
+};
 
 // FIX (A): the program's 16-bit layer over the Direct3D frame (app_engine)
 // starts as `key`, not the frame the original's locked back buffer held, so

@@ -16,13 +16,6 @@ std::vector<MenuBackgroundBlit> g_menu_background_blits;
 std::vector<MenuBackgroundBlit> g_recent_menu_background_blits;
 unsigned g_menu_background_age = 3;
 bool g_menu_background_draw_seen = false;
-class MuteObserver {
- public:
-  MuteObserver() : saved_(g_observer) { g_observer = nullptr; }
-  ~MuteObserver() { g_observer = saved_; }
- private:
-  DrawObserver* saved_;
-};
 
 // 565: red and blue by alpha/256 of the difference, green rounded to an odd
 // count of its units when it falls (the code keeps bit 5 for the sign).
@@ -104,12 +97,33 @@ void set_draw_observer(DrawObserver* value) { g_observer = value; }
 void observe_framebuffer_write(const void* target, const char* operation) {
   if (g_observer) g_observer->framebuffer_write(target, operation);
 }
+void observe_resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
+                             uint32_t pitch_bytes, const char* operation) {
+  if (g_observer) g_observer->resolved_region(destination, width, height, pitch_bytes, operation);
+}
+ScopedMuteDrawObserver::ScopedMuteDrawObserver() : saved_(g_observer) { g_observer = nullptr; }
+ScopedMuteDrawObserver::~ScopedMuteDrawObserver() { g_observer = saved_; }
 LayerCover& layer_cover() { return g_cover; }
 
 // Mech3.exe 1.2 @ 0x0055b3c0
 void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const BlitRect* src) {
-  if (g_observer) g_observer->image(img, x, y, key, src);
-  MuteObserver mute;
+  DrawObserver* const observer = g_observer;
+  const int32_t orig_x = x, orig_y = y;
+  const BlitRect* const orig_src = src;
+  const bool valid_image = img && img->pixels && img->width > 0 && img->height > 0 &&
+                           img->width <= 2048 && img->height <= 2048 &&
+                           img->width_again >= img->width &&
+                           (!img->palette || img->palette_count > 0);
+  const bool post_resolve_alpha =
+      observer && !g_cover.alpha && g_target.base && valid_image && img->alpha;
+  const bool candidate_full_unkeyed =
+      observer && !g_cover.alpha && g_target.base && valid_image && !img->palette && !img->alpha &&
+      !(img->flags & zimg::kAlpha) &&
+      g_target.pitch == static_cast<uint32_t>(img->width_again * 2);
+  if (observer && !post_resolve_alpha && !candidate_full_unkeyed)
+    observer->image(img, orig_x, orig_y, key, orig_src);
+  ScopedMuteDrawObserver mute;
+  if (!img) return;
   // FIX (B): a source rectangle reaching past the image is cut at its edges;
   // the original reads past the pixels. The menus pass the screen's size as
   // the rectangle of their 1280x960 background, so at taller or wider screens
@@ -138,12 +152,19 @@ void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const 
     w = src->right - src->left;
     h = src->bottom - src->top;
   }
-  if (w < 0 || w > 0x800 || h < 0 || h > 0x800) return;
+  if (w < 0 || w > 0x800 || h < 0 || h > 0x800) {
+    if (candidate_full_unkeyed) observer->image(img, orig_x, orig_y, key, orig_src);
+    return;
+  }
   const Target2D& t = g_target;
   uint32_t x2 = static_cast<uint32_t>(w + x - 1);
   const int32_t y_end = h + y;
   uint32_t y2 = static_cast<uint32_t>(y_end - 1);
-  if (w + x <= 0 || x >= static_cast<int32_t>(t.width) || y_end <= 0 || y >= static_cast<int32_t>(t.height)) return;
+  if (w + x <= 0 || x >= static_cast<int32_t>(t.width) || y_end <= 0 ||
+      y >= static_cast<int32_t>(t.height)) {
+    if (candidate_full_unkeyed) observer->image(img, orig_x, orig_y, key, orig_src);
+    return;
+  }
   const int32_t left = x < 0 ? 0 : x;
   if (x2 >= t.width) x2 = t.width - 1;
   const int32_t top = y < 0 ? 0 : y;
@@ -172,6 +193,13 @@ void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const 
   uint16_t* dst = reinterpret_cast<uint16_t*>(t.base) + (pitch * top + left);
   const bool full = left == 0 && x2 == t.width - 1 && pitch == stride;
   const bool keyed = (img->flags & zimg::kAlpha) != 0;
+  // The fast copy advances contiguously through padding instead of advancing
+  // source and destination rows. A rectangular image quad cannot reproduce it.
+  if (observer && full && pitch != static_cast<int32_t>(t.width) && !img->alpha && !keyed)
+    observer->framebuffer_write(t.base, "padded full blit");
+  const bool full_odd_copy = candidate_full_unkeyed && full && ((rows * width) & 1) != 0;
+  if (candidate_full_unkeyed && !full_odd_copy)
+    observer->image(img, orig_x, orig_y, key, orig_src);
   const int32_t lo = t.format == 6 ? 3 : 7;  // alphas at or below are skipped
 
   if (!img->palette) {
@@ -179,11 +207,24 @@ void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const 
     if (img->alpha) {
       const uint8_t* a = img->alpha + col + row * stride;
       for (int32_t r = 0; r < rows; ++r, dst += pitch, s += stride, a += stride) {
+        int32_t run_start = -1;
         for (int32_t c = 0; c < width; ++c) {
           const uint32_t al = a[c];
-          if (al <= static_cast<uint32_t>(lo)) continue;
+          if (al <= static_cast<uint32_t>(lo)) {
+            if (post_resolve_alpha && run_start >= 0) {
+              observer->resolved_region(dst + run_start, static_cast<uint32_t>(c - run_start), 1,
+                                        t.pitch, "alpha blit");
+              run_start = -1;
+            }
+            continue;
+          }
+          if (post_resolve_alpha && run_start < 0) run_start = c;
           if (al >= 0xfc) dst[c] = s[c], cover_opaque(dst + c);
           else dst[c] = cover_blend(dst + c, s[c], al, t.format == 6);
+        }
+        if (post_resolve_alpha && run_start >= 0) {
+          observer->resolved_region(dst + run_start, static_cast<uint32_t>(width - run_start), 1,
+                                    t.pitch, "alpha blit");
         }
       }
       return;
@@ -197,6 +238,14 @@ void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const 
     if (full) {  // one copy by dwords: an odd last pixel is left out (as written)
       const int32_t n = (rows * width) >> 1;
       for (int32_t i = 0; i < 2 * n; ++i) dst[i] = s[i], cover_opaque(dst + i);
+      if (full_odd_copy) {
+        if (rows > 1)
+          observer->resolved_region(dst, static_cast<uint32_t>(width),
+                                    static_cast<uint32_t>(rows - 1), t.pitch, "full odd blit");
+        if (width > 1)
+          observer->resolved_region(dst + (rows - 1) * pitch, static_cast<uint32_t>(width - 1), 1,
+                                    t.pitch, "full odd blit");
+      }
       return;
     }
     for (int32_t r = 0; r < rows; ++r, dst += pitch, s += stride)
@@ -209,13 +258,44 @@ void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const 
   const uint16_t* pal = img->palette;
   const uint8_t* s = static_cast<const uint8_t*>(img->pixels) + col + row * stride;
   if (img->alpha) {
+    // An index past the palette reads whatever follows it (as the original does), so the
+    // resolved colour is not something a run snapshot can vouch for. Hand the observer the
+    // whole image instead, which it rejects visibly, and still draw on the CPU below.
+    bool report_runs = post_resolve_alpha;
+    if (report_runs) {
+      const uint8_t* check_s = s;
+      const uint8_t* check_a = img->alpha + col + row * stride;
+      for (int32_t r = 0; r < rows && report_runs; ++r, check_s += stride, check_a += stride) {
+        for (int32_t c = 0; c < width; ++c) {
+          if (check_a[c] <= static_cast<uint32_t>(lo)) continue;
+          if (check_s[c] >= static_cast<uint32_t>(img->palette_count)) {
+            observer->image(img, orig_x, orig_y, key, orig_src);
+            report_runs = false;
+            break;
+          }
+        }
+      }
+    }
     const uint8_t* a = img->alpha + col + row * stride;
     for (int32_t r = 0; r < rows; ++r, dst += pitch, s += stride, a += stride) {
+      int32_t run_start = -1;
       for (int32_t c = 0; c < width; ++c) {
         const uint32_t al = a[c];
-        if (al <= static_cast<uint32_t>(lo)) continue;
+        if (al <= static_cast<uint32_t>(lo)) {
+          if (report_runs && run_start >= 0) {
+            observer->resolved_region(dst + run_start, static_cast<uint32_t>(c - run_start), 1,
+                                      t.pitch, "alpha blit");
+            run_start = -1;
+          }
+          continue;
+        }
+        if (report_runs && run_start < 0) run_start = c;
         if (al >= 0xfc) dst[c] = pal[s[c]], cover_opaque(dst + c);
         else dst[c] = cover_blend(dst + c, pal[s[c]], al, t.format == 6);
+      }
+      if (report_runs && run_start >= 0) {
+        observer->resolved_region(dst + run_start, static_cast<uint32_t>(width - run_start), 1,
+                                  t.pitch, "alpha blit");
       }
     }
     return;

@@ -8,6 +8,7 @@
 
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zreader/zreader.h"
+#include "gamez/zrender/zrndr_blit.h"
 #include "gamez/ztwod/twod.h"
 
 namespace ztwod {
@@ -486,6 +487,19 @@ void Cursor::grab_at(int32_t px, int32_t py) {
     b.top = r.top - py;
     b.right = r.right - px;
     b.bottom = r.bottom - py;
+    // FIX (host): SdlTwodHost::screen_grab_rect packs a clipped capture at
+    // the image origin, but erase() reads it through `b`, a crop in cursor
+    // coordinates, so at the left/top screen edge the restore was shifted.
+    // Move the rows into cursor coordinates, bottom-up so overlapping rows
+    // are not overwritten before they are copied.
+    if (b.left != 0 || b.top != 0) {
+      auto* pixels = static_cast<uint16_t*>(under->pixels);
+      for (int32_t row = b.bottom - b.top; row > 0; --row) {
+        std::memmove(pixels + (row - 1 + b.top) * under->width_again + b.left,
+                     pixels + (row - 1) * under->width_again,
+                     static_cast<size_t>(b.right - b.left) * sizeof(uint16_t));
+      }
+    }
     set_background(under, &b);
   } else {
     set_background(nullptr, &g_zero_rect);
@@ -494,12 +508,84 @@ void Cursor::grab_at(int32_t px, int32_t py) {
 
 // Mech3.exe 1.2 @ 0x005a7a20
 void Cursor::draw() {
+  if (!zrndr::kCursorUsesMenuLogicalTransform) {
+    zrndr::observe_framebuffer_write(zrndr::target2d().base, "unsupported physical cursor policy");
+    zrndr::ScopedMuteDrawObserver mute;
+    host().blit(image, x < 0 ? 0 : x, y < 0 ? 0 : y, 0, &bg_rect);
+    return;
+  }
   host().blit(image, x < 0 ? 0 : x, y < 0 ? 0 : y, 0, &bg_rect);
 }
 
 // Mech3.exe 1.2 @ 0x005a7a50
 void Cursor::erase() {
-  if (background) host().blit(background, x < 0 ? 0 : x, y < 0 ? 0 : y, 0, &bg_rect);
+  if (!background) return;
+  const int32_t draw_x = x < 0 ? 0 : x;
+  const int32_t draw_y = y < 0 ? 0 : y;
+  {
+    zrndr::ScopedMuteDrawObserver mute;
+    host().blit(background, draw_x, draw_y, 0, &bg_rect);
+  }
+  if (!zrndr::draw_observer()) return;
+  if (!zrndr::kCursorUsesMenuLogicalTransform) {
+    zrndr::observe_framebuffer_write(zrndr::target2d().base, "unsupported physical cursor policy");
+    return;
+  }
+  const zrndr::Target2D& target = zrndr::target2d();
+  if (!target.base || target.width == 0 || target.height == 0 || target.pitch < target.width * 2)
+    return;
+  int32_t bx = draw_x;
+  int32_t by = draw_y;
+  Rect cut = bg_rect;
+  if (cut.left < 0) {
+    bx -= cut.left;
+    cut.left = 0;
+  }
+  if (cut.top < 0) {
+    by -= cut.top;
+    cut.top = 0;
+  }
+  if (cut.right > background->width) cut.right = background->width;
+  if (cut.bottom > background->height) cut.bottom = background->height;
+  const int32_t w = cut.right - cut.left;
+  const int32_t h = cut.bottom - cut.top;
+  if (w <= 0 || w > 0x800 || h <= 0 || h > 0x800) return;
+  if (w + bx <= 0 || bx >= static_cast<int32_t>(target.width) || h + by <= 0 ||
+      by >= static_cast<int32_t>(target.height))
+    return;
+  const int32_t left = bx < 0 ? 0 : bx;
+  uint32_t x2 = static_cast<uint32_t>(w + bx - 1);
+  if (x2 >= target.width) x2 = target.width - 1;
+  const int32_t top = by < 0 ? 0 : by;
+  uint32_t y2 = static_cast<uint32_t>(h + by - 1);
+  if (y2 >= target.height) y2 = target.height - 1;
+  const int32_t width = static_cast<int32_t>(x2) - left + 1;
+  const int32_t rows = static_cast<int32_t>(y2) - top + 1;
+  if (width <= 0 || rows <= 0) return;
+  const int32_t pitch_px = static_cast<int32_t>(target.pitch >> 1);
+  const uint16_t* const dst =
+      reinterpret_cast<const uint16_t*>(target.base) + (pitch_px * top + left);
+  if (!background->alpha && !(background->flags & zimg::kAlpha) && left == 0 &&
+      x2 == target.width - 1 && pitch_px == background->width_again &&
+      pitch_px != static_cast<int32_t>(target.width)) {
+    zrndr::observe_framebuffer_write(target.base, "padded cursor restore");
+    return;
+  }
+  if (!background->palette && !background->alpha && !(background->flags & zimg::kAlpha) &&
+      left == 0 && x2 == target.width - 1 && pitch_px == background->width_again &&
+      ((rows * width) & 1) != 0) {
+    if (rows > 1)
+      zrndr::observe_resolved_region(dst, static_cast<uint32_t>(width),
+                                     static_cast<uint32_t>(rows - 1), target.pitch,
+                                     "cursor restore");
+    if (width > 1)
+      zrndr::observe_resolved_region(dst + (rows - 1) * pitch_px,
+                                     static_cast<uint32_t>(width - 1), 1, target.pitch,
+                                     "cursor restore");
+    return;
+  }
+  zrndr::observe_resolved_region(dst, static_cast<uint32_t>(width), static_cast<uint32_t>(rows),
+                                 target.pitch, "cursor restore");
 }
 
 // ---- Movie2D ----
