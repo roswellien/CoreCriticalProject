@@ -44,12 +44,12 @@ void flush() override {
                      "Local light staging first flush after mission change: pending packets=%zu "
                      "pending_bytes=%zu recycled_scenes=%zu; first packet total=%zu scene=%zu "
                      "vertices=%zu color_depth=%zu draws=%zu order=%zu textures=%zu "
-                     "texture_pixels=%zu geometry=%zu lit_normals=%zu height=%zu emissions=%zu "
+                     "texture_pixels=%zu geometry=%zu lit_normals=%zu raw_fog=%zu height=%zu emissions=%zu "
                      "clears=%zu budget=%zu\n",
                      staging_first_flush_packets_, staging_first_flush_bytes_,
                      recycled_scene_count_for_test(), local_bytes, terms.scene, terms.vertices,
                      terms.color_depth, terms.draws, terms.order, terms.textures,
-                     terms.texture_pixels, terms.geometry, terms.lit_normals,
+                     terms.texture_pixels, terms.geometry, terms.lit_normals, terms.raw_fog,
                      terms.height_metadata + terms.height_packet, terms.emissions, terms.clears,
                      local_staging_budget_);
       }
@@ -75,12 +75,12 @@ void flush() override {
                        "next_packet_bytes=%zu budget=%zu (earlier packets use the lights "
                        "known so far); next packet terms: scene=%zu vertices=%zu "
                        "color_depth=%zu draws=%zu order=%zu textures=%zu texture_pixels=%zu "
-                       "emissions=%zu geometry=%zu lit_normals=%zu height_metadata=%zu "
+                       "emissions=%zu geometry=%zu lit_normals=%zu raw_fog=%zu height_metadata=%zu "
                        "clears=%zu height_packet=%zu (capacity based)\n",
                        early_packets, early_pending_bytes, local_bytes, local_staging_budget_,
                        terms.scene, terms.vertices, terms.color_depth, terms.draws,
                        terms.order, terms.textures, terms.texture_pixels, terms.emissions,
-                       terms.geometry, terms.lit_normals, terms.height_metadata,
+                       terms.geometry, terms.lit_normals, terms.raw_fog, terms.height_metadata,
                        terms.clears, terms.height_packet);
         }
       }
@@ -240,10 +240,12 @@ private:
   // real retained memory but can outlast the packet that grew it.
   struct PacketByteTerms {
     std::size_t scene{}, vertices{}, color_depth{}, draws{}, order{}, textures{}, texture_pixels{},
-        emissions{}, geometry{}, lit_normals{}, height_metadata{}, clears{}, height_packet{};
+        emissions{}, geometry{}, lit_normals{}, raw_fog{}, height_metadata{}, clears{},
+        height_packet{};
     std::size_t total() const {
       return scene + vertices + color_depth + draws + order + textures + texture_pixels +
-             emissions + geometry + lit_normals + height_metadata + clears + height_packet;
+             emissions + geometry + lit_normals + raw_fog + height_metadata + clears +
+             height_packet;
     }
   };
 static PacketByteTerms packet_byte_terms(const vk::Scene &scene) {
@@ -277,8 +279,8 @@ static PacketByteTerms packet_byte_terms(const vk::Scene &scene) {
     if (draw.lit_normals && counted_lit_normals.insert(draw.lit_normals.get()).second)
       terms.lit_normals += draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
     if (draw.raw_fog && counted_raw_fog.insert(draw.raw_fog.get()).second)
-      terms.geometry += sizeof(*draw.raw_fog) +
-                        draw.raw_fog->capacity() * sizeof(std::array<float, 4>);
+      terms.raw_fog += sizeof(*draw.raw_fog) +
+                       draw.raw_fog->capacity() * sizeof(std::array<float, 4>);
   }
   std::set<const mw34::materials::HeightBinding *> height_snapshots;
   for (const auto &draw : scene.draws) {

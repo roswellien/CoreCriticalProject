@@ -2271,6 +2271,9 @@ private:
           ++world_gpu_draws;
       } else { // A model draw binds its own VBO; ordinary TL draws must restore
                // theirs.
+        // Every ordinary TL pipeline reads the raw fog at binding 2. Binding 0 is covered below:
+        // it holds vertexBuffer from the start of the pass, and boundVertices forces a rebind
+        // after any model draw replaced it, so only an already-bound vertexBuffer is skipped.
         f.vkCmdBindVertexBuffers(cmd, 2, 1, &fogBuffer.buffer, &zero);
         if (lit) {
           const VkBuffer buffers[2]{vertexBuffer.buffer, normalBuffer.buffer};
