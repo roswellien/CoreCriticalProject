@@ -837,6 +837,30 @@ void stage_b_primitive_checks(const std::filesystem::path& directory) {
             "DrawObserver::resolved_region did not delegate to framebuffer_write by default");
   }
 
+  // 0b. ScopedMuteDrawObserver: nested mutes restore the original observer, and an observer
+  //     installed inside a muted scope survives the scope's exit instead of being replaced by
+  //     the stale saved pointer.
+  {
+    LegacyObserver original, installed_inside;
+    zrndr::set_draw_observer(&original);
+    {
+      zrndr::ScopedMuteDrawObserver outer;
+      {
+        zrndr::ScopedMuteDrawObserver inner;
+        require(zrndr::draw_observer() == nullptr, "Nested mute did not clear the observer");
+      }
+      require(zrndr::draw_observer() == nullptr, "Inner mute exit unmuted the outer scope");
+    }
+    require(zrndr::draw_observer() == &original, "Nested mutes did not restore the observer");
+    {
+      zrndr::ScopedMuteDrawObserver mute;
+      zrndr::set_draw_observer(&installed_inside);
+    }
+    require(zrndr::draw_observer() == &installed_inside,
+            "Observer installed inside a muted scope was overwritten on scope exit");
+    zrndr::set_draw_observer(nullptr);
+  }
+
   sdlfe::HudOptions options;
   options.mode = "core-critical";
   options.text = false;

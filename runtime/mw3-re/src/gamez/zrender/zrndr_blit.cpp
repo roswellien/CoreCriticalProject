@@ -102,7 +102,11 @@ void observe_resolved_region(const uint16_t* destination, uint32_t width, uint32
   if (g_observer) g_observer->resolved_region(destination, width, height, pitch_bytes, operation);
 }
 ScopedMuteDrawObserver::ScopedMuteDrawObserver() : saved_(g_observer) { g_observer = nullptr; }
-ScopedMuteDrawObserver::~ScopedMuteDrawObserver() { g_observer = saved_; }
+ScopedMuteDrawObserver::~ScopedMuteDrawObserver() {
+  // Restore only if the scope is still muted: an observer installed inside the scope (nested
+  // rendering, tests) is newer than saved_ and must not be overwritten by it.
+  if (g_observer == nullptr) g_observer = saved_;
+}
 LayerCover& layer_cover() { return g_cover; }
 
 // Mech3.exe 1.2 @ 0x0055b3c0
