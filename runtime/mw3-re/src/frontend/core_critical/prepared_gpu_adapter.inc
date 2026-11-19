@@ -120,6 +120,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
         (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
         context.far_z};
     vk::Draw draw{};
+    draw.producer_view = producer_view_;
     // Same key as prepare_draw: a fading node blends and skips depth writes.
     draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f, 1, 0};
     // Prepared model draws do not use mode.w for alpha testing.

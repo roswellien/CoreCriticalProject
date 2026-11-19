@@ -1,6 +1,8 @@
 #version 450
 // Development original-mesh bridge: immutable local positions from binding0,
 // original alpha/fog/UV from binding1. Experimental per-pixel world sun.
+layout(location=11) out vec4 radialEye;
+layout(location=12) out vec3 radialScreen;
 layout(location=0) in vec3 position;
 layout(location=1) in uint diffuse;
 layout(location=2) in uint specular;
@@ -50,6 +52,8 @@ void main() {
     float w=1.0/rhw;
     vec2 ndc=(screen+0.5)/draw.target.xy*2.0-1.0;
     gl_Position=vec4(ndc*w,rhw*w,w);
+    radialScreen = gl_Position.xyw;
+    radialEye = vec4(camera, float(draw.mode.x >> 16));
     screenPos=screen;
     gl_PointSize=1.0;
     uvPerspective=uvAffine=uv;

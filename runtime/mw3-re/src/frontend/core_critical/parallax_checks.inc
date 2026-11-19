@@ -489,9 +489,9 @@ void uniform_layout_and_rgba16_roundtrip() {
             "POM 16-bit UV byte roundtrip loses precision");
   }
   mw34::sun::Uniform uniform{};
-  constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 4;
+  constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 5;
   const auto counts = vk::Renderer::material_descriptor_counts(limit);
-  require(counts[0] == limit * 4 + 2 && counts[1] == limit * 2 + 1 &&
+  require(counts[0] == limit * 5 + 2 && counts[1] == limit * 2 + 1 &&
               vk::Renderer::material_descriptor_capacity(limit - 64, 0) == limit,
           "POM material descriptor boundary changed");
   for (unsigned invalid = 0; invalid < 4; ++invalid) {

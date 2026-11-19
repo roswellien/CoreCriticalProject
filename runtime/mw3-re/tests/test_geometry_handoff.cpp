@@ -33,6 +33,8 @@ struct Renderer : platform::Render3D {
     cc::geometry::Mode mode = cc::geometry::Mode::partial;
     std::shared_ptr<const cc::geometry::Resource> submitted;
     unsigned legacy_draws{}, unsupported{};
+    unsigned range{};
+    unsigned opaque_world_range() const override { return range; }
     bool accept = true;
     bool prepared = false;
     cc::geometry::Submission submit_prepared_geometry(const platform::ModelDrawContext &context,
@@ -438,6 +440,26 @@ void check_far_cache_and_prepared() {
     require(!prepared.model.render_geometry && prepared.renderer.submissions == 0 &&
                 prepared.renderer.unsupported == 0 && prepared.emissions.empty(),
             "At-far prepared submission lost precedence over stock registration");
+}
+
+void check_typed_radial_far() {
+    using Purpose = platform::ProducerPurpose;
+    for (auto purpose : {Purpose::Original, Purpose::MainWorld, Purpose::WorldZoom}) {
+        FarFixture fixture;
+        fixture.depths(790, 810, 830);
+        zmth::projection().far_z = zmod::draw_state().clip.far_z = 800;
+        const zvid::ProducerPurposeScope request(purpose);
+        zvid::ProducerWorldScope world;
+        world.begin_emission();
+        fixture.renderer.range = 0;
+        fixture.submit(false);
+        fixture.renderer.range = 1200;
+        fixture.submit(false);
+        fixture.renderer.range = 800;
+        fixture.submit(purpose != Purpose::Original);
+        zmod::draw_state().clip.far_z = 799;
+        fixture.submit(false);
+    }
 }
 
 void check_far_planes_and_rounding() {
@@ -1039,6 +1061,7 @@ void check_far_regressions() {
     const Group groups[]{
         {"safe/cache/prepared identity", check_far_cache_and_prepared},
         {"planes/rounding/nextafter", check_far_planes_and_rounding},
+        {"typed radial range", check_typed_radial_far},
         {"transforms/cancellation/magnitude", check_far_transforms},
         {"subnormal registration/DAZ", check_far_subnormals},
         {"strict unwind/capacity", check_far_strict_and_capacity},
