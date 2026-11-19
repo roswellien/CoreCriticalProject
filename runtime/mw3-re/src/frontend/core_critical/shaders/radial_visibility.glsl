@@ -20,7 +20,9 @@ vec4 radialVisibility(vec4 eye, ivec2 pixel, uint flags) {
     if ((flags & (1u << 15)) != 0u) {
         vec2 uv = radialScreen.xy / radialScreen.z * 0.5 + 0.5;
         if ((flags & (1u << 14)) != 0u) {
-            ivec2 at = ivec2(uv * vec2(textureSize(radialBackdrop, 0)));
+            // texelFetch does not clamp: a fragment at or past the screen edge would read outside.
+            ivec2 size = textureSize(radialBackdrop, 0);
+            ivec2 at = clamp(ivec2(uv * vec2(size)), ivec2(0), size - ivec2(1));
             return vec4(texelFetch(radialBackdrop, at, 0).rgb, coverage);
         }
         vec4 sky = textureLod(radialBackdrop, uv, 0.0);
