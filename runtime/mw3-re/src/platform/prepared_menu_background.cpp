@@ -303,12 +303,13 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
                              const uint16_t* pixels, int width, int height, int pitch,
                              bool rgb565, unsigned output_width, unsigned output_height,
                              std::vector<uint32_t>* output, ComposeScratch* scratch) {
-  if (!output || !pixels || !source || source->palette || source->alpha || !source->pixels ||
+  if (!output || !pixels || blits.empty() || !source || source->palette || source->alpha ||
+      !source->pixels ||
       source->width != int(image.source_width) || source->height != int(image.source_height) ||
       source->width_again < source->width ||
       width <= 0 || height <= 0 || pitch < int64_t(width) * 2 ||
       output_width == 0 || output_height == 0 ||
-      uint64_t(output_width) * output_height > 16ull * 1024 * 1024 || blits.empty())
+      uint64_t(output_width) * output_height > 16ull * 1024 * 1024)
     return false;
 
   ComposeScratch local_scratch;
@@ -504,7 +505,11 @@ bool PreparedMenuBackgroundComposer::compose(
     int height, int pitch, bool rgb565, unsigned output_width, unsigned output_height,
     std::vector<uint32_t>* output, bool* cache_hit) {
   if (cache_hit) *cache_hit = false;
-  if (!output || !pixels || !source || width <= 0 || height <= 0 || pitch < int64_t(width) * 2)
+  if (!source || blits.empty()) {
+    invalidate_cache();
+    return false;
+  }
+  if (!output || !pixels || width <= 0 || height <= 0 || pitch < int64_t(width) * 2)
     return false;
   const auto& state = *impl_;
   const bool hit = state.valid && state.previous_image == &image &&
