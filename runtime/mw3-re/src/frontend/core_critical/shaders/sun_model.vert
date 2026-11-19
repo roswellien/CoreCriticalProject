@@ -1,5 +1,7 @@
 #version 450
 // Optional replacement geometry only. Original TL vertices keep their shader.
+layout(location=11) out vec4 radialEye;
+layout(location=12) out vec3 radialScreen;
 layout(location=0) in vec3 position;
 layout(location=1) in vec3 normal;
 layout(location=2) in vec2 uv;
@@ -60,6 +62,8 @@ void main() {
     float w = 1.0 / rhw;
     vec2 ndc = (screen + 0.5) / draw.target.xy * 2.0 - 1.0;
     gl_Position = vec4(ndc * w, rhw * w, w);
+    radialScreen = gl_Position.xyw;
+    radialEye = vec4(camera, float(draw.mode.x >> 16));
     screenPos = screen;
     gl_PointSize = 1.0;
     uvPerspective = uvAffine = uv;
