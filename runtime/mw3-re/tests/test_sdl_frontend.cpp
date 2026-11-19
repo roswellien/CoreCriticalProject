@@ -128,6 +128,24 @@ TEST(crash_report_rva_format_identifies_outside_addresses) {
   EXPECT(std::strcmp(text, "outside mw3.exe image") == 0);
 }
 
+TEST(crash_report_dump_path_stays_next_to_the_log) {
+  char path[64];
+  EXPECT(sdlfe::crash_report_dump_path("C:\\profiles\\mw3.log", path, sizeof path));
+  EXPECT(std::strcmp(path, "C:\\profiles\\crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("dir/sub/mw3.log", path, sizeof path));
+  EXPECT(std::strcmp(path, "dir/sub/crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("mw3.log", path, sizeof path));
+  EXPECT(std::strcmp(path, "crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("C:\\profiles\\", path, sizeof path));
+  EXPECT(std::strcmp(path, "C:\\profiles\\crash.dmp") == 0);
+  EXPECT(sdlfe::crash_report_dump_path("", path, sizeof path));
+  EXPECT(std::strcmp(path, "crash.dmp") == 0);
+  // A path whose directory leaves no room for crash.dmp is rejected and leaves an empty result.
+  const std::string long_log = std::string(60, 'a') + "/mw3.log";
+  EXPECT(!sdlfe::crash_report_dump_path(long_log.c_str(), path, sizeof path));
+  EXPECT(path[0] == '\0');
+}
+
 TEST(crash_report_wait_result_classifies_completion_timeout_and_failure) {
   EXPECT(sdlfe::crash_report_classify_wait_result(0) ==
          sdlfe::CrashReportWaitOutcome::completed);
@@ -140,7 +158,11 @@ TEST(crash_report_wait_result_classifies_completion_timeout_and_failure) {
 #if defined(_WIN32)
 TEST(crash_report_install_starts_dump_worker_without_crashing) {
   sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
-  EXPECT(sdlfe::crash_report_dump_worker_ready());
+  // Install deliberately leaves the worker unavailable when dbghelp, MiniDumpWriteDump, an event or
+  // the thread cannot be created; it must not crash either way. Expect a ready worker only when
+  // the loadable prerequisites are present.
+  if (sdlfe::crash_report_dump_prerequisites_present())
+    EXPECT(sdlfe::crash_report_dump_worker_ready());
 }
 #endif
 

@@ -34,6 +34,25 @@
 
 namespace sdlfe {
 
+// The minidump goes next to the log: keep the log path's directory (with its separator) and add
+// crash.dmp. A bare log file name (no separator) means the current directory, so the result is
+// plain "crash.dmp". Returns false, with an empty result, when the path would not fit.
+bool crash_report_dump_path(const char* log, char* output, size_t capacity) {
+  if (!output || capacity == 0) return false;
+  output[0] = '\0';
+  const char* name = "crash.dmp";
+  const size_t name_length = std::strlen(name);
+  size_t directory_length = 0;
+  if (log) {
+    for (size_t index = 0; log[index]; ++index)
+      if (log[index] == '\\' || log[index] == '/') directory_length = index + 1;
+  }
+  if (directory_length + name_length + 1 > capacity) return false;
+  if (directory_length) std::memcpy(output, log, directory_length);
+  std::memcpy(output + directory_length, name, name_length + 1);
+  return true;
+}
+
 bool crash_report_address_rva(uintptr_t module_base, size_t image_size, uintptr_t address,
                               uintptr_t* rva) {
   if (!rva || module_base == 0 || address < module_base || address - module_base >= image_size)
@@ -244,18 +263,8 @@ LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
 #endif
     }
 
-    g_dump_path[0] = '\0';
-    if (g_log[0]) {
-      std::snprintf(g_dump_path, sizeof g_dump_path, "%s", g_log);
-      char* separator = std::strrchr(g_dump_path, '\\');
-      char* slash = std::strrchr(g_dump_path, '/');
-      if (slash && (!separator || slash > separator)) separator = slash;
-      if (separator) separator[1] = '\0';
-      else g_dump_path[0] = '\0';
-    }
-    const size_t directory_length = std::strlen(g_dump_path);
-    if (directory_length + sizeof("crash.dmp") <= sizeof g_dump_path) {
-      std::memcpy(g_dump_path + directory_length, "crash.dmp", sizeof("crash.dmp"));
+    const bool dump_path_ok = crash_report_dump_path(g_log, g_dump_path, sizeof g_dump_path);
+    if (dump_path_ok) {
       crash_log("%s: minidump path: %s\n", g_program, g_dump_path);
       if (g_dump_worker_available && e && e->ExceptionRecord) {
         g_dump_exception_record = *e->ExceptionRecord;
@@ -365,6 +374,15 @@ void own_path() {
 #endif
 
 }  // namespace
+
+bool crash_report_dump_prerequisites_present() {
+#if defined(_WIN32)
+  HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
+  return dbghelp && GetProcAddress(dbghelp, "MiniDumpWriteDump");
+#else
+  return false;
+#endif
+}
 
 bool crash_report_dump_worker_ready() {
 #if defined(_WIN32)

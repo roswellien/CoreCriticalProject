@@ -14,6 +14,9 @@ size_t crash_report_format_rva(char* output, size_t capacity, bool inside_image,
 
 enum class CrashReportWaitOutcome { completed, timed_out, failed };
 CrashReportWaitOutcome crash_report_classify_wait_result(uint32_t wait_result);
+bool crash_report_dump_path(const char* log, char* output, size_t capacity);
+// True when dbghelp.dll and MiniDumpWriteDump can be loaded (the worker needs both).
+bool crash_report_dump_prerequisites_present();
 bool crash_report_dump_worker_ready();
 
 // The handlers for a crash and for an uncaught exception. `log` is named in
