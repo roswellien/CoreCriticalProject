@@ -130,6 +130,18 @@ TEST(crash_report_rva_format_identifies_outside_addresses) {
   EXPECT(std::strcmp(text, "outside mw3.exe image") == 0);
 }
 
+TEST(crash_report_format_rva_rejects_truncation_and_zero_capacity) {
+  char text[8];
+  EXPECT(sdlfe::crash_report_format_rva(text, 0, true, 0x12ab) == 0);
+  // "RVA 0x12ab" needs 11 bytes with the terminator, so 8 truncates: failure with an empty result.
+  text[0] = 'x';
+  EXPECT(sdlfe::crash_report_format_rva(text, sizeof text, true, 0x12ab) == 0);
+  EXPECT(text[0] == '\0');
+  char fits[16];
+  EXPECT(sdlfe::crash_report_format_rva(fits, sizeof fits, true, 0x12ab) == 10);
+  EXPECT(std::strcmp(fits, "RVA 0x12ab") == 0);
+}
+
 TEST(crash_report_dump_path_stays_next_to_the_log) {
   char path[64];
   EXPECT(sdlfe::crash_report_dump_path("C:\\profiles\\mw3.log", path, sizeof path));
