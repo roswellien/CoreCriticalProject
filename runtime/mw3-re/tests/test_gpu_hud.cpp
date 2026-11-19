@@ -277,6 +277,25 @@ void drawing_checks() {
     hud.begin(shadow.data(), 8, 6, 16, 18);
     zrndr::observe_framebuffer_write(shadow.data(), "fixture read/write effect");
     require(!hud.finish(), "Read/write effect discarded the CPU compatibility layer");
+    require(hud.frame_stats().shadow_reasons.at("fixture read/write effect") == 1,
+            "Read/write effect did not report its menu fallback reason");
+    const auto draws_before_observation = recorder.draws.size();
+    const auto shadow_before_observation = shadow;
+    hud.begin_observation(shadow.data(), 8, 6, 16, 18);
+    zrndr::blit16(&source, 1, 2, 0, nullptr);
+    require(hud.finish(), "Recorded menu image did not pass observation");
+    require(hud.frame_stats().images == 1 && hud.frame_stats().text_hits == 0,
+            "Recorded menu image counters were incorrect");
+    require(recorder.draws.size() == draws_before_observation && shadow != shadow_before_observation,
+            "Menu observation submitted GPU draws or changed CPU blit behavior");
+    require(!zrndr::draw_observer(), "Menu observation left a stale draw observer");
+    hud.begin_observation(shadow.data(), 8, 6, 16, 18);
+    zrndr::observe_framebuffer_write(shadow.data(), "fixture menu ripple");
+    require(!hud.finish(), "Unsupported menu write did not request native fallback");
+    require(hud.frame_stats().fallback &&
+                hud.frame_stats().shadow_reasons.at("fixture menu ripple") == 1 &&
+                !zrndr::draw_observer(),
+            "Unsupported menu write lost its fallback reason or left a stale observer");
     hud.begin(shadow.data(), 8, 6, 16, 18);
     zrndr::line16(1, 1, 4, 1, 0xffff);
     zrndr::set_finish_target(shadow.data(), 8, 6, 16);
@@ -362,6 +381,23 @@ void text_checks(const char* fonts) {
   host.DrawTextA(dc, "MW3", -1, &clip, 0);
   require(host.hud_text_image(image, 3, 0xf81f) == enhanced,
           "Unchanged native text accumulated recipes");
+  {
+    const auto previous_target = zrndr::target2d();
+    Recorder recorder;
+    sdlfe::HudOptions options;
+    options.mode = "core-critical";
+    std::array<uint16_t, 64 * 32> shadow{};
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), 64, 32, 64 * 2, 6};
+    sdlfe::GpuHud hud(recorder, options);
+    hud.begin_observation(shadow.data(), 64, 32, 64 * 2, 96);
+    zrndr::blit16(image, 0, 0, 0xf81f, nullptr);
+    require(hud.finish(), "Recorded menu text did not pass observation");
+    require(hud.frame_stats().images == 1 && hud.frame_stats().text_hits == 1,
+            "Recorded menu text hit counters were incorrect");
+    require(recorder.draws.empty() && !zrndr::draw_observer(),
+            "Menu text observation submitted GPU draws or left a stale observer");
+    zrndr::target2d() = previous_target;
+  }
   host.SetTextColor(dc, 0xff0000);
   host.DrawTextA(dc, "MW3", -1, &clip, 0);
   host.SetTextColor(dc, 0x0000ff);
