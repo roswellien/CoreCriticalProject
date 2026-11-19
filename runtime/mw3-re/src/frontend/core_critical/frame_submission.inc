@@ -178,7 +178,6 @@ private:
   std::size_t staging_early_completions_{};
   std::size_t staging_early_log_lines_{};
   bool staging_early_logged_{};
-  std::chrono::steady_clock::time_point staging_early_log_time_{};
   void complete_local_light_packets() {
     if (producer_failed_) return;
     // Detach the batch before posting: an exception must not cause a later
