@@ -113,6 +113,9 @@ namespace {
 // The MMX rows: four words at a time, each field scaled in its own word
 // (PMULLW keeps the low 16 bits); a count's last count % 4 pixels are left.
 void mmx_row(uint16_t* row, int32_t count, uint16_t rm, uint16_t gm, uint16_t bm) {
+  // An empty or inverted span tints nothing. Returning here keeps that explicit instead of
+  // relying on the unsigned wrap of a negative count failing the inside() check below.
+  if (count <= 0) return;
   const FinishConstants& k = g_k;
   const uint32_t quads = static_cast<uint32_t>(count) >> 2;
   if (!inside(row, static_cast<int32_t>(quads > 0x10000000u ? 0x7fffffff : quads * 4))) return;
@@ -180,9 +183,15 @@ uint32_t finish() {
     if (g_machine.format != 5 && t.base && t.width > 0 && t.height > 0 && t.pitch > 0) {
       int64_t written = 0;
       if (k.row >= 2) {
-        const uint32_t quads = static_cast<uint32_t>(count) >> 2;
-        const int32_t needed = static_cast<int32_t>(quads > 0x10000000u ? 0x7fffffff : quads * 4);
-        if (inside(row_start, needed)) written = needed;
+        // The MMX rows write nothing for an empty or inverted span (see mmx_row), so report
+        // nothing rather than letting a negative count wrap into the quads clamp.
+        const bool span_has_pixels = count > 0;
+        if (span_has_pixels) {
+          const uint32_t quads = static_cast<uint32_t>(count) >> 2;
+          const int32_t needed =
+              static_cast<int32_t>(quads > 0x10000000u ? 0x7fffffff : quads * 4);
+          if (inside(row_start, needed)) written = needed;
+        }
       } else if ((count >> 1) >= 0) {
         const int64_t requested = (static_cast<int64_t>(count >> 1) + 1) * 2;
         const int64_t available = room(row_start);

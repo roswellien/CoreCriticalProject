@@ -267,7 +267,11 @@ void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32
     record_shadow_reason(operation);
     return;
   }
-  if (width == 0 || height == 0 || pitch_bytes != static_cast<uint32_t>(pitch_) ||
+  // position() already refuses row padding, but the start must be checked here too: the
+  // unsigned subtractions below would wrap to a huge limit if x or y ever reached the edge.
+  const bool start_inside_surface = x >= 0 && y >= 0 && x < width_ && y < height_;
+  if (!start_inside_surface || width == 0 || height == 0 ||
+      pitch_bytes != static_cast<uint32_t>(pitch_) ||
       width > static_cast<uint32_t>(width_ - x) || height > static_cast<uint32_t>(height_ - y)) {
     record_shadow_reason(operation);
     return;

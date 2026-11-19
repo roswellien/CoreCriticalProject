@@ -1294,6 +1294,30 @@ void stage_b_primitive_checks(const std::filesystem::path& directory) {
               "Malformed resolved regions did not record fallback reasons");
     }
 
+    // A region starting in row padding (pitch wider than the visible width) must be refused
+    // before the unsigned width/height limits are computed, so it can never wrap into a huge
+    // accepted size.
+    {
+      constexpr int padded_pitch_bytes = 20;  // 8 visible pixels + 2 padding pixels per row
+      std::array<uint16_t, 60> padded{};
+      Recorder recorder;
+      sdlfe::GpuHud hud(recorder, options);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(padded.data()), width, height,
+                           padded_pitch_bytes, 6};
+      // Observation mode keeps counting every refusal, so both padding starts are checked.
+      const bool observing =
+          hud.begin_observation(padded.data(), width, height, padded_pitch_bytes, height);
+      zrndr::observe_resolved_region(padded.data() + 8, 1, 1, padded_pitch_bytes, "row padding");
+      zrndr::observe_resolved_region(padded.data() + 19, 1, 1, padded_pitch_bytes, "row padding");
+      const bool observed_drawing = hud.finish();
+      const auto& reasons = hud.frame_stats().shadow_reasons;
+      const auto padding_reason = reasons.find("row padding");
+      const bool both_refused = padding_reason != reasons.end() && padding_reason->second == 2;
+      require(observing && !observed_drawing && both_refused &&
+                  hud.frame_stats().resolved_regions == 0 && recorder.draws.empty(),
+              "Resolved region starting in row padding was not refused");
+    }
+
     // Resolved region texture allocation failure (Recorder::allocation_fails) falls back cleanly
     // without throwing out of blit16 and without leaving partial draws.
     {
