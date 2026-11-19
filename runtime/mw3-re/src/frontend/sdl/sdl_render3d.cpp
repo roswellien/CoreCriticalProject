@@ -76,7 +76,7 @@ bool same(const platform::DrawState& a, const platform::DrawState& b) {
          a.multiply == b.multiply && a.additive == b.additive && a.depth_write == b.depth_write &&
          a.depth_always == b.depth_always &&
          a.alpha_modulate == b.alpha_modulate && a.fog == b.fog &&
-         a.wireframe == b.wireframe && a.sharp == b.sharp;
+         a.wireframe == b.wireframe && a.sharp == b.sharp && a.filter == b.filter;
 }
 
 #if defined(MW3_HAVE_DXIL)
@@ -211,13 +211,13 @@ SDL_GPUGraphicsPipeline* SdlRender3D::pipeline(const platform::DrawState& s, boo
   return p;
 }
 
-SDL_GPUSampler* SdlRender3D::sampler(uint8_t u, uint8_t v) {
-  const uint32_t key = u << 8 | v;
+SDL_GPUSampler* SdlRender3D::sampler(uint8_t u, uint8_t v, bool nearest) {
+  const uint32_t key = u << 8 | v | (nearest ? 1u << 16 : 0u);
   auto it = samplers_.find(key);
   if (it != samplers_.end()) return it->second;
   auto mode = [](uint8_t m) { return m == 3 ? SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE : SDL_GPU_SAMPLERADDRESSMODE_REPEAT; };
   SDL_GPUSamplerCreateInfo si{};
-  si.min_filter = si.mag_filter = SDL_GPU_FILTER_LINEAR;  // TEXTUREMAG/MIN LINEAR
+  si.min_filter = si.mag_filter = nearest ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
   si.address_mode_u = mode(u), si.address_mode_v = mode(v), si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
   SDL_GPUSampler* s = SDL_CreateGPUSampler(dev_, &si);
   samplers_[key] = s;
@@ -431,15 +431,18 @@ void SdlRender3D::end_scene() {
     SDL_BindGPUGraphicsPipeline(pass, p);
     SDL_PushGPUVertexUniformData(cmd, 0, vu, sizeof vu);
     // A sharp draw's texel is a game pixel: the frame's pixels per game pixel.
-    const float sx = r.state.sharp && vw_ > 0 ? static_cast<float>(w) / static_cast<float>(vw_) : 0.0f;
-    const float sy = r.state.sharp && vh_ > 0 ? static_cast<float>(h) / static_cast<float>(vh_) : 0.0f;
+    const bool sharp = r.state.sharp && r.state.filter == platform::TextureFilter::kDefault;
+    const float sx = sharp && vw_ > 0 ? static_cast<float>(w) / static_cast<float>(vw_) : 0.0f;
+    const float sy = sharp && vh_ > 0 ? static_cast<float>(h) / static_cast<float>(vh_) : 0.0f;
     const float fu[8] = {r.fog[0], r.fog[1], r.fog[2], 1, r.state.fog ? 1.0f : 0.0f,
                          r.state.alpha_modulate ? 1.0f : 0.0f, std::max(sx, 1.0f) * (sx > 0), std::max(sy, 1.0f) * (sy > 0)};
     SDL_PushGPUFragmentUniformData(cmd, 0, fu, sizeof fu);
     SDL_GPUBufferBinding vb{vbuf_, 0};
     SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
     if (textured) {
-      SDL_GPUTextureSamplerBinding tsb{textures_[r.state.texture], sampler(r.state.address_u, r.state.address_v)};
+      SDL_GPUTextureSamplerBinding tsb{textures_[r.state.texture],
+          sampler(r.state.address_u, r.state.address_v,
+                  r.state.filter == platform::TextureFilter::kNearest)};
       SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
     }
     SDL_DrawGPUPrimitives(pass, r.count, 1, r.first, 0);

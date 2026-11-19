@@ -625,6 +625,146 @@ void menu_background_output_cap_preserves_fit_and_layer_rect() {
               smaller_window.width == 960 && smaller_window.height == 720,
           "Smaller-window output did not follow the full fit");
 }
+
+void gpu_cover_and_uv_geometry() {
+  struct CoverCase {
+    int width, height;
+    float x, y, covered_width, covered_height;
+  };
+  const CoverCase cases[] = {{3440, 1440, 0, -570, 3440, 2580},
+                             {1920, 1080, 0, -180, 1920, 1440},
+                             {640, 480, 0, 0, 640, 480},
+                             {5120, 1440, 0, -1200, 5120, 3840},
+                             {480, 640, -186.66667f, 0, 853.33333f, 640}};
+  for (const auto& entry : cases) {
+    const auto rect = platform::menu_background_cover_rect(640, 480, entry.width, entry.height);
+    require(std::abs(rect.x - entry.x) < .001f && std::abs(rect.y - entry.y) < .001f &&
+                std::abs(rect.width - entry.covered_width) < .001f &&
+                std::abs(rect.height - entry.covered_height) < .001f,
+            "Menu cover no longer uniformly fills the output and centers the crop");
+    const double scale = std::min(double(entry.width) / 640, double(entry.height) / 480);
+    const platform::MenuBackgroundLayerRect fitted{
+        float((entry.width - 640 * scale) * .5), float((entry.height - 480 * scale) * .5),
+        float(640 * scale), float(480 * scale)};
+    const platform::MenuBackgroundUvRect native_uv{.9f, .75f, 1.4f, 1.75f};
+    const auto extended = platform::menu_background_extend_uv(native_uv, fitted, rect);
+    // Re-evaluate the covering quad at the native frame corners: source
+    // correspondence must survive while the repeating image fills the margins.
+    const double left = extended.u0 + (double(fitted.x) - rect.x) / rect.width *
+                                         (double(extended.u1) - extended.u0);
+    const double top = extended.v0 + (double(fitted.y) - rect.y) / rect.height *
+                                        (double(extended.v1) - extended.v0);
+    const double right = extended.u0 + (double(fitted.x) + fitted.width - rect.x) / rect.width *
+                                          (double(extended.u1) - extended.u0);
+    const double bottom = extended.v0 + (double(fitted.y) + fitted.height - rect.y) / rect.height *
+                                           (double(extended.v1) - extended.v0);
+    require(std::abs(left - native_uv.u0) < .000001 && std::abs(top - native_uv.v0) < .000001 &&
+                std::abs(right - native_uv.u1) < .000001 && std::abs(bottom - native_uv.v1) < .000001,
+            "Menu cover extension moved the native scroll mapping or control corrections");
+  }
+  for (unsigned master_width : {1280u, 1920u}) {
+    const auto covered_master = platform::menu_background_cover_rect(int(master_width), 480, 3440, 1440);
+    const float expected_left = master_width == 1280 ? -200.f : -1160.f;
+    require(covered_master.x == expected_left && covered_master.y == 0 &&
+                covered_master.width == master_width * 3.f && covered_master.height == 1440,
+            "Wide menu masters no longer cover ultrawide output at a uniform scale");
+    platform::MenuBackgroundImage image;
+    image.source_width = master_width;
+    image.source_height = 480;
+    image.width = master_width * 3;
+    image.height = 1440;
+    for (int64_t offset : {int64_t(0), int64_t(master_width - 1),
+                           int64_t(master_width + 13), int64_t(master_width) * 5 + 13,
+                           int64_t(-1)}) {
+      const auto uv = platform::menu_background_uv_rect(image, offset, 479, 640, 480);
+      const int64_t wrapped = (offset % master_width + master_width) % master_width;
+      const double expected_u = double(wrapped) / master_width + .5 / image.width;
+      require(std::abs(uv.u0 - expected_u) < .000001 &&
+                  std::abs(uv.u1 - uv.u0 - 640.0 / master_width) < .000001 &&
+                  std::abs(uv.v0 - (479.0 / 480 + .5 / image.height)) < .000001 &&
+                  std::abs(uv.v1 - uv.v0 - 1.0) < .000001,
+              "Menu UV phase, half-texel convention or native-image wrap changed");
+    }
+  }
+  bool rejected = false;
+  try {
+    platform::menu_background_cover_rect(0, 480, 1920, 1080);
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  require(rejected, "Menu cover accepted an invalid required dimension");
+  rejected = false;
+  try {
+    platform::menu_background_uv_rect({}, 0, 0, 640, 480);
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  require(rejected, "Menu UV rectangle accepted an invalid image");
+}
+
+void gpu_maps_share_classification_gain_cache_and_fallback() {
+  platform::MenuBackgroundImage image{16, 16, 8, 8, std::vector<uint8_t>(16 * 16 * 3, 80)};
+  constexpr uint16_t original = uint16_t((12 << 11) | (25 << 5) | 12);
+  constexpr uint16_t dimmed = uint16_t((8 << 11) | (16 << 5) | 8);
+  constexpr uint16_t glow = uint16_t((12 << 11) | (45 << 5) | 12);
+  std::vector<uint16_t> source_pixels(64, original), frame(64, dimmed);
+  zimg::Texture source{};
+  source.width = source.height = source.width_again = 8;
+  source.pixels = source_pixels.data();
+  frame[0] = original;
+  frame[9] = glow;
+  frame[63] = 0xf81f;
+  std::vector<zrndr::MenuBackgroundBlit> blits{
+      {0, 0, 7, 6, 1, 2}, {1, 0, 0, 6, 7, 2},
+      {0, 2, 7, 0, 1, 6}, {1, 2, 0, 0, 7, 6}};
+  platform::PreparedMenuBackgroundComposer composer;
+  platform::MenuBackgroundGpuLayers layers;
+  bool hit = false;
+  const auto prepare = [&] {
+    return composer.prepare_gpu(image, &source, blits, frame.data(), 8, 8, 16, true, &layers, &hit);
+  };
+  require(prepare() && !hit && layers.status == platform::MenuBackgroundGpuStatus::kReady,
+          "Wrapped GPU maps rejected attenuation and nonnegative added light");
+  require(layers.overlay.size() == 64 && layers.gain.size() == 64 && layers.added.size() == 64,
+          "GPU maps did not stay at frame resolution");
+  require(layers.overlay[63] == 0xffff00ff && layers.overlay[0] == 0 &&
+              layers.added[9] == 0x00005100 && layers.gain[9] == 0xffffffff &&
+              layers.gain[0] != 0xffffffff,
+          "GPU maps lost native artwork, added-light classification or the 5x5 gain");
+  const auto expected_uv = platform::menu_background_uv_rect(image, 7, 6, 8, 8);
+  require(layers.uv.u0 == expected_uv.u0 && layers.uv.v0 == expected_uv.v0,
+          "GPU maps lost the game's wrapped scroll origin");
+  const auto* map_storage = layers.gain.data();
+  require(prepare() && hit && layers.gain.data() == map_storage,
+          "Unchanged GPU maps missed the cache or replaced retained storage");
+  frame[0] = dimmed;
+  require(prepare() && !hit, "GPU map cache ignored a changed frame");
+  blits[0].source_x = 6;
+  require(prepare() && !hit && layers.status == platform::MenuBackgroundGpuStatus::kMapping,
+          "GPU maps accepted pieces that are not one wrapped source rectangle");
+  require(prepare() && hit, "An unsupported map was unnecessarily reclassified on a cache hit");
+  blits = {{0, 0, 0, 0, 8, 8}};
+  std::fill(frame.begin(), frame.end(), uint16_t((14 << 11) | (29 << 5) | 14));
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kGain,
+          "GPU maps silently clamped amplification that requires the CPU fallback");
+  std::fill(frame.begin(), frame.end(), original);
+  frame[9] = uint16_t((11 << 11) | (45 << 5) | 12);
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kAdded,
+          "GPU maps silently discarded a negative added-light channel");
+  std::fill(frame.begin(), frame.end(), original);
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kReady,
+          "GPU map preparation failed to recover after an unsupported frame");
+  source.alpha = reinterpret_cast<uint8_t*>(frame.data());
+  require(!prepare() && !hit, "A GPU cache hit bypassed validation of an invalid source");
+  source.alpha = nullptr;
+  require(prepare() && !hit, "Invalid source rejection did not invalidate the GPU map cache");
+  const uint64_t previous_revision = layers.revision;
+  blits = {{0, 0, 7, 6, 1, 2}, {1, 0, 0, 6, 7, 2},
+           {0, 2, 7, 0, 1, 6}, {1, 2, 0, 0, 7, 6}};
+  require(prepare() && !hit && layers.status == platform::MenuBackgroundGpuStatus::kReady &&
+              layers.revision == previous_revision && layers.uv.u0 == expected_uv.u0,
+          "A UV-only scroll change requested an unnecessary GPU map upload");
+}
 }  // namespace
 
 int main() {
@@ -645,4 +785,6 @@ int main() {
     worker_pool_handles_single_worker_empty_and_inline_ranges();
   });
   menu_background_output_cap_preserves_fit_and_layer_rect();
+  gpu_cover_and_uv_geometry();
+  gpu_maps_share_classification_gain_cache_and_fallback();
 }

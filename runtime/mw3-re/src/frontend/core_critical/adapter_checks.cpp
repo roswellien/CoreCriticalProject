@@ -109,6 +109,150 @@ void quad(platform::Render3D &renderer, float low, float high, float depth,
 
 #include "local_light_gpu_checks.inc"
 
+void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
+  platform::MenuBackgroundImage image;
+  image.width = image.height = 16;
+  image.source_width = image.source_height = 8;
+  image.rgb.resize(16 * 16 * 3);
+  std::vector<uint32_t> hd_rgba(256);
+  for (unsigned y = 0; y < 16; ++y) {
+    for (unsigned x = 0; x < 16; ++x) {
+      const size_t at = size_t(y) * 16 + x;
+      const uint8_t red = uint8_t(30 + (x * 7 + y * 3) % 160);
+      const uint8_t green = uint8_t(40 + (x * 3 + y * 9) % 150);
+      const uint8_t blue = uint8_t(20 + (x * 5 + y * 5) % 170);
+      image.rgb[at * 3] = red;
+      image.rgb[at * 3 + 1] = green;
+      image.rgb[at * 3 + 2] = blue;
+      hd_rgba[at] = 0xff000000u | uint32_t(red) | uint32_t(green) << 8 | uint32_t(blue) << 16;
+    }
+  }
+  // Integer and fractional output densities catch map filtering and half-texel
+  // mistakes independently. Padding must never be interpreted as frame pixels.
+  for (const auto size : {std::array<int, 2>{32, 32}, std::array<int, 2>{31, 27}}) {
+    require(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window), SDL_GetError());
+    auto renderer = make_check_renderer(window, backend);
+    renderer->set_viewport(0, 0, 8, 8);
+    const auto hd_texture = renderer->create_texture(16, 16,
+        reinterpret_cast<const uint8_t*>(hd_rgba.data()), 1);
+    require(hd_texture >= 0, "Could not upload synthetic HD menu background");
+    for (bool rgb565 : {true, false}) {
+      for (int offset : {0, 7}) {
+        constexpr int stride = 10;
+        std::vector<uint16_t> source_pixels(8 * stride, 0xf81f);
+        std::vector<uint16_t> frame(8 * stride, 0xf81f);
+        const auto packed = [rgb565](int red, int green, int blue) {
+          return uint16_t((red << (rgb565 ? 11 : 10)) | (green << 5) | blue);
+        };
+        for (int y = 0; y < 8; ++y)
+          for (int x = 0; x < 8; ++x)
+            source_pixels[size_t(y) * stride + x] = packed(12 + x % 2, 20 + y % 3, 12 + y % 2);
+        const int offset_y = offset ? 6 : 0;
+        for (int y = 0; y < 8; ++y) {
+          for (int x = 0; x < 8; ++x) {
+            const int sx = (x + offset) % 8, sy = (y + offset_y) % 8;
+            frame[size_t(y) * stride + x] = packed((12 + sx % 2) * 2 / 3,
+                (20 + sy % 3) * 2 / 3, (12 + sy % 2) * 2 / 3);
+          }
+        }
+        frame[0] = source_pixels[size_t(offset_y) * stride + offset];
+        // Red/blue are unchanged; a large green delta must be kind 2 rather
+        // than a uniformly tinted kind 1 pixel. This also exercises saturation.
+        const int glow_x = (1 + offset) % 8, glow_y = (1 + offset_y) % 8;
+        frame[stride + 1] = packed(12 + glow_x % 2,
+            20 + glow_y % 3 + (rgb565 ? 24 : 10), 12 + glow_y % 2);
+        frame[7 * stride + 7] = packed(31, 0, 31);
+        zimg::Texture source{};
+        source.width = source.height = 8;
+        source.width_again = stride;
+        source.pixels = source_pixels.data();
+        std::vector<zrndr::MenuBackgroundBlit> blits;
+        if (offset == 0) {
+          blits = {{0, 0, 0, 0, 8, 8}};
+        } else {
+          blits = {{0, 0, 7, 6, 1, 2}, {1, 0, 0, 6, 7, 2},
+                   {0, 2, 7, 0, 1, 6}, {1, 2, 0, 0, 7, 6}};
+        }
+        platform::PreparedMenuBackgroundComposer composer;
+        platform::MenuBackgroundGpuLayers layers;
+        require(composer.prepare_gpu(image, &source, blits, frame.data(), 8, 8, stride * 2,
+                                     rgb565, &layers) &&
+                    layers.status == platform::MenuBackgroundGpuStatus::kReady,
+                "Synthetic GPU menu gain/glow/wrap fixture selected the fallback");
+        std::array<int32_t, 3> maps{};
+        const std::vector<uint32_t>* pixels[] = {&layers.gain, &layers.added, &layers.overlay};
+        for (size_t index = 0; index < maps.size(); ++index) {
+          maps[index] = renderer->create_texture(8, 8,
+              reinterpret_cast<const uint8_t*>(pixels[index]->data()), 1);
+          require(maps[index] >= 0, "Could not upload synthetic menu maps");
+        }
+        renderer->clear(true, 0, 0, 0);
+        sdlfe::draw_menu_background_gpu(*renderer, hd_texture, maps, layers, {0, 0, 8, 8});
+        std::vector<uint32_t> gpu, cpu;
+        int width = 0, height = 0;
+        require(renderer->read_back(&gpu, &width, &height) && width == size[0] && height == size[1],
+                "GPU menu readback lost output dimensions");
+        require(platform::compose_menu_background(image, &source, blits, frame.data(), 8, 8,
+                    stride * 2, rgb565, unsigned(width), unsigned(height), &cpu) && cpu.size() == gpu.size(),
+                "CPU menu reference failed at the same output size");
+        // CPU rounds the bilinear sample before gain; hardware rounds after
+        // blending. Allow 4/255 per RGB channel for filtering precision, gain
+        // UNORM quantization, delta rounding and render-target rounding.
+        for (size_t at = 0; at < cpu.size(); ++at) {
+          const uint32_t expected = (cpu[at] & 0xff00ff00u) |
+              ((cpu[at] & 255u) << 16) | ((cpu[at] >> 16) & 255u);
+          require((gpu[at] >> 24) == 255, "GPU menu lost opaque output alpha");
+          for (unsigned shift : {0u, 8u, 16u})
+            require(std::abs(int((gpu[at] >> shift) & 255u) - int((expected >> shift) & 255u)) <= 4,
+                    "GPU/CPU menu pixel mismatch (gain, glow, native overlay or scroll wrap)");
+        }
+        if (size[0] == 31 && rgb565 && offset == 7) {
+          auto flat_image = image;
+          const std::vector<uint32_t> flat_rgba(256, 0xff208040u);
+          for (size_t at = 0; at < 256; ++at) {
+            flat_image.rgb[at * 3] = 64;
+            flat_image.rgb[at * 3 + 1] = 128;
+            flat_image.rgb[at * 3 + 2] = 32;
+          }
+          const int32_t flat_texture = renderer->create_texture(16, 16,
+              reinterpret_cast<const uint8_t*>(flat_rgba.data()), 1);
+          require(flat_texture >= 0, "Could not upload flat menu coverage fixture");
+          // Original 1:1 frame aspect fits into 31x27 as a 27x27 rectangle.
+          // Only the background extends into the two columns on either side.
+          const platform::MenuBackgroundLayerRect fitted{2.f * 8 / 31, 0, 27.f * 8 / 31, 8};
+          const platform::MenuBackgroundLayerRect covered{0, -2.f * 8 / 27, 8, 31.f * 8 / 27};
+          renderer->clear(true, 0, 0, 0);
+          sdlfe::draw_menu_background_gpu(*renderer, flat_texture, maps, layers, fitted, &covered);
+          require(renderer->read_back(&gpu, &width, &height) && width == 31 && height == 27,
+                  "Cover extension changed output dimensions");
+          require(platform::compose_menu_background(flat_image, &source, blits, frame.data(),
+                      8, 8, stride * 2, true, 27, 27, &cpu),
+                  "CPU menu reference failed at the fitted output size");
+          for (int y = 0; y < 27; ++y) {
+            for (int x = 0; x < 31; ++x) {
+              const uint32_t pixel = gpu[size_t(y) * 31 + x];
+              if (x < 2 || x >= 29) {
+                require(pixel == 0xff408020u, "Cover extension left a pillar or drew native artwork in it");
+              } else {
+                const uint32_t reference = cpu[size_t(y) * 27 + x - 2];
+                const uint32_t expected = (reference & 0xff00ff00u) |
+                    ((reference & 255u) << 16) | ((reference >> 16) & 255u);
+                for (unsigned shift : {0u, 8u, 16u})
+                  require(std::abs(int((pixel >> shift) & 255u) - int((expected >> shift) & 255u)) <= 4,
+                          "Menu cover moved native artwork, lighting or control pixel correspondence");
+              }
+            }
+          }
+          renderer->release_texture(flat_texture);
+        }
+        for (int32_t map : maps) renderer->release_texture(map);
+      }
+    }
+    renderer->release_texture(hd_texture);
+  }
+  require(SDL_SetWindowSize(window, 32, 32) && SDL_SyncWindow(window), SDL_GetError());
+}
+
 void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
   auto renderer = make_check_renderer(window, backend);
   renderer->set_viewport(0, 0, 32, 32);
@@ -3055,6 +3199,7 @@ int main(int argc, char **argv) {
       check_local_light_gpu(window, backend);
       check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
+      check_menu_background_gpu(window, backend);
     }
     if (native_wsi || material_check)
       check_fullscreen_resize(window, backend);

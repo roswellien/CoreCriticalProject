@@ -29,6 +29,7 @@ enum class Primitive : uint8_t { kPoints = 1, kStrip = 5, kFan = 6 };  // D3DPRI
 
 // Host-only diagnostic values; no native texture or vertex layout is changed.
 enum class DrawQueue : uint8_t { Immediate, Transparent, Overlay };
+enum class TextureFilter : uint8_t { kDefault, kNearest, kLinear };
 struct FlareSpriteDiagnostic {
   int32_t slot = -1;
   float half_size_pixels = 0;  // before clipping, in the producer's screen pixels
@@ -54,6 +55,9 @@ struct DrawState {
   bool color_select = false;       // COLOROP SELECTARG1: the texture's colour alone (shadow passes)
   uint8_t texcoord = 0;            // TEXCOORDINDEX: which UV set of a draw_multi vertex
   bool sharp = false;              // ours: the 2D layer, a texel a game pixel, premultiplied, scaled sharp
+  // Explicit canvas sampling bypasses sharp's fractional edge smoothing.
+  // kDefault preserves every existing world/HUD sampling policy.
+  TextureFilter filter = TextureFilter::kDefault;
   FlareSpriteDiagnostic flare_diagnostic{};
   DrawQueue queue = DrawQueue::Immediate;
 };

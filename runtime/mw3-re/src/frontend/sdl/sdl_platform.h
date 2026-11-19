@@ -1,6 +1,8 @@
 #pragma once
 #include <SDL3/SDL.h>
 
+#include <array>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -20,6 +22,14 @@ namespace sdlfe {
 
 class SdlInput;
 class SdlMusicOutput;
+
+// Shared by presentation and the asset-free GPU readback checks. Texture order
+// is gain, added light, keyed native artwork; all handles remain caller-owned.
+void draw_menu_background_gpu(FrameRenderer& renderer, int32_t background_texture,
+                              const std::array<int32_t, 3>& textures,
+                              const platform::MenuBackgroundGpuLayers& layers,
+                              const platform::MenuBackgroundLayerRect& rectangle,
+                              const platform::MenuBackgroundLayerRect* background_rectangle = nullptr);
 
 // The main window ("Mech3Class", CWnd::CreateEx in 0x00482d10) with the GPU
 // device behind Render3D. Made hidden at start so Render3D exists before the
@@ -90,7 +100,10 @@ class SdlScreen2D : public platform::Screen2D {
  private:
   void upload(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, bool keyed, uint16_t key,
               const uint8_t* alpha = nullptr, const uint16_t* colour = nullptr);
-  void draw_layer(int width, int height, bool blend, bool sharp = true);
+  void draw_layer(int width, int height, bool blend, bool sharp = true,
+                  const platform::MenuBackgroundLayerRect* rectangle = nullptr);
+  bool prepare_menu_gpu(const uint16_t* pixels, int width, int height, int pitch,
+                        bool rgb565, bool* cache_hit);
   FrameRenderer* render_;
   std::unique_ptr<GpuHud> hud_;
   std::unique_ptr<platform::MenuBackgroundImage> menu_background_;
@@ -101,6 +114,18 @@ class SdlScreen2D : public platform::Screen2D {
   std::vector<uint8_t> rgba_;
   std::vector<uint32_t> menu_composed_;
   platform::PreparedMenuBackgroundComposer menu_composer_;
+  platform::PreparedMenuBackgroundComposer menu_gpu_composer_;
+  platform::MenuBackgroundGpuLayers menu_gpu_layers_;
+  std::array<int32_t, 3> menu_gpu_textures_{-1, -1, -1};
+  int32_t menu_hd_texture_ = -1;
+  int menu_gpu_width_ = 0, menu_gpu_height_ = 0;
+  uint64_t menu_gpu_uploaded_revision_ = 0;
+  bool menu_use_gpu_ = true;
+  bool menu_gpu_available_ = true;
+  std::chrono::steady_clock::time_point menu_report_start_ = std::chrono::steady_clock::now();
+  unsigned menu_report_frames_ = 0, menu_report_hits_ = 0, menu_report_gpu_frames_ = 0;
+  double menu_report_milliseconds_ = 0;
+  double menu_report_gpu_milliseconds_ = 0;
 };
 
 // GetTickCount from the game's start, and Sleep. With `frame_ms` (ours,

@@ -47,6 +47,37 @@ struct MenuBackgroundLayerRect {
   float x{}, y{}, width{}, height{};
 };
 
+struct MenuBackgroundUvRect {
+  float u0{}, v0{}, u1{}, v1{};
+};
+
+// Destination in output pixels: uniformly scaled and centered, with excess
+// cropped by the render target. Invalid dimensions are rejected.
+MenuBackgroundLayerRect menu_background_cover_rect(int frame_width, int frame_height,
+                                                    int output_width, int output_height);
+// Source offsets are in original-image pixels. The half-HD-texel offset
+// matches sample()'s integer-centered bilinear convention on GPU samplers.
+MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage& image,
+                                             int64_t source_x, int64_t source_y,
+                                             int frame_width, int frame_height);
+// Extend the recorded scroll mapping outside its original destination, so a
+// covering background cannot crop/move native controls or their correction maps.
+MenuBackgroundUvRect menu_background_extend_uv(const MenuBackgroundUvRect& uv,
+                                               const MenuBackgroundLayerRect& frame_rectangle,
+                                               const MenuBackgroundLayerRect& cover_rectangle);
+
+enum class MenuBackgroundGpuStatus { kReady, kMapping, kGain, kAdded };
+const char* menu_background_gpu_status_name(MenuBackgroundGpuStatus status);
+
+struct MenuBackgroundGpuLayers {
+  std::vector<uint32_t> overlay, gain, added;
+  MenuBackgroundUvRect uv;
+  MenuBackgroundGpuStatus status = MenuBackgroundGpuStatus::kMapping;
+  // UV-only changes need another quad, but no texture upload. A revision
+  // identifies the three complete maps, never an unsupported partial result.
+  uint64_t revision = 0;
+};
+
 // Output resolution follows the frame's uniform window fit, subject to an
 // optional height cap. A zero cap leaves the full fit uncapped.
 MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_height,
@@ -90,10 +121,21 @@ class PreparedMenuBackgroundComposer {
                const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels,
                int width, int height, int pitch, bool rgb565, unsigned output_width,
                unsigned output_height, std::vector<uint32_t>* output, bool* cache_hit = nullptr);
+  // Shares classification, gain math and input comparison with the CPU path;
+  // never samples the HD image or allocates output-sized storage.
+  bool prepare_gpu(const MenuBackgroundImage& image, const zimg::Texture* source,
+                   const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels,
+                   int width, int height, int pitch, bool rgb565,
+                   MenuBackgroundGpuLayers* layers, bool* cache_hit = nullptr);
   void invalidate_cache();
   unsigned thread_count() const;
 
  private:
+  bool prepare(const MenuBackgroundImage& image, const zimg::Texture* source,
+               const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels,
+               int width, int height, int pitch, bool rgb565, unsigned output_width,
+               unsigned output_height, std::vector<uint32_t>* output,
+               MenuBackgroundGpuLayers* layers, bool* cache_hit);
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

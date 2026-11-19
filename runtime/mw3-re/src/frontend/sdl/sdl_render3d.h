@@ -144,7 +144,7 @@ class SdlRender3D : public FrameRenderer {
     float fog[3];
   };
   SDL_GPUGraphicsPipeline* pipeline(const platform::DrawState& s, bool textured);
-  SDL_GPUSampler* sampler(uint8_t u, uint8_t v);
+  SDL_GPUSampler* sampler(uint8_t u, uint8_t v, bool nearest);
   void ensure_depth(uint32_t w, uint32_t h);
   void ensure_buffer(uint32_t bytes);
   bool ensure_frame();

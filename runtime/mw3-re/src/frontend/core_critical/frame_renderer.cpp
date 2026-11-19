@@ -1608,11 +1608,14 @@ private:
             surface_normal_texture(binding->normal_index), false));
       }
     }
-    const bool sharp = state.sharp && state.texture >= 0 &&
+    const bool sharp = state.sharp && state.filter == ::platform::TextureFilter::kDefault &&
+                       state.texture >= 0 &&
                        !textures_.at(state.texture).held_copy;
     draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
                    (state.address_v == 3 ? 3U : 1U) << 8 |
-                   (state.sharp && !sharp ? 0U : 3U);
+                   (state.filter == ::platform::TextureFilter::kNearest ? 0U :
+                    state.filter == ::platform::TextureFilter::kLinear ? 3U :
+                    state.sharp && !sharp ? 0U : 3U);
     if (!hud)
       draw.sampler |= 0x10000U;
     const auto flare = state.flare_diagnostic;

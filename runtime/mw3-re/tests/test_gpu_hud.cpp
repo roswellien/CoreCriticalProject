@@ -16,6 +16,7 @@
 
 #include "frontend/sdl/gpu_hud.h"
 #include "frontend/sdl/sdl_render3d.h"
+#include "frontend/sdl/sdl_platform.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zrender/zrndr_blur.h"
@@ -325,6 +326,120 @@ void drawing_checks() {
   }
   zrndr::target2d() = {};
 }
+
+void menu_background_checks(const std::filesystem::path& directory) {
+  class MenuRecorder : public Recorder {
+   public:
+    unsigned updates = 0;
+    unsigned creation_attempts = 0;
+    bool fail_next_texture = false;
+    const sdlfe::FrameShape* shape = nullptr;
+    void set_shape(const sdlfe::FrameShape* value) override { shape = value; }
+    int32_t create_texture(int width, int height, const uint8_t* pixels, uint8_t type) override {
+      ++creation_attempts;
+      if (fail_next_texture) {
+        fail_next_texture = false;
+        return -1;
+      }
+      return Recorder::create_texture(width, height, pixels, type);
+    }
+    void update_texture(int32_t handle, int width, int height, const uint8_t* pixels) override {
+      auto& image = images.at(size_t(handle));
+      require(image.size() == size_t(width) * height, "Menu updated a texture at the wrong size");
+      std::memcpy(image.data(), pixels, image.size() * 4);
+      ++updates;
+    }
+  };
+  const auto path = directory / "menu-background.rgb";
+  {
+    std::ofstream file(path, std::ios::binary);
+    const uint8_t header[24] = {'M', 'W', 'H', 'D', 'B', 'G', '1', 0,
+                                16, 0, 0, 0, 16, 0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0};
+    const std::array<uint8_t, 16 * 16 * 3> image{};
+    file.write(reinterpret_cast<const char*>(header), sizeof header);
+    file.write(reinterpret_cast<const char*>(image.data()), image.size());
+    require(bool(file), "Cannot write synthetic menu image");
+  }
+  std::array<uint16_t, 64> original{}, frame{};
+  original.fill(uint16_t((12 << 11) | (25 << 5) | 12));
+  zimg::Texture source{};
+  source.width = source.height = source.width_again = 8;
+  source.pixels = original.data();
+  zrndr::set_menu_background_source(&source);
+  zrndr::begin_menu_background_frame();
+  zrndr::target2d() = {reinterpret_cast<uint8_t*>(frame.data()), 8, 8, 16, 6};
+  zrndr::blit16(&source, 0, 0, 0, nullptr);
+  frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+  sdlfe::HudOptions options;
+  options.menu_background = path.string();
+  sdlfe::FrameShape shape;
+  shape.fit = true;
+  shape.frame_w = shape.frame_h = 8;
+  MenuRecorder recorder;
+  {
+    sdlfe::SdlScreen2D screen(&recorder, options, nullptr, &shape);
+    require(recorder.images.size() == 1 && recorder.images[0].size() == 256,
+            "HD menu image was not uploaded once during screen construction");
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.images.size() == 4 && recorder.updates == 0 && recorder.draws.size() == 4,
+            "GPU menu did not upload three frame-sized maps and draw four passes");
+    require(recorder.shape == &shape && recorder.x == 3 && recorder.y == 4 &&
+                recorder.w == 5 && recorder.h == 6,
+            "Menu presentation did not restore the world shape and viewport");
+    for (size_t index = 1; index < recorder.images.size(); ++index)
+      require(recorder.images[index].size() == 64, "GPU menu allocated an output-sized map");
+    require(recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
+                recorder.draws[0].state.address_u == 1 &&
+                recorder.draws[1].state.filter == platform::TextureFilter::kNearest &&
+                recorder.draws[1].state.multiply && recorder.draws[2].state.additive &&
+                recorder.draws[3].state.blend,
+            "GPU menu lost repeat sampling, exact map sampling or blend order");
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.images.size() == 4 && recorder.updates == 0,
+            "Unchanged GPU menu uploaded textures on a cache hit");
+    rejects([&] { screen.present_16(frame.data(), 8, 8, 15, true); });
+    frame[0] = 0xf81f;
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.images.size() == 4 && recorder.updates == 3,
+            "Changed GPU menu failed to update its maps or uploaded the immutable HD image");
+    const auto before_fallback = recorder.draws.size();
+    frame.fill(uint16_t((14 << 11) | (29 << 5) | 14));
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.draws.size() == before_fallback + 1 && recorder.images.size() == 5,
+            "Unsupported GPU gain did not select CPU composition");
+  }
+  require(recorder.released.size() == recorder.images.size(), "Menu screen leaked GPU resources");
+  MenuRecorder cpu;
+  options.menu_background_renderer = "cpu";
+  {
+    sdlfe::SdlScreen2D screen(&cpu, options);
+    require(cpu.images.empty(), "Explicit CPU mode uploaded an unused HD texture");
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(cpu.images.size() == 1 && cpu.draws.size() == 1,
+            "Explicit CPU mode did not retain the composed-texture path");
+  }
+  options.menu_background_renderer = "gpu";
+  frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+  for (bool fail_hd_image : {true, false}) {
+    MenuRecorder unavailable;
+    unavailable.fail_next_texture = fail_hd_image;
+    {
+      sdlfe::SdlScreen2D screen(&unavailable, options);
+      unavailable.fail_next_texture = !fail_hd_image;
+      screen.present_16(frame.data(), 8, 8, 16, true);
+      require(unavailable.draws.size() == 1,
+              "Unavailable GPU menu resources did not select CPU composition");
+      const auto attempts = unavailable.creation_attempts;
+      screen.present_16(frame.data(), 8, 8, 16, true);
+      require(unavailable.creation_attempts == attempts && unavailable.updates == 0,
+              "Unavailable GPU menu retried allocation or reuploaded an unchanged CPU fallback");
+    }
+    require(unavailable.released.size() == unavailable.images.size(),
+            "Unavailable GPU menu leaked partial texture resources");
+  }
+  zrndr::set_menu_background_source(nullptr);
+  zrndr::target2d() = {};
+}
 void text_checks(const char* fonts) {
   const auto saved = zutl::mounts();
   zutl::mounts() = {};
@@ -386,6 +501,7 @@ int main(int argc, char** argv) {
   try {
     artwork_checks(directory);
     drawing_checks();
+    menu_background_checks(directory);
     if (argc == 3 && std::string(argv[1]) == "--fonts")
       text_checks(argv[2]);
     else

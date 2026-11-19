@@ -248,6 +248,22 @@ bool same_frame(const uint16_t* pixels, int width, int height, int pitch,
   }
   return true;
 }
+
+bool valid_menu_inputs(const MenuBackgroundImage& image, const zimg::Texture* source,
+                       const std::vector<zrndr::MenuBackgroundBlit>& blits,
+                       const uint16_t* pixels, int width, int height, int pitch,
+                       unsigned output_width, unsigned output_height) {
+  return pixels && source && !source->palette && !source->alpha && source->pixels &&
+         image.width && image.height && image.source_width && image.source_height &&
+         std::max({image.width, image.height, image.source_width, image.source_height}) <= 16384 &&
+         uint64_t(image.width) * image.source_height == uint64_t(image.height) * image.source_width &&
+         uint64_t(image.width) * image.height * 3 == image.rgb.size() &&
+         source->width == int(image.source_width) && source->height == int(image.source_height) &&
+         source->width_again >= source->width && width > 0 && height > 0 &&
+         pitch >= int64_t(width) * 2 && pitch % 2 == 0 &&
+         uint64_t(width) * height <= 16ull * 1024 * 1024 && output_width && output_height &&
+         uint64_t(output_width) * output_height <= 16ull * 1024 * 1024 && !blits.empty();
+}
 }  // namespace
 
 MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_height,
@@ -267,6 +283,68 @@ MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_
 
 MenuBackgroundLayerRect menu_background_layer_rect(int frame_width, int frame_height) {
   return {0.f, 0.f, float(frame_width), float(frame_height)};
+}
+
+MenuBackgroundLayerRect menu_background_cover_rect(int frame_width, int frame_height,
+                                                    int output_width, int output_height) {
+  if (frame_width <= 0 || frame_height <= 0 || output_width <= 0 || output_height <= 0)
+    throw std::invalid_argument("Menu cover requires positive frame and output dimensions");
+  const double scale = std::max(double(output_width) / frame_width,
+                                double(output_height) / frame_height);
+  const double covered_width = frame_width * scale;
+  const double covered_height = frame_height * scale;
+  return {float((output_width - covered_width) * .5),
+          float((output_height - covered_height) * .5),
+          float(covered_width), float(covered_height)};
+}
+
+MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage& image,
+                                             int64_t source_x, int64_t source_y,
+                                             int frame_width, int frame_height) {
+  if (!image.width || !image.height || !image.source_width || !image.source_height ||
+      frame_width <= 0 || frame_height <= 0)
+    throw std::invalid_argument("Menu UV rectangle requires positive image and frame dimensions");
+  const auto wrap = [](int64_t value, unsigned extent) {
+    const int64_t remainder = value % int64_t(extent);
+    return remainder < 0 ? remainder + extent : remainder;
+  };
+  const double u0 = double(wrap(source_x, image.source_width)) / image.source_width +
+                    .5 / image.width;
+  const double v0 = double(wrap(source_y, image.source_height)) / image.source_height +
+                    .5 / image.height;
+  return {float(u0), float(v0), float(u0 + double(frame_width) / image.source_width),
+          float(v0 + double(frame_height) / image.source_height)};
+}
+
+const char* menu_background_gpu_status_name(MenuBackgroundGpuStatus status) {
+  switch (status) {
+    case MenuBackgroundGpuStatus::kReady: return "ready";
+    case MenuBackgroundGpuStatus::kMapping: return "nonuniform-source-mapping";
+    case MenuBackgroundGpuStatus::kGain: return "gain-outside-unorm";
+    case MenuBackgroundGpuStatus::kAdded: return "signed-added-light";
+  }
+  throw std::invalid_argument("Unknown menu GPU status");
+}
+
+MenuBackgroundUvRect menu_background_extend_uv(const MenuBackgroundUvRect& uv,
+                                               const MenuBackgroundLayerRect& frame_rectangle,
+                                               const MenuBackgroundLayerRect& cover_rectangle) {
+  const auto valid_rectangle = [](const MenuBackgroundLayerRect& rectangle) {
+    return std::isfinite(rectangle.x) && std::isfinite(rectangle.y) &&
+           std::isfinite(rectangle.width) && std::isfinite(rectangle.height) &&
+           rectangle.width > 0 && rectangle.height > 0;
+  };
+  if (!valid_rectangle(frame_rectangle) || !valid_rectangle(cover_rectangle) ||
+      !std::isfinite(uv.u0) || !std::isfinite(uv.v0) ||
+      !std::isfinite(uv.u1) || !std::isfinite(uv.v1))
+    throw std::invalid_argument("Menu background extension requires finite UVs and positive rectangles");
+  const double du = double(uv.u1) - uv.u0, dv = double(uv.v1) - uv.v0;
+  const double left = double(cover_rectangle.x) - frame_rectangle.x;
+  const double top = double(cover_rectangle.y) - frame_rectangle.y;
+  return {float(uv.u0 + du * left / frame_rectangle.width),
+          float(uv.v0 + dv * top / frame_rectangle.height),
+          float(uv.u0 + du * (left + cover_rectangle.width) / frame_rectangle.width),
+          float(uv.v0 + dv * (top + cover_rectangle.height) / frame_rectangle.height)};
 }
 
 MenuBackgroundImage load_menu_background(const std::filesystem::path& path) {
@@ -302,13 +380,10 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
                              const std::vector<zrndr::MenuBackgroundBlit>& blits,
                              const uint16_t* pixels, int width, int height, int pitch,
                              bool rgb565, unsigned output_width, unsigned output_height,
-                             std::vector<uint32_t>* output, ComposeScratch* scratch) {
-  if (!output || !pixels || !source || source->palette || source->alpha || !source->pixels ||
-      source->width != int(image.source_width) || source->height != int(image.source_height) ||
-      source->width_again < source->width ||
-      width <= 0 || height <= 0 || pitch < int64_t(width) * 2 ||
-      output_width == 0 || output_height == 0 ||
-      uint64_t(output_width) * output_height > 16ull * 1024 * 1024 || blits.empty())
+                             std::vector<uint32_t>* output, ComposeScratch* scratch,
+                             MenuBackgroundGpuLayers* layers = nullptr) {
+  if ((!output && !layers) || !valid_menu_inputs(image, source, blits, pixels, width, height,
+                                               pitch, output_width, output_height))
     return false;
 
   ComposeScratch local_scratch;
@@ -321,15 +396,19 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
   auto& gain = work.gain;
   source_at.assign(size_t(width) * height, {});
   for (const auto& blit : blits) {
-    for (int row = 0; row < blit.height; ++row) {
-      const int y = blit.destination_y + row;
-      if (y < 0 || y >= height || blit.source_y + row < 0 || blit.source_y + row >= source->height)
-        continue;
-      for (int column = 0; column < blit.width; ++column) {
-        const int x = blit.destination_x + column;
-        const int sx = blit.source_x + column;
-        if (x >= 0 && x < width && sx >= 0 && sx < source->width)
-          source_at[size_t(y) * width + x] = {sx, blit.source_y + row};
+    const int64_t first_row = std::max({int64_t(0), -int64_t(blit.destination_y),
+                                      -int64_t(blit.source_y)});
+    const int64_t last_row = std::min({int64_t(blit.height), int64_t(height) - blit.destination_y,
+                                     int64_t(source->height) - blit.source_y});
+    const int64_t first_column = std::max({int64_t(0), -int64_t(blit.destination_x),
+                                         -int64_t(blit.source_x)});
+    const int64_t last_column = std::min({int64_t(blit.width), int64_t(width) - blit.destination_x,
+                                        int64_t(source->width) - blit.source_x});
+    for (int64_t row = first_row; row < last_row; ++row) {
+      const int y = int(blit.destination_y + row);
+      for (int64_t column = first_column; column < last_column; ++column) {
+        const int x = int(blit.destination_x + column);
+        source_at[size_t(y) * width + x] = {int(blit.source_x + column), int(blit.source_y + row)};
       }
     }
   }
@@ -347,7 +426,7 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
       const size_t at = size_t(y) * width + x;
       const auto position = source_at[at];
       if (position.x < 0 || position.y < 0) continue;
-      const uint16_t rendered = frame[y * pitch_pixels + x];
+      const uint16_t rendered = frame[size_t(y) * pitch_pixels + x];
       const uint16_t background = original[size_t(position.y) * source->width_again + position.x];
       float ratio[3]{};
       bool background_pixel = rendered == background;
@@ -403,6 +482,81 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
     }
   }
 
+  if (layers) {
+    bool maps_changed = layers->status != MenuBackgroundGpuStatus::kReady ||
+                        layers->overlay.size() != frame_pixels ||
+                        layers->gain.size() != frame_pixels || layers->added.size() != frame_pixels;
+    layers->status = MenuBackgroundGpuStatus::kMapping;
+    bool have_origin = false;
+    int origin_x = 0, origin_y = 0;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const auto position = source_at[size_t(y) * width + x];
+        if (position.x < 0) continue;
+        if (!have_origin) {
+          origin_x = position.x - x;
+          origin_y = position.y - y;
+          have_origin = true;
+        }
+        // All recorded pieces must be one affine rectangle modulo the image,
+        // including overlap order. Otherwise a single repeating quad cannot
+        // reproduce the CPU source_at map.
+        if ((int64_t(position.x) - x - origin_x) % source->width != 0 ||
+            (int64_t(position.y) - y - origin_y) % source->height != 0)
+          return true;
+      }
+    }
+    if (!have_origin) return true;
+    layers->uv = menu_background_uv_rect(image, origin_x, origin_y, width, height);
+    layers->overlay.resize(frame_pixels);
+    layers->gain.resize(frame_pixels);
+    layers->added.resize(frame_pixels);
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const size_t at = size_t(y) * width + x;
+        const uint16_t pixel = frame[size_t(y) * pitch_pixels + x];
+        const uint32_t overlay = kind[at] == 0
+            ? pack(uint8_t(channel(pixel, 0, rgb565) + .5f),
+                   uint8_t(channel(pixel, 1, rgb565) + .5f),
+                   uint8_t(channel(pixel, 2, rgb565) + .5f)) : 0;
+        uint8_t factors[3]{255, 255, 255}, deltas[3]{};
+        for (int c = 0; c < 3; ++c) {
+          if (kind[at] == 1) {
+            const float factor = gain[at * 3 + c];
+            if (!std::isfinite(factor) || factor < 0.f || factor > 1.f) {
+              layers->status = MenuBackgroundGpuStatus::kGain;
+              return true;
+            }
+            factors[c] = uint8_t(factor * 255.f + .5f);
+          }
+          if (kind[at] == 2) {
+            const float delta = added[at * 3 + c];
+            if (!std::isfinite(delta) || delta < 0.f || delta > 255.f) {
+              layers->status = MenuBackgroundGpuStatus::kAdded;
+              return true;
+            }
+            deltas[c] = uint8_t(delta + .5f);
+          }
+        }
+        const uint32_t gain_pixel = pack(factors[0], factors[1], factors[2]);
+        // Additive alpha zero preserves the opaque destination's alpha.
+        const uint32_t added_pixel = pack(deltas[0], deltas[1], deltas[2]) & 0x00ffffffu;
+        maps_changed = maps_changed || layers->overlay[at] != overlay ||
+                       layers->gain[at] != gain_pixel || layers->added[at] != added_pixel;
+        layers->overlay[at] = overlay;
+        layers->gain[at] = gain_pixel;
+        layers->added[at] = added_pixel;
+      }
+    }
+    if (maps_changed) {
+      if (layers->revision == std::numeric_limits<uint64_t>::max())
+        throw std::overflow_error("Menu GPU map revision exhausted");
+      ++layers->revision;
+    }
+    layers->status = MenuBackgroundGpuStatus::kReady;
+    return true;
+  }
+
   output->resize(size_t(output_width) * output_height);
   auto render_rows = [&](unsigned first_row, unsigned last_row) {
     for (unsigned oy = first_row; oy < last_row; ++oy) {
@@ -413,7 +567,7 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
         const double fx = (double(ox) + .5) * width / output_width;
         const int x = std::min(width - 1, int(fx));
         const size_t at = size_t(y) * width + x;
-        const uint16_t pixel = frame[y * pitch_pixels + x];
+        const uint16_t pixel = frame[size_t(y) * pitch_pixels + x];
         const auto position = source_at[at];
         if (position.x >= 0 && kind[at] != 0) {
           const double hy = (position.y + sub_y) * double(image.height) / image.source_height;
@@ -481,6 +635,7 @@ struct PreparedMenuBackgroundComposer::Impl {
   std::vector<zrndr::MenuBackgroundBlit> previous_blits;
   const MenuBackgroundImage* previous_image = nullptr;
   std::vector<uint32_t>* previous_output = nullptr;
+  MenuBackgroundGpuLayers* previous_layers = nullptr;
   const uint8_t* previous_image_data = nullptr;
   const zimg::Texture* previous_source = nullptr;
   const void* previous_source_pixels = nullptr;
@@ -503,9 +658,30 @@ bool PreparedMenuBackgroundComposer::compose(
     const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels, int width,
     int height, int pitch, bool rgb565, unsigned output_width, unsigned output_height,
     std::vector<uint32_t>* output, bool* cache_hit) {
+  return prepare(image, source, blits, pixels, width, height, pitch, rgb565,
+                 output_width, output_height, output, nullptr, cache_hit);
+}
+
+bool PreparedMenuBackgroundComposer::prepare_gpu(
+    const MenuBackgroundImage& image, const zimg::Texture* source,
+    const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels, int width,
+    int height, int pitch, bool rgb565, MenuBackgroundGpuLayers* layers, bool* cache_hit) {
+  return prepare(image, source, blits, pixels, width, height, pitch, rgb565,
+                 unsigned(std::max(0, width)), unsigned(std::max(0, height)),
+                 nullptr, layers, cache_hit);
+}
+
+bool PreparedMenuBackgroundComposer::prepare(
+    const MenuBackgroundImage& image, const zimg::Texture* source,
+    const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels, int width,
+    int height, int pitch, bool rgb565, unsigned output_width, unsigned output_height,
+    std::vector<uint32_t>* output, MenuBackgroundGpuLayers* layers, bool* cache_hit) {
   if (cache_hit) *cache_hit = false;
-  if (!output || !pixels || !source || width <= 0 || height <= 0 || pitch < int64_t(width) * 2)
+  if ((!output && !layers) || !valid_menu_inputs(image, source, blits, pixels, width, height,
+                                               pitch, output_width, output_height)) {
+    invalidate_cache();
     return false;
+  }
   const auto& state = *impl_;
   const bool hit = state.valid && state.previous_image == &image &&
                    state.previous_image_data == image.rgb.data() &&
@@ -519,6 +695,7 @@ bool PreparedMenuBackgroundComposer::compose(
                    state.previous_source_height == unsigned(source->height) &&
                    state.previous_source_stride == source->width_again &&
                    state.previous_output == output &&
+                   state.previous_layers == layers &&
                    state.previous_width == width && state.previous_height == height &&
                    state.previous_pitch == pitch && state.previous_rgb565 == rgb565 &&
                    state.previous_output_width == output_width &&
@@ -531,7 +708,7 @@ bool PreparedMenuBackgroundComposer::compose(
   }
 
   if (!compose_menu_background_impl(image, source, blits, pixels, width, height, pitch, rgb565,
-                                    output_width, output_height, output, &impl_->scratch)) {
+                                    output_width, output_height, output, &impl_->scratch, layers)) {
     invalidate_cache();
     return false;
   }
@@ -546,6 +723,7 @@ bool PreparedMenuBackgroundComposer::compose(
   updated.previous_blits = blits;
   updated.previous_image = &image;
   updated.previous_output = output;
+  updated.previous_layers = layers;
   updated.previous_image_data = image.rgb.data();
   updated.previous_image_width = image.width;
   updated.previous_image_height = image.height;
