@@ -492,7 +492,12 @@ void Cursor::grab_at(int32_t px, int32_t py) {
     // coordinates, so at the left/top screen edge the restore was shifted.
     // Move the rows into cursor coordinates, bottom-up so overlapping rows
     // are not overwritten before they are copied.
-    if (b.left != 0 || b.top != 0) {
+    // grab() always sizes the save-under buffer to the whole cursor image, so the crop fits.
+    // The size check guards against a host (or a later change) that sizes it to the clipped
+    // area instead: then the rows stay where the host packed them rather than being moved
+    // past the end of the buffer.
+    const bool crop_fits_buffer = b.right <= under->width_again && b.bottom <= under->height;
+    if ((b.left != 0 || b.top != 0) && crop_fits_buffer) {
       auto* pixels = static_cast<uint16_t*>(under->pixels);
       for (int32_t row = b.bottom - b.top; row > 0; --row) {
         std::memmove(pixels + (row - 1 + b.top) * under->width_again + b.left,

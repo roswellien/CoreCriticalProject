@@ -1248,6 +1248,39 @@ void stage_b_primitive_checks(const std::filesystem::path& directory) {
                 "Replayed cursor draw/restore sequence differed from CPU output");
       }
     }
+
+    // A host that reports a crop wider than the save-under buffer (as if the buffer were sized
+    // to a clipped area) must not make grab_at move rows past the end of that buffer: the
+    // capture is left exactly as the host packed it.
+    {
+      struct OversizedCropHost : CursorTestHost {
+        zimg::Texture* screen_grab_rect(int32_t, ztwod::Rect* r, zimg::Texture* into) override {
+          if (!r || !into || !into->pixels) return nullptr;
+          auto* pixels = static_cast<uint16_t*>(into->pixels);
+          for (int32_t i = 0; i < into->pixel_count; ++i) pixels[i] = uint16_t(0x4000 + i);
+          r->left += 1;
+          r->top += 1;
+          r->right += 2;  // two columns past the cursor, so past the buffer's row width
+          return into;
+        }
+      } oversized_host;
+      ztwod::set_host(&oversized_host);
+      auto screen = initial;
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(screen.data()), width, height, pitch_bytes,
+                           6};
+      ztwod::Cursor cursor(nullptr, 1);
+      cursor.set_cursor_image(&cursor_tex);
+      cursor.set_pos(4, 4);
+      bool capture_left_as_packed = cursor.under != nullptr;
+      if (capture_left_as_packed) {
+        const auto* pixels = static_cast<const uint16_t*>(cursor.under->pixels);
+        for (int32_t i = 0; i < cursor.under->pixel_count; ++i)
+          capture_left_as_packed = capture_left_as_packed && pixels[i] == uint16_t(0x4000 + i);
+      }
+      require(capture_left_as_packed,
+              "Cursor grab_at relocated rows for a crop larger than the save-under buffer");
+      ztwod::set_host(&test_host);
+    }
   }
 
   // 5. Fallbacks: LayerCover active, RGB555 target, malformed regions, region allocation failure,
