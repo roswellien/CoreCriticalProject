@@ -278,6 +278,9 @@ TEST(crash_report_failed_worker_start_keeps_previous_handlers) {
   std::signal(SIGABRT, previous_abort);
   const auto previous_terminate = std::get_terminate();
   sdlfe::crash_report_fail_worker_start_for_test(true);
+  // Twice: a failed start must leave no stale module or handle state for the next attempt.
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  EXPECT(!sdlfe::crash_report_dump_worker_ready());
   sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
   sdlfe::crash_report_fail_worker_start_for_test(false);
   EXPECT(!sdlfe::crash_report_dump_worker_ready());
@@ -285,6 +288,10 @@ TEST(crash_report_failed_worker_start_keeps_previous_handlers) {
   EXPECT(std::signal(SIGABRT, previous_abort) == previous_abort);
   EXPECT(std::get_terminate() == previous_terminate);
   EXPECT(sdlfe::crash_report_uninstall_for_test());  // nothing was installed: a no-op that succeeds
+  // And a normal install straight after the failed ones works (no stale module or handle state).
+  sdlfe::crash_report_install("mw3sdltests", "mw3sdltests-crash.log", false);
+  if (sdlfe::crash_report_dump_prerequisites_present()) EXPECT(sdlfe::crash_report_dump_worker_ready());
+  EXPECT(sdlfe::crash_report_uninstall_for_test());
 }
 
 TEST(crash_report_install_starts_dump_worker_without_crashing) {

@@ -210,16 +210,22 @@ DWORD WINAPI dump_worker(void*) {
 }
 
 void start_dump_worker() {
+  // The error is read right after the call that failed (0 when no call failed, as with the test
+  // switch): a later call or the CloseHandle cleanup below would overwrite or stale it.
+  DWORD creation_error = 0;
   g_dump_request_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+  if (!g_dump_request_event) creation_error = GetLastError();
   g_dump_complete_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  if (!g_dump_complete_event && !creation_error) creation_error = GetLastError();
   g_dump_box_done_event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  if (!g_dump_box_done_event && !creation_error) creation_error = GetLastError();
   if (g_dump_request_event && g_dump_complete_event && g_dump_box_done_event &&
-      !g_fail_worker_start_for_test)
+      !g_fail_worker_start_for_test) {
     g_dump_worker_thread = CreateThread(nullptr, 1024 * 1024, dump_worker, nullptr,
                                         STACK_SIZE_PARAM_IS_A_RESERVATION,
                                         &g_dump_worker_thread_id);
-  // Read the error now: the cleanup below calls CloseHandle, which can overwrite it.
-  const DWORD creation_error = GetLastError();
+    if (!g_dump_worker_thread) creation_error = GetLastError();
+  }
   if (g_dump_worker_thread) {
     g_dump_worker_available = true;
     return;
@@ -264,11 +270,17 @@ void set_text(const std::string& program, const std::string& log) {
 #if defined(_WIN32)
   // The exception address, RVA and registers are in crash.txt next to the log, not in the log.
   char crash_text_path[MAX_PATH + 16] = "";
-  crash_report_sibling_path(log.c_str(), "crash.txt", crash_text_path, sizeof crash_text_path);
-  std::snprintf(g_tail, sizeof g_tail,
-                ".\n\nThe log is %s\nThe crash details are in %s\nPlease include both (and crash.dmp "
-                "next to them) if you report this.",
-                log.c_str(), crash_text_path);
+  if (crash_report_sibling_path(log.c_str(), "crash.txt", crash_text_path,
+                                sizeof crash_text_path)) {
+    std::snprintf(g_tail, sizeof g_tail,
+                  ".\n\nThe log is %s\nThe crash details are in %s\nPlease include both (and crash.dmp "
+                  "next to them) if you report this.",
+                  log.c_str(), crash_text_path);
+  } else {
+    // No path for crash.txt fits: name only the log rather than an empty file name.
+    std::snprintf(g_tail, sizeof g_tail, ".\n\nThe log is %s\nPlease include it if you report this.",
+                  log.c_str());
+  }
 #else
   std::snprintf(g_tail, sizeof g_tail, ".\n\nThe log is %s\nPlease include it if you report this.", log.c_str());
 #endif
@@ -646,6 +658,10 @@ void crash_report_install(const std::string& program, const std::string& log, bo
     if (g_stderr_handle != nullptr && g_stderr_handle != INVALID_HANDLE_VALUE)
       CloseHandle(g_stderr_handle);
     g_stderr_handle = INVALID_HANDLE_VALUE;
+    // Nothing will use dbghelp: free it so a later install does not leak a second reference.
+    if (g_dbghelp) FreeLibrary(g_dbghelp);
+    g_dbghelp = nullptr;
+    g_write_dump = nullptr;
     return;
   }
   g_previous_exception_filter = SetUnhandledExceptionFilter(on_exception);
