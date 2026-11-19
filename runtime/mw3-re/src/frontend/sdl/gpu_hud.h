@@ -15,16 +15,28 @@ struct HudOptions {
   std::string menu_background;
   std::string menu_background_renderer = "gpu";
   bool text = true;
+  // Diagnostic only: count what the menu draws without changing it. Off by default.
+  bool observe_menu = false;
 };
 // An instance-owned HUD draw list. The original canvas remains a CPU shadow
 // for native reads; display uses owned GPU images and ordered primitives.
 class GpuHud final : public zrndr::DrawObserver {
  public:
+  struct FrameStats {
+    uint64_t images{};
+    uint64_t text_hits{};
+    bool fallback{};
+    std::map<std::string, uint64_t> shadow_reasons;
+  };
+
   GpuHud(FrameRenderer& renderer, const HudOptions& options);
   ~GpuHud() override;
   void begin(const uint16_t* target, int width, int height, int pitch, int output_height);
+  // Records menu coverage without uploading textures or submitting GPU draws.
+  bool begin_observation(const uint16_t* target, int width, int height, int pitch, int output_height);
   bool finish();
   void cancel();
+  const FrameStats& frame_stats() const { return frame_stats_; }
   void image(const zimg::Texture*, int32_t x, int32_t y, uint16_t key,
              const zrndr::BlitRect*) override;
   void pixel(const uint16_t* destination, uint16_t colour) override;
@@ -47,6 +59,8 @@ class GpuHud final : public zrndr::DrawObserver {
     platform::Primitive primitive;
     bool sharp;
   };
+  void begin_frame(const uint16_t* target, int width, int height, int pitch, int output_height,
+                   bool observation_only);
   bool position(const uint16_t* pointer, int& x, int& y) const;
   int texture(const std::shared_ptr<const platform::HudImage>& image);
   void rectangle(float x0, float y0, float x1, float y1, uint32_t colour, int texture = -1,
@@ -66,6 +80,9 @@ class GpuHud final : public zrndr::DrawObserver {
   uint64_t frame_{}, layers_{}, images_{}, hits_{}, text_hits_{}, points_{}, spans_{};
   uint64_t resource_bytes_{};
   bool shadow_layer_{};
+  bool observation_only_{};
+  uint64_t observed_draws_{};
+  FrameStats frame_stats_;
   uint64_t shadow_layers_{};
   std::map<std::string, uint64_t> shadow_reasons_;
 };

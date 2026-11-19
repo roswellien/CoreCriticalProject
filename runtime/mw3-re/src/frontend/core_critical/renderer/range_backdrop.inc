@@ -67,7 +67,11 @@ void ensure_range_backdrop(unsigned index, bool depth = true) {
 unsigned range_backdrop(const Scene &scene, const Draw &draw) const {
     if (recording_backdrop || draw.key.blend || !uses_world_range(scene, draw))
         return 0;
+    // Only the two world view purposes (MainWorld = 1, WorldZoom = 2) own a backdrop, stored at
+    // index purpose - 1. Original (0) or any other value must not index the array.
     const unsigned id = unsigned(draw.producer_view.purpose);
+    if (id < 1 || id > range_backdrops.size())
+        return 0;
     return range_backdrops[id - 1].view.present &&
                    ::platform::same_producer_view_bits(range_backdrops[id - 1].view,
                                                        draw.producer_view)

@@ -278,6 +278,28 @@ void drawing_checks() {
     hud.begin(shadow.data(), 8, 6, 16, 18);
     zrndr::observe_framebuffer_write(shadow.data(), "fixture read/write effect");
     require(!hud.finish(), "Read/write effect discarded the CPU compatibility layer");
+    require(hud.frame_stats().shadow_reasons.at("fixture read/write effect") == 1,
+            "Read/write effect did not report its menu fallback reason");
+    const auto draws_before_observation = recorder.draws.size();
+    const auto shadow_before_observation = shadow;
+    hud.begin_observation(shadow.data(), 8, 6, 16, 18);
+    zrndr::blit16(&source, 1, 2, 0, nullptr);
+    require(hud.finish(), "Recorded menu image did not pass observation");
+    // The previous frame fell back (shadow reason). begin resets the whole counter struct and finish
+    // assigns the flag on every path, so this frame must not inherit that fallback.
+    require(hud.frame_stats().images == 1 && hud.frame_stats().text_hits == 0 &&
+                !hud.frame_stats().fallback && hud.frame_stats().shadow_reasons.empty(),
+            "Recorded menu image counters were incorrect or inherited an earlier fallback");
+    require(recorder.draws.size() == draws_before_observation && shadow != shadow_before_observation,
+            "Menu observation submitted GPU draws or changed CPU blit behavior");
+    require(!zrndr::draw_observer(), "Menu observation left a stale draw observer");
+    hud.begin_observation(shadow.data(), 8, 6, 16, 18);
+    zrndr::observe_framebuffer_write(shadow.data(), "fixture menu ripple");
+    require(!hud.finish(), "Unsupported menu write did not request native fallback");
+    require(hud.frame_stats().fallback &&
+                hud.frame_stats().shadow_reasons.at("fixture menu ripple") == 1 &&
+                !zrndr::draw_observer(),
+            "Unsupported menu write lost its fallback reason or left a stale observer");
     hud.begin(shadow.data(), 8, 6, 16, 18);
     zrndr::line16(1, 1, 4, 1, 0xffff);
     zrndr::set_finish_target(shadow.data(), 8, 6, 16);
@@ -438,6 +460,90 @@ void menu_background_checks(const std::filesystem::path& directory) {
             "Unavailable GPU menu leaked partial texture resources");
   }
   zrndr::set_menu_background_source(nullptr);
+void observation_checks() {
+  Recorder recorder;
+  sdlfe::HudOptions options;
+  options.mode = "core-critical";
+  options.text = false;
+  std::array<uint16_t, 48> shadow{}, baseline{};
+  shadow.fill(0x1234);
+  baseline = shadow;
+  uint16_t pixels[] = {0xf800, 0x07e0, 0x001f, 0xffff};
+  zimg::Texture image{};
+  image.width = image.width_again = 2;
+  image.height = 2;
+  image.pixels = pixels;
+  image.flags = zimg::kTwoBytes;
+  auto set_target = [&](auto& target_pixels) {
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(target_pixels.data()), 8, 6, 16, 6};
+  };
+  // The CPU result with no observer: observation must leave exactly these pixels.
+  set_target(baseline);
+  zrndr::blit16(&image, 1, 2, 0, nullptr);
+  zrndr::blit16(&image, 4, 0, 0, nullptr);
+  set_target(shadow);
+  sdlfe::GpuHud hud(recorder, options);
+  // Counting continues after the first fallback reason, and an observed frame allocates nothing.
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  zrndr::observe_framebuffer_write(shadow.data(), "fixture reason one");
+  zrndr::blit16(&image, 1, 2, 0, nullptr);
+  zrndr::observe_framebuffer_write(shadow.data(), "fixture reason two");
+  zrndr::blit16(&image, 4, 0, 0, nullptr);
+  require(!hud.finish(), "Fallback frame reported support");
+  require(hud.frame_stats().images == 2 && hud.frame_stats().fallback &&
+              hud.frame_stats().shadow_reasons.at("fixture reason one") == 1 &&
+              hud.frame_stats().shadow_reasons.at("fixture reason two") == 1,
+          "Counts stopped at the first fallback");
+  require(recorder.images.empty() && recorder.draws.empty(),
+          "Observation allocated textures or submitted draws");
+  require(shadow == baseline, "Observation changed the CPU pixels");
+  // An empty observed frame is not a fallback.
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  require(!hud.finish() && !hud.frame_stats().fallback && hud.frame_stats().images == 0,
+          "Empty frame counted as a fallback");
+  // A target that already owns the draw observer is skipped instead of throwing.
+  hud.begin(shadow.data(), 8, 6, 16, 18);
+  require(!hud.begin_observation(shadow.data(), 8, 6, 16, 18),
+          "Observation started while another target owned the draw observer");
+  hud.cancel();
+  require(!hud.begin_observation(nullptr, 8, 6, 16, 18) && !zrndr::draw_observer(),
+          "Observation with an invalid target did not skip quietly");
+  // Only the blit's crop is checked: an unkeyed magenta pixel outside it is no fallback.
+  uint16_t erase_outside[] = {0xf81f, 0x07e0, 0x001f, 0xffff};
+  zimg::Texture cropped = image;
+  cropped.pixels = erase_outside;
+  zrndr::BlitRect crop{1, 0, 2, 2};
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  zrndr::blit16(&cropped, 1, 2, 0, &crop);
+  require(hud.finish() && !hud.frame_stats().fallback, "Pixels outside the crop caused a fallback");
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  zrndr::blit16(&cropped, 1, 2, 0, nullptr);
+  require(!hud.finish() && hud.frame_stats().shadow_reasons.count("unkeyed layer erase") == 1,
+          "Visible unkeyed magenta did not fall back");
+  // Alpha 0 over magenta is transparent, not an erase.
+  uint8_t clear_alpha[] = {0, 255, 255, 255};
+  zimg::Texture alpha_image = cropped;
+  alpha_image.alpha = clear_alpha;
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  zrndr::blit16(&alpha_image, 1, 2, 0, nullptr);
+  require(hud.finish() && !hud.frame_stats().fallback, "Transparent magenta caused a fallback");
+  // Palette: an index past the palette inside the crop falls back; one outside it does not.
+  uint8_t indices[] = {0, 9, 1, 1};
+  uint16_t palette[] = {0xf800, 0x07e0};
+  zimg::Texture indexed{};
+  indexed.width = indexed.width_again = 2;
+  indexed.height = 2;
+  indexed.pixels = indices;
+  indexed.palette = palette;
+  indexed.palette_count = 2;
+  zrndr::BlitRect first_column{0, 0, 1, 2};
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  zrndr::blit16(&indexed, 1, 2, 0, &first_column);
+  require(hud.finish() && !hud.frame_stats().fallback, "Bad palette index outside the crop fell back");
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  zrndr::blit16(&indexed, 1, 2, 0, nullptr);
+  require(!hud.finish() && hud.frame_stats().shadow_reasons.count("invalid image palette") == 1,
+          "Bad palette index inside the crop did not fall back");
   zrndr::target2d() = {};
 }
 void text_checks(const char* fonts) {
@@ -477,6 +583,33 @@ void text_checks(const char* fonts) {
   host.DrawTextA(dc, "MW3", -1, &clip, 0);
   require(host.hud_text_image(image, 3, 0xf81f) == enhanced,
           "Unchanged native text accumulated recipes");
+  {
+    const auto previous_target = zrndr::target2d();
+    Recorder recorder;
+    sdlfe::HudOptions options;
+    options.mode = "core-critical";
+    std::array<uint16_t, 64 * 32> shadow{};
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), 64, 32, 64 * 2, 6};
+    sdlfe::GpuHud hud(recorder, options);
+    // Text is enabled, yet observation must not rasterise it and must keep the guest's FP state.
+    const int previous_round = std::fegetround();
+    std::fesetround(FE_DOWNWARD);
+    std::feclearexcept(FE_ALL_EXCEPT);
+    std::feraiseexcept(FE_INVALID);
+    const int previous_flags = std::fetestexcept(FE_ALL_EXCEPT);
+    require(hud.begin_observation(shadow.data(), 64, 32, 64 * 2, 96), "Observation did not start");
+    zrndr::blit16(image, 0, 0, 0xf81f, nullptr);
+    require(hud.finish(), "Recorded menu text did not pass observation");
+    require(std::fegetround() == FE_DOWNWARD && std::fetestexcept(FE_ALL_EXCEPT) == previous_flags,
+            "Menu text observation changed the guest FP state");
+    std::feclearexcept(FE_ALL_EXCEPT);
+    std::fesetround(previous_round);
+    require(hud.frame_stats().images == 1 && hud.frame_stats().text_hits == 0,
+            "Observation counted or rasterised menu text");
+    require(recorder.draws.empty() && recorder.images.empty() && !zrndr::draw_observer(),
+            "Menu text observation submitted GPU draws, allocated textures or left a stale observer");
+    zrndr::target2d() = previous_target;
+  }
   host.SetTextColor(dc, 0xff0000);
   host.DrawTextA(dc, "MW3", -1, &clip, 0);
   host.SetTextColor(dc, 0x0000ff);
@@ -502,6 +635,7 @@ int main(int argc, char** argv) {
     artwork_checks(directory);
     drawing_checks();
     menu_background_checks(directory);
+    observation_checks();
     if (argc == 3 && std::string(argv[1]) == "--fonts")
       text_checks(argv[2]);
     else

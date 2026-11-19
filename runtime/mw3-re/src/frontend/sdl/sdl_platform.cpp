@@ -468,27 +468,27 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   if (have_menu) {
     const auto now = std::chrono::steady_clock::now();
     const double milliseconds = std::chrono::duration<double, std::milli>(now - menu_start).count();
-    menu_report_milliseconds_ += milliseconds;
-    if (gpu_shown) menu_report_gpu_milliseconds_ += milliseconds;
-    ++menu_report_frames_;
-    menu_report_hits_ += cache_hit;
-    menu_report_gpu_frames_ += gpu_shown;
-    if (std::chrono::duration<double>(now - menu_report_start_).count() >= 1.0) {
-      const unsigned cpu_frames = menu_report_frames_ - menu_report_gpu_frames_;
-      const double gpu_average = menu_report_gpu_frames_ == 0 ? 0 :
-          menu_report_gpu_milliseconds_ / menu_report_gpu_frames_;
+    menu_background_report_milliseconds_ += milliseconds;
+    if (gpu_shown) menu_background_report_gpu_milliseconds_ += milliseconds;
+    ++menu_background_report_frames_;
+    menu_background_report_hits_ += cache_hit;
+    menu_background_report_gpu_frames_ += gpu_shown;
+    if (std::chrono::duration<double>(now - menu_background_report_start_).count() >= 1.0) {
+      const unsigned cpu_frames = menu_background_report_frames_ - menu_background_report_gpu_frames_;
+      const double gpu_average = menu_background_report_gpu_frames_ == 0 ? 0 :
+          menu_background_report_gpu_milliseconds_ / menu_background_report_gpu_frames_;
       const double cpu_average = cpu_frames == 0 ? 0 :
-          (menu_report_milliseconds_ - menu_report_gpu_milliseconds_) / cpu_frames;
+          (menu_background_report_milliseconds_ - menu_background_report_gpu_milliseconds_) / cpu_frames;
       std::fprintf(stderr,
           "mw3: menu background path=%s reason=%s CPU prepare/upload/submit "
           "gpu=%.3f ms/frame (%u) cpu=%.3f ms/frame (%u), output=%dx%d maps=%dx%d cache=%u/%u\n",
           gpu_shown ? "gpu" : "cpu", gpu_shown ? "ready" : reason,
-          gpu_average, menu_report_gpu_frames_, cpu_average, cpu_frames,
-          window_width, window_height, width, height, menu_report_hits_, menu_report_frames_);
-      menu_report_start_ = now;
-      menu_report_frames_ = menu_report_hits_ = menu_report_gpu_frames_ = 0;
-      menu_report_milliseconds_ = 0;
-      menu_report_gpu_milliseconds_ = 0;
+          gpu_average, menu_background_report_gpu_frames_, cpu_average, cpu_frames,
+          window_width, window_height, width, height, menu_background_report_hits_, menu_background_report_frames_);
+      menu_background_report_start_ = now;
+      menu_background_report_frames_ = menu_background_report_hits_ = menu_background_report_gpu_frames_ = 0;
+      menu_background_report_milliseconds_ = 0;
+      menu_background_report_gpu_milliseconds_ = 0;
     }
   }
   render_->present();
@@ -497,6 +497,7 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
 
 SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_Window* window, const FrameShape* shape)
     : render_(render), hud_window_(window), hud_shape_(shape) {
+  menu_observation_enabled_ = options.observe_menu;
   if (options.mode != "original" && options.mode != "core-critical")
     throw std::runtime_error("--cc-hud supports original or core-critical");
   if (options.menu_background_renderer != "cpu" && options.menu_background_renderer != "gpu")
@@ -531,6 +532,7 @@ SdlScreen2D::~SdlScreen2D() {
   if (texture_ >= 0) render_->release_texture(texture_);
 }
 void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height, int pitch) {
+  cancel_menu_observation();
   if (!hud_) return;
   int output_height = height;
   if (hud_window_) {
@@ -541,7 +543,77 @@ void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height
   }
   hud_->begin(target, width, height, pitch, output_height);
 }
-void SdlScreen2D::cancel_overlay_16() { if (hud_) hud_->cancel(); }
+void SdlScreen2D::cancel_overlay_16() {
+  cancel_menu_observation();
+  if (hud_) hud_->cancel();
+}
+void SdlScreen2D::begin_menu_observation(const uint16_t* target, int width, int height, int pitch) {
+  cancel_menu_observation();
+  // Off unless --cc-menu-observe: observing scans every menu blit, which the normal game must not pay for.
+  if (!hud_ || !menu_observation_enabled_) return;
+  int output_height = height;
+  if (hud_window_) {
+    int output_width = 0;
+    SDL_GetWindowSizeInPixels(hud_window_, &output_width, &output_height);
+    if (hud_shape_ && hud_shape_->fit && hud_shape_->frame_w > 0)
+      output_height = std::min(output_height, int(int64_t(output_width) * hud_shape_->frame_h / hud_shape_->frame_w));
+  }
+  // A false result means another target owns the draw observer or this target is unusable:
+  // skip observing this frame rather than throwing out of the engine's frame clear.
+  if (!hud_->begin_observation(target, width, height, pitch, output_height)) return;
+  menu_observation_active_ = true;
+  if (menu_report_start_ == std::chrono::steady_clock::time_point{})
+    menu_report_start_ = std::chrono::steady_clock::now();
+}
+void SdlScreen2D::cancel_menu_observation() noexcept {
+  if (!menu_observation_active_) return;
+  menu_observation_active_ = false;
+  if (hud_) hud_->cancel();
+}
+void SdlScreen2D::finish_menu_observation() noexcept {
+  if (!menu_observation_active_) return;
+  menu_observation_active_ = false;
+  bool observer_failed = false;
+  try {
+    if (hud_) hud_->finish();
+  } catch (const std::exception& error) {
+    observer_failed = true;
+    if (hud_) hud_->cancel();
+    std::fprintf(stderr, "mw3: menu observer failed; using native presentation: %s\n", error.what());
+  } catch (...) {
+    observer_failed = true;
+    if (hud_) hud_->cancel();
+    std::fprintf(stderr, "mw3: menu observer failed; using native presentation\n");
+  }
+  if (!hud_) return;
+  try {
+    ++menu_report_frames_;
+    menu_report_images_ += hud_->frame_stats().images;
+    menu_report_text_hits_ += hud_->frame_stats().text_hits;
+    for (const auto& [reason, count] : hud_->frame_stats().shadow_reasons)
+      menu_report_shadow_reasons_[reason] += count;
+    // An empty frame is not a fallback; only a failure or a recorded shadow reason is.
+    menu_report_fallbacks_ += observer_failed || hud_->frame_stats().fallback;
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration<double>(now - menu_report_start_).count() < 1.0 ||
+        menu_report_frames_ == 0)
+      return;
+    std::fprintf(stderr,
+                 "mw3: menu observer %llu frames, %llu images, %llu text hits, %llu fallbacks\n",
+                 static_cast<unsigned long long>(menu_report_frames_),
+                 static_cast<unsigned long long>(menu_report_images_),
+                 static_cast<unsigned long long>(menu_report_text_hits_),
+                 static_cast<unsigned long long>(menu_report_fallbacks_));
+    for (const auto& [reason, count] : menu_report_shadow_reasons_)
+      std::fprintf(stderr, "mw3: menu observer fallback %s: %llu\n", reason.c_str(),
+                   static_cast<unsigned long long>(count));
+    menu_report_start_ = now;
+    menu_report_frames_ = menu_report_images_ = menu_report_text_hits_ = menu_report_fallbacks_ = 0;
+    menu_report_shadow_reasons_.clear();
+  } catch (...) {
+    std::fprintf(stderr, "mw3: menu observer counters could not be recorded\n");
+  }
+}
 void SdlScreen2D::overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                              const uint8_t* alpha, const uint16_t* colour) {
   if (!render_ || width <= 0 || height <= 0) return;

@@ -3,8 +3,11 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "frontend/sdl/sdl_fit.h"
@@ -88,6 +91,9 @@ class SdlScreen2D : public platform::Screen2D {
   ~SdlScreen2D() override;
   void begin_overlay_16(const uint16_t*, int width, int height, int pitch) override;
   void cancel_overlay_16() override;
+  void begin_menu_observation(const uint16_t*, int width, int height, int pitch) override;
+  void cancel_menu_observation() noexcept override;
+  void finish_menu_observation() noexcept override;
   void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) override;
   // A 16-bit pixel (565, else 555) as the layer's RGBA8, opaque.
   static uint32_t rgba(uint16_t pixel, bool rgb565);
@@ -122,10 +128,16 @@ class SdlScreen2D : public platform::Screen2D {
   uint64_t menu_gpu_uploaded_revision_ = 0;
   bool menu_use_gpu_ = true;
   bool menu_gpu_available_ = true;
-  std::chrono::steady_clock::time_point menu_report_start_ = std::chrono::steady_clock::now();
-  unsigned menu_report_frames_ = 0, menu_report_hits_ = 0, menu_report_gpu_frames_ = 0;
-  double menu_report_milliseconds_ = 0;
-  double menu_report_gpu_milliseconds_ = 0;
+  std::chrono::steady_clock::time_point menu_background_report_start_ = std::chrono::steady_clock::now();
+  unsigned menu_background_report_frames_ = 0, menu_background_report_hits_ = 0, menu_background_report_gpu_frames_ = 0;
+  double menu_background_report_milliseconds_ = 0;
+  double menu_background_report_gpu_milliseconds_ = 0;
+  bool menu_observation_active_{};
+  bool menu_observation_enabled_{};
+  std::chrono::steady_clock::time_point menu_report_start_{};
+  uint64_t menu_report_frames_{}, menu_report_images_{}, menu_report_text_hits_{},
+      menu_report_fallbacks_{};
+  std::map<std::string, uint64_t> menu_report_shadow_reasons_;
 };
 
 // GetTickCount from the game's start, and Sleep. With `frame_ms` (ours,
