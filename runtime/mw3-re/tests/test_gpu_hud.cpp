@@ -284,8 +284,11 @@ void drawing_checks() {
     hud.begin_observation(shadow.data(), 8, 6, 16, 18);
     zrndr::blit16(&source, 1, 2, 0, nullptr);
     require(hud.finish(), "Recorded menu image did not pass observation");
-    require(hud.frame_stats().images == 1 && hud.frame_stats().text_hits == 0,
-            "Recorded menu image counters were incorrect");
+    // The previous frame fell back (shadow reason). begin resets the whole counter struct and finish
+    // assigns the flag on every path, so this frame must not inherit that fallback.
+    require(hud.frame_stats().images == 1 && hud.frame_stats().text_hits == 0 &&
+                !hud.frame_stats().fallback && hud.frame_stats().shadow_reasons.empty(),
+            "Recorded menu image counters were incorrect or inherited an earlier fallback");
     require(recorder.draws.size() == draws_before_observation && shadow != shadow_before_observation,
             "Menu observation submitted GPU draws or changed CPU blit behavior");
     require(!zrndr::draw_observer(), "Menu observation left a stale draw observer");
