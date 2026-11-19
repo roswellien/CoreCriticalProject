@@ -3023,6 +3023,8 @@ int main(int argc, char **argv) {
     else if (ultrawide_check)
       check_ultrawide(window, backend);
     else if (geometry_check) {
+      check_radial_world_visibility();
+      check_radial_model_views(window, backend);
       check_campaign_fog_color();
       check_distance_fog(window, backend);
       check_owned_rigid_capture(window, backend);

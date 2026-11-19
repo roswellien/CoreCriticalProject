@@ -132,7 +132,7 @@ double mul_up(double left, double right) noexcept {
 // when every corner of its source AABB is provably < far_z across all finite
 // float multiply/add/FMA orders, rounding modes and intermediate FTZ states.
 bool far_plane_safe(const cc::geometry::Resource &resource,
-                    const platform::ModelDrawContext &context, float clip_far) noexcept {
+                    const platform::ModelDrawContext &context, float clip_far, const platform::Render3D &renderer) {
     if (!resource.source_bounds_valid || !context.model_to_camera)
         return false;
     if (!is_positive_normal(clip_far) || !is_positive_normal(context.far_z) ||
@@ -183,7 +183,21 @@ bool far_plane_safe(const cc::geometry::Resource &resource,
     constexpr double kFloatMinNormal = double(std::numeric_limits<float>::min());
     const double margin = add_up(mul_up(64.0 * kFloatEpsilon, abs_sum), 64.0 * kFloatMinNormal);
     const double max_camera_z = add_up(support_sum, margin);
-    return std::isfinite(max_camera_z) && max_camera_z < double(clip_far);
+    if (!std::isfinite(max_camera_z)) return false;
+    if (max_camera_z < double(clip_far)) return true;
+    // Camera Z never exceeds length(eye). In an authenticated world projection
+    // the hardware far plane therefore clips only samples this renderer already
+    // discards. Keep every source/FP bound above and the legacy rule elsewhere.
+    const unsigned radius = renderer.opaque_world_range();
+    if (!radius || double(radius) > double(clip_far)) return false;
+    const auto view = zvid::capture_producer_view();
+    const auto &p = view.projection;
+    return view.present && (view.purpose == platform::ProducerPurpose::MainWorld ||
+                            view.purpose == platform::ProducerPurpose::WorldZoom) &&
+           p.far_z == context.far_z && p.near_z == context.near_z &&
+           p.fx_near == context.fx_near && p.fy_near == context.fy_near &&
+           p.cx == context.cx && p.cy == context.cy;
+
 }
 } // namespace
 
@@ -443,7 +457,7 @@ bool submit_geometry(zcls::Node &node) {
         model.render_geometry = std::move(registered.resource);
         model.render_materials = std::move(registered.original_materials);
     }
-    if (!far_plane_safe(*model.render_geometry, context, draw_state().clip.far_z)) {
+    if (!far_plane_safe(*model.render_geometry, context, draw_state().clip.far_z, *renderer)) {
         // Static baking also indexes cached normals with vertex shading off.
         if (model.count(0x14) > std::uint32_t(kModelVerts) ||
             model.count(0x18) > std::uint32_t(kModelVerts))

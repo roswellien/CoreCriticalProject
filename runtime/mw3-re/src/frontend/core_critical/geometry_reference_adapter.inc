@@ -51,6 +51,7 @@ void emit_reference_geometry(
     const auto &range = resource.ranges[range_index];
     const auto &material = materials[range_index];
     vk::Draw draw{};
+    draw.producer_view = producer_view_;
     draw.geometry_debug_normals = geometry_debug_;
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     draw.texture =

@@ -126,6 +126,11 @@ struct Push {
   std::uint32_t mode[4];
 };
 static_assert(sizeof(Push) == 64);
+struct TlPush {
+  Push base;
+  std::array<float, 4> radial_projection;
+};
+static_assert(sizeof(TlPush) == 80 && offsetof(TlPush, radial_projection) == 64);
 using ModelVertex = cc::geometry::Vertex;
 static_assert(sizeof(ModelVertex) == 32);
 struct ModelGeometry {
@@ -262,14 +267,15 @@ public:
     bool fxaa;
   };
   enum class ColorTarget { device_default, rgba8 };
+  static constexpr unsigned scene_texture_bindings = 3;
   static std::array<unsigned, 2> material_descriptor_counts(std::uint64_t capacity) {
-    if (capacity > (std::uint64_t(UINT32_MAX) - 2) / 4)
+    if (capacity > (std::uint64_t(UINT32_MAX) - 2) / 5)
       throw std::runtime_error("Material descriptor pool arithmetic overflow");
-    return {unsigned(capacity * 4 + 2), unsigned(capacity * 2 + 1)};
+    return {unsigned(capacity * 5 + 2), unsigned(capacity * 2 + 1)};
   }
   static unsigned material_descriptor_capacity(std::uint64_t draw_count,
                                                 std::uint64_t caster_count) {
-    constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 4;
+    constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 5;
     if (draw_count > limit || caster_count > limit - draw_count ||
         draw_count + caster_count > limit - 64)
       throw std::runtime_error("Scene material descriptor capacity overflows Vulkan counts");
@@ -1343,6 +1349,8 @@ public:
         camera_history.observe(std::move(snapshot));
       }
     }
+    apply_atmosphere(s, lighting_settings);
+    capture_range_backdrops(s, upload_in);
     if (can_reconstruct_world(s, upload_in, readback_out))
       render_reconstructed_world(s);
     else
@@ -1357,7 +1365,7 @@ private:
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);
-    if (worldColor.image &&
+    if (!recording_backdrop && worldColor.image &&
         reconstruction_stage == ReconstructionStage::normal) {
       // A depth-only frame may retain full-resolution HUD color. Reduce
       // only when a full color clear replaces every retained pixel.
@@ -1418,8 +1426,7 @@ private:
     if (upload_in)
       mw34::depth::upload(up + depthOffset, s.depth.data(), size_t(pixels));
     const auto &environment = lighting_settings;
-    if (!world_scene_prepared)
-      apply_atmosphere(s, environment);
+
     if (!s.vertices.empty())
       std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
     if (lighting_settings.enabled) {
@@ -1564,7 +1571,7 @@ private:
       }
       shadowFrame = &world_shadow_frame;
       fixtureLights = &world_fixture_lights;
-    } else {
+    } else if (!recording_backdrop) {
       localShadowFrame = prepare_shadow(s, environment);
       localFixtureLights = prepare_fixture_shadows(s, bound, s.vertices);
     }
@@ -1771,8 +1778,9 @@ private:
       pool(unsigned(descriptor_count));
     check(f.vkResetDescriptorPool(device, descriptorPool, 0),
           "reset descriptor pool");
-    std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> sets;
+    std::array<std::map<std::pair<Tex *, unsigned>, VkDescriptorSet>, 3> material_sets;
     std::vector<VkDescriptorSet> drawSets(s.draws.size());
+    std::vector<unsigned> visibility_flags(s.draws.size());
     for (size_t i = 0; i < s.draws.size(); ++i) {
       const auto &d = s.draws[i];
       if (d.texture >= 0 && size_t(d.texture) >= bound.size())
@@ -1781,6 +1789,9 @@ private:
             std::to_string(i) + " slot=" + std::to_string(d.texture) +
             " textures=" + std::to_string(bound.size()));
       Tex *t = d.texture >= 0 ? bound[size_t(d.texture)] : &white;
+      const unsigned backdrop = range_backdrop(s, d);
+      if (backdrop) visibility_flags[i] = (1U << 15) | (range_backdrops[backdrop-1].resident ? (1U << 14) : 0U);
+      auto &sets = material_sets[backdrop];
       auto it = sets.find({t, d.sampler});
       if (it == sets.end()) {
         VkDescriptorSetAllocateInfo ai{};
@@ -1799,6 +1810,12 @@ private:
         w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.pImageInfo = &info;
         f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        VkDescriptorImageInfo sky{sampler(3U | (3U << 4) | (3U << 8)),
+            backdrop ? range_backdrops[backdrop - 1].color.view : white.view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 2;
+        w.pImageInfo = &sky;
+        f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
         if (reconstruction_stage == ReconstructionStage::coverage) {
           VkDescriptorImageInfo reconstructed{
               sampler(3U | (3U << 4) | (3U << 8)), reconstructedColor.view,
@@ -1811,7 +1828,7 @@ private:
       }
       drawSets[i] = it->second;
     }
-    fixture_shadow_sets(sets);
+    if (!recording_backdrop) fixture_shadow_sets(material_sets[0]);
     std::map<MaterialDescriptorKey, VkDescriptorSet> normalSets;
     std::vector<VkDescriptorSet> drawNormalSets(s.draws.size());
     if (lighting_settings.enabled) {
@@ -1984,7 +2001,18 @@ private:
         off += VkDeviceSize(t->width) * t->height * 4;
       }
     }
-    if (!upload_in) {
+    if (recording_backdrop) {
+      barrier(recording_backdrop->color.image, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+              VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_IMAGE_ASPECT_COLOR_BIT);
+      barrier(range_backdrop_depth.image, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
+              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+              VK_IMAGE_ASPECT_DEPTH_BIT);
+    } else if (!upload_in) {
       // Keep the resident content: from the layout the previous scene left
       // (attachment, or transfer source after a copy-out).
       const bool att = in_attachment_layout;
@@ -2046,7 +2074,7 @@ private:
     if ((s.hud || (s.guest_surface_write && worldColor.image)) &&
         quality_world_dirty && fxaa_enabled())
       record_fxaa();
-    if (!world_scene_prepared || !world_shadow_recorded) {
+    if (!recording_backdrop && (!world_scene_prepared || !world_shadow_recorded)) {
       if (shadowFrame->active && !shadowFrame->reused)
         record_shadow(*shadowFrame);
       record_fixture_shadows(*fixtureLights);
@@ -2056,7 +2084,7 @@ private:
     VkRenderPassBeginInfo rb{};
     rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rb.renderPass = renderPass;
-    rb.framebuffer = framebuffer;
+    rb.framebuffer = recording_backdrop ? recording_backdrop->framebuffer : framebuffer;
     rb.renderArea = {{0, 0}, {rw, rh}};
     f.vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
     VkViewport vp{0, 0, float(rw), float(rh), 0, 1};
@@ -2074,6 +2102,8 @@ private:
       if (left.model || right.model || left.key.points || right.key.points ||
           !left.count || !right.count || left.count % 3 || right.count % 3 ||
           left.key.packed() != right.key.packed() ||
+          left.native_sky != right.native_sky || left.sky != right.sky ||
+          left.depth_only != right.depth_only ||
           !::platform::same_producer_view_bits(left.producer_view, right.producer_view) ||
           drawSets[a] != drawSets[b] ||
           !mw34::materials::same_height_binding(left.height_binding, right.height_binding) ||
@@ -2132,7 +2162,7 @@ private:
           ++orderAt;
         }
       }
-      if (producer_view_observer) {
+      if (producer_view_observer && !recording_backdrop) {
         cc_mw3_re::testing::ProducerViewObservation observation{};
         observation.stage = cc_mw3_re::testing::ProducerViewStage::backend_group;
         observation.view = d.producer_view;
@@ -2144,6 +2174,12 @@ private:
         producer_view_observer->backend(observation);
       }
       const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
+      const auto& view = d.producer_view;
+      // Opaque reduced shading supplies surface RGB. Its full-resolution replay
+      // makes the single coverage/depth decision for each output sample.
+      const unsigned radial_far = reconstruction_stage != ReconstructionStage::shading &&
+          uses_world_range(s, d) ? bridge_config.draw_distance : 0;
+
       const VkPipelineLayout layout =
           (model || lit) ? modelLayout : pipelineLayout;
       f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2194,6 +2230,10 @@ private:
         }
         ModelPush mp{};
         mp.base = d.push;
+        // mode.x low bits keep the legacy material flags. ModelPush already
+        // occupies Vulkan's guaranteed 128 bytes; its upper half-word carries metres.
+        mp.base.mode[0] |= radial_far << 16;
+        mp.base.mode[0] |= visibility_flags[o.index];
         mp.camera = i.camera;
         mp.base.target[2] = i.projection[0];
         mp.base.target[3] = i.projection[5];
@@ -2224,10 +2264,27 @@ private:
           f.vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &zero);
           boundVertices = vertexBuffer.buffer;
         }
+        TlPush tl{d.push, {}};
+        tl.base.mode[0] |= visibility_flags[o.index];
+        tl.base.target[3] = 0;
+        if (radial_far && view.canvas_available) {
+          const auto& p = view.projection;
+          const auto& c = view.canvas;
+          if (c.width > 0 && c.height > 0 && p.fx_near > 0 && p.fy_near > 0 &&
+              p.near_z > 0 && std::isfinite(p.near_z) && std::isfinite(p.fx_near) &&
+              std::isfinite(p.fy_near) && std::isfinite(p.cx) && std::isfinite(p.cy)) {
+            const float sx = float(s.width) / float(c.width);
+            const float sy = float(s.height) / float(c.height);
+            tl.radial_projection = {1.f / (p.fx_near * sx * radial_far),
+                                    1.f / (p.fy_near * sy * radial_far),
+                                    (p.cx - c.x) * sx, (p.cy - c.y) * sy};
+            tl.base.target[3] = p.near_z / radial_far;
+          }
+        }
         f.vkCmdPushConstants(cmd, layout,
                              VK_SHADER_STAGE_VERTEX_BIT |
                                  VK_SHADER_STAGE_FRAGMENT_BIT,
-                             0, sizeof(Push), &d.push);
+                             0, sizeof(tl), &tl);
       }
       if (d.model && !d.model->geometry->indices.empty())
         f.vkCmdDrawIndexed(cmd, vertexCount, 1, d.first, 0, 0);
@@ -2236,13 +2293,18 @@ private:
                     d.model && d.model->world ? 0 : d.first, 0);
       if (reconstruction_stage == ReconstructionStage::coverage)
         coverage_draws += logicalDraws;
-      else {
+      else if (!recording_backdrop) {
         draws += logicalDraws;
         ++submitted_draws;
         combined_draws += logicalDraws - 1;
       }
     }
     f.vkCmdEndRenderPass(cmd);
+    if (recording_backdrop)
+      barrier(recording_backdrop->color.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
     const bool writes_color =
         std::any_of(s.draws.begin(), s.draws.end(),
                     [](const Draw &draw) { return !draw.depth_only; });
@@ -2291,8 +2353,8 @@ private:
       height_uploaded_bytes += upload.cached->bytes;
     }
     profile_queries_pending = profile_queries != VK_NULL_HANDLE;
-    fixture_atlas_submitted();
-    if (reconstruction_stage != ReconstructionStage::coverage)
+    if (!recording_backdrop) fixture_atlas_submitted();
+    if (reconstruction_stage != ReconstructionStage::coverage && !recording_backdrop)
       ++scenes;
     if (readback_out) {
       check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
@@ -3620,20 +3682,22 @@ private:
       check(f.vkCreateQueryPool(device, &query, nullptr, &profile_queries),
             "scene timestamp query pool");
     }
-    const VkDescriptorSetLayoutBinding bindings[2]{
+    const VkDescriptorSetLayoutBinding bindings[scene_texture_bindings]{
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
          VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
          VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = world_scale_percent() < 100 ? 2 : 1;
+    li.bindingCount = scene_texture_bindings;
     li.pBindings = bindings;
     check(f.vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout),
           "descriptor set layout");
     VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT |
                                VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(Push)};
+                           0, sizeof(TlPush)};
     VkPipelineLayoutCreateInfo pli{};
     pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pli.setLayoutCount = 1;
@@ -3681,10 +3745,10 @@ private:
         check(
             f.vkCreateDescriptorSetLayout(device, &si, nullptr, &sunSetLayout),
             "sun descriptor layout");
-        if (p.limits.maxPerStageDescriptorSamplers < 6 ||
-            p.limits.maxPerStageDescriptorSampledImages < 6 ||
-            p.limits.maxDescriptorSetSamplers < 6 ||
-            p.limits.maxDescriptorSetSampledImages < 6)
+        if (p.limits.maxPerStageDescriptorSamplers < 7 ||
+            p.limits.maxPerStageDescriptorSampledImages < 7 ||
+            p.limits.maxDescriptorSetSamplers < 7 ||
+            p.limits.maxDescriptorSetSampledImages < 7)
           throw std::runtime_error("GPU cannot provide the normal/height descriptor contract");
         const std::array<VkDescriptorSetLayoutBinding, 2> nb{{
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
@@ -4961,6 +5025,7 @@ private:
     device = {};
   }
 #include "quality_stage.inc"
+#include "range_backdrop.inc"
 #include "world_resolution_stage.inc"
 };
 } // namespace mw34::vkscene

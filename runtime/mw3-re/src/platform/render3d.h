@@ -110,6 +110,9 @@ class Render3D {
   virtual ~Render3D() = default;
   // What the load screen names as the video driver (ours; 0x005799f0 named the DirectDraw driver).
   virtual const char* driver_name() const { return "Default"; }
+  // Positive only for renderers that discard opaque typed world geometry
+  // outside this 3D eye radius before it can write color or depth.
+  virtual unsigned opaque_world_range() const { return 0; }
   virtual cc::geometry::Mode geometry_mode() const { return cc::geometry::Mode::legacy; }
   virtual cc::geometry::Submission submit_prepared_geometry(const ModelDrawContext&,
                                                             const cc::geometry::Fog&) {
