@@ -803,6 +803,9 @@ bool SdlTwodHost::derive_text_recolour(const HudTextSource& source, const uint16
 
 std::shared_ptr<const platform::HudImage> SdlTwodHost::hud_text_image(const zimg::Texture* source,
                                                                       float density, uint16_t key) {
+  // An empty or malformed image has no text to raster; the row lookups below
+  // (height - 1, width - 1) would underflow on it.
+  if (!source || source->width <= 0 || source->height <= 0) return {};
   auto found = hud_text_sources_.find(source);
   if (!hud_text_enabled_ || found == hud_text_sources_.end() || found->second.lines.empty() ||
       !std::isfinite(density) || density <= 1 || source->palette || source->alpha)

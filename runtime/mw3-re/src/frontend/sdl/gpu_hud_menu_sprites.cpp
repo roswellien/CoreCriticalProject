@@ -184,10 +184,15 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
   const bool has_alpha_plane = source->alpha != nullptr;
   const bool keyed = !has_alpha_plane && (source->flags & zimg::kAlpha) != 0;
 
-  // First pass: validate, and build the artwork identity and the content hash.
-  // The identity is the HUD pack contract (tools/vulkan-hud/build_hires_pack.py):
-  // RGB565 where the pixel is drawn at all, 0 where it is fully transparent.
-  std::vector<uint16_t> identity_pixels(count);
+  // First pass: validate, and build the content hash (the native texture cache
+  // key) and, only when an artwork pack is loaded, the artwork identity.
+  // The identity is the HUD pack contract (tools/vulkan-hud/build_hires_pack.py,
+  // and gpu_hud.cpp's HUD path): RGB565 wherever the raw alpha is non-zero, 0
+  // only where it is exactly 0. It is deliberately not blit16's draw threshold
+  // (alphas 1..3 are not drawn): packs were keyed this way, and matching blit16
+  // instead would change the identity of every image with faint alpha edges.
+  const bool look_up_artwork = !artwork_.empty();
+  std::vector<uint16_t> identity_pixels(look_up_artwork ? count : 0);
   uint64_t content_hash = 0xcbf29ce484222325ULL;
   fold_word(content_hash, uint32_t(width));
   fold_word(content_hash, uint32_t(height));
@@ -208,7 +213,7 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
       const uint16_t compared = source->palette ? uint16_t(index) : pixel;
       unsigned raw_alpha = has_alpha_plane ? source->alpha[at] : 255;
       if (keyed && compared == key) raw_alpha = 0;
-      identity_pixels[size_t(row) * width + column] = raw_alpha ? pixel : 0;
+      if (look_up_artwork) identity_pixels[size_t(row) * width + column] = raw_alpha ? pixel : 0;
       fold_word(content_hash, uint32_t(pixel) | raw_alpha << 16);
     }
 
@@ -230,13 +235,17 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
   bool native_is_text = false;
   if (!selected) {
     native_is_text = ztwod::host().is_text_image(source);
-    const uint64_t identity = platform::hud_identity(width, height, identity_pixels);
-    const auto found = artwork_.find(identity);
-    if (found != artwork_.end()) {
-      selected = found->second;
-      kind = MenuSpriteSource::kArtwork;
-    } else if (!native_is_text) {
-      log_menu_artwork_miss(identity, width, height);
+    if (!look_up_artwork) {
+      if (!native_is_text) log_menu_artwork_miss(0, width, height);  // logs "no pack" once
+    } else {
+      const uint64_t identity = platform::hud_identity(width, height, identity_pixels);
+      const auto found = artwork_.find(identity);
+      if (found != artwork_.end()) {
+        selected = found->second;
+        kind = MenuSpriteSource::kArtwork;
+      } else if (!native_is_text) {
+        log_menu_artwork_miss(identity, width, height);
+      }
     }
   }
   if (!selected) {

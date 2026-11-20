@@ -319,6 +319,11 @@ void policy_checks() {
   require(inset.x0 == 5 && inset.x1 == 9 && inset.u0 == .25f + .0625f &&
               inset.u1 == .75f - .0625f && inset.v0 == .25f + .125f && inset.v1 == 1,
           "Linear crop must inset interior edges by half a texel and leave the border");
+  // A one-texel interior crop keeps its centre texel instead of inverting.
+  const auto single = menu_sprite_quad(0, 0, 3, 1, 4, 2, 8, 4, native, TextureFilter::kLinear);
+  require(single.u0 == single.u1 && single.u0 == 3.5f / 8 && single.v0 == single.v1 &&
+              single.v0 == 1.5f / 4 && single.x1 - single.x0 == 1,
+          "A one-texel linear crop must sample its own centre");
   platform::HudImage artwork;
   artwork.width = 64;
   artwork.height = 32;
@@ -606,6 +611,15 @@ void source_selection_checks(const std::filesystem::path& directory) {
     zrndr::blit16(&sprite, 0, 0, 0xf81f, nullptr);
     require(hud.finish() && recorder.uploads.size() == 2,
             "Changed sprite pixels were not uploaded");
+    // The same pixels blitted with another key are a different texture.
+    hud.begin(shadow.data(), width, height, pitch, height * 2);
+    hud.set_menu_presentation(2);
+    zrndr::blit16(&sprite, 0, 0, 0xffff, nullptr);
+    require(hud.finish() && recorder.uploads.size() == 3,
+            "A new colour key reused the texture built for the old key");
+    const auto& rekeyed = recorder.uploads[2].pixels;
+    require((rekeyed[3] >> 24) == 255 && (rekeyed[4] >> 24) == 0,
+            "The rebuilt texture did not follow the new key");
     for (int distinct = 0; distinct < 80; ++distinct) {
       pixels[2] = uint16_t(0x0100 + distinct);
       hud.begin(shadow.data(), width, height, pitch, height * 2);
