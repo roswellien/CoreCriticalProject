@@ -83,6 +83,12 @@ int copy_node_model(Node* src, Node* dst) {
 
 // Mech3.exe 1.2 @ 0x004f9190. Name, flags, the bits of +0x2c, the model,
 // priority, action and zone; the user field (+0x40) is not copied.
+void tree_set_prepared_skin_index(Node* node, int32_t index) {
+  if (!node) return;
+  node->prepared_skin_index = index;
+  for (int32_t k = 0; k < node->child_count(); ++k) tree_set_prepared_skin_index(node->children[k], index);
+}
+
 int copy_node_base(Node* src, Node* dst) {
   dst->source_asset = src->source_asset;
   dst->source_asset_root = src->source_asset_root;
