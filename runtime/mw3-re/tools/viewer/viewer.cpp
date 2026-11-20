@@ -30,7 +30,7 @@
 #include "frontend/sdl/sdl_render3d.h"
 #include "gamez/zutil/zutl_path.h"
 #include "frontend/debug_world.h"
-#include "scene.h"
+#include "mech3/world_mesh.h"
 
 namespace {
 

@@ -44,6 +44,12 @@ if(MSVC)
   target_compile_options(cc_geometry_resources PRIVATE /EHsc)
 endif()
 add_library(mw3core STATIC
+  src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
+  src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
+  src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
+  src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
+  src/mech3/replay_run.cpp  # ours (#289): mw3 --replay3d's log, map checks and session
+  src/mech3/replay_hooks.cpp  # ours (#289): what a 3D replay changes in the game's frame
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
@@ -292,6 +298,11 @@ add_library(mw3core STATIC
   src/mech3/zai_firing.cpp
   src/mech3/zai_attack.cpp
   src/mech3/zai_nav.cpp
+  src/mech3/zai_hunt.cpp
+  src/mech3/arena_setup.cpp
+  src/mech3/arena_catalog.cpp
+  src/mech3/arena.cpp
+  src/mech3/arena_log.cpp
   src/mech3/zai_repair.cpp
   src/mech3/zai_node.cpp
   src/mech3/zai_path.cpp
@@ -672,6 +683,11 @@ add_executable(mw3tests
   tests/test_camera_visual_far.cpp
   tests/test_lance.cpp
   tests/test_nav.cpp
+  tests/test_hunt.cpp
+  tests/test_arena.cpp
+  tests/test_replay.cpp
+  tests/test_replay_game.cpp
+  tests/test_arena_game.cpp
   tests/test_setup_sources.cpp
   tests/test_update.cpp
   tests/test_data_folder.cpp
@@ -717,7 +733,7 @@ if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
 endif()
 target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export)
-target_include_directories(mw3tests PRIVATE third_party)
+target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json, among others the arena log's records (#287)
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
@@ -877,6 +893,10 @@ if(SDL3_FOUND)
       src/frontend/sdl/campaign_chain.cpp
       src/frontend/sdl/modes_chain.cpp
       src/frontend/sdl/first_run_import.cpp
+      src/frontend/sdl/replay_view.cpp
+      src/frontend/sdl/replay_ui.cpp
+      src/frontend/sdl/replay3d_view.cpp
+      src/frontend/sdl/watch_launch.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     if(MSVC)
@@ -1040,9 +1060,8 @@ if(SDL3_FOUND)
     message(STATUS "SDL3_ttf not found: mw3 is not built (brew install sdl3_ttf)")
   endif()
   # Development tools (not part of the port): the world viewer.
-  add_executable(mw3view tools/viewer/viewer.cpp tools/viewer/scene.cpp)
+  add_executable(mw3view tools/viewer/viewer.cpp)
   target_link_libraries(mw3view PRIVATE mw3core mw3sdl SDL3::SDL3)
-  target_include_directories(mw3view PRIVATE tools/viewer)
   target_compile_definitions(mw3view PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}")
   # The importer's movies (docs/fmv.md, The imported movies): only with FFmpeg's
   # libraries (Indeo 5 decoding, the MPEG-1 encoder); not needed to build the game.

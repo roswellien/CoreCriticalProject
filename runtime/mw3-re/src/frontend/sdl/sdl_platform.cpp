@@ -1112,7 +1112,9 @@ void SdlPump::handle(const SDL_Event& e) {
     return;
   }
   const bool overlay_took = overlay_event && overlay_event(e);
-  if (input_ && !overlay_took) input_->on_event(e);
+  if (overlay_took) return;
+  if (intercept && intercept(e)) return;
+  if (input_) input_->on_event(e);
   switch (e.type) {
     case SDL_EVENT_QUIT:
       quit_ = true;

@@ -157,12 +157,18 @@ void Mech::flush_coolant() {
 // fitted (docs/weapons.md, The AMS). Playtest W18.
 bool update_ams(Mech& m) {
   Mech* p = g_world.mission_player;
-  if (!p || !(m.equipment[0] > 0) || !m.ams || !m.ams->on) return false;
+  // Ours (#287): the arena has no player; side A's masks stand in for its
+  // (World::arena_side_a_team). Projectiles carry one bit, hostile to side A
+  // or not, which with two sides tells each AMS which shots are its enemy's.
+  const bool arena_viewpoint = !p && g_world.arena_side_a_team != 0;
+  if (!p && !arena_viewpoint) return false;
+  if (!(m.equipment[0] > 0) || !m.ams || !m.ams->on) return false;
+  const uint32_t viewpoint_enemies = p ? p->enemies : g_world.arena_side_a_enemies;
   const Vec3 c = skis_calls().position ? *skis_calls().position(m)
                  : m.transform           ? Vec3{m.transform[9], m.transform[10], m.transform[11]}
                                          : Vec3{0, 0, 0};
   const zwep::Vec3f3 at{c.x, m.height + c.y, c.z};
-  const int32_t side = (p->enemies & m.team) ? 0 : 1;  // vt+0x24's vt+0x28's +0xc0
+  const int32_t side = (viewpoint_enemies & m.team) ? 0 : 1;  // vt+0x24's vt+0x28's +0xc0
   if (!m.ams->find(side, &at)) return false;
   m.ams->fire(m.equipment[0]);
   return true;
@@ -171,7 +177,9 @@ bool update_ams(Mech& m) {
 // Mech3.exe 1.2 @ 0x004192f0. Walkthrough and thresholds: docs/heat.md.
 void update_heat(Mech& m, float dt) {
   World& w = g_world;
-  const bool player = &m == w.player;
+  // Ours (#287): in an arena match w.player is only the bot the spectator
+  // views (for the HUD), so it gets the same heat rules as every other bot.
+  const bool player = &m == w.player && !w.arena_spectating;
   const bool full = w.full_heat_all_mechs || player;
 
   float rate = 1.0f;  // 0x005e1fd4

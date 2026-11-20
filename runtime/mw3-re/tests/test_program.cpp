@@ -84,6 +84,9 @@
 #include "crt/msvc_math.h"
 #include "mech3/message_panel.h"
 #include "mech3/app_mech.h"
+#include "mech3/arena.h"
+#include "mech3/arena_log.h"
+#include "program_harness.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mech_salvage.h"
@@ -209,16 +212,6 @@ float ground_under(float x, float top, float z) {
   return best;
 }
 
-bool have_game() { return std::filesystem::exists(std::string(MW3_GAME_DIR) + "/Mech3Msg.dll"); }
-
-std::string temp_dir(const char* name) {
-  const std::string d = std::string(MW3_TEST_TMP) + "/" + name;
-  std::error_code ec;
-  std::filesystem::remove_all(d, ec);
-  std::filesystem::create_directories(d, ec);
-  return d;
-}
-
 // Mirrors an existing file or directory into a private test fixture.
 // Tries a symbolic link first (instant and zero-copy where privileges allow);
 // falls back to copying the file or directory when symlink creation is denied
@@ -254,11 +247,6 @@ void touch(const std::string& path) {
   std::FILE* f = std::fopen(path.c_str(), "wb");
   if (f) std::fputs("x", f), std::fclose(f);
 }
-
-struct SavedMounts {
-  zutl::Mounts saved = zutl::mounts();
-  ~SavedMounts() { zutl::mounts() = saved; }
-};
 
 // Whether MW3_GAME_DIR holds 1.2's data (assets.md, Data versions): the runs
 // that pin exact outcomes took them on 1.2's; other data checks the behaviour
@@ -1007,58 +995,6 @@ TEST(music_tracks_found_through_the_mounts) {
   zsnd_cd::close();
   zsnd_cd::set_backend(nullptr, nullptr, "music");
 }
-
-namespace {
-// What the program gives the engine, without a window.
-struct FakeWindow : platform::Window {
-  std::string title;
-  bool shown = false;
-  uint32_t create(const std::string& t, int, int) override { return title = t, 0x1234; }
-  void set_title(const std::string& t) override { title = t; }
-  void show() override { shown = true; }
-  void client_size(int* w, int* h) override { *w = 640, *h = 480; }
-};
-struct FakeAlert : platform::Alert {
-  std::vector<std::string> shown;
-  void abort_message(const std::string& m) override { shown.push_back(m); }
-};
-struct FakeClock : platform::Clock {
-  uint32_t now = 0;
-  uint32_t ticks_ms() override { return now += 16; }
-};
-// zFMV's clock in the tests: a second a call, so the movie scripts' waits
-// (the Intro's SPLASH, 4 s) pass in a few frames.
-struct MovieClock : platform::Clock {
-  uint32_t now = 0;
-  uint32_t ticks_ms() override { return now += 1000; }
-};
-platform::Clock& fast_movie_clock() {
-  static MovieClock c;
-  return c;
-}
-struct FakeScreen : platform::Screen2D {
-  int frames = 0;
-  void present_16(const uint16_t*, int w, int h, int, bool) override { frames += w == 640 && h == 480; }
-};
-// Quits after `passes` waits for a message: the loop runs that many passes.
-struct CountingPump : platform::MessagePump {
-  int passes = 0, limit = 200;
-  bool quit = false;
-  std::function<void()> on_quit;  // unset: the mission's cleanup
-  std::function<bool()> stop;     // set: quits as soon as it says so
-  bool peek() override { return ++passes > limit || (stop && stop()); }
-  // The quit: a mission still up is cleaned up first, as a debriefing would,
-  // while zSound is still there (ExitInstance shuts it down next; a running
-  // animation's sounds would be stopped after it).
-  bool pump() override {
-    if (on_quit) on_quit();
-    else mech3::missions().cleanup(false);
-    return false;
-  }
-  void wait(uint32_t) override {}
-  void post_quit() override { quit = true; }
-};
-}  // namespace
 
 TEST(program_starts_like_the_game_to_the_main_state) {
   if (!have_game()) return;
@@ -11820,6 +11756,52 @@ TEST(settings_first_start_plays_at_the_desktop_size) {
   EXPECT(o.in_game_vmode == 16 && o.screen_w == 1280 && o.screen_h == 720);
   EXPECT(load("", 0, 0, true).in_game_vmode == 5);       // no desktop: a check or a shot
   EXPECT(load("", 2560, 1440, false).in_game_vmode == 5);  // the fix off: the original's
+  zfix::options().any_resolution = keep_fix;
+  mech3::options() = mech3::Options{};
+}
+
+// #289: the 3D replay plays at the screen's shape whatever mode is saved, and
+// watching one leaves the saved mode and size as they were.
+TEST(settings_replay_plays_at_the_screen_shape_and_saves_nothing) {
+  struct Desktop : mech3::OptionsHooks {
+    bool first_start_screen(int32_t* ow, int32_t* oh) override {
+      *ow = 2560, *oh = 1080;
+      return true;
+    }
+  } desk;
+  const bool keep_fix = zfix::options().any_resolution;
+  zfix::options().any_resolution = true;
+  const std::string path = temp_dir("replay_screen") + "/settings.reg";
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  std::fprintf(f, "Windows Registry Editor Version 5.00\r\n\r\n"
+                  "[HKEY_CURRENT_USER\\Software\\MicroProse\\MechWarrior 3\\1.0]\r\n"
+                  "\"InGameVMode\"=dword:00000005\r\n");
+  std::fclose(f);
+  {
+    platform::RegFile reg(path);
+    zreg::Machine m;
+    zreg::init("MicroProse", "MechWarrior 3", "1.0", m, 0x101);
+    zreg::set_settings(&reg);
+    mech3::set_options_hooks(&desk);
+    mech3::set_replay_screen(true);
+    mech3::options() = mech3::Options{};
+    EXPECT(mech3::load_options(nullptr) == 1);
+    const mech3::Options o = mech3::options();
+    EXPECT(o.in_game_vmode == mech3::kCustomVMode && o.screen_w == 2560 && o.screen_h == 1080);
+    mech3::options().sound_frequency = 0.25f;  // a change that is saved, so the save is seen to run
+    mech3::save_options();
+    mech3::set_replay_screen(false);
+    mech3::set_options_hooks(nullptr);
+    zreg::set_settings(nullptr);
+    zreg::shutdown();
+  }
+  platform::RegFile again(path);
+  EXPECT(again.open("SOFTWARE\\MicroProse\\MechWarrior 3\\1.0", true, false));
+  uint32_t v = 0, size = 4;
+  float volume = 0;
+  EXPECT(again.read(true, "SoundVolume", &volume, &size) && volume == 0.25f);
+  size = 4;
+  EXPECT(again.read(true, "InGameVMode", &v, &size) && v == 5);
   zfix::options().any_resolution = keep_fix;
   mech3::options() = mech3::Options{};
 }

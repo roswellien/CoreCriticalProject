@@ -34,6 +34,11 @@ void lod_budget(Mech& player) {
 // (docs/discoveries.md).
 int lod_update(Mech& m) {
   Mech* player = world().mission_player;
+  if (g_calls.same_detail_for_all && &m != player) {  // ours (#287): the arena's
+    m.detail = kMidDetail;
+    if (m.x690 == 1) lod_switch(m, 0);
+    return g_calls.controls_answer ? g_calls.controls_answer(m) : 1;
+  }
   if (&m != player) {
     const float selected_far = static_cast<float>(zcls::visual_far_request());
     const float far_squared = selected_far * selected_far;

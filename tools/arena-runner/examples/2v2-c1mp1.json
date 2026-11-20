@@ -1,0 +1,14 @@
+{
+ "map": "c1mp1",
+ "matches": 4,
+ "sides": [
+  [
+   {"mech": "thor", "loadout": 0, "preset": {"world": "c1", "mission": "ia1", "record": "Enemy_01"}},
+   {"mech": "madcat", "loadout": 0, "preset": {"world": "c1", "mission": "ia1", "record": "Enemy_01"}}
+  ],
+  [
+   {"mech": "thor", "loadout": 0, "preset": {"world": "c1", "mission": "ia1", "record": "Enemy_01"}},
+   {"mech": "madcat", "loadout": 0, "preset": {"world": "c1", "mission": "ia1", "record": "Enemy_01"}}
+  ]
+ ]
+}

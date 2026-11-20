@@ -88,6 +88,15 @@ uint32_t program_slot_count();  // the chosen pilot's campaign's slot count (0x0
 class GameEngine : public Engine {
  public:
   void nav_prebuild() override;  // ours (W58, app_mission.cpp)
+  void arena_start() override;   // ours (#287, app_mission.cpp -> mech3/arena)
+  void arena_tick() override;    // ours (#287, app_mission.cpp -> mech3/arena)
+  // Ours (#289): the 3D replay's frame, through replay_hooks() (replay_hooks.h).
+  bool replay_on() override;
+  void replay_start() override;
+  void replay_before_lists() override;
+  void replay_after_lists() override;
+  void replay_camera() override;
+  void replay_draw() override;
   // A mission started from the command line (our addition, docs/program.md):
   // the pilot's game answers these, and the load goes on to the Core state.
   struct Launch {
@@ -117,6 +126,9 @@ class GameEngine : public Engine {
     // A network debug start's game (type 3, ours: the lobby is not ported):
     // its rules and totals; the pilot's own when it has one.
     MultiplayerGame* multi = nullptr;
+    // Ours (#287): a network start with no player mech, the arena's
+    // spectator seat (mission_launch.h, set_launch_spectator).
+    bool spectator = false;
   };
   void set_launch(const Launch& l);
   // The launch's mech, loadout and skin read again from the chosen pilot's
