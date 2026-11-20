@@ -657,7 +657,9 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
 
   // A rejected draw list may contain writes that the legacy background classifier cannot
   // reconstruct. Present its complete current shadow instead of inferring those writes again.
-  if (!live_replay_shown && have_menu && !live_menu_gpu_enabled()) {
+  // A frame that was never recorded keeps the Stage C background: the game's menus redraw
+  // without clearing the canvas, so with MW3_MENU_GPU=1 most menu frames reach here unrecorded.
+  if (!live_replay_shown && have_menu && !recorded_live_frame) {
     if (!can_try_live_replay) {
       gpu_shown = prepare_menu_gpu(pixels, width, height, pitch, rgb565, &cache_hit);
       menu_background_shown = gpu_shown;

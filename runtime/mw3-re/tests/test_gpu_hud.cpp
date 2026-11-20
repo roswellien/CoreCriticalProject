@@ -2087,6 +2087,20 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
               "Live GPU menu begin did not opt the frame into HD menu stage D");
       screen.cancel_menu_observation();
 
+      // 3a''. The game's menus redraw without clearing the canvas, so most live menu frames are
+      //       never recorded. Such a frame must keep the Stage C HD background rather than
+      //       falling back to the bare native canvas.
+      screen_recorder.draws.clear();
+      zrndr::begin_menu_background_frame();
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(frame_buf.data()), width, height, pitch_bytes,
+                           6};
+      zrndr::blit16(&bg_tex, 0, 0, 0, nullptr);
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(screen_recorder.draws.size() >= 2 &&
+                  screen_recorder.draws[0].state.address_u == 1 &&
+                  screen_recorder.draws[1].state.address_u == 3,
+              "Unrecorded live menu frame lost the Stage C HD background");
+
       // 3b. Late background blit after a foreground draw is rejected rather than reordered,
       //     falling back to the complete CPU frame (1 draw) while keeping menu_layout_active.
       zrndr::begin_menu_background_frame();
