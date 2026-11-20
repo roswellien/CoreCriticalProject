@@ -313,21 +313,20 @@ class MenuCanvasScope {
   FrameShape shape_;
 };
 
-// Runtime escape hatch for live GPU menu presentation:
-//   MW3_MENU_GPU=1 (or true/on/yes)  -> explicitly enable live GPU menu replay
-//   MW3_MENU_GPU=0 (or false/off/no) -> disable live GPU menu replay
-//   unset or invalid                 -> disabled (0) by default until all required checks pass
+// Runtime escape hatch for live GPU menu presentation. The HD menu is the default (owner
+// decision, 2026-11-20); the old Stage C compositor/native presentation stays available:
+//   MW3_MENU_GPU=0 (or false/off/no) -> disable live GPU menu replay (escape hatch)
+//   unset, 1 or any other value      -> live GPU menu replay
+// Only an explicit "off" value disables it, so a typo cannot silently drop players back to
+// the old path.
 int mw3_menu_gpu_env() {
   const char* value = SDL_getenv("MW3_MENU_GPU");
   if (!value || !*value) value = std::getenv("MW3_MENU_GPU");
-  if (!value || !*value) return 0;
-  if (std::strcmp(value, "0") == 0 || SDL_strcasecmp(value, "false") == 0 ||
-      SDL_strcasecmp(value, "off") == 0 || SDL_strcasecmp(value, "no") == 0)
-    return 0;
-  if (std::strcmp(value, "1") == 0 || SDL_strcasecmp(value, "true") == 0 ||
-      SDL_strcasecmp(value, "on") == 0 || SDL_strcasecmp(value, "yes") == 0)
-    return 1;
-  return 0;
+  if (!value || !*value) return 1;
+  const bool explicitly_off = std::strcmp(value, "0") == 0 ||
+                              SDL_strcasecmp(value, "false") == 0 ||
+                              SDL_strcasecmp(value, "off") == 0 || SDL_strcasecmp(value, "no") == 0;
+  return explicitly_off ? 0 : 1;
 }
 
 struct ClippedMenuBlit {
@@ -610,19 +609,22 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   const bool can_try_live_replay =
       sealed_menu && hud_ && hud_->menu_sealed() && rgb565 && recorded_live_frame;
   if (can_try_live_replay) {
-    bool background_ok = true;
-    if (menu_background_) {
-      if (have_menu || hud_->menu_background_skipped() > 0) {
-        if (menu_use_gpu_ && menu_gpu_available_ && menu_hd_texture_ >= 0 &&
-            validate_live_menu_background_uv(
-                *menu_background_, zrndr::menu_background_source(),
-                zrndr::menu_background_blits(), width, height, menu_hd_bound_width_,
-                menu_hd_bound_height_, &live_bg_uv)) {
-          live_hd_background_quad = true;
-        } else {
-          background_ok = false;
-        }
-      }
+    // Menu screens redraw onto a persistent canvas without clearing. Only replay a
+    // recorded draw list when this frame itself redrew complete opaque background
+    // coverage before any foreground element; partial redraws fall back to the
+    // complete current CPU shadow so untouched regions are never blank or stale.
+    const auto& bg_blits = zrndr::menu_background_blits();
+    const bool current_frame_bg =
+        hud_->menu_background_skipped() > 0 &&
+        bg_blits.size() == hud_->menu_background_skipped();
+    const bool background_ok =
+        menu_background_ != nullptr && menu_use_gpu_ && menu_gpu_available_ &&
+        menu_hd_texture_ >= 0 && current_frame_bg &&
+        validate_live_menu_background_uv(
+            *menu_background_, zrndr::menu_background_source(), bg_blits, width, height,
+            menu_hd_bound_width_, menu_hd_bound_height_, &live_bg_uv);
+    if (background_ok) {
+      live_hd_background_quad = true;
     }
     if (background_ok) {
       try {
@@ -657,8 +659,8 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
 
   // A rejected draw list may contain writes that the legacy background classifier cannot
   // reconstruct. Present its complete current shadow instead of inferring those writes again.
-  // A frame that was never recorded keeps the Stage C background: the game's menus redraw
-  // without clearing the canvas, so with MW3_MENU_GPU=1 most menu frames reach here unrecorded.
+  // A frame that was never recorded (for example one presented before the engine armed
+  // recording, or by a host that does not record) keeps the Stage C background.
   if (!live_replay_shown && have_menu && !recorded_live_frame) {
     if (!can_try_live_replay) {
       gpu_shown = prepare_menu_gpu(pixels, width, height, pitch, rgb565, &cache_hit);

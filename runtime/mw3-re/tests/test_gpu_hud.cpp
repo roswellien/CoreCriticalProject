@@ -29,6 +29,7 @@
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "gamez/zvideo/zvid_format.h"
+#include "mech3/app_engine.h"
 #include "platform/prepared_hud.h"
 
 namespace {
@@ -2031,11 +2032,11 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
         }
       };
 
-      // Default (MW3_MENU_GPU unset) and invalid values must remain OFF and use legacy Stage C path.
-      env_guard.set(nullptr);
+      // The escape hatch MW3_MENU_GPU=0 keeps the legacy Stage C path.
+      env_guard.set("0");
       draw_full_menu_frame();
       require(!zrndr::draw_observer() && !shape.menu_layout_active,
-              "Unset MW3_MENU_GPU enabled live menu recording or active menu layout by default");
+              "MW3_MENU_GPU=0 enabled live menu recording or active menu layout");
       screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
       // Stage C draws the repeating HD image, then one pass per map the frame needs (#391: two
       // to six). Every map pass samples a frame-sized map clamped and unfiltered, which the live
@@ -2049,18 +2050,26 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
           stage_c_map_passes = false;
       }
       require(stage_c_map_passes && !shape.menu_layout_active,
-              "Unset MW3_MENU_GPU did not keep the legacy Stage C menu background composition");
+              "MW3_MENU_GPU=0 did not keep the legacy Stage C menu background composition");
 
-      env_guard.set("invalid");
+      env_guard.set("off");
       draw_full_menu_frame();
       require(!zrndr::draw_observer() && !shape.menu_layout_active,
-              "Invalid MW3_MENU_GPU enabled live menu recording or active menu layout");
+              "MW3_MENU_GPU=off enabled live menu recording or active menu layout");
+      screen.cancel_menu_observation();
 
-      // Explicitly set MW3_MENU_GPU=1 to enable live GPU menu replay and shared menu layout.
-      env_guard.set("1");
+      // An unrecognised value does not count as "off": only an explicit off value disables it.
+      env_guard.set("invalid");
       draw_full_menu_frame();
       require(shape.menu_layout_active,
-              "MW3_MENU_GPU=1 did not mark shared FrameShape::menu_layout_active during menu frame");
+              "An unrecognised MW3_MENU_GPU value turned the default live GPU menu off");
+      screen.cancel_menu_observation();
+
+      // Live GPU menu replay and the shared menu layout are the default (MW3_MENU_GPU unset).
+      env_guard.set(nullptr);
+      draw_full_menu_frame();
+      require(shape.menu_layout_active,
+              "Unset MW3_MENU_GPU did not mark shared FrameShape::menu_layout_active by default");
       // finish_menu_observation sealed the command list without drawing before present_16 clear.
       require(screen_recorder.draws.empty(),
               "finish_menu_observation drew before present_16 cleared the frame");
@@ -2210,6 +2219,253 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
       cpu_screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
       require(cpu_recorder.draws.size() == 1 && !shape.menu_layout_active,
               "--cc-menu-background-renderer cpu did not use single-pass CPU composition");
+
+      // 3f. GameEngine + SdlScreen2D frame-boundary integration (no video_clear, repeated
+      //     full redraw+flip, partial foreground/background redraw over persistent canvas,
+      //     empty idle flip, unknown write, recovery on subsequent full redraw, and clean
+      //     engine destructor detach).
+      {
+        env_guard.set("1");
+        zrndr::set_menu_background_source(&bg_tex);
+        LiveMenuRecorder engine_recorder;
+        sdlfe::FrameShape engine_shape;
+        engine_shape.fit = true;
+        engine_shape.frame_w = width;
+        engine_shape.frame_h = height;
+        sdlfe::SdlScreen2D engine_screen(&engine_recorder, screen_opts, nullptr, &engine_shape);
+
+        auto draw_engine_primitives = [&](int kind, mech3::GameEngine& engine) {
+          uint16_t* const target_pixels = engine.buffer16();
+          require(target_pixels != nullptr &&
+                      zrndr::target2d().base == reinterpret_cast<uint8_t*>(target_pixels) &&
+                      int(zrndr::target2d().width) == width &&
+                      int(zrndr::target2d().height) == height &&
+                      int(zrndr::target2d().pitch) == pitch_bytes,
+                  "GameEngine::video_lock did not bind zrndr::target2d to engine.buffer16()");
+          zrndr::BlitRect q0{0, 0, 8, 6}, q1{8, 0, 16, 6}, q2{0, 6, 8, 12}, q3{8, 6, 16, 12};
+          zrndr::blit16(&bg_tex, 0, 0, 0, &q0);
+          zrndr::blit16(&bg_tex, 8, 0, 0, &q1);
+          zrndr::blit16(&bg_tex, 0, 6, 0, &q2);
+          zrndr::blit16(&bg_tex, 8, 6, 0, &q3);
+          if (kind == 0 || kind == 6) {
+            zrndr::blit16(&unkeyed_tex, 1, 1, 0, nullptr);
+            zrndr::blit16(&keyed_tex, 4, 1, 0x0000, nullptr);
+            zrndr::blit16(&pal_tex, 7, 1, 1, nullptr);
+          }
+          if (kind == 1 || kind == 6) {
+            zrndr::blit16(&alpha_tex, 10, 1, 0, nullptr);
+          }
+          if (kind == 2 || kind == 6) {
+            zrndr::line16(1, 4, 6, 4, 0xf81f);
+            zrndr::line16(2, 5, 5, 7, 0xffff);
+          }
+          if (kind == 3 || kind == 6) {
+            zrndr::span_state().dest = zrndr::target2d().base + 6 * pitch_bytes + 8 * 2;
+            zrndr::span_fill16(0xf81f, 4);
+            zrndr::span_state().dest = zrndr::target2d().base + 7 * pitch_bytes + 8 * 2;
+            zrndr::span_fill16(0x07e0, 5);
+          }
+          if (kind == 4 || kind == 6) {
+            zrndr::ripple_state().scratch.assign(size_t(width) * height, 0x0000u);
+            zrndr::ripple(5, 6, 1, 3, 1, 2.0f, 0.5f, nullptr, zrndr::X87::k24);
+            zrndr::finish_machine().mmx = true;
+            zrndr::finish_machine().format = 6;
+            zrndr::tint(0x001f, tint_rect, 0.5, false);
+            zrndr::finish();
+            zrndr::tint_clear();
+          }
+          if (kind == 5 || kind == 6) {
+            ztwod::Cursor cursor(nullptr, 1);
+            cursor.center = 1;
+            cursor.set_cursor_image(&cursor_tex);
+            cursor.set_pos(3, 3);
+            cursor.draw();
+            cursor.erase();
+            cursor.set_pos(12, 9);
+            cursor.draw();
+          }
+        };
+
+        auto require_engine_shadow = [&](mech3::GameEngine& engine, const char* context) {
+          require(engine_recorder.draws.size() == 1, context);
+          const int handle = engine_recorder.draws.front().state.texture;
+          require(handle >= 0, context);
+          const auto& uploaded = engine_recorder.image_records.at(size_t(handle));
+          require(uploaded.width == width && uploaded.height == height, context);
+          const uint16_t* const expected_buf = engine.buffer16();
+          for (size_t index = 0; index < size_t(width) * height; ++index) {
+            const uint32_t pixel = uploaded.pixels[index];
+            const uint16_t native = uint16_t(((pixel & 255) >> 3) << 11 |
+                                             (((pixel >> 8) & 255) >> 2) << 5 |
+                                             (((pixel >> 16) & 255) >> 3));
+            require((pixel >> 24) == 255 && native == expected_buf[index], context);
+          }
+        };
+
+        struct ScreenRectGuard {
+          mech3::Rect saved_display = mech3::display();
+          mech3::Rect saved_render = mech3::render();
+          ScreenRectGuard(int32_t w, int32_t h) {
+            mech3::rect_set_origin(mech3::display(), 0, 0);
+            mech3::rect_set_size(mech3::display(), w, h);
+            mech3::rect_set_origin(mech3::render(), 0, 0);
+            mech3::rect_set_size(mech3::render(), w, h);
+          }
+          ~ScreenRectGuard() {
+            mech3::display() = saved_display;
+            mech3::render() = saved_render;
+          }
+        } screen_rect_guard(width, height);
+
+        {
+          mech3::Platform engine_platform;
+          engine_platform.screen = &engine_screen;
+          engine_platform.render = &engine_recorder;
+          mech3::GameEngine engine(engine_platform, "mech3.exe -nofmv");
+          engine.quiet = true;
+          // Allocate the 16x12 menu canvas via public video_open (never calling video_clear).
+          engine_recorder.flush();
+          engine.video_open(0, 1, 0, 0);
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images() &&
+                      engine_shape.menu_layout_active,
+                  "GameEngine::video_open did not arm live menu observation and Stage D");
+
+          // Frame 1: full menu redraw + flip WITHOUT video_clear.
+          ztwod::Cursor persistent_cursor(nullptr, 1);
+          persistent_cursor.center = 1;
+          persistent_cursor.set_cursor_image(&cursor_tex);
+
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          draw_engine_primitives(6, engine);
+          persistent_cursor.set_pos(10, 8);
+          persistent_cursor.draw();
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require(engine_recorder.draws.size() > 4 &&
+                      engine_recorder.draws[0].state.texture == 0 &&
+                      engine_recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
+                      engine_recorder.draws[0].state.address_u == 1 &&
+                      !engine_recorder.draws[1].state.multiply &&
+                      !engine_recorder.draws[2].state.additive &&
+                      engine_shape.menu_layout_active,
+                  "Frame 1 without video_clear did not replay live GPU menu draw list");
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images(),
+                  "GameEngine::video_flip did not re-arm live menu observation and Stage D for frame 2");
+
+          // Frame 2: repeated identical full redraw + flip without video_clear must engage live
+          // GPU replay with zero texture creates or updates.
+          const unsigned creates_after_f1 = engine_recorder.creates;
+          const unsigned updates_after_f1 = engine_recorder.updates;
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          persistent_cursor.erase();
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images(),
+                  "Prefix cursor erase disarmed live menu observation");
+          draw_engine_primitives(6, engine);
+          persistent_cursor.draw();
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require(engine_recorder.draws.size() > 4 &&
+                      engine_recorder.draws[0].state.texture == 0 &&
+                      !engine_recorder.draws[1].state.multiply &&
+                      engine_shape.menu_layout_active,
+                  "Frame 2 without video_clear did not replay live GPU menu draw list");
+          require(engine_recorder.creates == creates_after_f1 &&
+                      engine_recorder.updates == updates_after_f1,
+                  "Repeated unchanged full menu redraw caused per-frame texture churn");
+
+          // Frame 3: partial foreground-only redraw over the persistent canvas (no background redraw,
+          // no video_clear). Must NOT replay only the partial sprite over a blank/background-only
+          // frame; must present the exact complete current CPU shadow (retaining prior pixels plus
+          // the new sprite).
+          const uint16_t retained_corner = engine.buffer16()[size_t(height - 1) * width + (width - 1)];
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          persistent_cursor.erase();
+          zrndr::blit16(&unkeyed_tex, 2, 2, 0, nullptr);
+          engine.video_unlock();
+          require(engine.buffer16()[2 * width + 2] == unkeyed_px[0] &&
+                      engine.buffer16()[size_t(height - 1) * width + (width - 1)] == retained_corner,
+                  "Persistent engine canvas lost retained pixels during partial foreground redraw");
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Partial foreground menu redraw did not present the complete current CPU shadow");
+
+          // Frame 4: partial background redraw (only left half of background + foreground sprite)
+          // over the persistent canvas must also fall back to the exact complete current CPU shadow.
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          zrndr::BlitRect left_half{0, 0, width / 2, height};
+          zrndr::blit16(&bg_tex, 0, 0, 0, &left_half);
+          zrndr::blit16(&keyed_tex, 3, 2, 0x0000, nullptr);
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Partial background menu redraw did not present the complete current CPU shadow");
+
+          // Frame 5: empty idle flip (no draws at all between flips) must present the complete
+          // current CPU shadow with zero texture creates or updates.
+          const unsigned creates_after_f4 = engine_recorder.creates;
+          const unsigned updates_after_f4 = engine_recorder.updates;
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Empty idle menu flip did not present the complete current CPU shadow");
+          require(engine_recorder.creates == creates_after_f4 &&
+                      engine_recorder.updates == updates_after_f4,
+                  "Empty idle menu flip caused texture churn on unchanged CPU shadow");
+
+          // Frame 6: unknown framebuffer write mid-frame falls back to complete current CPU shadow.
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          draw_engine_primitives(0, engine);
+          zrndr::observe_framebuffer_write(engine.buffer16(), "unsupported menu effect");
+          engine.buffer16()[5 * width + 3] = 0x1234;
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Unknown framebuffer write in GameEngine menu frame did not present complete CPU shadow");
+
+          // Frame 7: subsequent full redraw without video_clear recovers live GPU replay and Stage D
+          // immediately without creating or updating cached foreground textures.
+          const unsigned creates_before_recovery = engine_recorder.creates;
+          const unsigned updates_before_recovery = engine_recorder.updates;
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images(),
+                  "Recovery frame was not armed with live menu observer and Stage D");
+          draw_engine_primitives(6, engine);
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require(engine_recorder.draws.size() > 4 &&
+                      engine_recorder.draws[0].state.texture == 0 &&
+                      engine_recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
+                      engine_recorder.draws[0].state.address_u == 1 &&
+                      !engine_recorder.draws[1].state.multiply &&
+                      !engine_recorder.draws[2].state.additive &&
+                      engine_shape.menu_layout_active,
+                  "Full menu redraw after partial/fallback frames did not recover live GPU replay");
+          require(engine_recorder.creates == creates_before_recovery &&
+                      engine_recorder.updates == updates_before_recovery,
+                  "Recovered full menu redraw churned already-cached GPU textures");
+          require(zrndr::draw_observer() != nullptr,
+                  "Post-flip boundary before engine destruction did not have active observer");
+        }
+        require(zrndr::draw_observer() == nullptr,
+                "GameEngine destructor left a dangling global zrndr draw observer");
+      }
+
       env_guard.set(nullptr);
       zrndr::set_menu_background_source(nullptr);
     }
@@ -2372,7 +2628,7 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
     }
 
     // 4b. Paired presentation & input agreement on unknown-write native CPU fallback (no HD background
-    //     required) when MW3_MENU_GPU=1 vs MW3_MENU_GPU=0/unset, plus destructor cleanup.
+    //     required) when MW3_MENU_GPU=1 vs MW3_MENU_GPU=0, plus destructor cleanup.
     {
       constexpr int canvas_w = 1147, canvas_h = 480, pitch_bytes = canvas_w * 2;
       std::vector<uint16_t> wide_frame(size_t(canvas_w) * canvas_h, uint16_t(0x07e0));

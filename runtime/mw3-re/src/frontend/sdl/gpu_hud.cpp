@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cfenv>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 
@@ -434,6 +435,14 @@ void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32
       pitch_bytes != static_cast<uint32_t>(pitch_) ||
       width > static_cast<uint32_t>(width_ - x) || height > static_cast<uint32_t>(height_ - y)) {
     record_shadow_reason(operation);
+    return;
+  }
+  if (menu_mode_ && skip_menu_background_source_ && !menu_foreground_seen_ &&
+      menu_background_skipped_ == 0 && operation &&
+      std::strcmp(operation, "cursor restore") == 0) {
+    // The live presenter only admits frames after fresh complete opaque background coverage,
+    // which overwrites this restore; incomplete frames always use full current CPU shadow,
+    // preserving cursor erase pixels. Only this exact cursor-restore prefix can be omitted.
     return;
   }
   const uint64_t bytes = uint64_t(width) * uint64_t(height) * sizeof(uint32_t);

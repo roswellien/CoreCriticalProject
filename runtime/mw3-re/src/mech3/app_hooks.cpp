@@ -97,6 +97,15 @@ std::vector<zmod::ShadowCaster*> g_casters;
 zmod::ShadowCaster* caster(Handle h) {
   return h && h <= g_casters.size() ? g_casters[h - 1] : nullptr;
 }
+
+bool wide_menus_enabled_by_env() {
+  const char* value = std::getenv("MW3_MENU_WIDE");
+  if (!value || !*value) return false;
+  return std::strcmp(value, "1") == 0 ||
+         std::strcmp(value, "true") == 0 || std::strcmp(value, "TRUE") == 0 ||
+         std::strcmp(value, "on") == 0 || std::strcmp(value, "ON") == 0 ||
+         std::strcmp(value, "yes") == 0 || std::strcmp(value, "YES") == 0;
+}
 }  // namespace
 
 Handle Engine::shadow_new() {
@@ -153,9 +162,11 @@ int32_t Engine::menu_vmode() {
   if (menu_vmode_ >= 0) return menu_vmode_;
   int32_t w = 0, h = 0;
   const int32_t m = in_game_vmode();
-  // Wide means a shape wider than 4:3, not a bigger canvas: the original's
-  // modes up to 10 (1600x1200) draw the 2D at full size, still 4:3.
-  const bool wide = zfix::options().any_resolution && zfix::options().wide_menus && mech3::vmode_canvas(m, &w, &h) &&
+  // Owner decision: menu screens keep a 640x480 (4:3, mode 5) logical layout
+  // by default while the GPU background covers the full window. MW3_MENU_WIDE=1
+  // restores the legacy wide-menu canvas when wide_menus is enabled.
+  const bool wide = wide_menus_enabled_by_env() && zfix::options().any_resolution &&
+                    zfix::options().wide_menus && mech3::vmode_canvas(m, &w, &h) &&
                     w > 640 && w * 3 > h * 4;
   return menu_vmode_ = wide ? m : 5;
 }
