@@ -27309,6 +27309,12 @@ TEST(menus_wide_follow_the_selected_aspect) {
   // Escape hatch MW3_MENU_WIDE=1 enables legacy wide menus when wide_menus is on.
   wide_env.set("1");
   const int32_t wide = menus_at(13), plain = menus_at(5), tall = menus_at(10);
+  // The value is matched in any letter case, as MW3_MENU_GPU is.
+  for (const char* env_val : {"TRUE", "On", "yes"}) {
+    wide_env.set(env_val);
+    EXPECT(menus_at(13) == 13);
+  }
+  wide_env.set("1");
   for (const auto& shape : {std::array<int32_t, 2>{3440, 1440}, {5120, 1440}}) {
     mech3::options().screen_w = shape[0], mech3::options().screen_h = shape[1];
     EXPECT(menus_at(mech3::kCustomVMode) == mech3::kCustomVMode);

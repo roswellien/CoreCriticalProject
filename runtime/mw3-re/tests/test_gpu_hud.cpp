@@ -2052,11 +2052,13 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
       require(stage_c_map_passes && !shape.menu_layout_active,
               "MW3_MENU_GPU=0 did not keep the legacy Stage C menu background composition");
 
-      env_guard.set("off");
-      draw_full_menu_frame();
-      require(!zrndr::draw_observer() && !shape.menu_layout_active,
-              "MW3_MENU_GPU=off enabled live menu recording or active menu layout");
-      screen.cancel_menu_observation();
+      for (const char* off_value : {"off", "false", "no", "OFF", "False"}) {
+        env_guard.set(off_value);
+        draw_full_menu_frame();
+        require(!zrndr::draw_observer() && !shape.menu_layout_active,
+                "An explicit MW3_MENU_GPU off value enabled live menu recording or menu layout");
+        screen.cancel_menu_observation();
+      }
 
       // An unrecognised value does not count as "off": only an explicit off value disables it.
       env_guard.set("invalid");
@@ -2698,6 +2700,37 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
         zin_host.client_to_screen(&legacy_x, &legacy_y);
         require(legacy_x == int32_t(std::lround(float((canvas_w - 640) / 2) * 3440.f / float(canvas_w))),
                 "MW3_MENU_GPU=0 input did not match legacy world-shape mapping");
+
+        // During a mission the live GPU menu is on by default but must not apply: the engine
+        // still arms menu recording at every flip, and a 2D-only frame presented then must use
+        // the mission's frame shape, as SdlInput does.
+        bool mission_running = false;
+        input.in_mission = [&mission_running] { return mission_running; };
+        screen.in_mission = [&mission_running] { return mission_running; };
+        env_guard.set(nullptr);
+        screen.begin_menu_observation(wide_frame.data(), canvas_w, canvas_h, pitch_bytes);
+        screen.finish_menu_observation();
+        screen.present_16(wide_frame.data(), canvas_w, canvas_h, pitch_bytes, true);
+        require(shared_shape.menu_layout_active,
+                "Menu before the mission did not use the default live menu layout");
+        mission_running = true;
+        screen.begin_menu_observation(wide_frame.data(), canvas_w, canvas_h, pitch_bytes);
+        require(!zrndr::draw_observer() && !shared_shape.menu_layout_active,
+                "Menu recording or the menu layout stayed armed during a mission");
+        screen.finish_menu_observation();
+        screen.present_16(wide_frame.data(), canvas_w, canvas_h, pitch_bytes, true);
+        const auto& mission_quad = fallback_recorder.draws[0].vertices;
+        require(fallback_recorder.draws.size() == 1 && !shared_shape.menu_layout_active &&
+                    mission_quad[0].sx == 0.f && mission_quad[0].sy == 0.f &&
+                    mission_quad[2].sx == float(canvas_w) && mission_quad[2].sy == float(canvas_h),
+                "A 2D frame presented during a mission did not use the mission frame shape");
+        int32_t mission_x = (canvas_w - 640) / 2, mission_y = 0;
+        zin_host.client_to_screen(&mission_x, &mission_y);
+        require(mission_x == legacy_x,
+                "Input during a mission disagreed with the mission-shape presentation");
+        mission_running = false;
+        input.in_mission = []() { return false; };
+        screen.in_mission = nullptr;
 
         // Re-activate before destruction to verify ~SdlScreen2D clears stale menu_layout_active.
         env_guard.set("1");

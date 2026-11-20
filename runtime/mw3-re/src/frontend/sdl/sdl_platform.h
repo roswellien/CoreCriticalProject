@@ -108,6 +108,11 @@ class SdlScreen2D : public platform::Screen2D {
   void overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                   const uint8_t* alpha, const uint16_t* colour) override;
   int frames = 0;  // frames shown
+  // True while the mission's own state runs (not a menu or the pause); the same signal
+  // SdlInput::in_mission uses. The live GPU menu and its 4:3 menu layout never apply then, so a
+  // 2D-only frame presented during a mission keeps the mission's frame shape, matching input.
+  // Unset means "not in a mission" (tests and hosts without missions).
+  std::function<bool()> in_mission;
 
  private:
   void upload(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, bool keyed, uint16_t key,

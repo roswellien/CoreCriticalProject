@@ -1,6 +1,7 @@
 #include "mech3/app_hooks.h"
 #include "gamez/zrender/zrndr_blit.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -98,13 +99,18 @@ zmod::ShadowCaster* caster(Handle h) {
   return h && h <= g_casters.size() ? g_casters[h - 1] : nullptr;
 }
 
+// MW3_MENU_WIDE is an opt-in escape hatch: 1, true, on or yes (any letter case) turns the old
+// wide menu canvas back on; anything else, or no value, keeps the 4:3 menu. It is parsed the
+// same way as MW3_MENU_GPU in sdl_platform.cpp, but read with std::getenv because the game
+// code here does not depend on SDL (SDL copies the process environment, so both see the same
+// value at startup).
 bool wide_menus_enabled_by_env() {
   const char* value = std::getenv("MW3_MENU_WIDE");
   if (!value || !*value) return false;
-  return std::strcmp(value, "1") == 0 ||
-         std::strcmp(value, "true") == 0 || std::strcmp(value, "TRUE") == 0 ||
-         std::strcmp(value, "on") == 0 || std::strcmp(value, "ON") == 0 ||
-         std::strcmp(value, "yes") == 0 || std::strcmp(value, "YES") == 0;
+  std::string lowered(value);
+  for (char& character : lowered)
+    character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+  return lowered == "1" || lowered == "true" || lowered == "on" || lowered == "yes";
 }
 }  // namespace
 

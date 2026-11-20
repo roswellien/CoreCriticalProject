@@ -821,6 +821,10 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
 
 bool SdlScreen2D::live_menu_gpu_enabled() const {
   if (!render_ || !hud_ || !menu_use_gpu_ || menu_observation_enabled_) return false;
+  // The engine arms menu recording for every canvas, mission modes included. Gating here keeps
+  // recording, the menu layout and present_16's menu canvas off for the whole mission.
+  const bool mission_running = in_mission && in_mission();
+  if (mission_running) return false;
   return mw3_menu_gpu_env() == 1;
 }
 
