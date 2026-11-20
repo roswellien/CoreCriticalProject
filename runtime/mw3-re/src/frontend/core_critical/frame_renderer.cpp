@@ -699,6 +699,19 @@ public:
     return handle;
   }
 
+  bool has_environment_pom_sources() const {
+    if (!bridge_config_.parallax_materials || !environment_)
+      return false;
+    if (!environment_->material_targets.empty())
+      return true;
+    for (const auto &[region, resources] : environment_->resources) {
+      if (resources.count(::platform::prepared::EnvironmentRole::surface_materials) ||
+          resources.count(::platform::prepared::EnvironmentRole::ground_materials))
+        return true;
+    }
+    return false;
+  }
+
   std::shared_ptr<const ::platform::DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t texture) override {
     VisualFloatScope preserve;
@@ -706,8 +719,7 @@ public:
       return {};
     const bool normal_admission = lighting_.normals &&
         (!bridge_config_.native_material_sidecar.empty() ||
-         (bridge_config_.parallax_materials && environment_ &&
-          !environment_->material_targets.empty()));
+         has_environment_pom_sources());
     const auto fixture = capture_fixture_polygon(texture);
     if (!normal_admission && !fixture)
       return {};
@@ -724,6 +736,10 @@ public:
     if (normal_admission) {
       receipt->surface_parameters = native_surface_parameters(key, texture);
       receipt->height_binding = native_height_binding(key, texture);
+      if (receipt->height_binding && receipt->surface_parameters[3] < 0.5f) {
+        const auto &record = receipt->height_binding->material;
+        receipt->surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+      }
       receipt->normal_index = surface_normal_index(receipt->key, true, texture);
     }
     return receipt;
@@ -744,8 +760,7 @@ public:
     return fixture_producer_enabled() || fixture_trace_run().open() ||
            (lighting_.normals &&
             (!bridge_config_.native_material_sidecar.empty() ||
-             (bridge_config_.parallax_materials && environment_ &&
-              !environment_->material_targets.empty()) ||
+             has_environment_pom_sources() ||
              bridge_config_.trace_native_bindings));
   }
   bool wants_model_context() const override {
@@ -1042,6 +1057,25 @@ public:
           "Prepared materials: %llu per-pixel draws, %llu normal-map draws\n",
           static_cast<unsigned long long>(assets.lit_draws),
           static_cast<unsigned long long>(assets.normal_draws));
+    if (bridge_config_.parallax_materials) {
+      const char *quality_label =
+          bridge_config_.parallax_quality == 1U ? "low" : "high";
+      std::fprintf(
+          stderr,
+          "Parallax occlusion mapping (%s): %llu draws, %llu height uploads "
+          "(%llu bytes), %llu cache hits, %llu retired\n",
+          quality_label,
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_draws : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_uploads : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_uploaded_bytes : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_cache_hits : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_retired_images : 0ULL));
+    }
     cc_mw3_re::platform::unregister_window_handle(native_window_);
   }
 
@@ -1735,6 +1769,10 @@ private:
       const auto &slot = textures_.at(state.texture);
       draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
       if (draw.height_binding) {
+        if (draw.surface_parameters[3] < 0.5f) {
+          const auto &record = draw.height_binding->material;
+          draw.surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+        }
         // projection is selected from the producing view above.
         if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
             !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||
@@ -2282,12 +2320,13 @@ private:
 RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
                                       const sdlfe::CoreCriticalQuality &quality,
                                       const sdlfe::CoreCriticalAssets &assets) {
-  if (assets.pom &&
+  const bool pom_requested = assets.pom || assets.pom_quality != 0U;
+  if (pom_requested &&
       (backend != sdlfe::RendererBackend::core_critical_dxgi &&
        backend != sdlfe::RendererBackend::core_critical_wsi))
     throw std::runtime_error(
         "--cc-pom 1 requires a Core Critical Vulkan backend");
-  if (assets.pom && assets.lighting != "normal")
+  if (pom_requested && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   const bool water_detail_requested =
       assets.water_detail_explicit && assets.water_detail;
@@ -2342,7 +2381,9 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.stock_headlights = assets.stock_headlights;
     config.headlight_bindings = assets.headlight_bindings;
   }
-  config.parallax_materials = assets.pom;
+  config.parallax_materials = pom_requested;
+  config.parallax_quality =
+      pom_requested ? (assets.pom_quality ? assets.pom_quality : 2U) : 0U;
   // These explicit launch options own surface detail for this session. They
   // are not inferred from development environment variables.
   config.water_detail = assets.water_detail_explicit && assets.water_detail;

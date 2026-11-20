@@ -733,13 +733,16 @@ static EnvironmentSelection load_environment_packs_impl(
           if (std::string(role) == "lighting")
             env_lighting(efs::u8path(pack.pins.at(name).path), pack.region,
                          &selected);
-          selected.resources[pack.region]
-                            [std::string(role) == "lighting"
-                                 ? EnvironmentRole::lighting
-                             : std::string(role) == "ground_surface_materials"
-                                 ? EnvironmentRole::ground_materials
-                                 : EnvironmentRole::surface_materials] =
-              pack.pins.at(name).path;
+          const auto role_enum = std::string(role) == "lighting"
+                                     ? EnvironmentRole::lighting
+                                 : std::string(role) == "ground_surface_materials"
+                                     ? EnvironmentRole::ground_materials
+                                     : EnvironmentRole::surface_materials;
+          selected.resources[pack.region][role_enum] = pack.pins.at(name).path;
+          if (role_enum == EnvironmentRole::surface_materials ||
+              (role_enum == EnvironmentRole::ground_materials &&
+               !selected.surface_material_digests.count(pack.region)))
+            selected.surface_material_digests[pack.region] = pack.pins.at(name).digest;
         }
       if (pack.registry.contains("material_targets")) {
         const std::set<std::string> allowed = {

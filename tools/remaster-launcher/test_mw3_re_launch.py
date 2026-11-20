@@ -126,6 +126,27 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         index = without_pom.index("--cc-pom")
         del without_pom[index:index + 2]
         self.assertEqual(without_pom, baseline["argv"])
+
+        for quality in ("low", "high"):
+            q_req = dict(self.request(), schema_version=3,
+                         visuals={"pom": True, "pom_quality": quality})
+            q_plan = plan(q_req)
+            self.assertTrue(q_plan["ok"])
+            q_args = q_plan["argv"]
+            self.assertEqual(q_args.count("--cc-pom"), 1)
+            self.assertEqual(q_args[q_args.index("--cc-pom") + 1], quality)
+        off_plan = plan(dict(self.request(), schema_version=3,
+                             visuals={"pom": False, "pom_quality": "off"}))
+        self.assertEqual(off_plan["argv"], baseline["argv"])
+        for bad_visuals in (
+            {"pom": True, "pom_quality": "off"},
+            {"pom": False, "pom_quality": "high"},
+            {"pom": False, "pom_quality": "low"},
+            {"pom_quality": "ultra"},
+            {"pom_quality": 2},
+        ):
+            with self.subTest(bad_visuals=bad_visuals), self.assertRaises(ValueError):
+                plan(dict(self.request(), schema_version=3, visuals=bad_visuals))
         self.assertEqual(request, before)
         for lighting in ("off", "flat"):
             with self.subTest(lighting=lighting), self.assertRaises(ValueError):

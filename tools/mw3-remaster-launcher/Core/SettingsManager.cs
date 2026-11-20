@@ -33,6 +33,8 @@ namespace MW3RemasterLauncher.Core
         // environment pack provides its validated role catalog.
         public bool WaterDetail { get; set; } = true;
         public bool CloudDetail { get; set; } = true;
+        // Opt-in parallax occlusion mapping quality ("off", "low", "high"). Default off until approved.
+        public string PomQuality { get; set; } = "off";
         public string DirectInputJoystickInstanceGuid { get; set; } = string.Empty;
         public string DirectInputJoystickProductName { get; set; } = string.Empty;
         public bool DirectInputJoystickNone { get; set; }
