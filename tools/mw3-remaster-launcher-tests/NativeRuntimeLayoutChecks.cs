@@ -835,6 +835,87 @@ static class NativeRuntimeLayoutChecks
             var noUiArgv = noUiPlan["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
             if (noUiArgv.Contains("--cc-hud") || noUiArgv.Contains("--cc-hud-text"))
                 throw new Exception("No UI packs should leave saved MW3-RE HUD settings unset.");
+            if (Directory.Exists(dataRoot)) throw new Exception("Planning without named skins unexpectedly created a write directory.");
+
+            // Named skins pass through the C# selection, wire request and the
+            // shipped Python validation/catalog writer, including both meshes.
+            var skinRoot = Path.Combine(packs, "named-skin");
+            Directory.CreateDirectory(Path.Combine(skinRoot, "skins"));
+            using var skinTextureStream = new MemoryStream();
+            using (var writer = new BinaryWriter(skinTextureStream, Encoding.UTF8, leaveOpen: true))
+            {
+                writer.Write("BWTEX1\0\0"u8);
+                writer.Write(1u); writer.Write(1u); writer.Write(0u);
+                writer.Write(Encoding.ASCII.GetBytes("authored".PadRight(32, '\0')));
+                writer.Write(1u); writer.Write(1u); writer.Write(0ul); writer.Write((ushort)0xffff);
+            }
+            var skinTexture = skinTextureStream.ToArray();
+            File.WriteAllBytes(Path.Combine(skinRoot, "texture.bin"), skinTexture);
+            var meshHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(
+                Path.Combine(mechs, "payload", "mesh.bin")))).ToLowerInvariant();
+            var skinRegistry = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema_version = 2, payload_profile = "prepared-skins-v1",
+                skins = new[] { new {
+                    id = "test.native-skin:sommerset", name = "Sommerset", chassis = "owens",
+                    mesh_sha256 = new { close = meshHash, distance = meshHash },
+                    textures = new { close = "texture.bin", distance = "texture.bin" }
+                } }
+            });
+            File.WriteAllBytes(Path.Combine(skinRoot, "skins", "skins.json"), skinRegistry);
+            File.WriteAllText(Path.Combine(skinRoot, "pack.json"), JsonSerializer.Serialize(new
+            {
+                schema_version = 2, game_id = "mw3", id = "test.native-skin", name = "Named skin",
+                files = new Dictionary<string, object>
+                {
+                    ["skins/skins.json"] = new { bytes = skinRegistry.Length,
+                        sha256 = Convert.ToHexString(SHA256.HashData(skinRegistry)).ToLowerInvariant() },
+                    ["texture.bin"] = new { bytes = skinTexture.Length,
+                        sha256 = Convert.ToHexString(SHA256.HashData(skinTexture)).ToLowerInvariant(), format = "BWTEX1" }
+                },
+                native_payload = new { profile = "prepared-skins-v1", registry = "skins/skins.json",
+                    path_base = "pack-root", required_formats = new[] { "BWTEX1" },
+                    required_capabilities = new Dictionary<string, int> { ["additional-mech-skins"] = 1 } }
+            }));
+            File.WriteAllText(Path.Combine(mechs, "models", "models.json"),
+                """{"schema_version":2,"models":[{"id":"owens","backend":"native","status":"runtime-ready","environment":{"MW34_OWENS_MESH":"payload/mesh.bin","MW34_OWENS_TEXTURES":"payload/tex.bin","MW34_OWENS_NORMALS":"payload/nrm.bin","MW34_OWENS_SKIN_B_TEXTURES":"payload/tex.bin","MW34_OWENS_LOD1_MESH":"payload/mesh.bin","MW34_OWENS_LOD1_TEXTURES":"payload/tex.bin","MW34_OWENS_LOD1_SKIN_B_TEXTURES":"payload/tex.bin"}}]}""");
+            var selectedSkins = NativeGameRunner.SelectSkinPacks(new[] { ui, skinRoot });
+            if (!selectedSkins.SequenceEqual(new[] { Path.GetFullPath(skinRoot) }))
+                throw new Exception("Named skin pack was not selected independently of UI/model packs.");
+            var withSkins = NativeGameRunner.PlanningOptionsForSettings(settings, contract, 1200,
+                new[] { mechs }, Array.Empty<string>(), null, skinPacks: selectedSkins);
+            var skinRequest = Mw3ReLaunchRequest.Create(contract, withSkins, "D:/Original MW3", dataRoot,
+                NativeGameRunner.ProfileId);
+            if (JsonNode.Parse(skinRequest)!["preview"]!["skin_packs"]![0]!.GetValue<string>() != skinRoot)
+                throw new Exception("Named skin selection was lost in the native wire request.");
+            var skinPlan = RunMw3RePlanner(skinRequest);
+            var skinArgv = skinPlan["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+            if (!skinArgv.Contains("--cc-skin-catalog"))
+                throw new Exception("Validated named skin did not produce a native catalog argument.");
+            if (!skinArgv.Contains("--cc-skin-bindings") || skinArgv.Contains("--cc-model-skin"))
+                throw new Exception("Stock skins were not compacted into one native binding argument.");
+            var stockBindingsPath = skinArgv[skinArgv.IndexOf("--cc-skin-bindings") + 1];
+            using (var reader = new BinaryReader(File.OpenRead(stockBindingsPath)))
+            {
+                if (!reader.ReadBytes(8).AsSpan().SequenceEqual("BWSKIDX1"u8) || reader.ReadUInt32() != 2)
+                    throw new Exception("Compact stock binding index has the wrong header/count.");
+                for (uint lod = 0; lod != 2; ++lod)
+                {
+                    var chassis = Encoding.UTF8.GetString(reader.ReadBytes((int)reader.ReadUInt32()));
+                    var storedLod = reader.ReadUInt32();
+                    var index = reader.ReadUInt32();
+                    var texture = Encoding.UTF8.GetString(reader.ReadBytes((int)reader.ReadUInt32()));
+                    if (chassis != "owens" || storedLod != lod || index != 1 ||
+                        texture != Path.Combine(mechs, "payload", "tex.bin"))
+                        throw new Exception("Compact stock binding lost its chassis, LOD, index or path.");
+                }
+                if (reader.BaseStream.Position != reader.BaseStream.Length)
+                    throw new Exception("Compact stock binding index has trailing data.");
+            }
+            var catalogBytes = File.ReadAllBytes(skinArgv[skinArgv.IndexOf("--cc-skin-catalog") + 1]);
+            if (!catalogBytes.AsSpan(0, 8).SequenceEqual("BWSKIN1\0"u8) ||
+                !Encoding.UTF8.GetString(catalogBytes).Contains("Sommerset", StringComparison.Ordinal))
+                throw new Exception("Native named-skin catalog did not preserve its format/name.");
 
             // Keep the saved request intact even when a dependency disables shadows for this launch.
             var suppressedSettings = new LauncherSettings { Shadows = true, DynamicLighting = false };
@@ -905,12 +986,16 @@ static class NativeRuntimeLayoutChecks
             Refused(() => NativeGameRunner.PreviewDrawDistance(4000, out _));
             if (NativeGameRunner.PreviewAntialiasing("fxaa") != Mw3ReAntialiasing.Fxaa) throw new Exception("Saved FXAA was remapped.");
             Refused(() => NativeGameRunner.PreviewAntialiasing("msaa"));
-            if (Directory.Exists(dataRoot)) throw new Exception("Planning unexpectedly created a write directory.");
+            var written = Directory.GetFiles(dataRoot, "*", SearchOption.AllDirectories);
+            var expectedWrites = new[] { stockBindingsPath, skinArgv[skinArgv.IndexOf("--cc-skin-catalog") + 1] };
+            if (written.Length != 2 || written.Except(expectedWrites).Any())
+                throw new Exception("Skin planning wrote files outside its isolated metadata indices.");
             Console.WriteLine("Native preview typed request -> actual Python planner pack translation passed; no game process.");
         }
         finally
         {
             if (Directory.Exists(packs)) Directory.Delete(packs, true);
+            if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
         }
     }
 
@@ -1013,7 +1098,7 @@ static class NativeRuntimeLayoutChecks
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
         foreach (var argument in new[] { "-I", "-c",
-            "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('mw3_re_launch',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\ntry: result=m.plan_json(sys.stdin.read())\nexcept ValueError: result={'validation_error':True}\nprint(json.dumps(result))",
+            "import importlib.util,json,sys,os; sys.path.insert(0,os.path.dirname(sys.argv[1])); s=importlib.util.spec_from_file_location('mw3_re_launch',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\ntry: result=m.plan_json(sys.stdin.read())\nexcept ValueError: result={'validation_error':True}\nprint(json.dumps(result))",
             Path.Combine(AppContext.BaseDirectory, "mw3_re_launch.py") }) info.ArgumentList.Add(argument);
         using var child = System.Diagnostics.Process.Start(info) ?? throw new Exception("Python planner test child did not start.");
         child.StandardInput.Write(json);

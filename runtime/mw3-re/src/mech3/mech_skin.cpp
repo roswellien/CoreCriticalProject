@@ -156,6 +156,7 @@ bool SkinSet::add(Skin* skin) {
     damage = skin;
     return true;
   }
+  skin->prepared_skin_index = static_cast<int32_t>(skins.size());
   skins.push_back(skin);
   return true;
 }
@@ -323,6 +324,7 @@ int32_t Skin::index_of(const SkinEntry* e) const {
 Skin* Skin::clone(const Skin* d) const {
   if (entries.empty()) return nullptr;
   auto* out = new Skin(name, static_cast<uint32_t>(entries.size()));
+  out->prepared_skin_index = prepared_skin_index;
   for (size_t k = 0; k < entries.size(); ++k) {
     const SkinEntry* de = d && k < d->entries.size() ? d->entries[k] : nullptr;
     out->push(entries[k], g_skins.damage_mode && de && de->name);
@@ -334,6 +336,7 @@ Skin* Skin::clone(const Skin* d) const {
 bool Skin::apply_first(void* node) {
   zcls::Node* n = nd(node);
   if (!n) return false;
+  n->prepared_skin_index = prepared_skin_index;
   const bool holes = g_skins.damage_mode != 0;
   each_material(n, [&](zmod::Material& mat) {
     mat.soil = static_cast<uint32_t>(soil_of("mech"));  // 0x005e5840
@@ -361,7 +364,8 @@ bool Skin::apply_first(void* node) {
 // Mech3.exe 1.2 @ 0x004749e0
 void Skin::apply(void* node, Skin* to) const {
   zcls::Node* n = nd(node);
-  if (!n) return;
+  if (!n || !to) return;
+  n->prepared_skin_index = to->prepared_skin_index;
   const bool holes = g_skins.damage_mode != 0;
   each_material(n, [&](zmod::Material& mat) {
     if (!(mat.flags & 1) || !mat.texture) return;

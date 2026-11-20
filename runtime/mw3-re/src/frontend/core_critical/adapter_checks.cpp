@@ -1648,6 +1648,34 @@ void check_native_sky_unlit(SDL_Window *window,
   std::fprintf(stderr, "[NATIVE_SKY_UNLIT] pixel_cases=%u\n", cases);
 }
 
+// A briefing loads its mission before the Mech Lab opens. The Lab preview must use
+// the configured stock lighting, not the mission's campaign profile: Operation 3's
+// red sky tint (c3m3) turned every paint orange and hid the selected skin.
+void check_lab_preview_lighting(SDL_Window *window, sdlfe::RendererBackend backend) {
+  sdlfe::CoreCriticalAssets assets;
+  assets.lighting = "normal";
+  auto renderer = make_check_renderer(window, backend, {}, assets);
+  require(cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Renderer without a mission did not start on stock lighting");
+  const platform::MissionIdentity fuel_depot{2, 3};  // c3m3
+  renderer->mission_changed(fuel_depot);
+  require(!cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "c3m3 campaign profile was not applied in the mission");
+  renderer->set_lab_preview_lighting(true);
+  require(cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Lab preview kept the mission's campaign lighting");
+  // A mission change while the Lab is up (not expected, but possible from a debug
+  // start) must not leak its profile into the preview either.
+  renderer->mission_changed({0, 1});
+  require(cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Mission change during the Lab preview restored campaign lighting");
+  renderer->mission_changed(fuel_depot);
+  renderer->set_lab_preview_lighting(false);
+  require(!cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Closing the Lab did not restore the mission's campaign lighting");
+  std::fprintf(stderr, "[LAB_PREVIEW_LIGHTING] stock in Lab, c3m3 profile restored after\n");
+}
+
 void check_sealed_environment(SDL_Window *window,
                               sdlfe::RendererBackend backend) {
   struct RestoreView {
@@ -3225,8 +3253,10 @@ int main(int argc, char **argv) {
       }
       check_gpu_prepared(window, backend);
     } else if (prepared_check) {
-      if (material_check && threaded_checks)
+      if (material_check && threaded_checks) {
         check_sealed_environment(window, backend);
+        check_lab_preview_lighting(window, backend);
+      }
       check_prepared(window, backend, quality, material_check);
     } else if (quality_check)
       check_quality(window, backend, quality);

@@ -33,6 +33,10 @@ Node* tree_copy_materials(Node* node, int32_t own_materials, int32_t shared);  /
 // sounds, sequences, animates and switches are refused (reported, 0).
 Node* node_copy(Node* node);                                // 0x004f99f0
 int copy_node_base(Node* src, Node* dst);                   // 0x004f9190 ECX src, EDX dst
+// Ours: the host-only prepared skin index set on a node and every node below it.
+// A node built later for an already-painted mech (a limb's stump) takes its paint
+// this way; the original never stored the skin on nodes at all.
+void tree_set_prepared_skin_index(Node* node, int32_t index);
 int copy_node_model(Node* src, Node* dst);                  // 0x004f90e0 ECX src, EDX dst
 
 // A node without parents and its whole tree below (each child that has no

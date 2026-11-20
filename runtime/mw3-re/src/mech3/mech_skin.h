@@ -35,6 +35,10 @@ struct Skin {                      // 0x18 bytes
   char* name = nullptr;            // +0x00
   std::vector<SkinEntry*> entries; // +0x08
   uint8_t loaded = 0;              // +0x14
+  // Host-only, not part of the 0x18-byte original layout: this skin's position in
+  // the definition skin list (0 primary, 1-7 retail B-H, then catalog skins). The
+  // prepared-model renderer reads it from the node to pick the matching texture set.
+  int32_t prepared_skin_index = 0;
   Skin(const char* name, uint32_t count);              // 0x00473e50
   void add_entry(const char* name, const char* alt);   // 0x00474000
   Skin* derive(const char* name, const char* suffix);  // 0x00474500

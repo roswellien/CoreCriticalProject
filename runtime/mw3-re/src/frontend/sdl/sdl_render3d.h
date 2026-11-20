@@ -42,6 +42,10 @@ struct PreparedNormalBinding {
 struct PreparedMaterialBinding {
   std::string chassis, lod, path;
 };
+struct PreparedSkinBinding {
+  std::string chassis, lod, path;
+  int32_t index{};
+};
 struct CoreCriticalAssets {
   std::vector<std::string> environment_packs;
   bool environment_packs_explicit = false;
@@ -56,6 +60,8 @@ struct CoreCriticalAssets {
   std::vector<PreparedModelBinding> models;
   std::vector<PreparedNormalBinding> normals;
   std::vector<PreparedMaterialBinding> materials;
+  std::vector<PreparedSkinBinding> skins;
+  std::string skin_catalog;
   bool sun_explicit = false;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool sun_shadows_explicit = false, sun_shadows = false;
@@ -74,7 +80,8 @@ struct CoreCriticalAssets {
            !render_thread && !pom && pom_quality == 0 && geometry == "legacy" && !geometry_debug_normals &&
            flare_style == "modern" &&
            textures.empty() && models.empty() && normals.empty() &&
-           materials.empty() && lighting == "off" && sun_azimuth == "45" &&
+           materials.empty() && skins.empty() && skin_catalog.empty() &&
+           lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";
   }
 };

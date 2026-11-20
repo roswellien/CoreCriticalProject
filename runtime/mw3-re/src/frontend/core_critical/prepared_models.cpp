@@ -4,6 +4,7 @@
 #include "gamez/zmodel/gmod_const.h"
 #include "renderer/donor_retarget.hpp"
 #include "platform/sha256.hpp"
+#include "platform/prepared_skins.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -303,6 +304,19 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
         Model model;
         model.distance_lod = (binding.lod == "1");
         model.source_asset = "mech_" + binding.chassis + (binding.lod == "1" ? "_1.flt" : ".flt");
+        for (const auto &skin : options.skins) {
+            if (skin.chassis != binding.chassis || skin.lod != binding.lod)
+                continue;
+            if (skin.index < 1 || skin.index > 135 || skin.path.empty() ||
+                !model.skins.emplace(skin.index, skin.path).second)
+                throw std::runtime_error("Invalid or duplicate prepared skin selection");
+        }
+        int32_t catalog_index = static_cast<int32_t>(platform::prepared::base_skin_count(binding.chassis));
+        for (const auto &skin : *platform::prepared::configured_skin_catalog())
+            if (skin.chassis == binding.chassis) {
+                if (!model.skins.emplace(catalog_index++, skin.textures[model.distance_lod ? 1 : 0]).second)
+                    throw std::runtime_error("Prepared catalog skin overrides a selected skin index");
+            }
         if (!selected.insert(model.source_asset).second)
             throw std::runtime_error("Duplicate prepared model selection");
         const auto mat = surface_materials.find({binding.chassis, binding.lod});
@@ -415,6 +429,30 @@ const platform::prepared::Image *PreparedModels::named_texture(const char *name)
             if (image.name == name)
                 return &image;
     return nullptr;
+}
+
+std::shared_ptr<const platform::prepared::Textures>
+PreparedModels::resolve_skin(const std::string &source_asset, int32_t index) const {
+    const auto *model = model_for_asset(source_asset);
+    if (!model || index == 0)
+        return {};
+    const auto found = model->skins.find(index);
+    if (found != model->skins.end() && !model->failed_skins.count(index)) {
+        try {
+            auto textures = skin_cache_.resolve(found->second, model->mesh);
+            if (model->logged_skins.insert(index).second)
+                std::fprintf(stderr, "Prepared skin selected: %s index %d\n", model->source_asset.c_str(), index);
+            return textures;
+        } catch (const std::exception &) {
+            model->failed_skins.insert(index);
+        }
+    }
+    if (!model->warned_skin_fallback) {
+        std::fprintf(stderr, "Prepared skin fallback: %s index %d missing or invalid; using primary\n",
+                     model->source_asset.c_str(), index);
+        model->warned_skin_fallback = true;
+    }
+    return {};
 }
 
 const PreparedModels::Model *
@@ -549,6 +587,8 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         donor = donor_pose(rig_for(selected->mesh.rig), live.poses);
     }
     output.replace = true;
+    const auto skin_owner = resolve_skin(selected->source_asset, node->prepared_skin_index);
+    const auto &textures = skin_owner ? *skin_owner : selected->textures;
     for (size_t index = 0; index < selected->mesh.batches.size(); ++index) {
         const auto &batch = selected->mesh.batches[index];
         const auto &visibility = batch.visibility.empty() ? batch.owner : batch.visibility;
@@ -557,15 +597,16 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
             continue;
         PreparedBatchDraw draw;
         draw.batch = &batch;
-        draw.texture = &selected->textures.images.at(selected->textures.bindings[index]);
-        if (index < selected->height_bindings.size())
+        draw.texture_owner = skin_owner;
+        draw.texture = &textures.images.at(textures.bindings[index]);
+        if (!skin_owner && index < selected->height_bindings.size())
             draw.height_binding = selected->height_bindings[index];
         if (!selected->normals.bindings.empty()) {
             const auto normal = selected->normals.bindings[index];
             if (normal != platform::prepared::no_normal)
                 draw.normal = &selected->normals.images.at(normal);
         }
-        if (selected->surface_materials && !selected->surface_materials->bindings.empty()) {
+        if (!skin_owner && selected->surface_materials && !selected->surface_materials->bindings.empty()) {
             const auto sm_index = selected->surface_materials->bindings[index];
             if (sm_index != ::mw34::materials::no_surface_material &&
                 sm_index < selected->surface_materials->records.size())
