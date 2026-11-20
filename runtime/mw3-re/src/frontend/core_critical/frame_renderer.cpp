@@ -677,7 +677,8 @@ public:
   testing::StagingTestState staging_state_for_test() {
     return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
             staging_first_flush_bytes_, staging_first_flush_packets_,
-            recycled_scene_count_for_test(), retained_scene_capacity_bytes()};
+            recycled_scene_count_for_test(), retained_scene_capacity_bytes(),
+            staging_oversized_packets_, staging_oversized_log_lines_};
   }
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
@@ -869,6 +870,7 @@ public:
     release_recycled_scenes();
     local_lights_clear();
     staging_early_logged_ = false;
+    staging_oversized_logged_ = false;
     staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
@@ -909,6 +911,28 @@ public:
     preload_mission_normal_textures();
     first_world_preload_pending_ = true;
   }
+  void set_lab_preview_lighting(bool on) override {
+    VisualFloatScope fp_guard;
+    if (lab_preview_lighting_ == on)
+      return;
+    lab_preview_lighting_ = on;
+    if (!renderer_)
+      return;
+    // Queued draws were recorded under the previous lighting; submit them first,
+    // as the HDR change in begin_scene_housekeeping does.
+    if (!scene_.draws.empty())
+      flush();
+    drain();
+    renderer_->update_lighting_settings(display_lighting());
+  }
+  bool display_lighting_is_stock_for_test() const {
+    const auto shown = display_lighting();
+    const auto stock = mw34::sun::display_ambient(base_lighting_, campaign_enabled_, display_hdr_);
+    return shown.color == stock.color && shown.ambient_color == stock.ambient_color &&
+           shown.sky_tint == stock.sky_tint && shown.haze_color == stock.haze_color &&
+           shown.sky_active == stock.sky_active && shown.haze_active == stock.haze_active &&
+           shown.strength == stock.strength && shown.ambient == stock.ambient;
+  }
   void reset_scene_resources() override {
     // Clear pending preload before the empty mission callback so scene teardown
     // does not warm old mission textures right before resetting them.
@@ -920,6 +944,8 @@ public:
     first_world_preload_pending_ = false;
     prepared_preload_pending_ = true;
     reset_pending_ = true;
+    prepared_.clear_skin_cache();
+    retire_skin_textures();
     ++group_load_epoch_;
     for (const auto &[index, handle] : surface_normal_textures_)
       textures_.at(handle) = {};
@@ -962,8 +988,10 @@ public:
           statistics.submitted, statistics.completed, statistics.peak_jobs,
           statistics.peak_bytes, statistics.waits);
       std::fprintf(stderr,
-                   "Local light staging: peak %zu bytes of %zu, %zu early completions\n",
-                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_);
+                   "Local light staging: peak %zu bytes of %zu, %zu early completions, "
+                   "%zu oversized packets\n",
+                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_,
+                   staging_oversized_packets_);
       worker_.reset(); // All later summary reads and destruction belong to this
                        // thread.
     }
@@ -1993,7 +2021,24 @@ private:
     return handle;
   }
 
-  int32_t prepared_texture(const ::platform::prepared::Image &image) {
+  void retire_skin_textures() {
+    for (auto it = prepared_skin_owners_.begin(); it != prepared_skin_owners_.end();) {
+      if (!it->second.expired()) {
+        ++it;
+        continue;
+      }
+      const auto texture = prepared_textures_.find(it->first);
+      if (texture != prepared_textures_.end()) {
+        // release_texture flushes any scene which still references this slot.
+        release_texture(texture->second);
+        prepared_textures_.erase(texture);
+      }
+      it = prepared_skin_owners_.erase(it);
+    }
+  }
+  int32_t prepared_texture(const ::platform::prepared::Image &image,
+      const std::shared_ptr<const ::platform::prepared::Textures> &owner = {}) {
+    retire_skin_textures();
     const auto found = prepared_textures_.find(&image);
     if (found != prepared_textures_.end()) {
       // PreparedModels owns this immutable image across mission resource
@@ -2008,6 +2053,8 @@ private:
     // immutable slot gets an exact key from its complete visible RGB565 plane.
     textures_.at(handle).surface_key = prepared_fixture_key(image);
     prepared_textures_.emplace(&image, handle);
+    if (owner)
+      prepared_skin_owners_.emplace(&image, owner);
     return handle;
   }
 
@@ -2056,7 +2103,7 @@ private:
     auto draw = staged->draw;
     draw.producer_view = producer_view_;
     draw.scissor = producer_scissor();
-    const auto texture = prepared_texture(*source.texture);
+    const auto texture = prepared_texture(*source.texture, source.texture_owner);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
                            group_load_epoch_, textures_.at(texture).version);
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
@@ -2081,7 +2128,10 @@ private:
   }
 
   mw34::sun::Settings display_lighting() const {
-    return mw34::sun::display_ambient(lighting_, campaign_enabled_, display_hdr_);
+    // The Lab preview keeps stock lighting; the mission profile stays resolved in
+    // lighting_ and returns as soon as the Lab closes.
+    const auto &active = lab_preview_lighting_ ? base_lighting_ : lighting_;
+    return mw34::sun::display_ambient(active, campaign_enabled_, display_hdr_);
   }
 
   void require_editor_producer() const {
@@ -2723,6 +2773,7 @@ private:
   bool display_hdr_ = false;
   const mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
+  bool lab_preview_lighting_{};
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
   std::shared_ptr<const zcls::ZbdObservationSession> observation_session_;
@@ -2770,6 +2821,8 @@ private:
   std::uint64_t retired_geometry_buffers_{};
   QualityStatistics retired_quality_{};
   std::map<const ::platform::prepared::Image *, int32_t> prepared_textures_;
+  std::map<const ::platform::prepared::Image *,
+           std::weak_ptr<const ::platform::prepared::Textures>> prepared_skin_owners_;
   std::map<const ::platform::prepared::NormalImage *, int32_t>
       prepared_normals_;
   std::map<const ::platform::prepared::Batch *,
@@ -3006,6 +3059,13 @@ testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) 
     if (!typed)
         throw std::runtime_error("Renderer is not a FrameRenderer");
     return typed->staging_state_for_test();
+}
+
+bool testing::display_lighting_is_stock(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->display_lighting_is_stock_for_test();
 }
 
 testing::NamedTextureTestState testing::named_texture_state(

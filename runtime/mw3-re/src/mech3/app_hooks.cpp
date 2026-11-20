@@ -1,6 +1,7 @@
 #include "mech3/app_hooks.h"
 #include "gamez/zrender/zrndr_blit.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -97,6 +98,20 @@ std::vector<zmod::ShadowCaster*> g_casters;
 zmod::ShadowCaster* caster(Handle h) {
   return h && h <= g_casters.size() ? g_casters[h - 1] : nullptr;
 }
+
+// MW3_MENU_WIDE is an opt-in escape hatch: 1, true, on or yes (any letter case) turns the old
+// wide menu canvas back on; anything else, or no value, keeps the 4:3 menu. It is parsed the
+// same way as MW3_MENU_GPU in sdl_platform.cpp, but read with std::getenv because the game
+// code here does not depend on SDL (SDL copies the process environment, so both see the same
+// value at startup).
+bool wide_menus_enabled_by_env() {
+  const char* value = std::getenv("MW3_MENU_WIDE");
+  if (!value || !*value) return false;
+  std::string lowered(value);
+  for (char& character : lowered)
+    character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+  return lowered == "1" || lowered == "true" || lowered == "on" || lowered == "yes";
+}
 }  // namespace
 
 Handle Engine::shadow_new() {
@@ -153,9 +168,11 @@ int32_t Engine::menu_vmode() {
   if (menu_vmode_ >= 0) return menu_vmode_;
   int32_t w = 0, h = 0;
   const int32_t m = in_game_vmode();
-  // Wide means a shape wider than 4:3, not a bigger canvas: the original's
-  // modes up to 10 (1600x1200) draw the 2D at full size, still 4:3.
-  const bool wide = zfix::options().any_resolution && zfix::options().wide_menus && mech3::vmode_canvas(m, &w, &h) &&
+  // Owner decision: menu screens keep a 640x480 (4:3, mode 5) logical layout
+  // by default while the GPU background covers the full window. MW3_MENU_WIDE=1
+  // restores the legacy wide-menu canvas when wide_menus is enabled.
+  const bool wide = wide_menus_enabled_by_env() && zfix::options().any_resolution &&
+                    zfix::options().wide_menus && mech3::vmode_canvas(m, &w, &h) &&
                     w > 640 && w * 3 > h * 4;
   return menu_vmode_ = wide ? m : 5;
 }

@@ -12,10 +12,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
 #include "frontend/sdl/sdl_input.h"
+#include "frontend/sdl/menu_sprites.h"
 #include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zgame/zgameapp.h"
 #include "gamez/zsound/zsnd_cd.h"
@@ -206,28 +208,37 @@ uint32_t SdlScreen2D::rgba(uint16_t pixel, bool rgb565) { return rgba_table(rgb5
 // keyed) transparent, blended ones (`alpha`, zrndr::LayerCover) see-through.
 void SdlScreen2D::upload(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, bool keyed,
                          uint16_t key, const uint8_t* alpha, const uint16_t* colour) {
+  bool changed = !native_texture_current_ || texture_ < 0 || tw_ != width || th_ != height;
   rgba_.resize(static_cast<size_t>(width) * height * 4);
   const uint32_t* table = rgba_table(rgb565);
   for (int y = 0; y < height; ++y) {
     const uint16_t* row = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(pixels) + y * pitch);
     auto* o = reinterpret_cast<uint32_t*>(&rgba_[static_cast<size_t>(y) * width * 4]);
-    if (keyed)
-      for (int x = 0; x < width; ++x) o[x] = row[x] == key ? 0u : table[row[x]];
-    else
-      for (int x = 0; x < width; ++x) o[x] = table[row[x]];
-    if (alpha) {
-      const size_t at = static_cast<size_t>(y) * (pitch / 2);
-      for (int x = 0; x < width; ++x)
-        if (alpha[at + x] && colour[at + x] == row[x]) o[x] = premultiplied(o[x], alpha[at + x]);
+    const size_t at = static_cast<size_t>(y) * (pitch / 2);
+    for (int x = 0; x < width; ++x) {
+      uint32_t converted = keyed && row[x] == key ? 0u : table[row[x]];
+      if (alpha && alpha[at + x] && colour[at + x] == row[x])
+        converted = premultiplied(converted, alpha[at + x]);
+      if (o[x] != converted) changed = true;
+      o[x] = converted;
     }
   }
+  // Unsupported effects can leave identical shadow frames. Reuse their texture too, while
+  // comparing final bytes so color-key, format and cover-alpha changes cannot leave stale pixels.
+  if (!changed) {
+    menu_composer_.invalidate_cache();
+    return;
+  }
+  native_texture_current_ = false;
   if (texture_ < 0 || tw_ != width || th_ != height) {
     if (texture_ >= 0) render_->release_texture(texture_);
+    texture_ = -1;
     texture_ = render_->create_texture(width, height, rgba_.data(), 1);
     tw_ = width, th_ = height;
   } else {
     render_->update_texture(texture_, width, height, rgba_.data());
   }
+  native_texture_current_ = texture_ >= 0;
   // Overlay uploads share texture_ with the cached HD menu background. Even
   // an equal-sized upload replaces its contents, so the next menu frame must
   // rebuild the composer cache before it can reuse this texture.
@@ -301,6 +312,135 @@ class MenuCanvasScope {
   bool cover_;
   FrameShape shape_;
 };
+
+// Runtime escape hatch for live GPU menu presentation. The HD menu is the default (owner
+// decision, 2026-11-20); the old Stage C compositor/native presentation stays available:
+//   MW3_MENU_GPU=0 (or false/off/no) -> disable live GPU menu replay (escape hatch)
+//   unset, 1 or any other value      -> live GPU menu replay
+// Only an explicit "off" value disables it, so a typo cannot silently drop players back to
+// the old path.
+int mw3_menu_gpu_env() {
+  const char* value = SDL_getenv("MW3_MENU_GPU");
+  if (!value || !*value) value = std::getenv("MW3_MENU_GPU");
+  if (!value || !*value) return 1;
+  const bool explicitly_off = std::strcmp(value, "0") == 0 ||
+                              SDL_strcasecmp(value, "false") == 0 ||
+                              SDL_strcasecmp(value, "off") == 0 || SDL_strcasecmp(value, "no") == 0;
+  return explicitly_off ? 0 : 1;
+}
+
+struct ClippedMenuBlit {
+  int32_t dx0, dy0, dx1, dy1;
+};
+
+int64_t wrap_menu_coord(int64_t value, int64_t extent) {
+  const int64_t rem = value % extent;
+  return rem < 0 ? rem + extent : rem;
+}
+
+// Validates that all recorded menu background blits come from a valid unkeyed
+// opaque source, agree on a single wrapped affine offset modulo the source
+// texture dimensions, and cover 100% of the menu frame without gaps.
+bool validate_live_menu_background_uv(const platform::MenuBackgroundImage& hd_background,
+                                      const zimg::Texture* source,
+                                      const std::vector<zrndr::MenuBackgroundBlit>& blits,
+                                      int frame_width, int frame_height,
+                                      unsigned bound_texture_width, unsigned bound_texture_height,
+                                      platform::MenuBackgroundUvRect* out_uv) {
+  if (!out_uv || blits.empty() || !source || !source->pixels || source->palette || source->alpha ||
+      (source->flags & zimg::kAlpha) != 0 || source->width <= 0 || source->width > 16384 ||
+      source->height <= 0 || source->width_again < source->width || frame_width <= 0 ||
+      frame_height <= 0)
+    return false;
+  if (!hd_background.width || !hd_background.height || !hd_background.source_width ||
+      !hd_background.source_height ||
+      std::max({hd_background.width, hd_background.height, hd_background.source_width,
+                hd_background.source_height}) > 16384 ||
+      uint64_t(hd_background.width) * hd_background.source_height !=
+          uint64_t(hd_background.height) * hd_background.source_width ||
+      uint64_t(hd_background.width) * hd_background.height * 3 != hd_background.rgb.size() ||
+      source->height != int(hd_background.source_height))
+    return false;
+
+  std::vector<ClippedMenuBlit> rects;
+  rects.reserve(blits.size());
+  std::vector<int32_t> xs{0, frame_width};
+  std::vector<int32_t> ys{0, frame_height};
+  int64_t origin_x = -1, origin_y = -1;
+
+  for (const auto& blit : blits) {
+    if (blit.width <= 0 || blit.height <= 0) continue;
+    int64_t sx0 = blit.source_x, sy0 = blit.source_y;
+    int64_t dx0 = blit.destination_x, dy0 = blit.destination_y;
+    int64_t dx1 = dx0 + blit.width, dy1 = dy0 + blit.height;
+    if (sx0 < 0) {
+      dx0 -= sx0;
+      sx0 = 0;
+    }
+    if (sy0 < 0) {
+      dy0 -= sy0;
+      sy0 = 0;
+    }
+    if (dx0 < 0) {
+      sx0 -= dx0;
+      dx0 = 0;
+    }
+    if (dy0 < 0) {
+      sy0 -= dy0;
+      dy0 = 0;
+    }
+    dx1 = std::min<int64_t>(dx1, frame_width);
+    dy1 = std::min<int64_t>(dy1, frame_height);
+    dx1 = std::min<int64_t>(dx1, dx0 + source->width - sx0);
+    dy1 = std::min<int64_t>(dy1, dy0 + source->height - sy0);
+    if (dx0 >= dx1 || dy0 >= dy1) continue;
+
+    const int64_t candidate_ox = wrap_menu_coord(sx0 - dx0, source->width);
+    const int64_t candidate_oy = wrap_menu_coord(sy0 - dy0, source->height);
+    if (origin_x < 0) {
+      origin_x = candidate_ox;
+      origin_y = candidate_oy;
+    } else if (candidate_ox != origin_x || candidate_oy != origin_y) {
+      return false;
+    }
+    rects.push_back({static_cast<int32_t>(dx0), static_cast<int32_t>(dy0),
+                     static_cast<int32_t>(dx1), static_cast<int32_t>(dy1)});
+    xs.push_back(static_cast<int32_t>(dx0));
+    xs.push_back(static_cast<int32_t>(dx1));
+    ys.push_back(static_cast<int32_t>(dy0));
+    ys.push_back(static_cast<int32_t>(dy1));
+  }
+  if (rects.empty() || rects.size() > 64) return false;
+
+  std::sort(xs.begin(), xs.end());
+  xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
+  std::sort(ys.begin(), ys.end());
+  ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+  if (xs.front() != 0 || xs.back() != frame_width || ys.front() != 0 || ys.back() != frame_height)
+    return false;
+
+  for (size_t yi = 0; yi + 1 < ys.size(); ++yi) {
+    const int32_t y0 = ys[yi], y1 = ys[yi + 1];
+    for (size_t xi = 0; xi + 1 < xs.size(); ++xi) {
+      const int32_t x0 = xs[xi], x1 = xs[xi + 1];
+      bool cell_covered = false;
+      for (const auto& r : rects) {
+        if (r.dx0 <= x0 && r.dx1 >= x1 && r.dy0 <= y0 && r.dy1 >= y1) {
+          cell_covered = true;
+          break;
+        }
+      }
+      if (!cell_covered) return false;
+    }
+  }
+
+  const unsigned tex_w = bound_texture_width > 0 ? bound_texture_width : hd_background.width;
+  const unsigned tex_h = bound_texture_height > 0 ? bound_texture_height : hd_background.height;
+  *out_uv = platform::menu_background_uv_rect(
+      hd_background, origin_x, origin_y, frame_width, frame_height,
+      static_cast<unsigned>(source->width), static_cast<unsigned>(source->height), tex_w, tex_h);
+  return out_uv->u1 > out_uv->u0 && out_uv->v1 > out_uv->v0;
+}
 }  // namespace
 
 void draw_menu_background_gpu(FrameRenderer& renderer, int32_t background_texture,
@@ -424,16 +564,29 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend, bool sharp,
 }
 
 void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) {
-  if (!render_ || width <= 0 || height <= 0) return;
+  if (menu_gpu_recording_) cancel_menu_observation();
+  const bool sealed_menu = menu_gpu_sealed_;
+  menu_gpu_sealed_ = false;
+  auto cleanup_sealed = [&]() {
+    if (sealed_menu && hud_ && hud_->menu_sealed()) hud_->cancel();
+  };
+  if (!render_ || width <= 0 || height <= 0) {
+    cleanup_sealed();
+    return;
+  }
   FloatScope float_scope;
   // Invalid native strides cannot be read safely even for fallback presentation.
   if (!pixels || pitch < int64_t(width) * 2 || pitch % 2 != 0) {
+      cleanup_sealed();
       log_native_menu_fallback();
       return;
   }
   ++frames;
   bool menu_background_shown = false;
   bool gpu_shown = false, cache_hit = false;
+  bool live_replay_shown = false;
+  bool live_hd_background_quad = false;
+  platform::MenuBackgroundUvRect live_bg_uv{};
   int window_width = width, window_height = height;
   if (hud_window_) SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
   // Minimized windows may report zero. Keep a valid logical canvas until the
@@ -448,15 +601,79 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   // window; the CPU path composes a texture at the frame's fit inside the window (capped at
   // 1080 high) and stretches it over the fitted rectangle.
   int background_width = window_width, background_height = window_height;
-  if (have_menu) {
-    gpu_shown = prepare_menu_gpu(pixels, width, height, pitch, rgb565, &cache_hit);
-    menu_background_shown = gpu_shown;
+  const bool recorded_live_frame =
+      live_menu_gpu_enabled() && pixels == menu_gpu_target_ &&
+      width == menu_gpu_recorded_width_ && height == menu_gpu_recorded_height_ &&
+      pitch == menu_gpu_recorded_pitch_;
+
+  const bool can_try_live_replay =
+      sealed_menu && hud_ && hud_->menu_sealed() && rgb565 && recorded_live_frame;
+  if (can_try_live_replay) {
+    // Menu screens redraw onto a persistent canvas without clearing. Only replay a
+    // recorded draw list when this frame itself redrew complete opaque background
+    // coverage before any foreground element; partial redraws fall back to the
+    // complete current CPU shadow so untouched regions are never blank or stale.
+    const auto& bg_blits = zrndr::menu_background_blits();
+    const bool current_frame_bg =
+        hud_->menu_background_skipped() > 0 &&
+        bg_blits.size() == hud_->menu_background_skipped();
+    const bool background_ok =
+        menu_background_ != nullptr && menu_use_gpu_ && menu_gpu_available_ &&
+        menu_hd_texture_ >= 0 && current_frame_bg &&
+        validate_live_menu_background_uv(
+            *menu_background_, zrndr::menu_background_source(), bg_blits, width, height,
+            menu_hd_bound_width_, menu_hd_bound_height_, &live_bg_uv);
+    if (background_ok) {
+      live_hd_background_quad = true;
+    }
+    if (background_ok) {
+      try {
+        std::vector<int32_t> preflight_textures;
+        if (live_hd_background_quad && menu_hd_texture_ >= 0) {
+          preflight_textures.push_back(menu_hd_texture_);
+        }
+        hud_->collect_menu_textures(&preflight_textures);
+        if (!preflight_textures.empty()) {
+          render_->prepare_canvas_textures(preflight_textures);
+        }
+        live_replay_shown = true;
+        if (live_hd_background_quad) {
+          gpu_shown = true;
+          menu_background_shown = true;
+          cache_hit = true;
+        }
+      } catch (...) {
+        hud_->record_menu_preflight_failure();
+        if (live_hd_background_quad) {
+          menu_gpu_available_ = false;
+          live_hd_background_quad = false;
+        }
+        live_replay_shown = false;
+      }
+    } else {
+      hud_->cancel();
+    }
+  } else {
+    cleanup_sealed();
+  }
+
+  // A rejected draw list may contain writes that the legacy background classifier cannot
+  // reconstruct. Present its complete current shadow instead of inferring those writes again.
+  // A frame that was never recorded (for example one presented before the engine armed
+  // recording, or by a host that does not record) keeps the Stage C background.
+  if (!live_replay_shown && have_menu && !recorded_live_frame) {
+    if (!can_try_live_replay) {
+      gpu_shown = prepare_menu_gpu(pixels, width, height, pitch, rgb565, &cache_hit);
+      menu_background_shown = gpu_shown;
+    }
     if (!gpu_shown) {
       if (menu_use_gpu_) {
         if (menu_hd_texture_ < 0)
           reason = "gpu-texture-unavailable";
         else if (!menu_gpu_available_)
           reason = "gpu-layer-unavailable";
+        else if (can_try_live_replay)
+          reason = "live-menu-fallback";
         else
           reason = platform::menu_background_gpu_status_name(menu_gpu_layers_.status);
         // Logged once per process so a log shows that the slower CPU compositor
@@ -480,6 +697,8 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
               const auto *composed_bytes = reinterpret_cast<const uint8_t *>(menu_composed_.data());
               const auto texture_action = platform::prepared_menu_texture_action(
                   cache_hit, texture_ >= 0, tw_, th_, output_width, output_height);
+              if (texture_action != platform::PreparedMenuTextureAction::kReuse)
+                  native_texture_current_ = false;
               if (texture_action == platform::PreparedMenuTextureAction::kCreate) {
                   if (texture_ >= 0)
                       render_->release_texture(texture_);
@@ -513,7 +732,7 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
           log_native_menu_fallback();
     }
   }
-  if (!menu_background_shown) {
+  if (!live_replay_shown && !menu_background_shown) {
     menu_composer_.invalidate_cache();
     menu_gpu_composer_.invalidate_cache();
     upload(pixels, width, height, pitch, rgb565, false, 0);
@@ -524,12 +743,19 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   int vx, vy, vw, vh;
   render_->viewport(&vx, &vy, &vw, &vh);
   render_->flush();
-  MenuCanvasScope canvas(*render_, hud_shape_, menu_background_shown);
+  const bool use_menu_layout = menu_layout_active_ && live_menu_gpu_enabled();
+  set_menu_layout_active(use_menu_layout);
+  const bool use_explicit_menu_canvas =
+      menu_background_shown || live_replay_shown || use_menu_layout;
+  MenuCanvasScope canvas(*render_, hud_shape_, use_explicit_menu_canvas);
   render_->set_viewport(0, 0, width, height);
   render_->clear(true, 0, 0, 0);
   auto cover = platform::menu_background_cover_rect(width, height, window_width, window_height);
-  const auto fit = fit_rect(float(window_width), float(window_height),
-                            hud_shape_ ? *hud_shape_ : FrameShape{});
+  const FrameShape base_shape = hud_shape_ ? *hud_shape_ : FrameShape{};
+  const FitRect fit = use_menu_layout
+                          ? menu_fit_rect(float(window_width), float(window_height), base_shape,
+                                          width, height)
+                          : fit_rect(float(window_width), float(window_height), base_shape);
   const platform::MenuBackgroundLayerRect fitted{
       fit.x * width / window_width, fit.y * height / window_height,
       fit.w * width / window_width, fit.h * height / window_height};
@@ -539,13 +765,27 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   cover.width *= float(width) / window_width;
   cover.y *= float(height) / window_height;
   cover.height *= float(height) / window_height;
-  if (gpu_shown)
+  if (live_replay_shown) {
+    render_->begin_canvas_scene();
+    if (live_hd_background_quad) {
+      platform::DrawState bg_state;
+      bg_state.depth_write = false;
+      bg_state.depth_always = bg_state.sharp = true;
+      bg_state.texture = menu_hd_texture_;
+      bg_state.filter = platform::TextureFilter::kLinear;
+      const auto background_uv = platform::menu_background_extend_uv(live_bg_uv, fitted, cover);
+      draw_menu_quad(*render_, cover, background_uv, bg_state);
+    }
+    hud_->submit_menu(&fitted, false);
+    render_->end_scene();
+  } else if (gpu_shown)
     draw_menu_background_gpu(*render_, menu_hd_texture_, menu_gpu_textures_, menu_gpu_layers_, fitted, &cover);
   else {
       // Both requested CPU mode and GPU fallback retain the same cleared surround.
-      // A first-blit quad cannot represent a nonuniform source mapping there.
+      // When the live menu feature is active, native fallback also draws into `fitted`
+      // under MenuCanvasScope so presentation and input share one menu canvas rectangle.
       draw_layer(width, height, false, !menu_background_shown,
-                 menu_background_shown ? &fitted : nullptr);
+                 (menu_background_shown || use_menu_layout) ? &fitted : nullptr);
   }
   if (have_menu) {
     const auto now = std::chrono::steady_clock::now();
@@ -579,6 +819,20 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   render_->set_viewport(vx, vy, vw, vh);
 }
 
+bool SdlScreen2D::live_menu_gpu_enabled() const {
+  if (!render_ || !hud_ || !menu_use_gpu_ || menu_observation_enabled_) return false;
+  // The engine arms menu recording for every canvas, mission modes included. Gating here keeps
+  // recording, the menu layout and present_16's menu canvas off for the whole mission.
+  const bool mission_running = in_mission && in_mission();
+  if (mission_running) return false;
+  return mw3_menu_gpu_env() == 1;
+}
+
+void SdlScreen2D::set_menu_layout_active(bool active) noexcept {
+  menu_layout_active_ = active;
+  if (hud_shape_) hud_shape_->menu_layout_active = active;
+}
+
 SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_Window* window, const FrameShape* shape)
     : render_(render), hud_window_(window), hud_shape_(shape) {
   menu_observation_enabled_ = options.observe_menu;
@@ -587,9 +841,16 @@ SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_W
   if (options.menu_background_renderer != "cpu" && options.menu_background_renderer != "gpu")
     throw std::runtime_error("--cc-menu-background-renderer supports cpu or gpu");
   menu_use_gpu_ = options.menu_background_renderer == "gpu";
-  if (options.mode == "core-critical") {
+  hud_overlay_enabled_ = options.mode == "core-critical";
+  if (hud_overlay_enabled_ || (render_ && (menu_observation_enabled_ || menu_use_gpu_))) {
     if (!render_) throw std::runtime_error("Core Critical HUD requires a renderer");
-    hud_ = std::make_unique<GpuHud>(*render_, options);
+    HudOptions hud_options = options;
+    hud_options.mode = "core-critical";
+    if (!hud_overlay_enabled_) {
+      hud_options.text = false;
+      hud_options.artwork.clear();
+    }
+    hud_ = std::make_unique<GpuHud>(*render_, hud_options);
   }
   if (!options.menu_background.empty()) {
     if (!render_) throw std::runtime_error("Menu HD background requires a renderer");
@@ -614,6 +875,8 @@ SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_W
                                        window_height, display_height, menu_background_->height));
             // The GPU samples this filtered copy: the half texel in the UVs is its, not the full
             // image's.
+            menu_hd_bound_width_ = image.width;
+            menu_hd_bound_height_ = image.height;
             menu_gpu_composer_.set_bound_texture_size(image.width, image.height);
             std::vector<uint32_t> rgba(size_t(image.width) * image.height);
             for (size_t at = 0; at < rgba.size(); ++at)
@@ -632,6 +895,8 @@ SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_W
   }
 }
 SdlScreen2D::~SdlScreen2D() {
+  set_menu_layout_active(false);
+  cancel_menu_observation();
   if (!render_) return;
   for (int32_t texture : menu_gpu_textures_)
     if (texture >= 0) render_->release_texture(texture);
@@ -639,8 +904,9 @@ SdlScreen2D::~SdlScreen2D() {
   if (texture_ >= 0) render_->release_texture(texture_);
 }
 void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height, int pitch) {
+  set_menu_layout_active(false);
   cancel_menu_observation();
-  if (!hud_) return;
+  if (!hud_overlay_enabled_ || !hud_) return;
   int output_height = height;
   if (hud_window_) {
     int output_width = 0;
@@ -651,33 +917,77 @@ void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height
   hud_->begin(target, width, height, pitch, output_height);
 }
 void SdlScreen2D::cancel_overlay_16() {
+  set_menu_layout_active(false);
   cancel_menu_observation();
   if (hud_) hud_->cancel();
 }
 void SdlScreen2D::begin_menu_observation(const uint16_t* target, int width, int height, int pitch) {
   cancel_menu_observation();
-  // Off unless --cc-menu-observe: observing scans every menu blit, which the normal game must not pay for.
-  if (!hud_ || !menu_observation_enabled_) return;
-  int output_height = height;
+  const bool live_enabled = live_menu_gpu_enabled();
+  set_menu_layout_active(live_enabled);
+  if (!hud_) return;
+  int output_width = width, output_height = height;
   if (hud_window_) {
-    int output_width = 0;
     SDL_GetWindowSizeInPixels(hud_window_, &output_width, &output_height);
-    if (hud_shape_ && hud_shape_->fit && hud_shape_->frame_w > 0)
-      output_height = std::min(output_height, int(int64_t(output_width) * hud_shape_->frame_h / hud_shape_->frame_w));
+    const FrameShape base_shape = hud_shape_ ? *hud_shape_ : FrameShape{};
+    const FitRect fit = live_enabled
+                            ? menu_fit_rect(float(output_width), float(output_height), base_shape,
+                                            width, height)
+                            : fit_rect(float(output_width), float(output_height), base_shape);
+    if (fit.h > 0) output_height = int(std::lround(fit.h));
   }
-  // A false result means another target owns the draw observer or this target is unusable:
-  // skip observing this frame rather than throwing out of the engine's frame clear.
-  if (!hud_->begin_observation(target, width, height, pitch, output_height)) return;
-  menu_observation_active_ = true;
-  if (menu_report_start_ == std::chrono::steady_clock::time_point{})
-    menu_report_start_ = std::chrono::steady_clock::now();
+  if (menu_observation_enabled_) {
+    // A false result means another target owns the draw observer or this target is unusable:
+    // skip observing this frame rather than throwing out of the engine's frame clear.
+    if (!hud_->begin_observation(target, width, height, pitch, output_height)) return;
+    menu_observation_active_ = true;
+    if (menu_report_start_ == std::chrono::steady_clock::time_point{})
+      menu_report_start_ = std::chrono::steady_clock::now();
+    return;
+  }
+  if (!live_enabled) return;
+  const bool skip_bg =
+      menu_background_ != nullptr && menu_use_gpu_ && menu_gpu_available_ && menu_hd_texture_ >= 0;
+  if (!hud_->begin_menu(target, width, height, pitch, output_height, skip_bg)) return;
+  // HD menu stage D: draw menu text and sprites at the scale the 4:3 menu is shown at, so they
+  // are rasterised for the output instead of being upscaled with the native canvas.
+  hud_->set_menu_presentation(menu_presentation_scale(width, height, output_width, output_height));
+  menu_gpu_recording_ = true;
+  menu_gpu_sealed_ = false;
+  menu_gpu_target_ = target;
+  menu_gpu_recorded_width_ = width;
+  menu_gpu_recorded_height_ = height;
+  menu_gpu_recorded_pitch_ = pitch;
 }
 void SdlScreen2D::cancel_menu_observation() noexcept {
-  if (!menu_observation_active_) return;
+  const bool was_active = menu_observation_active_ || menu_gpu_recording_ || menu_gpu_sealed_;
+  // The engine also calls this after a successful flip. Input between frames must keep
+  // matching the menu still visible; only abandoning an unfinished frame resets its policy.
+  if (was_active) set_menu_layout_active(false);
   menu_observation_active_ = false;
-  if (hud_) hud_->cancel();
+  menu_gpu_recording_ = false;
+  menu_gpu_sealed_ = false;
+  menu_gpu_target_ = nullptr;
+  menu_gpu_recorded_width_ = menu_gpu_recorded_height_ = menu_gpu_recorded_pitch_ = 0;
+  if (was_active && hud_) hud_->cancel();
 }
 void SdlScreen2D::finish_menu_observation() noexcept {
+  if (menu_gpu_recording_) {
+    menu_gpu_recording_ = false;
+    try {
+      menu_gpu_sealed_ = hud_ && hud_->seal_menu();
+    } catch (const std::exception& error) {
+      menu_gpu_sealed_ = false;
+      if (hud_) hud_->cancel();
+      std::fprintf(stderr, "mw3: live menu GPU seal failed; using fallback presentation: %s\n",
+                   error.what());
+    } catch (...) {
+      menu_gpu_sealed_ = false;
+      if (hud_) hud_->cancel();
+      std::fprintf(stderr, "mw3: live menu GPU seal failed; using fallback presentation\n");
+    }
+    return;
+  }
   if (!menu_observation_active_) return;
   menu_observation_active_ = false;
   bool observer_failed = false;
@@ -724,7 +1034,7 @@ void SdlScreen2D::finish_menu_observation() noexcept {
 void SdlScreen2D::overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                              const uint8_t* alpha, const uint16_t* colour) {
   if (!render_ || width <= 0 || height <= 0) return;
-  if (hud_ && hud_->finish()) return;
+  if (hud_overlay_enabled_ && hud_ && hud_->finish()) return;
   render_->flush();
   // Nothing drawn (every pixel still the key): nothing to lay over the frame.
   // A frame's locks often draw nothing (performance.md); the conversion,

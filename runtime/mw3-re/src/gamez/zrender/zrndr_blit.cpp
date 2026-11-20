@@ -119,8 +119,8 @@ void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const 
                            img->width <= 2048 && img->height <= 2048 &&
                            img->width_again >= img->width &&
                            (!img->palette || img->palette_count > 0);
-  const bool post_resolve_alpha =
-      observer && !g_cover.alpha && g_target.base && valid_image && img->alpha;
+  const bool post_resolve_alpha = observer && !g_cover.alpha && g_target.base && valid_image &&
+                                  img->alpha && !observer->wants_source_alpha_images();
   const bool candidate_full_unkeyed =
       observer && !g_cover.alpha && g_target.base && valid_image && !img->palette && !img->alpha &&
       !(img->flags & zimg::kAlpha) &&

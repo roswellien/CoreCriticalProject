@@ -529,10 +529,10 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
             "Fresh mission's native fixture did not illuminate the GPU receiver");
   }
 
-  // Use a small check-only allowance to exercise real rejection without a
-  // production-sized allocation. Two 128-square RGBA payloads fill it before
-  // scene metadata. Budget rejection must retain the scene. Retrying the same unchanged
-  // submission must reject again, rather than silently succeeding after loss.
+  // A small check-only allowance exercises a packet larger than the whole allowance without a
+  // production-sized allocation: two 128-square RGBA payloads fill it before scene metadata.
+  // The owner's c3m3 crash was such a packet ending the game. It must instead be staged alone,
+  // render, warn once per mission and render the same again on the next frame.
   {
     sdlfe::CoreCriticalAssets assets{};
     assets.lighting = "flat";
@@ -543,22 +543,29 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
     platform::DrawState first{}, second{};
     first.texture = renderer->create_texture(128, 128, pixels.data(), 1);
     second.texture = renderer->create_texture(128, 128, pixels.data(), 1);
-    renderer->clear(true, 0, 0, 0);
-    renderer->begin_scene();
-    quad(*renderer, 4, 28, .5f, 0xffffffff, first);
-    quad(*renderer, 4, 28, .5f, 0xffffffff, second);
-    auto rejects_budget = [&] {
-      try {
-        renderer->end_scene();
-      } catch (const std::runtime_error &e) {
-        return std::string(e.what()).find("staging exceeds budget") !=
-               std::string::npos;
-      }
-      return false;
+    auto render_oversized_frame = [&] {
+      renderer->clear(true, 0, 0, 0);
+      renderer->begin_scene();
+      quad(*renderer, 4, 28, .5f, 0xffffffff, first);
+      quad(*renderer, 4, 28, .5f, 0xffffffff, second);
+      renderer->end_scene();
+      std::vector<std::uint32_t> frame;
+      int width{}, height{};
+      require(renderer->read_back(&frame, &width, &height) && !frame.empty(),
+              "Oversized local-light view did not render");
+      return frame;
     };
-    require(rejects_budget(), "Oversized local-light view was not rejected");
-    require(rejects_budget(),
-            "Rejected local-light view lost its retained payloads");
+    const auto first_frame = render_oversized_frame();
+    const bool drew_quad = std::any_of(first_frame.begin(), first_frame.end(),
+                                       [](std::uint32_t pixel) { return (pixel & 0xffffff) != 0; });
+    require(drew_quad, "Oversized local-light view rendered no quad");
+    const auto second_frame = render_oversized_frame();
+    require(second_frame == first_frame,
+            "Oversized local-light view rendered differently on the next frame");
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    require(staging.oversized_packets == 1,
+            "The first frame's texture upload was not staged as one oversized packet");
+    require(staging.oversized_log_lines == 1, "Oversized packets were not warned exactly once");
   }
 }
 // Fixture keys are injected only at the established synthetic native upload
@@ -860,17 +867,18 @@ void check_native_fixture_gpu(SDL_Window *window, sdlfe::RendererBackend backend
       }
       }
       if (capacity_control) {
-        auto rejects_budget = [&] {
-          try {
-            renderer->end_scene();
-          } catch (const std::runtime_error &error) {
-            return std::string_view(error.what()).find("staging exceeds budget") !=
-                std::string_view::npos;
-          }
-          return false;
-        };
-        check(rejects_budget(), "Emission payload allocation escaped the staging budget");
-        check(rejects_budget(), "Rejected emission payload scene lost its unchanged retry");
+        // Emission payload bytes count toward the staging allowance: 128 copies push this
+        // packet past the 112 KiB check allowance. An oversized packet is staged alone instead
+        // of ending the game, so the counted bytes show as an oversized packet and the frame
+        // still renders.
+        renderer->end_scene();
+        const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+        check(staging.oversized_packets >= 1,
+              "Emission payload allocation escaped the staging budget");
+        std::vector<std::uint32_t> pixels;
+        int width{}, height{};
+        check(renderer->read_back(&pixels, &width, &height) && width == 32 && height == 32,
+              "Oversized emission payload scene did not render");
         return std::vector<std::uint32_t>{};
       }
       if (split)

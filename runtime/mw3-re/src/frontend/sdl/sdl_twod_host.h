@@ -30,6 +30,7 @@ class SdlTwodHost : public ztwod::Host {
   ~SdlTwodHost() override;
   void enable_hud_text(bool enabled) { hud_text_enabled_ = enabled; }
   std::shared_ptr<const platform::HudImage> hud_text_image(const zimg::Texture*, float, uint16_t) override;
+  bool is_text_image(const zimg::Texture* image) override;
 
 
   // zImage: a refcounted cache over zimg::fetch_image (0x005179d0 / 0x00517b10).
@@ -125,13 +126,31 @@ class SdlTwodHost : public ztwod::Host {
     ztwod::Rect clip{};
     uint32_t colour{}, background{};
   };
+  // A two-colour font (fonts.zrd colour_top != colour_bottom) is drawn white
+  // and then each row's white pixels are tinted by FontText::render
+  // (twod_wintext.cpp, 0x005a0790). The tint is a per-row colour substitution
+  // of pixels the text drew, recovered by comparing against `drawn`, so the
+  // output-scale raster can apply the same substitution to its rows.
+  struct HudTextRecolour {
+    uint64_t pixels_hash{};
+    bool valid{};
+    // For each native row: (colour DrawTextA wrote, colour now there) pairs.
+    std::vector<std::vector<std::pair<uint16_t, uint16_t>>> rows;
+  };
   struct HudTextSource {
     uint64_t pixels_hash{}, cached_signature{};
     int cached_scale{};
     std::vector<uint16_t> base;
+    // The image's pixels right after the last DrawTextA (for HudTextRecolour).
+    std::vector<uint16_t> drawn;
     std::vector<HudTextLine> lines;
+    HudTextRecolour recolour;
     std::shared_ptr<const platform::HudImage> cached;
   };
+  // The row substitutions that turn `drawn` into `current`, or false when the
+  // change is anything else (the image was repainted or edited).
+  static bool derive_text_recolour(const HudTextSource& source, const uint16_t* current, int width,
+                                   int height, HudTextRecolour& out);
   bool hud_text_enabled_{};
   std::map<const zimg::Texture*, HudTextSource> hud_text_sources_;
   std::map<std::string, TTF_Font*> hud_fonts_;

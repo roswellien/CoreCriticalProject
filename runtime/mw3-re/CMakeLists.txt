@@ -754,6 +754,7 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_music.cpp
     src/frontend/sdl/sdl_platform.cpp
     src/frontend/sdl/gpu_hud.cpp
+    src/frontend/sdl/gpu_hud_menu_sprites.cpp
     src/frontend/sdl/sdl_mods.cpp
     src/frontend/sdl/editor_context.cpp
     src/frontend/sdl/editor_forms_imgui.cpp
@@ -1010,6 +1011,18 @@ if(SDL3_FOUND)
     if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
       add_custom_command(TARGET mw3hud_checks POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3hud_checks> $<TARGET_FILE_DIR:mw3hud_checks>
+        COMMAND_EXPAND_LISTS)
+    endif()
+    # HD menu stage D: menu text and sprites at output resolution (menu_sprites.h).
+    add_executable(mw3menu_sprite_checks tests/test_menu_sprites.cpp)
+    target_link_libraries(mw3menu_sprite_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MSVC)
+      target_compile_options(mw3menu_sprite_checks PRIVATE /EHsc)
+    endif()
+    add_test(NAME mw3menu_sprite_checks COMMAND mw3menu_sprite_checks)
+    if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+      add_custom_command(TARGET mw3menu_sprite_checks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3menu_sprite_checks> $<TARGET_FILE_DIR:mw3menu_sprite_checks>
         COMMAND_EXPAND_LISTS)
     endif()
     target_compile_definitions(mw3sdltests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
