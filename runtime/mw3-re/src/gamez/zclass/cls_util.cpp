@@ -88,6 +88,7 @@ int copy_node_base(Node* src, Node* dst) {
   dst->source_asset_root = src->source_asset_root;
   dst->source_asset_root_name = src->source_asset_root_name;
   dst->source_model_vertices = src->source_model_vertices;
+  dst->prepared_skin_index = src->prepared_skin_index;
   const uint32_t f = src->flags();
   auto bit = [f](int n) { return static_cast<int>((f >> n) & 1); };
   if (int r = node_set_name(dst, src->name())) return copy_error(0x400, 0x3fb, "description field.", r);

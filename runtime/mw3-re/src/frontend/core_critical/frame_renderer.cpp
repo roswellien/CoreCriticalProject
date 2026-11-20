@@ -865,6 +865,8 @@ public:
     // identity before the scene resources are reset.
     mission_changed(::platform::MissionIdentity{});
     reset_pending_ = true;
+    prepared_.clear_skin_cache();
+    retire_skin_textures();
     ++group_load_epoch_;
     for (const auto &[index, handle] : surface_normal_textures_)
       textures_.at(handle) = {};
@@ -1876,7 +1878,24 @@ private:
 #include "frame_presentation.inc"
 
 private:
-  int32_t prepared_texture(const ::platform::prepared::Image &image) {
+  void retire_skin_textures() {
+    for (auto it = prepared_skin_owners_.begin(); it != prepared_skin_owners_.end();) {
+      if (!it->second.expired()) {
+        ++it;
+        continue;
+      }
+      const auto texture = prepared_textures_.find(it->first);
+      if (texture != prepared_textures_.end()) {
+        // release_texture flushes any scene which still references this slot.
+        release_texture(texture->second);
+        prepared_textures_.erase(texture);
+      }
+      it = prepared_skin_owners_.erase(it);
+    }
+  }
+  int32_t prepared_texture(const ::platform::prepared::Image &image,
+      const std::shared_ptr<const ::platform::prepared::Textures> &owner = {}) {
+    retire_skin_textures();
     const auto found = prepared_textures_.find(&image);
     if (found != prepared_textures_.end()) {
       // PreparedModels owns this immutable image across mission resource
@@ -1892,6 +1911,8 @@ private:
     // immutable slot gets an exact key from its complete visible RGB565 plane.
     textures_.at(handle).surface_key = prepared_fixture_key(image);
     prepared_textures_.emplace(&image, handle);
+    if (owner)
+      prepared_skin_owners_.emplace(&image, owner);
     return handle;
   }
 
@@ -1940,7 +1961,7 @@ private:
     auto draw = staged->draw;
     draw.producer_view = producer_view_;
     draw.scissor = producer_scissor();
-    const auto texture = prepared_texture(*source.texture);
+    const auto texture = prepared_texture(*source.texture, source.texture_owner);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
                            group_load_epoch_, textures_.at(texture).version);
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
@@ -2188,6 +2209,8 @@ private:
   std::uint64_t retired_geometry_buffers_{};
   QualityStatistics retired_quality_{};
   std::map<const ::platform::prepared::Image *, int32_t> prepared_textures_;
+  std::map<const ::platform::prepared::Image *,
+           std::weak_ptr<const ::platform::prepared::Textures>> prepared_skin_owners_;
   std::map<const ::platform::prepared::NormalImage *, int32_t>
       prepared_normals_;
   std::map<const ::platform::prepared::Batch *,

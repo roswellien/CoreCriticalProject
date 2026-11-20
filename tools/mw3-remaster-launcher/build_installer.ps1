@@ -54,9 +54,11 @@ if ($NativePreviewDirectory) {
     if ($previewManifest.schema_version -ne 2 -or $previewManifest.engine -ne 'mw3-re') { throw 'The Native preview needs an MW3-RE schema 2 runtime.json' }
     Copy-Item -LiteralPath $NativePreviewDirectory -Destination (Join-Path $PublishDirectory 'NativePreview') -Recurse
     # The launcher runs this planner; it is the only producer of MW3-RE arguments.
-    $planner = Join-Path $PSScriptRoot '../remaster-launcher/mw3_re_launch.py'
     New-Item -ItemType Directory -Path (Join-Path $PublishDirectory 'Planner') | Out-Null
-    Copy-Item -LiteralPath $planner -Destination (Join-Path $PublishDirectory 'Planner/mw3_re_launch.py')
+    foreach ($plannerFile in @('mw3_re_launch.py', 'prepared_skin_packs.py', 'prepared_mech_packs.py',
+        'content_capabilities.py', 'native_assets.py', 'legacy_content_capabilities.json')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../remaster-launcher/$plannerFile") -Destination (Join-Path $PublishDirectory "Planner/$plannerFile")
+    }
 }
 function Test-NativePreviewPins([string]$Root) {
     # runtime.json pins every file by size and SHA-256; the launcher refuses a runtime whose bytes differ.

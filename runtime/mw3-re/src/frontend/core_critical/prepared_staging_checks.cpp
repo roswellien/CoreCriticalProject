@@ -4,6 +4,7 @@
 #include "gamez/zmodel/gmod_draw.h"
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
+#include "platform/prepared_skins.h"
 #include "renderer/normal_codec.hpp"
 #include "renderer/fixture_observation_emission.hpp"
 #include "renderer/surface_materials.hpp"
@@ -619,6 +620,156 @@ void check_prepared_models_surface_materials() {
     require(launcher_draw.batches.size() == 1 &&
                 launcher_draw.batches[0].surface_material != nullptr,
             "Core Critical runtime options did not bind the selected surface materials");
+
+    // Skin switching uses the production selection path, including the Lab's
+    // independent node instance and distinct close/distance payloads.
+    {
+        auto skin_options = options;
+        skin_options.models.push_back({"authored", "1", mesh_path.string(), tex_path.string()});
+        for (int index = 1; index <= 7; ++index) {
+            for (int lod = 0; lod != 2; ++lod) {
+                const auto path = temp_dir / ("skin-" + std::to_string(index) + "-" + std::to_string(lod));
+                auto bytes = prepared_fixture::textures();
+                bytes[bytes.size() - 4] = char(index + lod * 16);
+                std::ofstream(path, std::ios::binary) << bytes;
+                skin_options.skins.push_back({"authored", std::to_string(lod), path.string(), index});
+            }
+        }
+        const auto catalog_path = temp_dir / "skins.bin";
+        prepared_fixture::Bytes catalog;
+        catalog.value.assign("BWSKIN1\0", 8);
+        catalog.u32(2);
+        const auto catalog_text = [&](const std::string &text) {
+            catalog.u32(static_cast<uint32_t>(text.size()));
+            catalog.value += text;
+        };
+        for (const auto &text : {std::string("test.paint:sommerset"), std::string("Sommerset"),
+                                std::string("authored"), tex_path.string(), tex_path.string()})
+            catalog_text(text);
+        for (const auto &text : {std::string("com.corecritical.marauder.gunmetal:gunmetal-worn"),
+                                std::string("Gun Metal - Worn"), std::string("com.corecritical.marauder:mech"),
+                                tex_path.string(), tex_path.string()})
+            catalog_text(text);
+        std::ofstream(catalog_path, std::ios::binary) << catalog.value;
+        const auto prior_catalog = platform::prepared::configured_skin_catalog();
+        struct RestoreCatalog {
+            std::shared_ptr<const platform::prepared::SkinCatalog> value;
+            ~RestoreCatalog() { platform::prepared::configured_skin_catalog() = value; }
+        } restore_catalog{prior_catalog};
+        platform::prepared::configure_skin_catalog(catalog_path.string());
+        require(platform::prepared::configured_skin_catalog()->size() == 2 &&
+                    platform::prepared::configured_skin_catalog()->front().chassis == "com.corecritical.marauder:mech",
+                "Catalog lost a namespaced added-chassis skin identity");
+        cc_mw3_re::PreparedModels skins(skin_options, skin_options.materials);
+        require(skins.skin_texture_loads() == 0, "Alternate textures loaded eagerly");
+        const auto primary = skins.draw(context).batches[0].texture;
+        for (int lod = 0; lod != 2; ++lod) {
+            asset->name = lod ? "mech_authored_1.flt" : "mech_authored.flt";
+            for (int index = 1; index <= 7; ++index) {
+                panel->prepared_skin_index = index;
+                const auto selected = skins.draw(context);
+                require(selected.batches.size() == 1 && selected.batches[0].texture_owner &&
+                            (selected.batches[0].texture->pixels[0] & 255) == unsigned(index + lod * 16),
+                        "Retail skin index selected the wrong LOD texture");
+                require(!selected.batches[0].height_binding && !selected.batches[0].surface_material,
+                        "Alternate albedo inherited a primary-only material identity");
+                const auto repeated = skins.draw(context);
+                require(repeated.batches[0].texture == selected.batches[0].texture,
+                        "Repeated skin draw decoded a new texture set");
+                panel->prepared_skin_index = 0;
+                require(!skins.draw(context).batches[0].texture_owner,
+                        "Skin selection leaked into the primary instance state");
+            }
+        }
+        require(skins.skin_texture_loads() == 14, "Retail skin cache did not reuse decodes");
+        prepared_fixture::Bytes binding_index;
+        binding_index.value = "BWSKIDX1";
+        binding_index.u32(1);
+        binding_index.u32(8);
+        binding_index.value += "authored";
+        binding_index.u32(0);
+        binding_index.u32(1);
+        const auto binding_path = (temp_dir / "skin-1-0").string();
+        binding_index.u32(static_cast<uint32_t>(binding_path.size()));
+        binding_index.value += binding_path;
+        std::istringstream binding_input(binding_index.value);
+        const auto compact_bindings = platform::prepared::read_skin_bindings(binding_input);
+        auto compact_options = options;
+        for (const auto &binding : compact_bindings)
+            compact_options.skins.push_back({binding.chassis, std::to_string(binding.lod), binding.path,
+                                            static_cast<int32_t>(binding.index)});
+        cc_mw3_re::PreparedModels compact_models(compact_options, compact_options.materials);
+        asset->name = "mech_authored.flt";
+        panel->prepared_skin_index = 1;
+        const auto compact_draw = compact_models.draw(context);
+        require(compact_draw.batches[0].texture_owner &&
+                    (compact_draw.batches[0].texture->pixels[0] & 255) == 1,
+                "Compact stock binding index did not reach prepared texture selection");
+        auto duplicate_binding = binding_index.value;
+        duplicate_binding[8] = 2;
+        duplicate_binding += binding_index.value.substr(12);
+        auto invalid_lod = binding_index.value;
+        invalid_lod[24] = 2;
+        auto invalid_skin = binding_index.value;
+        invalid_skin[28] = 8;
+        for (const auto &bad : {binding_index.value.substr(0, binding_index.value.size() - 1),
+                               binding_index.value + "x", duplicate_binding, invalid_lod, invalid_skin}) {
+            std::istringstream input(bad);
+            bool rejected = false;
+            try { platform::prepared::read_skin_bindings(input); }
+            catch (const std::exception &) { rejected = true; }
+            require(rejected, "Compact binding index accepted malformed or duplicate metadata");
+        }
+        asset->name = "mech_authored_1.flt";
+        panel->prepared_skin_index = 8;
+        const auto added_distance = skins.draw(context);
+        asset->name = "mech_authored.flt";
+        const auto added_close = skins.draw(context);
+        require(added_distance.batches[0].texture_owner == added_close.batches[0].texture_owner,
+                "Catalog skin shared between LODs decoded twice");
+        panel->prepared_skin_index = 999;
+        require(skins.draw(context).batches[0].texture == primary,
+                "Unknown skin failed to fall back to primary");
+        for (const auto index : {-1, 135}) {
+            panel->prepared_skin_index = index;
+            require(skins.draw(context).batches[0].texture == primary,
+                    "Invalid skin failed to fall back to primary");
+        }
+        const auto absent = temp_dir / "absent-skin";
+        const auto corrupt = temp_dir / "corrupt-skin";
+        std::ofstream(corrupt) << "bad";
+        skin_options.skins.push_back({"authored", "0", absent.string(), 9});
+        skin_options.skins.push_back({"authored", "0", corrupt.string(), 10});
+        cc_mw3_re::PreparedModels fallbacks(skin_options, skin_options.materials);
+        for (const auto index : {9, 10}) {
+            panel->prepared_skin_index = index;
+            require(!fallbacks.draw(context).batches[0].texture_owner,
+                    "Missing/corrupt skin did not fall back to primary");
+            require(!fallbacks.draw(context).batches[0].texture_owner,
+                    "Failed skin lookup was not stable");
+        }
+        cc_mw3_re::PreparedSkinCache tiny_cache(1);
+        std::ifstream mesh_input(mesh_path, std::ios::binary);
+        const auto mesh = platform::prepared::read_mesh(mesh_input);
+        auto owned = tiny_cache.resolve(tex_path.string(), mesh);
+        std::weak_ptr<const platform::prepared::Textures> old = owned;
+        tiny_cache.resolve((temp_dir / "skin-1-0").string(), mesh);
+        require(!old.expired(), "Eviction invalidated a retained draw");
+        owned.reset();
+        require(old.expired(), "Eviction retained unused skin pixels");
+        require(tiny_cache.loads() == 2, "Tiny cache decode accounting mismatch");
+        tiny_cache.clear();
+        require(tiny_cache.bytes() == 0, "Skin cache reset retained decoded bytes");
+        for (const auto &bad : {catalog.value.substr(0, catalog.value.size() - 1), catalog.value + "x"}) {
+            std::istringstream input(bad);
+            bool rejected = false;
+            try { platform::prepared::read_skin_catalog(input); }
+            catch (const std::exception &) { rejected = true; }
+            require(rejected, "Catalog accepted truncated or trailing data");
+        }
+        panel->prepared_skin_index = 0;
+        std::puts("Prepared skins: retail both LODs, catalog, lazy cache, reuse, fallback and eviction passed");
+    }
 
     // A resolved height image survives both its source model collection and a
     // queued draw copy. Neither a borrowed pack index nor host texture slot can
