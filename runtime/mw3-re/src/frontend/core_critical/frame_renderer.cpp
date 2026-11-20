@@ -2382,6 +2382,18 @@ private:
     return assets;
   }
 
+  // Selected per-instance skin indices for each live prepared asset. Zero is the
+  // primary texture set, which resources_for_assets already covers.
+  static std::map<std::string, std::set<int32_t>>
+  live_node_skin_indices(const std::vector<const zcls::Node *> &nodes) {
+    std::map<std::string, std::set<int32_t>> skins;
+    for (const auto *node : nodes)
+      if (node->source_asset && !node->source_asset->name.empty() &&
+          node->prepared_skin_index != 0)
+        skins[node->source_asset->name].insert(node->prepared_skin_index);
+    return skins;
+  }
+
   std::vector<int32_t>
   live_native_texture_handles(const std::vector<const zcls::Node *> &nodes) const {
     std::vector<int32_t> handles;
@@ -2543,6 +2555,7 @@ private:
     try {
       const auto nodes = ordered_live_nodes();
       const auto assets = live_node_source_assets(nodes);
+      const auto skin_indices = live_node_skin_indices(nodes);
       const auto native_handles = live_native_texture_handles(nodes);
       auto normal_handles = native_handles;
       if (world_normals) {
@@ -2604,6 +2617,35 @@ private:
                 handle = prepared_normal(*normal);
               }
               preload_texture_handle(handle, PreloadTextureStage::prepared, pending_receipts);
+            }
+          // A selected skin replaces the primary albedos at draw time. Resolve it
+          // through the same skin cache and prepared texture slots the draw uses,
+          // so its first appearance reuses these uploads. A missing or invalid
+          // skin resolves to nothing and draws the primary set warmed above.
+          const auto selected_skins = skin_indices.find(asset);
+          if (selected_skins != skin_indices.end())
+            for (const auto skin_index : selected_skins->second) {
+              if (renderer_->preload_stopped())
+                break;
+              std::shared_ptr<const ::platform::prepared::Textures> skin;
+              {
+                mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                skin = prepared_.resolve_skin(asset, skin_index);
+              }
+              if (!skin)
+                continue;
+              std::set<std::uint32_t> bound_images(skin->bindings.begin(), skin->bindings.end());
+              for (const auto image_index : bound_images) {
+                if (renderer_->preload_stopped())
+                  break;
+                int32_t handle;
+                {
+                  mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                  handle = prepared_texture(skin->images.at(image_index), skin);
+                }
+                preload_texture_handle(handle, PreloadTextureStage::prepared, pending_receipts);
+                ++albedos;
+              }
             }
         }
       }

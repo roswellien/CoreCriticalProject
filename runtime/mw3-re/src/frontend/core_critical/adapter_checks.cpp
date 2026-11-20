@@ -2137,6 +2137,39 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     require(warmed_renderer->asset_statistics().geometry_uploads == 1,
             "Scene reset left the first-world preload armed");
   }
+  {
+    // A selected skin replaces the primary albedos at draw time. Its textures are
+    // warmed at mission load as well, so the first skinned draw uploads nothing.
+    // Index 0 is the control: it stages only the primary set. The fixture
+    // images are too small for mip counts to show a missed upload, so the
+    // staged-byte comparison is what detects an unwarmed skin.
+    std::uint64_t primary_staged_bytes = 0;
+    auto skin_options = options;
+    skin_options.geometry = "gpu";
+    skin_options.skins.push_back({"authored", "0", options.textures, 1});
+    struct SkinIndex {
+      zcls::Node *node;
+      ~SkinIndex() { node->prepared_skin_index = 0; }
+    } skin_index{panel};
+    for (const int32_t index : {0, 1}) {
+      panel->prepared_skin_index = index;
+      auto skinned = make_check_renderer(window, backend, quality, skin_options);
+      skinned->set_viewport(0, 0, 64, 64);
+      skinned->mission_changed({});
+      const auto staged_bytes =
+          cc_mw3_re::testing::preload_test_state(*skinned).prepared_staged_bytes;
+      if (index == 0)
+        primary_staged_bytes = staged_bytes;
+      else
+        require(staged_bytes > primary_staged_bytes,
+                "Selected skin textures were not staged at mission load");
+      const auto loaded_mips = skinned->quality_statistics().mip_levels;
+      require(!frame(skinned.get(), true, true).empty(), "Skinned frame produced no pixels");
+      require(skinned->quality_statistics().mip_levels == loaded_mips,
+              index ? "First skinned draw uploaded textures again"
+                    : "First primary draw uploaded textures again");
+    }
+  }
   const auto first = frame();
   {
     using namespace cc_mw3_re::testing;
