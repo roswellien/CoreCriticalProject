@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -71,15 +72,50 @@ MenuBackgroundUvRect menu_background_extend_uv(const MenuBackgroundUvRect& uv,
                                                const MenuBackgroundLayerRect& frame_rectangle,
                                                const MenuBackgroundLayerRect& cover_rectangle);
 
+// kGain and kAdded are only the values no map pass can represent: a non-finite gain (or one
+// above kMenuBackgroundMaximumGain, which classification already limits for both paths), or
+// non-finite added light or added light beyond one full 8-bit channel.
 enum class MenuBackgroundGpuStatus { kReady, kMapping, kGain, kAdded };
 const char* menu_background_gpu_status_name(MenuBackgroundGpuStatus status);
 
+// The real menu art both brightens (gain above 1) and darkens added-light pixels (negative
+// deltas). Each map below is a frame-sized RGBA8 texture drawn as its own blended pass, in this
+// order, so every part of the range stays an exact UNORM value:
+//   kAttenuate  destination * map             gain up to 1
+//   kBoost      destination + destination*map  gain from 1 to 2 (map = gain - 1)
+//   kBoostHigh  destination + destination*map  gain from 2 to 4 (map = gain / 2 - 1)
+//   kAdd        destination + map              positive added light
+//   kSubtract   destination - map              negative added light
+//   kOverlay    alpha blend                    native artwork that is not background
+// A pixel's gain is attenuate * (1 + boost) * (1 + boost_high), so gains up to
+// kMenuBackgroundMaximumGain need no clamping. The CPU compositor clamps only once at the end;
+// the passes clamp after each step, which gives the same result because a pixel has either a
+// gain (all factors >= 0) or added light, never both.
+enum MenuBackgroundGpuMap : unsigned {
+  kMenuGpuAttenuate,
+  kMenuGpuBoost,
+  kMenuGpuBoostHigh,
+  kMenuGpuAdd,
+  kMenuGpuSubtract,
+  kMenuGpuOverlay,
+  kMenuGpuMapCount
+};
+// The 5x5 gain is limited to this for the CPU and GPU paths alike. A larger ratio only arises
+// over near-black original pixels, where the +4 bias of the ratio dominates.
+constexpr float kMenuBackgroundMaximumGain = 4.f;
+
 struct MenuBackgroundGpuLayers {
-  std::vector<uint32_t> overlay, gain, added;
+  std::array<std::vector<uint32_t>, kMenuGpuMapCount> maps;
+  // A map whose every pixel is the identity for its pass (0 for boosts, added and subtracted
+  // light; the overlay is always drawn) does not need its pass.
+  std::array<bool, kMenuGpuMapCount> used{};
+  // Each map's own revision changes only when its pixels change, so a frame that changes the
+  // gain alone uploads one texture rather than six.
+  std::array<uint64_t, kMenuGpuMapCount> map_revisions{};
   MenuBackgroundUvRect uv;
   MenuBackgroundGpuStatus status = MenuBackgroundGpuStatus::kMapping;
   // UV-only changes need another quad, but no texture upload. A revision
-  // identifies the three complete maps, never an unsupported partial result.
+  // identifies the complete maps, never an unsupported partial result.
   uint64_t revision = 0;
 };
 

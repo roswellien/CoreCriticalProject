@@ -26,10 +26,12 @@ namespace sdlfe {
 class SdlInput;
 class SdlMusicOutput;
 
-// Shared by presentation and the asset-free GPU readback checks. Texture order
-// is gain, added light, keyed native artwork; all handles remain caller-owned.
+// Shared by presentation and the asset-free GPU readback checks. Textures are indexed by
+// platform::MenuBackgroundGpuMap; a map the layers mark unused may be -1 and is not drawn. All
+// handles remain caller-owned.
+using MenuBackgroundGpuTextures = std::array<int32_t, platform::kMenuGpuMapCount>;
 void draw_menu_background_gpu(FrameRenderer& renderer, int32_t background_texture,
-                              const std::array<int32_t, 3>& textures,
+                              const MenuBackgroundGpuTextures& textures,
                               const platform::MenuBackgroundGpuLayers& layers,
                               const platform::MenuBackgroundLayerRect& rectangle,
                               const platform::MenuBackgroundLayerRect* background_rectangle = nullptr);
@@ -63,6 +65,9 @@ class SdlWindow : public platform::Window {
   // A play run (not a check or a shot): a first start takes the desktop's size.
   void set_first_start_desktop(bool on) { first_start_desktop_ = on; }
   bool first_start_size(int* width, int* height) override;
+  // A play run's --window WxH: this run's frame follows the launcher's resolution.
+  void set_launch_size(int width, int height) { launch_w_ = width, launch_h_ = height; }
+  bool launch_size(int* width, int* height) override;
 
   SDL_Window* sdl() const { return window_; }
   SDL_GPUDevice* device() const { return device_; }
@@ -77,6 +82,7 @@ class SdlWindow : public platform::Window {
   bool auto_size_ = false;
   bool fullscreen_ = false;
   bool first_start_desktop_ = false;
+  int launch_w_ = 0, launch_h_ = 0;  // set_launch_size; zero: none
   void inside_usable(int* w, int* h) const;  // shrunk into the display's usable area
   int windowed_w_ = 1280, windowed_h_ = 960;  // the size create() asked for
   FrameShape shape_;
@@ -122,10 +128,11 @@ class SdlScreen2D : public platform::Screen2D {
   platform::PreparedMenuBackgroundComposer menu_composer_;
   platform::PreparedMenuBackgroundComposer menu_gpu_composer_;
   platform::MenuBackgroundGpuLayers menu_gpu_layers_;
-  std::array<int32_t, 3> menu_gpu_textures_{-1, -1, -1};
+  MenuBackgroundGpuTextures menu_gpu_textures_{-1, -1, -1, -1, -1, -1};
   int32_t menu_hd_texture_ = -1;
   int menu_gpu_width_ = 0, menu_gpu_height_ = 0;
-  uint64_t menu_gpu_uploaded_revision_ = 0;
+  // Per map, the layers' map revision its texture holds; zero means never uploaded.
+  std::array<uint64_t, platform::kMenuGpuMapCount> menu_gpu_uploaded_revisions_{};
   bool menu_use_gpu_ = true;
   bool menu_gpu_available_ = true;
   std::chrono::steady_clock::time_point menu_background_report_start_ = std::chrono::steady_clock::now();

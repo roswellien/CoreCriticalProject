@@ -10,6 +10,7 @@
 #include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zutl_msg.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/options.h"
 #include "gamez/zutil/zutl_reg.h"
 
 namespace mech3 {
@@ -443,7 +444,9 @@ int32_t controls_write_settings() {
     live[i].assign(e->data, e->data + e->size);
     std::memcpy(e->data, g_kept[i].bytes.data(), e->size);
   }
+  launch_screen_for_save(true);
   const int32_t r = zreg::write_all();
+  launch_screen_for_save(false);
   for (size_t i = 0; i < std::size(g_kept); ++i)
     if (zreg::Entry* e = zreg::find(g_kept[i].name); e && !live[i].empty()) std::memcpy(e->data, live[i].data(), e->size);
   return r;

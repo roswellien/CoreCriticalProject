@@ -466,6 +466,25 @@ Narrower than 4:3 (5:4, 1280x1024) is unchanged. The fixed modes 11..15 are
 desktop), `sdl_window_shape_maps_the_mouse_through_the_frame` (the fit at
 21:9 and 32:9). Break: without the clamp, 6 checks fail.
 
+### The launcher's size (2026-11-19)
+
+The launcher passes its resolution as `--window WxH` (windowed mode; fullscreen
+and borderless pass nothing and keep the desktop's size). On a play run (the
+same runs that take the first start's desktop size, or `MW3_FIRST_START=1`)
+that size is the run's mode 16 frame, over a saved InGameVMode and size:
+`SdlWindow::launch_size`, `OptionsHooks::launch_screen`, applied after
+`load_options` reads the saved values. It is not written back
+(`launch_screen_for_save` around `zreg::write_all`), so a later launch without
+a size still finds the saved choice; a size the player picks in the game
+during the run is saved as usual.
+
+Found by the owner (candidate 6): a first start had saved the 3440x1440
+desktop, so a 1920x1080 launch opened a 1920x1080 window around a 3440x1440
+frame with a 1147x480 canvas, a 21:9 menu letterboxed in a 16:9 window. Test:
+`settings_launcher_size_wins_for_the_run_and_is_not_saved` (a saved 3440x1440
+with a 1920x1080 launch plays 1920x1080 on an 853x480 canvas; the next start
+without a size reads 3440x1440 back; a size picked during the run is saved).
+
 ## 11. Playtest W13: a mode changed mid-mission (2026-10-30)
 
 Owen's shots from his PC (d02a386, D3D12): after choosing RESOLUTION
