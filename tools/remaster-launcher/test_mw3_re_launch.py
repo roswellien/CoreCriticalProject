@@ -459,7 +459,11 @@ class NativePreviewPlanTests(unittest.TestCase):
         return {
             "schema_version": 4, "engine": "mw3-re", "runtime_root": "C:/Runtime",
             "executable": "C:/Runtime/bin/mw3.exe", "game_dir": "D:/Original MW3",
-            "write_dir": os.path.join(self.root, "native-writes"), "renderer": "vulkan-wsi",
+            # Skin metadata is written below write_dir, so Windows runs need a real directory;
+            # elsewhere the planner only validates the Windows path and never writes there.
+            "write_dir": (os.path.join(self.root, "native-writes") if os.name == "nt"
+                          else "E:/Data/mw3-re/profiles/native-preview"),
+            "renderer": "vulkan-wsi",
             "width": 1280, "height": 720, "aa": "fxaa", "af": 16, "window_mode": "windowed",
             "render_thread": True, "lighting": "normal", "assets": [], "visuals": {"pom": True},
             "preview": preview,
@@ -553,7 +557,8 @@ class NativePreviewPlanTests(unittest.TestCase):
         result = self.plan(request)
         self.assertEqual(result["skipped_packs"], [])
         catalog = Path(result["argv"][result["argv"].index("--cc-skin-catalog") + 1])
-        self.assertTrue(catalog.is_relative_to(Path(request["write_dir"])))
+        # The catalog writer resolves its path, which expands 8.3 short names in TEMP.
+        self.assertTrue(catalog.resolve().is_relative_to(Path(request["write_dir"]).resolve()))
         self.assertEqual(catalog.read_bytes()[:12], b"BWSKIN1\0" + struct.pack("<I", 1))
         self.assertIn(b"Sommerset", catalog.read_bytes())
         fixture.registry["skins"][0]["mesh_sha256"]["distance"] = "0" * 64

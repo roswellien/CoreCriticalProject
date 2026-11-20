@@ -651,7 +651,9 @@ def _compact_skin_arguments(argv, write_directory, skipped):
     except OSError as error:
         skipped.append({"root": str(write_directory), "feature": "skin_textures", "reason": str(error)})
         return compact
-    return compact + ["--cc-skin-bindings", str(output.resolve())]
+    # write_directory is already a validated absolute path; resolving it would expand
+    # 8.3 short names and make the argument differ from the request's own spelling.
+    return compact + ["--cc-skin-bindings", str(output)]
 
 
 def _environment_pack_skip_reason(root):
