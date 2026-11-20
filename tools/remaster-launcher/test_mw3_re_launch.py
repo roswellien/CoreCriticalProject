@@ -140,6 +140,8 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         self.assertEqual(off_plan["argv"], baseline["argv"])
         for bad_visuals in (
             {"pom": True, "pom_quality": "off"},
+            {"pom": False, "pom_quality": "high"},
+            {"pom": False, "pom_quality": "low"},
             {"pom_quality": "ultra"},
             {"pom_quality": 2},
         ):

@@ -841,7 +841,9 @@ def plan_launch(request):
             quality = visuals["pom_quality"]
             if type(quality) is not str or quality not in ("off", "low", "high"):
                 raise ValueError("Native POM quality must be off, low, or high")
-            if quality == "off" and pom:
+            if (quality == "off" and pom) or (
+                quality != "off" and "pom" in visuals and not pom
+            ):
                 raise ValueError("Conflicting native POM selection")
             if quality != "off":
                 pom = True

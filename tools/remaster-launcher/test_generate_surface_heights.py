@@ -51,15 +51,23 @@ def _make_sine_normal_map(width: int = 32, height: int = 32) -> bytes:
 
 
 class GenerateSurfaceHeightsTests(unittest.TestCase):
+    @unittest.skipIf(gen.np is None, "NumPy is required for height-map derivation")
     def test_frankot_chellappa_reconstructs_nonflat_height(self):
         normal_bytes = _make_sine_normal_map(32, 32)
         height_bytes, ref = gen.frankot_chellappa_height(normal_bytes, 32, 32)
         self.assertEqual(len(height_bytes), 32 * 32 * 4)
         self.assertGreater(ref, 0.2)
         self.assertLess(ref, 0.8)
-        red = height_bytes[0::4]
-        self.assertLess(min(red), 10)
-        self.assertGreater(max(red), 245)
+        red = gen.np.frombuffer(height_bytes, dtype=gen.np.uint8).reshape(32, 32, 4)[:, :, 0].astype(float)
+        self.assertLess(float(red.min()), 10.0)
+        self.assertGreater(float(red.max()), 245.0)
+        # Verify positive correlation (> 0.95) with the ground-truth sine*cos height field.
+        xs = gen.np.arange(32) * (2.0 * math.pi / 32.0)
+        ys = gen.np.arange(32) * (2.0 * math.pi / 32.0)
+        xx, yy = gen.np.meshgrid(xs, ys)
+        gt = gen.np.sin(xx) * gen.np.cos(yy)
+        corr = float(gen.np.corrcoef(red.ravel(), gt.ravel())[0, 1])
+        self.assertGreater(corr, 0.95)
 
     def test_excludes_water_and_classifies_families(self):
         self.assertTrue(gen.should_skip_material("c2_water01"))
@@ -71,6 +79,7 @@ class GenerateSurfaceHeightsTests(unittest.TestCase):
         self.assertEqual(gen.classify_material_family("c2road01"), "road")
         self.assertEqual(gen.classify_material_family("c2ter01"), "terrain")
 
+    @unittest.skipIf(gen.np is None, "NumPy is required for height-map derivation")
     def test_build_and_update_synthetic_environment_pack(self):
         with tempfile.TemporaryDirectory() as tmp:
             pack_dir = Path(tmp) / "pack"
@@ -125,10 +134,18 @@ class GenerateSurfaceHeightsTests(unittest.TestCase):
 
             parsed = read_surface_materials(sidecar, expected_asset_id="operation2")
             self.assertEqual(len(parsed["records"]), 1)
-            self.assertEqual(parsed["records"][0]["material_name"], "c2ter01")
+            self.assertTrue(parsed["records"][0]["material_name"].startswith("n_"))
+            self.assertAlmostEqual(
+                parsed["records"][0]["height_amplitude"],
+                gen.FAMILY_PROFILES["terrain"]["height_amplitude"],
+                places=5,
+            )
 
             manifest = gen.update_environment_pack(pack_dir, sidecar)
             self.assertIn("BWSFM1", manifest["native_payload"]["required_formats"])
+            self.assertEqual(
+                manifest["native_payload"]["required_capabilities"]["surface-materials"], 1
+            )
             self.assertIn("environment/surface_materials.bin", manifest["files"])
             self.assertTrue((env_dir / "surface_materials.bin").is_file())
 

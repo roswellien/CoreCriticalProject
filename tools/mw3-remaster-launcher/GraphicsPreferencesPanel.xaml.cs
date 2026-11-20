@@ -32,7 +32,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             ChkShadows.IsEnabled = settings.DynamicLighting;
             ChkWaterDetail.IsChecked = settings.WaterDetail;
             ChkCloudDetail.IsChecked = settings.CloudDetail;
-            Select(ComboPomQuality, settings.PomQuality);
+            Select(ComboPomQuality, settings.PomQuality is "low" or "high" ? settings.PomQuality : "off");
         }
         finally { _loading = false; }
     }

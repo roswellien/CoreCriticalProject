@@ -700,9 +700,16 @@ public:
   }
 
   bool has_environment_pom_sources() const {
-    return bridge_config_.parallax_materials && environment_ &&
-           (!environment_->material_targets.empty() ||
-            !surface_normals_.region_surface_materials.empty());
+    if (!bridge_config_.parallax_materials || !environment_)
+      return false;
+    if (!environment_->material_targets.empty())
+      return true;
+    for (const auto &[region, resources] : environment_->resources) {
+      if (resources.count(::platform::prepared::EnvironmentRole::surface_materials) ||
+          resources.count(::platform::prepared::EnvironmentRole::ground_materials))
+        return true;
+    }
+    return false;
   }
 
   std::shared_ptr<const ::platform::DeferredMaterialBinding>
@@ -729,6 +736,10 @@ public:
     if (normal_admission) {
       receipt->surface_parameters = native_surface_parameters(key, texture);
       receipt->height_binding = native_height_binding(key, texture);
+      if (receipt->height_binding && receipt->surface_parameters[3] < 0.5f) {
+        const auto &record = receipt->height_binding->material;
+        receipt->surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+      }
       receipt->normal_index = surface_normal_index(receipt->key, true, texture);
     }
     return receipt;
@@ -1758,6 +1769,10 @@ private:
       const auto &slot = textures_.at(state.texture);
       draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
       if (draw.height_binding) {
+        if (draw.surface_parameters[3] < 0.5f) {
+          const auto &record = draw.height_binding->material;
+          draw.surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+        }
         // projection is selected from the producing view above.
         if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
             !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||

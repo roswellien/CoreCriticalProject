@@ -161,6 +161,8 @@ def read_named_normal_images(page_bytes: bytes) -> dict[str, tuple[int, int, byt
     if surface_magic not in (b"BWSNR2\0\0", b"BWSNR3\0\0"):
         raise ValueError(f"Unsupported surface catalog magic: {surface_magic!r}")
     count = u32()
+    if count > 4096:
+        raise ValueError("Surface binding count exceeds BWSNR limit")
     for _ in range(count):
         read(20)  # SurfaceKey: w, h, fmt, hash
         read_name()
@@ -170,6 +172,8 @@ def read_named_normal_images(page_bytes: bytes) -> dict[str, tuple[int, int, byt
     if normal_magic != expected_normal or u32() != count:
         raise ValueError("Invalid embedded normal payload in BWSNR catalog")
     image_count = u32()
+    if image_count > 64:
+        raise ValueError("Normal image count exceeds BWSNR limit")
     for _ in range(count):
         idx = u32()
         if idx != NO_NORMAL and idx >= image_count:
@@ -178,18 +182,26 @@ def read_named_normal_images(page_bytes: bytes) -> dict[str, tuple[int, int, byt
     images: dict[str, tuple[int, int, bytes]] = {}
     for _ in range(image_count):
         material = read_name()
+        if material in images:
+            raise ValueError(f"Duplicate normal image name {material!r} in BWSNR catalog")
         width, height, expected_hash = struct.unpack("<IIQ", read(16))
+        if not 0 < width <= 4096 or not 0 < height <= 4096:
+            raise ValueError(f"Invalid normal image dimensions {width}x{height} for {material}")
         pixel_bytes = width * height * 4
         if normal_magic == b"BWNRM3\0\0":
             from normal_codec import decode
 
             encoded_size = struct.unpack("<Q", read(8))[0]
+            if not 0 < encoded_size <= width * height * 8:
+                raise ValueError(f"Invalid encoded normal size for {material}")
             pixels = decode(read(encoded_size), pixel_bytes)
         else:
             pixels = read(pixel_bytes)
         if uncached_pixel_hash(pixels) != expected_hash:
             raise ValueError(f"Normal image hash mismatch for {material}")
         images[material] = (width, height, pixels)
+    if stream.read(1):
+        raise ValueError("Trailing bytes in BWSNR catalog page")
     return images
 
 
@@ -248,9 +260,21 @@ def _downsample_rgba(pixels: bytes, width: int, height: int, max_dim: int) -> tu
     stride = max(math.ceil(width / max_dim), math.ceil(height / max_dim))
     if stride <= 1:
         return width, height, pixels
-    arr = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4)
-    reduced = arr[::stride, ::stride].copy()
-    return int(reduced.shape[1]), int(reduced.shape[0]), reduced.tobytes()
+    new_w = max(2, width // stride)
+    new_h = max(2, height // stride)
+    arr = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4).astype(np.float32)
+    cropped = arr[: new_h * stride, : new_w * stride, :]
+    blocks = cropped.reshape(new_h, stride, new_w, stride, 4)
+    nx = np.maximum((blocks[:, :, :, :, 0] - 128.0) / 127.0, -1.0).mean(axis=(1, 3))
+    ny = np.maximum((blocks[:, :, :, :, 1] - 128.0) / 127.0, -1.0).mean(axis=(1, 3))
+    nz = (blocks[:, :, :, :, 2] / 255.0).mean(axis=(1, 3))
+    length = np.maximum(np.sqrt(nx * nx + ny * ny + nz * nz), 1e-6)
+    out = np.empty((new_h, new_w, 4), dtype=np.uint8)
+    out[:, :, 0] = np.clip(np.round((nx / length) * 127.0 + 128.0), 0, 255).astype(np.uint8)
+    out[:, :, 1] = np.clip(np.round((ny / length) * 127.0 + 128.0), 0, 255).astype(np.uint8)
+    out[:, :, 2] = np.clip(np.round((nz / length) * 255.0), 0, 255).astype(np.uint8)
+    out[:, :, 3] = 255
+    return new_w, new_h, out.tobytes()
 
 
 def _normal_energy(pixels: bytes, width: int, height: int) -> float:
@@ -291,8 +315,11 @@ def build_environment_surface_materials(
     if not pages:
         raise ValueError(f"No BWSNR catalog pages found under {env_dir}")
 
-    unique_normals: dict[str, tuple[int, int, bytes]] = {}
-    seen_hashes: set[int] = set()
+    # Key every unique normal image by its authenticated 64-bit pixel hash
+    # ("n_<16-hex>") so authored.txt and world.txt pages can never collide or
+    # shadow each other, while retaining the original material name for family
+    # classification.
+    unique_normals: dict[str, tuple[str, int, int, bytes]] = {}
     skipped_excluded = 0
     for page in pages:
         if not page.is_file():
@@ -303,23 +330,23 @@ def build_environment_surface_materials(
                 skipped_excluded += 1
                 continue
             norm_hash = uncached_pixel_hash(pixels)
-            if norm_hash in seen_hashes:
-                continue
-            seen_hashes.add(norm_hash)
-            # Generic page-local names ("surface0".."surface63") collide across
-            # pages; bind those by their authenticated 64-bit normal pixel hash.
-            is_generic = mat_name.startswith("surface") and mat_name[7:].isdigit()
-            key_name = f"n_{norm_hash:016x}" if (is_generic or mat_name in unique_normals) else mat_name
-            unique_normals[key_name] = img
+            key_name = f"n_{norm_hash:016x}"
+            if key_name not in unique_normals:
+                unique_normals[key_name] = (mat_name, width, height, pixels)
+            else:
+                # Prefer a non-generic authored name for family classification.
+                existing_name = unique_normals[key_name][0]
+                if existing_name.startswith("surface") and not mat_name.startswith("surface"):
+                    unique_normals[key_name] = (mat_name, width, height, pixels)
 
-    candidates: list[tuple[float, str, int, int, bytes]] = []
+    candidates: list[tuple[float, str, str, int, int, bytes]] = []
     skipped_flat = 0
-    for mat_name, (width, height, pixels) in unique_normals.items():
+    for key_name, (orig_name, width, height, pixels) in unique_normals.items():
         energy = _normal_energy(pixels, width, height)
         if energy < min_normal_energy:
             skipped_flat += 1
             continue
-        candidates.append((energy, mat_name, width, height, pixels))
+        candidates.append((energy, key_name, orig_name, width, height, pixels))
 
     # Prefer the strongest-relief surfaces if a region has more than MAX_IMAGES materials.
     candidates.sort(key=lambda item: (-item[0], item[1]))
@@ -334,7 +361,7 @@ def build_environment_surface_materials(
     total_image_bytes = 0
     budget_limit = MAX_SIDECAR_BYTES - 1024 * 1024
 
-    for _, mat_name, width, height, pixels in sorted(selected, key=lambda item: item[1]):
+    for _, key_name, orig_name, width, height, pixels in sorted(selected, key=lambda item: item[1]):
         dw, dh, reduced = _downsample_rgba(pixels, width, height, max_dimension)
         if dw < 2 or dh < 2:
             continue
@@ -342,16 +369,16 @@ def build_environment_surface_materials(
         if total_image_bytes + image_bytes > budget_limit:
             break
         height_pixels, height_ref = frankot_chellappa_height(reduced, dw, dh)
-        family = classify_material_family(mat_name)
+        family = classify_material_family(orig_name)
         profile = FAMILY_PROFILES[family]
-        image_name = f"h_{mat_name}"
+        image_name = f"h_{key_name}"
         images[image_name] = (ROLE_HEIGHT, dw, dh, height_pixels)
         total_image_bytes += image_bytes
-        batch_materials.append(mat_name)
+        batch_materials.append(key_name)
         records.append(
             {
                 "asset_id": region,
-                "material_name": mat_name,
+                "material_name": key_name,
                 "height_image": image_name,
                 "height_reference": height_ref,
                 "height_amplitude": profile["height_amplitude"],
@@ -411,9 +438,12 @@ def update_environment_pack(pack_dir: Path, sidecar_bytes: bytes) -> dict:
     if env_rel in files:
         files[env_rel]["bytes"] = len(env_json_bytes)
         files[env_rel]["sha256"] = hashlib.sha256(env_json_bytes).hexdigest()
-    req_formats = manifest.setdefault("native_payload", {}).setdefault("required_formats", [])
+    native_payload = manifest.setdefault("native_payload", {})
+    req_formats = native_payload.setdefault("required_formats", [])
     if "BWSFM1" not in req_formats:
         req_formats.append("BWSFM1")
+    req_caps = native_payload.setdefault("required_capabilities", {})
+    req_caps["surface-materials"] = 1
     pack_json_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 

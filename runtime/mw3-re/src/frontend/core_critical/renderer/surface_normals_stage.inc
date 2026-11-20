@@ -232,52 +232,77 @@ void surface_normals_load() {
         !expected_polygons || expected_polygons > 4096)
       throw std::runtime_error("Native material sidecar header is invalid");
   }
-  std::map<std::string, RegionSurfaceMaterialCatalog> region_catalogs;
-  if (bridge_config_.parallax_materials && lighting_.normals && environment_) {
-    for (const auto &[region, resources] : environment_->resources) {
-      auto found = resources.find(::platform::prepared::EnvironmentRole::surface_materials);
-      if (found == resources.end())
-        found = resources.find(::platform::prepared::EnvironmentRole::ground_materials);
-      if (found == resources.end())
-        continue;
-      const auto sidecar_path = std::filesystem::u8path(found->second);
-      const auto size = std::filesystem::file_size(sidecar_path);
-      if (size < 32 || size > mw34::materials::max_surface_sidecar_bytes)
-        throw std::runtime_error("Environment surface-material sidecar size is invalid");
-      const auto digest = ::platform::integrity::sha256_file(sidecar_path);
-      std::ifstream input(sidecar_path, std::ios::binary);
-      if (!input)
-        throw std::runtime_error("Environment surface-material sidecar cannot be opened");
-      auto parsed = mw34::materials::read_surface_material_catalog(
-          input, region, mw34::materials::max_surface_sidecar_bytes,
-          mw34::materials::max_surface_sidecar_bytes, prepared_.surface_budget());
-      RegionSurfaceMaterialCatalog catalog;
-      catalog.path = found->second;
-      catalog.sha256 = digest;
-      catalog.bytes = size;
-      catalog.pack = std::make_shared<mw34::materials::SurfaceMaterialPack>(std::move(parsed));
-      for (std::size_t idx = 0; idx < catalog.pack->records.size(); ++idx) {
-        const auto &rec = *catalog.pack->records[idx];
-        if (rec.height_image != mw34::materials::no_surface_image &&
-            rec.height_amplitude != 0.0f) {
-          catalog.by_material_name.emplace(rec.material_name, idx);
-        }
-      }
-      std::fprintf(stderr,
-                   "[POM] Region surface materials loaded: region=%s records=%zu height_materials=%zu images=%zu\n",
-                   region.c_str(), catalog.pack->records.size(),
-                   catalog.by_material_name.size(), catalog.pack->images.size());
-      region_catalogs.emplace(region, std::move(catalog));
-    }
-  }
   surface_normals_.native_material_bytes = std::move(native_bytes);
   surface_normals_.expected_mesh_uv_hash = expected_hash;
   surface_normals_.expected_polygon_count = expected_polygons;
   surface_normals_.cache = std::move(cache);
   surface_normals_.detail_bindings = std::move(detail_bindings);
-  surface_normals_.region_surface_materials = std::move(region_catalogs);
+  surface_normals_.region_surface_materials.clear();
   surface_normals_.region_height_cache.clear();
   surface_normals_.loaded = true;
+}
+
+const RegionSurfaceMaterialCatalog *
+ensure_region_surface_materials(const std::string &region) {
+  if (!bridge_config_.parallax_materials || !lighting_.normals || !environment_)
+    return nullptr;
+  const auto existing = surface_normals_.region_surface_materials.find(region);
+  if (existing != surface_normals_.region_surface_materials.end())
+    return &existing->second;
+  const auto res_it = environment_->resources.find(region);
+  if (res_it == environment_->resources.end())
+    return nullptr;
+  auto found = res_it->second.find(::platform::prepared::EnvironmentRole::surface_materials);
+  if (found == res_it->second.end())
+    found = res_it->second.find(::platform::prepared::EnvironmentRole::ground_materials);
+  if (found == res_it->second.end())
+    return nullptr;
+  const auto digest_it = environment_->surface_material_digests.find(region);
+  if (digest_it == environment_->surface_material_digests.end())
+    throw std::runtime_error(
+        "Environment surface-material catalog has no admitted manifest digest");
+  const auto sidecar_path = std::filesystem::u8path(found->second);
+  const auto size = std::filesystem::file_size(sidecar_path);
+  if (size < 32 || size > mw34::materials::max_surface_sidecar_bytes)
+    throw std::runtime_error("Environment surface-material sidecar size is invalid");
+  std::ifstream input(sidecar_path, std::ios::binary);
+  if (!input)
+    throw std::runtime_error("Environment surface-material sidecar cannot be opened");
+  std::string raw(static_cast<std::size_t>(size), '\0');
+  if (!input.read(raw.data(), static_cast<std::streamsize>(size)) ||
+      input.peek() != std::char_traits<char>::eof())
+    throw std::runtime_error("Environment surface-material sidecar changed during load");
+  ::platform::integrity::Sha256 sha;
+  sha.update(raw.data(), raw.size());
+  const auto actual_digest = sha.hex();
+  if (actual_digest != digest_it->second)
+    throw std::runtime_error(
+        "Environment surface-material sidecar changed after environment admission");
+  // Keep only the active region's catalog decoded to stay within the shared
+  // 256 MiB SurfaceDecodedBudget across multi-region campaign packs.
+  surface_normals_.region_surface_materials.clear();
+  surface_normals_.region_height_cache.clear();
+  std::istringstream stream(raw, std::ios::binary);
+  auto parsed = mw34::materials::read_surface_material_catalog(
+      stream, region, mw34::materials::max_surface_sidecar_bytes,
+      mw34::materials::max_surface_sidecar_bytes, prepared_.surface_budget());
+  RegionSurfaceMaterialCatalog catalog;
+  catalog.path = found->second;
+  catalog.sha256 = actual_digest;
+  catalog.bytes = size;
+  catalog.pack = std::make_shared<mw34::materials::SurfaceMaterialPack>(std::move(parsed));
+  for (std::size_t idx = 0; idx < catalog.pack->records.size(); ++idx) {
+    const auto &rec = *catalog.pack->records[idx];
+    if (rec.height_image != mw34::materials::no_surface_image &&
+        rec.height_amplitude != 0.0f) {
+      catalog.by_material_name.emplace(rec.material_name, idx);
+    }
+  }
+  std::fprintf(stderr,
+               "[POM] Region surface materials loaded: region=%s records=%zu height_materials=%zu images=%zu\n",
+               region.c_str(), catalog.pack->records.size(),
+               catalog.by_material_name.size(), catalog.pack->images.size());
+  return &surface_normals_.region_surface_materials.emplace(region, std::move(catalog)).first->second;
 }
 
 // BWSNR catalogs authenticate texel identity. BWSFM1 separately supplies the
@@ -473,11 +498,10 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
       }
     }
     // Fall back to the region's admitted BWSFM1 surface-material catalog, bound
-    // through the authenticated SurfaceKey -> BWSNR normal image name.
+    // through the authenticated SurfaceKey -> BWSNR normal image hash/name.
     surface_normals_load();
-    const auto catalog_it = surface_normals_.region_surface_materials.find(region);
-    if (catalog_it != surface_normals_.region_surface_materials.end() &&
-        texture >= 0 && std::size_t(texture) < textures_.size() &&
+    const auto *catalog = ensure_region_surface_materials(region);
+    if (catalog && texture >= 0 && std::size_t(texture) < textures_.size() &&
         key.width > 0 && key.height > 0 && key.format == 1U && key.hash != 0) {
       const auto &slot = textures_[std::size_t(texture)];
       if (slot.group_load_epoch == group_load_epoch_ && slot.surface_key == key) {
@@ -490,26 +514,27 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
           if (cached != surface_normals_.region_height_cache.end())
             return cached->second;
           const auto &normal = surface_normal_image(normal_idx);
-          const auto &catalog = catalog_it->second;
           std::shared_ptr<const mw34::materials::HeightBinding> resolved;
-          auto rec_it = catalog.by_material_name.find(normal.name);
-          if (rec_it == catalog.by_material_name.end() && normal.hash != 0) {
+          auto rec_it = catalog->by_material_name.end();
+          if (normal.hash != 0) {
             char hash_name[24];
             std::snprintf(hash_name, sizeof(hash_name), "n_%016llx",
                           static_cast<unsigned long long>(normal.hash));
-            rec_it = catalog.by_material_name.find(hash_name);
+            rec_it = catalog->by_material_name.find(hash_name);
           }
-          if (rec_it != catalog.by_material_name.end()) {
+          if (rec_it == catalog->by_material_name.end())
+            rec_it = catalog->by_material_name.find(normal.name);
+          if (rec_it != catalog->by_material_name.end()) {
             auto binding = mw34::materials::resolve_catalog_height_binding(
-                catalog.pack, rec_it->second, catalog.sha256, key,
+                catalog->pack, rec_it->second, catalog->sha256, key,
                 normal.width, normal.height, normal.hash);
             if (binding) {
               auto owned = std::make_shared<mw34::materials::HeightBinding>(*binding);
-              owned->sidecar_path = catalog.path;
+              owned->sidecar_path = catalog->path;
               owned->producer_epoch = group_load_epoch_;
               owned->texture_version = slot.version;
               owned->world_source = mw34::materials::HeightWorldSource{
-                  "env-surface-bwsfm1", catalog.path, catalog.bytes, source_epoch, 0};
+                  "env-surface-bwsfm1", catalog->path, catalog->bytes, source_epoch, 0};
               resolved = std::move(owned);
             }
           }

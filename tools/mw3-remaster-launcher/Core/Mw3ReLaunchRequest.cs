@@ -101,15 +101,20 @@ public static class Mw3ReLaunchRequest
         if (options.Preview != null)
             return CreatePreview(contract, options, gameDirectory, dataRoot, id, renderer, antialiasing,
                 windowMode, lighting, flareStyle, indeoCodec);
+        if (options.PomQuality is not null and not ("off" or "low" or "high"))
+            throw new InvalidDataException("Unknown native POM quality.");
+        if (options.Pom && options.PomQuality == "off")
+            throw new InvalidDataException("Conflicting native POM options.");
+        var pomEnabled = options.Pom || options.PomQuality is "low" or "high";
         // This pinned combined runtime/planner claim is observational, not trusted execution admission.
-        if (options.Pom && (options.Lighting != Mw3ReLighting.Normal ||
+        if (pomEnabled && (options.Lighting != Mw3ReLighting.Normal ||
             !contract.Capabilities.TryGetValue("pom", out var versions) || !versions.Contains(1) ||
             !contract.Roles.ContainsKey("coordinator") || !contract.Roles.ContainsKey("python")))
             throw new InvalidDataException("Native POM planning requires normal lighting and compatible pinned runtime/planner roles.");
         // Do not create directories or repair input paths; the sole planner validates their lexical contract.
         var request = new JsonObject
         {
-            ["schema_version"] = options.Pom ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
+            ["schema_version"] = pomEnabled ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
             ["indeo_codec"] = indeoCodec,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,

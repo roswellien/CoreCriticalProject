@@ -502,7 +502,7 @@ read_surface_materials_impl(std::istream &input, const std::string &expected_ass
 
         record.uv_scale[0] = f32(-max_surface_uv_transform, max_surface_uv_transform);
         record.uv_scale[1] = f32(-max_surface_uv_transform, max_surface_uv_transform);
-        if (record.uv_scale[0] == 0.0f || record.uv_scale[1] == 0.0f)
+        if (std::abs(record.uv_scale[0]) < 1e-6f || std::abs(record.uv_scale[1]) < 1e-6f)
             fail();
         record.uv_offset[0] = f32(-max_surface_uv_transform, max_surface_uv_transform);
         record.uv_offset[1] = f32(-max_surface_uv_transform, max_surface_uv_transform);
@@ -578,9 +578,13 @@ read_surface_materials_impl(std::istream &input, const std::string &expected_ass
 
     for (const auto &rec_ptr : pack.records) {
         const auto &record = *rec_ptr;
-        if (record.height_image != no_surface_image &&
-            pack.images[record.height_image].role != surface_role_height)
-            fail();
+        if (record.height_image != no_surface_image) {
+            const auto &img = pack.images[record.height_image];
+            if (img.role != surface_role_height ||
+                !(record.atlas_rect[2] - record.atlas_rect[0] > 1.0f / float(img.width)) ||
+                !(record.atlas_rect[3] - record.atlas_rect[1] > 1.0f / float(img.height)))
+                fail();
+        }
         if (record.thickness_image != no_surface_image &&
             pack.images[record.thickness_image].role != surface_role_thickness)
             fail();

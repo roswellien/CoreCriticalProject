@@ -985,6 +985,30 @@ void quality_levels_distance_lod_and_grazing(vk::Renderer &high_renderer,
   require(far_high.scene.pom_rgba8 == far_zero.scene.pom_rgba8,
           "POM High far distance did not fall back bit-identically to base UV");
 
+  // Zoom-compensated LOD on GPU model/native route: at eyeLength == 204 (> Low fadeEnd 140),
+  // 1x FOV falls back to base UV, while 4x zoom (fy_near * 4 -> effectiveDistance ~ 59 < 60)
+  // retains active displacement.
+  auto model_far_1x = fixture(Route::native, Height::zero, .12f, 1.f, .7);
+  model_far_1x.scene.draws[0].surface_eye = {0, 0, -200.f, 1};
+  auto model_far_zero = fixture(Route::native, Height::zero, 0.f, 1.f, .7);
+  model_far_zero.scene.draws[0].surface_eye = {0, 0, -200.f, 1};
+  low_renderer.render(model_far_1x.scene);
+  low_renderer.render(model_far_zero.scene);
+  require(model_far_1x.scene.pom_rgba8 == model_far_zero.scene.pom_rgba8,
+          "POM Low native-route far 1x did not fall back to base UV");
+
+  auto model_far_4x = fixture(Route::native, Height::zero, .12f, 1.f, .7);
+  model_far_4x.scene.draws[0].surface_eye = {0, 0, -200.f, 1};
+  auto zoomed = std::make_shared<vk::ModelInstance>(*model_far_4x.scene.draws[0].model);
+  // cotHalfFovY = (fy_near * near) / (H / 2) = (112 * 1) / 16 = 7.0 -> zoomScale ~ 4.04.
+  zoomed->projection[2] = 112.f;
+  model_far_4x.scene.draws[0].model = zoomed;
+  low_renderer.render(model_far_4x.scene);
+  const auto zoom_uv = decode(model_far_4x.scene);
+  const double zoom_shift = std::abs(zoom_uv[0] - .5) + std::abs(zoom_uv[1] - .5);
+  require(zoom_shift > .005,
+          "POM Low native-route 4x zoom did not extend effective LOD distance");
+
   // Smooth grazing-angle taper on [0.08, 0.14]: 0.11 attenuates between 0 and full.
   auto taper = fixture(Route::tl, Height::zero, .04f, 1.f, .11);
   high_renderer.render(taper.scene);

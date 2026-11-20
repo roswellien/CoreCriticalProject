@@ -1762,6 +1762,9 @@ private:
               sunChecked[geometry.key] = geometry.hash;
             }
             u = mw34::sun::uniform(instance.sun_normal, environment);
+            u.projection = {instance.projection[1], instance.projection[2],
+                            instance.projection[3], instance.projection[4]};
+            u.extra[0] = instance.projection[0];
             u.world = instance.sun_world;
             u.geometry_fog0 = instance.geometry_fog0;
             u.geometry_fog1 = instance.geometry_fog1;
